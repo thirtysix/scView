@@ -18,6 +18,12 @@ from scview.core.ingestion.detection import (
     FileKind,
     detect_file,
 )
+from scview.core.ingestion.validation import (
+    IngestIssue,
+    IssueSeverity,
+    ValidationReport,
+    validate_bundle,
+)
 
 __all__ = [
     "Bundle",
@@ -25,9 +31,13 @@ __all__ = [
     "DetectionResult",
     "FileKind",
     "FileRole",
+    "IngestIssue",
     "IngestUnit",
+    "IssueSeverity",
     "UnitFormat",
+    "ValidationReport",
     "build_bundle",
     "bundle_from_detections",
     "detect_file",
+    "validate_bundle",
 ]

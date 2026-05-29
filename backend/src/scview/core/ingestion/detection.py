@@ -16,6 +16,7 @@ from __future__ import annotations
 import gzip
 import logging
 import re
+import zlib
 from enum import Enum
 from pathlib import Path
 
@@ -166,7 +167,8 @@ def _peek_text(path: Path, gzipped: bool) -> str | None:
                 return fh.read(_SNIFF_BYTES)
         with open(path, "rt", encoding="utf-8", errors="strict") as fh:
             return fh.read(_SNIFF_BYTES)
-    except (OSError, UnicodeDecodeError, EOFError, gzip.BadGzipFile) as e:
+    except (OSError, UnicodeDecodeError, EOFError, zlib.error) as e:
+        # gzip.BadGzipFile subclasses OSError; truncated deflate raises zlib.error.
         logger.debug("Text peek failed for %s: %s", path, e)
         return None
 
