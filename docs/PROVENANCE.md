@@ -119,9 +119,72 @@ Design choices that maximise usable information:
 - Frontend: a Provenance panel/banner (consumes the above); reuse Data Assessment's
   inference rendering for the no-history case.
 
+## Undo / branching without staged files
+
+The fair objection to "one evolving file": if a user wants to **undo a choice** (say,
+re-cluster at a different resolution), a staged-files workflow lets them grab the
+file from one step prior and proceed. With one file they'd seemingly have to replay
+*everything* from the original. We address this so that, in practice, **you rarely
+replay from the original and you only recompute what actually changed.**
+
+### Why a full replay is almost never needed
+Changing a step only invalidates the steps **downstream** of it; upstream steps stay
+valid. And the expensive upstream artifacts are **already materialised in the current
+file**:
+- `obsm['X_pca']`, the neighbour graph (`obsp['connectivities']`/`['distances']`) —
+  so changing clustering resolution just re-runs Leiden on the graph that's *already
+  there*. No PCA, no neighbours, no replay. (This is also scientifically correct: you
+  shouldn't recompute PCA to try a new resolution.)
+
+So the most common "undo" — re-cluster, re-embed, re-detect markers — is a fast,
+in-place re-run against artifacts the file already holds.
+
+### Anchor layers — the restore points for *earlier* changes
+For changes upstream of PCA (e.g. different normalisation), keep small **anchor
+layers** in the file so we restore from the nearest anchor, not the original:
+- `layers['counts']` — raw counts: the restore point for the whole
+  normalisation/transformation branch (and standard scanpy practice).
+- `layers['lognorm']` — log-normalised, pre-scaling: restore point for HVG / scaling /
+  PCA (scaling overwrites `X` destructively, so this anchor is what makes that branch
+  re-runnable).
+
+Anchors are cheap relative to checkpoints: `X_pca` is `n_cells × ~50`, the graph is
+sparse, counts/lognorm are one matrix each — all far smaller than storing a full h5ad
+per step.
+
+### "Branch from step k" as a first-class action
+Model the pipeline as a small **dependency DAG**
+(`normalize → log → hvg → scale → pca → neighbors → {clustering, umap} → markers →
+enrichment`). The recipe (history) records the order; the DAG records what depends on
+what. When the user edits step *k*'s parameters, scView:
+1. computes the **invalidation set** (step *k* + its descendants),
+2. restores the **nearest valid anchor** (existing graph for a clustering change; the
+   `lognorm`/`counts` layer for an upstream change),
+3. re-runs only the invalidated steps with the new params,
+4. appends the change to `history` (e.g. *"re-clustered res 0.5 → 0.8; superseded
+   markers, enrichment"*), recording random seeds so it's reproducible.
+
+The UI surfaces the scope and cost up front: *"Changing resolution will re-run
+clustering, markers, enrichment (~8 s); PCA and the neighbour graph are kept."* Each
+completed step in the provenance/assessment view gets an **"edit & re-run from here"**
+affordance.
+
+This is **better than manual staged files**: the user doesn't track which file is
+which step, scView computes the *minimal* correct re-run automatically (no accidental
+PCA recompute), there's one file to manage and share, and the full history is intact.
+
+### When you genuinely want parallel branches
+For true side-by-side comparison (res 0.5 *and* 0.8 at once), offer **explicit, named
+checkpoints/branches** — opt-in. Even these need not be full h5ad copies: a branch can
+be stored as *(recipe up to step k) + the counts/lognorm anchor*, and re-materialised
+on demand; a full snapshot is available when instant access is worth the disk. Keeping
+this opt-in means the simple path stays one file.
+
 ## Net
 One file, one growing internal log that is *also* a reproducible recipe; names stay
-stable; intermediate states are replayable rather than stored; and on load scView
-always answers "what's been done?" — from its own records when present, from inference
-otherwise. That closes the loop the tool is meant to close, including for scView's own
-outputs.
+stable; intermediate states are replayable rather than stored. Undo is handled by
+re-running the *minimal* invalidated subset from the nearest in-file anchor — usually
+without touching the original — and optional named branches cover true comparison. On
+load scView always answers "what's been done?" — from its own records when present,
+from inference otherwise. That closes the loop the tool is meant to close, including
+for scView's own outputs.
