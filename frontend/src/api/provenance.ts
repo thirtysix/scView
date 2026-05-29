@@ -35,3 +35,26 @@ export interface Provenance {
 export async function getProvenance(id: string): Promise<Provenance> {
   return apiFetch<Provenance>(`/datasets/${id}/provenance`);
 }
+
+export interface RerunPlan {
+  edited_step: string;
+  rerun_steps: string[];
+  kept_steps: string[];
+  requires_reprocess: boolean;
+  message: string;
+}
+
+export async function getRerunPlan(id: string, step: string): Promise<RerunPlan> {
+  return apiFetch<RerunPlan>(`/datasets/${id}/rerun-plan?step=${encodeURIComponent(step)}`);
+}
+
+export async function rerunStep(
+  id: string,
+  edited_step: string,
+  params: Record<string, unknown>
+): Promise<{ plan: RerunPlan; result: Record<string, unknown> }> {
+  return apiFetch(`/datasets/${id}/rerun`, {
+    method: "POST",
+    body: JSON.stringify({ edited_step, params }),
+  });
+}
