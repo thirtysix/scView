@@ -1,5 +1,14 @@
 # Data provenance & history — design (2026-05-29)
 
+> **Status (2026-05-29): Phase 1 shipped.** `core/provenance.py` records
+> `uns['scview_provenance']` (source + replayable history + denormalised current);
+> `pipeline.py` logs every step (params + effect) and ingestion writes the source block;
+> `GET /datasets/{id}/provenance` + the frontend **History** panel surface it on load,
+> with reconcile warnings and an inference fallback. ~90 tests green.
+> **Not yet built:** the anchor layers (`counts`/`lognorm`) and the dependency-aware
+> "edit & re-run from step k" (the undo/branching section below).
+
+
 **The problem scView exists to solve, applied to scView itself:** a user opens an
 h5ad they inherited, downloaded, or made long ago and can't remember *what's been
 done to it*. scView must (a) tell them what it can, for **any** file, and (b) never
