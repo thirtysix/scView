@@ -68,7 +68,20 @@ class DatasetManager:
     # Listing / info
     # ------------------------------------------------------------------
 
+    # Statuses for datasets still being prepared (no data file yet is expected).
+    _IN_PROGRESS_STATUSES = ("converting", "pending")
+
+    def _is_openable(self, dataset_id: str, status: str) -> bool:
+        """A dataset is openable if it's still being prepared, or has a data file."""
+        if status in self._IN_PROGRESS_STATUSES:
+            return True
+        return self._resolve_h5ad(dataset_id) is not None
+
     def list_datasets(self) -> list[dict[str, Any]]:
+        """Return only openable datasets — those with a resolvable data file (or
+        still converting). Orphaned entries (failed conversions, missing files)
+        are skipped so the picker never shows a dataset that can't be opened.
+        """
         results: list[dict[str, Any]] = []
         uploads_dir = self.data_dir / "uploads"
         if not uploads_dir.exists():
@@ -79,6 +92,8 @@ class DatasetManager:
                 if meta_path.exists():
                     with open(meta_path) as fh:
                         meta = json.load(fh)
+                    if not self._is_openable(entry.name, meta.get("status", "")):
+                        continue
                     # The picker only needs id/name/counts/embeddings and obs
                     # column names — never the inlined category `values`, which
                     # can be tens of MB per dataset for high-cardinality columns.
@@ -88,6 +103,24 @@ class DatasetManager:
                             col.pop("values", None)
                     results.append(meta)
         return results
+
+    def prune_orphans(self) -> list[dict[str, str]]:
+        """Delete dataset dirs that can't be opened (failed conversions, missing
+        data). Returns the removed [{id, name}] so the caller can report them."""
+        removed: list[dict[str, str]] = []
+        uploads_dir = self.data_dir / "uploads"
+        if not uploads_dir.exists():
+            return removed
+        for entry in sorted(uploads_dir.iterdir()):
+            meta_path = entry / "metadata.json"
+            if not (entry.is_dir() and meta_path.exists()):
+                continue
+            with open(meta_path) as fh:
+                meta = json.load(fh)
+            if not self._is_openable(entry.name, meta.get("status", "")):
+                if self.remove_dataset(entry.name):
+                    removed.append({"id": entry.name, "name": meta.get("name", entry.name)})
+        return removed
 
     def get_dataset_info(self, dataset_id: str) -> dict[str, Any] | None:
         meta_path = self.data_dir / "uploads" / dataset_id / "metadata.json"

@@ -137,6 +137,15 @@ async def list_datasets(
     return dm.list_datasets()
 
 
+@router.post("/datasets/prune")
+async def prune_datasets(
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Remove dataset entries that can't be opened (failed conversions / missing data)."""
+    removed = dm.prune_orphans()
+    return {"removed": removed, "count": len(removed)}
+
+
 @router.get("/datasets/{dataset_id}")
 async def get_dataset_info(
     dataset_id: str,

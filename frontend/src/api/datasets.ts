@@ -16,3 +16,10 @@ export async function getDataset(id: string): Promise<DatasetInfo> {
 export async function deleteDataset(id: string): Promise<void> {
   await apiFetch(`/datasets/${id}`, { method: "DELETE" });
 }
+
+export async function pruneDatasets(): Promise<{
+  removed: { id: string; name: string }[];
+  count: number;
+}> {
+  return apiFetch("/datasets/prune", { method: "POST" });
+}

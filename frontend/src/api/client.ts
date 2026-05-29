@@ -15,6 +15,10 @@ export async function apiFetch<T>(
     const error = await res.text();
     throw new Error(`API error ${res.status}: ${error}`);
   }
+  // No-content responses (e.g. 204 from DELETE) have no body to parse.
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
   return res.json();
 }
 
