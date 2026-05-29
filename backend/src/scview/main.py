@@ -13,11 +13,15 @@ from scview.api.router import api_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create required data directories on startup."""
+    """Create required data directories and sweep stale ingest sessions on startup."""
     settings = get_settings()
     data_dir = Path(settings.DATA_DIR)
     for subdir in ("uploads", "converted", "cache"):
         (data_dir / subdir).mkdir(parents=True, exist_ok=True)
+    # Remove abandoned ingest staging sessions older than the TTL (24 h).
+    from scview.dependencies import get_ingest_session_manager
+
+    get_ingest_session_manager().sweep_expired()
     yield
 
 

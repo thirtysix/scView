@@ -32,6 +32,11 @@ from scview.core.ingestion.merge import (
     merge_units,
     plan_merge,
 )
+from scview.core.ingestion.session import (
+    IngestCommitError,
+    IngestOptions,
+    IngestSessionManager,
+)
 from scview.core.ingestion.validation import (
     IngestIssue,
     IssueSeverity,
@@ -46,7 +51,10 @@ __all__ = [
     "FileKind",
     "FileRole",
     "IngestIssue",
+    "IngestCommitError",
     "IngestLoadError",
+    "IngestOptions",
+    "IngestSessionManager",
     "IngestUnit",
     "IssueSeverity",
     "MergeJoin",
