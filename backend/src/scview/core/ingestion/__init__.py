@@ -18,6 +18,10 @@ from scview.core.ingestion.detection import (
     FileKind,
     detect_file,
 )
+from scview.core.ingestion.loading import (
+    IngestLoadError,
+    load_unit,
+)
 from scview.core.ingestion.validation import (
     IngestIssue,
     IssueSeverity,
@@ -32,6 +36,7 @@ __all__ = [
     "FileKind",
     "FileRole",
     "IngestIssue",
+    "IngestLoadError",
     "IngestUnit",
     "IssueSeverity",
     "UnitFormat",
@@ -39,5 +44,6 @@ __all__ = [
     "build_bundle",
     "bundle_from_detections",
     "detect_file",
+    "load_unit",
     "validate_bundle",
 ]

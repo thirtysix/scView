@@ -132,13 +132,15 @@ class DatasetManager:
 
     # Subdirectory precedence for resolving a dataset's active .h5ad.
     # `derived` holds pipeline output and is preferred so processing results
-    # are seen; `converted` holds RDS→h5ad output; `uploads` holds the user's
-    # original file. Originals and conversions are NEVER written to after the
-    # initial ingest — all processing writes to `derived` (see derived_h5ad_path).
-    _H5AD_SUBDIRS = ("derived", "converted", "uploads")
+    # are seen; `ingested` holds the canonical h5ad produced by the ingestion
+    # engine (10x/CSV/loom → h5ad); `converted` holds RDS→h5ad output; `uploads`
+    # holds the user's original file(s). Originals, ingests and conversions are
+    # NEVER written to after the initial ingest — all processing writes to
+    # `derived` (see derived_h5ad_path).
+    _H5AD_SUBDIRS = ("derived", "ingested", "converted", "uploads")
 
     def _resolve_h5ad(self, dataset_id: str) -> str | None:
-        """Find the active .h5ad for a dataset (derived > converted > uploaded)."""
+        """Find the active .h5ad (derived > ingested > converted > uploaded)."""
         for subdir in self._H5AD_SUBDIRS:
             d = self.data_dir / subdir / dataset_id
             if d.exists():
