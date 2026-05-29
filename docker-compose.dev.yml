@@ -1,0 +1,58 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: dev
+    volumes:
+      - dataset_data:/data
+      - ./backend/src:/app/src
+      - ./backend/tests:/app/tests
+      - ./msigdb:/msigdb:ro
+    command: uvicorn scview.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "127.0.0.1:8080:8000"
+    env_file:
+      - .env
+    environment:
+      - DATA_DIR=/data
+      - CONVERTER_URL=http://converter:8001
+      - MSIGDB_DIR=/msigdb
+    depends_on:
+      converter:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      - VITE_API_URL=http://backend:8000
+    depends_on:
+      - backend
+
+  converter:
+    build:
+      context: ./converter
+      dockerfile: Dockerfile
+    volumes:
+      - dataset_data:/data
+      - ./converter:/app
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  dataset_data:

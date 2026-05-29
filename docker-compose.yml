@@ -1,0 +1,52 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8080:8000"
+    volumes:
+      - dataset_data:/data
+      - ./msigdb:/msigdb:ro
+    env_file:
+      - .env
+    environment:
+      - DATA_DIR=/data
+      - CONVERTER_URL=http://converter:8001
+      - MSIGDB_DIR=/msigdb
+    depends_on:
+      converter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  converter:
+    build:
+      context: ./converter
+      dockerfile: Dockerfile
+    volumes:
+      - dataset_data:/data
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  dataset_data:

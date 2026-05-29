@@ -1,0 +1,21 @@
+[Desktop Entry]
+Version=1.1
+Type=Application
+Name=scView
+GenericName=Single-Cell Viewer
+Comment=Single-cell RNA-seq data visualization tool
+Exec=/home/harl/Dropbox/manuscripts/0.datasets_visualizations/002.AI_projects/scView/scview.sh start --desktop
+Icon=/home/harl/Dropbox/manuscripts/0.datasets_visualizations/002.AI_projects/scView/frontend/public/icon.png
+Terminal=false
+Categories=Science;Education;Development;
+StartupNotify=true
+
+Actions=stop;status;
+
+[Desktop Action stop]
+Name=Stop Services
+Exec=/home/harl/Dropbox/manuscripts/0.datasets_visualizations/002.AI_projects/scView/scview.sh stop
+
+[Desktop Action status]
+Name=Show Status
+Exec=/home/harl/Dropbox/manuscripts/0.datasets_visualizations/002.AI_projects/scView/scview.sh status
