@@ -40,6 +40,9 @@ data/
 # MSigDB gene set files (large, copied locally)
 msigdb/
 
+# Sample/test data (large, reproducible — see sample_data/README.md)
+sample_data/
+
 # Testing
 .coverage
 htmlcov/
