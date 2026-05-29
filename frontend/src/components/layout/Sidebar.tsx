@@ -3,6 +3,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { PANEL_IDS, PANEL_LABELS, type PanelId } from "@/lib/constants";
 import {
   Upload,
+  Import,
   ClipboardCheck,
   ChartScatter,
   LayoutDashboard,
@@ -17,6 +18,7 @@ import {
 
 const PANEL_ICONS: Record<PanelId, React.ElementType> = {
   load: Upload,
+  ingest: Import,
   assessment: ClipboardCheck,
   overview: ChartScatter,
   unified: LayoutDashboard,
@@ -54,7 +56,7 @@ export function Sidebar() {
         {PANEL_IDS.map((id) => {
           const Icon = PANEL_ICONS[id];
           const isActive = activePanel === id;
-          const isDisabled = id !== "load" && !hasDataset;
+          const isDisabled = id !== "load" && id !== "ingest" && !hasDataset;
 
           return (
             <button
