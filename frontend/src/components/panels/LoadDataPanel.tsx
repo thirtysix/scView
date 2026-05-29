@@ -2,7 +2,16 @@ import { useCallback, useState } from "react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { uploadDataset, listDatasets, getDataset } from "@/api/datasets";
-import { Upload, FileUp, Trash2, Loader2 } from "lucide-react";
+import {
+  Upload,
+  FileUp,
+  Trash2,
+  Loader2,
+  FileCode2,
+  FlaskConical,
+  Layers,
+  ArrowRight,
+} from "lucide-react";
 import { formatNumber } from "@/lib/formatting";
 
 export function LoadDataPanel() {
@@ -132,6 +141,48 @@ export function LoadDataPanel() {
         </div>
       )}
 
+      {/* Accepted formats */}
+      <div>
+        <h3 className="mb-3 text-sm font-semibold text-slate-700">
+          What can I upload here?
+        </h3>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <FormatCard icon={FileCode2} title="AnnData (.h5ad)">
+            Scanpy's native single-cell format. Export it from Python with{" "}
+            <code className="rounded bg-slate-100 px-1">adata.write_h5ad()</code>.
+            Loads directly — no conversion needed.
+          </FormatCard>
+
+          <FormatCard icon={FlaskConical} title="Seurat (.rds / .RData)">
+            An R Seurat object saved with{" "}
+            <code className="rounded bg-slate-100 px-1">
+              saveRDS(obj, "data.rds")
+            </code>
+            . scView converts it to AnnData for you (this can take a minute).
+          </FormatCard>
+
+          <button
+            type="button"
+            onClick={() => setPanel("ingest")}
+            className="group flex flex-col rounded-xl border border-primary/30 bg-primary/5 p-4 text-left transition-colors hover:border-primary hover:bg-primary/10"
+          >
+            <div className="flex items-center justify-between">
+              <Layers className="h-5 w-5 text-primary" />
+              <ArrowRight className="h-4 w-4 text-primary opacity-0 transition-opacity group-hover:opacity-100" />
+            </div>
+            <span className="mt-2 text-sm font-semibold text-slate-800">
+              10x, CSV or multiple files
+            </span>
+            <span className="mt-1 text-xs leading-relaxed text-slate-500">
+              Raw CellRanger output (matrix + barcodes + features), a{" "}
+              <code className="rounded bg-slate-100 px-1">.h5</code>, an
+              expression table, or several samples to merge → use the{" "}
+              <span className="font-medium text-primary">Add Data</span> tab.
+            </span>
+          </button>
+        </div>
+      </div>
+
       {/* Previous datasets */}
       {availableDatasets.length > 0 && (
         <div>
@@ -171,6 +222,26 @@ export function LoadDataPanel() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function FormatCard({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon: React.ElementType;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-center gap-2">
+        <Icon className="h-5 w-5 text-primary" />
+        <span className="text-sm font-semibold text-slate-800">{title}</span>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-slate-500">{children}</p>
     </div>
   );
 }
