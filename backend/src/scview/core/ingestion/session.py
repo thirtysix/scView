@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from scview.core import provenance
 from scview.core.ingestion.bundling import UnitFormat, build_bundle
 from scview.core.ingestion.loading import load_unit
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
@@ -145,6 +146,7 @@ class IngestSessionManager:
 
         opts = self.get_options(sid)
         adata = self._load_and_merge(loadable, opts)
+        self._record_ingest_provenance(adata, loadable, opts)
 
         dataset_id = uuid.uuid4().hex
         name = opts.name or (loadable[0].label if len(loadable) == 1 else "merged_dataset")
@@ -175,6 +177,45 @@ class IngestSessionManager:
         return removed
 
     # -- internals --------------------------------------------------------
+
+    def _record_ingest_provenance(self, adata, loadable, opts: IngestOptions) -> None:
+        """Write the source block + an ingest history entry. Never raises."""
+        try:
+            if len(loadable) > 1:
+                provenance.init_source(
+                    adata,
+                    origin="ingested",
+                    original_filename=", ".join(u.label for u in loadable),
+                    fmt="merged",
+                    merged_from=[
+                        {"sample": u.label, "format": u.format.value, "n_files": len(u.files)}
+                        for u in loadable
+                    ],
+                    merge={
+                        "join": opts.join.value,
+                        "sample_label": opts.sample_label,
+                        "apply_reconciliation": opts.apply_reconciliation,
+                    },
+                )
+            else:
+                u = loadable[0]
+                provenance.init_source(
+                    adata,
+                    origin="ingested",
+                    original_filename=", ".join(f.name for f in u.files),
+                    fmt=u.format.value,
+                )
+            provenance.record_step(
+                adata,
+                step="ingest",
+                tool="scview.ingestion",
+                params={
+                    "formats": sorted({u.format.value for u in loadable}),
+                    "genes_in_rows": opts.genes_in_rows,
+                },
+            )
+        except Exception as e:  # provenance must never block ingest
+            logger.warning("Could not record ingest provenance: %s", e)
 
     def _load_and_merge(self, loadable, opts: IngestOptions):
         load_opts = {"genes_in_rows": opts.genes_in_rows}

@@ -147,6 +147,20 @@ async def test_commit_merge_two_samples(mgr, dm):
     assert "sample" in adaptor.adata.obs.columns
 
 
+async def test_commit_records_provenance(mgr, dm, data_dir):
+    from scview.core import provenance
+
+    sid = mgr.create_session()
+    _stage_h5ad(mgr, sid, fname="ovary.h5ad")
+    dataset_id = await mgr.commit(sid, dm)
+    h5 = next((data_dir / "ingested" / dataset_id).glob("*.h5ad"))
+    p = provenance.read_provenance(ad.read_h5ad(h5))
+    assert p["source"]["origin"] == "ingested"
+    assert p["source"]["format"] == "anndata"
+    assert p["source"]["original_filename"] == "ovary.h5ad"
+    assert any(h["step"] == "ingest" for h in p["history"])
+
+
 async def test_commit_rejects_incomplete(mgr, dm):
     sid = mgr.create_session()
     dense = np.array([[1, 0], [0, 2], [3, 4]])

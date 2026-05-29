@@ -70,7 +70,18 @@ def _write(adata, data: dict[str, Any]) -> None:
 
 
 def has_provenance(adata) -> bool:
-    return bool(read_provenance(adata).get("history") or read_provenance(adata).get("source"))
+    p = read_provenance(adata)
+    return bool(p.get("history") or p.get("source"))
+
+
+def carry(src, dst) -> None:
+    """Copy the provenance block from src to dst when a pipeline step returns a
+    new AnnData object that doesn't carry it (so history isn't lost)."""
+    try:
+        if UNS_KEY in src.uns and UNS_KEY not in dst.uns:
+            dst.uns[UNS_KEY] = src.uns[UNS_KEY]
+    except (AttributeError, TypeError):
+        pass
 
 
 # ---------------------------------------------------------------------------

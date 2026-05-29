@@ -19,6 +19,8 @@ from typing import Any, Callable, Generator
 import anndata as ad
 import scanpy as sc
 
+from scview.core import provenance
+
 logger = logging.getLogger(__name__)
 
 # Callback for sub-step progress: (message, current_index, total_count)
@@ -514,6 +516,84 @@ _STEP_RUNNERS: dict[str, Any] = {
 _STEPS_RETURNING_ADATA = {"filtering", "reset_to_counts"}
 
 
+# step -> (human tool label, PipelineParams fields worth recording)
+_STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
+    "reset_to_counts": ("scview.reset_to_counts", ()),
+    "qc_metrics": ("scanpy.pp.calculate_qc_metrics", ()),
+    "filtering": ("scanpy.pp.filter_cells/genes", ("min_genes", "min_cells", "max_pct_mt")),
+    "normalization": ("scanpy.pp.normalize_total", ("target_sum",)),
+    "log_transform": ("scanpy.pp.log1p", ()),
+    "highly_variable_genes": ("scanpy.pp.highly_variable_genes", ("n_top_genes", "hvg_flavor")),
+    "scaling": ("scanpy.pp.scale", ()),
+    "pca": ("scanpy.pp.pca", ("n_comps",)),
+    "batch_correction": ("scview.batch_correction", ("batch_key", "batch_method")),
+    "neighbors": ("scanpy.pp.neighbors", ("n_neighbors", "n_comps")),
+    "clustering": ("scanpy.tl.leiden/louvain", ("clustering_method", "clustering_resolution")),
+    "embeddings": ("scanpy.tl.umap", ("umap_min_dist",)),
+    "marker_genes": ("scanpy.tl.rank_genes_groups", ("marker_columns",)),
+    "enrichment": ("scview.enrichment",
+                   ("enrichment_columns", "enrichment_n_genes", "enrichment_collections")),
+    "cell_cycle": ("scanpy.tl.score_genes_cell_cycle", ()),
+}
+
+
+def _record_pipeline_step(adata: ad.AnnData, step_name: str, params: PipelineParams) -> None:
+    """Append a provenance entry for a completed step. Never raises."""
+    tool, keys = _STEP_PROVENANCE.get(step_name, (f"scview.{step_name}", ()))
+    try:
+        provenance.record_step(
+            adata, step=step_name, tool=tool,
+            params={k: getattr(params, k) for k in keys},
+        )
+    except Exception as e:  # provenance must never break the pipeline
+        logger.warning("Could not record provenance for step '%s': %s", step_name, e)
+
+
+def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list[str]) -> None:
+    """Update the denormalised ``current`` state summary after a pipeline run."""
+    try:
+        ran = set(steps_run)
+        current: dict[str, Any] = {}
+        if "normalization" in ran:
+            current["normalized"] = True
+        if "log_transform" in ran:
+            current["log1p"] = True
+        if "scaling" in ran:
+            current["scaled"] = True
+        if "pca" in ran or "X_pca" in adata.obsm:
+            current["pca"] = True
+        embs = sorted(k for k in adata.obsm.keys() if k.startswith("X_"))
+        if embs:
+            current["embeddings"] = embs
+        active = adata.uns.get("scview_active_clustering")
+        if active:
+            current["clustering"] = {
+                "column": active,
+                "method": params.clustering_method,
+                "resolution": params.clustering_resolution,
+            }
+        markers_for = sorted(
+            k.split("__", 1)[1]
+            for k in adata.uns
+            if isinstance(k, str) and k.startswith("rank_genes_groups__")
+        )
+        if markers_for:
+            current["markers_for"] = markers_for
+        enr_for = sorted(
+            {
+                k.split("__")[1]
+                for k in adata.uns
+                if isinstance(k, str) and k.startswith("enrichment__") and len(k.split("__")) >= 2
+            }
+        )
+        if enr_for:
+            current["enrichment_for"] = enr_for
+        if current:
+            provenance.set_current(adata, **current)
+    except Exception as e:
+        logger.warning("Could not finalise provenance state: %s", e)
+
+
 def run_pipeline(
     adata: ad.AnnData,
     steps: list[str],
@@ -571,12 +651,15 @@ def run_pipeline(
             ret = runner(adata, params)
             # Some steps return a new AnnData object
             if step_name in _STEPS_RETURNING_ADATA and isinstance(ret, ad.AnnData):
+                provenance.carry(adata, ret)  # keep history across the new object
                 adata = ret
             result.steps_run.append(step_name)
+            _record_pipeline_step(adata, step_name, params)
         except Exception as e:
             logger.error("Step '%s' failed: %s", step_name, e)
             result.errors[step_name] = str(e)
 
+    _finalize_current(adata, params, result.steps_run)
     result.elapsed_seconds = round(time.time() - t0, 2)
 
     if output_path:
@@ -662,8 +745,10 @@ def run_pipeline_streamed(
                 ret = runner(adata, params)
 
             if step_name in _STEPS_RETURNING_ADATA and isinstance(ret, ad.AnnData):
+                provenance.carry(adata, ret)  # keep history across the new object
                 adata = ret
             result.steps_run.append(step_name)
+            _record_pipeline_step(adata, step_name, params)
             elapsed = round(time.time() - step_t0, 2)
             yield ("step_done", {"step": step_name, "index": idx, "elapsed": elapsed})
         except Exception as e:
@@ -671,6 +756,7 @@ def run_pipeline_streamed(
             result.errors[step_name] = str(e)
             yield ("step_error", {"step": step_name, "index": idx, "error": str(e)})
 
+    _finalize_current(adata, params, result.steps_run)
     result.elapsed_seconds = round(time.time() - t0, 2)
 
     if output_path:

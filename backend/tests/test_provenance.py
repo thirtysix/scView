@@ -85,6 +85,26 @@ def test_h5ad_roundtrip(tmp_path):
     assert pr["current"]["qc"] is True
 
 
+def test_pipeline_records_history_and_current():
+    from scview.core.pipeline import PipelineParams, run_pipeline
+
+    rng = np.random.default_rng(0)
+    a = _adata(60, 40)
+    a.X = rng.poisson(2.0, size=(60, 40)).astype("float32")  # counts-like
+    adata, result = run_pipeline(
+        a, steps=["qc_metrics", "normalization", "log_transform"], params=PipelineParams()
+    )
+    p = prov.read_provenance(adata)
+    steps = [h["step"] for h in p["history"]]
+    assert "normalization" in steps and "log_transform" in steps
+    norm = next(h for h in p["history"] if h["step"] == "normalization")
+    assert norm["tool"] == "scanpy.pp.normalize_total"
+    assert norm["params"]["target_sum"] == 1e4
+    assert "timestamp" in norm and "effect" in norm
+    assert p["current"].get("normalized") is True
+    assert p["current"].get("log1p") is True
+
+
 def test_reconcile_detects_missing():
     a = _adata()
     prov.set_current(a, embeddings=["X_umap"], clustering={"column": "leiden"}, markers_for=["ct"])
