@@ -588,6 +588,13 @@ def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list
         )
         if enr_for:
             current["enrichment_for"] = enr_for
+        anchors = []
+        if "counts" in adata.layers:
+            anchors.append("counts")
+        if adata.raw is not None:
+            anchors.append("lognorm")  # pre-scaling state stored in adata.raw
+        if anchors:
+            current["anchors"] = anchors
         if current:
             provenance.set_current(adata, **current)
     except Exception as e:

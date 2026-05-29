@@ -16,6 +16,8 @@ from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
+from scview.core import provenance
+from scview.core.rerun import plan_rerun
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,12 @@ class RunPipelineRequest(BaseModel):
 class SuggestRequest(BaseModel):
     """Request body for the suggestions endpoint."""
     preprocessing_state: dict[str, Any]
+
+
+class RerunRequest(BaseModel):
+    """Re-run a step (and its downstream) with new parameters."""
+    edited_step: str
+    params: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -227,3 +235,67 @@ async def suggest_improvements(
     except Exception as e:
         logger.error("Suggestions failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Suggestions failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Dependency-aware re-run ("edit & re-run from step k")
+# ---------------------------------------------------------------------------
+
+
+def _history_steps(adaptor) -> list[str]:
+    return [h["step"] for h in provenance.read_provenance(adaptor.adata).get("history", [])]
+
+
+@router.get("/datasets/{dataset_id}/rerun-plan")
+async def get_rerun_plan(
+    dataset_id: str,
+    step: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Preview what re-running a step would recompute vs keep (no execution)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    return plan_rerun(_history_steps(adaptor), step).model_dump()
+
+
+@router.post("/datasets/{dataset_id}/rerun")
+async def rerun_step(
+    dataset_id: str,
+    body: RerunRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Re-run an in-place-rerunnable step (and its downstream) with new params,
+    reusing existing upstream artifacts (PCA / neighbour graph)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+
+    plan = plan_rerun(_history_steps(adaptor), body.edited_step)
+    if not plan.rerun_steps:
+        raise HTTPException(status_code=400, detail=plan.message or "Nothing to re-run.")
+    if plan.requires_reprocess:
+        raise HTTPException(status_code=409, detail=plan.message)
+
+    params = PipelineParams()
+    if body.params:
+        for key, value in body.params.items():
+            if hasattr(params, key):
+                setattr(params, key, value)
+
+    try:
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        _, result = run_pipeline(
+            adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path
+        )
+        # Reload so the new state is served.
+        if dataset_id in dm._datasets:
+            dm._datasets[dataset_id].close()
+            del dm._datasets[dataset_id]
+        if dataset_id in dm._load_order:
+            dm._load_order.remove(dataset_id)
+        await dm.load_dataset(dataset_id)
+        return {"plan": plan.model_dump(), "result": result.to_dict()}
+    except Exception as e:
+        logger.error("Re-run failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Re-run failed: {e}")
