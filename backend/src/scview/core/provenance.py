@@ -22,6 +22,7 @@ Block shape (see PROVENANCE.md for the full schema):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -130,20 +131,38 @@ def record_step(
     note: str | None = None,
     when: str | None = None,
 ) -> None:
-    """Append one step to the history (a replayable recipe entry)."""
+    """Append one step to the history — a replayable recipe entry that is also
+    a git-style commit: it carries a content-derived ``commit_id`` and a
+    ``parent`` pointer to the previous commit (the DAG backbone)."""
     data = read_provenance(adata)
+    history = data["history"]
+    parent = history[-1].get("commit_id") if history else None
+    ts = when or _now()
+    cleaned = _clean(params or {})
     entry: dict[str, Any] = {
+        "commit_id": _commit_id(parent, step, cleaned, ts),
+        "parent": parent,
         "step": step,
         "tool": tool,
-        "params": _clean(params or {}),
-        "timestamp": when or _now(),
+        "params": cleaned,
+        "timestamp": ts,
         "scview_version": _scview_version(),
         "effect": {"n_cells": int(adata.n_obs), "n_genes": int(adata.n_vars)},
     }
     if note:
         entry["note"] = note
-    data["history"].append(entry)
+    history.append(entry)
+    data.setdefault("current", {})["head"] = entry["commit_id"]
     _write(adata, data)
+
+
+def recipe(adata) -> list[dict[str, Any]]:
+    """Return the ordered, replayable recipe (step + params per commit) — a
+    portable record that reproduces this dataset's processing elsewhere."""
+    return [
+        {"commit_id": h.get("commit_id"), "step": h["step"], "params": h.get("params", {})}
+        for h in read_provenance(adata).get("history", [])
+    ]
 
 
 def set_current(adata, **fields: Any) -> None:
@@ -190,6 +209,12 @@ def reconcile(adata) -> list[str]:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _commit_id(parent: str | None, step: str, params: dict, ts: str) -> str:
+    """Content-derived commit id (git-style): hashes parent + step + params + time."""
+    payload = json.dumps([parent, step, params, ts], sort_keys=True, default=_json_default)
+    return hashlib.sha1(payload.encode()).hexdigest()[:12]
 
 
 def _scview_version() -> str:

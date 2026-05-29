@@ -47,6 +47,20 @@ def test_record_steps_ordered_with_effect():
     assert "timestamp" in hist[0] and "scview_version" in hist[0]
 
 
+def test_commit_chain_and_recipe():
+    a = _adata()
+    prov.record_step(a, step="normalization", tool="t", params={"target_sum": 1e4})
+    prov.record_step(a, step="pca", tool="t", params={"n_comps": 50})
+    h = prov.read_provenance(a)["history"]
+    assert h[0]["parent"] is None
+    assert h[1]["parent"] == h[0]["commit_id"]  # DAG backbone: child points to parent
+    assert h[0]["commit_id"] != h[1]["commit_id"]
+    assert prov.read_provenance(a)["current"]["head"] == h[1]["commit_id"]
+    r = prov.recipe(a)
+    assert [s["step"] for s in r] == ["normalization", "pca"]
+    assert r[0]["params"]["target_sum"] == 1e4
+
+
 def test_numpy_params_are_cleaned():
     a = _adata()
     prov.record_step(a, step="clustering", tool="sc.tl.leiden",

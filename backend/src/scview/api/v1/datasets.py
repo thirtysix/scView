@@ -196,6 +196,19 @@ async def get_provenance(
     }
 
 
+@router.get("/datasets/{dataset_id}/recipe")
+async def get_recipe(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Return the ordered, replayable recipe (commit chain of step+params) — a
+    portable record for reproducing this dataset's processing."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    return {"recipe": provenance.recipe(adaptor.adata)}
+
+
 @router.delete("/datasets/{dataset_id}", status_code=204)
 async def delete_dataset(
     dataset_id: str,
