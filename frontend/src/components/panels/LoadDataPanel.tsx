@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { uploadDataset, listDatasets, getDataset } from "@/api/datasets";
@@ -25,6 +25,16 @@ export function LoadDataPanel() {
   const setPanel = useViewStore((s) => s.setPanel);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Populate previously-loaded datasets on mount so they can be reopened
+  // without re-uploading.
+  useEffect(() => {
+    listDatasets()
+      .then(setAvailableDatasets)
+      .catch(() => {
+        /* non-fatal: the list just stays empty */
+      });
+  }, [setAvailableDatasets]);
 
   const handleFile = useCallback(
     async (file: File) => {
