@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 
 from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
+from scview.core import provenance
 from scview.core.dataset_manager import DatasetManager
 from scview.core.conversion import trigger_conversion
 from scview.models.enums import DatasetStatus
@@ -174,6 +175,25 @@ async def get_dataset_info(
         info["default_expression_layer"] = adaptor.default_expression_layer()
 
     return info
+
+
+@router.get("/datasets/{dataset_id}/provenance")
+async def get_provenance(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Return the recorded scView history/source for a dataset, plus any
+    recorded-vs-actual reconciliation issues. Empty history means scView hasn't
+    transformed this file (inferred state is available via the assessment endpoint)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    recorded = provenance.read_provenance(adaptor.adata)
+    return {
+        "recorded": recorded,
+        "has_history": bool(recorded.get("history") or recorded.get("source")),
+        "reconcile_issues": provenance.reconcile(adaptor.adata),
+    }
 
 
 @router.delete("/datasets/{dataset_id}", status_code=204)
