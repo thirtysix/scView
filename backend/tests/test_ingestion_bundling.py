@@ -88,6 +88,22 @@ def test_complete_mex_triplet(tmp_path):
     assert b.is_merge is False
 
 
+def test_mex_label_skips_generic_dir_name(tmp_path):
+    # A prefix-less triplet inside a generic CellRanger/staging dir should not
+    # be labelled with that dir name ("files", "filtered_feature_bc_matrix"…).
+    d = tmp_path / "filtered_feature_bc_matrix"
+    d.mkdir()
+    b = build_bundle(_mex_triplet(d))
+    assert b.units[0].label == "sample"
+
+
+def test_mex_label_uses_meaningful_dir_name(tmp_path):
+    d = tmp_path / "GSM4711"
+    d.mkdir()
+    b = build_bundle(_mex_triplet(d))
+    assert b.units[0].label == "GSM4711"
+
+
 def test_lone_matrix_is_incomplete(tmp_path):
     b = build_bundle([_mtx(tmp_path / "matrix.mtx")])
     assert len(b.units) == 1

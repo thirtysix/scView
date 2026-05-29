@@ -72,6 +72,12 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
 _STRIP_EXTS = (".gz", ".mtx", ".tsv", ".csv", ".txt")
 _ROLE_TOKENS = ("matrix", "barcodes", "features", "genes")
 
+# Directory names that are NOT sample-specific (CellRanger conventions + our
+# upload-staging dir), so they make poor default labels for a prefix-less MEX.
+_GENERIC_MEX_DIRS = {
+    "files", "filtered_feature_bc_matrix", "raw_feature_bc_matrix", "outs", "matrix",
+}
+
 
 class BundleFile(BaseModel):
     """One file placed into a unit."""
@@ -173,7 +179,7 @@ def _group_mex_units(mex_parts: list[tuple[Path, BundleFile]]) -> list[IngestUni
         prefix = _mex_prefix(path.name)
         key = f"{path.parent}|{prefix}"
         groups.setdefault(key, []).append(bf)
-        labels.setdefault(key, prefix or path.parent.name or "sample")
+        labels.setdefault(key, _mex_label(prefix, path.parent.name))
 
     units: list[IngestUnit] = []
     for key, files in groups.items():
@@ -203,6 +209,16 @@ def _assemble_mex_unit(label: str, files: list[BundleFile]) -> IngestUnit:
         missing_roles=missing,
         issues=issues,
     )
+
+
+def _mex_label(prefix: str, parent_name: str) -> str:
+    """Best label for a MEX unit: the filename prefix, else a meaningful parent
+    directory, else a neutral default (the user renames it in the wizard)."""
+    if prefix:
+        return prefix
+    if parent_name and parent_name.lower() not in _GENERIC_MEX_DIRS:
+        return parent_name
+    return "sample"
 
 
 def _mex_prefix(name: str) -> str:
