@@ -22,6 +22,16 @@ from scview.core.ingestion.loading import (
     IngestLoadError,
     load_unit,
 )
+from scview.core.ingestion.merge import (
+    MergeJoin,
+    MergePlan,
+    Reconciliation,
+    VarBasis,
+    VarReset,
+    classify_var_basis,
+    merge_units,
+    plan_merge,
+)
 from scview.core.ingestion.validation import (
     IngestIssue,
     IssueSeverity,
@@ -39,11 +49,19 @@ __all__ = [
     "IngestLoadError",
     "IngestUnit",
     "IssueSeverity",
+    "MergeJoin",
+    "MergePlan",
+    "Reconciliation",
     "UnitFormat",
     "ValidationReport",
+    "VarBasis",
+    "VarReset",
     "build_bundle",
     "bundle_from_detections",
+    "classify_var_basis",
     "detect_file",
     "load_unit",
+    "merge_units",
+    "plan_merge",
     "validate_bundle",
 ]
