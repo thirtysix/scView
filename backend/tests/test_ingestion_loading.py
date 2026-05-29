@@ -129,6 +129,23 @@ def test_load_tenx_h5(tmp_path):
     assert adata.shape == (2, 3)
 
 
+def test_load_loom(tmp_path):
+    p = tmp_path / "data.loom"
+    a = ad.AnnData(X=np.array([[1.0, 0, 2], [0, 3, 4]], dtype="float32"))
+    a.var_names = ["g0", "g1", "g2"]
+    a.write_loom(p)
+    adata = load_unit(_only_unit([p]))
+    assert adata.shape == (2, 3)
+
+
+def test_load_zarr(tmp_path):
+    d = tmp_path / "data.zarr"
+    a = ad.AnnData(X=np.zeros((5, 3), dtype="float32"))
+    a.write_zarr(str(d))
+    adata = load_unit(_only_unit([d]))
+    assert adata.shape == (5, 3)
+
+
 def test_load_dense_genes_in_rows_default(tmp_path):
     # genes × cells (genes in rows) — the default orientation.
     p = tmp_path / "expr.csv"
