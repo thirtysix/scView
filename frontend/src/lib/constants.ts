@@ -2,7 +2,6 @@ export const API_BASE = "/api/v1";
 
 export const PANEL_IDS = [
   "load",
-  "ingest",
   "assessment",
   "overview",
   "unified",
@@ -17,8 +16,7 @@ export const PANEL_IDS = [
 export type PanelId = (typeof PANEL_IDS)[number];
 
 export const PANEL_LABELS: Record<PanelId, string> = {
-  load: "Load Data",
-  ingest: "Add Data",
+  load: "Data",
   assessment: "Data Assessment",
   overview: "Visualizations",
   unified: "Unified View",

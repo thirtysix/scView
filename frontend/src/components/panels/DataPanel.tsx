@@ -25,9 +25,10 @@ import {
   type MergePlan,
   type UnitFormat,
 } from "@/api/ingest";
-import { getDataset, listDatasets } from "@/api/datasets";
+import { getDataset, listDatasets, uploadDataset } from "@/api/datasets";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
+import { DatasetLibrary } from "@/components/panels/DatasetLibrary";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
   tenx_mex: "10x MEX (matrix + barcodes + features)",
@@ -55,7 +56,7 @@ const DEFAULT_OPTIONS: IngestOptions = {
   genes_in_rows: true,
 };
 
-export function AddDataPanel() {
+export function DataPanel() {
   const setCurrentDataset = useDatasetStore((s) => s.setCurrentDataset);
   const setAvailableDatasets = useDatasetStore((s) => s.setAvailableDatasets);
   const setPanel = useViewStore((s) => s.setPanel);
@@ -66,6 +67,7 @@ export function AddDataPanel() {
   const [options, setOptions] = useState<IngestOptions>(DEFAULT_OPTIONS);
 
   const [busy, setBusy] = useState(false);
+  const [busyNote, setBusyNote] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,9 +75,49 @@ export function AddDataPanel() {
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
 
+  // Seurat .rds/.RData go through the R converter (not the ingest wizard).
+  const handleSeurat = useCallback(
+    async (file: File) => {
+      setBusy(true);
+      setError(null);
+      setBusyNote("Converting Seurat object… this can take a minute.");
+      try {
+        const result = await uploadDataset(file);
+        let dataset = await getDataset(result.id);
+        let attempts = 0;
+        while (dataset.status === "converting" && attempts < 90) {
+          await new Promise((r) => setTimeout(r, 2000));
+          dataset = await getDataset(result.id);
+          attempts++;
+        }
+        setAvailableDatasets(await listDatasets());
+        if (dataset.status === "error") {
+          setError(dataset.error_message || "Seurat conversion failed.");
+        } else {
+          setCurrentDataset(dataset);
+          if (dataset.status === "ready") setPanel("assessment");
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Seurat upload failed.");
+      } finally {
+        setBusy(false);
+        setBusyNote(null);
+      }
+    },
+    [setAvailableDatasets, setCurrentDataset, setPanel]
+  );
+
   const addFiles = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return;
+      // A single Seurat file → the converter path.
+      if (files.length === 1) {
+        const ext = files[0].name.split(".").pop()?.toLowerCase();
+        if (ext === "rds" || ext === "rdata") {
+          await handleSeurat(files[0]);
+          return;
+        }
+      }
       setBusy(true);
       setError(null);
       try {
@@ -99,7 +141,7 @@ export function AddDataPanel() {
         setBusy(false);
       }
     },
-    [sessionId]
+    [sessionId, handleSeurat]
   );
 
   const handleDrop = useCallback(
@@ -136,7 +178,6 @@ export function AddDataPanel() {
       const ds = await getDataset(dataset_id);
       setCurrentDataset(ds);
       setAvailableDatasets(await listDatasets());
-      // session is consumed on the server; clear local wizard state
       setSessionId(null);
       setState(null);
       setMergePlan(null);
@@ -154,19 +195,18 @@ export function AddDataPanel() {
   const hasDense = bundle?.units.some((u) => u.format === "dense_table") ?? false;
   const loadable = bundle?.units.filter((u) => u.format !== "unknown") ?? [];
   const canCommit = !!validation?.ok && loadable.length > 0 && !committing && !busy;
-  const recon = mergePlan?.reconciliation ?? null;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-slate-800">Add Data</h2>
+        <h2 className="text-2xl font-bold text-slate-800">Data</h2>
         <p className="mt-1 text-sm text-slate-500">
           Import single-cell data in almost any form — a 10x matrix (the three
           <code className="mx-1 rounded bg-slate-100 px-1">matrix / barcodes / features</code>
           files), a CellRanger <code className="rounded bg-slate-100 px-1">.h5</code>, an
-          AnnData <code className="rounded bg-slate-100 px-1">.h5ad</code>, an expression
-          table, or several samples to merge. Drop the files and scView will figure out the
-          rest.
+          AnnData <code className="rounded bg-slate-100 px-1">.h5ad</code>, a Seurat{" "}
+          <code className="rounded bg-slate-100 px-1">.rds</code>, an expression table, or
+          several samples to merge — or reopen one of your datasets below.
         </p>
       </div>
 
@@ -183,9 +223,7 @@ export function AddDataPanel() {
         }`}
       >
         <FileUp className="h-8 w-8 text-slate-400" />
-        <p className="mt-2 text-sm font-medium text-slate-700">
-          Drag files here, or
-        </p>
+        <p className="mt-2 text-sm font-medium text-slate-700">Drag files here, or</p>
         <div className="mt-2 flex gap-2">
           <button
             onClick={() => fileInput.current?.click()}
@@ -203,7 +241,8 @@ export function AddDataPanel() {
           </button>
         </div>
         <p className="mt-2 text-xs text-slate-400">
-          Add more files (or another sample to merge) at any time.
+          .h5ad · Seurat .rds · 10x (matrix/barcodes/features or .h5) · loom · CSV/TSV ·
+          multiple samples to merge
         </p>
         <input
           ref={fileInput}
@@ -231,13 +270,12 @@ export function AddDataPanel() {
 
       {busy && (
         <div className="flex items-center gap-2 text-sm text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin text-primary" /> Inspecting files…
+          <Loader2 className="h-4 w-4 animate-spin text-primary" />{" "}
+          {busyNote ?? "Inspecting files…"}
         </div>
       )}
 
-      {error && (
-        <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>
-      )}
+      {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
       {/* Detected samples (units) */}
       {bundle && bundle.units.length > 0 && (
@@ -266,28 +304,18 @@ export function AddDataPanel() {
       )}
 
       {/* Merge plan */}
-      {mergePlan && (
-        <MergeSection
-          plan={mergePlan}
-          options={options}
-          setOptions={setOptions}
-        />
-      )}
+      {mergePlan && <MergeSection plan={mergePlan} options={options} setOptions={setOptions} />}
 
       {/* Options + commit */}
       {bundle && loadable.length > 0 && (
         <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Dataset name
-            </label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Dataset name</label>
             <input
               type="text"
               value={options.name ?? ""}
               placeholder={loadable.length > 1 ? "merged_dataset" : loadable[0].label}
-              onChange={(e) =>
-                setOptions((o) => ({ ...o, name: e.target.value || null }))
-              }
+              onChange={(e) => setOptions((o) => ({ ...o, name: e.target.value || null }))}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none"
             />
           </div>
@@ -297,9 +325,7 @@ export function AddDataPanel() {
               <input
                 type="checkbox"
                 checked={options.genes_in_rows}
-                onChange={(e) =>
-                  setOptions((o) => ({ ...o, genes_in_rows: e.target.checked }))
-                }
+                onChange={(e) => setOptions((o) => ({ ...o, genes_in_rows: e.target.checked }))}
               />
               Genes are in rows (transpose the table to cells × genes)
             </label>
@@ -333,6 +359,9 @@ export function AddDataPanel() {
           )}
         </div>
       )}
+
+      {/* Your datasets library */}
+      <DatasetLibrary />
     </div>
   );
 }
@@ -416,9 +445,8 @@ function MergeSection({
       </h3>
       <p className="text-xs text-slate-500">
         {plan.intersection.toLocaleString()} genes shared across samples
-        {plan.union !== plan.intersection &&
-          `, ${plan.union.toLocaleString()} in total`}
-        . Cells will be labelled by sample.
+        {plan.union !== plan.intersection && `, ${plan.union.toLocaleString()} in total`}. Cells
+        will be labelled by sample.
       </p>
 
       {recon?.needed && recon.feasible && (

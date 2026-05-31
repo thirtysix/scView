@@ -1,7 +1,6 @@
 import { useViewStore } from "@/stores/viewStore";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
-import { LoadDataPanel } from "@/components/panels/LoadDataPanel";
-import { AddDataPanel } from "@/components/panels/AddDataPanel";
+import { DataPanel } from "@/components/panels/DataPanel";
 import { DataAssessmentPanel } from "@/components/panels/DataAssessmentPanel";
 import { OverviewPanel } from "@/components/panels/OverviewPanel";
 import { UnifiedViewPanel } from "@/components/panels/UnifiedViewPanel";
@@ -14,8 +13,7 @@ import { ProvenancePanel } from "@/components/panels/ProvenancePanel";
 import type { PanelId } from "@/lib/constants";
 
 const PANEL_COMPONENTS: Record<PanelId, React.ComponentType> = {
-  load: LoadDataPanel,
-  ingest: AddDataPanel,
+  load: DataPanel,
   assessment: DataAssessmentPanel,
   overview: OverviewPanel,
   unified: UnifiedViewPanel,
