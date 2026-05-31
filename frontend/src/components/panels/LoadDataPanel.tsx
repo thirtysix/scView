@@ -117,7 +117,16 @@ export function LoadDataPanel() {
     async (file: File) => {
       const ext = file.name.split(".").pop()?.toLowerCase();
       if (!ext || !["h5ad", "rds", "rdata"].includes(ext)) {
-        setError("Unsupported file type. Please upload .h5ad, .rds, or .Rdata files.");
+        // Redirect 10x / table / multi-file formats to the Add Data wizard.
+        const addDataExts = ["mtx", "tsv", "csv", "txt", "h5", "loom", "zarr", "gz"];
+        if (ext && addDataExts.includes(ext)) {
+          setError(
+            'This looks like a 10x, table, or multi-file dataset — use the "Add Data" tab ' +
+              "(in the sidebar) for those. The Load Data tab handles single .h5ad / .rds files."
+          );
+        } else {
+          setError("Unsupported file type. Please upload .h5ad, .rds, or .Rdata files.");
+        }
         return;
       }
 
