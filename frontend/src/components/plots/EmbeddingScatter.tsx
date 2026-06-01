@@ -19,6 +19,10 @@ interface EmbeddingScatterProps {
   dimensions?: 2 | 3;
   /** Compact reference mode: hides the reset button, sampling badge and tooltip. */
   minimal?: boolean;
+  /** When dimming non-selected cells, fade them to grey (still visible as
+   * context) instead of just lowering their alpha (which can make light colours
+   * vanish). Used by the cluster reference map. */
+  dimToGray?: boolean;
 }
 
 /**
@@ -115,6 +119,7 @@ export function EmbeddingScatter({
   maxRenderedCells = 100_000,
   dimensions = 2,
   minimal = false,
+  dimToGray = false,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(
@@ -230,15 +235,23 @@ export function EmbeddingScatter({
     if (effectiveColorType === "categorical") {
       for (let i = 0; i < count; i++) {
         const catIdx = colorValues[i] ?? 0;
-        const [r, g, b] = mapCategoryToColor(catIdx);
         const dimmed =
           selectedIndices && selectedIndices.size > 0 && !selectedIndices.has(i);
-        rgba[i * 4] = r;
-        rgba[i * 4 + 1] = g;
-        rgba[i * 4 + 2] = b;
-        rgba[i * 4 + 3] = dimmed
-          ? Math.round(opacity * 0.15 * 255)
-          : Math.round(opacity * 255);
+        if (dimmed && dimToGray) {
+          // Faded grey — still visible as spatial context.
+          rgba[i * 4] = 203;
+          rgba[i * 4 + 1] = 213;
+          rgba[i * 4 + 2] = 225;
+          rgba[i * 4 + 3] = Math.round(opacity * 0.55 * 255);
+        } else {
+          const [r, g, b] = mapCategoryToColor(catIdx);
+          rgba[i * 4] = r;
+          rgba[i * 4 + 1] = g;
+          rgba[i * 4 + 2] = b;
+          rgba[i * 4 + 3] = dimmed
+            ? Math.round(opacity * 0.15 * 255)
+            : Math.round(opacity * 255);
+        }
       }
     } else {
       // Continuous — find min/max
@@ -264,7 +277,7 @@ export function EmbeddingScatter({
     }
 
     return rgba;
-  }, [colorValues, colorType, opacity, selectedIndices, totalCells]);
+  }, [colorValues, colorType, opacity, selectedIndices, totalCells, dimToGray]);
 
   // Downsampling: when cell count exceeds threshold, render a random subset
   const { renderPositions, renderColors, indexMap, isSampled } = useMemo(() => {

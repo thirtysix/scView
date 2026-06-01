@@ -82,6 +82,7 @@ export function ClusterReference({
           dimensions={dimensions}
           pointSize={1.5}
           selectedIndices={selectedIndices}
+          dimToGray
           minimal
         />
       </div>
