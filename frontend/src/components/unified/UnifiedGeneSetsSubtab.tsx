@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Loader2, Search, Check } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { apiFetch } from "@/api/client";
@@ -109,11 +109,29 @@ export function UnifiedGeneSetsSubtab({
     return geneSets.filter((gs) => gs.name.toLowerCase().includes(q));
   }, [geneSets, filterQuery]);
 
-  // Select a gene set from the list
-  const handleSelectGeneSet = useCallback((gs: GeneSetSearchResult) => {
-    setSelectedGeneSet(gs);
-    setScoreResult(null);
-  }, []);
+  // Cache of already-computed scores, so re-selecting a previously-scored gene
+  // set restores its overlay instantly instead of forcing a re-score. Keyed by
+  // dataset id + gene-set name (scores are per-dataset).
+  const scoreCache = useRef<Map<string, { scores: Float32Array; found: number; missing: number }>>(
+    new Map(),
+  );
+  const cacheKey = (name: string) => `${datasetId}::${name}`;
+
+  // Select a gene set from the list — re-apply a cached score if we have one.
+  const handleSelectGeneSet = useCallback(
+    (gs: GeneSetSearchResult) => {
+      setSelectedGeneSet(gs);
+      const cached = scoreCache.current.get(cacheKey(gs.name));
+      if (cached) {
+        setScoreResult({ found: cached.found, missing: cached.missing });
+        onScoreComplete(cached.scores, gs.name);
+      } else {
+        setScoreResult(null);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [datasetId, onScoreComplete],
+  );
 
   // Score gene set using correct API fields
   const handleScore = useCallback(async () => {
@@ -133,16 +151,20 @@ export function UnifiedGeneSetsSubtab({
       );
 
       const scores = new Float32Array(response.scores);
-      setScoreResult({
+      const entry = {
+        scores,
         found: response.genes_found.length,
         missing: response.genes_missing.length,
-      });
+      };
+      scoreCache.current.set(cacheKey(selectedGeneSet.name), entry);
+      setScoreResult({ found: entry.found, missing: entry.missing });
       onScoreComplete(scores, selectedGeneSet.name);
     } catch (err) {
       console.error("Scoring failed:", err);
     } finally {
       setIsScoring(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasetId, selectedGeneSet, onScoreComplete]);
 
   if (!dataset || !datasetId) {
