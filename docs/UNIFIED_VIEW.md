@@ -52,11 +52,13 @@ Gaps today (from the 2026-05-29 UX audit, see `UX_AUDIT.md`):
   Gene Sets / Enrichment (they already exist as `Unified*Subtab`), shrinking sidebar sprawl.
 
 **U2 — Linked views (Kana parity)**
+- ✅ **Gene click → recolor + violin (2026-06-01):** clicking a marker row or an expression
+  hit recolors the embedding by that gene (viridis + colorbar) and updates the Distribution
+  violin. Was already wired in `unifiedViewStore`; unblocked by the blank-scatter fix +
+  a Markers-subtab race fix (markers now auto-populate for the active clustering, so
+  marker-gene clicks recolor too).
 - **Cluster select → markers:** click a cluster in the embedding (or pick a group) →
   the Markers subtab shows that group's ranked markers. Reuse `/markers?groupby_column=…`.
-- **Gene click → recolor + violin:** clicking a marker row or an expression hit recolors
-  the embedding by that gene and updates the Distribution violin. (Overlay plumbing for
-  this already exists in `unifiedViewStore`.)
 - **Lasso → on-the-fly markers:** Kana's signature — lasso a region, compute markers for
   the selection vs rest. Lasso selection already exists; wire it to a markers call.
 
