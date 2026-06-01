@@ -60,6 +60,10 @@ export function UnifiedMarkersSubtab({
   // Fetch markers
   useEffect(() => {
     if (!datasetId) return;
+    // Cancellation guard: when groupByColumn auto-selects, this effect re-runs.
+    // Without it, a stale first run (empty column → 404 → "no markers") can
+    // resolve *after* the second run succeeds and clobber it.
+    let cancelled = false;
     setIsLoading(true);
     setError(null);
     setNoMarkers(false);
@@ -69,42 +73,43 @@ export function UnifiedMarkersSubtab({
       ? `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupByColumn)}`
       : `/datasets/${datasetId}/markers?format=json`;
 
+    const applyData = (data: MarkersResponse) => {
+      if (cancelled) return;
+      setMarkersData(data);
+      setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
+      initialFetchDone.current = true;
+      setIsLoading(false);
+    };
+
     apiFetch<MarkersResponse>(url)
-      .then((data) => {
-        setMarkersData(data);
-        setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
-        initialFetchDone.current = true;
-      })
+      .then(applyData)
       .catch((err) => {
+        if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("404") && !useOnDemand) {
-          if (groupByColumn) {
-            apiFetch<MarkersResponse>(
-              `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupByColumn)}`,
-            )
-              .then((data) => {
-                setMarkersData(data);
-                setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
-                initialFetchDone.current = true;
-              })
-              .catch((innerErr) => {
-                const innerMsg = innerErr instanceof Error ? innerErr.message : String(innerErr);
-                if (innerMsg.includes("404")) setNoMarkers(true);
-                else setError(innerMsg);
-              })
-              .finally(() => setIsLoading(false));
-            return;
-          }
-          setNoMarkers(true);
-        } else if (msg.includes("404")) {
-          setNoMarkers(true);
-        } else {
-          setError(msg);
+        // No default markers — fall back to on-demand markers for the
+        // auto-selected grouping column.
+        if (msg.includes("404") && !useOnDemand && groupByColumn) {
+          apiFetch<MarkersResponse>(
+            `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupByColumn)}`,
+          )
+            .then(applyData)
+            .catch((innerErr) => {
+              if (cancelled) return;
+              const innerMsg = innerErr instanceof Error ? innerErr.message : String(innerErr);
+              if (innerMsg.includes("404")) setNoMarkers(true);
+              else setError(innerMsg);
+              setIsLoading(false);
+            });
+          return;
         }
+        if (msg.includes("404")) setNoMarkers(true);
+        else setError(msg);
         setIsLoading(false);
-        return;
-      })
-      .then(() => setIsLoading(false));
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [datasetId, groupByColumn]);
 
   const currentMarkers = useMemo(() => {
