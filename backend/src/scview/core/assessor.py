@@ -13,7 +13,27 @@ import numpy as np
 from pydantic import BaseModel
 from scipy import sparse
 
+from scview.core import provenance
+
 logger = logging.getLogger(__name__)
+
+# scView provenance step name -> PreprocessingState field.
+_PROV_STEP_TO_FIELD = {
+    "qc_metrics": "qc_metrics",
+    "filtering": "filtering",
+    "normalization": "normalization",
+    "log_transform": "log_transform",
+    "highly_variable_genes": "highly_variable_genes",
+    "scaling": "scaling",
+    "pca": "pca",
+    "batch_correction": "batch_correction",
+    "neighbors": "neighbors",
+    "clustering": "clustering",
+    "embeddings": "embeddings",
+    "marker_genes": "marker_genes",
+    "enrichment": "enrichment",
+    "cell_cycle": "cell_cycle",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +165,12 @@ def _check_filtering(adata: Any) -> StepStatus:
 def _check_normalization(adata: Any) -> StepStatus:
     """Check dtype of X (float -> likely normalized), presence of raw or counts layer."""
     try:
+        if _is_raw_counts(adata):
+            return StepStatus(
+                done=False,
+                confidence="high",
+                details="Raw integer counts — not normalized yet",
+            )
         X = adata.X
         is_float = False
 
@@ -213,9 +239,30 @@ def _dense_sample(X: Any, n_rows: int, n_cols: int | None = None) -> np.ndarray:
     return np.array(arr, dtype=np.float64, copy=True)
 
 
+def _is_raw_counts(adata: Any) -> bool:
+    """True if X looks like raw counts — non-negative and integer-valued, even
+    when stored as float (10x matrices are float-typed counts). This is the
+    definitive tell that the data has NOT been normalised / logged / scaled."""
+    try:
+        n_cols = min(2000, adata.n_vars)
+        sample = _dense_sample(adata.X, min(200, adata.n_obs), n_cols).ravel()
+        finite = sample[np.isfinite(sample)]
+        if finite.size == 0:
+            return False
+        return bool(np.all(finite >= 0) and np.allclose(finite, np.round(finite)))
+    except Exception:
+        return False
+
+
 def _check_log_transform(adata: Any) -> StepStatus:
     """Check if data appears log-transformed by examining value range."""
     try:
+        if _is_raw_counts(adata):
+            return StepStatus(
+                done=False,
+                confidence="high",
+                details="Raw integer counts — not log-transformed yet",
+            )
         has_raw = adata.raw is not None
 
         # Prefer raw.X (pre-scaling data) for a cleaner signal; fall back to X
@@ -281,11 +328,27 @@ def _check_highly_variable_genes(adata: Any) -> StepStatus:
 def _check_scaling(adata: Any) -> StepStatus:
     """Check if X has been z-score scaled (mean ~ 0, std ~ 1 per gene)."""
     try:
+        if _is_raw_counts(adata):
+            return StepStatus(
+                done=False,
+                confidence="high",
+                details="Raw counts — not scaled (z-scoring would produce negative values)",
+            )
+
         n_genes_sample = min(100, adata.n_vars)
         n_cells_sample = min(2000, adata.n_obs)
 
         # _dense_sample guarantees a plain float64 ndarray
         sample = _dense_sample(adata.X, n_cells_sample, n_genes_sample)
+
+        # Z-score scaling produces negative values centred near 0. Non-negative
+        # data (counts / normalised / log1p) is definitely not scaled.
+        if float(np.nanmin(sample)) >= 0:
+            return StepStatus(
+                done=False,
+                confidence="high",
+                details="All values are non-negative — not z-score scaled",
+            )
 
         # Compute per-gene statistics — ravel() guarantees 1D
         gene_means = np.ravel(np.nanmean(sample, axis=0))
@@ -626,7 +689,7 @@ def assess_preprocessing(adata: Any) -> PreprocessingState:
         adata.n_vars,
     )
 
-    return PreprocessingState(
+    state = PreprocessingState(
         qc_metrics=_check_qc_metrics(adata),
         filtering=_check_filtering(adata),
         normalization=_check_normalization(adata),
@@ -642,3 +705,30 @@ def assess_preprocessing(adata: Any) -> PreprocessingState:
         enrichment=_check_enrichment(adata),
         cell_cycle=_check_cell_cycle(adata),
     )
+    return _apply_recorded_provenance(adata, state)
+
+
+def _apply_recorded_provenance(adata: Any, state: PreprocessingState) -> PreprocessingState:
+    """Overlay what scView actually recorded doing: a step in the provenance
+    history is authoritatively 'done' (high confidence), overriding heuristics."""
+    try:
+        history = provenance.read_provenance(adata).get("history", [])
+        last_ts: dict[str, str] = {}
+        for h in history:
+            field = _PROV_STEP_TO_FIELD.get(h.get("step", ""))
+            if field:
+                last_ts[field] = h.get("timestamp", "")
+        for field, ts in last_ts.items():
+            when = ts.split("T")[0] if ts else ""
+            setattr(
+                state,
+                field,
+                StepStatus(
+                    done=True,
+                    confidence="high",
+                    details=f"Run by scView{(' on ' + when) if when else ''} (recorded)",
+                ),
+            )
+    except Exception as exc:  # provenance overlay must never break assessment
+        logger.warning("Provenance overlay failed: %s", exc)
+    return state
