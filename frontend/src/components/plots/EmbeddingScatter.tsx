@@ -146,6 +146,23 @@ export function EmbeddingScatter({
     return () => ro.disconnect();
   }, []);
 
+  // Proactively release the WebGL context when this scatter unmounts. Browsers
+  // cap the number of live WebGL contexts (~16); navigating between deck.gl
+  // panels (Overview, Trajectory, Unified View…) can accumulate contexts faster
+  // than they're GC'd, and exceeding the cap makes the browser silently drop a
+  // context — leaving the newest canvas blank with no 'contextlost' event.
+  // Forcing loseContext() on unmount frees the GPU resource immediately.
+  useEffect(() => {
+    const el = containerRef.current;
+    return () => {
+      const canvas = el?.querySelector("canvas");
+      const gl =
+        (canvas?.getContext("webgl2") as WebGL2RenderingContext | null) ??
+        (canvas?.getContext("webgl") as WebGLRenderingContext | null);
+      gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    };
+  }, []);
+
   // Attach WebGL context loss/restore listeners to the DeckGL canvas
   useEffect(() => {
     const canvas = containerRef.current?.querySelector("canvas");
