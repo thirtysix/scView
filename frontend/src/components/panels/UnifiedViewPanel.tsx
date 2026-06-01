@@ -15,8 +15,10 @@ import { UnifiedMarkersSubtab } from "@/components/unified/UnifiedMarkersSubtab"
 import { UnifiedExpressionSubtab } from "@/components/unified/UnifiedExpressionSubtab";
 import { UnifiedGeneSetsSubtab } from "@/components/unified/UnifiedGeneSetsSubtab";
 import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentSubtab";
+import { ClusterReference } from "@/components/unified/ClusterReference";
 import { mapCategoryToColor } from "@/lib/colors";
 import { apiFetch, apiFetchBinary } from "@/api/client";
+import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { decodeArrowBuffer } from "@/lib/arrow";
 
 const SUBTABS = [
@@ -277,9 +279,7 @@ export function UnifiedViewPanel() {
       // Build violin from scores grouped by the active groupBy column
       if (groupByColumn && dataset && datasetId) {
         // We need to fetch the groupBy column values to build the violin
-        apiFetchBinary(
-          `/datasets/${datasetId}/embedding?embedding=${encodeURIComponent(useSettingsStore.getState().embedding)}&color_by=${encodeURIComponent(groupByColumn)}`,
-        )
+        fetchEmbeddingBinary(datasetId, useSettingsStore.getState().embedding, groupByColumn)
           .then((buffer) => {
             const decoded = decodeArrowBuffer(buffer);
             const groupValues = decoded[groupByColumn];
@@ -573,6 +573,22 @@ export function UnifiedViewPanel() {
 
         {/* Right: tabbed side panel */}
         <div className="flex min-w-[260px] flex-1 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
+          {/* Cluster reference map — keeps cluster layout visible while the main
+              plot is recoloured by a gene / score. */}
+          {groupByColumn && positions && datasetId && (
+            <div className="flex-shrink-0 p-2">
+              <ClusterReference
+                datasetId={datasetId}
+                embedding={embedding}
+                column={groupByColumn}
+                positions={positions}
+                dimensions={dimensions}
+                categories={
+                  dataset?.obs_columns.find((c) => c.name === groupByColumn)?.values ?? []
+                }
+              />
+            </div>
+          )}
           {/* Tab bar */}
           <div className="flex flex-shrink-0 border-b border-slate-200">
             {SUBTABS.map((tab) => (

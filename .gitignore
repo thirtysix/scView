@@ -54,3 +54,6 @@ coverage/
 
 # Claude
 .claude/
+
+# Auto-generated project context for Claude Code
+CLAUDE.md

@@ -17,6 +17,8 @@ interface EmbeddingScatterProps {
   background?: "white" | "dark";
   maxRenderedCells?: number;
   dimensions?: 2 | 3;
+  /** Compact reference mode: hides the reset button, sampling badge and tooltip. */
+  minimal?: boolean;
 }
 
 /**
@@ -112,6 +114,7 @@ export function EmbeddingScatter({
   background = "white",
   maxRenderedCells = 100_000,
   dimensions = 2,
+  minimal = false,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(
@@ -488,23 +491,25 @@ export function EmbeddingScatter({
       )}
 
       {/* Reset view button */}
-      <button
-        onClick={resetView}
-        title="Reset view"
-        className="absolute right-3 top-3 z-10 rounded-md border border-slate-300 bg-white/90 p-1.5 text-slate-600 shadow-sm transition-colors hover:bg-slate-100 hover:text-slate-800"
-      >
-        <RotateCcw className="h-4 w-4" />
-      </button>
+      {!minimal && (
+        <button
+          onClick={resetView}
+          title="Reset view"
+          className="absolute right-3 top-3 z-10 rounded-md border border-slate-300 bg-white/90 p-1.5 text-slate-600 shadow-sm transition-colors hover:bg-slate-100 hover:text-slate-800"
+        >
+          <RotateCcw className="h-4 w-4" />
+        </button>
+      )}
 
       {/* Sampling indicator */}
-      {isSampled && (
+      {!minimal && isSampled && (
         <div className="absolute left-3 top-3 z-10 rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[10px] text-slate-500">
           Showing {(renderCount / 1000).toFixed(0)}K of {(totalCells / 1000).toFixed(0)}K cells (sampled)
         </div>
       )}
 
       {/* Tooltip — suppressed when parent provides onHover (custom tooltip) */}
-      {tooltip && !onHover && (
+      {!minimal && tooltip && !onHover && (
         <div
           className="pointer-events-none absolute z-20 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs shadow-lg"
           style={{ left: tooltip.x + 12, top: tooltip.y - 12 }}
