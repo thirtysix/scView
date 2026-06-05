@@ -75,7 +75,11 @@ function computeInitialViewState2D(
   };
 }
 
-function computeInitialViewState3D(positions: Float32Array) {
+function computeInitialViewState3D(
+  positions: Float32Array,
+  width = 600,
+  height = 600,
+) {
   let minX = Infinity, maxX = -Infinity;
   let minY = Infinity, maxY = -Infinity;
   let minZ = Infinity, maxZ = -Infinity;
@@ -103,7 +107,10 @@ function computeInitialViewState3D(positions: Float32Array) {
       minY + dataHeight / 2,
       minZ + dataDepth / 2,
     ] as [number, number, number],
-    zoom: Math.log2(400 / maxDim),
+    // Fit to the smaller container dimension (was a fixed 400px) so a small
+    // container — e.g. the cluster reference map — pulls back enough to show
+    // all clusters instead of cropping in.
+    zoom: Math.log2((Math.min(width, height) * 0.85) / maxDim),
     rotationX: 30,
     rotationOrbit: -30,
     minZoom: -5,
@@ -354,7 +361,7 @@ export function EmbeddingScatter({
   const initialViewState = useMemo(() => {
     if (!positions || positions.length === 0) return null;
     if (dimensions === 3) {
-      return computeInitialViewState3D(positions);
+      return computeInitialViewState3D(positions, containerSize.width, containerSize.height);
     }
     return computeInitialViewState2D(
       positions,
