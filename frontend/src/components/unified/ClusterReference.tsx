@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
@@ -67,6 +67,21 @@ export function ClusterReference({
     return s;
   }, [highlight, clusterValues]);
 
+  // Clicking a point selects that cell's cluster — same as clicking its legend
+  // chip (toggle off if already highlighted; click empty space to clear).
+  const handlePointClick = useCallback(
+    (index: number | null) => {
+      if (index == null) {
+        setHighlight(null);
+        return;
+      }
+      const code = clusterValues?.[index];
+      if (code == null || code < 0) return;
+      setHighlight((cur) => (cur === code ? null : code));
+    },
+    [clusterValues],
+  );
+
   if (!positions || !clusterValues) return null;
 
   return (
@@ -89,6 +104,7 @@ export function ClusterReference({
           selectedIndices={selectedIndices}
           externalViewState={viewState}
           onViewStateChange={onViewStateChange}
+          onClick={handlePointClick}
           dimToGray
           minimal
         />

@@ -12,6 +12,10 @@ interface EmbeddingScatterProps {
   pointSize?: number;
   opacity?: number;
   onHover?: (info: { index: number; x: number; y: number } | null) => void;
+  /** Fired on a click (not a drag) with the original cell index, or null when
+   * clicking empty space. deck.gl only emits this for genuine clicks, so it
+   * coexists with drag-to-rotate/pan. */
+  onClick?: (index: number | null) => void;
   onViewStateChange?: (viewState: Record<string, unknown>) => void;
   selectedIndices?: Set<number> | null;
   background?: "white" | "dark";
@@ -125,6 +129,7 @@ export function EmbeddingScatter({
   pointSize = 2,
   opacity = 0.8,
   onHover,
+  onClick,
   onViewStateChange,
   selectedIndices,
   background = "white",
@@ -423,6 +428,18 @@ export function EmbeddingScatter({
     [onHover, indexMap],
   );
 
+  const handleClick = useCallback(
+    (info: { index: number; picked: boolean }) => {
+      if (info.picked && info.index >= 0) {
+        const originalIndex = indexMap ? indexMap[info.index]! : info.index;
+        onClick?.(originalIndex);
+      } else {
+        onClick?.(null);
+      }
+    },
+    [onClick, indexMap],
+  );
+
   // Binary attribute data path — feeds typed arrays directly to GPU
   const layers = useMemo(() => {
     if (renderCount === 0 || !renderPositions || !renderColors) return [];
@@ -506,6 +523,7 @@ export function EmbeddingScatter({
           onViewStateChange={handleViewStateChange}
           layers={layers}
           onHover={handleHover}
+          onClick={handleClick}
           onError={handleGpuError}
           controller={{ scrollZoom: { speed: 0.002, smooth: true } }}
           style={{ background: bgColor }}
