@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # scView provenance step name -> PreprocessingState field.
 _PROV_STEP_TO_FIELD = {
     "qc_metrics": "qc_metrics",
+    "doublet_detection": "doublet_detection",
     "filtering": "filtering",
     "normalization": "normalization",
     "log_transform": "log_transform",
@@ -53,6 +54,7 @@ class PreprocessingState(BaseModel):
     """Full preprocessing state of an AnnData object."""
 
     qc_metrics: StepStatus
+    doublet_detection: StepStatus
     filtering: StepStatus
     normalization: StepStatus
     log_transform: StepStatus
@@ -109,6 +111,29 @@ def _check_qc_metrics(adata: Any) -> StepStatus:
             )
     except Exception as exc:
         logger.warning("Error checking QC metrics: %s", exc)
+        return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
+
+
+def _check_doublet_detection(adata: Any) -> StepStatus:
+    """Check if doublet detection (Scrublet) has annotated obs."""
+    try:
+        obs_cols = set(adata.obs.columns)
+        dbl_cols = {"doublet_score", "predicted_doublet"} & obs_cols
+        if dbl_cols:
+            n_dbl = (
+                int(adata.obs["predicted_doublet"].astype(bool).sum())
+                if "predicted_doublet" in obs_cols
+                else None
+            )
+            detail = f"Found doublet columns: {', '.join(sorted(dbl_cols))}"
+            if n_dbl is not None:
+                detail += f" ({n_dbl} cells flagged)"
+            return StepStatus(done=True, confidence="high", details=detail)
+        return StepStatus(
+            done=False, confidence="high", details="No doublet annotation found in obs"
+        )
+    except Exception as exc:
+        logger.warning("Error checking doublet detection: %s", exc)
         return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
 
 
@@ -691,6 +716,7 @@ def assess_preprocessing(adata: Any) -> PreprocessingState:
 
     state = PreprocessingState(
         qc_metrics=_check_qc_metrics(adata),
+        doublet_detection=_check_doublet_detection(adata),
         filtering=_check_filtering(adata),
         normalization=_check_normalization(adata),
         log_transform=_check_log_transform(adata),

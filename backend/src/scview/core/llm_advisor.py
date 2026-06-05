@@ -64,7 +64,8 @@ Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
 
 The possible preprocessing steps are:
 - qc_metrics: Calculate quality control metrics (n_genes, total_counts, pct_mt)
-- filtering: Filter low-quality cells and genes (params: min_genes, min_cells, max_pct_mt)
+- doublet_detection: Flag likely doublets with Scrublet, writing doublet_score + predicted_doublet to obs (params: expected_doublet_rate). Run before filtering on raw counts; removal is opt-in via filtering's drop_doublets.
+- filtering: Filter low-quality cells and genes (params: min_genes, min_cells, max_pct_mt, drop_doublets)
 - normalization: Normalize counts per cell (params: target_sum)
 - log_transform: Log1p transform the data
 - highly_variable_genes: Select highly variable genes (params: n_top_genes)

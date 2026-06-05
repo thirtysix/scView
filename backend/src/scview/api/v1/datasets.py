@@ -177,6 +177,23 @@ async def get_dataset_info(
     return info
 
 
+@router.get("/datasets/{dataset_id}/qc")
+async def get_qc_distributions(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Per-cell QC distributions (n_genes, total_counts, pct_mt, doublet_score if
+    present) as histograms + summary stats + a downsampled counts-vs-genes scatter.
+    Metrics absent from obs are computed on demand from X and cached (no disk write)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    try:
+        return adaptor.qc_distributions()
+    except Exception as e:  # noqa: BLE001 — surface a clean 500 rather than a stack trace
+        raise HTTPException(status_code=500, detail=f"Could not compute QC metrics: {e}")
+
+
 @router.get("/datasets/{dataset_id}/provenance")
 async def get_provenance(
     dataset_id: str,

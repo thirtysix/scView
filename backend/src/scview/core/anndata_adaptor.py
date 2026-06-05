@@ -23,6 +23,7 @@ class AnnDataAdaptor:
     def __init__(self, h5ad_path: str) -> None:
         self.h5ad_path = h5ad_path
         self._adata: ad.AnnData | None = None
+        self._qc_cache: dict | None = None
 
     @property
     def adata(self) -> ad.AnnData:
@@ -109,6 +110,109 @@ class AnnDataAdaptor:
         col = self.get_obs_column(groupby)
         counts = col.value_counts()
         return {str(k): int(v) for k, v in counts.items()}
+
+    # ------------------------------------------------------------------
+    # QC metrics
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _qc_summary(arr: np.ndarray, n_bins: int) -> dict:
+        """Histogram + summary stats for one QC metric."""
+        arr = np.asarray(arr, dtype=np.float64)
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return {
+                "min": 0.0, "max": 0.0, "mean": 0.0, "median": 0.0, "q1": 0.0, "q3": 0.0,
+                "hist": {"bin_edges": [], "counts": []},
+            }
+        counts, edges = np.histogram(arr, bins=n_bins)
+        return {
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+            "mean": float(arr.mean()),
+            "median": float(np.median(arr)),
+            "q1": float(np.percentile(arr, 25)),
+            "q3": float(np.percentile(arr, 75)),
+            "hist": {"bin_edges": edges.tolist(), "counts": counts.tolist()},
+        }
+
+    def qc_distributions(self, n_scatter: int = 5000, n_bins: int = 40) -> dict:
+        """Per-cell QC distributions for the Data Assessment tab.
+
+        Reads ``total_counts`` / ``n_genes_by_counts`` / ``pct_counts_mt`` from
+        ``obs`` when present, otherwise computes them on demand from ``X`` (no
+        mutation of the AnnData, no disk write). Returns per-metric histograms +
+        summary stats and a downsampled total_counts-vs-genes scatter (coloured
+        by % mito) so the payload stays small even for hundreds of thousands of
+        cells. Result is cached on the adaptor for the dataset's lifetime.
+        """
+        if self._qc_cache is not None:
+            return self._qc_cache
+
+        adata = self.adata
+        obs = adata.obs
+        computed = False
+
+        def _col(name: str) -> np.ndarray | None:
+            if name in obs.columns:
+                return np.asarray(obs[name].to_numpy(), dtype=np.float64)
+            return None
+
+        total_counts = _col("total_counts")
+        n_genes = _col("n_genes_by_counts")
+        if n_genes is None:
+            n_genes = _col("n_genes")
+        pct_mt = _col("pct_counts_mt")
+
+        if total_counts is None or n_genes is None or pct_mt is None:
+            computed = True
+            X = adata.X
+            tc = np.asarray(X.sum(axis=1)).ravel().astype(np.float64)
+            ng = np.asarray((X > 0).sum(axis=1)).ravel().astype(np.float64)
+            var_names = adata.var_names
+            mt_mask = np.asarray(
+                var_names.str.startswith("MT-") | var_names.str.startswith("mt-")
+            )
+            if mt_mask.any():
+                mt_counts = np.asarray(X[:, mt_mask].sum(axis=1)).ravel().astype(np.float64)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    pm = np.where(tc > 0, mt_counts / tc * 100.0, 0.0)
+            else:
+                pm = np.zeros_like(tc)
+            total_counts = tc if total_counts is None else total_counts
+            n_genes = ng if n_genes is None else n_genes
+            pct_mt = pm if pct_mt is None else pct_mt
+
+        doublet = _col("doublet_score")
+
+        metrics = {
+            "n_genes_by_counts": self._qc_summary(n_genes, n_bins),
+            "total_counts": self._qc_summary(total_counts, n_bins),
+            "pct_counts_mt": self._qc_summary(pct_mt, n_bins),
+        }
+        if doublet is not None:
+            metrics["doublet_score"] = self._qc_summary(doublet, n_bins)
+
+        n = int(len(total_counts))
+        idx = np.linspace(0, n - 1, n_scatter).astype(int) if n > n_scatter else np.arange(n)
+        scatter = {
+            "x": total_counts[idx].tolist(),
+            "y": n_genes[idx].tolist(),
+            "color": pct_mt[idx].tolist(),
+            "x_label": "total_counts",
+            "y_label": "n_genes_by_counts",
+            "color_label": "pct_counts_mt",
+            "n_shown": int(len(idx)),
+        }
+
+        result = {
+            "n_cells": n,
+            "computed_on_demand": computed,
+            "metrics": metrics,
+            "scatter": scatter,
+        }
+        self._qc_cache = result
+        return result
 
     # ------------------------------------------------------------------
     # Expression layers

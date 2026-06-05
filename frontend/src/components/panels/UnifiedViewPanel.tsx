@@ -56,18 +56,28 @@ export function UnifiedViewPanel() {
   const groupByColumn = useUnifiedViewStore((s) => s.groupByColumn);
   const setGroupByColumn = useUnifiedViewStore((s) => s.setGroupByColumn);
 
+  // Overlay + violin payload live in the store so they survive the
+  // unmount/remount PanelContainer does on every tab switch.
+  const overlayValues = useUnifiedViewStore((s) => s.overlayValues);
+  const setOverlayValues = useUnifiedViewStore((s) => s.setOverlayValues);
+  const overlayLabel = useUnifiedViewStore((s) => s.overlayLabel);
+  const setOverlayLabel = useUnifiedViewStore((s) => s.setOverlayLabel);
+  const setOverlayDatasetId = useUnifiedViewStore((s) => s.setOverlayDatasetId);
+  const overlayDatasetId = useUnifiedViewStore((s) => s.overlayDatasetId);
+  const violinData = useUnifiedViewStore((s) => s.violinData);
+  const setViolinData = useUnifiedViewStore((s) => s.setViolinData);
+  const violinTitle = useUnifiedViewStore((s) => s.violinTitle);
+  const setViolinTitle = useUnifiedViewStore((s) => s.setViolinTitle);
+  const clearOverlayState = useUnifiedViewStore((s) => s.clearOverlayState);
+
   // --- Embedding data (obs-colored) ---
   const { positions, colors, numCells, colorColumnName, dimensions, isLoading, error } =
     useEmbedding();
 
-  // --- Overlay state (expression / gene set score) ---
-  const [overlayValues, setOverlayValues] = useState<Float32Array | null>(null);
-  const [overlayLabel, setOverlayLabel] = useState<string>("");
+  // --- Overlay loading flag (transient; values/label persist in the store) ---
   const [isLoadingOverlay, setIsLoadingOverlay] = useState(false);
 
-  // --- Violin state ---
-  const [violinData, setViolinData] = useState<Record<string, number[]>>({});
-  const [violinTitle, setViolinTitle] = useState<string>("");
+  // --- Violin loading flag (transient; data/title persist in the store) ---
   const [isLoadingViolin, setIsLoadingViolin] = useState(false);
 
   // --- Auto-select embedding ---
@@ -101,6 +111,16 @@ export function UnifiedViewPanel() {
       setEmbedding(pick);
     }
   }, [dataset, embedding, setEmbedding]);
+
+  // --- Drop a persisted overlay if it belongs to a different dataset ---
+  // (overlay payload lives in the store, so a dataset switch could otherwise
+  // paint the previous dataset's values onto the new one.)
+  useEffect(() => {
+    if (!datasetId) return;
+    if (overlayDatasetId && overlayDatasetId !== datasetId) {
+      clearOverlayState();
+    }
+  }, [datasetId, overlayDatasetId, clearOverlayState]);
 
   // --- Auto-select groupBy column ---
   const categoricalColumns = useMemo(() => {
@@ -230,13 +250,14 @@ export function UnifiedViewPanel() {
         }
         setOverlayLabel(gene);
         setScatterOverlay({ type: "expression", gene });
+        setOverlayDatasetId(datasetId);
       } catch (err) {
         console.error("Failed to fetch expression:", err);
       } finally {
         setIsLoadingOverlay(false);
       }
     },
-    [datasetId, setScatterOverlay],
+    [datasetId, setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId],
   );
 
   // --- Fetch violin ---
@@ -275,6 +296,7 @@ export function UnifiedViewPanel() {
       setOverlayValues(scores);
       setOverlayLabel(name);
       setScatterOverlay({ type: "score", name });
+      if (datasetId) setOverlayDatasetId(datasetId);
 
       // Build violin from scores grouped by the active groupBy column
       if (groupByColumn && dataset && datasetId) {
@@ -300,7 +322,8 @@ export function UnifiedViewPanel() {
           .catch(() => { /* ignore */ });
       }
     },
-    [setScatterOverlay, groupByColumn, dataset, datasetId, openBottomPanel],
+    [setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId,
+     setViolinData, setViolinTitle, groupByColumn, dataset, datasetId, openBottomPanel],
   );
 
   // --- Clear overlay (revert to obs coloring) ---
@@ -308,7 +331,7 @@ export function UnifiedViewPanel() {
     setScatterOverlay(null);
     setOverlayValues(null);
     setOverlayLabel("");
-  }, [setScatterOverlay]);
+  }, [setScatterOverlay, setOverlayValues, setOverlayLabel]);
 
   // --- Clear overlay when colorBy changes in toolbar ---
   const prevColorByRef = useRef(colorBy);
@@ -424,9 +447,6 @@ export function UnifiedViewPanel() {
 
   return (
     <div className="flex h-full flex-col gap-2">
-      {/* Toolbar */}
-      <UnifiedToolbar numCells={numCells} />
-
       {/* No embeddings warning */}
       {!hasEmbeddings && (
         <div className="flex flex-shrink-0 items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
@@ -447,11 +467,13 @@ export function UnifiedViewPanel() {
         </div>
       )}
 
-      {/* Main area: scatter + right panel */}
+      {/* Main area: left column (toolbar + scatter + distribution) | right panel */}
       <div ref={splitContainerRef} className="flex min-h-0 flex-1">
-        {/* Left: scatter plot */}
-        <div className="relative min-w-0" style={{ width: `${splitFraction * 100}%` }}>
-          <div className="h-full w-full rounded-xl border border-slate-200 bg-white shadow-sm">
+        {/* Left column — UMAP width: toolbar, scatter, and distribution stacked */}
+        <div className="flex min-w-0 flex-col gap-2" style={{ width: `${splitFraction * 100}%` }}>
+          <UnifiedToolbar numCells={numCells} />
+          <div className="relative min-h-0 flex-1">
+            <div className="h-full w-full rounded-xl border border-slate-200 bg-white shadow-sm">
             {isLoading && !positions ? (
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
@@ -560,7 +582,14 @@ export function UnifiedViewPanel() {
                 )}
               </div>
             )}
+            </div>
           </div>
+          {/* Distribution — matches the UMAP width; frees the right column to extend down */}
+          <UnifiedBottomPanel
+            violinData={violinData}
+            violinTitle={violinTitle}
+            violinGroupLabel={groupByColumn}
+          />
         </div>
 
         {/* Drag handle */}
@@ -573,20 +602,38 @@ export function UnifiedViewPanel() {
 
         {/* Right: tabbed side panel */}
         <div className="flex min-w-[260px] flex-1 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
-          {/* Cluster reference map — keeps cluster layout visible while the main
-              plot is recoloured by a gene / score. */}
+          {/* Cluster reference map (half width) + summary card — keeps cluster
+              layout + key facts visible while the main plot is recoloured. */}
           {groupByColumn && positions && datasetId && (
-            <div className="flex-shrink-0 p-2">
-              <ClusterReference
-                datasetId={datasetId}
-                embedding={embedding}
-                column={groupByColumn}
-                positions={positions}
-                dimensions={dimensions}
-                categories={
-                  dataset?.obs_columns.find((c) => c.name === groupByColumn)?.values ?? []
-                }
-              />
+            <div className="flex flex-shrink-0 items-start gap-2 p-2">
+              <div className="w-1/2 min-w-0">
+                <ClusterReference
+                  datasetId={datasetId}
+                  embedding={embedding}
+                  column={groupByColumn}
+                  positions={positions}
+                  dimensions={dimensions}
+                  categories={
+                    dataset?.obs_columns.find((c) => c.name === groupByColumn)?.values ?? []
+                  }
+                />
+              </div>
+              <div className="flex w-1/2 min-w-0 flex-col gap-1.5 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-xs">
+                <div className="text-[11px] font-semibold text-slate-600">Summary</div>
+                <InfoRow label="Cells" value={numCells.toLocaleString()} />
+                <InfoRow label="Grouping" value={groupByColumn} />
+                <InfoRow
+                  label="Groups"
+                  value={String(
+                    dataset?.obs_columns.find((c) => c.name === groupByColumn)?.values?.length ?? 0,
+                  )}
+                />
+                <InfoRow label="Embedding" value={embedding.replace(/^X_/, "").toUpperCase()} />
+                <InfoRow
+                  label="Overlay"
+                  value={scatterOverlay ? `${overlayLabel} (${scatterOverlay.type})` : "—"}
+                />
+              </div>
             </div>
           )}
           {/* Tab bar */}
@@ -642,13 +689,17 @@ export function UnifiedViewPanel() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Bottom: distribution panel */}
-      <UnifiedBottomPanel
-        violinData={violinData}
-        violinTitle={violinTitle}
-        violinGroupLabel={groupByColumn}
-      />
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-slate-400">{label}</span>
+      <span className="truncate font-medium text-slate-600" title={value}>
+        {value}
+      </span>
     </div>
   );
 }

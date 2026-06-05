@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { apiFetch } from "@/api/client";
 import { getDataset } from "@/api/datasets";
 import { API_BASE } from "@/lib/constants";
+import { QcPlots } from "@/components/panels/QcPlots";
 import {
   ClipboardCheck,
   Check,
@@ -34,6 +35,7 @@ interface StepStatus {
 
 interface PreprocessingState {
   qc_metrics: StepStatus;
+  doublet_detection: StepStatus;
   filtering: StepStatus;
   normalization: StepStatus;
   log_transform: StepStatus;
@@ -79,6 +81,7 @@ const STEP_ORDER: {
   description: string;
 }[] = [
   { key: "qc_metrics", label: "QC Metrics", description: "Calculate quality control metrics" },
+  { key: "doublet_detection", label: "Doublet Detection", description: "Flag likely doublets with Scrublet (doublet_score + predicted_doublet)" },
   { key: "filtering", label: "Cell/Gene Filtering", description: "Filter low-quality cells and rare genes" },
   { key: "normalization", label: "Normalization", description: "Normalize library size" },
   { key: "log_transform", label: "Log Transform", description: "Log-transform expression values" },
@@ -97,7 +100,7 @@ const STEP_ORDER: {
 interface ParamConfig {
   param: string;
   label: string;
-  type: "number" | "select" | "checkbox_list" | "msigdb_tree";
+  type: "number" | "select" | "checkbox_list" | "msigdb_tree" | "boolean";
   min?: number;
   max?: number;
   step?: number;
@@ -107,10 +110,14 @@ interface ParamConfig {
 }
 
 const STEP_PARAMS: Record<string, ParamConfig[]> = {
+  doublet_detection: [
+    { param: "expected_doublet_rate", label: "Expected doublet rate", type: "number", min: 0.0, max: 0.5, step: 0.01, default: 0.06 },
+  ],
   filtering: [
     { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200 },
     { param: "min_cells", label: "Min cells/gene", type: "number", min: 0, max: 100, step: 1, default: 3 },
     { param: "max_pct_mt", label: "Max % mito", type: "number", min: 0, max: 100, step: 1, default: 20 },
+    { param: "drop_doublets", label: "Drop predicted doublets", type: "boolean", default: false },
   ],
   normalization: [
     { param: "target_sum", label: "Target sum", type: "number", min: 1000, max: 100000, step: 1000, default: 10000 },
@@ -578,7 +585,7 @@ export function DataAssessmentPanel() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3">
         <ClipboardCheck className="h-6 w-6 text-primary" />
@@ -588,6 +595,10 @@ export function DataAssessmentPanel() {
         Automatically assess preprocessing state and run missing analysis steps.
       </p>
 
+      {/* Two columns: controls + steps on the left, QC plots on the right */}
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        {/* Left: assessment controls + steps */}
+        <div className="min-w-0 flex-1 space-y-4">
       {/* Error banner */}
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -1018,6 +1029,19 @@ export function DataAssessmentPanel() {
                                           <span className="text-[10px] text-slate-400">No categorical columns available</span>
                                         )}
                                       </div>
+                                    ) : pc.type === "boolean" ? (
+                                      <label className="flex items-center gap-2 text-xs text-slate-700">
+                                        <input
+                                          type="checkbox"
+                                          checked={Boolean(currentVal)}
+                                          onChange={(e) =>
+                                            setStepParam(step.key, pc.param, e.target.checked)
+                                          }
+                                          disabled={running}
+                                          className="h-3.5 w-3.5 rounded border-slate-300 text-blue-500 focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
+                                        />
+                                        <span>{Boolean(currentVal) ? "Yes" : "No"}</span>
+                                      </label>
                                     ) : pc.type === "number" ? (
                                       <input
                                         type="number"
@@ -1118,6 +1142,12 @@ export function DataAssessmentPanel() {
           </div>
         </>
       )}
+        </div>
+        {/* Right: QC distributions */}
+        <div className="w-full flex-shrink-0 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
+          {datasetId && <QcPlots datasetId={datasetId} />}
+        </div>
+      </div>
     </div>
   );
 }

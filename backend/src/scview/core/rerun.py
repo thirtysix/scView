@@ -22,6 +22,7 @@ from scview.core.pipeline import ALL_STEPS
 _DEPENDS_ON: dict[str, tuple[str, ...]] = {
     "reset_to_counts": (),
     "qc_metrics": (),
+    "doublet_detection": ("qc_metrics",),
     "filtering": ("qc_metrics",),
     "normalization": ("filtering",),
     "log_transform": ("normalization",),

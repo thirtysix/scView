@@ -109,6 +109,28 @@ class Bundle(BaseModel):
     issues: list[str] = Field(default_factory=list)
 
 
+# nf-core/scrnaseq's mtx_conversions/ emits "<sample>_{raw,filtered,cellbender_filter}_matrix.h5ad"
+# (+ "combined_matrix.h5ad" for the all-samples concat). Strip these so the dataset
+# label is the sample name rather than the verbose nf-core filename.
+_NFCORE_MATRIX_SUFFIXES = (
+    "_raw_matrix",
+    "_filtered_matrix",
+    "_cellbender_filter_matrix",
+    "_unfiltered_matrix",
+    "_matrix",
+)
+
+
+def _clean_unit_label(stem: str) -> str:
+    """Best label for a single-file unit, cleaning nf-core matrix-export suffixes."""
+    if stem == "combined_matrix":
+        return "combined"
+    for suffix in _NFCORE_MATRIX_SUFFIXES:
+        if stem.endswith(suffix) and len(stem) > len(suffix):
+            return stem[: -len(suffix)]
+    return stem
+
+
 def build_bundle(paths: list[Path]) -> Bundle:
     """Detect, role-assign and group a set of staged paths into a Bundle."""
     detected = [(Path(p), detect_file(Path(p))) for p in paths]
@@ -138,7 +160,7 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
         fmt, _ = _KIND_MAP[bf.kind]
         units.append(
             IngestUnit(
-                label=Path(bf.name).stem,
+                label=_clean_unit_label(Path(bf.name).stem),
                 format=fmt,  # type: ignore[arg-type]
                 files=[bf],
                 complete=True,
