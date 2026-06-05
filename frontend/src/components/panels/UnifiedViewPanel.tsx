@@ -488,6 +488,7 @@ export function UnifiedViewPanel() {
                 selectedIndices={selectedIndices}
                 background={plotBackground}
                 maxRenderedCells={maxRenderedCells}
+                externalViewState={viewState}
                 onViewStateChange={setViewState}
                 onHover={handleHover}
                 dimensions={dimensions}
@@ -616,6 +617,8 @@ export function UnifiedViewPanel() {
                   categories={
                     dataset?.obs_columns.find((c) => c.name === groupByColumn)?.values ?? []
                   }
+                  viewState={viewState}
+                  onViewStateChange={setViewState}
                 />
               </div>
               <div className="flex w-1/2 min-w-0 flex-col gap-1.5 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-xs">

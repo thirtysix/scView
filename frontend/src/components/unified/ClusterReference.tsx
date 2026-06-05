@@ -19,6 +19,8 @@ export function ClusterReference({
   positions,
   dimensions,
   categories,
+  viewState,
+  onViewStateChange,
 }: {
   datasetId: string;
   embedding: string;
@@ -26,6 +28,9 @@ export function ClusterReference({
   positions: Float32Array | null;
   dimensions: 2 | 3;
   categories: string[];
+  /** Linked camera from the main plot (so the two rotate/pan together). */
+  viewState?: Record<string, unknown> | null;
+  onViewStateChange?: (vs: Record<string, unknown>) => void;
 }) {
   const [clusterValues, setClusterValues] = useState<Int32Array | null>(null);
   const [highlight, setHighlight] = useState<number | null>(null);
@@ -82,6 +87,8 @@ export function ClusterReference({
           dimensions={dimensions}
           pointSize={1.5}
           selectedIndices={selectedIndices}
+          externalViewState={viewState}
+          onViewStateChange={onViewStateChange}
           dimToGray
           minimal
         />

@@ -23,6 +23,11 @@ interface EmbeddingScatterProps {
    * context) instead of just lowering their alpha (which can make light colours
    * vanish). Used by the cluster reference map. */
   dimToGray?: boolean;
+  /** When provided, the camera follows this external view state (orientation +
+   * pan) while keeping its OWN zoom, so two linked plots rotate/pan in
+   * conjunction yet each stays fitted to its container. deck.gl only emits
+   * onViewStateChange on user interaction, so this won't feedback-loop. */
+  externalViewState?: Record<string, unknown> | null;
 }
 
 /**
@@ -120,6 +125,7 @@ export function EmbeddingScatter({
   dimensions = 2,
   minimal = false,
   dimToGray = false,
+  externalViewState = null,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(
@@ -370,6 +376,22 @@ export function EmbeddingScatter({
       setViewState({ ...initialViewState });
     }
   }, [initialViewState]);
+
+  // Follow a linked view's camera (orientation + pan) when controlled, keeping
+  // our own zoom so each view stays fitted to its container.
+  useEffect(() => {
+    if (!externalViewState) return;
+    setViewState((prev) => {
+      if (!prev) return { ...externalViewState };
+      return {
+        ...prev,
+        ...externalViewState,
+        zoom: prev.zoom,
+        minZoom: prev.minZoom,
+        maxZoom: prev.maxZoom,
+      };
+    });
+  }, [externalViewState]);
 
   const handleViewStateChange = useCallback(
     ({ viewState: vs }: { viewState: Record<string, unknown> }) => {
