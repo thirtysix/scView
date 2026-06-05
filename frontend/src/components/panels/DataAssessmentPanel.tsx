@@ -576,7 +576,7 @@ export function DataAssessmentPanel() {
   /* ---- No dataset selected ---- */
   if (!datasetId) {
     return (
-      <div className="mx-auto max-w-4xl space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center gap-3">
           <ClipboardCheck className="h-6 w-6 text-primary" />
           <h2 className="text-2xl font-bold text-slate-900">Data Assessment</h2>

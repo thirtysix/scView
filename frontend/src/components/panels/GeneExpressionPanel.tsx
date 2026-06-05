@@ -8,6 +8,7 @@ import { useEmbedding } from "@/hooks/useEmbedding";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
+import { Panel } from "@/components/common/Panel";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { ViolinPlot } from "@/components/plots/ViolinPlot";
 import { ColorLegend } from "@/components/plots/ColorLegend";
@@ -331,7 +332,11 @@ export function GeneExpressionPanel() {
                 </span>
               )}
             </div>
-            <div className="relative min-h-0 flex-1 rounded-xl border border-slate-200 bg-white shadow-sm">
+            <Panel
+              className="min-h-0 flex-1"
+              bodyClassName="relative min-h-0 p-0"
+              title={selectedGene ? `${selectedGene} expression` : "Expression"}
+            >
               {embeddingLoading && !positions ? (
                 <div className="flex h-full items-center justify-center">
                   <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
@@ -349,7 +354,7 @@ export function GeneExpressionPanel() {
                   dimensions={dimensions}
                 />
               )}
-            </div>
+            </Panel>
             {/* Color legend */}
             {expressionValues && (
               <div className="flex-shrink-0 px-2">

@@ -259,7 +259,7 @@ export function MarkerGenesPanel() {
   // No dataset
   if (!dataset || !datasetId) {
     return (
-      <div className="mx-auto max-w-6xl space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center gap-3">
           <ListTree className="h-6 w-6 text-primary" />
           <h2 className="text-2xl font-bold text-slate-900">Marker Genes</h2>
@@ -274,7 +274,7 @@ export function MarkerGenesPanel() {
   // Loading
   if (isLoading) {
     return (
-      <div className="mx-auto max-w-6xl space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center gap-3">
           <ListTree className="h-6 w-6 text-primary" />
           <h2 className="text-2xl font-bold text-slate-900">Marker Genes</h2>
@@ -290,7 +290,7 @@ export function MarkerGenesPanel() {
   // No markers computed yet (404) — friendly warning
   if (noMarkers || (!error && !markersData && !isLoading)) {
     return (
-      <div className="mx-auto max-w-6xl space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center gap-3">
           <ListTree className="h-6 w-6 text-primary" />
           <h2 className="text-2xl font-bold text-slate-900">Marker Genes</h2>
@@ -325,7 +325,7 @@ export function MarkerGenesPanel() {
   // Real error (non-404)
   if (error) {
     return (
-      <div className="mx-auto max-w-6xl space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center gap-3">
           <ListTree className="h-6 w-6 text-primary" />
           <h2 className="text-2xl font-bold text-slate-900">Marker Genes</h2>
@@ -342,7 +342,7 @@ export function MarkerGenesPanel() {
   if (!markersData) return null;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

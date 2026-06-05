@@ -197,7 +197,7 @@ export function DataPanel() {
   const canCommit = !!validation?.ok && loadable.length > 0 && !committing && !busy;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold text-slate-800">Data</h2>
         <p className="mt-1 text-sm text-slate-500">

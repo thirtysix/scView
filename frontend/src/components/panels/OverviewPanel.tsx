@@ -6,6 +6,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
+import { Panel } from "@/components/common/Panel";
 import { PlotControls } from "@/components/plots/PlotControls";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { LassoSelector } from "@/components/plots/LassoSelector";
@@ -299,7 +300,10 @@ export function OverviewPanel() {
       <div className="flex min-h-0 flex-1 gap-4">
         {/* Scatter plot area — 70% */}
         <div className="relative min-w-0 flex-[7]">
-          <div className="h-full w-full rounded-xl border border-slate-200 bg-white shadow-sm">
+          <Panel
+            title={`${embedding ? embedding.replace(/^X_/, "").toUpperCase() : "Embedding"}${colorColumnName ? ` · ${colorColumnName}` : ""}`}
+            bodyClassName="relative min-h-0 p-0"
+          >
             <EmbeddingScatter
               positions={positions}
               colorValues={colors}
@@ -362,7 +366,7 @@ export function OverviewPanel() {
                 )}
               </div>
             )}
-          </div>
+          </Panel>
         </div>
 
         {/* Controls panel — 30% */}

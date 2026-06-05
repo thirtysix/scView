@@ -207,7 +207,7 @@ export function ObservationsPanel() {
   // No dataset
   if (!dataset || !datasetId) {
     return (
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center gap-3">
           <Table2 className="h-6 w-6 text-primary" />
           <h2 className="text-2xl font-bold text-slate-900">Observations</h2>
@@ -222,7 +222,7 @@ export function ObservationsPanel() {
   // No categorical columns
   if (allCategoricalCols.length === 0) {
     return (
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center gap-3">
           <Table2 className="h-6 w-6 text-primary" />
           <h2 className="text-2xl font-bold text-slate-900">Observations</h2>
@@ -238,7 +238,7 @@ export function ObservationsPanel() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

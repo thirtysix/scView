@@ -128,7 +128,7 @@ export function ProvenancePanel() {
   const current = prov?.recorded.current ?? {};
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="space-y-6">
       <div>
         <h2 className="flex items-center gap-2 text-2xl font-bold text-slate-800">
           <ClipboardList className="h-6 w-6 text-primary" /> History &amp; Provenance

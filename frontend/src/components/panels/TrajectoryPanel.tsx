@@ -7,6 +7,7 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useEmbedding } from "@/hooks/useEmbedding";
 import { apiFetch } from "@/api/client";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
+import { Panel } from "@/components/common/Panel";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { formatNumber } from "@/lib/formatting";
@@ -292,7 +293,7 @@ export function TrajectoryPanel() {
           <h3 className="text-sm font-semibold text-slate-700">
             Embedding Colored by Pseudotime
           </h3>
-          <div className="relative min-h-0 flex-1 rounded-xl border border-slate-200 bg-white shadow-sm">
+          <Panel className="min-h-0 flex-1" bodyClassName="relative min-h-0 p-0">
             {(embeddingLoading || isLoadingPseudotime) && !positions ? (
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
@@ -309,7 +310,7 @@ export function TrajectoryPanel() {
                 maxRenderedCells={maxRenderedCells}
               />
             )}
-          </div>
+          </Panel>
           {pseudotimeValues && (
             <div className="flex-shrink-0 px-2">
               <ColorLegend

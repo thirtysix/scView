@@ -3,6 +3,8 @@ import Plot from "react-plotly.js";
 import { Loader2 } from "lucide-react";
 
 import { apiFetch } from "@/api/client";
+import { Panel } from "@/components/common/Panel";
+import { PlotGrid } from "@/components/common/PlotGrid";
 
 interface QcMetric {
   min: number;
@@ -40,6 +42,9 @@ const METRIC_LABELS: Record<string, string> = {
   pct_counts_hb: "% Hemoglobin",
 };
 
+const PLOT_CONFIG = { displayModeBar: false, responsive: true } as const;
+const FILL_STYLE = { width: "100%", height: "100%" } as const;
+
 function fmt(v: number): string {
   if (!isFinite(v)) return "—";
   if (Math.abs(v) >= 1000) return Math.round(v).toLocaleString();
@@ -53,52 +58,55 @@ function HistCard({ label, metric }: { label: string; metric: QcMetric }) {
   const mids = counts.map((_, i) => (edges[i]! + edges[i + 1]!) / 2);
   const width = edges.length > 1 ? edges[1]! - edges[0]! : 1;
   return (
-    <div className="rounded-lg border border-slate-100">
-      <Plot
-        data={[
-          {
-            type: "bar",
-            x: mids,
-            y: counts,
-            width,
-            marker: { color: "#60a5fa" },
-            hovertemplate: "%{x:.1f}: %{y} cells<extra></extra>",
-          },
-        ]}
-        layout={{
-          title: { text: label, font: { size: 11 } },
-          height: 160,
-          margin: { l: 36, r: 8, t: 22, b: 22 },
-          xaxis: { tickfont: { size: 8 } },
-          yaxis: { tickfont: { size: 8 } },
-          bargap: 0.02,
-          showlegend: false,
-          shapes: [
-            {
-              type: "line",
-              x0: metric.median,
-              x1: metric.median,
-              yref: "paper",
-              y0: 0,
-              y1: 1,
-              line: { color: "#ef4444", width: 1, dash: "dot" },
-            },
-          ],
-        }}
-        config={{ displayModeBar: false, responsive: true }}
-        style={{ width: "100%" }}
-        useResizeHandler
-      />
-      <div className="px-2 pb-1 text-[10px] text-slate-400">
-        median {fmt(metric.median)} · IQR {fmt(metric.q1)}–{fmt(metric.q3)} · max {fmt(metric.max)}
+    <Panel title={label}>
+      <div className="flex h-full flex-col">
+        <div className="min-h-0 flex-1">
+          <Plot
+            data={[
+              {
+                type: "bar",
+                x: mids,
+                y: counts,
+                width,
+                marker: { color: "#60a5fa" },
+                hovertemplate: "%{x:.1f}: %{y} cells<extra></extra>",
+              },
+            ]}
+            layout={{
+              autosize: true,
+              margin: { l: 40, r: 10, t: 8, b: 24 },
+              xaxis: { tickfont: { size: 9 } },
+              yaxis: { tickfont: { size: 9 } },
+              bargap: 0.02,
+              showlegend: false,
+              shapes: [
+                {
+                  type: "line",
+                  x0: metric.median,
+                  x1: metric.median,
+                  yref: "paper",
+                  y0: 0,
+                  y1: 1,
+                  line: { color: "#ef4444", width: 1, dash: "dot" },
+                },
+              ],
+            }}
+            config={PLOT_CONFIG}
+            style={FILL_STYLE}
+            useResizeHandler
+          />
+        </div>
+        <div className="flex-shrink-0 px-1 pt-1 text-[10px] text-slate-400">
+          median {fmt(metric.median)} · IQR {fmt(metric.q1)}–{fmt(metric.q3)} · max {fmt(metric.max)}
+        </div>
       </div>
-    </div>
+    </Panel>
   );
 }
 
 function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
   return (
-    <div className="rounded-lg border border-slate-100">
+    <Panel title="Counts vs. genes per cell (colour = % mito)" className="h-[380px]">
       <Plot
         data={[
           {
@@ -118,17 +126,16 @@ function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
           },
         ]}
         layout={{
-          title: { text: "Counts vs. genes per cell (colour = % mito)", font: { size: 11 } },
-          height: 300,
-          margin: { l: 52, r: 8, t: 24, b: 38 },
-          xaxis: { title: { text: scatter.x_label, font: { size: 9 } }, tickfont: { size: 8 } },
-          yaxis: { title: { text: scatter.y_label, font: { size: 9 } }, tickfont: { size: 8 } },
+          autosize: true,
+          margin: { l: 54, r: 10, t: 8, b: 40 },
+          xaxis: { title: { text: scatter.x_label, font: { size: 10 } }, tickfont: { size: 9 } },
+          yaxis: { title: { text: scatter.y_label, font: { size: 10 } }, tickfont: { size: 9 } },
         }}
-        config={{ displayModeBar: false, responsive: true }}
-        style={{ width: "100%" }}
+        config={PLOT_CONFIG}
+        style={FILL_STYLE}
         useResizeHandler
       />
-    </div>
+    </Panel>
   );
 }
 
@@ -176,7 +183,7 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
 
   const metricKeys = Object.keys(data.metrics);
   return (
-    <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-slate-700">QC Distributions</h3>
         <span className="text-xs text-slate-400">
@@ -187,11 +194,11 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
             : ""}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <PlotGrid minTile={300} rowHeight={240}>
         {metricKeys.map((k) => (
           <HistCard key={k} label={METRIC_LABELS[k] ?? k} metric={data.metrics[k]!} />
         ))}
-      </div>
+      </PlotGrid>
       <ScatterCard scatter={data.scatter} />
     </div>
   );

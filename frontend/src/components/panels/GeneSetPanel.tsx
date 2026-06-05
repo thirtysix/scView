@@ -629,7 +629,7 @@ export function GeneSetPanel() {
   // ---- No dataset ----
   if (!dataset || !datasetId) {
     return (
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center gap-3">
           <Library className="h-6 w-6 text-primary" />
           <h2 className="text-2xl font-bold text-slate-900">
