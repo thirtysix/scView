@@ -34,6 +34,10 @@ const METRIC_LABELS: Record<string, string> = {
   total_counts: "Counts per cell",
   pct_counts_mt: "% Mitochondrial",
   doublet_score: "Doublet score",
+  S_score: "Cell-cycle S score",
+  G2M_score: "Cell-cycle G2M score",
+  pct_counts_ribo: "% Ribosomal",
+  pct_counts_hb: "% Hemoglobin",
 };
 
 function fmt(v: number): string {
@@ -128,7 +132,7 @@ function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
   );
 }
 
-export function QcPlots({ datasetId }: { datasetId: string }) {
+export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refreshKey?: number }) {
   const [data, setData] = useState<QcResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -152,7 +156,7 @@ export function QcPlots({ datasetId }: { datasetId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [datasetId]);
+  }, [datasetId, refreshKey]);
 
   if (loading) {
     return (

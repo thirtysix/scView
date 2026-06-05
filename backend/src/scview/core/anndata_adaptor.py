@@ -183,15 +183,18 @@ class AnnDataAdaptor:
             n_genes = ng if n_genes is None else n_genes
             pct_mt = pm if pct_mt is None else pct_mt
 
-        doublet = _col("doublet_score")
-
         metrics = {
             "n_genes_by_counts": self._qc_summary(n_genes, n_bins),
             "total_counts": self._qc_summary(total_counts, n_bins),
             "pct_counts_mt": self._qc_summary(pct_mt, n_bins),
         }
-        if doublet is not None:
-            metrics["doublet_score"] = self._qc_summary(doublet, n_bins)
+        # Optional metrics contributed by later QC analyses (doublet detection,
+        # cell-cycle scoring, ribo/hemo QC) — included once they exist in obs, so
+        # the plot set grows as the user runs more steps.
+        for name in ("doublet_score", "S_score", "G2M_score", "pct_counts_ribo", "pct_counts_hb"):
+            col = _col(name)
+            if col is not None:
+                metrics[name] = self._qc_summary(col, n_bins)
 
         n = int(len(total_counts))
         idx = np.linspace(0, n - 1, n_scatter).astype(int) if n > n_scatter else np.arange(n)

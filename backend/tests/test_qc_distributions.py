@@ -64,6 +64,30 @@ def test_qc_includes_doublet_score_when_present(tmp_path):
     assert "doublet_score" in qc["metrics"]
 
 
+def test_qc_grows_with_optional_metrics(tmp_path):
+    """Optional QC metrics appear only once present in obs (plot set grows)."""
+    idx = [f"C{i}" for i in range(200)]
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    base = _write_h5ad(base_dir)
+    assert set(AnnDataAdaptor(base).qc_distributions()["metrics"]) == {
+        "n_genes_by_counts", "total_counts", "pct_counts_mt",
+    }
+    obs = pd.DataFrame(
+        {
+            "S_score": np.linspace(-1, 1, 200),
+            "G2M_score": np.linspace(-1, 1, 200),
+            "pct_counts_ribo": np.linspace(0, 40, 200),
+        },
+        index=idx,
+    )
+    enr_dir = tmp_path / "enriched"
+    enr_dir.mkdir()
+    enriched = _write_h5ad(enr_dir, obs=obs)
+    metrics = AnnDataAdaptor(enriched).qc_distributions()["metrics"]
+    assert {"S_score", "G2M_score", "pct_counts_ribo"} <= set(metrics)
+
+
 def test_qc_scatter_downsampled_and_cached(tmp_path):
     path = _write_h5ad(tmp_path, n_cells=12000)
     adaptor = AnnDataAdaptor(path)

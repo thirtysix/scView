@@ -212,6 +212,9 @@ export function DataAssessmentPanel() {
   const [state, setState] = useState<PreprocessingState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped after each pipeline run so the QC plots refetch (e.g. to pick up a
+  // newly computed doublet_score) without needing a tab switch.
+  const [qcRefreshKey, setQcRefreshKey] = useState(0);
 
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<PipelineResult | null>(null);
@@ -473,6 +476,7 @@ export function DataAssessmentPanel() {
       setRunningStep(null);
       // Keep runProgress alive so the completed bar stays visible
       await fetchAssessment();
+      setQcRefreshKey((k) => k + 1); // refresh QC plots (new metrics, post-filter counts)
       // Refresh dataset metadata
       try {
         const updated = await getDataset(datasetId);
@@ -1145,7 +1149,7 @@ export function DataAssessmentPanel() {
         </div>
         {/* Right: QC distributions */}
         <div className="w-full flex-shrink-0 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
-          {datasetId && <QcPlots datasetId={datasetId} />}
+          {datasetId && <QcPlots datasetId={datasetId} refreshKey={qcRefreshKey} />}
         </div>
       </div>
     </div>
