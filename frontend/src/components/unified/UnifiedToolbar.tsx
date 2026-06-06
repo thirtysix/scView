@@ -14,10 +14,12 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
 
   const embedding = useSettingsStore((s) => s.embedding);
   const colorBy = useSettingsStore((s) => s.colorBy);
+  const expressionLayer = useSettingsStore((s) => s.expressionLayer);
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
   const setEmbedding = useSettingsStore((s) => s.setEmbedding);
   const setColorBy = useSettingsStore((s) => s.setColorBy);
+  const setExpressionLayer = useSettingsStore((s) => s.setExpressionLayer);
   const setPointSize = useSettingsStore((s) => s.setPointSize);
   const setOpacity = useSettingsStore((s) => s.setOpacity);
 
@@ -91,6 +93,28 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
           ))}
         </select>
       </div>
+
+      {/* Expression layer (units for overlay + violin) */}
+      {(dataset?.expression_layers?.length ?? 0) > 0 && (
+        <>
+          <div className="h-4 w-px bg-slate-200" />
+          <div className="flex items-center gap-1.5">
+            <label className="text-[11px] font-medium text-slate-500">Layer</label>
+            <select
+              value={expressionLayer}
+              onChange={(e) => setExpressionLayer(e.target.value)}
+              title="Expression units used for the gene overlay and violin plots"
+              className="max-w-[160px] rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none"
+            >
+              {dataset!.expression_layers.map((l) => (
+                <option key={l.key} value={l.key}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </>
+      )}
 
       <div className="h-4 w-px bg-slate-200" />
 

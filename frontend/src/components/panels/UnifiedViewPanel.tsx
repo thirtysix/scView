@@ -42,6 +42,8 @@ export function UnifiedViewPanel() {
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const colorBy = useSettingsStore((s) => s.colorBy);
   const embedding = useSettingsStore((s) => s.embedding);
+  const expressionLayer = useSettingsStore((s) => s.expressionLayer);
+  const setExpressionLayer = useSettingsStore((s) => s.setExpressionLayer);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
   const selectionMode = useSelectionStore((s) => s.selectionMode);
   const setSelection = useSelectionStore((s) => s.setSelection);
@@ -236,8 +238,11 @@ export function UnifiedViewPanel() {
       if (!datasetId) return;
       setIsLoadingOverlay(true);
       try {
+        const layerQuery = expressionLayer
+          ? `&layer=${encodeURIComponent(expressionLayer)}`
+          : "";
         const buffer = await apiFetchBinary(
-          `/datasets/${datasetId}/expression?genes=${encodeURIComponent(gene)}`,
+          `/datasets/${datasetId}/expression?genes=${encodeURIComponent(gene)}${layerQuery}`,
         );
         const decoded = decodeArrowBuffer(buffer);
         const values = decoded[gene] ?? decoded[Object.keys(decoded)[0]!];
@@ -257,7 +262,7 @@ export function UnifiedViewPanel() {
         setIsLoadingOverlay(false);
       }
     },
-    [datasetId, setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId],
+    [datasetId, expressionLayer, setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId],
   );
 
   // --- Fetch violin ---
@@ -266,8 +271,11 @@ export function UnifiedViewPanel() {
       if (!datasetId || !group) return;
       setIsLoadingViolin(true);
       try {
+        const layerQuery = expressionLayer
+          ? `&layer=${encodeURIComponent(expressionLayer)}`
+          : "";
         const data = await apiFetch<ViolinResponse>(
-          `/datasets/${datasetId}/expression/violin?gene=${encodeURIComponent(gene)}&groupby=${encodeURIComponent(group)}`,
+          `/datasets/${datasetId}/expression/violin?gene=${encodeURIComponent(gene)}&groupby=${encodeURIComponent(group)}${layerQuery}`,
         );
         setViolinData(data.groups ?? {});
         setViolinTitle(`${gene} expression`);
@@ -278,7 +286,7 @@ export function UnifiedViewPanel() {
         setIsLoadingViolin(false);
       }
     },
-    [datasetId, openBottomPanel],
+    [datasetId, expressionLayer, openBottomPanel, setViolinData, setViolinTitle],
   );
 
   // --- Gene click handler (shared across Markers + Expression subtabs) ---
@@ -289,6 +297,27 @@ export function UnifiedViewPanel() {
     },
     [fetchExpression, fetchViolin, groupByColumn],
   );
+
+  // Default the expression layer to the dataset's default; re-default when the
+  // current layer key isn't valid for the (possibly newly selected) dataset.
+  useEffect(() => {
+    if (!dataset) return;
+    const keys = (dataset.expression_layers ?? []).map((l) => l.key);
+    if (!expressionLayer || !keys.includes(expressionLayer)) {
+      setExpressionLayer(dataset.default_expression_layer ?? keys[0] ?? "");
+    }
+  }, [dataset, expressionLayer, setExpressionLayer]);
+
+  // Re-fetch the active gene overlay + violin when the expression layer changes.
+  const prevLayerRef = useRef(expressionLayer);
+  useEffect(() => {
+    if (prevLayerRef.current === expressionLayer) return;
+    prevLayerRef.current = expressionLayer;
+    if (scatterOverlay?.type === "expression" && overlayLabel) {
+      fetchExpression(overlayLabel);
+      if (groupByColumn) fetchViolin(overlayLabel, groupByColumn);
+    }
+  }, [expressionLayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Gene set score handler ---
   const handleScoreComplete = useCallback(
