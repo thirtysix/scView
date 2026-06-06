@@ -57,10 +57,16 @@ Gaps today (from the 2026-05-29 UX audit, see `UX_AUDIT.md`):
   violin. Was already wired in `unifiedViewStore`; unblocked by the blank-scatter fix +
   a Markers-subtab race fix (markers now auto-populate for the active clustering, so
   marker-gene clicks recolor too).
-- **Cluster select → markers:** click a cluster in the embedding (or pick a group) →
-  the Markers subtab shows that group's ranked markers. Reuse `/markers?groupby_column=…`.
+- ✅ **Cluster-map click-to-select + linked camera (2026-06-06):** clicking a point in the
+  cluster reference map highlights that cluster (dims the rest) like its legend chip
+  (`EmbeddingScatter` opt-in `onClick`, deck.gl click-not-drag). The cluster map and the main
+  plot also **share one camera** (bidirectional, 3D OrbitView + 2D), each keeping its own zoom.
+  *Next:* make the click also drive the Markers subtab group (`/markers?groupby_column=…`).
 - **Lasso → on-the-fly markers:** Kana's signature — lasso a region, compute markers for
   the selection vs rest. Lasso selection already exists; wire it to a markers call.
+- ✅ **Tab-switch persistence + expression-units selector (2026-06-05/06):** the gene/score
+  overlay + violin persist across panel switches (lifted into `unifiedViewStore`); a **Layer**
+  dropdown in the toolbar sets the expression units for the overlay and violin.
 
 **U3 — One-click workflow + diagnostics gallery**
 - A prominent **"Analyze"** action that runs the Data Assessment pipeline
