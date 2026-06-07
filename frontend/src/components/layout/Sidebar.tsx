@@ -12,6 +12,7 @@ import {
   ListTree,
   GitBranch,
   ClipboardList,
+  Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -27,6 +28,7 @@ const PANEL_ICONS: Record<PanelId, React.ElementType> = {
   markers: ListTree,
   trajectory: GitBranch,
   provenance: ClipboardList,
+  assistant: Sparkles,
 };
 
 export function Sidebar() {

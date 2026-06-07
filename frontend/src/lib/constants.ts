@@ -11,6 +11,7 @@ export const PANEL_IDS = [
   "markers",
   "trajectory",
   "provenance",
+  "assistant",
 ] as const;
 
 export type PanelId = (typeof PANEL_IDS)[number];
@@ -26,4 +27,5 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   markers: "Marker Genes",
   trajectory: "Trajectory",
   provenance: "History",
+  assistant: "AI Co-pilot",
 };

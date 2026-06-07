@@ -10,6 +10,7 @@ import { GeneSetPanel } from "@/components/panels/GeneSetPanel";
 import { MarkerGenesPanel } from "@/components/panels/MarkerGenesPanel";
 import { TrajectoryPanel } from "@/components/panels/TrajectoryPanel";
 import { ProvenancePanel } from "@/components/panels/ProvenancePanel";
+import { AssistantPanel } from "@/components/panels/AssistantPanel";
 import type { PanelId } from "@/lib/constants";
 
 const PANEL_COMPONENTS: Record<PanelId, React.ComponentType> = {
@@ -23,6 +24,7 @@ const PANEL_COMPONENTS: Record<PanelId, React.ComponentType> = {
   markers: MarkerGenesPanel,
   trajectory: TrajectoryPanel,
   provenance: ProvenancePanel,
+  assistant: AssistantPanel,
 };
 
 export function PanelContainer() {
