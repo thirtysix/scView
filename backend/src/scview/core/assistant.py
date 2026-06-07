@@ -71,6 +71,7 @@ class ChatResponse(BaseModel):
     sources: list[ChatSource]
     grounded: bool          # True if an LLM produced the answer; False = templated fallback
     raw_response: str = ""  # raw LLM text, for transparency
+    route: list[str] = []   # which knowledge sources were consulted (app/data/tutorials/literature)
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +205,54 @@ def build_grounding_context(adaptor) -> tuple[str, list[ChatSource]]:
 
 
 # ---------------------------------------------------------------------------
+# App context — the dataset library + what scView can do (no RAG needed)
+# ---------------------------------------------------------------------------
+
+_FEATURE_GUIDE = (
+    "scView is a browser tool for single-cell RNA-seq. Tabs: Data (import/manage "
+    "datasets), Data Assessment (QC plots + AI-guided pipeline: QC → normalize → HVG → "
+    "PCA → batch correction → clustering → UMAP → markers → enrichment), Visualizations "
+    "(embeddings), Unified View (linked scatter + markers/expression/gene-sets/enrichment "
+    "+ violin), Observations, Gene Expression, Gene Sets & Enrichment, Marker Genes, "
+    "Trajectory, History (provenance: what was done + edit-&-re-run), and this AI Co-pilot."
+)
+
+
+def build_app_context(
+    datasets: list[dict] | None, view_context: dict | None = None
+) -> tuple[str, list[ChatSource]]:
+    """Assemble app-level facts: the dataset library + a feature/navigation guide.
+
+    Answers questions like "what datasets do we have?" / "how do I load data?"
+    without touching the RAG corpora.
+    """
+    lines = ["## scView app", f"- {_FEATURE_GUIDE}"]
+    sources = [ChatSource(kind="app", ref="app:features", detail="scView tabs and capabilities")]
+
+    datasets = datasets or []
+    lines.append(f"\n## Dataset library ({len(datasets)} dataset(s) available)")
+    if not datasets:
+        lines.append("- (no datasets loaded yet — use the Data tab to import one)")
+    for d in datasets[:50]:
+        name = d.get("name", d.get("id", "?"))
+        nc, ng = d.get("n_cells"), d.get("n_genes")
+        dims = f"{nc:,}×{ng:,}" if isinstance(nc, int) and isinstance(ng, int) else "unprocessed"
+        embs = d.get("available_embeddings") or []
+        status = d.get("status", "")
+        lines.append(
+            f"- **{name}** ({dims}"
+            + (f"; embeddings: {', '.join(embs)}" if embs else "")
+            + (f"; {status}" if status else "")
+            + ")"
+        )
+    sources.append(ChatSource(
+        kind="app", ref="app:library",
+        detail=f"{len(datasets)} dataset(s): " + ", ".join(d.get("name", "?") for d in datasets[:20]),
+    ))
+    return "\n".join(lines), sources
+
+
+# ---------------------------------------------------------------------------
 # Prompt assembly + LLM call
 # ---------------------------------------------------------------------------
 
@@ -263,29 +312,42 @@ async def answer_query(
     *,
     extra_context: str = "",  # LITERATURE_RAG_HOOK: retrieved doc/abstract chunks
     extra_sources: list[ChatSource] | None = None,  # citations behind extra_context
+    app_context: str = "",  # dataset library + feature guide
+    app_sources: list[ChatSource] | None = None,
     view_context: dict | None = None,  # what the user is currently looking at
+    include_data_grounding: bool = True,  # assemble the loaded dataset's facts
+    route: list[str] | None = None,  # which sources the classifier chose
     model: str = DEFAULT_MODEL,
 ) -> ChatResponse:
-    """Answer a question grounded in the dataset's analysis + results.
+    """Answer a question, grounded in whichever sources the intent classifier chose.
 
-    ``extra_context`` / ``extra_sources`` carry retrieved RAG chunks (literature +
-    tutorials) from ``core/rag/retrieve.py``; they are folded into the same prompt
-    and source list as the in-app facts. ``view_context`` describes the user's
-    current on-screen view (active panel, highlighted cluster, gene overlay) so
-    deictic questions resolve. All default empty/None.
+    ``include_data_grounding`` controls whether the loaded dataset's facts are
+    assembled (skipped for pure app/methods questions). ``app_context`` carries the
+    dataset library + feature guide. ``extra_context`` carries retrieved RAG chunks
+    (literature/tutorials). ``view_context`` describes the current on-screen view so
+    deictic questions resolve. Everything degrades gracefully when unset.
     """
-    context, sources = build_grounding_context(adaptor)
-    if extra_sources:
-        sources = [*extra_sources, *sources]
+    blocks: list[str] = []
+    sources: list[ChatSource] = []
+    if include_data_grounding and adaptor is not None:
+        data_context, data_sources = build_grounding_context(adaptor)
+        blocks.append(data_context)
+        sources.extend(data_sources)
+    if app_context:
+        blocks.insert(0, app_context)
+        sources = [*(app_sources or []), *sources]
     if extra_context:
-        context = extra_context + "\n\n" + context
+        blocks.insert(0, extra_context)
+        sources = [*(extra_sources or []), *sources]
+    context = "\n\n".join(b for b in blocks if b)
     view_note = _format_view_context(view_context)
     if view_note:
         context = view_note + "\n\n" + context
 
+    route = route or []
     if not api_key:
         logger.info("assistant: no API key, returning templated fallback")
-        return _fallback_answer(query, context, sources)
+        return _fallback_answer(query, context, sources, route)
 
     try:
         from openai import AsyncOpenAI
@@ -305,14 +367,18 @@ async def answer_query(
         )
         answer = (response.choices[0].message.content or "").strip()
         if not answer:
-            return _fallback_answer(query, context, sources)
-        return ChatResponse(answer=answer, sources=sources, grounded=True, raw_response=answer)
+            return _fallback_answer(query, context, sources, route)
+        return ChatResponse(
+            answer=answer, sources=sources, grounded=True, raw_response=answer, route=route
+        )
     except Exception as exc:
         logger.warning("assistant: LLM call failed (%s); using fallback", exc)
-        return _fallback_answer(query, context, sources)
+        return _fallback_answer(query, context, sources, route)
 
 
-def _fallback_answer(query: str, context: str, sources: list[ChatSource]) -> ChatResponse:
+def _fallback_answer(
+    query: str, context: str, sources: list[ChatSource], route: list[str] | None = None
+) -> ChatResponse:
     """Deterministic, no-LLM answer: surface the grounded facts honestly."""
     answer = (
         "The AI co-pilot's language model is not configured, so here is a direct "
@@ -320,4 +386,6 @@ def _fallback_answer(query: str, context: str, sources: list[ChatSource]) -> Cha
         "to enable conversational, cited answers.\n\n"
         f"{context}"
     )
-    return ChatResponse(answer=answer, sources=sources, grounded=False, raw_response="")
+    return ChatResponse(
+        answer=answer, sources=sources, grounded=False, raw_response="", route=route or []
+    )

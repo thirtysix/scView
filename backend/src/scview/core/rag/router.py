@@ -1,12 +1,18 @@
-"""Query router — decide which RAG corpora a question should retrieve from.
+"""Query intent classifier — decide which knowledge a question needs, so the
+co-pilot doesn't waste compute (embeddings + vector search) when it isn't needed.
 
-Two corpora answer different question types:
-  - ``tutorials``  — methods / how-to / parameter / interpretation questions.
-  - ``literature`` — biological / evidential ("what's known about …") questions.
+Four sources (a question may need a minimal subset):
+  - ``app``        — scView itself / the dataset library / navigation
+                     ("what datasets do we have?", "how do I load data?").
+  - ``data``       — the user's CURRENTLY LOADED dataset + its analysis/results
+                     ("what cell types are in my data?", "markers of this cluster").
+  - ``tutorials``  — single-cell methods / how-to / parameters (RAG corpus).
+  - ``literature`` — biology / evidence from research abstracts (RAG corpus).
 
-In-app grounding (the user's own provenance + results) is always added by the
-co-pilot regardless of routing, so the router only chooses the *external* corpora
-to consult. Uses a cheap LLM classifier with a deterministic keyword fallback.
+Only ``tutorials``/``literature`` trigger RAG retrieval; ``app``/``data`` are
+answered from local state. Uses a cheap LLM classifier with a keyword fallback,
+and takes the current tab as a hint (e.g. on the Data tab, "what do we have?"
+leans ``app``).
 """
 
 from __future__ import annotations
@@ -18,8 +24,20 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-CORPORA = ("tutorials", "literature")
+SOURCES = ("app", "data", "tutorials", "literature")
+CORPORA = ("tutorials", "literature")  # the subset that needs RAG retrieval
 
+_APP_HINTS = (
+    "what datasets", "datasets do we", "data do we have", "my datasets", "list datasets",
+    "available datasets", "load data", "loading data", "upload", "import data", "add data",
+    "how do i use", "what can this", "what can scview", "what does scview", "which tab",
+    "what tab", "navigate", "get started", "how do i load", "how do i open", "where do i",
+)
+_DATA_HINTS = (
+    "my data", "this dataset", "this cluster", "my cluster", "what cell types", "how many cells",
+    "what did i run", "what was run", "my results", "my markers", "my umap", "this gene",
+    "these cells", "current dataset", "annotation", "what's in my", "whats in my",
+)
 _METHODS_HINTS = (
     "how do i", "how to", "why ", "should i", "what does", "parameter", "resolution",
     "normalize", "normalisation", "normalization", "log transform", "scale", "scaling",
@@ -29,20 +47,25 @@ _METHODS_HINTS = (
     "cluster the", "clustering", "interpret", "read this", "dot plot", "violin", "heatmap",
 )
 _LITERATURE_HINTS = (
-    "marker", "express", "expression of", "gene", "pathway", "disease", "lupus", "cancer",
-    "tumor", "immune", "cell type", "what is known", "literature", "study", "studies",
+    "marker", "express", "expression of", "pathway", "disease", "lupus", "cancer",
+    "tumor", "immune", "what is known", "literature", "study", "studies",
     "paper", "associated with", "role of", "function of", "known to", "implicated",
     "biology", "mechanism", "signature", "interferon", "cytokine", "receptor",
 )
 
 
-class RouteResult(BaseModel):
+class RouteResult(BaseModel):  # kept for the corpora-level heuristic + tests
     corpora: list[str]
     reason: str
 
 
+class Intent(BaseModel):
+    sources: list[str]
+    reason: str
+
+
 def heuristic_route(query: str) -> RouteResult:
-    """Keyword-based routing (no LLM). Defaults to both when ambiguous."""
+    """Keyword routing between the two RAG corpora. Defaults to both when ambiguous."""
     q = query.lower()
     methods = any(h in q for h in _METHODS_HINTS)
     literature = any(h in q for h in _LITERATURE_HINTS)
@@ -50,23 +73,65 @@ def heuristic_route(query: str) -> RouteResult:
         return RouteResult(corpora=["tutorials"], reason="methods/how-to phrasing")
     if literature and not methods:
         return RouteResult(corpora=["literature"], reason="biological/evidential phrasing")
-    # both, or neither → consult both (cheap, and the reranker sorts it out)
     return RouteResult(corpora=["tutorials", "literature"], reason="mixed/ambiguous → both")
 
 
-_ROUTER_SYSTEM = """\
-You route a single-cell RNA-seq user question to knowledge sources. Choose any of:
-- "tutorials": methods / how-to / parameter / interpretation questions (e.g. "why \
-log-normalize?", "what clustering resolution?", "how do I read a dot plot?").
-- "literature": biology / evidence questions answerable from research abstracts \
+def heuristic_intent(query: str, view_context: dict | None = None) -> Intent:
+    """Keyword + tab-hint intent classification (no LLM)."""
+    q = query.lower()
+    panel = ((view_context or {}).get("panel") or "").lower()
+    sources: list[str] = []
+
+    app = any(h in q for h in _APP_HINTS)
+    # On the Data tab, generic "what do we have / what's available / list" leans app.
+    if (
+        panel.startswith("data")
+        and "my data" not in q
+        and any(k in q for k in ("have", "available", "loaded", "list", "dataset", "data"))
+    ):
+        app = True
+    if app:
+        sources.append("app")
+
+    if any(h in q for h in _DATA_HINTS):
+        sources.append("data")
+    if any(h in q for h in _METHODS_HINTS):
+        sources.append("tutorials")
+    if any(h in q for h in _LITERATURE_HINTS):
+        sources.append("literature")
+
+    if not sources:
+        sources = ["data"]  # cheap default: ground in the loaded dataset, no RAG
+    # de-dup preserving order
+    seen: set[str] = set()
+    sources = [s for s in sources if not (s in seen or seen.add(s))]
+    return Intent(sources=sources, reason="heuristic")
+
+
+_CLASSIFY_SYSTEM = """\
+You classify a user's question inside the scView single-cell RNA-seq app to decide \
+which knowledge sources to use — picking the MINIMAL set so we don't waste compute. \
+Sources:
+- "app": about scView itself or the user's dataset library / navigation \
+(e.g. "what datasets do we have?", "how do I load data?", "what can this tool do?").
+- "data": about the user's CURRENTLY LOADED dataset and its analysis/results \
+(e.g. "what cell types are in my data?", "markers of this cluster", "what steps ran?").
+- "tutorials": single-cell METHODS / how-to / parameter / interpretation questions \
+(e.g. "why log-normalize?", "what clustering resolution?").
+- "literature": BIOLOGY / evidence answerable from research abstracts \
 (e.g. "what marks pDCs?", "is the interferon signature linked to lupus?").
-Pick one or both. Respond ONLY as JSON: {"corpora": ["tutorials"|"literature", ...]}."""
+Only include "tutorials"/"literature" when the question truly needs external \
+knowledge — those run expensive retrieval. Respond ONLY as JSON: \
+{"sources": ["app"|"data"|"tutorials"|"literature", ...], "reason": "..."}."""
 
 
-async def route(query: str, api_key: str, model: str) -> RouteResult:
-    """Classify which corpora to retrieve from. Falls back to heuristics."""
+async def classify_intent(
+    query: str, view_context: dict | None, api_key: str, model: str
+) -> Intent:
+    """Classify which knowledge sources a question needs. Falls back to heuristics."""
     if not api_key:
-        return heuristic_route(query)
+        return heuristic_intent(query, view_context)
+    panel = (view_context or {}).get("panel") or "unknown"
     try:
         from openai import AsyncOpenAI
 
@@ -74,19 +139,19 @@ async def route(query: str, api_key: str, model: str) -> RouteResult:
         resp = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": _ROUTER_SYSTEM},
-                {"role": "user", "content": query},
+                {"role": "system", "content": _CLASSIFY_SYSTEM},
+                {"role": "user", "content": f'(current tab: "{panel}")\n{query}'},
             ],
             temperature=0.0,
-            max_tokens=64,
+            max_tokens=80,
         )
         raw = (resp.choices[0].message.content or "").strip()
         if "{" in raw:
             raw = raw[raw.find("{"): raw.rfind("}") + 1]
         data = json.loads(raw)
-        corpora = [c for c in data.get("corpora", []) if c in CORPORA]
-        if corpora:
-            return RouteResult(corpora=corpora, reason="llm-classified")
+        sources = [s for s in data.get("sources", []) if s in SOURCES]
+        if sources:
+            return Intent(sources=sources, reason=str(data.get("reason", "llm-classified")))
     except Exception as exc:
-        logger.warning("RAG router LLM failed (%s); using heuristic", exc)
-    return heuristic_route(query)
+        logger.warning("intent classify LLM failed (%s); using heuristic", exc)
+    return heuristic_intent(query, view_context)

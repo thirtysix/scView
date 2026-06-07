@@ -12,7 +12,7 @@ import logging
 
 from scview.config import Settings
 from scview.core.assistant import ChatSource
-from scview.core.rag import router, store
+from scview.core.rag import store
 from scview.core.rag.embeddings import embed_query
 
 logger = logging.getLogger(__name__)
@@ -38,19 +38,23 @@ def _doc_ref(md: dict) -> tuple[str, str]:
     return ref, detail.strip()
 
 
-async def retrieve_context(query: str, settings: Settings) -> tuple[str, list[ChatSource]]:
-    """Return ``(extra_context, sources)`` for a query, or ``("", [])`` if RAG off."""
-    if not settings.rag_enabled:
+async def retrieve_context(
+    query: str, settings: Settings, corpora: list[str]
+) -> tuple[str, list[ChatSource]]:
+    """Return ``(extra_context, sources)`` for a query against the given corpora,
+    or ``("", [])`` if RAG is off or no corpora are requested. The caller (the
+    intent classifier) decides ``corpora`` — so retrieval only runs when the
+    question actually needs the literature/tutorials knowledge."""
+    if not settings.rag_enabled or not corpora:
         return "", []
 
     try:
-        decision = await router.route(query, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL)
         qvec = await embed_query(query, settings.DEEPINFRA_API_KEY, settings.RAG_EMBED_MODEL)
         if not qvec:
             return "", []
         hits = await store.hybrid_search(
             settings.RAG_DATABASE_URL,
-            corpora=decision.corpora,
+            corpora=corpora,
             query_vec=qvec,
             query_text=query,
             top_k=settings.RAG_TOP_K,

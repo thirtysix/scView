@@ -10,8 +10,9 @@ from pydantic import BaseModel
 from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
-from scview.core.assistant import ChatMessage, ChatResponse, answer_query
+from scview.core.assistant import ChatMessage, ChatResponse, answer_query, build_app_context
 from scview.core.rag.retrieve import retrieve_context
+from scview.core.rag.router import classify_intent
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +47,14 @@ async def assistant_chat(
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ) -> ChatResponse:
-    """Answer a question grounded in this dataset's analysis state and results.
+    """Answer a question, routing first so we only spend the resources it needs.
 
-    Grounds in the in-app facts (preprocessing state, provenance recipe, cluster
-    sizes, top markers, enrichment). Falls back to a deterministic factual
-    summary when no LLM key is configured. (A methods/literature RAG layer is a
-    planned addition — see ``core/assistant.py`` ``extra_context`` hook.)
+    An intent classifier (using the current tab) picks the minimal knowledge set:
+    ``app`` (dataset library + features), ``data`` (the loaded dataset's facts),
+    ``tutorials`` / ``literature`` (RAG corpora). RAG retrieval runs *only* when a
+    corpus is selected — so "what datasets do we have?" answers from local state
+    with no embedding/vector-search cost. Falls back to a deterministic factual
+    summary and keyword routing when no LLM key is configured.
     """
     if not body.query or not body.query.strip():
         raise HTTPException(status_code=400, detail="Empty query.")
@@ -62,8 +65,22 @@ async def assistant_chat(
 
     try:
         query = body.query.strip()
-        # Dual-corpus RAG retrieval (literature + tutorials); empty when RAG is off.
-        extra_context, extra_sources = await retrieve_context(query, settings)
+
+        # 1. Classify intent (one cheap call) — what knowledge does this need?
+        intent = await classify_intent(
+            query, body.view_context, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL
+        )
+        chosen = set(intent.sources)
+
+        # 2. RAG retrieval ONLY for the corpora the classifier picked.
+        rag_corpora = [c for c in ("tutorials", "literature") if c in chosen]
+        extra_context, extra_sources = await retrieve_context(query, settings, rag_corpora)
+
+        # 3. App context (dataset library + features) only when asked about the app.
+        app_context, app_sources = "", []
+        if "app" in chosen:
+            app_context, app_sources = build_app_context(dm.list_datasets(), body.view_context)
+
         return await answer_query(
             query=query,
             adaptor=adaptor,
@@ -71,7 +88,11 @@ async def assistant_chat(
             history=body.history,
             extra_context=extra_context,
             extra_sources=extra_sources,
+            app_context=app_context,
+            app_sources=app_sources,
             view_context=body.view_context,
+            include_data_grounding=("data" in chosen),
+            route=sorted(chosen),
             model=settings.RAG_CHAT_MODEL,
         )
     except Exception as exc:
