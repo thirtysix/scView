@@ -79,6 +79,20 @@ class ChatResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _uns_str(adata, key: str, limit: int = 600) -> str:
+    """Read a free-text `uns` value that may be a str, list, or ndarray of one."""
+    if key not in adata.uns:
+        return ""
+    val = adata.uns[key]
+    try:
+        while not isinstance(val, str) and hasattr(val, "__len__") and len(val) > 0:
+            val = val[0]
+    except Exception:  # pragma: no cover
+        return ""
+    s = str(val).strip()
+    return s[:limit] + "…" if len(s) > limit else s
+
+
 def build_grounding_context(adaptor) -> tuple[str, list[ChatSource]]:
     """Assemble a bounded, structured snapshot of the dataset's analysis state.
 
@@ -101,6 +115,30 @@ def build_grounding_context(adaptor) -> tuple[str, list[ChatSource]]:
         detail=f"{n_cells:,} cells × {n_genes:,} genes; embeddings: "
                f"{', '.join(embeddings) or 'none'}",
     ))
+
+    # --- 1b. Dataset identity / source (so "what's the paper?" can be answered) ---
+    ident: list[str] = []
+    for key, label in (("about_title", "Title"), ("about_short_title", "Short title"),
+                       ("about_readme", "About")):
+        val = _uns_str(adata, key)
+        if val:
+            ident.append(f"- {label}: {val}")
+    prov_src = {}
+    try:
+        prov_src = provenance.read_provenance(adata).get("source", {}) or {}
+    except Exception:  # pragma: no cover
+        prov_src = {}
+    for k in ("origin", "original_filename", "format"):
+        if prov_src.get(k):
+            ident.append(f"- {k.replace('_', ' ').title()}: {prov_src[k]}")
+    if ident:
+        lines.append("\n## Dataset identity & source "
+                     "(use to answer questions about the dataset's paper/origin)")
+        lines.extend(ident)
+        sources.append(ChatSource(
+            kind="dataset", ref="dataset:source",
+            detail=(_uns_str(adata, "about_title") or prov_src.get("original_filename") or "source"),
+        ))
 
     # --- 2. Preprocessing state (the assessor) ------------------------------
     try:

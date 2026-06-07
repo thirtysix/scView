@@ -114,8 +114,9 @@ which knowledge sources to use — picking the MINIMAL set so we don't waste com
 Sources:
 - "app": about scView itself or the user's dataset library / navigation \
 (e.g. "what datasets do we have?", "how do I load data?", "what can this tool do?").
-- "data": about the user's CURRENTLY LOADED dataset and its analysis/results \
-(e.g. "what cell types are in my data?", "markers of this cluster", "what steps ran?").
+- "data": about the user's CURRENTLY LOADED dataset — its analysis/results AND its \
+own identity/source (e.g. "what cell types are in my data?", "markers of this \
+cluster", "what steps ran?", "what paper/publication is THIS dataset from?").
 - "tutorials": single-cell METHODS / how-to / parameter / interpretation questions \
 (e.g. "why log-normalize?", "what clustering resolution?").
 - "literature": BIOLOGY / evidence answerable from research abstracts \
