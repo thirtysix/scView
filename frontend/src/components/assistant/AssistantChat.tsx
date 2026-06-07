@@ -8,6 +8,7 @@ import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { PANEL_LABELS } from "@/lib/constants";
 import {
   assistantChat,
+  assistantChatStream,
   type ChatMessage,
   type ChatSource,
   type ViewContext,
@@ -64,36 +65,48 @@ export function AssistantChat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [turns, busy]);
 
+  // Replace the last turn (the streaming assistant placeholder) via a mapper.
+  const patchLast = (fn: (t: Turn) => Turn) =>
+    setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? fn(t) : t)));
+
   async function send(query: string) {
     const q = query.trim();
     if (!q || busy || !datasetId) return;
     setInput("");
     const history: ChatMessage[] = turns.map((t) => ({ role: t.role, content: t.content }));
-    setTurns((prev) => [...prev, { role: "user", content: q }]);
+    const vc = currentViewContext();
+    // push the user turn + an empty assistant placeholder to stream into
+    setTurns((prev) => [...prev, { role: "user", content: q }, { role: "assistant", content: "" }]);
     setBusy(true);
     try {
-      const res = await assistantChat(datasetId, q, history, currentViewContext());
-      setTurns((prev) => [
-        ...prev,
-        {
+      await assistantChatStream(datasetId, q, history, vc, {
+        onSources: (ev) =>
+          patchLast((t) => ({ ...t, sources: ev.sources, route: ev.route, grounded: ev.grounded })),
+        onDelta: (text) => patchLast((t) => ({ ...t, content: t.content + text })),
+        onDone: (ev) => patchLast((t) => ({ ...t, followups: ev.followups })),
+        onError: (msg) =>
+          patchLast((t) => ({ ...t, content: t.content || `Sorry — ${msg}` })),
+      });
+    } catch {
+      // Streaming unavailable → fall back to the non-streaming endpoint.
+      try {
+        const res = await assistantChat(datasetId, q, history, vc);
+        patchLast(() => ({
           role: "assistant",
           content: res.answer,
           sources: res.sources,
           grounded: res.grounded,
           route: res.route,
           followups: res.followups,
-        },
-      ]);
-    } catch (err) {
-      setTurns((prev) => [
-        ...prev,
-        {
-          role: "assistant",
+        }));
+      } catch (e2) {
+        patchLast((t) => ({
+          ...t,
           content: `Sorry — the assistant failed: ${
-            err instanceof Error ? err.message : String(err)
+            e2 instanceof Error ? e2.message : String(e2)
           }`,
-        },
-      ]);
+        }));
+      }
     } finally {
       setBusy(false);
     }
@@ -167,7 +180,14 @@ export function AssistantChat() {
             </div>
             <div className="min-w-0 flex-1">
               {t.role === "assistant" ? (
-                <MarkdownLite text={t.content} onCitation={handleCitation} />
+                t.content ? (
+                  <MarkdownLite text={t.content} onCitation={handleCitation} />
+                ) : (
+                  <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Thinking…
+                  </div>
+                )
               ) : (
                 <div className="whitespace-pre-wrap text-sm leading-relaxed">{t.content}</div>
               )}
@@ -223,16 +243,6 @@ export function AssistantChat() {
             </div>
           </div>
         ))}
-
-        {busy && (
-          <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 text-primary">
-              <Sparkles className="h-4 w-4" />
-            </div>
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Thinking…
-          </div>
-        )}
       </div>
 
       <div className="border-t p-3">

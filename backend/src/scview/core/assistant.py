@@ -346,6 +346,46 @@ def _format_view_context(vc: dict | None) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+def _assemble(
+    adaptor,
+    *,
+    extra_context: str,
+    extra_sources: list[ChatSource] | None,
+    app_context: str,
+    app_sources: list[ChatSource] | None,
+    view_context: dict | None,
+    include_data_grounding: bool,
+) -> tuple[str, list[ChatSource]]:
+    """Build the grounded context string + ordered source list from the chosen
+    sources (shared by streaming and non-streaming paths)."""
+    blocks: list[str] = []
+    sources: list[ChatSource] = []
+    if include_data_grounding and adaptor is not None:
+        data_context, data_sources = build_grounding_context(adaptor)
+        blocks.append(data_context)
+        sources.extend(data_sources)
+    if app_context:
+        blocks.insert(0, app_context)
+        sources = [*(app_sources or []), *sources]
+    if extra_context:
+        blocks.insert(0, extra_context)
+        sources = [*(extra_sources or []), *sources]
+    context = "\n\n".join(b for b in blocks if b)
+    view_note = _format_view_context(view_context)
+    if view_note:
+        context = view_note + "\n\n" + context
+    return context, sources
+
+
+def _build_messages(query: str, context: str, history: list[ChatMessage] | None) -> list[dict]:
+    messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for m in (history or [])[-6:]:  # keep the last few turns
+        if m.role in ("user", "assistant") and m.content:
+            messages.append({"role": m.role, "content": m.content})
+    messages.append({"role": "user", "content": _build_user_message(query, context)})
+    return messages
+
+
 async def answer_query(
     query: str,
     adaptor,
@@ -369,22 +409,11 @@ async def answer_query(
     (literature/tutorials). ``view_context`` describes the current on-screen view so
     deictic questions resolve. Everything degrades gracefully when unset.
     """
-    blocks: list[str] = []
-    sources: list[ChatSource] = []
-    if include_data_grounding and adaptor is not None:
-        data_context, data_sources = build_grounding_context(adaptor)
-        blocks.append(data_context)
-        sources.extend(data_sources)
-    if app_context:
-        blocks.insert(0, app_context)
-        sources = [*(app_sources or []), *sources]
-    if extra_context:
-        blocks.insert(0, extra_context)
-        sources = [*(extra_sources or []), *sources]
-    context = "\n\n".join(b for b in blocks if b)
-    view_note = _format_view_context(view_context)
-    if view_note:
-        context = view_note + "\n\n" + context
+    context, sources = _assemble(
+        adaptor, extra_context=extra_context, extra_sources=extra_sources,
+        app_context=app_context, app_sources=app_sources, view_context=view_context,
+        include_data_grounding=include_data_grounding,
+    )
 
     route = route or []
     if not api_key:
@@ -395,11 +424,7 @@ async def answer_query(
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
-        messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        for m in (history or [])[-6:]:  # keep the last few turns
-            if m.role in ("user", "assistant") and m.content:
-                messages.append({"role": m.role, "content": m.content})
-        messages.append({"role": "user", "content": _build_user_message(query, context)})
+        messages = _build_messages(query, context, history)
 
         response = await client.chat.completions.create(
             model=model,
@@ -452,6 +477,74 @@ async def suggest_followups(query: str, answer: str, api_key: str, model: str) -
     except Exception as exc:  # pragma: no cover - best-effort
         logger.debug("followup generation failed: %s", exc)
         return []
+
+
+async def stream_answer(
+    query: str,
+    adaptor,
+    api_key: str,
+    history: list[ChatMessage] | None = None,
+    *,
+    extra_context: str = "",
+    extra_sources: list[ChatSource] | None = None,
+    app_context: str = "",
+    app_sources: list[ChatSource] | None = None,
+    view_context: dict | None = None,
+    include_data_grounding: bool = True,
+    route: list[str] | None = None,
+    model: str = DEFAULT_MODEL,
+):
+    """Async generator yielding chat events for SSE:
+    ``{"type":"sources", sources, route, grounded}`` once, then ``{"type":"delta",
+    "text"}`` per token, then ``{"type":"done", "followups"}``. Mirrors
+    ``answer_query`` but streams the answer."""
+    context, sources = _assemble(
+        adaptor, extra_context=extra_context, extra_sources=extra_sources,
+        app_context=app_context, app_sources=app_sources, view_context=view_context,
+        include_data_grounding=include_data_grounding,
+    )
+    route = route or []
+    yield {
+        "type": "sources",
+        "sources": [s.model_dump() for s in sources],
+        "route": route,
+        "grounded": bool(api_key),
+    }
+
+    if not api_key:
+        fb = _fallback_answer(query, context, sources, route)
+        yield {"type": "delta", "text": fb.answer}
+        yield {"type": "done", "followups": []}
+        return
+
+    parts: list[str] = []
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        stream = await client.chat.completions.create(
+            model=model,
+            messages=_build_messages(query, context, history),
+            temperature=0.2,
+            max_tokens=1024,
+            stream=True,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                parts.append(delta)
+                yield {"type": "delta", "text": delta}
+    except Exception as exc:
+        logger.warning("assistant stream failed (%s); using fallback", exc)
+        if not parts:
+            fb = _fallback_answer(query, context, sources, route)
+            yield {"type": "delta", "text": fb.answer}
+        yield {"type": "done", "followups": []}
+        return
+
+    answer = "".join(parts).strip()
+    followups = await suggest_followups(query, answer, api_key, model) if answer else []
+    yield {"type": "done", "followups": followups}
 
 
 def _fallback_answer(
