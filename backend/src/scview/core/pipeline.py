@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Generator
 
 import anndata as ad
+import numpy as np
 import scanpy as sc
 
 from scview.core import provenance
@@ -273,10 +274,25 @@ def _run_batch_correction(adata: ad.AnnData, params: PipelineParams) -> None:
     if "X_pca" not in adata.obsm:
         raise ValueError("PCA must be computed before batch correction.")
 
-    import scanpy.external as sce
-    sce.pp.harmony_integrate(adata, key=params.batch_key)
-    # Harmony stores result in adata.obsm["X_pca_harmony"]
-    logger.info("Harmony batch correction using key '%s'", params.batch_key)
+    # Call harmonypy directly rather than scanpy's harmony_integrate: scanpy
+    # unconditionally transposes Harmony's output, which breaks with harmonypy
+    # >= 2.0 (where Z_corr is already cells × PCs) — producing a (n_pcs, n_cells)
+    # array that fails obsm validation. Orient to (n_cells, n_pcs) ourselves so
+    # the step works across harmonypy versions.
+    import harmonypy
+
+    ho = harmonypy.run_harmony(adata.obsm["X_pca"], adata.obs, [params.batch_key])
+    Z = np.asarray(ho.Z_corr)
+    n = adata.n_obs
+    if Z.shape[0] != n and Z.ndim == 2 and Z.shape[1] == n:
+        Z = Z.T  # old harmonypy returns PCs × cells
+    if Z.shape[0] != n:
+        raise ValueError(
+            f"Harmony output shape {Z.shape} does not match n_cells={n}."
+        )
+    adata.obsm["X_pca_harmony"] = np.ascontiguousarray(Z)
+    logger.info("Harmony batch correction using key '%s' -> X_pca_harmony %s",
+                params.batch_key, adata.obsm["X_pca_harmony"].shape)
 
 
 def _run_neighbors(adata: ad.AnnData, params: PipelineParams) -> None:
