@@ -21,6 +21,7 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     query: str
     history: list[ChatMessage] | None = None
+    view_context: dict | None = None  # what the user is currently looking at
 
 
 @router.get("/assistant/rag-status")
@@ -70,6 +71,7 @@ async def assistant_chat(
             history=body.history,
             extra_context=extra_context,
             extra_sources=extra_sources,
+            view_context=body.view_context,
             model=settings.RAG_CHAT_MODEL,
         )
     except Exception as exc:

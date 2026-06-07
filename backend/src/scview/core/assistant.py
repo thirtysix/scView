@@ -222,7 +222,9 @@ general scRNA-seq guidance clearly labelled as general (not from their data).
 - Be concise and specific. Prefer the user's actual cluster names, gene symbols, \
 and counts over generic statements.
 - Do NOT invent clusters, genes, counts, or steps that are not in the context. \
-Do not give clinical or diagnostic advice."""
+Do not give clinical or diagnostic advice.
+- If the user says "this cluster", "this gene", or "here", resolve it from the \
+"What the user is currently viewing" section when present."""
 
 
 def _build_user_message(query: str, context: str) -> str:
@@ -235,6 +237,24 @@ def _build_user_message(query: str, context: str) -> str:
     )
 
 
+def _format_view_context(vc: dict | None) -> str:
+    """Format the user's current on-screen view so deictic questions resolve
+    ("what is *this* cluster?", "explain *this* gene")."""
+    if not vc:
+        return ""
+    lines = ["## What the user is currently viewing"]
+    if vc.get("panel"):
+        lines.append(f"- Panel: {vc['panel']}")
+    if vc.get("color_by"):
+        lines.append(f"- Scatter coloured by: {vc['color_by']}")
+    hl = vc.get("highlighted")
+    if isinstance(hl, dict) and hl.get("value"):
+        lines.append(f"- Highlighted group: {hl.get('column', 'group')} = {hl['value']}")
+    if vc.get("overlay"):
+        lines.append(f"- Gene/expression overlay: {vc['overlay']}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 async def answer_query(
     query: str,
     adaptor,
@@ -243,20 +263,25 @@ async def answer_query(
     *,
     extra_context: str = "",  # LITERATURE_RAG_HOOK: retrieved doc/abstract chunks
     extra_sources: list[ChatSource] | None = None,  # citations behind extra_context
+    view_context: dict | None = None,  # what the user is currently looking at
     model: str = DEFAULT_MODEL,
 ) -> ChatResponse:
     """Answer a question grounded in the dataset's analysis + results.
 
     ``extra_context`` / ``extra_sources`` carry retrieved RAG chunks (literature +
     tutorials) from ``core/rag/retrieve.py``; they are folded into the same prompt
-    and source list as the in-app facts. Both default empty, so the assistant
-    grounds purely in in-app facts when RAG is disabled.
+    and source list as the in-app facts. ``view_context`` describes the user's
+    current on-screen view (active panel, highlighted cluster, gene overlay) so
+    deictic questions resolve. All default empty/None.
     """
     context, sources = build_grounding_context(adaptor)
     if extra_sources:
         sources = [*extra_sources, *sources]
     if extra_context:
         context = extra_context + "\n\n" + context
+    view_note = _format_view_context(view_context)
+    if view_note:
+        context = view_note + "\n\n" + context
 
     if not api_key:
         logger.info("assistant: no API key, returning templated fallback")
