@@ -18,7 +18,15 @@ interface Turn {
   content: string;
   sources?: ChatSource[];
   grounded?: boolean;
+  route?: string[];
 }
+
+const ROUTE_LABELS: Record<string, string> = {
+  app: "app & library",
+  data: "your dataset",
+  tutorials: "methods docs",
+  literature: "literature",
+};
 
 const SUGGESTIONS = [
   "What cell types are in my data?",
@@ -65,7 +73,13 @@ export function AssistantChat() {
       const res = await assistantChat(datasetId, q, history, currentViewContext());
       setTurns((prev) => [
         ...prev,
-        { role: "assistant", content: res.answer, sources: res.sources, grounded: res.grounded },
+        {
+          role: "assistant",
+          content: res.answer,
+          sources: res.sources,
+          grounded: res.grounded,
+          route: res.route,
+        },
       ]);
     } catch (err) {
       setTurns((prev) => [
@@ -131,6 +145,16 @@ export function AssistantChat() {
               {t.role === "assistant" && t.grounded === false && (
                 <div className="mt-1 text-xs italic text-amber-600">
                   Language model not configured — showing grounded facts directly.
+                </div>
+              )}
+              {t.role === "assistant" && t.route && t.route.length > 0 && (
+                <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+                  <span>via</span>
+                  {t.route.map((r) => (
+                    <span key={r} className="rounded bg-muted px-1.5 py-0.5">
+                      {ROUTE_LABELS[r] ?? r}
+                    </span>
+                  ))}
                 </div>
               )}
               {t.sources && t.sources.length > 0 && (

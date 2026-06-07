@@ -24,6 +24,7 @@ export interface ChatResponse {
   sources: ChatSource[];
   grounded: boolean;
   raw_response?: string;
+  route?: string[]; // knowledge sources consulted: app/data/tutorials/literature
 }
 
 export async function assistantChat(
