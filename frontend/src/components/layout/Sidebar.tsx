@@ -4,7 +4,6 @@ import { PANEL_IDS, PANEL_LABELS, type PanelId } from "@/lib/constants";
 import {
   Database,
   ClipboardCheck,
-  ChartScatter,
   LayoutDashboard,
   Table2,
   Dna,
@@ -20,7 +19,6 @@ import {
 const PANEL_ICONS: Record<PanelId, React.ElementType> = {
   load: Database,
   assessment: ClipboardCheck,
-  overview: ChartScatter,
   unified: LayoutDashboard,
   observations: Table2,
   expression: Dna,

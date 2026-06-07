@@ -22,6 +22,10 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
   const setExpressionLayer = useSettingsStore((s) => s.setExpressionLayer);
   const setPointSize = useSettingsStore((s) => s.setPointSize);
   const setOpacity = useSettingsStore((s) => s.setOpacity);
+  const plotBackground = useSettingsStore((s) => s.plotBackground);
+  const setPlotBackground = useSettingsStore((s) => s.setPlotBackground);
+  const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
+  const setMaxRenderedCells = useSettingsStore((s) => s.setMaxRenderedCells);
 
   const selectionMode = useSelectionStore((s) => s.selectionMode);
   const setSelectionMode = useSelectionStore((s) => s.setSelectionMode);
@@ -145,6 +149,44 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
           onChange={(e) => setOpacity(parseFloat(e.target.value))}
           className="w-16 accent-blue-500"
         />
+      </div>
+
+      {/* Background light/dark */}
+      <div className="flex items-center gap-1.5">
+        <label className="text-[11px] font-medium text-slate-500">BG</label>
+        <div className="flex overflow-hidden rounded border border-slate-300">
+          {(["white", "dark"] as const).map((bg) => (
+            <button
+              key={bg}
+              onClick={() => setPlotBackground(bg)}
+              className={`px-1.5 py-0.5 text-[10px] capitalize transition-colors ${
+                plotBackground === bg
+                  ? "bg-blue-500 text-white"
+                  : "bg-white text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {bg === "white" ? "Light" : "Dark"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Max rendered cells */}
+      <div className="flex items-center gap-1.5">
+        <label className="text-[11px] font-medium text-slate-500" title="Larger datasets are downsampled for rendering">
+          Max
+        </label>
+        <select
+          value={maxRenderedCells}
+          onChange={(e) => setMaxRenderedCells(parseInt(e.target.value))}
+          className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700 focus:border-blue-400 focus:outline-none"
+        >
+          {[25000, 50000, 100000, 250000, 500000].map((n) => (
+            <option key={n} value={n}>
+              {n / 1000}K
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="h-4 w-px bg-slate-200" />

@@ -183,7 +183,7 @@ export function DatasetLibrary() {
                 onClick={async () => {
                   const dataset = await getDataset(ds.id);
                   setCurrentDataset(dataset);
-                  if (dataset.status === "ready") setPanel("overview");
+                  if (dataset.status === "ready") setPanel("unified");
                 }}
                 className="text-left"
               >
