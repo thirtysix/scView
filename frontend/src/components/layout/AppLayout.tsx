@@ -1,6 +1,7 @@
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { PanelContainer } from "./PanelContainer";
+import { CoPilotDrawer } from "@/components/assistant/CoPilotDrawer";
 import { useViewStore } from "@/stores/viewStore";
 
 export function AppLayout() {
@@ -19,6 +20,7 @@ export function AppLayout() {
           <PanelContainer />
         </main>
       </div>
+      <CoPilotDrawer />
     </div>
   );
 }
