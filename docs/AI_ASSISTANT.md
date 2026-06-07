@@ -269,6 +269,28 @@ into the same prompt + sources contract. Standing up Postgres+pgvector, porting 
 **a joint session with the user** (new infra + a long embedding run + external API calls) — not done
 unattended.
 
+### 3.7 Co-pilot UX & interaction (brainstorm 2026-06-07)
+
+**Shipped this round:** floating drawer + dedicated panel; view-context awareness;
+intent routing (app/data/tutorials/literature) so RAG only runs when needed; dataset
+identity/source grounding ("what paper is this from?"); Markdown answers; clickable
+citation chips (PubMed links + result→jump-to-cluster); suggested follow-up questions;
+token-streaming (SSE); resizable drawer; gentler "Hide" affordance.
+
+**Still on the roadmap (not yet built):**
+- **Natural-language *actions*** (the big one, §3.4) — "color the UMAP by CD8A", "run
+  clustering at resolution 1.0", "show markers for cluster 3" → allow-listed actions over
+  existing endpoints, executed with a one-click confirm. Turns it from answerer into co-pilot.
+- **"Ask about this" entry points** — a ✦ on a cluster / marker row / enrichment term / QC
+  plot that opens the drawer pre-loaded with that context.
+- **Proactive insight on load** — a one-line "I notice…" when a dataset opens (e.g. strong
+  condition split → suggest integration); ties to anomaly/batch flagging (§3.2).
+- **Reranking** — wire `RAG_RERANK_MODEL` (Qwen3-Reranker) for sharper retrieval.
+- **Conversation persistence** — survive reloads (localStorage/backend), per-dataset threads + history.
+- **Export / "write methods"** — turn provenance + Q&A into a methods paragraph or report (§3.5).
+- **Domain-aware literature** — pull dataset-relevant literature into the corpus; let users add their own papers/docs; show corpus coverage.
+- **Trust affordances** — show model name + "AI-generated, verify" note; per-turn 👍/👎 feedback; token/cost surfacing for hosted use.
+
 ---
 
 ## 4. Guardrails & cost (for any hosted / multi-user deployment)
