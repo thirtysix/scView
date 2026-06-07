@@ -1,13 +1,21 @@
 import { type ReactNode } from "react";
+import { CitationChip } from "@/components/assistant/CitationChip";
 
 /** Minimal, dependency-free markdown renderer for co-pilot answers.
- *  Supports: paragraphs, bullet/numbered lists, ATX headers, and inline
- *  **bold**, *italic*, and `code`. Renders via React text nodes (no raw HTML),
- *  so it's XSS-safe. Anything it doesn't recognise falls through as text. */
+ *  Supports: paragraphs, bullet/numbered lists, ATX headers, inline
+ *  **bold**, *italic*, `code`, and [kind:...] citation chips. Renders via React
+ *  text nodes (no raw HTML), so it's XSS-safe. */
 
-const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*\n]+\*)/g;
+// bold | code | italic | citation tag (only our known kinds, so ordinary
+// bracketed text is untouched).
+const INLINE =
+  /(\*\*[^*]+\*\*|`[^`]+`|\*[^*\n]+\*|\[(?:lit|doc|result|app|preprocessing|provenance|dataset):[^\]]*\])/g;
 
-function renderInline(text: string, keyPrefix: string): ReactNode[] {
+function renderInline(
+  text: string,
+  keyPrefix: string,
+  onCitation?: (tag: string) => void
+): ReactNode[] {
   const out: ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
@@ -24,6 +32,8 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
           {tok.slice(1, -1)}
         </code>
       );
+    } else if (tok.startsWith("[")) {
+      out.push(<CitationChip key={`${keyPrefix}-${k++}`} tag={tok.slice(1, -1)} onClick={onCitation} />);
     } else {
       out.push(<em key={`${keyPrefix}-${k++}`}>{tok.slice(1, -1)}</em>);
     }
@@ -33,7 +43,13 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   return out;
 }
 
-export function MarkdownLite({ text }: { text: string }) {
+export function MarkdownLite({
+  text,
+  onCitation,
+}: {
+  text: string;
+  onCitation?: (tag: string) => void;
+}) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let para: string[] = [];
@@ -44,7 +60,7 @@ export function MarkdownLite({ text }: { text: string }) {
     if (para.length) {
       blocks.push(
         <p key={`p-${key++}`} className="my-1 first:mt-0 last:mb-0">
-          {renderInline(para.join(" "), `p${key}`)}
+          {renderInline(para.join(" "), `p${key}`, onCitation)}
         </p>
       );
       para = [];
@@ -57,7 +73,7 @@ export function MarkdownLite({ text }: { text: string }) {
       blocks.push(
         <Tag key={`l-${key++}`} className={`${cls} my-1 space-y-0.5 pl-5`}>
           {list.items.map((it, i) => (
-            <li key={i}>{renderInline(it, `li${key}-${i}`)}</li>
+            <li key={i}>{renderInline(it, `li${key}-${i}`, onCitation)}</li>
           ))}
         </Tag>
       );
@@ -81,7 +97,7 @@ export function MarkdownLite({ text }: { text: string }) {
       flushList();
       blocks.push(
         <p key={`h-${key++}`} className="mb-0.5 mt-2 font-semibold first:mt-0">
-          {renderInline(header[2] ?? "", `h${key}`)}
+          {renderInline(header[2] ?? "", `h${key}`, onCitation)}
         </p>
       );
       continue;

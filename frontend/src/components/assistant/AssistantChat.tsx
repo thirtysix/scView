@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import { Sparkles, Send, User, Loader2 } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -97,6 +97,28 @@ export function AssistantChat() {
     }
   }
 
+  // Clicking a result citation chip jumps to that cluster/gene in the Unified View.
+  const handleCitation = useCallback((tag: string) => {
+    const parts = tag.split(":");
+    if (parts[0] !== "result") return;
+    const sub = parts[1];
+    const value = parts.slice(2).join(":");
+    const ds = useDatasetStore.getState().currentDataset;
+    if (sub === "groups" && value) {
+      useSettingsStore.getState().setColorBy(value);
+      useSelectionStore.getState().setHighlight(null);
+    } else if (value) {
+      // find the obs column whose categories include this value (e.g. cluster name)
+      const col = ds?.obs_columns?.find((c) => (c.values ?? []).includes(value))?.name;
+      if (col) {
+        useSettingsStore.getState().setColorBy(col);
+        useSelectionStore.getState().setHighlight({ column: col, value });
+      }
+    }
+    useViewStore.getState().setPanel("unified");
+    useViewStore.getState().setCopilotOpen(false);
+  }, []);
+
   if (!datasetId) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
@@ -143,7 +165,7 @@ export function AssistantChat() {
             </div>
             <div className="min-w-0 flex-1">
               {t.role === "assistant" ? (
-                <MarkdownLite text={t.content} />
+                <MarkdownLite text={t.content} onCitation={handleCitation} />
               ) : (
                 <div className="whitespace-pre-wrap text-sm leading-relaxed">{t.content}</div>
               )}
