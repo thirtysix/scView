@@ -1,5 +1,10 @@
 # scView Future Roadmap
 
+> **AI assistant roadmap lives in [`AI_ASSISTANT.md`](AI_ASSISTANT.md)** — as-built (assessor +
+> Llama/DeepInfra advisor), design principles (deterministic-first, advise-don't-act, auditable,
+> graceful degradation), and the next features incl. a **RAG scientific co-pilot** grounded in
+> scRNA-seq methods literature + the user's own provenance + results.
+
 ## Phase 6: Polish & Testing (Next Up)
 
 These items were deferred during the initial build and are the immediate next steps.
