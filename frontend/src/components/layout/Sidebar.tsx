@@ -56,7 +56,9 @@ export function Sidebar() {
         {PANEL_IDS.map((id) => {
           const Icon = PANEL_ICONS[id];
           const isActive = activePanel === id;
-          const isDisabled = id !== "load" && !hasDataset;
+          // "load" and "assistant" work without a dataset (the co-pilot can help
+          // a newcomer get started); the rest need a loaded dataset.
+          const isDisabled = id !== "load" && id !== "assistant" && !hasDataset;
 
           return (
             <button

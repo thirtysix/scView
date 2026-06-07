@@ -1,7 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { Sparkles, PanelRightClose } from "lucide-react";
 import { useViewStore } from "@/stores/viewStore";
-import { useDatasetStore } from "@/stores/datasetStore";
 import { AssistantChat } from "@/components/assistant/AssistantChat";
 
 const MIN_WIDTH = 320;
@@ -9,8 +8,8 @@ const MIN_WIDTH = 320;
 /** A persistent ✦ launcher (bottom-right) + a right-side overlay drawer that
  *  renders the co-pilot chat over any panel. Mounted once in AppLayout. The
  *  chat is kept mounted (drawer slides via transform) so the conversation
- *  survives hide/show. The width is draggable (left edge). Available whenever a
- *  dataset is loaded. */
+ *  survives hide/show. The width is draggable (left edge). Always available —
+ *  even before a dataset is loaded — so it can help a newcomer get started. */
 export function CoPilotDrawer() {
   const open = useViewStore((s) => s.copilotOpen);
   const toggle = useViewStore((s) => s.toggleCopilot);
@@ -18,7 +17,6 @@ export function CoPilotDrawer() {
   const width = useViewStore((s) => s.copilotWidth);
   const setWidth = useViewStore((s) => s.setCopilotWidth);
   const onAssistantPanel = useViewStore((s) => s.activePanel === "assistant");
-  const hasDataset = useDatasetStore((s) => s.currentDatasetId !== null);
 
   useEffect(() => {
     if (!open) return;
@@ -51,8 +49,6 @@ export function CoPilotDrawer() {
     },
     [setWidth]
   );
-
-  if (!hasDataset) return null;
 
   return (
     <>

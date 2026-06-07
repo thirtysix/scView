@@ -29,13 +29,19 @@ export interface ChatResponse {
   followups?: string[]; // suggested next questions
 }
 
+// With no dataset loaded, hit the app-level endpoint so the co-pilot can still
+// help a newcomer (what scView does, how to load data).
+const chatPath = (datasetId: string | null, stream: boolean) =>
+  (datasetId ? `/datasets/${datasetId}/assistant` : `/assistant`) +
+  (stream ? "/chat-stream" : "/chat");
+
 export async function assistantChat(
-  datasetId: string,
+  datasetId: string | null,
   query: string,
   history: ChatMessage[] = [],
   viewContext?: ViewContext
 ): Promise<ChatResponse> {
-  return apiFetch<ChatResponse>(`/datasets/${datasetId}/assistant/chat`, {
+  return apiFetch<ChatResponse>(chatPath(datasetId, false), {
     method: "POST",
     body: JSON.stringify({ query, history, view_context: viewContext ?? null }),
   });
@@ -51,13 +57,13 @@ export interface StreamHandlers {
 /** Stream a chat answer via SSE. Resolves when the stream completes; throws on a
  *  transport/HTTP error so the caller can fall back to the non-streaming call. */
 export async function assistantChatStream(
-  datasetId: string,
+  datasetId: string | null,
   query: string,
   history: ChatMessage[],
   viewContext: ViewContext | undefined,
   handlers: StreamHandlers
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/datasets/${datasetId}/assistant/chat-stream`, {
+  const res = await fetch(`${API_BASE}${chatPath(datasetId, true)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, history, view_context: viewContext ?? null }),

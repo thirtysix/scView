@@ -38,6 +38,13 @@ const SUGGESTIONS = [
   "Should I run batch integration?",
 ];
 
+const SUGGESTIONS_NO_DATASET = [
+  "How do I load my data?",
+  "What file formats does scView support?",
+  "What can scView do?",
+  "What datasets are already available?",
+];
+
 /** Snapshot what the user is currently looking at, so deictic questions resolve. */
 function currentViewContext(): ViewContext {
   const v = useViewStore.getState();
@@ -71,7 +78,7 @@ export function AssistantChat() {
 
   async function send(query: string) {
     const q = query.trim();
-    if (!q || busy || !datasetId) return;
+    if (!q || busy) return;  // datasetId may be null → app-level co-pilot
     setInput("");
     const history: ChatMessage[] = turns.map((t) => ({ role: t.role, content: t.content }));
     const vc = currentViewContext();
@@ -134,13 +141,7 @@ export function AssistantChat() {
     useViewStore.getState().setCopilotOpen(false);
   }, []);
 
-  if (!datasetId) {
-    return (
-      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-        Load a dataset to chat with the AI co-pilot.
-      </div>
-    );
-  }
+  const suggestions = datasetId ? SUGGESTIONS : SUGGESTIONS_NO_DATASET;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -149,12 +150,12 @@ export function AssistantChat() {
           <div className="mx-auto max-w-xl pt-6 text-center">
             <Sparkles className="mx-auto mb-3 h-8 w-8 text-primary/60" />
             <p className="mb-4 text-sm text-muted-foreground">
-              Ask about your clusters, markers, the steps that were run, or
-              single-cell analysis in general. Answers are grounded in this
-              dataset (and the methods/literature corpora) and cite their sources.
+              {datasetId
+                ? "Ask about your clusters, markers, the steps that were run, or single-cell analysis in general. Answers are grounded in this dataset (and the methods/literature corpora) and cite their sources."
+                : "New here? Ask how to load your data, what formats are supported, or what scView can do — I can help you get started."}
             </p>
             <div className="flex flex-wrap justify-center gap-2">
-              {SUGGESTIONS.map((s) => (
+              {suggestions.map((s) => (
                 <button
                   key={s}
                   onClick={() => send(s)}

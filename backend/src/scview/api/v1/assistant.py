@@ -48,21 +48,32 @@ async def rag_status(settings: Settings = Depends(get_settings_dep)) -> dict:
         return {"enabled": True, "counts": {}, "error": str(exc)}
 
 
-async def _prepare(query: str, body: ChatRequest, dm: DatasetManager, settings: Settings) -> dict:
+async def _prepare(
+    query: str,
+    body: ChatRequest,
+    dm: DatasetManager,
+    settings: Settings,
+    *,
+    force_app: bool = False,
+) -> dict:
     """Classify intent, then assemble only the knowledge it needs — shared by the
-    streaming and non-streaming endpoints. Returns kwargs for answer_query /
+    streaming and non-streaming endpoints. ``force_app`` always includes the
+    dataset-library/feature context (used when no dataset is loaded, so the
+    co-pilot can help a newcomer get started). Returns kwargs for answer_query /
     stream_answer."""
     # 1. Classify intent (one cheap call) — what knowledge does this need?
     intent = await classify_intent(
         query, body.view_context, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL
     )
     chosen = set(intent.sources)
+    if force_app:
+        chosen.add("app")
 
     # 2. RAG retrieval ONLY for the corpora the classifier picked.
     rag_corpora = [c for c in ("tutorials", "literature") if c in chosen]
     extra_context, extra_sources = await retrieve_context(query, settings, rag_corpora)
 
-    # 3. App context (dataset library + features) only when asked about the app.
+    # 3. App context (dataset library + features) when asked about the app.
     app_context, app_sources = "", []
     if "app" in chosen:
         app_context, app_sources = build_app_context(dm.list_datasets(), body.view_context)
@@ -75,6 +86,7 @@ async def _prepare(query: str, body: ChatRequest, dm: DatasetManager, settings: 
         app_sources=app_sources,
         view_context=body.view_context,
         include_data_grounding=("data" in chosen),
+        data_facets=sorted(getattr(intent, "data_facets", []) or []),
         route=sorted(chosen),
         model=settings.RAG_CHAT_MODEL,
     )
@@ -139,6 +151,56 @@ async def assistant_chat_stream(
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             logger.error("assistant stream failed for %s: %s", dataset_id, exc, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --- No-dataset variants: the co-pilot is available before any dataset is loaded
+# (to help a newcomer get started — what scView does, how to load data). --------
+
+
+@router.post("/assistant/chat", response_model=ChatResponse)
+async def assistant_chat_app(
+    body: ChatRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+) -> ChatResponse:
+    """Co-pilot chat with no dataset loaded — grounds in the app (dataset library
+    + features) and the methods/literature corpora to help the user get started."""
+    if not body.query or not body.query.strip():
+        raise HTTPException(status_code=400, detail="Empty query.")
+    try:
+        query = body.query.strip()
+        kwargs = await _prepare(query, body, dm, settings, force_app=True)
+        return await answer_query(query, None, settings.DEEPINFRA_API_KEY, **kwargs)
+    except Exception as exc:
+        logger.error("assistant app chat failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Assistant failed: {exc}")
+
+
+@router.post("/assistant/chat-stream")
+async def assistant_chat_app_stream(
+    body: ChatRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+) -> StreamingResponse:
+    """Streaming no-dataset co-pilot chat (SSE)."""
+    if not body.query or not body.query.strip():
+        raise HTTPException(status_code=400, detail="Empty query.")
+    query = body.query.strip()
+
+    async def event_generator():
+        try:
+            kwargs = await _prepare(query, body, dm, settings, force_app=True)
+            async for event in stream_answer(query, None, settings.DEEPINFRA_API_KEY, **kwargs):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            logger.error("assistant app stream failed: %s", exc, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
 
     return StreamingResponse(
