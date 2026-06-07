@@ -128,11 +128,13 @@ def build_grounding_context(
     ident: list[str] = []
     prov_src: dict = {}
     if want("identity"):
+        has_pub = False
         for key, label in (("about_title", "Title"), ("about_short_title", "Short title"),
                            ("about_readme", "About")):
             val = _uns_str(adata, key)
             if val:
                 ident.append(f"- {label}: {val}")
+                has_pub = True
         try:
             prov_src = provenance.read_provenance(adata).get("source", {}) or {}
         except Exception:  # pragma: no cover
@@ -140,6 +142,14 @@ def build_grounding_context(
         for k in ("origin", "original_filename", "format"):
             if prov_src.get(k):
                 ident.append(f"- {k.replace('_', ' ').title()}: {prov_src[k]}")
+        if not has_pub:
+            # No embedded study/citation — say so explicitly so the answer is
+            # helpful ("user-uploaded, no publication metadata") not a flat "no info".
+            ident.append(
+                "- No embedded publication/study metadata: this appears to be a "
+                "user-uploaded dataset; its source/citation is not stored in the data "
+                "and could be added by the user."
+            )
     if ident:
         lines.append("\n## Dataset identity & source "
                      "(use to answer questions about the dataset's paper/origin)")
@@ -330,7 +340,10 @@ Do not give clinical or diagnostic advice.
 "What the user is currently viewing" section when present.
 - Format with Markdown: use a bullet or numbered list when enumerating items \
 (datasets, clusters, genes, steps), **bold** for key terms, and `code` for gene \
-symbols/parameters. Keep answers concise."""
+symbols/parameters. Keep answers concise.
+- For "what study/paper is this?" when no publication metadata is embedded, don't \
+just say "no information" — explain it looks like a user-uploaded dataset whose \
+source isn't stored in the data, and that they can add a citation."""
 
 
 def _build_user_message(query: str, context: str) -> str:
