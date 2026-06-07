@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 
 from scview.config import Settings, get_settings
 from scview.dependencies import get_dataset_manager as _get_dm
+from scview.dependencies import get_settings_dep as _get_settings
 from scview.core.dataset_manager import DatasetManager
 from scview.main import app
 
@@ -34,8 +35,12 @@ def tmp_data_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def test_settings(tmp_data_dir: Path) -> Settings:
-    """Settings wired to the temporary data directory."""
-    return Settings(DATA_DIR=str(tmp_data_dir))
+    """Settings wired to the temporary data directory.
+
+    Force external integrations off so tests are hermetic regardless of the
+    environment's .env (e.g. a populated DEEPINFRA_API_KEY would otherwise make
+    the assistant endpoint hit the live LLM)."""
+    return Settings(DATA_DIR=str(tmp_data_dir), DEEPINFRA_API_KEY="", RAG_DATABASE_URL="")
 
 
 @pytest.fixture()
@@ -54,6 +59,7 @@ async def client(test_settings: Settings, dataset_manager: DatasetManager):
         return dataset_manager
 
     app.dependency_overrides[_get_dm] = _override_dm
+    app.dependency_overrides[_get_settings] = _override_settings
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
