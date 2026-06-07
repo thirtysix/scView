@@ -275,7 +275,9 @@ unattended.
 intent routing (app/data/tutorials/literature) so RAG only runs when needed; dataset
 identity/source grounding ("what paper is this from?"); Markdown answers; clickable
 citation chips (PubMed links + result→jump-to-cluster); suggested follow-up questions;
-token-streaming (SSE); resizable drawer; gentler "Hide" affordance.
+token-streaming (SSE); resizable drawer; gentler "Hide" affordance;
+**available before a dataset loads** (app-level endpoints help a newcomer get started);
+**facet-narrowed data grounding** (identity/groups/markers/enrichment — minimal prompt per question).
 
 **Still on the roadmap (not yet built):**
 - **Natural-language *actions*** (the big one, §3.4) — "color the UMAP by CD8A", "run
