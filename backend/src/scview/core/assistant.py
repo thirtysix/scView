@@ -72,6 +72,7 @@ class ChatResponse(BaseModel):
     grounded: bool          # True if an LLM produced the answer; False = templated fallback
     raw_response: str = ""  # raw LLM text, for transparency
     route: list[str] = []   # which knowledge sources were consulted (app/data/tutorials/literature)
+    followups: list[str] = []  # suggested next questions
 
 
 # ---------------------------------------------------------------------------
@@ -409,12 +410,48 @@ async def answer_query(
         answer = (response.choices[0].message.content or "").strip()
         if not answer:
             return _fallback_answer(query, context, sources, route)
+        followups = await suggest_followups(query, answer, api_key, model)
         return ChatResponse(
-            answer=answer, sources=sources, grounded=True, raw_response=answer, route=route
+            answer=answer, sources=sources, grounded=True, raw_response=answer,
+            route=route, followups=followups,
         )
     except Exception as exc:
         logger.warning("assistant: LLM call failed (%s); using fallback", exc)
         return _fallback_answer(query, context, sources, route)
+
+
+async def suggest_followups(query: str, answer: str, api_key: str, model: str) -> list[str]:
+    """Propose 2-3 short, specific next questions. Empty on no-key/failure."""
+    if not api_key:
+        return []
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": (
+                    "Given a Q&A about a single-cell RNA-seq dataset in the scView app, "
+                    "propose 3 SHORT, specific follow-up questions the user might ask next "
+                    "(each < 12 words). Respond ONLY as a JSON array of strings."
+                )},
+                {"role": "user", "content": f"Q: {query}\nA: {answer}"},
+            ],
+            temperature=0.5,
+            max_tokens=120,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        if "[" in raw:
+            raw = raw[raw.find("["): raw.rfind("]") + 1]
+        import json as _json
+
+        items = _json.loads(raw)
+        out = [str(s).strip() for s in items if isinstance(s, str) and s.strip()]
+        return out[:3]
+    except Exception as exc:  # pragma: no cover - best-effort
+        logger.debug("followup generation failed: %s", exc)
+        return []
 
 
 def _fallback_answer(

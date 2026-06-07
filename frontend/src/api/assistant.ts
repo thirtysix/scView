@@ -25,6 +25,7 @@ export interface ChatResponse {
   grounded: boolean;
   raw_response?: string;
   route?: string[]; // knowledge sources consulted: app/data/tutorials/literature
+  followups?: string[]; // suggested next questions
 }
 
 export async function assistantChat(

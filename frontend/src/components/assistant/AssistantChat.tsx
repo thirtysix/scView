@@ -20,6 +20,7 @@ interface Turn {
   sources?: ChatSource[];
   grounded?: boolean;
   route?: string[];
+  followups?: string[];
 }
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -80,6 +81,7 @@ export function AssistantChat() {
           sources: res.sources,
           grounded: res.grounded,
           route: res.route,
+          followups: res.followups,
         },
       ]);
     } catch (err) {
@@ -201,6 +203,23 @@ export function AssistantChat() {
                   </ul>
                 </details>
               )}
+              {t.role === "assistant" &&
+                i === turns.length - 1 &&
+                !busy &&
+                t.followups &&
+                t.followups.length > 0 && (
+                  <div className="mt-2 flex flex-col items-start gap-1">
+                    {t.followups.map((q) => (
+                      <button
+                        key={q}
+                        onClick={() => send(q)}
+                        className="rounded-full border px-2.5 py-1 text-left text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                )}
             </div>
           </div>
         ))}
