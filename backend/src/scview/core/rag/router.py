@@ -59,9 +59,32 @@ class RouteResult(BaseModel):  # kept for the corpora-level heuristic + tests
     reason: str
 
 
+DATA_FACETS = ("identity", "groups", "markers", "enrichment")
+
+_FACET_HINTS = {
+    "identity": (
+        "article", "paper", "publication", "citation", "doi", "source", "origin",
+        "where is this from", "what is this dataset", "what's this dataset", "who made",
+    ),
+    "markers": ("marker", "gene", "express", "defines", "characteri", "signature", "top genes"),
+    "groups": (
+        "how many", "composition", "proportion", "count", "cell type", "cell types",
+        "cluster", "donor", "condition", "sample", "group", "breakdown", "fraction",
+    ),
+    "enrichment": ("enrichment", "pathway", "gsea", "go term", "ontology"),
+}
+
+
 class Intent(BaseModel):
     sources: list[str]
     reason: str
+    data_facets: list[str] = []  # when 'data': minimal facets needed (empty = all)
+
+
+def _infer_facets(query: str) -> list[str]:
+    """Heuristic: which dataset facets does a 'data' question need? Empty = all."""
+    q = query.lower()
+    return [f for f, hints in _FACET_HINTS.items() if any(h in q for h in hints)]
 
 
 def heuristic_route(query: str) -> RouteResult:
@@ -105,7 +128,8 @@ def heuristic_intent(query: str, view_context: dict | None = None) -> Intent:
     # de-dup preserving order
     seen: set[str] = set()
     sources = [s for s in sources if not (s in seen or seen.add(s))]
-    return Intent(sources=sources, reason="heuristic")
+    facets = _infer_facets(query) if "data" in sources else []
+    return Intent(sources=sources, reason="heuristic", data_facets=facets)
 
 
 _CLASSIFY_SYSTEM = """\
@@ -122,8 +146,11 @@ cluster", "what steps ran?", "what paper/publication is THIS dataset from?").
 - "literature": BIOLOGY / evidence answerable from research abstracts \
 (e.g. "what marks pDCs?", "is the interferon signature linked to lupus?").
 Only include "tutorials"/"literature" when the question truly needs external \
-knowledge — those run expensive retrieval. Respond ONLY as JSON: \
-{"sources": ["app"|"data"|"tutorials"|"literature", ...], "reason": "..."}."""
+knowledge — those run expensive retrieval. When you include "data", also return \
+"data_facets": the MINIMAL subset of ["identity","groups","markers","enrichment"] \
+the question needs (e.g. "what paper is this?" → ["identity"]; "what marks cluster \
+3?" → ["markers"]; leave empty only if truly everything is needed). Respond ONLY \
+as JSON: {"sources": [...], "data_facets": [...], "reason": "..."}."""
 
 
 async def classify_intent(
@@ -152,7 +179,12 @@ async def classify_intent(
         data = json.loads(raw)
         sources = [s for s in data.get("sources", []) if s in SOURCES]
         if sources:
-            return Intent(sources=sources, reason=str(data.get("reason", "llm-classified")))
+            facets = [f for f in (data.get("data_facets") or []) if f in DATA_FACETS]
+            return Intent(
+                sources=sources,
+                reason=str(data.get("reason", "llm-classified")),
+                data_facets=facets if "data" in sources else [],
+            )
     except Exception as exc:
         logger.warning("intent classify LLM failed (%s); using heuristic", exc)
     return heuristic_intent(query, view_context)

@@ -94,7 +94,9 @@ def _uns_str(adata, key: str, limit: int = 600) -> str:
     return s[:limit] + "…" if len(s) > limit else s
 
 
-def build_grounding_context(adaptor) -> tuple[str, list[ChatSource]]:
+def build_grounding_context(
+    adaptor, facets: set[str] | None = None
+) -> tuple[str, list[ChatSource]]:
     """Assemble a bounded, structured snapshot of the dataset's analysis state.
 
     Returns ``(context_text, sources)`` where ``context_text`` is the prompt
@@ -103,6 +105,11 @@ def build_grounding_context(adaptor) -> tuple[str, list[ChatSource]]:
     adata = adaptor.adata
     lines: list[str] = []
     sources: list[ChatSource] = []
+
+    def want(facet: str) -> bool:
+        # facets=None → include everything (back-compat); else only the requested
+        # facets. The dataset summary is always included (cheap + always useful).
+        return facets is None or facet in facets
 
     # --- 1. Dataset summary -------------------------------------------------
     n_cells = adaptor.n_cells()
@@ -119,19 +126,20 @@ def build_grounding_context(adaptor) -> tuple[str, list[ChatSource]]:
 
     # --- 1b. Dataset identity / source (so "what's the paper?" can be answered) ---
     ident: list[str] = []
-    for key, label in (("about_title", "Title"), ("about_short_title", "Short title"),
-                       ("about_readme", "About")):
-        val = _uns_str(adata, key)
-        if val:
-            ident.append(f"- {label}: {val}")
-    prov_src = {}
-    try:
-        prov_src = provenance.read_provenance(adata).get("source", {}) or {}
-    except Exception:  # pragma: no cover
-        prov_src = {}
-    for k in ("origin", "original_filename", "format"):
-        if prov_src.get(k):
-            ident.append(f"- {k.replace('_', ' ').title()}: {prov_src[k]}")
+    prov_src: dict = {}
+    if want("identity"):
+        for key, label in (("about_title", "Title"), ("about_short_title", "Short title"),
+                           ("about_readme", "About")):
+            val = _uns_str(adata, key)
+            if val:
+                ident.append(f"- {label}: {val}")
+        try:
+            prov_src = provenance.read_provenance(adata).get("source", {}) or {}
+        except Exception:  # pragma: no cover
+            prov_src = {}
+        for k in ("origin", "original_filename", "format"):
+            if prov_src.get(k):
+                ident.append(f"- {k.replace('_', ' ').title()}: {prov_src[k]}")
     if ident:
         lines.append("\n## Dataset identity & source "
                      "(use to answer questions about the dataset's paper/origin)")
@@ -186,10 +194,11 @@ def build_grounding_context(adaptor) -> tuple[str, list[ChatSource]]:
     # --- 4. Results — categorical groupings + top markers + enrichment ------
     # 4a. Low-cardinality categorical obs columns (cell types, condition, batch)
     cat_cols = []
-    for info in adaptor.obs_columns_info():
-        nun = info.get("n_unique")
-        if nun is not None and 1 < nun <= _MAX_CATEGORICAL_UNIQUE and "values" in info:
-            cat_cols.append(info["name"])
+    if want("groups"):
+        for info in adaptor.obs_columns_info():
+            nun = info.get("n_unique")
+            if nun is not None and 1 < nun <= _MAX_CATEGORICAL_UNIQUE and "values" in info:
+                cat_cols.append(info["name"])
     if cat_cols:
         lines.append("\n## Cell groupings (obs columns)")
         for col in cat_cols[:_MAX_CATEGORICAL_COLUMNS]:
@@ -206,10 +215,12 @@ def build_grounding_context(adaptor) -> tuple[str, list[ChatSource]]:
                 logger.debug("assistant: obs summary failed for %s: %s", col, exc)
 
     # 4b. Top markers per group, for each column that has computed markers
-    try:
-        marker_cols = adaptor.marker_columns()
-    except Exception:  # pragma: no cover
-        marker_cols = []
+    marker_cols = []
+    if want("markers"):
+        try:
+            marker_cols = adaptor.marker_columns()
+        except Exception:  # pragma: no cover
+            marker_cols = []
     for mcol in marker_cols[:2]:  # at most the two primary marker columns
         df = adaptor.get_markers(column=mcol, n_genes=_MAX_MARKER_GENES)
         if df is None or df.empty:
@@ -229,7 +240,11 @@ def build_grounding_context(adaptor) -> tuple[str, list[ChatSource]]:
 
     # 4c. Enrichment results, if present in uns
     try:
-        enr_keys = [k for k in adata.uns if str(k).startswith("enrichment__")]
+        enr_keys = (
+            [k for k in adata.uns if str(k).startswith("enrichment__")]
+            if want("enrichment")
+            else []
+        )
         if enr_keys:
             cols = sorted({k.split("__", 1)[1] for k in enr_keys})
             lines.append("\n## Pathway enrichment computed for: " + ", ".join(cols))
@@ -355,13 +370,16 @@ def _assemble(
     app_sources: list[ChatSource] | None,
     view_context: dict | None,
     include_data_grounding: bool,
+    data_facets: list[str] | None = None,
 ) -> tuple[str, list[ChatSource]]:
     """Build the grounded context string + ordered source list from the chosen
-    sources (shared by streaming and non-streaming paths)."""
+    sources (shared by streaming and non-streaming paths). ``data_facets`` narrows
+    the dataset grounding to only the facets a question needs (empty/None = all)."""
     blocks: list[str] = []
     sources: list[ChatSource] = []
     if include_data_grounding and adaptor is not None:
-        data_context, data_sources = build_grounding_context(adaptor)
+        facets = set(data_facets) if data_facets else None
+        data_context, data_sources = build_grounding_context(adaptor, facets)
         blocks.append(data_context)
         sources.extend(data_sources)
     if app_context:
@@ -398,6 +416,7 @@ async def answer_query(
     app_sources: list[ChatSource] | None = None,
     view_context: dict | None = None,  # what the user is currently looking at
     include_data_grounding: bool = True,  # assemble the loaded dataset's facts
+    data_facets: list[str] | None = None,  # narrow the dataset facets included
     route: list[str] | None = None,  # which sources the classifier chose
     model: str = DEFAULT_MODEL,
 ) -> ChatResponse:
@@ -412,7 +431,7 @@ async def answer_query(
     context, sources = _assemble(
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
-        include_data_grounding=include_data_grounding,
+        include_data_grounding=include_data_grounding, data_facets=data_facets,
     )
 
     route = route or []
@@ -491,6 +510,7 @@ async def stream_answer(
     app_sources: list[ChatSource] | None = None,
     view_context: dict | None = None,
     include_data_grounding: bool = True,
+    data_facets: list[str] | None = None,
     route: list[str] | None = None,
     model: str = DEFAULT_MODEL,
 ):
@@ -501,7 +521,7 @@ async def stream_answer(
     context, sources = _assemble(
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
-        include_data_grounding=include_data_grounding,
+        include_data_grounding=include_data_grounding, data_facets=data_facets,
     )
     route = route or []
     yield {
