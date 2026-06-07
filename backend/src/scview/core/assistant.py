@@ -273,7 +273,10 @@ and counts over generic statements.
 - Do NOT invent clusters, genes, counts, or steps that are not in the context. \
 Do not give clinical or diagnostic advice.
 - If the user says "this cluster", "this gene", or "here", resolve it from the \
-"What the user is currently viewing" section when present."""
+"What the user is currently viewing" section when present.
+- Format with Markdown: use a bullet or numbered list when enumerating items \
+(datasets, clusters, genes, steps), **bold** for key terms, and `code` for gene \
+symbols/parameters. Keep answers concise."""
 
 
 def _build_user_message(query: str, context: str) -> str:

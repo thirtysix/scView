@@ -12,6 +12,7 @@ import {
   type ChatSource,
   type ViewContext,
 } from "@/api/assistant";
+import { MarkdownLite } from "@/components/assistant/MarkdownLite";
 
 interface Turn {
   role: "user" | "assistant";
@@ -141,7 +142,11 @@ export function AssistantChat() {
               {t.role === "user" ? <User className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="whitespace-pre-wrap text-sm leading-relaxed">{t.content}</div>
+              {t.role === "assistant" ? (
+                <MarkdownLite text={t.content} />
+              ) : (
+                <div className="whitespace-pre-wrap text-sm leading-relaxed">{t.content}</div>
+              )}
               {t.role === "assistant" && t.grounded === false && (
                 <div className="mt-1 text-xs italic text-amber-600">
                   Language model not configured — showing grounded facts directly.
