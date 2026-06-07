@@ -6,12 +6,14 @@ interface UnifiedBottomPanelProps {
   violinData: Record<string, number[]>;
   violinTitle?: string;
   violinGroupLabel?: string;
+  isLoading?: boolean;
 }
 
 export function UnifiedBottomPanel({
   violinData,
   violinTitle,
   violinGroupLabel,
+  isLoading = false,
 }: UnifiedBottomPanelProps) {
   const isOpen = useUnifiedViewStore((s) => s.bottomPanelOpen);
   const toggle = useUnifiedViewStore((s) => s.toggleBottomPanel);
@@ -27,7 +29,11 @@ export function UnifiedBottomPanel({
       >
         <span>Distribution {violinTitle ? `\u2014 ${violinTitle}` : ""}</span>
         <span className="flex items-center gap-2">
-          {!hasData && <span className="text-slate-400">No data</span>}
+          {isLoading ? (
+            <span className="text-slate-400">Loading…</span>
+          ) : (
+            !hasData && <span className="text-slate-400">No data</span>
+          )}
           {isOpen ? (
             <ChevronDown className="h-3.5 w-3.5" />
           ) : (
@@ -49,7 +55,9 @@ export function UnifiedBottomPanel({
             />
           ) : (
             <div className="flex items-center justify-center py-8 text-xs text-slate-400">
-              Select a gene or score a gene set to see its distribution
+              {isLoading
+                ? "Loading distribution…"
+                : "Select a gene or score a gene set to see its distribution"}
             </div>
           )}
         </div>

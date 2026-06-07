@@ -106,7 +106,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
               title="Expression units used for the gene overlay and violin plots"
               className="max-w-[160px] rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none"
             >
-              {dataset!.expression_layers.map((l) => (
+              {dataset?.expression_layers?.map((l) => (
                 <option key={l.key} value={l.key}>
                   {l.label}
                 </option>

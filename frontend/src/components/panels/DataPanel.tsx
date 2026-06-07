@@ -112,9 +112,10 @@ export function DataPanel() {
       if (files.length === 0) return;
       // A single Seurat file → the converter path.
       if (files.length === 1) {
-        const ext = files[0].name.split(".").pop()?.toLowerCase();
-        if (ext === "rds" || ext === "rdata") {
-          await handleSeurat(files[0]);
+        const first = files[0];
+        const ext = first?.name.split(".").pop()?.toLowerCase();
+        if (first && (ext === "rds" || ext === "rdata")) {
+          await handleSeurat(first);
           return;
         }
       }
@@ -314,7 +315,7 @@ export function DataPanel() {
             <input
               type="text"
               value={options.name ?? ""}
-              placeholder={loadable.length > 1 ? "merged_dataset" : loadable[0].label}
+              placeholder={loadable.length > 1 ? "merged_dataset" : loadable[0]?.label}
               onChange={(e) => setOptions((o) => ({ ...o, name: e.target.value || null }))}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none"
             />

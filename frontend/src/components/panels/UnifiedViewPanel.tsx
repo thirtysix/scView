@@ -152,9 +152,6 @@ export function UnifiedViewPanel() {
   // --- View state for lasso ---
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(null);
 
-  // --- Reset view ref ---
-  const resetViewRef = useRef<(() => void) | null>(null);
-
   // --- Resizable split pane ---
   const [splitFraction, setSplitFraction] = useState(0.6); // left panel fraction (0.3–0.8)
   const splitContainerRef = useRef<HTMLDivElement>(null);
@@ -211,7 +208,8 @@ export function UnifiedViewPanel() {
 
   const categoryColors = useMemo<[number, number, number][] | undefined>(() => {
     if (!categories) return undefined;
-    return categories.map((_, i) => mapCategoryToColor(i) as [number, number, number]);
+    // ColorLegend wants RGB; mapCategoryToColor returns RGBA — drop the alpha.
+    return categories.map((_, i) => mapCategoryToColor(i).slice(0, 3) as [number, number, number]);
   }, [categories]);
 
   // --- Determine what to pass to scatter ---
@@ -619,6 +617,7 @@ export function UnifiedViewPanel() {
             violinData={violinData}
             violinTitle={violinTitle}
             violinGroupLabel={groupByColumn}
+            isLoading={isLoadingViolin}
           />
         </div>
 

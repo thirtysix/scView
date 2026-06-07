@@ -259,7 +259,7 @@ export function MSigDBCollectionTree({
 
               {isExpanded && (
                 <div className="ml-4 border-l border-slate-100 pl-2">
-                  {cat.children.map((child, idx) => {
+                  {cat.children.map((child) => {
                     if (isSubcategory(child)) {
                       const subKey = `${cat.category}:${child.subcategory}`;
                       const isSubExpanded =
