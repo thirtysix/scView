@@ -1,9 +1,7 @@
 # scView AI Assistant — Design Spec
 
-*Written 2026-06-06 alongside the conference-poster prep (`docs/POSTER_PREP.md`). This doc
-specifies (a) exactly what the AI assistant does **today**, (b) the **design principles** that
-keep it trustworthy, and (c) a **roadmap** spec'd concretely enough to build after the poster.
-The "Where it's going" tease on the poster is backed by the roadmap here.*
+*This doc specifies (a) exactly what the AI assistant does **today**, (b) the **design principles**
+that keep it trustworthy, and (c) a **roadmap** spec'd concretely enough to build against.*
 
 The AI assistant is scView's headline differentiator for an AI-in-medicine audience: it is the
 part of the tool that **interprets the data and advises the analyst** — transparently, reversibly,
@@ -316,4 +314,4 @@ token-streaming (SSE); resizable drawer; gentler "Hide" affordance;
 - `backend/src/scview/core/pipeline.py` — the 16-step pipeline the advisor recommends into.
 - `backend/src/scview/core/provenance.py` — the recorded history the assessor trusts and §3.5 narrates.
 
-*Poster brief: `docs/POSTER_PREP.md`. Broader roadmap: `docs/FUTURE.md`.*
+*Broader roadmap: `docs/FUTURE.md`.*
