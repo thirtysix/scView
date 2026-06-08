@@ -1,5 +1,8 @@
 # scView Future Roadmap
 
+> **Cell-type annotation options + design: [`CELLTYPE_ANNOTATION.md`](CELLTYPE_ANNOTATION.md)**
+> (lightweight tiered annotator — CellTypist / LLM-from-markers / marker-scoring; benchmarked on Kang).
+>
 > **AI assistant roadmap lives in [`AI_ASSISTANT.md`](AI_ASSISTANT.md)** — as-built (assessor +
 > Llama/DeepInfra advisor), design principles (deterministic-first, advise-don't-act, auditable,
 > graceful degradation), and the next features incl. a **RAG scientific co-pilot** grounded in

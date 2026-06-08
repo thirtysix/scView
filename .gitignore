@@ -59,3 +59,5 @@ coverage/
 CLAUDE.md
 poster_figures/
 Screenshot from *.png
+poster/*.pdf
+poster/_preview.png
