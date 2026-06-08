@@ -28,7 +28,7 @@ right (Markers / Expression / Gene Sets / Enrichment), and a collapsible violin
 ("Distribution") along the bottom. This is a strong foundation — the work is to finish,
 fix, and promote it rather than build anew.
 
-Gaps today (from the 2026-05-29 UX audit, see `UX_AUDIT.md`):
+Gaps today (from a 2026-05-29 UX audit):
 1. **🔴 The Unified View scatter renders blank** while the standalone Visualizations panel
    renders the same UMAP. Same `useEmbedding()` hook and same `EmbeddingScatter` props, so
    it's a deck.gl rendering issue in the Unified DOM context — prime suspects: the
