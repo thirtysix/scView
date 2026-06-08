@@ -58,6 +58,8 @@ coverage/
 # Auto-generated project context for Claude Code
 CLAUDE.md
 Screenshot from *.png
-# Poster working directories — kept out of the public repo
+# Poster / symposium working material — kept out of the public repo
 poster/
 poster_figures/
+docs/POSTER_PREP.md
+docs/SYMPOSIUM_DESCRIPTION.txt
