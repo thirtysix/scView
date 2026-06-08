@@ -9,10 +9,12 @@ provenance** — "git for the h5ad" — so you can always answer *"what was done
 why?"* Wet-lab and dry-lab users go from a raw matrix to annotated, reproducible figures without
 writing code.
 
-![scView demo](docs/images/demo.gif)
+<video src="https://github.com/thirtysix/scView/raw/main/docs/demo/demo.mp4" controls muted loop width="100%"></video>
 
-*Load a dataset → color by cluster → overlay a gene (with a violin) → ask the AI co-pilot a
-grounded, cited question.*
+▶️ **[Watch the demo](docs/demo/demo.mp4)** — *(the inline player appears once the repo is public)* — a
+full run-through: load a dataset → AI-assisted assessment → Unified View → cluster colors →
+marker-gene expression → 3D embedding → enrichment. The on-screen **real-time clock** shows true
+elapsed time, so fast-forwarded sections visibly race ahead.
 
 ---
 
@@ -73,33 +75,92 @@ reopen or manage previously loaded datasets.*
 
 ---
 
-## Quick start
+## Installation & usage
 
-Requires Docker + Docker Compose.
+scView runs entirely in Docker, so the **same steps work on Linux, macOS, and Windows** — no Python,
+Node, or R toolchains to install on the host.
 
+### 1. Prerequisites
+
+- **Docker** with the **Docker Compose v2** plugin:
+  - **macOS / Windows** → install **[Docker Desktop](https://www.docker.com/products/docker-desktop/)**
+    (bundles Compose). On **Windows**, accept the **WSL 2** backend when prompted.
+  - **Linux** → install **Docker Engine** + the Compose plugin:
+    ```bash
+    # Ubuntu/Debian
+    sudo apt install docker.io docker-compose-v2
+    # Fedora/RHEL
+    sudo dnf install docker docker-compose-plugin
+    # Arch
+    sudo pacman -S docker docker-compose
+    # then enable the daemon and allow your user to run Docker:
+    sudo systemctl enable --now docker
+    sudo usermod -aG docker "$USER"     # log out/in afterward
+    ```
+- **~8 GB RAM** recommended, **~3 GB disk** for the images, and a modern browser.
+
+Confirm Docker is ready:
+```bash
+docker --version && docker compose version && docker info
+```
+
+### 2. Get the code
 ```bash
 git clone https://github.com/thirtysix/scView.git
 cd scView
-
-# production stack (frontend on :3000, backend on :8080, R converter on :8001)
-make up
-# → open http://localhost:3000
-
-# …or the dev stack with hot-reload (frontend on :5173)
-make dev
-# → open http://localhost:5173
 ```
 
-**Optional — enable the AI features.** Copy `.env.example` to `.env` and set a
-[DeepInfra](https://deepinfra.com/dash/api_keys) API key:
+### 3. Start scView
 
+**macOS / Linux** *(and Windows via WSL 2 or Git Bash)* — one guided command:
+```bash
+./start.sh           # dev stack, hot-reload  → http://localhost:5173  (opens your browser)
+./start.sh --prod    # optimized Nginx stack  → http://localhost:3000
+./start.sh --stop    # stop all services
+./start.sh --clean   # stop and remove containers, volumes, and images
+```
+`start.sh` checks prerequisites, creates `.env`, builds the images (first run pulls a few GB and
+takes a few minutes), waits for health checks, and opens the app.
+
+**Windows (PowerShell, no WSL)** — run Compose directly:
+```powershell
+copy .env.example .env
+docker compose -f docker-compose.dev.yml up --build    # dev  → http://localhost:5173
+# …or the production stack:
+docker compose up --build -d                            # prod → http://localhost:3000
+```
+
+**Any platform with `make`:**
+```bash
+make dev     # dev stack  → http://localhost:5173
+make up      # prod stack → http://localhost:3000
+make down    # stop
+```
+
+Once it's running:
+
+| Service | URL |
+| --- | --- |
+| **App** (dev / prod) | http://localhost:5173 · http://localhost:3000 |
+| **Backend API + interactive docs** | http://localhost:8080 · http://localhost:8080/docs |
+| **R converter** (Seurat `.rds` → h5ad) | http://localhost:8001 |
+
+### 4. First steps
+1. Open the app and use **Add Data** (the **Data** tab).
+2. Drop in a dataset — `.h5ad`, a 10x matrix (MEX or HDF5), `.loom`, `.zarr`, a dense `.csv`, a
+   Seurat `.rds`, or an nf-core/scrnaseq output. *(No data handy? A small `pbmc_1k_v3` sample ships in
+   `sample_data/`.)*
+3. Open **Data Assessment** for QC plots + AI-suggested next steps, then explore in **Unified View**
+   and ask the **AI Co-pilot**.
+
+### 5. Optional — enable the AI features
+Copy `.env.example` to `.env` and add a [DeepInfra](https://deepinfra.com/dash/api_keys) API key:
 ```bash
 DEEPINFRA_API_KEY=your-key-here
 ```
-
-Without a key, the assistant degrades gracefully to deterministic, rule-based guidance. The RAG
-co-pilot's literature/tutorials corpora additionally require a Postgres/pgvector connection string
-(`RAG_DATABASE_URL`) — see `docs/AI_ASSISTANT.md`.
+Without a key the assistant degrades gracefully to deterministic, rule-based guidance. The RAG
+co-pilot's literature/tutorial corpora additionally require a Postgres/pgvector connection string
+(`RAG_DATABASE_URL`) — see [`docs/AI_ASSISTANT.md`](docs/AI_ASSISTANT.md).
 
 ---
 
@@ -132,4 +193,4 @@ multi-format ingestion are implemented; see [`docs/AI_ASSISTANT.md`](docs/AI_ASS
 
 ## License
 
-_TODO — add a license before public release._
+Released under the **[MIT License](LICENSE)** — © 2026 Harlan Barker.

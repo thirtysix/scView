@@ -57,7 +57,7 @@ coverage/
 
 # Auto-generated project context for Claude Code
 CLAUDE.md
-poster_figures/
 Screenshot from *.png
-poster/*.pdf
-poster/_preview.png
+# Poster working directories — kept out of the public repo
+poster/
+poster_figures/
