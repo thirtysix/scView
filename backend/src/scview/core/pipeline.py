@@ -381,6 +381,10 @@ def _run_marker_genes(adata: ad.AnnData, params: PipelineParams, cb: SubstepCall
 
         logger.info("Computing markers for column '%s' (%d/%d)", col, i + 1, len(columns))
         cb(f"Markers for '{col}'", i, len(columns))
+        # rank_genes_groups needs a categorical groupby — coerce bool/numeric/object
+        # columns (e.g. predicted_doublet) so they don't raise a .cat accessor error.
+        if adata.obs[col].dtype.name != "category":
+            adata.obs[col] = adata.obs[col].astype(str).astype("category")
         sc.tl.rank_genes_groups(adata, groupby=col, method="wilcoxon", pts=True)
         # Store under namespaced key
         adata.uns[f"rank_genes_groups__{col}"] = adata.uns["rank_genes_groups"].copy()

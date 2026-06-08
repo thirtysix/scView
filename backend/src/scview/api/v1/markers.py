@@ -49,9 +49,22 @@ async def get_markers(
             try:
                 import scanpy as sc
 
+                import pandas as pd
+
                 work_adata = adaptor.adata.to_memory() if hasattr(adaptor.adata, "to_memory") else adaptor.adata.copy()
                 if groupby_column not in work_adata.obs.columns:
                     raise HTTPException(status_code=404, detail=f"Column '{groupby_column}' not found in obs.")
+
+                # rank_genes_groups requires a categorical groupby; coerce bool /
+                # numeric / object columns (e.g. predicted_doublet) to category.
+                col = work_adata.obs[groupby_column]
+                if not isinstance(col.dtype, pd.CategoricalDtype):
+                    work_adata.obs[groupby_column] = col.astype(str).astype("category")
+                if work_adata.obs[groupby_column].nunique() < 2:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Column '{groupby_column}' has only one group; need at least two to compute markers.",
+                    )
 
                 sc.tl.rank_genes_groups(
                     work_adata,
