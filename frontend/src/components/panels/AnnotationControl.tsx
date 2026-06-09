@@ -14,11 +14,6 @@ interface Props {
   running: boolean;
 }
 
-/** Sanitize a grouping name into a column-name suffix. */
-function suffix(name: string): string {
-  return name.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-}
-
 /**
  * Cell-type annotation control for the Data Assessment panel.
  *
@@ -63,8 +58,8 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
   // annotating multiple clusterings writes to distinct columns.
   useEffect(() => {
     if (targetEdited || !groupby) return;
-    setTarget(groupby === primary ? "cell_type" : `cell_type_${suffix(groupby)}`);
-  }, [groupby, primary, targetEdited]);
+    setTarget(`${groupby}_celltypeAnno`);
+  }, [groupby, targetEdited]);
 
   // Lazily load the CellTypist catalog only when that method is selected.
   useEffect(() => {
@@ -138,7 +133,6 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
             {groupings.map((g) => (
               <option key={g} value={g}>
                 {g}
-                {g === primary ? " (active)" : ""}
               </option>
             ))}
           </select>
