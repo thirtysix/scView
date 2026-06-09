@@ -82,6 +82,13 @@ class PipelineParams:
     # Legacy field for backward compat — ignored if enrichment_collections is set
     enrichment_gene_sets: list[str] = field(default_factory=list)
 
+    # Cell-type annotation
+    annotation_method: str = "celltypist"        # celltypist | llm | marker_score
+    celltypist_model: str = "Immune_All_Low.pkl"  # CellTypist model (immune default)
+    annotation_groupby: str = ""                 # cluster column for consensus (empty = active clustering / "cluster")
+    annotation_target: str = "cell_type"         # obs column to write
+    annotation_llm_model: str = ""               # DeepInfra model id for method="llm"
+
 
 @dataclass
 class PipelineResult:
@@ -115,6 +122,7 @@ ALL_STEPS = [
     "marker_genes",
     "enrichment",
     "cell_cycle",
+    "cell_type_annotation",
 ]
 
 
@@ -548,6 +556,96 @@ def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> None:
         raise ValueError(f"Cell cycle scoring failed: {e}") from e
 
 
+def _resolve_annotation_groupby(adata: ad.AnnData, params: PipelineParams) -> str:
+    """Pick the clustering column to annotate per (consensus / majority voting)."""
+    groupby = params.annotation_groupby or adata.uns.get("scview_active_clustering") or ""
+    if groupby and groupby in adata.obs.columns:
+        return groupby
+    for cand in ("cluster", "leiden", "louvain"):
+        if cand in adata.obs.columns and adata.obs[cand].nunique() > 1:
+            return cand
+    raise ValueError(
+        "Cell-type annotation needs a clustering column (e.g. 'cluster'); run clustering first."
+    )
+
+
+def _annotate_celltypist(
+    adata: ad.AnnData, params: PipelineParams, groupby: str, target: str
+) -> None:
+    """Reference-based annotation with CellTypist, per-cluster consensus (majority voting)."""
+    try:
+        import celltypist
+        from celltypist import models
+    except ImportError as e:  # pragma: no cover - dependency guard
+        raise ValueError(
+            "CellTypist is not installed. Add 'celltypist' to the backend image."
+        ) from e
+
+    model_name = params.celltypist_model or "Immune_All_Low.pkl"
+    if not model_name.endswith(".pkl"):
+        model_name += ".pkl"
+    try:
+        models.download_models(model=[model_name], force_update=False)
+    except Exception as e:  # already cached, or offline — fail only if load fails below
+        logger.warning("CellTypist model fetch issue (%s); trying cached copy.", e)
+
+    # CellTypist expects log1p of counts-per-10k. Build that from raw counts so the
+    # result is correct regardless of the current X state (scaled/HVG-subset/etc.).
+    if adata.raw is not None:
+        counts, var_names = adata.raw.X, list(adata.raw.var_names)
+    elif "counts" in adata.layers:
+        counts, var_names = adata.layers["counts"], list(adata.var_names)
+    else:
+        counts, var_names = adata.X, list(adata.var_names)
+    inp = ad.AnnData(X=counts.copy() if hasattr(counts, "copy") else counts)
+    inp.obs_names = adata.obs_names
+    inp.var_names = var_names
+    sc.pp.normalize_total(inp, target_sum=1e4)
+    sc.pp.log1p(inp)
+    inp.obs[groupby] = adata.obs[groupby].values  # carry clusters for consensus voting
+
+    pred = celltypist.annotate(
+        inp, model=model_name, majority_voting=True, over_clustering=groupby
+    )
+    labels = pred.predicted_labels
+    col = "majority_voting" if "majority_voting" in labels.columns else "predicted_labels"
+    adata.obs[target] = labels[col].astype(str).astype("category").values
+    if "predicted_labels" in labels.columns and col != "predicted_labels":
+        adata.obs[f"{target}_percell"] = (
+            labels["predicted_labels"].astype(str).astype("category").values
+        )
+    if getattr(pred, "probability_matrix", None) is not None:
+        adata.obs[f"{target}_confidence"] = np.asarray(
+            pred.probability_matrix.max(axis=1), dtype="float32"
+        )
+    logger.info(
+        "CellTypist: annotated %d cells -> obs['%s'] (model=%s, groupby=%s, %d types)",
+        adata.n_obs, target, model_name, groupby, int(adata.obs[target].nunique()),
+    )
+
+
+def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None:
+    """Annotate cell types per cluster, writing a reviewable obs[target] column.
+
+    Methods: 'celltypist' (default, reference-based). 'llm' (LLM-from-markers) and
+    'marker_score' (offline marker scoring) are planned — see docs/CELLTYPE_ANNOTATION.md.
+    """
+    method = (params.annotation_method or "celltypist").lower()
+    target = params.annotation_target or "cell_type"
+    groupby = _resolve_annotation_groupby(adata, params)
+
+    if method == "celltypist":
+        _annotate_celltypist(adata, params, groupby, target)
+    elif method in ("llm", "marker_score"):
+        raise ValueError(
+            f"Annotation method '{method}' is not implemented yet; use 'celltypist'."
+        )
+    else:
+        raise ValueError(
+            f"Unknown annotation method '{method}' (expected celltypist | llm | marker_score)."
+        )
+
+
 # Map step names to their runner functions
 _STEP_RUNNERS: dict[str, Any] = {
     "reset_to_counts": _run_reset_to_counts,
@@ -566,6 +664,7 @@ _STEP_RUNNERS: dict[str, Any] = {
     "marker_genes": _run_marker_genes,
     "enrichment": _run_enrichment,
     "cell_cycle": _run_cell_cycle,
+    "cell_type_annotation": _run_cell_type_annotation,
 }
 
 # Steps that return a new AnnData object (instead of modifying in-place)
@@ -592,6 +691,9 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "enrichment": ("scview.enrichment",
                    ("enrichment_columns", "enrichment_n_genes", "enrichment_collections")),
     "cell_cycle": ("scanpy.tl.score_genes_cell_cycle", ()),
+    "cell_type_annotation": ("celltypist",
+                             ("annotation_method", "celltypist_model",
+                              "annotation_groupby", "annotation_target")),
 }
 
 

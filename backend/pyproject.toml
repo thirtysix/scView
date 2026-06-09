@@ -27,6 +27,7 @@ dependencies = [
     "zarr>=2.18.0",
     "asyncpg>=0.30.0",  # Neon/Postgres + pgvector for the RAG co-pilot corpora
     "beautifulsoup4>=4.12.0",  # tutorial-corpus HTML extraction (RAG ingestion)
+    "celltypist>=1.6.0",  # reference-based cell-type annotation (small CPU models)
 ]
 
 [project.optional-dependencies]

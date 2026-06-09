@@ -4,6 +4,24 @@
 backend** (Python/scanpy, CPU, no GPU) **without a heavy processing environment**. Benchmarks below
 were measured in the running backend container on the Kang IFN-β PBMC hero dataset (13,836 cells).*
 
+## Status (as built, 2026-06-09)
+- **CellTypist method shipped**: pipeline step `cell_type_annotation` (`PipelineParams.annotation_*`),
+  registered in `ALL_STEPS` / `_STEP_RUNNERS` / `_STEP_PROVENANCE`. Builds CellTypist input from raw
+  counts (normalize to 1e4 + log1p), runs majority-voting consensus over the existing clustering
+  (`over_clustering=groupby`), and writes `obs['cell_type']` (+ `cell_type_percell`,
+  `cell_type_confidence`); the method + model are recorded in provenance. `celltypist` is in
+  `backend/pyproject.toml` (rebuild the backend image to bake it in).
+- **Model picker endpoint**: `GET /api/v1/annotation/celltypist-models` returns the catalog (61
+  models, name + description) and the default. **Choosing a model:** CellTypist models are
+  tissue/system specific — there is *no* universal model — so the UI should offer a **dropdown** of
+  this catalog, defaulting to **`Immune_All_Low`** (the common PBMC/immune case, and what we
+  benchmarked). The user picks the model matching their sample's tissue; a mismatch mislabels (e.g.
+  on the immune Kang set, erythrocytes/megakaryocytes get myeloid/T calls). `Immune_All_High` is the
+  coarse-grained immune alternative.
+- **Pending**: the frontend annotation control (method + model dropdown + "Annotate" button surfaced
+  on Data Assessment / Unified View), and the `llm` (LLM-from-markers) and `marker_score` methods
+  (currently raise a clear "not implemented" error).
+
 ## TL;DR
 Ship a small **tiered annotator** behind one "Annotate cell types" step — pick a method, sensible
 default:
