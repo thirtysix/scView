@@ -58,6 +58,8 @@ coverage/
 # Auto-generated project context for Claude Code
 CLAUDE.md
 Screenshot from *.png
+# Large media: host demo videos on GitHub's CDN (drag-drop into the README), don't commit them
+*.mp4
 # Internal working material — kept out of the public repo
 .mastercontrol/
 poster/
