@@ -92,3 +92,18 @@ async def test_assistant_chat_missing_dataset_404(client, dataset_manager):
         f"{API}/datasets/ghost/assistant/chat", json={"query": "hi"}
     )
     assert r.status_code == 404
+
+
+def test_app_context_grounds_import_questions():
+    """Suggested questions about importing must be answerable from app context:
+    the feature guide enumerates supported formats and states import is local-file
+    only (no URL import), so the LLM doesn't punt or hallucinate a URL flow."""
+    from scview.core.assistant import build_app_context
+
+    ctx, sources = build_app_context([{"name": "demo", "n_cells": 100, "n_genes": 50}])
+    low = ctx.lower()
+    for fmt in (".h5ad", "mtx", ".loom", ".zarr", "csv", ".rds", "nf-core"):
+        assert fmt in low, f"supported format {fmt} missing from app context"
+    # import is local-file upload only — guards against the URL-import hallucination
+    assert "url" in low and "local files only" in low
+    assert any(s.ref == "app:features" for s in sources)

@@ -273,11 +273,19 @@ def build_grounding_context(
 # ---------------------------------------------------------------------------
 
 _FEATURE_GUIDE = (
-    "scView is a browser tool for single-cell RNA-seq. Tabs: Data (import/manage "
-    "datasets), Data Assessment (QC plots + AI-guided pipeline: QC → normalize → HVG → "
-    "PCA → batch correction → clustering → UMAP → markers → enrichment), Visualizations "
-    "(embeddings), Unified View (linked scatter + markers/expression/gene-sets/enrichment "
-    "+ violin), Observations, Gene Expression, Gene Sets & Enrichment, Marker Genes, "
+    "scView is a browser tool for single-cell RNA-seq. "
+    "IMPORTING DATA: open the Data tab and drag files onto it, or use the file picker. "
+    "Import is by uploading local files only — there is no URL/remote import. "
+    "Supported formats: AnnData .h5ad; 10x Genomics MTX (matrix.mtx + barcodes.tsv + "
+    "features/genes.tsv, optionally .gz) and 10x HDF5 (.h5); .loom; .zarr; dense CSV/TSV "
+    "(optionally .gz); Seurat .rds (converted to .h5ad by the R converter service); and "
+    "nf-core/scrnaseq mtx_conversions outputs (*.h5ad). A guided flow bundles multi-file "
+    "inputs (e.g. the three 10x MTX files) and can merge several samples into one dataset. "
+    "Each imported dataset then appears in the Data-tab library to open or manage. "
+    "TABS: Data (import/manage datasets), Data Assessment (QC plots + AI-guided pipeline: "
+    "QC → normalize → HVG → PCA → batch correction → clustering → UMAP → markers → "
+    "enrichment), Unified View (linked scatter + markers/expression/gene-sets/enrichment + "
+    "violin), Observations, Gene Expression, Gene Sets & Enrichment, Marker Genes, "
     "Trajectory, History (provenance: what was done + edit-&-re-run), and this AI Co-pilot."
 )
 
