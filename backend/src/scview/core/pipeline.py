@@ -88,6 +88,7 @@ class PipelineParams:
     annotation_groupby: str = ""                 # cluster column for consensus (empty = active clustering / "cluster")
     annotation_target: str = "cell_type"         # obs column to write
     annotation_llm_model: str = ""               # DeepInfra model id for method="llm"
+    annotation_tissue: str = ""                  # optional tissue hint for method="llm"
 
 
 @dataclass
@@ -628,11 +629,105 @@ def _annotate_celltypist(
     )
 
 
+def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 15) -> dict[str, list[str]]:
+    """Top-n marker genes per cluster, reusing precomputed rank_genes_groups when present."""
+    key = f"rank_genes_groups__{groupby}"
+    if key in adata.uns:
+        rgg = adata.uns[key]
+    elif (
+        "rank_genes_groups" in adata.uns
+        and adata.uns["rank_genes_groups"].get("params", {}).get("groupby") == groupby
+    ):
+        rgg = adata.uns["rank_genes_groups"]
+    else:
+        if adata.obs[groupby].dtype.name != "category":
+            adata.obs[groupby] = adata.obs[groupby].astype(str).astype("category")
+        sc.tl.rank_genes_groups(adata, groupby=groupby, method="wilcoxon", n_genes=n)
+        rgg = adata.uns["rank_genes_groups"]
+    names = rgg["names"]
+    groups = list(names.dtype.names) if hasattr(names.dtype, "names") else []
+    return {g: [str(names[g][i]) for i in range(min(n, len(names[g])))] for g in groups}
+
+
+def _parse_cluster_labels(raw: str, clusters: list[str]) -> dict[str, str]:
+    """Parse an LLM reply ('cluster_id: cell type' per line) into {cluster: label}."""
+    cluster_set = {str(c) for c in clusters}
+    out: dict[str, str] = {}
+    for line in raw.splitlines():
+        line = line.strip().lstrip("-*0123456789. ").strip()
+        if ":" not in line:
+            continue
+        cid, label = (p.strip() for p in line.split(":", 1))
+        if cid in cluster_set:
+            out[cid] = label
+        else:
+            for c in cluster_set:
+                if cid.endswith(c):
+                    out[c] = label
+                    break
+    if not out:  # fall back to positional zip if the model ignored the id format
+        labels = [ln.strip().split(":", 1)[-1].strip() for ln in raw.splitlines() if ln.strip()]
+        out = {str(c): lab for c, lab in zip(clusters, labels)}
+    return out
+
+
+def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, target: str) -> None:
+    """Tissue-agnostic annotation: name each cluster's cell type from its top markers via an LLM.
+
+    No reference model to choose — works for any tissue (GPTCelltype-style). Best treated as a
+    reviewable first pass; pair with CellTypist when a matching reference model exists.
+    """
+    if not groupby:
+        raise ValueError("LLM-from-markers annotation needs a clustering; run clustering first.")
+    marker_map = _top_markers_per_group(adata, groupby, n=15)
+    if not marker_map:
+        raise ValueError(f"No marker genes available for '{groupby}'.")
+
+    from scview.config import get_settings
+
+    settings = get_settings()
+    api_key = settings.DEEPINFRA_API_KEY
+    if not api_key:
+        raise ValueError("LLM annotation requires DEEPINFRA_API_KEY to be set.")
+    model = params.annotation_llm_model or settings.RAG_CHAT_MODEL
+
+    from openai import OpenAI
+
+    tissue = f"{params.annotation_tissue.strip()} " if params.annotation_tissue.strip() else ""
+    listing = "\n".join(f"{g}: {', '.join(genes)}" for g, genes in marker_map.items())
+    prompt = (
+        "You are an expert in single-cell RNA-seq. For each cluster below, identify the most likely "
+        f"cell type of these {tissue}cells from its top marker genes. Output exactly one line per "
+        "cluster as 'cluster_id: cell type', using a concise standard cell-type name (a mixture is "
+        "allowed). Do not add any other commentary.\n\nClusters and marker genes:\n" + listing
+    )
+    client = OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=800,
+    )
+    raw = resp.choices[0].message.content or ""
+    labels = _parse_cluster_labels(raw, list(marker_map.keys()))
+
+    mapping = {str(g): labels.get(str(g), "Unknown") for g in marker_map}
+    adata.obs[target] = (
+        adata.obs[groupby].astype(str).map(lambda g: mapping.get(g, "Unknown")).astype("category")
+    )
+    adata.uns[f"{target}_llm_mapping"] = mapping
+    logger.info(
+        "LLM annotation: %d clusters -> obs['%s'] (model=%s, groupby=%s)",
+        len(mapping), target, model, groupby,
+    )
+
+
 def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None:
     """Annotate cell types per cluster, writing a reviewable obs[target] column.
 
-    Methods: 'celltypist' (default, reference-based). 'llm' (LLM-from-markers) and
-    'marker_score' (offline marker scoring) are planned — see docs/CELLTYPE_ANNOTATION.md.
+    Methods: 'celltypist' (reference-based, tissue-specific model) and 'llm'
+    (LLM-from-markers, tissue-agnostic). 'marker_score' is planned — see
+    docs/CELLTYPE_ANNOTATION.md.
     """
     method = (params.annotation_method or "celltypist").lower()
     target = params.annotation_target or "cell_type"
@@ -640,9 +735,11 @@ def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None
 
     if method == "celltypist":
         _annotate_celltypist(adata, params, groupby, target)
-    elif method in ("llm", "marker_score"):
+    elif method == "llm":
+        _annotate_llm(adata, params, groupby, target)
+    elif method == "marker_score":
         raise ValueError(
-            f"Annotation method '{method}' is not implemented yet; use 'celltypist'."
+            "Annotation method 'marker_score' is not implemented yet; use 'celltypist' or 'llm'."
         )
     else:
         raise ValueError(
@@ -695,9 +792,9 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "enrichment": ("scview.enrichment",
                    ("enrichment_columns", "enrichment_n_genes", "enrichment_collections")),
     "cell_cycle": ("scanpy.tl.score_genes_cell_cycle", ()),
-    "cell_type_annotation": ("celltypist",
-                             ("annotation_method", "celltypist_model",
-                              "annotation_groupby", "annotation_target")),
+    "cell_type_annotation": ("scview.cell_type_annotation",
+                             ("annotation_method", "celltypist_model", "annotation_llm_model",
+                              "annotation_tissue", "annotation_groupby", "annotation_target")),
 }
 
 

@@ -44,9 +44,23 @@ def test_unknown_and_unimplemented_methods_raise():
     a = _clustered()
     with pytest.raises(ValueError):
         _run_cell_type_annotation(a, PipelineParams(annotation_method="bogus"))
-    for m in ("llm", "marker_score"):
-        with pytest.raises(ValueError):
-            _run_cell_type_annotation(a, PipelineParams(annotation_method=m))
+    with pytest.raises(ValueError):  # marker_score not implemented yet
+        _run_cell_type_annotation(a, PipelineParams(annotation_method="marker_score"))
+
+
+def test_llm_requires_clustering():
+    """LLM-from-markers needs clusters to label; with none it errors before any LLM call."""
+    a = ad.AnnData(X=np.zeros((6, 3), dtype="float32"))
+    with pytest.raises(ValueError):
+        _run_cell_type_annotation(a, PipelineParams(annotation_method="llm"))
+
+
+def test_parse_cluster_labels():
+    from scview.core.pipeline import _parse_cluster_labels
+
+    raw = "B: B cells\nCD14 Mono: Monocytes\n- NK: NK cells"
+    out = _parse_cluster_labels(raw, ["B", "CD14 Mono", "NK"])
+    assert out == {"B": "B cells", "CD14 Mono": "Monocytes", "NK": "NK cells"}
 
 
 def test_annotation_step_is_registered():

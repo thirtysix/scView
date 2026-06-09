@@ -18,9 +18,16 @@ were measured in the running backend container on the Kang IFN-β PBMC hero data
   benchmarked). The user picks the model matching their sample's tissue; a mismatch mislabels (e.g.
   on the immune Kang set, erythrocytes/megakaryocytes get myeloid/T calls). `Immune_All_High` is the
   coarse-grained immune alternative.
-- **Pending**: the frontend annotation control (method + model dropdown + "Annotate" button surfaced
-  on Data Assessment / Unified View), and the `llm` (LLM-from-markers) and `marker_score` methods
-  (currently raise a clear "not implemented" error).
+- **LLM-from-markers shipped** (`method="llm"`): names each cluster's cell type from its top marker
+  genes via the DeepInfra LLM — **no reference model to pick, any tissue**. On Kang it matched the
+  authors' labels and *beat* CellTypist on the non-immune clusters (**Erythroblast**, **Megakaryocyte**)
+  that the immune model mislabeled. Optional `annotation_tissue` hint; writes `obs[target]` + the
+  per-cluster mapping to `uns[<target>_llm_mapping]`. Reuses precomputed markers when present, else
+  computes them. Requires `DEEPINFRA_API_KEY`; non-deterministic, so present as a reviewable pass.
+  *(The earlier "8B is noisier" caveat was mitigated here by a tissue hint + a single structured
+  per-cluster prompt.)*
+- **Pending**: the frontend annotation control (method choice + CellTypist model picker + "Annotate"
+  button on Data Assessment / Unified View), and the offline `marker_score` method.
 
 ## TL;DR
 Ship a small **tiered annotator** behind one "Annotate cell types" step — pick a method, sensible
