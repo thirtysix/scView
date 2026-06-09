@@ -1,3 +1,11 @@
+
+
+https://github.com/user-attachments/assets/a3ebc5c4-3a76-4524-b819-bb7e5c3acbc0
+
+
+
+https://github.com/user-attachments/assets/ad92e2f8-42fd-4aa2-b86a-0f78fa7a26fb
+
 # scView
 
 **A Docker-based, browser-native workspace for single-cell RNA-seq, with an AI co-pilot and built-in provenance.**
