@@ -34,10 +34,10 @@ def test_groupby_resolves_to_clustering_column():
     ) == "my_clusters"
 
 
-def test_groupby_requires_a_clustering():
+def test_groupby_empty_without_clustering():
+    """No clustering -> "" so CellTypist over-clusters internally (not an error)."""
     a = ad.AnnData(X=np.zeros((6, 3), dtype="float32"))
-    with pytest.raises(ValueError):
-        _resolve_annotation_groupby(a, PipelineParams())
+    assert _resolve_annotation_groupby(a, PipelineParams()) == ""
 
 
 def test_unknown_and_unimplemented_methods_raise():

@@ -557,16 +557,18 @@ def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> None:
 
 
 def _resolve_annotation_groupby(adata: ad.AnnData, params: PipelineParams) -> str:
-    """Pick the clustering column to annotate per (consensus / majority voting)."""
+    """Clustering column to take per-cluster consensus over, or "" if none exists.
+
+    When a clustering is present we pass it to CellTypist as ``over_clustering`` so
+    labels align 1:1 with the user's clusters; when "", CellTypist computes its own
+    over-clustering for majority voting (the canonical no-clustering call)."""
     groupby = params.annotation_groupby or adata.uns.get("scview_active_clustering") or ""
     if groupby and groupby in adata.obs.columns:
         return groupby
     for cand in ("cluster", "leiden", "louvain"):
         if cand in adata.obs.columns and adata.obs[cand].nunique() > 1:
             return cand
-    raise ValueError(
-        "Cell-type annotation needs a clustering column (e.g. 'cluster'); run clustering first."
-    )
+    return ""  # no clustering: let CellTypist over-cluster internally
 
 
 def _annotate_celltypist(
@@ -602,11 +604,12 @@ def _annotate_celltypist(
     inp.var_names = var_names
     sc.pp.normalize_total(inp, target_sum=1e4)
     sc.pp.log1p(inp)
-    inp.obs[groupby] = adata.obs[groupby].values  # carry clusters for consensus voting
+    annotate_kwargs: dict[str, Any] = {"model": model_name, "majority_voting": True}
+    if groupby:
+        inp.obs[groupby] = adata.obs[groupby].values  # consensus over the user's clusters
+        annotate_kwargs["over_clustering"] = groupby
 
-    pred = celltypist.annotate(
-        inp, model=model_name, majority_voting=True, over_clustering=groupby
-    )
+    pred = celltypist.annotate(inp, **annotate_kwargs)
     labels = pred.predicted_labels
     col = "majority_voting" if "majority_voting" in labels.columns else "predicted_labels"
     adata.obs[target] = labels[col].astype(str).astype("category").values
@@ -620,7 +623,8 @@ def _annotate_celltypist(
         )
     logger.info(
         "CellTypist: annotated %d cells -> obs['%s'] (model=%s, groupby=%s, %d types)",
-        adata.n_obs, target, model_name, groupby, int(adata.obs[target].nunique()),
+        adata.n_obs, target, model_name, groupby or "celltypist-internal",
+        int(adata.obs[target].nunique()),
     )
 
 
