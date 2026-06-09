@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { Tags, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Tags, Loader2, Check } from "lucide-react";
 import { API_BASE } from "@/lib/constants";
+import { useDatasetStore } from "@/stores/datasetStore";
 
 interface CellTypistModel {
   model: string;
@@ -8,23 +9,62 @@ interface CellTypistModel {
 }
 
 interface Props {
-  /** Run the cell_type_annotation pipeline step with these PipelineParams. */
-  onAnnotate: (params: Record<string, unknown>) => void;
+  /** Run the cell_type_annotation pipeline step with these PipelineParams. Resolves on completion. */
+  onAnnotate: (params: Record<string, unknown>) => Promise<void>;
   running: boolean;
+}
+
+/** Sanitize a grouping name into a column-name suffix. */
+function suffix(name: string): string {
+  return name.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
 /**
  * Cell-type annotation control for the Data Assessment panel.
  *
- * Default method is the any-tissue LLM (no reference model to pick — names cell
- * types from each cluster's marker genes). CellTypist is the opt-in reference
- * method, which then needs a tissue-matched model from the catalog.
+ * Pick the clustering to base predictions on (so you can annotate, e.g., several
+ * Leiden resolutions into separate columns), choose the method (default: any-tissue
+ * LLM, no reference model to pick), and the output obs column is shown explicitly.
  */
 export function AnnotationControl({ onAnnotate, running }: Props) {
+  const dataset = useDatasetStore((s) => s.currentDataset);
+
+  // Candidate grouping (clustering) columns: categorical, 2..100 groups.
+  const groupings = useMemo(
+    () =>
+      (dataset?.obs_columns ?? [])
+        .filter(
+          (c) =>
+            (c.dtype === "category" || c.dtype === "object" || c.dtype === "bool") &&
+            c.n_unique >= 2 &&
+            c.n_unique <= 100,
+        )
+        .map((c) => c.name),
+    [dataset?.obs_columns],
+  );
+  const primary = dataset?.active_clustering ?? (groupings.includes("cluster") ? "cluster" : groupings[0]);
+
   const [method, setMethod] = useState<"llm" | "celltypist">("llm");
   const [tissue, setTissue] = useState("");
   const [model, setModel] = useState("Immune_All_Low.pkl");
   const [models, setModels] = useState<CellTypistModel[]>([]);
+  const [groupby, setGroupby] = useState<string>("");
+  const [target, setTarget] = useState("cell_type");
+  const [targetEdited, setTargetEdited] = useState(false);
+  const [annotating, setAnnotating] = useState(false);
+  const [lastWritten, setLastWritten] = useState<string | null>(null);
+
+  // Default the grouping once the dataset's columns are known.
+  useEffect(() => {
+    if (!groupby && primary) setGroupby(primary);
+  }, [primary, groupby]);
+
+  // Suggest an output column from the grouping (until the user edits it), so
+  // annotating multiple clusterings writes to distinct columns.
+  useEffect(() => {
+    if (targetEdited || !groupby) return;
+    setTarget(groupby === primary ? "cell_type" : `cell_type_${suffix(groupby)}`);
+  }, [groupby, primary, targetEdited]);
 
   // Lazily load the CellTypist catalog only when that method is selected.
   useEffect(() => {
@@ -40,16 +80,26 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
       });
   }, [method, models.length]);
 
-  const handleAnnotate = () => {
+  const handleAnnotate = async () => {
+    const tgt = target.trim() || "cell_type";
     const params: Record<string, unknown> = {
       annotation_method: method,
-      annotation_target: "cell_type",
+      annotation_groupby: groupby,
+      annotation_target: tgt,
     };
     if (method === "llm") params.annotation_tissue = tissue.trim();
     else params.celltypist_model = model;
-    onAnnotate(params);
+    setAnnotating(true);
+    setLastWritten(null);
+    try {
+      await onAnnotate(params);
+      setLastWritten(tgt);
+    } finally {
+      setAnnotating(false);
+    }
   };
 
+  const busy = annotating || running;
   const tab = (key: "llm" | "celltypist", label: string) => (
     <button
       type="button"
@@ -69,11 +119,45 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
         <h3 className="text-sm font-semibold text-slate-900">Cell-type annotation</h3>
       </div>
       <p className="mb-3 text-xs text-slate-500">
-        Label your clusters with cell types, writing a{" "}
-        <code className="rounded bg-slate-100 px-1">cell_type</code> column you can color by.
-        Requires a clustering.
+        Label clusters with cell types. The result is written to the obs column shown below, which
+        you can then color or group by.
       </p>
 
+      {/* Grouping + output column */}
+      <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-600">
+            Base predictions on (clustering)
+          </label>
+          <select
+            value={groupby}
+            onChange={(e) => setGroupby(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
+          >
+            {groupings.length === 0 && <option value="">(run clustering first)</option>}
+            {groupings.map((g) => (
+              <option key={g} value={g}>
+                {g}
+                {g === primary ? " (active)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-600">Output column</label>
+          <input
+            type="text"
+            value={target}
+            onChange={(e) => {
+              setTarget(e.target.value);
+              setTargetEdited(true);
+            }}
+            className="w-full rounded-lg border border-slate-200 px-3 py-1.5 font-mono text-sm focus:border-primary focus:outline-none"
+          />
+        </div>
+      </div>
+
+      {/* Method */}
       <div className="mb-3 inline-flex rounded-lg border border-slate-200 p-0.5 text-xs">
         {tab("llm", "AI (any tissue)")}
         {tab("celltypist", "CellTypist (reference)")}
@@ -116,15 +200,25 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={handleAnnotate}
-        disabled={running}
-        className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
-      >
-        {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Tags className="h-4 w-4" />}
-        Annotate cell types
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleAnnotate}
+          disabled={busy || !groupby}
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Tags className="h-4 w-4" />}
+          Annotate cell types
+        </button>
+        {lastWritten && !busy && (
+          <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
+            <Check className="h-4 w-4" />
+            Wrote{" "}
+            <code className="rounded bg-emerald-50 px-1 font-mono">{lastWritten}</code> — color or
+            group by it in Unified View.
+          </span>
+        )}
+      </div>
     </div>
   );
 }
