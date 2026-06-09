@@ -59,6 +59,7 @@ coverage/
 CLAUDE.md
 Screenshot from *.png
 # Internal working material — kept out of the public repo
+.mastercontrol/
 poster/
 poster_figures/
 docs/POSTER_PREP.md
