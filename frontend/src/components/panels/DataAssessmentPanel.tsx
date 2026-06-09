@@ -6,6 +6,7 @@ import { apiFetch } from "@/api/client";
 import { getDataset } from "@/api/datasets";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
+import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import {
   ClipboardCheck,
   Check,
@@ -515,6 +516,13 @@ export function DataAssessmentPanel() {
     runSteps(stepsToRun, Object.keys(flatParams).length > 0 ? flatParams : null);
   };
 
+  /* ---- Run cell-type annotation, then color by the new labels ---- */
+  const annotate = async (params: Record<string, unknown>) => {
+    await runSteps(["cell_type_annotation"], params);
+    const target = (params.annotation_target as string) || "cell_type";
+    useSettingsStore.getState().setColorBy(target);
+  };
+
   /* ---- Derived: re-run count ---- */
   const rerunCount = state
     ? STEP_ORDER.filter((s) => state[s.key].done && selectedSteps.has(s.key)).length
@@ -695,6 +703,9 @@ export function DataAssessmentPanel() {
               </div>
             )}
           </div>
+
+          {/* Cell-type annotation */}
+          <AnnotationControl onAnnotate={annotate} running={running} />
 
           {/* Pipeline progress bar — visible while running or just completed */}
           {(running || runResult) && runProgress && (

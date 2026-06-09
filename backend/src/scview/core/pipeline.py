@@ -83,7 +83,7 @@ class PipelineParams:
     enrichment_gene_sets: list[str] = field(default_factory=list)
 
     # Cell-type annotation
-    annotation_method: str = "celltypist"        # celltypist | llm | marker_score
+    annotation_method: str = "llm"               # llm (default, any-tissue) | celltypist | marker_score
     celltypist_model: str = "Immune_All_Low.pkl"  # CellTypist model (immune default)
     annotation_groupby: str = ""                 # cluster column for consensus (empty = active clustering / "cluster")
     annotation_target: str = "cell_type"         # obs column to write
@@ -729,9 +729,20 @@ def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None
     (LLM-from-markers, tissue-agnostic). 'marker_score' is planned — see
     docs/CELLTYPE_ANNOTATION.md.
     """
-    method = (params.annotation_method or "celltypist").lower()
+    method = (params.annotation_method or "llm").lower()
     target = params.annotation_target or "cell_type"
     groupby = _resolve_annotation_groupby(adata, params)
+
+    # Default method is the any-tissue LLM; degrade to CellTypist when no LLM key is set.
+    if method == "llm":
+        from scview.config import get_settings
+
+        if not get_settings().DEEPINFRA_API_KEY:
+            logger.warning(
+                "LLM annotation requested but DEEPINFRA_API_KEY is unset; "
+                "falling back to CellTypist (%s).", params.celltypist_model,
+            )
+            method = "celltypist"
 
     if method == "celltypist":
         _annotate_celltypist(adata, params, groupby, target)
