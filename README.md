@@ -17,17 +17,11 @@ provenance**, "git for the h5ad", so you can always answer *"what was done to th
 why?"* Wet-lab and dry-lab users go from a raw matrix to annotated, reproducible figures without
 writing code.
 
-<!--
-  DEMO VIDEO. GitHub only plays videos uploaded through its web editor (served from
-  the github.com CDN), not video files committed to a repo. To embed an inline
-  player: edit this README on github.com, drag the demo clip into the editor on the
-  line below, and GitHub replaces it with a playable
-  https://github.com/user-attachments/assets/... link.
--->
 
-> **Demo:** a full run-through with an on-screen real-time clock: load a dataset, AI-assisted
-> assessment, Unified View, cluster colors, marker-gene expression, 3D embedding, enrichment.
-> Fast-forwarded sections visibly race the clock.
+
+https://github.com/user-attachments/assets/486aaf9d-bf77-4a20-9f1f-28bc3bf81e8c
+
+
 
 ---
 
