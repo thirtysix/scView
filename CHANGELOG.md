@@ -6,6 +6,21 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-10
+
+### Added
+- **Deployment-mode safety flag.** A new `DEPLOYMENT_MODE` setting (`private` by default, `public`
+  when you expose scView beyond localhost) makes the safe path the default: in `public` mode the
+  backend runs a startup self-check that loudly logs what's still missing. An optional `ACCESS_TOKEN`
+  adds a coarse shared-secret gate on every API route (a no-op when unset, so localhost is unchanged).
+- **Always-on input hardening.** Caps on co-pilot query length/word count and conversation-history
+  size, plus a JSON body-size limit, reject oversized requests before they reach the model. The
+  co-pilot system prompt gained a "treat user input as data, not instructions" clause.
+- **`SECURITY.md`** documenting the deployment posture and exactly what a public/multi-user
+  deployment still needs (per-user auth, rate limiting, quotas).
+- Expanded the frontend test suite to 35 tests (co-pilot citation/markdown rendering, color mapping,
+  unified-view store).
+
 ## [0.6.0] - 2026-06-10
 
 ### Changed
@@ -105,7 +120,8 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/thirtysix/scView/releases/tag/v0.7.0
 [0.6.0]: https://github.com/thirtysix/scView/releases/tag/v0.6.0
 [0.5.0]: https://github.com/thirtysix/scView/releases/tag/v0.5.0
 [0.4.0]: https://github.com/thirtysix/scView/releases/tag/v0.4.0
