@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Loader2, Download, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { Loader2, Download, ArrowUpDown, ArrowUp, ArrowDown, Sparkles } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { formatPValue } from "@/lib/formatting";
@@ -42,6 +43,7 @@ export function UnifiedEnrichmentSubtab({
 }: UnifiedEnrichmentSubtabProps) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
+  const askCopilot = useViewStore((s) => s.askCopilot);
 
   const [selectedGroup, setSelectedGroup] = useState("");
   const [groups, setGroups] = useState<string[]>([]);
@@ -173,6 +175,16 @@ export function UnifiedEnrichmentSubtab({
       }
     },
     [datasetId, scoringTerm, onScoreGeneSet, onTermClick],
+  );
+
+  const askAboutTerm = useCallback(
+    (r: EnrichmentResult) => {
+      const where = selectedGroup ? ` enriched in the ${selectedGroup} group` : "";
+      askCopilot(
+        `What does the pathway "${r.term}" (${r.collection})${where} tell me biologically? Top genes: ${r.genes.slice(0, 8).join(", ")}.`,
+      );
+    },
+    [askCopilot, selectedGroup],
   );
 
   // Sort results
@@ -346,13 +358,23 @@ export function UnifiedEnrichmentSubtab({
                 <tr
                   key={`${r.collection}-${r.term}`}
                   onClick={() => handleTermClick(r)}
-                  className={`cursor-pointer border-b border-slate-50 transition-colors hover:bg-blue-50 ${isScoring ? "bg-blue-50/70" : ""} ${scoringTerm && !isScoring ? "opacity-50" : ""}`}
+                  className={`group cursor-pointer border-b border-slate-50 transition-colors hover:bg-blue-50 ${isScoring ? "bg-blue-50/70" : ""} ${scoringTerm && !isScoring ? "opacity-50" : ""}`}
                   title={`Click to score on scatter\nCollection: ${r.collection}\nGenes: ${r.genes.slice(0, 10).join(", ")}${r.genes.length > 10 ? "..." : ""}`}
                 >
                   <td className="max-w-[200px] px-2 py-1.5">
                     <div className="flex items-center gap-1.5">
                       {isScoring && <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-blue-500" />}
-                      <div className="truncate font-medium text-slate-800">{r.term}</div>
+                      <div className="min-w-0 flex-1 truncate font-medium text-slate-800">{r.term}</div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          askAboutTerm(r);
+                        }}
+                        title="Ask the co-pilot about this pathway"
+                        className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                      >
+                        <Sparkles className="h-3 w-3" />
+                      </button>
                     </div>
                     <div className="text-[10px] text-slate-400">{isScoring ? "Scoring..." : r.collection}</div>
                   </td>

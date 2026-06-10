@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download } from "lucide-react";
+import { Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Sparkles } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
@@ -36,6 +37,7 @@ export function UnifiedMarkersSubtab({
 }: UnifiedMarkersSubtabProps) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
+  const askCopilot = useViewStore((s) => s.askCopilot);
 
   const [markersData, setMarkersData] = useState<MarkersResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -174,6 +176,16 @@ export function UnifiedMarkersSubtab({
     );
   }, [sortedMarkers, selectedGroup, datasetId]);
 
+  const askAboutGene = useCallback(
+    (gene: string) => {
+      const where = groupByColumn ? ` in the ${selectedGroup} group of ${groupByColumn}` : "";
+      askCopilot(
+        `What is ${gene}, a top marker${where}? What cell types is it associated with?`,
+      );
+    },
+    [askCopilot, groupByColumn, selectedGroup],
+  );
+
   if (!dataset || !datasetId) {
     return <div className="text-xs text-slate-400">No dataset loaded.</div>;
   }
@@ -305,10 +317,22 @@ export function UnifiedMarkersSubtab({
               <tr
                 key={`${marker.group}-${marker.gene}`}
                 onClick={() => onGeneClick(marker.gene)}
-                className="cursor-pointer border-b border-slate-50 transition-colors hover:bg-blue-50"
+                className="group cursor-pointer border-b border-slate-50 transition-colors hover:bg-blue-50"
               >
                 <td className="px-2 py-1.5">
-                  <span className="font-mono font-medium text-slate-800">{marker.gene}</span>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="font-mono font-medium text-slate-800">{marker.gene}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        askAboutGene(marker.gene);
+                      }}
+                      title="Ask the co-pilot about this gene"
+                      className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                    </button>
+                  </div>
                 </td>
                 <td className="px-2 py-1.5 text-right tabular-nums">
                   <span className={marker.logfoldchange > 0 ? "text-emerald-600" : marker.logfoldchange < 0 ? "text-red-600" : "text-slate-600"}>
