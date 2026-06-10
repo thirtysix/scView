@@ -22,10 +22,22 @@ export interface ViewContext {
 
 /** An allow-listed UI action the co-pilot can request (natural-language commands). */
 export interface AssistantAction {
-  type: "set_color_by" | "highlight_cluster" | "open_panel";
+  type:
+    | "set_color_by"
+    | "highlight_cluster"
+    | "open_panel"
+    | "set_embedding"
+    | "set_subtab"
+    | "set_groupby"
+    | "clear_highlight"
+    | "clear_overlay"
+    | "show_gene";
   column?: string;
   value?: string;
   panel?: string;
+  embedding?: string;
+  subtab?: string;
+  gene?: string;
   label?: string;
 }
 

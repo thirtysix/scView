@@ -138,6 +138,24 @@ export function AssistantChat() {
         useViewStore.getState().setPanel("unified");
       } else if (a.type === "open_panel" && a.panel) {
         useViewStore.getState().setPanel(a.panel as PanelId);
+      } else if (a.type === "set_embedding" && a.embedding) {
+        useSettingsStore.getState().setEmbedding(a.embedding);
+        useViewStore.getState().setPanel("unified");
+      } else if (a.type === "set_subtab" && a.subtab) {
+        useUnifiedViewStore
+          .getState()
+          .setActiveSubtab(a.subtab as "markers" | "expression" | "genesets" | "enrichment");
+        useViewStore.getState().setPanel("unified");
+      } else if (a.type === "set_groupby" && a.column) {
+        useUnifiedViewStore.getState().setGroupByColumn(a.column);
+        useViewStore.getState().setPanel("unified");
+      } else if (a.type === "clear_highlight") {
+        useSelectionStore.getState().setHighlight(null);
+      } else if (a.type === "clear_overlay") {
+        useUnifiedViewStore.getState().clearOverlayState();
+      } else if (a.type === "show_gene" && a.gene) {
+        useViewStore.getState().setPendingGene(a.gene);
+        useViewStore.getState().setPanel("expression");
       }
     }
   }, []);

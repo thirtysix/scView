@@ -71,13 +71,18 @@ class ChatMessage(BaseModel):
 class AssistantAction(BaseModel):
     """An allow-listed UI action the co-pilot can request the frontend to perform.
 
-    Phase 1 (safe, reversible, synchronous): set_color_by, highlight_cluster, open_panel.
+    Safe, reversible view/navigation actions: set_color_by, highlight_cluster,
+    open_panel, set_embedding, set_subtab, set_groupby, clear_highlight,
+    clear_overlay, show_gene.
     """
 
-    type: str                    # set_color_by | highlight_cluster | open_panel
-    column: str | None = None    # obs column (set_color_by, highlight_cluster)
+    type: str                    # one of the allow-listed action types
+    column: str | None = None    # obs column (set_color_by, highlight_cluster, set_groupby)
     value: str | None = None     # group value (highlight_cluster)
     panel: str | None = None     # panel id (open_panel)
+    embedding: str | None = None  # obsm key (set_embedding)
+    subtab: str | None = None    # Unified View subtab (set_subtab)
+    gene: str | None = None      # gene symbol (show_gene)
     label: str = ""              # human-readable confirmation
 
 
@@ -495,8 +500,13 @@ _PANELS = {
     "genesets": "Gene Sets & Enrichment", "markers": "Marker Genes",
     "trajectory": "Trajectory", "provenance": "History", "assistant": "AI Co-pilot",
 }
+_SUBTABS = {
+    "markers": "Markers", "expression": "Expression",
+    "genesets": "Gene Sets", "enrichment": "Enrichment",
+}
 _COMMAND_RE = re.compile(
-    r"^\s*(colou?r|show|highlight|select|go to|open|switch|navigate|display|set|view|take me)\b",
+    r"^\s*(colou?r|show|highlight|select|go to|open|switch|navigate|display|set|view|take me|"
+    r"clear|hide|reset|remove|group|jump|focus|overlay)\b",
     re.I,
 )
 
@@ -506,8 +516,13 @@ def _looks_like_command(query: str) -> bool:
     return bool(_COMMAND_RE.match(query or ""))
 
 
-def _coerce_actions(raw: str, obs_columns: list[str]) -> list[AssistantAction]:
-    """Parse + validate the model's JSON action array against the Phase-1 allow-list."""
+def _coerce_actions(
+    raw: str, *, columns: list[str], embeddings: list[str], genes_upper: dict[str, str]
+) -> list[AssistantAction]:
+    """Parse + strictly validate the model's JSON action array against the allow-list.
+
+    Every field is checked against the real dataset (columns/embeddings/genes/panels);
+    anything off the allow-list is dropped, so the model can't drive arbitrary state."""
     m = re.search(r"\[.*\]", raw, re.S)
     if not m:
         return []
@@ -515,7 +530,7 @@ def _coerce_actions(raw: str, obs_columns: list[str]) -> list[AssistantAction]:
         items = json.loads(m.group(0))
     except Exception:
         return []
-    cols = set(obs_columns)
+    cols, embs = set(columns), set(embeddings)
     out: list[AssistantAction] = []
     for it in items if isinstance(items, list) else []:
         if not isinstance(it, dict):
@@ -526,28 +541,52 @@ def _coerce_actions(raw: str, obs_columns: list[str]) -> list[AssistantAction]:
             out.append(AssistantAction(type=t, column=c, label=f"Colored the plot by {c}."))
         elif t == "highlight_cluster" and it.get("column") in cols and it.get("value"):
             c, v = str(it["column"]), str(it["value"])
-            out.append(AssistantAction(type=t, column=c, value=v,
-                                       label=f"Highlighted {v} in {c}."))
+            out.append(AssistantAction(type=t, column=c, value=v, label=f"Highlighted {v} in {c}."))
         elif t == "open_panel" and str(it.get("panel", "")) in _PANELS:
             p = str(it["panel"])
             out.append(AssistantAction(type=t, panel=p, label=f"Opened {_PANELS[p]}."))
+        elif t == "set_embedding" and str(it.get("embedding", "")) in embs:
+            e = str(it["embedding"])
+            out.append(AssistantAction(type=t, embedding=e,
+                                       label=f"Switched the embedding to {e.replace('X_', '').upper()}."))
+        elif t == "set_subtab" and str(it.get("subtab", "")) in _SUBTABS:
+            s = str(it["subtab"])
+            out.append(AssistantAction(type=t, subtab=s, label=f"Opened the {_SUBTABS[s]} tab."))
+        elif t == "set_groupby" and it.get("column") in cols:
+            c = str(it["column"])
+            out.append(AssistantAction(type=t, column=c, label=f"Grouped by {c}."))
+        elif t == "clear_highlight":
+            out.append(AssistantAction(type=t, label="Cleared the highlight."))
+        elif t == "clear_overlay":
+            out.append(AssistantAction(type=t, label="Cleared the gene overlay."))
+        elif t == "show_gene" and str(it.get("gene", "")).upper() in genes_upper:
+            g = genes_upper[str(it["gene"]).upper()]
+            out.append(AssistantAction(type=t, gene=g, label=f"Showing {g} expression."))
     return out[:4]
 
 
 async def extract_actions(
-    query: str, view_context: dict | None, obs_columns: list[str], api_key: str, model: str
+    query: str, view_context: dict | None, columns: list[str], embeddings: list[str],
+    genes_upper: dict[str, str], api_key: str, model: str
 ) -> list[AssistantAction]:
     """Map a UI command to allow-listed structured actions (one focused LLM call)."""
     panels = ", ".join(f"{k} ({v})" for k, v in _PANELS.items())
-    cols = ", ".join(obs_columns[:40]) or "(none)"
+    cols = ", ".join(columns[:40]) or "(none)"
+    embs = ", ".join(embeddings) or "(none)"
     hl = (view_context or {}).get("highlighted") or {}
     vc = f" Current highlighted group: {hl.get('column')}={hl.get('value')}." if hl else ""
     prompt = (
         "You translate a single scView UI command into structured actions. Use ONLY these types:\n"
         "- set_color_by {type, column}: color the scatter by an obs column.\n"
         "- highlight_cluster {type, column, value}: highlight one group within a column.\n"
+        "- set_groupby {type, column}: set the grouping column (for markers/violins).\n"
+        "- show_gene {type, gene}: show a gene's expression (gene = a gene symbol).\n"
+        "- set_embedding {type, embedding}: switch the embedding (obsm key, e.g. 3D -> X_umap_3d).\n"
+        "- set_subtab {type, subtab}: open a Unified View tab (markers|expression|genesets|enrichment).\n"
         "- open_panel {type, panel}: navigate to a panel.\n"
+        "- clear_highlight {type} / clear_overlay {type}: clear the current highlight / gene overlay.\n"
         f"Valid obs columns: {cols}.\n"
+        f"Valid embeddings (obsm key): {embs}.\n"
         f"Valid panels (id): {panels}.\n"
         "Output ONLY a JSON array of action objects, nothing else. If the message is a question "
         "or cannot be mapped to the above, output []." + vc + f"\n\nCommand: {query}"
@@ -562,7 +601,10 @@ async def extract_actions(
             temperature=0.0,
             max_tokens=300,
         )
-        return _coerce_actions(resp.choices[0].message.content or "", obs_columns)
+        return _coerce_actions(
+            resp.choices[0].message.content or "",
+            columns=columns, embeddings=embeddings, genes_upper=genes_upper,
+        )
     except Exception as exc:  # pragma: no cover - network/LLM failure
         logger.debug("action extraction failed: %s", exc)
         return []
@@ -573,10 +615,18 @@ async def _maybe_actions(query, adaptor, api_key, view_context, model) -> list[A
     if not (api_key and adaptor is not None and _looks_like_command(query)):
         return []
     try:
-        obs_cols = [c["name"] for c in adaptor.obs_columns_info()]
+        cols = [c["name"] for c in adaptor.obs_columns_info()]
     except Exception:
-        obs_cols = []
-    return await extract_actions(query, view_context, obs_cols, api_key, model)
+        cols = []
+    try:
+        embs = [e["name"] for e in adaptor.available_embeddings()]
+    except Exception:
+        embs = []
+    try:
+        genes_upper = {str(g).upper(): str(g) for g in adaptor.adata.var_names}
+    except Exception:
+        genes_upper = {}
+    return await extract_actions(query, view_context, cols, embs, genes_upper, api_key, model)
 
 
 async def answer_query(
