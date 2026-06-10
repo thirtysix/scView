@@ -10,6 +10,25 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    // The vendor-plotly / vendor-deckgl chunks are intentionally large but lazy.
+    chunkSizeWarningLimit: 5000,
+    rollupOptions: {
+      output: {
+        // Split heavy vendors into their own long-lived chunks so an app code
+        // change doesn't bust the cache for ~5 MB of libraries.
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("plotly")) return "vendor-plotly";
+          if (/[\\/](deck\.gl|@deck\.gl|@luma\.gl|@math\.gl|@loaders\.gl)[\\/]/.test(id))
+            return "vendor-deckgl";
+          if (id.includes("apache-arrow")) return "vendor-arrow";
+          if (/[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "vendor-react";
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {
