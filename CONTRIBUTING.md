@@ -46,5 +46,18 @@ docker compose exec backend ruff check src/   # backend lint
 - `converter/` — R service that converts Seurat `.rds` to h5ad.
 - `docs/` — architecture, AI-assistant design, provenance, ingestion, and roadmap notes.
 
+## Versioning and releases
+
+scView follows [Semantic Versioning](https://semver.org/) and keeps a
+[CHANGELOG.md](CHANGELOG.md). To cut a release:
+
+1. Move the `Unreleased` notes into a new `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md`.
+2. Bump `version` in `backend/pyproject.toml` and `frontend/package.json` to match.
+3. Commit, then tag and publish:
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+   gh release create vX.Y.Z --title "vX.Y.Z" --notes-file <(sed -n '/## \[X.Y.Z\]/,/## \[/p' CHANGELOG.md)
+   ```
+
 By contributing, you agree that your contributions are licensed under the project's
 [MIT License](LICENSE).

@@ -94,7 +94,10 @@ Node, or R toolchains to install on the host.
     sudo systemctl enable --now docker
     sudo usermod -aG docker "$USER"     # log out/in afterward
     ```
-- **~8 GB RAM** recommended, **~3 GB disk** for the images, and a modern browser.
+- **RAM:** ~8 GB runs the stack and small-to-medium datasets (up to ~tens of thousands of cells)
+  fine. For **large datasets (100k+ cells)**, the **Seurat `.rds` converter**, or heavy steps
+  (doublet detection, Harmony, enrichment) on big data, **16 GB+ is recommended** — at 8 GB those
+  can be slow or run out of memory. **~3 GB disk** for the images, plus a modern browser.
 
 Confirm Docker is ready:
 ```bash
