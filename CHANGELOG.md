@@ -6,6 +6,29 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-10
+
+### Added
+- **Co-pilot "ask about this".** A ✦ button surfaces a contextual question on each categorical-legend
+  group, the gene expression overlay, every marker-gene row, and every enrichment-term row — it opens
+  the co-pilot pre-loaded with that question (and highlights the group so the answer resolves).
+- **Proactive insight on load.** A deterministic one-line "I notice…" banner when a dataset opens,
+  picking the most useful next step by walking the preprocessing state in order (raw counts → doublet
+  load → condition/batch split → cluster → annotate → done), with a click-to-ask follow-up the co-pilot
+  answers or executes. No LLM call, so it's reproducible.
+- **Conversation persistence.** Per-dataset co-pilot threads survive reloads and dataset switches
+  (localStorage), with a Clear control.
+- **Offline `marker_score` annotation.** A third cell-type method that scores curated marker sets per
+  cluster — deterministic, no network, no model download.
+- **Edit/override cell-type labels.** Inline-rename any categorical label from the color legend;
+  persists to the derived layer (never the original upload), merging if the target label exists.
+- **CSV export on every results table.** Markers, enrichment, gene sets, and the Observations
+  summary + composition now export through a shared RFC-4180 helper.
+
+### Fixed
+- CSV export no longer corrupts rows whose cells contain commas (e.g. enrichment term names).
+- Citation chips render reliably even when the model reformats a citation tag.
+
 ## [0.2.0] - 2026-06-10
 
 ### Added
@@ -41,6 +64,7 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/thirtysix/scView/releases/tag/v0.3.0
 [0.2.0]: https://github.com/thirtysix/scView/releases/tag/v0.2.0
 [0.1.0]: https://github.com/thirtysix/scView/releases/tag/v0.1.0
