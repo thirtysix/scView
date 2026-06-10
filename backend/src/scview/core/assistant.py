@@ -94,6 +94,31 @@ def _uns_str(adata, key: str, limit: int = 600) -> str:
     return s[:limit] + "…" if len(s) > limit else s
 
 
+_ANNO_SUFFIX = "_celltypeAnno"
+
+
+def _celltype_cluster_map(adata, acol: str) -> dict[str, str]:
+    """Map cluster -> cell type for a cell-type annotation column, so the co-pilot
+    can answer "what is this cluster?". Prefers the recorded per-cluster mapping;
+    otherwise takes the majority cell type per cluster of the source grouping."""
+    um = adata.uns.get(f"{acol}_llm_mapping")
+    if isinstance(um, dict) and um:
+        return {str(k): str(v) for k, v in um.items()}
+    if acol.endswith(_ANNO_SUFFIX):
+        grouping = acol[: -len(_ANNO_SUFFIX)]
+    else:
+        grouping = adata.uns.get("scview_active_clustering")
+    if not grouping or grouping not in adata.obs.columns or acol not in adata.obs.columns:
+        return {}
+    try:
+        import pandas as pd
+
+        ct = pd.crosstab(adata.obs[grouping], adata.obs[acol])
+        return {str(idx): str(ct.loc[idx].idxmax()) for idx in ct.index}
+    except Exception:  # pragma: no cover
+        return {}
+
+
 def build_grounding_context(
     adaptor, facets: set[str] | None = None
 ) -> tuple[str, list[ChatSource]]:
@@ -223,6 +248,27 @@ def build_grounding_context(
                 ))
             except Exception as exc:  # pragma: no cover
                 logger.debug("assistant: obs summary failed for %s: %s", col, exc)
+
+    # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
+    # "what is this cluster?", so it's always included (not facet-gated).
+    anno_cols = [
+        info["name"]
+        for info in adaptor.obs_columns_info()
+        if (info["name"] == "cell_type" or info["name"].endswith(_ANNO_SUFFIX))
+        and 1 < (info.get("n_unique") or 0) <= _MAX_CATEGORICAL_UNIQUE
+    ]
+    for acol in anno_cols[:3]:
+        mapping = _celltype_cluster_map(adata, acol)
+        if not mapping:
+            continue
+        src = acol[: -len(_ANNO_SUFFIX)] if acol.endswith(_ANNO_SUFFIX) else "the clustering"
+        lines.append(f"\n## Cell-type annotation '{acol}' — {src} cluster → cell type")
+        for cl, ct in list(mapping.items())[:_MAX_CATEGORICAL_UNIQUE]:
+            lines.append(f"- cluster **{cl}** = {ct}")
+        sources.append(ChatSource(
+            kind="result", ref=f"result:celltypes:{acol}",
+            detail=f"{acol}: " + "; ".join(f"{k}={v}" for k, v in list(mapping.items())[:12]),
+        ))
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []
