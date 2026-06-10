@@ -6,6 +6,18 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-10
+
+### Changed
+- **Much faster first load via code-splitting.** Panels are lazy-loaded and heavy libraries
+  (Plotly, deck.gl, Arrow, React) are split into their own cacheable chunks. The initial JavaScript
+  payload drops from ~6.2 MB to ~73 kB (app shell) plus React; Plotly and deck.gl now download only
+  when you open a panel that uses them, and an app-code change no longer invalidates the vendor cache.
+
+### Added
+- **Frontend test suite (Vitest).** `npm test` runs jsdom + Testing Library tests; initial coverage
+  spans CSV escaping, formatting helpers, the co-pilot ask queue, and the color-legend component.
+
 ## [0.5.0] - 2026-06-10
 
 ### Added
@@ -93,7 +105,8 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/thirtysix/scView/releases/tag/v0.6.0
 [0.5.0]: https://github.com/thirtysix/scView/releases/tag/v0.5.0
 [0.4.0]: https://github.com/thirtysix/scView/releases/tag/v0.4.0
 [0.3.0]: https://github.com/thirtysix/scView/releases/tag/v0.3.0
