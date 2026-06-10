@@ -77,6 +77,16 @@ export function AssistantChat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [turns, busy]);
 
+  // An "ask about this" affordance elsewhere in the UI queues a question here.
+  const pendingAsk = useViewStore((s) => s.pendingAsk);
+  const clearPendingAsk = useViewStore((s) => s.clearPendingAsk);
+  useEffect(() => {
+    if (!pendingAsk) return;
+    clearPendingAsk();
+    send(pendingAsk);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAsk]);
+
   // Replace the last turn (the streaming assistant placeholder) via a mapper.
   const patchLast = (fn: (t: Turn) => Turn) =>
     setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? fn(t) : t)));

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Pencil } from "lucide-react";
+import { Pencil, Sparkles } from "lucide-react";
 import { viridisColor } from "@/lib/colors";
 
 interface ColorLegendProps {
@@ -20,6 +20,10 @@ interface ColorLegendProps {
   highlightedCategory?: string | null;
   /** When provided, each category becomes inline-renamable (e.g. fix a cell-type label) */
   onRenameCategory?: (category: string, newName: string) => void;
+  /** When provided, each category gets an "ask the co-pilot about this" button */
+  onAskAbout?: (category: string) => void;
+  /** When provided (continuous mode), an "ask about this" button sits by the label */
+  onAsk?: () => void;
 }
 
 export function ColorLegend({
@@ -32,6 +36,8 @@ export function ColorLegend({
   onCategoryClick,
   highlightedCategory,
   onRenameCategory,
+  onAskAbout,
+  onAsk,
 }: ColorLegendProps) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -102,6 +108,18 @@ export function ColorLegend({
                     >
                       {cat}
                     </button>
+                    {onAskAbout && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onAskAbout(cat);
+                        }}
+                        title="Ask the co-pilot about this"
+                        className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                      >
+                        <Sparkles className="h-3 w-3" />
+                      </button>
+                    )}
                     {onRenameCategory && (
                       <button
                         onClick={(e) => {
@@ -129,8 +147,17 @@ export function ColorLegend({
     return (
       <div className="flex flex-col gap-1">
         {label && (
-          <div className="mb-0.5 text-xs font-medium text-slate-600">
-            {label}
+          <div className="mb-0.5 flex items-center justify-between gap-1">
+            <span className="text-xs font-medium text-slate-600">{label}</span>
+            {onAsk && (
+              <button
+                onClick={onAsk}
+                title="Ask the co-pilot about this"
+                className="flex-shrink-0 text-slate-300 transition-colors hover:text-primary"
+              >
+                <Sparkles className="h-3 w-3" />
+              </button>
+            )}
           </div>
         )}
         <div

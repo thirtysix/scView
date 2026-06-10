@@ -275,14 +275,16 @@ identity/source grounding ("what paper is this from?"); Markdown answers; clicka
 citation chips (PubMed links + result→jump-to-cluster); suggested follow-up questions;
 token-streaming (SSE); resizable drawer; gentler "Hide" affordance;
 **available before a dataset loads** (app-level endpoints help a newcomer get started);
-**facet-narrowed data grounding** (identity/groups/markers/enrichment — minimal prompt per question).
+**facet-narrowed data grounding** (identity/groups/markers/enrichment — minimal prompt per question);
+**natural-language *actions*** (§3.4 — allow-listed, confirm-gated, with a deterministic fallback);
+**"Ask about this" entry points** — a ✦ on each categorical-legend group and on a gene
+expression overlay opens the drawer pre-loaded with a contextual question (the group is
+highlighted so view-context resolves too). `ColorLegend` `onAskAbout`/`onAsk` →
+`viewStore.askCopilot` → `AssistantChat` consumes the queued `pendingAsk`.
 
 **Still on the roadmap (not yet built):**
-- **Natural-language *actions*** (the big one, §3.4) — "color the UMAP by CD8A", "run
-  clustering at resolution 1.0", "show markers for cluster 3" → allow-listed actions over
-  existing endpoints, executed with a one-click confirm. Turns it from answerer into co-pilot.
-- **"Ask about this" entry points** — a ✦ on a cluster / marker row / enrichment term / QC
-  plot that opens the drawer pre-loaded with that context.
+- **More "ask about this" surfaces** — marker-table rows, enrichment terms, QC plots
+  (the legend group + gene overlay are done; extend to the remaining subtabs).
 - **Proactive insight on load** — a one-line "I notice…" when a dataset opens (e.g. strong
   condition split → suggest integration); ties to anomaly/batch flagging (§3.2).
 - **Reranking** — wire `RAG_RERANK_MODEL` (Qwen3-Reranker) for sharper retrieval.

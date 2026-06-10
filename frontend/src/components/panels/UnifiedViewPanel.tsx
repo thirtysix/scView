@@ -53,7 +53,9 @@ export function UnifiedViewPanel() {
   const selectionMode = useSelectionStore((s) => s.selectionMode);
   const setSelection = useSelectionStore((s) => s.setSelection);
   const clearSelection = useSelectionStore((s) => s.clearSelection);
+  const setHighlight = useSelectionStore((s) => s.setHighlight);
   const setPanel = useViewStore((s) => s.setPanel);
+  const askCopilot = useViewStore((s) => s.askCopilot);
 
   const activeSubtab = useUnifiedViewStore((s) => s.activeSubtab);
   const setActiveSubtab = useUnifiedViewStore((s) => s.setActiveSubtab);
@@ -478,6 +480,28 @@ export function UnifiedViewPanel() {
     [datasetId, colorBy, setCurrentDataset, queryClient],
   );
 
+  // "Ask about this" — highlight the group and pose a contextual question to the
+  // co-pilot. The question embeds the specifics so it resolves even without view context.
+  const handleAskAboutCategory = useCallback(
+    (cat: string) => {
+      if (!colorBy) return;
+      setHighlight({ column: colorBy, value: cat });
+      const label = prettyObsLabel(colorBy);
+      askCopilot(
+        `What is the "${cat}" group in ${label}? Summarize its marker genes and likely cell-type identity.`,
+      );
+    },
+    [colorBy, setHighlight, askCopilot],
+  );
+
+  const handleAskAboutOverlay = useCallback(() => {
+    const gene = overlayLabel;
+    if (!gene) return;
+    askCopilot(
+      `What is ${gene}, and what does its expression pattern across these cells suggest?`,
+    );
+  }, [overlayLabel, askCopilot]);
+
   const hasEmbeddings = dataset != null && dataset.available_embeddings.length > 0;
 
   // No dataset
@@ -585,6 +609,11 @@ export function UnifiedViewPanel() {
                   min={colorMinMax.min}
                   max={colorMinMax.max}
                   label={overlayLabel || colorColumnName || colorBy}
+                  onAsk={
+                    scatterOverlay?.type === "expression" && overlayLabel
+                      ? handleAskAboutOverlay
+                      : undefined
+                  }
                 />
               ) : colorBy && categories ? (
                 <ColorLegend
@@ -594,6 +623,7 @@ export function UnifiedViewPanel() {
                   label={colorColumnName ?? colorBy}
                   onCategoryClick={handleCategoryClick}
                   onRenameCategory={handleRenameCategory}
+                  onAskAbout={handleAskAboutCategory}
                 />
               ) : null}
             </div>
