@@ -6,13 +6,17 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-10
+
 ### Added
 - **Natural-language actions in the AI co-pilot.** Type a command and it drives the UI:
   view/navigation commands ("color by cluster", "show CD8A expression", "switch to 3D", "go to
   marker genes", "group by stim") apply immediately and reversibly; mutating commands ("annotate
-  cell types", "cluster at resolution 1.0") are **confirm-gated**, showing an overwrite advisory and
-  a rough time estimate before anything runs. Every action is re-validated server-side against a
-  strict allow-list.
+  cell types", "cluster at resolution 1.0", "compute markers", "run enrichment", "detect doublets")
+  are **confirm-gated**, showing an overwrite advisory and a rough time estimate before anything
+  runs. Every action is re-validated server-side against a strict allow-list, the LLM handles
+  parametrized commands while a deterministic matcher catches unambiguous ones (working even with no
+  LLM key configured).
 
 ## [0.1.0] - 2026-06-10
 
@@ -37,5 +41,6 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/thirtysix/scView/releases/tag/v0.2.0
 [0.1.0]: https://github.com/thirtysix/scView/releases/tag/v0.1.0
