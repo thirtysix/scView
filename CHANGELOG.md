@@ -6,6 +6,19 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-10
+
+### Added
+- **Differential expression with a volcano plot.** A new "DE" tab in the Unified View: lasso (or
+  click) a population, then compute one-vs-rest Wilcoxon differential expression over all genes,
+  shown as an interactive volcano plus a significant-gene table. Click a point or row to overlay
+  that gene's expression; export the full table to CSV. Backed by `POST /datasets/{id}/de`.
+
+### Changed
+- README refreshed for the v0.2–v0.5 feature set (natural-language actions, ask-about-this,
+  write-methods, reranking, proactive insight, three-way annotation, DE/volcano), with new
+  screenshots (DE volcano, insight banner, write-methods, literature-grounded answers).
+
 ## [0.4.0] - 2026-06-10
 
 ### Added
@@ -80,7 +93,8 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/thirtysix/scView/releases/tag/v0.5.0
 [0.4.0]: https://github.com/thirtysix/scView/releases/tag/v0.4.0
 [0.3.0]: https://github.com/thirtysix/scView/releases/tag/v0.3.0
 [0.2.0]: https://github.com/thirtysix/scView/releases/tag/v0.2.0
