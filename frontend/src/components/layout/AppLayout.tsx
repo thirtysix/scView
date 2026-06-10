@@ -2,6 +2,7 @@ import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { PanelContainer } from "./PanelContainer";
 import { CoPilotDrawer } from "@/components/assistant/CoPilotDrawer";
+import { InsightBanner } from "@/components/assistant/InsightBanner";
 import { useViewStore } from "@/stores/viewStore";
 
 export function AppLayout() {
@@ -17,6 +18,7 @@ export function AppLayout() {
       >
         <Header />
         <main className="flex-1 overflow-auto bg-slate-50 p-6">
+          <InsightBanner />
           <PanelContainer />
         </main>
       </div>

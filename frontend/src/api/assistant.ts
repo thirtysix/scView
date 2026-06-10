@@ -64,6 +64,17 @@ export async function runPipelineSteps(
   });
 }
 
+/** A deterministic one-line "I notice…" nudge surfaced when a dataset opens. */
+export interface DatasetInsight {
+  insight: string;
+  question?: string | null;
+  severity?: "info" | "suggestion";
+}
+
+export async function getInsight(datasetId: string): Promise<DatasetInsight> {
+  return apiFetch<DatasetInsight>(`/datasets/${datasetId}/assistant/insight`);
+}
+
 export interface ChatResponse {
   answer: string;
   sources: ChatSource[];

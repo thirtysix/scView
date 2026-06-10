@@ -15,8 +15,10 @@ from scview.core.dataset_manager import DatasetManager
 from scview.core.assistant import (
     ChatMessage,
     ChatResponse,
+    DatasetInsight,
     answer_query,
     build_app_context,
+    build_insight,
     stream_answer,
 )
 from scview.core.rag.retrieve import retrieve_context
@@ -46,6 +48,26 @@ async def rag_status(settings: Settings = Depends(get_settings_dep)) -> dict:
     except Exception as exc:
         logger.warning("rag-status failed: %s", exc)
         return {"enabled": True, "counts": {}, "error": str(exc)}
+
+
+@router.get("/datasets/{dataset_id}/assistant/insight", response_model=DatasetInsight)
+async def assistant_insight(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+) -> DatasetInsight:
+    """A deterministic one-line 'I notice…' nudge for when a dataset opens.
+
+    No LLM — derived from the preprocessing state + obs structure, so it's cheap
+    and reproducible. The optional ``question`` is a click-to-ask follow-up the
+    co-pilot can answer (or execute, for action-style questions)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:
+        return build_insight(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("insight failed for %s: %s", dataset_id, exc)
+        return DatasetInsight(insight="")
 
 
 async def _prepare(

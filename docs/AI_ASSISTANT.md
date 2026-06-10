@@ -277,18 +277,24 @@ token-streaming (SSE); resizable drawer; gentler "Hide" affordance;
 **available before a dataset loads** (app-level endpoints help a newcomer get started);
 **facet-narrowed data grounding** (identity/groups/markers/enrichment — minimal prompt per question);
 **natural-language *actions*** (§3.4 — allow-listed, confirm-gated, with a deterministic fallback);
-**"Ask about this" entry points** — a ✦ on each categorical-legend group and on a gene
-expression overlay opens the drawer pre-loaded with a contextual question (the group is
-highlighted so view-context resolves too). `ColorLegend` `onAskAbout`/`onAsk` →
+**"Ask about this" entry points** — a ✦ on each categorical-legend group, the gene
+expression overlay, **every marker-table row, and every enrichment-term row** opens the
+drawer pre-loaded with a contextual question (groups are highlighted so view-context
+resolves too). `ColorLegend` `onAskAbout`/`onAsk` + subtab row buttons →
 `viewStore.askCopilot` → `AssistantChat` consumes the queued `pendingAsk`.
+**Proactive insight on load** — a deterministic one-line "I notice…" banner when a dataset
+opens, picking the most useful next step by walking the preprocessing state in pipeline
+order (raw counts → doublet load → condition/batch split → cluster → annotate → done), with
+a click-to-ask follow-up. Backend `build_insight` (no LLM, reproducible) +
+`GET /datasets/{id}/assistant/insight`; frontend `InsightBanner` (dismissal remembered per
+dataset+insight). **Conversation persistence** — per-dataset threads survive reloads via
+localStorage (`scview.chat.v1.<id>`), with a Clear control.
 
 **Still on the roadmap (not yet built):**
-- **More "ask about this" surfaces** — marker-table rows, enrichment terms, QC plots
-  (the legend group + gene overlay are done; extend to the remaining subtabs).
-- **Proactive insight on load** — a one-line "I notice…" when a dataset opens (e.g. strong
-  condition split → suggest integration); ties to anomaly/batch flagging (§3.2).
+- **More "ask about this" surfaces** — QC plots / Observations rows (legend, gene overlay,
+  marker rows, and enrichment terms are done).
 - **Reranking** — wire `RAG_RERANK_MODEL` (Qwen3-Reranker) for sharper retrieval.
-- **Conversation persistence** — survive reloads (localStorage/backend), per-dataset threads + history.
+- **LLM-polished insight** — optionally rephrase the deterministic nudge; tie to anomaly/batch flagging (§3.2).
 - **Export / "write methods"** — turn provenance + Q&A into a methods paragraph or report (§3.5).
 - **Domain-aware literature** — pull dataset-relevant literature into the corpus; let users add their own papers/docs; show corpus coverage.
 - **Trust affordances** — show model name + "AI-generated, verify" note; per-turn 👍/👎 feedback; token/cost surfacing for hosted use.

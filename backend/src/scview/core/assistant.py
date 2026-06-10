@@ -427,6 +427,139 @@ just say "no information" — explain it looks like a user-uploaded dataset whos
 source isn't stored in the data, and that they can add a citation."""
 
 
+# ---------------------------------------------------------------------------
+# Proactive insight (deterministic "I notice…" on dataset open)
+# ---------------------------------------------------------------------------
+
+
+class DatasetInsight(BaseModel):
+    """A one-line, next-step nudge surfaced when a dataset opens."""
+
+    insight: str
+    question: str | None = None  # a click-to-ask follow-up for the co-pilot
+    severity: str = "info"  # "info" | "suggestion"
+
+
+_CONDITION_HINT_RE = re.compile(
+    r"condition|stim|treat|disease|status|genotype|batch|donor|patient|"
+    r"sample|orig\.?ident|group|timepoint|sex|tissue",
+    re.I,
+)
+
+
+def _looks_like_celltype_col(name: str) -> bool:
+    n = name.lower()
+    return "celltype" in n or "cell_type" in n or name.endswith(_ANNO_SUFFIX)
+
+
+def build_insight(adaptor) -> DatasetInsight:
+    """One deterministic "I notice…" line when a dataset opens — what to do next.
+
+    No LLM call: cheap, reproducible, and safe to run on every load. Picks the
+    single most useful nudge by walking the preprocessing state in pipeline order
+    (un-normalized → doublets → batch split → cluster → annotate → done)."""
+    adata = adaptor.adata
+    n = int(adata.n_obs)
+    try:
+        state = assess_preprocessing(adata)
+    except Exception:  # pragma: no cover - defensive
+        return DatasetInsight(insight=f"{n:,} cells loaded.")
+
+    obs = adata.obs
+
+    # 1. Raw / un-normalized counts → start preprocessing.
+    if not state.normalization.done or not state.log_transform.done:
+        return DatasetInsight(
+            insight=(
+                f"This looks like {n:,} cells of raw counts — start with "
+                "normalization and a log-transform so the downstream steps are valid."
+            ),
+            question="How should I preprocess this dataset?",
+            severity="suggestion",
+        )
+
+    # 2. Heavy doublet load.
+    if "predicted_doublet" in obs.columns:
+        try:
+            frac = float(obs["predicted_doublet"].astype(bool).mean())
+            if frac >= 0.08:
+                return DatasetInsight(
+                    insight=(
+                        f"About {frac:.0%} of cells are flagged as predicted doublets "
+                        "— consider filtering them before clustering."
+                    ),
+                    question="Should I filter doublets?",
+                    severity="suggestion",
+                )
+        except Exception:  # pragma: no cover
+            pass
+
+    # 3. Strong split by a condition/batch-like column, not yet integrated.
+    if not state.batch_correction.done:
+        for col in obs.columns:
+            if _looks_like_celltype_col(col) or not _CONDITION_HINT_RE.search(col):
+                continue
+            try:
+                vc = obs[col].astype("category").value_counts()
+            except Exception:  # pragma: no cover
+                continue
+            k = int((vc > 0).sum())
+            if 2 <= k <= 8 and vc.iloc[: min(k, 4)].min() >= max(20, 0.02 * n):
+                vals = ", ".join(map(str, vc.index[:4]))
+                return DatasetInsight(
+                    insight=(
+                        f"Your cells split by {col} ({vals}) — if that's a batch or "
+                        "condition, integration will align shared cell types across groups."
+                    ),
+                    question="Should I run batch integration?",
+                    severity="suggestion",
+                )
+
+    celltype_cols = [c for c in obs.columns if _looks_like_celltype_col(c)]
+    active = adata.uns.get("scview_active_clustering")
+
+    def _n_clusters() -> int | None:
+        if active and active in obs.columns:
+            try:
+                return int(obs[active].astype("category").nunique())
+            except Exception:  # pragma: no cover
+                return None
+        return None
+
+    # 4. Embeddings/PCA ready but no clustering.
+    if not state.clustering.done and (state.pca.done or state.embeddings.done):
+        return DatasetInsight(
+            insight=(
+                "Embeddings are ready but the cells aren't clustered yet — run "
+                "Leiden to find cell populations."
+            ),
+            question="Run clustering",
+            severity="suggestion",
+        )
+
+    # 5. Clustered but unlabeled.
+    if state.clustering.done and not celltype_cols:
+        k = _n_clusters()
+        head = f"{k} clusters are" if k else "Clusters are"
+        return DatasetInsight(
+            insight=f"{head} computed but unlabeled — annotate cell types to read them biologically.",
+            question="Annotate cell types",
+            severity="suggestion",
+        )
+
+    # 6. Fully processed.
+    bits = [f"{n:,} cells"]
+    k = _n_clusters()
+    if k:
+        bits.append(f"{k} clusters")
+    if celltype_cols:
+        bits.append("annotated cell types")
+    return DatasetInsight(
+        insight="This dataset looks fully processed: " + ", ".join(bits) + ".",
+        question="What cell types are in my data?",
+    )
+
+
 def _build_user_message(query: str, context: str) -> str:
     return (
         "# DATA CONTEXT (facts about the user's dataset — cite these tags)\n"
