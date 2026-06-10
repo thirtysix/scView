@@ -747,8 +747,10 @@ async def extract_actions(
 
 
 async def _maybe_actions(query, adaptor, api_key, view_context, model) -> list[AssistantAction]:
-    """Return UI actions if this looks like a command we can map, else []."""
-    if not (api_key and adaptor is not None and _looks_like_command(query)):
+    """Return UI actions if this looks like a command we can map, else []. Uses the LLM
+    when a key is set, and falls back to the deterministic matcher (which also runs with
+    no key, so basic commands work without the LLM)."""
+    if not (adaptor is not None and _looks_like_command(query)):
         return []
     try:
         cols = [c["name"] for c in adaptor.obs_columns_info()]
@@ -770,6 +772,12 @@ async def _maybe_actions(query, adaptor, api_key, view_context, model) -> list[A
         active = str(adaptor.adata.uns.get("scview_active_clustering") or "")
     except Exception:
         active = ""
+    if not api_key:
+        # No LLM configured: deterministic matcher only (unambiguous commands).
+        return _deterministic_actions(
+            query, columns=cols, embeddings=embs, genes_upper=genes_upper,
+            n_cells=nc, active_clustering=active,
+        )
     return await extract_actions(
         query, view_context, cols, embs, genes_upper, nc, active, api_key, model
     )
