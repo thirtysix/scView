@@ -32,7 +32,7 @@ import json
 import logging
 import re
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
 from scview.core import provenance
@@ -84,6 +84,12 @@ class AssistantAction(BaseModel):
     subtab: str | None = None    # Unified View subtab (set_subtab)
     gene: str | None = None      # gene symbol (show_gene)
     label: str = ""              # human-readable confirmation
+    # Mutating actions (run a pipeline step) — confirmation-gated:
+    requires_confirm: bool = False  # if True, the UI shows a Confirm button (nothing auto-runs)
+    step: str | None = None      # pipeline step to run
+    params: dict = Field(default_factory=dict)  # PipelineParams overrides for the step
+    advisory: str = ""           # overwrite / destructive note for the user
+    estimate: str = ""           # rough processing-time estimate
 
 
 class ChatResponse(BaseModel):
@@ -506,7 +512,7 @@ _SUBTABS = {
 }
 _COMMAND_RE = re.compile(
     r"^\s*(colou?r|show|highlight|select|go to|open|switch|navigate|display|set|view|take me|"
-    r"clear|hide|reset|remove|group|jump|focus|overlay)\b",
+    r"clear|hide|reset|remove|group|jump|focus|overlay|annotate|label|re-?cluster|cluster|run|compute)\b",
     re.I,
 )
 
@@ -516,8 +522,21 @@ def _looks_like_command(query: str) -> bool:
     return bool(_COMMAND_RE.match(query or ""))
 
 
+def _estimate(step: str, n_cells: int, method: str | None = None) -> str:
+    """Rough processing-time estimate for a confirm-gated step."""
+    n = n_cells or 0
+    if step == "cell_type_annotation":
+        if method == "llm":
+            return "~15-45 s (a few model calls)"
+        return f"~{max(30, round(n / 250))} s (CellTypist on {n:,} cells)"
+    if step == "clustering":
+        return f"~{max(15, round(n / 500))} s for {n:,} cells"
+    return ""
+
+
 def _coerce_actions(
-    raw: str, *, columns: list[str], embeddings: list[str], genes_upper: dict[str, str]
+    raw: str, *, columns: list[str], embeddings: list[str], genes_upper: dict[str, str],
+    n_cells: int = 0,
 ) -> list[AssistantAction]:
     """Parse + strictly validate the model's JSON action array against the allow-list.
 
@@ -562,12 +581,47 @@ def _coerce_actions(
         elif t == "show_gene" and str(it.get("gene", "")).upper() in genes_upper:
             g = genes_upper[str(it["gene"]).upper()]
             out.append(AssistantAction(type=t, gene=g, label=f"Showing {g} expression."))
+        elif t == "annotate_cell_types":
+            method = str(it.get("method") or "llm").lower()
+            if method not in ("llm", "celltypist"):
+                method = "llm"
+            groupby = str(it.get("groupby") or "")
+            if groupby and groupby not in cols:
+                groupby = ""
+            target = f"{groupby}_celltypeAnno" if groupby else "cell_type"
+            params: dict = {"annotation_method": method, "annotation_target": target}
+            if groupby:
+                params["annotation_groupby"] = groupby
+            if it.get("tissue"):
+                params["annotation_tissue"] = str(it["tissue"])
+            adv = (f"Overwrites the existing '{target}' column."
+                   if target in cols else f"Writes a new '{target}' column.")
+            out.append(AssistantAction(
+                type=t, step="cell_type_annotation", params=params, requires_confirm=True,
+                advisory=adv, estimate=_estimate("cell_type_annotation", n_cells, method),
+                label=f"Annotate cell types ({'AI / any-tissue' if method == 'llm' else 'CellTypist'})"
+                      + (f" on {groupby}" if groupby else "") + ".",
+            ))
+        elif t == "cluster":
+            try:
+                res = float(it.get("resolution") or 0.5)
+            except Exception:
+                res = 0.5
+            scol = f"scview_leiden_r{res}"
+            adv = (f"Overwrites the existing '{scol}' column."
+                   if scol in cols else f"Adds a new clustering column '{scol}'.")
+            out.append(AssistantAction(
+                type=t, step="clustering",
+                params={"clustering_method": "leiden", "clustering_resolution": res},
+                requires_confirm=True, advisory=adv, estimate=_estimate("clustering", n_cells),
+                label=f"Re-cluster (Leiden, resolution {res}).",
+            ))
     return out[:4]
 
 
 async def extract_actions(
     query: str, view_context: dict | None, columns: list[str], embeddings: list[str],
-    genes_upper: dict[str, str], api_key: str, model: str
+    genes_upper: dict[str, str], n_cells: int, api_key: str, model: str
 ) -> list[AssistantAction]:
     """Map a UI command to allow-listed structured actions (one focused LLM call)."""
     panels = ", ".join(f"{k} ({v})" for k, v in _PANELS.items())
@@ -585,6 +639,9 @@ async def extract_actions(
         "- set_subtab {type, subtab}: open a Unified View tab (markers|expression|genesets|enrichment).\n"
         "- open_panel {type, panel}: navigate to a panel.\n"
         "- clear_highlight {type} / clear_overlay {type}: clear the current highlight / gene overlay.\n"
+        "- annotate_cell_types {type, method?, groupby?, tissue?}: label clusters with cell types "
+        "(method: llm = any-tissue AI default, or celltypist).\n"
+        "- cluster {type, resolution?}: re-run Leiden clustering at a resolution.\n"
         f"Valid obs columns: {cols}.\n"
         f"Valid embeddings (obsm key): {embs}.\n"
         f"Valid panels (id): {panels}.\n"
@@ -603,7 +660,7 @@ async def extract_actions(
         )
         return _coerce_actions(
             resp.choices[0].message.content or "",
-            columns=columns, embeddings=embeddings, genes_upper=genes_upper,
+            columns=columns, embeddings=embeddings, genes_upper=genes_upper, n_cells=n_cells,
         )
     except Exception as exc:  # pragma: no cover - network/LLM failure
         logger.debug("action extraction failed: %s", exc)
@@ -626,7 +683,11 @@ async def _maybe_actions(query, adaptor, api_key, view_context, model) -> list[A
         genes_upper = {str(g).upper(): str(g) for g in adaptor.adata.var_names}
     except Exception:
         genes_upper = {}
-    return await extract_actions(query, view_context, cols, embs, genes_upper, api_key, model)
+    try:
+        nc = adaptor.n_cells()
+    except Exception:
+        nc = 0
+    return await extract_actions(query, view_context, cols, embs, genes_upper, nc, api_key, model)
 
 
 async def answer_query(

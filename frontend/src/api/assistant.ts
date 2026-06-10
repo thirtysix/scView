@@ -31,7 +31,9 @@ export interface AssistantAction {
     | "set_groupby"
     | "clear_highlight"
     | "clear_overlay"
-    | "show_gene";
+    | "show_gene"
+    | "annotate_cell_types"
+    | "cluster";
   column?: string;
   value?: string;
   panel?: string;
@@ -39,6 +41,24 @@ export interface AssistantAction {
   subtab?: string;
   gene?: string;
   label?: string;
+  // Confirm-gated mutating actions:
+  requires_confirm?: boolean;
+  step?: string;
+  params?: Record<string, unknown>;
+  advisory?: string;
+  estimate?: string;
+}
+
+/** Run pipeline step(s) on a dataset (used when the user confirms a mutating action). */
+export async function runPipelineSteps(
+  datasetId: string,
+  steps: string[],
+  params: Record<string, unknown>
+): Promise<{ steps_run: string[]; errors: Record<string, string> }> {
+  return apiFetch(`/datasets/${datasetId}/assessment/run`, {
+    method: "POST",
+    body: JSON.stringify({ steps, params }),
+  });
 }
 
 export interface ChatResponse {

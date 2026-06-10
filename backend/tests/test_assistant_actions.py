@@ -63,3 +63,17 @@ def test_coerce_actions_rejects_anything_off_the_allowlist():
 def test_coerce_actions_caps_count():
     raw = "[" + ",".join('{"type":"set_color_by","column":"cluster"}' for _ in range(10)) + "]"
     assert len(_coerce_actions(raw, **CTX)) <= 4
+
+
+def test_mutating_actions_are_confirm_gated_with_advisory_and_estimate():
+    ctx = dict(columns=["cluster", "cell_type"], embeddings=["X_umap"],
+               genes_upper={}, n_cells=13836)
+    [a] = _coerce_actions('[{"type":"annotate_cell_types","method":"llm"}]', **ctx)
+    assert a.type == "annotate_cell_types" and a.requires_confirm
+    assert a.step == "cell_type_annotation" and a.params["annotation_method"] == "llm"
+    assert "Overwrites" in a.advisory and a.estimate  # cell_type already exists
+
+    [c] = _coerce_actions('[{"type":"cluster","resolution":1.0}]', **ctx)
+    assert c.type == "cluster" and c.requires_confirm and c.step == "clustering"
+    assert c.params["clustering_resolution"] == 1.0
+    assert "scview_leiden_r1.0" in c.advisory and c.estimate

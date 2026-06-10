@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Sparkles, Send, User, Loader2 } from "lucide-react";
+import { Sparkles, Send, User, Loader2, AlertTriangle, Clock, Check, X } from "lucide-react";
+import { getDataset } from "@/api/datasets";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useSelectionStore } from "@/stores/selectionStore";
@@ -9,6 +10,7 @@ import { PANEL_LABELS, type PanelId } from "@/lib/constants";
 import {
   assistantChat,
   assistantChatStream,
+  runPipelineSteps,
   type AssistantAction,
   type ChatMessage,
   type ChatSource,
@@ -23,6 +25,7 @@ interface Turn {
   grounded?: boolean;
   route?: string[];
   followups?: string[];
+  pendingAction?: AssistantAction; // a confirm-gated mutating action awaiting the user
 }
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -67,6 +70,7 @@ export function AssistantChat() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -128,6 +132,13 @@ export function AssistantChat() {
   const executeActions = useCallback((actions?: AssistantAction[]) => {
     if (!actions?.length) return;
     for (const a of actions) {
+      if (a.requires_confirm) {
+        // Mutating action: don't run it — surface a Confirm card on the turn.
+        setTurns((prev) =>
+          prev.map((t, i) => (i === prev.length - 1 ? { ...t, pendingAction: a } : t)),
+        );
+        continue;
+      }
       if (a.type === "set_color_by" && a.column) {
         useSettingsStore.getState().setColorBy(a.column);
         useSelectionStore.getState().setHighlight(null);
@@ -158,6 +169,56 @@ export function AssistantChat() {
         useViewStore.getState().setPanel("expression");
       }
     }
+  }, []);
+
+  // Run a confirm-gated mutating action (after the user clicks Confirm).
+  const runPendingAction = useCallback(
+    async (action: AssistantAction) => {
+      if (!datasetId || !action.step) return;
+      setConfirming(true);
+      setTurns((prev) =>
+        prev.map((t, i) =>
+          i === prev.length - 1
+            ? { ...t, pendingAction: undefined, content: t.content + "\n\n_Running…_" }
+            : t,
+        ),
+      );
+      try {
+        const res = await runPipelineSteps(datasetId, [action.step], action.params ?? {});
+        const updated = await getDataset(datasetId);
+        useDatasetStore.getState().setCurrentDataset(updated);
+        const err =
+          res.errors && Object.keys(res.errors).length ? Object.values(res.errors)[0] : "";
+        setTurns((prev) =>
+          prev.map((t, i) =>
+            i === prev.length - 1
+              ? { ...t, content: t.content.replace("_Running…_", err ? `❌ ${err}` : "✓ Done.") }
+              : t,
+          ),
+        );
+        const tgt = action.params?.annotation_target as string | undefined;
+        if (!err && action.step === "cell_type_annotation" && tgt) {
+          useSettingsStore.getState().setColorBy(tgt);
+          useViewStore.getState().setPanel("unified");
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setTurns((prev) =>
+          prev.map((t, i) =>
+            i === prev.length - 1 ? { ...t, content: t.content.replace("_Running…_", `❌ ${msg}`) } : t,
+          ),
+        );
+      } finally {
+        setConfirming(false);
+      }
+    },
+    [datasetId],
+  );
+
+  const cancelPendingAction = useCallback(() => {
+    setTurns((prev) =>
+      prev.map((t, i) => (i === prev.length - 1 ? { ...t, pendingAction: undefined } : t)),
+    );
   }, []);
 
   // Clicking a result citation chip jumps to that cluster/gene in the Unified View.
@@ -236,6 +297,47 @@ export function AssistantChat() {
               {t.role === "assistant" && t.grounded === false && (
                 <div className="mt-1 text-xs italic text-amber-600">
                   Language model not configured — showing grounded facts directly.
+                </div>
+              )}
+              {t.role === "assistant" && t.pendingAction && (
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
+                  <div className="mb-1.5 font-medium text-amber-900">{t.pendingAction.label}</div>
+                  {t.pendingAction.advisory && (
+                    <div className="mb-1 flex items-start gap-1.5 text-amber-800">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                      <span>{t.pendingAction.advisory}</span>
+                    </div>
+                  )}
+                  {t.pendingAction.estimate && (
+                    <div className="mb-2 flex items-center gap-1.5 text-amber-700">
+                      <Clock className="h-3.5 w-3.5" />
+                      <span>Estimated time: {t.pendingAction.estimate}</span>
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={confirming}
+                      onClick={() => runPendingAction(t.pendingAction!)}
+                      className="inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1 font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      {confirming ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Check className="h-3.5 w-3.5" />
+                      )}
+                      Confirm &amp; run
+                    </button>
+                    <button
+                      type="button"
+                      disabled={confirming}
+                      onClick={cancelPendingAction}
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-3 py-1 font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               )}
               {t.role === "assistant" && t.route && t.route.length > 0 && (
