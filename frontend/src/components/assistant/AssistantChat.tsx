@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Sparkles, Send, User, Loader2, AlertTriangle, Clock, Check, X } from "lucide-react";
+import { Sparkles, Send, User, Loader2, AlertTriangle, Clock, Check, X, Trash2 } from "lucide-react";
 import { getDataset } from "@/api/datasets";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -65,6 +65,9 @@ function currentViewContext(): ViewContext {
 
 /** The chat surface (conversation + composer), shared by the full panel and the
  *  floating drawer. Reads the current dataset + view context from the stores. */
+// Per-dataset conversation threads survive reloads + dataset switches.
+const threadKey = (datasetId: string | null) => `scview.chat.v1.${datasetId ?? "__app__"}`;
+
 export function AssistantChat() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -76,6 +79,37 @@ export function AssistantChat() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [turns, busy]);
+
+  // Load this dataset's saved thread when the dataset changes (and on mount).
+  const key = threadKey(datasetId);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      setTurns(raw ? (JSON.parse(raw) as Turn[]) : []);
+    } catch {
+      setTurns([]);
+    }
+  }, [key]);
+
+  // Persist the thread once idle (avoid hammering storage during streaming).
+  useEffect(() => {
+    if (busy) return;
+    try {
+      if (turns.length) localStorage.setItem(key, JSON.stringify(turns));
+      else localStorage.removeItem(key);
+    } catch {
+      /* storage full / unavailable — non-fatal */
+    }
+  }, [turns, busy, key]);
+
+  const clearChat = useCallback(() => {
+    setTurns([]);
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* non-fatal */
+    }
+  }, [key]);
 
   // An "ask about this" affordance elsewhere in the UI queues a question here.
   const pendingAsk = useViewStore((s) => s.pendingAsk);
@@ -266,6 +300,19 @@ export function AssistantChat() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {turns.length > 0 && (
+        <div className="flex justify-end border-b px-3 py-1.5">
+          <button
+            onClick={clearChat}
+            disabled={busy}
+            title="Clear this conversation"
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Clear
+          </button>
+        </div>
+      )}
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
         {turns.length === 0 && (
           <div className="mx-auto max-w-xl pt-6 text-center">
