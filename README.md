@@ -55,6 +55,12 @@ reviewer can audit. scView closes both gaps:
 *One linked screen: a UMAP colored by cell type, a camera-linked cluster reference map, a summary
 card, and a sortable markers table; recoloring, violins, and cluster highlighting all linked.*
 
+### Differential expression (volcano)
+![Differential expression volcano](docs/images/de-volcano.png)
+*Lasso a region or click a population (here Monocytes, 5,199 cells), then compute one-vs-rest
+differential expression over all genes as an interactive volcano plus a significant-gene table;
+click a point to overlay that gene, and export the table to CSV.*
+
 ### AI co-pilot
 ![AI co-pilot](docs/images/ai-copilot.png)
 *Ask about your data and get a grounded, cited answer: here the cell types and NK-cell markers,
@@ -67,10 +73,21 @@ link to PubMed or jump to the cluster in the app.*
 literature/tutorial corpus and come back with cited, reranked sources and suggested follow-ups,
 while in-app facts stay grounded in your dataset.*
 
+### Methods from provenance
+![Write methods](docs/images/copilot-methods.png)
+*One click turns the recorded provenance recipe into a methods-section paragraph, grounded strictly
+in the steps, tools, and parameters that actually ran. Every answer shows which model produced it
+with an "AI-generated, verify" note and a thumbs up/down.*
+
 ### AI-assisted Data Assessment
 ![Data Assessment](docs/images/data-assessment.png)
 *QC distribution plots plus a preprocessing step list. "Get AI Suggestions" returns recommended
 next steps with reasoning and parameters; one click to apply, you decide whether to run.*
+
+### Proactive insight on open
+![Insight banner](docs/images/insight-banner.png)
+*When a dataset opens, a one-line "I notice…" banner names the most useful next step (chosen from the
+preprocessing state, including QC anomalies) with a click-to-ask follow-up the co-pilot answers or runs.*
 
 ### History / provenance
 ![History](docs/images/history.png)
