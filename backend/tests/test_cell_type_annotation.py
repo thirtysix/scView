@@ -44,8 +44,26 @@ def test_unknown_and_unimplemented_methods_raise():
     a = _clustered()
     with pytest.raises(ValueError):
         _run_cell_type_annotation(a, PipelineParams(annotation_method="bogus"))
-    with pytest.raises(ValueError):  # marker_score not implemented yet
+    with pytest.raises(ValueError):  # marker_score: no marker-set genes in this toy data
         _run_cell_type_annotation(a, PipelineParams(annotation_method="marker_score"))
+
+
+def test_marker_score_assigns_top_cell_type():
+    """Offline marker_score: a T-marker cluster -> T cell, a B-marker cluster -> B cell."""
+    from scview.core.pipeline import _annotate_marker_score
+
+    genes = ["CD3D", "CD3E", "CD3G", "TRAC", "MS4A1", "CD79A", "CD79B", "CD19"]
+    rng = np.random.default_rng(0)
+    X = (rng.random((20, 8)) * 0.1).astype("float32")
+    X[:10, :4] += 3.0  # cluster 0 high in T-cell genes
+    X[10:, 4:] += 3.0  # cluster 1 high in B-cell genes
+    a = ad.AnnData(X)
+    a.var_names = genes
+    a.obs["cluster"] = pd.Categorical(["0"] * 10 + ["1"] * 10)
+    _annotate_marker_score(a, PipelineParams(), "cluster", "cell_type")
+    m = a.uns["cell_type_markerscore_mapping"]
+    assert m["0"] == "T cell" and m["1"] == "B cell"
+    assert "cell_type" in a.obs and a.obs["cell_type"].nunique() == 2
 
 
 def test_llm_requires_clustering():

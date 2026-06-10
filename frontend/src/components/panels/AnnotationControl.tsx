@@ -41,7 +41,7 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
   }, [dataset?.obs_columns]);
   const primary = dataset?.active_clustering ?? (groupings.includes("cluster") ? "cluster" : groupings[0]);
 
-  const [method, setMethod] = useState<"llm" | "celltypist">("llm");
+  const [method, setMethod] = useState<"llm" | "celltypist" | "marker_score">("llm");
   const [tissue, setTissue] = useState("");
   const [model, setModel] = useState("Immune_All_Low.pkl");
   const [models, setModels] = useState<CellTypistModel[]>([]);
@@ -85,7 +85,7 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
       annotation_target: tgt,
     };
     if (method === "llm") params.annotation_tissue = tissue.trim();
-    else params.celltypist_model = model;
+    else if (method === "celltypist") params.celltypist_model = model;
     setAnnotating(true);
     setLastWritten(null);
     try {
@@ -97,7 +97,7 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
   };
 
   const busy = annotating || running;
-  const tab = (key: "llm" | "celltypist", label: string) => (
+  const tab = (key: "llm" | "celltypist" | "marker_score", label: string) => (
     <button
       type="button"
       onClick={() => setMethod(key)}
@@ -157,9 +157,15 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
       <div className="mb-3 inline-flex rounded-lg border border-slate-200 p-0.5 text-xs">
         {tab("llm", "AI (any tissue)")}
         {tab("celltypist", "CellTypist (reference)")}
+        {tab("marker_score", "Marker score (offline)")}
       </div>
 
-      {method === "llm" ? (
+      {method === "marker_score" ? (
+        <p className="mb-3 text-[11px] text-slate-400">
+          Offline and deterministic: scores curated marker sets per cluster and assigns the top cell
+          type. No model or network; best for common immune/PBMC types.
+        </p>
+      ) : method === "llm" ? (
         <div className="mb-3">
           <label className="mb-1 block text-xs font-medium text-slate-600">Tissue (optional)</label>
           <input

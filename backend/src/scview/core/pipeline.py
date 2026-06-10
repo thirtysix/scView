@@ -726,12 +726,64 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     )
 
 
+# Curated marker sets for the offline 'marker_score' method (common PBMC/immune plus
+# a few stromal/epithelial types). Deterministic and network-free; tissue-limited.
+_MARKER_SETS: dict[str, list[str]] = {
+    "T cell": ["CD3D", "CD3E", "CD3G", "TRAC"],
+    "CD4+ T cell": ["CD4", "IL7R"],
+    "CD8+ T cell": ["CD8A", "CD8B", "GZMK"],
+    "B cell": ["CD79A", "CD79B", "MS4A1", "CD19"],
+    "Plasma cell": ["MZB1", "IGHG1", "JCHAIN", "XBP1"],
+    "NK cell": ["NKG7", "GNLY", "KLRD1", "NCAM1"],
+    "Monocyte": ["CD14", "LYZ", "S100A8", "S100A9", "FCN1"],
+    "Macrophage": ["CD68", "C1QA", "C1QB", "MARCO"],
+    "Dendritic cell": ["FCER1A", "CD1C", "CLEC9A", "LILRA4"],
+    "Megakaryocyte": ["PPBP", "PF4", "ITGA2B"],
+    "Erythrocyte": ["HBB", "HBA1", "HBA2", "GYPA"],
+    "Epithelial cell": ["EPCAM", "KRT8", "KRT18"],
+    "Fibroblast": ["COL1A1", "DCN", "LUM", "PDGFRB"],
+    "Endothelial cell": ["PECAM1", "VWF", "CLDN5"],
+}
+
+
+def _annotate_marker_score(
+    adata: ad.AnnData, params: PipelineParams, groupby: str, target: str
+) -> None:
+    """Offline annotation: score curated marker sets and assign each cluster the
+    top-scoring cell type. Deterministic, no network, no model download."""
+    if not groupby:
+        raise ValueError("marker_score annotation needs a clustering; run clustering first.")
+    upper = {str(g).upper(): str(g) for g in adata.var_names}
+    score_cols: dict[str, str] = {}
+    for ct, genes in _MARKER_SETS.items():
+        present = [upper[g.upper()] for g in genes if g.upper() in upper]
+        if len(present) < 2:
+            continue
+        key = f"_ms__{ct}"
+        sc.tl.score_genes(adata, present, score_name=key, ctrl_size=min(50, adata.n_vars - 1))
+        score_cols[ct] = key
+    if not score_cols:
+        raise ValueError("None of the marker-set genes are present in this dataset.")
+    inv = {v: k for k, v in score_cols.items()}
+    means = adata.obs.groupby(groupby, observed=True)[list(score_cols.values())].mean()
+    mapping = {str(idx): inv[means.loc[idx].idxmax()] for idx in means.index}
+    adata.obs[target] = (
+        adata.obs[groupby].astype(str).map(lambda g: mapping.get(g, "Unknown")).astype("category")
+    )
+    adata.uns[f"{target}_markerscore_mapping"] = mapping
+    for key in score_cols.values():
+        if key in adata.obs.columns:
+            del adata.obs[key]
+    logger.info("marker_score: %d clusters -> obs['%s'] (%d cell types scored)",
+                len(mapping), target, len(score_cols))
+
+
 def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None:
     """Annotate cell types per cluster, writing a reviewable obs[target] column.
 
-    Methods: 'celltypist' (reference-based, tissue-specific model) and 'llm'
-    (LLM-from-markers, tissue-agnostic). 'marker_score' is planned — see
-    docs/CELLTYPE_ANNOTATION.md.
+    Methods: 'llm' (LLM-from-markers, tissue-agnostic, default), 'celltypist'
+    (reference-based, tissue-specific model), and 'marker_score' (offline curated
+    marker scoring). See docs/CELLTYPE_ANNOTATION.md.
     """
     method = (params.annotation_method or "llm").lower()
     target = params.annotation_target or "cell_type"
@@ -753,9 +805,7 @@ def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None
     elif method == "llm":
         _annotate_llm(adata, params, groupby, target)
     elif method == "marker_score":
-        raise ValueError(
-            "Annotation method 'marker_score' is not implemented yet; use 'celltypist' or 'llm'."
-        )
+        _annotate_marker_score(adata, params, groupby, target)
     else:
         raise ValueError(
             f"Unknown annotation method '{method}' (expected celltypist | llm | marker_score)."

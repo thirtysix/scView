@@ -26,8 +26,14 @@ were measured in the running backend container on the Kang IFN-β PBMC hero data
   computes them. Requires `DEEPINFRA_API_KEY`; non-deterministic, so present as a reviewable pass.
   *(The earlier "8B is noisier" caveat was mitigated here by a tissue hint + a single structured
   per-cluster prompt.)*
-- **Pending**: the frontend annotation control (method choice + CellTypist model picker + "Annotate"
-  button on Data Assessment / Unified View), and the offline `marker_score` method.
+- **Frontend control shipped**: the "Cell-type annotation" card on Data Assessment — method picker
+  (AI / CellTypist / Marker score), grouping selector, explicit output column, "Annotate" button.
+  Also reachable by voice via the co-pilot ("annotate cell types").
+- **Offline `marker_score` shipped** (`method="marker_score"`): scores curated marker sets per
+  cluster (scanpy `score_genes`) and assigns the top cell type. Deterministic, no network, no model
+  download; tissue-limited to the built-in immune/PBMC + common stromal sets. On Kang it recovers
+  the major lineages and even gets Erythrocyte/Megakaryocyte (which the immune CellTypist model misses).
+- **Pending**: edit/override a label (reviewable rename).
 
 ## TL;DR
 Ship a small **tiered annotator** behind one "Annotate cell types" step — pick a method, sensible
