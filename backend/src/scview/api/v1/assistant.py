@@ -24,6 +24,7 @@ from scview.core.assistant import (
     stream_answer,
     write_methods,
 )
+from scview.core.guards import enforce_query_limits
 from scview.core.rag.retrieve import retrieve_context
 from scview.core.rag.router import classify_intent
 
@@ -119,6 +120,7 @@ async def assistant_methods(
     Grounded strictly in the recorded steps/tools/params (never invents methods);
     the optional chat history only nudges emphasis. Falls back to a deterministic
     digest with no LLM key."""
+    enforce_query_limits("", body.history, settings)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
@@ -192,6 +194,7 @@ async def assistant_chat(
     """
     if not body.query or not body.query.strip():
         raise HTTPException(status_code=400, detail="Empty query.")
+    enforce_query_limits(body.query, body.history, settings)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
@@ -219,6 +222,7 @@ async def assistant_chat_stream(
     """
     if not body.query or not body.query.strip():
         raise HTTPException(status_code=400, detail="Empty query.")
+    enforce_query_limits(body.query, body.history, settings)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
@@ -257,6 +261,7 @@ async def assistant_chat_app(
     + features) and the methods/literature corpora to help the user get started."""
     if not body.query or not body.query.strip():
         raise HTTPException(status_code=400, detail="Empty query.")
+    enforce_query_limits(body.query, body.history, settings)
     try:
         query = body.query.strip()
         kwargs = await _prepare(query, body, dm, settings, force_app=True)
@@ -275,6 +280,7 @@ async def assistant_chat_app_stream(
     """Streaming no-dataset co-pilot chat (SSE)."""
     if not body.query or not body.query.strip():
         raise HTTPException(status_code=400, detail="Empty query.")
+    enforce_query_limits(body.query, body.history, settings)
     query = body.query.strip()
 
     async def event_generator():

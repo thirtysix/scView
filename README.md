@@ -174,6 +174,12 @@ Once it's running:
 | **Backend API plus interactive docs** | http://localhost:8080 , http://localhost:8080/docs |
 | **R converter** (Seurat `.rds` to h5ad) | http://localhost:8001 |
 
+> **Running on localhost is safe by default.** scView assumes a single trusted user and ships
+> unauthenticated. **Do not expose it to the internet as-is** — every endpoint (AI co-pilot + compute)
+> is open, so anyone who can reach the port spends your LLM budget and CPU. Before exposing it, read
+> [`SECURITY.md`](SECURITY.md): set `DEPLOYMENT_MODE=public` (enables input hardening + a startup
+> self-check), set an `ACCESS_TOKEN`, and put real auth + rate limiting in front.
+
 ### 4. First steps
 1. Open the app and use **Add Data** (the **Data** tab).
 2. Drop in a dataset: `.h5ad`, a 10x matrix (MEX or HDF5), `.loom`, `.zarr`, a dense `.csv`, a

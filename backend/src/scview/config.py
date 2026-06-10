@@ -15,6 +15,24 @@ class Settings(BaseSettings):
     DEEPINFRA_API_KEY: str = ""
     MSIGDB_DIR: str = ""
 
+    # --- Deployment posture --------------------------------------------------
+    # "private" (default): assume a single trusted user on localhost — the only
+    # supported posture out of the box. "public": you are exposing scView beyond
+    # localhost; this turns on input hardening + a startup self-check and makes
+    # the optional shared-secret gate (ACCESS_TOKEN) advisable. Public, multi-user
+    # hosting still REQUIRES auth + rate limiting + quotas in front (see SECURITY).
+    DEPLOYMENT_MODE: str = "private"
+    # Optional shared-secret gate. When set, every /api request must present it as
+    # `Authorization: Bearer <token>` or `X-Access-Token`. A coarse gate (one
+    # secret for everyone), not per-user auth — pair it with a reverse proxy.
+    ACCESS_TOKEN: str = ""
+    # Always-on input caps for LLM-bound text (cheap hygiene, both modes).
+    MAX_QUERY_CHARS: int = 4000
+    MAX_QUERY_WORDS: int = 400
+    MAX_HISTORY_MESSAGES: int = 50
+    # Reject oversized JSON bodies on non-upload routes before parsing.
+    MAX_JSON_BODY_KB: int = 512
+
     # --- RAG co-pilot (literature + tutorials corpora over pgvector) ---------
     # Postgres/Neon connection string with the pgvector extension. Empty =
     # RAG retrieval disabled (the co-pilot still grounds in in-app facts).
@@ -36,6 +54,32 @@ class Settings(BaseSettings):
     @property
     def rag_enabled(self) -> bool:
         return bool(self.RAG_DATABASE_URL and self.DEEPINFRA_API_KEY)
+
+    @property
+    def is_public(self) -> bool:
+        return self.DEPLOYMENT_MODE.strip().lower() == "public"
+
+    def deployment_warnings(self) -> list[str]:
+        """Posture problems to surface loudly at startup in public mode."""
+        if not self.is_public:
+            return []
+        warns: list[str] = []
+        if not self.ACCESS_TOKEN:
+            warns.append(
+                "ACCESS_TOKEN is unset: every endpoint (LLM + compute) is OPEN to "
+                "anyone who can reach this port. Set ACCESS_TOKEN and/or front scView "
+                "with an authenticating reverse proxy."
+            )
+        if any("localhost" in o or "127.0.0.1" in o for o in self.cors_origins_list):
+            warns.append(
+                "CORS_ORIGINS still allows localhost — set it to your real public origin(s)."
+            )
+        warns.append(
+            "Public mode does NOT add rate limiting or per-user quotas. A single client "
+            "can still exhaust your LLM budget and CPU. Add those before real multi-user use "
+            "(see SECURITY.md)."
+        )
+        return warns
 
     @property
     def cors_origins_list(self) -> list[str]:
