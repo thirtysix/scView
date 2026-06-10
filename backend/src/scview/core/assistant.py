@@ -512,7 +512,8 @@ _SUBTABS = {
 }
 _COMMAND_RE = re.compile(
     r"^\s*(colou?r|show|highlight|select|go to|open|switch|navigate|display|set|view|take me|"
-    r"clear|hide|reset|remove|group|jump|focus|overlay|annotate|label|re-?cluster|cluster|run|compute)\b",
+    r"clear|hide|reset|remove|group|jump|focus|overlay|annotate|label|re-?cluster|cluster|run|"
+    r"compute|detect|find|score|enrich)\b",
     re.I,
 )
 
@@ -531,12 +532,18 @@ def _estimate(step: str, n_cells: int, method: str | None = None) -> str:
         return f"~{max(30, round(n / 250))} s (CellTypist on {n:,} cells)"
     if step == "clustering":
         return f"~{max(15, round(n / 500))} s for {n:,} cells"
+    if step == "doublet_detection":
+        return f"~{max(15, round(n / 300))} s (Scrublet)"
+    if step == "marker_genes":
+        return f"~{max(10, round(n / 500))} s for {n:,} cells"
+    if step == "enrichment":
+        return "~1-3 min (MSigDB enrichment)"
     return ""
 
 
 def _coerce_actions(
     raw: str, *, columns: list[str], embeddings: list[str], genes_upper: dict[str, str],
-    n_cells: int = 0,
+    n_cells: int = 0, active_clustering: str = "",
 ) -> list[AssistantAction]:
     """Parse + strictly validate the model's JSON action array against the allow-list.
 
@@ -616,12 +623,42 @@ def _coerce_actions(
                 requires_confirm=True, advisory=adv, estimate=_estimate("clustering", n_cells),
                 label=f"Re-cluster (Leiden, resolution {res}).",
             ))
+        elif t == "detect_doublets":
+            out.append(AssistantAction(
+                type=t, step="doublet_detection", params={}, requires_confirm=True,
+                advisory="Adds 'predicted_doublet' and 'doublet_score' columns (cells are flagged, not removed).",
+                estimate=_estimate("doublet_detection", n_cells),
+                label="Detect doublets (Scrublet).",
+            ))
+        elif t == "compute_markers":
+            gb = str(it.get("groupby") or "")
+            if gb not in cols:
+                gb = active_clustering if active_clustering in cols else ""
+            out.append(AssistantAction(
+                type=t, step="marker_genes", params=({"marker_columns": [gb]} if gb else {}),
+                requires_confirm=True,
+                advisory=f"Computes marker genes for '{gb or 'the active clustering'}'.",
+                estimate=_estimate("marker_genes", n_cells),
+                label="Compute marker genes" + (f" for {gb}" if gb else "") + ".",
+            ))
+        elif t == "run_enrichment":
+            gb = str(it.get("groupby") or "")
+            if gb not in cols:
+                gb = active_clustering if active_clustering in cols else ""
+            out.append(AssistantAction(
+                type=t, step="enrichment", params=({"enrichment_columns": [gb]} if gb else {}),
+                requires_confirm=True,
+                advisory=f"Computes MSigDB pathway enrichment for '{gb or 'the active clustering'}' "
+                         "(needs marker genes).",
+                estimate=_estimate("enrichment", n_cells),
+                label="Run pathway enrichment" + (f" for {gb}" if gb else "") + ".",
+            ))
     return out[:4]
 
 
 async def extract_actions(
     query: str, view_context: dict | None, columns: list[str], embeddings: list[str],
-    genes_upper: dict[str, str], n_cells: int, api_key: str, model: str
+    genes_upper: dict[str, str], n_cells: int, active_clustering: str, api_key: str, model: str
 ) -> list[AssistantAction]:
     """Map a UI command to allow-listed structured actions (one focused LLM call)."""
     panels = ", ".join(f"{k} ({v})" for k, v in _PANELS.items())
@@ -642,6 +679,9 @@ async def extract_actions(
         "- annotate_cell_types {type, method?, groupby?, tissue?}: label clusters with cell types "
         "(method: llm = any-tissue AI default, or celltypist).\n"
         "- cluster {type, resolution?}: re-run Leiden clustering at a resolution.\n"
+        "- detect_doublets {type}: run doublet detection / find doublets / flag doublet cells.\n"
+        "- compute_markers {type, groupby?}: compute marker genes per group.\n"
+        "- run_enrichment {type, groupby?}: compute MSigDB pathway enrichment per group.\n"
         f"Valid obs columns: {cols}.\n"
         f"Valid embeddings (obsm key): {embs}.\n"
         f"Valid panels (id): {panels}.\n"
@@ -661,6 +701,7 @@ async def extract_actions(
         return _coerce_actions(
             resp.choices[0].message.content or "",
             columns=columns, embeddings=embeddings, genes_upper=genes_upper, n_cells=n_cells,
+            active_clustering=active_clustering,
         )
     except Exception as exc:  # pragma: no cover - network/LLM failure
         logger.debug("action extraction failed: %s", exc)
@@ -687,7 +728,13 @@ async def _maybe_actions(query, adaptor, api_key, view_context, model) -> list[A
         nc = adaptor.n_cells()
     except Exception:
         nc = 0
-    return await extract_actions(query, view_context, cols, embs, genes_upper, nc, api_key, model)
+    try:
+        active = str(adaptor.adata.uns.get("scview_active_clustering") or "")
+    except Exception:
+        active = ""
+    return await extract_actions(
+        query, view_context, cols, embs, genes_upper, nc, active, api_key, model
+    )
 
 
 async def answer_query(

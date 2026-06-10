@@ -77,3 +77,14 @@ def test_mutating_actions_are_confirm_gated_with_advisory_and_estimate():
     assert c.type == "cluster" and c.requires_confirm and c.step == "clustering"
     assert c.params["clustering_resolution"] == 1.0
     assert "scview_leiden_r1.0" in c.advisory and c.estimate
+
+
+def test_pipeline_step_actions_are_confirm_gated():
+    ctx = dict(columns=["cluster"], embeddings=["X_umap"], genes_upper={},
+               n_cells=13836, active_clustering="cluster")
+    [d] = _coerce_actions('[{"type":"detect_doublets"}]', **ctx)
+    assert d.type == "detect_doublets" and d.requires_confirm and d.step == "doublet_detection"
+    [m] = _coerce_actions('[{"type":"compute_markers"}]', **ctx)
+    assert m.step == "marker_genes" and m.params["marker_columns"] == ["cluster"] and m.requires_confirm
+    [e] = _coerce_actions('[{"type":"run_enrichment","groupby":"cluster"}]', **ctx)
+    assert e.step == "enrichment" and e.params["enrichment_columns"] == ["cluster"] and e.estimate

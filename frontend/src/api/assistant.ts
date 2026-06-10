@@ -33,7 +33,10 @@ export interface AssistantAction {
     | "clear_overlay"
     | "show_gene"
     | "annotate_cell_types"
-    | "cluster";
+    | "cluster"
+    | "detect_doublets"
+    | "compute_markers"
+    | "run_enrichment";
   column?: string;
   value?: string;
   panel?: string;
