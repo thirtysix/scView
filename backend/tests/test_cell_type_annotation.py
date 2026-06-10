@@ -69,3 +69,23 @@ def test_annotation_step_is_registered():
     assert "cell_type_annotation" in ALL_STEPS
     assert "cell_type_annotation" in _STEP_RUNNERS
     assert "cell_type_annotation" in _STEP_PROVENANCE
+
+
+def test_celltype_cluster_map_for_copilot():
+    """The co-pilot's cluster -> cell-type map: prefers the recorded uns mapping,
+    else majority cell type per cluster; handles the _celltypeAnno naming."""
+    from scview.core.assistant import _celltype_cluster_map
+
+    a = ad.AnnData(X=np.zeros((6, 2), dtype="float32"))
+    a.obs["cluster"] = pd.Categorical(["0", "0", "1", "1", "2", "2"])
+    a.obs["cell_type"] = pd.Categorical(["B", "B", "NK", "NK", "Mono", "Mono"])
+
+    a.uns["cell_type_llm_mapping"] = {"0": "B cell", "1": "NK cell", "2": "Monocyte"}
+    assert _celltype_cluster_map(a, "cell_type") == {"0": "B cell", "1": "NK cell", "2": "Monocyte"}
+
+    del a.uns["cell_type_llm_mapping"]
+    a.uns["scview_active_clustering"] = "cluster"
+    assert _celltype_cluster_map(a, "cell_type") == {"0": "B", "1": "NK", "2": "Mono"}
+
+    a.obs["cluster_celltypeAnno"] = a.obs["cell_type"].values
+    assert _celltype_cluster_map(a, "cluster_celltypeAnno") == {"0": "B", "1": "NK", "2": "Mono"}
