@@ -6,6 +6,14 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Natural-language actions in the AI co-pilot.** Type a command and it drives the UI:
+  view/navigation commands ("color by cluster", "show CD8A expression", "switch to 3D", "go to
+  marker genes", "group by stim") apply immediately and reversibly; mutating commands ("annotate
+  cell types", "cluster at resolution 1.0") are **confirm-gated**, showing an overwrite advisory and
+  a rough time estimate before anything runs. Every action is re-validated server-side against a
+  strict allow-list.
+
 ## [0.1.0] - 2026-06-10
 
 Initial public release.
