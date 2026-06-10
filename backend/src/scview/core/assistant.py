@@ -656,6 +656,37 @@ def _coerce_actions(
     return out[:4]
 
 
+def _deterministic_actions(
+    query: str, *, columns: list[str], embeddings: list[str], genes_upper: dict[str, str],
+    n_cells: int, active_clustering: str
+) -> list[AssistantAction]:
+    """Regex fallback for unambiguous single-step commands the LLM sometimes drops
+    (e.g. 'detect doublets', 'clear highlight'). Built as dicts and passed through the
+    same strict allow-list validation, so this can't introduce off-list actions."""
+    q = (query or "").lower()
+    dicts: list[dict] = []
+    if "doublet" in q:
+        dicts.append({"type": "detect_doublets"})
+    if "highlight" in q and any(w in q for w in ("clear", "remove", "hide", "reset")):
+        dicts.append({"type": "clear_highlight"})
+    if "overlay" in q and any(w in q for w in ("clear", "remove", "hide")):
+        dicts.append({"type": "clear_overlay"})
+    if "annotate" in q:
+        dicts.append({"type": "annotate_cell_types"})
+    if "enrich" in q:
+        dicts.append({"type": "run_enrichment"})
+    if "marker" in q:
+        dicts.append({"type": "compute_markers"})
+    if re.search(r"\b3-?d\b", q):
+        dicts.append({"type": "set_embedding", "embedding": "X_umap_3d"})
+    if not dicts:
+        return []
+    return _coerce_actions(
+        json.dumps(dicts), columns=columns, embeddings=embeddings, genes_upper=genes_upper,
+        n_cells=n_cells, active_clustering=active_clustering,
+    )
+
+
 async def extract_actions(
     query: str, view_context: dict | None, columns: list[str], embeddings: list[str],
     genes_upper: dict[str, str], n_cells: int, active_clustering: str, api_key: str, model: str
@@ -698,14 +729,21 @@ async def extract_actions(
             temperature=0.0,
             max_tokens=300,
         )
-        return _coerce_actions(
+        actions = _coerce_actions(
             resp.choices[0].message.content or "",
             columns=columns, embeddings=embeddings, genes_upper=genes_upper, n_cells=n_cells,
             active_clustering=active_clustering,
         )
     except Exception as exc:  # pragma: no cover - network/LLM failure
         logger.debug("action extraction failed: %s", exc)
-        return []
+        actions = []
+    # Deterministic fallback for unambiguous commands the LLM (or a missing key) dropped.
+    if not actions:
+        actions = _deterministic_actions(
+            query, columns=columns, embeddings=embeddings, genes_upper=genes_upper,
+            n_cells=n_cells, active_clustering=active_clustering,
+        )
+    return actions
 
 
 async def _maybe_actions(query, adaptor, api_key, view_context, model) -> list[AssistantAction]:

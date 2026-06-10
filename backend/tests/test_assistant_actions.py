@@ -88,3 +88,15 @@ def test_pipeline_step_actions_are_confirm_gated():
     assert m.step == "marker_genes" and m.params["marker_columns"] == ["cluster"] and m.requires_confirm
     [e] = _coerce_actions('[{"type":"run_enrichment","groupby":"cluster"}]', **ctx)
     assert e.step == "enrichment" and e.params["enrichment_columns"] == ["cluster"] and e.estimate
+
+
+def test_deterministic_fallback_catches_unambiguous_commands():
+    from scview.core.assistant import _deterministic_actions
+
+    ctx = dict(columns=["cluster"], embeddings=["X_umap", "X_umap_3d"], genes_upper={},
+               n_cells=100, active_clustering="cluster")
+    assert [a.type for a in _deterministic_actions("detect doublets", **ctx)] == ["detect_doublets"]
+    assert [a.type for a in _deterministic_actions("clear the highlight", **ctx)] == ["clear_highlight"]
+    assert [a.type for a in _deterministic_actions("hide the overlay", **ctx)] == ["clear_overlay"]
+    assert [a.type for a in _deterministic_actions("switch to 3d view", **ctx)] == ["set_embedding"]
+    assert _deterministic_actions("what is this cluster?", **ctx) == []  # questions don't match
