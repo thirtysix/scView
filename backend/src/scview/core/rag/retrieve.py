@@ -14,6 +14,7 @@ from scview.config import Settings
 from scview.core.assistant import ChatSource
 from scview.core.rag import store
 from scview.core.rag.embeddings import embed_query
+from scview.core.rag.rerank import rerank_hits
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,10 @@ async def retrieve_context(
     if not settings.rag_enabled or not corpora:
         return "", []
 
+    # When a reranker is configured, cast a wider net first, then rerank down.
+    rerank = bool(settings.RAG_RERANK_MODEL)
+    fetch_k = max(settings.RAG_TOP_K, settings.RAG_RERANK_CANDIDATES) if rerank else settings.RAG_TOP_K
+
     try:
         qvec = await embed_query(query, settings.DEEPINFRA_API_KEY, settings.RAG_EMBED_MODEL)
         if not qvec:
@@ -57,7 +62,7 @@ async def retrieve_context(
             corpora=corpora,
             query_vec=qvec,
             query_text=query,
-            top_k=settings.RAG_TOP_K,
+            top_k=fetch_k,
             vector_weight=settings.RAG_VECTOR_WEIGHT,
             text_weight=settings.RAG_TEXT_WEIGHT,
         )
@@ -67,6 +72,12 @@ async def retrieve_context(
 
     if not hits:
         return "", []
+
+    # Sharpen ordering with a cross-encoder reranker (degrades to hybrid order).
+    if rerank:
+        hits = await rerank_hits(
+            query, hits, settings.DEEPINFRA_API_KEY, settings.RAG_RERANK_MODEL, settings.RAG_TOP_K
+        )
 
     lines: list[str] = [
         "# RETRIEVED KNOWLEDGE (cite these tags; literature = research abstracts, "

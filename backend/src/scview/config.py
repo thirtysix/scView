@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     RAG_EMBED_DIM: int = 768
     # DeepInfra reranker (optional; empty disables reranking).
     RAG_RERANK_MODEL: str = "Qwen/Qwen3-Reranker-4B"
+    # When reranking, fetch this many hybrid candidates, then rerank down to TOP_K.
+    RAG_RERANK_CANDIDATES: int = 24
     # Chat/generation + router model on DeepInfra.
     RAG_CHAT_MODEL: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
     # Retrieval tuning.
