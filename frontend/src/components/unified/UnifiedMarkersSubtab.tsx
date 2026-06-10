@@ -3,6 +3,7 @@ import { Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download } from "luci
 import { useDatasetStore } from "@/stores/datasetStore";
 import { apiFetch } from "@/api/client";
 import { formatPValue } from "@/lib/formatting";
+import { downloadCsv } from "@/lib/csv";
 
 interface MarkerGene {
   gene: string;
@@ -161,18 +162,16 @@ export function UnifiedMarkersSubtab({
 
   const handleExportCSV = useCallback(() => {
     if (sortedMarkers.length === 0) return;
-    const headers = ["gene", "group", "log_fold_change", "p_value_adjusted"];
-    const rows = sortedMarkers.map((m) =>
-      [m.gene, m.group, m.logfoldchange.toFixed(4), m.pval_adj.toExponential(4)].join(","),
+    downloadCsv(
+      `markers_${selectedGroup}_${datasetId}.csv`,
+      ["gene", "group", "log_fold_change", "p_value_adjusted"],
+      sortedMarkers.map((m) => [
+        m.gene,
+        m.group,
+        m.logfoldchange.toFixed(4),
+        m.pval_adj.toExponential(4),
+      ]),
     );
-    const csv = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `markers_${selectedGroup}_${datasetId}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
   }, [sortedMarkers, selectedGroup, datasetId]);
 
   if (!dataset || !datasetId) {

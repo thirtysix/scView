@@ -14,6 +14,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { formatPValue } from "@/lib/formatting";
+import { downloadCsv } from "@/lib/csv";
 
 interface MarkerGene {
   gene: string;
@@ -231,10 +232,10 @@ export function MarkerGenesPanel() {
   // Export as CSV
   const handleExportCSV = useCallback(() => {
     if (sortedMarkers.length === 0) return;
-
-    const headers = ["gene", "group", "log_fold_change", "p_value", "p_value_adjusted", "pct_in", "pct_out", "score"];
-    const rows = sortedMarkers.map((m) =>
-      [
+    downloadCsv(
+      `markers_${selectedGroup}_${datasetId}.csv`,
+      ["gene", "group", "log_fold_change", "p_value", "p_value_adjusted", "pct_in", "pct_out", "score"],
+      sortedMarkers.map((m) => [
         m.gene,
         m.group,
         m.logfoldchange.toFixed(4),
@@ -243,17 +244,8 @@ export function MarkerGenesPanel() {
         m.pct_in?.toFixed(3) ?? "",
         m.pct_out?.toFixed(3) ?? "",
         m.score?.toFixed(4) ?? "",
-      ].join(","),
+      ]),
     );
-
-    const csv = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `markers_${selectedGroup}_${datasetId}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
   }, [sortedMarkers, selectedGroup, datasetId]);
 
   // No dataset

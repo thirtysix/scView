@@ -25,6 +25,7 @@ import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { ViolinPlot } from "@/components/plots/ViolinPlot";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { formatNumber, formatPValue } from "@/lib/formatting";
+import { downloadCsv } from "@/lib/csv";
 import {
   MSigDBCollectionTree,
   DEFAULT_MSIGDB_COLLECTIONS,
@@ -590,34 +591,19 @@ export function GeneSetPanel() {
   // ---- Export CSV ----
   const handleExportCSV = useCallback(() => {
     if (sortedResults.length === 0) return;
-    const headers = [
-      "term",
-      "collection",
-      "p_value",
-      "adjusted_p_value",
-      "overlap_count",
-      "gene_count",
-      "genes",
-    ];
-    const rows = sortedResults.map((r) =>
-      [
-        `"${r.term}"`,
-        `"${r.collection ?? ""}"`,
+    downloadCsv(
+      `enrichment_${selectedGroup}_${datasetId}.csv`,
+      ["term", "collection", "p_value", "adjusted_p_value", "overlap_count", "gene_count", "genes"],
+      sortedResults.map((r) => [
+        r.term,
+        r.collection ?? "",
         r.pvalue.toExponential(4),
         r.adjusted_pvalue.toExponential(4),
         r.overlap_count,
         r.gene_count,
-        `"${r.genes.join(";")}"`,
-      ].join(","),
+        r.genes.join(";"),
+      ]),
     );
-    const csv = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `enrichment_${selectedGroup}_${datasetId}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
   }, [sortedResults, selectedGroup, datasetId]);
 
   // ---- Score range for legend ----

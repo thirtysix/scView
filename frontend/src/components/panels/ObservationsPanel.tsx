@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { Table2, Loader2, AlertCircle, MousePointerClick } from "lucide-react";
+import { Table2, Loader2, AlertCircle, MousePointerClick, Download } from "lucide-react";
 import Plot from "react-plotly.js";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { apiFetch } from "@/api/client";
 import { CATEGORICAL_COLORS } from "@/lib/colors";
 import { formatNumber } from "@/lib/formatting";
+import { downloadCsv } from "@/lib/csv";
 
 interface MetadataSummaryRaw {
   groupby: string | null;
@@ -129,6 +130,30 @@ export function ObservationsPanel() {
     },
     [selectedGroup, primaryCol, setSelection, setHighlight],
   );
+
+  // Export the per-group summary (name, count, percentage).
+  const handleExportSummary = useCallback(() => {
+    if (!summary) return;
+    const rows = Object.entries(summary.groups)
+      .sort(([, a], [, b]) => b.count - a.count)
+      .map(([name, grp]) => [
+        name,
+        grp.count,
+        summary.total > 0 ? ((grp.count / summary.total) * 100).toFixed(2) : "0",
+      ]);
+    downloadCsv(`observations_${primaryCol}_${datasetId}.csv`, [primaryCol, "cell_count", "percentage"], rows);
+  }, [summary, primaryCol, datasetId]);
+
+  // Export the full row×column composition matrix when a crosstab is available.
+  const handleExportCrosstab = useCallback(() => {
+    if (!crosstab) return;
+    const headers = [primaryCol, ...crosstab.col_values];
+    const rows = crosstab.row_values.map((rv, ri) => [
+      rv,
+      ...crosstab.col_values.map((_, ci) => crosstab.counts[ri]?.[ci] ?? 0),
+    ]);
+    downloadCsv(`composition_${primaryCol}_by_${colorByCol}_${datasetId}.csv`, headers, rows);
+  }, [crosstab, primaryCol, colorByCol, datasetId]);
 
   // Build bar chart traces — stacked bars when crosstab is available
   const compositionTraces = useMemo(() => {
@@ -322,10 +347,20 @@ export function ObservationsPanel() {
               <h3 className="text-sm font-semibold text-slate-700">
                 {primaryCol} Summary
               </h3>
-              <span className="flex items-center gap-1 text-xs text-slate-400">
-                <MousePointerClick className="h-3.5 w-3.5" />
-                Click to highlight on embedding
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1 text-xs text-slate-400">
+                  <MousePointerClick className="h-3.5 w-3.5" />
+                  Click to highlight on embedding
+                </span>
+                <button
+                  onClick={handleExportSummary}
+                  title="Export summary as CSV"
+                  className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  CSV
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -405,6 +440,18 @@ export function ObservationsPanel() {
 
           {/* Composition bar chart */}
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            {crosstab && (
+              <div className="mb-2 flex justify-end">
+                <button
+                  onClick={handleExportCrosstab}
+                  title="Export composition matrix as CSV"
+                  className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  CSV
+                </button>
+              </div>
+            )}
             <Plot
               data={compositionTraces}
               layout={compositionLayout}

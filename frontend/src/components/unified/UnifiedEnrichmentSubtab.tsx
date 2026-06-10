@@ -4,6 +4,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { apiFetch } from "@/api/client";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { formatPValue } from "@/lib/formatting";
+import { downloadCsv } from "@/lib/csv";
 
 interface EnrichmentResult {
   term: string;
@@ -208,18 +209,17 @@ export function UnifiedEnrichmentSubtab({
   // Export CSV
   const handleExportCSV = useCallback(() => {
     if (sortedResults.length === 0) return;
-    const headers = ["term", "collection", "adj_pvalue", "overlap", "genes"];
-    const rows = sortedResults.map((r) =>
-      [r.term, r.collection, r.adjusted_pvalue.toExponential(4), `${r.overlap_count}/${r.gene_count}`, r.genes.join(";")].join(","),
+    downloadCsv(
+      `enrichment_${groupByColumn}_${selectedGroup}_${datasetId}.csv`,
+      ["term", "collection", "adj_pvalue", "overlap", "genes"],
+      sortedResults.map((r) => [
+        r.term,
+        r.collection,
+        r.adjusted_pvalue.toExponential(4),
+        `${r.overlap_count}/${r.gene_count}`,
+        r.genes.join(";"),
+      ]),
     );
-    const csv = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `enrichment_${groupByColumn}_${selectedGroup}_${datasetId}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
   }, [sortedResults, groupByColumn, selectedGroup, datasetId]);
 
   if (!dataset || !datasetId) {
