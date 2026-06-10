@@ -6,10 +6,12 @@ import { CitationChip } from "@/components/assistant/CitationChip";
  *  **bold**, *italic*, `code`, and [kind:...] citation chips. Renders via React
  *  text nodes (no raw HTML), so it's XSS-safe. */
 
-// bold | code | italic | citation tag (only our known kinds, so ordinary
-// bracketed text is untouched).
+// bold | code | italic | citation tag. The citation alternative matches any
+// `[prefix: ...]` token (prefix = letters/spaces/-/_) that isn't a markdown link,
+// so the model's reformatted citation tags ("[cell-type annotation: ...]") still
+// render as chips instead of raw brackets.
 const INLINE =
-  /(\*\*[^*]+\*\*|`[^`]+`|\*[^*\n]+\*|\[(?:lit|doc|result|app|preprocessing|provenance|dataset):[^\]]*\])/g;
+  /(\*\*[^*]+\*\*|`[^`]+`|\*[^*\n]+\*|\[[A-Za-z][\w '-]*:[^\]\n]*\](?!\())/g;
 
 function renderInline(
   text: string,

@@ -223,21 +223,30 @@ export function AssistantChat() {
 
   // Clicking a result citation chip jumps to that cluster/gene in the Unified View.
   const handleCitation = useCallback((tag: string) => {
-    const parts = tag.split(":");
-    if (parts[0] !== "result") return;
-    const sub = parts[1];
-    const value = parts.slice(2).join(":");
     const ds = useDatasetStore.getState().currentDataset;
-    if (sub === "groups" && value) {
-      useSettingsStore.getState().setColorBy(value);
-      useSelectionStore.getState().setHighlight(null);
-    } else if (value) {
-      // find the obs column whose categories include this value (e.g. cluster name)
-      const col = ds?.obs_columns?.find((c) => (c.values ?? []).includes(value))?.name;
-      if (col) {
-        useSettingsStore.getState().setColorBy(col);
-        useSelectionStore.getState().setHighlight({ column: col, value });
+    // 1) jump to the longest categorical group value mentioned anywhere in the tag —
+    //    tolerant of the model reformatting the citation (e.g. "...cluster='NK'").
+    const tokenHit = (v: string) => {
+      const i = tag.indexOf(v);
+      if (i < 0) return false;
+      const bnd = (ch?: string) => !ch || !/[A-Za-z0-9]/.test(ch);
+      return bnd(tag[i - 1]) && bnd(tag[i + v.length]);
+    };
+    let best: { col: string; val: string } | null = null;
+    for (const c of ds?.obs_columns ?? []) {
+      for (const v of c.values ?? []) {
+        if (tokenHit(v) && (!best || v.length > best.val.length)) best = { col: c.name, val: v };
       }
+    }
+    const parts = tag.split(":");
+    if (best) {
+      useSettingsStore.getState().setColorBy(best.col);
+      useSelectionStore.getState().setHighlight({ column: best.col, value: best.val });
+    } else if (parts[0] === "result" && parts[1] === "groups" && parts[2]) {
+      useSettingsStore.getState().setColorBy(parts.slice(2).join(":"));
+      useSelectionStore.getState().setHighlight(null);
+    } else {
+      return; // nothing resolvable — leave the view untouched
     }
     useViewStore.getState().setPanel("unified");
     useViewStore.getState().setCopilotOpen(false);

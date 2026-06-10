@@ -8,7 +8,8 @@ const base =
 
 function shortLabel(tag: string): string {
   const parts = tag.split(":");
-  const kind = parts[0];
+  const head = parts[0] ?? tag;
+  const kind = head.toLowerCase().trim();
   if (kind === "lit" && parts[1] === "PMID") return `PMID ${parts[2] ?? ""}`;
   if (kind === "result") return parts.slice(2).join(":") || parts[1] || "result";
   if (kind === "doc") return "docs";
@@ -16,7 +17,20 @@ function shortLabel(tag: string): string {
   if (kind === "dataset") return parts[1] ?? "dataset";
   if (kind === "preprocessing") return "QC state";
   if (kind === "provenance") return "steps";
-  return tag;
+  // Reformatted / unknown kinds the model sometimes emits — clean short label.
+  if (kind.includes("cell")) return "cell type";
+  if (kind.includes("marker")) return "markers";
+  if (kind.includes("enrich")) return "enrichment";
+  if (kind.includes("group")) return "groups";
+  if (kind.includes("step")) return "steps";
+  return head.length > 18 ? head.slice(0, 16) + "…" : head;
+}
+
+/** A data-referencing citation (clickable → jump to the cluster/gene), even when
+ *  the model reformatted the tag's prefix. */
+function isDataCitation(tag: string): boolean {
+  const kind = (tag.split(":")[0] ?? "").toLowerCase();
+  return tag.startsWith("result:") || /cell|marker|cluster|group|enrich/.test(kind);
 }
 
 export function CitationChip({
@@ -44,8 +58,8 @@ export function CitationChip({
     );
   }
 
-  // Result → clickable (parent navigates to the cluster/gene).
-  if (tag.startsWith("result:") && onClick) {
+  // Data citation → clickable (parent navigates to the cluster/gene).
+  if (isDataCitation(tag) && onClick) {
     return (
       <button
         type="button"
