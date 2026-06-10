@@ -1,5 +1,8 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Sparkles, Send, User, Loader2, AlertTriangle, Clock, Check, X, Trash2 } from "lucide-react";
+import {
+  Sparkles, Send, User, Loader2, AlertTriangle, Clock, Check, X, Trash2,
+  FileText, ThumbsUp, ThumbsDown, Info,
+} from "lucide-react";
 import { getDataset } from "@/api/datasets";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -10,7 +13,9 @@ import { PANEL_LABELS, type PanelId } from "@/lib/constants";
 import {
   assistantChat,
   assistantChatStream,
+  getMethods,
   runPipelineSteps,
+  sendFeedback,
   type AssistantAction,
   type ChatMessage,
   type ChatSource,
@@ -26,6 +31,8 @@ interface Turn {
   route?: string[];
   followups?: string[];
   pendingAction?: AssistantAction; // a confirm-gated mutating action awaiting the user
+  model?: string; // which LLM produced this answer (trust/transparency)
+  feedback?: "up" | "down"; // the user's per-answer rating
 }
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -111,6 +118,61 @@ export function AssistantChat() {
     }
   }, [key]);
 
+  // Generate a methods-section write-up from the dataset's provenance recipe.
+  const generateMethods = useCallback(async () => {
+    if (!datasetId || busy) return;
+    const history: ChatMessage[] = turns.map((t) => ({ role: t.role, content: t.content }));
+    setTurns((prev) => [
+      ...prev,
+      { role: "user", content: "Write the methods for this analysis." },
+      { role: "assistant", content: "" },
+    ]);
+    setBusy(true);
+    try {
+      const res = await getMethods(datasetId, history);
+      patchLast(() => ({
+        role: "assistant",
+        content: res.methods,
+        grounded: res.grounded,
+        route: ["provenance"],
+        model: res.model ?? undefined,
+      }));
+    } catch (e) {
+      patchLast((t) => ({
+        ...t,
+        content: `Sorry — methods generation failed: ${e instanceof Error ? e.message : String(e)}`,
+      }));
+    } finally {
+      setBusy(false);
+    }
+  }, [datasetId, busy, turns]);
+
+  // Record a 👍/👎 on an answer (best-effort to the backend; persisted in the turn).
+  const rateTurn = useCallback(
+    (index: number, rating: "up" | "down") => {
+      let payloadQ = "";
+      let payloadA = "";
+      let payloadModel: string | undefined;
+      setTurns((prev) =>
+        prev.map((t, i) => {
+          if (i !== index) return t;
+          payloadA = t.content;
+          payloadModel = t.model;
+          payloadQ = prev[i - 1]?.role === "user" ? prev[i - 1]!.content : "";
+          return { ...t, feedback: t.feedback === rating ? undefined : rating };
+        }),
+      );
+      sendFeedback({
+        rating,
+        question: payloadQ,
+        answer: payloadA,
+        model: payloadModel,
+        datasetId,
+      });
+    },
+    [datasetId],
+  );
+
   // An "ask about this" affordance elsewhere in the UI queues a question here.
   const pendingAsk = useViewStore((s) => s.pendingAsk);
   const clearPendingAsk = useViewStore((s) => s.clearPendingAsk);
@@ -140,7 +202,7 @@ export function AssistantChat() {
           patchLast((t) => ({ ...t, sources: ev.sources, route: ev.route, grounded: ev.grounded })),
         onDelta: (text) => patchLast((t) => ({ ...t, content: t.content + text })),
         onDone: (ev) => {
-          patchLast((t) => ({ ...t, followups: ev.followups }));
+          patchLast((t) => ({ ...t, followups: ev.followups, model: ev.model ?? undefined }));
           executeActions(ev.actions);
         },
         onError: (msg) =>
@@ -157,6 +219,7 @@ export function AssistantChat() {
           grounded: res.grounded,
           route: res.route,
           followups: res.followups,
+          model: res.model ?? undefined,
         }));
         executeActions(res.actions);
       } catch (e2) {
@@ -300,17 +363,32 @@ export function AssistantChat() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {turns.length > 0 && (
-        <div className="flex justify-end border-b px-3 py-1.5">
-          <button
-            onClick={clearChat}
-            disabled={busy}
-            title="Clear this conversation"
-            className="flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Clear
-          </button>
+      {(turns.length > 0 || datasetId) && (
+        <div className="flex items-center justify-between border-b px-3 py-1.5">
+          {datasetId ? (
+            <button
+              onClick={generateMethods}
+              disabled={busy}
+              title="Generate a methods-section write-up from this dataset's provenance"
+              className="flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Write methods
+            </button>
+          ) : (
+            <span />
+          )}
+          {turns.length > 0 && (
+            <button
+              onClick={clearChat}
+              disabled={busy}
+              title="Clear this conversation"
+              className="flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Clear
+            </button>
+          )}
         </div>
       )}
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
@@ -448,6 +526,33 @@ export function AssistantChat() {
                         {q}
                       </button>
                     ))}
+                  </div>
+                )}
+              {t.role === "assistant" &&
+                t.content &&
+                t.grounded !== false &&
+                !t.pendingAction &&
+                (i !== turns.length - 1 || !busy) && (
+                  <div className="mt-2 flex items-center gap-2 border-t border-dashed pt-1.5 text-[10px] text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <Info className="h-3 w-3" />
+                      AI-generated{t.model ? ` · ${t.model.split("/").pop()}` : ""} — verify before use
+                    </span>
+                    <span className="flex-1" />
+                    <button
+                      onClick={() => rateTurn(i, "up")}
+                      title="Helpful"
+                      className={`rounded p-0.5 hover:text-foreground ${t.feedback === "up" ? "text-primary" : ""}`}
+                    >
+                      <ThumbsUp className="h-3 w-3" />
+                    </button>
+                    <button
+                      onClick={() => rateTurn(i, "down")}
+                      title="Not helpful"
+                      className={`rounded p-0.5 hover:text-foreground ${t.feedback === "down" ? "text-red-500" : ""}`}
+                    >
+                      <ThumbsDown className="h-3 w-3" />
+                    </button>
                   </div>
                 )}
             </div>

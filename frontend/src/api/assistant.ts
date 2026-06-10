@@ -75,6 +75,23 @@ export async function getInsight(datasetId: string): Promise<DatasetInsight> {
   return apiFetch<DatasetInsight>(`/datasets/${datasetId}/assistant/insight`);
 }
 
+/** A reproducible methods write-up generated from the recorded provenance. */
+export interface MethodsResponse {
+  methods: string;
+  grounded: boolean;
+  model?: string | null;
+}
+
+export async function getMethods(
+  datasetId: string,
+  history: ChatMessage[] = [],
+): Promise<MethodsResponse> {
+  return apiFetch<MethodsResponse>(`/datasets/${datasetId}/assistant/methods`, {
+    method: "POST",
+    body: JSON.stringify({ history }),
+  });
+}
+
 export interface ChatResponse {
   answer: string;
   sources: ChatSource[];
@@ -83,6 +100,33 @@ export interface ChatResponse {
   route?: string[]; // knowledge sources consulted: app/data/tutorials/literature
   followups?: string[]; // suggested next questions
   actions?: AssistantAction[]; // UI actions to execute
+  model?: string | null; // which LLM produced the answer (transparency)
+}
+
+/** Record a per-answer 👍/👎 (best-effort; failures are swallowed). */
+export async function sendFeedback(feedback: {
+  rating: "up" | "down";
+  question?: string;
+  answer?: string;
+  model?: string | null;
+  route?: string[];
+  datasetId?: string | null;
+}): Promise<void> {
+  try {
+    await apiFetch(`/assistant/feedback`, {
+      method: "POST",
+      body: JSON.stringify({
+        rating: feedback.rating,
+        question: feedback.question,
+        answer: feedback.answer,
+        model: feedback.model ?? null,
+        route: feedback.route ?? null,
+        dataset_id: feedback.datasetId ?? null,
+      }),
+    });
+  } catch {
+    /* feedback is best-effort */
+  }
 }
 
 // With no dataset loaded, hit the app-level endpoint so the co-pilot can still
@@ -106,7 +150,7 @@ export async function assistantChat(
 export interface StreamHandlers {
   onSources?: (ev: { sources: ChatSource[]; route: string[]; grounded: boolean }) => void;
   onDelta?: (text: string) => void;
-  onDone?: (ev: { followups: string[]; actions: AssistantAction[] }) => void;
+  onDone?: (ev: { followups: string[]; actions: AssistantAction[]; model?: string | null }) => void;
   onError?: (msg: string) => void;
 }
 
@@ -153,6 +197,7 @@ export async function assistantChatStream(
         handlers.onDone?.({
           followups: (ev.followups as string[]) ?? [],
           actions: (ev.actions as AssistantAction[]) ?? [],
+          model: (ev.model as string | null) ?? null,
         });
       } else if (ev.type === "error") {
         handlers.onError?.(String(ev.error ?? "stream error"));

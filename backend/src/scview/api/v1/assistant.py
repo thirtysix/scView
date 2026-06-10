@@ -16,10 +16,12 @@ from scview.core.assistant import (
     ChatMessage,
     ChatResponse,
     DatasetInsight,
+    MethodsResponse,
     answer_query,
     build_app_context,
     build_insight,
     stream_answer,
+    write_methods,
 )
 from scview.core.rag.retrieve import retrieve_context
 from scview.core.rag.router import classify_intent
@@ -33,6 +35,33 @@ class ChatRequest(BaseModel):
     query: str
     history: list[ChatMessage] | None = None
     view_context: dict | None = None  # what the user is currently looking at
+
+
+class MethodsRequest(BaseModel):
+    history: list[ChatMessage] | None = None  # the Q&A thread, for emphasis only
+
+
+class FeedbackRequest(BaseModel):
+    rating: str  # "up" | "down"
+    question: str | None = None
+    answer: str | None = None
+    model: str | None = None
+    route: list[str] | None = None
+    dataset_id: str | None = None
+
+
+@router.post("/assistant/feedback")
+async def assistant_feedback(body: FeedbackRequest) -> dict:
+    """Record a per-answer 👍/👎. Logged for now (no DB) — a hook for quality
+    monitoring without storing conversation content beyond the log."""
+    rating = (body.rating or "").lower()
+    if rating not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="rating must be 'up' or 'down'.")
+    logger.info(
+        "assistant feedback: %s | model=%s route=%s dataset=%s | q=%r",
+        rating, body.model, body.route, body.dataset_id, (body.question or "")[:160],
+    )
+    return {"ok": True}
 
 
 @router.get("/assistant/rag-status")
@@ -68,6 +97,30 @@ async def assistant_insight(
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("insight failed for %s: %s", dataset_id, exc)
         return DatasetInsight(insight="")
+
+
+@router.post("/datasets/{dataset_id}/assistant/methods", response_model=MethodsResponse)
+async def assistant_methods(
+    dataset_id: str,
+    body: MethodsRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+) -> MethodsResponse:
+    """Generate a methods-section write-up from the dataset's provenance recipe.
+
+    Grounded strictly in the recorded steps/tools/params (never invents methods);
+    the optional chat history only nudges emphasis. Falls back to a deterministic
+    digest with no LLM key."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:
+        return await write_methods(
+            adaptor, body.history, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL
+        )
+    except Exception as exc:
+        logger.error("methods generation failed for %s: %s", dataset_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Methods generation failed: {exc}")
 
 
 async def _prepare(

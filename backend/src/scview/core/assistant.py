@@ -100,6 +100,7 @@ class ChatResponse(BaseModel):
     route: list[str] = []   # which knowledge sources were consulted (app/data/tutorials/literature)
     followups: list[str] = []  # suggested next questions
     actions: list[AssistantAction] = []  # allow-listed UI actions to execute (NL commands)
+    model: str | None = None  # which LLM produced the answer (transparency); None = no LLM
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +561,122 @@ def build_insight(adaptor) -> DatasetInsight:
     )
 
 
+# ---------------------------------------------------------------------------
+# "Write methods" — provenance recipe → a methods-section paragraph
+# ---------------------------------------------------------------------------
+
+
+class MethodsResponse(BaseModel):
+    """A reproducible methods write-up generated from the recorded provenance."""
+
+    methods: str
+    grounded: bool  # True if an LLM wrote the prose; False = deterministic template
+    model: str | None = None
+
+
+def _methods_skeleton(adaptor) -> str:
+    """A compact, factual recipe digest: dataset size + each recorded step with
+    its tool and parameters, in order. This is the *only* thing the methods writer
+    is allowed to draw on — so it cannot invent steps that were never run."""
+    adata = adaptor.adata
+    n, g = int(adata.n_obs), int(adata.n_vars)
+    lines = [f"Dataset: {n:,} cells x {g:,} genes."]
+
+    for key in ("about_title", "title", "about_source", "source"):
+        val = _uns_str(adata, key, limit=200)
+        if val:
+            lines.append(f"Source: {val}")
+            break
+
+    hist = provenance.read_provenance(adata).get("history", [])
+    if not hist:
+        lines.append("No processing steps are recorded in the dataset's provenance.")
+        return "\n".join(lines)
+
+    lines.append("Recorded analysis steps (in order):")
+    for h in hist:
+        step = h.get("step", "?")
+        tool = h.get("tool", "")
+        params = h.get("params", {}) or {}
+        pstr = ", ".join(
+            f"{k}={v}" for k, v in params.items() if v not in (None, "", [], {})
+        )
+        line = f"- {step}"
+        if tool:
+            line += f" (tool: {tool})"
+        if pstr:
+            line += f" — {pstr}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _deterministic_methods(skeleton: str) -> str:
+    """No-LLM fallback: present the recipe as a tidy, honest methods digest."""
+    return (
+        "**Methods (auto-generated from the recorded analysis provenance)**\n\n"
+        "The following steps were recorded for this dataset. This is a factual "
+        "digest of the provenance recipe; set `DEEPINFRA_API_KEY` for polished "
+        "methods-section prose.\n\n"
+        f"{skeleton}\n\n"
+        "_Verify tool versions and parameters against your run before publication._"
+    )
+
+
+_METHODS_SYSTEM = (
+    "You are writing the Methods section of a single-cell RNA-seq study. You are "
+    "given the recorded analysis recipe (the exact steps, tools, and parameters "
+    "that were run). Write concise, past-tense, third-person scientific prose (1-2 "
+    "short paragraphs) describing the workflow. Name the software/tools and cite "
+    "specific parameter values from the recipe. Use ONLY what is in the recipe: do "
+    "NOT invent tools, parameters, steps, thresholds, or citations, and omit "
+    "anything not recorded. Do not make clinical or biological claims. End with a "
+    "one-sentence reproducibility note that the full provenance recipe is embedded "
+    "in the dataset."
+)
+
+
+async def write_methods(
+    adaptor,
+    history: list[ChatMessage] | None,
+    api_key: str,
+    model: str = DEFAULT_MODEL,
+) -> MethodsResponse:
+    """Generate a methods-section write-up from the dataset's provenance recipe
+    (the source of truth), optionally nudged by what the user has been asking
+    about. Falls back to a deterministic digest with no API key / on failure."""
+    skeleton = _methods_skeleton(adaptor)
+    if not api_key:
+        return MethodsResponse(methods=_deterministic_methods(skeleton), grounded=False)
+
+    focus = ""
+    if history:
+        asks = [m.content.strip() for m in history if m.role == "user" and m.content.strip()]
+        if asks:
+            focus = "\n\nThe user has focused on: " + "; ".join(asks[-3:]) + (
+                "\n(Use this only to choose emphasis — never to add unrecorded facts.)"
+            )
+
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _METHODS_SYSTEM},
+                {"role": "user", "content": f"Analysis recipe:\n{skeleton}{focus}\n\nWrite the Methods paragraph."},
+            ],
+            temperature=0.2,
+            max_tokens=700,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        if text:
+            return MethodsResponse(methods=text, grounded=True, model=model)
+    except Exception as exc:
+        logger.warning("write_methods LLM call failed (%s); using deterministic digest", exc)
+    return MethodsResponse(methods=_deterministic_methods(skeleton), grounded=False)
+
+
 def _build_user_message(query: str, context: str) -> str:
     return (
         "# DATA CONTEXT (facts about the user's dataset — cite these tags)\n"
@@ -976,7 +1093,7 @@ async def answer_query(
         followups = await suggest_followups(query, answer, api_key, model)
         return ChatResponse(
             answer=answer, sources=sources, grounded=True, raw_response=answer,
-            route=route, followups=followups,
+            route=route, followups=followups, model=model,
         )
     except Exception as exc:
         logger.warning("assistant: LLM call failed (%s); using fallback", exc)
@@ -1090,7 +1207,7 @@ async def stream_answer(
 
     answer = "".join(parts).strip()
     followups = await suggest_followups(query, answer, api_key, model) if answer else []
-    yield {"type": "done", "followups": followups}
+    yield {"type": "done", "followups": followups, "model": model}
 
 
 def _fallback_answer(
