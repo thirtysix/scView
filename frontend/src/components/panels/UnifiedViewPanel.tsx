@@ -15,6 +15,7 @@ import { UnifiedMarkersSubtab } from "@/components/unified/UnifiedMarkersSubtab"
 import { UnifiedExpressionSubtab } from "@/components/unified/UnifiedExpressionSubtab";
 import { UnifiedGeneSetsSubtab } from "@/components/unified/UnifiedGeneSetsSubtab";
 import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentSubtab";
+import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { mapCategoryToColor } from "@/lib/colors";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -29,6 +30,7 @@ const SUBTABS = [
   { id: "expression" as const, label: "Expression" },
   { id: "genesets" as const, label: "Gene Sets" },
   { id: "enrichment" as const, label: "Enrichment" },
+  { id: "de" as const, label: "DE" },
 ] as const;
 
 interface ViolinResponse {
@@ -771,6 +773,7 @@ export function UnifiedViewPanel() {
                 setGroupByColumn={setGroupByColumn}
               />
             )}
+            {activeSubtab === "de" && <UnifiedDESubtab onGeneClick={handleGeneClick} />}
           </div>
         </div>
       </div>

@@ -6,7 +6,7 @@ type ScatterOverlay =
   | { type: "score"; name: string }
   | null;
 
-type Subtab = "markers" | "expression" | "genesets" | "enrichment";
+type Subtab = "markers" | "expression" | "genesets" | "enrichment" | "de";
 
 interface UnifiedViewState {
   activeSubtab: Subtab;
