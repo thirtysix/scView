@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Tags, Loader2, Check } from "lucide-react";
 import { API_BASE } from "@/lib/constants";
+import { prettyObsLabel } from "@/lib/formatting";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 interface CellTypistModel {
@@ -132,7 +133,7 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
             {groupings.length === 0 && <option value="">(run clustering first)</option>}
             {groupings.map((g) => (
               <option key={g} value={g}>
-                {g}
+                {prettyObsLabel(g)}
               </option>
             ))}
           </select>

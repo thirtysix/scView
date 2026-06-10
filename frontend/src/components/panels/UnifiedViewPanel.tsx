@@ -17,6 +17,7 @@ import { UnifiedGeneSetsSubtab } from "@/components/unified/UnifiedGeneSetsSubta
 import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentSubtab";
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { mapCategoryToColor } from "@/lib/colors";
+import { prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { decodeArrowBuffer } from "@/lib/arrow";
@@ -616,7 +617,7 @@ export function UnifiedViewPanel() {
           <UnifiedBottomPanel
             violinData={violinData}
             violinTitle={violinTitle}
-            violinGroupLabel={groupByColumn}
+            violinGroupLabel={groupByColumn ? prettyObsLabel(groupByColumn) : groupByColumn}
             isLoading={isLoadingViolin}
           />
         </div>
@@ -652,7 +653,7 @@ export function UnifiedViewPanel() {
               <div className="flex w-1/2 min-w-0 flex-col gap-1.5 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-xs">
                 <div className="text-[11px] font-semibold text-slate-600">Summary</div>
                 <InfoRow label="Cells" value={numCells.toLocaleString()} />
-                <InfoRow label="Grouping" value={groupByColumn} />
+                <InfoRow label="Grouping" value={prettyObsLabel(groupByColumn)} />
                 <InfoRow
                   label="Groups"
                   value={String(

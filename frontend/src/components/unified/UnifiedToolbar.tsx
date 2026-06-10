@@ -2,7 +2,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { Lasso, RotateCcw, X } from "lucide-react";
-import { formatNumber } from "@/lib/formatting";
+import { formatNumber, prettyObsLabel } from "@/lib/formatting";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -89,7 +89,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
           <option value="">None</option>
           {sortedObsColumns.map((col) => (
             <option key={col.name} value={col.name}>
-              {col.name}
+              {prettyObsLabel(col.name)}
               {col.dtype === "category" || col.dtype === "object"
                 ? ` (${col.n_unique})`
                 : ""}
