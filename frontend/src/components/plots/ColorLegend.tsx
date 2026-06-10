@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { Pencil } from "lucide-react";
 import { viridisColor } from "@/lib/colors";
 
 interface ColorLegendProps {
@@ -17,6 +18,8 @@ interface ColorLegendProps {
   onCategoryClick?: (category: string) => void;
   /** Currently highlighted category (if any) */
   highlightedCategory?: string | null;
+  /** When provided, each category becomes inline-renamable (e.g. fix a cell-type label) */
+  onRenameCategory?: (category: string, newName: string) => void;
 }
 
 export function ColorLegend({
@@ -28,7 +31,15 @@ export function ColorLegend({
   label,
   onCategoryClick,
   highlightedCategory,
+  onRenameCategory,
 }: ColorLegendProps) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const commitEdit = (cat: string) => {
+    const v = draft.trim();
+    setEditing(null);
+    if (v && v !== cat) onRenameCategory?.(cat, v);
+  };
   // Build gradient CSS for continuous legend
   const gradientStyle = useMemo(() => {
     if (type !== "continuous") return undefined;
@@ -59,22 +70,54 @@ export function ColorLegend({
             const isDimmed =
               highlightedCategory != null && !isHighlighted;
 
+            const isEditing = editing === cat;
             return (
-              <button
+              <div
                 key={cat}
-                onClick={() => onCategoryClick?.(cat)}
-                className={`flex w-full items-center gap-2 rounded px-1.5 py-0.5 text-left text-xs transition-opacity ${
+                className={`group flex w-full items-center gap-2 rounded px-1.5 py-0.5 text-xs transition-opacity ${
                   isDimmed ? "opacity-40" : "opacity-100"
                 } hover:bg-slate-100`}
               >
                 <span
                   className="inline-block h-2.5 w-2.5 flex-shrink-0 rounded-full"
-                  style={{
-                    backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})`,
-                  }}
+                  style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
                 />
-                <span className="truncate text-slate-700">{cat}</span>
-              </button>
+                {isEditing ? (
+                  <input
+                    autoFocus
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitEdit(cat);
+                      else if (e.key === "Escape") setEditing(null);
+                    }}
+                    onBlur={() => commitEdit(cat)}
+                    className="min-w-0 flex-1 rounded border border-primary px-1 py-0 text-xs focus:outline-none"
+                  />
+                ) : (
+                  <>
+                    <button
+                      onClick={() => onCategoryClick?.(cat)}
+                      className="min-w-0 flex-1 truncate text-left text-slate-700"
+                    >
+                      {cat}
+                    </button>
+                    {onRenameCategory && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDraft(cat);
+                          setEditing(cat);
+                        }}
+                        title="Rename label"
+                        className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
             );
           })}
         </div>

@@ -23,3 +23,21 @@ export async function pruneDatasets(): Promise<{
 }> {
   return apiFetch("/datasets/prune", { method: "POST" });
 }
+
+/**
+ * Rename a category in a categorical obs column (e.g. correct a cell-type label).
+ * Persists to the derived layer; never touches the original upload. Returns once
+ * the backend has rewritten + reloaded the dataset.
+ */
+export async function renameObsCategory(
+  id: string,
+  column: string,
+  oldName: string,
+  newName: string,
+): Promise<{ column: string; old: string; new: string }> {
+  return apiFetch(`/datasets/${id}/metadata/${encodeURIComponent(column)}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old: oldName, new: newName }),
+  });
+}

@@ -20,7 +20,9 @@ import { mapCategoryToColor } from "@/lib/colors";
 import { prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
+import { getDataset, renameObsCategory } from "@/api/datasets";
 import { decodeArrowBuffer } from "@/lib/arrow";
+import { useQueryClient } from "@tanstack/react-query";
 
 const SUBTABS = [
   { id: "markers" as const, label: "Markers" },
@@ -37,6 +39,8 @@ interface ViolinResponse {
 export function UnifiedViewPanel() {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
+  const setCurrentDataset = useDatasetStore((s) => s.setCurrentDataset);
+  const queryClient = useQueryClient();
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
   const plotBackground = useSettingsStore((s) => s.plotBackground);
@@ -456,6 +460,24 @@ export function UnifiedViewPanel() {
     [colors, categories, selectedIndices, setSelection, clearSelection],
   );
 
+  // Inline-rename a categorical label (e.g. correct a cell-type annotation).
+  // Persists to the derived layer, then refreshes the dataset metadata + the
+  // embedding color buffer so the legend and plot pick up the new label.
+  const handleRenameCategory = useCallback(
+    async (cat: string, newName: string) => {
+      if (!datasetId || !colorBy) return;
+      try {
+        await renameObsCategory(datasetId, colorBy, cat, newName);
+        const fresh = await getDataset(datasetId);
+        setCurrentDataset(fresh);
+        await queryClient.invalidateQueries({ queryKey: ["embedding", datasetId] });
+      } catch (err) {
+        console.error("Failed to rename category:", err);
+      }
+    },
+    [datasetId, colorBy, setCurrentDataset, queryClient],
+  );
+
   const hasEmbeddings = dataset != null && dataset.available_embeddings.length > 0;
 
   // No dataset
@@ -571,6 +593,7 @@ export function UnifiedViewPanel() {
                   categoryColors={categoryColors}
                   label={colorColumnName ?? colorBy}
                   onCategoryClick={handleCategoryClick}
+                  onRenameCategory={handleRenameCategory}
                 />
               ) : null}
             </div>

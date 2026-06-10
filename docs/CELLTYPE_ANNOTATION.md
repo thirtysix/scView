@@ -33,7 +33,12 @@ were measured in the running backend container on the Kang IFN-β PBMC hero data
   cluster (scanpy `score_genes`) and assigns the top cell type. Deterministic, no network, no model
   download; tissue-limited to the built-in immune/PBMC + common stromal sets. On Kang it recovers
   the major lineages and even gets Erythrocyte/Megakaryocyte (which the immune CellTypist model misses).
-- **Pending**: edit/override a label (reviewable rename).
+- **Edit/override a label shipped**: any categorical legend entry (e.g. a cell-type call) is
+  inline-renamable — hover the swatch in the Unified-View color legend, click the pencil, type the
+  correction. Persists via `POST /datasets/{id}/metadata/{column}/rename` to the **derived** layer
+  (never the original upload); if the new label already exists the two categories merge. The legend +
+  plot refresh immediately. Backend: `rename_obs_category` in `api/v1/metadata.py`; frontend:
+  `ColorLegend` inline edit + `UnifiedViewPanel.handleRenameCategory`.
 
 ## TL;DR
 Ship a small **tiered annotator** behind one "Annotate cell types" step — pick a method, sensible
