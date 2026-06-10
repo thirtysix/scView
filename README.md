@@ -23,19 +23,25 @@ Neither **interprets** the data for you nor **records** what was done in a way a
 reviewer can audit. scView closes both gaps:
 
 - **AI co-pilot (grounded and cited).** Ask about your data in plain language. Answers are grounded
-  in your dataset's results plus provenance **and** a scRNA-seq methods/literature corpus, with
-  clickable citations (PubMed plus jump-to-cluster). A cheap intent classifier routes each question
-  so it only spends what it needs, and it's available even before a dataset is loaded.
+  in your dataset's results plus provenance **and** a scRNA-seq methods/literature corpus (with
+  cross-encoder reranking for sharper citations), linked to PubMed or jump-to-cluster. A cheap intent
+  classifier routes each question so it only spends what it needs, and it's available even before a
+  dataset is loaded. The co-pilot also **drives the UI** ("color by cell type", "run clustering at
+  resolution 1.0") via confirm-gated, allow-listed actions, **answers "what is this?"** from a ✦ on any
+  cluster, gene, marker, or pathway, and can **write a methods paragraph** from the provenance recipe.
 - **AI-assisted assessment.** A deterministic assessor reports the state of ~15 preprocessing
   steps; an LLM advisor recommends the next steps with reasons and sized parameters; *you* always
-  approve before anything runs.
+  approve before anything runs. A one-line "I notice…" insight on open points you at the right next step.
 - **Provenance: "git for the h5ad".** Every step is recorded into the data as a commit-style,
   replayable recipe with dependency-aware *edit and re-run from here*. Originals stay immutable.
+- **Cell-type annotation, three ways.** Tissue-agnostic LLM-from-markers (default, no reference model
+  to pick), reference-based CellTypist, or an offline marker-score method; labels are editable inline.
 - **Forgiving multi-format ingestion.** h5ad, 10x MEX/HDF5, loom, zarr, dense CSV, Seurat `.rds`,
   and nf-core/scrnaseq outputs, via a guided "Add Data" flow.
 - **Unified, linked, server-backed exploration.** A Kana-style single screen: scatter plus tabbed
-  Markers/Expression/Gene Sets/Enrichment plus violin, scaling to ~200k cells via a FastAPI backend,
-  Apache Arrow, and deck.gl.
+  Markers/Expression/Gene Sets/Enrichment/DE plus violin, scaling to ~200k cells via a FastAPI
+  backend, Apache Arrow, and deck.gl. Lasso (or click) a population for a **volcano of differential
+  expression**, and export any table to CSV.
 
 > Trust by design: the *facts* about your data are computed deterministically and reproducibly; the
 > *LLM only advises*, and every action it suggests is approved by you and recorded in provenance.
@@ -54,6 +60,12 @@ card, and a sortable markers table; recoloring, violins, and cluster highlightin
 *Ask about your data and get a grounded, cited answer: here the cell types and NK-cell markers,
 with a "via" route badge, expandable grounding sources, and suggested follow-ups. Citation chips
 link to PubMed or jump to the cluster in the app.*
+
+### Literature-grounded answers
+![Co-pilot literature](docs/images/copilot-literature.png)
+*Methods questions ("what does the literature say about batch integration?") route to the scRNA-seq
+literature/tutorial corpus and come back with cited, reranked sources and suggested follow-ups,
+while in-app facts stay grounded in your dataset.*
 
 ### AI-assisted Data Assessment
 ![Data Assessment](docs/images/data-assessment.png)
