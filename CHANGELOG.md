@@ -6,6 +6,22 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-10
+
+### Added
+- **"Write methods" export.** The co-pilot turns your recorded provenance recipe (steps, tools,
+  parameters) into a methods-section paragraph, grounded strictly in what was run — it never invents
+  methods. A "Write methods" button appends it to the conversation; works as a deterministic digest
+  with no LLM key.
+- **Cross-encoder reranking** of literature/tutorial retrieval. When a reranker model is configured,
+  retrieval casts a wider net and a DeepInfra reranker reorders candidates by direct query relevance
+  for sharper citations; it degrades to the hybrid order if unavailable.
+- **Proactive insight gets QC-anomaly detection and optional polish.** The "I notice…" banner now
+  flags high mitochondrial content (stressed/dying cells), and an actionable nudge can be reworded
+  into a friendlier sentence by the LLM (facts preserved; the deterministic text is the fallback).
+- **Transparency affordances.** Each answer shows which model produced it with an "AI-generated —
+  verify" note, plus a per-answer 👍/👎 rating.
+
 ## [0.3.0] - 2026-06-10
 
 ### Added
@@ -64,7 +80,8 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/thirtysix/scView/releases/tag/v0.4.0
 [0.3.0]: https://github.com/thirtysix/scView/releases/tag/v0.3.0
 [0.2.0]: https://github.com/thirtysix/scView/releases/tag/v0.2.0
 [0.1.0]: https://github.com/thirtysix/scView/releases/tag/v0.1.0
