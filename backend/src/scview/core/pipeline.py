@@ -330,6 +330,10 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
     scview_col = f"scview_{method}_r{params.clustering_resolution}"
     adata.obs[scview_col] = adata.obs[method].copy()
     adata.uns["scview_active_clustering"] = scview_col
+    # Drop scanpy's bare 'leiden'/'louvain' column — the named scview_* copy is canonical,
+    # so this avoids a redundant duplicate in the obs-column lists.
+    if method in adata.obs.columns and method != scview_col:
+        del adata.obs[method]
 
     n_clusters = adata.obs[scview_col].nunique()
     logger.info(

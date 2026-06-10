@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Tags, Loader2, Check } from "lucide-react";
 import { API_BASE } from "@/lib/constants";
-import { prettyObsLabel } from "@/lib/formatting";
+import { prettyObsLabel, isRedundantClusterCol } from "@/lib/formatting";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 interface CellTypistModel {
@@ -26,18 +26,19 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
   const dataset = useDatasetStore((s) => s.currentDataset);
 
   // Candidate grouping (clustering) columns: categorical, 2..100 groups.
-  const groupings = useMemo(
-    () =>
-      (dataset?.obs_columns ?? [])
-        .filter(
-          (c) =>
-            (c.dtype === "category" || c.dtype === "object" || c.dtype === "bool") &&
-            c.n_unique >= 2 &&
-            c.n_unique <= 100,
-        )
-        .map((c) => c.name),
-    [dataset?.obs_columns],
-  );
+  const groupings = useMemo(() => {
+    const cols = dataset?.obs_columns ?? [];
+    const allNames = cols.map((c) => c.name);
+    return cols
+      .filter(
+        (c) =>
+          !isRedundantClusterCol(c.name, allNames) &&
+          (c.dtype === "category" || c.dtype === "object" || c.dtype === "bool") &&
+          c.n_unique >= 2 &&
+          c.n_unique <= 100,
+      )
+      .map((c) => c.name);
+  }, [dataset?.obs_columns]);
   const primary = dataset?.active_clustering ?? (groupings.includes("cluster") ? "cluster" : groupings[0]);
 
   const [method, setMethod] = useState<"llm" | "celltypist">("llm");

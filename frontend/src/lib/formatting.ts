@@ -29,3 +29,12 @@ export function prettyObsLabel(name: string | null | undefined): string {
   }
   return name;
 }
+
+/**
+ * True if `name` is scanpy's bare 'leiden'/'louvain' column made redundant by a
+ * named scview_<method>_r<res> copy present in `allNames` — so it can be hidden.
+ */
+export function isRedundantClusterCol(name: string, allNames: string[]): boolean {
+  if (name !== "leiden" && name !== "louvain") return false;
+  return allNames.some((n) => n.startsWith(`scview_${name}_r`));
+}

@@ -2,7 +2,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { Lasso, RotateCcw, X } from "lucide-react";
-import { formatNumber, prettyObsLabel } from "@/lib/formatting";
+import { formatNumber, prettyObsLabel, isRedundantClusterCol } from "@/lib/formatting";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -34,9 +34,11 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
 
   const availableEmbeddings = dataset?.available_embeddings ?? [];
   const nCells = dataset?.n_cells ?? 0;
+  const allObsNames = (dataset?.obs_columns ?? []).map((c) => c.name);
 
   const sortedObsColumns = (dataset?.obs_columns ?? [])
     .filter((c) => {
+      if (isRedundantClusterCol(c.name, allObsNames)) return false;
       const isCat = c.dtype === "category" || c.dtype === "object" || c.dtype === "bool";
       if (isCat && c.n_unique > 100) return false;
       if (isCat && nCells > 0 && c.n_unique / nCells >= 0.9) return false;
