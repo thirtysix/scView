@@ -287,17 +287,25 @@ opens, picking the most useful next step by walking the preprocessing state in p
 order (raw counts → doublet load → condition/batch split → cluster → annotate → done), with
 a click-to-ask follow-up. Backend `build_insight` (no LLM, reproducible) +
 `GET /datasets/{id}/assistant/insight`; frontend `InsightBanner` (dismissal remembered per
-dataset+insight). **Conversation persistence** — per-dataset threads survive reloads via
-localStorage (`scview.chat.v1.<id>`), with a Clear control.
+dataset+insight); it includes a **QC-anomaly** branch (high mitochondrial content) and, when
+an LLM key is set, **optionally rewords** an actionable nudge into a friendlier sentence
+(`polish_insight`; facts + question preserved, deterministic text is the fallback).
+**Conversation persistence** — per-dataset threads survive reloads via localStorage
+(`scview.chat.v1.<id>`), with a Clear control.
+**Cross-encoder reranking** — when `RAG_RERANK_MODEL` is set, retrieval over-fetches
+`RAG_RERANK_CANDIDATES` hybrid hits and a DeepInfra reranker (Qwen3-Reranker) reorders them
+to `RAG_TOP_K` (`core/rag/rerank.py`; degrades to hybrid order on any failure).
+**Write methods** — `POST /datasets/{id}/assistant/methods` turns the provenance recipe
+(the source of truth) into a methods-section paragraph (LLM-written, never inventing steps;
+deterministic digest fallback); a "Write methods" button appends it to the thread.
+**Trust affordances** — answers carry the model name (`ChatResponse.model` + stream `done`)
+shown with an "AI-generated — verify" note, plus per-answer 👍/👎 (`POST /assistant/feedback`).
 
 **Still on the roadmap (not yet built):**
 - **More "ask about this" surfaces** — QC plots / Observations rows (legend, gene overlay,
   marker rows, and enrichment terms are done).
-- **Reranking** — wire `RAG_RERANK_MODEL` (Qwen3-Reranker) for sharper retrieval.
-- **LLM-polished insight** — optionally rephrase the deterministic nudge; tie to anomaly/batch flagging (§3.2).
-- **Export / "write methods"** — turn provenance + Q&A into a methods paragraph or report (§3.5).
 - **Domain-aware literature** — pull dataset-relevant literature into the corpus; let users add their own papers/docs; show corpus coverage.
-- **Trust affordances** — show model name + "AI-generated, verify" note; per-turn 👍/👎 feedback; token/cost surfacing for hosted use.
+- **Token/cost surfacing** for hosted/multi-user deployments.
 
 ---
 
