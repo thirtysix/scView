@@ -8,8 +8,9 @@ import types
 import anndata as ad
 import numpy as np
 import pandas as pd
+import pytest
 
-from scview.core.assistant import build_insight
+from scview.core.assistant import DatasetInsight, build_insight, polish_insight
 
 
 def _adaptor(adata: ad.AnnData):
@@ -64,7 +65,29 @@ def test_fully_processed_is_informational():
     assert ins.insight  # non-empty
 
 
+def test_high_mt_anomaly_flagged():
+    a = _raw()
+    a.X = np.log1p(a.X).astype("float32")
+    a.obs["pct_counts_mt"] = np.full(a.n_obs, 22.0)
+    a.uns["scview_provenance"] = {
+        "history": [{"step": s, "tool": "scanpy", "params": {}} for s in ("normalize", "log1p")]
+    }
+    ins = build_insight(_adaptor(a))
+    assert "mitochondrial" in ins.insight.lower()
+    assert ins.severity == "suggestion" and ins.question
+
+
 def test_insight_never_raises_on_minimal_data():
     a = ad.AnnData(X=np.zeros((3, 2), dtype="float32"))
     ins = build_insight(_adaptor(a))
     assert isinstance(ins.insight, str) and ins.insight
+
+
+@pytest.mark.asyncio
+async def test_polish_is_noop_without_key_or_on_info():
+    sug = DatasetInsight(insight="Run clustering.", question="Run clustering", severity="suggestion")
+    # No API key → returned unchanged (deterministic text is the source of truth).
+    assert (await polish_insight(sug, "", "m")).insight == "Run clustering."
+    # "info" severity is never polished even with a key.
+    info = DatasetInsight(insight="All done.", severity="info")
+    assert (await polish_insight(info, "fake-key", "m")).polished is False

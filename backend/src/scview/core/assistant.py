@@ -439,6 +439,7 @@ class DatasetInsight(BaseModel):
     insight: str
     question: str | None = None  # a click-to-ask follow-up for the co-pilot
     severity: str = "info"  # "info" | "suggestion"
+    polished: bool = False  # True if an LLM rephrased the deterministic text
 
 
 _CONDITION_HINT_RE = re.compile(
@@ -446,6 +447,8 @@ _CONDITION_HINT_RE = re.compile(
     r"sample|orig\.?ident|group|timepoint|sex|tissue",
     re.I,
 )
+
+_MT_COL_RE = re.compile(r"pct_counts_mt|percent[._]?mt|pct_counts_mito|percent[._]?mito", re.I)
 
 
 def _looks_like_celltype_col(name: str) -> bool:
@@ -494,6 +497,27 @@ def build_insight(adaptor) -> DatasetInsight:
                 )
         except Exception:  # pragma: no cover
             pass
+
+    # 2b. QC anomaly: high mitochondrial content (stressed / dying cells).
+    for col in obs.columns:
+        if not _MT_COL_RE.search(col):
+            continue
+        try:
+            import numpy as np
+
+            med = float(np.nanmedian(obs[col].to_numpy(dtype="float64")))
+        except Exception:  # pragma: no cover
+            break
+        if med >= 15:
+            return DatasetInsight(
+                insight=(
+                    f"Median mitochondrial content is high (~{med:.0f}% per cell) — that "
+                    "often marks stressed or dying cells; consider a stricter MT% filter."
+                ),
+                question="Should I filter high-MT cells?",
+                severity="suggestion",
+            )
+        break
 
     # 3. Strong split by a condition/batch-like column, not yet integrated.
     if not state.batch_correction.done:
@@ -559,6 +583,41 @@ def build_insight(adaptor) -> DatasetInsight:
         insight="This dataset looks fully processed: " + ", ".join(bits) + ".",
         question="What cell types are in my data?",
     )
+
+
+async def polish_insight(insight: DatasetInsight, api_key: str, model: str = DEFAULT_MODEL) -> DatasetInsight:
+    """Optionally rephrase a deterministic nudge into one friendlier sentence,
+    preserving its facts and its click-to-ask ``question``. Returns the original
+    unchanged with no API key / on failure (the deterministic text is the source
+    of truth — the LLM only rewords)."""
+    if not api_key or not insight.insight or insight.severity != "suggestion":
+        return insight
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": (
+                    "Rephrase this single-cell analysis tip into ONE friendly, concise "
+                    "sentence (max 28 words) for a biologist opening their dataset. Keep "
+                    "it factual; do NOT add numbers, tools, or claims not in the input. "
+                    "Return only the sentence, no quotes."
+                )},
+                {"role": "user", "content": insight.insight},
+            ],
+            temperature=0.4,
+            max_tokens=80,
+        )
+        text = (resp.choices[0].message.content or "").strip().strip('"')
+        if text:
+            return DatasetInsight(
+                insight=text, question=insight.question, severity=insight.severity, polished=True
+            )
+    except Exception as exc:  # pragma: no cover - best-effort
+        logger.debug("insight polish failed: %s", exc)
+    return insight
 
 
 # ---------------------------------------------------------------------------

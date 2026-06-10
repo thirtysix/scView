@@ -20,6 +20,7 @@ from scview.core.assistant import (
     answer_query,
     build_app_context,
     build_insight,
+    polish_insight,
     stream_answer,
     write_methods,
 )
@@ -82,18 +83,25 @@ async def rag_status(settings: Settings = Depends(get_settings_dep)) -> dict:
 @router.get("/datasets/{dataset_id}/assistant/insight", response_model=DatasetInsight)
 async def assistant_insight(
     dataset_id: str,
+    polish: bool = True,
     dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
 ) -> DatasetInsight:
-    """A deterministic one-line 'I notice…' nudge for when a dataset opens.
+    """A one-line 'I notice…' nudge for when a dataset opens.
 
-    No LLM — derived from the preprocessing state + obs structure, so it's cheap
-    and reproducible. The optional ``question`` is a click-to-ask follow-up the
-    co-pilot can answer (or execute, for action-style questions)."""
+    The nudge is chosen deterministically from the preprocessing state + obs
+    structure (cheap, reproducible) — including a QC-anomaly check. When an LLM
+    key is configured and ``polish`` is set, an actionable nudge is reworded into
+    a friendlier sentence (facts preserved; deterministic text is the fallback).
+    The ``question`` is a click-to-ask follow-up the co-pilot answers or executes."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
-        return build_insight(adaptor)
+        insight = build_insight(adaptor)
+        if polish:
+            insight = await polish_insight(insight, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL)
+        return insight
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("insight failed for %s: %s", dataset_id, exc)
         return DatasetInsight(insight="")
