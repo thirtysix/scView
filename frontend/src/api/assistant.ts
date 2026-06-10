@@ -20,6 +20,15 @@ export interface ViewContext {
   overlay?: string;
 }
 
+/** An allow-listed UI action the co-pilot can request (natural-language commands). */
+export interface AssistantAction {
+  type: "set_color_by" | "highlight_cluster" | "open_panel";
+  column?: string;
+  value?: string;
+  panel?: string;
+  label?: string;
+}
+
 export interface ChatResponse {
   answer: string;
   sources: ChatSource[];
@@ -27,6 +36,7 @@ export interface ChatResponse {
   raw_response?: string;
   route?: string[]; // knowledge sources consulted: app/data/tutorials/literature
   followups?: string[]; // suggested next questions
+  actions?: AssistantAction[]; // UI actions to execute
 }
 
 // With no dataset loaded, hit the app-level endpoint so the co-pilot can still
@@ -50,7 +60,7 @@ export async function assistantChat(
 export interface StreamHandlers {
   onSources?: (ev: { sources: ChatSource[]; route: string[]; grounded: boolean }) => void;
   onDelta?: (text: string) => void;
-  onDone?: (ev: { followups: string[] }) => void;
+  onDone?: (ev: { followups: string[]; actions: AssistantAction[] }) => void;
   onError?: (msg: string) => void;
 }
 
@@ -94,7 +104,10 @@ export async function assistantChatStream(
       } else if (ev.type === "delta") {
         handlers.onDelta?.(String(ev.text ?? ""));
       } else if (ev.type === "done") {
-        handlers.onDone?.({ followups: (ev.followups as string[]) ?? [] });
+        handlers.onDone?.({
+          followups: (ev.followups as string[]) ?? [],
+          actions: (ev.actions as AssistantAction[]) ?? [],
+        });
       } else if (ev.type === "error") {
         handlers.onError?.(String(ev.error ?? "stream error"));
       }

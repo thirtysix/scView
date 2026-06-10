@@ -5,10 +5,11 @@ import { useViewStore } from "@/stores/viewStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
-import { PANEL_LABELS } from "@/lib/constants";
+import { PANEL_LABELS, type PanelId } from "@/lib/constants";
 import {
   assistantChat,
   assistantChatStream,
+  type AssistantAction,
   type ChatMessage,
   type ChatSource,
   type ViewContext,
@@ -90,7 +91,10 @@ export function AssistantChat() {
         onSources: (ev) =>
           patchLast((t) => ({ ...t, sources: ev.sources, route: ev.route, grounded: ev.grounded })),
         onDelta: (text) => patchLast((t) => ({ ...t, content: t.content + text })),
-        onDone: (ev) => patchLast((t) => ({ ...t, followups: ev.followups })),
+        onDone: (ev) => {
+          patchLast((t) => ({ ...t, followups: ev.followups }));
+          executeActions(ev.actions);
+        },
         onError: (msg) =>
           patchLast((t) => ({ ...t, content: t.content || `Sorry — ${msg}` })),
       });
@@ -106,6 +110,7 @@ export function AssistantChat() {
           route: res.route,
           followups: res.followups,
         }));
+        executeActions(res.actions);
       } catch (e2) {
         patchLast((t) => ({
           ...t,
@@ -118,6 +123,24 @@ export function AssistantChat() {
       setBusy(false);
     }
   }
+
+  // Execute allow-listed UI actions the co-pilot returned for a natural-language command.
+  const executeActions = useCallback((actions?: AssistantAction[]) => {
+    if (!actions?.length) return;
+    for (const a of actions) {
+      if (a.type === "set_color_by" && a.column) {
+        useSettingsStore.getState().setColorBy(a.column);
+        useSelectionStore.getState().setHighlight(null);
+        useViewStore.getState().setPanel("unified");
+      } else if (a.type === "highlight_cluster" && a.column && a.value) {
+        useSettingsStore.getState().setColorBy(a.column);
+        useSelectionStore.getState().setHighlight({ column: a.column, value: a.value });
+        useViewStore.getState().setPanel("unified");
+      } else if (a.type === "open_panel" && a.panel) {
+        useViewStore.getState().setPanel(a.panel as PanelId);
+      }
+    }
+  }, []);
 
   // Clicking a result citation chip jumps to that cluster/gene in the Unified View.
   const handleCitation = useCallback((tag: string) => {

@@ -28,7 +28,9 @@ Design principles (mirroring ``llm_advisor.py``):
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 
 from pydantic import BaseModel
 
@@ -66,6 +68,19 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class AssistantAction(BaseModel):
+    """An allow-listed UI action the co-pilot can request the frontend to perform.
+
+    Phase 1 (safe, reversible, synchronous): set_color_by, highlight_cluster, open_panel.
+    """
+
+    type: str                    # set_color_by | highlight_cluster | open_panel
+    column: str | None = None    # obs column (set_color_by, highlight_cluster)
+    value: str | None = None     # group value (highlight_cluster)
+    panel: str | None = None     # panel id (open_panel)
+    label: str = ""              # human-readable confirmation
+
+
 class ChatResponse(BaseModel):
     answer: str
     sources: list[ChatSource]
@@ -73,6 +88,7 @@ class ChatResponse(BaseModel):
     raw_response: str = ""  # raw LLM text, for transparency
     route: list[str] = []   # which knowledge sources were consulted (app/data/tutorials/literature)
     followups: list[str] = []  # suggested next questions
+    actions: list[AssistantAction] = []  # allow-listed UI actions to execute (NL commands)
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +487,98 @@ def _build_messages(query: str, context: str, history: list[ChatMessage] | None)
     return messages
 
 
+# --- Natural-language UI actions (Phase 1: safe view/navigation commands) -----
+
+_PANELS = {
+    "load": "Data", "assessment": "Data Assessment", "unified": "Unified View",
+    "observations": "Observations", "expression": "Gene Expression",
+    "genesets": "Gene Sets & Enrichment", "markers": "Marker Genes",
+    "trajectory": "Trajectory", "provenance": "History", "assistant": "AI Co-pilot",
+}
+_COMMAND_RE = re.compile(
+    r"^\s*(colou?r|show|highlight|select|go to|open|switch|navigate|display|set|view|take me)\b",
+    re.I,
+)
+
+
+def _looks_like_command(query: str) -> bool:
+    """Cheap gate: only run action extraction on imperative/command-like messages."""
+    return bool(_COMMAND_RE.match(query or ""))
+
+
+def _coerce_actions(raw: str, obs_columns: list[str]) -> list[AssistantAction]:
+    """Parse + validate the model's JSON action array against the Phase-1 allow-list."""
+    m = re.search(r"\[.*\]", raw, re.S)
+    if not m:
+        return []
+    try:
+        items = json.loads(m.group(0))
+    except Exception:
+        return []
+    cols = set(obs_columns)
+    out: list[AssistantAction] = []
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        t = str(it.get("type", "")).strip()
+        if t == "set_color_by" and it.get("column") in cols:
+            c = str(it["column"])
+            out.append(AssistantAction(type=t, column=c, label=f"Colored the plot by {c}."))
+        elif t == "highlight_cluster" and it.get("column") in cols and it.get("value"):
+            c, v = str(it["column"]), str(it["value"])
+            out.append(AssistantAction(type=t, column=c, value=v,
+                                       label=f"Highlighted {v} in {c}."))
+        elif t == "open_panel" and str(it.get("panel", "")) in _PANELS:
+            p = str(it["panel"])
+            out.append(AssistantAction(type=t, panel=p, label=f"Opened {_PANELS[p]}."))
+    return out[:4]
+
+
+async def extract_actions(
+    query: str, view_context: dict | None, obs_columns: list[str], api_key: str, model: str
+) -> list[AssistantAction]:
+    """Map a UI command to allow-listed structured actions (one focused LLM call)."""
+    panels = ", ".join(f"{k} ({v})" for k, v in _PANELS.items())
+    cols = ", ".join(obs_columns[:40]) or "(none)"
+    hl = (view_context or {}).get("highlighted") or {}
+    vc = f" Current highlighted group: {hl.get('column')}={hl.get('value')}." if hl else ""
+    prompt = (
+        "You translate a single scView UI command into structured actions. Use ONLY these types:\n"
+        "- set_color_by {type, column}: color the scatter by an obs column.\n"
+        "- highlight_cluster {type, column, value}: highlight one group within a column.\n"
+        "- open_panel {type, panel}: navigate to a panel.\n"
+        f"Valid obs columns: {cols}.\n"
+        f"Valid panels (id): {panels}.\n"
+        "Output ONLY a JSON array of action objects, nothing else. If the message is a question "
+        "or cannot be mapped to the above, output []." + vc + f"\n\nCommand: {query}"
+    )
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=300,
+        )
+        return _coerce_actions(resp.choices[0].message.content or "", obs_columns)
+    except Exception as exc:  # pragma: no cover - network/LLM failure
+        logger.debug("action extraction failed: %s", exc)
+        return []
+
+
+async def _maybe_actions(query, adaptor, api_key, view_context, model) -> list[AssistantAction]:
+    """Return UI actions if this looks like a command we can map, else []."""
+    if not (api_key and adaptor is not None and _looks_like_command(query)):
+        return []
+    try:
+        obs_cols = [c["name"] for c in adaptor.obs_columns_info()]
+    except Exception:
+        obs_cols = []
+    return await extract_actions(query, view_context, obs_cols, api_key, model)
+
+
 async def answer_query(
     query: str,
     adaptor,
@@ -495,6 +603,13 @@ async def answer_query(
     (literature/tutorials). ``view_context`` describes the current on-screen view so
     deictic questions resolve. Everything degrades gracefully when unset.
     """
+    actions = await _maybe_actions(query, adaptor, api_key, view_context, model)
+    if actions:
+        return ChatResponse(
+            answer=" ".join(a.label for a in actions) or "Done.",
+            sources=[], grounded=True, route=["action"], actions=actions, followups=[],
+        )
+
     context, sources = _assemble(
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
@@ -585,6 +700,13 @@ async def stream_answer(
     ``{"type":"sources", sources, route, grounded}`` once, then ``{"type":"delta",
     "text"}`` per token, then ``{"type":"done", "followups"}``. Mirrors
     ``answer_query`` but streams the answer."""
+    actions = await _maybe_actions(query, adaptor, api_key, view_context, model)
+    if actions:
+        yield {"type": "sources", "sources": [], "route": ["action"], "grounded": True}
+        yield {"type": "delta", "text": " ".join(a.label for a in actions) or "Done."}
+        yield {"type": "done", "followups": [], "actions": [a.model_dump() for a in actions]}
+        return
+
     context, sources = _assemble(
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
