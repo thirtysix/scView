@@ -23,8 +23,9 @@ export function prettyObsLabel(name: string | null | undefined): string {
 
   const clust = name.match(/^scview_(leiden|louvain)_r([\d.]+)$/);
   if (clust) {
-    const method = clust[1][0].toUpperCase() + clust[1].slice(1);
-    return `${method} (res ${clust[2]})`;
+    const raw = clust[1] ?? "";
+    const method = raw.charAt(0).toUpperCase() + raw.slice(1);
+    return `${method} (res ${clust[2] ?? ""})`;
   }
   return name;
 }
