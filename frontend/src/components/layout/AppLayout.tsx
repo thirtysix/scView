@@ -4,9 +4,11 @@ import { PanelContainer } from "./PanelContainer";
 import { CoPilotDrawer } from "@/components/assistant/CoPilotDrawer";
 import { InsightBanner } from "@/components/assistant/InsightBanner";
 import { useViewStore } from "@/stores/viewStore";
+import { useSessionRestore } from "@/hooks/useSessionRestore";
 
 export function AppLayout() {
   const sidebarCollapsed = useViewStore((s) => s.sidebarCollapsed);
+  useSessionRestore();
 
   return (
     <div className="flex h-screen overflow-hidden">
