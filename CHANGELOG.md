@@ -6,6 +6,24 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-11
+
+### Added
+- **Compare datasets.** A new Compare panel puts two datasets side by side — pick a shared
+  categorical column (cell type / cluster) to see their composition as grouped proportions plus a
+  Δ table, with one click to ask the co-pilot what the differences mean.
+- **Batch-integration quality score.** The Observations panel reports how evenly each cluster mixes
+  across a batch/condition (normalized-entropy score, 0–1), with the least-mixed clusters called out
+  and a co-pilot tie-in.
+- **Workspace restored across reloads.** The active panel, scatter color/embedding, and last-open
+  dataset persist, so a refresh drops you back where you were.
+- **"Ask about this" on QC plots and Observations rows** — the contextual co-pilot affordance now
+  covers the QC distributions (with the metric values embedded) and each composition group.
+
+### Changed
+- **Smaller, faster Plotly.** A custom partial Plotly bundle (only the trace types scView uses)
+  cuts the charting payload ~68% (4.9 MB → 1.5 MB), loaded lazily.
+
 ## [0.7.0] - 2026-06-10
 
 ### Added
@@ -120,7 +138,8 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/thirtysix/scView/releases/tag/v0.8.0
 [0.7.0]: https://github.com/thirtysix/scView/releases/tag/v0.7.0
 [0.6.0]: https://github.com/thirtysix/scView/releases/tag/v0.6.0
 [0.5.0]: https://github.com/thirtysix/scView/releases/tag/v0.5.0

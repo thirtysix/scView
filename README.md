@@ -41,7 +41,8 @@ reviewer can audit. scView closes both gaps:
 - **Unified, linked, server-backed exploration.** A Kana-style single screen: scatter plus tabbed
   Markers/Expression/Gene Sets/Enrichment/DE plus violin, scaling to ~200k cells via a FastAPI
   backend, Apache Arrow, and deck.gl. Lasso (or click) a population for a **volcano of differential
-  expression**, and export any table to CSV.
+  expression**, and export any table to CSV. **Compare two datasets'** cell-type composition side by
+  side, gauge **batch-integration quality**, and your workspace is **restored across reloads**.
 
 > Trust by design: the *facts* about your data are computed deterministically and reproducibly; the
 > *LLM only advises*, and every action it suggests is approved by you and recorded in provenance.
@@ -60,6 +61,12 @@ card, and a sortable markers table; recoloring, violins, and cluster highlightin
 *Lasso a region or click a population (here Monocytes, 5,199 cells), then compute one-vs-rest
 differential expression over all genes as an interactive volcano plus a significant-gene table;
 click a point to overlay that gene, and export the table to CSV.*
+
+### Compare datasets
+![Compare datasets](docs/images/compare-datasets.png)
+*Pick a second dataset and a shared categorical column (cell type / cluster) to compare their
+composition side by side — grouped proportions plus a Δ table, with one click to ask the co-pilot
+what the differences mean.*
 
 ### AI co-pilot
 ![AI co-pilot](docs/images/ai-copilot.png)
