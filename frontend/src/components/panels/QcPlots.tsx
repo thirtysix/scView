@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import Plot from "react-plotly.js";
-import { Loader2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 
 import { apiFetch } from "@/api/client";
+import { useViewStore } from "@/stores/viewStore";
 import { Panel } from "@/components/common/Panel";
 import { PlotGrid } from "@/components/common/PlotGrid";
 
@@ -143,6 +144,19 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
   const [data, setData] = useState<QcResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const askCopilot = useViewStore((s) => s.askCopilot);
+
+  const askAboutQc = () => {
+    if (!data) return;
+    const parts = Object.entries(data.metrics).map(
+      ([k, m]) => `${METRIC_LABELS[k] ?? k} median ${fmt(m.median)} (IQR ${fmt(m.q1)}–${fmt(m.q3)})`,
+    );
+    askCopilot(
+      `Are these QC distributions healthy for ${data.n_cells.toLocaleString()} cells? ${parts.join(
+        "; ",
+      )}. What thresholds should I consider for filtering low-quality cells or doublets?`,
+    );
+  };
 
   useEffect(() => {
     if (!datasetId) return;
@@ -185,7 +199,17 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-700">QC Distributions</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-slate-700">QC Distributions</h3>
+          <button
+            onClick={askAboutQc}
+            title="Ask the co-pilot about these QC metrics"
+            className="inline-flex items-center gap-1 rounded-full border border-primary/30 px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
+          >
+            <Sparkles className="h-3 w-3" />
+            Ask about QC
+          </button>
+        </div>
         <span className="text-xs text-slate-400">
           {data.n_cells.toLocaleString()} cells
           {data.computed_on_demand ? " · computed on the fly" : ""}

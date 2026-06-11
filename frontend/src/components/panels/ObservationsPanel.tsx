@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { Table2, Loader2, AlertCircle, MousePointerClick, Download } from "lucide-react";
+import { Table2, Loader2, AlertCircle, MousePointerClick, Download, Sparkles } from "lucide-react";
 import Plot from "react-plotly.js";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
+import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { CATEGORICAL_COLORS } from "@/lib/colors";
 import { formatNumber } from "@/lib/formatting";
@@ -30,6 +31,7 @@ export function ObservationsPanel() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const setSelection = useSelectionStore((s) => s.setSelection);
   const setHighlight = useSelectionStore((s) => s.setHighlight);
+  const askCopilot = useViewStore((s) => s.askCopilot);
 
   const [summary, setSummary] = useState<MetadataSummary | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -392,7 +394,7 @@ export function ObservationsPanel() {
                         <tr
                           key={name}
                           onClick={() => handleGroupClick(name)}
-                          className={`cursor-pointer border-b border-slate-50 transition-colors ${
+                          className={`group cursor-pointer border-b border-slate-50 transition-colors ${
                             isSelected
                               ? "bg-blue-50 ring-1 ring-inset ring-blue-200"
                               : "hover:bg-slate-50"
@@ -407,6 +409,19 @@ export function ObservationsPanel() {
                                 }}
                               />
                               <span className="font-medium text-slate-800">{name}</span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setHighlight({ column: primaryCol, value: name });
+                                  askCopilot(
+                                    `What is the "${name}" group in ${primaryCol}? Summarize its marker genes and likely identity.`,
+                                  );
+                                }}
+                                title="Ask the co-pilot about this group"
+                                className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                              >
+                                <Sparkles className="h-3.5 w-3.5" />
+                              </button>
                             </div>
                           </td>
                           <td className="px-4 py-2.5 text-right tabular-nums text-slate-600">
