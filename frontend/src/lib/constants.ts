@@ -9,6 +9,7 @@ export const PANEL_IDS = [
   "genesets",
   "markers",
   "trajectory",
+  "compare",
   "provenance",
   "assistant",
 ] as const;
@@ -24,6 +25,7 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   genesets: "Gene Sets & Enrichment",
   markers: "Marker Genes",
   trajectory: "Trajectory",
+  compare: "Compare",
   provenance: "History",
   assistant: "AI Co-pilot",
 };

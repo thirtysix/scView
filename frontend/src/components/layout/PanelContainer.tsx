@@ -31,6 +31,9 @@ const MarkerGenesPanel = lazy(() =>
 const TrajectoryPanel = lazy(() =>
   import("@/components/panels/TrajectoryPanel").then((m) => ({ default: m.TrajectoryPanel })),
 );
+const ComparePanel = lazy(() =>
+  import("@/components/panels/ComparePanel").then((m) => ({ default: m.ComparePanel })),
+);
 const ProvenancePanel = lazy(() =>
   import("@/components/panels/ProvenancePanel").then((m) => ({ default: m.ProvenancePanel })),
 );
@@ -47,6 +50,7 @@ const PANEL_COMPONENTS: Record<PanelId, React.ComponentType> = {
   genesets: GeneSetPanel,
   markers: MarkerGenesPanel,
   trajectory: TrajectoryPanel,
+  compare: ComparePanel,
   provenance: ProvenancePanel,
   assistant: AssistantPanel,
 };

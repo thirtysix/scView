@@ -10,6 +10,7 @@ import {
   Library,
   ListTree,
   GitBranch,
+  GitCompare,
   ClipboardList,
   Sparkles,
   PanelLeftClose,
@@ -25,6 +26,7 @@ const PANEL_ICONS: Record<PanelId, React.ElementType> = {
   genesets: Library,
   markers: ListTree,
   trajectory: GitBranch,
+  compare: GitCompare,
   provenance: ClipboardList,
   assistant: Sparkles,
 };
