@@ -157,6 +157,39 @@ export function ObservationsPanel() {
     downloadCsv(`composition_${primaryCol}_by_${colorByCol}_${datasetId}.csv`, headers, rows);
   }, [crosstab, primaryCol, colorByCol, datasetId]);
 
+  // Batch-integration quality: how evenly each cluster mixes across the colorBy
+  // groups (e.g. batches/conditions), via normalized Shannon entropy. 1.0 = a
+  // cluster is split evenly across all groups (well-integrated); 0 = single-group.
+  // The overall score is weighted by cluster size. Only meaningful when colorBy is
+  // a batch/condition with ≥2 groups.
+  const mixing = useMemo(() => {
+    if (!crosstab || crosstab.col_values.length < 2 || crosstab.row_values.length === 0) return null;
+    const k = crosstab.col_values.length;
+    const logK = Math.log(k);
+    const perCluster: { name: string; score: number; n: number }[] = [];
+    let weightedSum = 0;
+    let totalN = 0;
+    crosstab.row_values.forEach((name, ri) => {
+      const counts = crosstab.col_values.map((_, ci) => crosstab.counts[ri]?.[ci] ?? 0);
+      const n = counts.reduce((a, b) => a + b, 0);
+      if (n === 0) return;
+      let h = 0;
+      for (const c of counts) {
+        if (c > 0) {
+          const p = c / n;
+          h -= p * Math.log(p);
+        }
+      }
+      const score = logK > 0 ? h / logK : 0;
+      perCluster.push({ name, score, n });
+      weightedSum += score * n;
+      totalN += n;
+    });
+    if (totalN === 0) return null;
+    perCluster.sort((a, b) => a.score - b.score);
+    return { overall: weightedSum / totalN, perCluster };
+  }, [crosstab]);
+
   // Build bar chart traces — stacked bars when crosstab is available
   const compositionTraces = useMemo(() => {
     // Stacked bars from crosstab
@@ -452,6 +485,64 @@ export function ObservationsPanel() {
               {Object.keys(summary.groups).length} groups
             </div>
           </div>
+
+          {/* Batch-integration quality */}
+          {mixing && (
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-700">
+                  Batch integration quality
+                  <span className="ml-2 font-normal text-slate-400">
+                    how evenly {primaryCol} clusters mix across {colorByCol}
+                  </span>
+                </h3>
+                <button
+                  onClick={() =>
+                    askCopilot(
+                      `Are my ${primaryCol} clusters well-integrated across ${colorByCol}? ` +
+                        `The overall batch-mixing score is ${mixing.overall.toFixed(2)} (1.0 = fully mixed). ` +
+                        `Should I run or revisit batch integration?`,
+                    )
+                  }
+                  title="Ask the co-pilot about integration"
+                  className="inline-flex items-center gap-1 rounded-full border border-primary/30 px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  Ask
+                </button>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-2xl font-bold tabular-nums text-slate-800">
+                  {mixing.overall.toFixed(2)}
+                </span>
+                <div className="flex-1">
+                  <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${Math.round(mixing.overall * 100)}%`,
+                        backgroundColor:
+                          mixing.overall >= 0.66
+                            ? "#22c55e"
+                            : mixing.overall >= 0.33
+                              ? "#f59e0b"
+                              : "#ef4444",
+                      }}
+                    />
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    0 = each cluster is one {colorByCol} group · 1 = evenly mixed across all{" "}
+                    {colorByCol} groups
+                  </div>
+                </div>
+              </div>
+              {mixing.perCluster.length > 1 && (
+                <div className="mt-2 text-[11px] text-slate-500">
+                  Least mixed: {mixing.perCluster.slice(0, 3).map((c) => `${c.name} (${c.score.toFixed(2)})`).join(", ")}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Composition bar chart */}
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
