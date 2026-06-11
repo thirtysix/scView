@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import Plot from "react-plotly.js";
+import Plot from "@/components/plots/Plot";
 import { Loader2, Sparkles } from "lucide-react";
 
 import { apiFetch } from "@/api/client";

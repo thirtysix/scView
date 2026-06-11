@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { GitBranch, Loader2, AlertCircle } from "lucide-react";
-import Plot from "react-plotly.js";
+import Plot from "@/components/plots/Plot";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSelectionStore } from "@/stores/selectionStore";

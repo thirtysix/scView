@@ -5,6 +5,11 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>scView - Single-Cell RNA-Seq Viewer</title>
+    <!-- plotly.js source partials (our slim bundle) reference Node's `global`;
+         define it before any module loads so they run in the browser. -->
+    <script>
+      window.global = window.global || window;
+    </script>
   </head>
   <body>
     <div id="root"></div>

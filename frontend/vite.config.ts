@@ -5,6 +5,17 @@ import path from "path";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // plotly.js source partials (our slim bundle) reference Node's `global`, which
+  // doesn't exist in the browser — alias it to globalThis for both the prod build
+  // (Rollup, via `define`) and the dev dependency pre-bundle (esbuild).
+  define: {
+    global: "globalThis",
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      define: { global: "globalThis" },
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

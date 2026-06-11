@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import Plot from "react-plotly.js";
+import Plot from "@/components/plots/Plot";
 import { CATEGORICAL_COLORS } from "@/lib/colors";
 
 interface ViolinPlotProps {

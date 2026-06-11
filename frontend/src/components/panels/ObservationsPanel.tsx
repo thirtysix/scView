@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Table2, Loader2, AlertCircle, MousePointerClick, Download, Sparkles } from "lucide-react";
-import Plot from "react-plotly.js";
+import Plot from "@/components/plots/Plot";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
