@@ -8,6 +8,30 @@
 > graceful degradation), and the next features incl. a **RAG scientific co-pilot** grounded in
 > scRNA-seq methods literature + the user's own provenance + results.
 
+## Status as of v0.8.0 (2026-06-12)
+
+Much of this roadmap has shipped. **Done:** 3D embedding view; on-the-fly **differential expression**
+(lasso/cluster → Wilcoxon volcano); **cell-type annotation** (CellTypist / LLM-from-markers /
+marker_score + inline rename); **batch-effect** integration-quality score; **session persistence**
+(panel/color/last-dataset restore); the full **AI co-pilot / advanced-AI** block (NL queries +
+actions, written methods/reports, proactive insight incl. anomaly flagging, RAG + reranking);
+**testing** (backend pytest 174; frontend Vitest 35); **performance** (React.lazy code-split, slim
+Plotly, bundle audit); **README + screenshots**; **public-hosting mode** *partially*
+(`DEPLOYMENT_MODE` + input hardening — see `SECURITY.md`); **multi-dataset comparison** *partially*
+(the Compare panel: composition + Δ table).
+
+**Not yet built (the real remaining work):**
+- **Joint-embedding multi-dataset integration** — one shared UMAP across datasets + cross-dataset DE
+  (beyond the composition Compare panel). The marquee analysis gap.
+- **Full public-hosting security stack** — per-user auth + persistent rate limiting + quotas
+  (`SECURITY.md` L1/L4/L5), plus the L0 provider balance cap.
+- **Improved heatmap**, **advanced gene-set analysis** (GSVA/ssGSEA, leading-edge), **export
+  enhancements** (PDF/SVG/session) — smaller, partly-defined.
+- **Spatial transcriptomics**, **collaboration**, **integration ecosystem**, **scale to 1M+** — larger,
+  need scoping.
+
+The sections below are the original roadmap, kept for detail.
+
 ## Phase 6: Polish & Testing (Next Up)
 
 These items were deferred during the initial build and are the immediate next steps.
