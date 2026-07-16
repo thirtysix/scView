@@ -17,8 +17,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from scview.config import Settings
+from scview.core import enrichment_network as network
 from scview.core.dataset_manager import DatasetManager
 from scview.core.msigdb_loader import DEFAULT_COLLECTIONS, get_msigdb_loader
+from scview.core.ora_background import (
+    cache_is_current,
+    get_background_genes,
+    write_meta,
+)
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
@@ -55,6 +61,26 @@ class LocalEnrichmentRequest(BaseModel):
     group: str
     n_genes: int = 100
     collections: list[str] = DEFAULT_COLLECTIONS
+
+
+class EnrichmentNetworkRequest(LocalEnrichmentRequest):
+    """Body for the enrichment-network endpoint.
+
+    Extends the local enrichment request, so the network is built from exactly the
+    result the compute-local endpoint would return for the same parameters.
+    """
+
+    fdr: float = network.DEFAULT_FDR
+    metric: str = network.DEFAULT_METRIC
+    min_similarity: float = network.DEFAULT_MIN_SIMILARITY
+    resolution: float = network.DEFAULT_RESOLUTION
+    seed: int = network.DEFAULT_SEED
+    min_term_size: int = network.DEFAULT_MIN_TERM_SIZE
+    max_term_size: int = network.DEFAULT_MAX_TERM_SIZE
+    # The collapsed cluster view needs no edges, and there are tens of thousands of
+    # them (10,379 for one CD14 Mono run). Callers rendering only clusters/nodes
+    # should turn this off rather than pay for the payload.
+    include_edges: bool = True
 
 
 class EnrichmentResult(BaseModel):
@@ -216,10 +242,16 @@ async def list_enrichment_groups(
     if hasattr(rgg["names"].dtype, "names") and rgg["names"].dtype.names:
         groups = list(rgg["names"].dtype.names)
 
-    # Check which groups have pre-computed enrichment
+    # Check which groups have pre-computed enrichment that is still servable.
+    # A payload predating the background fix is reported as not computed, since
+    # requesting it will recompute rather than return the cached result.
     col_name = column or rgg.get("params", {}).get("groupby", "")
     enrichment_computed = {
-        g: f"enrichment__{col_name}__{g}" in adaptor.adata.uns for g in groups
+        g: (
+            f"enrichment__{col_name}__{g}" in adaptor.adata.uns
+            and cache_is_current(adaptor.adata, col_name, g)
+        )
+        for g in groups
     }
 
     return {
@@ -227,6 +259,63 @@ async def list_enrichment_groups(
         "column": col_name,
         "groups": groups,
         "enrichment_computed": enrichment_computed,
+    }
+
+
+@router.post("/datasets/{dataset_id}/enrichment/network")
+async def enrichment_network(
+    dataset_id: str,
+    body: EnrichmentNetworkRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Collapse an enrichment result into a term-similarity network.
+
+    Significant terms become nodes, gene overlap becomes edges, and Leiden groups
+    the redundant terms into communities, so a few hundred near-duplicate GO terms
+    read as a handful of programs instead of a top-N list of rephrasings.
+
+    Delegates to compute-local for the enrichment itself, so the network always
+    reflects exactly what the table would show for the same parameters.
+    """
+    enrichment = await compute_enrichment_local(
+        dataset_id,
+        LocalEnrichmentRequest(
+            column=body.column,
+            group=body.group,
+            n_genes=body.n_genes,
+            collections=body.collections,
+        ),
+        dm=dm,
+        settings=settings,
+    )
+
+    try:
+        graph = network.build_network(
+            [r.model_dump() for r in enrichment.results],
+            fdr=body.fdr,
+            metric=body.metric,
+            min_similarity=body.min_similarity,
+            resolution=body.resolution,
+            seed=body.seed,
+            min_term_size=body.min_term_size,
+            max_term_size=body.max_term_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    n_edges = len(graph["edges"])
+    if not body.include_edges:
+        graph["edges"] = []
+
+    return {
+        "dataset_id": dataset_id,
+        "group": enrichment.group,
+        "groupby": enrichment.groupby,
+        "n_genes_used": enrichment.n_genes_used,
+        "n_significant": graph["n_terms"],
+        "n_edges": n_edges,
+        **graph,
     }
 
 
@@ -264,10 +353,17 @@ async def compute_enrichment_local(
                 detail=f"No marker genes available for column '{col}'.",
             )
 
-    # Check for cached result
+    # Check for cached result. Payloads without a current provenance sidecar were
+    # computed against gseapy's implicit universe and are recomputed rather than served.
     if col:
         cached_key = f"enrichment__{col}__{body.group}"
-        if cached_key in adaptor.adata.uns:
+        if cached_key in adaptor.adata.uns and cache_is_current(
+            adaptor.adata,
+            col,
+            body.group,
+            n_genes=body.n_genes,
+            collections=body.collections,
+        ):
             cached = adaptor.adata.uns[cached_key]
             if isinstance(cached, str):
                 cached = json.loads(cached)
@@ -281,16 +377,19 @@ async def compute_enrichment_local(
                 source="precomputed",
             )
 
-    # Get marker genes
-    df = adaptor.get_markers(groupby=body.group, column=col if col else None)
+    # Get marker genes. n_genes must be passed through: get_markers defaults to 100,
+    # which previously capped this endpoint no matter what the caller asked for (the
+    # UI offers up to 500). Genes come back in scanpy's rank order, which is the
+    # selection pipeline.py uses too. No re-sort: ORA scores the query as a set, so
+    # ordering it cannot change the result.
+    df = adaptor.get_markers(
+        groupby=body.group, column=col if col else None, n_genes=body.n_genes
+    )
     if df is None or df.empty:
         raise HTTPException(
             status_code=404,
             detail=f"No marker genes found for group '{body.group}'.",
         )
-
-    if "logfoldchange" in df.columns:
-        df = df.sort_values("logfoldchange", ascending=False)
 
     top_genes = df["gene"].head(body.n_genes).tolist()
 
@@ -305,9 +404,12 @@ async def compute_enrichment_local(
                 detail="No gene sets found for the selected collections.",
             )
 
+        background = get_background_genes(adaptor.adata, col, body.group)
+
         enr = gp.enrich(
             gene_list=top_genes,
             gene_sets=gene_sets_dict,
+            background=background,
             outdir=None,
             no_plot=True,
             cutoff=0.5,
@@ -328,6 +430,14 @@ async def compute_enrichment_local(
         if col:
             cache_key = f"enrichment__{col}__{body.group}"
             adaptor.adata.uns[cache_key] = json.dumps(all_results)
+            write_meta(
+                adaptor.adata,
+                col,
+                body.group,
+                background_n=len(background) if background else None,
+                n_genes=body.n_genes,
+                collections=body.collections,
+            )
 
         return EnrichmentResponse(
             group=body.group,
@@ -383,10 +493,17 @@ async def compute_enrichment(
                 detail=f"No marker genes available for column '{col}'.",
             )
 
-    # Check for cached enrichment result
+    # Check for cached enrichment result. Payloads without a current provenance
+    # sidecar predate the background fix and are recomputed rather than served.
     if col:
         cached_key = f"enrichment__{col}__{body.group}"
-        if cached_key in adaptor.adata.uns:
+        if cached_key in adaptor.adata.uns and cache_is_current(
+            adaptor.adata,
+            col,
+            body.group,
+            n_genes=body.n_genes,
+            collections=body.gene_sets,
+        ):
             cached = adaptor.adata.uns[cached_key]
             # uns values may be JSON strings (h5ad-safe) or already parsed lists
             if isinstance(cached, str):
@@ -401,17 +518,16 @@ async def compute_enrichment(
                 source="precomputed",
             )
 
-    # Get marker genes for the requested group
-    df = adaptor.get_markers(groupby=body.group, column=col if col else None)
+    # Get marker genes for the requested group. See compute-local above: n_genes must
+    # be passed through, and no re-sort is needed because ORA scores the query as a set.
+    df = adaptor.get_markers(
+        groupby=body.group, column=col if col else None, n_genes=body.n_genes
+    )
     if df is None or df.empty:
         raise HTTPException(
             status_code=404,
             detail=f"No marker genes found for group '{body.group}'.",
         )
-
-    # Sort by absolute logfoldchange (descending) and take top N
-    if "logfoldchange" in df.columns:
-        df = df.sort_values("logfoldchange", ascending=False)
 
     top_genes = df["gene"].head(body.n_genes).tolist()
 
@@ -419,9 +535,12 @@ async def compute_enrichment(
     try:
         import gseapy as gp
 
+        background = get_background_genes(adaptor.adata, col, body.group)
+
         enr = gp.enrich(
             gene_list=top_genes,
             gene_sets=body.gene_sets,
+            background=background,
             outdir=None,
             no_plot=True,
             cutoff=0.5,
@@ -436,6 +555,14 @@ async def compute_enrichment(
         if col:
             cache_key = f"enrichment__{col}__{body.group}"
             adaptor.adata.uns[cache_key] = json.dumps(results)
+            write_meta(
+                adaptor.adata,
+                col,
+                body.group,
+                background_n=len(background) if background else None,
+                n_genes=body.n_genes,
+                collections=body.gene_sets,
+            )
 
         return EnrichmentResponse(
             group=body.group,

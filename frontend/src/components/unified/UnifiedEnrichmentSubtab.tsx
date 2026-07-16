@@ -6,6 +6,12 @@ import { apiFetch } from "@/api/client";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
+import { InfoTip } from "@/components/common/InfoTip";
+import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
+import {
+  fetchEnrichmentNetwork,
+  type EnrichmentNetworkResponse,
+} from "@/api/enrichmentNetwork";
 
 interface EnrichmentResult {
   term: string;
@@ -61,6 +67,13 @@ export function UnifiedEnrichmentSubtab({
   const [sortField, setSortField] = useState<SortField>("adj_pval");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
+  // Programs: the same enrichment, collapsed by gene overlap into clusters.
+  const [network, setNetwork] = useState<EnrichmentNetworkResponse | null>(null);
+  const [isBuildingNetwork, setIsBuildingNetwork] = useState(false);
+  const [networkError, setNetworkError] = useState<string | null>(null);
+  const [resolution, setResolution] = useState(0.4);
+  const [showGraph, setShowGraph] = useState(true);
+
   const categoricalColumns = useMemo(() => {
     if (!dataset) return [];
     const nCells = dataset.n_cells ?? 0;
@@ -80,6 +93,8 @@ export function UnifiedEnrichmentSubtab({
     setSelectedGroup("");
     setGroups([]);
     setResults([]);
+    setNetwork(null);
+    setNetworkError(null);
 
     type GroupsResp = { groups: string[] };
     const setGroupsFromData = (data: GroupsResp) => {
@@ -122,6 +137,34 @@ export function UnifiedEnrichmentSubtab({
     return () => { cancelled = true; };
   }, [datasetId, groupByColumn, dataset]);
 
+  // Build the collapsed program view. Separate from the term table so changing
+  // granularity does not re-run the enrichment itself (the backend serves it from
+  // cache when the parameters match).
+  const buildNetwork = useCallback(
+    async (res: number) => {
+      if (!datasetId || !groupByColumn || !selectedGroup) return;
+      setIsBuildingNetwork(true);
+      setNetworkError(null);
+      try {
+        setNetwork(
+          await fetchEnrichmentNetwork(datasetId, {
+            column: groupByColumn,
+            group: selectedGroup,
+            n_genes: topN,
+            collections: Array.from(selectedCollections),
+            resolution: res,
+          }),
+        );
+      } catch (err) {
+        setNetworkError(err instanceof Error ? err.message : String(err));
+        setNetwork(null);
+      } finally {
+        setIsBuildingNetwork(false);
+      }
+    },
+    [datasetId, groupByColumn, selectedGroup, topN, selectedCollections],
+  );
+
   // Compute enrichment
   const handleCompute = useCallback(async () => {
     if (!datasetId || !groupByColumn || !selectedGroup) return;
@@ -141,18 +184,28 @@ export function UnifiedEnrichmentSubtab({
         },
       );
       setResults(data.results ?? []);
+      void buildNetwork(resolution);
     } catch (err) {
       setComputeError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsComputing(false);
     }
-  }, [datasetId, groupByColumn, selectedGroup, topN, selectedCollections]);
+  }, [datasetId, groupByColumn, selectedGroup, topN, selectedCollections, buildNetwork, resolution]);
 
-  // Handle term click -> score on scatter
-  const handleTermClick = useCallback(
-    async (term: EnrichmentResult) => {
-      if (!datasetId || scoringTerm) return;
-      setScoringTerm(term.term);
+  const handleResolutionChange = useCallback(
+    (r: number) => {
+      setResolution(r);
+      void buildNetwork(r);
+    },
+    [buildNetwork],
+  );
+
+  // Score an arbitrary gene set on the scatter. Shared by the term table, the
+  // program rows, and the graph nodes so all three behave identically.
+  const scoreGenes = useCallback(
+    async (genes: string[], name: string) => {
+      if (!datasetId || scoringTerm || genes.length === 0) return;
+      setScoringTerm(name);
       try {
         const scoreResponse = await apiFetch<{
           score_name: string;
@@ -161,20 +214,35 @@ export function UnifiedEnrichmentSubtab({
           genes_missing: string[];
         }>(`/datasets/${datasetId}/genesets/score`, {
           method: "POST",
-          body: JSON.stringify({
-            gene_set: term.genes,
-            score_name: term.term,
-          }),
+          body: JSON.stringify({ gene_set: genes, score_name: name }),
         });
-        onScoreGeneSet(new Float32Array(scoreResponse.scores), term.term);
+        onScoreGeneSet(new Float32Array(scoreResponse.scores), name);
       } catch {
         // Fallback: just signal the gene for expression view
-        if (term.genes.length > 0) onTermClick(term.genes[0]!);
+        onTermClick(genes[0]!);
       } finally {
         setScoringTerm(null);
       }
     },
     [datasetId, scoringTerm, onScoreGeneSet, onTermClick],
+  );
+
+  const handleTermClick = useCallback(
+    (term: EnrichmentResult) => scoreGenes(term.genes, term.term),
+    [scoreGenes],
+  );
+
+  const askAboutProgram = useCallback(
+    (label: string, terms: string[], genes: string[]) => {
+      const where = selectedGroup ? ` in the ${selectedGroup} group` : "";
+      askCopilot(
+        `An enrichment network grouped ${terms.length} redundant gene sets${where} into one program, ` +
+          `named after its most significant member "${label}". The member terms are: ${terms.slice(0, 12).join(", ")}` +
+          `${terms.length > 12 ? ", ..." : ""}. Genes driving it: ${genes.slice(0, 15).join(", ")}. ` +
+          `What single biological programme does this describe, and what does it suggest about these cells?`,
+      );
+    },
+    [askCopilot, selectedGroup],
   );
 
   const askAboutTerm = useCallback(
@@ -325,8 +393,27 @@ export function UnifiedEnrichmentSubtab({
         </div>
       )}
 
-      {/* Results table */}
+      {/* Terms and programs, side by side: the same result read two ways.
+          Container query, not a viewport breakpoint: this subtab lives in a ~650px
+          side panel regardless of how wide the window is, so `2xl:` would split
+          that panel into two unreadable ~300px columns. Side by side only once the
+          panel itself is wide enough, e.g. when expanded to full page. */}
       {sortedResults.length > 0 && (
+        <div className="@container">
+        <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-2">
+        <div className="min-w-0">
+        <div className="mb-1 flex items-center gap-1 px-0.5">
+          <h4 className="text-[11px] font-semibold text-slate-700">Terms</h4>
+          <InfoTip width={300}>
+            Every enriched gene set, ranked by adjusted p-value. Gene-set collections are highly
+            redundant, so this list repeats itself: the biggest, vaguest parent terms have the most
+            statistical power and crowd the top with rephrasings of one signal. The programs view
+            groups those rephrasings.
+          </InfoTip>
+          <span className="ml-auto text-[10px] tabular-nums text-slate-400">
+            {sortedResults.length}
+          </span>
+        </div>
         <div className="max-h-[calc(100vh-500px)] overflow-auto rounded-lg border border-slate-200">
           <table className="w-full text-xs">
             <thead className="sticky top-0 z-10">
@@ -391,6 +478,32 @@ export function UnifiedEnrichmentSubtab({
               })}
             </tbody>
           </table>
+        </div>
+        </div>
+
+        <div className="min-w-0">
+          <div className="mb-1 flex items-center gap-1 px-0.5">
+            <h4 className="text-[11px] font-semibold text-slate-700">Programs</h4>
+            <InfoTip width={300}>
+              The same terms, grouped by how much their genes overlap. Terms that describe one
+              signal collapse into a single row named after the strongest of them. This is the
+              readable version of the list on the left.
+            </InfoTip>
+          </div>
+          <EnrichmentPrograms
+            data={network}
+            isLoading={isBuildingNetwork}
+            error={networkError}
+            resolution={resolution}
+            onResolutionChange={handleResolutionChange}
+            onScoreGenes={scoreGenes}
+            onAsk={askAboutProgram}
+            scoringName={scoringTerm}
+            showGraph={showGraph}
+            onToggleGraph={setShowGraph}
+          />
+        </div>
+        </div>
         </div>
       )}
 

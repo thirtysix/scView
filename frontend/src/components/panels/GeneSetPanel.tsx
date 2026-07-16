@@ -16,6 +16,13 @@ import {
   ChevronRight,
 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
+import { InfoTip } from "@/components/common/InfoTip";
+import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
+import {
+  fetchEnrichmentNetwork,
+  type EnrichmentNetworkResponse,
+} from "@/api/enrichmentNetwork";
+import { useViewStore } from "@/stores/viewStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSelectionStore } from "@/stores/selectionStore";
@@ -114,6 +121,16 @@ export function GeneSetPanel() {
 
   const [geneInput, setGeneInput] = useState("");
   const [scoreName, setScoreName] = useState("gene_set_score");
+
+  const askCopilot = useViewStore((s) => s.askCopilot);
+
+  // Programs: the same enrichment collapsed by gene overlap into clusters.
+  const [network, setNetwork] = useState<EnrichmentNetworkResponse | null>(null);
+  const [isBuildingNetwork, setIsBuildingNetwork] = useState(false);
+  const [networkError, setNetworkError] = useState<string | null>(null);
+  const [resolution, setResolution] = useState(0.4);
+  const [showGraph, setShowGraph] = useState(true);
+  const [scoringProgram, setScoringProgram] = useState<string | null>(null);
   const [isScoring, setIsScoring] = useState(false);
   const [scoreError, setScoreError] = useState<string | null>(null);
   const [scoreResult, setScoreResult] = useState<GeneSetScoreResponse | null>(
@@ -425,6 +442,70 @@ export function GeneSetPanel() {
     [scoreResult, buildViolinFromScores],
   );
 
+  // ---- Programs (term-similarity network) ----
+  // Kept separate from the enrichment call so changing granularity re-clusters
+  // without re-running the ORA; the backend serves it from cache when the
+  // parameters match.
+  const buildNetwork = useCallback(
+    async (res: number) => {
+      if (!datasetId || !selectedGroup || selectedCollections.size === 0) return;
+      setIsBuildingNetwork(true);
+      setNetworkError(null);
+      try {
+        setNetwork(
+          await fetchEnrichmentNetwork(datasetId, {
+            column: selectedColumn,
+            group: selectedGroup,
+            n_genes: nGenes,
+            collections: Array.from(selectedCollections),
+            resolution: res,
+          }),
+        );
+      } catch (err) {
+        setNetworkError(err instanceof Error ? err.message : String(err));
+        setNetwork(null);
+      } finally {
+        setIsBuildingNetwork(false);
+      }
+    },
+    [datasetId, selectedColumn, selectedGroup, nGenes, selectedCollections],
+  );
+
+  const handleResolutionChange = useCallback(
+    (r: number) => {
+      setResolution(r);
+      void buildNetwork(r);
+    },
+    [buildNetwork],
+  );
+
+  // Load a gene set into the scoring box and score it, the same route
+  // handleTermClick takes for a single term.
+  const handleScoreGenes = useCallback((genes: string[], name: string) => {
+    if (genes.length === 0) return;
+    setScoringProgram(name);
+    setGeneInput(genes.join(", "));
+    setScoreName(name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 60));
+    setScoringSectionOpen(true);
+    setTimeout(() => {
+      document.getElementById("score-btn")?.click();
+      setScoringProgram(null);
+    }, 150);
+  }, []);
+
+  const askAboutProgram = useCallback(
+    (label: string, terms: string[], genes: string[]) => {
+      const where = selectedGroup ? ` in group ${selectedGroup}` : "";
+      askCopilot(
+        `An enrichment network grouped ${terms.length} redundant gene sets${where} into one program, ` +
+          `named after its most significant member "${label}". Member terms: ${terms.slice(0, 12).join(", ")}` +
+          `${terms.length > 12 ? ", ..." : ""}. Genes driving it: ${genes.slice(0, 15).join(", ")}. ` +
+          `What single biological programme does this describe?`,
+      );
+    },
+    [askCopilot, selectedGroup],
+  );
+
   // ---- Enrichment compute ----
   const handleComputeEnrichment = useCallback(async () => {
     if (!datasetId || !selectedGroup || selectedCollections.size === 0) return;
@@ -446,12 +527,16 @@ export function GeneSetPanel() {
       );
       setEnrichment(data);
       setEnrichmentStatus((prev) => ({ ...prev, [selectedGroup]: true }));
+      void buildNetwork(resolution);
     } catch (err) {
       setEnrichError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsEnrichLoading(false);
     }
-  }, [datasetId, selectedColumn, selectedGroup, nGenes, selectedCollections]);
+  }, [
+    datasetId, selectedColumn, selectedGroup, nGenes, selectedCollections,
+    buildNetwork, resolution,
+  ]);
 
   // ---- Batch compute all groups ----
   const handleComputeAllGroups = useCallback(async () => {
@@ -1086,14 +1171,21 @@ export function GeneSetPanel() {
               </div>
             )}
 
-            {/* Results: bar chart + table */}
+            {/* Results: bar chart + programs side by side, then the full table */}
             {enrichment && sortedResults.length > 0 && (
               <>
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 {/* Bar chart */}
-                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="mb-2 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-700">
+                    <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
                       Top {Math.min(topN, topResults.length)} Enriched Terms
+                      <InfoTip width={300}>
+                        The most significant gene sets, ranked. Gene-set collections are highly
+                        redundant, so this list tends to repeat itself: the biggest, vaguest parent
+                        terms carry the most statistical power and crowd the top with rephrasings of
+                        one signal. Programs, on the right, groups those rephrasings.
+                      </InfoTip>
                     </h3>
                     <div className="flex items-center gap-2">
                       <label className="text-xs text-slate-500">
@@ -1175,6 +1267,31 @@ export function GeneSetPanel() {
                     className="w-full"
                   />
                 </div>
+
+                {/* Programs: the same result, collapsed by gene overlap */}
+                <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+                    Programs
+                    <InfoTip width={300}>
+                      The same terms, grouped by how far their genes overlap. Terms describing one
+                      signal collapse into a single row named after the strongest of them. This is
+                      the readable version of the chart on the left.
+                    </InfoTip>
+                  </h3>
+                  <EnrichmentPrograms
+                    data={network}
+                    isLoading={isBuildingNetwork}
+                    error={networkError}
+                    resolution={resolution}
+                    onResolutionChange={handleResolutionChange}
+                    onScoreGenes={handleScoreGenes}
+                    onAsk={askAboutProgram}
+                    scoringName={scoringProgram}
+                    showGraph={showGraph}
+                    onToggleGraph={setShowGraph}
+                  />
+                </div>
+              </div>
 
                 {/* Results table */}
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
