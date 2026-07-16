@@ -21,6 +21,7 @@ import numpy as np
 import scanpy as sc
 
 from scview.core import provenance
+from scview.core.ora_background import write_meta
 
 logger = logging.getLogger(__name__)
 
@@ -441,6 +442,9 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
 
     # Determine gene_sets source: local MSigDB dicts or Enrichr names
     gene_sets_arg: Any  # dict[str, list[str]] or list[str]
+    # Track the gene-set selection actually used, so the cache sidecar records it and a
+    # later request with a different selection recomputes instead of reusing this payload.
+    used_collections: list[str]
     if params.enrichment_collections:
         import os
         from scview.core.msigdb_loader import get_msigdb_loader
@@ -453,11 +457,14 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
                 logger.warning("No gene sets loaded from MSigDB collections: %s", params.enrichment_collections)
                 return
             logger.info("Using %d local MSigDB gene sets from %d collections", len(gene_sets_arg), len(params.enrichment_collections))
+            used_collections = list(params.enrichment_collections)
         else:
             logger.warning("MSigDB loader not available; falling back to Enrichr libraries")
             gene_sets_arg = params.enrichment_gene_sets or ["GO_Biological_Process_2025"]
+            used_collections = list(gene_sets_arg)
     elif params.enrichment_gene_sets:
         gene_sets_arg = params.enrichment_gene_sets
+        used_collections = list(gene_sets_arg)
     else:
         logger.warning("No enrichment collections or gene sets specified, skipping")
         return
@@ -494,10 +501,16 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
         limit = min(params.enrichment_n_genes, total_genes)
         top_genes = [str(rgg["names"][group][i]) for i in range(limit)]
 
+        # The full ranked list is the set of genes the DE test could see, and is
+        # the correct ORA universe. Without it gseapy tests against every gene in
+        # the selected collections and p-values come out anti-conservative.
+        background = [str(g) for g in rgg["names"][group]]
+
         try:
             enr = gp.enrich(
                 gene_list=top_genes,
                 gene_sets=gene_sets_arg,
+                background=background,
                 outdir=None,
                 no_plot=True,
                 cutoff=0.5,
@@ -511,6 +524,14 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
                 adata.uns[store_key] = json.dumps(normalized)
             else:
                 adata.uns[store_key] = "[]"
+            write_meta(
+                adata,
+                col,
+                group,
+                background_n=len(background),
+                n_genes=params.enrichment_n_genes,
+                collections=used_collections,
+            )
             total_groups += 1
         except Exception as e:
             logger.warning("Enrichment failed for %s/%s: %s", col, group, e)
