@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 
 # Bump when a change invalidates cached enrichment payloads. Entries whose
 # sidecar is missing (pre-fix) or older than this are recomputed.
-ORA_VERSION = 2
+# v3: ribosomal/mitochondrial genes are excluded from the query by default, so
+# every pre-v3 payload was computed from a different query gene list.
+ORA_VERSION = 3
 
 META_PREFIX = "ora_meta__"
 
@@ -117,6 +119,7 @@ def write_meta(
     background_n: int | None,
     n_genes: int,
     collections: list[str] | None = None,
+    exclude_ribo_mito: bool = True,
 ) -> None:
     """Record how an enrichment payload was computed, so stale caches are detectable."""
     if not column:
@@ -127,6 +130,7 @@ def write_meta(
             "background_n": background_n,
             "n_genes": n_genes,
             "collections": _fingerprint(collections),
+            "exclude_ribo_mito": bool(exclude_ribo_mito),
         }
     )
 
@@ -138,6 +142,7 @@ def cache_is_current(
     *,
     n_genes: int | None = None,
     collections: list[str] | None = None,
+    exclude_ribo_mito: bool | None = None,
 ) -> bool:
     """True when a cached enrichment payload can be served for this request.
 
@@ -166,6 +171,10 @@ def cache_is_current(
         if collections is not None and list(meta.get("collections", [])) != _fingerprint(
             collections
         ):
+            return False
+        if exclude_ribo_mito is not None and bool(
+            meta.get("exclude_ribo_mito", False)
+        ) != bool(exclude_ribo_mito):
             return False
         return True
     except (ValueError, TypeError, AttributeError):

@@ -173,3 +173,11 @@ class TestCacheIsParamsAware:
             {"ora_version": ORA_VERSION, "n_genes": 100})})
         assert cache_is_current(a, "cluster", "T", n_genes=100,
                                 collections=["h.all"]) is False
+
+    def test_toggling_ribo_mito_filter_misses(self):
+        # A result computed with the filter on must not be served when it is off.
+        a = self._written(n_genes=100, collections=["h.all"], exclude_ribo_mito=True)
+        assert cache_is_current(a, "cluster", "T", n_genes=100,
+                                collections=["h.all"], exclude_ribo_mito=True) is True
+        assert cache_is_current(a, "cluster", "T", n_genes=100,
+                                collections=["h.all"], exclude_ribo_mito=False) is False

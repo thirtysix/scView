@@ -21,6 +21,7 @@ import numpy as np
 import scanpy as sc
 
 from scview.core import provenance
+from scview.core.gene_filters import select_query_genes
 from scview.core.ora_background import write_meta
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,9 @@ class PipelineParams:
     # Enrichment: obs columns to compute enrichment for (empty = skip)
     enrichment_columns: list[str] = field(default_factory=list)
     enrichment_n_genes: int = 100
+    # Drop ribosomal/mitochondrial genes from the query (scRNA-seq artifact); see
+    # core/gene_filters.py.
+    enrichment_exclude_ribo_mito: bool = True
     enrichment_collections: list[str] = field(default_factory=lambda: [
         "h.all", "c2.cp.kegg_medicus", "c2.cp.reactome", "c2.cp.wikipathways",
         "c5.go.bp", "c5.go.cc", "c5.go.mf", "c8.all",
@@ -497,14 +501,16 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
         cb(f"Enrichment: {col} / {group}", wi, total_items)
 
         rgg = adata.uns[uns_key]
-        total_genes = len(rgg["names"][group])
-        limit = min(params.enrichment_n_genes, total_genes)
-        top_genes = [str(rgg["names"][group][i]) for i in range(limit)]
-
         # The full ranked list is the set of genes the DE test could see, and is
         # the correct ORA universe. Without it gseapy tests against every gene in
         # the selected collections and p-values come out anti-conservative.
         background = [str(g) for g in rgg["names"][group]]
+        # The query drops ribosomal/mitochondrial genes before taking the top-n,
+        # so it must start from the full ranked list, not a pre-truncated slice.
+        top_genes = select_query_genes(
+            background, params.enrichment_n_genes,
+            exclude_ribo_mito=params.enrichment_exclude_ribo_mito,
+        )
 
         try:
             enr = gp.enrich(
@@ -531,6 +537,7 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
                 background_n=len(background),
                 n_genes=params.enrichment_n_genes,
                 collections=used_collections,
+                exclude_ribo_mito=params.enrichment_exclude_ribo_mito,
             )
             total_groups += 1
         except Exception as e:
