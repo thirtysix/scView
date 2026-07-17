@@ -130,6 +130,7 @@ export function GeneSetPanel() {
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [resolution, setResolution] = useState(0.4);
   const [showGraph, setShowGraph] = useState(true);
+  const [excludeRiboMito, setExcludeRiboMito] = useState(true);
   const [scoringProgram, setScoringProgram] = useState<string | null>(null);
   const [isScoring, setIsScoring] = useState(false);
   const [scoreError, setScoreError] = useState<string | null>(null);
@@ -459,6 +460,7 @@ export function GeneSetPanel() {
             n_genes: nGenes,
             collections: Array.from(selectedCollections),
             resolution: res,
+            excludeRiboMito,
           }),
         );
       } catch (err) {
@@ -468,7 +470,7 @@ export function GeneSetPanel() {
         setIsBuildingNetwork(false);
       }
     },
-    [datasetId, selectedColumn, selectedGroup, nGenes, selectedCollections],
+    [datasetId, selectedColumn, selectedGroup, nGenes, selectedCollections, excludeRiboMito],
   );
 
   const handleResolutionChange = useCallback(
@@ -522,6 +524,7 @@ export function GeneSetPanel() {
             group: selectedGroup,
             n_genes: nGenes,
             collections: Array.from(selectedCollections),
+            exclude_ribo_mito: excludeRiboMito,
           }),
         },
       );
@@ -535,7 +538,7 @@ export function GeneSetPanel() {
     }
   }, [
     datasetId, selectedColumn, selectedGroup, nGenes, selectedCollections,
-    buildNetwork, resolution,
+    excludeRiboMito, buildNetwork, resolution,
   ]);
 
   // ---- Batch compute all groups ----
@@ -560,6 +563,7 @@ export function GeneSetPanel() {
               group: g,
               n_genes: nGenes,
               collections: Array.from(selectedCollections),
+              exclude_ribo_mito: excludeRiboMito,
             }),
           },
         );
@@ -579,6 +583,7 @@ export function GeneSetPanel() {
     selectedColumn,
     nGenes,
     selectedCollections,
+    excludeRiboMito,
     enrichmentStatus,
     selectedGroup,
   ]);
@@ -1146,6 +1151,24 @@ export function GeneSetPanel() {
                 </button>
               )}
             </div>
+
+            {/* Ribo/mito filter */}
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                checked={excludeRiboMito}
+                onChange={(e) => setExcludeRiboMito(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300"
+              />
+              Exclude ribosomal / mitochondrial genes from the query
+              <InfoTip width={320}>
+                Ribosomal and mitochondrial genes dominate single-cell markers as an artifact and
+                are shared across nearly every pathway and cell-type signature, so they inflate a
+                generic "translation" program and mislabel cell types (an ovary cluster tagged as
+                pancreatic). Dropping them from the query &mdash; not the background &mdash; fixes
+                both. Turn off only to study ribosome biology directly.
+              </InfoTip>
+            </label>
 
             {/* MSigDB Collection tree */}
             <MSigDBCollectionTree

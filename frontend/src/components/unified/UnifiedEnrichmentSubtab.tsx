@@ -73,6 +73,7 @@ export function UnifiedEnrichmentSubtab({
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [resolution, setResolution] = useState(0.4);
   const [showGraph, setShowGraph] = useState(true);
+  const [excludeRiboMito, setExcludeRiboMito] = useState(true);
 
   const categoricalColumns = useMemo(() => {
     if (!dataset) return [];
@@ -153,6 +154,7 @@ export function UnifiedEnrichmentSubtab({
             n_genes: topN,
             collections: Array.from(selectedCollections),
             resolution: res,
+            excludeRiboMito,
           }),
         );
       } catch (err) {
@@ -162,7 +164,7 @@ export function UnifiedEnrichmentSubtab({
         setIsBuildingNetwork(false);
       }
     },
-    [datasetId, groupByColumn, selectedGroup, topN, selectedCollections],
+    [datasetId, groupByColumn, selectedGroup, topN, selectedCollections, excludeRiboMito],
   );
 
   // Compute enrichment
@@ -180,6 +182,7 @@ export function UnifiedEnrichmentSubtab({
             group: selectedGroup,
             n_genes: topN,
             collections: Array.from(selectedCollections),
+            exclude_ribo_mito: excludeRiboMito,
           }),
         },
       );
@@ -190,7 +193,7 @@ export function UnifiedEnrichmentSubtab({
     } finally {
       setIsComputing(false);
     }
-  }, [datasetId, groupByColumn, selectedGroup, topN, selectedCollections, buildNetwork, resolution]);
+  }, [datasetId, groupByColumn, selectedGroup, topN, selectedCollections, excludeRiboMito, buildNetwork, resolution]);
 
   const handleResolutionChange = useCallback(
     (r: number) => {
@@ -378,6 +381,24 @@ export function UnifiedEnrichmentSubtab({
           </button>
         )}
       </div>
+
+      {/* Ribo/mito filter */}
+      <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
+        <input
+          type="checkbox"
+          checked={excludeRiboMito}
+          onChange={(e) => setExcludeRiboMito(e.target.checked)}
+          className="h-3 w-3 rounded border-slate-300"
+        />
+        Exclude ribosomal / mitochondrial genes
+        <InfoTip width={300}>
+          Ribosomal and mitochondrial genes dominate single-cell markers as an artifact and are
+          shared across nearly every pathway and cell-type signature, so they inflate a generic
+          "translation" program and mislabel cell types (an ovary cluster tagged as pancreatic).
+          Dropping them from the query — not the background — fixes both. Turn off only to study
+          ribosome biology directly.
+        </InfoTip>
+      </label>
 
       {/* MSigDB collection tree */}
       <MSigDBCollectionTree

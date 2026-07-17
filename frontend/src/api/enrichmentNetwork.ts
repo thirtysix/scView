@@ -74,6 +74,8 @@ export interface EnrichmentNetworkRequest {
   collections: string[];
   resolution?: number;
   includeEdges?: boolean;
+  /** Drop ribosomal/mitochondrial genes from the query (default true). */
+  excludeRiboMito?: boolean;
 }
 
 export function fetchEnrichmentNetwork(
@@ -93,6 +95,7 @@ export function fetchEnrichmentNetwork(
         // Edges are only needed to draw the graph. Turning this off drops tens of
         // thousands of rows from the payload if the graph is ever removed.
         include_edges: req.includeEdges ?? true,
+        exclude_ribo_mito: req.excludeRiboMito ?? true,
       }),
     },
   );
