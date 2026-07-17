@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from scview.config import Settings
 from scview.core import enrichment_network as network
 from scview.core.dataset_manager import DatasetManager
+from scview.core.gene_filters import select_query_genes
 from scview.core.msigdb_loader import DEFAULT_COLLECTIONS, get_msigdb_loader
 from scview.core.ora_background import (
     cache_is_current,
@@ -44,6 +45,10 @@ class EnrichmentComputeRequest(BaseModel):
     groupby: str = ""  # kept for backward compat — falls back if column is empty
     group: str
     n_genes: int = 100
+    # Drop ribosomal/mitochondrial genes from the query. They dominate scRNA-seq
+    # markers as an artifact and cross-react with every cell-type signature; see
+    # core/gene_filters.py. Opt out for a ribosome-biology study.
+    exclude_ribo_mito: bool = True
     gene_sets: list[str] = [
         "GO_Biological_Process_2025",
         "GO_Molecular_Function_2025",
@@ -60,6 +65,8 @@ class LocalEnrichmentRequest(BaseModel):
     column: str = ""
     group: str
     n_genes: int = 100
+    # See EnrichmentComputeRequest.exclude_ribo_mito.
+    exclude_ribo_mito: bool = True
     collections: list[str] = DEFAULT_COLLECTIONS
 
 
@@ -285,6 +292,7 @@ async def enrichment_network(
             group=body.group,
             n_genes=body.n_genes,
             collections=body.collections,
+            exclude_ribo_mito=body.exclude_ribo_mito,
         ),
         dm=dm,
         settings=settings,
@@ -363,6 +371,7 @@ async def compute_enrichment_local(
             body.group,
             n_genes=body.n_genes,
             collections=body.collections,
+            exclude_ribo_mito=body.exclude_ribo_mito,
         ):
             cached = adaptor.adata.uns[cached_key]
             if isinstance(cached, str):
@@ -377,11 +386,8 @@ async def compute_enrichment_local(
                 source="precomputed",
             )
 
-    # Get marker genes. n_genes must be passed through: get_markers defaults to 100,
-    # which previously capped this endpoint no matter what the caller asked for (the
-    # UI offers up to 500). Genes come back in scanpy's rank order, which is the
-    # selection pipeline.py uses too. No re-sort: ORA scores the query as a set, so
-    # ordering it cannot change the result.
+    # Existence check. n_genes must be passed through: get_markers defaults to 100,
+    # which previously capped this endpoint no matter what the caller asked for.
     df = adaptor.get_markers(
         groupby=body.group, column=col if col else None, n_genes=body.n_genes
     )
@@ -391,7 +397,16 @@ async def compute_enrichment_local(
             detail=f"No marker genes found for group '{body.group}'.",
         )
 
-    top_genes = df["gene"].head(body.n_genes).tolist()
+    # Query and background both come from the full rank-ordered marker list. The
+    # query drops ribosomal/mitochondrial genes (an scRNA-seq artifact) BEFORE
+    # taking the top-n, so the ranked list must be the full one, not the truncated
+    # df. The background keeps every measured gene. No re-sort: ORA scores the
+    # query as a set, so ordering it cannot change the result.
+    background = get_background_genes(adaptor.adata, col, body.group)
+    ranked = background if background else df["gene"].tolist()
+    top_genes = select_query_genes(
+        ranked, body.n_genes, exclude_ribo_mito=body.exclude_ribo_mito
+    )
 
     try:
         import gseapy as gp
@@ -403,8 +418,6 @@ async def compute_enrichment_local(
                 status_code=400,
                 detail="No gene sets found for the selected collections.",
             )
-
-        background = get_background_genes(adaptor.adata, col, body.group)
 
         enr = gp.enrich(
             gene_list=top_genes,
@@ -437,6 +450,7 @@ async def compute_enrichment_local(
                 background_n=len(background) if background else None,
                 n_genes=body.n_genes,
                 collections=body.collections,
+                exclude_ribo_mito=body.exclude_ribo_mito,
             )
 
         return EnrichmentResponse(
@@ -503,6 +517,7 @@ async def compute_enrichment(
             body.group,
             n_genes=body.n_genes,
             collections=body.gene_sets,
+            exclude_ribo_mito=body.exclude_ribo_mito,
         ):
             cached = adaptor.adata.uns[cached_key]
             # uns values may be JSON strings (h5ad-safe) or already parsed lists
@@ -518,8 +533,7 @@ async def compute_enrichment(
                 source="precomputed",
             )
 
-    # Get marker genes for the requested group. See compute-local above: n_genes must
-    # be passed through, and no re-sort is needed because ORA scores the query as a set.
+    # Existence check; see compute-local above for the query/background split.
     df = adaptor.get_markers(
         groupby=body.group, column=col if col else None, n_genes=body.n_genes
     )
@@ -529,13 +543,15 @@ async def compute_enrichment(
             detail=f"No marker genes found for group '{body.group}'.",
         )
 
-    top_genes = df["gene"].head(body.n_genes).tolist()
-
     # Attempt gseapy enrichment
     try:
         import gseapy as gp
 
         background = get_background_genes(adaptor.adata, col, body.group)
+        ranked = background if background else df["gene"].tolist()
+        top_genes = select_query_genes(
+            ranked, body.n_genes, exclude_ribo_mito=body.exclude_ribo_mito
+        )
 
         enr = gp.enrich(
             gene_list=top_genes,
@@ -562,6 +578,7 @@ async def compute_enrichment(
                 background_n=len(background) if background else None,
                 n_genes=body.n_genes,
                 collections=body.gene_sets,
+                exclude_ribo_mito=body.exclude_ribo_mito,
             )
 
         return EnrichmentResponse(
