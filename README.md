@@ -43,6 +43,13 @@ reviewer can audit. scView closes both gaps:
   backend, Apache Arrow, and deck.gl. Lasso (or click) a population for a **volcano of differential
   expression**, and export any table to CSV. **Compare two datasets'** cell-type composition side by
   side, gauge **batch-integration quality**, and your workspace is **restored across reloads**.
+- **Pathway enrichment that stays readable.** Over-representation analysis against bundled MSigDB
+  collections (Hallmark, GO, Reactome, KEGG, cell-type signatures), scored against the genes your
+  experiment actually measured. A **Programs view** then collapses the usual wall of near-duplicate
+  terms into a few biological programs (clustered on their shared genes and ranked by significance),
+  and ribosomal/mitochondrial genes are filtered from the query by default, so cell-type and pathway
+  labels stay tissue-appropriate instead of drowning in a generic "translation" signal. Click any
+  term or program to score its genes on the embedding.
 
 > Trust by design: the *facts* about your data are computed deterministically and reproducibly; the
 > *LLM only advises*, and every action it suggests is approved by you and recorded in provenance.
@@ -61,6 +68,14 @@ card, and a sortable markers table; recoloring, violins, and cluster highlightin
 *Lasso a region or click a population (here Monocytes, 5,199 cells), then compute one-vs-rest
 differential expression over all genes as an interactive volcano plus a significant-gene table;
 click a point to overlay that gene, and export the table to CSV.*
+
+### Pathway enrichment: programs, not a wall of terms
+![Enrichment Programs](docs/images/enrichment-programs.png)
+*The same over-representation result two ways: a familiar ranked bar chart (left), and a **Programs**
+view (right) that clusters the redundant terms on their shared genes into a few labeled programs,
+with a similarity graph. Ribosomal and mitochondrial genes are filtered from the query by default,
+so an ovary sample resolves to ovary cell types (stromal, granulosa, follicle) rather than a generic
+"translation" signal. Click any term or program to score its genes on the embedding.*
 
 ### Compare datasets
 ![Compare datasets](docs/images/compare-datasets.png)
