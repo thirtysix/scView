@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     MAX_HISTORY_MESSAGES: int = 50
     # Reject oversized JSON bodies on non-upload routes before parsing.
     MAX_JSON_BODY_KB: int = 512
+    # Joint-embedding caps: datasets per integration and total merged cells. The
+    # pipeline's scaling step densifies all genes, so memory grows ~cells x genes.
+    MAX_INTEGRATE_DATASETS: int = 8
+    MAX_INTEGRATE_CELLS: int = 150_000
 
     # --- RAG co-pilot (literature + tutorials corpora over pgvector) ---------
     # Postgres/Neon connection string with the pgvector extension. Empty =

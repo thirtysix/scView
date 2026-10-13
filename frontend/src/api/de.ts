@@ -28,3 +28,26 @@ export async function computeDE(
     body: JSON.stringify({ indices, label }),
   });
 }
+
+export interface DECompareRequest {
+  split_by: string;
+  group_a: string;
+  group_b: string;
+  within_column?: string;
+  within_value?: string;
+}
+
+/**
+ * Wilcoxon DE between two groups of one obs column (A vs B), optionally within
+ * one subgroup — e.g. dataset STIM vs CTRL within one cell type. In the response,
+ * `n_selected` / `n_rest` are the A / B cell counts.
+ */
+export async function computeDECompare(
+  datasetId: string,
+  body: DECompareRequest,
+): Promise<DEResponse> {
+  return apiFetch<DEResponse>(`/datasets/${datasetId}/de/compare`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}

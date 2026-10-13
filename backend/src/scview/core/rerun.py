@@ -29,6 +29,7 @@ _DEPENDS_ON: dict[str, tuple[str, ...]] = {
     "highly_variable_genes": ("log_transform",),
     "scaling": ("highly_variable_genes",),
     "pca": ("scaling",),
+    "uncorrected_embedding": ("pca",),
     "batch_correction": ("pca",),
     "neighbors": ("pca", "batch_correction"),
     "clustering": ("neighbors",),

@@ -182,6 +182,16 @@ class DatasetManager:
                         return str(f)
         return None
 
+    def h5ad_candidates(self, dataset_id: str) -> list[str]:
+        """Every .h5ad stored for a dataset, in the same precedence as
+        :meth:`_resolve_h5ad` (active file first, then its sources)."""
+        found: list[str] = []
+        for subdir in self._H5AD_SUBDIRS:
+            d = self.data_dir / subdir / dataset_id
+            if d.exists():
+                found.extend(str(f) for f in sorted(d.iterdir()) if f.suffix == ".h5ad")
+        return found
+
     def derived_h5ad_path(self, dataset_id: str, source_path: str) -> Path:
         """Return the output path for pipeline/processing results.
 

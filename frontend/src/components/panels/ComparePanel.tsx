@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { GitCompare, Loader2, AlertCircle, Sparkles } from "lucide-react";
+import { JointEmbedding } from "@/components/compare/JointEmbedding";
 import Plot from "@/components/plots/Plot";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -38,12 +39,46 @@ async function fetchProportions(datasetId: string, column: string): Promise<Reco
   return props;
 }
 
+type CompareTab = "joint" | "composition";
+
+const TABS: { id: CompareTab; label: string }[] = [
+  { id: "joint", label: "Joint embedding" },
+  { id: "composition", label: "Composition" },
+];
+
+/** Multi-dataset analysis: a joint embedding across datasets, or a side-by-side
+ * composition comparison of two. */
+export function ComparePanel() {
+  const [tab, setTab] = useState<CompareTab>("joint");
+  return (
+    <div className="space-y-5">
+      <Header />
+      <div className="flex gap-1 border-b border-slate-200">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+              tab === t.id
+                ? "border-primary text-primary"
+                : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === "joint" ? <JointEmbedding /> : <CompositionCompare />}
+    </div>
+  );
+}
+
 /**
  * Compare two datasets by the composition of a shared categorical column
  * (e.g. cell-type proportions in dataset A vs B). Proportions are normalized so
  * datasets of different sizes are comparable.
  */
-export function ComparePanel() {
+function CompositionCompare() {
   const datasetA = useDatasetStore((s) => s.currentDataset);
   const askCopilot = useViewStore((s) => s.askCopilot);
 
@@ -137,11 +172,8 @@ export function ComparePanel() {
 
   if (!datasetA) {
     return (
-      <div className="space-y-6">
-        <Header />
-        <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-400">
-          Load a dataset first, then pick a second one to compare against.
-        </div>
+      <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-400">
+        Load a dataset first, then pick a second one to compare against.
       </div>
     );
   }
@@ -151,8 +183,6 @@ export function ComparePanel() {
 
   return (
     <div className="space-y-5">
-      <Header />
-
       {/* Dataset + column pickers */}
       <div className="flex flex-wrap items-end gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div>
@@ -313,7 +343,7 @@ function Header() {
       <div>
         <h2 className="text-2xl font-bold text-slate-900">Compare datasets</h2>
         <p className="text-sm text-slate-500">
-          Compare the cell-type / cluster composition of two datasets side by side.
+          Embed several datasets together, or compare the composition of two side by side.
         </p>
       </div>
     </div>

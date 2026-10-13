@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { formatNumber, formatPValue, prettyObsLabel, isRedundantClusterCol } from "./formatting";
+import {
+  formatNumber,
+  formatPValue,
+  prettyObsLabel,
+  prettyEmbeddingLabel,
+  isRedundantClusterCol,
+} from "./formatting";
 
 describe("formatNumber", () => {
   it("abbreviates thousands and millions", () => {
@@ -37,5 +43,14 @@ describe("isRedundantClusterCol", () => {
     expect(isRedundantClusterCol("leiden", ["leiden", "scview_leiden_r0.5"])).toBe(true);
     expect(isRedundantClusterCol("leiden", ["leiden"])).toBe(false);
     expect(isRedundantClusterCol("cell_type", ["cell_type", "scview_leiden_r0.5"])).toBe(false);
+  });
+});
+
+describe("prettyEmbeddingLabel", () => {
+  it("labels plain, corrected and uncorrected embeddings", () => {
+    expect(prettyEmbeddingLabel("X_umap")).toBe("UMAP");
+    expect(prettyEmbeddingLabel("X_umap_3d")).toBe("UMAP");
+    expect(prettyEmbeddingLabel("X_umap_uncorrected")).toBe("UMAP (uncorrected)");
+    expect(prettyEmbeddingLabel("X_pca_harmony")).toBe("PCA (HARMONY)");
   });
 });
