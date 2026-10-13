@@ -43,6 +43,12 @@ reviewer can audit. scView closes both gaps:
   backend, Apache Arrow, and deck.gl. Lasso (or click) a population for a **volcano of differential
   expression**, and export any table to CSV. **Compare two datasets'** cell-type composition side by
   side, gauge **batch-integration quality**, and your workspace is **restored across reloads**.
+- **Joint embedding across datasets.** Pick two or more datasets and scView merges their raw counts
+  on the shared genes (recovering counts from the original upload if processing replaced them),
+  then processes them together with Harmony: one UMAP, one clustering and one marker set, with a
+  `dataset` column for each cell's origin and the uncorrected UMAP kept for a before/after check.
+  The DE tab's **Between groups** mode then compares datasets or conditions within a single cell
+  type or cluster. The source datasets are never modified.
 - **Pathway enrichment that stays readable.** Over-representation analysis against bundled MSigDB
   collections (Hallmark, GO, Reactome, KEGG, cell-type signatures), scored against the genes your
   experiment actually measured. A **Programs view** then collapses the usual wall of near-duplicate
@@ -77,11 +83,19 @@ with a similarity graph. Ribosomal and mitochondrial genes are filtered from the
 so an ovary sample resolves to ovary cell types (stromal, granulosa, follicle) rather than a generic
 "translation" signal. Click any term or program to score its genes on the embedding.*
 
+### Joint embedding across datasets
+![Joint embedding](docs/images/joint-embedding.png)
+*The Kang et al. (2018) PBMCs imported as two datasets, control and IFN-β stimulated, then
+integrated from the Compare tab. Before correction the interferon response splits every cell type by
+condition (left); in the joint UMAP the conditions overlay while cell types stay apart (right). Each
+joint cluster holds 42-58% of each condition. Between-groups DE of STIM vs CTRL within monocytes
+then recovers the expected interferon-stimulated genes (CXCL10, ISG15, IFIT1-3, RSAD2, MX1).*
+
 ### Compare datasets
 ![Compare datasets](docs/images/compare-datasets.png)
-*Pick a second dataset and a shared categorical column (cell type / cluster) to compare their
-composition side by side — grouped proportions plus a Δ table, with one click to ask the co-pilot
-what the differences mean.*
+*On the Composition tab, pick a second dataset and a shared categorical column (cell type / cluster)
+to compare their composition side by side — grouped proportions plus a Δ table, with one click to
+ask the co-pilot what the differences mean.*
 
 ### AI co-pilot
 ![AI co-pilot](docs/images/ai-copilot.png)
