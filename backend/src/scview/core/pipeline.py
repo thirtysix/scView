@@ -53,6 +53,7 @@ class PipelineParams:
     # HVG
     n_top_genes: int = 2000
     hvg_flavor: str = "seurat"
+    hvg_batch_key: str = ""  # obs column for batch-aware HVG selection (empty = pooled)
 
     # PCA
     n_comps: int = 50
@@ -121,6 +122,7 @@ ALL_STEPS = [
     "highly_variable_genes",
     "scaling",
     "pca",
+    "uncorrected_embedding",
     "batch_correction",
     "neighbors",
     "clustering",
@@ -255,13 +257,20 @@ def _run_log_transform(adata: ad.AnnData, params: PipelineParams) -> None:
 
 def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> None:
     """Identify highly variable genes."""
+    # A batch key ranks genes by how many batches call them variable, so a gene
+    # that only differs *between* batches isn't picked as biology.
+    batch_key = params.hvg_batch_key or None
+    if batch_key and batch_key not in adata.obs.columns:
+        raise ValueError(f"HVG batch key '{batch_key}' not found in obs columns.")
     sc.pp.highly_variable_genes(
         adata,
         n_top_genes=params.n_top_genes,
         flavor=params.hvg_flavor,
+        batch_key=batch_key,
     )
     n_hvg = int(adata.var["highly_variable"].sum())
-    logger.info("Selected %d highly variable genes (flavor=%s)", n_hvg, params.hvg_flavor)
+    logger.info("Selected %d highly variable genes (flavor=%s, batch_key=%s)",
+                n_hvg, params.hvg_flavor, batch_key)
 
 
 def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -277,6 +286,28 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> None:
     n_comps = min(params.n_comps, adata.n_obs - 1, adata.n_vars - 1)
     sc.tl.pca(adata, n_comps=n_comps, svd_solver="arpack")
     logger.info("PCA: %d components", n_comps)
+
+
+def _run_uncorrected_embedding(adata: ad.AnnData, params: PipelineParams) -> None:
+    """UMAP of the *uncorrected* PCA, stored as ``X_umap_uncorrected``.
+
+    Run before batch correction so the corrected and uncorrected layouts can be
+    compared side by side — the most direct check of whether integration mixed
+    the batches (or over-corrected real differences). Uses its own neighbor
+    graph so the main ``neighbors`` graph is left for the corrected space.
+    """
+    if "X_pca" not in adata.obsm:
+        raise ValueError("PCA must be computed before the uncorrected embedding.")
+    key = "uncorrected"
+    sc.pp.neighbors(adata, n_neighbors=params.n_neighbors, use_rep="X_pca", key_added=key)
+    sc.tl.umap(adata, min_dist=params.umap_min_dist, neighbors_key=key,
+               key_added="X_umap_uncorrected")
+    # Only the layout is kept; the graph would roughly double the file size.
+    for k in (f"{key}_connectivities", f"{key}_distances"):
+        adata.obsp.pop(k, None)
+    adata.uns.pop(key, None)
+    adata.uns.pop("X_umap_uncorrected", None)
+    logger.info("Uncorrected UMAP -> X_umap_uncorrected %s", adata.obsm["X_umap_uncorrected"].shape)
 
 
 def _run_batch_correction(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -851,6 +882,7 @@ _STEP_RUNNERS: dict[str, Any] = {
     "highly_variable_genes": _run_hvg,
     "scaling": _run_scaling,
     "pca": _run_pca,
+    "uncorrected_embedding": _run_uncorrected_embedding,
     "batch_correction": _run_batch_correction,
     "neighbors": _run_neighbors,
     "clustering": _run_clustering,
@@ -874,9 +906,11 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
                   ("min_genes", "min_cells", "max_pct_mt", "drop_doublets")),
     "normalization": ("scanpy.pp.normalize_total", ("target_sum",)),
     "log_transform": ("scanpy.pp.log1p", ()),
-    "highly_variable_genes": ("scanpy.pp.highly_variable_genes", ("n_top_genes", "hvg_flavor")),
+    "highly_variable_genes": ("scanpy.pp.highly_variable_genes",
+                              ("n_top_genes", "hvg_flavor", "hvg_batch_key")),
     "scaling": ("scanpy.pp.scale", ()),
     "pca": ("scanpy.pp.pca", ("n_comps",)),
+    "uncorrected_embedding": ("scanpy.tl.umap (uncorrected PCA)", ("n_neighbors", "umap_min_dist")),
     "batch_correction": ("scview.batch_correction", ("batch_key", "batch_method")),
     "neighbors": ("scanpy.pp.neighbors", ("n_neighbors", "n_comps")),
     "clustering": ("scanpy.tl.leiden/louvain", ("clustering_method", "clustering_resolution")),

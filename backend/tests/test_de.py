@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 from fastapi import HTTPException
 
-from scview.api.v1.de import DERequest, differential_expression
+from scview.api.v1.de import (
+    DECompareRequest,
+    DERequest,
+    differential_expression,
+    differential_expression_compare,
+)
 
 
 class _DM:
@@ -61,3 +67,55 @@ async def test_de_dedupes_and_clamps_indices():
     # Duplicates + an out-of-range index are cleaned, not fatal.
     res = await differential_expression("x", DERequest(indices=[0, 0, 1, 2, 3, 9999]), dm)
     assert res.n_selected == 4
+
+
+def _two_conditions() -> ad.AnnData:
+    """Cell types X/Y in conditions A/B; G0–G4 are up in A, but only in X cells."""
+    rng = np.random.default_rng(1)
+    n, g = 80, 30
+    X = np.abs(rng.normal(5, 1, size=(n, g))).astype("float32")
+    cond = np.array(["A", "B"] * (n // 2))
+    ct = np.array(["X"] * (n // 2) + ["Y"] * (n // 2))
+    X[(cond == "A") & (ct == "X"), :5] += 6.0
+    a = ad.AnnData(X)
+    a.var_names = [f"G{i}" for i in range(g)]
+    a.obs["cond"] = pd.Categorical(cond)
+    a.obs["ct"] = pd.Categorical(ct)
+    return a
+
+
+@pytest.mark.asyncio
+async def test_de_compare_within_subgroup():
+    dm = _DM(_two_conditions())
+    body = DECompareRequest(split_by="cond", group_a="A", group_b="B",
+                            within_column="ct", within_value="X")
+    res = await differential_expression_compare("x", body, dm)
+    assert (res.n_selected, res.n_rest) == (20, 20)
+    assert res.label == "A (X)"
+    top = sorted(res.genes, key=lambda d: d.pval_adj)[:5]
+    assert {g.gene for g in top} == {f"G{i}" for i in range(5)}
+    assert all(g.logfoldchange > 0 for g in top)
+
+    # Within Y there is no planted difference.
+    body_y = DECompareRequest(split_by="cond", group_a="A", group_b="B",
+                              within_column="ct", within_value="Y")
+    res_y = await differential_expression_compare("x", body_y, dm)
+    assert min(g.pval_adj for g in res_y.genes) > 0.05
+
+
+@pytest.mark.asyncio
+async def test_de_compare_rejects_bad_requests():
+    dm = _DM(_two_conditions())
+    with pytest.raises(HTTPException) as e:
+        await differential_expression_compare(
+            "x", DECompareRequest(split_by="nope", group_a="A", group_b="B"), dm)
+    assert e.value.status_code == 404
+    with pytest.raises(HTTPException) as e:
+        await differential_expression_compare(
+            "x", DECompareRequest(split_by="cond", group_a="A", group_b="A"), dm)
+    assert e.value.status_code == 400
+    with pytest.raises(HTTPException) as e:  # empty subgroup
+        await differential_expression_compare(
+            "x", DECompareRequest(split_by="cond", group_a="A", group_b="B",
+                                  within_column="ct", within_value="Z"), dm)
+    assert e.value.status_code == 400

@@ -29,6 +29,17 @@ class DERequest(BaseModel):
     label: str = "selection"  # display label for the selection group
 
 
+class DECompareRequest(BaseModel):
+    """Group A vs group B of one obs column, optionally within one subgroup —
+    e.g. dataset=STIM vs dataset=CTRL within cell_type=CD14 Mono."""
+
+    split_by: str
+    group_a: str
+    group_b: str
+    within_column: str | None = None
+    within_value: str | None = None
+
+
 class DEGene(BaseModel):
     gene: str
     logfoldchange: float
@@ -43,44 +54,20 @@ class DEResponse(BaseModel):
     genes: list[DEGene]
 
 
-@router.post("/datasets/{dataset_id}/de", response_model=DEResponse)
-async def differential_expression(
-    dataset_id: str,
-    body: DERequest,
-    dm: DatasetManager = Depends(get_dataset_manager),
-) -> DEResponse:
-    """One-vs-rest Wilcoxon DE for the selected cells, over all genes (for a volcano)."""
-    adaptor = await dm.get_or_load_dataset(dataset_id)
-    if adaptor is None:
-        raise HTTPException(status_code=404, detail="Dataset not found.")
-
+def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
+    """Wilcoxon DE of the ``mask_a`` cells against the ``mask_b`` cells of ``work``
+    (an in-memory AnnData the caller may modify), over all genes."""
     import numpy as np
     import pandas as pd
     import scanpy as sc
 
-    adata = adaptor.adata
-    n = int(adata.n_obs)
-
-    idx = sorted({int(i) for i in body.indices if 0 <= int(i) < n})
-    if len(idx) < _MIN_GROUP:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Select at least {_MIN_GROUP} cells (got {len(idx)}).",
-        )
-    if n - len(idx) < _MIN_GROUP:
-        raise HTTPException(
-            status_code=400,
-            detail="The selection covers (almost) all cells; nothing to compare against.",
-        )
-
-    work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
-
-    mask = np.zeros(n, dtype=bool)
-    mask[idx] = True
+    keep = mask_a | mask_b
+    if not keep.all():
+        work = work[keep].copy()
+        mask_a = mask_a[keep]
     work.obs["_de_group"] = pd.Categorical(
-        np.where(mask, "selection", "rest"), categories=["rest", "selection"]
+        np.where(mask_a, "selection", "rest"), categories=["rest", "selection"]
     )
-
     try:
         sc.tl.rank_genes_groups(
             work,
@@ -108,5 +95,86 @@ async def differential_expression(
         if not (np.isfinite(lf) and np.isfinite(p) and np.isfinite(pa)):
             continue
         genes.append(DEGene(gene=str(names[i]), logfoldchange=lf, pval=p, pval_adj=pa))
+    return genes
 
+
+@router.post("/datasets/{dataset_id}/de", response_model=DEResponse)
+async def differential_expression(
+    dataset_id: str,
+    body: DERequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+) -> DEResponse:
+    """One-vs-rest Wilcoxon DE for the selected cells, over all genes (for a volcano)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+
+    import numpy as np
+
+    adata = adaptor.adata
+    n = int(adata.n_obs)
+
+    idx = sorted({int(i) for i in body.indices if 0 <= int(i) < n})
+    if len(idx) < _MIN_GROUP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Select at least {_MIN_GROUP} cells (got {len(idx)}).",
+        )
+    if n - len(idx) < _MIN_GROUP:
+        raise HTTPException(
+            status_code=400,
+            detail="The selection covers (almost) all cells; nothing to compare against.",
+        )
+
+    mask = np.zeros(n, dtype=bool)
+    mask[idx] = True
+    work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
+    genes = _wilcoxon(work, mask, ~mask, dataset_id)
     return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=genes)
+
+
+@router.post("/datasets/{dataset_id}/de/compare", response_model=DEResponse)
+async def differential_expression_compare(
+    dataset_id: str,
+    body: DECompareRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+) -> DEResponse:
+    """Wilcoxon DE between two groups of an obs column (A vs B), optionally
+    restricted to one subgroup — the cross-dataset / cross-condition comparison
+    for a joint dataset. ``n_selected``/``n_rest`` are the A/B cell counts."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+
+    import numpy as np
+
+    adata = adaptor.adata
+    obs = adata.obs
+    for col in (body.split_by, body.within_column):
+        if col and col not in obs.columns:
+            raise HTTPException(status_code=404, detail=f"Column '{col}' not found.")
+    if body.group_a == body.group_b:
+        raise HTTPException(status_code=400, detail="Pick two different groups to compare.")
+
+    split = obs[body.split_by].astype(str).to_numpy()
+    within = np.ones(adata.n_obs, dtype=bool)
+    if body.within_column and body.within_value is not None:
+        within = obs[body.within_column].astype(str).to_numpy() == body.within_value
+    mask_a = within & (split == body.group_a)
+    mask_b = within & (split == body.group_b)
+    n_a, n_b = int(mask_a.sum()), int(mask_b.sum())
+    if min(n_a, n_b) < _MIN_GROUP:
+        scope = f" within {body.within_value}" if body.within_column else ""
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Each group needs at least {_MIN_GROUP} cells{scope} "
+                    f"({body.group_a}: {n_a}, {body.group_b}: {n_b})."),
+        )
+
+    # Subset before copying: only the compared cells are materialised.
+    keep = mask_a | mask_b
+    sub = adata[keep]
+    work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
+    genes = _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id)
+    label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
+    return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes)
