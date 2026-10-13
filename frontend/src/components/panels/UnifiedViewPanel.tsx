@@ -18,7 +18,7 @@ import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentS
 import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { mapCategoryToColor } from "@/lib/colors";
-import { prettyObsLabel } from "@/lib/formatting";
+import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { getDataset, renameObsCategory } from "@/api/datasets";
@@ -715,7 +715,7 @@ export function UnifiedViewPanel() {
                     dataset?.obs_columns.find((c) => c.name === groupByColumn)?.values?.length ?? 0,
                   )}
                 />
-                <InfoRow label="Embedding" value={embedding.replace(/^X_/, "").toUpperCase()} />
+                <InfoRow label="Embedding" value={prettyEmbeddingLabel(embedding)} />
                 <InfoRow
                   label="Overlay"
                   value={scatterOverlay ? `${overlayLabel} (${scatterOverlay.type})` : "—"}

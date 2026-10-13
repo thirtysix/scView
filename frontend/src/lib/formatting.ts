@@ -38,3 +38,16 @@ export function isRedundantClusterCol(name: string, allNames: string[]): boolean
   if (name !== "leiden" && name !== "louvain") return false;
   return allNames.some((n) => n.startsWith(`scview_${name}_r`));
 }
+
+/**
+ * Display label for an obsm embedding key:
+ *  - X_umap               -> "UMAP"
+ *  - X_umap_uncorrected   -> "UMAP (uncorrected)"
+ *  - X_pca_harmony        -> "PCA (HARMONY)"
+ */
+export function prettyEmbeddingLabel(name: string): string {
+  const [base = "", ...rest] = name.replace(/^X_/, "").split("_");
+  const suffix = rest.filter((r) => r.toLowerCase() !== "3d").join(" ");
+  if (!suffix) return base.toUpperCase();
+  return `${base.toUpperCase()} (${suffix === "uncorrected" ? suffix : suffix.toUpperCase()})`;
+}

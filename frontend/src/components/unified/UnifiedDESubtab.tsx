@@ -1,11 +1,32 @@
-import { useCallback, useMemo, useState } from "react";
-import { Loader2, Download, Lasso, FlaskConical } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Loader2, Download, Lasso, FlaskConical, ArrowLeftRight } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
-import { computeDE, type DEResponse } from "@/api/de";
+import { computeDE, computeDECompare, type DEResponse } from "@/api/de";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { downloadCsv } from "@/lib/csv";
-import { formatPValue } from "@/lib/formatting";
+import { formatPValue, prettyObsLabel } from "@/lib/formatting";
+import type { ObsColumnInfo } from "@/api/types";
+
+type Mode = "selection" | "groups";
+
+/** Categorical columns with listed values, usable as a group picker. */
+function groupColumns(cols: ObsColumnInfo[] | undefined, maxLevels: number): ObsColumnInfo[] {
+  return (cols ?? []).filter(
+    (c) => (c.values?.length ?? 0) >= 2 && (c.values?.length ?? 0) <= maxLevels,
+  );
+}
+
+/** Default "compare" column: the joint dataset's origin, else a condition-like column. */
+function defaultSplit(cols: ObsColumnInfo[]): string {
+  const names = cols.map((c) => c.name);
+  return (
+    names.find((n) => n === "dataset") ??
+    names.find((n) => /stim|condition|treat|group|disease|status|sample|batch/i.test(n)) ??
+    names[0] ??
+    ""
+  );
+}
 
 interface Props {
   onGeneClick: (gene: string) => void;
@@ -17,14 +38,53 @@ interface Props {
  */
 export function UnifiedDESubtab({ onGeneClick }: Props) {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
+  const dataset = useDatasetStore((s) => s.currentDataset);
   const selected = useSelectionStore((s) => s.selectedCellIndices);
   const highlighted = useSelectionStore((s) => s.highlightedGroup);
 
+  const [mode, setMode] = useState<Mode>("selection");
   const [result, setResult] = useState<DEResponse | null>(null);
+  // Display name of the comparison group ("rest" for selection-vs-rest).
+  const [refLabel, setRefLabel] = useState("rest");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fcThreshold, setFcThreshold] = useState(1);
   const [pThreshold] = useState(0.05);
+
+  // Between-groups pickers.
+  const splitCols = useMemo(() => groupColumns(dataset?.obs_columns, 50), [dataset]);
+  const withinCols = useMemo(() => groupColumns(dataset?.obs_columns, 100), [dataset]);
+  const [splitBy, setSplitBy] = useState("");
+  const [groupA, setGroupA] = useState("");
+  const [groupB, setGroupB] = useState("");
+  const [withinCol, setWithinCol] = useState("");
+  const [withinVal, setWithinVal] = useState("");
+
+  const splitValues = splitCols.find((c) => c.name === splitBy)?.values ?? [];
+  const withinValues = withinCols.find((c) => c.name === withinCol)?.values ?? [];
+
+  // Reset the pickers when the dataset changes; default to the joint `dataset` column.
+  useEffect(() => {
+    setResult(null);
+    setSplitBy(defaultSplit(splitCols));
+    setWithinCol("");
+    setWithinVal("");
+  }, [datasetId, splitCols]);
+
+  useEffect(() => {
+    const vals = splitCols.find((c) => c.name === splitBy)?.values ?? [];
+    setGroupA(vals[1] ?? vals[0] ?? "");
+    setGroupB(vals[0] ?? "");
+  }, [splitBy, splitCols]);
+
+  // A cluster / cell type clicked in the legend becomes the "within" scope.
+  useEffect(() => {
+    if (!highlighted || highlighted.column === splitBy) return;
+    if (withinCols.some((c) => c.name === highlighted.column)) {
+      setWithinCol(highlighted.column);
+      setWithinVal(highlighted.value);
+    }
+  }, [highlighted, splitBy, withinCols]);
 
   const nSelected = selected?.size ?? 0;
 
@@ -36,12 +96,34 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
       const label = highlighted?.value ?? "selection";
       const res = await computeDE(datasetId, Array.from(selected), label);
       setResult(res);
+      setRefLabel("rest");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
   }, [datasetId, selected, highlighted]);
+
+  const runCompare = useCallback(async () => {
+    if (!datasetId || !splitBy || !groupA || !groupB) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const scoped = withinCol && withinVal;
+      const res = await computeDECompare(datasetId, {
+        split_by: splitBy,
+        group_a: groupA,
+        group_b: groupB,
+        ...(scoped ? { within_column: withinCol, within_value: withinVal } : {}),
+      });
+      setResult(res);
+      setRefLabel(groupB);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal]);
 
   // Significant genes, most significant first, for the table.
   const sigGenes = useMemo(() => {
@@ -69,9 +151,122 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
     return <div className="text-xs text-slate-400">No dataset loaded.</div>;
   }
 
+  const selectCls =
+    "min-w-0 flex-1 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700";
+
   return (
     <div className="flex flex-col gap-3">
-      {/* Selection status + run */}
+      {/* Mode */}
+      <div className="flex rounded-md border border-slate-200 p-0.5 text-xs">
+        {(
+          [
+            ["selection", "Selection vs rest"],
+            ["groups", "Between groups"],
+          ] as const
+        ).map(([m, label]) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className={`flex-1 rounded px-2 py-1 font-medium transition ${
+              mode === m ? "bg-primary text-white" : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "groups" ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs">
+          {splitCols.length === 0 ? (
+            <span className="text-slate-500">
+              This dataset has no categorical column with 2–50 groups to compare.
+            </span>
+          ) : (
+            <>
+              <div className="flex items-center gap-1.5">
+                <span className="w-12 font-medium text-slate-500">Compare</span>
+                <select value={splitBy} onChange={(e) => setSplitBy(e.target.value)} className={selectCls}>
+                  {splitCols.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {prettyObsLabel(c.name)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-12 font-medium text-slate-500">Groups</span>
+                <select value={groupA} onChange={(e) => setGroupA(e.target.value)} className={selectCls}>
+                  {splitValues.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    setGroupA(groupB);
+                    setGroupB(groupA);
+                  }}
+                  title="Swap groups"
+                  className="rounded border border-slate-300 bg-white p-1 text-slate-500 hover:bg-slate-100"
+                >
+                  <ArrowLeftRight className="h-3 w-3" />
+                </button>
+                <select value={groupB} onChange={(e) => setGroupB(e.target.value)} className={selectCls}>
+                  {splitValues.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-12 font-medium text-slate-500">Within</span>
+                <select
+                  value={withinCol}
+                  onChange={(e) => {
+                    setWithinCol(e.target.value);
+                    setWithinVal(withinCols.find((c) => c.name === e.target.value)?.values?.[0] ?? "");
+                  }}
+                  className={selectCls}
+                >
+                  <option value="">All cells</option>
+                  {withinCols
+                    .filter((c) => c.name !== splitBy)
+                    .map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {prettyObsLabel(c.name)}
+                      </option>
+                    ))}
+                </select>
+                {withinCol && (
+                  <select value={withinVal} onChange={(e) => setWithinVal(e.target.value)} className={selectCls}>
+                    {withinValues.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-500">
+                  Up = higher in <span className="font-semibold text-slate-700">{groupA}</span>
+                </span>
+                <button
+                  onClick={runCompare}
+                  disabled={loading || !groupA || !groupB || groupA === groupB}
+                  className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
+                >
+                  {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <FlaskConical className="h-3 w-3" />}
+                  Compute DE
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs">
         {nSelected < 3 ? (
           <div className="flex items-start gap-2 text-slate-500">
@@ -98,6 +293,7 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
           </div>
         )}
       </div>
+      )}
 
       {error && (
         <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">{error}</div>
@@ -129,9 +325,15 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
           </div>
 
           <div className="text-[10px] text-slate-400">
-            {result.label} (n={result.n_selected.toLocaleString()}) vs rest (n=
+            {result.label} (n={result.n_selected.toLocaleString()}) vs {refLabel} (n=
             {result.n_rest.toLocaleString()}) · {sigGenes.length.toLocaleString()} significant of{" "}
             {result.genes.length.toLocaleString()} genes · click a point or row to overlay it
+            {refLabel !== "rest" && (
+              <span className="block pt-0.5">
+                Cell-level Wilcoxon: cells are treated as independent, so p-values are optimistic
+                when the groups also differ by donor or sample.
+              </span>
+            )}
           </div>
 
           {/* Volcano */}

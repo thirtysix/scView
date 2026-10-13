@@ -58,9 +58,10 @@ export function Sidebar() {
         {PANEL_IDS.map((id) => {
           const Icon = PANEL_ICONS[id];
           const isActive = activePanel === id;
-          // "load" and "assistant" work without a dataset (the co-pilot can help
-          // a newcomer get started); the rest need a loaded dataset.
-          const isDisabled = id !== "load" && id !== "assistant" && !hasDataset;
+          // "load", "assistant" and "compare" work without a dataset (the co-pilot
+          // can help a newcomer get started; a joint embedding picks its own
+          // datasets); the rest need a loaded dataset.
+          const isDisabled = !["load", "assistant", "compare"].includes(id) && !hasDataset;
 
           return (
             <button

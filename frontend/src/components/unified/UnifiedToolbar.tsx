@@ -2,7 +2,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { Lasso, RotateCcw, X } from "lucide-react";
-import { formatNumber, prettyObsLabel, isRedundantClusterCol } from "@/lib/formatting";
+import { formatNumber, prettyObsLabel, prettyEmbeddingLabel, isRedundantClusterCol } from "@/lib/formatting";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -71,7 +71,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             const dims = dataset?.embedding_dimensions?.[name];
             return (
               <option key={name} value={name}>
-                {name.replace("X_", "").toUpperCase()}{dims === 3 ? " (3D)" : ""}
+                {prettyEmbeddingLabel(name)}{dims === 3 ? " (3D)" : ""}
               </option>
             );
           })}
