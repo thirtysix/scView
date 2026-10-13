@@ -359,8 +359,13 @@ _FEATURE_GUIDE = (
     "TABS: Data (import/manage datasets), Data Assessment (QC plots + AI-guided pipeline: "
     "QC → normalize → HVG → PCA → batch correction → clustering → UMAP → markers → "
     "enrichment), Unified View (linked scatter + markers/expression/gene-sets/enrichment + "
-    "violin), Observations, Gene Expression, Gene Sets & Enrichment, Marker Genes, "
-    "Trajectory, History (provenance: what was done + edit-&-re-run), and this AI Co-pilot."
+    "violin; its DE subtab compares a lasso/cluster selection vs the rest, or two groups of "
+    "a column such as dataset or condition, optionally within one cell type), Observations, "
+    "Gene Expression, Gene Sets & Enrichment, Marker Genes, Trajectory, Compare (Joint "
+    "embedding: merge 2+ library datasets on shared genes into a new dataset with one "
+    "Harmony-corrected UMAP, joint clusters and a 'dataset' column, plus an uncorrected UMAP "
+    "for before/after; Composition: cell-type proportions of two datasets side by side), "
+    "History (provenance: what was done + edit-&-re-run), and this AI Co-pilot."
 )
 
 
