@@ -10,7 +10,7 @@ name: scview
 
 services:
   backend:
-    image: ghcr.io/thirtysix/scview-backend:${SCVIEW_VERSION:-0.10.0}
+    image: ghcr.io/thirtysix/scview-backend:${SCVIEW_VERSION:-0.10.1}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -36,7 +36,7 @@ services:
       retries: 3
 
   frontend:
-    image: ghcr.io/thirtysix/scview-frontend:${SCVIEW_VERSION:-0.10.0}
+    image: ghcr.io/thirtysix/scview-frontend:${SCVIEW_VERSION:-0.10.1}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -47,7 +47,7 @@ services:
         condition: service_healthy
 
   converter:
-    image: ghcr.io/thirtysix/scview-converter:${SCVIEW_VERSION:-0.10.0}
+    image: ghcr.io/thirtysix/scview-converter:${SCVIEW_VERSION:-0.10.1}
     build:
       context: ./converter
       dockerfile: Dockerfile

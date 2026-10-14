@@ -6,6 +6,16 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-14
+
+### Fixed
+- **A Seurat `.rds` added together with other files no longer fails with "Internal Server Error".**
+  The upload wizard now explains that `.rds` files are converted separately and asks for the file on
+  its own. A single `.rds` was already converted correctly.
+- **Unreadable files get a clear error.** A file that can't be read is reported with the reason
+  instead of a server error, and a damaged file that parses to no cells or no genes is rejected
+  instead of being saved as an empty dataset.
+
 ## [0.10.0] - 2026-10-14
 
 ### Added
