@@ -19,6 +19,7 @@ from typing import Any, Callable, Generator
 import anndata as ad
 import numpy as np
 import scanpy as sc
+import scipy.sparse as sp
 
 from scview.core import provenance
 from scview.core.gene_filters import select_query_genes
@@ -240,11 +241,51 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> ad.AnnData:
     return adata
 
 
+# Non-zero values sampled when deciding whether a matrix holds raw counts.
+_COUNTS_SAMPLE = 20_000
+
+
+def looks_like_counts(M) -> bool:
+    """Non-negative integers with some signal: a raw-count matrix."""
+    if M is None:
+        return False
+    if sp.issparse(M):
+        vals = np.asarray(M.data[:_COUNTS_SAMPLE])
+    else:
+        arr = np.asarray(M)
+        vals = arr.ravel()[:_COUNTS_SAMPLE * 4]
+        vals = vals[vals != 0][:_COUNTS_SAMPLE]
+    if vals.size == 0:
+        return False
+    vals = vals.astype(np.float64, copy=False)
+    return bool(np.all(vals >= 0) and np.all(np.mod(vals, 1) == 0))
+
+
+def _keep_raw_counts(adata: ad.AnnData) -> None:
+    """Copy counts held only in ``.raw`` into ``layers['counts']``.
+
+    Uploads often carry counts in ``.raw`` alone. ``_run_scaling`` replaces
+    ``.raw`` with the log-normalised matrix, which would leave no counts anywhere.
+    """
+    if "counts" in adata.layers or adata.raw is None:
+        return
+    if not looks_like_counts(adata.raw.X):
+        return
+    if len(adata.var_names.difference(adata.raw.var_names)):
+        logger.warning("adata.raw lacks some genes in X; raw counts not copied to layers")
+        return
+    adata.layers["counts"] = adata.raw[:, adata.var_names].X.copy()
+    logger.info("Kept raw counts from adata.raw in layers['counts']")
+
+
 def _run_normalization(adata: ad.AnnData, params: PipelineParams) -> None:
     """Normalize to target sum per cell, store raw counts."""
     # Save raw counts before normalization
-    if adata.raw is None and "counts" not in adata.layers:
-        adata.layers["counts"] = adata.X.copy()
+    if "counts" not in adata.layers:
+        if adata.raw is None or looks_like_counts(adata.X):
+            adata.layers["counts"] = adata.X.copy()
+        else:
+            _keep_raw_counts(adata)
     sc.pp.normalize_total(adata, target_sum=params.target_sum)
     logger.info("Normalized to target sum %.0f", params.target_sum)
 
@@ -276,6 +317,7 @@ def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> None:
 def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> None:
     """Scale expression to unit variance and zero mean."""
     # Store the full data before subsetting to HVGs
+    _keep_raw_counts(adata)
     adata.raw = adata
     sc.pp.scale(adata, max_value=10)
     logger.info("Scaled expression (max_value=10)")
@@ -657,10 +699,11 @@ def _annotate_celltypist(
 
     # CellTypist expects log1p of counts-per-10k. Build that from raw counts so the
     # result is correct regardless of the current X state (scaled/HVG-subset/etc.).
-    if adata.raw is not None:
-        counts, var_names = adata.raw.X, list(adata.raw.var_names)
-    elif "counts" in adata.layers:
+    # layers['counts'] first: after scaling, .raw holds log-normalised values.
+    if "counts" in adata.layers:
         counts, var_names = adata.layers["counts"], list(adata.var_names)
+    elif adata.raw is not None:
+        counts, var_names = adata.raw.X, list(adata.raw.var_names)
     else:
         counts, var_names = adata.X, list(adata.var_names)
     inp = ad.AnnData(X=counts.copy() if hasattr(counts, "copy") else counts)
