@@ -13,6 +13,33 @@ https://github.com/user-attachments/assets/486aaf9d-bf77-4a20-9f1f-28bc3bf81e8c
 
 *A full run-through with an on-screen real-time clock: load a dataset, AI-assisted assessment, Unified View, cluster colors, marker-gene expression, 3D embedding, enrichment. Fast-forwarded sections visibly race the clock.*
 
+## Contents
+
+- [Why scView](#why-scview)
+- [Screenshots](#screenshots)
+  - [Unified View](#unified-view)
+  - [Differential expression (volcano)](#differential-expression-volcano)
+  - [Pathway enrichment: programs, not a wall of terms](#pathway-enrichment-programs-not-a-wall-of-terms)
+  - [Joint embedding across datasets](#joint-embedding-across-datasets)
+  - [Compare datasets](#compare-datasets)
+  - [AI co-pilot](#ai-co-pilot)
+  - [Literature-grounded answers](#literature-grounded-answers)
+  - [Methods from provenance](#methods-from-provenance)
+  - [AI-assisted Data Assessment](#ai-assisted-data-assessment)
+  - [Proactive insight on open](#proactive-insight-on-open)
+  - [History / provenance](#history--provenance)
+  - [Forgiving data import](#forgiving-data-import)
+- [Installation and usage](#installation-and-usage)
+  - [1. Prerequisites](#1-prerequisites)
+  - [2. Get the code](#2-get-the-code)
+  - [3. Start scView](#3-start-scview)
+  - [4. First steps](#4-first-steps)
+  - [5. Optional: enable the AI features](#5-optional-enable-the-ai-features)
+- [Architecture](#architecture)
+- [Development](#development)
+- [Status](#status)
+- [License](#license)
+
 ---
 
 ## Why scView
