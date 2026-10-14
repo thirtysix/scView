@@ -2,8 +2,15 @@
 # called (a ZIP download unpacks to scView-main, a git clone to scView).
 name: scview
 
+# Each service pulls a prebuilt image from GHCR (published per release by
+# .github/workflows/publish-images.yml) and falls back to building from source
+# when that image isn't available. `docker compose up -d --build` always builds
+# from source. Set SCVIEW_VERSION in .env to use another tag, e.g. `main`.
+# A release must bump all three tags; the publish workflow checks this.
+
 services:
   backend:
+    image: ghcr.io/thirtysix/scview-backend:${SCVIEW_VERSION:-0.10.0}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -29,6 +36,7 @@ services:
       retries: 3
 
   frontend:
+    image: ghcr.io/thirtysix/scview-frontend:${SCVIEW_VERSION:-0.10.0}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -39,6 +47,7 @@ services:
         condition: service_healthy
 
   converter:
+    image: ghcr.io/thirtysix/scview-converter:${SCVIEW_VERSION:-0.10.0}
     build:
       context: ./converter
       dockerfile: Dockerfile

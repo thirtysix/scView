@@ -36,7 +36,7 @@ test-backend:
 
 # Clean up
 clean:
-	docker compose down -v --rmi local
+	docker compose down -v --rmi all
 	rm -rf frontend/node_modules frontend/dist
 	find backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 

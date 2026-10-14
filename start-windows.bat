@@ -58,11 +58,14 @@ echo   [ok] Settings saved to .env
 :env_ready
 
 echo.
-echo   Building and starting scView. The first run downloads and builds
-echo   everything (several GB) and can take tens of minutes. Later starts
-echo   take about a minute.
+echo   Downloading and starting scView. The first run downloads a few GB.
+echo   If a prebuilt part isn't available it is built here instead, which
+echo   can take tens of minutes. Later starts take about a minute.
+echo   You can ignore a "must be built from source" warning: this window
+echo   does that for you.
 echo.
-docker compose up -d --build
+docker compose pull --ignore-pull-failures
+docker compose up -d
 if errorlevel 1 (
     echo.
     echo   scView did not start; the messages above say why.

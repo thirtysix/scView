@@ -181,7 +181,7 @@ scView runs entirely in Docker, so there is no Python, Node, or R to install. **
   fine. For **large datasets (100k+ cells)**, the **Seurat `.rds` converter**, or heavy steps
   (doublet detection, Harmony, enrichment) on big data, **16 GB+ is recommended**; at 8 GB those
   can be slow or run out of memory.
-- **Disk:** about 4 GB for the images; have **10 GB free** for the first build.
+- **Disk:** about 4 GB for the images; have **10 GB free** for the first start.
 - **Internet on the first start**, to download the images and the MSigDB gene sets.
 - A modern browser.
 
@@ -203,8 +203,9 @@ You install Docker Desktop once, then start and stop scView by double-clicking.
    File*). If Windows shows a security warning, choose **Run**, or **More info → Run anyway**.
    A window opens that:
    - asks for an optional DeepInfra API key for the AI features (press Enter to skip),
-   - builds and starts scView. **The first run downloads several GB and can take tens of
-     minutes**; later starts take about a minute,
+   - downloads and starts scView. **The first run downloads a few GB**; later starts take about
+     a minute. If a prebuilt part isn't available yet, it is built on your computer instead,
+     which can take tens of minutes (a "must be built from source" warning means just that),
    - opens scView in your browser at **http://localhost:3000**.
 6. **Load some data:** see [First steps](#first-steps).
 
@@ -265,24 +266,30 @@ Then run `wsl --shutdown` in PowerShell and reopen Docker Desktop.
    ```
 3. **Start scView** with the guided script:
    ```bash
-   ./start.sh --prod    # recommended: optimized stack     -> http://localhost:3000
-   ./start.sh           # development stack, hot-reload    -> http://localhost:5173
+   ./start.sh --prod           # recommended: prebuilt images  -> http://localhost:3000
+   ./start.sh --prod --build   # same, built from source
+   ./start.sh                  # development stack, hot-reload -> http://localhost:5173
    ./start.sh --stop    # stop all services (datasets are kept)
    ./start.sh --clean   # remove containers, images AND all uploaded datasets (asks first)
    ```
-   `start.sh` checks prerequisites, creates `.env` (asking for an optional API key), builds the
-   images (the first run downloads several GB and can take tens of minutes), waits for health
-   checks, and opens the app.
+   `start.sh` checks prerequisites, creates `.env` (asking for an optional API key), downloads
+   the prebuilt images (or builds them: the development stack and `--build` always do, and the
+   first build can take tens of minutes), waits for health checks, and opens the app.
 
 ### Other ways to start
 
 On any platform, Compose works directly. A `.env` file is optional; copy `.env.example` to `.env`
 to change settings.
 ```bash
-docker compose up --build -d                           # prod -> http://localhost:3000
-docker compose -f docker-compose.dev.yml up --build    # dev  -> http://localhost:5173
+docker compose up -d                                   # prod, prebuilt images -> http://localhost:3000
+docker compose up -d --build                           # prod, built from source
+docker compose -f docker-compose.dev.yml up --build    # dev                   -> http://localhost:5173
 docker compose down                                    # stop (datasets are kept)
 ```
+The production images are published to GitHub's container registry for each release, for both
+Intel/AMD and ARM machines: `ghcr.io/thirtysix/scview-backend`, `scview-frontend` and
+`scview-converter`. `docker-compose.yml` pins them to the release version and builds any image
+that isn't published; set `SCVIEW_VERSION` in `.env` to use another tag.
 Or with `make`:
 ```bash
 make up      # prod stack -> http://localhost:3000
