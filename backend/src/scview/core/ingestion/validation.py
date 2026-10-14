@@ -63,6 +63,24 @@ def _validate_unit(unit: IngestUnit) -> list[IngestIssue]:
     issues.extend(_check_gzip_integrity(unit))
     if unit.format == UnitFormat.tenx_mex:
         issues.extend(_validate_mex(unit))
+    if unit.format == UnitFormat.seurat:
+        # The UI sends a lone .rds to the R converter; mixed with other files it
+        # lands here, where no loader can read it.
+        issues.append(
+            IngestIssue(
+                severity=IssueSeverity.error,
+                code="seurat_needs_converter",
+                message=(
+                    "Seurat .rds files are converted separately, so they can't be "
+                    "combined with other files in one upload."
+                ),
+                suggestion=(
+                    "Remove the .rds file here, then add it on its own: it is converted "
+                    "and becomes its own dataset."
+                ),
+                unit_label=unit.label,
+            )
+        )
     return issues
 
 
