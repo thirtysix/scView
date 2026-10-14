@@ -203,7 +203,7 @@ You install Docker Desktop once, then start and stop scView by double-clicking.
    File*). If Windows shows a security warning, choose **Run**, or **More info → Run anyway**.
    A window opens that:
    - asks for an optional DeepInfra API key for the AI features (press Enter to skip),
-   - downloads and starts scView. **The first run downloads a few GB**; later starts take about
+   - downloads and starts scView. **The first run downloads about 1 GB**; later starts take about
      a minute. If a prebuilt part isn't available yet, it is built on your computer instead,
      which can take tens of minutes (a "must be built from source" warning means just that),
    - opens scView in your browser at **http://localhost:3000**.

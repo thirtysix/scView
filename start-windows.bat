@@ -58,7 +58,7 @@ echo   [ok] Settings saved to .env
 :env_ready
 
 echo.
-echo   Downloading and starting scView. The first run downloads a few GB.
+echo   Downloading and starting scView. The first run downloads about 1 GB.
 echo   If a prebuilt part isn't available it is built here instead, which
 echo   can take tens of minutes. Later starts take about a minute.
 echo   You can ignore a "must be built from source" warning: this window
