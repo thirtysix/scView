@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from scview.config import Settings, get_settings
+from scview.config import Settings
 from scview.dependencies import get_dataset_manager as _get_dm
 from scview.dependencies import get_settings_dep as _get_settings
 from scview.core.dataset_manager import DatasetManager

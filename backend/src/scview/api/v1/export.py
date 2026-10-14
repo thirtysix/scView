@@ -10,7 +10,6 @@ import io
 import logging
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
