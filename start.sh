@@ -181,7 +181,7 @@ else
         echo ""
         docker compose build
     else
-        info "Downloading prebuilt images (a few GB on the first run)."
+        info "Downloading prebuilt images (about 1 GB on the first run)."
         info "Any image that isn't published is built from source instead, which is slower."
         echo ""
         docker compose pull --ignore-pull-failures

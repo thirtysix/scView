@@ -62,8 +62,8 @@ scView follows [Semantic Versioning](https://semver.org/) and keeps a
    ```
 4. Pushing the tag runs the **Publish images** workflow, which builds the three images for amd64
    and arm64 and publishes them to GHCR as `X.Y.Z`, `X.Y` and `latest`. It fails if step 2 missed
-   a tag. GHCR packages start private: after the first publish, set each one to Public in its
-   package settings, or every install falls back to building from source.
+   a tag. The packages take the repository's public visibility; if one ever shows as private, set
+   it to Public in its package settings, or installs fall back to building from source.
 
 By contributing, you agree that your contributions are licensed under the project's
 [MIT License](LICENSE).

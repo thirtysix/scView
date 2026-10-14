@@ -6,6 +6,38 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-14
+
+### Added
+- **Prebuilt images.** Each release now publishes the backend, frontend and converter images to
+  GitHub's container registry (`ghcr.io/thirtysix/scview-*`) for amd64 and arm64, so installing
+  downloads about 1 GB instead of building everything locally. `docker-compose.yml` pins them to the
+  release and still builds any image that isn't available; `./start.sh --prod --build` or
+  `docker compose up -d --build` builds from source.
+- **Windows install without a command line.** `start-windows.bat` starts Docker Desktop if needed,
+  creates `.env` (asking for an optional API key), starts scView and opens the browser;
+  `stop-windows.bat` stops it. The README has a Windows step-by-step guide and troubleshooting table.
+- **MSigDB gene sets download on first start.** The collections were never in the repository, so a
+  fresh install had no gene sets for enrichment or scoring. The backend now fetches the 22
+  collections (~45 MB) from the Broad Institute into a Docker volume, in the background.
+  `MSIGDB_AUTO_DOWNLOAD=false` turns this off.
+- **README table of contents.**
+
+### Changed
+- **Fixed Compose project name (`scview`)**, so datasets stay available when an update is unpacked
+  into a differently named folder (a GitHub ZIP unpacks to `scView-main`). Upgrading from a folder
+  with another name: earlier datasets are in the Docker volume `<folder name>_dataset_data`, which
+  this version no longer uses.
+- **`.env` is optional.** Requires Docker Compose 2.24 or newer, which `start.sh` now checks.
+- **`./start.sh --clean` asks before deleting**, since it removes every uploaded dataset.
+- The backend's own log messages now appear in `docker logs`.
+
+### Fixed
+- **The converter image build fails when an R package is missing**, instead of producing an image
+  that cannot convert anything.
+- README: the sample-data link now points at a downloadable file (the old path was not in the
+  repository), and the disk estimate is corrected.
+
 ## [0.9.0] - 2026-10-14
 
 ### Added
