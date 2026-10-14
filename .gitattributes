@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings or bash fails with "$'\r': command not
+# found" when Git for Windows converts line endings on checkout.
+*.sh text eol=lf
+# Windows batch files need CRLF; cmd.exe misreads labels in LF-only files.
+*.bat text eol=crlf

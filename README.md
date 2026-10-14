@@ -30,11 +30,15 @@ https://github.com/user-attachments/assets/486aaf9d-bf77-4a20-9f1f-28bc3bf81e8c
   - [History / provenance](#history--provenance)
   - [Forgiving data import](#forgiving-data-import)
 - [Installation and usage](#installation-and-usage)
-  - [1. Prerequisites](#1-prerequisites)
-  - [2. Get the code](#2-get-the-code)
-  - [3. Start scView](#3-start-scview)
-  - [4. First steps](#4-first-steps)
-  - [5. Optional: enable the AI features](#5-optional-enable-the-ai-features)
+  - [Requirements](#requirements)
+  - [Windows, step by step](#windows-step-by-step)
+  - [Windows troubleshooting](#windows-troubleshooting)
+  - [macOS and Linux](#macos-and-linux)
+  - [Other ways to start](#other-ways-to-start)
+  - [Once it's running](#once-its-running)
+  - [First steps](#first-steps)
+  - [Optional: enable the AI features](#optional-enable-the-ai-features)
+  - [Updating](#updating)
 - [Architecture](#architecture)
 - [Development](#development)
 - [Status](#status)
@@ -76,8 +80,8 @@ reviewer can audit. scView closes both gaps:
   `dataset` column for each cell's origin and the uncorrected UMAP kept for a before/after check.
   The DE tab's **Between groups** mode then compares datasets or conditions within a single cell
   type or cluster. The source datasets are never modified.
-- **Pathway enrichment that stays readable.** Over-representation analysis against bundled MSigDB
-  collections (Hallmark, GO, Reactome, KEGG, cell-type signatures), scored against the genes your
+- **Pathway enrichment that stays readable.** Over-representation analysis against MSigDB
+  collections (downloaded from the Broad Institute on first start) (Hallmark, GO, Reactome, KEGG, cell-type signatures), scored against the genes your
   experiment actually measured. A **Programs view** then collapses the usual wall of near-duplicate
   terms into a few biological programs (clustered on their shared genes and ranked by significance),
   and ribosomal/mitochondrial genes are filtered from the query by default, so cell-type and pathway
@@ -166,74 +170,131 @@ reopen or manage previously loaded datasets.*
 
 ## Installation and usage
 
-scView runs entirely in Docker, so the **same steps work on Linux, macOS, and Windows**: no Python,
-Node, or R toolchains to install on the host.
+scView runs entirely in Docker, so there is no Python, Node, or R to install. **On Windows, follow
+[Windows, step by step](#windows-step-by-step)**: no command line needed.
 
-### 1. Prerequisites
+### Requirements
 
-- **Docker** with the **Docker Compose v2** plugin:
-  - **macOS / Windows**: install **[Docker Desktop](https://www.docker.com/products/docker-desktop/)**
-    (bundles Compose). On **Windows**, accept the **WSL 2** backend when prompted.
-  - **Linux**: install **Docker Engine** plus the Compose plugin:
-    ```bash
-    # Ubuntu/Debian
-    sudo apt install docker.io docker-compose-v2
-    # Fedora/RHEL
-    sudo dnf install docker docker-compose-plugin
-    # Arch
-    sudo pacman -S docker docker-compose
-    # then enable the daemon and allow your user to run Docker:
-    sudo systemctl enable --now docker
-    sudo usermod -aG docker "$USER"     # log out/in afterward
-    ```
+- **Docker:** Docker Desktop on Windows and macOS, Docker Engine on Linux, with **Docker Compose
+  v2.24 or newer** (current Docker Desktop includes it).
 - **RAM:** ~8 GB runs the stack and small-to-medium datasets (up to ~tens of thousands of cells)
   fine. For **large datasets (100k+ cells)**, the **Seurat `.rds` converter**, or heavy steps
-  (doublet detection, Harmony, enrichment) on big data, **16 GB+ is recommended** — at 8 GB those
-  can be slow or run out of memory. **~3 GB disk** for the images, plus a modern browser.
+  (doublet detection, Harmony, enrichment) on big data, **16 GB+ is recommended**; at 8 GB those
+  can be slow or run out of memory.
+- **Disk:** about 4 GB for the images; have **10 GB free** for the first build.
+- **Internet on the first start**, to download the images and the MSigDB gene sets.
+- A modern browser.
 
-Confirm Docker is ready:
-```bash
-docker --version && docker compose version && docker info
+### Windows, step by step
+
+You install Docker Desktop once, then start and stop scView by double-clicking.
+
+1. **Make sure you can install software.** Docker Desktop needs administrator rights, so on a work
+   or university PC you may need to ask IT to install it.
+2. **Install [Docker Desktop](https://www.docker.com/products/docker-desktop/).** Keep the default
+   **Use WSL 2** setting and restart the computer when asked. If Docker Desktop then asks to
+   install or update WSL, let it.
+3. **Open Docker Desktop** from the Start menu and wait until it shows **Engine running**. You can
+   skip signing in.
+4. **Download scView:** at the top of this GitHub page, click **Code → Download ZIP**. In your
+   Downloads folder, right-click the ZIP, choose **Extract All**, and open the extracted
+   `scView-main` folder. Running the files from inside the ZIP without extracting will not work.
+5. **Double-click `start-windows.bat`** (it may show as `start-windows`, type *Windows Batch
+   File*). If Windows shows a security warning, choose **Run**, or **More info → Run anyway**.
+   A window opens that:
+   - asks for an optional DeepInfra API key for the AI features (press Enter to skip),
+   - builds and starts scView. **The first run downloads several GB and can take tens of
+     minutes**; later starts take about a minute,
+   - opens scView in your browser at **http://localhost:3000**.
+6. **Load some data:** see [First steps](#first-steps).
+
+**To stop scView**, double-click `stop-windows.bat`. **To start it again later**, open Docker
+Desktop and double-click `start-windows.bat`, or in Docker Desktop open **Containers**, press ▶
+next to **scview**, and go to http://localhost:3000. Your datasets are stored inside Docker, not
+in the scView folder, so stopping, restarting, and [updating](#updating) all keep them.
+
+### Windows troubleshooting
+
+| What you see | What to do |
+| --- | --- |
+| `start-windows.bat` says Docker Desktop is not installed, but you installed it | Restart the computer so Windows finds Docker's commands. |
+| Docker Desktop says virtualization is not enabled, or shows a WSL error | Virtualization has to be switched on in the PC's BIOS/UEFI settings (called Intel VT-x, or AMD-V / SVM). Then run `wsl --update` in PowerShell and restart. On a managed PC, ask IT. |
+| "Docker Desktop did not start" | Open Docker Desktop yourself, wait for **Engine running**, and run `start-windows.bat` again. |
+| "port is already allocated" | Another program is using port 3000, 8080, or 8001. Close it or restart the computer, then try again. |
+| A large dataset fails, or the app becomes very slow | Docker on Windows can use only half of the computer's memory by default. To raise it, see below. |
+| Gene sets or pathway enrichment are empty | On the first start scView downloads the MSigDB gene sets (~45 MB) in the background. Wait a minute and reload the page. This needs internet access to `data.broadinstitute.org`; if the download failed, it is retried on the next start. |
+| Something else | Copy the last lines of the window's text into an [issue](https://github.com/thirtysix/scView/issues). |
+
+To give Docker more memory, create a file named `.wslconfig` in your user folder
+(`C:\Users\<your name>`) containing these two lines, adjusting the number to leave a few GB for
+Windows itself:
+```ini
+[wsl2]
+memory=12GB
 ```
+Then run `wsl --shutdown` in PowerShell and reopen Docker Desktop.
 
-### 2. Get the code
+### macOS and Linux
+
+1. **Install Docker.**
+   - **macOS:** install and open **[Docker Desktop](https://www.docker.com/products/docker-desktop/)**.
+   - **Linux:** install **Docker Engine** plus the Compose plugin:
+     ```bash
+     # Ubuntu/Debian
+     sudo apt install docker.io docker-compose-v2
+     # Fedora/RHEL
+     sudo dnf install docker docker-compose-plugin
+     # Arch
+     sudo pacman -S docker docker-compose
+     # then enable the daemon and allow your user to run Docker:
+     sudo systemctl enable --now docker
+     sudo usermod -aG docker "$USER"     # log out/in afterward
+     ```
+     If `docker compose version` reports a version older than 2.24 (older distribution
+     releases), install from [Docker's own repository](https://docs.docker.com/engine/install/)
+     instead.
+
+   Confirm Docker is ready:
+   ```bash
+   docker --version && docker compose version && docker info
+   ```
+2. **Get the code**, with Git or via **Code → Download ZIP** on this page:
+   ```bash
+   git clone https://github.com/thirtysix/scView.git
+   cd scView
+   ```
+3. **Start scView** with the guided script:
+   ```bash
+   ./start.sh --prod    # recommended: optimized stack     -> http://localhost:3000
+   ./start.sh           # development stack, hot-reload    -> http://localhost:5173
+   ./start.sh --stop    # stop all services (datasets are kept)
+   ./start.sh --clean   # remove containers, images AND all uploaded datasets (asks first)
+   ```
+   `start.sh` checks prerequisites, creates `.env` (asking for an optional API key), builds the
+   images (the first run downloads several GB and can take tens of minutes), waits for health
+   checks, and opens the app.
+
+### Other ways to start
+
+On any platform, Compose works directly. A `.env` file is optional; copy `.env.example` to `.env`
+to change settings.
 ```bash
-git clone https://github.com/thirtysix/scView.git
-cd scView
-```
-
-### 3. Start scView
-
-**macOS / Linux** *(and Windows via WSL 2 or Git Bash)*, one guided command:
-```bash
-./start.sh           # dev stack, hot-reload  -> http://localhost:5173  (opens your browser)
-./start.sh --prod    # optimized Nginx stack  -> http://localhost:3000
-./start.sh --stop    # stop all services
-./start.sh --clean   # stop and remove containers, volumes, and images
-```
-`start.sh` checks prerequisites, creates `.env`, builds the images (first run pulls a few GB and
-takes a few minutes), waits for health checks, and opens the app.
-
-**Windows (PowerShell, no WSL)**, run Compose directly:
-```powershell
-copy .env.example .env
+docker compose up --build -d                           # prod -> http://localhost:3000
 docker compose -f docker-compose.dev.yml up --build    # dev  -> http://localhost:5173
-# ...or the production stack:
-docker compose up --build -d                            # prod -> http://localhost:3000
+docker compose down                                    # stop (datasets are kept)
 ```
-
-**Any platform with `make`:**
+Or with `make`:
 ```bash
-make dev     # dev stack  -> http://localhost:5173
 make up      # prod stack -> http://localhost:3000
+make dev     # dev stack  -> http://localhost:5173
 make down    # stop
 ```
 
-Once it's running:
+### Once it's running
 
 | Service | URL |
 | --- | --- |
-| **App** (dev / prod) | http://localhost:5173 , http://localhost:3000 |
+| **App** (prod / dev) | http://localhost:3000 , http://localhost:5173 |
 | **Backend API plus interactive docs** | http://localhost:8080 , http://localhost:8080/docs |
 | **R converter** (Seurat `.rds` to h5ad) | http://localhost:8001 |
 
@@ -243,22 +304,42 @@ Once it's running:
 > [`SECURITY.md`](SECURITY.md): set `DEPLOYMENT_MODE=public` (enables input hardening + a startup
 > self-check), set an `ACCESS_TOKEN`, and put real auth + rate limiting in front.
 
-### 4. First steps
+### First steps
 1. Open the app and use **Add Data** (the **Data** tab).
 2. Drop in a dataset: `.h5ad`, a 10x matrix (MEX or HDF5), `.loom`, `.zarr`, a dense `.csv`, a
-   Seurat `.rds`, or an nf-core/scrnaseq output. *(No data handy? A small `pbmc_1k_v3` sample ships
-   in `sample_data/`.)*
+   Seurat `.rds`, or an nf-core/scrnaseq output. *(No data handy? Download 10x Genomics' 1k PBMC
+   sample,
+   [`pbmc_1k_v3_filtered_feature_bc_matrix.h5`](https://cf.10xgenomics.com/samples/cell-exp/3.0.0/pbmc_1k_v3/pbmc_1k_v3_filtered_feature_bc_matrix.h5)
+   (5 MB), and drop it in as it is.)*
 3. Open **Data Assessment** for QC plots plus AI-suggested next steps, then explore in **Unified
    View** and ask the **AI Co-pilot**.
 
-### 5. Optional: enable the AI features
-Copy `.env.example` to `.env` and add a [DeepInfra](https://deepinfra.com/dash/api_keys) API key:
+Pathway enrichment and gene-set scoring use the
+[MSigDB](https://www.gsea-msigdb.org/gsea/msigdb/) collections. scView does not ship them: on the
+first start the backend downloads them (~45 MB) from the Broad Institute in the background, and
+they are subject to [MSigDB's terms](https://www.gsea-msigdb.org/gsea/msigdb_license_terms.jsp).
+Set `MSIGDB_AUTO_DOWNLOAD=false` in `.env` to skip the download.
+
+### Optional: enable the AI features
+Add a [DeepInfra](https://deepinfra.com/dash/api_keys) API key. The start scripts ask for one on
+the first run; to add or change it later, open the `.env` file in the scView folder in a text
+editor (on Windows: right-click → **Open with** → **Notepad**), set this line, save, and start
+scView again:
 ```bash
 DEEPINFRA_API_KEY=your-key-here
 ```
 Without a key the assistant degrades gracefully to deterministic, rule-based guidance. The RAG
 co-pilot's literature/tutorial corpora additionally require a Postgres/pgvector connection string
 (`RAG_DATABASE_URL`); see [`docs/AI_ASSISTANT.md`](docs/AI_ASSISTANT.md).
+
+### Updating
+- **Downloaded ZIP:** download and extract the new ZIP, copy your `.env` file across from the old
+  folder if you set an API key, and start scView from the new folder as before.
+- **Git:** run `git pull`, then start scView as before.
+
+Your datasets live in a Docker volume (`scview_dataset_data`), not in the scView folder, so they
+carry over. Only `./start.sh --clean`, `make clean`, or deleting that volume in Docker Desktop
+removes them.
 
 ---
 

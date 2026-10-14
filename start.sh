@@ -9,7 +9,7 @@
 #   ./start.sh            # Development mode (hot-reload)
 #   ./start.sh --prod     # Production mode (optimized, Nginx)
 #   ./start.sh --stop     # Stop all services
-#   ./start.sh --clean    # Stop and remove containers, volumes, images
+#   ./start.sh --clean    # Stop and remove containers, images, volumes (deletes datasets)
 #
 
 set -euo pipefail
@@ -41,6 +41,11 @@ for arg in "$@"; do
             ;;
         --clean)
             step "Cleaning up scView"
+            echo -e "  ${RED}This permanently deletes every dataset you have uploaded or converted.${NC}"
+            if [ -t 0 ]; then
+                read -r -p "  Type 'delete' to continue: " CONFIRM
+                [ "$CONFIRM" = "delete" ] || { info "Cancelled — nothing removed."; exit 0; }
+            fi
             docker compose down -v --rmi local 2>/dev/null || true
             rm -rf frontend/node_modules frontend/dist
             find backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
@@ -53,7 +58,8 @@ for arg in "$@"; do
             echo "  (default)   Start in development mode (hot-reload)"
             echo "  --prod      Start in production mode (Nginx, optimized)"
             echo "  --stop      Stop all running services"
-            echo "  --clean     Stop and remove containers, volumes, images"
+            echo "  --clean     Stop and remove containers, images, and volumes"
+            echo "              (DELETES all uploaded datasets; asks first)"
             exit 0
             ;;
         *) fail "Unknown argument: $arg (use --help for usage)" ;;
@@ -81,7 +87,13 @@ ok "Docker found: $(docker --version | head -1)"
 # Docker Compose v2 (as a plugin: "docker compose")
 if docker compose version &>/dev/null; then
     COMPOSE_CMD="docker compose"
-    ok "Docker Compose found: $(docker compose version --short 2>/dev/null || docker compose version)"
+    COMPOSE_VER=$(docker compose version --short 2>/dev/null | sed 's/^v//')
+    ok "Docker Compose found: ${COMPOSE_VER:-$(docker compose version)}"
+    # The compose files use `env_file: required: false`, added in Compose 2.24.
+    IFS=. read -r C_MAJ C_MIN _ <<< "${COMPOSE_VER:-0.0}"
+    if [ "${C_MAJ:-0}" -eq 2 ] && [ "${C_MIN%%[!0-9]*}" -lt 24 ] 2>/dev/null; then
+        fail "Docker Compose ${COMPOSE_VER} is too old; scView needs 2.24 or newer. Update Docker (https://docs.docker.com/compose/install/)."
+    fi
 else
     echo ""
     echo -e "  ${RED}Docker Compose v2 plugin is required but not installed.${NC}"
@@ -215,7 +227,7 @@ echo -e "  ${BOLD}Useful commands:${NC}"
 echo -e "    docker compose logs -f          ${CYAN}# View all logs${NC}"
 echo -e "    docker compose logs -f backend  ${CYAN}# View backend logs${NC}"
 echo -e "    ./start.sh --stop               ${CYAN}# Stop all services${NC}"
-echo -e "    ./start.sh --clean              ${CYAN}# Remove everything${NC}"
+echo -e "    ./start.sh --clean              ${CYAN}# Remove everything, including datasets${NC}"
 echo ""
 
 # ── 6. Open browser ─────────────────────────────────────────────────────────

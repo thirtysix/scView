@@ -1,3 +1,7 @@
+# Fixed project name, so the data volume is the same whatever the folder is
+# called (a ZIP download unpacks to scView-main, a git clone to scView).
+name: scview
+
 services:
   backend:
     build:
@@ -8,12 +12,13 @@ services:
       - dataset_data:/data
       - ./backend/src:/app/src
       - ./backend/tests:/app/tests
-      - ./msigdb:/msigdb:ro
+      - msigdb:/msigdb
     command: uvicorn scview.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "127.0.0.1:8080:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       - DATA_DIR=/data
       - CONVERTER_URL=http://converter:8001
@@ -56,3 +61,4 @@ services:
 
 volumes:
   dataset_data:
+  msigdb:
