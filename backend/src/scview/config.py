@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     CONVERTER_URL: str = "http://converter:8001"
     DEEPINFRA_API_KEY: str = ""
     MSIGDB_DIR: str = ""
+    # Fetch missing MSigDB collections from the Broad Institute on startup.
+    MSIGDB_AUTO_DOWNLOAD: bool = True
 
     # --- Deployment posture --------------------------------------------------
     # "private" (default): assume a single trusted user on localhost — the only
