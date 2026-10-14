@@ -6,6 +6,34 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-14
+
+### Added
+- **Joint embedding across datasets.** A *Joint embedding* tab in the Compare panel merges 2–8
+  library datasets on their shared genes, labels each cell by its dataset, and runs batch-aware HVG
+  selection, PCA and Harmony, then joint clustering, UMAP and markers. Raw counts are recovered from
+  the original upload when processing had replaced them. The uncorrected UMAP is kept beside the
+  corrected one, so the effect of correction is visible. On Kang 2018 (IFN-β, CTRL vs STIM) the
+  share of each cell's neighbours from the other condition rises from 0.11 to 0.48 (0.50 is perfect
+  mixing) while cell types stay separate.
+- **Between-groups differential expression.** A *Between groups* mode in the DE subtab tests group A
+  against group B, optionally within one cluster or cell type (for example STIM vs CTRL monocytes).
+  The UI notes that cell-level p-values are optimistic when cells from one donor are not independent.
+- **Enrichment Programs view.** Collapses a wall of near-duplicate enrichment terms into a few
+  biological programs (clustered on shared genes, EnrichmentMap method), with a similarity graph;
+  click a program to score its genes on the embedding.
+- **"Exclude ribosomal/mito genes" toggle** on both enrichment surfaces (on by default).
+
+### Fixed
+- **Raw counts kept through processing.** An upload carrying counts only in `.raw` lost them at the
+  scaling step, which overwrote `.raw` with log-normalised values. They are now kept in
+  `layers['counts']`. CellTypist annotation now builds its input from those counts instead of from
+  `.raw`, which after scaling held log-normalised values that were then normalised a second time.
+- **Pathway enrichment (ORA) correctness.** The background is now the genes the experiment measured
+  (previously the union of the selected collections), the gene-count control works above 100 genes,
+  cached results are reused only when their parameters match, and ribosomal/mitochondrial genes are
+  filtered from the query, which fixes wrong-tissue cell-type-signature (C8) labels.
+
 ## [0.8.0] - 2026-06-11
 
 ### Added
@@ -138,7 +166,8 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/thirtysix/scView/releases/tag/v0.9.0
 [0.8.0]: https://github.com/thirtysix/scView/releases/tag/v0.8.0
 [0.7.0]: https://github.com/thirtysix/scView/releases/tag/v0.7.0
 [0.6.0]: https://github.com/thirtysix/scView/releases/tag/v0.6.0
