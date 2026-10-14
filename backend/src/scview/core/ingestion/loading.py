@@ -69,6 +69,14 @@ def load_unit(unit: IngestUnit, options: dict | None = None) -> ad.AnnData:
         logger.exception("Failed to load unit '%s' (%s)", unit.label, unit.format)
         raise IngestLoadError(f"Could not read this {unit.format.value} dataset: {e}") from e
 
+    # A corrupt binary file can still parse as a text table with no usable data.
+    if adata.n_obs == 0 or adata.n_vars == 0:
+        raise IngestLoadError(
+            f"Could not read '{unit.label}' as single-cell data: it was read as "
+            f"{unit.format.value} with {adata.n_obs} cells and {adata.n_vars} genes. "
+            "Check that it is the file you meant to upload and that it isn't damaged."
+        )
+
     adata.var_names_make_unique()
     adata.obs_names_make_unique()
     return adata

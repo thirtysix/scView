@@ -28,7 +28,7 @@ from pydantic import BaseModel
 
 from scview.core import provenance
 from scview.core.ingestion.bundling import UnitFormat, build_bundle
-from scview.core.ingestion.loading import load_unit
+from scview.core.ingestion.loading import IngestLoadError, load_unit
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.validation import IssueSeverity, validate_bundle
 
@@ -118,11 +118,21 @@ class IngestSessionManager:
     def merge_plan(self, sid: str) -> MergePlan | None:
         """Load the units and analyse a multi-sample merge (heavier — reads data)."""
         bundle = build_bundle(self.staged_paths(sid))
-        loadable = [u for u in bundle.units if u.format != UnitFormat.unknown and u.complete]
+        loadable = [
+            u for u in bundle.units
+            if u.format not in (UnitFormat.unknown, UnitFormat.seurat) and u.complete
+        ]
         if len(loadable) < 2:
             return None
         opts = self.get_options(sid)
-        adatas = {u.label: load_unit(u, {"genes_in_rows": opts.genes_in_rows}) for u in loadable}
+        try:
+            adatas = {
+                u.label: load_unit(u, {"genes_in_rows": opts.genes_in_rows}) for u in loadable
+            }
+        except IngestLoadError as e:
+            # No plan for unreadable data; commit reports the error to the user.
+            logger.warning("Merge plan skipped for session %s: %s", sid, e)
+            return None
         return plan_merge(adatas)
 
     # -- commit -----------------------------------------------------------
@@ -145,7 +155,10 @@ class IngestSessionManager:
             raise IngestCommitError("No recognisable single-cell dataset was found.")
 
         opts = self.get_options(sid)
-        adata = self._load_and_merge(loadable, opts)
+        try:
+            adata = self._load_and_merge(loadable, opts)
+        except IngestLoadError as e:
+            raise IngestCommitError(str(e)) from e
         self._record_ingest_provenance(adata, loadable, opts)
 
         dataset_id = uuid.uuid4().hex

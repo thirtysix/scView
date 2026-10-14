@@ -175,6 +175,29 @@ async def test_commit_rejects_empty(mgr, dm):
         await mgr.commit(sid, dm)
 
 
+async def test_seurat_among_other_files_is_a_validation_error(mgr, dm):
+    # The UI sends a lone .rds to the converter; mixed with other files it used
+    # to reach load_unit and come back as a 500.
+    sid = mgr.create_session()
+    _stage_h5ad(mgr, sid, "a.h5ad")
+    _stage_h5ad(mgr, sid, "b.h5ad")
+    (mgr.files_dir(sid) / "obj.rds").write_bytes(b"\x1f\x8b not really R data")
+    codes = [i["code"] for i in mgr.get_state(sid)["validation"]["issues"]]
+    assert "seurat_needs_converter" in codes
+    assert mgr.get_state(sid)["validation"]["ok"] is False
+    assert mgr.merge_plan(sid) is not None  # the two h5ad files still get a plan
+    with pytest.raises(IngestCommitError, match="converted separately"):
+        await mgr.commit(sid, dm)
+
+
+async def test_unreadable_file_is_a_commit_error(mgr, dm):
+    sid = mgr.create_session()
+    (mgr.files_dir(sid) / "broken.h5ad").write_bytes(b"not an HDF5 file")
+    with pytest.raises(IngestCommitError, match="Could not read"):
+        await mgr.commit(sid, dm)
+    assert mgr.merge_plan(sid) is None
+
+
 # ---------------------------------------------------------------------------
 # TTL sweep
 # ---------------------------------------------------------------------------
