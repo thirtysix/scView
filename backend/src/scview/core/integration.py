@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from scview.core import provenance
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.session import _make_readonly, _safe_name
-from scview.core.pipeline import PipelineParams, run_pipeline_streamed
+from scview.core.pipeline import PipelineParams, looks_like_counts, run_pipeline_streamed
 
 if TYPE_CHECKING:
     from scview.core.dataset_manager import DatasetManager
@@ -46,8 +46,6 @@ LABEL_COLUMN = "dataset"
 _MAX_CARRY_CATEGORIES = 200
 # Below this, a dataset can't contribute meaningfully to per-batch HVG selection.
 MIN_CELLS_PER_DATASET = 20
-# Non-zero values sampled when deciding whether a matrix holds raw counts.
-_COUNTS_SAMPLE = 20_000
 
 # Pipeline parameters a caller may override for the joint run.
 TUNABLE_PARAMS = ("clustering_resolution", "n_top_genes", "n_comps", "n_neighbors", "umap_min_dist")
@@ -73,22 +71,6 @@ METHODS = (METHOD_HARMONY, METHOD_NONE)
 # ---------------------------------------------------------------------------
 # Raw-count recovery
 # ---------------------------------------------------------------------------
-
-
-def looks_like_counts(M) -> bool:
-    """Non-negative integers with some signal: a raw-count matrix."""
-    if M is None:
-        return False
-    if sp.issparse(M):
-        vals = np.asarray(M.data[:_COUNTS_SAMPLE])
-    else:
-        arr = np.asarray(M)
-        vals = arr.ravel()[:_COUNTS_SAMPLE * 4]
-        vals = vals[vals != 0][:_COUNTS_SAMPLE]
-    if vals.size == 0:
-        return False
-    vals = vals.astype(np.float64, copy=False)
-    return bool(np.all(vals >= 0) and np.all(np.mod(vals, 1) == 0))
 
 
 def _find_counts(adata: ad.AnnData) -> tuple[str, Any, pd.DataFrame] | None:
