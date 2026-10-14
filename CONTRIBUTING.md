@@ -52,12 +52,18 @@ scView follows [Semantic Versioning](https://semver.org/) and keeps a
 [CHANGELOG.md](CHANGELOG.md). To cut a release:
 
 1. Move the `Unreleased` notes into a new `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md`.
-2. Bump `version` in `backend/pyproject.toml` and `frontend/package.json` to match.
+2. Bump `version` in `backend/pyproject.toml` and `frontend/package.json` to match, and the three
+   image tags in `docker-compose.yml` (`scview-backend:${SCVIEW_VERSION:-X.Y.Z}`, and the same for
+   `scview-frontend` and `scview-converter`).
 3. Commit, then tag and publish:
    ```bash
    git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
    gh release create vX.Y.Z --title "vX.Y.Z" --notes-file <(sed -n '/## \[X.Y.Z\]/,/## \[/p' CHANGELOG.md)
    ```
+4. Pushing the tag runs the **Publish images** workflow, which builds the three images for amd64
+   and arm64 and publishes them to GHCR as `X.Y.Z`, `X.Y` and `latest`. It fails if step 2 missed
+   a tag. GHCR packages start private: after the first publish, set each one to Public in its
+   package settings, or every install falls back to building from source.
 
 By contributing, you agree that your contributions are licensed under the project's
 [MIT License](LICENSE).

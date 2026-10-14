@@ -7,7 +7,8 @@
 #
 # Usage:
 #   ./start.sh            # Development mode (hot-reload)
-#   ./start.sh --prod     # Production mode (optimized, Nginx)
+#   ./start.sh --prod     # Production mode (optimized, Nginx; prebuilt images)
+#   ./start.sh --prod --build  # Production mode, images built from source
 #   ./start.sh --stop     # Stop all services
 #   ./start.sh --clean    # Stop and remove containers, images, volumes (deletes datasets)
 #
@@ -30,9 +31,11 @@ step()  { echo -e "\n${BOLD}── $* ──${NC}"; }
 
 # ── Parse arguments ─────────────────────────────────────────────────────────
 MODE="dev"
+BUILD_FROM_SOURCE=false
 for arg in "$@"; do
     case "$arg" in
         --prod|--production) MODE="prod" ;;
+        --build) BUILD_FROM_SOURCE=true ;;
         --stop)
             step "Stopping scView"
             docker compose down
@@ -46,17 +49,19 @@ for arg in "$@"; do
                 read -r -p "  Type 'delete' to continue: " CONFIRM
                 [ "$CONFIRM" = "delete" ] || { info "Cancelled — nothing removed."; exit 0; }
             fi
-            docker compose down -v --rmi local 2>/dev/null || true
+            docker compose down -v --rmi all 2>/dev/null || true
             rm -rf frontend/node_modules frontend/dist
             find backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
             ok "Cleaned containers, volumes, and build artifacts."
             exit 0
             ;;
         --help|-h)
-            echo "Usage: ./start.sh [--prod] [--stop] [--clean] [--help]"
+            echo "Usage: ./start.sh [--prod [--build]] [--stop] [--clean] [--help]"
             echo ""
             echo "  (default)   Start in development mode (hot-reload)"
-            echo "  --prod      Start in production mode (Nginx, optimized)"
+            echo "  --prod      Start in production mode (Nginx, optimized), pulling"
+            echo "              prebuilt images; anything not published is built"
+            echo "  --build     With --prod: build the images from source instead"
             echo "  --stop      Stop all running services"
             echo "  --clean     Stop and remove containers, images, and volumes"
             echo "              (DELETES all uploaded datasets; asks first)"
@@ -170,11 +175,17 @@ if [ "$MODE" = "dev" ]; then
     BACKEND_URL="http://localhost:8080"
     CONVERTER_URL="http://localhost:8001"
 else
-    step "Building and starting services (production mode)"
-    info "This may take a few minutes on first run (downloading Docker images)..."
-    echo ""
-
-    docker compose build
+    step "Starting services (production mode)"
+    if [ "$BUILD_FROM_SOURCE" = true ]; then
+        info "Building images from source; the first build can take tens of minutes..."
+        echo ""
+        docker compose build
+    else
+        info "Downloading prebuilt images (a few GB on the first run)."
+        info "Any image that isn't published is built from source instead, which is slower."
+        echo ""
+        docker compose pull --ignore-pull-failures
+    fi
     docker compose up -d
 
     FRONTEND_URL="http://localhost:3000"
