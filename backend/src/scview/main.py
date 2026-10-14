@@ -1,6 +1,7 @@
 """scView backend – FastAPI application entry point."""
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -32,6 +33,15 @@ async def lifespan(app: FastAPI):
     from scview.dependencies import get_ingest_session_manager
 
     get_ingest_session_manager().sweep_expired()
+
+    # Fetch MSigDB gene sets in the background on first start (~45 MB), so
+    # startup isn't held up and an offline machine still comes up.
+    if settings.MSIGDB_DIR and settings.MSIGDB_AUTO_DOWNLOAD:
+        from scview.core.msigdb_fetch import ensure_msigdb
+
+        threading.Thread(
+            target=ensure_msigdb, args=(Path(settings.MSIGDB_DIR),), daemon=True
+        ).start()
 
     # Deployment-posture self-check — make an insecure public exposure loud.
     logger.info("scView deployment mode: %s", settings.DEPLOYMENT_MODE)
