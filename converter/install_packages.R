@@ -41,5 +41,7 @@ missing   <- setdiff(cran_pkgs, installed)
 if (length(missing) == 0) {
   cat("All expected packages are installed.\n")
 } else {
-  cat(sprintf("WARNING - missing packages: %s\n", paste(missing, collapse = ", ")))
+  # Fail the image build: a converter without these can't convert anything.
+  cat(sprintf("ERROR - missing packages: %s\n", paste(missing, collapse = ", ")))
+  quit(status = 1)
 }

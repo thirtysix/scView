@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 from pathlib import Path
 
 import anndata as ad
 import numpy as np
 import pandas as pd
-from scipy import sparse
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +231,7 @@ class AnnDataAdaptor:
         if layer in self.adata.layers:
             return self.adata.var_names.tolist()
         raise KeyError(
-            f"Layer '{layer}' not found. Available: {[l['key'] for l in self.available_expression_layers()]}"
+            f"Layer '{layer}' not found. Available: {[lyr['key'] for lyr in self.available_expression_layers()]}"
         )
 
     def _get_matrix_for_layer(self, layer: str):

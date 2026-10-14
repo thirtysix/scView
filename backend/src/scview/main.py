@@ -17,6 +17,16 @@ from scview.api.router import api_router
 
 logger = logging.getLogger(__name__)
 
+# uvicorn configures only its own loggers, so without a handler here the app's
+# INFO lines (e.g. MSigDB download progress) never reach `docker logs`. Scoped
+# to the scview namespace to keep third-party INFO chatter out.
+_app_log = logging.getLogger("scview")
+if not _app_log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s - %(message)s"))
+    _app_log.addHandler(_handler)
+    _app_log.setLevel(logging.INFO)
+
 # Routes that legitimately accept large bodies (file uploads) — exempt from the
 # JSON body-size cap, which still bounds them via MAX_UPLOAD_SIZE_MB.
 _UPLOAD_PATH_HINTS = ("upload", "ingest", "convert")

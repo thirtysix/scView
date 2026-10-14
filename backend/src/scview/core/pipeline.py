@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 # Callback for sub-step progress: (message, current_index, total_count)
 SubstepCallback = Callable[[str, int, int], None]
 
-# No-op default for runners that don't support callbacks
-_NOOP_CB: SubstepCallback = lambda _msg, _cur, _tot: None
+def _NOOP_CB(_msg: str, _cur: int, _tot: int) -> None:
+    """No-op default for runners that don't support callbacks."""
 
 
 @dataclass
