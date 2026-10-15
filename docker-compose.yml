@@ -34,6 +34,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # A slow machine can need well over 30 s to import the analysis stack.
+      start_period: 120s
 
   frontend:
     image: ghcr.io/thirtysix/scview-frontend:${SCVIEW_VERSION:-0.10.2}
