@@ -63,7 +63,8 @@ async def upload_dataset(
     upload_dir = Path(settings.DATA_DIR) / "uploads" / dataset_id
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    dest_path = upload_dir / file.filename
+    # Only the name: a client-supplied "../x.h5ad" must not leave the upload dir.
+    dest_path = upload_dir / Path(file.filename).name
     total_bytes = 0
     max_bytes = settings.max_upload_bytes
 
