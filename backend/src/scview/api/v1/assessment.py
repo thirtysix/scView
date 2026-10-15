@@ -100,23 +100,15 @@ async def run_assessment_pipeline(
         # upload or conversion — those stay immutable.
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
 
-        # Run the pipeline
-        new_adata, result = run_pipeline(
-            adata=adaptor.adata,
-            steps=body.steps,
-            params=params,
-            output_path=output_path,
-        )
-
-        # Reload the dataset to pick up changes
-        # Clear the cached adaptor so it reloads from disk
-        if dataset_id in dm._datasets:
-            dm._datasets[dataset_id].close()
-            del dm._datasets[dataset_id]
-        if dataset_id in dm._load_order:
-            dm._load_order.remove(dataset_id)
-
-        # Reload
+        try:
+            new_adata, result = run_pipeline(
+                adata=adaptor.adata,
+                steps=body.steps,
+                params=params,
+                output_path=output_path,
+            )
+        finally:
+            dm.evict(dataset_id)  # serve what is on disk, never a half-run cache
         await dm.load_dataset(dataset_id)
 
         return result.to_dict()
@@ -156,6 +148,7 @@ async def run_assessment_pipeline_stream(
     output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
 
     async def event_generator():
+        completed = False
         try:
             gen = run_pipeline_streamed(
                 adata=adaptor.adata,
@@ -166,19 +159,17 @@ async def run_assessment_pipeline_stream(
             for event_type, event_data in gen:
                 line = f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
                 yield line
-
-            # Reload dataset after pipeline completes
-            if dataset_id in dm._datasets:
-                dm._datasets[dataset_id].close()
-                del dm._datasets[dataset_id]
-            if dataset_id in dm._load_order:
-                dm._load_order.remove(dataset_id)
-            await dm.load_dataset(dataset_id)
-
+            completed = True
         except Exception as e:
             logger.error("Streamed pipeline failed for %s: %s", dataset_id, e, exc_info=True)
             error_line = f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
             yield error_line
+        finally:
+            # Also runs when the client goes away mid-run (tab closed, proxy
+            # timeout): the cached copy may hold unsaved steps, so drop it.
+            dm.evict(dataset_id)
+        if completed:
+            await dm.load_dataset(dataset_id)
 
     return StreamingResponse(
         event_generator(),
@@ -286,15 +277,12 @@ async def rerun_step(
 
     try:
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        _, result = run_pipeline(
-            adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path
-        )
-        # Reload so the new state is served.
-        if dataset_id in dm._datasets:
-            dm._datasets[dataset_id].close()
-            del dm._datasets[dataset_id]
-        if dataset_id in dm._load_order:
-            dm._load_order.remove(dataset_id)
+        try:
+            _, result = run_pipeline(
+                adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path
+            )
+        finally:
+            dm.evict(dataset_id)  # serve what is on disk, never a half-run cache
         await dm.load_dataset(dataset_id)
         return {"plan": plan.model_dump(), "result": result.to_dict()}
     except Exception as e:
