@@ -363,7 +363,10 @@ _FEATURE_GUIDE = (
     "violin; its DE subtab compares a lasso/cluster selection vs the rest, or two groups of "
     "a column such as dataset or condition, optionally within one cell type), Observations, "
     "Gene Expression, Gene Sets & Enrichment, Marker Genes (a sortable marker table per "
-    "cluster or group, plus a dot plot and a heatmap of the top markers of every group), "
+    "cluster or group, plus a dot plot and a heatmap of the top 3, 5 or 10 up-regulated "
+    "markers of every group of the 'Compute for' column; the table's filter and group picker "
+    "don't change the plots, you can't choose your own genes, colour scale or subset of groups "
+    "for them, and the camera icon in their toolbar downloads a PNG), "
     "Trajectory, Compare (Joint "
     "embedding: merge 2+ library datasets on shared genes into a new dataset with one "
     "Harmony-corrected UMAP, joint clusters and a 'dataset' column, plus an uncorrected UMAP "
@@ -835,13 +838,14 @@ _SUBTABS = {
     "markers": "Markers", "expression": "Expression",
     "genesets": "Gene Sets", "enrichment": "Enrichment",
 }
-# "Can you show ..." / "please open ...": a request phrased as a question.
-_POLITE_RE = re.compile(r"^\s*(?:(?:can|could|would|will) you\s+(?:please\s+)?|please\s+)", re.I)
+# "Can you show ..." / "can I see ..." / "please open ...": a request phrased as a question.
+_POLITE = r"(?:(?:can|could|would|will) you\s+|(?:can|could|may) i\s+|please\s+)(?:please\s+)?"
+_POLITE_RE = re.compile(r"^\s*" + _POLITE, re.I)
 _COMMAND_RE = re.compile(
-    r"^\s*(?:(?:can|could|would|will) you\s+(?:please\s+)?|please\s+)?"
+    r"^\s*(?:" + _POLITE + r")?"
     r"(colou?r|show|highlight|select|go to|open|switch|navigate|display|set|view|take me|"
     r"clear|hide|reset|remove|group|jump|focus|overlay|annotate|label|re-?cluster|cluster|run|"
-    r"compute|detect|find|score|enrich|plot|draw)\b",
+    r"compute|detect|find|score|enrich|plot|draw|see|get)\b",
     re.I,
 )
 
@@ -1061,7 +1065,8 @@ async def extract_actions(
         f"Valid obs columns: {cols}.\n"
         f"Valid embeddings (obsm key): {embs}.\n"
         f"Valid panels (id): {panels}.\n"
-        "A polite request such as \"can you show ...?\" is a command, not a question.\n"
+        "A polite request such as \"can you show ...?\" or \"can I see ...?\" is a command, "
+        "not a question.\n"
         "Output ONLY a JSON array of action objects, nothing else. If the message is a question "
         "or cannot be mapped to the above, output []." + vc + f"\n\nCommand: {query}"
     )
@@ -1215,7 +1220,9 @@ async def suggest_followups(query: str, answer: str, api_key: str, model: str) -
                 {"role": "system", "content": (
                     "Given a Q&A about a single-cell RNA-seq dataset in the scView app, "
                     "propose 3 SHORT, specific follow-up questions the user might ask next "
-                    "(each < 12 words). Respond ONLY as a JSON array of strings."
+                    "(each < 12 words). Ask about the data, its analysis results or the "
+                    "biology, not about app features or plot settings, which may not exist. "
+                    "Respond ONLY as a JSON array of strings."
                 )},
                 {"role": "user", "content": f"Q: {query}\nA: {answer}"},
             ],

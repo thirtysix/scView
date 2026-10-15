@@ -6,6 +6,15 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-15
+
+### Fixed
+- **The co-pilot describes the marker plots accurately.** It said filtering the marker table changes
+  the heatmap (it doesn't) and suggested follow-up questions about plot settings scView doesn't have.
+  It now knows the plots' limits and that the camera icon in their toolbar downloads a PNG, and its
+  suggested follow-ups stick to the data and the biology.
+- **"Can I see a heatmap of these markers?" opens the heatmap**, like "Can you show…" already did.
+
 ## [0.11.0] - 2026-10-15
 
 ### Added
@@ -242,7 +251,8 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/thirtysix/scView/releases/tag/v0.11.1
 [0.11.0]: https://github.com/thirtysix/scView/releases/tag/v0.11.0
 [0.10.3]: https://github.com/thirtysix/scView/releases/tag/v0.10.3
 [0.10.2]: https://github.com/thirtysix/scView/releases/tag/v0.10.2

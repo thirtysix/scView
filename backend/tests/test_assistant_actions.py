@@ -108,7 +108,8 @@ def test_marker_plot_requests_are_commands_and_map_to_show_marker_plot():
     ctx = dict(columns=["cluster"], embeddings=["X_umap"], genes_upper={},
                n_cells=100, active_clustering="cluster")
     for q in ("Can you show a heatmap of these markers?", "please plot a dot plot of the markers",
-              "show the marker heatmap"):
+              "show the marker heatmap", "Can I see a heatmap of these markers?",
+              "show me a dot plot of the markers"):
         assert _looks_like_command(q), q
     heat = _deterministic_actions("Can you show a heatmap of these markers?", **ctx)
     assert [(a.type, a.plot) for a in heat] == [("show_marker_plot", "heatmap")]  # not compute_markers
@@ -141,6 +142,9 @@ async def test_polite_question_skips_keyword_fallback(monkeypatch):
     # ...but a polite plot request still opens the plot when the model returned nothing
     heat = await asst.extract_actions("Can you show a heatmap of these markers?", *args)
     assert [(a.type, a.plot) for a in heat] == [("show_marker_plot", "heatmap")]
+    see = await asst.extract_actions("Can I see a heatmap of these markers?", *args)
+    assert [(a.type, a.plot) for a in see] == [("show_marker_plot", "heatmap")]
+    assert await asst.extract_actions("Can I get the markers of cluster 3?", *args) == []
 
 
 def test_app_ui_questions_pull_in_the_feature_list():
