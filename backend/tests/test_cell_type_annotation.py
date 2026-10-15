@@ -124,3 +124,15 @@ def test_annotation_computes_markers_for_its_column():
     rgg = a.uns["rank_genes_groups__cell_type"]
     assert set(rgg["names"].dtype.names) == {"T cell", "B cell"}
     assert a.uns["rank_genes_groups"]["params"]["groupby"] == "cluster"
+
+
+def test_top_markers_for_a_new_column_leave_the_default_markers_alone():
+    from scview.core.pipeline import _top_markers_per_group
+
+    a = _clustered(40)
+    a.var_names = [f"G{i}" for i in range(5)]
+    a.uns["rank_genes_groups"] = {"params": {"groupby": "leiden"}}
+    out = _top_markers_per_group(a, "cluster", n=3)
+    assert set(out) == {"a", "b"} and all(len(v) == 3 for v in out.values())
+    assert a.uns["rank_genes_groups"]["params"]["groupby"] == "leiden"
+    assert "rank_genes_groups__cluster" in a.uns

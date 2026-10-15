@@ -22,6 +22,7 @@ import scanpy as sc
 import scipy.sparse as sp
 
 from scview.core import provenance
+from scview.core.llm import chat_extra
 from scview.core.gene_filters import select_query_genes
 from scview.core.ora_background import write_meta
 
@@ -748,8 +749,12 @@ def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 15) -> dict
     else:
         if adata.obs[groupby].dtype.name != "category":
             adata.obs[groupby] = adata.obs[groupby].astype(str).astype("category")
-        sc.tl.rank_genes_groups(adata, groupby=groupby, method="wilcoxon", n_genes=n)
-        rgg = adata.uns["rank_genes_groups"]
+        # Under the column's own key: the default rank_genes_groups follows the
+        # clustering, and the Marker Genes panel reads it.
+        sc.tl.rank_genes_groups(
+            adata, groupby=groupby, method="wilcoxon", pts=True, key_added=key
+        )
+        rgg = adata.uns[key]
     names = rgg["names"]
     groups = list(names.dtype.names) if hasattr(names.dtype, "names") else []
     return {g: [str(names[g][i]) for i in range(min(n, len(names[g])))] for g in groups}
@@ -810,6 +815,7 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     client = OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
     resp = client.chat.completions.create(
         model=model,
+        **chat_extra(model),
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_tokens=800,
