@@ -464,6 +464,23 @@ export function UnifiedViewPanel() {
     [colors, categories, selectedIndices, setSelection, clearSelection],
   );
 
+  // A group highlighted elsewhere (an Observations row, the co-pilot's "highlight
+  // the NK cluster") selects its cells here once the plot is coloured by its
+  // column, as a legend click does. Applied once per highlight.
+  const highlightedGroup = useSelectionStore((s) => s.highlightedGroup);
+  const appliedHighlight = useRef<typeof highlightedGroup>(null);
+  useEffect(() => {
+    const hl = highlightedGroup;
+    if (!hl || hl === appliedHighlight.current) return;
+    if (hl.column !== colorBy || colorColumnName !== colorBy || !colors || !categories) return;
+    const catIndex = categories.indexOf(hl.value);
+    if (catIndex < 0) return;
+    const indices = new Set<number>();
+    for (let i = 0; i < colors.length; i++) if (colors[i] === catIndex) indices.add(i);
+    appliedHighlight.current = hl;
+    setSelection(indices);
+  }, [highlightedGroup, colorBy, colorColumnName, colors, categories, setSelection]);
+
   // Inline-rename a categorical label (e.g. correct a cell-type annotation).
   // Persists to the derived layer, then refreshes the dataset metadata + the
   // embedding color buffer so the legend and plot pick up the new label.
