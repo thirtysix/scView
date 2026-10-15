@@ -913,6 +913,25 @@ def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None
             f"Unknown annotation method '{method}' (expected celltypist | llm | marker_score)."
         )
 
+    # Marker genes for the new column, so enrichment and the marker plots can use it
+    # straight away. The default rank_genes_groups stays on the clustering.
+    _markers_for_column(adata, target)
+
+
+def _markers_for_column(adata: ad.AnnData, col: str) -> None:
+    """Store wilcoxon markers for one obs column under rank_genes_groups__{col}.
+    Best effort: a failure is logged and leaves the column without markers."""
+    if col not in adata.obs.columns or not 2 <= adata.obs[col].nunique() <= 100:
+        return
+    try:
+        if adata.obs[col].dtype.name != "category":
+            adata.obs[col] = adata.obs[col].astype(str).astype("category")
+        sc.tl.rank_genes_groups(
+            adata, groupby=col, method="wilcoxon", pts=True, key_added=f"rank_genes_groups__{col}"
+        )
+    except Exception as exc:
+        logger.warning("Markers for '%s' failed: %s", col, exc)
+
 
 # Map step names to their runner functions
 _STEP_RUNNERS: dict[str, Any] = {
