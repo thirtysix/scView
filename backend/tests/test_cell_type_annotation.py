@@ -107,3 +107,20 @@ def test_celltype_cluster_map_for_copilot():
 
     a.obs["cluster_celltypeAnno"] = a.obs["cell_type"].values
     assert _celltype_cluster_map(a, "cluster_celltypeAnno") == {"0": "B", "1": "NK", "2": "Mono"}
+
+
+def test_annotation_computes_markers_for_its_column():
+    """The new cell-type column gets its own markers; the default stays on the clustering."""
+    genes = ["CD3D", "CD3E", "CD3G", "TRAC", "MS4A1", "CD79A", "CD79B", "CD19"]
+    rng = np.random.default_rng(0)
+    X = (rng.random((20, 8)) * 0.1).astype("float32")
+    X[:10, :4] += 3.0
+    X[10:, 4:] += 3.0
+    a = ad.AnnData(X)
+    a.var_names = genes
+    a.obs["cluster"] = pd.Categorical(["0"] * 10 + ["1"] * 10)
+    a.uns["rank_genes_groups"] = {"params": {"groupby": "cluster"}}  # the clustering's markers
+    _run_cell_type_annotation(a, PipelineParams(annotation_method="marker_score"))
+    rgg = a.uns["rank_genes_groups__cell_type"]
+    assert set(rgg["names"].dtype.names) == {"T cell", "B cell"}
+    assert a.uns["rank_genes_groups"]["params"]["groupby"] == "cluster"
