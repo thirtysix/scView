@@ -3,6 +3,8 @@ import { Loader2, Download, ArrowUpDown, ArrowUp, ArrowDown, Sparkles } from "lu
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
+import { runPipelineSteps } from "@/api/assistant";
+import { getDataset } from "@/api/datasets";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
@@ -49,11 +51,16 @@ export function UnifiedEnrichmentSubtab({
 }: UnifiedEnrichmentSubtabProps) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
+  const setCurrentDataset = useDatasetStore((s) => s.setCurrentDataset);
   const askCopilot = useViewStore((s) => s.askCopilot);
 
   const [selectedGroup, setSelectedGroup] = useState("");
   const [groups, setGroups] = useState<string[]>([]);
   const [isLoadingGroups, setIsLoadingGroups] = useState(false);
+  // The column has no marker genes yet, so there is nothing to enrich.
+  const [noMarkers, setNoMarkers] = useState(false);
+  const [isComputingMarkers, setIsComputingMarkers] = useState(false);
+  const [markersError, setMarkersError] = useState<string | null>(null);
   const [topN, setTopN] = useState(100);
   const [selectedCollections, setSelectedCollections] = useState<Set<string>>(
     new Set(DEFAULT_MSIGDB_COLLECTIONS),
@@ -93,6 +100,8 @@ export function UnifiedEnrichmentSubtab({
     setIsLoadingGroups(true);
     setSelectedGroup("");
     setGroups([]);
+    setNoMarkers(false);
+    setMarkersError(null);
     setResults([]);
     setNetwork(null);
     setNetworkError(null);
@@ -105,37 +114,26 @@ export function UnifiedEnrichmentSubtab({
       if (grps.length > 0) setSelectedGroup(grps[0]!);
     };
 
-    // Try with column first, fall back to default markers, then to obs categories
+    // Only the column's own marker genes will do: another column's groups (the
+    // clusters, say) can't be enriched under this column's name.
     (async () => {
       try {
         const data = await apiFetch<GroupsResp>(
           `/datasets/${datasetId}/enrichment/groups?column=${encodeURIComponent(groupByColumn)}`,
         );
         setGroupsFromData(data);
-      } catch {
-        try {
-          // Fallback: try without column (use default markers)
-          const data = await apiFetch<GroupsResp>(
-            `/datasets/${datasetId}/enrichment/groups`,
-          );
-          setGroupsFromData(data);
-        } catch {
-          if (cancelled) return;
-          // Final fallback: use obs column categories from dataset metadata
-          const col = dataset?.obs_columns.find((c) => c.name === groupByColumn);
-          if (col?.values && col.values.length > 0) {
-            setGroups(col.values);
-            setSelectedGroup(col.values[0]!);
-          } else {
-            setGroups([]);
-          }
-        }
+      } catch (err) {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("404")) setNoMarkers(true);
+        else setMarkersError(msg);
       } finally {
         if (!cancelled) setIsLoadingGroups(false);
       }
     })();
 
     return () => { cancelled = true; };
+    // `dataset` is a dependency so groups are fetched again after markers are computed.
   }, [datasetId, groupByColumn, dataset]);
 
   // Build the collapsed program view. Separate from the term table so changing
@@ -166,6 +164,26 @@ export function UnifiedEnrichmentSubtab({
     },
     [datasetId, groupByColumn, selectedGroup, topN, selectedCollections, excludeRiboMito],
   );
+
+  // Compute marker genes for a column that has none, then reload the dataset so
+  // its groups are fetched again.
+  const handleComputeMarkers = useCallback(async () => {
+    if (!datasetId || !groupByColumn) return;
+    setIsComputingMarkers(true);
+    setMarkersError(null);
+    try {
+      const res = await runPipelineSteps(datasetId, ["marker_genes"], {
+        marker_columns: [groupByColumn],
+      });
+      const err = res.errors?.marker_genes;
+      if (err) throw new Error(err);
+      setCurrentDataset(await getDataset(datasetId));
+    } catch (e) {
+      setMarkersError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsComputingMarkers(false);
+    }
+  }, [datasetId, groupByColumn, setCurrentDataset]);
 
   // Compute enrichment
   const handleCompute = useCallback(async () => {
@@ -349,6 +367,28 @@ export function UnifiedEnrichmentSubtab({
           )}
         </div>
       </div>
+
+      {noMarkers && (
+        <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+          <p>
+            <span className="font-semibold">{groupByColumn}</span> has no marker genes yet, and
+            enrichment starts from them.
+          </p>
+          <button
+            onClick={handleComputeMarkers}
+            disabled={isComputingMarkers}
+            className="mt-1 flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
+          >
+            {isComputingMarkers && <Loader2 className="h-3 w-3 animate-spin" />}
+            {isComputingMarkers ? "Computing markers..." : "Compute markers for this column"}
+          </button>
+        </div>
+      )}
+      {markersError && (
+        <div className="rounded border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] text-red-700">
+          {markersError}
+        </div>
+      )}
 
       {/* Top N + compute */}
       <div className="flex items-end gap-2">
