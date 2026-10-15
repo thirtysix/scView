@@ -89,6 +89,10 @@ class AnnDataAdaptor:
                 # branch and omit values beyond the cap.
                 if len(cats) <= 100:
                     info["values"] = [str(c) for c in cats]
+            elif pd.api.types.is_bool_dtype(series):
+                # A two-level categorical; the colour codes are int(value), see embeddings.
+                info["n_unique"] = int(series.nunique())
+                info["values"] = ["False", "True"]
             elif series.dtype == object:
                 unique = series.unique()
                 info["n_unique"] = len(unique)
