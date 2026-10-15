@@ -202,18 +202,21 @@ an hour the first time, most of it waiting for downloads.
 
    - In the black window, press any key. It installs WSL and closes by itself.
    - If the **WSL not installed** dialog is still there, click **Quit**. Then right-click the
-     **Start** button, choose **Terminal (Admin)**, click **Yes**, type this line and press Enter:
+     **Start** button, choose **Terminal (Admin)**, and click **Yes**.
+
+     <img src="docs/images/windows/2-terminal-admin.png" width="200" alt="Right-click menu of the Start button with Terminal (Admin) highlighted">
+
+     In the window that opens, type this line and press Enter:
      ```
      wsl --install --no-distribution
      ```
-     <img src="docs/images/windows/2-wsl-install.png" width="720" alt="An administrator terminal running wsl --install --no-distribution">
 
      When it finishes, restart the computer and open Docker Desktop again. A "Welcome to WSL"
      window may also open; you can close it.
 4. **Wait until Docker Desktop shows "Engine running"** in small green text at the bottom left of
    its window. The first start can take several minutes. You can skip signing in.
 
-   <img src="docs/images/windows/3-engine-running.png" width="420" alt="Engine running, bottom left of the Docker Desktop window">
+   <img src="docs/images/windows/3-engine-running.png" width="720" alt="Docker Desktop with Engine running highlighted at the bottom left">
 5. **Download scView:** at the top of this GitHub page, click **Code → Download ZIP**. In your
    Downloads folder, right-click the ZIP, choose **Extract All**, and open the extracted
    `scView-main` folder. Running the files from inside the ZIP without extracting will not work.
@@ -231,9 +234,10 @@ an hour the first time, most of it waiting for downloads.
      still for several minutes while Docker unpacks the download: leave the window open. If a
      prebuilt part isn't available, it is built on your computer instead, which can take tens of
      minutes (a "must be built from source" warning means just that).
+   - opens scView in your browser at **http://localhost:3000** when it says *scView is running*.
+     You can then close the window: scView keeps running in Docker Desktop.
 
-     <img src="docs/images/windows/5-downloading.png" width="720" alt="start-windows.bat downloading the scView images">
-   - opens scView in your browser at **http://localhost:3000**.
+     <img src="docs/images/windows/5-running.png" width="600" alt="start-windows.bat after a successful start: scView is running at http://localhost:3000">
 
      <img src="docs/images/windows/6-scview-open.png" width="720" alt="scView open in the browser, ready to import data">
 7. **Load some data:** see [First steps](#first-steps).
