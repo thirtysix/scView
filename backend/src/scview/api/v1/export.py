@@ -112,9 +112,11 @@ async def export_dataset(
             )
 
         # Build expression DataFrame
-        expr = adaptor.get_expression(genes)
-        var_names = adaptor.adata.var_names.tolist()
-        found_genes = [g for g in genes if g in var_names]
+        # Names from the same layer the values come from (.raw can hold more genes than X).
+        layer = adaptor.default_expression_layer()
+        present = set(adaptor._var_names_for_layer(layer))
+        found_genes = [g for g in genes if g in present]
+        expr = adaptor.get_expression(found_genes, layer=layer)
 
         if expr.shape[1] == 0:
             raise HTTPException(
