@@ -23,4 +23,6 @@ CMD ["uvicorn", "scview.main:app", "--host", "0.0.0.0", "--port", "8000", "--rel
 FROM base AS production
 ENV PYTHONPATH=/app/src
 EXPOSE 8000
-CMD ["uvicorn", "scview.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# One worker: datasets are cached in process memory, so a second worker keeps
+# serving its own stale copy after the pipeline rewrites a dataset.
+CMD ["uvicorn", "scview.main:app", "--host", "0.0.0.0", "--port", "8000"]
