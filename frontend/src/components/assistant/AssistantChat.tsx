@@ -274,6 +274,9 @@ export function AssistantChat() {
       } else if (a.type === "show_gene" && a.gene) {
         useViewStore.getState().setPendingGene(a.gene);
         useViewStore.getState().setPanel("expression");
+      } else if (a.type === "show_marker_plot") {
+        useViewStore.getState().setMarkerView(a.plot === "dotplot" ? "dotplot" : "heatmap");
+        useViewStore.getState().setPanel("markers");
       }
     }
   }, []);

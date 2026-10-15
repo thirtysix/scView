@@ -6,6 +6,22 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-15
+
+### Added
+- **Marker gene dot plot and heatmap.** The Marker Genes panel can switch between the table, a dot
+  plot and a heatmap of the top up-regulated markers of every group (3, 5 or 10 per group). Colour
+  is mean expression scaled per gene; in the dot plot, dot size is the share of cells in the group
+  that express the gene.
+- **The co-pilot opens them.** "Can you show a heatmap of these markers?" opens the heatmap, and
+  asking for a dot plot opens the dot plot.
+
+### Fixed
+- **The co-pilot no longer describes features scView doesn't have.** Asked for a heatmap, it used
+  to point to a heatmap option that didn't exist. Its list of scView's features is now complete,
+  questions about scView's screens always include it, and it is told not to go beyond it.
+- **Code blocks in co-pilot answers render as code** instead of running together into one paragraph.
+
 ## [0.10.3] - 2026-10-15
 
 ### Fixed
@@ -226,7 +242,8 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.10.3...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/thirtysix/scView/releases/tag/v0.11.0
 [0.10.3]: https://github.com/thirtysix/scView/releases/tag/v0.10.3
 [0.10.2]: https://github.com/thirtysix/scView/releases/tag/v0.10.2
 [0.10.1]: https://github.com/thirtysix/scView/releases/tag/v0.10.1

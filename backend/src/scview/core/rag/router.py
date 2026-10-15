@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from pydantic import BaseModel
 
@@ -52,6 +53,20 @@ _LITERATURE_HINTS = (
     "paper", "associated with", "role of", "function of", "known to", "implicated",
     "biology", "mechanism", "signature", "interferon", "cytokine", "receptor",
 )
+
+
+# Questions about scView's own screens. The feature list must be in the context for
+# these, or the model describes tabs and buttons that don't exist.
+_APP_UI_RE = re.compile(
+    r"\bscview\b|\b(?:tab|button|panel|menu|heat ?map|dot ?plot|visuali[sz]e|in the app)s?\b"
+    r"|\bwhere (?:do|can) i\b",
+    re.I,
+)
+
+
+def mentions_app_ui(query: str) -> bool:
+    """True when a question is about what scView can show or where to find it."""
+    return bool(_APP_UI_RE.search(query or ""))
 
 
 class RouteResult(BaseModel):  # kept for the corpora-level heuristic + tests
@@ -136,8 +151,9 @@ _CLASSIFY_SYSTEM = """\
 You classify a user's question inside the scView single-cell RNA-seq app to decide \
 which knowledge sources to use — picking the MINIMAL set so we don't waste compute. \
 Sources:
-- "app": about scView itself or the user's dataset library / navigation \
-(e.g. "what datasets do we have?", "how do I load data?", "what can this tool do?").
+- "app": about scView itself or the user's dataset library / navigation, including \
+how to see or do something in scView (e.g. "what datasets do we have?", "how do I \
+load data?", "what can this tool do?", "how do I plot markers in scView?").
 - "data": about the user's CURRENTLY LOADED dataset — its analysis/results AND its \
 own identity/source (e.g. "what cell types are in my data?", "markers of this \
 cluster", "what steps ran?", "what paper/publication is THIS dataset from?").

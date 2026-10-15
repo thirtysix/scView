@@ -9,6 +9,8 @@ interface ViewState {
   copilotWidth: number;
   /** A question queued for the co-pilot by an "ask about this" affordance. */
   pendingAsk: string | null;
+  /** How the Marker Genes panel shows its markers. */
+  markerView: MarkerView;
   setPanel: (panel: PanelId) => void;
   toggleSidebar: () => void;
   setPendingGene: (gene: string | null) => void;
@@ -18,7 +20,10 @@ interface ViewState {
   /** Open the co-pilot and queue a contextual question for it to answer. */
   askCopilot: (question: string) => void;
   clearPendingAsk: () => void;
+  setMarkerView: (view: MarkerView) => void;
 }
+
+export type MarkerView = "table" | "dotplot" | "heatmap";
 
 export const useViewStore = create<ViewState>((set) => ({
   activePanel: "load",
@@ -27,6 +32,7 @@ export const useViewStore = create<ViewState>((set) => ({
   copilotOpen: false,
   copilotWidth: 400,
   pendingAsk: null,
+  markerView: "table",
   setPanel: (panel) => set({ activePanel: panel }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setPendingGene: (gene) => set({ pendingGene: gene }),
@@ -35,4 +41,5 @@ export const useViewStore = create<ViewState>((set) => ({
   setCopilotWidth: (width) => set({ copilotWidth: width }),
   askCopilot: (question) => set({ copilotOpen: true, pendingAsk: question }),
   clearPendingAsk: () => set({ pendingAsk: null }),
+  setMarkerView: (view) => set({ markerView: view }),
 }));

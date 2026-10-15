@@ -34,6 +34,21 @@ describe("MarkdownLite", () => {
     expect(screen.getByText("cell type")).toBeInTheDocument();
   });
 
+  it("renders a fenced code block verbatim, keeping its line breaks", () => {
+    const text = "Run this:\n```python\nimport scanpy as sc\nsc.pl.dotplot(adata, **kw)\n```\nDone.";
+    const { container } = render(<MarkdownLite text={text} />);
+    expect(container.querySelector("pre code")?.textContent).toBe(
+      "import scanpy as sc\nsc.pl.dotplot(adata, **kw)",
+    );
+    expect(container.querySelector("pre strong")).toBeNull(); // no inline markdown inside code
+    expect(container.querySelectorAll("p")).toHaveLength(2);
+  });
+
+  it("renders an unclosed code fence (answer still streaming) as code", () => {
+    const { container } = render(<MarkdownLite text={"```\nx = 1"} />);
+    expect(container.querySelector("pre code")?.textContent).toBe("x = 1");
+  });
+
   it("does not treat a markdown link as a citation chip", () => {
     const { container } = render(<MarkdownLite text="A [link: here](http://x.test) stays text." />);
     // No chip button; the bracket text remains as plain text.

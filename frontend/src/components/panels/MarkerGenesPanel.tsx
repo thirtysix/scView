@@ -15,6 +15,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
+import { MarkerPlot } from "@/components/plots/MarkerPlot";
 
 interface MarkerGene {
   gene: string;
@@ -50,6 +51,9 @@ export function MarkerGenesPanel() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filterQuery, setFilterQuery] = useState("");
   const [groupbyColumn, setGroupbyColumn] = useState<string>("");
+  const [perGroup, setPerGroup] = useState(5);
+  const markerView = useViewStore((s) => s.markerView);
+  const setMarkerView = useViewStore((s) => s.setMarkerView);
   const initialFetchDone = useRef(false);
 
   // Categorical columns suitable for marker gene grouping
@@ -345,6 +349,21 @@ export function MarkerGenesPanel() {
 
       {/* Controls row */}
       <div className="flex flex-wrap items-center gap-4">
+        <div className="flex overflow-hidden rounded-lg border border-slate-300 text-sm shadow-sm" role="group" aria-label="Marker view">
+          {([["table", "Table"], ["dotplot", "Dot plot"], ["heatmap", "Heatmap"]] as const).map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setMarkerView(v)}
+              aria-pressed={markerView === v}
+              className={`px-3 py-1.5 font-medium transition-colors ${
+                markerView === v ? "bg-primary text-white" : "bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         {/* Groupby column selector (compute for which obs column) */}
         {groupbyColumns.length > 0 && (
           <div className="flex items-center gap-2">
@@ -369,6 +388,25 @@ export function MarkerGenesPanel() {
           </div>
         )}
 
+        {markerView !== "table" && (
+          <div className="flex items-center gap-2">
+            <label htmlFor="marker-pergroup-select" className="text-sm font-medium text-slate-600">
+              Genes per group:
+            </label>
+            <select
+              id="marker-pergroup-select"
+              value={perGroup}
+              onChange={(e) => setPerGroup(Number(e.target.value))}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            >
+              {[3, 5, 10].map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {markerView === "table" && (<>
         {/* Group selector (filter within computed results) */}
         <div className="flex items-center gap-2">
           <label htmlFor="marker-group-select" className="text-sm font-medium text-slate-600">
@@ -417,9 +455,22 @@ export function MarkerGenesPanel() {
         <span className="text-xs text-slate-500">
           {sortedMarkers.length} of {currentMarkers.length} genes
         </span>
+        </>)}
       </div>
 
-      {/* Marker genes table */}
+      {markerView !== "table" ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <MarkerPlot
+            datasetId={datasetId}
+            groupby={groupbyColumn}
+            groups={markersData.groups}
+            markers={markersData.markers}
+            kind={markerView}
+            perGroup={perGroup}
+          />
+        </div>
+      ) : (
+      /* Marker genes table */
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="max-h-[600px] overflow-auto">
           <table className="w-full text-sm">
@@ -550,6 +601,7 @@ export function MarkerGenesPanel() {
           </table>
         </div>
       </div>
+      )}
     </div>
   );
 }

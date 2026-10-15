@@ -85,6 +85,32 @@ async def get_expression_violin(
     return {"gene": gene, "groupby": groupby, "groups": result}
 
 
+@router.get("/datasets/{dataset_id}/expression/by-group")
+async def get_expression_by_group(
+    dataset_id: str,
+    genes: list[str] = Query(..., description="Gene names (repeat the parameter)"),
+    groupby: str = Query(default="", description="Obs column to group by"),
+    layer: str = Query(default="", description="Expression layer key (e.g. raw, X, counts)"),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Mean expression and fraction of expressing cells per group, for the
+    marker dot plot and heatmap."""
+    if len(genes) > 300:
+        raise HTTPException(status_code=400, detail="At most 300 genes per request.")
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    if not groupby:
+        groupby = adaptor.active_clustering_column() or ""
+    try:
+        result = adaptor.expression_by_group(genes, groupby, layer=layer or None)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not result["genes"]:
+        raise HTTPException(status_code=404, detail="None of the requested genes are in this layer.")
+    return result
+
+
 @router.get("/datasets/{dataset_id}/genes")
 async def list_genes(
     dataset_id: str,

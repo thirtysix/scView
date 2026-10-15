@@ -368,6 +368,35 @@ class AnnDataAdaptor:
             result[str(group_val)] = values[mask].tolist()
         return result
 
+    def expression_by_group(
+        self, gene_names: list[str], groupby: str, layer: str | None = None
+    ) -> dict:
+        """Mean expression and fraction of expressing cells per group, for the
+        marker dot plot and heatmap. Genes missing from the layer are dropped.
+
+        ``mean`` and ``fraction`` are indexed [group][gene].
+        """
+        if layer is None:
+            layer = self.default_expression_layer()
+        present = set(self._var_names_for_layer(layer))
+        genes = [g for g in dict.fromkeys(gene_names) if g in present]
+        col = self.get_obs_column(groupby)
+        if isinstance(col.dtype, pd.CategoricalDtype):
+            groups = [str(c) for c in col.cat.categories if (col == c).any()]
+        else:
+            groups = sorted(str(v) for v in col.dropna().unique())
+        labels = col.astype(str).to_numpy()
+        expr = self.get_expression(genes, layer=layer) if genes else np.zeros((len(labels), 0))
+        mean, fraction = [], []
+        for g in groups:
+            sub = expr[labels == g]
+            mean.append([round(float(v), 4) for v in sub.mean(axis=0)])
+            fraction.append([round(float(v), 4) for v in (sub > 0).mean(axis=0)])
+        return {
+            "groupby": groupby, "layer": layer, "groups": groups, "genes": genes,
+            "mean": mean, "fraction": fraction,
+        }
+
     # ------------------------------------------------------------------
     # Clustering helpers
     # ------------------------------------------------------------------

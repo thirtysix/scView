@@ -2,8 +2,8 @@ import { type ReactNode } from "react";
 import { CitationChip } from "@/components/assistant/CitationChip";
 
 /** Minimal, dependency-free markdown renderer for co-pilot answers.
- *  Supports: paragraphs, bullet/numbered lists, ATX headers, inline
- *  **bold**, *italic*, `code`, and [kind:...] citation chips. Renders via React
+ *  Supports: paragraphs, bullet/numbered lists, ATX headers, ``` code blocks,
+ *  inline **bold**, *italic*, `code`, and [kind:...] citation chips. Renders via React
  *  text nodes (no raw HTML), so it's XSS-safe. */
 
 // bold | code | italic | citation tag. The citation alternative matches any
@@ -56,6 +56,8 @@ export function MarkdownLite({
   const blocks: ReactNode[] = [];
   let para: string[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
+  let inCode = false;
+  let code: string[] = [];
   let key = 0;
 
   const flushPara = () => {
@@ -83,8 +85,31 @@ export function MarkdownLite({
     }
   };
 
+  const flushCode = () => {
+    blocks.push(
+      <pre key={`c-${key++}`} className="my-1 overflow-x-auto rounded bg-muted p-2 text-xs leading-snug">
+        <code>{code.join("\n")}</code>
+      </pre>
+    );
+    code = [];
+  };
+
   for (const raw of lines) {
     const line = raw.trimEnd();
+    if (/^\s*```/.test(line)) {
+      if (inCode) {
+        flushCode();
+      } else {
+        flushPara();
+        flushList();
+      }
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) {
+      code.push(line);
+      continue;
+    }
     const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
     const numbered = /^\s*\d+\.\s+(.*)$/.exec(line);
     const header = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -125,6 +150,7 @@ export function MarkdownLite({
     flushList();
     para.push(line);
   }
+  if (inCode) flushCode(); // unclosed fence, e.g. while the answer is still streaming
   flushPara();
   flushList();
 
