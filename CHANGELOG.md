@@ -6,6 +6,16 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-15
+
+### Fixed
+- **Unified View no longer says "No embeddings available" after the pipeline has run.** The
+  released backend image ran two server processes, each with its own copy of the dataset in
+  memory. After a pipeline run only one of them had the results, so pages showed the processed or
+  the raw data depending on which process answered, and Data Assessment flickered between
+  "13 completed" and "0 completed". The backend now runs a single process, as the development
+  setup always has. Restarting scView was a workaround on 0.10.0 and 0.10.1.
+
 ## [0.10.1] - 2026-10-14
 
 ### Fixed
@@ -208,7 +218,10 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/thirtysix/scView/releases/tag/v0.10.2
+[0.10.1]: https://github.com/thirtysix/scView/releases/tag/v0.10.1
+[0.10.0]: https://github.com/thirtysix/scView/releases/tag/v0.10.0
 [0.9.0]: https://github.com/thirtysix/scView/releases/tag/v0.9.0
 [0.8.0]: https://github.com/thirtysix/scView/releases/tag/v0.8.0
 [0.7.0]: https://github.com/thirtysix/scView/releases/tag/v0.7.0
