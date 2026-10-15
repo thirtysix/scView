@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Sparkles } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -49,7 +49,6 @@ export function UnifiedMarkersSubtab({
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filterQuery, setFilterQuery] = useState("");
   const [minAbsFC, setMinAbsFC] = useState(0);
-  const initialFetchDone = useRef(false);
 
   const groupbyColumns = useMemo(() => {
     if (!dataset) return [];
@@ -71,40 +70,23 @@ export function UnifiedMarkersSubtab({
     setError(null);
     setNoMarkers(false);
 
-    const useOnDemand = initialFetchDone.current && groupByColumn;
-    const url = useOnDemand
+    // Always the grouping column's own markers: the backend serves stored ones
+    // when it has them and computes them otherwise. Asking for the default
+    // markers first showed the clustering's markers under another grouping.
+    const url = groupByColumn
       ? `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupByColumn)}`
       : `/datasets/${datasetId}/markers?format=json`;
 
-    const applyData = (data: MarkersResponse) => {
-      if (cancelled) return;
-      setMarkersData(data);
-      setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
-      initialFetchDone.current = true;
-      setIsLoading(false);
-    };
-
     apiFetch<MarkersResponse>(url)
-      .then(applyData)
+      .then((data) => {
+        if (cancelled) return;
+        setMarkersData(data);
+        setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
+        setIsLoading(false);
+      })
       .catch((err) => {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
-        // No default markers — fall back to on-demand markers for the
-        // auto-selected grouping column.
-        if (msg.includes("404") && !useOnDemand && groupByColumn) {
-          apiFetch<MarkersResponse>(
-            `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupByColumn)}`,
-          )
-            .then(applyData)
-            .catch((innerErr) => {
-              if (cancelled) return;
-              const innerMsg = innerErr instanceof Error ? innerErr.message : String(innerErr);
-              if (innerMsg.includes("404")) setNoMarkers(true);
-              else setError(innerMsg);
-              setIsLoading(false);
-            });
-          return;
-        }
         if (msg.includes("404")) setNoMarkers(true);
         else setError(msg);
         setIsLoading(false);
