@@ -478,6 +478,7 @@ def _run_marker_genes(adata: ad.AnnData, params: PipelineParams, cb: SubstepCall
         sc.tl.rank_genes_groups(adata, groupby=col, method="wilcoxon", pts=True)
         # Store under namespaced key
         adata.uns[f"rank_genes_groups__{col}"] = adata.uns["rank_genes_groups"].copy()
+        drop_enrichment_cache(adata, col)
         computed += 1
 
     # Leave rank_genes_groups pointing to the active clustering for backward compat
@@ -922,6 +923,17 @@ def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None
     _markers_for_column(adata, target)
 
 
+def drop_enrichment_cache(adata: ad.AnnData, col: str) -> None:
+    """Forget cached enrichment for a column whose markers or groups changed.
+
+    The cache is keyed by column and group name only, so after re-annotation or
+    new markers a surviving label would otherwise be served its old result.
+    """
+    for prefix in (f"enrichment__{col}__", f"ora_meta__{col}__"):
+        for k in [k for k in adata.uns if isinstance(k, str) and k.startswith(prefix)]:
+            del adata.uns[k]
+
+
 def _markers_for_column(adata: ad.AnnData, col: str) -> None:
     """Store wilcoxon markers for one obs column under rank_genes_groups__{col}.
     Best effort: a failure is logged and leaves the column without markers."""
@@ -933,6 +945,7 @@ def _markers_for_column(adata: ad.AnnData, col: str) -> None:
         sc.tl.rank_genes_groups(
             adata, groupby=col, method="wilcoxon", pts=True, key_added=f"rank_genes_groups__{col}"
         )
+        drop_enrichment_cache(adata, col)
     except Exception as exc:
         logger.warning("Markers for '%s' failed: %s", col, exc)
 
