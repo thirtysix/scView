@@ -100,3 +100,54 @@ def test_deterministic_fallback_catches_unambiguous_commands():
     assert [a.type for a in _deterministic_actions("hide the overlay", **ctx)] == ["clear_overlay"]
     assert [a.type for a in _deterministic_actions("switch to 3d view", **ctx)] == ["set_embedding"]
     assert _deterministic_actions("what is this cluster?", **ctx) == []  # questions don't match
+
+
+def test_marker_plot_requests_are_commands_and_map_to_show_marker_plot():
+    from scview.core.assistant import _deterministic_actions
+
+    ctx = dict(columns=["cluster"], embeddings=["X_umap"], genes_upper={},
+               n_cells=100, active_clustering="cluster")
+    for q in ("Can you show a heatmap of these markers?", "please plot a dot plot of the markers",
+              "show the marker heatmap"):
+        assert _looks_like_command(q), q
+    heat = _deterministic_actions("Can you show a heatmap of these markers?", **ctx)
+    assert [(a.type, a.plot) for a in heat] == [("show_marker_plot", "heatmap")]  # not compute_markers
+    dot = _deterministic_actions("show a dotplot of the markers", **ctx)
+    assert [(a.type, a.plot) for a in dot] == [("show_marker_plot", "dotplot")]
+    bare = _coerce_actions('[{"type":"show_marker_plot"}]', **CTX)
+    assert [(a.type, a.plot) for a in bare] == [("show_marker_plot", "heatmap")]
+    assert _coerce_actions('[{"type":"show_marker_plot","plot":"violin"}]', **CTX) == []
+
+
+async def test_polite_question_skips_keyword_fallback(monkeypatch):
+    # The model saw a question and returned no actions; the keyword matcher must not
+    # turn "find the markers" into a compute-markers card.
+    import scview.core.assistant as asst
+
+    class _Resp:
+        choices = [type("C", (), {"message": type("M", (), {"content": "[]"})()})()]
+
+    class _Client:
+        def __init__(self, **_):
+            self.chat = type("Ch", (), {"completions": self})()
+
+        async def create(self, **_):
+            return _Resp()
+
+    monkeypatch.setattr("openai.AsyncOpenAI", _Client)
+    args = (None, ["cluster"], ["X_umap"], {}, 100, "cluster", "key", "m")
+    assert await asst.extract_actions("Can you find the markers of cluster 3?", *args) == []
+    assert [a.type for a in await asst.extract_actions("find the markers", *args)] == ["compute_markers"]
+    # ...but a polite plot request still opens the plot when the model returned nothing
+    heat = await asst.extract_actions("Can you show a heatmap of these markers?", *args)
+    assert [(a.type, a.plot) for a in heat] == [("show_marker_plot", "heatmap")]
+
+
+def test_app_ui_questions_pull_in_the_feature_list():
+    from scview.core.rag.router import mentions_app_ui
+
+    for q in ("How can I visualise marker genes across clusters in scView?",
+              "is there a heatmap?", "which button runs clustering?", "where do I find markers"):
+        assert mentions_app_ui(q), q
+    for q in ("what marks pDCs?", "how many cells are in cluster 3?"):
+        assert not mentions_app_ui(q), q

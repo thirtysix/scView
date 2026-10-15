@@ -32,6 +32,7 @@ export interface AssistantAction {
     | "clear_highlight"
     | "clear_overlay"
     | "show_gene"
+    | "show_marker_plot"
     | "annotate_cell_types"
     | "cluster"
     | "detect_doublets"
@@ -43,6 +44,7 @@ export interface AssistantAction {
   embedding?: string;
   subtab?: string;
   gene?: string;
+  plot?: "dotplot" | "heatmap";
   label?: string;
   // Confirm-gated mutating actions:
   requires_confirm?: boolean;

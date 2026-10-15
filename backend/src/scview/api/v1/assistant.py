@@ -26,7 +26,7 @@ from scview.core.assistant import (
 )
 from scview.core.guards import enforce_query_limits
 from scview.core.rag.retrieve import retrieve_context
-from scview.core.rag.router import classify_intent
+from scview.core.rag.router import classify_intent, mentions_app_ui
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ async def _prepare(
         query, body.view_context, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL
     )
     chosen = set(intent.sources)
-    if force_app:
+    if force_app or mentions_app_ui(query):
         chosen.add("app")
 
     # 2. RAG retrieval ONLY for the corpora the classifier picked.
