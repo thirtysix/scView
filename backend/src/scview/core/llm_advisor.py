@@ -1,6 +1,6 @@
 """LLM-powered and rule-based preprocessing advisor.
 
-Uses DeepInfra (Llama 3.1 8B) to suggest next preprocessing steps based on
+Uses a DeepInfra chat model to suggest next preprocessing steps based on
 the current state of an AnnData object, with a deterministic rule-based fallback.
 """
 
@@ -11,6 +11,8 @@ import logging
 from typing import Any
 
 from pydantic import BaseModel
+
+from scview.core.llm import chat_extra
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +190,9 @@ async def get_llm_suggestions(
     preprocessing_state: dict[str, Any],
     dataset_summary: dict[str, Any],
     api_key: str,
+    model: str = "deepseek-ai/DeepSeek-V4.1-Flash",
 ) -> AdvisorResponse:
-    """Get preprocessing suggestions from DeepInfra's Llama 3.1 8B model.
+    """Get preprocessing suggestions from a DeepInfra chat model.
 
     Parameters
     ----------
@@ -221,7 +224,8 @@ async def get_llm_suggestions(
         user_message = _build_user_message(preprocessing_state, dataset_summary)
 
         response = await client.chat.completions.create(
-            model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+            model=model,
+            **chat_extra(model),
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},

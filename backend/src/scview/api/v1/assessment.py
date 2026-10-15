@@ -218,6 +218,7 @@ async def suggest_improvements(
                     preprocessing_state=body.preprocessing_state,
                     dataset_summary=dataset_summary,
                     api_key=settings.DEEPINFRA_API_KEY,
+                    model=settings.RAG_CHAT_MODEL,
                 )
                 return result.model_dump()
             except Exception as e:

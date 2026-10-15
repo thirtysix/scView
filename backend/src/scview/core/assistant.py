@@ -36,12 +36,13 @@ from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
 from scview.core import provenance
+from scview.core.llm import chat_extra
 
 logger = logging.getLogger(__name__)
 
 # Reuse the same provider/model as the preprocessing advisor for consistency.
 DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
-DEFAULT_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash"
 
 # How much result detail to put in the prompt (keep the context bounded).
 _MAX_MARKER_GROUPS = 16
@@ -617,6 +618,7 @@ async def polish_insight(insight: DatasetInsight, api_key: str, model: str = DEF
         client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
         resp = await client.chat.completions.create(
             model=model,
+            **chat_extra(model),
             messages=[
                 {"role": "system", "content": (
                     "Rephrase this single-cell analysis tip into ONE friendly, concise "
@@ -740,6 +742,7 @@ async def write_methods(
         client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
         resp = await client.chat.completions.create(
             model=model,
+            **chat_extra(model),
             messages=[
                 {"role": "system", "content": _METHODS_SYSTEM},
                 {"role": "user", "content": f"Analysis recipe:\n{skeleton}{focus}\n\nWrite the Methods paragraph."},
@@ -1076,6 +1079,7 @@ async def extract_actions(
         client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
         resp = await client.chat.completions.create(
             model=model,
+            **chat_extra(model),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=300,
@@ -1189,6 +1193,7 @@ async def answer_query(
 
         response = await client.chat.completions.create(
             model=model,
+            **chat_extra(model),
             messages=messages,
             temperature=0.2,
             max_tokens=1024,
@@ -1216,6 +1221,7 @@ async def suggest_followups(query: str, answer: str, api_key: str, model: str) -
         client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
         resp = await client.chat.completions.create(
             model=model,
+            **chat_extra(model),
             messages=[
                 {"role": "system", "content": (
                     "Given a Q&A about a single-cell RNA-seq dataset in the scView app, "
@@ -1295,6 +1301,7 @@ async def stream_answer(
         client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
         stream = await client.chat.completions.create(
             model=model,
+            **chat_extra(model),
             messages=_build_messages(query, context, history),
             temperature=0.2,
             max_tokens=1024,

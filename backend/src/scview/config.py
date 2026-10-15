@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     # When reranking, fetch this many hybrid candidates, then rerank down to TOP_K.
     RAG_RERANK_CANDIDATES: int = 24
     # Chat/generation + router model on DeepInfra.
-    RAG_CHAT_MODEL: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    RAG_CHAT_MODEL: str = "deepseek-ai/DeepSeek-V4.1-Flash"
     # Retrieval tuning.
     RAG_TOP_K: int = 6
     RAG_VECTOR_WEIGHT: float = 0.7
