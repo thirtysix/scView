@@ -119,3 +119,17 @@ async def test_de_compare_rejects_bad_requests():
             "x", DECompareRequest(split_by="cond", group_a="A", group_b="B",
                                   within_column="ct", within_value="Z"), dm)
     assert e.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_de_on_hvg_subset_keeps_down_regulated_genes():
+    # The usual imported layout: .raw holds every gene, X only the variable ones.
+    full = _two_pop(g=30)
+    full.X[: full.n_obs // 2, 20:25] = 0.0  # the selection loses G20-G24
+    full.raw = full
+    a = full[:, :10].copy()
+    sel = list(range(a.n_obs // 2))
+    res = await differential_expression("x", DERequest(indices=sel, label="A"), _DM(a))
+    assert len(res.genes) == 30
+    down = {g.gene for g in res.genes if g.logfoldchange < 0}
+    assert {f"G{i}" for i in range(20, 25)} <= down
