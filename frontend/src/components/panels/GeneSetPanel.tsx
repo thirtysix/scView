@@ -161,6 +161,15 @@ export function GeneSetPanel() {
   const [isLoadingColumns, setIsLoadingColumns] = useState(false);
   const [isLoadingGroups, setIsLoadingGroups] = useState(false);
   const [enrichError, setEnrichError] = useState<string | null>(null);
+  // The enrichment shown belongs to one group: clear it when the group changes,
+  // and ignore responses for a group the user has already left.
+  const groupRef = useRef(selectedGroup);
+  groupRef.current = selectedGroup;
+  useEffect(() => {
+    setEnrichment(null);
+    setNetwork(null);
+    setEnrichError(null);
+  }, [selectedGroup]);
 
   // Batch enrichment state
   const [isBatchComputing, setIsBatchComputing] = useState(false);
@@ -528,8 +537,9 @@ export function GeneSetPanel() {
           }),
         },
       );
-      setEnrichment(data);
       setEnrichmentStatus((prev) => ({ ...prev, [selectedGroup]: true }));
+      if (groupRef.current !== selectedGroup) return; // the user picked another group meanwhile
+      setEnrichment(data);
       void buildNetwork(resolution);
     } catch (err) {
       setEnrichError(err instanceof Error ? err.message : String(err));
@@ -568,10 +578,8 @@ export function GeneSetPanel() {
           },
         );
         setEnrichmentStatus((prev) => ({ ...prev, [g]: true }));
-        // Show last result
-        if (i === groups.length - 1 || g === selectedGroup) {
-          setEnrichment(data);
-        }
+        // Show only the result of the group the selector is on.
+        if (g === groupRef.current) setEnrichment(data);
       } catch {
         // Continue batch even if one group fails
       }
