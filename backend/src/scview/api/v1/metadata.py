@@ -106,11 +106,58 @@ async def get_metadata_column(
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
 
     if format == "json":
-        values = series.tolist()
+        # Missing values as null: NaN is not valid JSON and made this a 500.
+        values = series.astype(object).where(series.notna(), None).tolist()
         return {"column": column, "values": values}
 
     ipc_bytes = series_to_arrow_ipc(series, name=column)
     return Response(content=ipc_bytes, media_type=ARROW_CONTENT_TYPE)
+
+
+def _marker_keys(adata, column: str) -> list[str]:
+    keys = [f"rank_genes_groups__{column}"] if f"rank_genes_groups__{column}" in adata.uns else []
+    rgg = adata.uns.get("rank_genes_groups")
+    if isinstance(rgg, dict) and rgg.get("params", {}).get("groupby") == column:
+        keys.append("rank_genes_groups")
+    return keys
+
+
+def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
+    """Carry a category rename into the column's markers and cached enrichment,
+    which are keyed by group name and otherwise keep the old label."""
+    import pandas as pd
+    import scanpy as sc
+
+    from scview.core.ora_background import meta_key
+    from scview.core.pipeline import drop_enrichment_cache
+
+    if merge:
+        # Two groups became one: markers and enrichment no longer apply.
+        drop_enrichment_cache(adata, column)
+        keys = _marker_keys(adata, column)
+        if keys:
+            sc.tl.rank_genes_groups(
+                adata, groupby=column, method="wilcoxon", pts=True,
+                key_added=f"rank_genes_groups__{column}",
+            )
+            if "rank_genes_groups" in keys:
+                adata.uns["rank_genes_groups"] = adata.uns[f"rank_genes_groups__{column}"]
+        return
+    for key in _marker_keys(adata, column):
+        rgg = adata.uns[key]
+        for field in ("names", "scores", "logfoldchanges", "pvals", "pvals_adj"):
+            arr = rgg.get(field)
+            names = getattr(getattr(arr, "dtype", None), "names", None)
+            if names and old in names:
+                arr.dtype.names = tuple(new if n == old else n for n in names)
+        for field in ("pts", "pts_rest"):
+            df = rgg.get(field)
+            if isinstance(df, pd.DataFrame) and old in df.columns:
+                rgg[field] = df.rename(columns={old: new})
+    for k_old, k_new in ((f"enrichment__{column}__{old}", f"enrichment__{column}__{new}"),
+                         (meta_key(column, old), meta_key(column, new))):
+        if k_old in adata.uns:
+            adata.uns[k_new] = adata.uns.pop(k_old)
 
 
 class RenameCategoryBody(BaseModel):
@@ -148,18 +195,19 @@ async def rename_obs_category(
     cats = list(col.cat.categories)
     if body.old not in cats:
         raise HTTPException(status_code=404, detail=f"'{body.old}' is not a category of '{column}'.")
-    if new in cats and new != body.old:
-        adata.obs[column] = col.astype(str).replace({body.old: new}).astype("category")
+    merge = new in cats and new != body.old
+    if merge:
+        # Through the categories, not str: astype(str) made missing values "nan".
+        col = col.copy()
+        col[col == body.old] = new
+        adata.obs[column] = col.cat.remove_unused_categories()
     else:
         adata.obs[column] = col.cat.rename_categories({body.old: new})
+    _follow_rename(adata, column, body.old, new, merge)
 
     output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
     adata.write_h5ad(output_path)
     # Reload so subsequent reads see the rename.
-    if dataset_id in dm._datasets:
-        dm._datasets[dataset_id].close()
-        del dm._datasets[dataset_id]
-    if dataset_id in dm._load_order:
-        dm._load_order.remove(dataset_id)
+    dm.evict(dataset_id)
     await dm.load_dataset(dataset_id)
     return {"column": column, "old": body.old, "new": new}
