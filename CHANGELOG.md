@@ -6,6 +6,14 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-15
+
+### Fixed
+- **scView no longer fails to start on slower computers with "container scview-backend-1 is
+  unhealthy".** Docker gave the backend only about 30 seconds to answer its health check, and a
+  slow machine (seen on a Windows 11 virtual machine) can take longer than that to load. It now
+  has two minutes. Starting scView a second time was a workaround.
+
 ## [0.10.2] - 2026-10-15
 
 ### Fixed
@@ -218,7 +226,8 @@ Initial public release.
   correction, Leiden/Louvain clustering, UMAP/t-SNE, marker genes, MSigDB enrichment, cell cycle.
 - **Docker self-host** — `./start.sh` or `make` on Linux, macOS, and Windows.
 
-[Unreleased]: https://github.com/thirtysix/scView/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/thirtysix/scView/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/thirtysix/scView/releases/tag/v0.10.3
 [0.10.2]: https://github.com/thirtysix/scView/releases/tag/v0.10.2
 [0.10.1]: https://github.com/thirtysix/scView/releases/tag/v0.10.1
 [0.10.0]: https://github.com/thirtysix/scView/releases/tag/v0.10.0
