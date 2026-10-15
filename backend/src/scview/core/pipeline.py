@@ -328,6 +328,9 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> None:
     """Run PCA."""
     n_comps = min(params.n_comps, adata.n_obs - 1, adata.n_vars - 1)
     sc.tl.pca(adata, n_comps=n_comps, svd_solver="arpack")
+    # A Harmony embedding of the previous PCA would otherwise still be picked up
+    # by the neighbour graph; the batch-correction step rebuilds it if it runs.
+    adata.obsm.pop("X_pca_harmony", None)
     logger.info("PCA: %d components", n_comps)
 
 
@@ -400,19 +403,14 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
     downstream steps (marker genes, violin groupby, etc.).
     """
     method = params.clustering_method
-    if method == "leiden":
-        sc.tl.leiden(adata, resolution=params.clustering_resolution)
-    else:
-        sc.tl.louvain(adata, resolution=params.clustering_resolution)
-
-    # Build custom column name to preserve the original
+    # Written straight to the scview_* column: scanpy's default key ("leiden" /
+    # "louvain") would overwrite a clustering the dataset came with.
     scview_col = f"scview_{method}_r{params.clustering_resolution}"
-    adata.obs[scview_col] = adata.obs[method].copy()
+    if method == "leiden":
+        sc.tl.leiden(adata, resolution=params.clustering_resolution, key_added=scview_col)
+    else:
+        sc.tl.louvain(adata, resolution=params.clustering_resolution, key_added=scview_col)
     adata.uns["scview_active_clustering"] = scview_col
-    # Drop scanpy's bare 'leiden'/'louvain' column — the named scview_* copy is canonical,
-    # so this avoids a redundant duplicate in the obs-column lists.
-    if method in adata.obs.columns and method != scview_col:
-        del adata.obs[method]
 
     n_clusters = adata.obs[scview_col].nunique()
     logger.info(

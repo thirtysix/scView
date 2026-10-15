@@ -84,3 +84,21 @@ def test_marker_genes_explicit_columns():
     adata.obs["cell_type"] = (["A"] * 80 + ["B"] * 80 + ["C"] * 80)
     _run_marker_genes(adata, PipelineParams(marker_columns=["cell_type"]))
     assert "rank_genes_groups__cell_type" in adata.uns
+
+
+def test_clustering_keeps_the_datasets_own_leiden_column():
+    adata = _structured()
+    curated = np.array(["T", "B", "Mono"]).repeat(80)
+    adata.obs["leiden"] = curated
+    out, res = run_pipeline(adata, _prep_chain(), PipelineParams(n_comps=30))
+    assert res.errors == {}
+    assert list(out.obs["leiden"]) == list(curated)
+    assert "scview_leiden_r0.5" in out.obs.columns
+
+
+def test_pca_drops_a_harmony_embedding_of_the_previous_pca():
+    adata = _structured()
+    adata.obsm["X_pca_harmony"] = np.zeros((adata.n_obs, 5))
+    out, res = run_pipeline(adata, ["normalization", "log_transform", "pca"], PipelineParams(n_comps=30))
+    assert res.errors == {}
+    assert "X_pca_harmony" not in out.obsm
