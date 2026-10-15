@@ -20,7 +20,7 @@ interface TrajectoryColumnsResponse {
 interface PseudotimeValuesResponse {
   column: string;
   n_cells: number;
-  values: number[];
+  values: (number | null)[];
   min: number;
   max: number;
 }
@@ -101,7 +101,7 @@ export function TrajectoryPanel() {
       .then((data) => {
         const f32 = new Float32Array(data.values.length);
         for (let i = 0; i < data.values.length; i++) {
-          f32[i] = data.values[i]!;
+          f32[i] = data.values[i] ?? NaN; // null: no pseudotime for this cell
         }
         setPseudotimeValues(f32);
         setPseudotimeMinMax({ min: data.min, max: data.max });

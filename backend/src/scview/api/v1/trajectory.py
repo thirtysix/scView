@@ -10,7 +10,6 @@ import logging
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
-from scipy import sparse
 
 from scview.core.dataset_manager import DatasetManager
 from scview.dependencies import get_dataset_manager
@@ -70,15 +69,19 @@ async def get_pseudotime_values(
         )
 
     values = adaptor.adata.obs[column].values.astype(float)
-    values = np.nan_to_num(values, nan=0.0)
+    # Unreachable cells get inf (DPT, Monocle) and unassigned ones NaN: send null
+    # for them rather than 0 / 1.8e308, which flattened the colour scale.
+    finite = np.isfinite(values)
+    if not finite.any():
+        raise HTTPException(status_code=422, detail=f"Column '{column}' has no finite values.")
 
     return {
         "dataset_id": dataset_id,
         "column": column,
         "n_cells": int(len(values)),
-        "values": values.tolist(),
-        "min": float(np.nanmin(values)),
-        "max": float(np.nanmax(values)),
+        "values": [float(v) if ok else None for v, ok in zip(values, finite)],
+        "min": float(values[finite].min()),
+        "max": float(values[finite].max()),
     }
 
 
@@ -128,26 +131,25 @@ async def get_expression_along_pseudotime(
             detail="At most 10 genes can be queried at once.",
         )
 
-    adata = adaptor.adata
-    pseudotime = adata.obs[column].values.astype(float)
-    pseudotime = np.nan_to_num(pseudotime, nan=0.0)
+    pseudotime = adaptor.adata.obs[column].values.astype(float)
+    # Cells without a finite pseudotime are left out of the trends.
+    finite = np.isfinite(pseudotime)
+    if not finite.any():
+        raise HTTPException(status_code=422, detail=f"Column '{column}' has no finite values.")
+    pseudotime = pseudotime[finite]
 
-    var_names = list(adata.var_names)
+    # The same expression layer as every other expression view (log-normalised
+    # .raw when present), not X, which the pipeline leaves scaled.
+    layer = adaptor.default_expression_layer()
+    present = set(adaptor._var_names_for_layer(layer))
     results: dict[str, dict] = {}
 
     for gene in gene_list:
-        if gene not in var_names:
+        if gene not in present:
             results[gene] = {"found": False}
             continue
 
-        gene_idx = var_names.index(gene)
-        X = adata.X
-        if sparse.issparse(X):
-            expr = np.asarray(X[:, gene_idx].toarray()).flatten().astype(float)
-        else:
-            expr = np.asarray(X[:, gene_idx]).flatten().astype(float)
-
-        expr = np.nan_to_num(expr, nan=0.0)
+        expr = adaptor.get_expression([gene], layer=layer)[:, 0].astype(float)[finite]
 
         # ---- Binned / smoothed values ----
         pt_min, pt_max = float(np.min(pseudotime)), float(np.max(pseudotime))
