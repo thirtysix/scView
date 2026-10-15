@@ -9,6 +9,8 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from scview.core.ora_background import resolve_markers_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -425,7 +427,7 @@ class AnnDataAdaptor:
 
     def has_markers(self, column: str | None = None) -> bool:
         if column:
-            return f"rank_genes_groups__{column}" in self.adata.uns
+            return resolve_markers_key(self.adata.uns, column) is not None
         return "rank_genes_groups" in self.adata.uns or any(
             k.startswith("rank_genes_groups__") for k in self.adata.uns
         )
@@ -459,12 +461,9 @@ class AnnDataAdaptor:
 
         Returns a DataFrame with columns: group, gene, logfoldchange, pval, pval_adj, pct.
         """
-        if column:
-            uns_key = f"rank_genes_groups__{column}"
-        else:
-            uns_key = "rank_genes_groups"
-
-        if uns_key not in self.adata.uns:
+        # A file's own markers are often under the bare key with params.groupby set.
+        uns_key = resolve_markers_key(self.adata.uns, column or "")
+        if uns_key is None:
             return None
 
         rgg = self.adata.uns[uns_key]
