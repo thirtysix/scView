@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-16
+
 ### Added
 - **Pseudobulk DE (donor-aware).** In DE, *Between groups*, a new test sums each donor's counts
   and tests donors rather than cells with DESeq2 (pydeseq2), so the p-values allow for
