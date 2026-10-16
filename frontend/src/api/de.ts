@@ -5,6 +5,8 @@ export interface DEGene {
   logfoldchange: number;
   pval: number;
   pval_adj: number;
+  /** Test statistic (Wilcoxon z, DESeq2 Wald); TF / pathway activity is scored on it. */
+  stat?: number | null;
 }
 
 export interface DEResponse {

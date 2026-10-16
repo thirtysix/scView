@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from scview.api.v1 import (
+    activity,
     datasets,
     embeddings,
     metadata,
@@ -21,6 +22,7 @@ from scview.api.v1 import (
     export,
     ingest,
     integration,
+    normalization,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -43,3 +45,5 @@ api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(export.router, tags=["export"])
 api_router.include_router(ingest.router, tags=["ingest"])
 api_router.include_router(integration.router, tags=["integration"])
+api_router.include_router(normalization.router, tags=["assessment"])
+api_router.include_router(activity.router, tags=["activity"])

@@ -54,6 +54,9 @@ class DEGene(BaseModel):
     logfoldchange: float
     pval: float
     pval_adj: float
+    # The test statistic (Wilcoxon z-score, DESeq2 Wald statistic): what TF and
+    # pathway activity is scored on. p-values saturate at 0 for strong genes.
+    stat: float | None = None
 
 
 class DEResponse(BaseModel):
@@ -145,6 +148,7 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
         lfc = rgg["logfoldchanges"]["selection"]
         pv = rgg["pvals"]["selection"]
         pv_adj = rgg["pvals_adj"]["selection"]
+        scores = rgg["scores"]["selection"]
     except Exception as exc:
         logger.error("DE computation failed for %s: %s", dataset_id, exc)
         raise HTTPException(status_code=500, detail=f"DE computation failed: {exc!s}")
@@ -157,7 +161,9 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
         # Drop non-finite rows (a gene with zero variance yields NaNs).
         if not (np.isfinite(lf) and np.isfinite(p) and np.isfinite(pa)):
             continue
-        genes.append(DEGene(gene=str(names[i]), logfoldchange=lf, pval=p, pval_adj=pa))
+        z = float(scores[i])
+        genes.append(DEGene(gene=str(names[i]), logfoldchange=lf, pval=p, pval_adj=pa,
+                            stat=z if np.isfinite(z) else None))
     return genes
 
 
@@ -312,7 +318,8 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         n_selected=res.n_cells_a,
         n_rest=res.n_cells_b,
         label=label,
-        genes=[DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa) for g, lf, p, pa in res.genes],
+        genes=[DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa, stat=res.stats.get(g))
+               for g, lf, p, pa in res.genes],
         replicate_key=key,
         n_donors_a=res.n_samples_a,
         n_donors_b=res.n_samples_b,
