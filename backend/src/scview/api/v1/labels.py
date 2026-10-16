@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_lock, write_derived
+from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
 from scview.core.user_labels import UNASSIGNED, LabelError, label_cells, restore, user_columns
 from scview.dependencies import get_dataset_manager
 
@@ -53,10 +53,13 @@ async def _edit_and_save(
         adata = adaptor.adata
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
 
+        backed = getattr(adata, "isbacked", False)
+
         def _run():
-            work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
+            work = adata.to_memory() if backed else adata
+            before = uns_snapshot(work)
             result = edit(work)
-            write_derived(work, output_path)
+            write_derived(work, output_path, adaptor.h5ad_path, before)
             return result
 
         try:
@@ -68,8 +71,12 @@ async def _edit_and_save(
             dm.evict(dataset_id)  # may hold an edit that was never saved
             logger.error("Labelling failed for %s: %s", dataset_id, exc, exc_info=True)
             raise HTTPException(status_code=500, detail=f"Could not save the labels: {exc!s}")
-        dm.evict(dataset_id)
-        await dm.load_dataset(dataset_id)
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            # The cached dataset is the edited one and now matches the file.
+            dm.saved_in_place(dataset_id, adaptor, output_path)
         return result
 
 

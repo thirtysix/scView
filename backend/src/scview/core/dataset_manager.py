@@ -306,6 +306,12 @@ class DatasetManager:
             adaptor.h5ad_path = str(target)
         return True
 
+    def saved_in_place(self, dataset_id: str, adaptor: AnnDataAdaptor, path: str) -> None:
+        """Record that the cached ``adaptor`` was edited and saved to ``path``, so
+        it stays cached (no reload) and the library sees its new columns."""
+        adaptor.h5ad_path = str(path)
+        self._update_metadata_from_adaptor(dataset_id, adaptor)
+
     def _update_metadata_from_adaptor(
         self, dataset_id: str, adaptor: AnnDataAdaptor
     ) -> None:

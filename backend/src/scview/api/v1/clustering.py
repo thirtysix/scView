@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from scview.core import resolution_sweep as rs
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_lock, write_derived
+from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -158,19 +158,26 @@ async def keep_resolution(
             raise HTTPException(status_code=400, detail=str(exc))
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
 
+        backed = getattr(adata, "isbacked", False)
+
         def _run():
-            work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
+            work = adata.to_memory() if backed else adata
+            before = uns_snapshot(work)
             result = rs.keep(work, method, resolution)
-            write_derived(work, output_path)
+            write_derived(work, output_path, adaptor.h5ad_path, before)
             return result
 
         try:
             result = await asyncio.to_thread(_run)
         except Exception as exc:
+            dm.evict(dataset_id)  # the cached copy may hold the column without it being saved
             logger.error("Keeping resolution %s failed for %s: %s", resolution, dataset_id, exc,
                          exc_info=True)
             raise HTTPException(status_code=500, detail=f"Could not save the clustering: {exc!s}")
-        finally:
-            dm.evict(dataset_id)  # the cached copy may hold the column without it being saved
-        await dm.load_dataset(dataset_id)
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            # The cached dataset is the edited one and now matches the file.
+            dm.saved_in_place(dataset_id, adaptor, output_path)
         return result
