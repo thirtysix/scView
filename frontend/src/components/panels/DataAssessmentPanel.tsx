@@ -8,6 +8,7 @@ import { getDataset } from "@/api/datasets";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
 import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
+import { QcReportCard } from "@/components/panels/QcReportCard";
 import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import {
   ClipboardCheck,
@@ -725,6 +726,9 @@ export function DataAssessmentPanel() {
               </div>
             )}
           </div>
+
+          {/* "Explain this data": written QC report from the assessment facts */}
+          <QcReportCard datasetId={datasetId} refreshKey={qcRefreshKey} />
 
           {/* Cell-type annotation */}
           <AnnotationControl onAnnotate={annotate} running={running} />
