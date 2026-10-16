@@ -18,8 +18,15 @@ from pydantic import BaseModel
 
 from scview.config import Settings
 from scview.core import enrichment_network as network
+from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
 from scview.core.gene_filters import select_query_genes
+from scview.core.geneset_sources import (
+    label_records,
+    match_query_case,
+    resolve_gene_sets,
+    tag_records,
+)
 from scview.core.msigdb_loader import DEFAULT_COLLECTIONS, get_msigdb_loader
 from scview.core.ora_background import (
     cache_is_current,
@@ -102,6 +109,10 @@ class EnrichmentResult(BaseModel):
     gene_count: int
     genes: list[str]
     collection: str = ""
+    # A custom collection's name (MSigDB results leave it empty), and whether
+    # the collection has been deleted since this result was computed.
+    collection_name: str = ""
+    collection_deleted: bool = False
 
 
 class EnrichmentResponse(BaseModel):
@@ -325,17 +336,20 @@ async def compute_enrichment_local(
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ):
-    """Compute enrichment using local MSigDB subcategory files.
+    """Compute enrichment using local MSigDB subcategory files and custom collections.
 
     Uses the top N marker genes for the specified group and runs them through
-    gseapy.enrich() with gene sets loaded from local MSigDB JSON files.
+    gseapy.enrich() with gene sets loaded from local MSigDB JSON files and/or
+    the user's custom collections (ids starting "custom-").
     """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
-    if loader is None:
+    store = get_custom_store(settings.DATA_DIR)
+    # Custom collections need no MSigDB, so only an MSigDB-only request fails here.
+    if loader is None and not any(is_custom_id(c) for c in body.collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
 
     col = body.column
@@ -368,7 +382,8 @@ async def compute_enrichment_local(
             if isinstance(cached, str):
                 cached = json.loads(cached)
             normalized = [_normalize_gseapy_record(r) for r in cached] if cached else []
-            results = [EnrichmentResult(**r) for r in normalized]
+            # A custom collection deleted since then is shown as deleted.
+            results = [EnrichmentResult(**r) for r in label_records(normalized, store)]
             return EnrichmentResponse(
                 group=body.group,
                 groupby=col,
@@ -402,13 +417,22 @@ async def compute_enrichment_local(
     try:
         import gseapy as gp
 
-        # Load selected MSigDB collections as a merged dict
-        gene_sets_dict = loader.get_multiple_collections_as_dict(body.collections)
-        if not gene_sets_dict:
+        # Load the selected MSigDB and custom collections as one merged dict
+        resolved = resolve_gene_sets(body.collections, loader, store)
+        if resolved.missing_custom:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A selected custom collection no longer exists (it was deleted): "
+                    f"{', '.join(resolved.missing_custom)}. Deselect it and run again."
+                ),
+            )
+        if not resolved.gene_sets:
             raise HTTPException(
                 status_code=400,
                 detail="No gene sets found for the selected collections.",
             )
+        gene_sets_dict = match_query_case(resolved, top_genes, background)
 
         enr = gp.enrich(
             gene_list=top_genes,
@@ -420,12 +444,12 @@ async def compute_enrichment_local(
         )
 
         all_results: list[dict[str, Any]] = []
-        if enr.results is not None and not enr.results.empty:
+        # With no overlap at all gseapy leaves results as an empty list, not a frame.
+        if not getattr(enr.results, "empty", True):
             for _, row in enr.results.iterrows():
-                rec = _normalize_gseapy_record(row.to_dict())
-                # Try to identify which collection the term belongs to
-                rec["collection"] = _identify_collection(rec["term"], body.collections, loader)
-                all_results.append(rec)
+                all_results.append(_normalize_gseapy_record(row.to_dict()))
+        # Which collection each term came from (and a custom one's name)
+        tag_records(all_results, resolved)
 
         # Sort by adjusted p-value
         all_results.sort(key=lambda r: r.get("adjusted_pvalue", 1.0))
@@ -448,7 +472,7 @@ async def compute_enrichment_local(
             group=body.group,
             groupby=col,
             n_genes_used=len(top_genes),
-            results=[EnrichmentResult(**r) for r in all_results],
+            results=[EnrichmentResult(**r) for r in label_records(all_results, store)],
             source="msigdb_local",
         )
 
@@ -648,17 +672,6 @@ def _normalize_gseapy_record(row: dict[str, Any]) -> dict[str, Any]:
         "gene_count": gene_count,
         "genes": genes,
     }
-
-
-def _identify_collection(
-    term_name: str, collection_ids: list[str], loader: Any
-) -> str:
-    """Try to identify which MSigDB collection a term belongs to."""
-    for cid in collection_ids:
-        data = loader._load_collection(cid)
-        if data and term_name in data:
-            return cid
-    return ""
 
 
 def _parse_precomputed_enrichment(raw: Any, group_filter: str) -> list[dict]:

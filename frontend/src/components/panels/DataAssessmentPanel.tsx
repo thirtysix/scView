@@ -1015,6 +1015,7 @@ export function DataAssessmentPanel() {
                                       <MSigDBCollectionTree
                                         selected={new Set((currentVal as string[]) || DEFAULT_MSIGDB_COLLECTIONS)}
                                         onChange={(sel) => setStepParam(step.key, pc.param, Array.from(sel))}
+                                        datasetId={datasetId}
                                         compact
                                       />
                                     ) : pc.type === "checkbox_list" ? (

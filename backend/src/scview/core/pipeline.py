@@ -24,6 +24,12 @@ import scipy.sparse as sp
 from scview.core import provenance
 from scview.core.llm import chat_extra
 from scview.core.gene_filters import select_query_genes
+from scview.core.geneset_sources import (
+    ResolvedGeneSets,
+    match_query_case,
+    resolve_gene_sets,
+    tag_records,
+)
 from scview.core.ora_background import write_meta
 from scview.core.uns_keys import (
     BATCH_MIXING_KEY,
@@ -569,21 +575,32 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
     # Track the gene-set selection actually used, so the cache sidecar records it and a
     # later request with a different selection recomputes instead of reusing this payload.
     used_collections: list[str]
+    # MSigDB + custom collections merged, when local gene sets are used.
+    resolved: ResolvedGeneSets | None = None
     if params.enrichment_collections:
         import os
+        from scview.config import get_settings
+        from scview.core.custom_genesets import get_custom_store
         from scview.core.msigdb_loader import get_msigdb_loader
 
         msigdb_dir = os.environ.get("MSIGDB_DIR", "/msigdb")
         loader = get_msigdb_loader(msigdb_dir)
-        if loader:
-            gene_sets_arg = loader.get_multiple_collections_as_dict(params.enrichment_collections)
+        resolved = resolve_gene_sets(
+            params.enrichment_collections, loader, get_custom_store(get_settings().DATA_DIR)
+        )
+        if resolved.missing_custom:
+            logger.warning("Custom gene-set collections not found (deleted?): %s",
+                           resolved.missing_custom)
+        if loader or resolved.custom_names:
+            gene_sets_arg = resolved.gene_sets
             if not gene_sets_arg:
-                logger.warning("No gene sets loaded from MSigDB collections: %s", params.enrichment_collections)
+                logger.warning("No gene sets loaded from collections: %s", params.enrichment_collections)
                 return
-            logger.info("Using %d local MSigDB gene sets from %d collections", len(gene_sets_arg), len(params.enrichment_collections))
+            logger.info("Using %d local gene sets from %d collections", len(gene_sets_arg), len(params.enrichment_collections))
             used_collections = list(params.enrichment_collections)
         else:
             logger.warning("MSigDB loader not available; falling back to Enrichr libraries")
+            resolved = None
             gene_sets_arg = params.enrichment_gene_sets or ["GO_Biological_Process_2025"]
             used_collections = list(gene_sets_arg)
     elif params.enrichment_gene_sets:
@@ -635,18 +652,24 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
         try:
             enr = gp.enrich(
                 gene_list=top_genes,
-                gene_sets=gene_sets_arg,
+                gene_sets=(
+                    match_query_case(resolved, top_genes, background)
+                    if resolved is not None else gene_sets_arg
+                ),
                 background=background,
                 outdir=None,
                 no_plot=True,
                 cutoff=0.5,
             )
             store_key = enrichment_key(col, group)
-            if enr.results is not None and not enr.results.empty:
+            # With no overlap at all gseapy leaves results as an empty list.
+            if not getattr(enr.results, "empty", True):
                 from scview.api.v1.enrichment import _normalize_gseapy_record
                 normalized = [
                     _normalize_gseapy_record(r) for r in enr.results.to_dict(orient="records")
                 ]
+                if resolved is not None:
+                    tag_records(normalized, resolved)
                 adata.uns[store_key] = json.dumps(normalized)
             else:
                 adata.uns[store_key] = "[]"
