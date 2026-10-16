@@ -6,6 +6,52 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-16
+
+### Changed
+- **The AI features use DeepSeek-V4.1-Flash by default** instead of Llama-3.1-8B. On scView's own
+  requests it gave better co-pilot answers, proposed a complete pipeline for raw data (Llama
+  skipped filtering, PCA and clustering), annotated about 12 of 13 cell types where Llama
+  managed about 6, and answered fastest. Its "thinking" mode is switched off, and the pipeline
+  advisor now follows the model setting instead of always using Llama. **Existing installs keep
+  Llama**, because the old `.env.example` wrote `RAG_CHAT_MODEL` into `.env`: change that line to
+  `RAG_CHAT_MODEL=deepseek-ai/DeepSeek-V4.1-Flash`, or delete it.
+- **Windows install steps** in the README now cover the WSL prompts on a PC that hasn't used WSL,
+  where Docker Desktop shows "Engine running", and a download that looks stuck near the end, with
+  screenshots.
+
+### Fixed
+- **Security: deleting a dataset with a path-like id removed the whole data folder.** Dataset and
+  session ids must now be plain ids, and uploads keep only the file's own name.
+- **A pipeline run stopped partway (tab closed, proxy timeout) no longer leaves half-processed
+  data behind.** Running the steps again could log-transform the data twice.
+- **Clustering keeps a dataset's own `leiden` column**, and re-running PCA no longer reuses the
+  previous run's Harmony embedding.
+- **Differential expression returns down-regulated genes** when the data holds only the highly
+  variable genes. Before, the volcano plot showed only up-regulated ones.
+- **QC counts per cell come from counts.** Data Assessment summed scaled data, so Kang showed a
+  median of -286 counts per cell. Files over 2 GB also work.
+- **Enrichment and markers stay right after re-annotating, renaming or merging labels.** Cached
+  enrichment for a surviving label was served after re-annotation, a renamed label lost its
+  markers and enrichment, merging labels created a "nan" group, and markers saved under scanpy's
+  default name were not found ("No marker genes found").
+- **Trajectory** no longer fails on cells the trajectory can't reach; they are drawn light grey.
+  Gene trends use the expression layer instead of scaled data.
+- **Errors:** metadata with missing values and expression export for genes kept only in `.raw` no
+  longer fail with a server error.
+- **Yes/no columns** such as `predicted_doublet` get a proper True/False legend.
+- **Cell annotation no longer replaces the Marker Genes panel's default table** with the new
+  column's markers.
+- **Switching datasets resets the cell selection and grouping**, which carried over (a
+  1,113-cell dataset showed "355 selected").
+- **Enrichment results stay with the group they were computed for** when you change the group.
+- **Unified View markers always match the grouping column.**
+- **The co-pilot answers an "ask about this" question once.** It was answered twice, doubling
+  the AI cost.
+- **The Expression tab's layer menu works**, and matches the toolbar's Layer menu.
+- **Highlighting a group selects its cells** in Unified View, from an Observations row or the
+  co-pilot.
+
 ## [0.11.2] - 2026-10-15
 
 ### Fixed
