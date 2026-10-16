@@ -47,3 +47,42 @@ def test_provenance_overlay_overrides_heuristic():
     assert "recorded" in s.normalization.details.lower()
     # a step NOT recorded stays not-done
     assert s.scaling.done is False
+
+
+def _norm_log(target, n_obs=80, n_var=60, hvg_of=None):
+    c = _RNG.poisson(3.0, (n_obs, n_var)).astype("float64") + 1
+    x = np.log1p(c / c.sum(1, keepdims=True) * target).astype("float32")
+    return ad.AnnData(X=x)
+
+
+def test_cpm_scale_warns():
+    s = assess_preprocessing(_norm_log(1e6))
+    d = s.normalization.details
+    assert "CPM" in d and "1e6" in d
+    assert "No raw counts" in d
+
+
+def test_1e4_scale_no_warning():
+    d = assess_preprocessing(_norm_log(1e4)).normalization.details
+    assert "CPM" not in d and "WARNING" not in d
+    assert "scanpy/Seurat default" in d
+
+
+def test_counts_layer_reported_recoverable():
+    a = _norm_log(1e6)
+    a.layers["counts"] = _RNG.poisson(3.0, a.shape).astype("float32")
+    assert "recoverable from layers['counts']" in assess_preprocessing(a).normalization.details
+
+
+def test_hvg_subset_softens_message():
+    a = _norm_log(1e4, n_var=60)
+    full = _norm_log(1e4, n_var=60)[:, :10].copy()
+    full.raw = a
+    d = assess_preprocessing(full).normalization.details
+    assert "gene subset" in d or "gene subsetting" in d
+    assert "recoverable" not in d  # raw here is normalised, not counts
+
+
+def test_raw_counts_have_no_scale_note():
+    d = assess_preprocessing(_counts()).normalization.details
+    assert "Median per-cell total" not in d
