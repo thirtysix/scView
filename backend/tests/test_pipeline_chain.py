@@ -7,6 +7,7 @@ import anndata as ad
 import numpy as np
 import pytest
 
+from scview.core import provenance
 from scview.core.pipeline import (
     PipelineParams,
     _run_marker_genes,
@@ -102,3 +103,30 @@ def test_pca_drops_a_harmony_embedding_of_the_previous_pca():
     out, res = run_pipeline(adata, ["normalization", "log_transform", "pca"], PipelineParams(n_comps=30))
     assert res.errors == {}
     assert "X_pca_harmony" not in out.obsm
+
+
+def _recorded_clustering(adata):
+    return provenance.read_provenance(adata)["current"].get("clustering")
+
+
+def test_provenance_keeps_the_params_of_the_run_that_clustered():
+    adata = _structured()
+    out, res = run_pipeline(
+        adata, _prep_chain(), PipelineParams(n_comps=30, clustering_resolution=1.2)
+    )
+    assert res.errors == {}
+    recorded = _recorded_clustering(out)
+    assert recorded == {"column": "scview_leiden_r1.2", "method": "leiden", "resolution": 1.2}
+    # A later run without clustering used to overwrite these with its defaults.
+    out, res = run_pipeline(out, ["marker_genes"], PipelineParams(clustering_method="louvain"))
+    assert res.errors == {}
+    assert _recorded_clustering(out) == recorded
+
+
+def test_provenance_records_no_clustering_params_when_clustering_never_ran():
+    adata = _structured()
+    adata.obs["clusters"] = np.array(["0", "1", "2"]).repeat(80)
+    adata.uns["scview_active_clustering"] = "clusters"
+    out, res = run_pipeline(adata, ["normalization"], PipelineParams())
+    assert res.errors == {}
+    assert _recorded_clustering(out) == {"column": "clusters"}

@@ -1077,12 +1077,18 @@ def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list
         if embs:
             current["embeddings"] = embs
         active = adata.uns.get("scview_active_clustering")
-        if active:
+        if active and "clustering" in ran:
             current["clustering"] = {
                 "column": active,
                 "method": params.clustering_method,
                 "resolution": params.clustering_resolution,
             }
+        elif active:
+            # Clustering did not run, so params.clustering_* are just defaults: keep
+            # what the run that made the column recorded.
+            recorded = provenance.read_provenance(adata)["current"].get("clustering") or {}
+            if recorded.get("column") != active:
+                current["clustering"] = {"column": active}
         markers_for = sorted(
             c for c in (markers_column(k) for k in adata.uns) if c is not None
         )
