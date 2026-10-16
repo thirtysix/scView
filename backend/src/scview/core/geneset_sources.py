@@ -44,12 +44,16 @@ def resolve_gene_sets(
 ) -> ResolvedGeneSets:
     """Merge the requested collections into one gseapy gene-set dict.
 
-    A term already taken by an earlier collection (a custom copy of Hallmark,
-    say) is kept under "<term> (<collection>)" instead of silently replacing it.
+    MSigDB collections go first whatever the request order, so an MSigDB term
+    always keeps its plain name: a custom set reusing it (a custom copy of
+    Hallmark, say) is kept under "<term> (<collection>)" instead of silently
+    replacing it.
     """
     out = ResolvedGeneSets()
     seen: set[str] = set()
-    for cid in collection_ids:
+    ids = list(collection_ids)
+    ordered = [c for c in ids if not is_custom_id(c)] + [c for c in ids if is_custom_id(c)]
+    for cid in ordered:
         if cid in seen:
             continue
         seen.add(cid)

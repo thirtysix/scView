@@ -134,7 +134,8 @@ async def test_custom_and_msigdb_together(client, dataset_manager, test_settings
     did = _register(dataset_manager)
     # A custom set reusing an MSigDB name is kept beside it, not merged into it.
     cid = await _upload(client, _gmt(extra="HALLMARK_T_PROGRAM\t\tg0\tg1\tg2\n"))
-    r = await _compute(client, did, _local(["h.all", cid]))
+    # Custom first in the request: the MSigDB term still keeps the plain name.
+    r = await _compute(client, did, _local([cid, "h.all"]))
     assert r.status_code == 200, r.text
     by_term = {x["term"]: x for x in r.json()["results"]}
     assert by_term["HALLMARK_T_PROGRAM"]["collection"] == "h.all"
@@ -144,6 +145,22 @@ async def test_custom_and_msigdb_together(client, dataset_manager, test_settings
     assert by_term["HALLMARK_T_PROGRAM (Lab)"]["overlap_count"] == 3
     assert by_term["T_SIG"]["collection"] == cid
     assert by_term["T_SIG"]["overlap_count"] == 10
+
+
+async def test_name_lookup_prefers_msigdb_then_custom(client, dataset_manager, test_settings, msigdb_dir):
+    # Matches the result naming above: the MSigDB set keeps the plain name.
+    test_settings.MSIGDB_DIR = str(msigdb_dir)
+    did = _register(dataset_manager)
+    cid = await _upload(client, _gmt(extra="HALLMARK_T_PROGRAM\t\tg0\n"))
+    r = await client.get(f"{API}/datasets/{did}/genesets/search",
+                         params={"q": "HALLMARK_T_PROGRAM", "limit": 1})
+    assert r.json()["results"][0]["collection"] == "h.all"
+    r = await client.get(f"{API}/datasets/{did}/genesets/search", params={"q": "T_SIG", "limit": 1})
+    assert r.json()["results"][0]["collection"] == cid
+    # The browser's list puts the custom collection after MSigDB's.
+    r = await client.get(f"{API}/datasets/{did}/genesets/collections")
+    ids = [c["id"] for c in r.json()["collections"]]
+    assert ids[-1] == cid and "h.all" in ids
 
 
 async def test_cached_result_follows_rename_and_delete(client, dataset_manager):

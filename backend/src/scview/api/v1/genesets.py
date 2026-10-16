@@ -110,10 +110,10 @@ async def search_genesets(
     results: list[dict] = []
     if query:
         exact = None
-        if custom or not collection:
-            exact = store.get_gene_set(query, collection=collection)
-        if exact is None and not custom and loader is not None:
+        if not custom and loader is not None:
             exact = loader.get_gene_set(query, collection=collection)
+        if exact is None and (custom or not collection):
+            exact = store.get_gene_set(query, collection=collection)
         if exact is not None:
             results.append(exact)
     if not custom and loader is not None:
