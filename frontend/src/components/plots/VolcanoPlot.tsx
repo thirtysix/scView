@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import Plot from "@/components/plots/Plot";
+import { plotConfig } from "@/lib/plotConfig";
 import type { DEGene } from "@/api/de";
 
 interface VolcanoPlotProps {
@@ -98,7 +99,7 @@ export function VolcanoPlot({ genes, fcThreshold, pThreshold, onGeneClick }: Vol
     <Plot
       data={traces}
       layout={layout}
-      config={{ responsive: true, displayModeBar: false }}
+      config={plotConfig("volcano")}
       useResizeHandler
       className="w-full"
       style={{ width: "100%" }}

@@ -3,6 +3,7 @@ import { plotlyColorscale } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { AlertCircle, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
+import { plotConfig } from "@/lib/plotConfig";
 import { apiFetch } from "@/api/client";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { missingGenes } from "@/lib/geneList";
@@ -206,7 +207,7 @@ export function MarkerPlot({
           paper_bgcolor: "rgba(0,0,0,0)",
           plot_bgcolor: "rgba(0,0,0,0)",
         }}
-        config={{ displaylogo: false, responsive: true }}
+        config={plotConfig(`markers_${kind}`)}
         useResizeHandler
         style={{ width: "100%" }}
       />

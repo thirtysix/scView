@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import shutil
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,27 @@ _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 def is_safe_id(value: str) -> bool:
     """True for an id that is safe to use as one path component."""
     return bool(_ID_RE.fullmatch(value or ""))
+
+
+DATASET_NAME_MAX = 120
+# Control characters, invisible format characters (bidi overrides, zero-width
+# spaces) and line/paragraph separators: none belong in a one-line display name.
+_BAD_NAME_CATEGORIES = {"Cc", "Cf", "Cs", "Zl", "Zp"}
+
+
+def clean_dataset_name(value: object) -> str:
+    """Return a user-supplied dataset name trimmed, or raise ValueError saying why
+    it can't be used."""
+    if not isinstance(value, str):
+        raise ValueError("Name must be text.")
+    name = value.strip()
+    if not name:
+        raise ValueError("Name must not be empty.")
+    if len(name) > DATASET_NAME_MAX:
+        raise ValueError(f"Name is too long (max {DATASET_NAME_MAX} characters).")
+    if any(unicodedata.category(ch) in _BAD_NAME_CATEGORIES for ch in name):
+        raise ValueError("Name must not contain control or invisible characters.")
+    return name
 
 
 class DatasetManager:
@@ -153,6 +175,18 @@ class DatasetManager:
         meta.update(updates)
         with open(meta_path, "w") as fh:
             json.dump(meta, fh, indent=2)
+
+    def rename_dataset(self, dataset_id: str, name: object) -> str | None:
+        """Change a dataset's display name. Returns the stored name, or None if the
+        dataset doesn't exist; raises ValueError for a name that can't be used.
+
+        The name lives only in the metadata sidecar (never in the .h5ad), so this
+        doesn't touch the data or the cached adaptor."""
+        if self.get_dataset_info(dataset_id) is None:
+            return None
+        clean = clean_dataset_name(name)
+        self.update_dataset_metadata(dataset_id, {"name": clean})
+        return clean
 
     # ------------------------------------------------------------------
     # Removal

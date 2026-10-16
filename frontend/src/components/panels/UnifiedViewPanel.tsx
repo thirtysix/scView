@@ -590,6 +590,14 @@ export function UnifiedViewPanel() {
                 onViewStateChange={setViewState}
                 onHover={handleHover}
                 dimensions={dimensions}
+                exportName={`${prettyEmbeddingLabel(embedding || "embedding")}_${overlayLabel || colorColumnName || colorBy}`}
+                exportLegend={
+                  effectiveColorType === "continuous" && effectiveColorValues
+                    ? { type: "continuous", title: overlayLabel || colorColumnName || colorBy, ...colorMinMax }
+                    : categories && categoryColors
+                      ? { type: "categorical", title: colorColumnName ?? colorBy, categories, colors: categoryColors }
+                      : null
+                }
               />
             )}
             {dimensions === 2 && (

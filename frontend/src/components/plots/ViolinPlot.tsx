@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import Plot from "@/components/plots/Plot";
 import { useCategoryColors, useCategoryOrder } from "@/hooks/useCategoryColors";
 import { rgbCss, sortByCategoryOrder } from "@/lib/categoryColors";
+import { plotConfig } from "@/lib/plotConfig";
 
 interface ViolinPlotProps {
   data: Record<string, number[]>; // group name -> values
@@ -88,10 +89,7 @@ export function ViolinPlot({
     <Plot
       data={traces}
       layout={layout}
-      config={{
-        responsive: true,
-        displayModeBar: false,
-      }}
+      config={plotConfig("violin")}
       useResizeHandler
       className="w-full"
       style={{ width: "100%", height }}

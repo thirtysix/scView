@@ -17,6 +17,22 @@ export async function deleteDataset(id: string): Promise<void> {
   await apiFetch(`/datasets/${id}`, { method: "DELETE" });
 }
 
+/** Rename a dataset (display name only). A rejected name throws with the server's reason. */
+export async function renameDataset(id: string, name: string): Promise<{ id: string; name: string }> {
+  try {
+    return await apiFetch(`/datasets/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+  } catch (e) {
+    const body = e instanceof Error ? e.message.replace(/^API error \d+: /, "") : "";
+    let detail = "";
+    try {
+      detail = String(JSON.parse(body).detail ?? "");
+    } catch {
+      /* not JSON: keep the original error */
+    }
+    throw detail ? new Error(detail) : e;
+  }
+}
+
 export async function pruneDatasets(): Promise<{
   removed: { id: string; name: string }[];
   count: number;

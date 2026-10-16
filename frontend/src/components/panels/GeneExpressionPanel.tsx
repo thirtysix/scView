@@ -352,6 +352,10 @@ export function GeneExpressionPanel() {
                   background={plotBackground}
                   maxRenderedCells={maxRenderedCells}
                   dimensions={dimensions}
+                  exportName={`expression_${selectedGene ?? ""}`}
+                  exportLegend={
+                    expressionValues ? { type: "continuous", title: selectedGene ?? "", ...expressionMinMax } : null
+                  }
                 />
               )}
             </Panel>

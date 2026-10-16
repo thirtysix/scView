@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Table2, Loader2, AlertCircle, MousePointerClick, Download, Sparkles } from "lucide-react";
 import Plot from "@/components/plots/Plot";
+import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -565,7 +566,7 @@ export function ObservationsPanel() {
             <Plot
               data={compositionTraces}
               layout={compositionLayout}
-              config={{ responsive: true, displayModeBar: false }}
+              config={plotConfig(`composition_${primaryCol}`)}
               useResizeHandler
               className="w-full"
               style={{ width: "100%" }}

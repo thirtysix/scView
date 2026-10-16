@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { GitBranch, Loader2, AlertCircle } from "lucide-react";
 import Plot from "@/components/plots/Plot";
+import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSelectionStore } from "@/stores/selectionStore";
@@ -308,6 +309,10 @@ export function TrajectoryPanel() {
                 selectedIndices={selectedIndices}
                 background={plotBackground}
                 maxRenderedCells={maxRenderedCells}
+                exportName={`pseudotime_${selectedColumn}`}
+                exportLegend={
+                  pseudotimeValues ? { type: "continuous", title: selectedColumn, ...pseudotimeMinMax } : null
+                }
               />
             )}
           </Panel>
@@ -419,7 +424,7 @@ export function TrajectoryPanel() {
                   plot_bgcolor: "white",
                   font: { family: "Inter, system-ui, sans-serif" },
                 }}
-                config={{ responsive: true, displayModeBar: false }}
+                config={plotConfig("trajectory_expression")}
                 useResizeHandler
                 className="w-full"
                 style={{ width: "100%", height: "100%" }}
