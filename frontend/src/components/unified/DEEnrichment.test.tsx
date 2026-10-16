@@ -172,6 +172,16 @@ describe("DEEnrichment", () => {
     expect(screen.queryByText("HALLMARK_INTERFERON_GAMMA_RESPONSE")).not.toBeInTheDocument();
   });
 
+  it("names a result the server kept by its id instead of sending every gene back", async () => {
+    runGsea.mockResolvedValue(GSEA);
+    setup(1, { ...RESULT, result_id: "abc123" });
+    fireEvent.click(screen.getByRole("button", { name: "GSEA" }));
+    await waitFor(() => expect(runGsea).toHaveBeenCalledTimes(1));
+    expect(runGsea).toHaveBeenCalledWith("d1", {
+      de_result_id: "abc123", collections: ["h.all"], exclude_ribo_mito: true,
+    });
+  });
+
   it("asks the co-pilot about a GSEA term with its direction and leading edge", async () => {
     runGsea.mockResolvedValue(GSEA);
     setup();

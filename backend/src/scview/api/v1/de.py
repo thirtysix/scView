@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.dependencies import get_dataset_manager
+from scview.core import de_results
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
@@ -81,6 +82,9 @@ class DEResponse(BaseModel):
     dropped_samples: list[str] = []
     # /de/compare: the two sides are also different batches (core/confounding.py).
     confounding: dict | None = None
+    # Names this result for a follow-up such as GSEA (core/de_results.py), which
+    # could not take every gene back within the request size cap.
+    result_id: str | None = None
 
 
 def _detect_replicate_key(obs, exclude: set[str], mask_a=None, mask_b=None) -> str | None:
@@ -204,7 +208,8 @@ async def differential_expression(
 
     # Seconds on a large dataset: in a worker thread, so the server keeps answering.
     genes = await asyncio.to_thread(_run)
-    return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=genes)
+    return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=genes,
+                      result_id=de_results.remember(dataset_id, genes))
 
 
 @router.post("/datasets/{dataset_id}/de/compare", response_model=DEResponse)
@@ -274,6 +279,7 @@ async def differential_expression_compare(
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes,
+                      result_id=de_results.remember(dataset_id, genes),
                       confounding=confounding, **guard)
 
 
@@ -314,11 +320,13 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         raise HTTPException(status_code=500, detail=f"Pseudobulk DE failed: {exc!s}")
 
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
+    genes = [DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa) for g, lf, p, pa in res.genes]
     return DEResponse(
         n_selected=res.n_cells_a,
         n_rest=res.n_cells_b,
         label=label,
-        genes=[DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa) for g, lf, p, pa in res.genes],
+        genes=genes,
+        result_id=de_results.remember(dataset_id, genes),
         replicate_key=key,
         n_donors_a=res.n_samples_a,
         n_donors_b=res.n_samples_b,

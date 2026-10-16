@@ -19,8 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
+from scview.core import de_results, gsea
 from scview.core import enrichment_network as network
-from scview.core import gsea
 from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
 from scview.core.gene_filters import select_query_genes
@@ -183,9 +183,12 @@ class GseaGene(BaseModel):
 
 
 class GseaRequest(BaseModel):
-    """Body for preranked GSEA: a DE result's genes, or a marker group."""
+    """Body for preranked GSEA: a DE result, or a marker group."""
 
-    # Every gene the DE tested (core/gsea.py says how they are ranked) ...
+    # A DE result by the id its response carried (core/de_results.py) ...
+    de_result_id: str = ""
+    # ... or its genes: every gene the DE tested (core/gsea.py says how they are
+    # ranked); a whole transcriptome does not fit the request size cap ...
     genes: list[GseaGene] = Field(default=[], max_length=MAX_GENE_LIST)
     # ... or a marker group of an obs column, ranked by scanpy's score.
     column: str = ""
@@ -832,8 +835,8 @@ async def compute_gsea(
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ) -> GseaResponse:
-    """Preranked GSEA of a DE result (``genes``) or a marker group (``column`` +
-    ``group``) against the chosen collections: NES, nominal p, FDR and the
+    """Preranked GSEA of a DE result (``de_result_id``, or its ``genes``) or a marker
+    group (``column`` + ``group``) against the chosen collections: NES, nominal p, FDR and the
     leading-edge genes of each set. The same ranking and parameters again are
     served from a cache."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
@@ -841,20 +844,34 @@ async def compute_gsea(
         raise HTTPException(status_code=404, detail="Dataset not found.")
     # Seconds to tens of seconds of permutations: in a worker thread (gseapy's
     # Rust core releases the GIL), so the server keeps answering meanwhile.
-    return await asyncio.to_thread(_compute_gsea, adaptor, body, settings)
+    return await asyncio.to_thread(_compute_gsea, dataset_id, adaptor, body, settings)
 
 
-def _gsea_ranking(adaptor, body: GseaRequest) -> gsea.Ranking:
-    if body.genes and body.group:
-        raise HTTPException(status_code=400, detail="Send a DE result's genes or a marker group, not both.")
+def _gsea_ranking(dataset_id: str, adaptor, body: GseaRequest) -> gsea.Ranking:
+    sources = sum(bool(x) for x in (body.de_result_id, body.genes, body.group))
+    if sources != 1:
+        raise HTTPException(
+            status_code=400, detail="Send one of: a DE result's id, its genes, or a marker group."
+        )
     try:
+        if body.de_result_id:
+            stored = de_results.recall(dataset_id, body.de_result_id)
+            if stored is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"The server no longer holds this DE result (it keeps the last "
+                        f"{de_results.KEEP}); run the DE again, then GSEA."
+                    ),
+                )
+            return gsea.ranking_from_de(
+                stored.rows(), rank_by=body.rank_by, exclude_ribo_mito=body.exclude_ribo_mito
+            )
         if body.genes:
             return gsea.ranking_from_de(
                 [g.model_dump() for g in body.genes],
                 rank_by=body.rank_by, exclude_ribo_mito=body.exclude_ribo_mito,
             )
-        if not body.group:
-            raise HTTPException(status_code=400, detail="Send a DE result's genes or a marker group.")
         key = resolve_markers_key(adaptor.adata.uns, body.column)
         if key is None:
             raise HTTPException(status_code=404, detail=f"No marker genes for column '{body.column}'.")
@@ -878,12 +895,12 @@ def _collections_fingerprint(collections: list[str], store) -> list[str]:
     return out
 
 
-def _compute_gsea(adaptor, body: GseaRequest, settings: Settings) -> GseaResponse:
+def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Settings) -> GseaResponse:
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
     store = get_custom_store(settings.DATA_DIR)
     if loader is None and not any(is_custom_id(c) for c in body.collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
-    ranking = _gsea_ranking(adaptor, body)
+    ranking = _gsea_ranking(dataset_id, adaptor, body)
 
     params = {
         "min_size": body.min_size, "max_size": body.max_size,

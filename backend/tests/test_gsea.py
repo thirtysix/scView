@@ -16,10 +16,11 @@ import numpy as np
 import pandas as pd
 import pytest
 import scanpy as sc
+import scipy.sparse as sp
 
 from scview.api.v1.de import DERequest, differential_expression
 from scview.config import Settings
-from scview.core import gsea
+from scview.core import de_results, gsea
 from scview.core.uns_keys import markers_key
 
 API = "/api/v1"
@@ -52,8 +53,10 @@ def test_settings(tmp_data_dir: Path, msigdb_dir: Path) -> Settings:
 @pytest.fixture(autouse=True)
 def _fresh_cache():
     gsea.clear_cache()
+    de_results.clear()
     yield
     gsea.clear_cache()
+    de_results.clear()
 
 
 @pytest.fixture()
@@ -292,3 +295,78 @@ async def test_wilcoxon_de_carries_the_statistic():
     # Ranked the way the test ranked them.
     scores = [g.score for g in res.genes]
     assert scores == sorted(scores, reverse=True)
+
+
+# --- a whole transcriptome: by the DE result's id ------------------------------------
+
+
+def _register_transcriptome(dm, did: str = "big", n_genes: int = 15_000) -> str:
+    """60 cells x 15k genes; the first 30 cells over-express the top set."""
+    d = Path(dm.data_dir) / "uploads" / did
+    d.mkdir(parents=True)
+    (d / "metadata.json").write_text(json.dumps({"id": did, "name": did, "status": "ready"}))
+    rng = np.random.default_rng(1)
+    X = rng.poisson(0.3, (60, n_genes)).astype("float32")
+    X[:30, 0:20] += 5
+    X[30:, 280:300] += 5
+    a = ad.AnnData(sp.csr_matrix(X))
+    a.var_names = [f"G{i}" for i in range(n_genes)]
+    a.obs_names = [f"C{i}" for i in range(60)]
+    a.write_h5ad(d / "data.h5ad")
+    return did
+
+
+async def test_a_whole_transcriptome_goes_by_the_de_results_id(client, dataset_manager):
+    did = _register_transcriptome(dataset_manager)
+    r = await client.post(f"{API}/datasets/{did}/de", json={"indices": list(range(30)), "label": "A"})
+    assert r.status_code == 200, r.text
+    de = r.json()
+    assert de["result_id"] and len(de["genes"]) == 15_000
+
+    # Sending every gene back is past the request size cap...
+    genes = [{k: g[k] for k in ("gene", "logfoldchange", "pval", "score")} for g in de["genes"]]
+    too_big = await _gsea(client, did, genes=genes)
+    assert too_big.status_code == 413
+    # ... so GSEA takes the result by its id.
+    r = await _gsea(client, did, de_result_id=de["result_id"])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["rank_metric"] == "wilcoxon_score"
+    assert body["n_genes_ranked"] == 15_000
+    assert _terms(body["up"])["HALLMARK_TOP"]["fdr"] < 0.05
+    assert _terms(body["down"])["HALLMARK_BOTTOM"]["nes"] < 0
+
+
+async def test_an_unknown_or_foreign_result_id_is_404(client, dataset_manager):
+    did = _register(dataset_manager)
+    other = _register_transcriptome(dataset_manager, "other", n_genes=400)
+    r = await client.post(f"{API}/datasets/{other}/de", json={"indices": list(range(30))})
+    rid = r.json()["result_id"]
+    assert (await _gsea(client, did, de_result_id=rid)).status_code == 404  # another dataset's
+    r = await _gsea(client, did, de_result_id="nope")
+    assert r.status_code == 404 and "run the DE again" in r.json()["detail"]
+    both = await _gsea(client, other, de_result_id=rid, column="cell_type", group="T")
+    assert both.status_code == 400
+
+
+def test_the_store_keeps_the_last_results(monkeypatch):
+    monkeypatch.setattr(de_results, "KEEP", 2)
+
+    class G:
+        def __init__(self, gene, score=None):
+            self.gene, self.logfoldchange, self.pval, self.score = gene, 1.0, 0.01, score
+
+    ids = [de_results.remember("d", [G("A", 2.0), G("B")]) for _ in range(3)]
+    assert de_results.recall("d", ids[0]) is None  # dropped for newer ones
+    rows = de_results.recall("d", ids[2]).rows()
+    assert rows == [{"gene": "A", "logfoldchange": 1.0, "pval": 0.01, "score": 2.0},
+                    {"gene": "B", "logfoldchange": 1.0, "pval": 0.01, "score": None}]
+    assert de_results.recall("other", ids[2]) is None
+
+
+async def test_pseudobulk_and_compare_results_carry_an_id(client, dataset_manager):
+    did = _register(dataset_manager)
+    r = await client.post(f"{API}/datasets/{did}/de/compare",
+                          json={"split_by": "cell_type", "group_a": "T", "group_b": "B"})
+    assert r.status_code == 200, r.text
+    assert de_results.recall(did, r.json()["result_id"]) is not None

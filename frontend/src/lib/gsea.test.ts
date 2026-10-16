@@ -7,6 +7,7 @@ import {
   formatPermP,
   gseaCsvRows,
   gseaGenesFromDE,
+  gseaSourceFromDE,
   nextGseaSort,
   sortGseaResults,
 } from "./gsea";
@@ -39,6 +40,9 @@ describe("gseaGenesFromDE", () => {
       { gene: "ISG15", logfoldchange: 4, pval: 1e-30, score: 25 },
       { gene: "CD14", logfoldchange: -1, pval: 1e-4, score: null },
     ]);
+    // With an id the server kept it under, only the id goes.
+    expect(gseaSourceFromDE({ ...r, result_id: "r1" })).toEqual({ de_result_id: "r1" });
+    expect(gseaSourceFromDE(r)).toEqual({ genes: gseaGenesFromDE(r) });
   });
 });
 

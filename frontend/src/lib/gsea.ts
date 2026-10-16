@@ -1,5 +1,5 @@
 import type { DEResponse } from "@/api/de";
-import type { GseaGene, GseaResponse, GseaTerm } from "@/api/enrichment";
+import type { GseaGene, GseaRequest, GseaResponse, GseaTerm } from "@/api/enrichment";
 import { collectionLabel } from "@/api/genesets";
 import type { CsvCell } from "@/lib/csv";
 import { formatPValue } from "@/lib/formatting";
@@ -18,6 +18,15 @@ export function gseaGenesFromDE(r: DEResponse): GseaGene[] {
     pval: g.pval,
     score: g.score ?? null,
   }));
+}
+
+/**
+ * Which DE result GSEA ranks: by the id the server kept it under, since a whole
+ * transcriptome sent back is past the request size cap; the genes themselves
+ * only for a result without one.
+ */
+export function gseaSourceFromDE(r: DEResponse): Pick<GseaRequest, "de_result_id" | "genes"> {
+  return r.result_id ? { de_result_id: r.result_id } : { genes: gseaGenesFromDE(r) };
 }
 
 export type GseaSortField = "term" | "nes" | "fdr" | "leading_edge";

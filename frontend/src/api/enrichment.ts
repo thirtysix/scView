@@ -72,7 +72,9 @@ export interface GseaGene {
 }
 
 export interface GseaRequest {
-  /** Every gene a DE tested ... */
+  /** A DE result by the id its response carried (the server keeps the last few) ... */
+  de_result_id?: string;
+  /** ... or every gene it tested (a whole transcriptome is past the request size cap) ... */
   genes?: GseaGene[];
   /** ... or a marker group, ranked by scanpy's score. */
   column?: string;

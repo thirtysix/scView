@@ -18,7 +18,7 @@ import { useEnrichmentSort } from "@/hooks/useEnrichmentSort";
 import { useGeneSetScoring } from "@/hooks/useGeneSetScoring";
 import { downloadCsv } from "@/lib/csv";
 import { deEnrichmentQuery } from "@/lib/de";
-import { gseaGenesFromDE } from "@/lib/gsea";
+import { gseaSourceFromDE } from "@/lib/gsea";
 import { useViewStore } from "@/stores/viewStore";
 
 type Side = "up" | "down";
@@ -113,7 +113,7 @@ export function DEEnrichment({
     setGseaError(null);
     try {
       const res = await runGsea(datasetId, {
-        genes: gseaGenesFromDE(result),
+        ...gseaSourceFromDE(result),
         collections: Array.from(collections),
         exclude_ribo_mito: excludeRiboMito,
       });

@@ -31,6 +31,8 @@ export interface DEResponse {
   dropped_samples?: string[];
   /** /de/compare: the two sides are also different batches (datasets, runs). */
   confounding?: DEConfounding | null;
+  /** Names this result for GSEA, which could not send every gene back. */
+  result_id?: string | null;
 }
 
 export interface DEConfounding {
