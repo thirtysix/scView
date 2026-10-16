@@ -15,9 +15,11 @@ function axisLayout(yTitle: string) {
     autosize: true,
     margin: { l: 52, r: 8, t: 8, b: 40 },
     showlegend: true,
-    legend: { orientation: "h" as const, y: -0.22, font: { size: 9 } },
-    xaxis: { type: "log" as const, title: { text: "mean count", font: { size: 10 } }, tickfont: { size: 9 } },
-    yaxis: { type: "log" as const, title: { text: yTitle, font: { size: 10 } }, tickfont: { size: 9 } },
+    // Inside the plot, top left (empty there: variance rises with the mean).
+    legend: { x: 0.01, y: 0.99, bgcolor: "rgba(255,255,255,0.75)", font: { size: 9 } },
+    // dtick 1 = one tick per decade; Plotly otherwise labels 2..9 within each.
+    xaxis: { type: "log" as const, dtick: 1, title: { text: "mean count", font: { size: 10 } }, tickfont: { size: 9 } },
+    yaxis: { type: "log" as const, dtick: 1, title: { text: yTitle, font: { size: 10 } }, tickfont: { size: 9 } },
   };
 }
 

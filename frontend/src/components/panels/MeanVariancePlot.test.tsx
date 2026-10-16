@@ -6,8 +6,10 @@ const { getMeanVariance } = vi.hoisted(() => ({ getMeanVariance: vi.fn() }));
 vi.mock("@/api/normalization", () => ({ getMeanVariance }));
 // Plotly needs a real canvas; the traces it is handed are what matters here.
 vi.mock("@/components/plots/Plot", () => ({
-  default: ({ data }: { data: { name?: string }[] }) => (
-    <div data-testid="plot">{data.map((t) => t.name ?? "").join(",")}</div>
+  default: ({ data, layout }: { data: { name?: string }[]; layout: { yaxis: { dtick?: number }; legend: { y?: number } } }) => (
+    <div data-testid="plot" data-dtick={layout.yaxis.dtick} data-legend-y={layout.legend.y}>
+      {data.map((t) => t.name ?? "").join(",")}
+    </div>
   ),
 }));
 
@@ -46,6 +48,11 @@ describe("MeanVariancePlot", () => {
     expect(plots[0]).toContain("Poisson (var = mean)");
     expect(plots[1]).toContain("Sampling noise (1)");
     expect(screen.getByText(/20,000 sampled of 30,000/)).toBeTruthy();
+    // One tick per decade, and the legend inside the plot rather than under it.
+    for (const p of screen.getAllByTestId("plot")) {
+      expect(p.dataset.dtick).toBe("1");
+      expect(Number(p.dataset.legendY)).toBeGreaterThan(0);
+    }
     expect(screen.getByText(/Analytic Pearson residuals/)).toBeTruthy();
   });
 
