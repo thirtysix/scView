@@ -6,6 +6,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { computeDE, computeDECompare, type DEResponse } from "@/api/de";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { DEEnrichment } from "@/components/unified/DEEnrichment";
+import { DEActivity } from "@/components/unified/DEActivity";
 import { downloadCsv } from "@/lib/csv";
 import {
   deGeneQuestion,
@@ -559,6 +560,15 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             fcThreshold={fcThreshold}
             onScoreGeneSet={onScoreGeneSet}
             onGeneClick={onGeneClick}
+          />
+
+          {/* Every tested gene's statistic -> TF / pathway activity */}
+          <DEActivity
+            datasetId={datasetId}
+            result={result}
+            labelA={comparison?.a ?? result.label}
+            labelB={comparison?.b ?? refLabel}
+            onScore={onScoreGeneSet}
           />
         </>
       )}

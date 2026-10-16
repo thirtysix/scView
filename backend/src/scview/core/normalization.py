@@ -143,7 +143,7 @@ def _mean_var(M) -> tuple[np.ndarray, np.ndarray]:
     return mean, np.maximum(sq - mean**2, 0.0)
 
 
-def _shifted_log(counts, target_sum: float = 1e4):
+def shifted_log(counts, target_sum: float = 1e4):
     """log1p(counts / cell total x target_sum), sparse in, sparse out."""
     totals = np.asarray(counts.sum(axis=1), dtype=np.float64).ravel()
     scale = np.divide(target_sum, totals, out=np.zeros_like(totals), where=totals > 0)
@@ -175,7 +175,7 @@ def mean_variance(
     mean, var = _mean_var(counts)
     keep = mean > 0
     counts = counts[:, np.flatnonzero(keep)]
-    _, var_log = _mean_var(_shifted_log(counts))
+    _, var_log = _mean_var(shifted_log(counts))
     clip = default_clip(counts.shape[0])
     return {
         "n_cells": int(n),
