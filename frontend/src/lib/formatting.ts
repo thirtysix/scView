@@ -9,6 +9,14 @@ export function formatPValue(p: number): string {
   return p.toFixed(4);
 }
 
+/** Short date ("16 Oct 2026" in en-GB) for an ISO timestamp; "" when missing or unparseable. */
+export function formatDate(iso: string | null | undefined, locale?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
+}
+
 /**
  * Human-friendly label for an obs column name, keeping the raw name as the value.
  *  - scview_leiden_r0.5        -> "Leiden (res 0.5)"
