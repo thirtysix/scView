@@ -16,6 +16,7 @@ clusters look low quality?" is answered from them (``grounding_block``).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -131,12 +132,15 @@ def default_grouping(adata) -> str | None:
     return None
 
 
-def cluster_qc(adata, groupby: str | None = None, cells: dict | None = None) -> ClusterQCReport:
+def cluster_qc(
+    adata, groupby: str | None = None, cells: dict | Callable[[], dict] | None = None
+) -> ClusterQCReport:
     """Per-cluster QC summary + flags for ``groupby`` (default: the active clustering).
 
-    ``cells`` are the per-cell QC arrays (``AnnDataAdaptor.qc_per_cell``); they are
-    computed here when not given. Raises ``ValueError`` for a column that is not
-    a usable grouping."""
+    ``cells`` are the per-cell QC arrays (``AnnDataAdaptor.qc_per_cell``), or a
+    function returning them that is only called once the column checks out; they
+    are computed here when not given. Raises ``ValueError`` for a column that is
+    not a usable grouping."""
     n = int(adata.n_obs)
     column = groupby or default_grouping(adata)
     if not column:
@@ -153,7 +157,10 @@ def cluster_qc(adata, groupby: str | None = None, cells: dict | None = None) -> 
             f"'{column}' has {n_groups} distinct values; cluster QC needs 2 to {MAX_GROUPS} groups."
         )
 
-    cells = cells if cells is not None else per_cell_qc(adata, ribo=True)
+    if callable(cells):
+        cells = cells()
+    elif cells is None:
+        cells = per_cell_qc(adata, ribo=True)
     frame = pd.DataFrame(
         {"genes": cells["n_genes"], "counts": cells["total_counts"]}, index=adata.obs_names
     )
@@ -238,11 +245,10 @@ def for_adaptor(adaptor, groupby: str | None = None) -> ClusterQCReport:
     Accepts anything with ``.adata`` (the co-pilot's insight tests pass a bare
     namespace); the arrays are then computed here."""
     adata = adaptor.adata
-    if not (groupby or default_grouping(adata)):
-        return cluster_qc(adata, groupby, cells={})
     fn = getattr(adaptor, "qc_per_cell", None)
-    cells = fn(ribo=True) if callable(fn) else per_cell_qc(adata, ribo=True)
-    return cluster_qc(adata, groupby, cells)
+    if callable(fn):
+        return cluster_qc(adata, groupby, lambda: fn(ribo=True))
+    return cluster_qc(adata, groupby)
 
 
 def _num(v, digits: int = 2) -> float | None:

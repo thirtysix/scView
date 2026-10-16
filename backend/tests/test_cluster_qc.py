@@ -154,6 +154,15 @@ def test_adaptor_caches_per_cell_qc_and_plots_still_work(tmp_path: Path):
     assert qc["computed_on_demand"] is True and "pct_counts_ribo" not in qc["metrics"]
 
 
+def test_bad_column_is_rejected_before_any_counts_pass(tmp_path: Path):
+    p = tmp_path / "d.h5ad"
+    _planted().write_h5ad(p)
+    adaptor = AnnDataAdaptor(str(p))
+    with pytest.raises(ValueError):
+        for_adaptor(adaptor, "nope")
+    assert adaptor._qc_cells is None
+
+
 def _register(dm, did: str = "qc1") -> str:
     d = Path(dm.data_dir) / "uploads" / did
     d.mkdir(parents=True, exist_ok=True)
