@@ -150,3 +150,53 @@ def test_new_markers_drop_that_columns_cached_enrichment():
     assert "rank_genes_groups__cluster" in a.uns
     assert "enrichment__cluster__a" not in a.uns and "ora_meta__cluster__a" not in a.uns
     assert "enrichment__other__a" in a.uns
+
+
+def test_tissue_line_and_label_case():
+    from scview.core.pipeline import _label_case, _parse_cluster_labels, _parse_tissue_line
+
+    raw = "tissue: peripheral blood.\n0: monocytes\n1: pDC\n2: CD8+ T cells"
+    assert _parse_tissue_line(raw) == "peripheral blood"
+    labels = _parse_cluster_labels(raw, ["0", "1", "2"])
+    assert labels == {"0": "monocytes", "1": "pDC", "2": "CD8+ T cells"}
+    assert [_label_case(v) for v in labels.values()] == ["Monocytes", "pDC", "CD8+ T cells"]
+    # Positional fallback never takes the tissue line for a cluster.
+    assert _parse_cluster_labels("tissue: blood\nB cells\nNK cells", ["a", "b"]) == {
+        "a": "B cells", "b": "NK cells"}
+
+
+def test_annotator_sends_informative_markers_and_records_the_tissue(monkeypatch):
+    """Kang's main T-cell cluster: its top markers were all RPS/RPL, and the model
+    called it "Ribosomal cells"; monocytes were "macrophages" without a tissue."""
+    import sys
+    import types
+
+    from scview.core import pipeline as P
+
+    a = _clustered()
+    groups = [str(g) for g in a.obs["cluster"].cat.categories]
+    monkeypatch.setattr(P, "_top_markers_per_group", lambda adata, groupby, n=15: {
+        g: ["RPS14", "RPL32", "MT-CO1", "MRPL3", "CD3D", "IL7R"] for g in groups})
+    sent: list[str] = []
+
+    class _Client:
+        def __init__(self, **_):
+            self.chat = types.SimpleNamespace(completions=self)
+
+        def create(self, messages, **_):
+            sent.append(messages[0]["content"])
+            reply = "tissue: blood\n" + "\n".join(f"{g}: t cells" for g in groups)
+            msg = types.SimpleNamespace(content=reply)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
+    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
+        DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
+    P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
+
+    listing = sent[0].split("Clusters and marker genes:")[1]
+    assert "CD3D" in listing and "RPS14" not in listing and "MT-CO1" not in listing
+    assert "MRPL3" not in listing
+    assert "tissue" in sent[0] and "monocytes, not macrophages" in sent[0]
+    assert set(a.obs["cell_type"].astype(str)) == {"T cells"}
+    assert a.uns["cell_type_llm_tissue"] == "blood"
