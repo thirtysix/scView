@@ -25,6 +25,8 @@ import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { getDataset, renameObsCategory } from "@/api/datasets";
+import { subclusterGroup } from "@/api/clustering";
+import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -512,6 +514,33 @@ export function UnifiedViewPanel() {
     [datasetId, colorBy, setCurrentDataset, queryClient],
   );
 
+  // Split one group into sub-clusters on its own graph (saved as <column>_sub),
+  // then colour by the result.
+  const refreshDataset = useDatasetRefresh();
+  const [split, setSplit] = useState<{ cat: string; status: string; error?: boolean } | null>(null);
+  const handleSubcluster = useCallback(
+    async (cat: string) => {
+      if (!datasetId || !colorBy) return;
+      setSplit({ cat, status: `Splitting "${cat}" on its own graph…` });
+      try {
+        const res = await subclusterGroup(datasetId, colorBy, cat);
+        await refreshDataset(datasetId, res.column);
+        setHighlight(null);
+        useSettingsStore.getState().setColorBy(res.column);
+        setSplit({
+          cat: "",
+          status: `"${cat}" split into ${res.n_subclusters} (${res.groups.join(", ")}); colour: ${prettyObsLabel(res.column)}.`,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message.replace(/^API error \d+: /, "") : String(err);
+        let detail = msg;
+        try { detail = String(JSON.parse(msg).detail ?? msg); } catch { /* plain text */ }
+        setSplit({ cat: "", status: `Could not split "${cat}": ${detail}`, error: true });
+      }
+    },
+    [datasetId, colorBy, refreshDataset, setHighlight],
+  );
+
   // "Ask about this" — highlight the group and pose a contextual question to the
   // co-pilot. The question embeds the specifics so it resolves even without view context.
   const handleAskAboutCategory = useCallback(
@@ -687,8 +716,18 @@ export function UnifiedViewPanel() {
                   onCategoryClick={handleCategoryClick}
                   onRenameCategory={handleRenameCategory}
                   onAskAbout={handleAskAboutCategory}
+                  onSubcluster={handleSubcluster}
+                  splittingCategory={split?.cat || null}
                 />
               ) : null}
+              {split?.status && (
+                <p
+                  role={split.error ? "alert" : "status"}
+                  className={`mt-1 max-w-[220px] text-[11px] ${split.error ? "text-red-600" : "text-slate-500"}`}
+                >
+                  {split.status}
+                </p>
+              )}
             </div>
             </div>
 

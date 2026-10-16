@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Pencil, Sparkles } from "lucide-react";
+import { Loader2, Pencil, Sparkles, Split } from "lucide-react";
 import { colormapColor } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -25,6 +25,10 @@ interface ColorLegendProps {
   onAskAbout?: (category: string) => void;
   /** When provided (continuous mode), an "ask about this" button sits by the label */
   onAsk?: () => void;
+  /** When provided, each category gets a "split into sub-clusters" button */
+  onSubcluster?: (category: string) => void;
+  /** The category being split right now (its button shows a spinner) */
+  splittingCategory?: string | null;
 }
 
 export function ColorLegend({
@@ -39,6 +43,8 @@ export function ColorLegend({
   onRenameCategory,
   onAskAbout,
   onAsk,
+  onSubcluster,
+  splittingCategory,
 }: ColorLegendProps) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -120,6 +126,28 @@ export function ColorLegend({
                         className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
                       >
                         <Sparkles className="h-3 w-3" />
+                      </button>
+                    )}
+                    {onSubcluster && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSubcluster(cat);
+                        }}
+                        disabled={!!splittingCategory}
+                        title="Split into sub-clusters (on this group's own graph)"
+                        aria-label={`Split ${cat} into sub-clusters`}
+                        className={`flex-shrink-0 transition-opacity hover:text-primary ${
+                          splittingCategory === cat
+                            ? "text-primary opacity-100"
+                            : "text-slate-300 opacity-0 group-hover:opacity-100"
+                        }`}
+                      >
+                        {splittingCategory === cat ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Split className="h-3 w-3" />
+                        )}
                       </button>
                     )}
                     {onRenameCategory && (

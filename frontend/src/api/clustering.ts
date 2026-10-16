@@ -108,3 +108,27 @@ export function keepResolution(
     body: JSON.stringify({ resolution, method }),
   });
 }
+
+export interface SubclusterResult {
+  column: string;
+  group: string;
+  n_cells: number;
+  n_subclusters: number;
+  groups: string[];
+  sizes: number[];
+  representation: string;
+  batch_key: string | null;
+}
+
+/** Split one group of a column on its own graph, saved as `<column>_sub`. */
+export function subclusterGroup(
+  datasetId: string,
+  column: string,
+  group: string,
+  resolution = 0.5,
+): Promise<SubclusterResult> {
+  return apiFetch(`/datasets/${datasetId}/clustering/subcluster`, {
+    method: "POST",
+    body: JSON.stringify({ column, group, resolution }),
+  });
+}

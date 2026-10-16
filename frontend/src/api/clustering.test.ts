@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { runSweep, type SweepRow } from "./clustering";
+import { runSweep, subclusterGroup, type SweepRow } from "./clustering";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -56,5 +56,21 @@ describe("runSweep", () => {
     await expect(runSweep("ds", { resolutions: [1] }, { onResult: () => {} })).rejects.toThrow("boom");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamed([`event: result\ndata: ${JSON.stringify(row(1))}\n\n`])));
     await expect(runSweep("ds", { resolutions: [1] }, { onResult: () => {} })).rejects.toThrow(/before it finished/);
+  });
+});
+
+describe("subclusterGroup", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("posts the column, group and resolution", async () => {
+    const body = { column: "cl_sub", group: "B", n_cells: 220, n_subclusters: 2, groups: ["B.0", "B.1"],
+                   sizes: [120, 100], representation: "X_pca", batch_key: null };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await subclusterGroup("ds", "cl", "B");
+    expect(res.groups).toEqual(["B.0", "B.1"]);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toContain("/datasets/ds/clustering/subcluster");
+    expect(JSON.parse(init.body)).toEqual({ column: "cl", group: "B", resolution: 0.5 });
   });
 });
