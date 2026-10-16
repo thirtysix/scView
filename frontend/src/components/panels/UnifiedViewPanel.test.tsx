@@ -9,7 +9,7 @@ import { useSplitViewStore } from "@/stores/splitViewStore";
 
 // The panel's scatter, data hook and side panels are stubbed: these tests look
 // at what the panel itself draws over the plot (tooltip) and hands the scatter.
-const { embedding, scatterProps, apiFetch, stub } = vi.hoisted(() => ({
+const { embedding, scatterProps, compareProps, apiFetch, stub } = vi.hoisted(() => ({
   stub: (name: string) => () => ({ [name]: () => null }),
   embedding: {
     current: {
@@ -23,6 +23,7 @@ const { embedding, scatterProps, apiFetch, stub } = vi.hoisted(() => ({
     },
   },
   scatterProps: { current: null as Record<string, unknown> | null },
+  compareProps: { current: null as Record<string, unknown> | null },
   apiFetch: vi.fn(),
 }));
 vi.mock("@/hooks/useEmbedding", () => ({ useEmbedding: () => embedding.current }));
@@ -42,7 +43,13 @@ vi.mock("@/components/unified/UnifiedEnrichmentSubtab", stub("UnifiedEnrichmentS
 vi.mock("@/components/unified/UnifiedDESubtab", stub("UnifiedDESubtab"));
 vi.mock("@/components/unified/ClusterReference", stub("ClusterReference"));
 vi.mock("@/components/unified/SplitScatterGrid", stub("SplitScatterGrid"));
-vi.mock("@/components/plots/LassoSelector", stub("LassoSelector"));
+vi.mock("@/components/plots/LassoSelector", () => ({ LassoSelector: () => <div data-testid="lasso" /> }));
+vi.mock("@/components/unified/CompareColoringsGrid", () => ({
+  CompareColoringsGrid: (props: Record<string, unknown>) => {
+    compareProps.current = props;
+    return <div data-testid="compare-grid" />;
+  },
+}));
 
 import { UnifiedViewPanel } from "./UnifiedViewPanel";
 
@@ -75,7 +82,8 @@ beforeEach(() => {
   useDatasetStore.setState({ currentDataset: DATASET, currentDatasetId: "kang" });
   useSettingsStore.setState({ colorBy: "cell_type", embedding: "X_umap" });
   useUnifiedViewStore.getState().clearOverlayState();
-  useSplitViewStore.setState({ splitBy: null });
+  useSplitViewStore.setState({ splitBy: null, compareColumns: null });
+  compareProps.current = null;
   embedding.current = {
     positions: Float32Array.from([0, 0, 1, 1, 2, 2]),
     colors: Int32Array.from([0, 1, 1]),
@@ -137,5 +145,44 @@ describe("Unified View hover tooltip", () => {
     renderPanel();
     hover(0);
     expect(screen.getByTestId("hover-colour-line")).toHaveTextContent("IFN score:0.100");
+  });
+});
+
+describe("Unified View compare colourings", () => {
+  it("covers the plot with the compare grid, lasso and the single plot's legend off", () => {
+    useSplitViewStore.setState({ compareColumns: ["cell_type", "sample"] });
+    renderPanel();
+    expect(screen.getByTestId("compare-grid")).toBeInTheDocument();
+    expect(compareProps.current!.columns).toEqual(["cell_type", "sample"]);
+    expect(screen.queryByTestId("lasso")).toBeNull();
+    // The grid draws a legend per column; the single plot's legend steps aside.
+    expect(screen.queryByText("B")).toBeNull();
+  });
+
+  it("leads the tooltip with the cell's value in every compared column", async () => {
+    useSplitViewStore.setState({ compareColumns: ["cell_type", "sample"] });
+    renderPanel();
+    act(() =>
+      (compareProps.current!.onHover as (i: unknown) => void)({
+        index: 1,
+        x: 5,
+        y: 5,
+        lines: [
+          { label: "cell_type", value: "NK", color: [1, 2, 3] },
+          { label: "sample", value: "ctrl", color: [4, 5, 6] },
+        ],
+      }),
+    );
+    const rows = screen.getAllByTestId("hover-colour-line").map((r) => r.textContent);
+    expect(rows).toEqual(["cell_type:NK", "sample:ctrl"]);
+    await screen.findByText("n_genes:");
+    const tooltip = screen.getAllByTestId("hover-colour-line")[0]!.closest("div.absolute")! as HTMLElement;
+    expect(Array.from(tooltip.querySelectorAll("dt")).map((dt) => dt.textContent)).toEqual(["n_genes:"]);
+  });
+
+  it("shows the lasso and the legend on the single plot", () => {
+    renderPanel();
+    expect(screen.getByTestId("lasso")).toBeInTheDocument();
+    expect(screen.getByText("B")).toBeInTheDocument();
   });
 });
