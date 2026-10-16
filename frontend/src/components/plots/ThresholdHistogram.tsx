@@ -99,6 +99,10 @@ export function ThresholdHistogram({
   const layout = useMemo<Partial<Layout>>(
     () => ({
       autosize: true,
+      // A new value makes Plotly.react recompute the axes' ranges. Without it a
+      // layout-only change (a moved threshold, the bars unchanged) left the x axis
+      // on Plotly's empty default [-1, 6] and the line far off the plot (found live).
+      datarevision: `${lineKey}#${commits}#${logY}`,
       margin: { l: 40, r: 10, t: lines.length > 0 || refLines.some((r) => r.showLabel) ? 16 : 8, b: 24 },
       xaxis: { tickfont: { size: 9 } },
       yaxis: { tickfont: { size: 9 }, type: logY ? "log" : "linear" },

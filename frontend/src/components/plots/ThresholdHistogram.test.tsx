@@ -117,6 +117,19 @@ describe("ThresholdHistogram", () => {
     expect(seen.props.at(-1)!.layout).not.toBe(first.layout);
   });
 
+  it("tells Plotly to recompute the ranges when a threshold moves", () => {
+    // Without it a layout-only change left the x axis on Plotly's empty [-1, 6].
+    seen.props = [];
+    const { rerender } = render(
+      <ThresholdHistogram edges={EDGES} counts={COUNTS} lines={[{ id: "t", value: 1, label: "t" }]} plotName="t" />,
+    );
+    const before = seen.props.at(-1)!.layout as { datarevision?: string };
+    rerender(<ThresholdHistogram edges={EDGES} counts={COUNTS} lines={[{ id: "t", value: 2, label: "t" }]} plotName="t" />);
+    const after = seen.props.at(-1)!.layout as { datarevision?: string };
+    expect(before.datarevision).toBeTruthy();
+    expect(after.datarevision).not.toBe(before.datarevision);
+  });
+
   it("listens again after a redraw purged the plot, without doubling up", () => {
     seen.props = [];
     const onCommit = vi.fn();
