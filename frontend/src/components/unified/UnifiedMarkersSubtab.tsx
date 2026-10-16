@@ -3,6 +3,7 @@ import { Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Sparkles } 
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
 import { formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
@@ -55,6 +56,8 @@ export function UnifiedMarkersSubtab({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noMarkers, setNoMarkers] = useState(false);
+  // Still loading after 1.5 s: the backend is computing this column's markers.
+  const computingMarkers = useDelayedFlag(isLoading, 1500);
 
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [sortField, setSortField] = useState<SortField>("logfoldchange");
@@ -201,7 +204,11 @@ export function UnifiedMarkersSubtab({
     return (
       <div className="flex items-center justify-center py-8">
         <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
-        <span className="ml-2 text-xs text-slate-500">Loading markers...</span>
+        <span className="ml-2 text-xs text-slate-500">
+          {computingMarkers
+            ? "Computing marker genes… this can take ~30 s on a large dataset"
+            : "Loading markers..."}
+        </span>
       </div>
     );
   }

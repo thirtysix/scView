@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
 import { formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
@@ -45,6 +46,9 @@ export function MarkerGenesPanel() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noMarkers, setNoMarkers] = useState(false);
+  // Stored markers arrive at once; a request still running after 1.5 s is
+  // computing them for this column, which takes a while on a large dataset.
+  const computingMarkers = useDelayedFlag(isLoading, 1500);
 
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [sortField, setSortField] = useState<SortField>("logfoldchange");
@@ -277,7 +281,11 @@ export function MarkerGenesPanel() {
         </div>
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
-          <span className="ml-3 text-sm text-slate-500">Loading marker genes...</span>
+          <span className="ml-3 text-sm text-slate-500">
+            {computingMarkers
+              ? "Computing marker genes… this can take ~30 s on a large dataset"
+              : "Loading marker genes..."}
+          </span>
         </div>
       </div>
     );
