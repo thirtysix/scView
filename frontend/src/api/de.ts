@@ -12,6 +12,13 @@ export interface DEResponse {
   n_rest: number;
   label: string;
   genes: DEGene[];
+  /** Replicate guard (/de/compare only). */
+  replicate_key?: string | null;
+  n_donors_a?: number | null;
+  n_donors_b?: number | null;
+  top_donor_share_a?: number | null;
+  top_donor_share_b?: number | null;
+  underreplicated?: boolean;
 }
 
 /**
@@ -35,6 +42,7 @@ export interface DECompareRequest {
   group_b: string;
   within_column?: string;
   within_value?: string;
+  replicate_key?: string;
 }
 
 /**
