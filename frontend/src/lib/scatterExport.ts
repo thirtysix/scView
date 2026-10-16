@@ -118,13 +118,36 @@ export function legendLayout(legend: ScatterLegend, plotHeight: number, measure:
   };
 }
 
+/** One legend, or several side by side (one per panel's column), or none. */
+export type ScatterLegends = ScatterLegend | ScatterLegend[] | null;
+
+/**
+ * Place each legend for a plot `plotHeight` CSS pixels tall, left to right:
+ * their x offsets from the plot's right edge, and the size of the whole strip.
+ */
+export function legendsLayout(
+  legends: ScatterLegends,
+  plotHeight: number,
+  measure: Measure,
+): { layouts: (LegendLayout & { x: number })[]; width: number; height: number } {
+  const list = legends == null ? [] : Array.isArray(legends) ? legends : [legends];
+  let x = 0;
+  const layouts = list.map((l) => {
+    const layout = { ...legendLayout(l, plotHeight, measure), x };
+    x += layout.width;
+    return layout;
+  });
+  return { layouts, width: x, height: Math.max(0, ...layouts.map((l) => l.height)) };
+}
+
 /**
  * Draw `source` (the scatter, already rendered at `scale`) on white, with the
- * legend to its right and an optional note (e.g. "sampled") under the plot.
+ * legend (or legends) to its right and an optional note (e.g. "sampled") under
+ * the plot.
  */
 export function composeScatterPng(
   source: HTMLCanvasElement,
-  legend: ScatterLegend | null,
+  legend: ScatterLegends,
   scale: number,
   colormap: ColormapName,
   note?: string,
@@ -137,9 +160,9 @@ export function composeScatterPng(
     return probe.measureText(text).width;
   };
   const plotH = source.height / scale;
-  const layout = legend ? legendLayout(legend, plotH, measure) : null;
-  out.width = Math.ceil(source.width + (layout ? layout.width * scale : 0));
-  out.height = Math.ceil(Math.max(source.height, layout ? layout.height * scale : 0));
+  const strip = legendsLayout(legend, plotH, measure);
+  out.width = Math.ceil(source.width + strip.width * scale);
+  out.height = Math.ceil(Math.max(source.height, strip.height * scale));
 
   const ctx = out.getContext("2d")!;
   ctx.fillStyle = "#ffffff";
@@ -153,9 +176,16 @@ export function composeScatterPng(
     ctx.fillStyle = "#64748b";
     ctx.fillText(note, PAD, plotH - PAD);
   }
-  if (!layout) return out;
+  for (const layout of strip.layouts) {
+    const dx = source.width / scale + layout.x;
+    ctx.translate(dx, 0);
+    drawLegend(ctx, layout, colormap);
+    ctx.translate(-dx, 0);
+  }
+  return out;
+}
 
-  ctx.translate(source.width / scale, 0);
+function drawLegend(ctx: CanvasRenderingContext2D, layout: LegendLayout, colormap: ColormapName): void {
   if (layout.title) {
     ctx.font = LEGEND_TITLE_FONT;
     ctx.fillStyle = "#334155";
@@ -185,7 +215,6 @@ export function composeScatterPng(
     ctx.fillText(maxLabel, x + BAR_W + GAP, y + 6);
     ctx.fillText(minLabel, x + BAR_W + GAP, y + h - 6);
   }
-  return out;
 }
 
 /** The part of a deck.gl Deck the capture needs. */
@@ -206,7 +235,7 @@ export interface CapturableDeck {
 export function downloadDeckPng(
   deck: CapturableDeck,
   opts: {
-    legend: ScatterLegend | null;
+    legend: ScatterLegends;
     colormap: ColormapName;
     filename: string;
     note?: string;

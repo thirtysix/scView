@@ -970,6 +970,7 @@ export function GeneSetPanel() {
                         maxRenderedCells={maxRenderedCells}
                         dimensions={dimensions}
                         exportName={`score_${scoreName}`}
+                        colorLabel={`${scoreName} score`}
                         exportLegend={
                           scoreValues ? { type: "continuous", title: scoreName, ...scoreMinMax } : null
                         }

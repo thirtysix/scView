@@ -505,9 +505,10 @@ export function DataAssessmentPanel() {
       try {
         const updated = await getDataset(datasetId);
         useDatasetStore.getState().setCurrentDataset(updated);
-        // Auto-select the active clustering column for colorBy
+        // Show the new clustering; as a default, so another dataset opened
+        // later still gets its own best colouring.
         if (updated.active_clustering) {
-          useSettingsStore.getState().setColorBy(updated.active_clustering);
+          useSettingsStore.getState().setDefaultColorBy(updated.active_clustering);
         }
       } catch { /* best-effort */ }
       queryClient.invalidateQueries({ queryKey: ["embedding", datasetId] });

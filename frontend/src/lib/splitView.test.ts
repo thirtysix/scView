@@ -7,10 +7,13 @@ import {
   SPLIT_GAP,
   SPLIT_TITLE_H,
   buildSplitPanels,
+  compareColumnOptions,
   dataBounds,
   downloadSplitPng,
+  drawnIndices,
   fitSplitViewState,
   gatherPositions,
+  initialCompareSelection,
   layerInView,
   panelColors,
   panelOfLayer,
@@ -292,5 +295,36 @@ describe("downloadSplitPng", () => {
       downloadSplitPng(deck, { grid: splitGridLayout(1, 100, 100), panels: [], legend: null, colormap: "viridis", filename: "f" }),
     ).toThrow();
     expect(setProps).toHaveBeenLastCalledWith({ useDevicePixels: true });
+  });
+});
+
+describe("compare colourings", () => {
+  const cols = [
+    col("stim", ["CTRL", "STIM"]),
+    col("n_genes", undefined, "float32"),
+    col("barcode", undefined, "object"),
+    col("leiden", Array.from({ length: 12 }, (_, i) => `${i}`)),
+    col("cell_type", Array.from({ length: 13 }, (_, i) => `t${i}`)),
+  ];
+
+  it("offers every grouping column, best first, without numbers or ids", () => {
+    expect(compareColumnOptions(cols, 1000)).toEqual([
+      { name: "cell_type", nValues: 13 },
+      { name: "leiden", nValues: 12 },
+      { name: "stim", nValues: 2 },
+    ]);
+  });
+
+  it("starts from the current colouring plus the best other column", () => {
+    const names = ["cell_type", "leiden", "stim"];
+    expect(initialCompareSelection(names, "stim")).toEqual(["stim", "cell_type"]);
+    expect(initialCompareSelection(names, "n_genes")).toEqual(["cell_type", "leiden"]);
+    expect(initialCompareSelection(["stim"], "")).toEqual(["stim"]);
+  });
+
+  it("draws the single plot's sample in every panel, or every cell", () => {
+    const sample = Uint32Array.from([1, 4]);
+    expect(drawnIndices(5, sample)).toBe(sample);
+    expect(Array.from(drawnIndices(3, null))).toEqual([0, 1, 2]);
   });
 });
