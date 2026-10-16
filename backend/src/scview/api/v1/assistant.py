@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -67,19 +68,38 @@ async def assistant_feedback(body: FeedbackRequest) -> dict:
     return {"ok": True}
 
 
+# The co-pilot's "Sources" note reads this on every open; a remote (Neon) database
+# would be woken each time, so a good answer is kept for a while.
+_RAG_STATUS_TTL = 600.0
+_rag_status_cache: dict = {}
+
+
 @router.get("/assistant/rag-status")
 async def rag_status(settings: Settings = Depends(get_settings_dep)) -> dict:
-    """Whether the literature/tutorials RAG is configured, and per-corpus counts."""
+    """Whether the literature/tutorials RAG is configured, and what each corpus
+    holds: ``corpora[name] = {documents, chunks, last_added}`` (``counts`` keeps
+    the chunk counts for older callers). Read-only: one SELECT, nothing written."""
     if not settings.rag_enabled:
-        return {"enabled": False, "counts": {}}
+        reason = "no_database" if not settings.RAG_DATABASE_URL else "no_api_key"
+        return {"enabled": False, "counts": {}, "corpora": {}, "reason": reason}
+    hit = _rag_status_cache.get(settings.RAG_DATABASE_URL)
+    if hit and time.monotonic() - hit[0] < _RAG_STATUS_TTL:
+        return hit[1]
     try:
         from scview.core.rag import store
 
-        counts = await store.corpus_counts(settings.RAG_DATABASE_URL)
-        return {"enabled": True, "counts": counts}
+        corpora = await store.corpus_stats(settings.RAG_DATABASE_URL)
     except Exception as exc:
+        # Details go to the log only: a driver error can echo the connection string.
         logger.warning("rag-status failed: %s", exc)
-        return {"enabled": True, "counts": {}, "error": str(exc)}
+        return {"enabled": True, "counts": {}, "corpora": {}, "error": "database unreachable"}
+    out = {
+        "enabled": True,
+        "counts": {c: s["chunks"] for c, s in corpora.items()},
+        "corpora": corpora,
+    }
+    _rag_status_cache[settings.RAG_DATABASE_URL] = (time.monotonic(), out)
+    return out
 
 
 @router.get("/datasets/{dataset_id}/assistant/insight", response_model=DatasetInsight)
