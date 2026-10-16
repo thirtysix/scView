@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import Plot from "@/components/plots/Plot";
+import { plotConfig } from "@/lib/plotConfig";
 import { getPalette } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -84,10 +85,7 @@ export function ViolinPlot({
     <Plot
       data={traces}
       layout={layout}
-      config={{
-        responsive: true,
-        displayModeBar: false,
-      }}
+      config={plotConfig("violin")}
       useResizeHandler
       className="w-full"
       style={{ width: "100%", height }}

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { plotlyColorscale } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import Plot from "@/components/plots/Plot";
+import { plotConfig } from "@/lib/plotConfig";
 import { Loader2, Sparkles } from "lucide-react";
 
 import { apiFetch } from "@/api/client";
@@ -45,7 +46,6 @@ const METRIC_LABELS: Record<string, string> = {
   pct_counts_hb: "% Hemoglobin",
 };
 
-const PLOT_CONFIG = { displayModeBar: false, responsive: true } as const;
 const FILL_STYLE = { width: "100%", height: "100%" } as const;
 
 function fmt(v: number): string {
@@ -94,7 +94,7 @@ function HistCard({ label, metric }: { label: string; metric: QcMetric }) {
                 },
               ],
             }}
-            config={PLOT_CONFIG}
+            config={plotConfig(`qc_${label}`)}
             style={FILL_STYLE}
             useResizeHandler
           />
@@ -135,7 +135,7 @@ function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
           xaxis: { title: { text: scatter.x_label, font: { size: 10 } }, tickfont: { size: 9 } },
           yaxis: { title: { text: scatter.y_label, font: { size: 10 } }, tickfont: { size: 9 } },
         }}
-        config={PLOT_CONFIG}
+        config={plotConfig("qc_counts_vs_genes")}
         style={FILL_STYLE}
         useResizeHandler
       />

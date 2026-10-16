@@ -17,6 +17,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
+import { plotConfig } from "@/lib/plotConfig";
 import { InfoTip } from "@/components/common/InfoTip";
 import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
 import {
@@ -1295,7 +1296,7 @@ export function GeneSetPanel() {
                       plot_bgcolor: "white",
                       font: { family: "Inter, system-ui, sans-serif" },
                     }}
-                    config={{ responsive: true, displayModeBar: false }}
+                    config={plotConfig("enrichment_top_terms")}
                     useResizeHandler
                     className="w-full"
                   />

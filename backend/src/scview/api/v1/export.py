@@ -51,7 +51,8 @@ def file_stem(text: str | None, fallback: str = "dataset") -> str:
 
     Mirrors ``exportFilename`` in the frontend so plots, tables and the .h5ad
     from one dataset share a prefix."""
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", text or "").strip("._-")[:80].rstrip("._-")
+    stem = re.sub(r"_{2,}", "_", re.sub(r"[^A-Za-z0-9._-]+", "_", text or ""))
+    stem = stem.strip("._-")[:80].rstrip("._-")
     return stem or fallback
 
 

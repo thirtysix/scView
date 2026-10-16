@@ -52,6 +52,7 @@ def test_file_stem_is_filename_safe():
     assert file_stem("PBMC 3k (v2)") == "PBMC_3k_v2"
     assert file_stem("../../etc/passwd") == "etc_passwd"
     assert file_stem("ÄÖ") == "dataset"
+    assert file_stem("qc_% mito") == "qc_mito"
     assert len(file_stem("x" * 300)) == 80
 
 
