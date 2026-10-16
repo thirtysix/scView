@@ -44,9 +44,11 @@ export function formatRatio(r: number | null): string {
   return r >= 10 ? r.toFixed(0) : r.toFixed(1);
 }
 
-/** A fraction as a whole percentage, "–" when missing. */
+/** A fraction as a whole percentage, "<1%" for a few cells (not "0%"), "–" when missing. */
 export function formatPct(v: number | null | undefined): string {
-  return v == null || !Number.isFinite(v) ? "–" : `${Math.round(v * 100)}%`;
+  if (v == null || !Number.isFinite(v)) return "–";
+  if (v > 0 && v < 0.005) return "<1%";
+  return `${Math.round(v * 100)}%`;
 }
 
 export function formatTau(v: number | null | undefined): string {

@@ -3,6 +3,7 @@ import type { MarkerGene } from "@/api/markers";
 import {
   MARKER_CSV_HEADERS,
   detectionRatio,
+  formatPct,
   formatRatio,
   hasSpecificity,
   markerCsvRow,
@@ -49,6 +50,15 @@ describe("sortMarkers", () => {
 
   it("keeps a missing fold change last", () => {
     expect(sortMarkers(rows, "logfoldchange", "asc").at(-1)!.gene).toBe("C");
+  });
+});
+
+describe("formatPct", () => {
+  it("shows a few cells as <1% rather than 0%, next to a large ratio", () => {
+    expect(formatPct(0.0035)).toBe("<1%");
+    expect(formatPct(0)).toBe("0%");
+    expect(formatPct(0.935)).toBe("94%");
+    expect(formatPct(null)).toBe("–");
   });
 });
 

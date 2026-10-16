@@ -68,12 +68,13 @@ export function MarkerSpecificityPlot({ markers, name, onGeneClick, height = 240
     }
     return {
       traces: [mk(rest, "#94a3b8", "Other markers"), mk(strong, "#dc2626", "Strong and specific")],
-      annotations: labelled.map((m) => ({
+      // Labels alternate above and below their point: the corner they mark is crowded.
+      annotations: labelled.map((m, i) => ({
         x: m.logfoldchange,
         y: m.tau,
         text: m.gene,
         showarrow: false,
-        yshift: 9,
+        yshift: i % 2 === 0 ? 9 : -9,
         font: { size: 9, color: "#7f1d1d" },
       })),
       xMin: Math.floor(lo) - 0.25,
