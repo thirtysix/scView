@@ -16,7 +16,7 @@ from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing
-from scview.core import cluster_qc, doublets, qc_groups, qc_report
+from scview.core import cluster_qc, doublets, qc_filter, qc_groups, qc_report
 from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
@@ -143,6 +143,53 @@ async def get_qc_by_group(
     except Exception as e:
         logger.error("QC by group failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"QC by group failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/qc/filter-preview
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/filter-preview")
+async def get_filter_preview(
+    dataset_id: str,
+    min_genes: float | None = None,
+    max_genes: float | None = None,
+    min_counts: float | None = None,
+    max_pct_mt: float | None = None,
+    drop_doublets: bool | None = None,
+    sample_column: str = "",
+    cluster_column: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The cells the filtering step's thresholds would remove (core/qc_filter.py):
+    overall, per threshold, per sample and per cluster, with warnings for a sample
+    or cluster lost whole or more than half. Thresholds left out take the
+    pipeline's defaults. Small and fast at any cell count (one pass over cached
+    per-cell values), so the QC plots ask again on every threshold change."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    params = PipelineParams()
+    for key, value in (("min_genes", min_genes), ("max_genes", max_genes),
+                       ("min_counts", min_counts), ("max_pct_mt", max_pct_mt),
+                       ("drop_doublets", drop_doublets)):
+        if value is not None:
+            setattr(params, key, value)
+    thresholds = qc_filter.Thresholds.from_params(params)
+
+    def _run() -> dict:
+        return qc_filter.preview(adaptor.adata, adaptor.qc_per_cell(), thresholds,
+                                 sample_column or None, cluster_column or None)
+
+    try:
+        # Per-cell metrics may need a pass over the counts the first time: off the loop.
+        return await asyncio.to_thread(_run)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Filter preview failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Filter preview failed: {e}")
 
 
 # ---------------------------------------------------------------------------

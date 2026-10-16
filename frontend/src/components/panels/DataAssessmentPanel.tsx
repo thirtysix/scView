@@ -5,7 +5,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { getDataset } from "@/api/datasets";
-import { getDoublets, type DoubletRateSuggestion } from "@/api/qc";
+import { getDoublets, type DoubletRateSuggestion, type FilterThresholds } from "@/api/qc";
 import { pct } from "@/lib/qcThresholds";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
@@ -140,6 +140,8 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
   ],
   filtering: [
     { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200 },
+    { param: "max_genes", label: "Max genes/cell (0 = off)", type: "number", min: 0, max: 20000, step: 100, default: 0 },
+    { param: "min_counts", label: "Min counts/cell (0 = off)", type: "number", min: 0, max: 100000, step: 100, default: 0 },
     { param: "min_cells", label: "Min cells/gene", type: "number", min: 0, max: 100, step: 1, default: 3 },
     { param: "max_pct_mt", label: "Max % mito", type: "number", min: 0, max: 100, step: 1, default: 20 },
     { param: "drop_doublets", label: "Drop predicted doublets", type: "boolean", default: false },
@@ -177,6 +179,20 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
     { param: "enrichment_collections", label: "MSigDB Collections", type: "msigdb_tree", default: [] },
   ],
 };
+
+/** The filtering step's cell thresholds: the step's params as set, else their defaults.
+ *  The QC histograms set the same params, so either place changes both. */
+export function filterThresholds(set: Record<string, unknown> | undefined): FilterThresholds {
+  const value = (param: string) =>
+    set?.[param] ?? STEP_PARAMS.filtering!.find((pc) => pc.param === param)!.default;
+  return {
+    min_genes: Number(value("min_genes")),
+    max_genes: Number(value("max_genes")),
+    min_counts: Number(value("min_counts")),
+    max_pct_mt: Number(value("max_pct_mt")),
+    drop_doublets: Boolean(value("drop_doublets")),
+  };
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -333,6 +349,15 @@ export function DataAssessmentPanel() {
       cancelled = true;
     };
   }, [datasetId, qcRefreshKey]);
+
+  // The QC histograms set the filtering step's thresholds: one state, two places.
+  const filterValues = useMemo(() => filterThresholds(stepParams.filtering), [stepParams.filtering]);
+  const setFilter = useCallback(
+    (patch: Partial<FilterThresholds>) =>
+      setStepParams((prev) => ({ ...prev, filtering: { ...prev.filtering, ...patch } })),
+    [],
+  );
+  const qcFilter = useMemo(() => ({ values: filterValues, onChange: setFilter }), [filterValues, setFilter]);
 
   /* ---- Categorical obs columns (shared by batch, markers, enrichment) ---- */
   const categoricalObsColumns = useMemo(() => {
@@ -1285,6 +1310,7 @@ export function DataAssessmentPanel() {
               datasetId={datasetId}
               refreshKey={qcRefreshKey}
               onDoubletsApplied={() => setCallsRevision((r) => r + 1)}
+              filter={qcFilter}
             />
           )}
         </div>

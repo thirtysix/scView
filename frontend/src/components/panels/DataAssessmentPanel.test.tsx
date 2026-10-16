@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { OpenInUnifiedView, SkippedSteps, SpeciesNote, SuggestedRateNote } from "./DataAssessmentPanel";
+import { filterThresholds, OpenInUnifiedView, SkippedSteps, SpeciesNote, SuggestedRateNote } from "./DataAssessmentPanel";
 import { useViewStore } from "@/stores/viewStore";
 
 describe("SuggestedRateNote", () => {
@@ -60,5 +60,16 @@ describe("OpenInUnifiedView", () => {
     expect(useViewStore.getState().activePanel).toBe("assessment");
     fireEvent.click(screen.getByRole("button", { name: /open in unified view/i }));
     expect(useViewStore.getState().activePanel).toBe("unified");
+  });
+});
+
+describe("filterThresholds", () => {
+  it("takes the filtering step's params as set, else their defaults", () => {
+    expect(filterThresholds(undefined)).toEqual({
+      min_genes: 200, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: false,
+    });
+    expect(filterThresholds({ min_genes: 500, drop_doublets: true, min_cells: 5 })).toEqual({
+      min_genes: 500, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: true,
+    });
   });
 });

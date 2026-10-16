@@ -21,7 +21,8 @@ import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
 
-from scview.core import doublets, provenance, stress
+from scview.core import cluster_qc, doublets, provenance, qc_filter, stress
+from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.llm import chat_extra
 from scview.core.gene_filters import is_ribo_mito, select_query_genes
 from scview.core.geneset_sources import (
@@ -55,10 +56,12 @@ def _NOOP_CB(_msg: str, _cur: int, _tot: int) -> None:
 class PipelineParams:
     """Parameters for each preprocessing step."""
 
-    # Filtering
+    # Filtering (cells: see core/qc_filter.py; 0 turns a threshold off)
     min_genes: int = 200
+    max_genes: int = 0
+    min_counts: int = 0
     min_cells: int = 3
-    max_pct_mt: float = 20.0
+    max_pct_mt: float = 20.0  # used only when % mito can be measured (MT- genes)
     drop_doublets: bool = False  # drop cells flagged by doublet detection (opt-in)
 
     # Doublet detection
@@ -261,21 +264,24 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
 
 
 def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> ad.AnnData:
-    """Filter cells and genes based on QC thresholds. Returns new AnnData."""
+    """Filter cells on QC thresholds, then genes seen in too few cells. Returns new AnnData.
+
+    Cells are judged on the per-cell QC values the QC plots show (``per_cell_qc``:
+    obs QC columns, else computed from the counts) with ``qc_filter``'s masks, so
+    the loss the Data Assessment tab previews is what this removes, and a re-run
+    on processed data (X scaled, every gene "detected") still counts genes in
+    the counts. % mito is used only when measurable; predicted doublets are
+    dropped when ``drop_doublets`` is set.
+    """
     n_before = adata.n_obs
-    sc.pp.filter_cells(adata, min_genes=params.min_genes)
+    calls = cluster_qc.doublet_calls(adata.obs)
+    removed = qc_filter.removed_by(per_cell_qc(adata), qc_filter.Thresholds.from_params(params), calls)
+    keep = qc_filter.keep_mask(removed, n_before)
+    for name, mask in removed.items():
+        logger.info("Filtering: %s removes %d cells on its own", name, int(mask.sum()))
+    if not keep.all():
+        adata = adata[keep, :].copy()
     sc.pp.filter_genes(adata, min_cells=params.min_cells)
-
-    # Filter by mitochondrial percentage if QC metrics are available
-    if "pct_counts_mt" in adata.obs.columns:
-        adata = adata[adata.obs["pct_counts_mt"] < params.max_pct_mt, :].copy()
-
-    # Drop predicted doublets (opt-in; requires the doublet_detection step to have run)
-    if params.drop_doublets and "predicted_doublet" in adata.obs.columns:
-        n_dbl = int(adata.obs["predicted_doublet"].astype(bool).sum())
-        adata = adata[~adata.obs["predicted_doublet"].astype(bool), :].copy()
-        logger.info("Filtering: dropped %d predicted doublets", n_dbl)
-
     logger.info("Filtering: %d -> %d cells", n_before, adata.n_obs)
     return adata
 
@@ -1188,8 +1194,9 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "reset_to_counts": ("scview.reset_to_counts", ()),
     "qc_metrics": ("scanpy.pp.calculate_qc_metrics", ()),
     "doublet_detection": ("scanpy.pp.scrublet", ("doublet_method", "expected_doublet_rate")),
-    "filtering": ("scanpy.pp.filter_cells/genes",
-                  ("min_genes", "min_cells", "max_pct_mt", "drop_doublets")),
+    "filtering": ("scview.qc_filter + scanpy.pp.filter_genes",
+                  ("min_genes", "max_genes", "min_counts", "min_cells", "max_pct_mt",
+                   "drop_doublets")),
     "normalization": ("scanpy.pp.normalize_total", ("target_sum",)),
     "log_transform": ("scanpy.pp.log1p", ()),
     "highly_variable_genes": ("scanpy.pp.highly_variable_genes",

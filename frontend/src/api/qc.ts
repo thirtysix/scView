@@ -167,6 +167,76 @@ export async function applyDoubletThreshold(datasetId: string, threshold: number
   }
 }
 
+/** The Cell/Gene Filtering step's cell thresholds (pipeline params); 0 turns
+ *  min/max genes and min counts off. % mito is applied only when measurable. */
+export interface FilterThresholds {
+  min_genes: number;
+  max_genes: number;
+  min_counts: number;
+  max_pct_mt: number;
+  drop_doublets: boolean;
+}
+
+export type FilterCriterion = "min_genes" | "max_genes" | "min_counts" | "max_pct_mt" | "doublets";
+
+export interface FilterGroupLoss {
+  name: string;
+  n_cells: number;
+  n_removed: number;
+  fraction: number;
+  /** Cells each threshold removes from the group on its own. */
+  by_criterion: Partial<Record<FilterCriterion, number>>;
+}
+
+export interface FilterGrouping {
+  column: string;
+  reason: string | null;
+  groups: FilterGroupLoss[];
+  /** Set when the column has too many groups to list. */
+  note?: string;
+}
+
+/** What the thresholds would remove (backend core/qc_filter.py). */
+export interface FilterPreview {
+  n_cells: number;
+  n_removed: number;
+  n_kept: number;
+  fraction_removed: number;
+  thresholds: Omit<FilterThresholds, "max_pct_mt"> & { max_pct_mt: number | null };
+  has_mt: boolean;
+  /** The dataset has doublet calls, so "drop predicted doublets" has something to drop. */
+  doublet_calls: boolean;
+  by_criterion: Partial<Record<FilterCriterion, { label: string; n_removed: number }>>;
+  samples: FilterGrouping | null;
+  clusters: FilterGrouping | null;
+  warnings: {
+    kind: "sample" | "cluster";
+    column: string;
+    group: string;
+    n_cells: number;
+    n_removed: number;
+    fraction: number;
+    whole: boolean;
+    criterion: FilterCriterion | null;
+    message: string;
+  }[];
+}
+
+export async function getFilterPreview(datasetId: string, t: FilterThresholds): Promise<FilterPreview> {
+  const q = new URLSearchParams({
+    min_genes: String(t.min_genes),
+    max_genes: String(t.max_genes),
+    min_counts: String(t.min_counts),
+    max_pct_mt: String(t.max_pct_mt),
+    drop_doublets: String(t.drop_doublets),
+  });
+  try {
+    return await apiFetch<FilterPreview>(`/datasets/${datasetId}/qc/filter-preview?${q.toString()}`);
+  } catch (e) {
+    throw withDetail(e);
+  }
+}
+
 /** The "Explain this data" QC report, written from the deterministic facts only. */
 export interface QcReport {
   report: string; // Markdown in four sections; "" = not generated yet

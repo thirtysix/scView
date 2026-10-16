@@ -85,6 +85,14 @@ def _group_order(labels: pd.Series, present: set[str]) -> list[str]:
 def group_codes(raw: pd.Series) -> tuple[list[str], np.ndarray]:
     """The groups of one obs column in its own order, and each cell's index into
     them (-1 = no value)."""
+    if isinstance(raw.dtype, pd.CategoricalDtype):
+        # The codes as they are, minus unused categories: no string per cell. The QC
+        # filter preview asks on every threshold change (200k cells: 66 -> 11 ms).
+        codes = raw.cat.codes.to_numpy()
+        used = np.unique(codes[codes >= 0])
+        remap = np.full(len(raw.cat.categories) + 1, -1)  # code -1 reads the last slot
+        remap[used] = np.arange(used.size)
+        return [str(raw.cat.categories[i]) for i in used], remap[codes]
     labels = raw.astype(str).where(raw.notna())
     order = _group_order(raw, set(labels.dropna().unique()))
     return order, np.asarray(pd.Categorical(labels, categories=order).codes)

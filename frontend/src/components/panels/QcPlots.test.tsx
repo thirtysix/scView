@@ -1,11 +1,16 @@
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { QcByGroup } from "@/api/qc";
 import type { DatasetInfo } from "@/api/types";
 
-const { apiFetch, getQcByGroup } = vi.hoisted(() => ({ apiFetch: vi.fn(), getQcByGroup: vi.fn() }));
+const { apiFetch, getQcByGroup, getFilterPreview } = vi.hoisted(() => ({
+  apiFetch: vi.fn(),
+  getQcByGroup: vi.fn(),
+  getFilterPreview: vi.fn(),
+}));
 vi.mock("@/api/client", () => ({ apiFetch }));
-vi.mock("@/api/qc", () => ({ getQcByGroup }));
+vi.mock("@/api/qc", () => ({ getQcByGroup, getFilterPreview }));
 // Plotly needs a real canvas; the traces it is handed are what matters here.
 vi.mock("@/components/plots/Plot", () => ({
   default: ({ data }: { data: { name?: string; type: string }[] }) => (
@@ -95,5 +100,76 @@ describe("QcPlots group by", () => {
     fireEvent.change(screen.getByLabelText("Group by"), { target: { value: "cluster" } });
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("at most 50"));
     expect(screen.getByText("Counts vs. genes per cell (colour = % mito)")).toBeInTheDocument();
+  });
+});
+
+describe("QcPlots thresholds", () => {
+  const values = { min_genes: 200, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: false };
+
+  beforeEach(() => {
+    apiFetch.mockReset().mockResolvedValue(POOLED);
+    getQcByGroup.mockReset().mockResolvedValue(byGroup("Donor", "donor", ["d1", "d2"]));
+    getFilterPreview.mockReset().mockResolvedValue({
+      n_cells: 10, n_removed: 2, n_kept: 8, fraction_removed: 0.2, thresholds: values, has_mt: true,
+      doublet_calls: false, by_criterion: { min_genes: { label: "Min genes", n_removed: 2 } },
+      samples: null, clusters: null, warnings: [],
+    });
+  });
+
+  /** The panel's part: it owns the values, so they follow each change. */
+  function Owner({ onChange }: { onChange: (patch: Partial<typeof values>) => void }) {
+    const [v, setV] = useState(values);
+    return (
+      <QcPlots
+        datasetId="d1"
+        filter={{
+          values: v,
+          onChange: (patch) => {
+            onChange(patch);
+            setV((prev) => ({ ...prev, ...patch }));
+          },
+        }}
+      />
+    );
+  }
+
+  it("puts the filtering thresholds on the histograms and says what they remove", async () => {
+    const onChange = vi.fn();
+    render(<Owner onChange={onChange} />);
+    expect(await screen.findByLabelText("Min min_genes")).toHaveValue(200);
+    expect(screen.getByLabelText("Max max_genes")).toHaveValue(null); // off
+    expect(screen.getByLabelText("Min min_counts")).toHaveValue(null);
+    expect(screen.getByLabelText("Max max_pct_mt")).toHaveValue(20);
+    expect(await screen.findByText(/2 of 10 cells \(20.0%\)/)).toBeInTheDocument();
+    expect(getFilterPreview).toHaveBeenCalledWith("d1", values);
+
+    fireEvent.change(screen.getByLabelText("Min min_genes"), { target: { value: "600" } });
+    expect(onChange).toHaveBeenLastCalledWith({ min_genes: 600 });
+    fireEvent.change(screen.getByLabelText("Max max_genes"), { target: { value: "4000" } });
+    expect(onChange).toHaveBeenLastCalledWith({ max_genes: 4000 });
+    fireEvent.change(screen.getByLabelText("Max max_genes"), { target: { value: "" } });
+    expect(onChange).toHaveBeenLastCalledWith({ max_genes: 0 }); // emptied = off
+    const calls = onChange.mock.calls.length;
+    fireEvent.change(screen.getByLabelText("Max max_pct_mt"), { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledTimes(calls); // % mito has no off: wait for a number
+  });
+
+  it("shows a value set elsewhere in an input that still has the focus", async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<QcPlots datasetId="d1" filter={{ values, onChange }} />);
+    const input = await screen.findByLabelText("Min min_genes");
+    fireEvent.change(input, { target: { value: "600" } });
+    rerender(<QcPlots datasetId="d1" filter={{ values: { ...values, min_genes: 600 }, onChange }} />);
+    expect(input).toHaveValue(600);
+    // A drag on the plot keeps the input focused and sets 750.
+    rerender(<QcPlots datasetId="d1" filter={{ values: { ...values, min_genes: 750 }, onChange }} />);
+    expect(input).toHaveValue(750);
+  });
+
+  it("has no thresholds without a filter to set", async () => {
+    render(<QcPlots datasetId="d1" />);
+    await screen.findByText("Genes per cell");
+    expect(screen.queryByLabelText("Min min_genes")).not.toBeInTheDocument();
+    expect(getFilterPreview).not.toHaveBeenCalled();
   });
 });
