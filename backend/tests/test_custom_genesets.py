@@ -214,6 +214,15 @@ def test_store_skips_half_written_and_broken_collections(tmp_path):
     assert [m["id"] for m in store.list()] == [good["id"]]
 
 
+def test_store_keeps_only_a_few_collections_in_memory(tmp_path, monkeypatch):
+    monkeypatch.setattr(cg, "MAX_CACHED_COLLECTIONS", 2)
+    store = CustomGeneSetStore(tmp_path)
+    ids = [store.create(f"C{i}", _parsed())["id"] for i in range(3)]
+    assert list(store._sets) == ids[1:]
+    assert store.get_sets(ids[0])["B_PROGRAM"] == ["MS4A1", "CD79A"]  # read back from disk
+    assert list(store._sets) == [ids[2], ids[0]]
+
+
 def test_store_search_and_exact_lookup(tmp_path):
     store = CustomGeneSetStore(tmp_path)
     meta = store.create("Mine", _parsed())

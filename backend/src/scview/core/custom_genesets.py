@@ -58,6 +58,8 @@ MAX_GENE_CHARS = 100
 MAX_DESCRIPTION_CHARS = 1_000
 # Problems listed in a 400; the rest are summarised as "...and N more".
 MAX_PROBLEMS_LISTED = 20
+# Collections whose gene sets stay loaded in memory (least recently used dropped).
+MAX_CACHED_COLLECTIONS = 8
 
 ALLOWED_EXTENSIONS = (".gmt", ".csv", ".tsv", ".txt")
 
@@ -425,15 +427,24 @@ class CustomGeneSetStore:
             return None
         if cid in self._sets:
             if d.is_dir():
-                return self._sets[cid]
+                sets = self._sets[cid]
+                self._remember(cid, sets)
+                return sets
             self._sets.pop(cid, None)
         try:
             payload = json.loads((d / "sets.json").read_text())
             sets = {str(k): [str(g) for g in v] for k, v in payload["sets"].items()}
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return None
-        self._sets[cid] = sets
+        self._remember(cid, sets)
         return sets
+
+    def _remember(self, cid: str, sets: dict[str, list[str]]) -> None:
+        # Keep the most recently used few in memory; a large library is tens of MB.
+        self._sets.pop(cid, None)
+        self._sets[cid] = sets
+        while len(self._sets) > MAX_CACHED_COLLECTIONS:
+            self._sets.pop(next(iter(self._sets)))
 
     def get_descriptions(self, cid: str) -> dict[str, str]:
         d = self._dir(cid)
@@ -527,7 +538,7 @@ class CustomGeneSetStore:
         except OSError:
             shutil.rmtree(tmp, ignore_errors=True)
             raise
-        self._sets[cid] = parsed.sets
+        self._remember(cid, parsed.sets)
         logger.info("Saved custom gene-set collection %s (%s): %d sets", cid, clean, len(parsed.sets))
         return self.get_meta(cid) or meta
 
