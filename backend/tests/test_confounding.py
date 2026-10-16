@@ -91,3 +91,21 @@ def test_integration_plan_notes_datasets_that_are_conditions():
     notes = confounding_notes({"CTRL": unit("CTRL", "CTRL"), "STIM": unit("STIM", "STIM")})
     assert len(notes) == 1 and "'stim'" in notes[0] and "pseudobulk" in notes[0]
     assert confounding_notes({"A": unit("A", "CTRL"), "B": unit("B", "CTRL")}) == []
+
+
+async def test_a_batch_key_that_is_the_compared_column_is_not_a_batch_for_de():
+    """Kang run with Harmony on 'stim': DE by 'stim' tests expression, which the
+    correction never touched, so it is not 'different batches'."""
+    obs = _obs(["d1", "d1", "d2", "d2"], ["CTRL", "STIM", "CTRL", "STIM"]).rename(
+        columns={"batch": "Donor", "condition": "stim"})
+    a = _adata(obs)
+    provenance.record_step(a, step="batch_correction", tool="harmony",
+                           params={"batch_key": "stim", "batch_method": "harmony"})
+
+    class _DM:
+        async def get_or_load_dataset(self, _id):
+            return type("A", (), {"adata": a})()
+
+    r = await differential_expression_compare(
+        "x", DECompareRequest(split_by="stim", group_a="STIM", group_b="CTRL"), _DM())
+    assert r.confounding is None

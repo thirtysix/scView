@@ -241,8 +241,11 @@ async def differential_expression_compare(
 
     # The two sides being different batches (datasets, libraries, runs): the
     # result then mixes the batch effect with any biological one.
+    # The batch-correction key counts unless it is the compared column itself:
+    # Harmony changes the embedding, not the expression this test runs on.
     batch_key = recorded_batch_key(adata)
-    hit = for_comparison(obs, body.split_by, mask_a | mask_b, [batch_key] if batch_key else [])
+    extra = [batch_key] if batch_key and batch_key != body.split_by else []
+    hit = for_comparison(obs, body.split_by, mask_a | mask_b, extra)
     confounding = hit.to_dict() if hit else None
 
     if body.method == "pseudobulk":
