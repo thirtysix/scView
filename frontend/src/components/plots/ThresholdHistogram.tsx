@@ -119,14 +119,18 @@ export function ThresholdHistogram({
         y1: 1,
         line: { color: l.color ?? "#dc2626", width: 2, dash: "dash" },
       })),
+      // A threshold's label runs right of its line and a reference line's left of
+      // it, so the two never print over each other when the lines (nearly) meet.
       annotations: [
-        ...lines.map((l) => ({ value: l.value, label: l.label, color: l.color ?? "#dc2626" })),
-        ...refLines.filter((r) => r.showLabel),
+        ...lines.map((l) => ({ value: l.value, label: l.label, color: l.color ?? "#dc2626", side: "left" as const })),
+        ...refLines.filter((r) => r.showLabel).map((r) => ({ ...r, side: "right" as const })),
       ].map((l) => ({
         xref: "x" as const,
         yref: "paper" as const,
         x: l.value,
         y: 1,
+        xanchor: l.side,
+        xshift: l.side === "left" ? 2 : -2,
         yanchor: "bottom" as const,
         text: l.label,
         showarrow: false,

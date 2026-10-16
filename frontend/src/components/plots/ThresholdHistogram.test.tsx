@@ -22,7 +22,7 @@ class FakeDiv {
 
 type PlotProps = {
   data: { type: string; yaxis?: string }[];
-  layout: { shapes?: { x0: number }[]; yaxis?: { type?: string }; annotations?: { text: string }[] };
+  layout: { shapes?: { x0: number }[]; yaxis?: { type?: string }; annotations?: { text: string; xanchor?: string }[] };
   config: { edits?: { shapePosition?: boolean } };
   onInitialized?: (fig: unknown, gd: unknown) => void;
   onUpdate?: (fig: unknown, gd: unknown) => void;
@@ -61,6 +61,8 @@ describe("ThresholdHistogram", () => {
     expect(p.data.map((t) => t.type)).toEqual(["bar", "scatter", "scatter"]);
     expect(p.data[1]!.yaxis).toBe("y2");
     expect(p.layout.annotations!.map((a) => a.text)).toEqual(["min", "Scrublet"]);
+    // Labels run away from each other, so lines at the same value don't overprint.
+    expect(p.layout.annotations!.map((a) => a.xanchor)).toEqual(["left", "right"]);
     expect(p.config.edits?.shapePosition).toBe(true);
     expect(p.layout.yaxis?.type).toBe("log");
   });
