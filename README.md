@@ -187,27 +187,60 @@ scView runs entirely in Docker, so there is no Python, Node, or R to install. **
 
 ### Windows, step by step
 
-You install Docker Desktop once, then start and stop scView by double-clicking.
+You install Docker Desktop once, then start and stop scView by double-clicking. Allow about half
+an hour the first time, most of it waiting for downloads.
 
 1. **Make sure you can install software.** Docker Desktop needs administrator rights, so on a work
    or university PC you may need to ask IT to install it.
 2. **Install [Docker Desktop](https://www.docker.com/products/docker-desktop/).** Keep the default
-   **Use WSL 2** setting and restart the computer when asked. If Docker Desktop then asks to
-   install or update WSL, let it.
-3. **Open Docker Desktop** from the Start menu and wait until it shows **Engine running**. You can
-   skip signing in.
-4. **Download scView:** at the top of this GitHub page, click **Code → Download ZIP**. In your
+   **Use WSL 2** setting and restart the computer when asked.
+3. **Open Docker Desktop** from the Start menu. On a PC that hasn't used WSL before, two windows can
+   appear at once: a black `wsl.exe` window saying WSL must be updated, and a **WSL not installed**
+   dialog.
+
+   <img src="docs/images/windows/1-wsl-prompts.png" width="720" alt="The wsl.exe update prompt and Docker Desktop's WSL not installed dialog">
+
+   - In the black window, press any key. It installs WSL and closes by itself.
+   - If the **WSL not installed** dialog is still there, click **Quit**. Then right-click the
+     **Start** button, choose **Terminal (Admin)**, and click **Yes**.
+
+     <img src="docs/images/windows/2-terminal-admin.png" width="200" alt="Right-click menu of the Start button with Terminal (Admin) highlighted">
+
+     In the window that opens, type this line and press Enter:
+     ```
+     wsl --install --no-distribution
+     ```
+
+     When it finishes, restart the computer and open Docker Desktop again. A "Welcome to WSL"
+     window may also open; you can close it.
+4. **Wait until Docker Desktop shows "Engine running"** in small green text at the bottom left of
+   its window. The first start can take several minutes. You can skip signing in.
+
+   <img src="docs/images/windows/3-engine-running.png" width="720" alt="Docker Desktop with Engine running highlighted at the bottom left">
+5. **Download scView:** at the top of this GitHub page, click **Code → Download ZIP**. In your
    Downloads folder, right-click the ZIP, choose **Extract All**, and open the extracted
    `scView-main` folder. Running the files from inside the ZIP without extracting will not work.
-5. **Double-click `start-windows.bat`** (it may show as `start-windows`, type *Windows Batch
+6. **Double-click `start-windows.bat`** (it may show as `start-windows`, type *Windows Batch
    File*). If Windows shows a security warning, choose **Run**, or **More info → Run anyway**.
    A window opens that:
-   - asks for an optional DeepInfra API key for the AI features (press Enter to skip),
-   - downloads and starts scView. **The first run downloads about 1 GB**; later starts take about
-     a minute. If a prebuilt part isn't available yet, it is built on your computer instead,
-     which can take tens of minutes (a "must be built from source" warning means just that),
-   - opens scView in your browser at **http://localhost:3000**.
-6. **Load some data:** see [First steps](#first-steps).
+   - asks for an optional DeepInfra API key for the AI features. Paste it (right-click pastes)
+     and press Enter, or just press Enter to skip. The key stays visible in the window, so don't
+     share a screenshot of it. You can add or change it later: see
+     [Optional: enable the AI features](#optional-enable-the-ai-features).
+
+     <img src="docs/images/windows/4-key-prompt.png" width="720" alt="start-windows.bat asking for an optional DeepInfra API key">
+   - downloads and starts scView. **The first run downloads about 1 GB**, a few minutes on a
+     typical connection; later starts take about a minute. Near the end the progress can sit
+     still for several minutes while Docker unpacks the download: leave the window open. If a
+     prebuilt part isn't available, it is built on your computer instead, which can take tens of
+     minutes (a "must be built from source" warning means just that).
+   - opens scView in your browser at **http://localhost:3000** when it says *scView is running*.
+     You can then close the window: scView keeps running in Docker Desktop.
+
+     <img src="docs/images/windows/5-running.png" width="600" alt="start-windows.bat after a successful start: scView is running at http://localhost:3000">
+
+     <img src="docs/images/windows/6-scview-open.png" width="720" alt="scView open in the browser, ready to import data">
+7. **Load some data:** see [First steps](#first-steps).
 
 **To stop scView**, double-click `stop-windows.bat`. **To start it again later**, open Docker
 Desktop and double-click `start-windows.bat`, or in Docker Desktop open **Containers**, press ▶
@@ -221,6 +254,9 @@ in the scView folder, so stopping, restarting, and [updating](#updating) all kee
 | `start-windows.bat` says Docker Desktop is not installed, but you installed it | Restart the computer so Windows finds Docker's commands. |
 | Docker Desktop says virtualization is not enabled, or shows a WSL error | Virtualization has to be switched on in the PC's BIOS/UEFI settings (called Intel VT-x, or AMD-V / SVM). Then run `wsl --update` in PowerShell and restart. On a managed PC, ask IT. |
 | "Docker Desktop did not start" | Open Docker Desktop yourself, wait for **Engine running**, and run `start-windows.bat` again. |
+| Docker Desktop keeps saying WSL is not installed | Follow step 3 above: in an administrator Terminal run `wsl --install --no-distribution`, then restart. |
+| The window says a container "is unhealthy" or "failed to start" | scView took longer than usual to start. Run `start-windows.bat` again. |
+| The download seems stuck near the end | Docker is unpacking what it downloaded, which can take several minutes. Leave the window open. |
 | "port is already allocated" | Another program is using port 3000, 8080, or 8001. Close it or restart the computer, then try again. |
 | A large dataset fails, or the app becomes very slow | Docker on Windows can use only half of the computer's memory by default. To raise it, see below. |
 | Gene sets or pathway enrichment are empty | On the first start scView downloads the MSigDB gene sets (~45 MB) in the background. Wait a minute and reload the page. This needs internet access to `data.broadinstitute.org`; if the download failed, it is retried on the next start. |
@@ -341,7 +377,9 @@ co-pilot's literature/tutorial corpora additionally require a Postgres/pgvector 
 
 ### Updating
 - **Downloaded ZIP:** download and extract the new ZIP, copy your `.env` file across from the old
-  folder if you set an API key, and start scView from the new folder as before.
+  folder if you set an API key, and start scView from the new folder as before. The version
+  scView runs comes from the ZIP, so starting the old folder again keeps the old version. If you
+  added a `SCVIEW_VERSION` line to `.env`, remove it, or it keeps that version.
 - **Git:** run `git pull`, then start scView as before.
 
 Your datasets live in a Docker volume (`scview_dataset_data`), not in the scView folder, so they
