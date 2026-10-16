@@ -33,7 +33,7 @@ interface Props {
   /** The DE table's significance cut-offs; the gene lists use exactly these. */
   pThreshold: number;
   fcThreshold: number;
-  onScoreGeneSet: (scores: Float32Array, name: string) => void;
+  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
   onGeneClick: (gene: string) => void;
 }
 

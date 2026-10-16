@@ -17,6 +17,8 @@ export interface DatasetInfo {
   active_clustering?: string;
   expression_layers?: ExpressionLayerInfo[];
   default_expression_layer?: string;
+  /** Hash of the cell barcodes in order: equal for the same cells (saved sessions) */
+  cells_fingerprint?: string;
   created_at: string;
   error_message?: string;
 }

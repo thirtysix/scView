@@ -16,6 +16,11 @@ export const PANEL_IDS = [
 
 export type PanelId = (typeof PANEL_IDS)[number];
 
+/** The Unified View's side-panel tabs. */
+export const UNIFIED_SUBTABS = ["markers", "expression", "genesets", "enrichment", "de"] as const;
+
+export type UnifiedSubtab = (typeof UNIFIED_SUBTABS)[number];
+
 export const PANEL_LABELS: Record<PanelId, string> = {
   load: "Data",
   assessment: "Data Assessment",

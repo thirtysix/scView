@@ -8,7 +8,7 @@ import { apiFetch } from "@/api/client";
  */
 export function useGeneSetScoring(
   datasetId: string | null | undefined,
-  onScoreGeneSet: (scores: Float32Array, name: string) => void,
+  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void,
   onFallbackGene: (gene: string) => void,
 ): { scoreGenes: (genes: string[], name: string) => Promise<void>; scoringName: string | null } {
   const [scoringName, setScoringName] = useState<string | null>(null);
@@ -22,7 +22,7 @@ export function useGeneSetScoring(
           method: "POST",
           body: JSON.stringify({ gene_set: genes, score_name: name }),
         });
-        onScoreGeneSet(new Float32Array(res.scores), name);
+        onScoreGeneSet(new Float32Array(res.scores), name, genes);
       } catch {
         onFallbackGene(genes[0]!);
       } finally {
