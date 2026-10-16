@@ -83,6 +83,10 @@ class ClusterQC(BaseModel):
     reasons: list[str] = []  # one plain-language sentence per flag, with the numbers
 
 
+NO_MT_NOTE = ("No mitochondrial (MT-) genes in this dataset, so % mito can't be measured "
+              "(a mito filter had nothing to remove).")
+
+
 class ClusterQCReport(BaseModel):
     column: str | None
     n_cells: int
@@ -232,10 +236,12 @@ def cluster_qc(
         typical={names[k]: round(v, 4) for k, v in typical.items() if k in names},
         clusters=rows,
         computed_on_demand=bool(cells.get("computed")),
-        note=(
+        note=" ".join(n for n in (
             "" if len(order) >= MIN_GROUPS
-            else f"Only {len(order)} groups: too few to say which stands out; only size is flagged."
-        ),
+            else f"Only {len(order)} groups: too few to say which stands out; only size is flagged.",
+            "" if cells.get("has_mt", True)
+            else NO_MT_NOTE,
+        ) if n),
     )
 
 
@@ -349,8 +355,10 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
         cites.append((tag, f"{c.group}: " + "; ".join(c.flags)))
     rest = report.n_groups - len(flagged)
     if not flagged:
-        lines.append("- No cluster stands out: all are within the normal range on genes, "
-                     "counts, mito and doublets.")
+        checked = ["genes", "counts"] + [w for m, w in (("pct_mt", "mito"), ("doublet_fraction", "doublets"))
+                                         if m in report.metrics]
+        lines.append("- No cluster stands out: all are within the normal range on "
+                     + ", ".join(checked[:-1]) + " and " + checked[-1] + ".")
     elif rest:
         lines.append(f"- The other {rest} clusters are within the normal range.")
     if report.note:

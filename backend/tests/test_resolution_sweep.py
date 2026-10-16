@@ -192,3 +192,26 @@ async def test_keep_endpoint_saves_and_reloads(client, dataset_manager):
     assert r.json()["created"] is False
     r = await client.post(f"{API}/datasets/{did}/clustering/keep", json={"resolution": 0.8, "method": "x"})
     assert r.status_code == 400
+
+
+def test_the_umap_step_leaves_the_clustering_graph_as_it_was():
+    """umap-learn zeroes the weakest edges of the graph it is given, in place; the
+    graph saved after the pipeline must be the one the clustering ran on."""
+    from scview.core.pipeline import _run_embeddings
+
+    a = _adata()
+    before = a.obsp["connectivities"].copy()
+    _run_embeddings(a, PipelineParams())
+    after = a.obsp["connectivities"]
+    assert after.nnz == before.nnz and (after != before).nnz == 0
+    assert "X_umap" in a.obsm and "X_umap_3d" in a.obsm
+
+
+def test_a_resolution_with_a_column_is_shown_as_that_column():
+    """What "Keep this one" returns for it, even if re-clustering would differ."""
+    a = _adata()
+    rng = np.random.default_rng(1)
+    a.obs["scview_leiden_r0.5"] = pd.Categorical(rng.integers(0, 3, a.n_obs).astype(str))
+    rows = list(rs.iter_sweep(a, [0.5], "leiden"))[1:]
+    assert rows[0]["exists"] and rows[0]["n_clusters"] == 3
+    assert rs.keep(a, "leiden", 0.5)["n_clusters"] == rows[0]["n_clusters"]

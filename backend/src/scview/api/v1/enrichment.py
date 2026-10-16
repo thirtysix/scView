@@ -8,6 +8,7 @@ starting point.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -301,15 +302,18 @@ async def enrichment_network(
     )
 
     try:
-        graph = network.build_network(
-            [r.model_dump() for r in enrichment.results],
-            fdr=body.fdr,
-            metric=body.metric,
-            min_similarity=body.min_similarity,
-            resolution=body.resolution,
-            seed=body.seed,
-            min_term_size=body.min_term_size,
-            max_term_size=body.max_term_size,
+        # Leiden over the term-similarity graph: off the event loop too.
+        graph = await asyncio.to_thread(
+            lambda: network.build_network(
+                [r.model_dump() for r in enrichment.results],
+                fdr=body.fdr,
+                metric=body.metric,
+                min_similarity=body.min_similarity,
+                resolution=body.resolution,
+                seed=body.seed,
+                min_term_size=body.min_term_size,
+                max_term_size=body.max_term_size,
+            )
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -345,7 +349,14 @@ async def compute_enrichment_local(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    # The background genes and gseapy take seconds: in a worker thread, so the
+    # server keeps answering meanwhile.
+    return await asyncio.to_thread(_compute_local, dataset_id, adaptor, body, settings)
 
+
+def _compute_local(
+    dataset_id: str, adaptor, body: LocalEnrichmentRequest, settings: Settings
+) -> EnrichmentResponse:
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
     store = get_custom_store(settings.DATA_DIR)
     # Custom collections need no MSigDB, so only an MSigDB-only request fails here.
@@ -505,7 +516,11 @@ async def compute_enrichment(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    # As compute-local: off the event loop.
+    return await asyncio.to_thread(_compute, dataset_id, adaptor, body)
 
+
+def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> EnrichmentResponse:
     # Resolve which obs column's markers to use
     col = body.column or body.groupby
     if not col:

@@ -122,7 +122,21 @@ def per_cell_qc(adata, ribo: bool = False) -> dict:
                 out["total_counts"] = tc
             if out["n_genes"] is None:
                 out["n_genes"] = ng
+    if has_mt and out["pct_mt"] is not None and not np.any(out["pct_mt"] > 0) and not _has_mt_genes(adata):
+        # A % mito column of zeros on a matrix without MT- genes (the QC step ran
+        # but had nothing to count) measures nothing: report it as unmeasurable,
+        # not as a clean 0 %. A non-zero column is kept even then: authors often
+        # drop MT genes after computing it.
+        has_mt = False
     return {**out, "computed": bool(need), "has_mt": has_mt, "ribo_checked": bool(need) or ribo}
+
+
+def _has_mt_genes(adata) -> bool:
+    """Whether the matrix (or .raw) has any mitochondrial MT-/mt- genes."""
+    names = [adata.var_names]
+    if getattr(adata, "raw", None) is not None:
+        names.append(adata.raw.var_names)
+    return any(bool(n.str.startswith(("MT-", "mt-")).any()) for n in names)
 
 
 class AnnDataAdaptor:
@@ -289,11 +303,13 @@ class AnnDataAdaptor:
         total_counts, n_genes, pct_mt = cells["total_counts"], cells["n_genes"], cells["pct_mt"]
         computed = cells["computed"]
 
+        has_mt = bool(cells.get("has_mt", True))
         metrics = {
             "n_genes_by_counts": self._qc_summary(n_genes, n_bins),
             "total_counts": self._qc_summary(total_counts, n_bins),
-            "pct_counts_mt": self._qc_summary(pct_mt, n_bins),
         }
+        if has_mt:  # else no MT genes: a histogram of zeros would read as "clean"
+            metrics["pct_counts_mt"] = self._qc_summary(pct_mt, n_bins)
         # Optional metrics contributed by later QC analyses (doublet detection,
         # cell-cycle scoring, ribo/hemo QC) — included once they exist in obs, so
         # the plot set grows as the user runs more steps.
@@ -307,16 +323,17 @@ class AnnDataAdaptor:
         scatter = {
             "x": total_counts[idx].tolist(),
             "y": n_genes[idx].tolist(),
-            "color": pct_mt[idx].tolist(),
+            "color": pct_mt[idx].tolist() if has_mt else [],
             "x_label": "total_counts",
             "y_label": "n_genes_by_counts",
-            "color_label": "pct_counts_mt",
+            "color_label": "pct_counts_mt" if has_mt else "",
             "n_shown": int(len(idx)),
         }
 
         result = {
             "n_cells": n,
             "computed_on_demand": computed,
+            "has_mt": has_mt,
             "metrics": metrics,
             "scatter": scatter,
         }

@@ -188,8 +188,13 @@ async def differential_expression(
 
     mask = np.zeros(n, dtype=bool)
     mask[idx] = True
-    work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
-    genes = _wilcoxon(work, mask, ~mask, dataset_id)
+
+    def _run() -> list[DEGene]:
+        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
+        return _wilcoxon(work, mask, ~mask, dataset_id)
+
+    # Seconds on a large dataset: in a worker thread, so the server keeps answering.
+    genes = await asyncio.to_thread(_run)
     return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=genes)
 
 
@@ -236,9 +241,13 @@ async def differential_expression_compare(
 
     # Subset before copying: only the compared cells are materialised.
     keep = mask_a | mask_b
-    sub = adata[keep]
-    work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
-    genes = _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id)
+
+    def _run() -> list[DEGene]:
+        sub = adata[keep]
+        work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
+        return _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id)
+
+    genes = await asyncio.to_thread(_run)
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
     key = body.replicate_key or _detect_replicate_key(
         obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b

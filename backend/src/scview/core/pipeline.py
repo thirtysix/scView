@@ -23,7 +23,7 @@ import scipy.sparse as sp
 
 from scview.core import provenance
 from scview.core.llm import chat_extra
-from scview.core.gene_filters import select_query_genes
+from scview.core.gene_filters import is_ribo_mito, select_query_genes
 from scview.core.geneset_sources import (
     ResolvedGeneSets,
     match_query_case,
@@ -474,12 +474,21 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
 
 def _run_embeddings(adata: ad.AnnData, params: PipelineParams) -> None:
     """Compute 2D and 3D UMAP embeddings."""
+    # sc.tl.umap hands umap-learn the neighbour graph without copying it, and
+    # umap-learn zeroes the graph's weakest edges in place. The saved graph was
+    # then not the one the clustering ran on: re-clustering it (the resolution
+    # sweep, "Keep this one") gave 11 clusters on Kang where the pipeline's had 10.
+    key = (adata.uns.get("neighbors") or {}).get("connectivities_key", "connectivities")
+    graph = adata.obsp[key].copy() if key in adata.obsp else None
+
     # 3D UMAP first (stored temporarily in X_umap, then moved)
     sc.tl.umap(adata, min_dist=params.umap_min_dist, n_components=3)
     adata.obsm["X_umap_3d"] = adata.obsm["X_umap"].copy()
 
     # 2D UMAP (overwrites X_umap)
     sc.tl.umap(adata, min_dist=params.umap_min_dist, n_components=2)
+    if graph is not None:
+        adata.obsp[key] = graph
     logger.info("UMAP computed: 2D and 3D (min_dist=%.2f)", params.umap_min_dist)
 
 
@@ -846,7 +855,8 @@ def _parse_cluster_labels(raw: str, clusters: list[str]) -> dict[str, str]:
                     out[c] = label
                     break
     if not out:  # fall back to positional zip if the model ignored the id format
-        labels = [ln.strip().split(":", 1)[-1].strip() for ln in raw.splitlines() if ln.strip()]
+        labels = [ln.strip().split(":", 1)[-1].strip() for ln in raw.splitlines()
+                  if ln.strip() and not ln.strip().lower().startswith("tissue:")]
         out = {str(c): lab for c, lab in zip(clusters, labels)}
     return out
 
@@ -859,7 +869,13 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     """
     if not groupby:
         raise ValueError("LLM-from-markers annotation needs a clustering; run clustering first.")
-    marker_map = _top_markers_per_group(adata, groupby, n=15)
+    # Ribosomal and mitochondrial genes say nothing about cell type, yet they can
+    # fill a large cluster's whole top list (Kang's main T-cell cluster: 15 of 15
+    # were RPS/RPL, and the model called it "Ribosomal cells").
+    marker_map = {
+        g: [x for x in genes if not is_ribo_mito(x)][:20]
+        for g, genes in _top_markers_per_group(adata, groupby, n=60).items()
+    }
     if not marker_map:
         raise ValueError(f"No marker genes available for '{groupby}'.")
 
@@ -873,14 +889,9 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
 
     from openai import OpenAI
 
-    tissue = f"{params.annotation_tissue.strip()} " if params.annotation_tissue.strip() else ""
+    hint = params.annotation_tissue.strip()
     listing = "\n".join(f"{g}: {', '.join(genes)}" for g, genes in marker_map.items())
-    prompt = (
-        "You are an expert in single-cell RNA-seq. For each cluster below, identify the most likely "
-        f"cell type of these {tissue}cells from its top marker genes. Output exactly one line per "
-        "cluster as 'cluster_id: cell type', using a concise standard cell-type name (a mixture is "
-        "allowed). Do not add any other commentary.\n\nClusters and marker genes:\n" + listing
-    )
+    prompt = _annotation_prompt(listing, hint)
     client = OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
     resp = client.chat.completions.create(
         model=model,
@@ -890,17 +901,61 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         max_tokens=800,
     )
     raw = resp.choices[0].message.content or ""
+    tissue = _parse_tissue_line(raw) or hint
     labels = _parse_cluster_labels(raw, list(marker_map.keys()))
 
-    mapping = {str(g): labels.get(str(g), "Unknown") for g in marker_map}
+    mapping = {str(g): _label_case(labels.get(str(g), "Unknown")) for g in marker_map}
     adata.obs[target] = (
         adata.obs[groupby].astype(str).map(lambda g: mapping.get(g, "Unknown")).astype("category")
     )
     adata.uns[f"{target}_llm_mapping"] = mapping
+    if tissue:
+        adata.uns[f"{target}_llm_tissue"] = tissue
     logger.info(
-        "LLM annotation: %d clusters -> obs['%s'] (model=%s, groupby=%s)",
-        len(mapping), target, model, groupby,
+        "LLM annotation: %d clusters -> obs['%s'] (model=%s, groupby=%s, tissue=%s)",
+        len(mapping), target, model, groupby, tissue or "?",
     )
+
+
+def _annotation_prompt(listing: str, tissue_hint: str = "") -> str:
+    """The marker-based annotation prompt.
+
+    The tissue comes first, from every cluster together (or the user's hint), so
+    cells are named as they occur there. Without it, blood monocytes (S100A8, LYZ)
+    were called "macrophages" and plasmacytoid DCs (JCHAIN, IRF7) "plasma cells".
+    """
+    tissue = (
+        f"These cells come from {tissue_hint}. Start with the line 'tissue: {tissue_hint}'."
+        if tissue_hint else
+        "First infer the tissue or sample type from all the clusters together, and write it "
+        "as the first line, 'tissue: <tissue>'."
+    )
+    return (
+        "You are an expert in single-cell RNA-seq. " + tissue + " Then, for each cluster, "
+        "identify the most likely cell type from its top marker genes, naming cells as they "
+        "occur in that tissue: in blood, CD14/LYZ/S100A8 cells are monocytes, not macrophages. "
+        "Decide by lineage-defining genes when markers overlap: CD3D/CD3E/CD8A mean T cells "
+        "even with NKG7/GZMB; plasmacytoid dendritic cells (LILRA4, IL3RA, CLEC4C, TCF4, IRF7) "
+        "are not plasma cells (MZB1, XBP1, SDC1 with high immunoglobulin genes), though both "
+        "express JCHAIN. If a cluster shows two lineages, name the mixture (e.g. "
+        "'NK cells / CD8+ T cells'). Output one line per cluster as 'cluster_id: cell type', "
+        "with concise standard cell-type names, and nothing else.\n\n"
+        "Clusters and marker genes:\n" + listing
+    )
+
+
+def _parse_tissue_line(raw: str) -> str:
+    for line in raw.splitlines():
+        head, _, rest = line.strip().lstrip("-*# ").partition(":")
+        if head.strip().lower() == "tissue" and rest.strip():
+            return rest.strip().rstrip(".")
+    return ""
+
+
+def _label_case(label: str) -> str:
+    """Sentence case for labels the model wrote in lower case ("macrophages" and
+    "Macrophages" came back on different runs); "pDC" and "CD8+ T" are kept."""
+    return label[:1].upper() + label[1:] if label[:1].islower() and not label[1:2].isupper() else label
 
 
 # Curated marker sets for the offline 'marker_score' method (common PBMC/immune plus
@@ -1274,14 +1329,17 @@ def run_pipeline_streamed(
                 t = threading.Thread(target=_run_in_thread, daemon=True)
                 t.start()
 
-                # Drain substep events from the queue while thread runs
-                while True:
-                    item = q.get()
-                    if item is _SENTINEL:
-                        break
-                    yield ("substep", {"step": step_name, **item})
-
-                t.join()
+                # Drain substep events from the queue while thread runs. If the
+                # consumer stops at a substep, still wait for the step's thread:
+                # whoever runs this generator owns the dataset until it returns.
+                try:
+                    while True:
+                        item = q.get()
+                        if item is _SENTINEL:
+                            break
+                        yield ("substep", {"step": step_name, **item})
+                finally:
+                    t.join()
                 if exc_holder:
                     raise exc_holder[0]
                 ret = ret_holder[0]

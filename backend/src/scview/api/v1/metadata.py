@@ -1,5 +1,7 @@
 """Metadata endpoints – obs column info, values, and summaries."""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -7,6 +9,7 @@ from pydantic import BaseModel
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import series_to_arrow_ipc
+from scview.core.obs_writes import dataset_lock, write_derived
 from scview.core.uns_keys import enrichment_key, markers_key
 
 router = APIRouter()
@@ -178,37 +181,53 @@ async def rename_obs_category(
     Persists to the derived layer, never the original upload. If the new label already
     exists, the two categories are merged.
     """
-    adaptor = await dm.get_or_load_dataset(dataset_id)
-    if adaptor is None:
-        raise HTTPException(status_code=404, detail="Dataset not found.")
     new = body.new.strip()
     if not new:
         raise HTTPException(status_code=400, detail="New label must not be empty.")
 
-    adata = adaptor.adata
-    if getattr(adata, "isbacked", False):
-        adata = adata.to_memory()
-    if column not in adata.obs.columns:
-        raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
-    col = adata.obs[column]
-    if col.dtype.name != "category":
-        col = col.astype("category")
-    cats = list(col.cat.categories)
-    if body.old not in cats:
-        raise HTTPException(status_code=404, detail=f"'{body.old}' is not a category of '{column}'.")
-    merge = new in cats and new != body.old
-    if merge:
-        # Through the categories, not str: astype(str) made missing values "nan".
-        col = col.copy()
-        col[col == body.old] = new
-        adata.obs[column] = col.cat.remove_unused_categories()
-    else:
-        adata.obs[column] = col.cat.rename_categories({body.old: new})
-    _follow_rename(adata, column, body.old, new, merge)
+    # One edit of the dataset's file at a time (markers, labels, a run).
+    async with dataset_lock(dataset_id):
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = getattr(adaptor.adata, "isbacked", False)
 
-    output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-    adata.write_h5ad(output_path)
-    # Reload so subsequent reads see the rename.
-    dm.evict(dataset_id)
-    await dm.load_dataset(dataset_id)
+        def _run() -> None:
+            adata = adaptor.adata.to_memory() if backed else adaptor.adata
+            if column not in adata.obs.columns:
+                raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
+            col = adata.obs[column]
+            if col.dtype.name != "category":
+                col = col.astype("category")
+            cats = list(col.cat.categories)
+            if body.old not in cats:
+                raise HTTPException(
+                    status_code=404, detail=f"'{body.old}' is not a category of '{column}'."
+                )
+            merge = new in cats and new != body.old
+            if merge:
+                # Through the categories, not str: astype(str) made missing values "nan".
+                col = col.copy()
+                col[col == body.old] = new
+                adata.obs[column] = col.cat.remove_unused_categories()
+            else:
+                adata.obs[column] = col.cat.rename_categories({body.old: new})
+            _follow_rename(adata, column, body.old, new, merge)
+            # A full write (markers are edited in place), beside the file then swapped in.
+            write_derived(adata, output_path)
+
+        try:
+            # Markers may be recomputed on a merge: seconds, so in a worker thread.
+            await asyncio.to_thread(_run)
+        except HTTPException:
+            raise  # raised before anything changed
+        except Exception as exc:
+            dm.evict(dataset_id)  # may hold a rename that was never saved
+            raise HTTPException(status_code=500, detail=f"Could not save the rename: {exc!s}")
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
     return {"column": column, "old": body.old, "new": new}

@@ -23,6 +23,8 @@ interface QcMetric {
 interface QcResponse {
   n_cells: number;
   computed_on_demand: boolean;
+  /** False when the dataset has no MT- genes: % mito can't be measured (older backends omit it). */
+  has_mt?: boolean;
   metrics: Record<string, QcMetric>;
   scatter: {
     x: number[];
@@ -109,8 +111,13 @@ function HistCard({ label, metric }: { label: string; metric: QcMetric }) {
 
 function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
   const colormapName = useSettingsStore((s) => s.continuousColormap);
+  // No colour when the dataset has no MT- genes: every cell would be "0 %".
+  const byMito = scatter.color.length > 0;
   return (
-    <Panel title="Counts vs. genes per cell (colour = % mito)" className="h-[380px]">
+    <Panel
+      title={byMito ? "Counts vs. genes per cell (colour = % mito)" : "Counts vs. genes per cell"}
+      className="h-[380px]"
+    >
       <Plot
         data={[
           {
@@ -118,14 +125,16 @@ function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
             mode: "markers",
             x: scatter.x,
             y: scatter.y,
-            marker: {
-              size: 3,
-              color: scatter.color,
-              colorscale: plotlyColorscale(colormapName),
-              showscale: true,
-              opacity: 0.55,
-              colorbar: { title: { text: "% mito", font: { size: 9 } }, thickness: 8, len: 0.85 },
-            },
+            marker: byMito
+              ? {
+                  size: 3,
+                  color: scatter.color,
+                  colorscale: plotlyColorscale(colormapName),
+                  showscale: true,
+                  opacity: 0.55,
+                  colorbar: { title: { text: "% mito", font: { size: 9 } }, thickness: 8, len: 0.85 },
+                }
+              : { size: 3, color: "#64748b", opacity: 0.55 },
             hovertemplate: "counts %{x}<br>genes %{y}<extra></extra>",
           },
         ]}
@@ -221,6 +230,12 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
             : ""}
         </span>
       </div>
+      {data.has_mt === false && (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          No mitochondrial (MT-) genes in this dataset, so % mito can&apos;t be measured: a 0 %
+          reading would mean nothing, and a mito filter has nothing to remove.
+        </p>
+      )}
       <PlotGrid minTile={300} rowHeight={240}>
         {metricKeys.map((k) => (
           <HistCard key={k} label={METRIC_LABELS[k] ?? k} metric={data.metrics[k]!} />

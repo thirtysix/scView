@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from scview.core.dataset_manager import DatasetManager
+from scview.core.obs_writes import dataset_lock
 from scview.core.trajectory import TrajectoryError, compute_dpt, graph_source, read_params
 from scview.dependencies import get_dataset_manager
 
@@ -67,6 +68,12 @@ async def compute_pseudotime(
 ):
     """Compute diffusion pseudotime rooted in one group, save it as an obs
     column of the dataset's derived file, and reload the dataset."""
+    # One edit of the derived file at a time (labels, a kept resolution, a run).
+    async with dataset_lock(dataset_id):
+        return await _compute_pseudotime(dataset_id, body, dm)
+
+
+async def _compute_pseudotime(dataset_id: str, body: DPTRequest, dm: DatasetManager):
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
