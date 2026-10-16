@@ -355,6 +355,10 @@ def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> None:
     # Store the full data before subsetting to HVGs
     _keep_raw_counts(adata)
     adata.raw = adata
+    # .raw shares a dense X rather than copying it, and scaling works in place:
+    # without a copy .raw would hold the z-scores too (markers then read them).
+    if not sp.issparse(adata.X):
+        adata.X = adata.X.copy()
     sc.pp.scale(adata, max_value=10)
     logger.info("Scaled expression (max_value=10)")
 

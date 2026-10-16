@@ -68,3 +68,15 @@ def test_plain_counts_upload_unchanged():
     out, res = run_pipeline(a, _steps("normalization", "log_transform"), PipelineParams(n_comps=10, n_top_genes=40))
     assert res.errors == {}
     np.testing.assert_array_equal(np.asarray(out.layers["counts"].todense()), expected)
+
+
+def test_scaling_a_dense_x_leaves_raw_log_normalised():
+    # anndata's .raw shares a dense X, and scaling works in place: .raw used to
+    # end up scaled too, so markers read z-scores (paul15: ~95% NaN fold changes).
+    a = _counts()
+    a.X = a.X.toarray()
+    out, res = run_pipeline(a, ["normalization", "log_transform", "scaling"], PipelineParams())
+    assert res.errors == {}
+    raw = out.raw.X.toarray() if sp.issparse(out.raw.X) else np.asarray(out.raw.X)
+    assert raw.min() >= 0
+    assert np.asarray(out.X).min() < 0
