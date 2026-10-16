@@ -105,3 +105,29 @@ describe("JointSummary", () => {
     expect(screen.queryByText("After correction")).toBeNull();
   });
 });
+
+describe("JointSummary integration metrics", () => {
+  beforeEach(() => {
+    getJointSummary.mockReset();
+    apiFetch.mockReset();
+    apiFetch.mockResolvedValue({ row_values: [], col_values: [], counts: [] });
+  });
+
+  it("shows iLISI, cell-type conservation and an over-correction warning", async () => {
+    getJointSummary.mockResolvedValue(joint({
+      ...KANG,
+      ilisi: { ideal: 2, uncorrected: 1.2, corrected: 1.8 },
+      conservation: {
+        label_column: "cluster", kind: "shared", uncorrected: 0.9, corrected: 0.6,
+        labels: [{ label: "CD14 Mono", n_scored: 3000, uncorrected: 0.95, corrected: 0.4 }],
+      },
+      overcorrection: "After correction a cell's nearest neighbours share its 'cluster' label 60% of the time.",
+    }));
+    await act(async () => {
+      render(<JointSummary datasetId="j" title="Checks" />);
+    });
+    expect(screen.getByText(/iLISI/)).toBeTruthy();
+    expect(screen.getByText(/Cell types kept apart/i)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("60% of the time");
+  });
+});

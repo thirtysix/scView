@@ -65,6 +65,18 @@ export interface BatchMixing {
   uncorrected: number | null;
   corrected: number | null;
   datasets: BatchMixingDataset[];
+  /** Effective number of datasets among a cell's neighbours (1 = unmixed); older scores lack it. */
+  ilisi?: { ideal: number; uncorrected: number | null; corrected: number | null };
+  /** Bio-conservation: share of neighbours with the cell's own label, before and after. */
+  conservation?: {
+    label_column: string;
+    kind: "shared" | "within_dataset";
+    uncorrected: number | null;
+    corrected: number | null;
+    labels: { label: string; n_scored: number; uncorrected: number; corrected: number }[];
+  } | null;
+  /** Set when correction cost cell-type separation. */
+  overcorrection?: string | null;
 }
 
 export interface JointSummary {

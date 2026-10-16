@@ -289,6 +289,14 @@ def build_facts(adaptor) -> QCFacts:
         )))
         if mixing["corrected"] < 0.5 * mixing["ideal"]:
             concern("qc:mixing", "Batches are still poorly mixed after correction.")
+        cons = mixing.get("conservation") or {}
+        if cons.get("uncorrected") is not None and cons.get("corrected") is not None:
+            f.overview.append(_fact("qc:conservation", (
+                f"Neighbours sharing a cell's '{cons['label_column']}' label: "
+                f"{cons['uncorrected']:.2f} before and {cons['corrected']:.2f} after correction."
+            )))
+        if mixing.get("overcorrection"):
+            concern("qc:conservation", mixing["overcorrection"])
 
     # --- Per-cluster QC flags ---
     try:
