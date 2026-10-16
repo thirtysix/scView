@@ -93,11 +93,12 @@ reference datasets.
   Major lineages recovered; misses are the expected ones (rare Mk; fine T-subtype splits) — i.e. a
   good *reviewable* first pass, not ground truth.
 
-### LLM-from-markers (DeepInfra, Llama-3.1-8B, top-10 markers/cluster)
-Zero local footprint; recovers many (B → B cells, CD4 Memory → CD4+ T, CD4 Naive → Naive T, CD8 T →
-CD8 T, CD16 Mono → Monocytes, DC → Dendritic cells, Eryth → Erythrocytes) but noisier than CellTypist
-with an 8B model (Mk → Neutrophils, NK → Cytotoxic T, pDC → Cytotoxic T). The GPTCelltype paper used
-GPT-4; accuracy scales with model size — offer a "stronger model" toggle.
+### LLM-from-markers (DeepInfra, top-15 markers/cluster)
+Zero local footprint. Measured 2026-10-15 on Kang with the cluster names replaced by numbers (so the
+model can't read the answer off the name), tissue "human PBMC": `DeepSeek-V4.1-Flash` (the default)
+and `DeepSeek-V4-Flash-0731` each got ~12 of 13 clusters right (V4.1: pDC → plasma cells; 0731:
+CD16 Mono → NK cells). The previous default, Llama-3.1-8B, got ~6 (CD14 Mono → Eosinophil, Mk →
+Monocyte, NK → Cytotoxic T). Still a reviewable first pass, not ground truth.
 
 ## Integration design
 

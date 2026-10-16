@@ -43,7 +43,7 @@ beats inference.** This is what ties the assistant to the provenance feature: th
 what scView *did*, and only infers what it *didn't observe*.
 
 ### 1b. The advisor (LLM) — `backend/src/scview/core/llm_advisor.py`
-- **Model:** `meta-llama/Meta-Llama-3.1-8B-Instruct` via **DeepInfra** (`https://api.deepinfra.com/v1/openai`,
+- **Model:** `RAG_CHAT_MODEL` (default `deepseek-ai/DeepSeek-V4.1-Flash`, thinking off) via **DeepInfra** (`https://api.deepinfra.com/v1/openai`,
   OpenAI-compatible `AsyncOpenAI` client), `temperature=0.3`, `max_tokens=2048`.
 - **Input:** a system prompt (role = "expert single-cell bioinformatician"; the 12 nameable steps +
   their params; **dataset-size parameter guidance** — <5k / 5k–50k / >50k cells) and a user message

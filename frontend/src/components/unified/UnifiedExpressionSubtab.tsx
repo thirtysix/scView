@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Dna } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 
@@ -34,6 +35,8 @@ export function UnifiedExpressionSubtab({
   }, [dataset]);
 
   const expressionLayers = dataset?.expression_layers ?? [];
+  const expressionLayer = useSettingsStore((s) => s.expressionLayer);
+  const setExpressionLayer = useSettingsStore((s) => s.setExpressionLayer);
 
   if (!dataset || !datasetId) {
     return <div className="text-xs text-slate-400">No dataset loaded.</div>;
@@ -78,7 +81,12 @@ export function UnifiedExpressionSubtab({
           <label className="mb-1 block text-[11px] font-medium text-slate-500">
             Expression layer
           </label>
-          <select className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700">
+          {/* The same setting as the toolbar's Layer menu. */}
+          <select
+            value={expressionLayer}
+            onChange={(e) => setExpressionLayer(e.target.value)}
+            className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700"
+          >
             {expressionLayers.map((l) => (
               <option key={l.key} value={l.key}>{l.label}</option>
             ))}

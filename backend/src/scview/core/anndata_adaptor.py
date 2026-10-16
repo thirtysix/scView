@@ -9,7 +9,53 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from scview.core.ora_background import resolve_markers_key
+
 logger = logging.getLogger(__name__)
+
+
+def _dense_rows(block) -> np.ndarray:
+    return block.toarray() if hasattr(block, "toarray") else np.asarray(block)
+
+
+def _looks_like_counts(M) -> bool:
+    """Non-negative integers in the first rows: raw counts, not log or scaled values."""
+    sample = _dense_rows(M[: min(200, M.shape[0])])
+    return sample.size == 0 or (sample.min() >= 0 and np.allclose(sample, np.round(sample)))
+
+
+def _counts_matrix(adata):
+    """The best available counts matrix and its gene names: layers['counts'], .raw, X."""
+    candidates = []
+    if "counts" in adata.layers:
+        candidates.append((adata.layers["counts"], adata.var_names))
+    if adata.raw is not None:
+        candidates.append((adata.raw.X, adata.raw.var_names))
+    candidates.append((adata.X, adata.var_names))
+    for M, names in candidates:
+        try:
+            if _looks_like_counts(M):
+                return M, names
+        except Exception:  # an unreadable layer: try the next one
+            continue
+    return adata.X, adata.var_names
+
+
+def _row_stats(M, mt_mask: np.ndarray, chunk: int = 20000):
+    """Per-cell totals, detected genes and mito counts, read in row chunks so a
+    backed (on-disk) matrix, which has no .sum, works too."""
+    tc, ng, mt = [], [], []
+    for i in range(0, M.shape[0], chunk):
+        block = M[i:i + chunk]
+        if not hasattr(block, "toarray"):
+            block = np.asarray(block)
+        tc.append(np.asarray(block.sum(axis=1)).ravel())
+        ng.append(np.asarray((block > 0).sum(axis=1)).ravel())
+        if mt_mask.any():
+            mt.append(np.asarray(block[:, mt_mask].sum(axis=1)).ravel())
+    cat = lambda parts: np.concatenate(parts).astype(np.float64) if parts else np.zeros(0)  # noqa: E731
+    total = cat(tc)
+    return total, cat(ng), (cat(mt) if mt else np.zeros_like(total))
 
 
 class AnnDataAdaptor:
@@ -87,6 +133,10 @@ class AnnDataAdaptor:
                 # branch and omit values beyond the cap.
                 if len(cats) <= 100:
                     info["values"] = [str(c) for c in cats]
+            elif pd.api.types.is_bool_dtype(series):
+                # A two-level categorical; the colour codes are int(value), see embeddings.
+                info["n_unique"] = int(series.nunique())
+                info["values"] = ["False", "True"]
             elif series.dtype == object:
                 unique = series.unique()
                 info["n_unique"] = len(unique)
@@ -156,23 +206,28 @@ class AnnDataAdaptor:
                 return np.asarray(obs[name].to_numpy(), dtype=np.float64)
             return None
 
-        total_counts = _col("total_counts")
-        n_genes = _col("n_genes_by_counts")
-        if n_genes is None:
-            n_genes = _col("n_genes")
-        pct_mt = _col("pct_counts_mt")
+        def _first(*names: str) -> np.ndarray | None:
+            for n in names:
+                v = _col(n)
+                if v is not None:
+                    return v
+            return None
+
+        # scanpy, older scanpy / Kang, and Seurat names for the same metrics.
+        total_counts = _first("total_counts", "n_counts", "nCount_RNA")
+        n_genes = _first("n_genes_by_counts", "n_genes", "nFeature_RNA")
+        pct_mt = _first("pct_counts_mt", "percent.mt", "pct_counts_mito", "percent_mito")
 
         if total_counts is None or n_genes is None or pct_mt is None:
             computed = True
-            X = adata.X
-            tc = np.asarray(X.sum(axis=1)).ravel().astype(np.float64)
-            ng = np.asarray((X > 0).sum(axis=1)).ravel().astype(np.float64)
-            var_names = adata.var_names
+            # Counts, not whatever X holds: summing a scaled X gave negative
+            # "counts per cell".
+            M, var_names = _counts_matrix(adata)
             mt_mask = np.asarray(
                 var_names.str.startswith("MT-") | var_names.str.startswith("mt-")
             )
+            tc, ng, mt_counts = _row_stats(M, mt_mask)
             if mt_mask.any():
-                mt_counts = np.asarray(X[:, mt_mask].sum(axis=1)).ravel().astype(np.float64)
                 with np.errstate(divide="ignore", invalid="ignore"):
                     pm = np.where(tc > 0, mt_counts / tc * 100.0, 0.0)
             else:
@@ -344,11 +399,15 @@ class AnnDataAdaptor:
 
         # Extract expression data — handle scipy sparse, backed sparse datasets,
         # and dense arrays via duck typing
-        sliced = X[:, indices]
+        # Read the columns in increasing order, once each (an on-disk h5py matrix
+        # rejects anything else), then put them back in the requested order.
+        order, inverse = np.unique(np.asarray(indices), return_inverse=True)
+        sliced = X[:, order]
         if hasattr(sliced, 'toarray'):
             data = sliced.toarray()
         else:
             data = np.asarray(sliced)
+        data = data[:, inverse]
 
         return np.nan_to_num(data.astype(np.float32), nan=0.0)
 
@@ -425,7 +484,7 @@ class AnnDataAdaptor:
 
     def has_markers(self, column: str | None = None) -> bool:
         if column:
-            return f"rank_genes_groups__{column}" in self.adata.uns
+            return resolve_markers_key(self.adata.uns, column) is not None
         return "rank_genes_groups" in self.adata.uns or any(
             k.startswith("rank_genes_groups__") for k in self.adata.uns
         )
@@ -459,12 +518,9 @@ class AnnDataAdaptor:
 
         Returns a DataFrame with columns: group, gene, logfoldchange, pval, pval_adj, pct.
         """
-        if column:
-            uns_key = f"rank_genes_groups__{column}"
-        else:
-            uns_key = "rank_genes_groups"
-
-        if uns_key not in self.adata.uns:
+        # A file's own markers are often under the bare key with params.groupby set.
+        uns_key = resolve_markers_key(self.adata.uns, column or "")
+        if uns_key is None:
             return None
 
         rgg = self.adata.uns[uns_key]

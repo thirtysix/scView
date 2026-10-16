@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { Loader2, Download, ArrowUpDown, ArrowUp, ArrowDown, Sparkles } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -139,22 +139,32 @@ export function UnifiedEnrichmentSubtab({
   // Build the collapsed program view. Separate from the term table so changing
   // granularity does not re-run the enrichment itself (the backend serves it from
   // cache when the parameters match).
+  // Results belong to one group: clear them when the group changes, and drop a
+  // response that arrives after the user has moved on to another group.
+  const groupRef = useRef(selectedGroup);
+  groupRef.current = selectedGroup;
+  useEffect(() => {
+    setResults([]);
+    setNetwork(null);
+    setNetworkError(null);
+    setComputeError(null);
+  }, [selectedGroup]);
+
   const buildNetwork = useCallback(
     async (res: number) => {
       if (!datasetId || !groupByColumn || !selectedGroup) return;
       setIsBuildingNetwork(true);
       setNetworkError(null);
       try {
-        setNetwork(
-          await fetchEnrichmentNetwork(datasetId, {
-            column: groupByColumn,
-            group: selectedGroup,
-            n_genes: topN,
-            collections: Array.from(selectedCollections),
-            resolution: res,
-            excludeRiboMito,
-          }),
-        );
+        const net = await fetchEnrichmentNetwork(datasetId, {
+          column: groupByColumn,
+          group: selectedGroup,
+          n_genes: topN,
+          collections: Array.from(selectedCollections),
+          resolution: res,
+          excludeRiboMito,
+        });
+        if (groupRef.current === selectedGroup) setNetwork(net);
       } catch (err) {
         setNetworkError(err instanceof Error ? err.message : String(err));
         setNetwork(null);
@@ -204,6 +214,7 @@ export function UnifiedEnrichmentSubtab({
           }),
         },
       );
+      if (groupRef.current !== selectedGroup) return;
       setResults(data.results ?? []);
       void buildNetwork(resolution);
     } catch (err) {

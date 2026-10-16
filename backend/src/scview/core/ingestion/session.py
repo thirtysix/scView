@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from scview.core import provenance
+from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion.bundling import UnitFormat, build_bundle
 from scview.core.ingestion.loading import IngestLoadError, load_unit
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
@@ -73,9 +74,11 @@ class IngestSessionManager:
         return sid
 
     def exists(self, sid: str) -> bool:
-        return self._session_dir(sid).is_dir()
+        return is_safe_id(sid) and self._session_dir(sid).is_dir()
 
     def discard(self, sid: str) -> bool:
+        if not is_safe_id(sid):
+            return False
         d = self._session_dir(sid)
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
@@ -280,6 +283,8 @@ class IngestSessionManager:
             json.dump(meta, fh, indent=2)
 
     def _session_dir(self, sid: str) -> Path:
+        if not is_safe_id(sid):
+            raise ValueError(f"Invalid session id: {sid!r}")
         return self.ingest_dir / sid
 
     def _session_file(self, sid: str) -> Path:

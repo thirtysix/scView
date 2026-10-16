@@ -18,7 +18,7 @@ export function AssistantPanel() {
         </div>
       </div>
       <div className="min-h-0 flex-1">
-        <AssistantChat />
+        <AssistantChat surface="panel" />
       </div>
     </div>
   );

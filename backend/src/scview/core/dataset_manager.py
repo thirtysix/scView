@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,15 @@ from typing import Any
 from scview.core.anndata_adaptor import AnnDataAdaptor
 
 logger = logging.getLogger(__name__)
+
+# Dataset and ingest-session ids are generated here (uuid4, hex or with dashes).
+# Anything else, e.g. ".." arriving as %2E%2E in a URL, must never become a path.
+_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
+def is_safe_id(value: str) -> bool:
+    """True for an id that is safe to use as one path component."""
+    return bool(_ID_RE.fullmatch(value or ""))
 
 
 class DatasetManager:
@@ -123,6 +133,8 @@ class DatasetManager:
         return removed
 
     def get_dataset_info(self, dataset_id: str) -> dict[str, Any] | None:
+        if not is_safe_id(dataset_id):
+            return None
         meta_path = self.data_dir / "uploads" / dataset_id / "metadata.json"
         if not meta_path.exists():
             return None
@@ -131,6 +143,8 @@ class DatasetManager:
 
     def update_dataset_metadata(self, dataset_id: str, updates: dict[str, Any]) -> None:
         """Merge updates into the metadata sidecar JSON."""
+        if not is_safe_id(dataset_id):
+            return
         meta_path = self.data_dir / "uploads" / dataset_id / "metadata.json"
         if not meta_path.exists():
             return
@@ -144,7 +158,22 @@ class DatasetManager:
     # Removal
     # ------------------------------------------------------------------
 
+    def evict(self, dataset_id: str) -> None:
+        """Drop the cached adaptor so the next access reloads from disk.
+
+        Pipeline steps change the cached AnnData in place and only write the file
+        at the end, so after a failed or abandoned run the cache can hold changes
+        that were never saved; re-running steps on it would apply them twice.
+        """
+        adaptor = self._datasets.pop(dataset_id, None)
+        if adaptor:
+            adaptor.close()
+        if dataset_id in self._load_order:
+            self._load_order.remove(dataset_id)
+
     def remove_dataset(self, dataset_id: str) -> bool:
+        if not is_safe_id(dataset_id):
+            return False
         adaptor = self._datasets.pop(dataset_id, None)
         if adaptor:
             adaptor.close()
@@ -174,6 +203,8 @@ class DatasetManager:
 
     def _resolve_h5ad(self, dataset_id: str) -> str | None:
         """Find the active .h5ad (derived > ingested > converted > uploaded)."""
+        if not is_safe_id(dataset_id):
+            return None
         for subdir in self._H5AD_SUBDIRS:
             d = self.data_dir / subdir / dataset_id
             if d.exists():
@@ -185,6 +216,8 @@ class DatasetManager:
     def h5ad_candidates(self, dataset_id: str) -> list[str]:
         """Every .h5ad stored for a dataset, in the same precedence as
         :meth:`_resolve_h5ad` (active file first, then its sources)."""
+        if not is_safe_id(dataset_id):
+            return []
         found: list[str] = []
         for subdir in self._H5AD_SUBDIRS:
             d = self.data_dir / subdir / dataset_id
@@ -201,6 +234,8 @@ class DatasetManager:
         run can never clobber an irreplaceable source file. Re-running the
         pipeline overwrites only the (regenerable) derived file.
         """
+        if not is_safe_id(dataset_id):
+            raise ValueError(f"Invalid dataset id: {dataset_id!r}")
         stem = Path(source_path).stem
         d = self.data_dir / "derived" / dataset_id
         d.mkdir(parents=True, exist_ok=True)

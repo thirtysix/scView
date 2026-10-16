@@ -62,6 +62,8 @@ export function mapValueToColor(
   min: number,
   max: number
 ): [number, number, number, number] {
+  // A missing value (e.g. pseudotime for a cell the trajectory never reached).
+  if (!Number.isFinite(value)) return [200, 200, 200, 255];
   const t = max > min ? (value - min) / (max - min) : 0;
   const [r, g, b] = viridisColor(Math.max(0, Math.min(1, t)));
   return [r, g, b, 255];

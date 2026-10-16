@@ -23,6 +23,8 @@ import re
 
 from pydantic import BaseModel
 
+from scview.core.llm import chat_extra
+
 logger = logging.getLogger(__name__)
 
 SOURCES = ("app", "data", "tutorials", "literature")
@@ -182,6 +184,7 @@ async def classify_intent(
         client = AsyncOpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
         resp = await client.chat.completions.create(
             model=model,
+            **chat_extra(model),
             messages=[
                 {"role": "system", "content": _CLASSIFY_SYSTEM},
                 {"role": "user", "content": f'(current tab: "{panel}")\n{query}'},

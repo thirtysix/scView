@@ -75,7 +75,10 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
             groups=["selection"],
             reference="rest",
             method="wilcoxon",
-            n_genes=work.n_vars,
+            # Every tested gene: the test runs on .raw when present, which can hold
+            # more genes than X (an HVG subset); capping at X's width kept only the
+            # top-scoring, i.e. up-regulated, genes.
+            n_genes=work.raw.n_vars if work.raw is not None else work.n_vars,
         )
         rgg = work.uns["rank_genes_groups"]
         names = rgg["names"]["selection"]

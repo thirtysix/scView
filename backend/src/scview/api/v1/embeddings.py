@@ -1,6 +1,7 @@
 """Embedding endpoints – serve UMAP/tSNE/PCA coordinates as Arrow IPC."""
 
 import numpy as np
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
@@ -50,6 +51,10 @@ async def get_embedding(
             col = adaptor.get_obs_column(color_by)
             if hasattr(col, "cat") or col.dtype.name == "category":
                 color_values = col.cat.codes.values.astype(np.int32)
+            elif pd.api.types.is_bool_dtype(col):
+                # Fixed codes matching the listed values ["False", "True"]; the
+                # string branch below numbered them in order of first appearance.
+                color_values = np.where(col.isna(), -1, col.fillna(False).astype(int)).astype(np.int32)
             elif np.issubdtype(col.dtype, np.number):
                 color_values = col.values.astype(np.float32)
             else:

@@ -22,6 +22,7 @@ import scanpy as sc
 import scipy.sparse as sp
 
 from scview.core import provenance
+from scview.core.llm import chat_extra
 from scview.core.gene_filters import select_query_genes
 from scview.core.ora_background import write_meta
 
@@ -327,6 +328,9 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> None:
     """Run PCA."""
     n_comps = min(params.n_comps, adata.n_obs - 1, adata.n_vars - 1)
     sc.tl.pca(adata, n_comps=n_comps, svd_solver="arpack")
+    # A Harmony embedding of the previous PCA would otherwise still be picked up
+    # by the neighbour graph; the batch-correction step rebuilds it if it runs.
+    adata.obsm.pop("X_pca_harmony", None)
     logger.info("PCA: %d components", n_comps)
 
 
@@ -399,19 +403,14 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
     downstream steps (marker genes, violin groupby, etc.).
     """
     method = params.clustering_method
-    if method == "leiden":
-        sc.tl.leiden(adata, resolution=params.clustering_resolution)
-    else:
-        sc.tl.louvain(adata, resolution=params.clustering_resolution)
-
-    # Build custom column name to preserve the original
+    # Written straight to the scview_* column: scanpy's default key ("leiden" /
+    # "louvain") would overwrite a clustering the dataset came with.
     scview_col = f"scview_{method}_r{params.clustering_resolution}"
-    adata.obs[scview_col] = adata.obs[method].copy()
+    if method == "leiden":
+        sc.tl.leiden(adata, resolution=params.clustering_resolution, key_added=scview_col)
+    else:
+        sc.tl.louvain(adata, resolution=params.clustering_resolution, key_added=scview_col)
     adata.uns["scview_active_clustering"] = scview_col
-    # Drop scanpy's bare 'leiden'/'louvain' column — the named scview_* copy is canonical,
-    # so this avoids a redundant duplicate in the obs-column lists.
-    if method in adata.obs.columns and method != scview_col:
-        del adata.obs[method]
 
     n_clusters = adata.obs[scview_col].nunique()
     logger.info(
@@ -479,6 +478,7 @@ def _run_marker_genes(adata: ad.AnnData, params: PipelineParams, cb: SubstepCall
         sc.tl.rank_genes_groups(adata, groupby=col, method="wilcoxon", pts=True)
         # Store under namespaced key
         adata.uns[f"rank_genes_groups__{col}"] = adata.uns["rank_genes_groups"].copy()
+        drop_enrichment_cache(adata, col)
         computed += 1
 
     # Leave rank_genes_groups pointing to the active clustering for backward compat
@@ -748,8 +748,12 @@ def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 15) -> dict
     else:
         if adata.obs[groupby].dtype.name != "category":
             adata.obs[groupby] = adata.obs[groupby].astype(str).astype("category")
-        sc.tl.rank_genes_groups(adata, groupby=groupby, method="wilcoxon", n_genes=n)
-        rgg = adata.uns["rank_genes_groups"]
+        # Under the column's own key: the default rank_genes_groups follows the
+        # clustering, and the Marker Genes panel reads it.
+        sc.tl.rank_genes_groups(
+            adata, groupby=groupby, method="wilcoxon", pts=True, key_added=key
+        )
+        rgg = adata.uns[key]
     names = rgg["names"]
     groups = list(names.dtype.names) if hasattr(names.dtype, "names") else []
     return {g: [str(names[g][i]) for i in range(min(n, len(names[g])))] for g in groups}
@@ -810,6 +814,7 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     client = OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
     resp = client.chat.completions.create(
         model=model,
+        **chat_extra(model),
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_tokens=800,
@@ -918,6 +923,17 @@ def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None
     _markers_for_column(adata, target)
 
 
+def drop_enrichment_cache(adata: ad.AnnData, col: str) -> None:
+    """Forget cached enrichment for a column whose markers or groups changed.
+
+    The cache is keyed by column and group name only, so after re-annotation or
+    new markers a surviving label would otherwise be served its old result.
+    """
+    for prefix in (f"enrichment__{col}__", f"ora_meta__{col}__"):
+        for k in [k for k in adata.uns if isinstance(k, str) and k.startswith(prefix)]:
+            del adata.uns[k]
+
+
 def _markers_for_column(adata: ad.AnnData, col: str) -> None:
     """Store wilcoxon markers for one obs column under rank_genes_groups__{col}.
     Best effort: a failure is logged and leaves the column without markers."""
@@ -929,6 +945,7 @@ def _markers_for_column(adata: ad.AnnData, col: str) -> None:
         sc.tl.rank_genes_groups(
             adata, groupby=col, method="wilcoxon", pts=True, key_added=f"rank_genes_groups__{col}"
         )
+        drop_enrichment_cache(adata, col)
     except Exception as exc:
         logger.warning("Markers for '%s' failed: %s", col, exc)
 

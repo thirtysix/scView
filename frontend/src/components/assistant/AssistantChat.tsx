@@ -75,8 +75,18 @@ function currentViewContext(): ViewContext {
 // Per-dataset conversation threads survive reloads + dataset switches.
 const threadKey = (datasetId: string | null) => `scview.chat.v1.${datasetId ?? "__app__"}`;
 
-export function AssistantChat() {
+// Two chats can be mounted at once (the drawer and the AI Co-pilot panel). They
+// share one saved thread per dataset; this event tells the other one to reload it.
+const THREAD_EVENT = "scview-copilot-thread";
+
+/** `surface` says where this chat is mounted: a question queued by "ask about
+ *  this" is answered once, by the panel when it is open, else by the drawer. */
+export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "panel" }) {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
+  const instanceId = useRef(Math.random().toString(36));
+  // Bumped when the dataset changes, so an answer still streaming for the
+  // previous dataset doesn't write into the new dataset's thread.
+  const epoch = useRef(0);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -89,7 +99,7 @@ export function AssistantChat() {
 
   // Load this dataset's saved thread when the dataset changes (and on mount).
   const key = threadKey(datasetId);
-  useEffect(() => {
+  const loadThread = useCallback(() => {
     try {
       const raw = localStorage.getItem(key);
       setTurns(raw ? (JSON.parse(raw) as Turn[]) : []);
@@ -97,17 +107,37 @@ export function AssistantChat() {
       setTurns([]);
     }
   }, [key]);
+  useEffect(() => {
+    epoch.current += 1;
+    loadThread();
+  }, [loadThread]);
 
   // Persist the thread once idle (avoid hammering storage during streaming).
+  // Only on a real change, so two mounted chats don't keep reloading each other.
   useEffect(() => {
     if (busy) return;
     try {
-      if (turns.length) localStorage.setItem(key, JSON.stringify(turns));
+      const json = turns.length ? JSON.stringify(turns) : null;
+      if (json === localStorage.getItem(key)) return;
+      if (json) localStorage.setItem(key, json);
       else localStorage.removeItem(key);
+      window.dispatchEvent(
+        new CustomEvent(THREAD_EVENT, { detail: { key, source: instanceId.current } }),
+      );
     } catch {
       /* storage full / unavailable — non-fatal */
     }
   }, [turns, busy, key]);
+
+  // The other mounted chat saved the thread: show it here too.
+  useEffect(() => {
+    const onSaved = (e: Event) => {
+      const d = (e as CustomEvent<{ key: string; source: string }>).detail;
+      if (d.key === key && d.source !== instanceId.current && !busy) loadThread();
+    };
+    window.addEventListener(THREAD_EVENT, onSaved);
+    return () => window.removeEventListener(THREAD_EVENT, onSaved);
+  }, [key, busy, loadThread]);
 
   const clearChat = useCallback(() => {
     setTurns([]);
@@ -176,16 +206,22 @@ export function AssistantChat() {
   // An "ask about this" affordance elsewhere in the UI queues a question here.
   const pendingAsk = useViewStore((s) => s.pendingAsk);
   const clearPendingAsk = useViewStore((s) => s.clearPendingAsk);
+  const onCopilotPanel = useViewStore((s) => s.activePanel === "assistant");
+  const answersQueued = (surface === "panel") === onCopilotPanel;
   useEffect(() => {
-    if (!pendingAsk) return;
+    if (!pendingAsk || !answersQueued) return;
     clearPendingAsk();
     send(pendingAsk);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingAsk]);
+  }, [pendingAsk, answersQueued]);
 
   // Replace the last turn (the streaming assistant placeholder) via a mapper.
-  const patchLast = (fn: (t: Turn) => Turn) =>
+  // `runEpoch` is the epoch the request started in; a stale stream is dropped.
+  let runEpoch = epoch.current;
+  const patchLast = (fn: (t: Turn) => Turn) => {
+    if (runEpoch !== epoch.current) return;
     setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? fn(t) : t)));
+  };
 
   async function send(query: string) {
     const q = query.trim();
@@ -195,6 +231,7 @@ export function AssistantChat() {
     const vc = currentViewContext();
     // push the user turn + an empty assistant placeholder to stream into
     setTurns((prev) => [...prev, { role: "user", content: q }, { role: "assistant", content: "" }]);
+    runEpoch = epoch.current;
     setBusy(true);
     try {
       await assistantChatStream(datasetId, q, history, vc, {

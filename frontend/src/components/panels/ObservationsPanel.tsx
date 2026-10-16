@@ -3,6 +3,7 @@ import { Table2, Loader2, AlertCircle, MousePointerClick, Download, Sparkles } f
 import Plot from "@/components/plots/Plot";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { CATEGORICAL_COLORS } from "@/lib/colors";
@@ -126,6 +127,8 @@ export function ObservationsPanel() {
         setSelection(null);
       } else {
         setSelectedGroup(groupName);
+        // Colour by this column so Unified View can select the group's cells.
+        useSettingsStore.getState().setColorBy(primaryCol);
         setHighlight({ column: primaryCol, value: groupName });
         setSelection(null);
       }

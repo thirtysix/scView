@@ -23,6 +23,9 @@ services:
       - DATA_DIR=/data
       - CONVERTER_URL=http://converter:8001
       - MSIGDB_DIR=/msigdb
+      # The container runs as root, so bytecode written into the bind-mounted
+      # src/ and tests/ would land root-owned in the host checkout.
+      - PYTHONDONTWRITEBYTECODE=1
     depends_on:
       converter:
         condition: service_healthy

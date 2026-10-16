@@ -39,7 +39,9 @@ export const useViewStore = create<ViewState>((set) => ({
   toggleCopilot: () => set((s) => ({ copilotOpen: !s.copilotOpen })),
   setCopilotOpen: (open) => set({ copilotOpen: open }),
   setCopilotWidth: (width) => set({ copilotWidth: width }),
-  askCopilot: (question) => set({ copilotOpen: true, pendingAsk: question }),
+  // On the AI Co-pilot panel the panel's own chat answers; no drawer over it.
+  askCopilot: (question) =>
+    set((s) => ({ copilotOpen: s.activePanel === "assistant" ? s.copilotOpen : true, pendingAsk: question })),
   clearPendingAsk: () => set({ pendingAsk: null }),
   setMarkerView: (view) => set({ markerView: view }),
 }));
