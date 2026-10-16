@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from scview.core.assessor import assess_preprocessing
 from scview.core import cluster_qc, provenance
 from scview.core.llm import chat_extra
+from scview.core.species import detect_species
 from scview.core.uns_keys import enrichment_column
 
 logger = logging.getLogger(__name__)
@@ -172,7 +173,7 @@ def build_grounding_context(
     n_genes = adaptor.n_genes()
     embeddings = [e["name"] for e in adaptor.available_embeddings()]
     lines.append("## Dataset")
-    lines.append(f"- Cells: {n_cells:,} | Genes: {n_genes:,}")
+    lines.append(f"- Cells: {n_cells:,} | Genes: {n_genes:,} | Species: {detect_species(adata).species}")
     lines.append(f"- Embeddings present: {', '.join(embeddings) if embeddings else 'none'}")
     sources.append(ChatSource(
         kind="dataset", ref="dataset:summary",

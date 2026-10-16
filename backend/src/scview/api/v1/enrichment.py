@@ -35,6 +35,7 @@ from scview.core.ora_background import (
     resolve_markers_key,
     write_meta,
 )
+from scview.core.species import detect_species, human_genesets_warning
 from scview.core.uns_keys import enrichment_key
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
@@ -124,6 +125,8 @@ class EnrichmentResponse(BaseModel):
     n_genes_used: int
     results: list[EnrichmentResult]
     source: str  # "gseapy" | "precomputed" | "marker_list" | "msigdb_local"
+    # Set when the gene sets (human symbols) may not fit the dataset's species.
+    warning: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +330,7 @@ async def enrichment_network(
         "group": enrichment.group,
         "groupby": enrichment.groupby,
         "n_genes_used": enrichment.n_genes_used,
+        "warning": enrichment.warning,
         "n_significant": graph["n_terms"],
         "n_edges": n_edges,
         **graph,
@@ -362,6 +366,7 @@ def _compute_local(
     # Custom collections need no MSigDB, so only an MSigDB-only request fails here.
     if loader is None and not any(is_custom_id(c) for c in body.collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
+    warning = human_genesets_warning(detect_species(adaptor.adata))
 
     col = body.column
     if not col:
@@ -401,6 +406,7 @@ def _compute_local(
                 n_genes_used=0,
                 results=results,
                 source="precomputed",
+                warning=warning,
             )
 
     # Existence check. n_genes must be passed through: get_markers defaults to 100,
@@ -485,6 +491,7 @@ def _compute_local(
             n_genes_used=len(top_genes),
             results=[EnrichmentResult(**r) for r in label_records(all_results, store)],
             source="msigdb_local",
+            warning=warning,
         )
 
     except ImportError:
@@ -521,6 +528,7 @@ async def compute_enrichment(
 
 
 def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> EnrichmentResponse:
+    warning = human_genesets_warning(detect_species(adaptor.adata))
     # Resolve which obs column's markers to use
     col = body.column or body.groupby
     if not col:
@@ -561,6 +569,7 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
                 n_genes_used=0,
                 results=results,
                 source="precomputed",
+                warning=warning,
             )
 
     # Existence check; see compute-local above for the query/background split.
@@ -617,6 +626,7 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
             n_genes_used=len(top_genes),
             results=[EnrichmentResult(**r) for r in results],
             source="gseapy",
+            warning=warning,
         )
 
     except ImportError:
@@ -654,6 +664,7 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
             n_genes_used=len(top_genes),
             results=marker_results,
             source="marker_list",
+            warning=warning,
         )
 
     except Exception as e:

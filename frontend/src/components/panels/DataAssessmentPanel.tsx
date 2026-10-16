@@ -56,6 +56,18 @@ interface PreprocessingState {
   cell_cycle: StepStatus;
 }
 
+/** Which species the gene names say (backend core/species.py). */
+interface SpeciesCall {
+  species: "human" | "mouse" | "unknown";
+  method: string;
+  evidence: string;
+}
+
+/** The assessment response: the step entries plus facts that are not steps. */
+interface AssessmentResponse extends PreprocessingState {
+  species?: SpeciesCall;
+}
+
 interface PipelineResult {
   steps_run: string[];
   steps_skipped: string[];
@@ -206,6 +218,16 @@ function confidenceBadge(confidence: "high" | "medium" | "low") {
   );
 }
 
+/** One line under the step summary: the species and the evidence for it. */
+export function SpeciesNote({ call }: { call?: SpeciesCall }) {
+  if (!call) return null;
+  return (
+    <p className="mt-2 text-xs text-slate-500">
+      Species: <span className="font-medium text-slate-700">{call.species}</span>. {call.evidence}
+    </p>
+  );
+}
+
 /** Shown when a pipeline run finishes: a way on to the results, not a jump. */
 export function OpenInUnifiedView() {
   const setPanel = useViewStore((s) => s.setPanel);
@@ -233,7 +255,7 @@ export function DataAssessmentPanel() {
   const setPipelineRunning = useSettingsStore((s) => s.setPipelineRunning);
   const queryClient = useQueryClient();
 
-  const [state, setState] = useState<PreprocessingState | null>(null);
+  const [state, setState] = useState<AssessmentResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Bumped after each pipeline run so the QC plots refetch (e.g. to pick up a
@@ -292,7 +314,7 @@ export function DataAssessmentPanel() {
     setRunResult(null);
     setSuggestions(null);
     try {
-      const data = await apiFetch<PreprocessingState>(
+      const data = await apiFetch<AssessmentResponse>(
         `/datasets/${datasetId}/assessment`
       );
       setState(data);
@@ -725,6 +747,7 @@ export function DataAssessmentPanel() {
                 </button>
               </div>
             )}
+            <SpeciesNote call={state.species} />
           </div>
 
           {/* "Explain this data": written QC report from the assessment facts */}

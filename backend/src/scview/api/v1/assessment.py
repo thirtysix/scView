@@ -22,6 +22,7 @@ from scview.core.processing import iterate_exclusive, run_exclusive
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
 from scview.core import provenance
 from scview.core.rerun import plan_rerun
+from scview.core.species import detect_species
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +66,14 @@ async def get_assessment(
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
 
+    def _assess(adata) -> dict:
+        # Not a step, so beside the step entries rather than one of them.
+        return {**assess_preprocessing(adata).model_dump(),
+                "species": detect_species(adata).model_dump()}
+
     try:
         # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop.
-        state = await asyncio.to_thread(assess_preprocessing, adaptor.adata)
-        return state.model_dump()
+        return await asyncio.to_thread(_assess, adaptor.adata)
     except Exception as e:
         logger.error("Assessment failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assessment failed: {e}")
@@ -232,6 +237,9 @@ async def suggest_improvements(
         "n_cells": adaptor.n_cells(),
         "n_genes": adaptor.n_genes(),
     }
+    species = detect_species(adaptor.adata).species
+    if species != "unknown":
+        dataset_summary["species"] = species
 
     try:
         # Try LLM suggestions if API key is configured

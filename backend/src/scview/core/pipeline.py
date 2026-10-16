@@ -31,6 +31,7 @@ from scview.core.geneset_sources import (
     tag_records,
 )
 from scview.core.ora_background import write_meta
+from scview.core.species import detect_species, match_genes
 from scview.core.uns_keys import (
     BATCH_MIXING_KEY,
     enrichment_column,
@@ -698,31 +699,49 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
     logger.info("Enrichment completed: %d total group results", total_groups)
 
 
-def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Score cell cycle phases using scanpy's built-in gene sets."""
+# Tirosh et al. 2016 (Science 352:189) S and G2/M genes, as in scanpy's tutorial
+# list and Seurat's cc.genes. Written as human symbols and matched ignoring case:
+# each gene's mouse ortholog is the title-cased symbol (MCM5 -> Mcm5).
+CELL_CYCLE_S_GENES = (
+    "MCM5", "PCNA", "TYMS", "FEN1", "MCM2", "MCM4", "RRM1", "UNG",
+    "GINS2", "MCM6", "CDCA7", "DTL", "PRIM1", "UHRF1", "MLF1IP",
+    "HELLS", "RFC2", "RPA2", "NASP", "RAD51AP1", "GMNN", "WDR76",
+    "SLBP", "CCNE2", "UBR7", "POLD3", "MSH2", "ATAD2", "RAD51",
+    "RRM2", "CDC45", "CDC6", "EXO1", "TIPIN", "DSCC1", "BLM",
+    "CASP8AP2", "USP1", "CLSPN", "POLA1", "CHAF1B", "BRIP1", "E2F8",
+)
+CELL_CYCLE_G2M_GENES = (
+    "HMGB2", "CDK1", "NUSAP1", "UBE2C", "BIRC5", "TPX2", "TOP2A",
+    "NDC80", "CKS2", "NUF2", "CKS1B", "MKI67", "TMPO", "CENPF",
+    "TACC3", "FAM64A", "SMC4", "CCNB2", "CKAP2L", "CKAP2", "AURKB",
+    "BUB1", "KIF11", "ANP32E", "TUBB4B", "GTSE1", "KIF20B", "HJURP",
+    "CDCA3", "HN1", "CDC20", "TTK", "CDC25C", "KIF2C", "RANGAP1",
+    "NCAPD2", "DLGAP5", "CDCA2", "CDCA8", "ECT2", "KIF23", "HMMR",
+    "AURKA", "PSRC1", "ANLN", "LBR", "CKAP5", "CENPE", "CTCF",
+    "NEK2", "G2E3", "GAS2L3", "CBX5", "CENPA",
+)
+# Three genes were renamed in both species after 2016 (Seurat's
+# cc.genes.updated.2019; mouse Cenpu, Pimreg, Jpt1). References differ, and one can
+# mix them: Kang 2018 has CENPU but HN1. That list's MCM2->MCM7, RPA2->POLR1B and
+# BRIP1->MRPL36 are alias mix-ups, not renames, and are not followed.
+CELL_CYCLE_ALIASES = {"MLF1IP": ("CENPU",), "FAM64A": ("PIMREG",), "HN1": ("JPT1",)}
+
+
+def _scoring_names(adata: ad.AnnData) -> tuple[bool, list[str]]:
+    """``use_raw`` as scanpy's score_genes resolves it, and that matrix's gene names."""
+    use_raw = adata.raw is not None
+    return use_raw, list(adata.raw.var_names if use_raw else adata.var_names)
+
+
+def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
+    """Score cell cycle phases (Tirosh 2016 genes), for human or mouse gene names."""
     try:
-        s_genes = [
-            "MCM5", "PCNA", "TYMS", "FEN1", "MCM2", "MCM4", "RRM1", "UNG",
-            "GINS2", "MCM6", "CDCA7", "DTL", "PRIM1", "UHRF1", "MLF1IP",
-            "HELLS", "RFC2", "RPA2", "NASP", "RAD51AP1", "GMNN", "WDR76",
-            "SLBP", "CCNE2", "UBR7", "POLD3", "MSH2", "ATAD2", "RAD51",
-            "RRM2", "CDC45", "CDC6", "EXO1", "TIPIN", "DSCC1", "BLM",
-            "CASP8AP2", "USP1", "CLSPN", "POLA1", "CHAF1B", "BRIP1", "E2F8",
-        ]
-        g2m_genes = [
-            "HMGB2", "CDK1", "NUSAP1", "UBE2C", "BIRC5", "TPX2", "TOP2A",
-            "NDC80", "CKS2", "NUF2", "CKS1B", "MKI67", "TMPO", "CENPF",
-            "TACC3", "FAM64A", "SMC4", "CCNB2", "CKAP2L", "CKAP2", "AURKB",
-            "BUB1", "KIF11", "ANP32E", "TUBB4B", "GTSE1", "KIF20B", "HJURP",
-            "CDCA3", "HN1", "CDC20", "TTK", "CDC25C", "KIF2C", "RANGAP1",
-            "NCAPD2", "DLGAP5", "CDCA2", "CDCA8", "ECT2", "KIF23", "HMMR",
-            "AURKA", "PSRC1", "ANLN", "LBR", "CKAP5", "CENPE", "CTCF",
-            "NEK2", "G2E3", "GAS2L3", "CBX5", "CENPA",
-        ]
-        # Filter to genes present in the dataset
-        var_names_upper = [g.upper() for g in adata.var_names]
-        s_present = [g for g in s_genes if g.upper() in var_names_upper]
-        g2m_present = [g for g in g2m_genes if g.upper() in var_names_upper]
+        species = detect_species(adata).species
+        # The dataset's own spelling: scanpy drops a gene whose name differs only
+        # in case, so a mouse dataset had none of the (human) list.
+        use_raw, names = _scoring_names(adata)
+        s_present = match_genes(CELL_CYCLE_S_GENES, names, CELL_CYCLE_ALIASES)
+        g2m_present = match_genes(CELL_CYCLE_G2M_GENES, names, CELL_CYCLE_ALIASES)
 
         if len(s_present) < 5 or len(g2m_present) < 5:
             logger.warning(
@@ -735,10 +754,14 @@ def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> None:
                 "Need at least 5 of each."
             )
 
-        sc.tl.score_genes_cell_cycle(adata, s_genes=s_present, g2m_genes=g2m_present)
-        logger.info("Cell cycle scored (%d S genes, %d G2M genes)", len(s_present), len(g2m_present))
+        sc.tl.score_genes_cell_cycle(
+            adata, s_genes=s_present, g2m_genes=g2m_present, use_raw=use_raw
+        )
+        logger.info("Cell cycle scored (%s; %d S genes, %d G2M genes)",
+                    species, len(s_present), len(g2m_present))
     except Exception as e:
         raise ValueError(f"Cell cycle scoring failed: {e}") from e
+    return {"species": species, "n_s_genes": len(s_present), "n_g2m_genes": len(g2m_present)}
 
 
 def _resolve_annotation_groupby(adata: ad.AnnData, params: PipelineParams) -> str:
@@ -1129,14 +1152,19 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
-def _record_pipeline_step(adata: ad.AnnData, step_name: str, params: PipelineParams) -> None:
-    """Append a provenance entry for a completed step. Never raises."""
+def _record_pipeline_step(
+    adata: ad.AnnData, step_name: str, params: PipelineParams, ret: Any = None
+) -> None:
+    """Append a provenance entry for a completed step. Never raises.
+
+    A runner that returns a dict adds it to the recorded params: what the step
+    found rather than was told (the species, how many signature genes it had)."""
     tool, keys = _STEP_PROVENANCE.get(step_name, (f"scview.{step_name}", ()))
     try:
-        provenance.record_step(
-            adata, step=step_name, tool=tool,
-            params={k: getattr(params, k) for k in keys},
-        )
+        recorded = {k: getattr(params, k) for k in keys}
+        if isinstance(ret, dict):
+            recorded.update(ret)
+        provenance.record_step(adata, step=step_name, tool=tool, params=recorded)
     except Exception as e:  # provenance must never break the pipeline
         logger.warning("Could not record provenance for step '%s': %s", step_name, e)
 
@@ -1253,7 +1281,7 @@ def run_pipeline(
                 provenance.carry(adata, ret)  # keep history across the new object
                 adata = ret
             result.steps_run.append(step_name)
-            _record_pipeline_step(adata, step_name, params)
+            _record_pipeline_step(adata, step_name, params, ret)
         except Exception as e:
             logger.error("Step '%s' failed: %s", step_name, e)
             result.errors[step_name] = str(e)
@@ -1350,7 +1378,7 @@ def run_pipeline_streamed(
                 provenance.carry(adata, ret)  # keep history across the new object
                 adata = ret
             result.steps_run.append(step_name)
-            _record_pipeline_step(adata, step_name, params)
+            _record_pipeline_step(adata, step_name, params, ret)
             elapsed = round(time.time() - step_t0, 2)
             yield ("step_done", {"step": step_name, "index": idx, "elapsed": elapsed})
         except Exception as e:

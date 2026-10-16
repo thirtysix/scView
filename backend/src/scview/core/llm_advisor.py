@@ -114,7 +114,8 @@ def _build_user_message(
     lines.append("## Current Preprocessing State")
 
     for step_name, status in preprocessing_state.items():
-        if isinstance(status, dict):
+        # Step entries only: the assessment also carries e.g. "species".
+        if isinstance(status, dict) and "done" in status:
             done = status.get("done", False)
             confidence = status.get("confidence", "unknown")
             details = status.get("details", "")
