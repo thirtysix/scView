@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from scview.config import get_settings
+from scview.core.dataset_manager import DatasetBusyError
 from scview.core.guards import require_access
 from scview.api.router import api_router
 
@@ -102,6 +103,15 @@ app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.MAX_JSON_BODY_KB 
 # Routers — every /api route passes the (optional) shared-secret access gate.
 # ---------------------------------------------------------------------------
 app.include_router(api_router, dependencies=[Depends(require_access)])
+
+
+@app.exception_handler(DatasetBusyError)
+async def dataset_busy_handler(_request: Request, exc: DatasetBusyError):
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "This dataset is being processed. Try again when the run has finished."},
+        headers={"Retry-After": "30"},
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -12,10 +12,15 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import weakref
 
 from scview.core.uns_keys import markers_key
 
-_locks: dict[str, asyncio.Lock] = {}
+# One set per event loop: an asyncio.Lock belongs to the loop it was first
+# contended on (one loop in the server; a fresh one per test).
+_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def forget_column_results(adata, column: str) -> None:
@@ -36,10 +41,21 @@ def forget_column_results(adata, column: str) -> None:
 
 def dataset_lock(dataset_id: str) -> asyncio.Lock:
     """The lock held while a request edits and saves this dataset."""
-    lock = _locks.get(dataset_id)
+    locks = _locks.setdefault(asyncio.get_running_loop(), {})
+    lock = locks.get(dataset_id)
     if lock is None:
-        lock = _locks[dataset_id] = asyncio.Lock()
+        lock = locks[dataset_id] = asyncio.Lock()
     return lock
+
+
+def is_locked(dataset_id: str) -> bool:
+    """True while a request holds this dataset's edit lock (creates no lock)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    lock = _locks.get(loop, {}).get(dataset_id)
+    return lock is not None and lock.locked()
 
 
 def uns_snapshot(adata) -> dict[str, int]:

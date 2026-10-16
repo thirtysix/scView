@@ -13,6 +13,7 @@ from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
 from scview.core import provenance
 from scview.core.dataset_manager import DatasetManager
+from scview.core.obs_writes import is_locked
 from scview.core.conversion import trigger_conversion
 from scview.models.enums import DatasetStatus
 from scview.models.schemas import DatasetUploadResponse
@@ -257,6 +258,13 @@ async def delete_dataset(
     dataset_id: str,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
+    if dm.is_busy(dataset_id) or is_locked(dataset_id):
+        # The run would write its file back afterwards: an orphan the library
+        # can no longer list or prune.
+        raise HTTPException(
+            status_code=409,
+            detail="This dataset is being processed. Delete it when the run has finished.",
+        )
     removed = dm.remove_dataset(dataset_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Dataset not found.")

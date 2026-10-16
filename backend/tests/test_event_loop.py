@@ -276,3 +276,98 @@ async def test_dataset_info_answers_from_the_sidecar_while_a_run_works(client, d
     finally:
         dataset_manager.mark_idle("ds")
     assert r.status_code == 200 and r.json()["id"] == "ds"
+
+
+# --- review follow-ups ------------------------------------------------------------
+
+
+async def test_lru_never_evicts_a_dataset_being_edited(tmp_path):
+    for did in ("one", "two", "three"):
+        _dataset(tmp_path, did)
+    dm = DatasetManager(str(tmp_path), max_datasets=1)
+    first = await dm.load_dataset("one")
+    async with dataset_lock("one"):  # e.g. markers computing in a thread
+        await dm.load_dataset("two")
+        assert dm.get_dataset("one") is first  # its in-memory work survives
+    await dm.load_dataset("three")  # once free, it can go
+    assert dm.get_dataset("one") is None
+
+
+def test_closing_a_stream_at_a_substep_waits_for_the_step(monkeypatch):
+    """A step that reports progress runs in a thread of its own; whoever closes the
+    stream must not get the dataset back while that thread still works on it."""
+    finished = threading.Event()
+
+    def markers_step(adata, params, progress):
+        progress("group 1", 1, 2)
+        time.sleep(0.3)
+        finished.set()
+
+    monkeypatch.setitem(pipeline._STEP_RUNNERS, "marker_genes", markers_step)
+    a = ad.AnnData(np.ones((5, 3), dtype="float32"))
+    gen = pipeline.run_pipeline_streamed(a, ["marker_genes"])
+    for event, _data in gen:
+        if event == "substep":
+            break
+    gen.close()
+    assert finished.is_set()
+
+
+async def test_delete_is_refused_while_the_dataset_is_worked_on(client, dataset_manager):
+    _dataset(Path(dataset_manager.data_dir))
+    dataset_manager.mark_busy("ds")
+    try:
+        assert (await client.delete("/api/v1/datasets/ds")).status_code == 409
+    finally:
+        dataset_manager.mark_idle("ds")
+    async with dataset_lock("ds"):
+        assert (await client.delete("/api/v1/datasets/ds")).status_code == 409
+    assert (await client.delete("/api/v1/datasets/ds")).status_code == 204
+
+
+async def test_a_request_gives_up_on_a_long_run_with_a_503(client, dataset_manager, monkeypatch):
+    from scview.core import dataset_manager as dm_module
+
+    _dataset(Path(dataset_manager.data_dir))
+    monkeypatch.setattr(dm_module, "BUSY_WAIT_SECONDS", 0.2)
+    dataset_manager.mark_busy("ds")
+    try:
+        r = await client.get("/api/v1/datasets/ds/qc")
+    finally:
+        dataset_manager.mark_idle("ds")
+    assert r.status_code == 503 and r.headers.get("retry-after")
+
+
+async def test_dataset_info_while_busy_keeps_the_expression_layers(client, dataset_manager):
+    _dataset(Path(dataset_manager.data_dir))
+    ready = (await client.get("/api/v1/datasets/ds")).json()
+    dataset_manager.mark_busy("ds")
+    try:
+        busy = (await client.get("/api/v1/datasets/ds")).json()
+    finally:
+        dataset_manager.mark_idle("ds")
+    assert busy["expression_layers"] == ready["expression_layers"]
+    assert busy["default_expression_layer"] == ready["default_expression_layer"]
+
+
+async def test_a_category_rename_waits_for_the_edit_lock(client, dataset_manager):
+    _dataset(Path(dataset_manager.data_dir))
+    await dataset_manager.load_dataset("ds")
+    async with dataset_lock("ds"):  # e.g. markers being saved
+        rename = asyncio.create_task(client.post(
+            "/api/v1/datasets/ds/metadata/grp/rename", json={"old": "a", "new": "alpha"}))
+        await asyncio.sleep(0.2)
+        assert not rename.done()
+    r = await rename
+    assert r.status_code == 200
+    saved = ad.read_h5ad(dataset_manager.derived_h5ad_path("ds", "data.h5ad"))
+    assert set(saved.obs["grp"].cat.categories) == {"alpha", "b"}
+    assert set(dataset_manager.get_dataset("ds").adata.obs["grp"].cat.categories) == {"alpha", "b"}
+
+
+def test_edit_locks_belong_to_their_event_loop():
+    async def lock():
+        return dataset_lock("ds")
+
+    one, two = asyncio.run(lock()), asyncio.run(lock())
+    assert one is not two

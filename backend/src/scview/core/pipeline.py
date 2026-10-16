@@ -1274,14 +1274,17 @@ def run_pipeline_streamed(
                 t = threading.Thread(target=_run_in_thread, daemon=True)
                 t.start()
 
-                # Drain substep events from the queue while thread runs
-                while True:
-                    item = q.get()
-                    if item is _SENTINEL:
-                        break
-                    yield ("substep", {"step": step_name, **item})
-
-                t.join()
+                # Drain substep events from the queue while thread runs. If the
+                # consumer stops at a substep, still wait for the step's thread:
+                # whoever runs this generator owns the dataset until it returns.
+                try:
+                    while True:
+                        item = q.get()
+                        if item is _SENTINEL:
+                            break
+                        yield ("substep", {"step": step_name, **item})
+                finally:
+                    t.join()
                 if exc_holder:
                     raise exc_holder[0]
                 ret = ret_holder[0]

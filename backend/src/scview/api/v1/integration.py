@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from scview.config import Settings
 from scview.core import provenance
 from scview.core.dataset_manager import DatasetManager
+from scview.core.obs_writes import dataset_lock
 from scview.core.ingestion.merge import MergeJoin
 from scview.core.integration import (
     LABEL_COLUMN,
@@ -171,12 +172,17 @@ async def integration_summary(
 
     mixing = read_batch_mixing(adata)
     if mixing is None:
-        mixing = await asyncio.to_thread(record_batch_mixing, adata)
-        if mixing is not None:
-            try:
-                dm.persist_uns(dataset_id, adaptor, [BATCH_MIXING_KEY])
-            except Exception as e:  # still served from memory
-                logger.warning("Could not save the mixing score of %s: %s", dataset_id, e)
+        async with dataset_lock(dataset_id):  # saving writes the dataset's file
+            mixing = read_batch_mixing(adata)  # another request may have scored it
+            if mixing is None:
+                mixing = await asyncio.to_thread(record_batch_mixing, adata)
+                if mixing is not None:
+                    try:
+                        await asyncio.to_thread(
+                            dm.persist_uns, dataset_id, adaptor, [BATCH_MIXING_KEY]
+                        )
+                    except Exception as e:  # still served from memory
+                        logger.warning("Could not save the mixing score of %s: %s", dataset_id, e)
     return {
         "dataset_id": dataset_id,
         "joint": True,

@@ -66,7 +66,8 @@ async def get_assessment(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
 
     try:
-        state = assess_preprocessing(adaptor.adata)
+        # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop.
+        state = await asyncio.to_thread(assess_preprocessing, adaptor.adata)
         return state.model_dump()
     except Exception as e:
         logger.error("Assessment failed for %s: %s", dataset_id, e, exc_info=True)

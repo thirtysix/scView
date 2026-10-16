@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from scview.core.anndata_adaptor import AnnDataAdaptor
+from scview.core.obs_writes import is_locked
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,19 @@ def clean_dataset_name(value: object) -> str:
     if any(unicodedata.category(ch) in _BAD_NAME_CATEGORIES for ch in name):
         raise ValueError("Name must not contain control or invisible characters.")
     return name
+
+
+# How long a request waits for a pipeline run on its dataset: under nginx's
+# proxy_read_timeout (300 s), so the client gets a 503 it can retry, not a 504.
+BUSY_WAIT_SECONDS = 240.0
+
+
+class DatasetBusyError(Exception):
+    """A pipeline run kept the dataset busy for longer than a request waits."""
+
+    def __init__(self, dataset_id: str) -> None:
+        super().__init__(f"Dataset {dataset_id} is being processed.")
+        self.dataset_id = dataset_id
 
 
 class DatasetManager:
@@ -119,7 +133,9 @@ class DatasetManager:
         for evict_id in list(self._load_order):
             if len(self._datasets) <= limit:
                 break
-            if evict_id == keep or evict_id in self._busy:
+            # Never one a request is working on: its adaptor would re-read the file
+            # and lose what the request computed (markers, a pipeline run).
+            if evict_id == keep or evict_id in self._busy or is_locked(evict_id):
                 continue
             self._load_order.remove(evict_id)
             adaptor = self._datasets.pop(evict_id, None)
@@ -134,13 +150,16 @@ class DatasetManager:
         """Get from cache or load from disk.
 
         While a pipeline run is changing the dataset this waits for it to finish,
-        so no request reads a half-processed dataset.
+        so no request reads a half-processed dataset; after BUSY_WAIT_SECONDS it
+        raises DatasetBusyError (a 503), before a proxy gives up on the request.
         """
-        await self.wait_until_idle(dataset_id)
-        adaptor = self.get_dataset(dataset_id)
-        if adaptor is None:
-            adaptor = await self.load_dataset(dataset_id)
-        return adaptor
+        if dataset_id in self._busy:
+            try:
+                await asyncio.wait_for(self.wait_until_idle(dataset_id), BUSY_WAIT_SECONDS)
+            except TimeoutError:
+                raise DatasetBusyError(dataset_id) from None
+        # load_dataset also marks a cached dataset as recently used.
+        return await self.load_dataset(dataset_id)
 
     # ------------------------------------------------------------------
     # Processing state
@@ -403,6 +422,9 @@ class DatasetManager:
                 "embedding_dimensions": {e["name"]: e["dimensions"] for e in embeddings},
                 "obs_columns": adaptor.obs_columns_info(),
                 "active_clustering": adaptor.active_clustering_column(),
+                # Kept so the dataset can be described while a run works on it.
+                "expression_layers": adaptor.available_expression_layers(),
+                "default_expression_layer": adaptor.default_expression_layer(),
                 "status": "ready",
             }
         except Exception as e:
