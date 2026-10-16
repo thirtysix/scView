@@ -155,3 +155,10 @@ def test_app_ui_questions_pull_in_the_feature_list():
         assert mentions_app_ui(q), q
     for q in ("what marks pDCs?", "how many cells are in cluster 3?"):
         assert not mentions_app_ui(q), q
+
+
+def test_coerce_actions_reaches_compare_panel_and_de_subtab():
+    acts = _coerce_actions(
+        '[{"type":"open_panel","panel":"compare"},{"type":"set_subtab","subtab":"de"}]', **CTX)
+    assert [(a.type, a.panel or a.subtab) for a in acts] == [
+        ("open_panel", "compare"), ("set_subtab", "de")]

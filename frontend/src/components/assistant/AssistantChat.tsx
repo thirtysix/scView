@@ -299,7 +299,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
       } else if (a.type === "set_subtab" && a.subtab) {
         useUnifiedViewStore
           .getState()
-          .setActiveSubtab(a.subtab as "markers" | "expression" | "genesets" | "enrichment");
+          .setActiveSubtab(a.subtab as "markers" | "expression" | "genesets" | "enrichment" | "de");
         useViewStore.getState().setPanel("unified");
       } else if (a.type === "set_groupby" && a.column) {
         useUnifiedViewStore.getState().setGroupByColumn(a.column);
