@@ -10,6 +10,7 @@ from scview.api.v1 import (
     markers,
     de,
     genesets,
+    custom_genesets,
     enrichment,
     trajectory,
     assessment,
@@ -30,6 +31,7 @@ api_router.include_router(expression.router, tags=["expression"])
 api_router.include_router(markers.router, tags=["markers"])
 api_router.include_router(de.router, tags=["differential-expression"])
 api_router.include_router(genesets.router, tags=["gene-sets"])
+api_router.include_router(custom_genesets.router, tags=["gene-sets"])
 api_router.include_router(enrichment.router, tags=["enrichment"])
 api_router.include_router(trajectory.router, tags=["trajectory"])
 api_router.include_router(assessment.router, tags=["assessment"])

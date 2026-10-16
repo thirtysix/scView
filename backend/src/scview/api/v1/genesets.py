@@ -1,7 +1,7 @@
 """Gene set endpoints – Phase 5.
 
-Provides gene set collection listing, search (via MSigDB), and per-cell
-scoring via scanpy.tl.score_genes().
+Provides gene set collection listing, search (MSigDB and custom collections),
+and per-cell scoring via scanpy.tl.score_genes().
 """
 
 from __future__ import annotations
@@ -13,7 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from scview.config import Settings
+from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
+from scview.core.geneset_sources import custom_collections_for_dataset
 from scview.core.msigdb_loader import get_msigdb_loader
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
@@ -61,16 +63,20 @@ async def list_geneset_collections(
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ):
-    """List available gene-set collections (subcategory-level)."""
+    """List available gene-set collections (subcategory-level).
+
+    MSigDB collections first, then the custom ones (category "Custom"), which
+    also say how many of their genes this dataset measures.
+    """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
-    if loader is None:
-        return {"dataset_id": dataset_id, "collections": []}
-
-    collections = loader.available_collections()
+    collections = loader.available_collections() if loader is not None else []
+    collections += custom_collections_for_dataset(
+        adaptor, get_custom_store(settings.DATA_DIR)
+    )
     return {
         "dataset_id": dataset_id,
         "collections": collections,
@@ -86,38 +92,53 @@ async def search_genesets(
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ):
-    """Search MSigDB gene-set collections by name."""
+    """Search gene-set collections (MSigDB, then custom) by name.
+
+    An empty query lists the collection's sets. A set whose name matches the
+    query exactly comes first, so looking a result term up by name finds that
+    term rather than the first longer name containing it.
+    """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
-    if loader is None:
-        return {
-            "results": [],
-            "total": 0,
-            "query": q,
-            "collection": collection,
-            "message": "MSigDB directory not configured. Set MSIGDB_DIR environment variable.",
-        }
+    store = get_custom_store(settings.DATA_DIR)
+    custom = is_custom_id(collection)
+    query = q.strip()
 
-    if not q.strip():
-        # No query — list all gene sets in the collection (or first collection)
-        results = loader.search("", collection=collection, limit=limit)
-        return {
-            "results": results,
-            "total": len(results),
-            "query": q,
-            "collection": collection,
-        }
+    results: list[dict] = []
+    if query:
+        exact = None
+        if custom or not collection:
+            exact = store.get_gene_set(query, collection=collection)
+        if exact is None and not custom and loader is not None:
+            exact = loader.get_gene_set(query, collection=collection)
+        if exact is not None:
+            results.append(exact)
+    if not custom and loader is not None:
+        results += loader.search(query, collection=collection, limit=limit)
+    if custom or not collection:
+        results += store.search(query, collection=collection, limit=limit)
 
-    results = loader.search(q, collection=collection, limit=limit)
-    return {
-        "results": results,
-        "total": len(results),
+    seen: set[tuple[str, str]] = set()
+    unique: list[dict] = []
+    for r in results:
+        key = (r["collection"], r["name"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+    unique = unique[:limit]
+
+    body = {
+        "results": unique,
+        "total": len(unique),
         "query": q,
         "collection": collection,
     }
+    if loader is None and not custom:
+        body["message"] = "MSigDB directory not configured. Set MSIGDB_DIR environment variable."
+    return body
 
 
 @router.post("/datasets/{dataset_id}/genesets/score")
@@ -143,10 +164,21 @@ async def score_genesets(
 
     adata = adaptor.adata
 
-    # Determine which genes are present in the dataset
+    # Determine which genes are present in the dataset. A name matches exactly,
+    # else ignoring case, the way ORA matches MSigDB's upper-case human symbols
+    # (and custom sets, stored upper-case) to a mouse dataset's Cd3e.
     available_genes = set(adaptor.gene_names())
-    genes_found = [g for g in body.gene_set if g in available_genes]
-    genes_missing = [g for g in body.gene_set if g not in available_genes]
+    by_upper: dict[str, str] = {}
+    for g in available_genes:
+        by_upper.setdefault(g.upper(), g)
+    genes_found = []
+    genes_missing = []
+    for g in body.gene_set:
+        hit = g if g in available_genes else by_upper.get(g.upper())
+        if hit is None:
+            genes_missing.append(g)
+        elif hit not in genes_found:
+            genes_found.append(hit)
 
     if len(genes_found) == 0:
         raise HTTPException(
@@ -191,8 +223,9 @@ async def score_genesets(
                 )
                 scored = True
                 # Update genes_found to reflect what was actually used
+                used = {g.upper() for g in gene_list}
+                genes_missing = [g for g in body.gene_set if g.upper() not in used]
                 genes_found = gene_list
-                genes_missing = [g for g in body.gene_set if g not in set(genes_found)]
                 break
             except Exception as inner_err:
                 logger.warning(
