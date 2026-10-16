@@ -875,7 +875,9 @@ export function UnifiedViewPanel() {
                 setGroupByColumn={setGroupByColumn}
               />
             )}
-            {activeSubtab === "de" && <UnifiedDESubtab onGeneClick={handleGeneClick} />}
+            {activeSubtab === "de" && (
+              <UnifiedDESubtab onGeneClick={handleGeneClick} onScoreGeneSet={handleScoreComplete} />
+            )}
           </div>
         </div>
       </div>
