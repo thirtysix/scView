@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, Download, Lasso, FlaskConical, ArrowLeftRight } from "lucide-react";
+import { Loader2, Download, Lasso, FlaskConical, ArrowLeftRight, Sparkles } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
+import { useViewStore } from "@/stores/viewStore";
 import { computeDE, computeDECompare, type DEResponse } from "@/api/de";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { downloadCsv } from "@/lib/csv";
-import { replicateColumns, suggestReplicateColumn } from "@/lib/de";
+import {
+  deGeneQuestion,
+  deResultQuestion,
+  replicateColumns,
+  suggestReplicateColumn,
+  type DEComparison,
+} from "@/lib/de";
 import { formatPValue, prettyObsLabel } from "@/lib/formatting";
 import type { ObsColumnInfo } from "@/api/types";
 
@@ -43,11 +50,14 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const selected = useSelectionStore((s) => s.selectedCellIndices);
   const highlighted = useSelectionStore((s) => s.highlightedGroup);
+  const askCopilot = useViewStore((s) => s.askCopilot);
 
   const [mode, setMode] = useState<Mode>("selection");
   const [result, setResult] = useState<DEResponse | null>(null);
   // Display name of the comparison group ("rest" for selection-vs-rest).
   const [refLabel, setRefLabel] = useState("rest");
+  // What the result compares, for questions to the co-pilot.
+  const [comparison, setComparison] = useState<DEComparison | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fcThreshold, setFcThreshold] = useState(1);
@@ -112,6 +122,7 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
       const res = await computeDE(datasetId, Array.from(selected), label);
       setResult(res);
       setRefLabel("rest");
+      setComparison({ a: label, b: "rest", betweenGroups: false });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -134,6 +145,12 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
       });
       setResult(res);
       setRefLabel(groupB);
+      setComparison({
+        a: groupA,
+        b: groupB,
+        scope: scoped ? `${withinCol} = ${withinVal}` : undefined,
+        betweenGroups: true,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -148,6 +165,17 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
       .filter((g) => g.pval_adj <= pThreshold && Math.abs(g.logfoldchange) >= fcThreshold)
       .sort((a, b) => a.pval_adj - b.pval_adj || Math.abs(b.logfoldchange) - Math.abs(a.logfoldchange));
   }, [result, pThreshold, fcThreshold]);
+
+  const askAboutGene = useCallback(
+    (gene: DEResponse["genes"][number]) => {
+      if (result && comparison) askCopilot(deGeneQuestion(comparison, result, gene));
+    },
+    [askCopilot, result, comparison],
+  );
+
+  const askAboutResult = useCallback(() => {
+    if (result && comparison) askCopilot(deResultQuestion(comparison, result, sigGenes, fcThreshold));
+  }, [askCopilot, result, comparison, sigGenes, fcThreshold]);
 
   const exportCSV = useCallback(() => {
     if (!result) return;
@@ -383,6 +411,14 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
             />
             <span className="w-8 text-right tabular-nums text-slate-600">{fcThreshold.toFixed(2)}</span>
             <button
+              onClick={askAboutResult}
+              title="Ask the co-pilot what these results suggest"
+              className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-600 hover:bg-slate-50 hover:text-primary"
+            >
+              <Sparkles className="h-3 w-3" />
+              Ask
+            </button>
+            <button
               onClick={exportCSV}
               title="Export DE table as CSV"
               className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-600 hover:bg-slate-50"
@@ -460,9 +496,23 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
                   <tr
                     key={g.gene}
                     onClick={() => onGeneClick(g.gene)}
-                    className="cursor-pointer border-b border-slate-50 transition-colors hover:bg-blue-50"
+                    className="group cursor-pointer border-b border-slate-50 transition-colors hover:bg-blue-50"
                   >
-                    <td className="px-2 py-1.5 font-mono font-medium text-slate-800">{g.gene}</td>
+                    <td className="px-2 py-1.5">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-mono font-medium text-slate-800">{g.gene}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            askAboutGene(g);
+                          }}
+                          title="Ask the co-pilot about this gene"
+                          className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                        >
+                          <Sparkles className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </td>
                     <td className="px-2 py-1.5 text-right tabular-nums">
                       <span className={g.logfoldchange > 0 ? "text-red-600" : "text-blue-600"}>
                         {g.logfoldchange.toFixed(2)}
