@@ -31,6 +31,33 @@ describe("switching datasets", () => {
     expect(useUnifiedViewStore.getState().groupByColumn).toBe("stim");
   });
 
+  it("opens a dataset coloured by its best grouping when nothing was chosen", () => {
+    const typed = (id: string) =>
+      ({
+        id,
+        n_cells: 1000,
+        active_clustering: "leiden_r1",
+        obs_columns: [
+          { name: "leiden_r1", dtype: "category", n_unique: 12, values: [] },
+          { name: "cell_type", dtype: "category", n_unique: 9, values: [] },
+        ],
+      }) as unknown as DatasetInfo;
+    useSettingsStore.getState().setDefaultColorBy("");
+    useDatasetStore.getState().setCurrentDataset(typed("a"));
+    expect(useSettingsStore.getState().colorBy).toBe("cell_type");
+    expect(useSettingsStore.getState().colorByChosen).toBe(false);
+
+    // A colouring the user picks is kept for the next dataset that has it...
+    useSettingsStore.getState().setColorBy("leiden_r1");
+    useDatasetStore.getState().setCurrentDataset(typed("b"));
+    expect(useSettingsStore.getState().colorBy).toBe("leiden_r1");
+
+    // ...but a default carried over from the previous dataset is re-picked.
+    useSettingsStore.getState().setDefaultColorBy("leiden_r1");
+    useDatasetStore.getState().setCurrentDataset(typed("c"));
+    expect(useSettingsStore.getState().colorBy).toBe("cell_type");
+  });
+
   it("leaves the view alone when the same dataset is refreshed", () => {
     useDatasetStore.getState().setCurrentDataset(ds("kang", ["cluster", "cell_type", "stim"], "cluster"));
     expect(useSelectionStore.getState().selectedCellIndices?.size).toBe(3);

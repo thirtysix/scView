@@ -4,6 +4,7 @@ import { ApiDetailError, labelCells, listLabelColumns, undoLabel } from "@/api/l
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { columnNameError, labelError, suggestColumnName, UNASSIGNED } from "@/lib/labels";
+import { defaultColorBy } from "@/lib/obsColumns";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { latestUndo, useLabelUndoStore } from "@/stores/labelUndoStore";
@@ -68,7 +69,7 @@ export function LabelSelectionControls() {
       if (res.removed) {
         // Nothing may point at the removed column.
         const settings = useSettingsStore.getState();
-        if (settings.colorBy === entry.column) settings.setColorBy(fresh.active_clustering ?? "");
+        if (settings.colorBy === entry.column) settings.setDefaultColorBy(defaultColorBy(fresh));
         const unified = useUnifiedViewStore.getState();
         if (unified.groupByColumn === entry.column) unified.setGroupByColumn("");
         const selection = useSelectionStore.getState();
