@@ -297,8 +297,17 @@ def _run_log_transform(adata: ad.AnnData, params: PipelineParams) -> None:
     logger.info("Applied log1p transformation")
 
 
+# Flavours offered in the UI. `seurat_v3` is deliberately absent: it needs
+# scikit-misc, which is not installed.
+HVG_FLAVORS: tuple[str, ...] = ("seurat", "cell_ranger")
+
+
 def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> None:
     """Identify highly variable genes."""
+    if params.hvg_flavor not in HVG_FLAVORS:
+        raise ValueError(
+            f"Unsupported HVG flavor '{params.hvg_flavor}'; choose from {', '.join(HVG_FLAVORS)}."
+        )
     # A batch key ranks genes by how many batches call them variable, so a gene
     # that only differs *between* batches isn't picked as biology.
     batch_key = params.hvg_batch_key or None
