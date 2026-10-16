@@ -15,6 +15,7 @@ from scview.api.v1 import (
     assessment,
     annotation,
     labels,
+    clustering,
     assistant,
     export,
     ingest,
@@ -36,6 +37,7 @@ api_router.include_router(trajectory.router, tags=["trajectory"])
 api_router.include_router(assessment.router, tags=["assessment"])
 api_router.include_router(annotation.router, tags=["annotation"])
 api_router.include_router(labels.router, tags=["labels"])
+api_router.include_router(clustering.router, tags=["clustering"])
 api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(export.router, tags=["export"])
 api_router.include_router(ingest.router, tags=["ingest"])
