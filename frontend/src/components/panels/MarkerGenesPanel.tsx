@@ -17,6 +17,8 @@ import { apiFetch } from "@/api/client";
 import { formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
+import { GeneSearch } from "@/components/common/GeneSearch";
+import { MAX_PLOT_GENES, mergeGeneLists, parseGeneList } from "@/lib/geneList";
 
 interface MarkerGene {
   gene: string;
@@ -58,6 +60,13 @@ export function MarkerGenesPanel() {
   const [perGroup, setPerGroup] = useState(5);
   const markerView = useViewStore((s) => s.markerView);
   const setMarkerView = useViewStore((s) => s.setMarkerView);
+  const markerGenes = useViewStore((s) => s.markerGenes);
+  const setMarkerGenes = useViewStore((s) => s.setMarkerGenes);
+  // Typed, picked or pasted genes for the dot plot / heatmap (see GeneSearch `multiple`).
+  const addMarkerGenes = useCallback(
+    (text: string) => setMarkerGenes(mergeGeneLists(markerGenes, parseGeneList(text))),
+    [markerGenes, setMarkerGenes],
+  );
   const initialFetchDone = useRef(false);
 
   // Categorical columns suitable for marker gene grouping
@@ -396,7 +405,7 @@ export function MarkerGenesPanel() {
           </div>
         )}
 
-        {markerView !== "table" && (
+        {markerView !== "table" && markerGenes.length === 0 && (
           <div className="flex items-center gap-2">
             <label htmlFor="marker-pergroup-select" className="text-sm font-medium text-slate-600">
               Genes per group:
@@ -468,6 +477,46 @@ export function MarkerGenesPanel() {
 
       {markerView !== "table" ? (
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          {/* Your own genes instead of the top markers */}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <GeneSearch
+              datasetId={datasetId}
+              onSelect={addMarkerGenes}
+              multiple
+              placeholder="Plot your own genes: type one, or paste a list..."
+              className="w-full max-w-sm"
+            />
+            {markerGenes.length === 0 ? (
+              <span className="text-xs text-slate-400">Showing the top markers of each group.</span>
+            ) : (
+              <>
+                {markerGenes.map((g) => (
+                  <span
+                    key={g}
+                    className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 font-mono text-xs text-slate-700"
+                  >
+                    {g}
+                    <button
+                      onClick={() => setMarkerGenes(markerGenes.filter((x) => x !== g))}
+                      title={`Remove ${g}`}
+                      className="rounded-full px-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+                <button
+                  onClick={() => setMarkerGenes([])}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  Back to top markers
+                </button>
+                {markerGenes.length >= MAX_PLOT_GENES && (
+                  <span className="text-xs text-amber-700">Up to {MAX_PLOT_GENES} genes.</span>
+                )}
+              </>
+            )}
+          </div>
           <MarkerPlot
             datasetId={datasetId}
             groupby={groupbyColumn}
@@ -475,6 +524,7 @@ export function MarkerGenesPanel() {
             markers={markersData.markers}
             kind={markerView}
             perGroup={perGroup}
+            genes={markerGenes}
           />
         </div>
       ) : (

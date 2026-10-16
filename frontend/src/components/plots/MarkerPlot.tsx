@@ -5,6 +5,7 @@ import { AlertCircle, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { apiFetch } from "@/api/client";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { missingGenes } from "@/lib/geneList";
 
 interface MarkerRow {
   gene: string;
@@ -66,6 +67,7 @@ export function MarkerPlot({
   markers,
   kind,
   perGroup,
+  genes: chosenGenes,
 }: {
   datasetId: string;
   groupby: string;
@@ -73,9 +75,18 @@ export function MarkerPlot({
   markers: Record<string, MarkerRow[]>;
   kind: "dotplot" | "heatmap";
   perGroup: number;
+  /** Plot these genes instead of the top markers (empty or absent: top markers). */
+  genes?: string[];
 }) {
   const colormapName = useSettingsStore((s) => s.continuousColormap);
-  const picked = useMemo(() => pickMarkerGenes(groups, markers, perGroup), [groups, markers, perGroup]);
+  const custom = (chosenGenes?.length ?? 0) > 0;
+  const picked = useMemo(
+    () =>
+      custom
+        ? chosenGenes!.map((gene) => ({ gene, group: "" }))
+        : pickMarkerGenes(groups, markers, perGroup),
+    [custom, chosenGenes, groups, markers, perGroup],
+  );
   const [data, setData] = useState<ByGroup | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -98,6 +109,14 @@ export function MarkerPlot({
   if (picked.length === 0) {
     return <p className="py-8 text-center text-sm text-slate-400">No up-regulated marker genes to plot.</p>;
   }
+  if (error && custom && error.includes("404")) {
+    return (
+      <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        None of these genes are in this dataset (names are case-sensitive):{" "}
+        {chosenGenes!.join(", ")}.
+      </p>
+    );
+  }
   if (error) {
     return (
       <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -115,8 +134,11 @@ export function MarkerPlot({
     );
   }
 
-  // Rows in the marker table's group order; genes in the order they were picked.
-  const rowIdx = groups.map((g) => data.groups.indexOf(g)).filter((i) => i >= 0);
+  // Rows in the marker table's group order (chosen genes: the column's own
+  // order, as the legend lists it); genes in the order they were picked.
+  const rowIdx = custom
+    ? data.groups.map((_, i) => i)
+    : groups.map((g) => data.groups.indexOf(g)).filter((i) => i >= 0);
   const rows = rowIdx.map((i) => data.groups[i]!);
   if (rows.length === 0) {
     return (
@@ -129,13 +151,14 @@ export function MarkerPlot({
   const layerLabel = layers?.find((l) => l.key === data.layer)?.label ?? data.layer;
   const markerOf = new Map(picked.map((p) => [p.gene, p.group]));
   const genes = data.genes;
+  const missing = custom ? missingGenes(chosenGenes!, genes) : [];
   const mean = rowIdx.map((i) => data.mean[i]!);
   const fraction = rowIdx.map((i) => data.fraction[i]!);
   const scaled = scalePerGene(mean);
   const hover = rows.map((g, r) =>
     genes.map(
       (gene, c) =>
-        `<b>${gene}</b> (marker of ${markerOf.get(gene) ?? "?"})<br>${groupby}: ${g}` +
+        `<b>${gene}</b>${custom ? "" : ` (marker of ${markerOf.get(gene) ?? "?"})`}<br>${groupby}: ${g}` +
         `<br>mean ${(mean[r]?.[c] ?? 0).toFixed(2)}` +
         `<br>${Math.round((fraction[r]?.[c] ?? 0) * 100)}% of cells express it`,
     ),
@@ -187,9 +210,17 @@ export function MarkerPlot({
         useResizeHandler
         style={{ width: "100%" }}
       />
+      {missing.length > 0 && (
+        <p className="mt-1 text-xs text-amber-700">
+          Not in this dataset&apos;s {layerLabel} layer, so not plotted (names are case-sensitive):{" "}
+          {missing.join(", ")}.
+        </p>
+      )}
       <p className="mt-1 text-xs text-slate-500">
-        Top {perGroup} up-regulated markers of each {groupby} group. Colour: mean expression,
-        scaled to 0-1 per gene.
+        {custom
+          ? `Your ${genes.length} gene${genes.length === 1 ? "" : "s"} across the ${groupby} groups.`
+          : `Top ${perGroup} up-regulated markers of each ${groupby} group.`}{" "}
+        Colour: mean expression, scaled to 0-1 per gene.
         {kind === "dotplot" && " Dot size: share of cells in the group that express the gene."}
         {` Layer: ${layerLabel}.`}
       </p>

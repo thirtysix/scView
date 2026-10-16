@@ -11,6 +11,8 @@ interface ViewState {
   pendingAsk: string | null;
   /** How the Marker Genes panel shows its markers. */
   markerView: MarkerView;
+  /** Genes the user chose for the marker dot plot / heatmap; empty = top markers. */
+  markerGenes: string[];
   setPanel: (panel: PanelId) => void;
   toggleSidebar: () => void;
   setPendingGene: (gene: string | null) => void;
@@ -21,6 +23,7 @@ interface ViewState {
   askCopilot: (question: string) => void;
   clearPendingAsk: () => void;
   setMarkerView: (view: MarkerView) => void;
+  setMarkerGenes: (genes: string[]) => void;
 }
 
 export type MarkerView = "table" | "dotplot" | "heatmap";
@@ -33,6 +36,7 @@ export const useViewStore = create<ViewState>((set) => ({
   copilotWidth: 400,
   pendingAsk: null,
   markerView: "table",
+  markerGenes: [],
   setPanel: (panel) => set({ activePanel: panel }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setPendingGene: (gene) => set({ pendingGene: gene }),
@@ -44,4 +48,5 @@ export const useViewStore = create<ViewState>((set) => ({
     set((s) => ({ copilotOpen: s.activePanel === "assistant" ? s.copilotOpen : true, pendingAsk: question })),
   clearPendingAsk: () => set({ pendingAsk: null }),
   setMarkerView: (view) => set({ markerView: view }),
+  setMarkerGenes: (genes) => set({ markerGenes: genes }),
 }));
