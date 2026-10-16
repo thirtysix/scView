@@ -129,10 +129,19 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
     import pandas as pd
     import scanpy as sc
 
+    from scview.core.pipeline import looks_like_counts
+
     keep = mask_a | mask_b
     if not keep.all():
         work = work[keep].copy()
         mask_a = mask_a[keep]
+    # Log-normalised expression, never counts: an unprocessed upload can hold counts
+    # in .raw beside a log-normalised X, or counts alone, and the fold change is
+    # taken of whatever is tested (Kang: ISG15 log2FC 184 on counts).
+    use_raw = work.raw is not None and not looks_like_counts(work.raw.X)
+    if not use_raw and looks_like_counts(work.X):
+        sc.pp.normalize_total(work, target_sum=1e4)
+        sc.pp.log1p(work)
     work.obs["_de_group"] = pd.Categorical(
         np.where(mask_a, "selection", "rest"), categories=["rest", "selection"]
     )
@@ -143,10 +152,11 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
             groups=["selection"],
             reference="rest",
             method="wilcoxon",
+            use_raw=use_raw,
             # Every tested gene: the test runs on .raw when present, which can hold
             # more genes than X (an HVG subset); capping at X's width kept only the
             # top-scoring, i.e. up-regulated, genes.
-            n_genes=work.raw.n_vars if work.raw is not None else work.n_vars,
+            n_genes=work.raw.n_vars if use_raw else work.n_vars,
         )
         rgg = work.uns["rank_genes_groups"]
         names = rgg["names"]["selection"]
@@ -154,7 +164,6 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
         lfc = rgg["logfoldchanges"]["selection"]
         pv = rgg["pvals"]["selection"]
         pv_adj = rgg["pvals_adj"]["selection"]
-        scores = rgg["scores"]["selection"]
     except Exception as exc:
         logger.error("DE computation failed for %s: %s", dataset_id, exc)
         raise HTTPException(status_code=500, detail=f"DE computation failed: {exc!s}")
