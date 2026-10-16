@@ -389,6 +389,7 @@ export function GeneExpressionPanel() {
               ) : (
                 <ViolinPlot
                   data={violinData}
+                  groupColumn={currentGroupBy}
                   title={`${selectedGene} expression`}
                   xLabel={currentGroupBy}
                   yLabel="Expression"

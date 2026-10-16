@@ -698,6 +698,7 @@ export function UnifiedViewPanel() {
             violinData={violinData}
             violinTitle={violinTitle}
             violinGroupLabel={groupByColumn ? prettyObsLabel(groupByColumn) : groupByColumn}
+            violinGroupColumn={groupByColumn}
             isLoading={isLoadingViolin}
           />
         </div>
