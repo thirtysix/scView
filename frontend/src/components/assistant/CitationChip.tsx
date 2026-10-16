@@ -11,7 +11,11 @@ function shortLabel(tag: string): string {
   const head = parts[0] ?? tag;
   const kind = head.toLowerCase().trim();
   if (kind === "lit" && parts[1] === "PMID") return `PMID ${parts[2] ?? ""}`;
+  // result:qc:<column>[:<cluster>] — a cluster's QC numbers, or the whole table.
+  if (kind === "result" && parts[1] === "qc")
+    return parts.length > 3 ? `QC ${parts.slice(3).join(":")}` : "cluster QC";
   if (kind === "result") return parts.slice(2).join(":") || parts[1] || "result";
+  if (kind === "qc") return parts[1] ?? "QC"; // a QC-report fact, e.g. qc:mito
   if (kind === "doc") return "docs";
   if (kind === "app") return parts[1] ?? "app";
   if (kind === "dataset") return parts[1] ?? "dataset";

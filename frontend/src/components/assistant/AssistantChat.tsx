@@ -380,17 +380,22 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
       return bnd(tag[i - 1]) && bnd(tag[i + v.length]);
     };
     let best: { col: string; val: string } | null = null;
-    for (const c of ds?.obs_columns ?? []) {
+    const parts = tag.split(":");
+    // A tag that names its column (result:qc:leiden:3) only matches values there.
+    const named = ds?.obs_columns.find((c) => parts.includes(c.name));
+    for (const c of named ? [named] : ds?.obs_columns ?? []) {
       for (const v of c.values ?? []) {
         if (tokenHit(v) && (!best || v.length > best.val.length)) best = { col: c.name, val: v };
       }
     }
-    const parts = tag.split(":");
     if (best) {
       useSettingsStore.getState().setColorBy(best.col);
       useSelectionStore.getState().setHighlight({ column: best.col, value: best.val });
     } else if (parts[0] === "result" && parts[1] === "groups" && parts[2]) {
       useSettingsStore.getState().setColorBy(parts.slice(2).join(":"));
+      useSelectionStore.getState().setHighlight(null);
+    } else if (parts[0] === "result" && parts[1] === "qc" && named) {
+      useSettingsStore.getState().setColorBy(named.name);
       useSelectionStore.getState().setHighlight(null);
     } else {
       return; // nothing resolvable — leave the view untouched
