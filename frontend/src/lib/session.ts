@@ -48,7 +48,9 @@ export function cameraFromViewState(vs: Record<string, unknown>): Camera | null 
 
 export type SessionOverlay =
   | { type: "expression"; gene: string }
-  | { type: "score"; name: string; genes: string[] };
+  | { type: "score"; name: string; genes: string[] }
+  // A TF or pathway's per-cell activity (Activity subtab), computed again on open.
+  | { type: "activity"; network: "collectri" | "progeny"; source: string };
 
 /** A selection: the filter it came from, else its cells (whichever is shorter). */
 export type SessionSelection =
@@ -252,7 +254,14 @@ function parseOverlay(x: unknown, where: string): SessionOverlay {
       genes: texts(o.genes, `${where}.genes`, 1, MAX_GENES),
     };
   }
-  fail(`${where}.type`, 'must be "expression" or "score"');
+  if (o.type === "activity") {
+    return {
+      type: "activity",
+      network: oneOf(o.network, ["collectri", "progeny"] as const, `${where}.network`),
+      source: text(o.source, `${where}.source`, { empty: false, max: 256 }),
+    };
+  }
+  fail(`${where}.type`, 'must be "expression", "score" or "activity"');
 }
 
 function parseSelection(x: unknown, where: string): SessionSelection {

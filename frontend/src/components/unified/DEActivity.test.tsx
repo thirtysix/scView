@@ -68,6 +68,8 @@ describe("DEActivity", () => {
     fireEvent.click(screen.getByText("STAT1"));
     await waitFor(() => expect(onScore).toHaveBeenCalled());
     expect(onScore.mock.calls[0]![1]).toBe("STAT1 (TF activity)");
+    // The source rides along, so a saved session can colour by it again.
+    expect(onScore.mock.calls[0]![3]).toEqual({ network: "collectri", source: "STAT1" });
 
     getDEActivity.mockResolvedValueOnce({ ...TF, network: "progeny", kind: "pathway", results: [] });
     fireEvent.click(screen.getByRole("button", { name: "Pathways (PROGENy)" }));

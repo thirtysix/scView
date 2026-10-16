@@ -60,7 +60,9 @@ export function captureSession(now: Date = new Date()): SessionFile {
   const overlay = unified.scatterOverlay;
   if (dataset && overlay && unified.overlayDatasetId === dataset.id) {
     if (overlay.type === "expression") view.overlay = { type: "expression", gene: overlay.gene };
-    else if (overlay.type === "score" && overlay.genes?.length) {
+    else if (overlay.type === "score" && overlay.activity) {
+      view.overlay = { type: "activity", ...overlay.activity };
+    } else if (overlay.type === "score" && overlay.genes?.length) {
       view.overlay = { type: "score", name: overlay.name, genes: overlay.genes };
     }
   }

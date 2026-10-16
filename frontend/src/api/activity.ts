@@ -3,6 +3,12 @@ import { apiFetch } from "./client";
 /** CollecTRI (TFs) or PROGENy (pathways): backend core/activity_nets.py. */
 export type ActivityNetwork = "collectri" | "progeny";
 
+/** One TF or pathway of a network: what an activity colouring shows. */
+export interface ActivityRef {
+  network: ActivityNetwork;
+  source: string;
+}
+
 /** Sources scored on a dataset, and each group's mean activity (ULM t-value). */
 export interface ActivitySummary {
   network: ActivityNetwork;

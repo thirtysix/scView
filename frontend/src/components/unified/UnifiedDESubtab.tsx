@@ -5,6 +5,7 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDESettingsStore, type DEMode, type DETest } from "@/stores/deSettingsStore";
 import { computeDE, computeDECompare, type DEResponse } from "@/api/de";
+import type { ActivityRef } from "@/api/activity";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { DEEnrichment } from "@/components/unified/DEEnrichment";
 import { DEActivity } from "@/components/unified/DEActivity";
@@ -44,7 +45,7 @@ function defaultSplit(cols: ObsColumnInfo[]): string {
 interface Props {
   onGeneClick: (gene: string) => void;
   /** Scores an enriched gene set on the scatter (from the DE enrichment). */
-  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
+  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[], activity?: ActivityRef) => void;
 }
 
 /**

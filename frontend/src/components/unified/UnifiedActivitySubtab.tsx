@@ -9,14 +9,15 @@ import {
   getActivitySummary,
   NETWORK_LABELS,
   type ActivityNetwork,
+  type ActivityRef,
   type ActivitySummary,
 } from "@/api/activity";
-import { filterRows, heatmapData, sourceRows } from "@/lib/activity";
+import { activityLabel, filterRows, heatmapData, sourceRows } from "@/lib/activity";
 import { plotConfig } from "@/lib/plotConfig";
 
 interface Props {
   /** Colour the embedding by one source's per-cell activity. */
-  onScore: (scores: Float32Array, name: string) => void;
+  onScore: (scores: Float32Array, name: string, genes?: string[], activity?: ActivityRef) => void;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
 }
@@ -91,7 +92,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
       setColouring(source);
       try {
         const res = await getActivityCells(datasetId, network, source);
-        onScore(new Float32Array(res.scores), `${source} (${network === "collectri" ? "TF" : "pathway"} activity)`);
+        onScore(new Float32Array(res.scores), activityLabel(network, source), undefined, { network, source });
         setShown(source);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));

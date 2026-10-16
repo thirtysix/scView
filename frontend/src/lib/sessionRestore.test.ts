@@ -133,6 +133,19 @@ beforeEach(() => {
 });
 
 describe("save then open on the same dataset", () => {
+  it("saves a TF or pathway activity colouring and computes it again on open", async () => {
+    buildWorkspace("lasso");
+    const u = useUnifiedViewStore.getState();
+    u.setScatterOverlay({ type: "score", name: "STAT1 (TF activity)", activity: { network: "collectri", source: "STAT1" } });
+    const session = saveAndReset();
+    expect(session.view?.overlay).toEqual({ type: "activity", network: "collectri", source: "STAT1" });
+    await restoreSession(session);
+    expect(useUnifiedViewStore.getState().pendingOverlay).toEqual({
+      datasetId: "kang",
+      overlay: { type: "activity", network: "collectri", source: "STAT1" },
+    });
+  });
+
   it("restores the whole workspace", async () => {
     buildWorkspace("lasso");
     const session = saveAndReset();

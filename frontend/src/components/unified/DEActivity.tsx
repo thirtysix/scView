@@ -7,9 +7,10 @@ import {
   NETWORK_LABELS,
   type ActivityNetwork,
   type DEActivityResponse,
+  type ActivityRef,
 } from "@/api/activity";
 import { InfoTip } from "@/components/common/InfoTip";
-import { deProfile } from "@/lib/activity";
+import { activityLabel, deProfile } from "@/lib/activity";
 import { downloadCsv } from "@/lib/csv";
 import { formatPValue } from "@/lib/formatting";
 
@@ -19,7 +20,7 @@ interface Props {
   /** Display names of the two sides: a positive score = targets higher in `labelA`. */
   labelA: string;
   labelB: string;
-  onScore: (scores: Float32Array, name: string) => void;
+  onScore: (scores: Float32Array, name: string, genes?: string[], activity?: ActivityRef) => void;
 }
 
 const SHOWN = 50;
@@ -70,7 +71,7 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
     setColouring(source);
     try {
       const res = await getActivityCells(datasetId, network, source);
-      onScore(new Float32Array(res.scores), `${source} (${network === "collectri" ? "TF" : "pathway"} activity)`);
+      onScore(new Float32Array(res.scores), activityLabel(network, source), undefined, { network, source });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

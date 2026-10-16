@@ -2,7 +2,7 @@
  * Helpers for the TF / pathway activity views: which sources the heatmap shows,
  * the per-source summary rows, and the DE profile sent for scoring.
  */
-import type { ActivitySummary } from "@/api/activity";
+import type { ActivitySummary, ActivityNetwork } from "@/api/activity";
 import type { DEGene } from "@/api/de";
 
 export interface SourceRow {
@@ -74,4 +74,9 @@ export function deProfile(genes: DEGene[]): { genes: string[]; stats: number[] }
     }
   }
   return out;
+}
+
+/** The overlay label for a source's per-cell activity, e.g. "STAT1 (TF activity)". */
+export function activityLabel(network: ActivityNetwork, source: string): string {
+  return `${source} (${network === "collectri" ? "TF" : "pathway"} activity)`;
 }

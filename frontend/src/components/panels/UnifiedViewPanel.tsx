@@ -34,6 +34,8 @@ import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { getDataset, renameObsCategory } from "@/api/datasets";
 import { subclusterGroup } from "@/api/clustering";
+import { getActivityCells, type ActivityRef } from "@/api/activity";
+import { activityLabel } from "@/lib/activity";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { useQueryClient } from "@tanstack/react-query";
@@ -374,10 +376,10 @@ export function UnifiedViewPanel() {
   // --- Gene set score handler ---
   // `genes`: the set scored, so a saved session can score it again.
   const handleScoreComplete = useCallback(
-    (scores: Float32Array, name: string, genes?: string[]) => {
+    (scores: Float32Array, name: string, genes?: string[], activity?: ActivityRef) => {
       setOverlayValues(scores);
       setOverlayLabel(name);
-      setScatterOverlay({ type: "score", name, genes });
+      setScatterOverlay({ type: "score", name, genes, activity });
       if (datasetId) setOverlayDatasetId(datasetId);
 
       // Build violin from scores grouped by the active groupBy column
@@ -417,6 +419,13 @@ export function UnifiedViewPanel() {
     setPendingOverlay(null);
     if (o.type === "expression") {
       handleGeneClick(o.gene);
+      return;
+    }
+    if (o.type === "activity") {
+      const ref = { network: o.network, source: o.source };
+      getActivityCells(datasetId, o.network, o.source)
+        .then((res) => handleScoreComplete(new Float32Array(res.scores), activityLabel(o.network, o.source), undefined, ref))
+        .catch((err) => console.error("Failed to restore the activity overlay:", err));
       return;
     }
     apiFetch<{ scores: number[] }>(`/datasets/${datasetId}/genesets/score`, {

@@ -98,6 +98,7 @@ describe("parseSession", () => {
     ["a camera without zoom", { view: { camera: { target: [0, 0] } } }, /view.camera.zoom/],
     ["a camera at infinity", { view: { camera: { target: [0, Infinity], zoom: 1 } } }, /view.camera.target\[1\]/],
     ["an unknown overlay", { view: { overlay: { type: "obs", column: "x" } } }, /view.overlay.type/],
+    ["an unknown activity network", { view: { overlay: { type: "activity", network: "dorothea", source: "STAT1" } } }, /view.overlay.network/],
     ["a negative index", { selection: { n_cells: 10, indices: [1, -1] } }, /selection.indices must hold whole numbers/],
     ["a fractional index", { selection: { n_cells: 10, indices: [1.5] } }, /selection.indices/],
     ["more indices than cells", { selection: { n_cells: 1, indices: [0, 0] } }, /at most 1 cells/],
