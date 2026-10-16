@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Sparkles } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useObsRevision } from "@/stores/obsRevisionStore";
@@ -34,6 +34,23 @@ export function highlightedMarkerGroup(
 ): string | null {
   if (!highlighted || highlighted.column !== groupByColumn) return null;
   return groups.includes(highlighted.value) ? highlighted.value : null;
+}
+
+/** What a newly highlighted group does to the Markers subtab: open it when it is a
+ * group of the markers' column, or switch to its own column when that is one the
+ * subtab can group by (the plot coloured by cell type, say); else nothing. */
+export function followHighlight(
+  highlighted: { column: string; value: string } | null,
+  groupByColumn: string,
+  groupableColumns: string[],
+  groups: string[] | null,
+): { column: string } | { group: string } | null {
+  if (!highlighted) return null;
+  if (highlighted.column !== groupByColumn) {
+    return groupableColumns.includes(highlighted.column) ? { column: highlighted.column } : null;
+  }
+  const group = groups ? highlightedMarkerGroup(groups, groupByColumn, highlighted) : null;
+  return group ? { group } : null;
 }
 type SortDir = "asc" | "desc";
 
@@ -115,17 +132,22 @@ export function UnifiedMarkersSubtab({
     };
   }, [datasetId, groupByColumn, revision]);
 
-  // A cluster clicked in the legend, the cluster map or an Observations row
-  // (or highlighted by the co-pilot) opens its markers, when it is a group of
-  // the column the markers are for.
+  // A group clicked in the legend, the cluster map or an Observations row (or
+  // highlighted by the co-pilot) opens its markers, switching to its column when
+  // the markers are for another one. Each highlight is followed once, so picking
+  // another grouping by hand afterwards sticks.
+  const followed = useRef<typeof highlighted>(null);
   useEffect(() => {
-    if (!markersData) return;
-    const group = highlightedMarkerGroup(markersData.groups, groupByColumn, highlighted);
-    if (group) {
-      setSelectedGroup(group);
-      setFilterQuery("");
-    }
-  }, [highlighted, markersData, groupByColumn]);
+    if (!highlighted || highlighted === followed.current) return;
+    const action = followHighlight(
+      highlighted, groupByColumn, groupbyColumns.map((c) => c.name), markersData?.groups ?? null,
+    );
+    if (!action) return; // markers still loading: the fetch opens the group
+    followed.current = highlighted;
+    setFilterQuery("");
+    if ("column" in action) setGroupByColumn(action.column); // the fetch then opens the group
+    else setSelectedGroup(action.group);
+  }, [highlighted, markersData, groupByColumn, groupbyColumns, setGroupByColumn]);
 
   const currentMarkers = useMemo(() => {
     if (!markersData || !selectedGroup) return [];
