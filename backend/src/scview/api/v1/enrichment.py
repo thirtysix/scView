@@ -24,8 +24,10 @@ from scview.core.msigdb_loader import DEFAULT_COLLECTIONS, get_msigdb_loader
 from scview.core.ora_background import (
     cache_is_current,
     get_background_genes,
+    resolve_markers_key,
     write_meta,
 )
+from scview.core.uns_keys import enrichment_key
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
@@ -223,26 +225,15 @@ async def list_enrichment_groups(
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    # Determine which uns key to read
-    if column:
-        uns_key = f"rank_genes_groups__{column}"
-        if uns_key not in adaptor.adata.uns:
-            # Fall back to default if the column matches
-            if "rank_genes_groups" in adaptor.adata.uns:
-                rgg = adaptor.adata.uns["rank_genes_groups"]
-                if rgg.get("params", {}).get("groupby") == column:
-                    uns_key = "rank_genes_groups"
-                else:
-                    raise HTTPException(status_code=404, detail=f"No markers for column '{column}'.")
-            else:
-                raise HTTPException(status_code=404, detail=f"No markers for column '{column}'.")
-    else:
-        if not adaptor.has_markers():
-            raise HTTPException(
-                status_code=404,
-                detail="No marker genes found. Run sc.tl.rank_genes_groups first.",
-            )
-        uns_key = "rank_genes_groups"
+    # The column's own markers, or scanpy's bare key when its groupby matches.
+    uns_key = resolve_markers_key(adaptor.adata.uns, column)
+    if uns_key is None:
+        if column:
+            raise HTTPException(status_code=404, detail=f"No markers for column '{column}'.")
+        raise HTTPException(
+            status_code=404,
+            detail="No marker genes found. Run sc.tl.rank_genes_groups first.",
+        )
 
     rgg = adaptor.adata.uns[uns_key]
     groups: list[str] = []
@@ -255,7 +246,7 @@ async def list_enrichment_groups(
     col_name = column or rgg.get("params", {}).get("groupby", "")
     enrichment_computed = {
         g: (
-            f"enrichment__{col_name}__{g}" in adaptor.adata.uns
+            enrichment_key(col_name, g) in adaptor.adata.uns
             and cache_is_current(adaptor.adata, col_name, g)
         )
         for g in groups
@@ -364,7 +355,7 @@ async def compute_enrichment_local(
     # Check for cached result. Payloads without a current provenance sidecar were
     # computed against gseapy's implicit universe and are recomputed rather than served.
     if col:
-        cached_key = f"enrichment__{col}__{body.group}"
+        cached_key = enrichment_key(col, body.group)
         if cached_key in adaptor.adata.uns and cache_is_current(
             adaptor.adata,
             col,
@@ -441,7 +432,7 @@ async def compute_enrichment_local(
 
         # Cache the result
         if col:
-            cache_key = f"enrichment__{col}__{body.group}"
+            cache_key = enrichment_key(col, body.group)
             adaptor.adata.uns[cache_key] = json.dumps(all_results)
             write_meta(
                 adaptor.adata,
@@ -510,7 +501,7 @@ async def compute_enrichment(
     # Check for cached enrichment result. Payloads without a current provenance
     # sidecar predate the background fix and are recomputed rather than served.
     if col:
-        cached_key = f"enrichment__{col}__{body.group}"
+        cached_key = enrichment_key(col, body.group)
         if cached_key in adaptor.adata.uns and cache_is_current(
             adaptor.adata,
             col,
@@ -569,7 +560,7 @@ async def compute_enrichment(
 
         # Cache the result for future lookups
         if col:
-            cache_key = f"enrichment__{col}__{body.group}"
+            cache_key = enrichment_key(col, body.group)
             adaptor.adata.uns[cache_key] = json.dumps(results)
             write_meta(
                 adaptor.adata,

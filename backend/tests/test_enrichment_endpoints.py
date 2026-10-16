@@ -17,6 +17,7 @@ import pytest
 import scanpy as sc
 
 from scview.config import Settings
+from scview.core.uns_keys import markers_key
 
 API = "/api/v1"
 GENES = [f"G{i}" for i in range(60)]
@@ -60,7 +61,7 @@ def _register(dm, did: str = "enr", labels: tuple[str, str, str] = ("T", "B", "N
     )
     if markers:
         sc.tl.rank_genes_groups(a, column, method="wilcoxon", pts=True,
-                                key_added=f"rank_genes_groups__{column}")
+                                key_added=markers_key(column))
     a.write_h5ad(d / "data.h5ad")
     return did
 
@@ -181,3 +182,43 @@ async def test_compute_local_without_msigdb_dir_is_500(client, dataset_manager, 
     r = await client.post(f"{API}/datasets/{did}/enrichment/compute-local", json=_local())
     assert r.status_code == 500
     assert "MSigDB" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# "/" in a group name (CellTypist labels)
+# ---------------------------------------------------------------------------
+
+TCM = "Tcm/Naive helper T cells"
+
+
+async def test_slash_label_enrichment_survives_a_write_and_reload(client, dataset_manager):
+    # h5py read "/" as a path separator, so this result came back nested under
+    # "enrichment__cell_type__Tcm" and was never found again.
+    did = _register(dataset_manager, labels=(TCM, "B", "NK"))
+    r = await client.post(f"{API}/datasets/{did}/enrichment/compute-local", json=_local(group=TCM))
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "msigdb_local"
+    assert r.json()["results"][0]["term"] == "HALLMARK_T_PROGRAM"
+
+    # Renaming another label writes the derived file and reloads it.
+    r = await client.post(f"{API}/datasets/{did}/metadata/cell_type/rename",
+                          json={"old": "NK", "new": "NK cells"})
+    assert r.status_code == 200, r.text
+    assert dataset_manager.get_dataset(did).h5ad_path.split("/")[-3] == "derived"
+
+    r = await client.get(f"{API}/datasets/{did}/enrichment/groups", params={"column": "cell_type"})
+    assert r.json()["enrichment_computed"][TCM] is True
+    r = await client.post(f"{API}/datasets/{did}/enrichment/compute-local", json=_local(group=TCM))
+    assert r.json()["source"] == "precomputed"
+    assert r.json()["results"][0]["term"] == "HALLMARK_T_PROGRAM"
+
+
+async def test_slash_label_rename_carries_its_cached_enrichment(client, dataset_manager):
+    did = _register(dataset_manager, labels=(TCM, "B", "NK"))
+    await client.post(f"{API}/datasets/{did}/enrichment/compute-local", json=_local(group=TCM))
+    r = await client.post(f"{API}/datasets/{did}/metadata/cell_type/rename",
+                          json={"old": TCM, "new": "CD4 T/naive"})
+    assert r.status_code == 200, r.text
+    r = await client.post(f"{API}/datasets/{did}/enrichment/compute-local",
+                          json=_local(group="CD4 T/naive"))
+    assert r.json()["source"] == "precomputed"

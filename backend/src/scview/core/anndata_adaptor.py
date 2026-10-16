@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from scview.core.ora_background import resolve_markers_key
+from scview.core.uns_keys import markers_column, repair_slash_keys
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,8 @@ class AnnDataAdaptor:
             else:
                 self._adata = ad.read_h5ad(self.h5ad_path)
                 logger.info("Loaded in memory (%d bytes)", file_size)
+            if repair_slash_keys(self._adata.uns):
+                logger.info("Re-keyed cached results saved under '/' keys")
         return self._adata
 
     # ------------------------------------------------------------------
@@ -486,15 +489,15 @@ class AnnDataAdaptor:
         if column:
             return resolve_markers_key(self.adata.uns, column) is not None
         return "rank_genes_groups" in self.adata.uns or any(
-            k.startswith("rank_genes_groups__") for k in self.adata.uns
+            markers_column(k) is not None for k in self.adata.uns
         )
 
     def marker_columns(self) -> list[str]:
         """Return list of obs columns that have pre-computed markers."""
         cols = []
         for key in self.adata.uns:
-            if key.startswith("rank_genes_groups__"):
-                cols.append(key.split("__", 1)[1])
+            if markers_column(key) is not None:
+                cols.append(markers_column(key))
         if not cols and "rank_genes_groups" in self.adata.uns:
             rgg = self.adata.uns["rank_genes_groups"]
             groupby = rgg.get("params", {}).get("groupby", "")

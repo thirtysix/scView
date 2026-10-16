@@ -31,6 +31,8 @@ from typing import Any
 
 import numpy as np
 
+from scview.core.uns_keys import markers_key
+
 logger = logging.getLogger(__name__)
 
 UNS_KEY = "scview_provenance"
@@ -196,7 +198,7 @@ def reconcile(adata) -> list[str]:
 
     uns = getattr(adata, "uns", {})
     for mcol in current.get("markers_for", []) or []:
-        if f"rank_genes_groups__{mcol}" not in uns and "rank_genes_groups" not in uns:
+        if markers_key(mcol) not in uns and "rank_genes_groups" not in uns:
             issues.append(f"recorded markers for '{mcol}' are not present in the data")
 
     return issues

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from scipy import sparse
 
 from scview.core import provenance
+from scview.core.uns_keys import enrichment_column, markers_column
 
 logger = logging.getLogger(__name__)
 
@@ -658,16 +659,15 @@ def _check_marker_genes(adata: Any) -> StepStatus:
     """Check for rank_genes_groups in uns (single or multi-column)."""
     try:
         # Check for per-column marker results
-        multi_keys = [k for k in adata.uns if k.startswith("rank_genes_groups__")]
-        columns_done = [k.split("__", 1)[1] for k in multi_keys]
+        multi_keys = [k for k in adata.uns if markers_column(k) is not None]
         has_default = "rank_genes_groups" in adata.uns
 
         if multi_keys:
             details_parts = []
-            for col in columns_done:
-                rgg = adata.uns[f"rank_genes_groups__{col}"]
+            for key in multi_keys:
+                rgg = adata.uns[key]
                 method = rgg.get("params", {}).get("method", "unknown")
-                details_parts.append(f"'{col}' ({method})")
+                details_parts.append(f"'{markers_column(key)}' ({method})")
             return StepStatus(
                 done=True,
                 confidence="high",
@@ -696,13 +696,9 @@ def _check_marker_genes(adata: Any) -> StepStatus:
 def _check_enrichment(adata: Any) -> StepStatus:
     """Check for pre-computed enrichment results in uns."""
     try:
-        enrichment_keys = [k for k in adata.uns if k.startswith("enrichment__")]
+        enrichment_keys = [k for k in adata.uns if enrichment_column(k) is not None]
         if enrichment_keys:
-            columns = set()
-            for k in enrichment_keys:
-                parts = k.split("__")
-                if len(parts) >= 2:
-                    columns.add(parts[1])
+            columns = {enrichment_column(k) for k in enrichment_keys}
             return StepStatus(
                 done=True,
                 confidence="high",

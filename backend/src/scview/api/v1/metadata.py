@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import series_to_arrow_ipc
+from scview.core.uns_keys import enrichment_key, markers_key
 
 router = APIRouter()
 
@@ -115,7 +116,7 @@ async def get_metadata_column(
 
 
 def _marker_keys(adata, column: str) -> list[str]:
-    keys = [f"rank_genes_groups__{column}"] if f"rank_genes_groups__{column}" in adata.uns else []
+    keys = [markers_key(column)] if markers_key(column) in adata.uns else []
     rgg = adata.uns.get("rank_genes_groups")
     if isinstance(rgg, dict) and rgg.get("params", {}).get("groupby") == column:
         keys.append("rank_genes_groups")
@@ -138,10 +139,10 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
         if keys:
             sc.tl.rank_genes_groups(
                 adata, groupby=column, method="wilcoxon", pts=True,
-                key_added=f"rank_genes_groups__{column}",
+                key_added=markers_key(column),
             )
             if "rank_genes_groups" in keys:
-                adata.uns["rank_genes_groups"] = adata.uns[f"rank_genes_groups__{column}"]
+                adata.uns["rank_genes_groups"] = adata.uns[markers_key(column)]
         return
     for key in _marker_keys(adata, column):
         rgg = adata.uns[key]
@@ -154,7 +155,7 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
             df = rgg.get(field)
             if isinstance(df, pd.DataFrame) and old in df.columns:
                 rgg[field] = df.rename(columns={old: new})
-    for k_old, k_new in ((f"enrichment__{column}__{old}", f"enrichment__{column}__{new}"),
+    for k_old, k_new in ((enrichment_key(column, old), enrichment_key(column, new)),
                          (meta_key(column, old), meta_key(column, new))):
         if k_old in adata.uns:
             adata.uns[k_new] = adata.uns.pop(k_old)
