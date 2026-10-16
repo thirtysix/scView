@@ -2,10 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import type { BatchMixing, JointSummary as Summary } from "@/api/integration";
 
-const { getJointSummary } = vi.hoisted(() => ({ getJointSummary: vi.fn() }));
+const { getJointSummary, apiFetch } = vi.hoisted(() => ({
+  getJointSummary: vi.fn(),
+  apiFetch: vi.fn(),
+}));
 vi.mock("@/api/integration", () => ({ getJointSummary }));
+vi.mock("@/api/client", () => ({ apiFetch }));
 
-import { JointSummary, shareOfIdeal } from "./JointSummary";
+import { JointSummary, compositionRows, shareOfIdeal, type Crosstab } from "./JointSummary";
 
 // Kang CTRL vs STIM, as scored by hand before this existed.
 const KANG: BatchMixing = {
@@ -35,8 +39,34 @@ describe("shareOfIdeal", () => {
   });
 });
 
+// Cluster 0 shared evenly, cluster 1 only in CTRL, cluster 2 empty after filtering.
+const CROSSTAB: Crosstab = {
+  row_values: ["0", "1", "2"],
+  col_values: ["CTRL", "STIM"],
+  counts: [
+    [50, 50],
+    [30, 0],
+    [0, 0],
+  ],
+};
+
+describe("compositionRows", () => {
+  it("gives each dataset's share per cluster and over all cells", () => {
+    const { all, rows } = compositionRows(CROSSTAB);
+    expect(rows.map((r) => r.group)).toEqual(["0", "1"]);
+    expect(rows[0]!.shares).toEqual([0.5, 0.5]);
+    expect(rows[1]!.shares).toEqual([1, 0]);
+    expect(all.n).toBe(130);
+    expect(all.counts).toEqual([80, 50]);
+    expect(all.shares[0]).toBeCloseTo(80 / 130);
+  });
+});
+
 describe("JointSummary", () => {
-  beforeEach(() => getJointSummary.mockReset());
+  beforeEach(() => {
+    getJointSummary.mockReset();
+    apiFetch.mockReset().mockResolvedValue(CROSSTAB);
+  });
 
   it("renders nothing for a dataset that isn't joint", async () => {
     getJointSummary.mockResolvedValue({ dataset_id: "x", joint: false });
@@ -54,8 +84,18 @@ describe("JointSummary", () => {
     expect(screen.getByText("0.107")).toBeInTheDocument();
     expect(screen.getByText("0.478")).toBeInTheDocument();
     expect(screen.getByText("0.499")).toBeInTheDocument();
-    expect(screen.getByText("STIM")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "STIM" })).toBeInTheDocument();
     expect(screen.getByText(/10,000 of 13,836 cells/)).toBeInTheDocument();
+  });
+
+  it("breaks the clusters down by source dataset with the crosstab endpoint", async () => {
+    getJointSummary.mockResolvedValue(joint(KANG));
+    render(<JointSummary datasetId="j" title="Checks" />);
+    expect(await screen.findByText(/Datasets per cluster/)).toBeInTheDocument();
+    expect(apiFetch).toHaveBeenCalledWith("/datasets/j/metadata/crosstab?row=leiden&col=dataset");
+    expect(screen.getByText("All cells")).toBeInTheDocument();
+    expect(screen.getByTitle("CTRL: 100.0% (30 cells)")).toBeInTheDocument();
+    expect(screen.getByTitle("STIM: 50.0% (50 cells)")).toBeInTheDocument();
   });
 
   it("has no 'after' row when nothing was corrected", async () => {

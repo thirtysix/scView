@@ -1,5 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "@/api/client";
 import { getJointSummary, type BatchMixing, type JointSummary as Summary } from "@/api/integration";
+import { getPalette } from "@/lib/colors";
+import { prettyObsLabel } from "@/lib/formatting";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 /** A score as a share of the ideal, for bar widths: 0 = datasets apart, 1 = ideal. */
 export function shareOfIdeal(value: number | null | undefined, ideal: number): number {
@@ -7,19 +11,58 @@ export function shareOfIdeal(value: number | null | undefined, ideal: number): n
   return Math.max(0, Math.min(1, value / ideal));
 }
 
+/** `/metadata/crosstab` response: counts[row][col]. */
+export interface Crosstab {
+  row_values: string[];
+  col_values: string[];
+  counts: number[][];
+}
+
+export interface CompositionRow {
+  group: string;
+  n: number;
+  counts: number[];
+  shares: number[];
+}
+
+/** Per row (cluster) of a crosstab, each column's (dataset's) share of its cells,
+ *  plus the same over all cells, which is what an evenly mixed cluster looks like. */
+export function compositionRows(ct: Crosstab): { all: CompositionRow; rows: CompositionRow[] } {
+  const row = (group: string, counts: number[]): CompositionRow => {
+    const n = counts.reduce((a, b) => a + b, 0);
+    return { group, n, counts, shares: counts.map((c) => (n > 0 ? c / n : 0)) };
+  };
+  const rows = ct.row_values
+    .map((g, ri) => row(g, ct.col_values.map((_, ci) => ct.counts[ri]?.[ci] ?? 0)))
+    .filter((r) => r.n > 0);
+  const totals = ct.col_values.map((_, ci) => rows.reduce((a, r) => a + (r.counts[ci] ?? 0), 0));
+  return { all: row("All cells", totals), rows };
+}
+
 /**
  * Quality checks for a joint dataset: how well its source datasets mix before and
- * after batch correction. Renders nothing for a dataset that isn't joint.
+ * after batch correction, and what each cluster is made of. Renders nothing for a
+ * dataset that isn't joint.
  */
 export function JointSummary({ datasetId, title }: { datasetId: string; title: string }) {
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [crosstab, setCrosstab] = useState<Crosstab | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setSummary(null);
+    setCrosstab(null);
     getJointSummary(datasetId)
-      .then((s) => !cancelled && setSummary(s))
-      .catch(() => !cancelled && setSummary(null));
+      .then((s) => {
+        if (cancelled) return;
+        setSummary(s);
+        if (!s.joint || !s.cluster_column || !s.label_column) return;
+        return apiFetch<Crosstab>(
+          `/datasets/${datasetId}/metadata/crosstab?row=${encodeURIComponent(s.cluster_column)}` +
+            `&col=${encodeURIComponent(s.label_column)}`,
+        ).then((ct) => !cancelled && setCrosstab(ct));
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -34,6 +77,66 @@ export function JointSummary({ datasetId, title }: { datasetId: string; title: s
       ) : (
         <p className="text-sm text-slate-400">No batch-mixing score for this dataset.</p>
       )}
+      {crosstab && summary.cluster_column && (
+        <ClusterComposition crosstab={crosstab} clusterColumn={summary.cluster_column} />
+      )}
+    </div>
+  );
+}
+
+function ClusterComposition({ crosstab, clusterColumn }: { crosstab: Crosstab; clusterColumn: string }) {
+  const palette = getPalette(useSettingsStore((s) => s.categoricalPalette));
+  const { all, rows } = useMemo(() => compositionRows(crosstab), [crosstab]);
+  const color = (i: number) => {
+    const c = palette[i % palette.length]!;
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  };
+  if (rows.length === 0) return null;
+
+  const bar = (r: CompositionRow, strong: boolean) => (
+    <div key={r.group} className="flex items-center gap-3 text-xs">
+      <span
+        className={`w-28 flex-shrink-0 truncate ${strong ? "font-medium text-slate-700" : "text-slate-600"}`}
+        title={r.group}
+      >
+        {r.group}
+      </span>
+      <div className="flex h-3 flex-1 overflow-hidden rounded bg-slate-100">
+        {r.shares.map((s, i) =>
+          s > 0 ? (
+            <div
+              key={crosstab.col_values[i]}
+              style={{ width: `${s * 100}%`, backgroundColor: color(i) }}
+              title={`${crosstab.col_values[i]}: ${(s * 100).toFixed(1)}% (${(r.counts[i] ?? 0).toLocaleString()} cells)`}
+            />
+          ) : null,
+        )}
+      </div>
+      <span className="w-14 text-right font-mono text-slate-500">{r.n.toLocaleString()}</span>
+    </div>
+  );
+
+  return (
+    <div>
+      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Datasets per cluster ({prettyObsLabel(clusterColumn)})
+      </h4>
+      <div className="mb-2 flex flex-wrap gap-3 text-xs text-slate-600">
+        {crosstab.col_values.map((v, i) => (
+          <span key={v} className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: color(i) }} />
+            {v}
+          </span>
+        ))}
+      </div>
+      <div className="max-h-80 space-y-1 overflow-y-auto pr-1">
+        {bar(all, true)}
+        {rows.map((r) => bar(r, false))}
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        A cluster close to the &quot;All cells&quot; split is shared by the datasets; one made of a
+        single dataset is either specific to it or a batch effect left uncorrected.
+      </p>
     </div>
   );
 }
