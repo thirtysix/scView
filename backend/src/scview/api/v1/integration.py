@@ -68,6 +68,9 @@ def _check_ids(ids: list[str], settings: Settings) -> None:
 
 async def _plan(body: IntegratePlanRequest, dm: DatasetManager, settings: Settings):
     _check_ids(body.dataset_ids, settings)
+    # A dataset a pipeline run is changing is read once the run has finished.
+    for did in body.dataset_ids:
+        await dm.wait_until_idle(did)
     checks, units = await asyncio.to_thread(load_units, dm, body.dataset_ids, body.labels)
     plan = build_plan(
         checks, units,

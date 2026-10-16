@@ -158,13 +158,17 @@ async def get_dataset_info(
     if info is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
+    if dm.is_busy(dataset_id):
+        # A pipeline run is changing it: the sidecar still describes the dataset
+        # as it was, without waiting for the run or reading it half-processed.
+        return info
+
     # Always ensure adaptor is loaded for ready datasets
     # (needed after restart when metadata.json has n_cells but adaptor is not in memory)
     adaptor = dm.get_dataset(dataset_id)
     if adaptor is None and info.get("status") == "ready":
-        await dm.load_dataset(dataset_id)
-        info = dm.get_dataset_info(dataset_id)
-        adaptor = dm.get_dataset(dataset_id)
+        adaptor = await dm.load_dataset(dataset_id)
+        info = dm.get_dataset_info(dataset_id) or info
     if adaptor is not None:
         embs = adaptor.available_embeddings()
         info["obs_columns"] = adaptor.obs_columns_info()

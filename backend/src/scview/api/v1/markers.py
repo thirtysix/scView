@@ -1,5 +1,6 @@
 """Marker gene endpoints."""
 
+import asyncio
 import logging
 
 import math
@@ -12,6 +13,7 @@ from fastapi.responses import Response
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import dataframe_to_arrow_ipc
+from scview.core.obs_writes import dataset_lock
 from scview.core.pipeline import drop_enrichment_cache
 from scview.core.uns_keys import markers_key
 
@@ -55,6 +57,38 @@ def _compute_markers(adata: ad.AnnData, column: str) -> dict:
     return rgg
 
 
+def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str) -> None:
+    """Compute ``column``'s markers into the dataset and save them with it."""
+    adata = adaptor.adata
+    if column not in adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found in obs.")
+    n_groups = adata.obs[column].nunique()
+    if n_groups < 2:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Column '{column}' has only one group; need at least two to compute markers.",
+        )
+    if n_groups > MAX_MARKER_GROUPS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column '{column}' has {n_groups} groups; markers are computed "
+                f"for at most {MAX_MARKER_GROUPS}."
+            ),
+        )
+    try:
+        key = markers_key(column)
+        adata.uns[key] = _compute_markers(adata, column)
+        drop_enrichment_cache(adata, column)
+    except Exception as e:
+        logger.error("On-demand marker computation failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Marker computation failed: {e!s}")
+    try:
+        dm.persist_uns(dataset_id, adaptor, [key])
+    except Exception as e:  # still served from memory; recomputed after a reload
+        logger.warning("Could not save markers for '%s': %s", column, e)
+
+
 @router.get("/datasets/{dataset_id}/markers")
 async def get_markers(
     dataset_id: str,
@@ -77,34 +111,16 @@ async def get_markers(
     # under the column's key (as the pipeline does), so the next visit is instant.
     if groupby_column:
         if not adaptor.has_markers(column=groupby_column):
-            adata = adaptor.adata
-            if groupby_column not in adata.obs.columns:
-                raise HTTPException(status_code=404, detail=f"Column '{groupby_column}' not found in obs.")
-            n_groups = adata.obs[groupby_column].nunique()
-            if n_groups < 2:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Column '{groupby_column}' has only one group; need at least two to compute markers.",
-                )
-            if n_groups > MAX_MARKER_GROUPS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Column '{groupby_column}' has {n_groups} groups; markers are computed "
-                        f"for at most {MAX_MARKER_GROUPS}."
-                    ),
-                )
-            try:
-                key = markers_key(groupby_column)
-                adata.uns[key] = _compute_markers(adata, groupby_column)
-                drop_enrichment_cache(adata, groupby_column)
-            except Exception as e:
-                logger.error("On-demand marker computation failed: %s", e)
-                raise HTTPException(status_code=500, detail=f"Marker computation failed: {e!s}")
-            try:
-                dm.persist_uns(dataset_id, adaptor, [key])
-            except Exception as e:  # still served from memory; recomputed after a reload
-                logger.warning("Could not save markers for '%s': %s", groupby_column, e)
+            # Saving rewrites the dataset's file, so one edit at a time; a request
+            # that waited here usually finds the markers already computed.
+            async with dataset_lock(dataset_id):
+                adaptor = await dm.get_or_load_dataset(dataset_id)
+                if adaptor is None:
+                    raise HTTPException(status_code=404, detail="Dataset not found.")
+                if not adaptor.has_markers(column=groupby_column):
+                    # Seconds to tens of seconds: in a worker thread, so the server
+                    # keeps answering meanwhile.
+                    await asyncio.to_thread(_compute_and_save, dm, dataset_id, adaptor, groupby_column)
         df = adaptor.get_markers(
             groupby=groupby if groupby else None,
             column=groupby_column,

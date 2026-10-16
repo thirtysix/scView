@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -53,48 +54,113 @@ class DatasetManager:
         self.max_datasets = max_datasets
         self._datasets: dict[str, AnnDataAdaptor] = {}
         self._load_order: list[str] = []
+        # Loads in progress, so concurrent requests for one dataset share a read.
+        self._loading: dict[str, asyncio.Future] = {}
+        # Bumped by evict/remove: a load that started before must not be cached.
+        self._generation: dict[str, int] = {}
+        # Datasets a pipeline run is changing in a worker thread (see core/processing.py).
+        self._busy: dict[str, asyncio.Event] = {}
 
     # ------------------------------------------------------------------
     # Loading
     # ------------------------------------------------------------------
 
     async def load_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
-        """Load (or promote in LRU) a dataset and return its adaptor."""
+        """Load (or promote in LRU) a dataset and return its adaptor.
+
+        The file is read in a worker thread (seconds for a large dataset), so the
+        server keeps answering other requests meanwhile.
+        """
         if dataset_id in self._datasets:
             self._load_order.remove(dataset_id)
             self._load_order.append(dataset_id)
             return self._datasets[dataset_id]
 
+        pending = self._loading.get(dataset_id)
+        if pending is None:
+            pending = asyncio.ensure_future(self._load(dataset_id))
+            self._loading[dataset_id] = pending
+
+            def _forget(fut: asyncio.Future, did: str = dataset_id) -> None:
+                if self._loading.get(did) is fut:
+                    del self._loading[did]
+
+            pending.add_done_callback(_forget)
+        # Shielded: one caller giving up must not cancel the read the others wait on.
+        return await asyncio.shield(pending)
+
+    async def _load(self, dataset_id: str) -> AnnDataAdaptor | None:
         h5ad_path = self._resolve_h5ad(dataset_id)
         if h5ad_path is None:
             return None
+        generation = self._generation.get(dataset_id, 0)
 
-        # Evict least-recently-used if at capacity
-        while len(self._datasets) >= self.max_datasets and self._load_order:
-            evict_id = self._load_order.pop(0)
+        # Make room first, so the new dataset never sits beside a full cache.
+        self._evict_lru(keep=dataset_id, room_for_one=True)
+
+        adaptor = AnnDataAdaptor(h5ad_path)
+        updates = await asyncio.to_thread(self._metadata_updates, dataset_id, adaptor)
+        if self._generation.get(dataset_id, 0) != generation:
+            # Evicted while reading (its file was rewritten or removed): this copy
+            # may be stale, so hand it to the requests waiting on it but don't cache it.
+            return adaptor
+        if updates:
+            # Update metadata sidecar with actual cell/gene counts and embeddings
+            self.update_dataset_metadata(dataset_id, updates)
+        self._datasets[dataset_id] = adaptor
+        self._load_order.append(dataset_id)
+        self._evict_lru(keep=dataset_id)  # two loads may have finished at once
+        return adaptor
+
+    def _evict_lru(self, keep: str, room_for_one: bool = False) -> None:
+        """Drop least-recently-used datasets beyond capacity, never ``keep`` or a
+        dataset a pipeline run is still working on."""
+        limit = self.max_datasets - 1 if room_for_one else self.max_datasets
+        for evict_id in list(self._load_order):
+            if len(self._datasets) <= limit:
+                break
+            if evict_id == keep or evict_id in self._busy:
+                continue
+            self._load_order.remove(evict_id)
             adaptor = self._datasets.pop(evict_id, None)
             if adaptor:
                 adaptor.close()
                 logger.info("Evicted dataset %s from cache", evict_id)
 
-        adaptor = AnnDataAdaptor(h5ad_path)
-        self._datasets[dataset_id] = adaptor
-        self._load_order.append(dataset_id)
-
-        # Update metadata sidecar with actual cell/gene counts and embeddings
-        self._update_metadata_from_adaptor(dataset_id, adaptor)
-
-        return adaptor
-
     def get_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
         return self._datasets.get(dataset_id)
 
     async def get_or_load_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
-        """Get from cache or load from disk."""
+        """Get from cache or load from disk.
+
+        While a pipeline run is changing the dataset this waits for it to finish,
+        so no request reads a half-processed dataset.
+        """
+        await self.wait_until_idle(dataset_id)
         adaptor = self.get_dataset(dataset_id)
         if adaptor is None:
             adaptor = await self.load_dataset(dataset_id)
         return adaptor
+
+    # ------------------------------------------------------------------
+    # Processing state
+    # ------------------------------------------------------------------
+
+    def is_busy(self, dataset_id: str) -> bool:
+        """True while a pipeline run is changing this dataset."""
+        return dataset_id in self._busy
+
+    def mark_busy(self, dataset_id: str) -> None:
+        self._busy.setdefault(dataset_id, asyncio.Event())
+
+    def mark_idle(self, dataset_id: str) -> None:
+        event = self._busy.pop(dataset_id, None)
+        if event is not None:
+            event.set()
+
+    async def wait_until_idle(self, dataset_id: str) -> None:
+        while (event := self._busy.get(dataset_id)) is not None:
+            await event.wait()
 
     # ------------------------------------------------------------------
     # Listing / info
@@ -199,6 +265,8 @@ class DatasetManager:
         at the end, so after a failed or abandoned run the cache can hold changes
         that were never saved; re-running steps on it would apply them twice.
         """
+        self._generation[dataset_id] = self._generation.get(dataset_id, 0) + 1
+        self._loading.pop(dataset_id, None)  # the next access reads the file again
         adaptor = self._datasets.pop(dataset_id, None)
         if adaptor:
             adaptor.close()
@@ -208,6 +276,8 @@ class DatasetManager:
     def remove_dataset(self, dataset_id: str) -> bool:
         if not is_safe_id(dataset_id):
             return False
+        self._generation[dataset_id] = self._generation.get(dataset_id, 0) + 1
+        self._loading.pop(dataset_id, None)
         adaptor = self._datasets.pop(dataset_id, None)
         if adaptor:
             adaptor.close()
@@ -316,17 +386,25 @@ class DatasetManager:
         self, dataset_id: str, adaptor: AnnDataAdaptor
     ) -> None:
         """Update the metadata JSON with info extracted from the loaded AnnData."""
+        updates = self._metadata_updates(dataset_id, adaptor)
+        if updates:
+            self.update_dataset_metadata(dataset_id, updates)
+
+    @staticmethod
+    def _metadata_updates(dataset_id: str, adaptor: AnnDataAdaptor) -> dict[str, Any] | None:
+        """The sidecar fields read from the AnnData (reading the file on first use),
+        or None when it can't be read."""
         try:
             embeddings = adaptor.available_embeddings()
-            obs_info = adaptor.obs_columns_info()
-            self.update_dataset_metadata(dataset_id, {
+            return {
                 "n_cells": adaptor.n_cells(),
                 "n_genes": adaptor.n_genes(),
                 "available_embeddings": [e["name"] for e in embeddings],
                 "embedding_dimensions": {e["name"]: e["dimensions"] for e in embeddings},
-                "obs_columns": obs_info,
+                "obs_columns": adaptor.obs_columns_info(),
                 "active_clustering": adaptor.active_clustering_column(),
                 "status": "ready",
-            })
+            }
         except Exception as e:
             logger.error("Failed to update metadata for %s: %s", dataset_id, e)
+            return None

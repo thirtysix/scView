@@ -15,6 +15,7 @@ Abandoned sessions are removed by :meth:`sweep_expired` (24 h TTL). See
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -147,6 +148,16 @@ class IngestSessionManager:
         if not files:
             raise IngestCommitError("No files have been uploaded to this session.")
 
+        # Reading, merging and writing the files takes seconds to minutes: in a
+        # worker thread, so the server keeps answering meanwhile.
+        dataset_id = await asyncio.to_thread(self._build_dataset, sid, files)
+        await dm.load_dataset(dataset_id)  # populates n_cells / embeddings / obs_columns
+
+        self.discard(sid)
+        return dataset_id
+
+    def _build_dataset(self, sid: str, files: list[Path]) -> str:
+        """Validate, load, merge and save the staged files as a new dataset."""
         bundle = build_bundle(files)
         report = validate_bundle(bundle)
         if not report.ok:
@@ -167,9 +178,6 @@ class IngestSessionManager:
         dataset_id = uuid.uuid4().hex
         name = opts.name or (loadable[0].label if len(loadable) == 1 else "merged_dataset")
         self._persist_dataset(dataset_id, name, adata, files)
-        await dm.load_dataset(dataset_id)  # populates n_cells / embeddings / obs_columns
-
-        self.discard(sid)
         logger.info("Committed ingest session %s as dataset %s (%s)", sid, dataset_id, name)
         return dataset_id
 

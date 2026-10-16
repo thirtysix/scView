@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import aclosing
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,6 +18,7 @@ from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing
 from scview.core import cluster_qc, qc_report
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
+from scview.core.processing import iterate_exclusive, run_exclusive
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
 from scview.core import provenance
 from scview.core.rerun import plan_rerun
@@ -125,24 +127,25 @@ async def run_assessment_pipeline(
             if hasattr(params, key):
                 setattr(params, key, value)
 
-    try:
+    def _run(adaptor):
         # Write processing output to the derived layer, never the original
         # upload or conversion — those stay immutable.
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        return run_pipeline(
+            adata=adaptor.adata,
+            steps=body.steps,
+            params=params,
+            output_path=output_path,
+        )[1]
 
-        try:
-            new_adata, result = run_pipeline(
-                adata=adaptor.adata,
-                steps=body.steps,
-                params=params,
-                output_path=output_path,
-            )
-        finally:
-            dm.evict(dataset_id)  # serve what is on disk, never a half-run cache
-        await dm.load_dataset(dataset_id)
-
+    try:
+        # In a worker thread with the dataset to itself; the cached copy is
+        # dropped afterwards, so what is served is what is on disk.
+        result = await run_exclusive(dm, dataset_id, _run)
         return result.to_dict()
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Pipeline run failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Pipeline run failed: {e}")
@@ -173,33 +176,31 @@ async def run_assessment_pipeline_stream(
             if hasattr(params, key):
                 setattr(params, key, value)
 
-    # Write processing output to the derived layer, never the original
-    # upload or conversion — those stay immutable.
-    output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+    def _events(adaptor):
+        # Write processing output to the derived layer, never the original
+        # upload or conversion — those stay immutable.
+        return run_pipeline_streamed(
+            adata=adaptor.adata,
+            steps=body.steps,
+            params=params,
+            output_path=str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path)),
+        )
 
     async def event_generator():
-        completed = False
+        # Steps run in a worker thread with the dataset to itself. When the
+        # client goes away mid-run (tab closed, proxy timeout) the run stops
+        # after its current step without saving, and the cached copy, which may
+        # hold unsaved steps, is dropped.
         try:
-            gen = run_pipeline_streamed(
-                adata=adaptor.adata,
-                steps=body.steps,
-                params=params,
-                output_path=output_path,
-            )
-            for event_type, event_data in gen:
-                line = f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
-                yield line
-            completed = True
+            # aclosing: stopping this generator must stop the run at once, not
+            # whenever the inner generator is garbage-collected.
+            async with aclosing(iterate_exclusive(dm, dataset_id, _events)) as events:
+                async for event_type, event_data in events:
+                    yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
         except Exception as e:
             logger.error("Streamed pipeline failed for %s: %s", dataset_id, e, exc_info=True)
-            error_line = f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-            yield error_line
-        finally:
-            # Also runs when the client goes away mid-run (tab closed, proxy
-            # timeout): the cached copy may hold unsaved steps, so drop it.
-            dm.evict(dataset_id)
-        if completed:
-            await dm.load_dataset(dataset_id)
+            detail = e.detail if isinstance(e, HTTPException) else str(e)
+            yield f"event: error\ndata: {json.dumps({'error': detail})}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -305,16 +306,18 @@ async def rerun_step(
             if hasattr(params, key):
                 setattr(params, key, value)
 
-    try:
+    def _run(adaptor):
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        try:
-            _, result = run_pipeline(
-                adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path
-            )
-        finally:
-            dm.evict(dataset_id)  # serve what is on disk, never a half-run cache
-        await dm.load_dataset(dataset_id)
+        return run_pipeline(
+            adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path
+        )[1]
+
+    try:
+        # As /assessment/run: a worker thread, then serve what is on disk.
+        result = await run_exclusive(dm, dataset_id, _run)
         return {"plan": plan.model_dump(), "result": result.to_dict()}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Re-run failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Re-run failed: {e}")
