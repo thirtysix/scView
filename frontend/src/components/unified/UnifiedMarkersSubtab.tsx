@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Sparkles } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
 import { formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
@@ -22,6 +24,16 @@ interface MarkersResponse {
 }
 
 type SortField = "gene" | "logfoldchange" | "pval_adj";
+
+/** The highlighted group's name when it is a group of the markers' column, else null. */
+export function highlightedMarkerGroup(
+  groups: string[],
+  groupByColumn: string,
+  highlighted: { column: string; value: string } | null,
+): string | null {
+  if (!highlighted || highlighted.column !== groupByColumn) return null;
+  return groups.includes(highlighted.value) ? highlighted.value : null;
+}
 type SortDir = "asc" | "desc";
 
 interface UnifiedMarkersSubtabProps {
@@ -38,11 +50,14 @@ export function UnifiedMarkersSubtab({
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const askCopilot = useViewStore((s) => s.askCopilot);
+  const highlighted = useSelectionStore((s) => s.highlightedGroup);
 
   const [markersData, setMarkersData] = useState<MarkersResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noMarkers, setNoMarkers] = useState(false);
+  // Still loading after 1.5 s: the backend is computing this column's markers.
+  const computingMarkers = useDelayedFlag(isLoading, 1500);
 
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [sortField, setSortField] = useState<SortField>("logfoldchange");
@@ -81,7 +96,8 @@ export function UnifiedMarkersSubtab({
       .then((data) => {
         if (cancelled) return;
         setMarkersData(data);
-        setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
+        const hl = useSelectionStore.getState().highlightedGroup;
+        setSelectedGroup(highlightedMarkerGroup(data.groups, groupByColumn, hl) ?? data.groups[0] ?? "");
         setIsLoading(false);
       })
       .catch((err) => {
@@ -96,6 +112,18 @@ export function UnifiedMarkersSubtab({
       cancelled = true;
     };
   }, [datasetId, groupByColumn]);
+
+  // A cluster clicked in the legend, the cluster map or an Observations row
+  // (or highlighted by the co-pilot) opens its markers, when it is a group of
+  // the column the markers are for.
+  useEffect(() => {
+    if (!markersData) return;
+    const group = highlightedMarkerGroup(markersData.groups, groupByColumn, highlighted);
+    if (group) {
+      setSelectedGroup(group);
+      setFilterQuery("");
+    }
+  }, [highlighted, markersData, groupByColumn]);
 
   const currentMarkers = useMemo(() => {
     if (!markersData || !selectedGroup) return [];
@@ -176,7 +204,11 @@ export function UnifiedMarkersSubtab({
     return (
       <div className="flex items-center justify-center py-8">
         <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
-        <span className="ml-2 text-xs text-slate-500">Loading markers...</span>
+        <span className="ml-2 text-xs text-slate-500">
+          {computingMarkers
+            ? "Computing marker genes… this can take ~30 s on a large dataset"
+            : "Loading markers..."}
+        </span>
       </div>
     );
   }

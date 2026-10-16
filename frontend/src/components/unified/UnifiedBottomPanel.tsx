@@ -6,6 +6,8 @@ interface UnifiedBottomPanelProps {
   violinData: Record<string, number[]>;
   violinTitle?: string;
   violinGroupLabel?: string;
+  /** Obs column the violin groups come from (for category colours). */
+  violinGroupColumn?: string;
   isLoading?: boolean;
 }
 
@@ -13,6 +15,7 @@ export function UnifiedBottomPanel({
   violinData,
   violinTitle,
   violinGroupLabel,
+  violinGroupColumn,
   isLoading = false,
 }: UnifiedBottomPanelProps) {
   const isOpen = useUnifiedViewStore((s) => s.bottomPanelOpen);
@@ -48,6 +51,7 @@ export function UnifiedBottomPanel({
           {hasData ? (
             <ViolinPlot
               data={violinData}
+              groupColumn={violinGroupColumn}
               title={violinTitle}
               xLabel={violinGroupLabel}
               yLabel="Value"

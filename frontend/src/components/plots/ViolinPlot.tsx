@@ -1,10 +1,12 @@
 import { useMemo } from "react";
 import Plot from "@/components/plots/Plot";
-import { getPalette } from "@/lib/colors";
-import { useSettingsStore } from "@/stores/settingsStore";
+import { useCategoryColors, useCategoryOrder } from "@/hooks/useCategoryColors";
+import { rgbCss, sortByCategoryOrder } from "@/lib/categoryColors";
 
 interface ViolinPlotProps {
   data: Record<string, number[]>; // group name -> values
+  /** Obs column the groups come from: colours and order then match the scatter. */
+  groupColumn?: string;
   title?: string;
   xLabel?: string;
   yLabel?: string;
@@ -13,18 +15,20 @@ interface ViolinPlotProps {
 
 export function ViolinPlot({
   data,
+  groupColumn,
   title,
   xLabel,
   yLabel,
   height = 400,
 }: ViolinPlotProps) {
-  const palette = getPalette(useSettingsStore((s) => s.categoricalPalette));
+  const colorOf = useCategoryColors(groupColumn);
+  const order = useCategoryOrder(groupColumn);
   const traces = useMemo(() => {
-    const groups = Object.keys(data);
-    return groups.map((group, i) => {
-      const color = palette[i % palette.length]!;
-      const rgbStr = `rgb(${color[0]},${color[1]},${color[2]})`;
-      const rgbaStr = `rgba(${color[0]},${color[1]},${color[2]},0.5)`;
+    const groups = sortByCategoryOrder(Object.keys(data), order);
+    return groups.map((group) => {
+      const color = colorOf(group);
+      const rgbStr = rgbCss(color);
+      const rgbaStr = rgbCss(color, 0.5);
 
       return {
         type: "violin" as const,
@@ -39,7 +43,7 @@ export function ViolinPlot({
         points: false as const,
       };
     });
-  }, [data, palette]);
+  }, [data, colorOf, order]);
 
   const layout = useMemo(
     () => ({

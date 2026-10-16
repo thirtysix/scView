@@ -993,6 +993,7 @@ export function GeneSetPanel() {
                     ) : (
                       <ViolinPlot
                         data={violinData}
+                        groupColumn={currentGroupBy}
                         title={scoreName}
                         xLabel={currentGroupBy}
                         yLabel="Score"

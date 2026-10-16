@@ -382,12 +382,14 @@ export function UnifiedViewPanel() {
   }, [colorBy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Lasso handler ---
+  // A lasso selection is not a group, so it drops any highlighted group.
   const handleSelectionComplete = useCallback(
     (indices: Set<number>) => {
+      setHighlight(null);
       if (indices.size === 0) clearSelection();
       else setSelection(indices);
     },
-    [setSelection, clearSelection],
+    [setSelection, clearSelection, setHighlight],
   );
 
   // --- Keyboard shortcuts ---
@@ -458,11 +460,13 @@ export function UnifiedViewPanel() {
         for (const idx of indices) {
           if (!selectedIndices.has(idx)) { same = false; break; }
         }
-        if (same) { clearSelection(); return; }
+        if (same) { clearSelection(); setHighlight(null); return; }
       }
       setSelection(indices);
+      // Shared with the cluster map and the Markers / DE subtabs.
+      if (colorBy) setHighlight({ column: colorBy, value: cat });
     },
-    [colors, categories, selectedIndices, setSelection, clearSelection],
+    [colors, categories, selectedIndices, setSelection, clearSelection, colorBy, setHighlight],
   );
 
   // A group highlighted elsewhere (an Observations row, the co-pilot's "highlight
@@ -597,9 +601,19 @@ export function UnifiedViewPanel() {
               />
             )}
 
-            {/* Overlay indicator */}
+            {/* Loading overlay indicator */}
+            {isLoadingOverlay && (
+              <div className="absolute right-12 top-3 z-10 flex items-center gap-1.5 rounded-md bg-white/90 px-2 py-1 text-xs text-blue-500 shadow">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading...
+              </div>
+            )}
+
+            {/* Overlay chip stacked above the legend (bottom-left): one flex
+                column, so a tall legend pushes the chip up instead of covering it. */}
+            <div className="pointer-events-none absolute left-3 bottom-3 z-10 flex max-h-[calc(100%-1.5rem)] flex-col items-start gap-1.5">
             {scatterOverlay && (
-              <div className="absolute left-3 bottom-14 z-10 flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50/90 px-2 py-1 text-xs text-blue-700">
+              <div className="pointer-events-auto flex flex-shrink-0 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50/90 px-2 py-1 text-xs text-blue-700">
                 <span className="font-medium">{overlayLabel}</span>
                 <span className="text-blue-500">
                   {scatterOverlay.type === "expression" ? "expression" : "score"}
@@ -613,16 +627,8 @@ export function UnifiedViewPanel() {
               </div>
             )}
 
-            {/* Loading overlay indicator */}
-            {isLoadingOverlay && (
-              <div className="absolute right-12 top-3 z-10 flex items-center gap-1.5 rounded-md bg-white/90 px-2 py-1 text-xs text-blue-500 shadow">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Loading...
-              </div>
-            )}
-
-            {/* Legend overlay (bottom-left) */}
-            <div className="absolute left-3 bottom-3 z-10 max-h-48 max-w-[200px] overflow-y-auto rounded-lg bg-white/90 p-2 shadow">
+            {/* Legend overlay */}
+            <div className="pointer-events-auto max-h-48 min-h-0 max-w-[200px] overflow-y-auto rounded-lg bg-white/90 p-2 shadow">
               {effectiveColorType === "continuous" && overlayValues ? (
                 <ColorLegend
                   type="continuous"
@@ -646,6 +652,7 @@ export function UnifiedViewPanel() {
                   onAskAbout={handleAskAboutCategory}
                 />
               ) : null}
+            </div>
             </div>
 
             {/* Hover tooltip */}
@@ -691,6 +698,7 @@ export function UnifiedViewPanel() {
             violinData={violinData}
             violinTitle={violinTitle}
             violinGroupLabel={groupByColumn ? prettyObsLabel(groupByColumn) : groupByColumn}
+            violinGroupColumn={groupByColumn}
             isLoading={isLoadingViolin}
           />
         </div>
