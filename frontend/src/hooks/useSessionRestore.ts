@@ -4,6 +4,8 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { PanelId } from "@/lib/constants";
+import { CATEGORICAL_PALETTES, COLORMAP_STOPS } from "@/lib/colors";
+import type { CategoricalPaletteName, ColormapName } from "@/lib/colors";
 
 const KEY = "scview.session.v1";
 
@@ -12,6 +14,8 @@ interface Snapshot {
   activePanel?: PanelId;
   colorBy?: string;
   embedding?: string;
+  categoricalPalette?: string;
+  continuousColormap?: string;
 }
 
 /**
@@ -37,6 +41,12 @@ export function useSessionRestore() {
     if (!snap) return;
     if (snap.colorBy) useSettingsStore.getState().setColorBy(snap.colorBy);
     if (snap.embedding) useSettingsStore.getState().setEmbedding(snap.embedding);
+    if (snap.categoricalPalette && snap.categoricalPalette in CATEGORICAL_PALETTES) {
+      useSettingsStore.getState().setCategoricalPalette(snap.categoricalPalette as CategoricalPaletteName);
+    }
+    if (snap.continuousColormap && snap.continuousColormap in COLORMAP_STOPS) {
+      useSettingsStore.getState().setContinuousColormap(snap.continuousColormap as ColormapName);
+    }
     if (snap.datasetId) {
       getDataset(snap.datasetId)
         .then((d) => {
@@ -56,13 +66,15 @@ export function useSessionRestore() {
   const activePanel = useViewStore((s) => s.activePanel);
   const colorBy = useSettingsStore((s) => s.colorBy);
   const embedding = useSettingsStore((s) => s.embedding);
+  const categoricalPalette = useSettingsStore((s) => s.categoricalPalette);
+  const continuousColormap = useSettingsStore((s) => s.continuousColormap);
   useEffect(() => {
     if (!restored.current) return;
-    const snap: Snapshot = { datasetId, activePanel, colorBy, embedding };
+    const snap: Snapshot = { datasetId, activePanel, colorBy, embedding, categoricalPalette, continuousColormap };
     try {
       localStorage.setItem(KEY, JSON.stringify(snap));
     } catch {
       /* storage unavailable — non-fatal */
     }
-  }, [datasetId, activePanel, colorBy, embedding]);
+  }, [datasetId, activePanel, colorBy, embedding, categoricalPalette, continuousColormap]);
 }

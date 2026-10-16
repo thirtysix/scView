@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { plotlyColorscale } from "@/lib/colors";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { AlertCircle, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { apiFetch } from "@/api/client";
@@ -72,6 +74,7 @@ export function MarkerPlot({
   kind: "dotplot" | "heatmap";
   perGroup: number;
 }) {
+  const colormapName = useSettingsStore((s) => s.continuousColormap);
   const picked = useMemo(() => pickMarkerGenes(groups, markers, perGroup), [groups, markers, perGroup]);
   const [data, setData] = useState<ByGroup | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -147,7 +150,7 @@ export function MarkerPlot({
           z: scaled,
           text: hover as unknown as string[],
           hoverinfo: "text" as const,
-          colorscale: "Viridis",
+          colorscale: plotlyColorscale(colormapName),
           colorbar: { title: { text: "Mean<br>(scaled)" }, thickness: 12 },
         }
       : {

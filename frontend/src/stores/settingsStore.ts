@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { CategoricalPaletteName, ColormapName } from "@/lib/colors";
 
 interface SettingsState {
   embedding: string;
@@ -7,6 +8,8 @@ interface SettingsState {
   pointSize: number;
   opacity: number;
   plotBackground: "white" | "dark";
+  categoricalPalette: CategoricalPaletteName;
+  continuousColormap: ColormapName;
   maxRenderedCells: number;
   pipelineRunning: boolean;
   setEmbedding: (embedding: string) => void;
@@ -15,6 +18,8 @@ interface SettingsState {
   setPointSize: (size: number) => void;
   setOpacity: (opacity: number) => void;
   setPlotBackground: (bg: "white" | "dark") => void;
+  setCategoricalPalette: (p: CategoricalPaletteName) => void;
+  setContinuousColormap: (m: ColormapName) => void;
   setMaxRenderedCells: (max: number) => void;
   setPipelineRunning: (running: boolean) => void;
 }
@@ -26,6 +31,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   pointSize: 2,
   opacity: 0.8,
   plotBackground: "white",
+  categoricalPalette: "cvd",
+  continuousColormap: "viridis",
   maxRenderedCells: 100_000,
   pipelineRunning: false,
   setEmbedding: (embedding) => set({ embedding }),
@@ -34,6 +41,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setPointSize: (size) => set({ pointSize: size }),
   setOpacity: (opacity) => set({ opacity }),
   setPlotBackground: (bg) => set({ plotBackground: bg }),
+  setCategoricalPalette: (categoricalPalette) => set({ categoricalPalette }),
+  setContinuousColormap: (continuousColormap) => set({ continuousColormap }),
   setMaxRenderedCells: (max) => set({ maxRenderedCells: max }),
   setPipelineRunning: (running) => set({ pipelineRunning: running }),
 }));

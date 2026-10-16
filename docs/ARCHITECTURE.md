@@ -336,8 +336,8 @@ useEmbedding hook
 
 ### Color System
 
-- **Categorical**: 20-colour CVD-aware palette (Okabe-Ito with mid grey in place of black, then Paul Tol muted/light; first 8 checked under deuteranopia/protanopia), wraps for >20 categories
-- **Continuous**: Viridis colormap (perceptually uniform), supports inferno/magma/plasma
+- **Categorical**: 20-colour CVD-aware palette (Okabe-Ito with mid grey in place of black, then Paul Tol muted/light; first 8 checked under deuteranopia/protanopia), wraps for >20 categories. User-selectable in the toolbar (Colours: Categories = colour-blind safe / scView classic / Tableau 20; Expression = viridis / cividis / magma / plasma, 32 matplotlib stops interpolated); stored in `settingsStore` and persisted in the session snapshot
+- **Continuous**: viridis (default), cividis, magma or plasma via `colormapColor`
 - **Selection dimming**: non-selected cells rendered at 20% opacity
 - **Group highlighting**: clicked legend item highlights matching cells
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Pencil, Sparkles } from "lucide-react";
-import { viridisColor } from "@/lib/colors";
+import { colormapColor } from "@/lib/colors";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 interface ColorLegendProps {
   type: "categorical" | "continuous";
@@ -46,6 +47,7 @@ export function ColorLegend({
     setEditing(null);
     if (v && v !== cat) onRenameCategory?.(cat, v);
   };
+  const colormap = useSettingsStore((s) => s.continuousColormap);
   // Build gradient CSS for continuous legend
   const gradientStyle = useMemo(() => {
     if (type !== "continuous") return undefined;
@@ -53,13 +55,13 @@ export function ColorLegend({
     const nStops = 64;
     for (let i = 0; i <= nStops; i++) {
       const t = i / nStops;
-      const [r, g, b] = viridisColor(t);
+      const [r, g, b] = colormapColor(colormap, t);
       stops.push(`rgb(${r},${g},${b}) ${(t * 100).toFixed(1)}%`);
     }
     return {
       background: `linear-gradient(to right, ${stops.join(", ")})`,
     };
-  }, [type]);
+  }, [type, colormap]);
 
   if (type === "categorical" && categories && categories.length > 0) {
     return (

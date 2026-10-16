@@ -3,6 +3,7 @@ import { DeckGL } from "@deck.gl/react";
 import { OrthographicView, OrbitView } from "@deck.gl/core";
 import { ScatterplotLayer, PointCloudLayer } from "@deck.gl/layers";
 import { mapCategoryToColor, mapValueToColor } from "@/lib/colors";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { RotateCcw, AlertTriangle } from "lucide-react";
 
 interface EmbeddingScatterProps {
@@ -226,6 +227,9 @@ export function EmbeddingScatter({
   const stride = dimensions === 3 ? 3 : 2;
   const totalCells = positions ? positions.length / stride : 0;
 
+  const categoricalPalette = useSettingsStore((s) => s.categoricalPalette);
+  const continuousColormap = useSettingsStore((s) => s.continuousColormap);
+
   // Precompute the RGBA color array for all cells
   const colorArray = useMemo<Uint8Array>(() => {
     const count = totalCells;
@@ -262,7 +266,7 @@ export function EmbeddingScatter({
           rgba[i * 4 + 2] = 225;
           rgba[i * 4 + 3] = Math.round(opacity * 0.55 * 255);
         } else {
-          const [r, g, b] = mapCategoryToColor(catIdx);
+          const [r, g, b] = mapCategoryToColor(catIdx, categoricalPalette);
           rgba[i * 4] = r;
           rgba[i * 4 + 1] = g;
           rgba[i * 4 + 2] = b;
@@ -282,7 +286,7 @@ export function EmbeddingScatter({
       }
       for (let i = 0; i < count; i++) {
         const v = colorValues[i] ?? 0;
-        const [r, g, b] = mapValueToColor(v, min, max);
+        const [r, g, b] = mapValueToColor(v, min, max, continuousColormap);
         const dimmed =
           selectedIndices && selectedIndices.size > 0 && !selectedIndices.has(i);
         rgba[i * 4] = r;
@@ -295,7 +299,7 @@ export function EmbeddingScatter({
     }
 
     return rgba;
-  }, [colorValues, colorType, opacity, selectedIndices, totalCells, dimToGray]);
+  }, [colorValues, colorType, opacity, selectedIndices, totalCells, dimToGray, categoricalPalette, continuousColormap]);
 
   // Downsampling: when cell count exceeds threshold, render a random subset
   const { renderPositions, renderColors, indexMap, isSampled } = useMemo(() => {

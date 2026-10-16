@@ -46,6 +46,7 @@ export function UnifiedViewPanel() {
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
   const plotBackground = useSettingsStore((s) => s.plotBackground);
+  const paletteName = useSettingsStore((s) => s.categoricalPalette);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const colorBy = useSettingsStore((s) => s.colorBy);
   const embedding = useSettingsStore((s) => s.embedding);
@@ -218,8 +219,8 @@ export function UnifiedViewPanel() {
   const categoryColors = useMemo<[number, number, number][] | undefined>(() => {
     if (!categories) return undefined;
     // ColorLegend wants RGB; mapCategoryToColor returns RGBA — drop the alpha.
-    return categories.map((_, i) => mapCategoryToColor(i).slice(0, 3) as [number, number, number]);
-  }, [categories]);
+    return categories.map((_, i) => mapCategoryToColor(i, paletteName).slice(0, 3) as [number, number, number]);
+  }, [categories, paletteName]);
 
   // --- Determine what to pass to scatter ---
   const effectiveColorValues = scatterOverlay ? overlayValues : colors;
