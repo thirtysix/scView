@@ -9,12 +9,14 @@ steps log-transformed twice.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import anndata as ad
 import numpy as np
 
 from scview.api.v1.assessment import RunPipelineRequest, run_assessment_pipeline_stream
+from scview.core import pipeline
 from scview.core.dataset_manager import DatasetManager
 
 
@@ -27,8 +29,18 @@ def _counts_dataset(data_dir: Path) -> None:
     a.write_h5ad(d / "data.h5ad")
 
 
-async def test_abandoned_stream_drops_the_half_run_cache(tmp_path):
+async def test_abandoned_stream_drops_the_half_run_cache(tmp_path, monkeypatch):
     _counts_dataset(tmp_path)
+    # The run is in a worker thread that doesn't wait for the client: hold the last
+    # step until the client has gone, or the thread can finish and save first (CI).
+    client_gone = threading.Event()
+    run_pca = pipeline._STEP_RUNNERS["pca"]
+
+    def held_pca(adata, params):
+        client_gone.wait(10)
+        return run_pca(adata, params)
+
+    monkeypatch.setitem(pipeline._STEP_RUNNERS, "pca", held_pca)
     dm = DatasetManager(str(tmp_path))
     await dm.load_dataset("ds")
     resp = await run_assessment_pipeline_stream(
@@ -41,6 +53,7 @@ async def test_abandoned_stream_drops_the_half_run_cache(tmp_path):
             seen = True
             break  # the client goes away here
     await it.aclose()
+    client_gone.set()
     assert seen
 
     assert dm.get_dataset("ds") is None  # evicted, so the next access reads the disk
