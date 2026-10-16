@@ -165,12 +165,18 @@ def iter_sweep(adata, resolutions: list[float], method: str) -> Iterator[dict[st
 
     prev: np.ndarray | None = None
     for r in resolutions:
-        codes = np.asarray(cluster(adata, method, r).codes)
+        existing = existing_column(adata, method, r)
+        # A resolution the dataset already has a column for is shown as that
+        # column, which "Keep this one" returns: re-clustering may not reproduce it
+        # (files processed before the UMAP graph fix carry an altered graph).
+        labels = (pd.Categorical(adata.obs[existing].astype(str)) if existing is not None
+                  else cluster(adata, method, r))
+        codes = np.asarray(labels.codes)
+        codes = np.where(codes < 0, codes.max() + 1, codes)  # missing labels: one group
         sizes = np.sort(np.bincount(codes))[::-1]
         silhouette = None
         if sub is not None and 2 <= np.unique(codes[sub]).size < sub.size:
             silhouette = float(silhouette_score(X, codes[sub]))
-        existing = existing_column(adata, method, r)
         yield {
             "resolution": r,
             "n_clusters": int(sizes.size),

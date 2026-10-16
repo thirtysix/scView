@@ -474,12 +474,21 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
 
 def _run_embeddings(adata: ad.AnnData, params: PipelineParams) -> None:
     """Compute 2D and 3D UMAP embeddings."""
+    # sc.tl.umap hands umap-learn the neighbour graph without copying it, and
+    # umap-learn zeroes the graph's weakest edges in place. The saved graph was
+    # then not the one the clustering ran on: re-clustering it (the resolution
+    # sweep, "Keep this one") gave 11 clusters on Kang where the pipeline's had 10.
+    key = (adata.uns.get("neighbors") or {}).get("connectivities_key", "connectivities")
+    graph = adata.obsp[key].copy() if key in adata.obsp else None
+
     # 3D UMAP first (stored temporarily in X_umap, then moved)
     sc.tl.umap(adata, min_dist=params.umap_min_dist, n_components=3)
     adata.obsm["X_umap_3d"] = adata.obsm["X_umap"].copy()
 
     # 2D UMAP (overwrites X_umap)
     sc.tl.umap(adata, min_dist=params.umap_min_dist, n_components=2)
+    if graph is not None:
+        adata.obsp[key] = graph
     logger.info("UMAP computed: 2D and 3D (min_dist=%.2f)", params.umap_min_dist)
 
 
