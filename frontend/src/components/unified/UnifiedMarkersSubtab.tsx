@@ -6,13 +6,14 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
-import { formatPValue } from "@/lib/formatting";
+import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 
 interface MarkerGene {
   gene: string;
   group: string;
-  logfoldchange: number;
+  /** null when scanpy's fold change was NaN (e.g. a gene absent from both sides). */
+  logfoldchange: number | null;
   pval: number;
   pval_adj: number;
   pct_in?: number;
@@ -157,7 +158,7 @@ export function UnifiedMarkersSubtab({
   const filteredMarkers = useMemo(() => {
     let filtered = currentMarkers;
     if (minAbsFC > 0) {
-      filtered = filtered.filter((m) => Math.abs(m.logfoldchange) >= minAbsFC);
+      filtered = filtered.filter((m) => Math.abs(m.logfoldchange ?? 0) >= minAbsFC);
     }
     if (filterQuery.trim()) {
       const q = filterQuery.trim().toLowerCase();
@@ -173,6 +174,8 @@ export function UnifiedMarkersSubtab({
         return sortDir === "asc" ? a.gene.localeCompare(b.gene) : b.gene.localeCompare(a.gene);
       const aVal = sortField === "logfoldchange" ? a.logfoldchange : a.pval_adj;
       const bVal = sortField === "logfoldchange" ? b.logfoldchange : b.pval_adj;
+      // A missing fold change sorts last either way.
+      if (aVal == null || bVal == null) return (aVal == null ? 1 : 0) - (bVal == null ? 1 : 0);
       return sortDir === "asc" ? aVal - bVal : bVal - aVal;
     });
     return sorted;
@@ -204,7 +207,7 @@ export function UnifiedMarkersSubtab({
       sortedMarkers.map((m) => [
         m.gene,
         m.group,
-        m.logfoldchange.toFixed(4),
+        formatFoldChange(m.logfoldchange, 4, ""),
         m.pval_adj.toExponential(4),
       ]),
     );
@@ -374,8 +377,8 @@ export function UnifiedMarkersSubtab({
                   </div>
                 </td>
                 <td className="px-2 py-1.5 text-right tabular-nums">
-                  <span className={marker.logfoldchange > 0 ? "text-emerald-600" : marker.logfoldchange < 0 ? "text-red-600" : "text-slate-600"}>
-                    {marker.logfoldchange.toFixed(2)}
+                  <span className={marker.logfoldchange == null ? "text-slate-400" : marker.logfoldchange > 0 ? "text-emerald-600" : marker.logfoldchange < 0 ? "text-red-600" : "text-slate-600"}>
+                    {formatFoldChange(marker.logfoldchange, 2)}
                   </span>
                 </td>
                 <td className="px-2 py-1.5 text-right tabular-nums">

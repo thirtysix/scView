@@ -14,7 +14,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
-import { formatPValue } from "@/lib/formatting";
+import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
 import { GeneSearch } from "@/components/common/GeneSearch";
@@ -23,7 +23,8 @@ import { MAX_PLOT_GENES, mergeGeneLists, parseGeneList } from "@/lib/geneList";
 interface MarkerGene {
   gene: string;
   group: string;
-  logfoldchange: number;
+  /** null when scanpy's fold change was NaN. */
+  logfoldchange: number | null;
   pval: number;
   pval_adj: number;
   pct_in?: number;
@@ -178,8 +179,8 @@ export function MarkerGenesPanel() {
             ? a.gene.localeCompare(b.gene)
             : b.gene.localeCompare(a.gene);
         case "logfoldchange":
-          aVal = a.logfoldchange;
-          bVal = b.logfoldchange;
+          aVal = a.logfoldchange ?? 0;
+          bVal = b.logfoldchange ?? 0;
           break;
         case "pval":
           aVal = a.pval;
@@ -255,7 +256,7 @@ export function MarkerGenesPanel() {
       sortedMarkers.map((m) => [
         m.gene,
         m.group,
-        m.logfoldchange.toFixed(4),
+        formatFoldChange(m.logfoldchange, 4, ""),
         m.pval.toExponential(4),
         m.pval_adj.toExponential(4),
         m.pct_in?.toFixed(3) ?? "",
@@ -606,14 +607,14 @@ export function MarkerGenesPanel() {
                     <td className="px-4 py-2 text-right tabular-nums">
                       <span
                         className={
-                          marker.logfoldchange > 0
+                          (marker.logfoldchange ?? 0) > 0
                             ? "text-emerald-600"
-                            : marker.logfoldchange < 0
+                            : (marker.logfoldchange ?? 0) < 0
                               ? "text-red-600"
                               : "text-slate-600"
                         }
                       >
-                        {marker.logfoldchange.toFixed(3)}
+                        {formatFoldChange(marker.logfoldchange, 3)}
                       </span>
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums text-slate-600">

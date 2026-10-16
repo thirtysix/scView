@@ -9,6 +9,11 @@ export function formatPValue(p: number): string {
   return p.toFixed(4);
 }
 
+/** A fold change to `digits` places; `missing` when there is none (scanpy's NaN arrives as null). */
+export function formatFoldChange(v: number | null | undefined, digits: number, missing = "–"): string {
+  return v == null || !Number.isFinite(v) ? missing : v.toFixed(digits);
+}
+
 /** Short date ("16 Oct 2026" in en-GB) for an ISO timestamp; "" when missing or unparseable. */
 export function formatDate(iso: string | null | undefined, locale?: string): string {
   if (!iso) return "";
