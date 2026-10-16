@@ -128,3 +128,38 @@ async def test_assessment_endpoint_returns_the_caution(client, dataset_manager):
     r = await client.get(f"{API}/datasets/cc/assessment")
     assert r.status_code == 200, r.text
     assert "not reliable" in r.json()["cell_cycle"]["caution"]
+
+
+def test_cell_cycle_scores_log_normalised_x_when_raw_holds_counts():
+    # A fresh upload can carry counts in .raw and log-normalised X (Kang). scanpy's
+    # use_raw default would score the counts; the step must score X instead.
+    import anndata as ad
+    import numpy as np
+    import scanpy as sc
+
+    from scview.core.pipeline import (
+        CELL_CYCLE_G2M_GENES,
+        CELL_CYCLE_S_GENES,
+        PipelineParams,
+        run_pipeline,
+    )
+
+    genes = list(dict.fromkeys(CELL_CYCLE_S_GENES + CELL_CYCLE_G2M_GENES)) + [f"G{i}" for i in range(400)]
+    rng = np.random.default_rng(0)
+    counts = ad.AnnData(rng.poisson(1.5, (300, len(genes))).astype("float32"))
+    counts.var_names = genes
+    a = counts.copy()
+    sc.pp.normalize_total(a, target_sum=1e4)
+    sc.pp.log1p(a)
+    expected = a.copy()
+    a.raw = counts
+
+    sc.tl.score_genes_cell_cycle(
+        expected,
+        s_genes=[g for g in CELL_CYCLE_S_GENES if g in genes],
+        g2m_genes=[g for g in CELL_CYCLE_G2M_GENES if g in genes],
+        use_raw=False,
+    )
+    out, res = run_pipeline(a, ["cell_cycle"], PipelineParams())
+    assert res.errors == {}
+    np.testing.assert_allclose(out.obs["S_score"], expected.obs["S_score"], rtol=1e-5)

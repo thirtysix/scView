@@ -742,10 +742,18 @@ CELL_CYCLE_G2M_GENES = (
 CELL_CYCLE_ALIASES = {"MLF1IP": ("CENPU",), "FAM64A": ("PIMREG",), "HN1": ("JPT1",)}
 
 
-def _scoring_names(adata: ad.AnnData) -> tuple[bool, list[str]]:
-    """``use_raw`` as scanpy's score_genes resolves it, and that matrix's gene names."""
-    use_raw = adata.raw is not None
-    return use_raw, list(adata.raw.var_names if use_raw else adata.var_names)
+def _lognorm_scoring_names(adata: ad.AnnData, what: str) -> tuple[bool, list[str]]:
+    """``use_raw`` for scanpy's gene scoring and that matrix's gene names, on
+    log-normalised expression: ``.raw`` after scaling, else X. Never counts: a fresh
+    upload can hold counts in ``.raw`` beside a log-normalised X (Kang), and
+    scanpy's default would score the counts."""
+    if adata.raw is not None and not looks_like_counts(adata.raw.X):
+        return True, list(adata.raw.var_names)
+    if not looks_like_counts(adata.X):
+        return False, list(adata.var_names)
+    raise ValueError(
+        f"{what} needs log-normalised expression: run normalization and log transform first."
+    )
 
 
 def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
@@ -754,7 +762,7 @@ def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]
         species = detect_species(adata).species
         # The dataset's own spelling: scanpy drops a gene whose name differs only
         # in case, so a mouse dataset had none of the (human) list.
-        use_raw, names = _scoring_names(adata)
+        use_raw, names = _lognorm_scoring_names(adata, "Cell cycle scoring")
         s_present = match_genes(CELL_CYCLE_S_GENES, names, CELL_CYCLE_ALIASES)
         g2m_present = match_genes(CELL_CYCLE_G2M_GENES, names, CELL_CYCLE_ALIASES)
 
@@ -786,15 +794,7 @@ def _run_dissociation_stress(adata: ad.AnnData, params: PipelineParams) -> dict[
 
     On log-normalised expression: ``.raw`` after scaling, else X. Skipped, not
     failed, when too few signature genes are present."""
-    if adata.raw is not None and not looks_like_counts(adata.raw.X):
-        use_raw, names = True, adata.raw.var_names
-    elif not looks_like_counts(adata.X):
-        use_raw, names = False, adata.var_names
-    else:
-        raise ValueError(
-            "The dissociation-stress score needs log-normalised expression: run "
-            "normalization and log transform first."
-        )
+    use_raw, names = _lognorm_scoring_names(adata, "The dissociation-stress score")
     genes = stress.signature_genes(names)
     if len(genes) < stress.MIN_GENES:
         raise StepSkipped(
