@@ -209,6 +209,11 @@ export function DEEnrichment({
             . Background: the {fmt(data.background_n)} genes tested. {data.collections.length}{" "}
             collection{data.collections.length === 1 ? "" : "s"}.
           </p>
+          {data.warning && (
+            <p role="note" className="rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-amber-800">
+              {data.warning}
+            </p>
+          )}
           {stale && (
             <p role="status" className="rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-amber-800">
               The table&apos;s cut-off is now |log2FC| &ge; {fcThreshold.toFixed(2)}; this enrichment

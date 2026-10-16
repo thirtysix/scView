@@ -186,3 +186,22 @@ async def test_gene_list_enrichment_runs_in_a_worker_thread(client, dataset_mana
     assert r.status_code == 200, r.text
     assert len(threads) == 2  # one run per side
     assert all(t is not threading.main_thread() for t in threads)
+
+
+async def test_a_mouse_dataset_gets_the_human_genesets_warning(client, dataset_manager):
+    did = _register(dataset_manager)
+    r = await client.post(f"{API}/datasets/{did}/enrichment/gene-lists", json=_body())
+    assert r.json()["warning"] == ""
+    # Title-case symbols: detected as mouse, so the human gene sets carry a note.
+    mouse = [f"Gm{i}" for i in range(len(GENES))]
+    d = Path(dataset_manager.data_dir) / "uploads" / "glm"
+    d.mkdir(parents=True)
+    (d / "metadata.json").write_text(json.dumps({"id": "glm", "name": "glm", "status": "ready"}))
+    a = ad.AnnData(np.random.default_rng(0).poisson(1.0, (30, len(mouse))).astype("float32"))
+    a.var_names = mouse
+    a.obs_names = [f"C{i}" for i in range(30)]
+    a.write_h5ad(d / "data.h5ad")
+    r = await client.post(f"{API}/datasets/glm/enrichment/gene-lists",
+                          json=_body(up=mouse[:6], down=[], background=mouse))
+    assert r.status_code == 200, r.text
+    assert "mouse" in r.json()["warning"]

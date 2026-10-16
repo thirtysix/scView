@@ -168,6 +168,7 @@ class GeneListEnrichmentResponse(BaseModel):
     up: GeneListSide
     down: GeneListSide
     source: str = "msigdb_local"
+    warning: str = ""  # e.g. a mouse dataset against human gene sets
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +750,7 @@ def _compute_gene_lists(
         exclude_ribo_mito=body.exclude_ribo_mito,
         up=up,
         down=down,
+        warning=human_genesets_warning(detect_species(adaptor.adata)),
     )
 
 

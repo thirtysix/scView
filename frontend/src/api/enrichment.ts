@@ -45,6 +45,8 @@ export interface GeneListEnrichmentResponse {
   up: GeneListSide;
   down: GeneListSide;
   source: string;
+  /** Set when the (human) gene sets may not fit the dataset, e.g. a mouse dataset. */
+  warning?: string;
 }
 
 /**
