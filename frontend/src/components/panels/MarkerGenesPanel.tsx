@@ -502,6 +502,7 @@ export function MarkerGenesPanel() {
                 </th>
                 <th
                   onClick={() => handleSort("pval_adj")}
+                  title="For ranking only: the clusters were found from these same cells, so marker p-values are inflated."
                   className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                 >
                   <span className="flex items-center justify-end gap-1">
