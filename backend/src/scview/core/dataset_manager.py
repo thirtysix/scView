@@ -241,6 +241,37 @@ class DatasetManager:
         d.mkdir(parents=True, exist_ok=True)
         return d / f"{stem}.h5ad"
 
+    def persist_uns(self, dataset_id: str, adaptor: AnnDataAdaptor, keys: list[str]) -> bool:
+        """Save ``uns`` entries the cached dataset gained since it was loaded.
+
+        When the loaded file is already the derived one, only those entries are
+        rewritten in place, far cheaper than writing the whole file again;
+        otherwise the dataset is written to ``derived/`` like any processing
+        result, so originals stay untouched. A backed dataset's file is open
+        read-only, so its entries stay in memory. Returns whether it saved.
+        """
+        adata = adaptor.adata
+        if getattr(adata, "isbacked", False):
+            logger.info("Dataset %s is backed; not saving %s", dataset_id, keys)
+            return False
+        target = self.derived_h5ad_path(dataset_id, adaptor.h5ad_path)
+        if Path(adaptor.h5ad_path) == target and target.exists():
+            import h5py
+            from anndata.io import write_elem
+
+            with h5py.File(target, "a") as f:
+                if "uns" not in f:
+                    write_elem(f, "uns", {})
+                group = f["uns"]
+                for key in keys:
+                    if key in group:
+                        del group[key]
+                    write_elem(group, key, adata.uns[key])
+        else:
+            adata.write_h5ad(target, compression="gzip")
+            adaptor.h5ad_path = str(target)
+        return True
+
     def _update_metadata_from_adaptor(
         self, dataset_id: str, adaptor: AnnDataAdaptor
     ) -> None:

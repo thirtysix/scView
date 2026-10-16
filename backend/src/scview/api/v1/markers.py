@@ -4,18 +4,55 @@ import logging
 
 import math
 
+import anndata as ad
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import dataframe_to_arrow_ipc
+from scview.core.pipeline import drop_enrichment_cache
+from scview.core.uns_keys import markers_key
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 ARROW_CONTENT_TYPE = "application/vnd.apache.arrow.stream"
+
+# The pipeline's limit too: every gene is kept per group, so a column with
+# thousands of levels (barcodes, free text) would cost a lot to compute and store.
+MAX_MARKER_GROUPS = 100
+
+
+def _compute_markers(adata: ad.AnnData, column: str) -> dict:
+    """Wilcoxon markers for every group of ``column``, as the pipeline computes them.
+
+    Runs on a light AnnData sharing the dataset's matrix rather than on a copy of
+    the whole dataset, and leaves the dataset's own obs column as it is.
+    """
+    import scanpy as sc
+
+    if getattr(adata, "isbacked", False):
+        adata = adata.to_memory()
+    # scanpy ranks .raw when there is one; give it that matrix directly.
+    use_raw = adata.raw is not None
+    src = adata.raw if use_raw else adata
+    labels = adata.obs[column]
+    # rank_genes_groups needs a categorical groupby; coerce bool / numeric /
+    # object columns (e.g. predicted_doublet) the way the pipeline does.
+    if not isinstance(labels.dtype, pd.CategoricalDtype):
+        labels = labels.astype(str).astype("category")
+    work = ad.AnnData(
+        X=src.X,
+        obs=pd.DataFrame({column: labels.values}, index=adata.obs_names),
+        var=pd.DataFrame(index=src.var_names),
+    )
+    sc.tl.rank_genes_groups(work, groupby=column, method="wilcoxon", pts=True, use_raw=False)
+    rgg = work.uns["rank_genes_groups"]
+    rgg["params"]["use_raw"] = use_raw  # what the ranking actually read
+    return rgg
 
 
 @router.get("/datasets/{dataset_id}/markers")
@@ -29,96 +66,50 @@ async def get_markers(
 ):
     """Return marker gene table from rank_genes_groups.
 
-    If groupby_column is provided, computes markers on-the-fly for that column.
+    If groupby_column is provided, returns that column's markers, computing and
+    saving them the first time. ``groupby`` limits the table to one group.
     """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    # On-demand marker computation for a specific obs column
+    # Markers for a specific obs column: stored ones, else computed once and stored
+    # under the column's key (as the pipeline does), so the next visit is instant.
     if groupby_column:
-        # First check for pre-computed per-column markers
-        if adaptor.has_markers(column=groupby_column):
-            df = adaptor.get_markers(
-                groupby=groupby if groupby else None,
-                column=groupby_column,
-                n_genes=n_genes,
-            )
-        else:
-            # Fall back to on-demand computation
-            try:
-                import scanpy as sc
-
-                import pandas as pd
-
-                work_adata = adaptor.adata.to_memory() if hasattr(adaptor.adata, "to_memory") else adaptor.adata.copy()
-                if groupby_column not in work_adata.obs.columns:
-                    raise HTTPException(status_code=404, detail=f"Column '{groupby_column}' not found in obs.")
-
-                # rank_genes_groups requires a categorical groupby; coerce bool /
-                # numeric / object columns (e.g. predicted_doublet) to category.
-                col = work_adata.obs[groupby_column]
-                if not isinstance(col.dtype, pd.CategoricalDtype):
-                    work_adata.obs[groupby_column] = col.astype(str).astype("category")
-                if work_adata.obs[groupby_column].nunique() < 2:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Column '{groupby_column}' has only one group; need at least two to compute markers.",
-                    )
-
-                sc.tl.rank_genes_groups(
-                    work_adata,
-                    groupby=groupby_column,
-                    method="wilcoxon",
-                    pts=True,
-                    n_genes=n_genes,
+        if not adaptor.has_markers(column=groupby_column):
+            adata = adaptor.adata
+            if groupby_column not in adata.obs.columns:
+                raise HTTPException(status_code=404, detail=f"Column '{groupby_column}' not found in obs.")
+            n_groups = adata.obs[groupby_column].nunique()
+            if n_groups < 2:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Column '{groupby_column}' has only one group; need at least two to compute markers.",
                 )
-                rgg = work_adata.uns["rank_genes_groups"]
-                groups = list(rgg["names"].dtype.names) if hasattr(rgg["names"].dtype, "names") else []
-                rows = []
-                for group in groups:
-                    total_genes = len(rgg["names"][group])
-                    limit = min(n_genes, total_genes)
-                    for i in range(limit):
-                        gene_name = str(rgg["names"][group][i])
-                        row = {"group": str(group), "gene": gene_name}
-                        if "logfoldchanges" in rgg:
-                            row["logfoldchange"] = float(rgg["logfoldchanges"][group][i])
-                        if "pvals" in rgg:
-                            row["pval"] = float(rgg["pvals"][group][i])
-                        if "pvals_adj" in rgg:
-                            row["pval_adj"] = float(rgg["pvals_adj"][group][i])
-                        if "pts" in rgg and rgg["pts"] is not None:
-                            pts = rgg["pts"]
-                            try:
-                                if hasattr(pts, "loc"):
-                                    row["pct_in"] = float(pts.loc[gene_name, group])
-                                elif hasattr(pts.dtype, "names") and group in pts.dtype.names:
-                                    row["pct_in"] = float(pts[group][i])
-                            except (KeyError, IndexError):
-                                pass
-                        if "pts_rest" in rgg and rgg["pts_rest"] is not None:
-                            pts_rest = rgg["pts_rest"]
-                            try:
-                                if hasattr(pts_rest, "loc"):
-                                    row["pct_out"] = float(pts_rest.loc[gene_name, group])
-                                elif hasattr(pts_rest.dtype, "names") and group in pts_rest.dtype.names:
-                                    row["pct_out"] = float(pts_rest[group][i])
-                            except (KeyError, IndexError):
-                                pass
-                        rows.append(row)
-
-                if not rows:
-                    raise HTTPException(status_code=404, detail="No marker genes computed.")
-
-                import pandas as pd
-                df = pd.DataFrame(rows)
-
-            except HTTPException:
-                raise
+            if n_groups > MAX_MARKER_GROUPS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Column '{groupby_column}' has {n_groups} groups; markers are computed "
+                        f"for at most {MAX_MARKER_GROUPS}."
+                    ),
+                )
+            try:
+                key = markers_key(groupby_column)
+                adata.uns[key] = _compute_markers(adata, groupby_column)
+                drop_enrichment_cache(adata, groupby_column)
             except Exception as e:
                 logger.error("On-demand marker computation failed: %s", e)
                 raise HTTPException(status_code=500, detail=f"Marker computation failed: {e!s}")
+            try:
+                dm.persist_uns(dataset_id, adaptor, [key])
+            except Exception as e:  # still served from memory; recomputed after a reload
+                logger.warning("Could not save markers for '%s': %s", groupby_column, e)
+        df = adaptor.get_markers(
+            groupby=groupby if groupby else None,
+            column=groupby_column,
+            n_genes=n_genes,
+        )
     else:
         if not adaptor.has_markers():
             raise HTTPException(
