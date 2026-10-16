@@ -195,6 +195,20 @@ describe("CompareColoringsGrid", () => {
     expect(screen.getByText("1")).toBeInTheDocument();
   });
 
+  it("keeps a long label at a panel's left edge inside the panel", async () => {
+    // "CD4+ memory T cell" sits on the leftmost cells, ~26 px from the panel's
+    // edge; its ~134 px of text would lose its first characters there.
+    const long = { ...CELL_TYPE, values: ["CD4+ memory T cell", "NK", "T"] };
+    useDatasetStore.setState({ currentDataset: dataset([long, LEIDEN]), currentDatasetId: "ds1" });
+    renderGrid();
+    await screen.findByTestId("deck");
+    type L = { id: string; props: { data: { label: string; offset: number[] }[] } };
+    const layer = (deckProps.current!.layers as L[]).find((l) => l.id === "split-label-0")!;
+    const offsetX = (label: string) => layer.props.data.find((d) => d.label === label)!.offset[0]!;
+    expect(offsetX("CD4+ memory T cell")).toBeGreaterThan(30);
+    expect(offsetX("NK")).toBe(0);
+  });
+
   it("drops the labels when toggled off for this set of columns, and fades all but a highlighted group", async () => {
     useUnifiedViewStore.setState({ centroidLabels: { key: compareLabelKey(["cell_type", "leiden"]), show: false } });
     const { unmount } = renderGrid();

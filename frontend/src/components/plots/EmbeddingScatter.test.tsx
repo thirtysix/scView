@@ -73,20 +73,42 @@ describe("EmbeddingScatter built-in tooltip", () => {
 });
 
 describe("EmbeddingScatter group labels", () => {
-  type L = { id: string; props: { data: { label: string; position: number[] }[]; opacity: number } };
+  type L = {
+    id: string;
+    props: { data: { label: string; position: number[]; offset: number[] }[]; opacity: number };
+  };
   const labelLayers = () => (deckProps.current!.layers as L[]).filter((l) => l.id.startsWith("embedding-labels"));
   const codes = Int32Array.from([0, 1, 1]);
 
-  it("draws each category's name at its centroid when asked", async () => {
+  it("draws each category's name among its cells when asked", async () => {
     render(
       <EmbeddingScatter positions={positions} colorValues={codes} colorType="categorical" categories={["B", "NK"]} showLabels />,
     );
     await screen.findByTestId("deck");
     const [layer] = labelLayers();
-    expect(layer!.props.data.map((d) => [d.label, d.position])).toEqual([
-      ["B", [0, 0]],
-      ["NK", [1.5, 1.5]],
+    expect(layer!.props.data.map((d) => [d.label, d.position, d.offset])).toEqual([
+      ["B", [0, 0], [0, 0]],
+      ["NK", [1, 1], [0, 0]],
     ]);
+  });
+
+  it("keeps a label near the plot's edge inside it", async () => {
+    // A wide embedding: the fitted view puts x = 0 about 18 px from the left
+    // edge of the 400 px plot, and x = 100 as far from the right one.
+    render(
+      <EmbeddingScatter
+        positions={Float32Array.from([0, 0, 100, 1])}
+        colorValues={Int32Array.from([0, 1])}
+        colorType="categorical"
+        categories={["CD4+ memory T cell", "Megakaryocyte"]}
+        showLabels
+      />,
+    );
+    await screen.findByTestId("deck");
+    const [layer] = labelLayers();
+    const [left, right] = layer!.props.data.map((d) => d.offset[0]!);
+    expect(left).toBeGreaterThan(40);
+    expect(right).toBeLessThan(-30);
   });
 
   it("keeps the highlighted group's label and fades the others", async () => {
