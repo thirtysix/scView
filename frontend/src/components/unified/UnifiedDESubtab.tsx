@@ -3,6 +3,7 @@ import { Loader2, Download, Lasso, FlaskConical, ArrowLeftRight, Sparkles } from
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
+import { useDESettingsStore, type DEMode, type DETest } from "@/stores/deSettingsStore";
 import { computeDE, computeDECompare, type DEResponse } from "@/api/de";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { DEEnrichment } from "@/components/unified/DEEnrichment";
@@ -19,8 +20,8 @@ import {
 import { formatPValue, prettyObsLabel } from "@/lib/formatting";
 import type { ObsColumnInfo } from "@/api/types";
 
-type Mode = "selection" | "groups";
-type Test = "wilcoxon" | "pseudobulk";
+type Mode = DEMode;
+type Test = DETest;
 
 /** Categorical columns with listed values, usable as a group picker. */
 function groupColumns(cols: ObsColumnInfo[] | undefined, maxLevels: number): ObsColumnInfo[] {
@@ -43,7 +44,7 @@ function defaultSplit(cols: ObsColumnInfo[]): string {
 interface Props {
   onGeneClick: (gene: string) => void;
   /** Scores an enriched gene set on the scatter (from the DE enrichment). */
-  onScoreGeneSet: (scores: Float32Array, name: string) => void;
+  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
 }
 
 /**
@@ -57,7 +58,6 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const highlighted = useSelectionStore((s) => s.highlightedGroup);
   const askCopilot = useViewStore((s) => s.askCopilot);
 
-  const [mode, setMode] = useState<Mode>("selection");
   const [result, setResult] = useState<DEResponse | null>(null);
   // Display name of the comparison group ("rest" for selection-vs-rest).
   const [refLabel, setRefLabel] = useState("rest");
@@ -65,19 +65,31 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const [comparison, setComparison] = useState<DEComparison | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [fcThreshold, setFcThreshold] = useState(1);
   const [pThreshold] = useState(0.05);
+
+  // The settings live in a store (they survive a tab switch; a session restores them).
+  const mode = useDESettingsStore((s) => s.mode);
+  const fcThreshold = useDESettingsStore((s) => s.fcThreshold);
+  const splitBy = useDESettingsStore((s) => s.splitBy);
+  const groupA = useDESettingsStore((s) => s.groupA);
+  const groupB = useDESettingsStore((s) => s.groupB);
+  const withinCol = useDESettingsStore((s) => s.withinCol);
+  const withinVal = useDESettingsStore((s) => s.withinVal);
+  const test = useDESettingsStore((s) => s.test);
+  const replicateKey = useDESettingsStore((s) => s.replicateKey);
+  const update = useDESettingsStore((s) => s.update);
+  const setMode = (m: Mode) => update({ mode: m });
+  const setFcThreshold = (v: number) => update({ fcThreshold: v });
+  const setSplitBy = (v: string) => update({ splitBy: v });
+  const setGroupA = (v: string) => update({ groupA: v });
+  const setGroupB = (v: string) => update({ groupB: v });
+  const setWithinVal = (v: string) => update({ withinVal: v });
+  const setTest = (t: Test) => update({ test: t });
+  const setReplicateKey = useCallback((v: string) => update({ replicateKey: v }), [update]);
 
   // Between-groups pickers.
   const splitCols = useMemo(() => groupColumns(dataset?.obs_columns, 50), [dataset]);
   const withinCols = useMemo(() => groupColumns(dataset?.obs_columns, 100), [dataset]);
-  const [splitBy, setSplitBy] = useState("");
-  const [groupA, setGroupA] = useState("");
-  const [groupB, setGroupB] = useState("");
-  const [withinCol, setWithinCol] = useState("");
-  const [withinVal, setWithinVal] = useState("");
-  const [test, setTest] = useState<Test>("wilcoxon");
-  const [replicateKey, setReplicateKey] = useState("");
 
   const donorCols = useMemo(
     () => replicateColumns(dataset?.obs_columns, [splitBy, withinCol]),
@@ -88,33 +100,43 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     if (!donorCols.some((c) => c.name === replicateKey)) {
       setReplicateKey(suggestReplicateColumn(donorCols));
     }
-  }, [donorCols, replicateKey]);
+  }, [donorCols, replicateKey, setReplicateKey]);
 
   const splitValues = splitCols.find((c) => c.name === splitBy)?.values ?? [];
   const withinValues = withinCols.find((c) => c.name === withinCol)?.values ?? [];
 
-  // Reset the pickers when the dataset changes; default to the joint `dataset` column.
   useEffect(() => {
     setResult(null);
-    setSplitBy(defaultSplit(splitCols));
-    setWithinCol("");
-    setWithinVal("");
-  }, [datasetId, splitCols]);
+  }, [datasetId]);
+
+  // Pickers this dataset can't use fall back to the defaults (the joint
+  // `dataset` column first); a new dataset starts from DE_DEFAULTS.
+  useEffect(() => {
+    const s = useDESettingsStore.getState();
+    if (!splitCols.some((c) => c.name === s.splitBy)) update({ splitBy: defaultSplit(splitCols) });
+    if (s.withinCol && !withinCols.some((c) => c.name === s.withinCol && (c.values ?? []).includes(s.withinVal))) {
+      update({ withinCol: "", withinVal: "" });
+    }
+  }, [splitCols, withinCols, update]);
 
   useEffect(() => {
     const vals = splitCols.find((c) => c.name === splitBy)?.values ?? [];
-    setGroupA(vals[1] ?? vals[0] ?? "");
-    setGroupB(vals[0] ?? "");
-  }, [splitBy, splitCols]);
+    const s = useDESettingsStore.getState();
+    if (!vals.includes(s.groupA) || !vals.includes(s.groupB)) {
+      update({ groupA: vals[1] ?? vals[0] ?? "", groupB: vals[0] ?? "" });
+    }
+  }, [splitBy, splitCols, update]);
 
-  // A cluster / cell type clicked in the legend becomes the "within" scope.
+  // A cluster / cell type clicked in the legend becomes the "within" scope,
+  // once per highlight (a scope picked by hand since stays).
   useEffect(() => {
     if (!highlighted || highlighted.column === splitBy) return;
+    const done = useDESettingsStore.getState().scopedHighlight;
+    if (done && done.column === highlighted.column && done.value === highlighted.value) return;
     if (withinCols.some((c) => c.name === highlighted.column)) {
-      setWithinCol(highlighted.column);
-      setWithinVal(highlighted.value);
+      update({ withinCol: highlighted.column, withinVal: highlighted.value, scopedHighlight: highlighted });
     }
-  }, [highlighted, splitBy, withinCols]);
+  }, [highlighted, splitBy, withinCols, update]);
 
   const nSelected = selected?.size ?? 0;
 
@@ -253,10 +275,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                   ))}
                 </select>
                 <button
-                  onClick={() => {
-                    setGroupA(groupB);
-                    setGroupB(groupA);
-                  }}
+                  onClick={() => update({ groupA: groupB, groupB: groupA })}
                   title="Swap groups"
                   className="rounded border border-slate-300 bg-white p-1 text-slate-500 hover:bg-slate-100"
                 >
@@ -274,10 +293,12 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 <span className="w-12 font-medium text-slate-500">Within</span>
                 <select
                   value={withinCol}
-                  onChange={(e) => {
-                    setWithinCol(e.target.value);
-                    setWithinVal(withinCols.find((c) => c.name === e.target.value)?.values?.[0] ?? "");
-                  }}
+                  onChange={(e) =>
+                    update({
+                      withinCol: e.target.value,
+                      withinVal: withinCols.find((c) => c.name === e.target.value)?.values?.[0] ?? "",
+                    })
+                  }
                   className={selectCls}
                 >
                   <option value="">All cells</option>

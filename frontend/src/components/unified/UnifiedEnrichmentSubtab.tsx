@@ -32,7 +32,7 @@ interface EnrichmentResponse {
 
 interface UnifiedEnrichmentSubtabProps {
   onTermClick: (gene: string) => void;
-  onScoreGeneSet: (scores: Float32Array, name: string) => void;
+  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
 }

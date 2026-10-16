@@ -28,6 +28,7 @@ import { colorByLine, type HoverLine } from "@/lib/hoverInfo";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { labelsShown } from "@/lib/centroidLabels";
+import { cameraFromViewState } from "@/lib/session";
 import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
@@ -183,6 +184,27 @@ export function UnifiedViewPanel() {
 
   // --- View state for lasso ---
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(null);
+
+  // The main plot's camera, kept in the store for "Save session"; a camera from
+  // "Open session" is shown once this dataset and embedding are on screen.
+  const setCamera = useUnifiedViewStore((s) => s.setCamera);
+  const handleCameraChange = useCallback(
+    (vs: Record<string, unknown>, fitted: boolean) => {
+      const camera = fitted ? null : cameraFromViewState(vs);
+      setCamera(camera && datasetId ? { datasetId, embedding, camera } : null);
+    },
+    [datasetId, embedding, setCamera],
+  );
+  const pendingCamera = useUnifiedViewStore((s) => s.pendingCamera);
+  const setPendingCamera = useUnifiedViewStore((s) => s.setPendingCamera);
+  const restoreCamera =
+    pendingCamera && pendingCamera.datasetId === datasetId && pendingCamera.embedding === embedding
+      ? (pendingCamera.camera as unknown as Record<string, unknown>)
+      : null;
+  const handleCameraRestored = useCallback(() => {
+    setViewState(restoreCamera); // the lasso and the cluster map follow it
+    setPendingCamera(null);
+  }, [restoreCamera, setPendingCamera]);
 
   // --- Resizable split pane ---
   const [splitFraction, setSplitFraction] = useState(0.6); // left panel fraction (0.3–0.8)
@@ -350,11 +372,12 @@ export function UnifiedViewPanel() {
   }, [expressionLayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Gene set score handler ---
+  // `genes`: the set scored, so a saved session can score it again.
   const handleScoreComplete = useCallback(
-    (scores: Float32Array, name: string) => {
+    (scores: Float32Array, name: string, genes?: string[]) => {
       setOverlayValues(scores);
       setOverlayLabel(name);
-      setScatterOverlay({ type: "score", name });
+      setScatterOverlay({ type: "score", name, genes });
       if (datasetId) setOverlayDatasetId(datasetId);
 
       // Build violin from scores grouped by the active groupBy column
@@ -384,6 +407,25 @@ export function UnifiedViewPanel() {
     [setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId,
      setViolinData, setViolinTitle, groupByColumn, dataset, datasetId, openBottomPanel],
   );
+
+  // --- An overlay from "Open session", drawn once this dataset is on screen ---
+  const pendingOverlay = useUnifiedViewStore((s) => s.pendingOverlay);
+  const setPendingOverlay = useUnifiedViewStore((s) => s.setPendingOverlay);
+  useEffect(() => {
+    if (!pendingOverlay || !datasetId || pendingOverlay.datasetId !== datasetId) return;
+    const o = pendingOverlay.overlay;
+    setPendingOverlay(null);
+    if (o.type === "expression") {
+      handleGeneClick(o.gene);
+      return;
+    }
+    apiFetch<{ scores: number[] }>(`/datasets/${datasetId}/genesets/score`, {
+      method: "POST",
+      body: JSON.stringify({ gene_set: o.genes, score_name: o.name }),
+    })
+      .then((res) => handleScoreComplete(new Float32Array(res.scores), o.name, o.genes))
+      .catch((err) => console.error("Failed to restore the gene-set overlay:", err));
+  }, [pendingOverlay, datasetId, handleGeneClick, handleScoreComplete, setPendingOverlay]);
 
   // --- Clear overlay (revert to obs coloring) ---
   const handleClearOverlay = useCallback(() => {
@@ -689,6 +731,10 @@ export function UnifiedViewPanel() {
                 maxRenderedCells={maxRenderedCells}
                 externalViewState={viewState}
                 onViewStateChange={setViewState}
+                restoreViewState={restoreCamera}
+                onRestoreViewState={handleCameraRestored}
+                cameraKey={`${datasetId}:${embedding}`}
+                onCameraChange={handleCameraChange}
                 onHover={handleHover}
                 dimensions={dimensions}
                 exportName={scatterExportName}

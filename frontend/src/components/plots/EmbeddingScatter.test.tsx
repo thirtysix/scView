@@ -149,3 +149,49 @@ describe("EmbeddingScatter group labels", () => {
     expect(labelLayers()).toHaveLength(0);
   });
 });
+
+describe("EmbeddingScatter restored camera", () => {
+  const viewState = () => deckProps.current!.viewState as Record<string, unknown>;
+  const userMoves = (vs: Record<string, unknown>) =>
+    act(() => (deckProps.current!.onViewStateChange as (e: unknown) => void)({ viewState: vs }));
+
+  it("shows a restored camera over the fit, keeps it through a data reload, and drops it when the user moves", async () => {
+    const onRestored = vi.fn();
+    const onCamera = vi.fn();
+    const restored = { target: [1.5, 1.5, 0], zoom: 6 };
+    const props = { colorValues: null, colorType: "continuous" as const, onCameraChange: onCamera };
+    const { rerender } = render(
+      <EmbeddingScatter positions={positions} restoreViewState={restored} onRestoreViewState={onRestored} {...props} />,
+    );
+    await screen.findByTestId("deck");
+    expect(viewState()).toMatchObject(restored);
+    expect(typeof viewState().minZoom).toBe("number"); // the fit's limits stay
+    expect(onRestored).toHaveBeenCalled();
+    expect(onCamera).toHaveBeenLastCalledWith(expect.objectContaining(restored), false);
+
+    // A recolour reloads the positions: the restored camera stays (the panel
+    // has cleared restoreViewState by then).
+    rerender(<EmbeddingScatter positions={Float32Array.from(positions)} restoreViewState={null} {...props} />);
+    expect(viewState()).toMatchObject(restored);
+
+    userMoves({ ...viewState(), target: [0, 0, 0] });
+    expect(onCamera).toHaveBeenLastCalledWith(expect.objectContaining({ target: [0, 0, 0] }), false);
+    rerender(<EmbeddingScatter positions={Float32Array.from(positions)} restoreViewState={null} {...props} />);
+    expect(viewState().zoom).not.toBe(6); // fitted again, as before
+    expect(onCamera).toHaveBeenLastCalledWith(expect.anything(), true);
+  });
+
+  it("drops a restored camera when another dataset or embedding is shown", async () => {
+    const restored = { target: [1.5, 1.5, 0], zoom: 6 };
+    const props = { colorValues: null, colorType: "continuous" as const };
+    const { rerender } = render(
+      <EmbeddingScatter positions={positions} restoreViewState={restored} cameraKey="kang:X_umap" {...props} />,
+    );
+    await screen.findByTestId("deck");
+    expect(viewState()).toMatchObject(restored);
+    rerender(<EmbeddingScatter positions={positions} restoreViewState={null} cameraKey="pbmc:X_umap" {...props} />);
+    rerender(<EmbeddingScatter positions={Float32Array.from([5, 5, 9, 9])} restoreViewState={null} cameraKey="pbmc:X_umap" {...props} />);
+    expect(viewState().zoom).not.toBe(6);
+    expect(viewState().target).not.toEqual(restored.target);
+  });
+});

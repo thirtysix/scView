@@ -3,12 +3,14 @@ import type { DatasetInfo } from "@/api/types";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
+import { useDESettingsStore } from "@/stores/deSettingsStore";
 import { defaultColorBy } from "@/lib/obsColumns";
 
 /** Per-dataset view state lives in other stores; a selection of cell indices or a
  *  column name from the previous dataset means nothing (or the wrong thing) in
- *  the next one, so it is reset when the dataset changes. */
-function resetViewForDataset(dataset: DatasetInfo | null) {
+ *  the next one, so it is reset when the dataset changes (and before a saved
+ *  session is restored on the open dataset). */
+export function resetViewForDataset(dataset: DatasetInfo | null) {
   const columns = new Set((dataset?.obs_columns ?? []).map((c) => c.name));
   const keep = (col: string) => (col && columns.has(col) ? col : "");
   useSelectionStore.getState().clearSelection();
@@ -21,6 +23,10 @@ function resetViewForDataset(dataset: DatasetInfo | null) {
   const unified = useUnifiedViewStore.getState();
   unified.setGroupByColumn(keep(unified.groupByColumn));
   unified.clearOverlayState();
+  unified.setCamera(null);
+  unified.setPendingCamera(null);
+  unified.setPendingOverlay(null);
+  useDESettingsStore.getState().reset();
 }
 
 interface DatasetState {

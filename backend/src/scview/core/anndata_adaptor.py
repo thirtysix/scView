@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -152,6 +153,7 @@ class AnnDataAdaptor:
         self._adata: ad.AnnData | None = None
         self._qc_cache: dict | None = None
         self._qc_cells: dict | None = None
+        self._fingerprint: tuple[pd.Index, str] | None = None  # (obs_names hashed, hash)
 
     @property
     def adata(self) -> ad.AnnData:
@@ -175,6 +177,22 @@ class AnnDataAdaptor:
 
     def n_cells(self) -> int:
         return self.adata.n_obs
+
+    def cells_fingerprint(self) -> str:
+        """A short hash of the cell barcodes in order: equal for two datasets
+        whose cell i is the same cell, so a saved session's cell indices and
+        camera still mean the same cells. Labels, embeddings and genes don't
+        change it; filtering or reordering cells does."""
+        names = self.adata.obs_names
+        if self._fingerprint is not None and self._fingerprint[0] is names:
+            return self._fingerprint[1]
+        h = hashlib.sha256(f"{len(names)}\n".encode())
+        for start in range(0, len(names), 100_000):
+            h.update("\n".join(map(str, names[start:start + 100_000])).encode())
+            h.update(b"\n")
+        fingerprint = h.hexdigest()[:24]
+        self._fingerprint = (names, fingerprint)
+        return fingerprint
 
     def n_genes(self) -> int:
         return self.adata.n_vars

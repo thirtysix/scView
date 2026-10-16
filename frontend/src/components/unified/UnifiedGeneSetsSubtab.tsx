@@ -36,7 +36,7 @@ interface ScoreResponse {
 }
 
 interface UnifiedGeneSetsSubtabProps {
-  onScoreComplete: (scores: Float32Array, name: string) => void;
+  onScoreComplete: (scores: Float32Array, name: string, genes?: string[]) => void;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
 }
@@ -134,7 +134,7 @@ export function UnifiedGeneSetsSubtab({
       const cached = scoreCache.current.get(cacheKey(gs));
       if (cached) {
         setScoreResult({ found: cached.found, missing: cached.missing });
-        onScoreComplete(cached.scores, gs.name);
+        onScoreComplete(cached.scores, gs.name, gs.genes);
       } else {
         setScoreResult(null);
       }
@@ -168,7 +168,7 @@ export function UnifiedGeneSetsSubtab({
       };
       scoreCache.current.set(cacheKey(selectedGeneSet), entry);
       setScoreResult({ found: entry.found, missing: entry.missing });
-      onScoreComplete(scores, selectedGeneSet.name);
+      onScoreComplete(scores, selectedGeneSet.name, selectedGeneSet.genes);
     } catch (err) {
       console.error("Scoring failed:", err);
     } finally {
