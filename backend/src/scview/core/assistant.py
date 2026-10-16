@@ -835,11 +835,12 @@ _PANELS = {
     "load": "Data", "assessment": "Data Assessment", "unified": "Unified View",
     "observations": "Observations", "expression": "Gene Expression",
     "genesets": "Gene Sets & Enrichment", "markers": "Marker Genes",
-    "trajectory": "Trajectory", "provenance": "History", "assistant": "AI Co-pilot",
+    "trajectory": "Trajectory", "compare": "Compare", "provenance": "History",
+    "assistant": "AI Co-pilot",
 }
 _SUBTABS = {
     "markers": "Markers", "expression": "Expression",
-    "genesets": "Gene Sets", "enrichment": "Enrichment",
+    "genesets": "Gene Sets", "enrichment": "Enrichment", "de": "DE",
 }
 # "Can you show ..." / "can I see ..." / "please open ...": a request phrased as a question.
 _POLITE = r"(?:(?:can|could|would|will) you\s+|(?:can|could|may) i\s+|please\s+)(?:please\s+)?"
@@ -1056,7 +1057,7 @@ async def extract_actions(
         "- show_marker_plot {type, plot}: show the existing marker genes as a heatmap or dot "
         "plot (plot: heatmap|dotplot).\n"
         "- set_embedding {type, embedding}: switch the embedding (obsm key, e.g. 3D -> X_umap_3d).\n"
-        "- set_subtab {type, subtab}: open a Unified View tab (markers|expression|genesets|enrichment).\n"
+        "- set_subtab {type, subtab}: open a Unified View tab (markers|expression|genesets|enrichment|de).\n"
         "- open_panel {type, panel}: navigate to a panel.\n"
         "- clear_highlight {type} / clear_overlay {type}: clear the current highlight / gene overlay.\n"
         "- annotate_cell_types {type, method?, groupby?, tissue?}: label clusters with cell types "

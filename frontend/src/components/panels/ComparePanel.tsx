@@ -6,7 +6,8 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { listDatasets, getDataset } from "@/api/datasets";
 import { apiFetch } from "@/api/client";
-import { CATEGORICAL_COLORS } from "@/lib/colors";
+import { getPalette } from "@/lib/colors";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { prettyObsLabel } from "@/lib/formatting";
 import type { DatasetInfo } from "@/api/types";
 
@@ -79,6 +80,7 @@ export function ComparePanel() {
  * datasets of different sizes are comparable.
  */
 function CompositionCompare() {
+  const palette = getPalette(useSettingsStore((s) => s.categoricalPalette));
   const datasetA = useDatasetStore((s) => s.currentDataset);
   const askCopilot = useViewStore((s) => s.askCopilot);
 
@@ -178,8 +180,8 @@ function CompositionCompare() {
     );
   }
 
-  const aColor = `rgb(${CATEGORICAL_COLORS[0]!.join(",")})`;
-  const bColor = `rgb(${CATEGORICAL_COLORS[3]!.join(",")})`;
+  const aColor = `rgb(${palette[0]!.join(",")})`;
+  const bColor = `rgb(${palette[3]!.join(",")})`;
 
   return (
     <div className="space-y-5">

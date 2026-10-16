@@ -9,6 +9,7 @@ group here is an ad-hoc list of cell indices.
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -38,6 +39,7 @@ class DECompareRequest(BaseModel):
     group_b: str
     within_column: str | None = None
     within_value: str | None = None
+    replicate_key: str | None = None  # donor/sample obs column; overrides detection
 
 
 class DEGene(BaseModel):
@@ -52,6 +54,52 @@ class DEResponse(BaseModel):
     n_rest: int
     label: str
     genes: list[DEGene]
+    # Replicate guard (only set by /de/compare); additive, all optional.
+    replicate_key: str | None = None
+    n_donors_a: int | None = None
+    n_donors_b: int | None = None
+    top_donor_share_a: float | None = None
+    top_donor_share_b: float | None = None
+    underreplicated: bool = False
+
+
+_DONOR_COL_RE = re.compile(r"donor|patient|individual|subject|sample|participant", re.I)
+
+
+def _detect_replicate_key(obs, exclude: set[str]) -> str | None:
+    """First donor/patient/sample-like obs column (not one used to split/scope)."""
+    for col in obs.columns:
+        if col in exclude or not _DONOR_COL_RE.search(str(col)):
+            continue
+        if obs[col].nunique(dropna=True) > 1:
+            return str(col)
+    return None
+
+
+def _donor_stats(donors) -> tuple[int, float]:
+    """(number of distinct donors, share of cells held by the largest donor)."""
+    counts = donors.value_counts(dropna=True)
+    total = int(counts.sum())
+    if total == 0:
+        return 0, 0.0
+    return int((counts > 0).sum()), float(counts.max()) / total
+
+
+def _replicate_guard(obs, mask_a, mask_b, key: str | None) -> dict:
+    if not key:
+        return {"replicate_key": None, "underreplicated": False}
+    col = obs[key].astype(str).where(obs[key].notna())
+    na, sa = _donor_stats(col[mask_a])
+    nb, sb = _donor_stats(col[mask_b])
+    under = na < 2 or nb < 2 or sa > 0.5 or sb > 0.5
+    return {
+        "replicate_key": key,
+        "n_donors_a": na,
+        "n_donors_b": nb,
+        "top_donor_share_a": round(sa, 4),
+        "top_donor_share_b": round(sb, 4),
+        "underreplicated": bool(under),
+    }
 
 
 def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
@@ -153,7 +201,7 @@ async def differential_expression_compare(
 
     adata = adaptor.adata
     obs = adata.obs
-    for col in (body.split_by, body.within_column):
+    for col in (body.split_by, body.within_column, body.replicate_key):
         if col and col not in obs.columns:
             raise HTTPException(status_code=404, detail=f"Column '{col}' not found.")
     if body.group_a == body.group_b:
@@ -180,4 +228,8 @@ async def differential_expression_compare(
     work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
     genes = _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id)
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
-    return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes)
+    key = body.replicate_key or _detect_replicate_key(
+        obs, {c for c in (body.split_by, body.within_column) if c}
+    )
+    guard = _replicate_guard(obs, mask_a, mask_b, key)
+    return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes, **guard)

@@ -1,4 +1,6 @@
 import { useSettingsStore } from "@/stores/settingsStore";
+import { CATEGORICAL_PALETTE_OPTIONS, COLORMAP_OPTIONS } from "@/lib/colors";
+import type { CategoricalPaletteName, ColormapName } from "@/lib/colors";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { Lasso, RotateCcw, X } from "lucide-react";
@@ -24,6 +26,10 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
   const setOpacity = useSettingsStore((s) => s.setOpacity);
   const plotBackground = useSettingsStore((s) => s.plotBackground);
   const setPlotBackground = useSettingsStore((s) => s.setPlotBackground);
+  const categoricalPalette = useSettingsStore((s) => s.categoricalPalette);
+  const setCategoricalPalette = useSettingsStore((s) => s.setCategoricalPalette);
+  const continuousColormap = useSettingsStore((s) => s.continuousColormap);
+  const setContinuousColormap = useSettingsStore((s) => s.setContinuousColormap);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const setMaxRenderedCells = useSettingsStore((s) => s.setMaxRenderedCells);
 
@@ -171,6 +177,43 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Colour schemes */}
+      <div className="flex items-center gap-1.5">
+        <label className="text-[11px] font-medium text-slate-500">Colours</label>
+        <label htmlFor="palette-categorical" className="text-[10px] text-slate-500">
+          Categories
+        </label>
+        <select
+          id="palette-categorical"
+          aria-label="Categorical colour palette"
+          value={categoricalPalette}
+          onChange={(e) => setCategoricalPalette(e.target.value as CategoricalPaletteName)}
+          className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700 focus:border-blue-400 focus:outline-none"
+        >
+          {CATEGORICAL_PALETTE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="palette-continuous" className="text-[10px] text-slate-500">
+          Expression
+        </label>
+        <select
+          id="palette-continuous"
+          aria-label="Continuous colour map"
+          value={continuousColormap}
+          onChange={(e) => setContinuousColormap(e.target.value as ColormapName)}
+          className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700 focus:border-blue-400 focus:outline-none"
+        >
+          {COLORMAP_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Max rendered cells */}

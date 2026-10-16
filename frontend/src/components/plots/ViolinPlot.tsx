@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import Plot from "@/components/plots/Plot";
-import { CATEGORICAL_COLORS } from "@/lib/colors";
+import { getPalette } from "@/lib/colors";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 interface ViolinPlotProps {
   data: Record<string, number[]>; // group name -> values
@@ -17,10 +18,11 @@ export function ViolinPlot({
   yLabel,
   height = 400,
 }: ViolinPlotProps) {
+  const palette = getPalette(useSettingsStore((s) => s.categoricalPalette));
   const traces = useMemo(() => {
     const groups = Object.keys(data);
     return groups.map((group, i) => {
-      const color = CATEGORICAL_COLORS[i % CATEGORICAL_COLORS.length]!;
+      const color = palette[i % palette.length]!;
       const rgbStr = `rgb(${color[0]},${color[1]},${color[2]})`;
       const rgbaStr = `rgba(${color[0]},${color[1]},${color[2]},0.5)`;
 
@@ -37,7 +39,7 @@ export function ViolinPlot({
         points: false as const,
       };
     });
-  }, [data]);
+  }, [data, palette]);
 
   const layout = useMemo(
     () => ({

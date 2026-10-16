@@ -125,6 +125,8 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
   ],
   highly_variable_genes: [
     { param: "n_top_genes", label: "N top genes", type: "number", min: 500, max: 10000, step: 100, default: 2000 },
+    { param: "hvg_flavor", label: "HVG flavor", type: "select", options: ["seurat", "cell_ranger"], default: "seurat" },
+    { param: "hvg_batch_key", label: "HVG batch column", type: "select", options: [], default: "" },
   ],
   pca: [
     { param: "n_comps", label: "N components", type: "number", min: 10, max: 200, step: 5, default: 50 },
@@ -1079,9 +1081,9 @@ export function DataAssessmentPanel() {
                                         disabled={running}
                                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                       >
-                                        {pc.param === "batch_key" ? (
+                                        {pc.param === "batch_key" || pc.param === "hvg_batch_key" ? (
                                           <>
-                                            <option value="">Select batch column...</option>
+                                            <option value="">{pc.param === "hvg_batch_key" ? "None (pooled)" : "Select batch column..."}</option>
                                             {batchColumnOptions.map((opt) => (
                                               <option key={opt} value={opt}>{opt}</option>
                                             ))}

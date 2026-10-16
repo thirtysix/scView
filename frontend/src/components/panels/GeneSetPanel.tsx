@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { plotlyColorscale } from "@/lib/colors";
 import {
   Library,
   Loader2,
@@ -97,6 +98,7 @@ export function GeneSetPanel() {
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
   const plotBackground = useSettingsStore((s) => s.plotBackground);
+  const colormapName = useSettingsStore((s) => s.continuousColormap);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
 
@@ -1258,7 +1260,7 @@ export function GeneSetPanel() {
                               ),
                             )
                             .reverse(),
-                          colorscale: "Viridis",
+                          colorscale: plotlyColorscale(colormapName),
                           colorbar: {
                             title: {
                               text: "-log10(adj. p)",

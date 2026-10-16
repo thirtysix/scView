@@ -329,9 +329,29 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
             {result.n_rest.toLocaleString()}) · {sigGenes.length.toLocaleString()} significant of{" "}
             {result.genes.length.toLocaleString()} genes · click a point or row to overlay it
             {refLabel !== "rest" && (
-              <span className="block pt-0.5">
+              <span
+                className={`mt-0.5 block ${
+                  result.underreplicated
+                    ? "rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-amber-800"
+                    : ""
+                }`}
+              >
                 Cell-level Wilcoxon: cells are treated as independent, so p-values are optimistic
                 when the groups also differ by donor or sample.
+                {result.replicate_key ? (
+                  <>
+                    {" "}
+                    Donors (<code>{result.replicate_key}</code>): {result.label.split(" (")[0]}{" "}
+                    {result.n_donors_a}, top donor{" "}
+                    {Math.round((result.top_donor_share_a ?? 0) * 100)}%; {refLabel}{" "}
+                    {result.n_donors_b}, top donor{" "}
+                    {Math.round((result.top_donor_share_b ?? 0) * 100)}%.
+                    {result.underreplicated &&
+                      " Under-replicated: fewer than 2 donors or one donor dominates a side."}
+                  </>
+                ) : (
+                  " No donor/sample column detected."
+                )}
               </span>
             )}
           </div>

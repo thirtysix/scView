@@ -4,6 +4,7 @@ import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { mapCategoryToColor } from "@/lib/colors";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
  * A compact reference scatter showing the cells coloured by the active grouping
@@ -32,6 +33,7 @@ export function ClusterReference({
   viewState?: Record<string, unknown> | null;
   onViewStateChange?: (vs: Record<string, unknown>) => void;
 }) {
+  const paletteName = useSettingsStore((s) => s.categoricalPalette);
   const [clusterValues, setClusterValues] = useState<Int32Array | null>(null);
   const [highlight, setHighlight] = useState<number | null>(null);
 
@@ -111,7 +113,7 @@ export function ClusterReference({
       </div>
       <div className="flex flex-wrap gap-1 p-2">
         {categories.map((name, idx) => {
-          const [r, g, b] = mapCategoryToColor(idx);
+          const [r, g, b] = mapCategoryToColor(idx, paletteName);
           const active = highlight === idx;
           return (
             <button

@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { plotlyColorscale } from "@/lib/colors";
+import { useSettingsStore } from "@/stores/settingsStore";
 import Plot from "@/components/plots/Plot";
 import { Loader2, Sparkles } from "lucide-react";
 
@@ -106,6 +108,7 @@ function HistCard({ label, metric }: { label: string; metric: QcMetric }) {
 }
 
 function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
+  const colormapName = useSettingsStore((s) => s.continuousColormap);
   return (
     <Panel title="Counts vs. genes per cell (colour = % mito)" className="h-[380px]">
       <Plot
@@ -118,7 +121,7 @@ function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
             marker: {
               size: 3,
               color: scatter.color,
-              colorscale: "Viridis",
+              colorscale: plotlyColorscale(colormapName),
               showscale: true,
               opacity: 0.55,
               colorbar: { title: { text: "% mito", font: { size: 9 } }, thickness: 8, len: 0.85 },

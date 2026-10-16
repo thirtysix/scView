@@ -133,3 +133,64 @@ async def test_de_on_hvg_subset_keeps_down_regulated_genes():
     assert len(res.genes) == 30
     down = {g.gene for g in res.genes if g.logfoldchange < 0}
     assert {f"G{i}" for i in range(20, 25)} <= down
+
+
+def _donor_adata(donors_a: list[str], donors_b: list[str], col: str | None = "donor"):
+    rng = np.random.default_rng(1)
+    n = len(donors_a) + len(donors_b)
+    a = ad.AnnData(np.abs(rng.normal(5, 1, size=(n, 10))).astype("float32"))
+    a.var_names = [f"G{i}" for i in range(10)]
+    a.obs["grp"] = ["A"] * len(donors_a) + ["B"] * len(donors_b)
+    if col:
+        a.obs[col] = donors_a + donors_b
+    return a
+
+
+async def _guard(a):
+    return await differential_expression_compare(
+        "x", DECompareRequest(split_by="grp", group_a="A", group_b="B"), _DM(a)
+    )
+
+
+@pytest.mark.asyncio
+async def test_guard_single_donor_per_side_flagged():
+    res = await _guard(_donor_adata(["d1"] * 20, ["d2"] * 20))
+    assert res.replicate_key == "donor"
+    assert res.n_donors_a == 1 and res.n_donors_b == 1
+    assert res.top_donor_share_a == 1.0
+    assert res.underreplicated is True
+
+
+@pytest.mark.asyncio
+async def test_guard_four_donors_even_not_flagged():
+    a_d = [f"a{i}" for i in range(4)] * 5
+    b_d = [f"b{i}" for i in range(4)] * 5
+    res = await _guard(_donor_adata(a_d, b_d))
+    assert res.n_donors_a == 4 and res.n_donors_b == 4
+    assert res.top_donor_share_a == 0.25
+    assert res.underreplicated is False
+
+
+@pytest.mark.asyncio
+async def test_guard_dominant_donor_flagged():
+    a_d = ["a0"] * 14 + ["a1"] * 2 + ["a2"] * 2 + ["a3"] * 2
+    b_d = [f"b{i}" for i in range(4)] * 5
+    res = await _guard(_donor_adata(a_d, b_d))
+    assert res.n_donors_a == 4
+    assert res.top_donor_share_a == 0.7
+    assert res.underreplicated is True
+
+
+@pytest.mark.asyncio
+async def test_guard_no_donor_column_and_override():
+    a = _donor_adata(["x"] * 20, ["y"] * 20, col=None)
+    res = await _guard(a)
+    assert res.replicate_key is None and res.underreplicated is False
+    assert res.n_donors_a is None
+    a.obs["animal"] = [f"m{i % 4}" for i in range(40)]
+    res = await differential_expression_compare(
+        "x",
+        DECompareRequest(split_by="grp", group_a="A", group_b="B", replicate_key="animal"),
+        _DM(a),
+    )
+    assert res.replicate_key == "animal" and res.n_donors_a == 4

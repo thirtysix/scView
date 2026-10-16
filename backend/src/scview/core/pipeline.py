@@ -297,8 +297,17 @@ def _run_log_transform(adata: ad.AnnData, params: PipelineParams) -> None:
     logger.info("Applied log1p transformation")
 
 
+# Flavours offered in the UI. `seurat_v3` is deliberately absent: it needs
+# scikit-misc, which is not installed.
+HVG_FLAVORS: tuple[str, ...] = ("seurat", "cell_ranger")
+
+
 def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> None:
     """Identify highly variable genes."""
+    if params.hvg_flavor not in HVG_FLAVORS:
+        raise ValueError(
+            f"Unsupported HVG flavor '{params.hvg_flavor}'; choose from {', '.join(HVG_FLAVORS)}."
+        )
     # A batch key ranks genes by how many batches call them variable, so a gene
     # that only differs *between* batches isn't picked as biology.
     batch_key = params.hvg_batch_key or None
@@ -394,6 +403,33 @@ def _run_neighbors(adata: ad.AnnData, params: PipelineParams) -> None:
     logger.info("Neighbor graph: k=%d, use_rep=%s", params.n_neighbors, use_rep)
 
 
+def _louvain_igraph(adata: ad.AnnData, resolution: float, key_added: str, seed: int = 0) -> None:
+    """Louvain clustering on the neighbour graph with python-igraph.
+
+    ``sc.tl.louvain`` needs the unmaintained ``louvain`` package, and its igraph
+    flavor ignores ``resolution``; igraph's own multilevel method honours it.
+    Clusters are numbered by size, largest first, as Leiden's are.
+    """
+    import random
+
+    import igraph as ig
+    import pandas as pd
+
+    adj = sp.triu(adata.obsp["connectivities"], k=1).tocoo()
+    g = ig.Graph(n=adata.n_obs, edges=np.column_stack([adj.row, adj.col]).tolist(), directed=False)
+    g.es["weight"] = adj.data.tolist()
+    ig.set_random_number_generator(random.Random(seed))
+    try:
+        membership = np.asarray(g.community_multilevel(weights="weight", resolution=resolution).membership)
+    finally:
+        ig.set_random_number_generator(random)
+    order = np.argsort(-np.bincount(membership), kind="stable")
+    rank = np.empty_like(order)
+    rank[order] = np.arange(order.size)
+    labels = rank[membership].astype(str)
+    adata.obs[key_added] = pd.Categorical(labels, categories=[str(i) for i in range(order.size)])
+
+
 def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
     """Run clustering (Leiden or Louvain).
 
@@ -409,7 +445,7 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
     if method == "leiden":
         sc.tl.leiden(adata, resolution=params.clustering_resolution, key_added=scview_col)
     else:
-        sc.tl.louvain(adata, resolution=params.clustering_resolution, key_added=scview_col)
+        _louvain_igraph(adata, params.clustering_resolution, scview_col)
     adata.uns["scview_active_clustering"] = scview_col
 
     n_clusters = adata.obs[scview_col].nunique()

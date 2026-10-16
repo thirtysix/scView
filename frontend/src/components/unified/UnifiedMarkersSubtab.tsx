@@ -288,6 +288,7 @@ export function UnifiedMarkersSubtab({
               </th>
               <th
                 onClick={() => handleSort("pval_adj")}
+                title="For ranking only: the clusters were found from these same cells, so marker p-values are inflated."
                 className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
               >
                 <span className="flex items-center justify-end gap-1">Adj.P {sortIcon("pval_adj")}</span>
@@ -339,7 +340,10 @@ export function UnifiedMarkersSubtab({
         </table>
       </div>
 
-      <p className="text-[10px] text-slate-400">Click a gene to view its expression on the scatter plot</p>
+      <p className="text-[10px] text-slate-400">
+        Click a gene to view its expression on the scatter plot. Use p-values to rank markers, not as
+        evidence: the clusters were found from these same cells, so markers always test as significant.
+      </p>
     </div>
   );
 }

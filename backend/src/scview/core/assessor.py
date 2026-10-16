@@ -188,6 +188,87 @@ def _check_filtering(adata: Any) -> StepStatus:
 
 
 def _check_normalization(adata: Any) -> StepStatus:
+    """Normalization check, plus an advisory on the library-size scale (C011)."""
+    status = _check_normalization_basic(adata)
+    try:
+        note = _scale_note(adata)
+    except Exception as exc:  # advisory only; never break the check
+        logger.warning("Error checking normalization scale: %s", exc)
+        note = ""
+    if note:
+        status = status.model_copy(update={"details": f"{status.details}. {note}"})
+    return status
+
+
+_SCALE_SAMPLE_CELLS = 2000
+_SCALE_TARGETS = ((1e4, "1e4, the scanpy/Seurat default"), (1e6, "1e6 (CPM)"))
+_BAND_LOG10 = 0.3  # +/- factor ~2 around a target
+
+
+def _counts_recoverable(adata: Any) -> str:
+    """Say where raw counts can be read from, without running any recovery."""
+    from scview.core.pipeline import looks_like_counts  # lazy: pipeline is heavy
+
+    try:
+        layer = adata.layers["counts"] if "counts" in adata.layers else None
+        if layer is not None and looks_like_counts(layer[:200]):
+            return "Raw counts are recoverable from layers['counts']"
+        if adata.raw is not None and looks_like_counts(adata.raw.X[:200]):
+            return "Raw counts are recoverable from .raw"
+    except Exception as exc:
+        logger.debug("counts recovery probe failed: %s", exc)
+    return "No raw counts found in layers['counts'] or .raw"
+
+
+def _scale_note(adata: Any) -> str:
+    """Median per-cell total on a cell sample, classified into scale bands.
+
+    Bands (not equality) because gene filtering / HVG subsetting makes the sums
+    smaller than the normalisation target. Empty string when X is raw counts,
+    scaled (negative) or otherwise unreadable.
+    """
+    if _is_raw_counts(adata):
+        return ""
+    sample = _dense_sample(adata.X, min(_SCALE_SAMPLE_CELLS, adata.n_obs))
+    finite = sample[np.isfinite(sample)]
+    if finite.size == 0 or finite.min() < 0:
+        return ""  # scaled data: totals are meaningless
+    logged = float(finite.max()) <= 20
+    totals = np.expm1(sample).sum(axis=1) if logged else sample.sum(axis=1)
+    median = float(np.median(totals))
+    if median <= 0:
+        return ""
+    n_ref = adata.raw.n_vars if adata.raw is not None else adata.n_vars
+    if "counts" in adata.layers:
+        n_ref = max(n_ref, adata.layers["counts"].shape[1])
+    hvg_subset = adata.n_vars < 0.5 * n_ref
+    form = "expm1(X)" if logged else "X"
+    msg = f"Median per-cell total of {form} = {median:.3g}"
+    near = [
+        label for target, label in _SCALE_TARGETS
+        if abs(np.log10(median / target)) <= _BAND_LOG10
+    ]
+    if near and near[0].startswith("1e4"):
+        msg += " (~1e4, the scanpy/Seurat default; fine)"
+    elif near:
+        msg += (
+            " (~1e6, CPM-scale: WARNING, not the usual 1e4; counts-per-million "
+            "inflates log values and can distort HVG selection and DE effect sizes)"
+        )
+    else:
+        msg += " (non-standard scale"
+        msg += (
+            f"; X holds {adata.n_vars} of {n_ref} genes, so totals are lower than "
+            "the normalisation target, likely normalised before gene subsetting)"
+            if hvg_subset and median < 1e6
+            else ")"
+        )
+    if hvg_subset and near:
+        msg += f"; X is a gene subset ({adata.n_vars} of {n_ref}), totals may sit below the target"
+    return msg + ". " + _counts_recoverable(adata)
+
+
+def _check_normalization_basic(adata: Any) -> StepStatus:
     """Check dtype of X (float -> likely normalized), presence of raw or counts layer."""
     try:
         if _is_raw_counts(adata):
