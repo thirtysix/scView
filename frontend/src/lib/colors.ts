@@ -1,26 +1,29 @@
-// Curated 20-color palette for single-cell biology — vibrant, perceptually
-// distinct, no greys, optimized for UMAP/bar/violin on white & dark backgrounds.
+// 20-colour categorical palette, colour-vision-deficiency (CVD) aware.
+// 1-8: Okabe-Ito (Okabe & Ito 2008) with black replaced by mid grey, since the
+// scatter background toggles white / dark slate. 9-20: Paul Tol muted + light
+// schemes. Only the first 8 are CVD-checked (colors.cvd.test.ts); later entries
+// are for >8 categories, where separation relies on hue/lightness alone.
 export const CATEGORICAL_COLORS = [
-  [0, 117, 220],     // vivid blue
-  [230, 25, 75],     // crimson
-  [60, 180, 75],     // green
-  [255, 127, 0],     // orange
-  [145, 30, 180],    // violet
-  [0, 183, 183],     // teal
-  [240, 163, 10],    // amber
-  [233, 90, 196],    // pink
-  [128, 128, 0],     // olive
-  [70, 153, 144],    // dark teal
-  [0, 51, 128],      // navy
-  [255, 0, 16],      // red
-  [43, 206, 72],     // vivid green
-  [157, 204, 0],     // lime
-  [194, 0, 136],     // magenta
-  [116, 10, 255],    // bright violet
-  [153, 63, 0],      // brown
-  [0, 153, 143],     // sea green
-  [255, 164, 5],     // golden
-  [94, 106, 211],    // periwinkle
+  [230,159,0],      // orange
+  [86,180,233],     // sky blue
+  [0,158,115],      // bluish green
+  [240,228,66],     // yellow
+  [0,114,178],      // blue
+  [213,94,0],       // vermillion
+  [204,121,167],    // reddish purple
+  [153,153,153],    // mid grey (Okabe-Ito black dropped: invisible on the dark background)
+  [51,34,136],      // indigo
+  [136,204,238],    // cyan
+  [68,170,153],     // teal
+  [17,119,51],      // green
+  [153,153,51],     // olive
+  [221,204,119],    // sand
+  [204,102,119],    // rose
+  [136,34,85],      // wine
+  [170,68,153],     // purple
+  [119,170,221],    // light blue
+  [238,136,102],    // light orange
+  [187,204,51],     // pear
 ] as const;
 
 // Viridis colormap — polynomial approximation matching matplotlib's viridis.
