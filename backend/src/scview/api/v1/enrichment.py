@@ -304,15 +304,16 @@ async def enrichment_network(
     try:
         # Leiden over the term-similarity graph: off the event loop too.
         graph = await asyncio.to_thread(
-            network.build_network,
-            [r.model_dump() for r in enrichment.results],
-            fdr=body.fdr,
-            metric=body.metric,
-            min_similarity=body.min_similarity,
-            resolution=body.resolution,
-            seed=body.seed,
-            min_term_size=body.min_term_size,
-            max_term_size=body.max_term_size,
+            lambda: network.build_network(
+                [r.model_dump() for r in enrichment.results],
+                fdr=body.fdr,
+                metric=body.metric,
+                min_similarity=body.min_similarity,
+                resolution=body.resolution,
+                seed=body.seed,
+                min_term_size=body.min_term_size,
+                max_term_size=body.max_term_size,
+            )
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

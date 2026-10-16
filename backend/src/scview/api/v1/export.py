@@ -6,6 +6,7 @@ expression subsets, and a download of the dataset's own .h5ad file.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import re
@@ -272,30 +273,36 @@ async def export_dataset(
         )
 
     # ---- Serialise to bytes ----
-    buf = io.BytesIO()
+    # Excel writing is pure Python (openpyxl): in a worker thread, so the server
+    # keeps answering meanwhile.
+    def _serialise() -> tuple[io.BytesIO, str, str]:
+        buf = io.BytesIO()
 
-    if fmt == "csv":
-        df.to_csv(buf, index=keep_index)
-        buf.seek(0)
-        media_type = "text/csv; charset=utf-8"
-        filename = f"{filename_base}.csv"
-    else:
-        if max(len(part) for part in (sheets or {"": df}).values()) > _XLSX_MAX_ROWS:
-            raise HTTPException(
-                status_code=400,
-                detail="Too many rows for an Excel sheet; export as CSV instead.",
-            )
-        if sheets:
-            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                for name, part in sheets.items():
-                    part.to_excel(writer, sheet_name=name, index=False)
+        if fmt == "csv":
+            df.to_csv(buf, index=keep_index)
+            buf.seek(0)
+            media_type = "text/csv; charset=utf-8"
+            filename = f"{filename_base}.csv"
         else:
-            df.to_excel(buf, index=keep_index, engine="openpyxl")
-        buf.seek(0)
-        media_type = (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        filename = f"{filename_base}.xlsx"
+            if max(len(part) for part in (sheets or {"": df}).values()) > _XLSX_MAX_ROWS:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Too many rows for an Excel sheet; export as CSV instead.",
+                )
+            if sheets:
+                with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                    for name, part in sheets.items():
+                        part.to_excel(writer, sheet_name=name, index=False)
+            else:
+                df.to_excel(buf, index=keep_index, engine="openpyxl")
+            buf.seek(0)
+            media_type = (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            filename = f"{filename_base}.xlsx"
+        return buf, media_type, filename
+
+    buf, media_type, filename = await asyncio.to_thread(_serialise)
 
     return StreamingResponse(
         buf,
