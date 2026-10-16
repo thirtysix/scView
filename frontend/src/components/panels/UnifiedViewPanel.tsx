@@ -382,12 +382,14 @@ export function UnifiedViewPanel() {
   }, [colorBy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Lasso handler ---
+  // A lasso selection is not a group, so it drops any highlighted group.
   const handleSelectionComplete = useCallback(
     (indices: Set<number>) => {
+      setHighlight(null);
       if (indices.size === 0) clearSelection();
       else setSelection(indices);
     },
-    [setSelection, clearSelection],
+    [setSelection, clearSelection, setHighlight],
   );
 
   // --- Keyboard shortcuts ---
@@ -458,11 +460,13 @@ export function UnifiedViewPanel() {
         for (const idx of indices) {
           if (!selectedIndices.has(idx)) { same = false; break; }
         }
-        if (same) { clearSelection(); return; }
+        if (same) { clearSelection(); setHighlight(null); return; }
       }
       setSelection(indices);
+      // Shared with the cluster map and the Markers / DE subtabs.
+      if (colorBy) setHighlight({ column: colorBy, value: cat });
     },
-    [colors, categories, selectedIndices, setSelection, clearSelection],
+    [colors, categories, selectedIndices, setSelection, clearSelection, colorBy, setHighlight],
   );
 
   // A group highlighted elsewhere (an Observations row, the co-pilot's "highlight
