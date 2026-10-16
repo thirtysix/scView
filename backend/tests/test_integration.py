@@ -372,3 +372,12 @@ def test_redoing_pca_drops_the_mixing_score():
     out, res = run_pipeline(a, ["normalization", "log_transform", "pca"], PipelineParams(n_comps=10))
     assert res.errors == {}
     assert BATCH_MIXING_KEY not in out.uns
+
+
+def test_reset_to_counts_drops_the_mixing_score():
+    from scview.core.pipeline import PipelineParams, _run_reset_to_counts
+
+    a = _counts_dataset()
+    a.layers["counts"] = a.X.copy()
+    a.uns[BATCH_MIXING_KEY] = "{}"
+    assert BATCH_MIXING_KEY not in _run_reset_to_counts(a, PipelineParams()).uns

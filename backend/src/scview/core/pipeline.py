@@ -180,7 +180,7 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
 
     # Clear uns entries (fixed keys + multi-column marker/enrichment keys)
     for key in ["neighbors", "rank_genes_groups", "scview_active_clustering",
-                "pca", "umap", "leiden", "louvain"]:
+                "pca", "umap", "leiden", "louvain", BATCH_MIXING_KEY]:
         if key in adata.uns:
             del adata.uns[key]
     multi_keys = [k for k in list(adata.uns.keys())
