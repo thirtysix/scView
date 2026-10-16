@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.dependencies import get_dataset_manager
+from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
 
 logger = logging.getLogger(__name__)
@@ -77,37 +77,12 @@ class DEResponse(BaseModel):
     dropped_samples: list[str] = []
 
 
-# Most specific first, as in the frontend's lib/de.ts: a donor column beats a
-# per-sample one, which often just encodes the condition (Kang's orig_ident is
-# CTRL/STIM while Donor holds the 8 people).
-_DONOR_COL_PATTERNS = [
-    re.compile(p, re.I)
-    for p in (
-        r"donor", r"patient", r"individual", r"^ind$", r"subject",
-        r"participant", r"replicate", r"sample", r"orig[._]ident",
-    )
-]
-
-
 def _detect_replicate_key(obs, exclude: set[str], mask_a=None, mask_b=None) -> str | None:
-    """The most donor-like obs column (not one used to split/scope).
-
-    With the two groups' masks, a column with at least 2 donors in each group
-    wins over a better-named one that has fewer, so a sample column that only
-    repeats the condition isn't reported as the donors."""
-    candidates: list[str] = []
-    for pattern in _DONOR_COL_PATTERNS:
-        for col in obs.columns:
-            name = str(col)
-            if name in exclude or name in candidates or not pattern.search(name):
-                continue
-            if obs[col].nunique(dropna=True) > 1:
-                candidates.append(name)
-    if mask_a is not None and mask_b is not None:
-        for name in candidates:
-            if obs[name][mask_a].nunique() >= 2 and obs[name][mask_b].nunique() >= 2:
-                return name
-    return candidates[0] if candidates else None
+    """The most donor-like obs column (not one used to split/scope); with the two
+    groups' masks, one with at least 2 donors in each group (core/replicates.py)."""
+    candidates = donor_candidates(obs, exclude)
+    groups = [mask_a, mask_b] if mask_a is not None and mask_b is not None else []
+    return pick_donor(obs, candidates, groups)
 
 
 def _donor_stats(donors) -> tuple[int, float]:

@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
+from scview.core.replicates import donor_candidates, pick_donor
 from scview.core import cluster_qc
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
@@ -40,10 +41,6 @@ PROMPT_VERSION = "1"  # part of the cache key: bump when the prompt changes
 SECTIONS = ("Overview", "Quality", "Concerns", "Suggested next steps")
 _MAX_ITEMS = 6
 
-# Same donor pattern as the DE replicate guard (api/v1/de.py).
-_DONOR_RE = re.compile(
-    r"donor|patient|individual|subject|sample|participant|replicate|^ind$|orig[._]ident", re.I
-)
 _CONDITION_RE = re.compile(
     r"condition|stim|treat|disease|status|genotype|timepoint|time_point|infect|perturb|group",
     re.I,
@@ -111,9 +108,14 @@ def _design(adata) -> tuple[str, list[str], str | None, list[str]]:
     """(design text, condition columns, donor column, batch columns)."""
     obs = adata.obs
     cols = [str(c) for c in obs.columns if not _SKIP_RE.search(str(c))]
-    donor = next((c for c in cols if _DONOR_RE.search(c) and _categorical(obs, c, 2, 1000)), None)
-    conditions = [c for c in cols if c != donor and _CONDITION_RE.search(c)
-                  and _categorical(obs, c, 2, 8)][:3]
+    condition_like = [c for c in cols if _CONDITION_RE.search(c) and _categorical(obs, c, 2, 8)]
+    # The same choice as the DE replicate guard (core/replicates.py): a column
+    # with 2+ donors in every condition level beats one that repeats a condition.
+    candidates = [c for c in donor_candidates(obs) if c in cols and _categorical(obs, c, 2, 1000)]
+    levels = [(obs[c].astype(str) == lvl).to_numpy()
+              for c in condition_like for lvl in obs[c].astype(str).unique()]
+    donor = pick_donor(obs, candidates, levels)
+    conditions = [c for c in condition_like if c != donor][:3]
     batches = [c for c in cols if c not in (donor, *conditions) and _BATCH_RE.search(c)
                and _categorical(obs, c, 2, 50)][:3]
     parts: list[str] = []

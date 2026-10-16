@@ -214,3 +214,25 @@ async def test_stream_endpoint_with_a_key_caches_per_dataset(
     # Removing the dataset removes its cached report.
     assert dataset_manager.remove_dataset(did)
     assert not (Path(dataset_manager.data_dir) / "cache" / did).exists()
+
+
+def test_design_names_the_donor_column_not_one_that_repeats_the_condition():
+    # Kang: orig_ident (first) is CTRL/STIM; Donor holds 8 people, all in both.
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+
+    from scview.core.qc_report import _design
+
+    n = 160
+    a = ad.AnnData(np.zeros((n, 2), dtype=np.float32))
+    stim = np.repeat(["CTRL", "STIM"], n // 2)
+    a.obs = pd.DataFrame({
+        "orig_ident": pd.Categorical(stim),
+        "stim": pd.Categorical(stim),
+        "Donor": pd.Categorical(np.tile([f"d{i}" for i in range(8)], n // 8)),
+    }, index=[f"c{i}" for i in range(n)])
+    text, conditions, donor, _ = _design(a)
+    assert donor == "Donor"
+    assert "stim" in conditions
+    assert "8 donors." in text
