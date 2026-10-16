@@ -151,8 +151,7 @@ async def keep_resolution(
         method = _method(adata, body.method)
         try:
             resolution = rs.clean_resolutions([body.resolution])[0]
-            column = rs.column_name(method, resolution)
-            if column in adata.obs.columns:
+            if rs.existing_column(adata, method, resolution) is not None:
                 return rs.keep(adata, method, resolution)
             rs.check(adata)
         except rs.SweepError as exc:

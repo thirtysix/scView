@@ -47,6 +47,19 @@ def column_name(method: str, resolution: float) -> str:
     return f"scview_{method}_r{float(resolution)}"
 
 
+def existing_column(adata, method: str, resolution: float) -> str | None:
+    """The dataset's column for this clustering, if it has one.
+
+    A whole-number resolution has two spellings: the pipeline names the column
+    from the value it was given, and one sent from the browser as JSON ``1``
+    arrives as an int (``scview_leiden_r1``), not ``1.0``.
+    """
+    names = [column_name(method, resolution)]
+    if float(resolution).is_integer():
+        names.append(f"scview_{method}_r{int(resolution)}")
+    return next((n for n in names if n in adata.obs.columns), None)
+
+
 def clean_resolutions(values: list[float] | None) -> list[float]:
     """Resolutions rounded to 0.01, deduplicated and sorted; SweepError if unusable."""
     if not values:
@@ -157,15 +170,15 @@ def iter_sweep(adata, resolutions: list[float], method: str) -> Iterator[dict[st
         silhouette = None
         if sub is not None and 2 <= np.unique(codes[sub]).size < sub.size:
             silhouette = float(silhouette_score(X, codes[sub]))
-        column = column_name(method, r)
+        existing = existing_column(adata, method, r)
         yield {
             "resolution": r,
             "n_clusters": int(sizes.size),
             "sizes": sizes.astype(int).tolist(),
             "silhouette": silhouette,
             "ari_previous": None if prev is None else float(adjusted_rand_score(prev, codes)),
-            "column": column,
-            "exists": column in adata.obs.columns,
+            "column": existing or column_name(method, r),
+            "exists": existing is not None,
         }
         prev = codes
 
@@ -180,9 +193,10 @@ def sweep(adata, resolutions: list[float], method: str) -> dict[str, Any]:
 def keep(adata, method: str, resolution: float) -> dict[str, Any]:
     """Save the clustering at ``resolution`` as its pipeline column, unless that
     column exists already. Does not change the dataset's active clustering."""
+    existing = existing_column(adata, method, resolution)
+    if existing is not None:
+        return {"column": existing, "created": False, "n_clusters": int(adata.obs[existing].nunique())}
     column = column_name(method, resolution)
-    if column in adata.obs.columns:
-        return {"column": column, "created": False, "n_clusters": int(adata.obs[column].nunique())}
     check(adata)
     labels = cluster(adata, method, resolution)
     adata.obs[column] = labels

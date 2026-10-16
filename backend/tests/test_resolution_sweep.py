@@ -49,6 +49,20 @@ def test_column_name_matches_the_pipeline():
     assert rs.column_name("louvain", 0.5) == "scview_louvain_r0.5"
 
 
+def test_whole_number_resolutions_match_either_spelling():
+    a = _adata()
+    assert rs.existing_column(a, "leiden", 1.0) is None
+    # The browser sends 1.0 as JSON 1, which the pipeline names without ".0".
+    _run_clustering(a, PipelineParams(clustering_resolution=1))
+    assert rs.existing_column(a, "leiden", 1.0) == "scview_leiden_r1"
+    assert rs.keep(a, "leiden", 1.0) == {
+        "column": "scview_leiden_r1", "created": False, "n_clusters": a.obs["scview_leiden_r1"].nunique(),
+    }
+    row = rs.sweep(a, [1.0], "leiden")["results"][0]
+    assert row["column"] == "scview_leiden_r1" and row["exists"]
+    assert rs.existing_column(a, "leiden", 0.5) is None
+
+
 def test_check_explains_a_missing_graph_and_caps_cells(monkeypatch):
     with pytest.raises(rs.SweepError, match="neighbour graph"):
         rs.check(_adata(graph=False))
