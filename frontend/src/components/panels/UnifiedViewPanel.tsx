@@ -17,6 +17,9 @@ import { UnifiedGeneSetsSubtab } from "@/components/unified/UnifiedGeneSetsSubta
 import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentSubtab";
 import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { ClusterReference } from "@/components/unified/ClusterReference";
+import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
+import { useSplitViewStore } from "@/stores/splitViewStore";
+import type { ScatterLegend } from "@/lib/scatterExport";
 import { mapCategoryToColor } from "@/lib/colors";
 import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
@@ -85,6 +88,11 @@ export function UnifiedViewPanel() {
   // --- Embedding data (obs-colored) ---
   const { positions, colors, numCells, colorColumnName, dimensions, isLoading, error } =
     useEmbedding();
+
+  // --- Split-by small multiples (SplitScatterGrid covers the single plot,
+  // which stays mounted underneath so leaving the split shows it as it was) ---
+  const splitBy = useSplitViewStore((s) => s.splitBy);
+  const splitActive = !!(splitBy && datasetId && positions);
 
   // --- Overlay loading flag (transient; values/label persist in the store) ---
   const [isLoadingOverlay, setIsLoadingOverlay] = useState(false);
@@ -398,7 +406,7 @@ export function UnifiedViewPanel() {
       // Don't intercept when typing in inputs
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "l" || e.key === "L") {
+      if ((e.key === "l" || e.key === "L") && !useSplitViewStore.getState().splitBy) {
         const store = useSelectionStore.getState();
         store.setSelectionMode(store.selectionMode === "lasso" ? "none" : "lasso");
       }
@@ -528,6 +536,15 @@ export function UnifiedViewPanel() {
 
   const hasEmbeddings = dataset != null && dataset.available_embeddings.length > 0;
 
+  // "Download PNG" name + legend, shared by the single plot and the split grid
+  const scatterExportName = `${prettyEmbeddingLabel(embedding || "embedding")}_${overlayLabel || colorColumnName || colorBy}`;
+  const scatterExportLegend: ScatterLegend | null =
+    effectiveColorType === "continuous" && effectiveColorValues
+      ? { type: "continuous", title: overlayLabel || colorColumnName || colorBy, ...colorMinMax }
+      : categories && categoryColors
+        ? { type: "categorical", title: colorColumnName ?? colorBy, categories, colors: categoryColors }
+        : null;
+
   // No dataset
   if (!dataset) {
     return (
@@ -590,22 +607,31 @@ export function UnifiedViewPanel() {
                 onViewStateChange={setViewState}
                 onHover={handleHover}
                 dimensions={dimensions}
-                exportName={`${prettyEmbeddingLabel(embedding || "embedding")}_${overlayLabel || colorColumnName || colorBy}`}
-                exportLegend={
-                  effectiveColorType === "continuous" && effectiveColorValues
-                    ? { type: "continuous", title: overlayLabel || colorColumnName || colorBy, ...colorMinMax }
-                    : categories && categoryColors
-                      ? { type: "categorical", title: colorColumnName ?? colorBy, categories, colors: categoryColors }
-                      : null
-                }
+                exportName={scatterExportName}
+                exportLegend={scatterExportLegend}
               />
             )}
-            {dimensions === 2 && (
+            {dimensions === 2 && !splitActive && (
               <LassoSelector
                 active={selectionMode === "lasso"}
                 positions={positions}
                 viewState={viewState}
                 onSelectionComplete={handleSelectionComplete}
+              />
+            )}
+            {splitBy && datasetId && positions && (
+              <SplitScatterGrid
+                datasetId={datasetId}
+                embedding={embedding}
+                column={splitBy}
+                positions={positions}
+                dimensions={dimensions}
+                colorValues={effectiveColorValues}
+                colorType={effectiveColorType}
+                selectedIndices={selectedIndices}
+                onHover={handleHover}
+                exportName={scatterExportName}
+                exportLegend={scatterExportLegend}
               />
             )}
 
@@ -618,8 +644,11 @@ export function UnifiedViewPanel() {
             )}
 
             {/* Overlay chip stacked above the legend (bottom-left): one flex
-                column, so a tall legend pushes the chip up instead of covering it. */}
-            <div className="pointer-events-none absolute left-3 bottom-3 z-10 flex max-h-[calc(100%-1.5rem)] flex-col items-start gap-1.5">
+                column, so a tall legend pushes the chip up instead of covering it.
+                While split, it sits in the legend column the grid keeps free. */}
+            <div className={`pointer-events-none absolute z-10 flex flex-col items-start gap-1.5 ${
+              splitActive ? "right-2 top-10 max-h-[calc(100%-3rem)]" : "left-3 bottom-3 max-h-[calc(100%-1.5rem)]"
+            }`}>
             {scatterOverlay && (
               <div className="pointer-events-auto flex flex-shrink-0 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50/90 px-2 py-1 text-xs text-blue-700">
                 <span className="font-medium">{overlayLabel}</span>
