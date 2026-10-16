@@ -107,6 +107,16 @@ describe("CompareColoringsControl", () => {
     expect(useSplitViewStore.getState().compareColumns).toEqual(["stim", "cell_type", "leiden"]);
   });
 
+  it("lists the dataset's hand-label columns first, and ticks one as the best other column", () => {
+    const labelled = { ...dataset([STIM, CELL_TYPE, LEIDEN, SAMPLE]), user_annotation_columns: ["sample"] };
+    useDatasetStore.setState({ currentDataset: labelled, currentDatasetId: "ds1" });
+    render(<CompareColoringsControl />);
+    fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
+    const ticked = screen.getAllByRole("checkbox").filter((c) => (c as HTMLInputElement).checked);
+    expect(screen.getAllByRole("checkbox")[0]!.closest("label")!.textContent).toBe("sample2");
+    expect(ticked.map((c) => c.closest("label")!.textContent)).toEqual(["sample2", "stim2"]);
+  });
+
   it("allows at most four columns and needs two", () => {
     useDatasetStore.setState({
       currentDataset: dataset([STIM, CELL_TYPE, LEIDEN, SAMPLE, { ...SAMPLE, name: "donor" }]),

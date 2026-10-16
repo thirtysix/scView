@@ -177,6 +177,7 @@ async def test_label_endpoint_saves_reloads_and_undo_round_trips(client, dataset
     assert "my labels" not in upload.obs.columns
     info = (await client.get(f"{API}/datasets/{did}")).json()
     assert "my labels" in [c["name"] for c in info["obs_columns"]]
+    assert info["user_annotation_columns"] == ["my labels"]
     cols = (await client.get(f"{API}/datasets/{did}/labels/columns")).json()
     assert cols["columns"] == ["my labels"]
 
@@ -186,8 +187,26 @@ async def test_label_endpoint_saves_reloads_and_undo_round_trips(client, dataset
     assert r.status_code == 200, r.text
     assert r.json()["removed"] is True
     assert "my labels" not in ad.read_h5ad(derived).obs.columns
+    assert (await client.get(f"{API}/datasets/{did}")).json()["user_annotation_columns"] == []
     steps = [h["step"] for h in provenance.read_provenance(ad.read_h5ad(derived))["history"]]
     assert steps[-2:] == ["label_cells", "undo_label_cells"]
+
+
+async def test_dataset_info_lists_the_hand_label_columns(client, dataset_manager):
+    # A hand-label column whatever its name, and none that has since been deleted.
+    a = _adata()
+    a.obs["curated"] = pd.Categorical(["x"] * 30 + ["y"] * 30)
+    a.uns[USER_COLUMNS_KEY] = json.dumps(["curated", "gone"])
+    did = _register(dataset_manager, a)
+    info = (await client.get(f"{API}/datasets/{did}")).json()
+    assert info["user_annotation_columns"] == ["curated"]
+    # Kept in the sidecar, so a dataset a run is working on still says so.
+    dataset_manager.mark_busy(did)
+    try:
+        busy = (await client.get(f"{API}/datasets/{did}")).json()
+    finally:
+        dataset_manager.mark_idle(did)
+    assert busy["user_annotation_columns"] == ["curated"]
 
 
 async def test_label_endpoint_rejects_bad_requests(client, dataset_manager):

@@ -315,6 +315,16 @@ describe("compare colourings", () => {
     ]);
   });
 
+  it("offers the dataset's hand-label columns first", () => {
+    const withLabels = [...cols, col("T states", ["naive", "memory", "effector"])];
+    expect(compareColumnOptions(withLabels, 1000, null, ["T states"]).map((o) => o.name)).toEqual([
+      "T states",
+      "cell_type",
+      "leiden",
+      "stim",
+    ]);
+  });
+
   it("starts from the current colouring plus the best other column", () => {
     const names = ["cell_type", "leiden", "stim"];
     expect(initialCompareSelection(names, "stim")).toEqual(["stim", "cell_type"]);

@@ -109,14 +109,13 @@ export function rankGroupingColumns(columns: readonly ObsColumnInfo[], opts: Ran
  * nothing ("").
  */
 export function defaultColorBy(
-  dataset: Pick<DatasetInfo, "obs_columns" | "n_cells" | "active_clustering"> | null,
-  userColumns?: readonly string[],
+  dataset: Pick<DatasetInfo, "obs_columns" | "n_cells" | "active_clustering" | "user_annotation_columns"> | null,
 ): string {
   if (!dataset) return "";
   const best = rankGroupingColumns(dataset.obs_columns ?? [], {
     nCells: dataset.n_cells,
     activeClustering: dataset.active_clustering,
-    userColumns,
+    userColumns: dataset.user_annotation_columns,
   })[0];
   if (best) return best.name;
   const active = dataset.active_clustering ?? "";

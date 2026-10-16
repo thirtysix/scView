@@ -26,7 +26,13 @@ export function CompareColoringsControl() {
   const ref = useRef<HTMLDivElement>(null);
 
   const options = useMemo(
-    () => compareColumnOptions(dataset?.obs_columns ?? [], dataset?.n_cells, dataset?.active_clustering),
+    () =>
+      compareColumnOptions(
+        dataset?.obs_columns ?? [],
+        dataset?.n_cells,
+        dataset?.active_clustering,
+        dataset?.user_annotation_columns,
+      ),
     [dataset],
   );
 

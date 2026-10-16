@@ -116,4 +116,10 @@ describe("defaultColorBy", () => {
     expect(defaultColorBy(ds([num("n_genes")]))).toBe("");
     expect(defaultColorBy(null)).toBe("");
   });
+
+  it("opens on the hand-label columns the dataset info lists, whatever their name", () => {
+    const cols = [cat("cell_type", 13), cat("my_tcells", 4)];
+    expect(defaultColorBy({ ...ds(cols), user_annotation_columns: ["my_tcells"] })).toBe("my_tcells");
+    expect(defaultColorBy(ds(cols))).toBe("cell_type");
+  });
 });
