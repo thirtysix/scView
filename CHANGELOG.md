@@ -29,6 +29,21 @@ All notable changes to scView are documented here. The format is based on
   control in Unified View for categories and expression (viridis, cividis, magma, plasma).
 - **HVG settings** in Data Assessment: the HVG flavour (`seurat`, `cell_ranger`) and a batch key.
 - **"Open in Unified View"** button when a pipeline run finishes.
+- **Split Unified View by a condition.** Choose a column with 2-6 values (a condition, sample or
+  donor) to get one linked panel per value, with the other cells in faint grey. The panels share
+  the camera, the category colours, one legend and one expression colour scale, so a gene can be
+  compared across conditions; Download PNG saves all panels in one image.
+- **Label cells by hand.** Select cells with the lasso or a legend click, choose "Label
+  selection…", and save the label into an annotation column of your own. "Undo label" reverses
+  the latest labelling.
+- **Try clustering resolutions.** "Resolutions" compares several resolutions on the existing
+  neighbour graph (cluster count, sizes, silhouette, and stability between neighbouring
+  resolutions) without changing the dataset; "Keep this one" saves the chosen one as a clustering
+  column.
+- **Your own gene-set collections.** Upload a `.gmt` file (or a gene_set,gene CSV/TSV), then rename
+  or delete it. Custom collections work alongside MSigDB, or without it, for enrichment, gene-set
+  scoring and browsing, and show how many of their genes the current dataset measures. A file
+  with problems is refused with a list of them by line.
 
 ### Changed
 - **A category has the same colour in every panel:** embedding, legend, cluster map, violins and
@@ -52,6 +67,8 @@ All notable changes to scView are documented here. The format is based on
 - **Provenance no longer records default clustering settings** for runs that did not cluster.
 - **Colouring by pseudotime** no longer turns every cell the same colour when some cells are
   unreachable.
+- **Gene-set scoring ignores case**, so MSigDB sets score on mouse data, and enrichment no longer
+  fails when a collection shares no genes with the marker list.
 - **The gene overlay label** no longer hides under the legend, and the Joint embedding dataset
   picker shows a loading state instead of "No ready datasets".
 
