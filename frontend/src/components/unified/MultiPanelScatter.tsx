@@ -11,6 +11,7 @@ import {
 import { PointCloudLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { AlertTriangle, ImageDown, Loader2, RotateCcw, X } from "lucide-react";
 import type { ScatterLegend } from "@/lib/scatterExport";
+import { centroidLabelLayers, type GroupCentroid } from "@/lib/centroidLabels";
 import {
   SPLIT_CONTEXT_LAYER,
   contextColor,
@@ -20,6 +21,7 @@ import {
   layerInView,
   panelOfLayer,
   splitGridLayout,
+  splitLabelLayerId,
   splitLayerId,
   splitViewId,
 } from "@/lib/splitView";
@@ -44,6 +46,10 @@ export interface GridPanel {
   /** Their coordinates (stride 2 or 3) and RGBA colours */
   positions: Float32Array;
   colors: Uint8Array;
+  /** Group labels drawn in this panel (at its cells' centroids), or none */
+  labels?: GroupCentroid[] | null;
+  /** The highlighted group among them: the other labels fade */
+  highlight?: string | null;
 }
 
 /** A hovered cell: original index, x/y in the scatter area's pixels, its panel. */
@@ -239,8 +245,14 @@ export function MultiPanelScatter({
     panels.forEach((p, i) => {
       out.push(point(splitLayerId(i), p.indices.length, p.positions, p.colors, true));
     });
+    // Labels last, so they draw over every panel's points.
+    panels.forEach((p, i) => {
+      if (p.labels?.length) {
+        out.push(...centroidLabelLayers(splitLabelLayerId(i), p.labels, { dark: background === "dark", highlight: p.highlight }));
+      }
+    });
     return out;
-  }, [ready, dimensions, context, stride, grey, panels, pointSize]);
+  }, [ready, dimensions, context, stride, grey, panels, pointSize, background]);
 
   const layerFilter = useCallback(
     ({ layer, viewport }: { layer: { id: string }; viewport: { id: string } }) =>

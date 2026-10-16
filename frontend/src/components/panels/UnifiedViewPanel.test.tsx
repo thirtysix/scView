@@ -6,6 +6,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
+import { useSelectionStore } from "@/stores/selectionStore";
 
 // The panel's scatter, data hook and side panels are stubbed: these tests look
 // at what the panel itself draws over the plot (tooltip) and hands the scatter.
@@ -184,5 +185,43 @@ describe("Unified View compare colourings", () => {
     renderPanel();
     expect(screen.getByTestId("lasso")).toBeInTheDocument();
     expect(screen.getByText("B")).toBeInTheDocument();
+  });
+});
+
+describe("Unified View group labels", () => {
+  beforeEach(() => {
+    useUnifiedViewStore.setState({ centroidLabels: null });
+    useSelectionStore.setState({ highlightedGroup: null });
+  });
+
+  it("asks the scatter for the colour-by column's labels, with the highlighted group", () => {
+    useSelectionStore.setState({ highlightedGroup: { column: "cell_type", value: "NK" } });
+    renderPanel();
+    expect(scatterProps.current).toMatchObject({ showLabels: true, categories: ["B", "NK"], highlightCategory: "NK" });
+  });
+
+  it("leaves them off when toggled off, for a numeric colouring and under a gene overlay", () => {
+    useUnifiedViewStore.setState({ centroidLabels: { key: "cell_type", show: false } });
+    const { unmount } = renderPanel();
+    expect(scatterProps.current!.showLabels).toBe(false);
+    unmount();
+
+    useUnifiedViewStore.setState({ centroidLabels: null });
+    useSettingsStore.setState({ colorBy: "n_genes" });
+    embedding.current = { ...embedding.current, colors: Float32Array.from([1, 2, 3]), colorColumnName: "n_genes" };
+    const second = renderPanel();
+    expect(scatterProps.current!.showLabels).toBe(false);
+    second.unmount();
+
+    useSettingsStore.setState({ colorBy: "cell_type" });
+    embedding.current = { ...embedding.current, colors: Int32Array.from([0, 1, 1]), colorColumnName: "cell_type" };
+    useUnifiedViewStore.setState({
+      scatterOverlay: { type: "expression", gene: "CD3E" },
+      overlayValues: Float32Array.from([0, 1, 2]),
+      overlayLabel: "CD3E",
+      overlayDatasetId: "kang",
+    });
+    renderPanel();
+    expect(scatterProps.current!.showLabels).toBe(false);
   });
 });

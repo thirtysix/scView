@@ -433,10 +433,21 @@ export function panelOfLayer(layerId: string | undefined): number | null {
   return m ? Number(m[1]) : null;
 }
 
-/** deck.gl layerFilter: the grey context in every view, each panel's cells in its own. */
+/** Layer `split-label-<i>` (and `-hl`, its highlighted label) draws panel i's group labels. */
+export const splitLabelLayerId = (i: number) => `split-label-${i}`;
+
+function panelOfLabelLayer(layerId: string): number | null {
+  const m = layerId.match(/^split-label-(\d+)(-hl)?$/);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * deck.gl layerFilter (called with each root layer): the grey context in
+ * every view, each panel's cells and labels in its own.
+ */
 export function layerInView(layerId: string, viewId: string): boolean {
   if (layerId === SPLIT_CONTEXT_LAYER) return true;
-  const p = panelOfLayer(layerId);
+  const p = panelOfLayer(layerId) ?? panelOfLabelLayer(layerId);
   return p != null && viewId === splitViewId(p);
 }
 

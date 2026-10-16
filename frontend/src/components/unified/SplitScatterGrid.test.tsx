@@ -180,4 +180,31 @@ describe("SplitScatterGrid", () => {
     });
     expect(useSplitViewStore.getState().showContext).toBe(false);
   });
+
+  it("labels each panel's colour groups at their centre in that panel, skipping absent groups", async () => {
+    // Coloured by cell type: B = cells 0, 1; NK = 2, 3; T = 4 (CTRL only) and 5 (STIM only).
+    render(
+      withQuery(
+        <SplitScatterGrid
+          datasetId="ds1"
+          embedding="X_umap"
+          column="stim"
+          positions={positions}
+          dimensions={2}
+          colorValues={Int32Array.from([0, 0, 1, 1, 2, 3])}
+          colorType="categorical"
+          labelCategories={["B", "NK", "T", "Mk"]}
+          showLabels
+        />,
+      ),
+    );
+    await screen.findByTestId("deck");
+    type L = { id: string; props: { data: { label: string; position: number[] }[] } };
+    const labels = (deckProps.current!.layers as L[]).filter((l) => l.id.startsWith("split-label"));
+    // CTRL has cells 0, 2, 4 (B, NK, T); STIM has 1, 3, 5 (B, NK, Mk).
+    expect(labels.map((l) => [l.id, l.props.data.map((d) => `${d.label}@${d.position.join(",")}`)])).toEqual([
+      ["split-label-0", ["B@0,0", "NK@2,2", "T@4,4"]],
+      ["split-label-1", ["B@1,1", "NK@3,3", "Mk@5,5"]],
+    ]);
+  });
 });

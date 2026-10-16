@@ -6,6 +6,7 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { isGridActive, useSplitViewStore } from "@/stores/splitViewStore";
 import { SplitByControl } from "@/components/unified/SplitByControl";
 import { CompareColoringsControl } from "@/components/unified/CompareColoringsControl";
+import { GroupLabelsToggle } from "@/components/unified/GroupLabelsToggle";
 import { Lasso, RotateCcw, X } from "lucide-react";
 import { formatNumber, prettyObsLabel, prettyEmbeddingLabel, isRedundantClusterCol } from "@/lib/formatting";
 import { LabelSelectionControls } from "@/components/unified/LabelSelection";
@@ -110,6 +111,8 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             </option>
           ))}
         </select>
+        {/* Group names at their centres on the plot */}
+        <GroupLabelsToggle />
       </div>
 
       <div className="h-4 w-px bg-slate-200" />

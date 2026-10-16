@@ -19,6 +19,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import { MultiPanelScatter, type GridPanel } from "@/components/unified/MultiPanelScatter";
+import { groupCentroids } from "@/lib/centroidLabels";
 
 interface SplitScatterGridProps {
   datasetId: string;
@@ -35,6 +36,11 @@ interface SplitScatterGridProps {
   onHover?: (info: { index: number; x: number; y: number } | null) => void;
   exportLegend?: ScatterLegend | null;
   exportName?: string;
+  /** Names of the colour codes, for the group labels */
+  labelCategories?: readonly string[] | null;
+  /** Draw each colour group's label at its centroid within each panel */
+  showLabels?: boolean;
+  highlightCategory?: string | null;
 }
 
 /**
@@ -59,6 +65,9 @@ export function SplitScatterGrid({
   onHover,
   exportLegend = null,
   exportName = "embedding",
+  labelCategories = null,
+  showLabels = false,
+  highlightCategory = null,
 }: SplitScatterGridProps) {
   const opacity = useSettingsStore((s) => s.opacity);
   const palette = useSettingsStore((s) => s.categoricalPalette);
@@ -135,13 +144,31 @@ export function SplitScatterGrid({
     ? `Showing ${drawnCells.toLocaleString()} of ${total.toLocaleString()} cells (sampled)`
     : undefined;
 
+  // Each panel labels the colour groups it has cells of, at their centre in it.
+  const panelLabels = useMemo(
+    () =>
+      showLabels && labelCategories && colorValues instanceof Int32Array && colorType === "categorical"
+        ? panels.map((p) => groupCentroids(positions, stride as 2 | 3, colorValues, labelCategories, p.indices))
+        : null,
+    [showLabels, labelCategories, colorValues, colorType, panels, positions, stride],
+  );
+
   const gridPanels = useMemo<GridPanel[]>(
     () =>
       panels.map((p, i) => {
         const { label, count } = panelTitle(p);
-        return { key: p.code, title: label, subtitle: count, indices: p.indices, positions: panelPositions[i]!, colors: panelRgba[i]! };
+        return {
+          key: p.code,
+          title: label,
+          subtitle: count,
+          indices: p.indices,
+          positions: panelPositions[i]!,
+          colors: panelRgba[i]!,
+          labels: panelLabels?.[i] ?? null,
+          highlight: highlightCategory,
+        };
       }),
-    [panels, panelPositions, panelRgba],
+    [panels, panelPositions, panelRgba, panelLabels, highlightCategory],
   );
 
   return (

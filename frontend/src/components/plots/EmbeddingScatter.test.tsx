@@ -71,3 +71,59 @@ describe("EmbeddingScatter built-in tooltip", () => {
     expect(line.querySelector("span[aria-hidden]")).not.toBeNull();
   });
 });
+
+describe("EmbeddingScatter group labels", () => {
+  type L = { id: string; props: { data: { label: string; position: number[] }[]; opacity: number } };
+  const labelLayers = () => (deckProps.current!.layers as L[]).filter((l) => l.id.startsWith("embedding-labels"));
+  const codes = Int32Array.from([0, 1, 1]);
+
+  it("draws each category's name at its centroid when asked", async () => {
+    render(
+      <EmbeddingScatter positions={positions} colorValues={codes} colorType="categorical" categories={["B", "NK"]} showLabels />,
+    );
+    await screen.findByTestId("deck");
+    const [layer] = labelLayers();
+    expect(layer!.props.data.map((d) => [d.label, d.position])).toEqual([
+      ["B", [0, 0]],
+      ["NK", [1.5, 1.5]],
+    ]);
+  });
+
+  it("keeps the highlighted group's label and fades the others", async () => {
+    render(
+      <EmbeddingScatter
+        positions={positions}
+        colorValues={codes}
+        colorType="categorical"
+        categories={["B", "NK"]}
+        showLabels
+        highlightCategory="NK"
+      />,
+    );
+    await screen.findByTestId("deck");
+    expect(labelLayers().map((l) => [l.id, l.props.opacity])).toEqual([
+      ["embedding-labels", 0.3],
+      ["embedding-labels-hl", 1],
+    ]);
+  });
+
+  it("draws no labels when off, or for a gene's expression", async () => {
+    const { unmount } = render(
+      <EmbeddingScatter positions={positions} colorValues={codes} colorType="categorical" categories={["B", "NK"]} />,
+    );
+    await screen.findByTestId("deck");
+    expect(labelLayers()).toHaveLength(0);
+    unmount();
+    render(
+      <EmbeddingScatter
+        positions={positions}
+        colorValues={Float32Array.from([0, 1, 2])}
+        colorType="continuous"
+        categories={["B", "NK"]}
+        showLabels
+      />,
+    );
+    await screen.findByTestId("deck");
+    expect(labelLayers()).toHaveLength(0);
+  });
+});

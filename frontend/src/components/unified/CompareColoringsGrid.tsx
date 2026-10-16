@@ -14,6 +14,9 @@ import { MultiPanelScatter, type GridHover, type GridPanel } from "@/components/
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
+import { useSelectionStore } from "@/stores/selectionStore";
+import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
+import { compareLabelKey, groupCentroids, labelsShown } from "@/lib/centroidLabels";
 
 type RGB = [number, number, number];
 
@@ -68,6 +71,8 @@ export function CompareColoringsGrid({
   const pipelineRunning = useSettingsStore((s) => s.pipelineRunning);
   const dataset = useDatasetStore((s) => s.currentDataset);
   const setCompareColumns = useSplitViewStore((s) => s.setCompareColumns);
+  const labelChoice = useUnifiedViewStore((s) => s.centroidLabels);
+  const highlighted = useSelectionStore((s) => s.highlightedGroup);
 
   // Each column's codes: the query useEmbedding and the split grid use, so the
   // colour-by column is not fetched twice.
@@ -115,6 +120,20 @@ export function CompareColoringsGrid({
         : [],
     [ready, codes, indices, opacity, selectedIndices, palette],
   );
+  // Group labels per panel: on by default for a column with few groups, or as
+  // the user toggled them for this set of columns.
+  const labelKey = compareLabelKey(columns);
+  const panelLabels = useMemo(
+    () =>
+      ready
+        ? codes.map((c, i) =>
+            labelsShown(labelChoice, labelKey, categories[i]!.length)
+              ? groupCentroids(positions, stride as 2 | 3, c!, categories[i]!, sample)
+              : null,
+          )
+        : [],
+    [ready, codes, labelChoice, labelKey, categories, positions, stride, sample],
+  );
   const panels = useMemo<GridPanel[]>(
     () =>
       ready
@@ -125,9 +144,11 @@ export function CompareColoringsGrid({
             indices,
             positions: drawnPositions,
             colors: panelRgba[i]!,
+            labels: panelLabels[i] ?? null,
+            highlight: highlighted?.column === column ? highlighted.value : null,
           }))
         : [],
-    [ready, columns, categories, indices, drawnPositions, panelRgba],
+    [ready, columns, categories, indices, drawnPositions, panelRgba, panelLabels, highlighted],
   );
 
   // Legend swatches as the panels draw them (category code -> palette slot).

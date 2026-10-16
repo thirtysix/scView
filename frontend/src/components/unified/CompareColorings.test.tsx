@@ -7,6 +7,9 @@ import type { DatasetInfo } from "@/api/types";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { isGridActive, useSplitViewStore } from "@/stores/splitViewStore";
+import { useSelectionStore } from "@/stores/selectionStore";
+import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
+import { compareLabelKey } from "@/lib/centroidLabels";
 
 // jsdom has no WebGL: capture what the grid hands deck.gl instead.
 const { deckProps, fetchEmbeddingBinary } = vi.hoisted(() => ({
@@ -59,6 +62,8 @@ beforeEach(() => {
   deckProps.current = null;
   useSplitViewStore.setState({ splitBy: null, compareColumns: null, showContext: true });
   useSettingsStore.setState({ colorBy: "stim" });
+  useUnifiedViewStore.setState({ centroidLabels: null });
+  useSelectionStore.setState({ highlightedGroup: null });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -176,15 +181,33 @@ describe("CompareColoringsGrid", () => {
 
     const props = deckProps.current!;
     expect((props.views as { id: string }[]).map((v) => v.id)).toEqual(["split-0", "split-1"]);
-    const layers = props.layers as { id: string; props: { data: { length: number } } }[];
-    // No grey context: each panel already draws all six cells.
+    const layers = props.layers as { id: string; props: { data: { length: number; label?: string }[] & { length: number } } }[];
+    // No grey context: each panel already draws all six cells. Then each
+    // panel's group labels (on by default for a few groups).
     expect(layers.map((l) => [l.id, l.props.data.length])).toEqual([
       ["split-fg-0", 6],
       ["split-fg-1", 6],
+      ["split-label-0", 3],
+      ["split-label-1", 2],
     ]);
     // Both legends, by their categories.
     expect(screen.getByText("NK")).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
+  });
+
+  it("drops the labels when toggled off for this set of columns, and fades all but a highlighted group", async () => {
+    useUnifiedViewStore.setState({ centroidLabels: { key: compareLabelKey(["cell_type", "leiden"]), show: false } });
+    const { unmount } = renderGrid();
+    await screen.findByTestId("deck");
+    const ids = () => (deckProps.current!.layers as { id: string }[]).map((l) => l.id);
+    expect(ids()).toEqual(["split-fg-0", "split-fg-1"]);
+    unmount();
+
+    useUnifiedViewStore.setState({ centroidLabels: null });
+    useSelectionStore.setState({ highlightedGroup: { column: "cell_type", value: "NK" } });
+    renderGrid();
+    await screen.findByTestId("deck");
+    expect(ids()).toEqual(["split-fg-0", "split-fg-1", "split-label-0", "split-label-0-hl", "split-label-1"]);
   });
 
   it("reports the hovered cell's value in every compared column", async () => {

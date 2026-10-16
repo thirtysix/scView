@@ -26,6 +26,7 @@ import { isCategoricalDtype } from "@/lib/obsColumns";
 import { colorByLine, type HoverLine } from "@/lib/hoverInfo";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
+import { labelsShown } from "@/lib/centroidLabels";
 import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
@@ -474,6 +475,16 @@ export function UnifiedViewPanel() {
     [dataset, colorColumnName],
   );
   const colorOfCategory = useCategoryColors(colorColumnName);
+
+  // Group labels at their centroids, for a categorical colouring (no overlay):
+  // on by default up to 40 groups, else as toggled in the toolbar.
+  const labelChoice = useUnifiedViewStore((s) => s.centroidLabels);
+  const labelCategories =
+    !scatterOverlay && colorColumnInfo && isCategoricalDtype(colorColumnInfo.dtype)
+      ? colorColumnInfo.values ?? null
+      : null;
+  const showLabels =
+    !!labelCategories && !!colorColumnName && labelsShown(labelChoice, colorColumnName, labelCategories.length);
   const hoverColorLine = (index: number, metadata: Record<string, unknown> | null): HoverLine | null => {
     if (scatterOverlay && overlayValues) {
       return colorByLine({
@@ -535,6 +546,8 @@ export function UnifiedViewPanel() {
     appliedHighlight.current = hl;
     setSelection(indices);
   }, [highlightedGroup, colorBy, colorColumnName, colors, categories, setSelection]);
+  // ...and keeps its label while the others fade.
+  const labelHighlight = highlightedGroup?.column === colorColumnName ? highlightedGroup.value : null;
 
   // Inline-rename a categorical label (e.g. correct a cell-type annotation).
   // Persists to the derived layer, then refreshes the dataset metadata + the
@@ -678,6 +691,9 @@ export function UnifiedViewPanel() {
                 dimensions={dimensions}
                 exportName={scatterExportName}
                 exportLegend={scatterExportLegend}
+                categories={labelCategories}
+                showLabels={showLabels}
+                highlightCategory={labelHighlight}
               />
             )}
             {dimensions === 2 && !gridActive && (
@@ -701,6 +717,9 @@ export function UnifiedViewPanel() {
                 onHover={handleHover}
                 exportName={scatterExportName}
                 exportLegend={scatterExportLegend}
+                labelCategories={labelCategories}
+                showLabels={showLabels}
+                highlightCategory={labelHighlight}
               />
             )}
             {compareColumns && datasetId && positions && (

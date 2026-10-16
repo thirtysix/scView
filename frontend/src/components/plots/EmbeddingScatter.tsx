@@ -9,6 +9,7 @@ import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
 import { exportFilename } from "@/lib/exportFilename";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { colorByLine } from "@/lib/hoverInfo";
+import { centroidLabelLayers, groupCentroids } from "@/lib/centroidLabels";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 
 interface EmbeddingScatterProps {
@@ -44,8 +45,13 @@ interface EmbeddingScatterProps {
   exportName?: string;
   /** What the points are coloured by (gene, score, column), for the built-in tooltip */
   colorLabel?: string;
-  /** Category names in code order (categorical colouring), for the built-in tooltip */
+  /** Category names in code order (categorical colouring), for the built-in
+   *  tooltip and the group labels */
   categories?: readonly string[] | null;
+  /** Draw each category's name at its centroid (categorical colouring only) */
+  showLabels?: boolean;
+  /** A highlighted category: its label stays, the others fade */
+  highlightCategory?: string | null;
 }
 
 /**
@@ -156,6 +162,8 @@ export function EmbeddingScatter({
   exportName = "embedding",
   colorLabel = "Value",
   categories = null,
+  showLabels = false,
+  highlightCategory = null,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<DeckGLRef>(null);
@@ -384,6 +392,14 @@ export function EmbeddingScatter({
 
   const renderCount = renderPositions ? renderPositions.length / stride : 0;
 
+  // Group labels at the median of each group's drawn cells; a group with no
+  // drawn cell (sampled away) gets none.
+  const centroids = useMemo(() => {
+    if (!showLabels || !positions || !categories || !(colorValues instanceof Int32Array)) return null;
+    if (colorType !== "categorical") return null;
+    return groupCentroids(positions, stride, colorValues, categories, indexMap);
+  }, [showLabels, positions, categories, colorValues, colorType, stride, indexMap]);
+
   // Compute initial view state from data bounds (use full positions for bounds)
   const initialViewState = useMemo(() => {
     if (!positions || positions.length === 0) return null;
@@ -462,8 +478,19 @@ export function EmbeddingScatter({
     [onClick, indexMap],
   );
 
+  const labelLayers = useMemo(
+    () =>
+      centroids
+        ? centroidLabelLayers("embedding-labels", centroids, {
+            dark: background === "dark",
+            highlight: highlightCategory,
+          })
+        : [],
+    [centroids, background, highlightCategory],
+  );
+
   // Binary attribute data path — feeds typed arrays directly to GPU
-  const layers = useMemo(() => {
+  const pointLayers = useMemo(() => {
     if (renderCount === 0 || !renderPositions || !renderColors) return [];
 
     if (dimensions === 3) {
@@ -513,6 +540,7 @@ export function EmbeddingScatter({
       }),
     ];
   }, [renderCount, renderPositions, renderColors, pointSize, dimensions]);
+  const layers = useMemo(() => [...pointLayers, ...labelLayers], [pointLayers, labelLayers]);
 
   const views = useMemo(
     () =>
