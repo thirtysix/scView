@@ -6,6 +6,63 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-16
+
+### Added
+- **Group labels on the plot.** Each group's name sits at its centre, readable on light and dark
+  points, in split panels and in the PNG export. On by default up to 40 groups ("Labels" toggle).
+- **Datasets open coloured by their cell types** (or hand labels, then clusterings) instead of the
+  clustering. A colouring you picked yourself is kept when you switch datasets.
+- **Compare colourings.** "Compare" shows the same cells coloured by 2-4 columns side by side, on
+  one camera, with a legend per column and every value in the tooltip.
+- **The hover tooltip leads with what the plot is coloured by:** the cell's group (with its
+  colour), the number, or the gene's expression or gene-set score.
+- **Split a cluster into sub-clusters.** The split icon on a legend entry re-clusters that group on
+  its own genes, PCA and neighbour graph (with Harmony when the dataset was batch-corrected) and
+  writes `<column>_sub`, leaving every other cluster as it was.
+- **Enrich a DE result.** Under any DE result, "Enrich" runs over-representation on the significant
+  up genes and, separately, the down genes, with the genes that were tested as the background and
+  the table's cut-offs.
+- **QC plots by sample, batch or cluster.** Data Assessment's QC plots get a "Group by" control:
+  violins of genes, counts and % mito per group and the counts-vs-genes scatter in category
+  colours. It starts on the donor column and stays light at 200k cells.
+- **Batch/condition confounding check.** When each batch holds one condition (or batches sit
+  inside conditions), a condition difference is also a batch difference. DE between groups, the
+  joint-embedding plan and the QC report now say so.
+- **Integration quality:** the joint embedding reports iLISI (how many datasets share each
+  neighbourhood) and cell-type conservation before and after correction, and warns, naming the
+  cell types, when correction looks like it merged real differences.
+- **Dissociation-stress score.** A new pipeline step scores immediate-early and heat-shock genes
+  per cell (`dissociation_stress_score`, after van den Brink et al. 2017), and Cluster QC flags a
+  cluster whose score stands out and whose top markers are stress genes.
+- **Species detection.** Human or mouse is called from Ensembl ids or gene-name case and shown on
+  Data Assessment; enrichment on a mouse dataset notes that the gene sets are human.
+
+### Changed
+- **The server stays responsive during long work.** Pipeline runs, dataset loads, markers, DE,
+  enrichment, ingest and Excel export run off the server's event loop. Before, a pipeline run
+  froze every request (healthcheck included) for up to ~70 s on Kang. Requests for a dataset that
+  is being processed wait up to 240 s and then get a "busy" answer; deleting a dataset mid-run is
+  refused.
+- **LLM cell-type labels use informative markers.** Ribosomal and mitochondrial genes are left out
+  of the marker lists, and the model names the tissue first: on Kang, monocytes were called
+  "macrophages", pDCs "plasma cells" and the main T-cell cluster "Ribosomal cells" before.
+- **A legend click on any grouping opens that group's markers**, not group 0 of the clustering.
+
+### Fixed
+- **Dense-matrix data: markers, cell cycle and stress scores read scaled values.** Scaling a dense
+  matrix (CSV uploads, dense `.h5ad`) also scaled the log-normalised copy in `.raw`, so most marker
+  fold changes were missing and the Markers tab could crash. **Re-process such datasets from
+  counts**; sparse data (10x, most `.h5ad`) was not affected. A missing fold change now shows a dash.
+- **Cell-cycle scoring works on mouse data** (it failed with "No valid genes") and finds genes
+  under their renamed symbols (CENPU, PIMREG, JPT1).
+- **Data without MT- genes no longer reports 0% mito** as a measurement; QC plots, Cluster QC and
+  the QC report say it can't be measured.
+- **The saved neighbour graph is the one the clustering used** (UMAP was trimming it in place), so
+  re-clustering and the resolution sweep agree with the pipeline.
+- **DE by the column used as the batch-correction key** is no longer reported as a comparison
+  between batches.
+
 ## [0.13.0] - 2026-10-16
 
 ### Added
