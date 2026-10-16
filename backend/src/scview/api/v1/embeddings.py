@@ -57,6 +57,10 @@ async def get_embedding(
                 color_values = np.where(col.isna(), -1, col.fillna(False).astype(int)).astype(np.int32)
             elif np.issubdtype(col.dtype, np.number):
                 color_values = col.values.astype(np.float32)
+                # inf (pseudotime of a cell the root never reached) stretched the
+                # colour range to infinity, flattening every finite value; NaN is
+                # left out of the range and drawn grey.
+                color_values[np.isinf(color_values)] = np.nan
             else:
                 # String column — encode as integer categories
                 categories = {v: i for i, v in enumerate(col.unique())}
