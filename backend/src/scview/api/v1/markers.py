@@ -12,10 +12,12 @@ from fastapi.responses import Response
 
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
+from scview.core import marker_specificity
 from scview.core.arrow_serializer import dataframe_to_arrow_ipc
 from scview.core.obs_writes import dataset_lock
+from scview.core.ora_background import resolve_markers_key
 from scview.core.pipeline import drop_enrichment_cache
-from scview.core.uns_keys import markers_key
+from scview.core.uns_keys import markers_column, markers_key
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,8 @@ def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str)
         key = markers_key(column)
         adata.uns[key] = _compute_markers(adata, column)
         drop_enrichment_cache(adata, column)
+        # Computed with the markers and saved with them (best effort).
+        marker_specificity.attach(adata, adata.uns[key], column)
     except Exception as e:
         logger.error("On-demand marker computation failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Marker computation failed: {e!s}")
@@ -87,6 +91,51 @@ def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str)
         dm.persist_uns(dataset_id, adaptor, [key])
     except Exception as e:  # still served from memory; recomputed after a reload
         logger.warning("Could not save markers for '%s': %s", column, e)
+
+
+def _specificity_target(adata, column: str) -> tuple[str, str] | None:
+    """(uns key, obs column) of stored markers that lack their specificity columns:
+    markers saved before they existed, or a file's own."""
+    key = resolve_markers_key(adata.uns, column)
+    if key is None:
+        return None
+    rgg = adata.uns[key]
+    if not isinstance(rgg, dict) or marker_specificity.has_specificity(rgg):
+        return None
+    col = column or markers_column(key) or str(rgg.get("params", {}).get("groupby") or "")
+    if not col or col not in adata.obs.columns:
+        return None
+    return key, col
+
+
+def _attach_and_save(dm: DatasetManager, dataset_id: str, adaptor, key: str, column: str) -> None:
+    adata = adaptor.adata
+    rgg = adata.uns[key]
+    if not marker_specificity.attach(adata, rgg, column):
+        return
+    # The default key is often the very same entry as the column's own.
+    keys = [k for k in dict.fromkeys((key, markers_key(column), "rank_genes_groups"))
+            if adata.uns.get(k) is rgg]
+    try:
+        dm.persist_uns(dataset_id, adaptor, keys)
+    except Exception as e:  # still served from memory; recomputed after a reload
+        logger.warning("Could not save marker specificity for '%s': %s", column, e)
+
+
+async def ensure_specificity(dm: DatasetManager, dataset_id: str, adaptor, column: str = ""):
+    """Give a column's stored markers their specificity columns, once: computed and
+    saved with the markers, as on-demand markers are. Returns the current adaptor."""
+    if _specificity_target(adaptor.adata, column) is None:
+        return adaptor
+    async with dataset_lock(dataset_id):
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+        target = _specificity_target(adaptor.adata, column)
+        if target is not None:
+            # Group means over the whole matrix: a second or so, in a worker thread.
+            await asyncio.to_thread(_attach_and_save, dm, dataset_id, adaptor, *target)
+    return adaptor
 
 
 @router.get("/datasets/{dataset_id}/markers")
@@ -121,6 +170,7 @@ async def get_markers(
                     # Seconds to tens of seconds: in a worker thread, so the server
                     # keeps answering meanwhile.
                     await asyncio.to_thread(_compute_and_save, dm, dataset_id, adaptor, groupby_column)
+        adaptor = await ensure_specificity(dm, dataset_id, adaptor, groupby_column)
         df = adaptor.get_markers(
             groupby=groupby if groupby else None,
             column=groupby_column,
@@ -132,6 +182,7 @@ async def get_markers(
                 status_code=404,
                 detail="No marker genes found. Run sc.tl.rank_genes_groups first.",
             )
+        adaptor = await ensure_specificity(dm, dataset_id, adaptor)
         df = adaptor.get_markers(groupby=groupby if groupby else None, n_genes=n_genes)
 
     if df is None or df.empty:

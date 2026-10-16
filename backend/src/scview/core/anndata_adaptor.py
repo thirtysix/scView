@@ -9,6 +9,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from scview.core import marker_specificity
 from scview.core.ora_background import resolve_markers_key
 from scview.core.uns_keys import markers_column, repair_slash_keys
 
@@ -587,7 +588,9 @@ class AnnDataAdaptor:
         n_genes : int
             Max genes to return per group (default 100).
 
-        Returns a DataFrame with columns: group, gene, logfoldchange, pval, pval_adj, pct.
+        Returns a DataFrame with columns: group, gene, logfoldchange, pval, pval_adj,
+        pct_in, pct_out, and the specificity columns of ``core/marker_specificity.py``
+        (tau, pct_max_other, max_other_group, pct_ratio) when they can be computed.
         """
         # A file's own markers are often under the bare key with params.groupby set.
         uns_key = resolve_markers_key(self.adata.uns, column or "")
@@ -606,6 +609,8 @@ class AnnDataAdaptor:
                 continue
             total_genes = len(rgg["names"][group])
             limit = min(n_genes, total_genes)
+            genes = [str(g) for g in rgg["names"][group][:limit]]
+            spec = marker_specificity.columns_for_group(rgg, str(group), genes)
             for i in range(limit):
                 gene_name = str(rgg["names"][group][i])
                 row = {
@@ -638,6 +643,9 @@ class AnnDataAdaptor:
                             row["pct_out"] = float(pts_rest[group][i])
                     except (KeyError, IndexError):
                         pass
+                for field, values in spec.items():
+                    value = values[i]
+                    row[field] = value if value is None or isinstance(value, str) else float(value)
                 rows.append(row)
 
         return pd.DataFrame(rows)
