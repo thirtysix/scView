@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -99,7 +100,8 @@ async def assistant_insight(
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
-        insight = build_insight(adaptor)
+        # The per-cluster QC check may read the counts matrix: keep it off the loop.
+        insight = await asyncio.to_thread(build_insight, adaptor)
         if polish:
             insight = await polish_insight(insight, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL)
         return insight
@@ -177,6 +179,20 @@ async def _prepare(
     )
 
 
+async def _warm_cluster_qc(adaptor, kwargs: dict) -> None:
+    """Per-cluster QC grounding may need a pass over the counts matrix the first
+    time; do that in a thread so the event loop isn't blocked (then it's cached)."""
+    facets = kwargs.get("data_facets") or []
+    if adaptor is None or not kwargs.get("include_data_grounding"):
+        return
+    if facets and "qc" not in facets:
+        return
+    try:
+        await asyncio.to_thread(adaptor.qc_per_cell, True)
+    except Exception as exc:  # grounding skips QC on its own if this fails
+        logger.debug("cluster QC warm-up failed: %s", exc)
+
+
 @router.post("/datasets/{dataset_id}/assistant/chat", response_model=ChatResponse)
 async def assistant_chat(
     dataset_id: str,
@@ -201,6 +217,7 @@ async def assistant_chat(
     try:
         query = body.query.strip()
         kwargs = await _prepare(query, body, dm, settings)
+        await _warm_cluster_qc(adaptor, kwargs)
         return await answer_query(query, adaptor, settings.DEEPINFRA_API_KEY, **kwargs)
     except Exception as exc:
         logger.error("assistant chat failed for %s: %s", dataset_id, exc, exc_info=True)
@@ -232,6 +249,7 @@ async def assistant_chat_stream(
     async def event_generator():
         try:
             kwargs = await _prepare(query, body, dm, settings)
+            await _warm_cluster_qc(adaptor, kwargs)
             async for event in stream_answer(
                 query, adaptor, settings.DEEPINFRA_API_KEY, **kwargs
             ):

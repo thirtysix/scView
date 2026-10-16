@@ -35,7 +35,7 @@ import re
 from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
-from scview.core import provenance
+from scview.core import cluster_qc, provenance
 from scview.core.llm import chat_extra
 from scview.core.uns_keys import enrichment_column
 
@@ -301,6 +301,16 @@ def build_grounding_context(
             detail=f"{acol}: " + "; ".join(f"{k}={v}" for k, v in list(mapping.items())[:12]),
         ))
 
+    # 4a-ter. Per-cluster QC flags (deterministic), so "which clusters look low
+    # quality?" is answered from the numbers. Only flagged clusters are listed.
+    if want("qc"):
+        try:
+            qc_lines, qc_cites = cluster_qc.grounding_block(cluster_qc.for_adaptor(adaptor))
+            lines.extend(qc_lines)
+            sources.extend(ChatSource(kind="result", ref=t, detail=d) for t, d in qc_cites)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: cluster QC failed: %s", exc)
+
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []
     if want("markers"):
@@ -539,6 +549,32 @@ def build_insight(adaptor) -> DatasetInsight:
                 severity="suggestion",
             )
         break
+
+    # 2c. QC anomaly in one cluster: low quality / doublet-rich against the others.
+    if state.clustering.done:
+        try:
+            report = cluster_qc.for_adaptor(adaptor)
+        except Exception:  # pragma: no cover - defensive
+            report = None
+        bad = [
+            c for c in (report.flagged if report else [])
+            if set(c.flags) & {"low_quality", "doublet_rich", "high_mito", "low_genes"}
+        ]
+        if bad:
+            first = bad[0]
+            reason = next(r for f, r in zip(first.flags, first.reasons) if f != "small")
+            more = (
+                f" {len(bad) - 1} more cluster{'s' if len(bad) > 2 else ''} also flagged."
+                if len(bad) > 1 else ""
+            )
+            return DatasetInsight(
+                insight=(
+                    f"Cluster {first.group} ({report.column}) stands out. {reason}{more} "
+                    "Details are in the cluster QC table on Data Assessment."
+                ),
+                question="Which clusters look low quality?",
+                severity="suggestion",
+            )
 
     # 3. Strong split by a condition/batch-like column, not yet integrated.
     if not state.batch_correction.done:

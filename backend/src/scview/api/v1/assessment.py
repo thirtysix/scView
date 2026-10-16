@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -14,6 +15,7 @@ from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing
+from scview.core import cluster_qc
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
 from scview.core import provenance
@@ -67,6 +69,34 @@ async def get_assessment(
     except Exception as e:
         logger.error("Assessment failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assessment failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/cluster-qc
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/cluster-qc")
+async def get_cluster_qc(
+    dataset_id: str,
+    groupby: str | None = None,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Per-cluster QC (size, median genes/counts/% mito/% ribo, doublets) with
+    plain-language flags for clusters that stand out (deterministic, no LLM).
+    ``groupby`` defaults to the active clustering."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:
+        # Per-cell metrics may need a pass over the counts: keep it off the loop.
+        report = await asyncio.to_thread(cluster_qc.for_adaptor, adaptor, groupby)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Cluster QC failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Cluster QC failed: {e}")
+    return report.model_dump()
 
 
 # ---------------------------------------------------------------------------
