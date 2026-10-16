@@ -96,58 +96,53 @@ export function MarkerGenesPanel() {
   // Fetch markers — first try pre-computed, then on-demand with groupbyColumn
   useEffect(() => {
     if (!datasetId) return;
+    // A request made before the default column was picked can answer after the
+    // column's own markers: only the latest run may set state.
+    let cancelled = false;
 
     setIsLoading(true);
     setError(null);
     setNoMarkers(false);
 
+    const show = (data: MarkersResponse) => {
+      if (cancelled) return;
+      setMarkersData(data);
+      setNoMarkers(false);
+      setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
+      initialFetchDone.current = true;
+    };
+    const fail = (err: unknown) => {
+      if (cancelled) return;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("404")) setNoMarkers(true);
+      else setError(msg);
+    };
+    const onDemand = () =>
+      apiFetch<MarkersResponse>(
+        `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupbyColumn)}`,
+      );
+
     // On initial load, try pre-computed markers first (no groupby_column)
     // On subsequent changes to groupbyColumn, compute on-the-fly
     const useOnDemand = initialFetchDone.current && groupbyColumn;
-    const url = useOnDemand
-      ? `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupbyColumn)}`
-      : `/datasets/${datasetId}/markers?format=json`;
+    const first = useOnDemand ? onDemand() : apiFetch<MarkersResponse>(`/datasets/${datasetId}/markers?format=json`);
 
-    apiFetch<MarkersResponse>(url)
-      .then((data) => {
-        setMarkersData(data);
-        setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
-        initialFetchDone.current = true;
-      })
+    first
+      .then(show)
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("404") && !useOnDemand) {
-          // No pre-computed markers — try on-demand if we have a groupby column
-          if (groupbyColumn) {
-            apiFetch<MarkersResponse>(
-              `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupbyColumn)}`,
-            )
-              .then((data) => {
-                setMarkersData(data);
-                setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
-                initialFetchDone.current = true;
-              })
-              .catch((innerErr) => {
-                const innerMsg = innerErr instanceof Error ? innerErr.message : String(innerErr);
-                if (innerMsg.includes("404")) {
-                  setNoMarkers(true);
-                } else {
-                  setError(innerMsg);
-                }
-              })
-              .finally(() => setIsLoading(false));
-            return;
-          }
-          setNoMarkers(true);
-        } else if (msg.includes("404")) {
-          setNoMarkers(true);
-        } else {
-          setError(msg);
+        // No pre-computed markers — try on-demand if we have a groupby column
+        if (msg.includes("404") && !useOnDemand && groupbyColumn && !cancelled) {
+          return onDemand().then(show, fail);
         }
-        setIsLoading(false);
-        return;
+        fail(err);
       })
-      .then(() => setIsLoading(false));
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [datasetId, groupbyColumn]);
 
   // Current markers for selected group
