@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
-from scview.core.assessor import assess_preprocessing
+from scview.core.assessor import assess_preprocessing, recorded_normalization_method
 from scview.core import cluster_qc, qc_groups, qc_report
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
@@ -67,9 +67,10 @@ async def get_assessment(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
 
     def _assess(adata) -> dict:
-        # Not a step, so beside the step entries rather than one of them.
+        # Not steps, so beside the step entries rather than among them.
         return {**assess_preprocessing(adata).model_dump(),
-                "species": detect_species(adata).model_dump()}
+                "species": detect_species(adata).model_dump(),
+                "normalization_method": recorded_normalization_method(adata)}
 
     try:
         # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop.

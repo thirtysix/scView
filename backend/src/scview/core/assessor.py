@@ -824,27 +824,48 @@ def assess_preprocessing(adata: Any) -> PreprocessingState:
     return _apply_recorded_provenance(adata, state)
 
 
+_PEARSON_DETAILS = {
+    "highly_variable_genes": "Ranked by Pearson residual variance (analytic Pearson residuals)",
+    "scaling": "X holds analytic Pearson residuals of the counts (.raw keeps log values)",
+}
+
+
+def recorded_normalization_method(adata: Any) -> str | None:
+    """The normalisation method scView last processed this dataset with ("log" or
+    "pearson_residuals"), or None when it never ran the HVG or scaling step."""
+    try:
+        data = provenance.read_provenance(adata)
+        method = data.get("current", {}).get("normalization_method")
+        if method:
+            return str(method)
+        for h in reversed(data.get("history", [])):
+            if h.get("step") in ("highly_variable_genes", "scaling"):
+                return str((h.get("params") or {}).get("normalization_method") or "log")
+    except Exception as exc:  # never break the assessment
+        logger.warning("Could not read the recorded normalization method: %s", exc)
+    return None
+
+
 def _apply_recorded_provenance(adata: Any, state: PreprocessingState) -> PreprocessingState:
     """Overlay what scView actually recorded doing: a step in the provenance
     history is authoritatively 'done' (high confidence), overriding heuristics."""
     try:
         history = provenance.read_provenance(adata).get("history", [])
-        last_ts: dict[str, str] = {}
+        last: dict[str, dict] = {}
         for h in history:
             field = _PROV_STEP_TO_FIELD.get(h.get("step", ""))
             if field:
-                last_ts[field] = h.get("timestamp", "")
-        for field, ts in last_ts.items():
+                last[field] = h
+        for field, h in last.items():
+            ts = h.get("timestamp", "")
             when = ts.split("T")[0] if ts else ""
-            setattr(
-                state,
-                field,
-                StepStatus(
-                    done=True,
-                    confidence="high",
-                    details=f"Run by scView{(' on ' + when) if when else ''} (recorded)",
-                ),
-            )
+            details = f"Run by scView{(' on ' + when) if when else ''} (recorded)"
+            # Under Pearson residuals these two steps did something else than their
+            # names say: residual-variance HVGs, residuals in X instead of z-scores.
+            method = (h.get("params") or {}).get("normalization_method")
+            if field in _PEARSON_DETAILS and method == "pearson_residuals":
+                details = f"{_PEARSON_DETAILS[field]}; {details[0].lower()}{details[1:]}"
+            setattr(state, field, StepStatus(done=True, confidence="high", details=details))
     except Exception as exc:  # provenance overlay must never break assessment
         logger.warning("Provenance overlay failed: %s", exc)
     return state

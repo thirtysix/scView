@@ -21,7 +21,7 @@ import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
 
-from scview.core import provenance, stress
+from scview.core import normalization, provenance, stress
 from scview.core.llm import chat_extra
 from scview.core.gene_filters import is_ribo_mito, select_query_genes
 from scview.core.geneset_sources import (
@@ -65,7 +65,10 @@ class PipelineParams:
     doublet_method: str = "scrublet"
     expected_doublet_rate: float = 0.06
 
-    # Normalization
+    # Normalization: "log" = shifted log, normalize_total + log1p (the default) |
+    # "pearson_residuals" = analytic Pearson residuals of the counts, for HVG
+    # selection and PCA only; .raw stays log-normalised (see core/normalization.py).
+    normalization_method: str = "log"
     target_sum: float = 1e4
 
     # HVG
@@ -181,8 +184,10 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
     # Clear preprocessing artifacts
     adata.raw = None
 
-    # Remove HVG annotation from var
-    for col in ["highly_variable", "means", "dispersions", "dispersions_norm"]:
+    # Remove HVG annotation from var (both flavours' columns)
+    for col in ["highly_variable", "means", "dispersions", "dispersions_norm",
+                "variances", "residual_variances", "highly_variable_rank",
+                "highly_variable_nbatches", "highly_variable_intersection"]:
         if col in adata.var.columns:
             del adata.var[col]
 
@@ -306,7 +311,11 @@ def _keep_raw_counts(adata: ad.AnnData) -> None:
 
 
 def _run_normalization(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Normalize to target sum per cell, store raw counts."""
+    """Normalize to target sum per cell, store raw counts.
+
+    Under both normalisation methods: with Pearson residuals, this shifted log
+    still becomes .raw, which markers, DE and the scores read."""
+    normalization.check_method(params.normalization_method)  # fail before any work
     # Save raw counts before normalization
     if "counts" not in adata.layers:
         if adata.raw is None or looks_like_counts(adata.X):
@@ -328,9 +337,33 @@ def _run_log_transform(adata: ad.AnnData, params: PipelineParams) -> None:
 HVG_FLAVORS: tuple[str, ...] = ("seurat", "cell_ranger")
 
 
-def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Identify highly variable genes."""
-    if params.hvg_flavor not in HVG_FLAVORS:
+def _pearson_hvg(adata: ad.AnnData, params: PipelineParams, batch_key: str | None) -> dict[str, Any]:
+    """Variable genes ranked by the variance of their Pearson residuals, from the counts."""
+    _keep_raw_counts(adata)  # counts held only in .raw: kept, as scaling would keep them
+    counts, source = normalization.find_counts(adata)
+    tmp = ad.AnnData(X=counts, obs=adata.obs[[batch_key]] if batch_key else None)
+    tmp.var_names = adata.var_names
+    df = sc.experimental.pp.highly_variable_genes(
+        tmp, flavor="pearson_residuals", n_top_genes=min(params.n_top_genes, adata.n_vars),
+        batch_key=batch_key, theta=normalization.THETA, inplace=False,
+    )
+    for col in ("dispersions", "dispersions_norm"):  # the other flavour's, now stale
+        if col in adata.var.columns:
+            del adata.var[col]
+    for col in df.columns:
+        adata.var[col] = df[col].to_numpy()
+    adata.var["highly_variable"] = adata.var["highly_variable"].astype(bool)
+    logger.info("Selected %d highly variable genes (Pearson residuals; counts from %s, "
+                "batch_key=%s)", int(adata.var["highly_variable"].sum()), source, batch_key)
+    return {"hvg_flavor": "pearson_residuals", "theta": normalization.THETA,
+            "counts_source": source}
+
+
+def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
+    """Identify highly variable genes: on the log values, or with Pearson residuals
+    chosen, by residual variance (``hvg_flavor`` is then not used)."""
+    method = normalization.check_method(params.normalization_method)
+    if method == "log" and params.hvg_flavor not in HVG_FLAVORS:
         raise ValueError(
             f"Unsupported HVG flavor '{params.hvg_flavor}'; choose from {', '.join(HVG_FLAVORS)}."
         )
@@ -339,6 +372,8 @@ def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> None:
     batch_key = params.hvg_batch_key or None
     if batch_key and batch_key not in adata.obs.columns:
         raise ValueError(f"HVG batch key '{batch_key}' not found in obs columns.")
+    if method == "pearson_residuals":
+        return _pearson_hvg(adata, params, batch_key)
     sc.pp.highly_variable_genes(
         adata,
         n_top_genes=params.n_top_genes,
@@ -348,12 +383,30 @@ def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> None:
     n_hvg = int(adata.var["highly_variable"].sum())
     logger.info("Selected %d highly variable genes (flavor=%s, batch_key=%s)",
                 n_hvg, params.hvg_flavor, batch_key)
+    return None
 
 
-def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Scale expression to unit variance and zero mean."""
+def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
+    """Scale expression to unit variance and zero mean, or, with Pearson residuals
+    chosen, put the residuals of the counts in X instead. Either way .raw keeps
+    the log-normalised matrix that markers, DE and the scores read."""
+    method = normalization.check_method(params.normalization_method)
     # Store the full data before subsetting to HVGs
     _keep_raw_counts(adata)
+    if method == "pearson_residuals":
+        counts, source = normalization.find_counts(adata)
+        if looks_like_counts(adata.X):
+            raise ValueError(
+                "Pearson residuals replace only the matrix PCA reads: run normalization "
+                "and log transform too, so markers, DE and plots keep log-normalised values."
+            )
+        adata.raw = adata
+        clip = normalization.default_clip(adata.n_obs)
+        # A new array: .raw, which may share a dense X, keeps the log values.
+        adata.X = normalization.pearson_residuals(counts, clip=clip)
+        logger.info("Pearson residuals in X (theta=%g, clip=%.1f; counts from %s)",
+                    normalization.THETA, clip, source)
+        return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source}
     adata.raw = adata
     # .raw shares a dense X rather than copying it, and scaling works in place:
     # without a copy .raw would hold the z-scores too (markers then read them).
@@ -361,6 +414,7 @@ def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> None:
         adata.X = adata.X.copy()
     sc.pp.scale(adata, max_value=10)
     logger.info("Scaled expression (max_value=10)")
+    return None
 
 
 def _run_pca(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -1178,11 +1232,12 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "doublet_detection": ("scanpy.pp.scrublet", ("doublet_method", "expected_doublet_rate")),
     "filtering": ("scanpy.pp.filter_cells/genes",
                   ("min_genes", "min_cells", "max_pct_mt", "drop_doublets")),
-    "normalization": ("scanpy.pp.normalize_total", ("target_sum",)),
+    "normalization": ("scanpy.pp.normalize_total", ("target_sum", "normalization_method")),
     "log_transform": ("scanpy.pp.log1p", ()),
     "highly_variable_genes": ("scanpy.pp.highly_variable_genes",
-                              ("n_top_genes", "hvg_flavor", "hvg_batch_key")),
-    "scaling": ("scanpy.pp.scale", ()),
+                              ("n_top_genes", "hvg_flavor", "hvg_batch_key",
+                               "normalization_method")),
+    "scaling": ("scanpy.pp.scale", ("normalization_method",)),
     "pca": ("scanpy.pp.pca", ("n_comps",)),
     "uncorrected_embedding": ("scanpy.tl.umap (uncorrected PCA)", ("n_neighbors", "umap_min_dist")),
     "batch_correction": ("scview.batch_correction", ("batch_key", "batch_method")),
@@ -1200,6 +1255,13 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
+# What those steps run instead when Pearson residuals are chosen.
+_PEARSON_TOOLS = {
+    "highly_variable_genes": "scanpy.experimental.pp.highly_variable_genes (pearson_residuals)",
+    "scaling": "analytic Pearson residuals (scanpy.experimental.pp.normalize_pearson_residuals)",
+}
+
+
 def _record_pipeline_step(
     adata: ad.AnnData, step_name: str, params: PipelineParams, ret: Any = None
 ) -> None:
@@ -1208,6 +1270,8 @@ def _record_pipeline_step(
     A runner that returns a dict adds it to the recorded params: what the step
     found rather than was told (the species, how many signature genes it had)."""
     tool, keys = _STEP_PROVENANCE.get(step_name, (f"scview.{step_name}", ()))
+    if params.normalization_method == "pearson_residuals":
+        tool = _PEARSON_TOOLS.get(step_name, tool)
     try:
         recorded = {k: getattr(params, k) for k in keys}
         if isinstance(ret, dict):
@@ -1228,6 +1292,9 @@ def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list
             current["log1p"] = True
         if "scaling" in ran:
             current["scaled"] = True
+        if ran & {"highly_variable_genes", "scaling"}:
+            # What X and the variable genes came from: z-scored log values or residuals.
+            current["normalization_method"] = params.normalization_method
         if "pca" in ran or "X_pca" in adata.obsm:
             current["pca"] = True
         embs = sorted(k for k in adata.obsm.keys() if k.startswith("X_"))
