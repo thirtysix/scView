@@ -44,6 +44,16 @@ All notable changes to scView are documented here. The format is based on
   or delete it. Custom collections work alongside MSigDB, or without it, for enrichment, gene-set
   scoring and browsing, and show how many of their genes the current dataset measures. A file
   with problems is refused with a list of them by line.
+- **Cluster QC on Data Assessment.** Each cluster's size, genes and counts per cell, % mito and
+  ribo, and doublets, compared with the typical cluster, with plain-language flags for clusters
+  that look low quality, doublet-rich or very small. The co-pilot answers "which clusters look low
+  quality?" from these numbers, and the tip shown when a dataset opens names a cluster that stands
+  out.
+- **"Explain this data"** writes a short, cited QC report (Overview, Quality, Concerns, Suggested
+  next steps) from the assessment numbers only. It is saved per dataset, so reopening the tab
+  doesn't call the model again; without an API key it lays out the same facts.
+- **The co-pilot shows what its literature search covers:** how many papers and tutorial documents
+  it can search, and when the index last grew.
 
 ### Changed
 - **A category has the same colour in every panel:** embedding, legend, cluster map, violins and
@@ -77,7 +87,8 @@ All notable changes to scView are documented here. The format is based on
   release's published images and starts them on amd64 and arm64 (the images Apple Silicon Macs
   use).
 - `npm run lint` works again; ten unused frontend packages were removed; the ruff rule set and
-  `anndata<0.13` are pinned so fresh installs behave like the tested ones.
+  `anndata<0.13` are pinned so fresh installs behave like the tested ones; the unused websocket
+  stub (it echoed whatever a client sent) is gone.
 
 ## [0.12.0] - 2026-10-16
 
