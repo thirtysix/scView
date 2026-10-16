@@ -111,6 +111,26 @@ def test_group_sums_match_pandas_in_blocks(monkeypatch, dense):
         np.testing.assert_allclose(detected[g], (rows > 0).sum(axis=0))
 
 
+def test_a_dense_matrix_is_read_in_small_blocks(monkeypatch):
+    # A dense block is held under _DENSE_ELEMENTS values, not _CHUNK cells, so a
+    # 50k x 30k in-memory X is never copied (and upcast) in multi-GB slices.
+    monkeypatch.setattr(ms, "_DENSE_ELEMENTS", 100)  # 2 cells of 40 genes
+    a = _adata(dense=True)
+    seen: list[int] = []
+
+    class Recording:
+        shape = a.raw.X.shape
+
+        def __getitem__(self, rows):
+            seen.append(rows.stop - rows.start)
+            return a.raw.X[rows]
+
+    codes = pd.Categorical(a.obs["cell_type"], categories=["T", "B", "NK"]).codes.astype(np.int64)
+    sums, _ = ms._group_sums(Recording(), codes, 3)
+    assert max(seen) == 2 and sum(seen) == 120
+    np.testing.assert_allclose(sums[0], np.asarray(a.raw.X)[:40].sum(axis=0), rtol=1e-5)
+
+
 def test_mismatched_groups_give_no_columns():
     a = _adata()
     sc.tl.rank_genes_groups(a, "cell_type", method="wilcoxon", pts=True)

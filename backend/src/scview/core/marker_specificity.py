@@ -38,8 +38,10 @@ logger = logging.getLogger(__name__)
 # indexed by gene with a "tau" column.
 SPECIFICITY_FIELD = "scview_specificity"
 
-# Cells per block when summing a large or backed matrix.
+# Cells per block when summing a large or backed matrix; a dense block is also
+# held under _DENSE_ELEMENTS values (50k cells x 30k genes would otherwise copy GBs).
 _CHUNK = 20_000
+_DENSE_ELEMENTS = 20_000_000
 
 
 def group_names(rgg: Any) -> list[str]:
@@ -85,8 +87,9 @@ def _group_sums(X, codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.nda
     n_cells, n_genes = X.shape
     sums = np.zeros((n_groups, n_genes))
     detected = np.zeros((n_groups, n_genes))
-    for start in range(0, n_cells, _CHUNK):
-        stop = min(start + _CHUNK, n_cells)
+    rows = _CHUNK if sp.issparse(X) else min(_CHUNK, max(1, _DENSE_ELEMENTS // max(n_genes, 1)))
+    for start in range(0, n_cells, rows):
+        stop = min(start + rows, n_cells)
         c = codes[start:stop]
         keep = np.flatnonzero(c >= 0)
         if keep.size == 0:
@@ -94,7 +97,8 @@ def _group_sums(X, codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.nda
         block = X[start:stop]
         if hasattr(block, "to_memory"):  # a backed sparse dataset's slice
             block = block.to_memory()
-        block = block[keep]
+        if keep.size < len(c):
+            block = block[keep]
         onehot = sp.csr_matrix(
             (np.ones(keep.size), (c[keep], np.arange(keep.size))), shape=(n_groups, keep.size)
         )
@@ -102,12 +106,12 @@ def _group_sums(X, codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.nda
             block = sp.csr_matrix(block)
             sums += (onehot @ block).toarray()
             hit = block.copy()
-            hit.data = (hit.data > 0).astype(np.float64)
+            hit.data = (hit.data > 0).astype(np.float32)
             detected += (onehot @ hit).toarray()
         else:
-            block = np.asarray(block, dtype=np.float64)
+            block = np.asarray(block)
             sums += onehot @ block
-            detected += onehot @ (block > 0).astype(np.float64)
+            detected += onehot @ (block > 0).astype(np.float32)
     return sums, detected
 
 
