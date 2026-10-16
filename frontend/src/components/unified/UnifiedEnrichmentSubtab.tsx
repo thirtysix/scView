@@ -5,6 +5,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { runPipelineSteps } from "@/api/assistant";
 import { getDataset } from "@/api/datasets";
+import { collectionLabel } from "@/api/genesets";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
@@ -23,6 +24,8 @@ interface EnrichmentResult {
   gene_count: number;
   genes: string[];
   collection: string;
+  /** Set for a custom collection: its name, "(deleted)" once it is gone. */
+  collection_name?: string;
 }
 
 interface EnrichmentResponse {
@@ -281,7 +284,7 @@ export function UnifiedEnrichmentSubtab({
     (r: EnrichmentResult) => {
       const where = selectedGroup ? ` enriched in the ${selectedGroup} group` : "";
       askCopilot(
-        `What does the pathway "${r.term}" (${r.collection})${where} tell me biologically? Top genes: ${r.genes.slice(0, 8).join(", ")}.`,
+        `What does the pathway "${r.term}" (${collectionLabel(r)})${where} tell me biologically? Top genes: ${r.genes.slice(0, 8).join(", ")}.`,
       );
     },
     [askCopilot, selectedGroup],
@@ -326,7 +329,7 @@ export function UnifiedEnrichmentSubtab({
       ["term", "collection", "adj_pvalue", "overlap", "genes"],
       sortedResults.map((r) => [
         r.term,
-        r.collection,
+        collectionLabel(r),
         r.adjusted_pvalue.toExponential(4),
         `${r.overlap_count}/${r.gene_count}`,
         r.genes.join(";"),
@@ -455,6 +458,7 @@ export function UnifiedEnrichmentSubtab({
       <MSigDBCollectionTree
         selected={selectedCollections}
         onChange={setSelectedCollections}
+        datasetId={datasetId}
         compact
       />
 
@@ -518,7 +522,7 @@ export function UnifiedEnrichmentSubtab({
                   key={`${r.collection}-${r.term}`}
                   onClick={() => handleTermClick(r)}
                   className={`group cursor-pointer border-b border-slate-50 transition-colors hover:bg-blue-50 ${isScoring ? "bg-blue-50/70" : ""} ${scoringTerm && !isScoring ? "opacity-50" : ""}`}
-                  title={`Click to score on scatter\nCollection: ${r.collection}\nGenes: ${r.genes.slice(0, 10).join(", ")}${r.genes.length > 10 ? "..." : ""}`}
+                  title={`Click to score on scatter\nCollection: ${collectionLabel(r)}\nGenes: ${r.genes.slice(0, 10).join(", ")}${r.genes.length > 10 ? "..." : ""}`}
                 >
                   <td className="max-w-[200px] px-2 py-1.5">
                     <div className="flex items-center gap-1.5">
@@ -535,7 +539,7 @@ export function UnifiedEnrichmentSubtab({
                         <Sparkles className="h-3 w-3" />
                       </button>
                     </div>
-                    <div className="text-[10px] text-slate-400">{isScoring ? "Scoring..." : r.collection}</div>
+                    <div className="text-[10px] text-slate-400">{isScoring ? "Scoring..." : collectionLabel(r)}</div>
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums">
                     <span className={r.adjusted_pvalue < 0.05 ? "font-medium text-blue-600" : "text-slate-600"}>

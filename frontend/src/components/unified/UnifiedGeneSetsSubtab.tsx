@@ -1,11 +1,15 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { Loader2, Search, Check } from "lucide-react";
+import { Loader2, Search, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useCustomGeneSetsStore } from "@/stores/customGeneSetsStore";
 import { apiFetch } from "@/api/client";
+import type { CollectionChoice } from "@/api/genesets";
+import {
+  CollectionOptions,
+  CustomCollectionsGroup,
+} from "@/components/panels/CustomCollectionsGroup";
 
-interface CollectionMeta {
-  id: string;
-  name: string;
+interface CollectionMeta extends CollectionChoice {
   category: string;
   subcategory?: string;
   n_sets: number;
@@ -15,6 +19,8 @@ interface CollectionMeta {
 interface GeneSetSearchResult {
   name: string;
   collection: string;
+  /** Set for a custom collection. */
+  collection_name?: string;
   n_genes: number;
   genes: string[];
 }
@@ -70,7 +76,9 @@ export function UnifiedGeneSetsSubtab({
     });
   }, [dataset]);
 
-  // Fetch collections on mount
+  // Fetch collections on mount, and again when a custom one is added, renamed or deleted
+  const customVersion = useCustomGeneSetsStore((s) => s.version);
+  const [showCustom, setShowCustom] = useState(false);
   useEffect(() => {
     if (!datasetId) return;
     apiFetch<{ dataset_id: string; collections: CollectionMeta[] }>(
@@ -79,12 +87,13 @@ export function UnifiedGeneSetsSubtab({
       .then((data) => {
         const available = (data.collections ?? []).filter((c) => c.available);
         setCollections(available);
-        if (available.length > 0 && !selectedCollection) {
-          setSelectedCollection(available[0]!.id);
-        }
+        // Keep the current choice unless it was a custom collection just deleted.
+        setSelectedCollection((cur) =>
+          available.some((c) => c.id === cur) ? cur : (available[0]?.id ?? ""),
+        );
       })
       .catch(() => {});
-  }, [datasetId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [datasetId, customVersion]);
 
   // Fetch gene sets when collection changes
   useEffect(() => {
@@ -115,13 +124,14 @@ export function UnifiedGeneSetsSubtab({
   const scoreCache = useRef<Map<string, { scores: Float32Array; found: number; missing: number }>>(
     new Map(),
   );
-  const cacheKey = (name: string) => `${datasetId}::${name}`;
+  // The collection is part of the key: a custom set may share an MSigDB set's name.
+  const cacheKey = (gs: GeneSetSearchResult) => `${datasetId}::${gs.collection}::${gs.name}`;
 
   // Select a gene set from the list — re-apply a cached score if we have one.
   const handleSelectGeneSet = useCallback(
     (gs: GeneSetSearchResult) => {
       setSelectedGeneSet(gs);
-      const cached = scoreCache.current.get(cacheKey(gs.name));
+      const cached = scoreCache.current.get(cacheKey(gs));
       if (cached) {
         setScoreResult({ found: cached.found, missing: cached.missing });
         onScoreComplete(cached.scores, gs.name);
@@ -156,7 +166,7 @@ export function UnifiedGeneSetsSubtab({
         found: response.genes_found.length,
         missing: response.genes_missing.length,
       };
-      scoreCache.current.set(cacheKey(selectedGeneSet.name), entry);
+      scoreCache.current.set(cacheKey(selectedGeneSet), entry);
       setScoreResult({ found: entry.found, missing: entry.missing });
       onScoreComplete(scores, selectedGeneSet.name);
     } catch (err) {
@@ -176,7 +186,7 @@ export function UnifiedGeneSetsSubtab({
       {/* Collection dropdown */}
       <div>
         <label className="mb-1 block text-[11px] font-medium text-slate-500">
-          MSigDB Collection
+          Collection
         </label>
         <select
           value={selectedCollection}
@@ -184,14 +194,24 @@ export function UnifiedGeneSetsSubtab({
             setSelectedCollection(e.target.value);
             setFilterQuery("");
           }}
+          aria-label="Gene-set collection"
           className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700"
         >
-          {collections.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name} ({c.n_sets} sets)
-            </option>
-          ))}
+          <CollectionOptions collections={collections} />
         </select>
+        <button
+          type="button"
+          onClick={() => setShowCustom((v) => !v)}
+          className="mt-1 flex items-center gap-0.5 text-[10px] text-blue-600 hover:underline"
+        >
+          {showCustom ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          Your own collections (upload, rename, delete)
+        </button>
+        {showCustom && (
+          <div className="mt-1 rounded-lg border border-slate-200 bg-white p-1.5">
+            <CustomCollectionsGroup datasetId={datasetId} compact />
+          </div>
+        )}
       </div>
 
       {/* Search filter for gene sets */}
@@ -247,7 +267,8 @@ export function UnifiedGeneSetsSubtab({
         <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-2.5">
           <div className="mb-1 text-xs font-semibold text-blue-700">{selectedGeneSet.name}</div>
           <div className="mb-2 text-[10px] text-blue-500">
-            {selectedGeneSet.n_genes} genes in {selectedGeneSet.collection}
+            {selectedGeneSet.n_genes} genes in{" "}
+            {selectedGeneSet.collection_name || selectedGeneSet.collection}
           </div>
           <div className="flex items-center gap-2">
             <button

@@ -39,21 +39,23 @@ import {
   MSigDBCollectionTree,
   DEFAULT_MSIGDB_COLLECTIONS,
 } from "./MSigDBCollectionTree";
+import { CollectionOptions } from "./CustomCollectionsGroup";
+import { collectionLabel, type CollectionChoice } from "@/api/genesets";
+import { useCustomGeneSetsStore } from "@/stores/customGeneSetsStore";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
 /* ------------------------------------------------------------------ */
 
-interface GeneSetCollection {
-  id: string;
-  name: string;
-  description: string;
-  n_sets?: number;
+interface GeneSetCollection extends CollectionChoice {
+  description?: string;
 }
 
 interface GeneSetSearchResult {
   name: string;
   collection: string;
+  /** Set for a custom collection. */
+  collection_name?: string;
   n_genes: number;
   genes: string[];
 }
@@ -76,6 +78,8 @@ interface EnrichmentResult {
   gene_count: number;
   genes: string[];
   collection?: string;
+  /** Set for a custom collection: its name, "(deleted)" once it is gone. */
+  collection_name?: string;
 }
 
 interface EnrichmentResponse {
@@ -209,7 +213,8 @@ export function GeneSetPanel() {
     }
   }, [categoricalColumns, currentGroupBy, dataset]);
 
-  // ---- Fetch gene set collections on mount ----
+  // ---- Fetch gene set collections on mount (and when custom ones change) ----
+  const customVersion = useCustomGeneSetsStore((s) => s.version);
   useEffect(() => {
     if (!datasetId) return;
     apiFetch<{ collections: GeneSetCollection[] }>(
@@ -217,12 +222,13 @@ export function GeneSetPanel() {
     )
       .then((data) => {
         setCollections(data.collections);
-        if (data.collections.length > 0) {
-          setSelectedCollection(data.collections[0]!.id);
-        }
+        // Keep the current choice unless it was a custom collection just deleted.
+        setSelectedCollection((cur) =>
+          data.collections.some((c) => c.id === cur) ? cur : (data.collections[0]?.id ?? ""),
+        );
       })
       .catch(() => {});
-  }, [datasetId]);
+  }, [datasetId, customVersion]);
 
   // ---- Fetch enrichment columns on mount ----
   useEffect(() => {
@@ -697,7 +703,7 @@ export function GeneSetPanel() {
       ["term", "collection", "p_value", "adjusted_p_value", "overlap_count", "gene_count", "genes"],
       sortedResults.map((r) => [
         r.term,
-        r.collection ?? "",
+        collectionLabel(r),
         r.pvalue.toExponential(4),
         r.adjusted_pvalue.toExponential(4),
         r.overlap_count,
@@ -777,12 +783,7 @@ export function GeneSetPanel() {
                 onChange={(e) => setSelectedCollection(e.target.value)}
                 className="flex-shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
               >
-                {collections.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                    {c.n_sets ? ` (${c.n_sets})` : ""}
-                  </option>
-                ))}
+                <CollectionOptions collections={collections} />
               </select>
               <div className="relative flex-1">
                 <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -842,7 +843,7 @@ export function GeneSetPanel() {
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-2">
                                 <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
-                                  {result.collection}
+                                  {result.collection_name || result.collection}
                                 </span>
                                 <span className="truncate text-xs font-medium text-slate-800">
                                   {result.name}
@@ -1190,6 +1191,7 @@ export function GeneSetPanel() {
             <MSigDBCollectionTree
               selected={selectedCollections}
               onChange={setSelectedCollections}
+              datasetId={datasetId}
             />
 
             {/* Error */}
@@ -1392,7 +1394,7 @@ export function GeneSetPanel() {
                             <td className="px-3 py-2">
                               {r.collection && (
                                 <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
-                                  {r.collection}
+                                  {collectionLabel(r)}
                                 </span>
                               )}
                             </td>
