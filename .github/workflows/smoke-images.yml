@@ -1,0 +1,94 @@
+# After Publish images succeeds, pulls the images it just published and starts
+# them with the real docker-compose.yml on amd64 and arm64. The arm64 job runs
+# the images Apple Silicon Macs pull (not Docker Desktop for Mac itself).
+#
+# A manual run (Actions -> Smoke-test images -> Run workflow) tests any
+# published tag, e.g. 0.13.0 or main.
+name: Smoke-test images
+
+on:
+  workflow_run:
+    workflows: ["Publish images"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to test (e.g. 0.13.0, latest, main)"
+        required: true
+        default: latest
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Pick the image tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_REF: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          # A release run's ref is the tag (v0.13.0 -> 0.13.0); a manual
+          # publish run's is the branch, tagged with / replaced by -.
+          if [ -n "$INPUT_TAG" ]; then tag="$INPUT_TAG"
+          elif [[ "$RUN_REF" =~ ^v[0-9] ]]; then tag="${RUN_REF#v}"
+          else tag="${RUN_REF//\//-}"
+          fi
+          echo "SCVIEW_VERSION=$tag" >> "$GITHUB_ENV"
+          echo "Testing tag $tag on ${{ matrix.arch }}"
+
+      - name: Start scView from the published images
+        run: |
+          printf 'MSIGDB_AUTO_DOWNLOAD=false\n' > .env
+          docker compose pull
+          docker compose up -d --no-build --wait --wait-timeout 300
+          docker compose ps
+
+      - name: Page, API proxy and converter respond
+        run: |
+          curl -fsS -o /dev/null http://127.0.0.1:3000/
+          curl -fsS http://127.0.0.1:3000/api/v1/datasets > /dev/null
+          curl -fsS http://127.0.0.1:8001/health
+
+      - name: Upload a small dataset
+        run: |
+          docker compose exec -T backend python - <<'EOF'
+          import anndata as ad, numpy as np, scipy.sparse as sp
+          rng = np.random.default_rng(0)
+          X = sp.csr_matrix(rng.poisson(1.0, size=(200, 300)).astype(np.float32))
+          a = ad.AnnData(X)
+          a.obs_names = [f"cell{i}" for i in range(200)]
+          a.var_names = [f"Gene{i}" for i in range(300)]
+          a.write_h5ad("/tmp/smoke.h5ad")
+          EOF
+          docker compose cp backend:/tmp/smoke.h5ad smoke.h5ad
+          id=$(curl -fsS -F file=@smoke.h5ad http://127.0.0.1:3000/api/v1/datasets/upload | jq -r .id)
+          echo "uploaded $id"
+          for i in $(seq 1 30); do
+            body=$(curl -fsS "http://127.0.0.1:3000/api/v1/datasets/$id")
+            [ "$(jq -r .status <<< "$body")" = ready ] && break
+            sleep 2
+          done
+          jq -e '.status == "ready" and .n_cells == 200 and .n_genes == 300' <<< "$body"
+
+      - name: Logs
+        if: always()
+        run: docker compose logs --no-color --tail 200
+
+      - name: Stop
+        if: always()
+        run: docker compose down -v

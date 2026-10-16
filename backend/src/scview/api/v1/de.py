@@ -3,18 +3,21 @@
 Powers the volcano plot: the user lassoes (or clicks) a set of cells, and we run a
 one-vs-rest Wilcoxon test over all genes, returning log fold-change and adjusted
 p-values per gene. Unlike the marker endpoint (which groups by an obs column), the
-group here is an ad-hoc list of cell indices.
+group here is an ad-hoc list of cell indices. Between-groups comparisons can
+instead run donor-aware pseudobulk DESeq2 (``core/pseudobulk.py``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import re
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.dependencies import get_dataset_manager
+from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
 
 logger = logging.getLogger(__name__)
@@ -40,6 +43,9 @@ class DECompareRequest(BaseModel):
     within_column: str | None = None
     within_value: str | None = None
     replicate_key: str | None = None  # donor/sample obs column; overrides detection
+    # "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key
+    # or a detectable donor column, and raw counts).
+    method: Literal["wilcoxon", "pseudobulk"] = "wilcoxon"
 
 
 class DEGene(BaseModel):
@@ -61,19 +67,22 @@ class DEResponse(BaseModel):
     top_donor_share_a: float | None = None
     top_donor_share_b: float | None = None
     underreplicated: bool = False
+    # Pseudobulk only (method="pseudobulk"); additive, all optional.
+    method: str = "wilcoxon"
+    n_samples_a: int | None = None
+    n_samples_b: int | None = None
+    n_genes_tested: int | None = None
+    design: str | None = None
+    counts_source: str | None = None
+    dropped_samples: list[str] = []
 
 
-_DONOR_COL_RE = re.compile(r"donor|patient|individual|subject|sample|participant", re.I)
-
-
-def _detect_replicate_key(obs, exclude: set[str]) -> str | None:
-    """First donor/patient/sample-like obs column (not one used to split/scope)."""
-    for col in obs.columns:
-        if col in exclude or not _DONOR_COL_RE.search(str(col)):
-            continue
-        if obs[col].nunique(dropna=True) > 1:
-            return str(col)
-    return None
+def _detect_replicate_key(obs, exclude: set[str], mask_a=None, mask_b=None) -> str | None:
+    """The most donor-like obs column (not one used to split/scope); with the two
+    groups' masks, one with at least 2 donors in each group (core/replicates.py)."""
+    candidates = donor_candidates(obs, exclude)
+    groups = [mask_a, mask_b] if mask_a is not None and mask_b is not None else []
+    return pick_donor(obs, candidates, groups)
 
 
 def _donor_stats(donors) -> tuple[int, float]:
@@ -222,6 +231,9 @@ async def differential_expression_compare(
                     f"({body.group_a}: {n_a}, {body.group_b}: {n_b})."),
         )
 
+    if body.method == "pseudobulk":
+        return await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id)
+
     # Subset before copying: only the compared cells are materialised.
     keep = mask_a | mask_b
     sub = adata[keep]
@@ -229,7 +241,62 @@ async def differential_expression_compare(
     genes = _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id)
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
     key = body.replicate_key or _detect_replicate_key(
-        obs, {c for c in (body.split_by, body.within_column) if c}
+        obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes, **guard)
+
+
+async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str):
+    """Donor-aware A vs B: per-donor count sums, DESeq2 Wald test (off the event loop)."""
+    from scview.core.pseudobulk import PseudobulkError, pseudobulk_de
+
+    key = body.replicate_key or _detect_replicate_key(
+        adata.obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
+    )
+    if not key:
+        raise HTTPException(
+            status_code=400,
+            detail="Pseudobulk DE needs a donor or sample column; none was found, so pick one.",
+        )
+    if key == body.split_by:
+        raise HTTPException(
+            status_code=400, detail="The donor column must differ from the column being compared."
+        )
+
+    keep = mask_a | mask_b
+
+    def _run():
+        sub = adata[keep]
+        if getattr(adata, "isbacked", False):
+            sub = sub.to_memory()
+        return pseudobulk_de(
+            sub, mask_a[keep], sub.obs[key],
+            label_a=body.group_a, label_b=body.group_b, donor_key=key,
+        )
+
+    try:
+        res = await asyncio.to_thread(_run)
+    except PseudobulkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("Pseudobulk DE failed for %s: %s", dataset_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Pseudobulk DE failed: {exc!s}")
+
+    label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
+    return DEResponse(
+        n_selected=res.n_cells_a,
+        n_rest=res.n_cells_b,
+        label=label,
+        genes=[DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa) for g, lf, p, pa in res.genes],
+        replicate_key=key,
+        n_donors_a=res.n_samples_a,
+        n_donors_b=res.n_samples_b,
+        method="pseudobulk",
+        n_samples_a=res.n_samples_a,
+        n_samples_b=res.n_samples_b,
+        n_genes_tested=res.n_genes_tested,
+        design=res.design,
+        counts_source=res.counts_source,
+        dropped_samples=res.dropped_samples,
+    )

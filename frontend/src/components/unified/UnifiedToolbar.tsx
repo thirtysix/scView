@@ -3,8 +3,12 @@ import { CATEGORICAL_PALETTE_OPTIONS, COLORMAP_OPTIONS } from "@/lib/colors";
 import type { CategoricalPaletteName, ColormapName } from "@/lib/colors";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
+import { useSplitViewStore } from "@/stores/splitViewStore";
+import { SplitByControl } from "@/components/unified/SplitByControl";
 import { Lasso, RotateCcw, X } from "lucide-react";
 import { formatNumber, prettyObsLabel, prettyEmbeddingLabel, isRedundantClusterCol } from "@/lib/formatting";
+import { LabelSelectionControls } from "@/components/unified/LabelSelection";
+import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -37,6 +41,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
   const setSelectionMode = useSelectionStore((s) => s.setSelectionMode);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
   const clearSelection = useSelectionStore((s) => s.clearSelection);
+  const splitActive = useSplitViewStore((s) => s.splitBy != null);
 
   const availableEmbeddings = dataset?.available_embeddings ?? [];
   const nCells = dataset?.n_cells ?? 0;
@@ -105,6 +110,11 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
           ))}
         </select>
       </div>
+
+      <div className="h-4 w-px bg-slate-200" />
+
+      {/* Split by: one plot per value of a column */}
+      <SplitByControl />
 
       {/* Expression layer (units for overlay + violin) */}
       {(dataset?.expression_layers?.length ?? 0) > 0 && (
@@ -239,9 +249,10 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
       {/* Lasso */}
       <button
         onClick={() => setSelectionMode(selectionMode === "lasso" ? "none" : "lasso")}
-        title="Lasso selection (L)"
-        className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
-          selectionMode === "lasso"
+        disabled={splitActive}
+        title={splitActive ? "Lasso is off while the plot is split" : "Lasso selection (L)"}
+        className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+          selectionMode === "lasso" && !splitActive
             ? "bg-orange-50 text-orange-700 ring-1 ring-orange-300"
             : "text-slate-600 hover:bg-slate-100"
         }`}
@@ -259,6 +270,8 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
           </button>
         </span>
       )}
+      <LabelSelectionControls />
+      <ResolutionSweepControl />
 
       {/* Spacer */}
       <div className="flex-1" />

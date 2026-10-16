@@ -3,7 +3,8 @@
 ``POST /integrate/plan`` checks a set of datasets (raw counts available, gene
 overlap, shared annotations) without changing anything; ``POST
 /integrate/run-stream`` builds the joint dataset and processes it, streaming
-progress as Server-Sent Events. See ``core/integration.py``.
+progress as Server-Sent Events; ``GET /datasets/{id}/integration/summary``
+reports a joint dataset's batch mixing. See ``core/integration.py``.
 """
 
 from __future__ import annotations
@@ -20,15 +21,20 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
+from scview.core import provenance
 from scview.core.dataset_manager import DatasetManager
 from scview.core.ingestion.merge import MergeJoin
 from scview.core.integration import (
+    LABEL_COLUMN,
     METHODS,
     IntegrationPlan,
     build_plan,
     load_units,
+    read_batch_mixing,
+    record_batch_mixing,
     run_integration_streamed,
 )
+from scview.core.uns_keys import BATCH_MIXING_KEY
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
@@ -139,3 +145,39 @@ async def run_integration(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/datasets/{dataset_id}/integration/summary")
+async def integration_summary(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """For a joint dataset: its batch-mixing score and the columns to break it down by.
+
+    ``joint`` is false for any other dataset. A joint dataset built before the
+    score existed (or whose PCA was redone since) is scored now and the score saved.
+    """
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    adata = adaptor.adata
+    origin = provenance.read_provenance(adata)["source"].get("origin")
+    info = dm.get_dataset_info(dataset_id) or {}
+    if origin != "integrated" and info.get("source") != "integrated":
+        return {"dataset_id": dataset_id, "joint": False}
+
+    mixing = read_batch_mixing(adata)
+    if mixing is None:
+        mixing = await asyncio.to_thread(record_batch_mixing, adata)
+        if mixing is not None:
+            try:
+                dm.persist_uns(dataset_id, adaptor, [BATCH_MIXING_KEY])
+            except Exception as e:  # still served from memory
+                logger.warning("Could not save the mixing score of %s: %s", dataset_id, e)
+    return {
+        "dataset_id": dataset_id,
+        "joint": True,
+        "label_column": LABEL_COLUMN if LABEL_COLUMN in adata.obs.columns else None,
+        "cluster_column": adaptor.active_clustering_column(),
+        "mixing": mixing,
+    }

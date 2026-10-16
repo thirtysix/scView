@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { ChevronRight, ChevronDown, Loader2 } from "lucide-react";
 import { apiFetch } from "@/api/client";
+import { CustomCollectionsGroup } from "./CustomCollectionsGroup";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -48,14 +49,18 @@ interface MSigDBCollectionTreeProps {
   selected: Set<string>;
   onChange: (selected: Set<string>) => void;
   compact?: boolean;
+  /** Lets the Custom group say how many of each collection's genes the dataset has. */
+  datasetId?: string | null;
 }
 
 export function MSigDBCollectionTree({
   selected,
   onChange,
   compact = false,
+  datasetId,
 }: MSigDBCollectionTreeProps) {
   const [hierarchy, setHierarchy] = useState<CategoryNode[]>([]);
+  const [customIds, setCustomIds] = useState<string[]>([]);
   const [defaults, setDefaults] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
@@ -146,8 +151,9 @@ export function MSigDBCollectionTree({
         }
       }
     }
+    for (const id of customIds) all.add(id);
     onChange(all);
-  }, [hierarchy, onChange]);
+  }, [hierarchy, customIds, onChange]);
 
   const selectDefaults = useCallback(() => {
     onChange(new Set(defaults));
@@ -166,14 +172,6 @@ export function MSigDBCollectionTree({
     );
   }
 
-  if (hierarchy.length === 0) {
-    return (
-      <div className="py-2 text-xs text-slate-400">
-        No MSigDB collections available. Check MSIGDB_DIR configuration.
-      </div>
-    );
-  }
-
   const textSize = compact ? "text-[11px]" : "text-xs";
   const py = compact ? "py-0.5" : "py-1";
 
@@ -182,7 +180,7 @@ export function MSigDBCollectionTree({
       {/* Quick actions */}
       <div className="flex items-center gap-2 text-[10px]">
         <span className={`font-medium text-slate-600 ${textSize}`}>
-          MSigDB Collections ({selected.size} selected)
+          Collections ({selected.size} selected)
         </span>
         <button
           type="button"
@@ -211,6 +209,22 @@ export function MSigDBCollectionTree({
       <div
         className={`max-h-64 overflow-auto rounded-lg border border-slate-200 bg-white ${compact ? "p-1.5" : "p-2"}`}
       >
+        {/* The user's own collections, usable alongside MSigDB (and without it).
+            First, so the upload is in view without scrolling past MSigDB. */}
+        <div className="mb-1 border-b border-slate-100 pb-1">
+          <CustomCollectionsGroup
+            datasetId={datasetId}
+            selected={selected}
+            onChange={onChange}
+            onLoaded={(cols) => setCustomIds(cols.map((c) => c.id))}
+            compact={compact}
+          />
+        </div>
+        {hierarchy.length === 0 && (
+          <div className="py-1 text-xs text-slate-400">
+            No MSigDB collections available. Check MSIGDB_DIR configuration.
+          </div>
+        )}
         {hierarchy.map((cat) => {
           const isExpanded = expandedCategories.has(cat.category);
           const hasChildren =

@@ -17,6 +17,9 @@ import { UnifiedGeneSetsSubtab } from "@/components/unified/UnifiedGeneSetsSubta
 import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentSubtab";
 import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { ClusterReference } from "@/components/unified/ClusterReference";
+import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
+import { useSplitViewStore } from "@/stores/splitViewStore";
+import type { ScatterLegend } from "@/lib/scatterExport";
 import { mapCategoryToColor } from "@/lib/colors";
 import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
@@ -85,6 +88,11 @@ export function UnifiedViewPanel() {
   // --- Embedding data (obs-colored) ---
   const { positions, colors, numCells, colorColumnName, dimensions, isLoading, error } =
     useEmbedding();
+
+  // --- Split-by small multiples (SplitScatterGrid covers the single plot,
+  // which stays mounted underneath so leaving the split shows it as it was) ---
+  const splitBy = useSplitViewStore((s) => s.splitBy);
+  const splitActive = !!(splitBy && datasetId && positions);
 
   // --- Overlay loading flag (transient; values/label persist in the store) ---
   const [isLoadingOverlay, setIsLoadingOverlay] = useState(false);
@@ -382,12 +390,14 @@ export function UnifiedViewPanel() {
   }, [colorBy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Lasso handler ---
+  // A lasso selection is not a group, so it drops any highlighted group.
   const handleSelectionComplete = useCallback(
     (indices: Set<number>) => {
+      setHighlight(null);
       if (indices.size === 0) clearSelection();
       else setSelection(indices);
     },
-    [setSelection, clearSelection],
+    [setSelection, clearSelection, setHighlight],
   );
 
   // --- Keyboard shortcuts ---
@@ -396,7 +406,7 @@ export function UnifiedViewPanel() {
       // Don't intercept when typing in inputs
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "l" || e.key === "L") {
+      if ((e.key === "l" || e.key === "L") && !useSplitViewStore.getState().splitBy) {
         const store = useSelectionStore.getState();
         store.setSelectionMode(store.selectionMode === "lasso" ? "none" : "lasso");
       }
@@ -458,11 +468,13 @@ export function UnifiedViewPanel() {
         for (const idx of indices) {
           if (!selectedIndices.has(idx)) { same = false; break; }
         }
-        if (same) { clearSelection(); return; }
+        if (same) { clearSelection(); setHighlight(null); return; }
       }
       setSelection(indices);
+      // Shared with the cluster map and the Markers / DE subtabs.
+      if (colorBy) setHighlight({ column: colorBy, value: cat });
     },
-    [colors, categories, selectedIndices, setSelection, clearSelection],
+    [colors, categories, selectedIndices, setSelection, clearSelection, colorBy, setHighlight],
   );
 
   // A group highlighted elsewhere (an Observations row, the co-pilot's "highlight
@@ -523,6 +535,15 @@ export function UnifiedViewPanel() {
   }, [overlayLabel, askCopilot]);
 
   const hasEmbeddings = dataset != null && dataset.available_embeddings.length > 0;
+
+  // "Download PNG" name + legend, shared by the single plot and the split grid
+  const scatterExportName = `${prettyEmbeddingLabel(embedding || "embedding")}_${overlayLabel || colorColumnName || colorBy}`;
+  const scatterExportLegend: ScatterLegend | null =
+    effectiveColorType === "continuous" && effectiveColorValues
+      ? { type: "continuous", title: overlayLabel || colorColumnName || colorBy, ...colorMinMax }
+      : categories && categoryColors
+        ? { type: "categorical", title: colorColumnName ?? colorBy, categories, colors: categoryColors }
+        : null;
 
   // No dataset
   if (!dataset) {
@@ -586,9 +607,11 @@ export function UnifiedViewPanel() {
                 onViewStateChange={setViewState}
                 onHover={handleHover}
                 dimensions={dimensions}
+                exportName={scatterExportName}
+                exportLegend={scatterExportLegend}
               />
             )}
-            {dimensions === 2 && (
+            {dimensions === 2 && !splitActive && (
               <LassoSelector
                 active={selectionMode === "lasso"}
                 positions={positions}
@@ -596,10 +619,38 @@ export function UnifiedViewPanel() {
                 onSelectionComplete={handleSelectionComplete}
               />
             )}
+            {splitBy && datasetId && positions && (
+              <SplitScatterGrid
+                datasetId={datasetId}
+                embedding={embedding}
+                column={splitBy}
+                positions={positions}
+                dimensions={dimensions}
+                colorValues={effectiveColorValues}
+                colorType={effectiveColorType}
+                selectedIndices={selectedIndices}
+                onHover={handleHover}
+                exportName={scatterExportName}
+                exportLegend={scatterExportLegend}
+              />
+            )}
 
-            {/* Overlay indicator */}
+            {/* Loading overlay indicator */}
+            {isLoadingOverlay && (
+              <div className="absolute right-12 top-3 z-10 flex items-center gap-1.5 rounded-md bg-white/90 px-2 py-1 text-xs text-blue-500 shadow">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading...
+              </div>
+            )}
+
+            {/* Overlay chip stacked above the legend (bottom-left): one flex
+                column, so a tall legend pushes the chip up instead of covering it.
+                While split, it sits in the legend column the grid keeps free. */}
+            <div className={`pointer-events-none absolute z-10 flex flex-col items-start gap-1.5 ${
+              splitActive ? "right-2 top-10 max-h-[calc(100%-3rem)]" : "left-3 bottom-3 max-h-[calc(100%-1.5rem)]"
+            }`}>
             {scatterOverlay && (
-              <div className="absolute left-3 bottom-14 z-10 flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50/90 px-2 py-1 text-xs text-blue-700">
+              <div className="pointer-events-auto flex flex-shrink-0 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50/90 px-2 py-1 text-xs text-blue-700">
                 <span className="font-medium">{overlayLabel}</span>
                 <span className="text-blue-500">
                   {scatterOverlay.type === "expression" ? "expression" : "score"}
@@ -613,16 +664,8 @@ export function UnifiedViewPanel() {
               </div>
             )}
 
-            {/* Loading overlay indicator */}
-            {isLoadingOverlay && (
-              <div className="absolute right-12 top-3 z-10 flex items-center gap-1.5 rounded-md bg-white/90 px-2 py-1 text-xs text-blue-500 shadow">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Loading...
-              </div>
-            )}
-
-            {/* Legend overlay (bottom-left) */}
-            <div className="absolute left-3 bottom-3 z-10 max-h-48 max-w-[200px] overflow-y-auto rounded-lg bg-white/90 p-2 shadow">
+            {/* Legend overlay */}
+            <div className="pointer-events-auto max-h-48 min-h-0 max-w-[200px] overflow-y-auto rounded-lg bg-white/90 p-2 shadow">
               {effectiveColorType === "continuous" && overlayValues ? (
                 <ColorLegend
                   type="continuous"
@@ -646,6 +689,7 @@ export function UnifiedViewPanel() {
                   onAskAbout={handleAskAboutCategory}
                 />
               ) : null}
+            </div>
             </div>
 
             {/* Hover tooltip */}
@@ -691,6 +735,7 @@ export function UnifiedViewPanel() {
             violinData={violinData}
             violinTitle={violinTitle}
             violinGroupLabel={groupByColumn ? prettyObsLabel(groupByColumn) : groupByColumn}
+            violinGroupColumn={groupByColumn}
             isLoading={isLoadingViolin}
           />
         </div>

@@ -1,12 +1,14 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Table2, Loader2, AlertCircle, MousePointerClick, Download, Sparkles } from "lucide-react";
 import Plot from "@/components/plots/Plot";
+import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
-import { getPalette } from "@/lib/colors";
+import { useCategoryColors } from "@/hooks/useCategoryColors";
+import { rgbCss } from "@/lib/categoryColors";
 import { formatNumber } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 
@@ -28,7 +30,6 @@ interface CrosstabResponse {
 }
 
 export function ObservationsPanel() {
-  const palette = getPalette(useSettingsStore((s) => s.categoricalPalette));
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const setSelection = useSelectionStore((s) => s.setSelection);
@@ -44,6 +45,10 @@ export function ObservationsPanel() {
 
   const [crosstab, setCrosstab] = useState<CrosstabResponse | null>(null);
   const [isLoadingCrosstab, setIsLoadingCrosstab] = useState(false);
+
+  // Each column's categories keep the colours they have on the embedding.
+  const primaryColor = useCategoryColors(primaryCol);
+  const colorByColor = useCategoryColors(colorByCol);
 
   // All categorical columns, excluding non-informative ones
   const allCategoricalCols = useMemo(() => {
@@ -199,14 +204,13 @@ export function ObservationsPanel() {
     // Stacked bars from crosstab
     if (crosstab && crosstab.row_values.length > 0 && crosstab.col_values.length > 0) {
       return crosstab.col_values.map((colVal, ci) => {
-        const c = palette[ci % palette.length]!;
         return {
           type: "bar" as const,
           x: crosstab.row_values,
           y: crosstab.row_values.map((_, ri) => crosstab.counts[ri]?.[ci] ?? 0),
           name: colVal,
           marker: {
-            color: `rgb(${c[0]},${c[1]},${c[2]})`,
+            color: rgbCss(colorByColor(colVal)),
           },
         };
       });
@@ -226,14 +230,11 @@ export function ObservationsPanel() {
         y: groupNames.map((s) => summary.groups[s]?.count ?? 0),
         name: "Cell count",
         marker: {
-          color: groupNames.map((_, i) => {
-            const c = palette[i % palette.length]!;
-            return `rgb(${c[0]},${c[1]},${c[2]})`;
-          }),
+          color: groupNames.map((name) => rgbCss(primaryColor(name))),
         },
       },
     ];
-  }, [summary, crosstab, palette]);
+  }, [summary, crosstab, primaryColor, colorByColor]);
 
   const compositionLayout = useMemo(
     () => ({
@@ -422,9 +423,9 @@ export function ObservationsPanel() {
                 <tbody>
                   {Object.entries(summary.groups)
                     .sort(([, a], [, b]) => b.count - a.count)
-                    .map(([name, grp], idx) => {
+                    .map(([name, grp]) => {
                       const pct = summary.total > 0 ? (grp.count / summary.total) * 100 : 0;
-                      const color = palette[idx % palette.length]!;
+                      const color = primaryColor(name);
                       const isSelected = selectedGroup === name;
 
                       return (
@@ -565,7 +566,7 @@ export function ObservationsPanel() {
             <Plot
               data={compositionTraces}
               layout={compositionLayout}
-              config={{ responsive: true, displayModeBar: false }}
+              config={plotConfig(`composition_${primaryCol}`)}
               useResizeHandler
               className="w-full"
               style={{ width: "100%" }}

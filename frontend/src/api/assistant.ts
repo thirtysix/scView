@@ -66,6 +66,24 @@ export async function runPipelineSteps(
   });
 }
 
+/** What the literature/tutorial retrieval can draw on (read-only status). */
+export interface RagCorpus {
+  documents: number; // papers (literature) or pages (tutorials)
+  chunks: number;
+  last_added: string | null; // ISO time the newest chunk was first added
+}
+
+export interface RagStatus {
+  enabled: boolean;
+  corpora: Record<string, RagCorpus>;
+  reason?: "no_database" | "no_api_key";
+  error?: string;
+}
+
+export async function getRagStatus(): Promise<RagStatus> {
+  return apiFetch<RagStatus>(`/assistant/rag-status`);
+}
+
 /** A deterministic one-line "I notice…" nudge surfaced when a dataset opens. */
 export interface DatasetInsight {
   insight: string;

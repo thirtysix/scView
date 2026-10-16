@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel
 
 from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
@@ -225,6 +226,26 @@ async def get_recipe(
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
     return {"recipe": provenance.recipe(adaptor.adata)}
+
+
+class DatasetRenameBody(BaseModel):
+    name: str
+
+
+@router.patch("/datasets/{dataset_id}")
+async def rename_dataset(
+    dataset_id: str,
+    body: DatasetRenameBody,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Rename a dataset (display name only; files and ids are unchanged)."""
+    try:
+        name = dm.rename_dataset(dataset_id, body.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if name is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    return {"id": dataset_id, "name": name}
 
 
 @router.delete("/datasets/{dataset_id}", status_code=204)

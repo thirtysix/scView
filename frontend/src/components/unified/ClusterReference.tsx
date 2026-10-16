@@ -4,6 +4,8 @@ import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { mapCategoryToColor } from "@/lib/colors";
+import { useObsRevision } from "@/stores/obsRevisionStore";
+import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
@@ -11,7 +13,9 @@ import { useSettingsStore } from "@/stores/settingsStore";
  * column (e.g. Leiden clusters) on the same embedding as the main plot — so the
  * cluster layout stays visible while the main plot is recoloured by a gene /
  * gene-set score. Clicking a legend entry highlights that cluster (dimming the
- * rest) so you can see exactly which cells a colour change refers to.
+ * rest) so you can see exactly which cells a colour change refers to. The
+ * highlight is the shared one (selection store): a cluster clicked here also
+ * opens in the Markers subtab, and one clicked in the main legend shows here.
  */
 export function ClusterReference({
   datasetId,
@@ -35,10 +39,25 @@ export function ClusterReference({
 }) {
   const paletteName = useSettingsStore((s) => s.categoricalPalette);
   const [clusterValues, setClusterValues] = useState<Int32Array | null>(null);
-  const [highlight, setHighlight] = useState<number | null>(null);
+  const revision = useObsRevision(datasetId, column); // refetch after hand labels
+  const highlightedGroup = useSelectionStore((s) => s.highlightedGroup);
+  const setHighlightedGroup = useSelectionStore((s) => s.setHighlight);
+  // Index of the highlighted group in this column's categories (null when the
+  // highlight belongs to another column).
+  const highlight = useMemo(() => {
+    if (!highlightedGroup || highlightedGroup.column !== column) return null;
+    const idx = categories.indexOf(highlightedGroup.value);
+    return idx >= 0 ? idx : null;
+  }, [highlightedGroup, column, categories]);
+  const setHighlight = useCallback(
+    (idx: number | null) => {
+      const value = idx == null ? undefined : categories[idx];
+      setHighlightedGroup(value == null ? null : { column, value });
+    },
+    [categories, column, setHighlightedGroup],
+  );
 
   useEffect(() => {
-    setHighlight(null);
     if (!datasetId || !column || !embedding) {
       setClusterValues(null);
       return;
@@ -58,7 +77,7 @@ export function ClusterReference({
     return () => {
       cancelled = true;
     };
-  }, [datasetId, embedding, column]);
+  }, [datasetId, embedding, column, revision]);
 
   const selectedIndices = useMemo(() => {
     if (highlight == null || !clusterValues) return null;
@@ -79,9 +98,9 @@ export function ClusterReference({
       }
       const code = clusterValues?.[index];
       if (code == null || code < 0) return;
-      setHighlight((cur) => (cur === code ? null : code));
+      setHighlight(highlight === code ? null : code);
     },
-    [clusterValues],
+    [clusterValues, highlight, setHighlight],
   );
 
   if (!positions || !clusterValues) return null;

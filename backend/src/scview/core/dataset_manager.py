@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import shutil
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,27 @@ _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 def is_safe_id(value: str) -> bool:
     """True for an id that is safe to use as one path component."""
     return bool(_ID_RE.fullmatch(value or ""))
+
+
+DATASET_NAME_MAX = 120
+# Control characters, invisible format characters (bidi overrides, zero-width
+# spaces) and line/paragraph separators: none belong in a one-line display name.
+_BAD_NAME_CATEGORIES = {"Cc", "Cf", "Cs", "Zl", "Zp"}
+
+
+def clean_dataset_name(value: object) -> str:
+    """Return a user-supplied dataset name trimmed, or raise ValueError saying why
+    it can't be used."""
+    if not isinstance(value, str):
+        raise ValueError("Name must be text.")
+    name = value.strip()
+    if not name:
+        raise ValueError("Name must not be empty.")
+    if len(name) > DATASET_NAME_MAX:
+        raise ValueError(f"Name is too long (max {DATASET_NAME_MAX} characters).")
+    if any(unicodedata.category(ch) in _BAD_NAME_CATEGORIES for ch in name):
+        raise ValueError("Name must not contain control or invisible characters.")
+    return name
 
 
 class DatasetManager:
@@ -154,6 +176,18 @@ class DatasetManager:
         with open(meta_path, "w") as fh:
             json.dump(meta, fh, indent=2)
 
+    def rename_dataset(self, dataset_id: str, name: object) -> str | None:
+        """Change a dataset's display name. Returns the stored name, or None if the
+        dataset doesn't exist; raises ValueError for a name that can't be used.
+
+        The name lives only in the metadata sidecar (never in the .h5ad), so this
+        doesn't touch the data or the cached adaptor."""
+        if self.get_dataset_info(dataset_id) is None:
+            return None
+        clean = clean_dataset_name(name)
+        self.update_dataset_metadata(dataset_id, {"name": clean})
+        return clean
+
     # ------------------------------------------------------------------
     # Removal
     # ------------------------------------------------------------------
@@ -240,6 +274,43 @@ class DatasetManager:
         d = self.data_dir / "derived" / dataset_id
         d.mkdir(parents=True, exist_ok=True)
         return d / f"{stem}.h5ad"
+
+    def persist_uns(self, dataset_id: str, adaptor: AnnDataAdaptor, keys: list[str]) -> bool:
+        """Save ``uns`` entries the cached dataset gained since it was loaded.
+
+        When the loaded file is already the derived one, only those entries are
+        rewritten in place, far cheaper than writing the whole file again;
+        otherwise the dataset is written to ``derived/`` like any processing
+        result, so originals stay untouched. A backed dataset's file is open
+        read-only, so its entries stay in memory. Returns whether it saved.
+        """
+        adata = adaptor.adata
+        if getattr(adata, "isbacked", False):
+            logger.info("Dataset %s is backed; not saving %s", dataset_id, keys)
+            return False
+        target = self.derived_h5ad_path(dataset_id, adaptor.h5ad_path)
+        if Path(adaptor.h5ad_path) == target and target.exists():
+            import h5py
+            from anndata.io import write_elem
+
+            with h5py.File(target, "a") as f:
+                if "uns" not in f:
+                    write_elem(f, "uns", {})
+                group = f["uns"]
+                for key in keys:
+                    if key in group:
+                        del group[key]
+                    write_elem(group, key, adata.uns[key])
+        else:
+            adata.write_h5ad(target, compression="gzip")
+            adaptor.h5ad_path = str(target)
+        return True
+
+    def saved_in_place(self, dataset_id: str, adaptor: AnnDataAdaptor, path: str) -> None:
+        """Record that the cached ``adaptor`` was edited and saved to ``path``, so
+        it stays cached (no reload) and the library sees its new columns."""
+        adaptor.h5ad_path = str(path)
+        self._update_metadata_from_adaptor(dataset_id, adaptor)
 
     def _update_metadata_from_adaptor(
         self, dataset_id: str, adaptor: AnnDataAdaptor

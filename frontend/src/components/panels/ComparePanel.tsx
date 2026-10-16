@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { GitCompare, Loader2, AlertCircle, Sparkles } from "lucide-react";
 import { JointEmbedding } from "@/components/compare/JointEmbedding";
 import Plot from "@/components/plots/Plot";
+import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { listDatasets, getDataset } from "@/api/datasets";
@@ -291,7 +292,7 @@ function CompositionCompare() {
                 paper_bgcolor: "white",
                 plot_bgcolor: "white",
               }}
-              config={{ displayModeBar: false, responsive: true }}
+              config={plotConfig(`composition_${column}_vs_${datasetB.name}`, datasetA.name)}
               useResizeHandler
               style={{ width: "100%" }}
             />

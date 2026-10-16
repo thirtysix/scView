@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from scview.core.ora_background import resolve_markers_key
+from scview.core.uns_keys import markers_column, repair_slash_keys
 
 logger = logging.getLogger(__name__)
 
@@ -41,21 +42,87 @@ def _counts_matrix(adata):
     return adata.X, adata.var_names
 
 
-def _row_stats(M, mt_mask: np.ndarray, chunk: int = 20000):
-    """Per-cell totals, detected genes and mito counts, read in row chunks so a
-    backed (on-disk) matrix, which has no .sum, works too."""
-    tc, ng, mt = [], [], []
+def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
+    """Per-cell totals, detected genes and one sum per gene mask, read in row
+    chunks so a backed (on-disk) matrix, which has no .sum, works too."""
+    tc, ng = [], []
+    sums: list[list[np.ndarray]] = [[] for _ in masks]
     for i in range(0, M.shape[0], chunk):
         block = M[i:i + chunk]
         if not hasattr(block, "toarray"):
             block = np.asarray(block)
         tc.append(np.asarray(block.sum(axis=1)).ravel())
         ng.append(np.asarray((block > 0).sum(axis=1)).ravel())
-        if mt_mask.any():
-            mt.append(np.asarray(block[:, mt_mask].sum(axis=1)).ravel())
+        for parts, mask in zip(sums, masks):
+            if mask.any():
+                parts.append(np.asarray(block[:, mask].sum(axis=1)).ravel())
     cat = lambda parts: np.concatenate(parts).astype(np.float64) if parts else np.zeros(0)  # noqa: E731
     total = cat(tc)
-    return total, cat(ng), (cat(mt) if mt else np.zeros_like(total))
+    return total, cat(ng), [cat(p) if p else np.zeros_like(total) for p in sums]
+
+
+def _row_stats(M, mt_mask: np.ndarray, chunk: int = 20000):
+    """Per-cell totals, detected genes and mito counts (see ``_row_sums``)."""
+    total, detected, (mt,) = _row_sums(M, [mt_mask], chunk)
+    return total, detected, mt
+
+
+# obs names for the same per-cell metric: scanpy, older scanpy / Kang, Seurat.
+_QC_OBS_NAMES = {
+    "total_counts": ("total_counts", "n_counts", "nCount_RNA"),
+    "n_genes": ("n_genes_by_counts", "n_genes", "nFeature_RNA"),
+    "pct_mt": ("pct_counts_mt", "percent.mt", "pct_counts_mito", "percent_mito"),
+    "pct_ribo": ("pct_counts_ribo", "percent.ribo", "percent.rb", "pct_counts_rb"),
+}
+
+
+def per_cell_qc(adata, ribo: bool = False) -> dict:
+    """Per-cell QC arrays: ``total_counts``, ``n_genes``, ``pct_mt`` and, when it
+    can be had cheaply, ``pct_ribo`` (else None).
+
+    Read from ``obs`` when present, otherwise computed from the counts matrix in
+    one chunked pass (no mutation of the AnnData, no disk write). ``computed`` is
+    True when one of the three core metrics had to be computed; ``has_mt`` is
+    False when it was computed and no MT- genes exist (pct_mt is then all zero).
+    """
+    obs = adata.obs
+
+    def _first(names: tuple[str, ...]) -> np.ndarray | None:
+        for n in names:
+            if n in obs.columns:
+                try:
+                    return np.asarray(obs[n].to_numpy(), dtype=np.float64)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    out = {k: _first(names) for k, names in _QC_OBS_NAMES.items()}
+    need = [k for k in ("total_counts", "n_genes", "pct_mt") if out[k] is None]
+    # Ribosomal % is a bonus: worked out in the pass the core metrics need, or,
+    # when ``ribo`` asks for it, in a pass of its own if the matrix is in memory
+    # (one sparse pass is cheap; a backed file would be read again from disk).
+    want_ribo = out["pct_ribo"] is None and (bool(need) or (ribo and not adata.isbacked))
+    has_mt = True
+    if need or want_ribo:
+        M, var_names = _counts_matrix(adata)
+        mt_mask = np.asarray(var_names.str.startswith("MT-") | var_names.str.startswith("mt-"))
+        ribo_mask = np.asarray(var_names.str.startswith(("RPS", "RPL", "Rps", "Rpl")))
+        if not (want_ribo and _looks_like_counts(M)):
+            ribo_mask = np.zeros_like(ribo_mask)  # log or scaled X: no meaningful %
+        if need or ribo_mask.any():
+            tc, ng, (mt_counts, ribo_counts) = _row_sums(M, [mt_mask, ribo_mask])
+            with np.errstate(divide="ignore", invalid="ignore"):
+                pct = lambda part: np.where(tc > 0, part / tc * 100.0, 0.0)  # noqa: E731
+                if out["pct_mt"] is None:
+                    has_mt = bool(mt_mask.any())
+                    out["pct_mt"] = pct(mt_counts) if has_mt else np.zeros_like(tc)
+                if ribo_mask.any():
+                    out["pct_ribo"] = pct(ribo_counts)
+            if out["total_counts"] is None:
+                out["total_counts"] = tc
+            if out["n_genes"] is None:
+                out["n_genes"] = ng
+    return {**out, "computed": bool(need), "has_mt": has_mt, "ribo_checked": bool(need) or ribo}
 
 
 class AnnDataAdaptor:
@@ -68,6 +135,7 @@ class AnnDataAdaptor:
         self.h5ad_path = h5ad_path
         self._adata: ad.AnnData | None = None
         self._qc_cache: dict | None = None
+        self._qc_cells: dict | None = None
 
     @property
     def adata(self) -> ad.AnnData:
@@ -81,6 +149,8 @@ class AnnDataAdaptor:
             else:
                 self._adata = ad.read_h5ad(self.h5ad_path)
                 logger.info("Loaded in memory (%d bytes)", file_size)
+            if repair_slash_keys(self._adata.uns):
+                logger.info("Re-keyed cached results saved under '/' keys")
         return self._adata
 
     # ------------------------------------------------------------------
@@ -184,6 +254,15 @@ class AnnDataAdaptor:
             "hist": {"bin_edges": edges.tolist(), "counts": counts.tolist()},
         }
 
+    def qc_per_cell(self, ribo: bool = False) -> dict:
+        """Per-cell QC arrays (see ``per_cell_qc``), cached for the dataset's
+        lifetime in memory; shared by the QC plots and the per-cluster flags.
+        ``ribo`` also works out % ribosomal when obs lacks it (an extra pass)."""
+        cells = self._qc_cells
+        if cells is None or (ribo and not cells["ribo_checked"]):
+            self._qc_cells = per_cell_qc(self.adata, ribo=ribo)
+        return self._qc_cells
+
     def qc_distributions(self, n_scatter: int = 5000, n_bins: int = 40) -> dict:
         """Per-cell QC distributions for the Data Assessment tab.
 
@@ -197,44 +276,18 @@ class AnnDataAdaptor:
         if self._qc_cache is not None:
             return self._qc_cache
 
-        adata = self.adata
-        obs = adata.obs
-        computed = False
+        obs = self.adata.obs
 
         def _col(name: str) -> np.ndarray | None:
             if name in obs.columns:
                 return np.asarray(obs[name].to_numpy(), dtype=np.float64)
             return None
 
-        def _first(*names: str) -> np.ndarray | None:
-            for n in names:
-                v = _col(n)
-                if v is not None:
-                    return v
-            return None
-
-        # scanpy, older scanpy / Kang, and Seurat names for the same metrics.
-        total_counts = _first("total_counts", "n_counts", "nCount_RNA")
-        n_genes = _first("n_genes_by_counts", "n_genes", "nFeature_RNA")
-        pct_mt = _first("pct_counts_mt", "percent.mt", "pct_counts_mito", "percent_mito")
-
-        if total_counts is None or n_genes is None or pct_mt is None:
-            computed = True
-            # Counts, not whatever X holds: summing a scaled X gave negative
-            # "counts per cell".
-            M, var_names = _counts_matrix(adata)
-            mt_mask = np.asarray(
-                var_names.str.startswith("MT-") | var_names.str.startswith("mt-")
-            )
-            tc, ng, mt_counts = _row_stats(M, mt_mask)
-            if mt_mask.any():
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    pm = np.where(tc > 0, mt_counts / tc * 100.0, 0.0)
-            else:
-                pm = np.zeros_like(tc)
-            total_counts = tc if total_counts is None else total_counts
-            n_genes = ng if n_genes is None else n_genes
-            pct_mt = pm if pct_mt is None else pct_mt
+        # Counts, not whatever X holds: summing a scaled X gave negative
+        # "counts per cell" (see _counts_matrix).
+        cells = self.qc_per_cell()
+        total_counts, n_genes, pct_mt = cells["total_counts"], cells["n_genes"], cells["pct_mt"]
+        computed = cells["computed"]
 
         metrics = {
             "n_genes_by_counts": self._qc_summary(n_genes, n_bins),
@@ -486,15 +539,15 @@ class AnnDataAdaptor:
         if column:
             return resolve_markers_key(self.adata.uns, column) is not None
         return "rank_genes_groups" in self.adata.uns or any(
-            k.startswith("rank_genes_groups__") for k in self.adata.uns
+            markers_column(k) is not None for k in self.adata.uns
         )
 
     def marker_columns(self) -> list[str]:
         """Return list of obs columns that have pre-computed markers."""
         cols = []
         for key in self.adata.uns:
-            if key.startswith("rank_genes_groups__"):
-                cols.append(key.split("__", 1)[1])
+            if markers_column(key) is not None:
+                cols.append(markers_column(key))
         if not cols and "rank_genes_groups" in self.adata.uns:
             rgg = self.adata.uns["rank_genes_groups"]
             groupby = rgg.get("params", {}).get("groupby", "")

@@ -7,7 +7,8 @@ its categorical annotations; genes are aligned with the ingestion merge engine
 records each cell's origin. The joint dataset is then processed from counts with
 that column as the batch key — batch-aware HVGs, PCA, an *uncorrected* UMAP kept
 for comparison, Harmony, then neighbors / clustering / UMAP / markers on the
-corrected space — so every existing panel works on it unchanged.
+corrected space — so every existing panel works on it unchanged. A batch-mixing
+score before and after correction is stored with it (``batch_mixing``).
 
 Sources are never modified: the merged counts land in ``ingested/{id}/``
 (read-only) and the processed result in ``derived/{id}/``, like any dataset.
@@ -32,6 +33,7 @@ from scview.core import provenance
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.session import _make_readonly, _safe_name
 from scview.core.pipeline import PipelineParams, looks_like_counts, run_pipeline_streamed
+from scview.core.uns_keys import BATCH_MIXING_KEY
 
 if TYPE_CHECKING:
     from scview.core.dataset_manager import DatasetManager
@@ -408,6 +410,115 @@ def persist_joint(
 
 
 # ---------------------------------------------------------------------------
+# Batch mixing
+# ---------------------------------------------------------------------------
+
+# Neighbours per cell for the mixing score.
+MIXING_K = 30
+# Cells the score is averaged over; a random subset above this keeps it to
+# seconds at the 150k-cell cap (standard error ~0.005 at 10k cells).
+MIXING_MAX_SCORED = 10_000
+
+# Embedding scored as "uncorrected" / "corrected".
+_MIXING_SPACES = (("uncorrected", "X_pca"), ("corrected", "X_pca_harmony"))
+
+
+def _cross_dataset_fraction(
+    X: np.ndarray, codes: np.ndarray, query: np.ndarray, k: int
+) -> np.ndarray:
+    """Per query cell, the fraction of its k nearest neighbours from another dataset."""
+    from sklearn.neighbors import NearestNeighbors
+
+    idx = NearestNeighbors(n_neighbors=k + 1).fit(X).kneighbors(X[query], return_distance=False)
+    # Drop the cell itself; among duplicate points it need not come first.
+    not_self = idx != query[:, None]
+    order = np.argsort(~not_self, axis=1, kind="stable")
+    idx = np.take_along_axis(idx, order, axis=1)[:, :k]
+    return (codes[idx] != codes[query][:, None]).mean(axis=1)
+
+
+def batch_mixing(
+    adata: ad.AnnData,
+    *,
+    label_column: str = LABEL_COLUMN,
+    k: int = MIXING_K,
+    max_scored: int = MIXING_MAX_SCORED,
+    seed: int = 0,
+) -> dict[str, Any] | None:
+    """How well the source datasets mix, in the uncorrected and corrected PCA.
+
+    For each cell, the fraction of its ``k`` nearest neighbours that come from a
+    different source dataset, averaged over cells. Were the datasets perfectly
+    mixed, a cell of dataset d would see others at rate (n - n_d) / (n - 1), so
+    ``ideal`` is that rate averaged over the scored cells (~1 - sum of squared
+    proportions). Kang CTRL vs STIM, scored by hand: 0.107 uncorrected, 0.478
+    after Harmony, ideal 0.499. None when there is nothing to score.
+    """
+    if label_column not in adata.obs.columns:
+        return None
+    spaces = [(name, key) for name, key in _MIXING_SPACES if key in adata.obsm]
+    n = int(adata.n_obs)
+    names, codes = np.unique(adata.obs[label_column].astype(str).to_numpy(), return_inverse=True)
+    if not spaces or len(names) < 2 or n < 3:
+        return None
+    k = min(k, n - 1)
+    rng = np.random.default_rng(seed)
+    query = np.sort(rng.choice(n, size=min(n, max_scored), replace=False))
+    sizes = np.bincount(codes, minlength=len(names))
+    ideal = (n - sizes) / (n - 1)
+    q_codes = codes[query]
+
+    out: dict[str, Any] = {
+        "k": k,
+        "label_column": label_column,
+        "n_cells": n,
+        "n_scored": int(query.size),
+        "ideal": round(float(ideal[q_codes].mean()), 4),
+        "spaces": dict(spaces),
+        "uncorrected": None,
+        "corrected": None,
+        "datasets": [
+            {"label": str(lab), "n_cells": int(sizes[i]), "ideal": round(float(ideal[i]), 4),
+             "uncorrected": None, "corrected": None}
+            for i, lab in enumerate(names)
+        ],
+    }
+    for name, key in spaces:
+        frac = _cross_dataset_fraction(
+            np.asarray(adata.obsm[key], dtype=np.float32), codes, query, k
+        )
+        out[name] = round(float(frac.mean()), 4)
+        for i, row in enumerate(out["datasets"]):
+            mine = frac[q_codes == i]
+            row[name] = round(float(mine.mean()), 4) if mine.size else None
+    return out
+
+
+def record_batch_mixing(adata: ad.AnnData) -> dict[str, Any] | None:
+    """Score batch mixing and store it in ``uns``. Never raises."""
+    try:
+        mixing = batch_mixing(adata)
+    except Exception as e:  # a missing score must never fail an integration
+        logger.warning("Could not score batch mixing: %s", e)
+        return None
+    if mixing is not None:
+        adata.uns[BATCH_MIXING_KEY] = json.dumps(mixing)
+    return mixing
+
+
+def read_batch_mixing(adata: ad.AnnData) -> dict[str, Any] | None:
+    """The stored score, or None (not a joint dataset, or scored before it existed)."""
+    raw = adata.uns.get(BATCH_MIXING_KEY)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+# ---------------------------------------------------------------------------
 # Joint processing
 # ---------------------------------------------------------------------------
 
@@ -461,8 +572,13 @@ def run_integration_streamed(
 
     steps = joint_steps(method)
     params = joint_params(method, overrides)
+    # Score once both PCA spaces exist, so the pipeline's final write saves it.
+    score_after = "batch_correction" if method == METHOD_HARMONY else "pca"
     for event, data in run_pipeline_streamed(
         joint, steps, params, output_path=str(output_path_for(str(src)))
     ):
         # The pipeline's own "complete" isn't the end of the integration.
         yield ("pipeline_complete" if event == "complete" else event, data)
+        if event in ("step_done", "step_error") and data.get("step") == score_after:
+            yield ("substep", {"step": score_after, "message": "Scoring batch mixing"})
+            record_batch_mixing(joint)

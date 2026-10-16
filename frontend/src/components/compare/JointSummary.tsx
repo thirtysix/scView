@@ -1,0 +1,208 @@
+import { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "@/api/client";
+import { getJointSummary, type BatchMixing, type JointSummary as Summary } from "@/api/integration";
+import { getPalette } from "@/lib/colors";
+import { prettyObsLabel } from "@/lib/formatting";
+import { useSettingsStore } from "@/stores/settingsStore";
+
+/** A score as a share of the ideal, for bar widths: 0 = datasets apart, 1 = ideal. */
+export function shareOfIdeal(value: number | null | undefined, ideal: number): number {
+  if (value == null || !(ideal > 0)) return 0;
+  return Math.max(0, Math.min(1, value / ideal));
+}
+
+/** `/metadata/crosstab` response: counts[row][col]. */
+export interface Crosstab {
+  row_values: string[];
+  col_values: string[];
+  counts: number[][];
+}
+
+export interface CompositionRow {
+  group: string;
+  n: number;
+  counts: number[];
+  shares: number[];
+}
+
+/** Per row (cluster) of a crosstab, each column's (dataset's) share of its cells,
+ *  plus the same over all cells, which is what an evenly mixed cluster looks like. */
+export function compositionRows(ct: Crosstab): { all: CompositionRow; rows: CompositionRow[] } {
+  const row = (group: string, counts: number[]): CompositionRow => {
+    const n = counts.reduce((a, b) => a + b, 0);
+    return { group, n, counts, shares: counts.map((c) => (n > 0 ? c / n : 0)) };
+  };
+  const rows = ct.row_values
+    .map((g, ri) => row(g, ct.col_values.map((_, ci) => ct.counts[ri]?.[ci] ?? 0)))
+    .filter((r) => r.n > 0);
+  const totals = ct.col_values.map((_, ci) => rows.reduce((a, r) => a + (r.counts[ci] ?? 0), 0));
+  return { all: row("All cells", totals), rows };
+}
+
+/**
+ * Quality checks for a joint dataset: how well its source datasets mix before and
+ * after batch correction, and what each cluster is made of. Renders nothing for a
+ * dataset that isn't joint.
+ */
+export function JointSummary({ datasetId, title }: { datasetId: string; title: string }) {
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [crosstab, setCrosstab] = useState<Crosstab | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSummary(null);
+    setCrosstab(null);
+    getJointSummary(datasetId)
+      .then((s) => {
+        if (cancelled) return;
+        setSummary(s);
+        if (!s.joint || !s.cluster_column || !s.label_column) return;
+        return apiFetch<Crosstab>(
+          `/datasets/${datasetId}/metadata/crosstab?row=${encodeURIComponent(s.cluster_column)}` +
+            `&col=${encodeURIComponent(s.label_column)}`,
+        ).then((ct) => !cancelled && setCrosstab(ct));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId]);
+
+  if (!summary?.joint) return null;
+  return (
+    <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
+      {summary.mixing ? (
+        <MixingScore mixing={summary.mixing} />
+      ) : (
+        <p className="text-sm text-slate-400">No batch-mixing score for this dataset.</p>
+      )}
+      {crosstab && summary.cluster_column && (
+        <ClusterComposition crosstab={crosstab} clusterColumn={summary.cluster_column} />
+      )}
+    </div>
+  );
+}
+
+function ClusterComposition({ crosstab, clusterColumn }: { crosstab: Crosstab; clusterColumn: string }) {
+  const palette = getPalette(useSettingsStore((s) => s.categoricalPalette));
+  const { all, rows } = useMemo(() => compositionRows(crosstab), [crosstab]);
+  const color = (i: number) => {
+    const c = palette[i % palette.length]!;
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  };
+  if (rows.length === 0) return null;
+
+  const bar = (r: CompositionRow, strong: boolean) => (
+    <div key={r.group} className="flex items-center gap-3 text-xs">
+      <span
+        className={`w-28 flex-shrink-0 truncate ${strong ? "font-medium text-slate-700" : "text-slate-600"}`}
+        title={r.group}
+      >
+        {r.group}
+      </span>
+      <div className="flex h-3 flex-1 overflow-hidden rounded bg-slate-100">
+        {r.shares.map((s, i) =>
+          s > 0 ? (
+            <div
+              key={crosstab.col_values[i]}
+              style={{ width: `${s * 100}%`, backgroundColor: color(i) }}
+              title={`${crosstab.col_values[i]}: ${(s * 100).toFixed(1)}% (${(r.counts[i] ?? 0).toLocaleString()} cells)`}
+            />
+          ) : null,
+        )}
+      </div>
+      <span className="w-14 text-right font-mono text-slate-500">{r.n.toLocaleString()}</span>
+    </div>
+  );
+
+  return (
+    <div>
+      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Datasets per cluster ({prettyObsLabel(clusterColumn)})
+      </h4>
+      <div className="mb-2 flex flex-wrap gap-3 text-xs text-slate-600">
+        {crosstab.col_values.map((v, i) => (
+          <span key={v} className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: color(i) }} />
+            {v}
+          </span>
+        ))}
+      </div>
+      <div className="max-h-80 space-y-1 overflow-y-auto pr-1">
+        {bar(all, true)}
+        {rows.map((r) => bar(r, false))}
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        A cluster close to the &quot;All cells&quot; split is shared by the datasets; one made of a
+        single dataset is either specific to it or a batch effect left uncorrected.
+      </p>
+    </div>
+  );
+}
+
+function MixingScore({ mixing }: { mixing: BatchMixing }) {
+  const rows: { label: string; value: number | null }[] = [
+    { label: "Before correction", value: mixing.uncorrected },
+  ];
+  if (mixing.corrected != null) rows.push({ label: "After correction", value: mixing.corrected });
+  const fmt = (v: number | null) => (v == null ? "–" : v.toFixed(3));
+
+  return (
+    <div>
+      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Batch mixing
+      </h4>
+      <div className="space-y-1.5">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-center gap-3 text-sm">
+            <span className="w-36 flex-shrink-0 text-slate-600">{r.label}</span>
+            <div className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-primary"
+                style={{ width: `${shareOfIdeal(r.value, mixing.ideal) * 100}%` }}
+              />
+            </div>
+            <span className="w-14 text-right font-mono text-slate-800">{fmt(r.value)}</span>
+          </div>
+        ))}
+        <div className="flex items-center gap-3 text-sm">
+          <span className="w-36 flex-shrink-0 text-slate-400">Ideal</span>
+          <div className="flex-1" />
+          <span className="w-14 text-right font-mono text-slate-500">{fmt(mixing.ideal)}</span>
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        Share of each cell&apos;s {mixing.k} nearest neighbours that come from another dataset, averaged
+        over {mixing.n_scored.toLocaleString()}
+        {mixing.n_scored < mixing.n_cells ? ` of ${mixing.n_cells.toLocaleString()}` : ""} cells. Near 0,
+        the datasets sit apart; the ideal is what perfect mixing gives for these dataset sizes. High
+        mixing is only expected where the datasets share cell types.
+      </p>
+      {mixing.datasets.length > 0 && (
+        <table className="mt-2 w-full text-xs">
+          <thead>
+            <tr className="text-left text-slate-400">
+              <th className="py-1 font-medium">Dataset</th>
+              <th className="py-1 text-right font-medium">Cells</th>
+              <th className="py-1 text-right font-medium">Before</th>
+              {mixing.corrected != null && <th className="py-1 text-right font-medium">After</th>}
+              <th className="py-1 text-right font-medium">Ideal</th>
+            </tr>
+          </thead>
+          <tbody className="font-mono text-slate-700">
+            {mixing.datasets.map((d) => (
+              <tr key={d.label} className="border-t border-slate-100">
+                <td className="py-1 font-sans">{d.label}</td>
+                <td className="py-1 text-right">{d.n_cells.toLocaleString()}</td>
+                <td className="py-1 text-right">{fmt(d.uncorrected)}</td>
+                {mixing.corrected != null && <td className="py-1 text-right">{fmt(d.corrected)}</td>}
+                <td className="py-1 text-right text-slate-500">{fmt(d.ideal)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}

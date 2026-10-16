@@ -10,15 +10,17 @@ from scview.api.v1 import (
     markers,
     de,
     genesets,
+    custom_genesets,
     enrichment,
     trajectory,
     assessment,
     annotation,
+    labels,
+    clustering,
     assistant,
     export,
     ingest,
     integration,
-    ws,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -30,12 +32,14 @@ api_router.include_router(expression.router, tags=["expression"])
 api_router.include_router(markers.router, tags=["markers"])
 api_router.include_router(de.router, tags=["differential-expression"])
 api_router.include_router(genesets.router, tags=["gene-sets"])
+api_router.include_router(custom_genesets.router, tags=["gene-sets"])
 api_router.include_router(enrichment.router, tags=["enrichment"])
 api_router.include_router(trajectory.router, tags=["trajectory"])
 api_router.include_router(assessment.router, tags=["assessment"])
 api_router.include_router(annotation.router, tags=["annotation"])
+api_router.include_router(labels.router, tags=["labels"])
+api_router.include_router(clustering.router, tags=["clustering"])
 api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(export.router, tags=["export"])
 api_router.include_router(ingest.router, tags=["ingest"])
 api_router.include_router(integration.router, tags=["integration"])
-api_router.include_router(ws.router, tags=["websocket"])

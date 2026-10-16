@@ -28,6 +28,8 @@ import json
 import logging
 from typing import Any
 
+from scview.core import uns_keys
+
 logger = logging.getLogger(__name__)
 
 # Bump when a change invalidates cached enrichment payloads. Entries whose
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 # every pre-v3 payload was computed from a different query gene list.
 ORA_VERSION = 3
 
-META_PREFIX = "ora_meta__"
+META_PREFIX = uns_keys.META_PREFIX
 
 
 def meta_key(column: str, group: str) -> str:
@@ -46,12 +48,12 @@ def meta_key(column: str, group: str) -> str:
     pipeline all scan that prefix and parse the obs column out of the key, so a
     sidecar sharing it would be miscounted as a result.
     """
-    return f"{META_PREFIX}{column}__{group}"
+    return uns_keys.meta_key(column, group)
 
 
 def resolve_markers_key(uns: Any, column: str = "") -> str | None:
     """Locate the rank_genes_groups uns key backing ``column``."""
-    keyed = f"rank_genes_groups__{column}" if column else "rank_genes_groups"
+    keyed = uns_keys.markers_key(column) if column else "rank_genes_groups"
     if keyed in uns:
         return keyed
     if "rank_genes_groups" in uns:

@@ -352,6 +352,10 @@ export function GeneExpressionPanel() {
                   background={plotBackground}
                   maxRenderedCells={maxRenderedCells}
                   dimensions={dimensions}
+                  exportName={`expression_${selectedGene ?? ""}`}
+                  exportLegend={
+                    expressionValues ? { type: "continuous", title: selectedGene ?? "", ...expressionMinMax } : null
+                  }
                 />
               )}
             </Panel>
@@ -389,6 +393,7 @@ export function GeneExpressionPanel() {
               ) : (
                 <ViolinPlot
                   data={violinData}
+                  groupColumn={currentGroupBy}
                   title={`${selectedGene} expression`}
                   xLabel={currentGroupBy}
                   yLabel="Expression"

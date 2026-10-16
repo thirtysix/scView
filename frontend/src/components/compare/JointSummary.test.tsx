@@ -1,0 +1,107 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import type { BatchMixing, JointSummary as Summary } from "@/api/integration";
+
+const { getJointSummary, apiFetch } = vi.hoisted(() => ({
+  getJointSummary: vi.fn(),
+  apiFetch: vi.fn(),
+}));
+vi.mock("@/api/integration", () => ({ getJointSummary }));
+vi.mock("@/api/client", () => ({ apiFetch }));
+
+import { JointSummary, compositionRows, shareOfIdeal, type Crosstab } from "./JointSummary";
+
+// Kang CTRL vs STIM, as scored by hand before this existed.
+const KANG: BatchMixing = {
+  k: 30,
+  label_column: "dataset",
+  n_cells: 13836,
+  n_scored: 10000,
+  ideal: 0.499,
+  uncorrected: 0.107,
+  corrected: 0.478,
+  datasets: [
+    { label: "CTRL", n_cells: 6960, ideal: 0.497, uncorrected: 0.1, corrected: 0.47 },
+    { label: "STIM", n_cells: 6876, ideal: 0.503, uncorrected: 0.114, corrected: 0.486 },
+  ],
+};
+
+function joint(mixing: BatchMixing | null): Summary {
+  return { dataset_id: "j", joint: true, label_column: "dataset", cluster_column: "leiden", mixing };
+}
+
+describe("shareOfIdeal", () => {
+  it("scales a score to the ideal and clamps it", () => {
+    expect(shareOfIdeal(0.25, 0.5)).toBe(0.5);
+    expect(shareOfIdeal(0.6, 0.5)).toBe(1);
+    expect(shareOfIdeal(null, 0.5)).toBe(0);
+    expect(shareOfIdeal(0.3, 0)).toBe(0);
+  });
+});
+
+// Cluster 0 shared evenly, cluster 1 only in CTRL, cluster 2 empty after filtering.
+const CROSSTAB: Crosstab = {
+  row_values: ["0", "1", "2"],
+  col_values: ["CTRL", "STIM"],
+  counts: [
+    [50, 50],
+    [30, 0],
+    [0, 0],
+  ],
+};
+
+describe("compositionRows", () => {
+  it("gives each dataset's share per cluster and over all cells", () => {
+    const { all, rows } = compositionRows(CROSSTAB);
+    expect(rows.map((r) => r.group)).toEqual(["0", "1"]);
+    expect(rows[0]!.shares).toEqual([0.5, 0.5]);
+    expect(rows[1]!.shares).toEqual([1, 0]);
+    expect(all.n).toBe(130);
+    expect(all.counts).toEqual([80, 50]);
+    expect(all.shares[0]).toBeCloseTo(80 / 130);
+  });
+});
+
+describe("JointSummary", () => {
+  beforeEach(() => {
+    getJointSummary.mockReset();
+    apiFetch.mockReset().mockResolvedValue(CROSSTAB);
+  });
+
+  it("renders nothing for a dataset that isn't joint", async () => {
+    getJointSummary.mockResolvedValue({ dataset_id: "x", joint: false });
+    const { container } = render(<JointSummary datasetId="x" title="Checks" />);
+    await act(async () => {}); // let the request settle
+    expect(getJointSummary).toHaveBeenCalledWith("x");
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows the score before and after correction against the ideal", async () => {
+    getJointSummary.mockResolvedValue(joint(KANG));
+    render(<JointSummary datasetId="j" title="Checks" />);
+    expect(await screen.findByText("Checks")).toBeInTheDocument();
+    expect(screen.getByText("Before correction")).toBeInTheDocument();
+    expect(screen.getByText("0.107")).toBeInTheDocument();
+    expect(screen.getByText("0.478")).toBeInTheDocument();
+    expect(screen.getByText("0.499")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "STIM" })).toBeInTheDocument();
+    expect(screen.getByText(/10,000 of 13,836 cells/)).toBeInTheDocument();
+  });
+
+  it("breaks the clusters down by source dataset with the crosstab endpoint", async () => {
+    getJointSummary.mockResolvedValue(joint(KANG));
+    render(<JointSummary datasetId="j" title="Checks" />);
+    expect(await screen.findByText(/Datasets per cluster/)).toBeInTheDocument();
+    expect(apiFetch).toHaveBeenCalledWith("/datasets/j/metadata/crosstab?row=leiden&col=dataset");
+    expect(screen.getByText("All cells")).toBeInTheDocument();
+    expect(screen.getByTitle("CTRL: 100.0% (30 cells)")).toBeInTheDocument();
+    expect(screen.getByTitle("STIM: 50.0% (50 cells)")).toBeInTheDocument();
+  });
+
+  it("has no 'after' row when nothing was corrected", async () => {
+    getJointSummary.mockResolvedValue(joint({ ...KANG, corrected: null }));
+    render(<JointSummary datasetId="j" title="Checks" />);
+    expect(await screen.findByText("Before correction")).toBeInTheDocument();
+    expect(screen.queryByText("After correction")).toBeNull();
+  });
+});

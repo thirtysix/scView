@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -66,19 +68,38 @@ async def assistant_feedback(body: FeedbackRequest) -> dict:
     return {"ok": True}
 
 
+# The co-pilot's "Sources" note reads this on every open; a remote (Neon) database
+# would be woken each time, so a good answer is kept for a while.
+_RAG_STATUS_TTL = 600.0
+_rag_status_cache: dict = {}
+
+
 @router.get("/assistant/rag-status")
 async def rag_status(settings: Settings = Depends(get_settings_dep)) -> dict:
-    """Whether the literature/tutorials RAG is configured, and per-corpus counts."""
+    """Whether the literature/tutorials RAG is configured, and what each corpus
+    holds: ``corpora[name] = {documents, chunks, last_added}`` (``counts`` keeps
+    the chunk counts for older callers). Read-only: one SELECT, nothing written."""
     if not settings.rag_enabled:
-        return {"enabled": False, "counts": {}}
+        reason = "no_database" if not settings.RAG_DATABASE_URL else "no_api_key"
+        return {"enabled": False, "counts": {}, "corpora": {}, "reason": reason}
+    hit = _rag_status_cache.get(settings.RAG_DATABASE_URL)
+    if hit and time.monotonic() - hit[0] < _RAG_STATUS_TTL:
+        return hit[1]
     try:
         from scview.core.rag import store
 
-        counts = await store.corpus_counts(settings.RAG_DATABASE_URL)
-        return {"enabled": True, "counts": counts}
+        corpora = await store.corpus_stats(settings.RAG_DATABASE_URL)
     except Exception as exc:
+        # Details go to the log only: a driver error can echo the connection string.
         logger.warning("rag-status failed: %s", exc)
-        return {"enabled": True, "counts": {}, "error": str(exc)}
+        return {"enabled": True, "counts": {}, "corpora": {}, "error": "database unreachable"}
+    out = {
+        "enabled": True,
+        "counts": {c: s["chunks"] for c, s in corpora.items()},
+        "corpora": corpora,
+    }
+    _rag_status_cache[settings.RAG_DATABASE_URL] = (time.monotonic(), out)
+    return out
 
 
 @router.get("/datasets/{dataset_id}/assistant/insight", response_model=DatasetInsight)
@@ -99,7 +120,8 @@ async def assistant_insight(
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
-        insight = build_insight(adaptor)
+        # The per-cluster QC check may read the counts matrix: keep it off the loop.
+        insight = await asyncio.to_thread(build_insight, adaptor)
         if polish:
             insight = await polish_insight(insight, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL)
         return insight
@@ -177,6 +199,20 @@ async def _prepare(
     )
 
 
+async def _warm_cluster_qc(adaptor, kwargs: dict) -> None:
+    """Per-cluster QC grounding may need a pass over the counts matrix the first
+    time; do that in a thread so the event loop isn't blocked (then it's cached)."""
+    facets = kwargs.get("data_facets") or []
+    if adaptor is None or not kwargs.get("include_data_grounding"):
+        return
+    if facets and "qc" not in facets:
+        return
+    try:
+        await asyncio.to_thread(adaptor.qc_per_cell, True)
+    except Exception as exc:  # grounding skips QC on its own if this fails
+        logger.debug("cluster QC warm-up failed: %s", exc)
+
+
 @router.post("/datasets/{dataset_id}/assistant/chat", response_model=ChatResponse)
 async def assistant_chat(
     dataset_id: str,
@@ -201,6 +237,7 @@ async def assistant_chat(
     try:
         query = body.query.strip()
         kwargs = await _prepare(query, body, dm, settings)
+        await _warm_cluster_qc(adaptor, kwargs)
         return await answer_query(query, adaptor, settings.DEEPINFRA_API_KEY, **kwargs)
     except Exception as exc:
         logger.error("assistant chat failed for %s: %s", dataset_id, exc, exc_info=True)
@@ -232,6 +269,7 @@ async def assistant_chat_stream(
     async def event_generator():
         try:
             kwargs = await _prepare(query, body, dm, settings)
+            await _warm_cluster_qc(adaptor, kwargs)
             async for event in stream_answer(
                 query, adaptor, settings.DEEPINFRA_API_KEY, **kwargs
             ):

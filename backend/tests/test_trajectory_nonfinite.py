@@ -22,6 +22,7 @@ def _register(dm) -> str:
     pt[:3] = np.inf
     pt[3:5] = np.nan
     a.obs["dpt_pseudotime"] = pt
+    a.obsm["X_umap"] = rng.normal(size=(40, 2)).astype("float32")
     a.write_h5ad(d / "data.h5ad")
     return "pt"
 
@@ -33,6 +34,17 @@ async def test_values_send_null_for_missing_and_finite_range(client, dataset_man
     body = r.json()
     assert body["values"][:5] == [None] * 5
     assert body["max"] == 1.0 and body["min"] > 0
+
+
+async def test_colour_by_pseudotime_sends_nan_not_inf(client, dataset_manager):
+    import pyarrow as pa
+
+    did = _register(dataset_manager)
+    r = await client.get(f"{API}/datasets/{did}/embeddings/X_umap", params={"color_by": "dpt_pseudotime"})
+    assert r.status_code == 200, r.text
+    table = pa.ipc.open_stream(r.content).read_all()
+    vals = np.array(table.column(table.num_columns - 1).to_pylist(), dtype=float)
+    assert np.isnan(vals[:5]).all() and np.isfinite(vals[5:]).all()
 
 
 async def test_gene_trends_skip_missing_cells(client, dataset_manager):

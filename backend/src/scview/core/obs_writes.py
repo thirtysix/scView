@@ -1,0 +1,97 @@
+"""Saving a dataset after an obs edit made outside the pipeline.
+
+Hand labels (``core/user_labels.py``) and a kept clustering resolution
+(``core/resolution_sweep.py``) each add or change one obs column (plus a few uns
+entries), so ``write_derived`` can save them without rewriting the matrix.
+Writes to one dataset are serialised: two requests writing the same
+``.partial`` file at once would corrupt it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import shutil
+
+from scview.core.uns_keys import markers_key
+
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def forget_column_results(adata, column: str) -> None:
+    """Drop the markers and cached enrichment computed for ``column``.
+
+    Both are keyed by group name, so after cells change group a surviving label
+    would otherwise be served results for its old members. Markers are computed
+    again on the next visit to the column.
+    """
+    from scview.core.pipeline import drop_enrichment_cache
+
+    adata.uns.pop(markers_key(column), None)
+    rgg = adata.uns.get("rank_genes_groups")
+    if isinstance(rgg, dict) and rgg.get("params", {}).get("groupby") == column:
+        del adata.uns["rank_genes_groups"]
+    drop_enrichment_cache(adata, column)
+
+
+def dataset_lock(dataset_id: str) -> asyncio.Lock:
+    """The lock held while a request edits and saves this dataset."""
+    lock = _locks.get(dataset_id)
+    if lock is None:
+        lock = _locks[dataset_id] = asyncio.Lock()
+    return lock
+
+
+def uns_snapshot(adata) -> dict[str, int]:
+    """Identity of each top-level ``uns`` entry, taken before an edit, so
+    ``write_derived`` can tell which entries the edit replaced or removed."""
+    return {k: id(v) for k, v in adata.uns.items()}
+
+
+def write_derived(
+    adata,
+    output_path: str,
+    source_path: str | None = None,
+    uns_before: dict[str, int] | None = None,
+) -> None:
+    """Write ``adata`` to its derived file: beside it first, then swapped in, so a
+    failed write leaves the old file and a backed dataset reading it intact.
+
+    When the dataset was loaded from ``output_path`` itself and the edit only
+    touched obs and uns (``uns_before`` from ``uns_snapshot``), the file is
+    copied and just obs plus the replaced or removed uns entries are rewritten:
+    a full write re-compresses the whole matrix (8 s on a 14k-cell dense file,
+    against 0.1 s). Edits must replace an uns entry, not mutate it in place.
+    """
+    partial = output_path + ".partial"
+    if (
+        uns_before is not None
+        and source_path
+        and os.path.exists(output_path)
+        and os.path.samefile(source_path, output_path)
+    ):
+        import h5py
+        from anndata.io import write_elem
+
+        shutil.copyfile(output_path, partial)
+        try:
+            with h5py.File(partial, "a") as f:
+                del f["obs"]
+                write_elem(f, "obs", adata.obs)
+                if "uns" not in f:
+                    write_elem(f, "uns", {})
+                group = f["uns"]
+                for key in [k for k in uns_before if k not in adata.uns]:
+                    if key in group:
+                        del group[key]
+                for key, value in adata.uns.items():
+                    if uns_before.get(key) != id(value):
+                        if key in group:
+                            del group[key]
+                        write_elem(group, key, value)
+        except Exception:
+            os.remove(partial)
+            raise
+    else:
+        adata.write_h5ad(partial, compression="gzip")
+    os.replace(partial, output_path)

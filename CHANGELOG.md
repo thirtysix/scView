@@ -6,6 +6,92 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-16
+
+### Added
+- **Pseudobulk DE (donor-aware).** In DE, *Between groups*, a new test sums each donor's counts
+  and tests donors rather than cells with DESeq2 (pydeseq2), so the p-values allow for
+  donor-to-donor variation. It runs a paired design when every donor is in both groups, and the
+  donor column is pre-selected. It needs raw counts and at least 2 donors per group.
+- **Pseudotime inside the app.** The Trajectory panel can compute diffusion pseudotime from a start
+  cluster or cell type you choose, and saves it with the dataset. You no longer have to re-upload
+  a file that already has pseudotime.
+- **Download figures.** Every chart's toolbar downloads a high-resolution PNG or an SVG, and the
+  embedding scatter downloads a high-resolution PNG on white with its legend.
+- **Download data.** From the header or the dataset library: the processed `.h5ad` (its size is
+  shown first), the cell metadata as CSV, and the marker genes as CSV or Excel (one sheet per
+  grouping).
+- **Rename datasets** in the library, which now also shows when each dataset was added.
+- **Joint embedding:** the tab shows how well the datasets mixed before and after batch
+  correction (the share of each cell's 30 nearest neighbours from another dataset, against the
+  ideal for their sizes), and which datasets each joint cluster is made of.
+- **Marker dot plot and heatmap of your own genes:** type them or paste a list.
+- **Ask the co-pilot about DE results**, for one gene or the whole result.
+- **Colour choices:** a colour-blind-safe default palette (Okabe-Ito, then Paul Tol) and a Colours
+  control in Unified View for categories and expression (viridis, cividis, magma, plasma).
+- **HVG settings** in Data Assessment: the HVG flavour (`seurat`, `cell_ranger`) and a batch key.
+- **"Open in Unified View"** button when a pipeline run finishes.
+- **Split Unified View by a condition.** Choose a column with 2-6 values (a condition, sample or
+  donor) to get one linked panel per value, with the other cells in faint grey. The panels share
+  the camera, the category colours, one legend and one expression colour scale, so a gene can be
+  compared across conditions; Download PNG saves all panels in one image.
+- **Label cells by hand.** Select cells with the lasso or a legend click, choose "Label
+  selection…", and save the label into an annotation column of your own. "Undo label" reverses
+  the latest labelling.
+- **Try clustering resolutions.** "Resolutions" compares several resolutions on the existing
+  neighbour graph (cluster count, sizes, silhouette, and stability between neighbouring
+  resolutions) without changing the dataset; "Keep this one" saves the chosen one as a clustering
+  column.
+- **Your own gene-set collections.** Upload a `.gmt` file (or a gene_set,gene CSV/TSV), then rename
+  or delete it. Custom collections work alongside MSigDB, or without it, for enrichment, gene-set
+  scoring and browsing, and show how many of their genes the current dataset measures. A file
+  with problems is refused with a list of them by line.
+- **Cluster QC on Data Assessment.** Each cluster's size, genes and counts per cell, % mito and
+  ribo, and doublets, compared with the typical cluster, with plain-language flags for clusters
+  that look low quality, doublet-rich or very small. The co-pilot answers "which clusters look low
+  quality?" from these numbers, and the tip shown when a dataset opens names a cluster that stands
+  out.
+- **"Explain this data"** writes a short, cited QC report (Overview, Quality, Concerns, Suggested
+  next steps) from the assessment numbers only. It is saved per dataset, so reopening the tab
+  doesn't call the model again; without an API key it lays out the same facts.
+- **The co-pilot shows what its literature search covers:** how many papers and tutorial documents
+  it can search, and when the index last grew.
+
+### Changed
+- **A category has the same colour in every panel:** embedding, legend, cluster map, violins and
+  the Observations charts.
+- **Clicking a cluster** in the legend or the cluster map shows its marker genes in Unified View.
+- **Marker genes for a grouping are computed once and kept**, instead of recomputed (up to ~30 s)
+  on every visit; the loading message says when they are being computed.
+- **Analysis guards:** marker tables say cluster-marker p-values are for ranking only;
+  between-groups DE reports the donor column, donors per side and the largest donor's share, and
+  warns when a side has fewer than 2 donors or one donor holds most of its cells; Data Assessment
+  flags data normalised to the wrong scale (CPM ~1e6 instead of ~1e4).
+- **The co-pilot can open the Compare panel and the DE subtab.**
+
+### Fixed
+- **Louvain clustering works.** The `louvain` package was never installed; it now uses
+  python-igraph, seeded, and honours the resolution.
+- **Enrichment results for labels containing "/"** (such as CellTypist's "Tcm/Naive helper T
+  cells") are no longer lost when the dataset is saved.
+- **DE picked the wrong donor column** on datasets whose per-sample column repeats the condition
+  (Kang's `orig_ident`), and reported one donor per side.
+- **Provenance no longer records default clustering settings** for runs that did not cluster.
+- **Colouring by pseudotime** no longer turns every cell the same colour when some cells are
+  unreachable.
+- **Gene-set scoring ignores case**, so MSigDB sets score on mouse data, and enrichment no longer
+  fails when a collection shares no genes with the marker list.
+- **The gene overlay label** no longer hides under the legend, and the Joint embedding dataset
+  picker shows a loading state instead of "No ready datasets".
+
+### Development
+- CI runs the backend and frontend checks on every pull request, and a smoke test pulls each
+  release's published images and starts them on amd64 and arm64 (the images Apple Silicon Macs
+  use).
+- `npm run lint` works again; ten unused frontend packages were removed; the ruff rule set and
+  `anndata<0.13` are pinned so fresh installs behave like the tested ones; the unused websocket
+  stub (it echoed whatever a client sent) is gone.
+
 ## [0.12.0] - 2026-10-16
 
 ### Changed

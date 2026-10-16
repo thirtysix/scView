@@ -25,6 +25,17 @@ describe("CitationChip", () => {
     expect(onClick).toHaveBeenCalledWith("cell-type annotation:Monocyte");
   });
 
+  it("labels cluster-QC tags by cluster and QC-report facts by topic", () => {
+    const onClick = vi.fn();
+    render(<CitationChip tag="result:qc:leiden:5" onClick={onClick} />);
+    fireEvent.click(screen.getByRole("button", { name: "QC 5" }));
+    expect(onClick).toHaveBeenCalledWith("result:qc:leiden:5");
+    render(<CitationChip tag="result:qc:leiden" onClick={onClick} />);
+    expect(screen.getByRole("button", { name: "cluster QC" })).toBeInTheDocument();
+    render(<CitationChip tag="qc:mito" onClick={onClick} />);
+    expect(screen.getByText("mito").tagName).toBe("SPAN"); // a fact, not a jump
+  });
+
   it("renders an unknown/non-data tag as a non-interactive chip", () => {
     const onClick = vi.fn();
     render(<CitationChip tag="provenance:clustering" onClick={onClick} />);

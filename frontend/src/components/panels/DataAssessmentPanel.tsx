@@ -2,10 +2,13 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { getDataset } from "@/api/datasets";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
+import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
+import { QcReportCard } from "@/components/panels/QcReportCard";
 import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import {
   ClipboardCheck,
@@ -18,6 +21,7 @@ import {
   ChevronDown,
   ChevronRight,
   RotateCcw,
+  LayoutDashboard,
 } from "lucide-react";
 import {
   MSigDBCollectionTree,
@@ -199,6 +203,23 @@ function confidenceBadge(confidence: "high" | "medium" | "low") {
     >
       {confidence}
     </span>
+  );
+}
+
+/** Shown when a pipeline run finishes: a way on to the results, not a jump. */
+export function OpenInUnifiedView() {
+  const setPanel = useViewStore((s) => s.setPanel);
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-emerald-200 pt-3">
+      <span>The results are ready to explore.</span>
+      <button
+        onClick={() => setPanel("unified")}
+        className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white transition hover:bg-primary/90"
+      >
+        <LayoutDashboard className="h-4 w-4" />
+        Open in Unified View
+      </button>
+    </div>
   );
 }
 
@@ -706,6 +727,9 @@ export function DataAssessmentPanel() {
             )}
           </div>
 
+          {/* "Explain this data": written QC report from the assessment facts */}
+          <QcReportCard datasetId={datasetId} refreshKey={qcRefreshKey} />
+
           {/* Cell-type annotation */}
           <AnnotationControl onAnnotate={annotate} running={running} />
 
@@ -830,6 +854,9 @@ export function DataAssessmentPanel() {
                   ))}
                 </div>
               )}
+              {!running &&
+                runResult.steps_run.length > 0 &&
+                (dataset?.available_embeddings.length ?? 0) > 0 && <OpenInUnifiedView />}
             </div>
           )}
 
@@ -993,6 +1020,7 @@ export function DataAssessmentPanel() {
                                       <MSigDBCollectionTree
                                         selected={new Set((currentVal as string[]) || DEFAULT_MSIGDB_COLLECTIONS)}
                                         onChange={(sel) => setStepParam(step.key, pc.param, Array.from(sel))}
+                                        datasetId={datasetId}
                                         compact
                                       />
                                     ) : pc.type === "checkbox_list" ? (
@@ -1057,7 +1085,7 @@ export function DataAssessmentPanel() {
                                           disabled={running}
                                           className="h-3.5 w-3.5 rounded border-slate-300 text-blue-500 focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                         />
-                                        <span>{Boolean(currentVal) ? "Yes" : "No"}</span>
+                                        <span>{currentVal ? "Yes" : "No"}</span>
                                       </label>
                                     ) : pc.type === "number" ? (
                                       <input
@@ -1161,7 +1189,8 @@ export function DataAssessmentPanel() {
       )}
         </div>
         {/* Right: QC distributions */}
-        <div className="w-full flex-shrink-0 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
+        <div className="w-full flex-shrink-0 space-y-4 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
+          {datasetId && <ClusterQcTable datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <QcPlots datasetId={datasetId} refreshKey={qcRefreshKey} />}
         </div>
       </div>

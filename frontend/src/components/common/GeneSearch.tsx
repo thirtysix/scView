@@ -7,6 +7,12 @@ interface GeneSearchProps {
   onSelect: (gene: string) => void;
   placeholder?: string;
   className?: string;
+  /**
+   * For building a gene list: the box empties after each pick, and pasted text
+   * holding several names goes to onSelect whole (the caller splits it), since
+   * a one-line input would otherwise drop the newlines of a pasted column.
+   */
+  multiple?: boolean;
 }
 
 interface GeneSearchResult {
@@ -19,6 +25,7 @@ export function GeneSearch({
   onSelect,
   placeholder = "Search genes...",
   className = "",
+  multiple = false,
 }: GeneSearchProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<string[]>([]);
@@ -29,10 +36,13 @@ export function GeneSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The query the box holds now; a search answered after it changed is dropped.
+  const latestQueryRef = useRef("");
 
   // Debounced search
   const search = useCallback(
     (q: string) => {
+      latestQueryRef.current = q;
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }
@@ -51,6 +61,7 @@ export function GeneSearch({
           const data = await apiFetch<GeneSearchResult>(
             `/datasets/${datasetId}/genes/search?q=${encodeURIComponent(q.trim())}&limit=10`,
           );
+          if (latestQueryRef.current !== q) return;
           setResults(data.results ?? []);
           setIsOpen(true);
           setActiveIndex(-1);
@@ -84,13 +95,14 @@ export function GeneSearch({
 
   const handleSelect = useCallback(
     (gene: string) => {
-      setQuery(gene);
+      setQuery(multiple ? "" : gene);
+      latestQueryRef.current = multiple ? "" : gene;
       setIsOpen(false);
       setResults([]);
       setActiveIndex(-1);
       onSelect(gene);
     },
-    [onSelect],
+    [onSelect, multiple],
   );
 
   const handleClear = useCallback(() => {
@@ -107,6 +119,10 @@ export function GeneSearch({
         if (e.key === "Enter" && query.trim().length > 0) {
           onSelect(query.trim());
           setIsOpen(false);
+          if (multiple) {
+            setQuery("");
+            search("");
+          }
         }
         return;
       }
@@ -139,7 +155,20 @@ export function GeneSearch({
           break;
       }
     },
-    [isOpen, results, activeIndex, handleSelect, onSelect, query],
+    [isOpen, results, activeIndex, handleSelect, onSelect, query, multiple, search],
+  );
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLInputElement>) => {
+      if (!multiple) return;
+      const text = e.clipboardData.getData("text");
+      if (!/[\s,;]/.test(text.trim())) return; // one name: autocomplete as usual
+      e.preventDefault();
+      onSelect(text);
+      setQuery("");
+      search("");
+    },
+    [multiple, onSelect, search],
   );
 
   // Close dropdown on click outside
@@ -168,6 +197,7 @@ export function GeneSearch({
           value={query}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           onFocus={() => {
             if (results.length > 0) setIsOpen(true);
           }}

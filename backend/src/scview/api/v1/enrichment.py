@@ -18,14 +18,23 @@ from pydantic import BaseModel
 
 from scview.config import Settings
 from scview.core import enrichment_network as network
+from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
 from scview.core.gene_filters import select_query_genes
+from scview.core.geneset_sources import (
+    label_records,
+    match_query_case,
+    resolve_gene_sets,
+    tag_records,
+)
 from scview.core.msigdb_loader import DEFAULT_COLLECTIONS, get_msigdb_loader
 from scview.core.ora_background import (
     cache_is_current,
     get_background_genes,
+    resolve_markers_key,
     write_meta,
 )
+from scview.core.uns_keys import enrichment_key
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
@@ -100,6 +109,10 @@ class EnrichmentResult(BaseModel):
     gene_count: int
     genes: list[str]
     collection: str = ""
+    # A custom collection's name (MSigDB results leave it empty), and whether
+    # the collection has been deleted since this result was computed.
+    collection_name: str = ""
+    collection_deleted: bool = False
 
 
 class EnrichmentResponse(BaseModel):
@@ -223,26 +236,15 @@ async def list_enrichment_groups(
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    # Determine which uns key to read
-    if column:
-        uns_key = f"rank_genes_groups__{column}"
-        if uns_key not in adaptor.adata.uns:
-            # Fall back to default if the column matches
-            if "rank_genes_groups" in adaptor.adata.uns:
-                rgg = adaptor.adata.uns["rank_genes_groups"]
-                if rgg.get("params", {}).get("groupby") == column:
-                    uns_key = "rank_genes_groups"
-                else:
-                    raise HTTPException(status_code=404, detail=f"No markers for column '{column}'.")
-            else:
-                raise HTTPException(status_code=404, detail=f"No markers for column '{column}'.")
-    else:
-        if not adaptor.has_markers():
-            raise HTTPException(
-                status_code=404,
-                detail="No marker genes found. Run sc.tl.rank_genes_groups first.",
-            )
-        uns_key = "rank_genes_groups"
+    # The column's own markers, or scanpy's bare key when its groupby matches.
+    uns_key = resolve_markers_key(adaptor.adata.uns, column)
+    if uns_key is None:
+        if column:
+            raise HTTPException(status_code=404, detail=f"No markers for column '{column}'.")
+        raise HTTPException(
+            status_code=404,
+            detail="No marker genes found. Run sc.tl.rank_genes_groups first.",
+        )
 
     rgg = adaptor.adata.uns[uns_key]
     groups: list[str] = []
@@ -255,7 +257,7 @@ async def list_enrichment_groups(
     col_name = column or rgg.get("params", {}).get("groupby", "")
     enrichment_computed = {
         g: (
-            f"enrichment__{col_name}__{g}" in adaptor.adata.uns
+            enrichment_key(col_name, g) in adaptor.adata.uns
             and cache_is_current(adaptor.adata, col_name, g)
         )
         for g in groups
@@ -334,17 +336,20 @@ async def compute_enrichment_local(
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ):
-    """Compute enrichment using local MSigDB subcategory files.
+    """Compute enrichment using local MSigDB subcategory files and custom collections.
 
     Uses the top N marker genes for the specified group and runs them through
-    gseapy.enrich() with gene sets loaded from local MSigDB JSON files.
+    gseapy.enrich() with gene sets loaded from local MSigDB JSON files and/or
+    the user's custom collections (ids starting "custom-").
     """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
-    if loader is None:
+    store = get_custom_store(settings.DATA_DIR)
+    # Custom collections need no MSigDB, so only an MSigDB-only request fails here.
+    if loader is None and not any(is_custom_id(c) for c in body.collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
 
     col = body.column
@@ -364,7 +369,7 @@ async def compute_enrichment_local(
     # Check for cached result. Payloads without a current provenance sidecar were
     # computed against gseapy's implicit universe and are recomputed rather than served.
     if col:
-        cached_key = f"enrichment__{col}__{body.group}"
+        cached_key = enrichment_key(col, body.group)
         if cached_key in adaptor.adata.uns and cache_is_current(
             adaptor.adata,
             col,
@@ -377,7 +382,8 @@ async def compute_enrichment_local(
             if isinstance(cached, str):
                 cached = json.loads(cached)
             normalized = [_normalize_gseapy_record(r) for r in cached] if cached else []
-            results = [EnrichmentResult(**r) for r in normalized]
+            # A custom collection deleted since then is shown as deleted.
+            results = [EnrichmentResult(**r) for r in label_records(normalized, store)]
             return EnrichmentResponse(
                 group=body.group,
                 groupby=col,
@@ -411,13 +417,22 @@ async def compute_enrichment_local(
     try:
         import gseapy as gp
 
-        # Load selected MSigDB collections as a merged dict
-        gene_sets_dict = loader.get_multiple_collections_as_dict(body.collections)
-        if not gene_sets_dict:
+        # Load the selected MSigDB and custom collections as one merged dict
+        resolved = resolve_gene_sets(body.collections, loader, store)
+        if resolved.missing_custom:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A selected custom collection no longer exists (it was deleted): "
+                    f"{', '.join(resolved.missing_custom)}. Deselect it and run again."
+                ),
+            )
+        if not resolved.gene_sets:
             raise HTTPException(
                 status_code=400,
                 detail="No gene sets found for the selected collections.",
             )
+        gene_sets_dict = match_query_case(resolved, top_genes, background)
 
         enr = gp.enrich(
             gene_list=top_genes,
@@ -429,19 +444,19 @@ async def compute_enrichment_local(
         )
 
         all_results: list[dict[str, Any]] = []
-        if enr.results is not None and not enr.results.empty:
+        # With no overlap at all gseapy leaves results as an empty list, not a frame.
+        if not getattr(enr.results, "empty", True):
             for _, row in enr.results.iterrows():
-                rec = _normalize_gseapy_record(row.to_dict())
-                # Try to identify which collection the term belongs to
-                rec["collection"] = _identify_collection(rec["term"], body.collections, loader)
-                all_results.append(rec)
+                all_results.append(_normalize_gseapy_record(row.to_dict()))
+        # Which collection each term came from (and a custom one's name)
+        tag_records(all_results, resolved)
 
         # Sort by adjusted p-value
         all_results.sort(key=lambda r: r.get("adjusted_pvalue", 1.0))
 
         # Cache the result
         if col:
-            cache_key = f"enrichment__{col}__{body.group}"
+            cache_key = enrichment_key(col, body.group)
             adaptor.adata.uns[cache_key] = json.dumps(all_results)
             write_meta(
                 adaptor.adata,
@@ -457,7 +472,7 @@ async def compute_enrichment_local(
             group=body.group,
             groupby=col,
             n_genes_used=len(top_genes),
-            results=[EnrichmentResult(**r) for r in all_results],
+            results=[EnrichmentResult(**r) for r in label_records(all_results, store)],
             source="msigdb_local",
         )
 
@@ -510,7 +525,7 @@ async def compute_enrichment(
     # Check for cached enrichment result. Payloads without a current provenance
     # sidecar predate the background fix and are recomputed rather than served.
     if col:
-        cached_key = f"enrichment__{col}__{body.group}"
+        cached_key = enrichment_key(col, body.group)
         if cached_key in adaptor.adata.uns and cache_is_current(
             adaptor.adata,
             col,
@@ -569,7 +584,7 @@ async def compute_enrichment(
 
         # Cache the result for future lookups
         if col:
-            cache_key = f"enrichment__{col}__{body.group}"
+            cache_key = enrichment_key(col, body.group)
             adaptor.adata.uns[cache_key] = json.dumps(results)
             write_meta(
                 adaptor.adata,
@@ -657,17 +672,6 @@ def _normalize_gseapy_record(row: dict[str, Any]) -> dict[str, Any]:
         "gene_count": gene_count,
         "genes": genes,
     }
-
-
-def _identify_collection(
-    term_name: str, collection_ids: list[str], loader: Any
-) -> str:
-    """Try to identify which MSigDB collection a term belongs to."""
-    for cid in collection_ids:
-        data = loader._load_collection(cid)
-        if data and term_name in data:
-            return cid
-    return ""
 
 
 def _parse_precomputed_enrichment(raw: Any, group_filter: str) -> list[dict]:
