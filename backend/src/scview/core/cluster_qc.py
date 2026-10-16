@@ -98,7 +98,7 @@ class ClusterQCReport(BaseModel):
         return [c for c in self.clusters if c.flags]
 
 
-def _doublet_calls(obs: pd.DataFrame) -> np.ndarray | None:
+def doublet_calls(obs: pd.DataFrame) -> np.ndarray | None:
     """Per-cell doublet calls as booleans, from Scrublet's bool column or a text one."""
     if "predicted_doublet" in obs.columns:
         col = obs["predicted_doublet"]
@@ -164,7 +164,7 @@ def cluster_qc(adata, groupby: str | None = None, cells: dict | None = None) -> 
     if cells.get("pct_ribo") is not None:
         frame["pct_ribo"] = cells["pct_ribo"]
         metrics.append("pct_ribo")
-    calls = _doublet_calls(adata.obs)
+    calls = doublet_calls(adata.obs)
     if calls is not None:
         frame["doublet"] = calls.astype(np.float64)
         metrics.append("doublet_fraction")
@@ -254,7 +254,8 @@ def _num(v, digits: int = 2) -> float | None:
 
 
 def _fmt(v: float) -> str:
-    return f"{v:,.0f}" if abs(v) >= 100 else f"{v:.1f}"
+    """Genes or counts per cell: whole numbers."""
+    return f"{v:,.0f}"
 
 
 def _flag(row: ClusterQC, z: dict[str, float], typical: dict[str, float], small_cut: float) -> None:
