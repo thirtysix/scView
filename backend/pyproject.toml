@@ -6,7 +6,9 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-    "anndata>=0.11.0",
+    # 0.13 refuses "/" in h5 keys, which marker tables for labels like
+    # "Tcm/Naive helper T cells" still write (as pts columns).
+    "anndata>=0.11.0,<0.13",
     "scanpy>=1.10.0",
     "scipy>=1.14.0",
     "numpy>=1.26.0",
