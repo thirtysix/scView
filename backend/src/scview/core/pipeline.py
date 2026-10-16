@@ -21,7 +21,7 @@ import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
 
-from scview.core import provenance, stress
+from scview.core import doublets, provenance, stress
 from scview.core.llm import chat_extra
 from scview.core.gene_filters import is_ribo_mito, select_query_genes
 from scview.core.geneset_sources import (
@@ -63,7 +63,8 @@ class PipelineParams:
 
     # Doublet detection
     doublet_method: str = "scrublet"
-    expected_doublet_rate: float = 0.06
+    # None: suggested from the cells per sample (core/doublets.py, a rule of thumb)
+    expected_doublet_rate: float | None = None
 
     # Normalization
     target_sum: float = 1e4
@@ -225,27 +226,38 @@ def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> None:
     )
 
 
-def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> None:
+def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
     """Detect doublets with Scrublet; annotate ``.obs`` only (removal is opt-in).
 
     Writes ``doublet_score`` (float) and ``predicted_doublet`` (bool) to ``.obs``.
     Ordered before normalization so Scrublet sees raw counts. The flags are
     informational here — actual removal happens in the filtering step when
     ``params.drop_doublets`` is set, so users can inspect the QC distribution first.
+    Without an ``expected_doublet_rate`` the rate is suggested from the cells per
+    sample (``doublets.suggest_rate``); the rate used is recorded in provenance.
     """
     method = (params.doublet_method or "scrublet").lower()
     if method != "scrublet":
         logger.warning("Unknown doublet method '%s'; falling back to scrublet", method)
-    sc.pp.scrublet(adata, expected_doublet_rate=params.expected_doublet_rate)
+    rate = params.expected_doublet_rate
+    if rate is not None and rate > 0:
+        found: dict[str, Any] = {"expected_doublet_rate": float(rate)}
+    else:
+        suggestion = doublets.suggest_rate(adata)
+        found = {"expected_doublet_rate": suggestion["rate"],
+                 "expected_rate_from": suggestion["column"] or "all cells (no sample column)"}
+    sc.pp.scrublet(adata, expected_doublet_rate=found["expected_doublet_rate"])
+    doublets.clear_threshold(adata)  # set on the previous run's scores
     n_dbl = (
         int(adata.obs["predicted_doublet"].sum())
         if "predicted_doublet" in adata.obs.columns
         else 0
     )
     logger.info(
-        "Doublet detection (scrublet): %d / %d cells flagged as doublets",
-        n_dbl, adata.n_obs,
+        "Doublet detection (scrublet, expected rate %.4f): %d / %d cells flagged as doublets",
+        found["expected_doublet_rate"], n_dbl, adata.n_obs,
     )
+    return found
 
 
 def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> ad.AnnData:

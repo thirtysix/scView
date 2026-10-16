@@ -14,6 +14,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { Panel } from "@/components/common/Panel";
 import { PlotGrid } from "@/components/common/PlotGrid";
+import { DoubletCard } from "@/components/panels/DoubletCard";
 
 interface QcMetric {
   min: number;
@@ -212,7 +213,16 @@ function GroupedQc({ data }: { data: QcByGroup }) {
   );
 }
 
-export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refreshKey?: number }) {
+export function QcPlots({
+  datasetId,
+  refreshKey = 0,
+  onDoubletsApplied,
+}: {
+  datasetId: string;
+  refreshKey?: number;
+  /** After new doublet calls were saved (other QC views count them). */
+  onDoubletsApplied?: () => void;
+}) {
   const [data, setData] = useState<QcResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -310,7 +320,8 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
     ) : null;
   }
 
-  const metricKeys = Object.keys(data.metrics);
+  // The doublet score has a card of its own, with its threshold.
+  const metricKeys = Object.keys(data.metrics).filter((k) => k !== "doublet_score");
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -370,6 +381,9 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
           <HistCard key={k} label={METRIC_LABELS[k] ?? k} metric={data.metrics[k]!} />
         ))}
       </PlotGrid>
+      {data.metrics.doublet_score && (
+        <DoubletCard datasetId={datasetId} refreshKey={refreshKey} onApplied={onDoubletsApplied} />
+      )}
       {grouped?.column ? <GroupedQc data={grouped} /> : <ScatterCard scatter={data.scatter} />}
     </div>
   );

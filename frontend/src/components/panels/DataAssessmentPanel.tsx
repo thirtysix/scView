@@ -5,6 +5,8 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { getDataset } from "@/api/datasets";
+import { getDoublets, type DoubletRateSuggestion } from "@/api/qc";
+import { pct } from "@/lib/qcThresholds";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
 import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
@@ -128,11 +130,13 @@ interface ParamConfig {
   options?: string[];
   default: unknown;
   dynamicOptions?: "categorical_obs_columns";
+  /** Shown (and used by the backend) until the user types a value. */
+  dynamicDefault?: "suggested_doublet_rate";
 }
 
 const STEP_PARAMS: Record<string, ParamConfig[]> = {
   doublet_detection: [
-    { param: "expected_doublet_rate", label: "Expected doublet rate", type: "number", min: 0.0, max: 0.5, step: 0.01, default: 0.06 },
+    { param: "expected_doublet_rate", label: "Expected doublet rate", type: "number", min: 0.0, max: 0.5, step: 0.001, default: null, dynamicDefault: "suggested_doublet_rate" },
   ],
   filtering: [
     { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200 },
@@ -249,6 +253,19 @@ export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
   );
 }
 
+/** Under the expected doublet rate: where the default comes from. */
+export function SuggestedRateNote({ suggestion }: { suggestion: DoubletRateSuggestion | null }) {
+  if (!suggestion) return null;
+  const where = suggestion.column
+    ? `the cells per ${suggestion.column} sample (${suggestion.samples.length})`
+    : "all cells as one channel (no sample column found)";
+  return (
+    <span className="text-[10px] text-slate-400" title={suggestion.basis}>
+      Default {pct(suggestion.rate)}, from {where}: a rule of thumb, ~0.8 % per 1,000 cells captured.
+    </span>
+  );
+}
+
 /** Shown when a pipeline run finishes: a way on to the results, not a jump. */
 export function OpenInUnifiedView() {
   const setPanel = useViewStore((s) => s.setPanel);
@@ -282,6 +299,8 @@ export function DataAssessmentPanel() {
   // Bumped after each pipeline run so the QC plots refetch (e.g. to pick up a
   // newly computed doublet_score) without needing a tab switch.
   const [qcRefreshKey, setQcRefreshKey] = useState(0);
+  // Bumped when doublet calls are re-thresholded: the cluster QC and report count them.
+  const [callsRevision, setCallsRevision] = useState(0);
 
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<PipelineResult | null>(null);
@@ -296,6 +315,24 @@ export function DataAssessmentPanel() {
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   const [selectedSteps, setSelectedSteps] = useState<Set<string>>(new Set());
   const [stepParams, setStepParams] = useState<Record<string, Record<string, unknown>>>({});
+
+  // The doublet step's default expected rate, from the cells per sample.
+  const [doubletRate, setDoubletRate] = useState<DoubletRateSuggestion | null>(null);
+  useEffect(() => {
+    if (!datasetId) return;
+    let cancelled = false;
+    setDoubletRate(null);
+    getDoublets(datasetId)
+      .then((s) => {
+        if (!cancelled) setDoubletRate(s.suggestion ?? null);
+      })
+      .catch(() => {
+        /* the backend falls back to the same suggestion; the input just shows none */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId, qcRefreshKey]);
 
   /* ---- Categorical obs columns (shared by batch, markers, enrichment) ---- */
   const categoricalObsColumns = useMemo(() => {
@@ -773,7 +810,7 @@ export function DataAssessmentPanel() {
           </div>
 
           {/* "Explain this data": written QC report from the assessment facts */}
-          <QcReportCard datasetId={datasetId} refreshKey={qcRefreshKey} />
+          <QcReportCard datasetId={datasetId} refreshKey={qcRefreshKey + callsRevision} />
 
           {/* Cell-type annotation */}
           <AnnotationControl onAnnotate={annotate} running={running} />
@@ -1052,7 +1089,9 @@ export function DataAssessmentPanel() {
                             </p>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
                               {STEP_PARAMS[step.key]!.map((pc) => {
-                                const currentVal = stepParams[step.key]?.[pc.param] ?? pc.default;
+                                const suggested =
+                                  pc.dynamicDefault === "suggested_doublet_rate" ? doubletRate?.rate : undefined;
+                                const currentVal = stepParams[step.key]?.[pc.param] ?? suggested ?? pc.default;
                                 const resolvedOptions =
                                   pc.dynamicOptions === "categorical_obs_columns"
                                     ? augmentedCategoricalOptions
@@ -1169,6 +1208,10 @@ export function DataAssessmentPanel() {
                                         )}
                                       </select>
                                     )}
+                                    {pc.dynamicDefault === "suggested_doublet_rate" &&
+                                      stepParams[step.key]?.[pc.param] == null && (
+                                        <SuggestedRateNote suggestion={doubletRate} />
+                                      )}
                                   </div>
                                 );
                               })}
@@ -1236,8 +1279,14 @@ export function DataAssessmentPanel() {
         </div>
         {/* Right: QC distributions */}
         <div className="w-full flex-shrink-0 space-y-4 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
-          {datasetId && <ClusterQcTable datasetId={datasetId} refreshKey={qcRefreshKey} />}
-          {datasetId && <QcPlots datasetId={datasetId} refreshKey={qcRefreshKey} />}
+          {datasetId && <ClusterQcTable datasetId={datasetId} refreshKey={qcRefreshKey + callsRevision} />}
+          {datasetId && (
+            <QcPlots
+              datasetId={datasetId}
+              refreshKey={qcRefreshKey}
+              onDoubletsApplied={() => setCallsRevision((r) => r + 1)}
+            />
+          )}
         </div>
       </div>
     </div>

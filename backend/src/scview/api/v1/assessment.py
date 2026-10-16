@@ -16,7 +16,8 @@ from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing
-from scview.core import cluster_qc, qc_groups, qc_report
+from scview.core import cluster_qc, doublets, qc_groups, qc_report
+from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
@@ -142,6 +143,79 @@ async def get_qc_by_group(
     except Exception as e:
         logger.error("QC by group failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"QC by group failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Doublet score threshold (core/doublets.py)
+# ---------------------------------------------------------------------------
+
+
+class DoubletThresholdRequest(BaseModel):
+    """Call doublets above ``threshold``; ``None`` puts Scrublet's own call back."""
+    threshold: float | None = None
+    column: str = ""  # the sample column for the per-sample counts (default: detected)
+
+
+@router.get("/datasets/{dataset_id}/qc/doublets")
+async def get_doublets(
+    dataset_id: str,
+    threshold: float | None = None,
+    column: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The doublet-score histogram and how many cells ``threshold`` (default: the
+    applied one, else Scrublet's) calls doublets, overall and per sample, with
+    the expected doublet rate suggested from the cells per sample. Without scores
+    only the suggestion is returned (``available`` false)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:
+        return await asyncio.to_thread(doublets.summary, adaptor.adata, threshold, column or None)
+    except doublets.DoubletError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Doublet summary failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Doublet summary failed: {e}")
+
+
+@router.post("/datasets/{dataset_id}/qc/doublets/threshold")
+async def apply_doublet_threshold(
+    dataset_id: str,
+    body: DoubletThresholdRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Write the calls at ``threshold`` into ``predicted_doublet`` (what the
+    filtering step drops), keeping Scrublet's own call in
+    ``predicted_doublet_scrublet``; save, and answer with the new summary."""
+    async with dataset_lock(dataset_id):
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = getattr(adaptor.adata, "isbacked", False)
+
+        def _run():
+            work = adaptor.adata.to_memory() if backed else adaptor.adata
+            before = uns_snapshot(work)
+            result = doublets.apply_threshold(work, body.threshold, body.column or None)
+            write_derived(work, output_path, adaptor.h5ad_path, before)
+            return result
+
+        try:
+            result = await asyncio.to_thread(_run)
+        except doublets.DoubletError as e:
+            raise HTTPException(status_code=400, detail=str(e))  # raised before any change
+        except Exception as e:
+            dm.evict(dataset_id)  # the cached copy may hold calls that were never saved
+            logger.error("Doublet threshold failed for %s: %s", dataset_id, e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Could not save the doublet calls: {e!s}")
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
+        return result
 
 
 # ---------------------------------------------------------------------------

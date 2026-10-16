@@ -38,28 +38,37 @@ def _n_groups(obs: pd.DataFrame, col: str) -> int:
     return int(obs[col].nunique(dropna=True))
 
 
-def default_grouping(adata) -> tuple[str | None, str | None]:
-    """(column, why) when none is named: the donor/sample column, picked as the DE
+def _usable(obs: pd.DataFrame, col: str | None) -> bool:
+    return bool(col) and col in obs.columns and 2 <= _n_groups(obs, col) <= MAX_GROUPS
+
+
+def sample_grouping(adata) -> tuple[str | None, str | None]:
+    """(column, why) for the samples: the donor/sample column, picked as the DE
     replicate guard and the QC report pick it (core/replicates.py), else a batch
-    column, else the clustering. Each with 2 to MAX_GROUPS groups."""
+    column. Each with 2 to MAX_GROUPS groups."""
     obs = adata.obs
-
-    def usable(col: str | None) -> bool:
-        return bool(col) and col in obs.columns and 2 <= _n_groups(obs, col) <= MAX_GROUPS
-
     # A sample column that only repeats the condition loses to a real donor column.
-    candidates = [c for c in donor_candidates(obs) if usable(c)]
+    candidates = [c for c in donor_candidates(obs) if _usable(obs, c)]
     levels = [(obs[c].astype(str) == lvl).to_numpy()
               for c in condition_columns(obs) for lvl in obs[c].astype(str).unique()]
     donor = pick_donor(obs, candidates, levels)
     if donor:
         return donor, "donor"
     key = recorded_batch_key(adata)
-    batches = [c for c in batch_columns(obs, [key] if key else []) if usable(c)]
+    batches = [c for c in batch_columns(obs, [key] if key else []) if _usable(obs, c)]
     if batches:
         return batches[0], "batch"
+    return None, None
+
+
+def default_grouping(adata) -> tuple[str | None, str | None]:
+    """(column, why) when none is named: the samples (``sample_grouping``), else
+    the clustering, with 2 to MAX_GROUPS groups."""
+    col, reason = sample_grouping(adata)
+    if col:
+        return col, reason
     clustering = cluster_qc.default_grouping(adata)
-    if usable(clustering):
+    if _usable(adata.obs, clustering):
         return clustering, "clustering"
     return None, None
 
@@ -71,6 +80,14 @@ def _group_order(labels: pd.Series, present: set[str]) -> list[str]:
     else:
         order = sorted(present, key=lambda s: (0, int(s), "") if s.isdigit() else (1, 0, s))
     return [g for g in order if g in present]
+
+
+def group_codes(raw: pd.Series) -> tuple[list[str], np.ndarray]:
+    """The groups of one obs column in its own order, and each cell's index into
+    them (-1 = no value)."""
+    labels = raw.astype(str).where(raw.notna())
+    order = _group_order(raw, set(labels.dropna().unique()))
+    return order, np.asarray(pd.Categorical(labels, categories=order).codes)
 
 
 def _quantiles(values: np.ndarray, k: int) -> list[float]:
@@ -110,18 +127,14 @@ def qc_by_group(adata, column: str, cells: dict, reason: str = "requested", *,
     cells or more than MAX_GROUPS groups."""
     if column not in adata.obs.columns:
         raise KeyError(f"Column '{column}' not found in obs.")
-    raw = adata.obs[column]
-    labels = raw.astype(str).where(raw.notna())
-    present = set(labels.dropna().unique())
-    if not present:
+    order, codes = group_codes(adata.obs[column])
+    if not order:
         raise ValueError(f"'{column}' has no labelled cells.")
-    if len(present) > MAX_GROUPS:
+    if len(order) > MAX_GROUPS:
         raise ValueError(
-            f"'{column}' has {len(present)} groups; QC by group shows at most {MAX_GROUPS}. "
+            f"'{column}' has {len(order)} groups; QC by group shows at most {MAX_GROUPS}. "
             "Pick a column with fewer groups, such as the sample, batch or clustering."
         )
-    order = _group_order(raw, present)
-    codes = pd.Categorical(labels, categories=order).codes  # -1 = unlabelled
     members = [np.flatnonzero(codes == i) for i in range(len(order))]
 
     has_mt = bool(cells.get("has_mt", True))
