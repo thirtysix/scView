@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import anndata as ad
 import numpy as np
-import pytest
 
 from scview.core.assessor import assess_preprocessing
 from scview.core.pipeline import (
@@ -41,7 +40,7 @@ def test_doublet_is_descendant_of_qc_metrics():
 def test_params_have_doublet_fields():
     p = PipelineParams()
     assert p.doublet_method == "scrublet"
-    assert p.expected_doublet_rate == pytest.approx(0.06)
+    assert p.expected_doublet_rate is None  # suggested from the cells per sample
     assert p.drop_doublets is False
 
 

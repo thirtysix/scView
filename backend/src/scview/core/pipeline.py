@@ -21,7 +21,8 @@ import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
 
-from scview.core import provenance, stress
+from scview.core import cluster_qc, doublets, provenance, qc_filter, stress
+from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.cell_cycle import near_zero_phase_calls
 from scview.core.llm import chat_extra
 from scview.core.gene_filters import is_ribo_mito, select_query_genes
@@ -56,15 +57,18 @@ def _NOOP_CB(_msg: str, _cur: int, _tot: int) -> None:
 class PipelineParams:
     """Parameters for each preprocessing step."""
 
-    # Filtering
+    # Filtering (cells: see core/qc_filter.py; 0 turns a threshold off)
     min_genes: int = 200
+    max_genes: int = 0
+    min_counts: int = 0
     min_cells: int = 3
-    max_pct_mt: float = 20.0
+    max_pct_mt: float = 20.0  # used only when % mito can be measured (MT- genes)
     drop_doublets: bool = False  # drop cells flagged by doublet detection (opt-in)
 
     # Doublet detection
     doublet_method: str = "scrublet"
-    expected_doublet_rate: float = 0.06
+    # None: suggested from the cells per sample (core/doublets.py, a rule of thumb)
+    expected_doublet_rate: float | None = None
 
     # Normalization
     target_sum: float = 1e4
@@ -226,45 +230,59 @@ def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> None:
     )
 
 
-def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> None:
+def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
     """Detect doublets with Scrublet; annotate ``.obs`` only (removal is opt-in).
 
     Writes ``doublet_score`` (float) and ``predicted_doublet`` (bool) to ``.obs``.
     Ordered before normalization so Scrublet sees raw counts. The flags are
     informational here — actual removal happens in the filtering step when
     ``params.drop_doublets`` is set, so users can inspect the QC distribution first.
+    Without an ``expected_doublet_rate`` the rate is suggested from the cells per
+    sample (``doublets.suggest_rate``); the rate used is recorded in provenance.
     """
     method = (params.doublet_method or "scrublet").lower()
     if method != "scrublet":
         logger.warning("Unknown doublet method '%s'; falling back to scrublet", method)
-    sc.pp.scrublet(adata, expected_doublet_rate=params.expected_doublet_rate)
+    rate = params.expected_doublet_rate
+    if rate is not None and rate > 0:
+        found: dict[str, Any] = {"expected_doublet_rate": float(rate)}
+    else:
+        suggestion = doublets.suggest_rate(adata)
+        found = {"expected_doublet_rate": suggestion["rate"],
+                 "expected_rate_from": suggestion["column"] or "all cells (no sample column)"}
+    sc.pp.scrublet(adata, expected_doublet_rate=found["expected_doublet_rate"])
+    doublets.clear_threshold(adata)  # set on the previous run's scores
     n_dbl = (
         int(adata.obs["predicted_doublet"].sum())
         if "predicted_doublet" in adata.obs.columns
         else 0
     )
     logger.info(
-        "Doublet detection (scrublet): %d / %d cells flagged as doublets",
-        n_dbl, adata.n_obs,
+        "Doublet detection (scrublet, expected rate %.4f): %d / %d cells flagged as doublets",
+        found["expected_doublet_rate"], n_dbl, adata.n_obs,
     )
+    return found
 
 
 def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> ad.AnnData:
-    """Filter cells and genes based on QC thresholds. Returns new AnnData."""
+    """Filter cells on QC thresholds, then genes seen in too few cells. Returns new AnnData.
+
+    Cells are judged on the per-cell QC values the QC plots show (``per_cell_qc``:
+    obs QC columns, else computed from the counts) with ``qc_filter``'s masks, so
+    the loss the Data Assessment tab previews is what this removes, and a re-run
+    on processed data (X scaled, every gene "detected") still counts genes in
+    the counts. % mito is used only when measurable; predicted doublets are
+    dropped when ``drop_doublets`` is set.
+    """
     n_before = adata.n_obs
-    sc.pp.filter_cells(adata, min_genes=params.min_genes)
+    calls = cluster_qc.doublet_calls(adata.obs)
+    removed = qc_filter.removed_by(per_cell_qc(adata), qc_filter.Thresholds.from_params(params), calls)
+    keep = qc_filter.keep_mask(removed, n_before)
+    for name, mask in removed.items():
+        logger.info("Filtering: %s removes %d cells on its own", name, int(mask.sum()))
+    if not keep.all():
+        adata = adata[keep, :].copy()
     sc.pp.filter_genes(adata, min_cells=params.min_cells)
-
-    # Filter by mitochondrial percentage if QC metrics are available
-    if "pct_counts_mt" in adata.obs.columns:
-        adata = adata[adata.obs["pct_counts_mt"] < params.max_pct_mt, :].copy()
-
-    # Drop predicted doublets (opt-in; requires the doublet_detection step to have run)
-    if params.drop_doublets and "predicted_doublet" in adata.obs.columns:
-        n_dbl = int(adata.obs["predicted_doublet"].astype(bool).sum())
-        adata = adata[~adata.obs["predicted_doublet"].astype(bool), :].copy()
-        logger.info("Filtering: dropped %d predicted doublets", n_dbl)
-
     logger.info("Filtering: %d -> %d cells", n_before, adata.n_obs)
     return adata
 
@@ -1179,8 +1197,9 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "reset_to_counts": ("scview.reset_to_counts", ()),
     "qc_metrics": ("scanpy.pp.calculate_qc_metrics", ()),
     "doublet_detection": ("scanpy.pp.scrublet", ("doublet_method", "expected_doublet_rate")),
-    "filtering": ("scanpy.pp.filter_cells/genes",
-                  ("min_genes", "min_cells", "max_pct_mt", "drop_doublets")),
+    "filtering": ("scview.qc_filter + scanpy.pp.filter_genes",
+                  ("min_genes", "max_genes", "min_counts", "min_cells", "max_pct_mt",
+                   "drop_doublets")),
     "normalization": ("scanpy.pp.normalize_total", ("target_sum",)),
     "log_transform": ("scanpy.pp.log1p", ()),
     "highly_variable_genes": ("scanpy.pp.highly_variable_genes",
