@@ -11,7 +11,7 @@ import {
 import { PointCloudLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { AlertTriangle, ImageDown, Loader2, RotateCcw, X } from "lucide-react";
 import type { ScatterLegend } from "@/lib/scatterExport";
-import { centroidLabelLayers, type GroupCentroid } from "@/lib/centroidLabels";
+import { centroidLabelLayers, labelViewOf, placeLabels, type GroupCentroid } from "@/lib/centroidLabels";
 import {
   SPLIT_CONTEXT_LAYER,
   contextColor,
@@ -189,7 +189,7 @@ export function MultiPanelScatter({
   }, [views, viewState]);
 
   const grey = useMemo(() => contextColor(background, opacity), [background, opacity]);
-  const layers = useMemo(() => {
+  const pointLayers = useMemo(() => {
     if (!ready) return [];
     const point = (
       id: string,
@@ -245,14 +245,24 @@ export function MultiPanelScatter({
     panels.forEach((p, i) => {
       out.push(point(splitLayerId(i), p.indices.length, p.positions, p.colors, true));
     });
-    // Labels last, so they draw over every panel's points.
-    panels.forEach((p, i) => {
-      if (p.labels?.length) {
-        out.push(...centroidLabelLayers(splitLabelLayerId(i), p.labels, { dark: background === "dark", highlight: p.highlight }));
-      }
-    });
     return out;
-  }, [ready, dimensions, context, stride, grey, panels, pointSize, background]);
+  }, [ready, dimensions, context, stride, grey, panels, pointSize]);
+  // Labels are placed for the current camera (every panel has the same view
+  // size), inside the panel and off each other; drawn last, over the points.
+  const labelLayers = useMemo(() => {
+    if (!ready || !viewState || !views[0]) return [];
+    const view = labelViewOf(views[0], area.width, area.height, viewState);
+    if (!view) return [];
+    return panels.flatMap((p, i) =>
+      p.labels?.length
+        ? centroidLabelLayers(splitLabelLayerId(i), placeLabels(p.labels, view, { highlight: p.highlight }), {
+            dark: background === "dark",
+            highlight: p.highlight,
+          })
+        : [],
+    );
+  }, [ready, viewState, views, area.width, area.height, panels, background]);
+  const layers = useMemo(() => [...pointLayers, ...labelLayers], [pointLayers, labelLayers]);
 
   const layerFilter = useCallback(
     ({ layer, viewport }: { layer: { id: string }; viewport: { id: string } }) =>

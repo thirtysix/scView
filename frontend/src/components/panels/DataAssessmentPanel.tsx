@@ -36,6 +36,8 @@ interface StepStatus {
   done: boolean;
   confidence: "high" | "medium" | "low";
   details: string;
+  /** A one-line warning about the step's result (e.g. unreliable phase calls) */
+  caution?: string | null;
 }
 
 interface PreprocessingState {
@@ -230,6 +232,13 @@ export function SpeciesNote({ call }: { call?: SpeciesCall }) {
       Species: <span className="font-medium text-slate-700">{call.species}</span>. {call.evidence}
     </p>
   );
+}
+
+/** A step's warning about its result (e.g. phase calls on resting cells), shown
+ *  in full under the step's one-line details. */
+export function StepCaution({ caution }: { caution?: string | null }) {
+  if (!caution) return null;
+  return <p className="mt-0.5 text-xs text-amber-700">{caution}</p>;
 }
 
 /** Steps a run skipped because they had nothing to do (e.g. too few signature
@@ -1009,6 +1018,7 @@ export function DataAssessmentPanel() {
                         <p className="mt-0.5 truncate text-xs text-slate-400">
                           {status.details}
                         </p>
+                        <StepCaution caution={status.caution} />
                       </button>
 
                       {/* Expand chevron */}

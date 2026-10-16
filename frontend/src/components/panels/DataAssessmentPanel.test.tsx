@@ -1,7 +1,26 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { OpenInUnifiedView, SkippedSteps, SpeciesNote } from "./DataAssessmentPanel";
+import { OpenInUnifiedView, SkippedSteps, SpeciesNote, StepCaution } from "./DataAssessmentPanel";
 import { useViewStore } from "@/stores/viewStore";
+
+describe("StepCaution", () => {
+  it("shows a step's caution in full", () => {
+    const text =
+      "13,162 of 13,836 cells (95%) have both S and G2M scores within ±0.1 of 0: phase calls for these cells are not reliable.";
+    render(<StepCaution caution={text} />);
+    expect(screen.getByText(text)).toBeTruthy();
+  });
+
+  it("renders nothing without one (or from an older backend)", () => {
+    const { container } = render(
+      <>
+        <StepCaution caution={null} />
+        <StepCaution />
+      </>,
+    );
+    expect(container.textContent).toBe("");
+  });
+});
 
 describe("SkippedSteps", () => {
   it("lists a skipped step by its label, with the reason", () => {

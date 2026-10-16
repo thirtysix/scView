@@ -422,6 +422,7 @@ class DatasetManager:
                 "embedding_dimensions": {e["name"]: e["dimensions"] for e in embeddings},
                 "obs_columns": adaptor.obs_columns_info(),
                 "active_clustering": adaptor.active_clustering_column(),
+                "user_annotation_columns": adaptor.user_annotation_columns(),
                 # Kept so the dataset can be described while a run works on it.
                 "expression_layers": adaptor.available_expression_layers(),
                 "default_expression_layer": adaptor.default_expression_layer(),

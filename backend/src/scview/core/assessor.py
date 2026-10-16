@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from scipy import sparse
 
 from scview.core import provenance
+from scview.core.cell_cycle import near_zero_phase_calls, phase_caution
 from scview.core.stress import SCORE_COLUMN
 from scview.core.uns_keys import enrichment_column, markers_column
 
@@ -51,6 +52,7 @@ class StepStatus(BaseModel):
     done: bool
     confidence: str  # "high", "medium", "low"
     details: str  # human-readable description of what was detected
+    caution: str | None = None  # a one-line warning about the step's result, if any
 
 
 class PreprocessingState(BaseModel):
@@ -745,6 +747,7 @@ def _check_cell_cycle(adata: Any) -> StepStatus:
                 done=True,
                 confidence="high",
                 details=f"Found S_score and G2M_score in obs{extra}",
+                caution=phase_caution(near_zero_phase_calls(adata.obs)),
             )
         elif has_s or has_g2m:
             found = "S_score" if has_s else "G2M_score"
@@ -826,7 +829,8 @@ def assess_preprocessing(adata: Any) -> PreprocessingState:
 
 def _apply_recorded_provenance(adata: Any, state: PreprocessingState) -> PreprocessingState:
     """Overlay what scView actually recorded doing: a step in the provenance
-    history is authoritatively 'done' (high confidence), overriding heuristics."""
+    history is authoritatively 'done' (high confidence), overriding heuristics.
+    A caution read from the data itself is kept."""
     try:
         history = provenance.read_provenance(adata).get("history", [])
         last_ts: dict[str, str] = {}
@@ -843,6 +847,7 @@ def _apply_recorded_provenance(adata: Any, state: PreprocessingState) -> Preproc
                     done=True,
                     confidence="high",
                     details=f"Run by scView{(' on ' + when) if when else ''} (recorded)",
+                    caution=getattr(state, field).caution,
                 ),
             )
     except Exception as exc:  # provenance overlay must never break assessment

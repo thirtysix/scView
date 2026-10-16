@@ -11,6 +11,7 @@ import pandas as pd
 
 from scview.core.ora_background import resolve_markers_key
 from scview.core.uns_keys import markers_column, repair_slash_keys
+from scview.core.user_labels import user_columns
 
 logger = logging.getLogger(__name__)
 
@@ -548,6 +549,10 @@ class AnnDataAdaptor:
             if candidate in self.adata.obs.columns:
                 return candidate
         return None
+
+    def user_annotation_columns(self) -> list[str]:
+        """The hand-label columns (uns ``scview_user_annotations``) still in obs."""
+        return user_columns(self.adata)
 
     # ------------------------------------------------------------------
     # Marker genes

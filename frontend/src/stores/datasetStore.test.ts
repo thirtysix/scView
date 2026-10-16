@@ -58,6 +58,25 @@ describe("switching datasets", () => {
     expect(useSettingsStore.getState().colorBy).toBe("cell_type");
   });
 
+  it("opens a dataset on its hand labels, whatever the column is called", () => {
+    const labelled = (id: string, users?: string[]) =>
+      ({
+        id,
+        n_cells: 1000,
+        obs_columns: [
+          { name: "cell_type", dtype: "category", n_unique: 9, values: [] },
+          { name: "T cell states", dtype: "category", n_unique: 4, values: [] },
+        ],
+        user_annotation_columns: users,
+      }) as unknown as DatasetInfo;
+    useSettingsStore.getState().setDefaultColorBy("");
+    useDatasetStore.getState().setCurrentDataset(labelled("a", ["T cell states"]));
+    expect(useSettingsStore.getState().colorBy).toBe("T cell states");
+    // Not listed as hand labels (an older backend, or an imported column): cell type first.
+    useDatasetStore.getState().setCurrentDataset(labelled("b"));
+    expect(useSettingsStore.getState().colorBy).toBe("cell_type");
+  });
+
   it("leaves the view alone when the same dataset is refreshed", () => {
     useDatasetStore.getState().setCurrentDataset(ds("kang", ["cluster", "cell_type", "stim"], "cluster"));
     expect(useSelectionStore.getState().selectedCellIndices?.size).toBe(3);

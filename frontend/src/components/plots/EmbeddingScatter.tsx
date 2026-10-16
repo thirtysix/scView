@@ -9,7 +9,7 @@ import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
 import { exportFilename } from "@/lib/exportFilename";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { colorByLine } from "@/lib/hoverInfo";
-import { centroidLabelLayers, groupCentroids } from "@/lib/centroidLabels";
+import { centroidLabelLayers, groupCentroids, labelViewOf, placeLabels } from "@/lib/centroidLabels";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 
 interface EmbeddingScatterProps {
@@ -392,7 +392,7 @@ export function EmbeddingScatter({
 
   const renderCount = renderPositions ? renderPositions.length / stride : 0;
 
-  // Group labels at the median of each group's drawn cells; a group with no
+  // Group labels where most of each group's drawn cells are; a group with no
   // drawn cell (sampled away) gets none.
   const centroids = useMemo(() => {
     if (!showLabels || !positions || !categories || !(colorValues instanceof Int32Array)) return null;
@@ -478,16 +478,6 @@ export function EmbeddingScatter({
     [onClick, indexMap],
   );
 
-  const labelLayers = useMemo(
-    () =>
-      centroids
-        ? centroidLabelLayers("embedding-labels", centroids, {
-            dark: background === "dark",
-            highlight: highlightCategory,
-          })
-        : [],
-    [centroids, background, highlightCategory],
-  );
 
   // Binary attribute data path — feeds typed arrays directly to GPU
   const pointLayers = useMemo(() => {
@@ -540,8 +530,6 @@ export function EmbeddingScatter({
       }),
     ];
   }, [renderCount, renderPositions, renderColors, pointSize, dimensions]);
-  const layers = useMemo(() => [...pointLayers, ...labelLayers], [pointLayers, labelLayers]);
-
   const views = useMemo(
     () =>
       dimensions === 3
@@ -549,6 +537,19 @@ export function EmbeddingScatter({
         : new OrthographicView({ id: "ortho", flipY: false, controller: true }),
     [dimensions],
   );
+
+  // Labels are placed for the current camera: kept inside the plot, and off
+  // each other (the bigger group keeps its spot).
+  const labelLayers = useMemo(() => {
+    if (!centroids || !viewState) return [];
+    const view = labelViewOf(views, containerSize.width, containerSize.height, viewState);
+    if (!view) return [];
+    return centroidLabelLayers("embedding-labels", placeLabels(centroids, view, { highlight: highlightCategory }), {
+      dark: background === "dark",
+      highlight: highlightCategory,
+    });
+  }, [centroids, viewState, views, containerSize.width, containerSize.height, background, highlightCategory]);
+  const layers = useMemo(() => [...pointLayers, ...labelLayers], [pointLayers, labelLayers]);
 
   // One-off high-resolution redraw on click; see downloadDeckPng.
   const downloadPng = useCallback(() => {
