@@ -1,10 +1,13 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
-import { DeckGL } from "@deck.gl/react";
+import { DeckGL, type DeckGLRef } from "@deck.gl/react";
 import { OrthographicView, OrbitView } from "@deck.gl/core";
 import { ScatterplotLayer, PointCloudLayer } from "@deck.gl/layers";
 import { mapCategoryToColor, mapValueToColor } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { RotateCcw, AlertTriangle } from "lucide-react";
+import { RotateCcw, AlertTriangle, ImageDown } from "lucide-react";
+import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
+import { exportFilename } from "@/lib/exportFilename";
+import { useDatasetStore } from "@/stores/datasetStore";
 
 interface EmbeddingScatterProps {
   positions: Float32Array | null;
@@ -33,6 +36,10 @@ interface EmbeddingScatterProps {
    * conjunction yet each stays fitted to its container. deck.gl only emits
    * onViewStateChange on user interaction, so this won't feedback-loop. */
   externalViewState?: Record<string, unknown> | null;
+  /** Legend drawn beside the points in the "Download PNG" image */
+  exportLegend?: ScatterLegend | null;
+  /** Plot part of the PNG's filename (scview_<dataset>_<exportName>.png) */
+  exportName?: string;
 }
 
 /**
@@ -139,8 +146,11 @@ export function EmbeddingScatter({
   minimal = false,
   dimToGray = false,
   externalViewState = null,
+  exportLegend = null,
+  exportName = "embedding",
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const deckRef = useRef<DeckGLRef>(null);
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(
     null,
   );
@@ -504,6 +514,20 @@ export function EmbeddingScatter({
     [dimensions],
   );
 
+  // One-off high-resolution redraw on click; see downloadDeckPng.
+  const downloadPng = useCallback(() => {
+    const deck = deckRef.current?.deck;
+    if (!deck) return;
+    downloadDeckPng(deck, {
+      legend: exportLegend,
+      colormap: continuousColormap,
+      filename: exportFilename(useDatasetStore.getState().currentDataset?.name, exportName),
+      note: isSampled
+        ? `Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} cells (sampled)`
+        : undefined,
+    });
+  }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells]);
+
   if (!positions || positions.length === 0) {
     return (
       <div
@@ -522,6 +546,7 @@ export function EmbeddingScatter({
       {viewState && !contextLost && (
         <DeckGL
           key={renderKey}
+          ref={deckRef}
           views={views}
           viewState={{ ...viewState }}
           onViewStateChange={handleViewStateChange}
@@ -562,6 +587,16 @@ export function EmbeddingScatter({
           className="absolute right-3 top-3 z-10 rounded-md border border-slate-300 bg-white/90 p-1.5 text-slate-600 shadow-sm transition-colors hover:bg-slate-100 hover:text-slate-800"
         >
           <RotateCcw className="h-4 w-4" />
+        </button>
+      )}
+      {!minimal && viewState && !contextLost && (
+        <button
+          onClick={downloadPng}
+          title="Download PNG (high resolution, white background, with legend)"
+          aria-label="Download PNG"
+          className="absolute right-3 top-12 z-10 rounded-md border border-slate-300 bg-white/90 p-1.5 text-slate-600 shadow-sm transition-colors hover:bg-slate-100 hover:text-slate-800"
+        >
+          <ImageDown className="h-4 w-4" />
         </button>
       )}
 

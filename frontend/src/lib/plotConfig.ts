@@ -10,28 +10,13 @@
  */
 import type { Config, DownloadImgopts, ModeBarButton, PlotlyHTMLElement } from "plotly.js";
 import Plotly from "@/lib/plotly";
+import { exportFilename } from "@/lib/exportFilename";
 import { useDatasetStore } from "@/stores/datasetStore";
+
+export { exportFilename };
 
 /** PNG downloads render at this multiple of the on-screen size. */
 export const PNG_SCALE = 3;
-
-function stem(text: string): string {
-  return text
-    .replace(/[^A-Za-z0-9._-]+/g, "_")
-    .replace(/_{2,}/g, "_")
-    .replace(/^[._-]+|[._-]+$/g, "")
-    .slice(0, 80)
-    .replace(/[._-]+$/, "");
-}
-
-/**
- * `scview_<dataset>_<plot>` with anything but letters, digits, `.`, `_` and `-`
- * collapsed to one `_` (the backend's `file_stem` uses the same rule, so figures and
- * tables from one dataset sort together). Empty parts are left out.
- */
-export function exportFilename(dataset: string | null | undefined, plot: string): string {
-  return ["scview", stem(dataset ?? ""), stem(plot)].filter(Boolean).join("_");
-}
 
 /** Save the plot in `gd` as PNG (at PNG_SCALE) or SVG, on a white background. */
 export function downloadPlot(gd: PlotlyHTMLElement, format: "png" | "svg", filename: string): Promise<void> {

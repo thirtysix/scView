@@ -309,6 +309,10 @@ export function TrajectoryPanel() {
                 selectedIndices={selectedIndices}
                 background={plotBackground}
                 maxRenderedCells={maxRenderedCells}
+                exportName={`pseudotime_${selectedColumn}`}
+                exportLegend={
+                  pseudotimeValues ? { type: "continuous", title: selectedColumn, ...pseudotimeMinMax } : null
+                }
               />
             )}
           </Panel>

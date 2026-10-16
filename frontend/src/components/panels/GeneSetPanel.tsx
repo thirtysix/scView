@@ -968,6 +968,10 @@ export function GeneSetPanel() {
                         background={plotBackground}
                         maxRenderedCells={maxRenderedCells}
                         dimensions={dimensions}
+                        exportName={`score_${scoreName}`}
+                        exportLegend={
+                          scoreValues ? { type: "continuous", title: scoreName, ...scoreMinMax } : null
+                        }
                       />
                     )}
                   </div>
