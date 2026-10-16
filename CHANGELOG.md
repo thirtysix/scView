@@ -6,6 +6,62 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Pseudobulk DE (donor-aware).** In DE, *Between groups*, a new test sums each donor's counts
+  and tests donors rather than cells with DESeq2 (pydeseq2), so the p-values allow for
+  donor-to-donor variation. It runs a paired design when every donor is in both groups, and the
+  donor column is pre-selected. It needs raw counts and at least 2 donors per group.
+- **Pseudotime inside the app.** The Trajectory panel can compute diffusion pseudotime from a start
+  cluster or cell type you choose, and saves it with the dataset. You no longer have to re-upload
+  a file that already has pseudotime.
+- **Download figures.** Every chart's toolbar downloads a high-resolution PNG or an SVG, and the
+  embedding scatter downloads a high-resolution PNG on white with its legend.
+- **Download data.** From the header or the dataset library: the processed `.h5ad` (its size is
+  shown first), the cell metadata as CSV, and the marker genes as CSV or Excel (one sheet per
+  grouping).
+- **Rename datasets** in the library, which now also shows when each dataset was added.
+- **Joint embedding:** the tab shows how well the datasets mixed before and after batch
+  correction (the share of each cell's 30 nearest neighbours from another dataset, against the
+  ideal for their sizes), and which datasets each joint cluster is made of.
+- **Marker dot plot and heatmap of your own genes:** type them or paste a list.
+- **Ask the co-pilot about DE results**, for one gene or the whole result.
+- **Colour choices:** a colour-blind-safe default palette (Okabe-Ito, then Paul Tol) and a Colours
+  control in Unified View for categories and expression (viridis, cividis, magma, plasma).
+- **HVG settings** in Data Assessment: the HVG flavour (`seurat`, `cell_ranger`) and a batch key.
+- **"Open in Unified View"** button when a pipeline run finishes.
+
+### Changed
+- **A category has the same colour in every panel:** embedding, legend, cluster map, violins and
+  the Observations charts.
+- **Clicking a cluster** in the legend or the cluster map shows its marker genes in Unified View.
+- **Marker genes for a grouping are computed once and kept**, instead of recomputed (up to ~30 s)
+  on every visit; the loading message says when they are being computed.
+- **Analysis guards:** marker tables say cluster-marker p-values are for ranking only;
+  between-groups DE reports the donor column, donors per side and the largest donor's share, and
+  warns when a side has fewer than 2 donors or one donor holds most of its cells; Data Assessment
+  flags data normalised to the wrong scale (CPM ~1e6 instead of ~1e4).
+- **The co-pilot can open the Compare panel and the DE subtab.**
+
+### Fixed
+- **Louvain clustering works.** The `louvain` package was never installed; it now uses
+  python-igraph, seeded, and honours the resolution.
+- **Enrichment results for labels containing "/"** (such as CellTypist's "Tcm/Naive helper T
+  cells") are no longer lost when the dataset is saved.
+- **DE picked the wrong donor column** on datasets whose per-sample column repeats the condition
+  (Kang's `orig_ident`), and reported one donor per side.
+- **Provenance no longer records default clustering settings** for runs that did not cluster.
+- **Colouring by pseudotime** no longer turns every cell the same colour when some cells are
+  unreachable.
+- **The gene overlay label** no longer hides under the legend, and the Joint embedding dataset
+  picker shows a loading state instead of "No ready datasets".
+
+### Development
+- CI runs the backend and frontend checks on every pull request, and a smoke test pulls each
+  release's published images and starts them on amd64 and arm64 (the images Apple Silicon Macs
+  use).
+- `npm run lint` works again; ten unused frontend packages were removed; the ruff rule set and
+  `anndata<0.13` are pinned so fresh installs behave like the tested ones.
+
 ## [0.12.0] - 2026-10-16
 
 ### Changed
