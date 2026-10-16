@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import type { DEGene, DEResponse } from "@/api/de";
 import type { ObsColumnInfo } from "@/api/types";
 import {
+  deEnrichmentQuery,
   deGeneQuestion,
   deResultQuestion,
   describeComparison,
+  isSignificant,
   replicateColumns,
   suggestReplicateColumn,
   type DEComparison,
@@ -122,5 +124,41 @@ describe("describeComparison with confounding", () => {
     };
     const text = describeComparison({ a: "STIM", b: "CTRL", betweenGroups: true }, r);
     expect(text).toContain("Caution: The two sides are different 'dataset' groups");
+  });
+});
+
+describe("deEnrichmentQuery", () => {
+  const res: DEResponse = {
+    n_selected: 50,
+    n_rest: 50,
+    label: "STIM",
+    genes: [
+      gene("ISG15", 4.2, 1e-30),
+      gene("IFIT1", 0.8, 1e-20), // significant p, but under the |log2FC| cut-off at 1
+      gene("CCL2", -1.5, 0.001),
+      gene("FOS", -2.0, 0.2), // big change, not significant
+      gene("ACTB", 0, 1e-5),
+    ],
+  };
+
+  it("splits the significant genes by direction, with every tested gene as background", () => {
+    expect(deEnrichmentQuery(res, 0.05, 1)).toEqual({
+      up: ["ISG15"],
+      down: ["CCL2"],
+      background: ["ISG15", "IFIT1", "CCL2", "FOS", "ACTB"],
+    });
+  });
+
+  it("uses exactly the table's rule, so lowering the cut-off adds genes", () => {
+    expect(deEnrichmentQuery(res, 0.05, 0.5).up).toEqual(["ISG15", "IFIT1"]);
+    const table = res.genes.filter((g) => isSignificant(g, 0.05, 0.5) && g.logfoldchange !== 0);
+    const q = deEnrichmentQuery(res, 0.05, 0.5);
+    expect([...q.up, ...q.down].sort()).toEqual(table.map((g) => g.gene).sort());
+  });
+
+  it("puts a gene with no change in neither list", () => {
+    const q = deEnrichmentQuery(res, 0.05, 0);
+    expect(q.up).not.toContain("ACTB");
+    expect(q.down).not.toContain("ACTB");
   });
 });

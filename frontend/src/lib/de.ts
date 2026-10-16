@@ -44,6 +44,37 @@ export function suggestReplicateColumn(cols: ObsColumnInfo[]): string {
   return "";
 }
 
+/** What the DE table calls significant; the enrichment hand-off uses the same rule. */
+export function isSignificant(g: DEGene, pThreshold: number, fcThreshold: number): boolean {
+  return g.pval_adj <= pThreshold && Math.abs(g.logfoldchange) >= fcThreshold;
+}
+
+/** The gene lists an enrichment of a DE result tests. */
+export interface DEEnrichmentQuery {
+  /** Significant and higher in A (log2FC > 0). */
+  up: string[];
+  /** Significant and higher in B (log2FC < 0). */
+  down: string[];
+  /** Every gene the DE tested: the universe the two lists were drawn from. */
+  background: string[];
+}
+
+/** Split a DE result into its significant up / down genes, with the tested genes as background. */
+export function deEnrichmentQuery(
+  r: DEResponse,
+  pThreshold: number,
+  fcThreshold: number,
+): DEEnrichmentQuery {
+  const up: string[] = [];
+  const down: string[] = [];
+  for (const g of r.genes) {
+    if (!isSignificant(g, pThreshold, fcThreshold)) continue;
+    if (g.logfoldchange > 0) up.push(g.gene);
+    else if (g.logfoldchange < 0) down.push(g.gene);
+  }
+  return { up, down, background: r.genes.map((g) => g.gene) };
+}
+
 // ---------------------------------------------------------------------------
 // "Ask the co-pilot" about a DE result. DE results live only in the subtab (they
 // are not stored in the dataset), so, like the other subtabs, the question

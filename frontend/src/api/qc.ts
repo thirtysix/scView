@@ -37,6 +37,53 @@ export async function getClusterQc(datasetId: string, groupby?: string): Promise
   return apiFetch<ClusterQcReport>(`/datasets/${datasetId}/cluster-qc${q}`);
 }
 
+/** QC distributions per group of one obs column (backend core/qc_groups.py). */
+export interface QcByGroup {
+  /** null: no column named and no sample / batch / clustering column found. */
+  column: string | null;
+  /** Why this column: picked as the donor/sample, batch or clustering column, or asked for. */
+  reason: "donor" | "batch" | "clustering" | "requested" | null;
+  n_cells: number;
+  n_groups: number;
+  max_groups: number;
+  n_unlabelled?: number;
+  /** False when the dataset has no MT- genes: % mito is then left out. */
+  has_mt?: boolean;
+  computed_on_demand?: boolean;
+  n_quantiles?: number;
+  groups: { name: string; n_cells: number }[];
+  /** metric -> group -> the group's quantiles (all its values when it has fewer cells). */
+  metrics: Record<string, Record<string, number[]>>;
+  /** A stratified sample; `group` indexes `groups`. */
+  scatter: {
+    x: number[];
+    y: number[];
+    group: number[];
+    x_label: string;
+    y_label: string;
+    n_shown: number;
+  } | null;
+  note?: string;
+}
+
+/** QC by group; with no column the backend picks the donor, else batch, else clustering
+ *  column. A refused column (too many groups) throws with the server's reason. */
+export async function getQcByGroup(datasetId: string, column?: string): Promise<QcByGroup> {
+  const q = column ? `?column=${encodeURIComponent(column)}` : "";
+  try {
+    return await apiFetch<QcByGroup>(`/datasets/${datasetId}/qc/by-group${q}`);
+  } catch (e) {
+    const body = e instanceof Error ? e.message.replace(/^API error \d+: /, "") : "";
+    let detail = "";
+    try {
+      detail = String(JSON.parse(body).detail ?? "");
+    } catch {
+      /* not JSON: keep the original error */
+    }
+    throw detail ? new Error(detail) : e;
+  }
+}
+
 /** The "Explain this data" QC report, written from the deterministic facts only. */
 export interface QcReport {
   report: string; // Markdown in four sections; "" = not generated yet
