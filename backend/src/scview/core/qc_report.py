@@ -225,6 +225,10 @@ def build_facts(adaptor) -> QCFacts:
         if n >= 500:
             step("qc:doublets", "Run doublet detection (Scrublet) before clustering.")
 
+    # --- Cell cycle: phase calls resting on near-zero scores (core/cell_cycle.py) ---
+    if state.cell_cycle.caution:
+        concern("qc:cell_cycle", f"Cell cycle: {state.cell_cycle.caution}")
+
     # --- Normalisation (the assessor's own check keeps the wrong-scale note,
     # which the recorded-provenance overlay replaces in the state) ---
     norm = _check_normalization(adata).details

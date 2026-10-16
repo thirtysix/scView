@@ -22,6 +22,7 @@ import scanpy as sc
 import scipy.sparse as sp
 
 from scview.core import provenance, stress
+from scview.core.cell_cycle import near_zero_phase_calls
 from scview.core.llm import chat_extra
 from scview.core.gene_filters import is_ribo_mito, select_query_genes
 from scview.core.geneset_sources import (
@@ -775,7 +776,9 @@ def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]
                     species, len(s_present), len(g2m_present))
     except Exception as e:
         raise ValueError(f"Cell cycle scoring failed: {e}") from e
-    return {"species": species, "n_s_genes": len(s_present), "n_g2m_genes": len(g2m_present)}
+    # Recorded with the step: how many phase calls rest on scores that are noise.
+    return {"species": species, "n_s_genes": len(s_present), "n_g2m_genes": len(g2m_present),
+            **(near_zero_phase_calls(adata.obs) or {})}
 
 
 def _run_dissociation_stress(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
