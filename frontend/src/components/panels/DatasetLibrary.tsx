@@ -8,6 +8,7 @@ import {
   pruneDatasets,
   renameDataset,
 } from "@/api/datasets";
+import { DatasetDownloadMenu } from "@/components/common/DatasetDownloadMenu";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { formatDate, formatNumber } from "@/lib/formatting";
@@ -279,18 +280,21 @@ export function DatasetLibrary() {
                 </div>
               )}
             </div>
-            <button
-              onClick={() => handleDelete(ds.id, ds.name)}
-              disabled={deletingId === ds.id}
-              title="Delete dataset"
-              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-red-500 disabled:opacity-50"
-            >
-              {deletingId === ds.id ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4" />
-              )}
-            </button>
+            <div className="flex flex-shrink-0 items-center gap-1">
+              {ds.status === "ready" && <DatasetDownloadMenu datasetId={ds.id} compact />}
+              <button
+                onClick={() => handleDelete(ds.id, ds.name)}
+                disabled={deletingId === ds.id}
+                title="Delete dataset"
+                className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-red-500 disabled:opacity-50"
+              >
+                {deletingId === ds.id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </button>
+            </div>
           </div>
         ))}
       </div>

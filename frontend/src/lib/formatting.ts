@@ -17,6 +17,20 @@ export function formatDate(iso: string | null | undefined, locale?: string): str
   return d.toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
 }
 
+/** File size in decimal units, as file managers show it: 950 B, 12.3 MB, 1.20 GB. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1000) return `${bytes} B`;
+  const units = ["kB", "MB", "GB", "TB"];
+  let v = bytes;
+  let i = -1;
+  do {
+    v /= 1000;
+    i++;
+  } while (v >= 1000 && i < units.length - 1);
+  return `${v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)} ${units[i]}`;
+}
+
 /**
  * Human-friendly label for an obs column name, keeping the raw name as the value.
  *  - scview_leiden_r0.5        -> "Leiden (res 0.5)"

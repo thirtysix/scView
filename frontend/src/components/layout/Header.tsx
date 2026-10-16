@@ -1,5 +1,6 @@
 import { useDatasetStore } from "@/stores/datasetStore";
 import { formatNumber } from "@/lib/formatting";
+import { DatasetDownloadMenu } from "@/components/common/DatasetDownloadMenu";
 
 export function Header() {
   const currentDataset = useDatasetStore((s) => s.currentDataset);
@@ -38,6 +39,7 @@ export function Header() {
           <h1 className="text-sm text-slate-400">No dataset loaded</h1>
         )}
       </div>
+      {currentDataset?.status === "ready" && <DatasetDownloadMenu datasetId={currentDataset.id} />}
     </header>
   );
 }
