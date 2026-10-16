@@ -16,7 +16,7 @@ from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing
-from scview.core import cluster_qc, qc_report
+from scview.core import cluster_qc, qc_groups, qc_report
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
@@ -100,6 +100,43 @@ async def get_cluster_qc(
         logger.error("Cluster QC failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Cluster QC failed: {e}")
     return report.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/qc/by-group
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/by-group")
+async def get_qc_by_group(
+    dataset_id: str,
+    column: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """QC distributions (genes, counts, % mito when measurable) per group of one
+    categorical obs column, as quantiles for violins, plus a counts-vs-genes scatter
+    sample carrying each point's group. With no ``column``, the donor/sample column
+    is used, else a batch column, else the clustering (``reason`` says which)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    if column and column not in adaptor.adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
+
+    def _run() -> dict:
+        col, reason = (column, "requested") if column else qc_groups.default_grouping(adaptor.adata)
+        if col is None:
+            return qc_groups.no_grouping(adaptor.adata)
+        return qc_groups.qc_by_group(adaptor.adata, col, adaptor.qc_per_cell(), reason)
+
+    try:
+        # Per-cell metrics may need a pass over the counts: keep it off the loop.
+        return await asyncio.to_thread(_run)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("QC by group failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"QC by group failed: {e}")
 
 
 # ---------------------------------------------------------------------------

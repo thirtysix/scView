@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { plotlyColorscale } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import Plot from "@/components/plots/Plot";
+import { ViolinPlot } from "@/components/plots/ViolinPlot";
 import { plotConfig } from "@/lib/plotConfig";
 import { Loader2, Sparkles } from "lucide-react";
 
 import { apiFetch } from "@/api/client";
+import { getQcByGroup, type QcByGroup } from "@/api/qc";
+import { useCategoryColors, useCategoryOrder } from "@/hooks/useCategoryColors";
+import { groupScatterTraces, qcGroupOptions, qcGroupReason, QC_MAX_GROUPS } from "@/lib/qcGroups";
+import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { Panel } from "@/components/common/Panel";
 import { PlotGrid } from "@/components/common/PlotGrid";
@@ -152,11 +157,77 @@ function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
   );
 }
 
+/** Violins of each QC metric per group, and the counts-vs-genes scatter coloured by
+ *  group (colours shared with the embedding scatter). The backend sends each group's
+ *  quantiles and a stratified sample, not every cell, so 200k cells cost no more. */
+function GroupedQc({ data }: { data: QcByGroup }) {
+  const column = data.column ?? "";
+  const colorOf = useCategoryColors(column);
+  const order = useCategoryOrder(column);
+  const traces = useMemo(
+    () => (data.scatter ? groupScatterTraces(data.scatter, data.groups, order, colorOf) : []),
+    [data, order, colorOf],
+  );
+  const smallest = data.groups.reduce<QcByGroup["groups"][number] | null>(
+    (min, g) => (min === null || g.n_cells < min.n_cells ? g : min),
+    null,
+  );
+  const why = qcGroupReason(data.reason);
+  return (
+    <>
+      <p className="text-[11px] text-slate-500">
+        By <span className="font-semibold text-slate-700">{column}</span>
+        {why ? ` (${why})` : ""}: {data.n_groups} groups
+        {smallest ? `, smallest ${smallest.name} with ${smallest.n_cells.toLocaleString()} cells` : ""}
+        {(data.n_unlabelled ?? 0) > 0
+          ? `; ${data.n_unlabelled!.toLocaleString()} cells without a value are left out`
+          : ""}
+        .
+      </p>
+      {Object.entries(data.metrics).map(([k, groups]) => (
+        <Panel key={k} title={`${METRIC_LABELS[k] ?? k} by ${column}`} className="h-[280px]">
+          <ViolinPlot data={groups} groupColumn={column} yLabel={METRIC_LABELS[k] ?? k} height={240} />
+        </Panel>
+      ))}
+      {data.scatter && (
+        <Panel title={`Counts vs. genes per cell (colour = ${column})`} className="h-[380px]">
+          <Plot
+            data={traces}
+            layout={{
+              autosize: true,
+              margin: { l: 54, r: 10, t: 8, b: 40 },
+              xaxis: { title: { text: data.scatter.x_label, font: { size: 10 } }, tickfont: { size: 9 } },
+              yaxis: { title: { text: data.scatter.y_label, font: { size: 10 } }, tickfont: { size: 9 } },
+              showlegend: true,
+              legend: { font: { size: 9 }, itemsizing: "constant" },
+            }}
+            config={plotConfig(`qc_counts_vs_genes_by_${column}`)}
+            style={FILL_STYLE}
+            useResizeHandler
+          />
+        </Panel>
+      )}
+    </>
+  );
+}
+
 export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refreshKey?: number }) {
   const [data, setData] = useState<QcResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const askCopilot = useViewStore((s) => s.askCopilot);
+  const obsColumns = useDatasetStore((s) => s.currentDataset?.obs_columns);
+
+  // Group by: null until the user picks (the backend then picks the donor, batch
+  // or clustering column); "" = all cells pooled. Kept per dataset.
+  const [choice, setChoice] = useState<{ datasetId: string; column: string | null }>({
+    datasetId,
+    column: null,
+  });
+  const groupBy = choice.datasetId === datasetId ? choice.column : null;
+  const [grouped, setGrouped] = useState<QcByGroup | null>(null);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const [groupError, setGroupError] = useState<string | null>(null);
 
   const askAboutQc = () => {
     if (!data) return;
@@ -190,6 +261,37 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
       cancelled = true;
     };
   }, [datasetId, refreshKey]);
+
+  useEffect(() => {
+    setGrouped(null);
+    setGroupError(null);
+    if (!datasetId || groupBy === "") return;
+    let cancelled = false;
+    setGroupLoading(true);
+    getQcByGroup(datasetId, groupBy ?? undefined)
+      .then((d) => {
+        if (!cancelled) setGrouped(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setGroupError(String(e?.message ?? e));
+      })
+      .finally(() => {
+        if (!cancelled) setGroupLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId, groupBy, refreshKey]);
+
+  const groupOptions = useMemo(() => {
+    const opts = qcGroupOptions(obsColumns);
+    // The backend's pick is listed even when its dtype is not one the list takes.
+    const picked = grouped?.column;
+    if (picked && !opts.some((o) => o.name === picked)) {
+      opts.unshift({ name: picked, n: grouped!.n_groups, disabled: false });
+    }
+    return opts;
+  }, [obsColumns, grouped]);
 
   if (loading) {
     return (
@@ -230,6 +332,32 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
             : ""}
         </span>
       </div>
+      <div className="flex items-center gap-2 text-[11px] text-slate-500">
+        <label htmlFor="qc-group-by" className="font-medium">
+          Group by
+        </label>
+        <select
+          id="qc-group-by"
+          value={groupBy ?? grouped?.column ?? ""}
+          onChange={(e) => setChoice({ datasetId, column: e.target.value })}
+          disabled={groupBy === null && groupLoading}
+          className="min-w-0 max-w-[60%] rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600 disabled:opacity-50"
+        >
+          <option value="">None (all cells)</option>
+          {groupOptions.map((o) => (
+            <option key={o.name} value={o.name} disabled={o.disabled}>
+              {o.name} ({o.n}
+              {o.disabled ? ` groups: over ${QC_MAX_GROUPS}, pick another` : ""})
+            </option>
+          ))}
+        </select>
+        {groupLoading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
+      </div>
+      {groupError && (
+        <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {groupError}
+        </p>
+      )}
       {data.has_mt === false && (
         <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
           No mitochondrial (MT-) genes in this dataset, so % mito can&apos;t be measured: a 0 %
@@ -241,7 +369,7 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
           <HistCard key={k} label={METRIC_LABELS[k] ?? k} metric={data.metrics[k]!} />
         ))}
       </PlotGrid>
-      <ScatterCard scatter={data.scatter} />
+      {grouped?.column ? <GroupedQc data={grouped} /> : <ScatterCard scatter={data.scatter} />}
     </div>
   );
 }
