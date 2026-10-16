@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { DEGene, DEResponse } from "@/api/de";
-import type { EnrichmentResult, GeneListEnrichmentResponse } from "@/api/enrichment";
+import type { EnrichmentResult, GeneListEnrichmentResponse, GseaResponse } from "@/api/enrichment";
 
-const { enrichGeneLists } = vi.hoisted(() => ({ enrichGeneLists: vi.fn() }));
-vi.mock("@/api/enrichment", () => ({ enrichGeneLists }));
+const { enrichGeneLists, runGsea } = vi.hoisted(() => ({ enrichGeneLists: vi.fn(), runGsea: vi.fn() }));
+vi.mock("@/api/enrichment", () => ({ enrichGeneLists, runGsea }));
 // The collection tree fetches MSigDB's hierarchy; not what is under test here.
 vi.mock("@/components/panels/MSigDBCollectionTree", () => ({
   MSigDBCollectionTree: () => null,
@@ -15,7 +15,7 @@ import { DEEnrichment } from "./DEEnrichment";
 import { useViewStore } from "@/stores/viewStore";
 
 const gene = (name: string, lfc: number, padj: number): DEGene => ({
-  gene: name, logfoldchange: lfc, pval: padj / 10, pval_adj: padj,
+  gene: name, logfoldchange: lfc, pval: padj / 10, pval_adj: padj, score: lfc * 5,
 });
 
 const RESULT: DEResponse = {
@@ -45,6 +45,22 @@ const RESPONSE: GeneListEnrichmentResponse = {
           results: [term("HALLMARK_INFLAMMATORY_RESPONSE", 0.2)] },
 };
 
+const GSEA: GseaResponse = {
+  rank_metric: "wilcoxon_score",
+  rank_metric_label: "Wilcoxon statistic (z-score)",
+  n_genes_ranked: 5, n_excluded_ribo_mito: 0, n_sets_tested: 3, permutations: 1000,
+  min_size: 15, max_size: 500, collections: ["h.all"], exclude_ribo_mito: true,
+  up: { n_terms: 1, n_significant: 1, results: [{
+    term: "HALLMARK_INTERFERON_GAMMA_RESPONSE", es: 0.7, nes: 2.05, pvalue: 0, fdr: 0, set_size: 192,
+    leading_edge: ["ISG15", "IFIT1"], collection: "h.all",
+  }] },
+  down: { n_terms: 1, n_significant: 1, results: [{
+    term: "HALLMARK_OXIDATIVE_PHOSPHORYLATION", es: -0.5, nes: -1.83, pvalue: 0, fdr: 0.002, set_size: 180,
+    leading_edge: ["CCL2"], collection: "h.all",
+  }] },
+  seconds: 1.6, cached: false,
+};
+
 function setup(fcThreshold = 1, result = RESULT) {
   const props = {
     datasetId: "d1", result, labelA: "STIM", labelB: "CTRL", pThreshold: 0.05,
@@ -58,6 +74,7 @@ function setup(fcThreshold = 1, result = RESULT) {
 describe("DEEnrichment", () => {
   beforeEach(() => {
     enrichGeneLists.mockReset();
+    runGsea.mockReset();
     useViewStore.setState({ pendingAsk: null });
   });
 
@@ -131,5 +148,54 @@ describe("DEEnrichment", () => {
     setup(10);
     expect(screen.getByText("0 up · 0 down")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Enrich" })).toBeDisabled();
+    // GSEA ranks every tested gene, so it needs no significant ones.
+    expect(screen.getByRole("button", { name: "GSEA" })).toBeEnabled();
+  });
+
+  it("runs GSEA on every tested gene with its statistic and shows each direction", async () => {
+    runGsea.mockResolvedValue(GSEA);
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "GSEA" }));
+    await waitFor(() => expect(runGsea).toHaveBeenCalledTimes(1));
+    expect(runGsea).toHaveBeenCalledWith("d1", {
+      genes: RESULT.genes.map((g) => ({ gene: g.gene, logfoldchange: g.logfoldchange, pval: g.pval, score: g.score })),
+      collections: ["h.all"],
+      exclude_ribo_mito: true,
+    });
+    const row = (await screen.findByText("HALLMARK_INTERFERON_GAMMA_RESPONSE")).closest("tr")!;
+    expect(row).toHaveTextContent("+2.05");
+    expect(row).toHaveTextContent("< 0.0010");
+    expect(row).toHaveTextContent("2/192");
+    expect(screen.getByText(/5 genes ranked by Wilcoxon statistic \(z-score\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Higher in CTRL · 1 set/ }));
+    expect(screen.getByText("HALLMARK_OXIDATIVE_PHOSPHORYLATION")).toBeInTheDocument();
+    expect(screen.queryByText("HALLMARK_INTERFERON_GAMMA_RESPONSE")).not.toBeInTheDocument();
+  });
+
+  it("asks the co-pilot about a GSEA term with its direction and leading edge", async () => {
+    runGsea.mockResolvedValue(GSEA);
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "GSEA" }));
+    await screen.findByText("HALLMARK_INTERFERON_GAMMA_RESPONSE");
+    fireEvent.click(screen.getByTitle("Ask the co-pilot about this pathway"));
+    const asked = useViewStore.getState().pendingAsk ?? "";
+    expect(asked).toContain("enriched among the genes higher in STIM: NES 2.05");
+    expect(asked).toContain("Leading-edge genes: ISG15, IFIT1");
+  });
+
+  it("drops the GSEA result when a new DE result arrives", async () => {
+    runGsea.mockResolvedValue(GSEA);
+    const { rerender } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "GSEA" }));
+    await screen.findByText("HALLMARK_INTERFERON_GAMMA_RESPONSE");
+    rerender(1, { ...RESULT, label: "other" });
+    expect(screen.queryByText("HALLMARK_INTERFERON_GAMMA_RESPONSE")).not.toBeInTheDocument();
+  });
+
+  it("shows a GSEA error", async () => {
+    runGsea.mockRejectedValue(new Error("API 400: Pick fewer collections."));
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "GSEA" }));
+    expect(await screen.findByText(/GSEA: API 400: Pick fewer collections/)).toBeInTheDocument();
   });
 });

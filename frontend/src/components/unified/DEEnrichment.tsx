@@ -3,17 +3,22 @@ import { ChevronDown, ChevronRight, Download, Loader2, Network } from "lucide-re
 import type { DEResponse } from "@/api/de";
 import {
   enrichGeneLists,
+  runGsea,
   type EnrichmentResult,
   type GeneListEnrichmentResponse,
+  type GseaResponse,
+  type GseaTerm,
 } from "@/api/enrichment";
 import { collectionLabel } from "@/api/genesets";
 import { InfoTip } from "@/components/common/InfoTip";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
+import { GseaResults } from "@/components/unified/GseaResults";
 import { useEnrichmentSort } from "@/hooks/useEnrichmentSort";
 import { useGeneSetScoring } from "@/hooks/useGeneSetScoring";
 import { downloadCsv } from "@/lib/csv";
 import { deEnrichmentQuery } from "@/lib/de";
+import { gseaGenesFromDE } from "@/lib/gsea";
 import { useViewStore } from "@/stores/viewStore";
 
 type Side = "up" | "down";
@@ -41,7 +46,8 @@ interface Props {
  * Over-representation of a DE result's significant genes: the up genes and,
  * separately, the down genes against the chosen collections, with every tested
  * gene as the background. Lives under the DE table so the cut-offs it uses are
- * the ones on screen.
+ * the ones on screen. Beside it, preranked GSEA of every tested gene against the
+ * same collections, which needs no cut-off.
  */
 export function DEEnrichment({
   datasetId,
@@ -64,6 +70,9 @@ export function DEEnrichment({
   const [side, setSide] = useState<Side>("up");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gsea, setGsea] = useState<GseaResponse | null>(null);
+  const [gseaLoading, setGseaLoading] = useState(false);
+  const [gseaError, setGseaError] = useState<string | null>(null);
 
   const query = useMemo(
     () => deEnrichmentQuery(result, pThreshold, fcThreshold),
@@ -75,6 +84,8 @@ export function DEEnrichment({
     setData(null);
     setRanWith(null);
     setError(null);
+    setGsea(null);
+    setGseaError(null);
   }, [result]);
 
   const run = useCallback(async () => {
@@ -96,6 +107,24 @@ export function DEEnrichment({
     }
   }, [datasetId, query, collections, excludeRiboMito, pThreshold, fcThreshold]);
 
+  // Every tested gene, ranked by the test's statistic (signed -log10 p for pseudobulk).
+  const runGseaForResult = useCallback(async () => {
+    setGseaLoading(true);
+    setGseaError(null);
+    try {
+      const res = await runGsea(datasetId, {
+        genes: gseaGenesFromDE(result),
+        collections: Array.from(collections),
+        exclude_ribo_mito: excludeRiboMito,
+      });
+      setGsea(res);
+    } catch (e) {
+      setGseaError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGseaLoading(false);
+    }
+  }, [datasetId, result, collections, excludeRiboMito]);
+
   const { scoreGenes, scoringName } = useGeneSetScoring(datasetId, onScoreGeneSet, onGeneClick);
   const shown = data ? data[side].results : [];
   const { sorted, sortField, sortDir, onSort } = useEnrichmentSort(shown);
@@ -112,6 +141,25 @@ export function DEEnrichment({
       );
     },
     [askCopilot, labelA, labelB, side, higherIn],
+  );
+
+  const gseaLabels = useMemo(
+    () => ({ up: `Higher in ${labelA}`, down: `Higher in ${labelB}` }),
+    [labelA, labelB],
+  );
+
+  const askAboutGseaTerm = useCallback(
+    (r: GseaTerm) => {
+      const higher = r.nes > 0 ? labelA : labelB;
+      askCopilot(
+        `In a GSEA of a differential-expression comparison of ${labelA} vs ${labelB} (all tested genes ` +
+          `ranked by ${gsea?.rank_metric_label ?? "the test statistic"}), "${r.term}" ` +
+          `(${collectionLabel(r)}) is enriched among the genes higher in ${higher}: NES ` +
+          `${r.nes.toFixed(2)}, FDR ${r.fdr.toExponential(2)}. Leading-edge genes: ` +
+          `${r.leading_edge.slice(0, 15).join(", ")}. What does this suggest biologically?`,
+      );
+    },
+    [askCopilot, labelA, labelB, gsea],
   );
 
   const exportCsv = useCallback(() => {
@@ -149,7 +197,10 @@ export function DEEnrichment({
           Over-representation (hypergeometric test, Benjamini-Hochberg adjusted) of the significant
           genes in the table above: the genes higher in {labelA} and, separately, those higher in{" "}
           {labelB}, so two opposing programmes are not blurred into one. The background is every
-          gene this DE tested, not every gene the collections name.
+          gene this DE tested, not every gene the collections name. GSEA instead ranks every tested
+          gene (by the Wilcoxon statistic, or sign(log2FC) × −log10(p) for pseudobulk) and asks
+          whether a set&apos;s genes bunch at the top or bottom, so it needs no cut-off and finds
+          programmes of many small shifts; the leading edge is the genes that drive it.
         </InfoTip>
         <span className="flex-1 truncate text-slate-500">
           {fmt(query.up.length)} up · {fmt(query.down.length)} down
@@ -162,6 +213,15 @@ export function DEEnrichment({
         >
           {loading && <Loader2 className="h-3 w-3 animate-spin" />}
           Enrich
+        </button>
+        <button
+          onClick={runGseaForResult}
+          disabled={gseaLoading || result.genes.length === 0 || collections.size === 0}
+          title="GSEA on every tested gene, ranked: no cut-off"
+          className="flex items-center gap-1.5 rounded-md border border-primary px-3 py-1.5 font-medium text-primary transition hover:bg-primary/5 disabled:opacity-50"
+        >
+          {gseaLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+          GSEA
         </button>
       </div>
 
@@ -196,6 +256,14 @@ export function DEEnrichment({
 
       {error && (
         <div className="rounded border border-red-200 bg-red-50 p-2 text-red-700">{error}</div>
+      )}
+      {gseaError && (
+        <div className="rounded border border-red-200 bg-red-50 p-2 text-red-700">GSEA: {gseaError}</div>
+      )}
+      {gseaLoading && !gsea && (
+        <p className="text-[10px] text-slate-400">
+          Running GSEA: a few seconds for Hallmark, up to ~30 s for many collections.
+        </p>
       )}
 
       {data && ranWith && (
@@ -277,6 +345,20 @@ export function DEEnrichment({
               />
             </>
           )}
+        </div>
+      )}
+
+      {gsea && (
+        <div className="flex flex-col gap-1.5 border-t border-slate-100 pt-2">
+          <h4 className="text-[11px] font-semibold text-slate-700">GSEA: every tested gene, ranked</h4>
+          <GseaResults
+            data={gsea}
+            labels={gseaLabels}
+            csvName={`de_gsea_${result.label}_${datasetId}`}
+            onTermClick={(r) => scoreGenes(r.leading_edge, r.term)}
+            onAsk={askAboutGseaTerm}
+            scoringTerm={scoringName}
+          />
         </div>
       )}
     </div>

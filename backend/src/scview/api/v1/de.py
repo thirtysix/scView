@@ -54,6 +54,9 @@ class DEGene(BaseModel):
     logfoldchange: float
     pval: float
     pval_adj: float
+    # Wilcoxon only: scanpy's z-score of the rank-sum test, which GSEA ranks by
+    # (pseudobulk leaves it unset; see core/gsea.py).
+    score: float | None = None
 
 
 class DEResponse(BaseModel):
@@ -142,6 +145,7 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
         )
         rgg = work.uns["rank_genes_groups"]
         names = rgg["names"]["selection"]
+        scores = rgg["scores"]["selection"]
         lfc = rgg["logfoldchanges"]["selection"]
         pv = rgg["pvals"]["selection"]
         pv_adj = rgg["pvals_adj"]["selection"]
@@ -157,7 +161,9 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
         # Drop non-finite rows (a gene with zero variance yields NaNs).
         if not (np.isfinite(lf) and np.isfinite(p) and np.isfinite(pa)):
             continue
-        genes.append(DEGene(gene=str(names[i]), logfoldchange=lf, pval=p, pval_adj=pa))
+        z = float(scores[i])
+        genes.append(DEGene(gene=str(names[i]), logfoldchange=lf, pval=p, pval_adj=pa,
+                            score=z if np.isfinite(z) else None))
     return genes
 
 

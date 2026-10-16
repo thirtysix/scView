@@ -9,9 +9,10 @@ starting point.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from scview.config import Settings
 from scview.core import enrichment_network as network
+from scview.core import gsea
 from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
 from scview.core.gene_filters import select_query_genes
@@ -169,6 +171,75 @@ class GeneListEnrichmentResponse(BaseModel):
     down: GeneListSide
     source: str = "msigdb_local"
     warning: str = ""  # e.g. a mouse dataset against human gene sets
+
+
+class GseaGene(BaseModel):
+    """One gene of a DE result: GSEA ranks by ``score`` when every gene has one."""
+
+    gene: str
+    logfoldchange: float | None = None
+    pval: float | None = None
+    score: float | None = None
+
+
+class GseaRequest(BaseModel):
+    """Body for preranked GSEA: a DE result's genes, or a marker group."""
+
+    # Every gene the DE tested (core/gsea.py says how they are ranked) ...
+    genes: list[GseaGene] = Field(default=[], max_length=MAX_GENE_LIST)
+    # ... or a marker group of an obs column, ranked by scanpy's score.
+    column: str = ""
+    group: str = ""
+    rank_by: Literal["auto", "score", "signed_p"] = "auto"
+    collections: list[str] = DEFAULT_COLLECTIONS
+    # Left out of the ranking altogether (see EnrichmentComputeRequest.exclude_ribo_mito).
+    exclude_ribo_mito: bool = True
+    min_size: int = Field(default=gsea.MIN_SIZE, ge=5, le=500)
+    max_size: int = Field(default=gsea.MAX_SIZE, ge=15, le=2000)
+    # None: as many as the cost budget allows (core/gsea.py permutations_for).
+    permutations: int | None = Field(default=None, ge=gsea.MIN_PERMUTATIONS, le=gsea.MAX_PERMUTATIONS)
+    seed: int = 123
+    # Terms returned per direction, most significant first.
+    max_terms: int = Field(default=500, ge=1, le=20_000)
+
+
+class GseaTerm(BaseModel):
+    term: str
+    es: float
+    nes: float  # > 0: the set's genes sit at the top of the ranking
+    pvalue: float  # nominal, from permutations; 0 means below 1/permutations
+    fdr: float  # GSEA's FDR q-value
+    set_size: int  # the set's genes in the ranking
+    leading_edge: list[str]
+    collection: str = ""
+    collection_name: str = ""
+    collection_deleted: bool = False
+
+
+class GseaSide(BaseModel):
+    n_terms: int
+    n_significant: int  # FDR < 0.05
+    results: list[GseaTerm]
+
+
+class GseaResponse(BaseModel):
+    rank_metric: str  # wilcoxon_score | signed_log10_p | marker_score
+    rank_metric_label: str
+    n_genes_ranked: int
+    n_excluded_ribo_mito: int
+    n_sets_tested: int
+    permutations: int
+    min_size: int
+    max_size: int
+    collections: list[str]
+    exclude_ribo_mito: bool
+    up: GseaSide  # NES > 0
+    down: GseaSide  # NES < 0
+    seconds: float  # compute time of the run (0 when served from the cache)
+    cached: bool = False
+    column: str = ""
+    group: str = ""
+    warning: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -750,6 +821,134 @@ def _compute_gene_lists(
         exclude_ribo_mito=body.exclude_ribo_mito,
         up=up,
         down=down,
+        warning=human_genesets_warning(detect_species(adaptor.adata)),
+    )
+
+
+@router.post("/datasets/{dataset_id}/enrichment/gsea", response_model=GseaResponse)
+async def compute_gsea(
+    dataset_id: str,
+    body: GseaRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+) -> GseaResponse:
+    """Preranked GSEA of a DE result (``genes``) or a marker group (``column`` +
+    ``group``) against the chosen collections: NES, nominal p, FDR and the
+    leading-edge genes of each set. The same ranking and parameters again are
+    served from a cache."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    # Seconds to tens of seconds of permutations: in a worker thread (gseapy's
+    # Rust core releases the GIL), so the server keeps answering meanwhile.
+    return await asyncio.to_thread(_compute_gsea, adaptor, body, settings)
+
+
+def _gsea_ranking(adaptor, body: GseaRequest) -> gsea.Ranking:
+    if body.genes and body.group:
+        raise HTTPException(status_code=400, detail="Send a DE result's genes or a marker group, not both.")
+    try:
+        if body.genes:
+            return gsea.ranking_from_de(
+                [g.model_dump() for g in body.genes],
+                rank_by=body.rank_by, exclude_ribo_mito=body.exclude_ribo_mito,
+            )
+        if not body.group:
+            raise HTTPException(status_code=400, detail="Send a DE result's genes or a marker group.")
+        key = resolve_markers_key(adaptor.adata.uns, body.column)
+        if key is None:
+            raise HTTPException(status_code=404, detail=f"No marker genes for column '{body.column}'.")
+        return gsea.ranking_from_markers(
+            adaptor.adata.uns[key], body.group, exclude_ribo_mito=body.exclude_ribo_mito
+        )
+    except gsea.GseaError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _collections_fingerprint(collections: list[str], store) -> list[str]:
+    """Collection ids for the cache key; a custom collection can be edited, so its
+    current contents count too (MSigDB files are versioned and fixed)."""
+    out = []
+    for cid in collections:
+        if is_custom_id(cid):
+            sets = store.get_sets(cid) if store else None
+            blob = json.dumps(sets, sort_keys=True, default=str).encode()
+            cid = f"{cid}:{hashlib.sha256(blob).hexdigest()[:16]}"
+        out.append(cid)
+    return out
+
+
+def _compute_gsea(adaptor, body: GseaRequest, settings: Settings) -> GseaResponse:
+    loader = get_msigdb_loader(settings.MSIGDB_DIR)
+    store = get_custom_store(settings.DATA_DIR)
+    if loader is None and not any(is_custom_id(c) for c in body.collections):
+        raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
+    ranking = _gsea_ranking(adaptor, body)
+
+    params = {
+        "min_size": body.min_size, "max_size": body.max_size,
+        "permutations": body.permutations, "seed": body.seed,
+    }
+    key = gsea.cache_key(ranking, _collections_fingerprint(body.collections, store), params)
+    run = gsea.cached(key)
+    hit = run is not None
+    if run is None:
+        resolved = resolve_gene_sets(body.collections, loader, store)
+        if resolved.missing_custom:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A selected custom collection no longer exists (it was deleted): "
+                    f"{', '.join(resolved.missing_custom)}. Deselect it and run again."
+                ),
+            )
+        if not resolved.gene_sets:
+            raise HTTPException(status_code=400, detail="No gene sets found for the selected collections.")
+        sets = match_query_case(resolved, ranking.genes, ranking.genes)
+        try:
+            run = gsea.run_prerank(
+                ranking, sets, min_size=body.min_size, max_size=body.max_size,
+                permutations=body.permutations, seed=body.seed,
+            )
+        except gsea.GseaError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except ImportError:
+            raise HTTPException(status_code=500, detail="gseapy is required for GSEA.")
+        except Exception as e:
+            logger.error("GSEA failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"GSEA failed: {e!s}")
+        tag_records(run.up + run.down, resolved)
+        gsea.remember(key, run)
+        logger.info(
+            "GSEA: %d genes, %d sets, %d permutations in %.1f s",
+            len(ranking.genes), run.n_sets, run.permutations, run.seconds,
+        )
+
+    def side(records: list[dict]) -> GseaSide:
+        top = records[: body.max_terms]
+        return GseaSide(
+            n_terms=len(records),
+            n_significant=sum(r["fdr"] < gsea.SIGNIFICANT_FDR for r in records),
+            results=[GseaTerm(**r) for r in label_records(top, store)],
+        )
+
+    return GseaResponse(
+        rank_metric=ranking.metric,
+        rank_metric_label=gsea.RANK_LABELS[ranking.metric],
+        n_genes_ranked=len(ranking.genes),
+        n_excluded_ribo_mito=ranking.n_excluded_ribo_mito,
+        n_sets_tested=run.n_sets,
+        permutations=run.permutations,
+        min_size=body.min_size,
+        max_size=body.max_size,
+        collections=list(body.collections),
+        exclude_ribo_mito=body.exclude_ribo_mito,
+        up=side(run.up),
+        down=side(run.down),
+        seconds=0.0 if hit else round(run.seconds, 2),
+        cached=hit,
+        column=body.column if body.group else "",
+        group=body.group,
         warning=human_genesets_warning(detect_species(adaptor.adata)),
     )
 

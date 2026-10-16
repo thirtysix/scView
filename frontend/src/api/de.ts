@@ -5,6 +5,8 @@ export interface DEGene {
   logfoldchange: number;
   pval: number;
   pval_adj: number;
+  /** Wilcoxon only: the test's z-score, which GSEA ranks by. */
+  score?: number | null;
 }
 
 export interface DEResponse {
