@@ -5,10 +5,12 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { computeDE, computeDECompare, type DEResponse } from "@/api/de";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { downloadCsv } from "@/lib/csv";
+import { replicateColumns, suggestReplicateColumn } from "@/lib/de";
 import { formatPValue, prettyObsLabel } from "@/lib/formatting";
 import type { ObsColumnInfo } from "@/api/types";
 
 type Mode = "selection" | "groups";
+type Test = "wilcoxon" | "pseudobulk";
 
 /** Categorical columns with listed values, usable as a group picker. */
 function groupColumns(cols: ObsColumnInfo[] | undefined, maxLevels: number): ObsColumnInfo[] {
@@ -59,6 +61,19 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
   const [groupB, setGroupB] = useState("");
   const [withinCol, setWithinCol] = useState("");
   const [withinVal, setWithinVal] = useState("");
+  const [test, setTest] = useState<Test>("wilcoxon");
+  const [replicateKey, setReplicateKey] = useState("");
+
+  const donorCols = useMemo(
+    () => replicateColumns(dataset?.obs_columns, [splitBy, withinCol]),
+    [dataset, splitBy, withinCol],
+  );
+  // Keep a valid donor column picked, pre-selecting the most donor-like name.
+  useEffect(() => {
+    if (!donorCols.some((c) => c.name === replicateKey)) {
+      setReplicateKey(suggestReplicateColumn(donorCols));
+    }
+  }, [donorCols, replicateKey]);
 
   const splitValues = splitCols.find((c) => c.name === splitBy)?.values ?? [];
   const withinValues = withinCols.find((c) => c.name === withinCol)?.values ?? [];
@@ -115,6 +130,7 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
         group_a: groupA,
         group_b: groupB,
         ...(scoped ? { within_column: withinCol, within_value: withinVal } : {}),
+        ...(test === "pseudobulk" ? { method: "pseudobulk", replicate_key: replicateKey } : {}),
       });
       setResult(res);
       setRefLabel(groupB);
@@ -123,7 +139,7 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal]);
+  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey]);
 
   // Significant genes, most significant first, for the table.
   const sigGenes = useMemo(() => {
@@ -136,7 +152,7 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
   const exportCSV = useCallback(() => {
     if (!result) return;
     downloadCsv(
-      `de_${result.label}_${datasetId}.csv`,
+      `de_${result.method === "pseudobulk" ? "pseudobulk_" : ""}${result.label}_${datasetId}.csv`,
       ["gene", "log2_fold_change", "p_value", "p_value_adjusted"],
       result.genes.map((g) => [
         g.gene,
@@ -250,13 +266,65 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
                   </select>
                 )}
               </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-12 font-medium text-slate-500">Test</span>
+                <div className="flex min-w-0 flex-1 rounded border border-slate-300 bg-white p-0.5">
+                  {(
+                    [
+                      ["wilcoxon", "Cell-level (Wilcoxon)"],
+                      ["pseudobulk", "Pseudobulk (donor-aware)"],
+                    ] as const
+                  ).map(([t, label]) => (
+                    <button
+                      key={t}
+                      onClick={() => setTest(t)}
+                      className={`flex-1 truncate rounded px-1.5 py-0.5 transition ${
+                        test === t ? "bg-slate-200 font-medium text-slate-800" : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {test === "pseudobulk" && (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-12 font-medium text-slate-500">Donor</span>
+                    <select
+                      value={replicateKey}
+                      onChange={(e) => setReplicateKey(e.target.value)}
+                      className={selectCls}
+                    >
+                      {!replicateKey && <option value="">Pick the donor / sample column</option>}
+                      {donorCols.map((c) => (
+                        <option key={c.name} value={c.name}>
+                          {prettyObsLabel(c.name)} ({c.n_unique})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <p className="text-[10px] leading-snug text-slate-500">
+                    Sums each donor&apos;s raw counts per group and tests donors, not cells, with
+                    DESeq2, so p-values allow for donor-to-donor variation. Needs raw counts and at
+                    least 2 donors per group with 10+ cells each.
+                    {loading && " Fitting one model per gene can take up to a minute."}
+                  </p>
+                </>
+              )}
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-500">
                   Up = higher in <span className="font-semibold text-slate-700">{groupA}</span>
                 </span>
                 <button
                   onClick={runCompare}
-                  disabled={loading || !groupA || !groupB || groupA === groupB}
+                  disabled={
+                    loading ||
+                    !groupA ||
+                    !groupB ||
+                    groupA === groupB ||
+                    (test === "pseudobulk" && !replicateKey)
+                  }
                   className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
                 >
                   {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <FlaskConical className="h-3 w-3" />}
@@ -328,7 +396,17 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
             {result.label} (n={result.n_selected.toLocaleString()}) vs {refLabel} (n=
             {result.n_rest.toLocaleString()}) · {sigGenes.length.toLocaleString()} significant of{" "}
             {result.genes.length.toLocaleString()} genes · click a point or row to overlay it
-            {refLabel !== "rest" && (
+            {result.method === "pseudobulk" ? (
+              <span className="mt-0.5 block">
+                Pseudobulk DESeq2 (Wald test, design <code>{result.design}</code>): donors (
+                <code>{result.replicate_key}</code>) {result.label.split(" (")[0]}{" "}
+                {result.n_samples_a}, {refLabel} {result.n_samples_b}; counts summed from{" "}
+                <code>{result.counts_source}</code>; {result.n_genes_tested?.toLocaleString()} genes
+                tested.
+                {(result.dropped_samples?.length ?? 0) > 0 &&
+                  ` Left out (under 10 cells): ${result.dropped_samples!.join(", ")}.`}
+              </span>
+            ) : refLabel !== "rest" && (
               <span
                 className={`mt-0.5 block ${
                   result.underreplicated
@@ -337,7 +415,8 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
                 }`}
               >
                 Cell-level Wilcoxon: cells are treated as independent, so p-values are optimistic
-                when the groups also differ by donor or sample.
+                when the groups also differ by donor or sample (the pseudobulk test allows for
+                donors).
                 {result.replicate_key ? (
                   <>
                     {" "}
