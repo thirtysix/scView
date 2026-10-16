@@ -469,6 +469,17 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
                 )}
               </span>
             )}
+            {result.confounding && (
+              <span
+                role="alert"
+                className="mt-1 block rounded border border-red-200 bg-red-50 px-1.5 py-1 text-red-800"
+              >
+                Batch and comparison coincide: {result.confounding.message} Read these genes as
+                &ldquo;{result.label.split(" (")[0]} vs {refLabel}, batch included&rdquo;, not as a
+                pure {result.confounding.condition === result.confounding.batch
+                  ? "biological" : `'${result.confounding.condition}'`} effect.
+              </span>
+            )}
           </div>
 
           {/* Volcano */}

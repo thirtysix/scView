@@ -286,6 +286,7 @@ export function JointEmbedding() {
               )}
               {m?.reconciliation?.message && <WarnLine text={m.reconciliation.message} />}
               {m?.warnings.map((w) => <WarnLine key={w} text={w} />)}
+              {plan.notes?.map((n) => <WarnLine key={n} text={n} />)}
               {plan.shared_columns.length > 0 && (
                 <p className="text-xs text-slate-500">
                   Annotations in every dataset (comparable across them):{" "}

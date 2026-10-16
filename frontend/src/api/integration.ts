@@ -27,6 +27,8 @@ export interface IntegrationPlan {
   shared_columns: string[];
   est_cells: number;
   blocking: string[];
+  /** Design notes that don't block (e.g. each dataset holds one condition). */
+  notes?: string[];
   ok: boolean;
 }
 

@@ -64,6 +64,12 @@ const num = (n: number | null | undefined) => (n ?? 0).toLocaleString("en-US");
 
 /** One-line description of the comparison and the test behind it. */
 export function describeComparison(c: DEComparison, r: DEResponse): string {
+  const base = describeTest(c, r);
+  // The co-pilot must not read a batch difference as biology.
+  return r.confounding ? `${base}. Caution: ${r.confounding.message}` : base;
+}
+
+function describeTest(c: DEComparison, r: DEResponse): string {
   const where = c.scope ? ` within ${c.scope}` : "";
   const cells = `${num(r.n_selected)} vs ${num(r.n_rest)} cells`;
   if (r.method === "pseudobulk") {

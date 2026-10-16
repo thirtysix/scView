@@ -27,6 +27,15 @@ export interface DEResponse {
   design?: string | null;
   counts_source?: string | null;
   dropped_samples?: string[];
+  /** /de/compare: the two sides are also different batches (datasets, runs). */
+  confounding?: DEConfounding | null;
+}
+
+export interface DEConfounding {
+  batch: string;
+  condition: string;
+  kind: "confounded" | "nested";
+  message: string;
 }
 
 /**

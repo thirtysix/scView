@@ -232,6 +232,8 @@ class IntegrationPlan(BaseModel):
     shared_columns: list[str] = Field(default_factory=list)
     est_cells: int = 0
     blocking: list[str] = Field(default_factory=list)
+    # Design notes (not blocking): e.g. each dataset holds one condition.
+    notes: list[str] = Field(default_factory=list)
     ok: bool = False
 
 
@@ -317,8 +319,36 @@ def build_plan(
         if genes == 0:
             blocking.append("These datasets share no genes, so they can't be embedded together.")
 
+    if len(units) >= 2:
+        plan.notes = confounding_notes(units)
     plan.ok = not blocking
     return plan
+
+
+def confounding_notes(units: dict[str, "Unit"]) -> list[str]:
+    """When each dataset holds one condition, joining them corrects the condition
+    away with the datasets: say so before the user reads the mixing as success."""
+    import pandas as pd
+
+    from scview.core.confounding import check, condition_columns
+
+    frames = [u.adata.obs.assign(**{"__dataset": lab}) for lab, u in units.items()]
+    shared = set.intersection(*(set(f.columns) for f in frames))
+    obs = pd.concat([f[sorted(shared)] for f in frames], ignore_index=True)
+    notes = []
+    for cond in condition_columns(obs):
+        hit = check(obs, "__dataset", cond)
+        if hit is None:
+            continue
+        shape = "one" if hit.kind == "confounded" else "a single"
+        notes.append(
+            f"Each dataset holds {shape} '{cond}' group, so Harmony removes the '{cond}' difference "
+            "from the joint embedding along with the dataset difference: a high mixing score is "
+            f"expected, and cells of different '{cond}' groups can share clusters. Expression "
+            f"values are not corrected, so DE between '{cond}' groups within a cell type still "
+            "works (use pseudobulk across donors)."
+        )
+    return notes[:2]
 
 
 # ---------------------------------------------------------------------------

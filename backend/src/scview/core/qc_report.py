@@ -33,6 +33,7 @@ from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
 from scview.core.assistant import DEEPINFRA_BASE_URL, DEFAULT_MODEL, ChatSource
 from scview.core.llm import chat_extra
+from scview.core.confounding import BATCH_RE, CONDITION_RE, in_design
 from scview.core.pseudobulk import MIN_CELLS_PER_SAMPLE, MIN_REPLICATES
 
 logger = logging.getLogger(__name__)
@@ -41,11 +42,8 @@ PROMPT_VERSION = "1"  # part of the cache key: bump when the prompt changes
 SECTIONS = ("Overview", "Quality", "Concerns", "Suggested next steps")
 _MAX_ITEMS = 6
 
-_CONDITION_RE = re.compile(
-    r"condition|stim|treat|disease|status|genotype|timepoint|time_point|infect|perturb|group",
-    re.I,
-)
-_BATCH_RE = re.compile(r"batch|library|lane|plate|chip|^dataset$|^run$|seq_?run", re.I)
+_CONDITION_RE = CONDITION_RE
+_BATCH_RE = BATCH_RE
 _SKIP_RE = re.compile(r"cell_?type|celltypeanno|leiden|louvain|cluster|phase|doublet", re.I)
 
 
@@ -263,6 +261,15 @@ def build_facts(adaptor) -> QCFacts:
             concern("qc:design", f"No donor/sample column was found, so replicates per '{c}' "
                                  "group are unknown and cell-level DE p-values between them "
                                  "will be optimistic.")
+    for hit in in_design(adata)[:2]:
+        concern("qc:design", hit.message)
+        if hit.role == "correction":
+            step("qc:design", f"Re-run batch correction with a technical batch column (sequencing "
+                              f"run, library, sample) instead of '{hit.batch}', or none.")
+        elif hit.kind == "confounded":
+            step("qc:design", f"Treat '{hit.condition}' comparisons as exploratory: with each "
+                              f"'{hit.batch}' holding one '{hit.condition}', no analysis can "
+                              "separate the two.")
     if batches and not state.batch_correction.done:
         b = batches[0]
         step("qc:design", f"If cells separate by '{b}' rather than biology on the UMAP, run "

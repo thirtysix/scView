@@ -110,3 +110,17 @@ describe("DE co-pilot questions", () => {
     );
   });
 });
+
+describe("describeComparison with confounding", () => {
+  it("passes the batch warning to the co-pilot", () => {
+    const r = {
+      n_selected: 100, n_rest: 120, label: "STIM", genes: [], method: "wilcoxon" as const,
+      confounding: {
+        batch: "dataset", condition: "dataset", kind: "confounded" as const,
+        message: "The two sides are different 'dataset' groups, i.e. different batches.",
+      },
+    };
+    const text = describeComparison({ a: "STIM", b: "CTRL", betweenGroups: true }, r);
+    expect(text).toContain("Caution: The two sides are different 'dataset' groups");
+  });
+});
