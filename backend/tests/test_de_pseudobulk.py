@@ -163,3 +163,22 @@ def test_gene_filter_needs_counts_in_enough_samples():
     # Gene 1 has >=10 counts in 2 samples; gene 2 in 2 as well; gene 0 in all 4.
     assert list(pseudobulk._filter_genes(P, 2)) == [0, 1, 2]
     assert list(pseudobulk._filter_genes(P, 3)) == [0]
+
+
+def test_detect_replicate_key_skips_a_sample_column_that_is_the_condition():
+    # Kang's layout: orig_ident (first in obs) is CTRL/STIM, Donor holds the people.
+    import pandas as pd
+
+    obs = pd.DataFrame({
+        "orig_ident": ["CTRL"] * 4 + ["STIM"] * 4,
+        "stim": ["CTRL"] * 4 + ["STIM"] * 4,
+        "Donor": ["d1", "d2", "d3", "d4"] * 2,
+    })
+    a = (obs["stim"] == "STIM").to_numpy()
+    b = (obs["stim"] == "CTRL").to_numpy()
+    assert _detect_replicate_key(obs, {"stim"}) == "Donor"
+    assert _detect_replicate_key(obs, {"stim"}, a, b) == "Donor"
+    # A better-named column with one donor per side loses to one with two per side.
+    obs2 = obs.assign(Donor=["d1"] * 4 + ["d2"] * 4, sample=["s1", "s2"] * 4)
+    assert _detect_replicate_key(obs2, {"stim"}) == "Donor"
+    assert _detect_replicate_key(obs2, {"stim"}, a, b) == "sample"

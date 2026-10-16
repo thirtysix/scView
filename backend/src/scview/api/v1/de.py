@@ -77,19 +77,37 @@ class DEResponse(BaseModel):
     dropped_samples: list[str] = []
 
 
-_DONOR_COL_RE = re.compile(
-    r"donor|patient|individual|subject|sample|participant|replicate|^ind$|orig[._]ident", re.I
-)
+# Most specific first, as in the frontend's lib/de.ts: a donor column beats a
+# per-sample one, which often just encodes the condition (Kang's orig_ident is
+# CTRL/STIM while Donor holds the 8 people).
+_DONOR_COL_PATTERNS = [
+    re.compile(p, re.I)
+    for p in (
+        r"donor", r"patient", r"individual", r"^ind$", r"subject",
+        r"participant", r"replicate", r"sample", r"orig[._]ident",
+    )
+]
 
 
-def _detect_replicate_key(obs, exclude: set[str]) -> str | None:
-    """First donor/patient/sample-like obs column (not one used to split/scope)."""
-    for col in obs.columns:
-        if col in exclude or not _DONOR_COL_RE.search(str(col)):
-            continue
-        if obs[col].nunique(dropna=True) > 1:
-            return str(col)
-    return None
+def _detect_replicate_key(obs, exclude: set[str], mask_a=None, mask_b=None) -> str | None:
+    """The most donor-like obs column (not one used to split/scope).
+
+    With the two groups' masks, a column with at least 2 donors in each group
+    wins over a better-named one that has fewer, so a sample column that only
+    repeats the condition isn't reported as the donors."""
+    candidates: list[str] = []
+    for pattern in _DONOR_COL_PATTERNS:
+        for col in obs.columns:
+            name = str(col)
+            if name in exclude or name in candidates or not pattern.search(name):
+                continue
+            if obs[col].nunique(dropna=True) > 1:
+                candidates.append(name)
+    if mask_a is not None and mask_b is not None:
+        for name in candidates:
+            if obs[name][mask_a].nunique() >= 2 and obs[name][mask_b].nunique() >= 2:
+                return name
+    return candidates[0] if candidates else None
 
 
 def _donor_stats(donors) -> tuple[int, float]:
@@ -248,7 +266,7 @@ async def differential_expression_compare(
     genes = _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id)
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
     key = body.replicate_key or _detect_replicate_key(
-        obs, {c for c in (body.split_by, body.within_column) if c}
+        obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes, **guard)
@@ -259,7 +277,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
     from scview.core.pseudobulk import PseudobulkError, pseudobulk_de
 
     key = body.replicate_key or _detect_replicate_key(
-        adata.obs, {c for c in (body.split_by, body.within_column) if c}
+        adata.obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     if not key:
         raise HTTPException(
