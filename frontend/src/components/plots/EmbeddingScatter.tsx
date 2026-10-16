@@ -8,6 +8,8 @@ import { RotateCcw, AlertTriangle, ImageDown } from "lucide-react";
 import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
 import { exportFilename } from "@/lib/exportFilename";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { colorByLine } from "@/lib/hoverInfo";
+import { HoverLineRow } from "@/components/plots/HoverLineRow";
 
 interface EmbeddingScatterProps {
   positions: Float32Array | null;
@@ -40,6 +42,10 @@ interface EmbeddingScatterProps {
   exportLegend?: ScatterLegend | null;
   /** Plot part of the PNG's filename (scview_<dataset>_<exportName>.png) */
   exportName?: string;
+  /** What the points are coloured by (gene, score, column), for the built-in tooltip */
+  colorLabel?: string;
+  /** Category names in code order (categorical colouring), for the built-in tooltip */
+  categories?: readonly string[] | null;
 }
 
 /**
@@ -148,6 +154,8 @@ export function EmbeddingScatter({
   externalViewState = null,
   exportLegend = null,
   exportName = "embedding",
+  colorLabel = "Value",
+  categories = null,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<DeckGLRef>(null);
@@ -608,21 +616,27 @@ export function EmbeddingScatter({
       )}
 
       {/* Tooltip — suppressed when parent provides onHover (custom tooltip) */}
-      {!minimal && tooltip && !onHover && (
-        <div
-          className="pointer-events-none absolute z-20 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs shadow-lg"
-          style={{ left: tooltip.x + 12, top: tooltip.y - 12 }}
-        >
-          <div className="font-medium text-slate-700">
-            Cell {tooltip.index.toLocaleString()}
-          </div>
-          {colorValues && (
-            <div className="text-slate-500">
-              value: {colorValues[tooltip.index]?.toFixed?.(3) ?? colorValues[tooltip.index]}
+      {!minimal && tooltip && !onHover && (() => {
+        const line = colorByLine({
+          label: colorLabel,
+          values: colorValues,
+          index: tooltip.index,
+          type: colorType,
+          categories,
+          colorOf: (code) => mapCategoryToColor(code, categoricalPalette).slice(0, 3) as [number, number, number],
+        });
+        return (
+          <div
+            className="pointer-events-none absolute z-20 max-w-xs rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs shadow-lg"
+            style={{ left: tooltip.x + 12, top: tooltip.y - 12 }}
+          >
+            {line && <HoverLineRow line={line} />}
+            <div className={line ? "text-[11px] text-slate-400" : "font-medium text-slate-700"}>
+              Cell {tooltip.index.toLocaleString()}
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

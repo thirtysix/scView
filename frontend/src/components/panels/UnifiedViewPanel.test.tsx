@@ -1,0 +1,141 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { DatasetInfo } from "@/api/types";
+import { useDatasetStore } from "@/stores/datasetStore";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
+import { useSplitViewStore } from "@/stores/splitViewStore";
+
+// The panel's scatter, data hook and side panels are stubbed: these tests look
+// at what the panel itself draws over the plot (tooltip) and hands the scatter.
+const { embedding, scatterProps, apiFetch, stub } = vi.hoisted(() => ({
+  stub: (name: string) => () => ({ [name]: () => null }),
+  embedding: {
+    current: {
+      positions: null as Float32Array | null,
+      colors: null as Float32Array | Int32Array | null,
+      numCells: 0,
+      colorColumnName: null as string | null,
+      dimensions: 2 as 2 | 3,
+      isLoading: false,
+      error: null as string | null,
+    },
+  },
+  scatterProps: { current: null as Record<string, unknown> | null },
+  apiFetch: vi.fn(),
+}));
+vi.mock("@/hooks/useEmbedding", () => ({ useEmbedding: () => embedding.current }));
+vi.mock("@/components/plots/EmbeddingScatter", () => ({
+  EmbeddingScatter: (props: Record<string, unknown>) => {
+    scatterProps.current = props;
+    return <div data-testid="scatter" />;
+  },
+}));
+vi.mock("@/api/client", () => ({ apiFetch, apiFetchBinary: vi.fn() }));
+vi.mock("@/components/unified/UnifiedToolbar", stub("UnifiedToolbar"));
+vi.mock("@/components/unified/UnifiedBottomPanel", stub("UnifiedBottomPanel"));
+vi.mock("@/components/unified/UnifiedMarkersSubtab", stub("UnifiedMarkersSubtab"));
+vi.mock("@/components/unified/UnifiedExpressionSubtab", stub("UnifiedExpressionSubtab"));
+vi.mock("@/components/unified/UnifiedGeneSetsSubtab", stub("UnifiedGeneSetsSubtab"));
+vi.mock("@/components/unified/UnifiedEnrichmentSubtab", stub("UnifiedEnrichmentSubtab"));
+vi.mock("@/components/unified/UnifiedDESubtab", stub("UnifiedDESubtab"));
+vi.mock("@/components/unified/ClusterReference", stub("ClusterReference"));
+vi.mock("@/components/unified/SplitScatterGrid", stub("SplitScatterGrid"));
+vi.mock("@/components/plots/LassoSelector", stub("LassoSelector"));
+
+import { UnifiedViewPanel } from "./UnifiedViewPanel";
+
+const DATASET: DatasetInfo = {
+  id: "kang",
+  name: "Kang",
+  filename: "kang.h5ad",
+  n_cells: 3,
+  n_genes: 10,
+  status: "ready",
+  available_embeddings: ["X_umap"],
+  obs_columns: [
+    { name: "cell_type", dtype: "category", n_unique: 2, values: ["B", "NK"] },
+    { name: "n_genes", dtype: "int64", n_unique: 3 },
+  ],
+  created_at: "",
+};
+
+const renderPanel = () =>
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <UnifiedViewPanel />
+    </QueryClientProvider>,
+  );
+
+const hover = (index: number) =>
+  act(() => (scatterProps.current!.onHover as (i: unknown) => void)({ index, x: 10, y: 10 }));
+
+beforeEach(() => {
+  useDatasetStore.setState({ currentDataset: DATASET, currentDatasetId: "kang" });
+  useSettingsStore.setState({ colorBy: "cell_type", embedding: "X_umap" });
+  useUnifiedViewStore.getState().clearOverlayState();
+  useSplitViewStore.setState({ splitBy: null });
+  embedding.current = {
+    positions: Float32Array.from([0, 0, 1, 1, 2, 2]),
+    colors: Int32Array.from([0, 1, 1]),
+    numCells: 3,
+    colorColumnName: "cell_type",
+    dimensions: 2,
+    isLoading: false,
+    error: null,
+  };
+  apiFetch.mockReset();
+  apiFetch.mockResolvedValue({ cell_type: "NK", n_genes: 812, sample: "ctrl" });
+});
+
+describe("Unified View hover tooltip", () => {
+  it("leads with the colour-by column and the cell's category, then the rest of its metadata", async () => {
+    renderPanel();
+    hover(2);
+    const line = screen.getByTestId("hover-colour-line");
+    expect(line).toHaveTextContent("cell_type:NK");
+    expect(line.querySelector("span[aria-hidden]")).not.toBeNull();
+    // The metadata arrives later; the colour-by column is not listed twice.
+    await screen.findByText("sample:");
+    const tooltip = line.closest("div.absolute")! as HTMLElement;
+    const listed = Array.from(tooltip.querySelectorAll("dt")).map((dt) => dt.textContent);
+    expect(listed).toEqual(["n_genes:", "sample:"]);
+  });
+
+  it("shows the numeric value when coloured by a numeric column", () => {
+    useSettingsStore.setState({ colorBy: "n_genes" });
+    embedding.current = {
+      ...embedding.current,
+      colors: Float32Array.from([500, 812, 1200]),
+      colorColumnName: "n_genes",
+    };
+    renderPanel();
+    hover(1);
+    expect(screen.getByTestId("hover-colour-line")).toHaveTextContent("n_genes:812");
+  });
+
+  it("shows the gene and its expression while a gene overlay is on", () => {
+    useUnifiedViewStore.setState({
+      scatterOverlay: { type: "expression", gene: "CD3E" },
+      overlayValues: Float32Array.from([0, 0.25, 2.5]),
+      overlayLabel: "CD3E",
+      overlayDatasetId: "kang",
+    });
+    renderPanel();
+    hover(2);
+    expect(screen.getByTestId("hover-colour-line")).toHaveTextContent("CD3E expression:2.500");
+  });
+
+  it("shows the gene-set score while a score overlay is on", () => {
+    useUnifiedViewStore.setState({
+      scatterOverlay: { type: "score", name: "IFN" },
+      overlayValues: Float32Array.from([0.1, 0.2, 0.3]),
+      overlayLabel: "IFN",
+      overlayDatasetId: "kang",
+    });
+    renderPanel();
+    hover(0);
+    expect(screen.getByTestId("hover-colour-line")).toHaveTextContent("IFN score:0.100");
+  });
+});

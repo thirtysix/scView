@@ -456,6 +456,7 @@ export function TrajectoryPanel() {
                 background={plotBackground}
                 maxRenderedCells={maxRenderedCells}
                 exportName={`pseudotime_${selectedColumn}`}
+                colorLabel={prettyObsLabel(selectedColumn) || "Pseudotime"}
                 exportLegend={
                   pseudotimeValues ? { type: "continuous", title: selectedColumn, ...pseudotimeMinMax } : null
                 }

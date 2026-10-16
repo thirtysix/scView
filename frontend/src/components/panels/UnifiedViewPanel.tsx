@@ -21,6 +21,10 @@ import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import type { ScatterLegend } from "@/lib/scatterExport";
 import { mapCategoryToColor } from "@/lib/colors";
+import { isCategoricalDtype } from "@/lib/obsColumns";
+import { colorByLine, type HoverLine } from "@/lib/hoverInfo";
+import { HoverLineRow } from "@/components/plots/HoverLineRow";
+import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
@@ -455,6 +459,35 @@ export function UnifiedViewPanel() {
     return () => { if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current); };
   }, []);
 
+  // The tooltip's first line: what the plot is coloured by, and the cell's value
+  // (from the arrays the plot draws, so it needs no request). The column is the
+  // one the colour buffer belongs to, which lags colorBy while a new one loads.
+  const colorColumnInfo = useMemo(
+    () => dataset?.obs_columns.find((c) => c.name === colorColumnName) ?? null,
+    [dataset, colorColumnName],
+  );
+  const colorOfCategory = useCategoryColors(colorColumnName);
+  const hoverColorLine = (index: number, metadata: Record<string, unknown> | null): HoverLine | null => {
+    if (scatterOverlay && overlayValues) {
+      return colorByLine({
+        label: `${overlayLabel} ${scatterOverlay.type === "expression" ? "expression" : "score"}`,
+        values: overlayValues,
+        index,
+        type: "continuous",
+      });
+    }
+    if (!colorColumnName || !colors) return null;
+    return colorByLine({
+      label: prettyObsLabel(colorColumnName),
+      values: colors,
+      index,
+      type: colorColumnInfo && !isCategoricalDtype(colorColumnInfo.dtype) ? "continuous" : "categorical",
+      categories: colorColumnInfo?.values,
+      colorOf: (_code, category) => colorOfCategory(category),
+      fallback: metadata?.[colorColumnName],
+    });
+  };
+
   // --- Legend click (category selection) ---
   const handleCategoryClick = useCallback(
     (cat: string) => {
@@ -731,13 +764,20 @@ export function UnifiedViewPanel() {
             </div>
             </div>
 
-            {/* Hover tooltip */}
-            {hoveredCell && (
+            {/* Hover tooltip: the colour-by value first, then the cell's metadata */}
+            {hoveredCell && (() => {
+              const colorLine = hoverColorLine(hoveredCell.index, hoveredCell.metadata);
+              return (
               <div
                 className="pointer-events-none absolute z-20 max-w-xs rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg"
                 style={{ left: hoveredCell.x + 14, top: hoveredCell.y - 14 }}
               >
-                <div className="mb-1 font-semibold text-slate-700">
+                {colorLine && (
+                  <div className="mb-1">
+                    <HoverLineRow line={colorLine} />
+                  </div>
+                )}
+                <div className={`mb-1 ${colorLine ? "text-[11px] text-slate-400" : "font-semibold text-slate-700"}`}>
                   Cell {hoveredCell.index.toLocaleString()}
                 </div>
                 {hoveredCell.metadata ? (() => {
@@ -746,7 +786,11 @@ export function UnifiedViewPanel() {
                     return k.startsWith("x_") ||
                       /^(umap|tsne|t-?sne|pca|phate|diffmap|draw_graph|harmony|pc)[-_]?\d*$/i.test(key);
                   };
-                  const entries = Object.entries(hoveredCell.metadata).filter(([key]) => !isEmbeddingCol(key));
+                  // The colour-by column is already the first line.
+                  const shown = colorLine && !(scatterOverlay && overlayValues) ? colorColumnName : null;
+                  const entries = Object.entries(hoveredCell.metadata).filter(
+                    ([key]) => !isEmbeddingCol(key) && key !== shown,
+                  );
                   return (
                     <dl className="space-y-0.5">
                       {entries.slice(0, 8).map(([key, val]) => (
@@ -766,7 +810,8 @@ export function UnifiedViewPanel() {
                   <div className="text-slate-400">Loading...</div>
                 )}
               </div>
-            )}
+              );
+            })()}
             </div>
           </div>
           {/* Distribution — matches the UMAP width; frees the right column to extend down */}
