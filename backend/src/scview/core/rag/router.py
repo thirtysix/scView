@@ -76,7 +76,7 @@ class RouteResult(BaseModel):  # kept for the corpora-level heuristic + tests
     reason: str
 
 
-DATA_FACETS = ("identity", "groups", "markers", "enrichment")
+DATA_FACETS = ("identity", "groups", "markers", "enrichment", "qc")
 
 _FACET_HINTS = {
     "identity": (
@@ -89,6 +89,10 @@ _FACET_HINTS = {
         "cluster", "donor", "condition", "sample", "group", "breakdown", "fraction",
     ),
     "enrichment": ("enrichment", "pathway", "gsea", "go term", "ontology"),
+    "qc": (
+        "quality", "qc", "mito", "doublet", "dying", "damaged", "ribosom", "outlier",
+        "stand out", "stands out", "artifact", "artefact",
+    ),
 }
 
 
@@ -165,9 +169,10 @@ cluster", "what steps ran?", "what paper/publication is THIS dataset from?").
 (e.g. "what marks pDCs?", "is the interferon signature linked to lupus?").
 Only include "tutorials"/"literature" when the question truly needs external \
 knowledge — those run expensive retrieval. When you include "data", also return \
-"data_facets": the MINIMAL subset of ["identity","groups","markers","enrichment"] \
+"data_facets": the MINIMAL subset of ["identity","groups","markers","enrichment","qc"] \
 the question needs (e.g. "what paper is this?" → ["identity"]; "what marks cluster \
-3?" → ["markers"]; leave empty only if truly everything is needed). Respond ONLY \
+3?" → ["markers"]; "which clusters look low quality?" → ["qc"]; leave empty only if \
+truly everything is needed). Respond ONLY \
 as JSON: {"sources": [...], "data_facets": [...], "reason": "..."}."""
 
 

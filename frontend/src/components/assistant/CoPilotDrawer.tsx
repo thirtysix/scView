@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { Sparkles, PanelRightClose } from "lucide-react";
 import { useViewStore } from "@/stores/viewStore";
 import { AssistantChat } from "@/components/assistant/AssistantChat";
+import { RagSourcesNote } from "@/components/assistant/RagSourcesNote";
 
 const MIN_WIDTH = 320;
 
@@ -81,10 +82,13 @@ export function CoPilotDrawer() {
           <div className="mx-auto h-full w-px bg-transparent transition-colors group-hover:bg-primary/40" />
         </div>
 
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-primary" />
-            <h2 className="text-sm font-semibold">AI Co-pilot</h2>
+        <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <h2 className="text-sm font-semibold">AI Co-pilot</h2>
+            </div>
+            {open && <RagSourcesNote />}
           </div>
           <button
             onClick={() => setOpen(false)}

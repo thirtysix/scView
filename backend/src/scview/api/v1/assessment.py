@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -14,6 +15,7 @@ from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing
+from scview.core import cluster_qc, qc_report
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
 from scview.core import provenance
@@ -67,6 +69,34 @@ async def get_assessment(
     except Exception as e:
         logger.error("Assessment failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assessment failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/cluster-qc
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/cluster-qc")
+async def get_cluster_qc(
+    dataset_id: str,
+    groupby: str | None = None,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Per-cluster QC (size, median genes/counts/% mito/% ribo, doublets) with
+    plain-language flags for clusters that stand out (deterministic, no LLM).
+    ``groupby`` defaults to the active clustering."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:
+        # Per-cell metrics may need a pass over the counts: keep it off the loop.
+        report = await asyncio.to_thread(cluster_qc.for_adaptor, adaptor, groupby)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Cluster QC failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Cluster QC failed: {e}")
+    return report.model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +318,89 @@ async def rerun_step(
     except Exception as e:
         logger.error("Re-run failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Re-run failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Narrative QC report ("Explain this data")
+# ---------------------------------------------------------------------------
+
+
+class QCReportRequest(BaseModel):
+    """Request body for the QC report endpoints."""
+    regenerate: bool = False  # skip the cached report and write a new one
+
+
+async def _qc_facts(dataset_id: str, dm: DatasetManager) -> qc_report.QCFacts:
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:
+        # Per-cell metrics may need a pass over the counts: keep it off the loop.
+        return await asyncio.to_thread(qc_report.build_facts, adaptor)
+    except Exception as e:
+        logger.error("QC facts failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"QC report failed: {e}")
+
+
+def _report_kwargs(dataset_id: str, dm: DatasetManager, settings: Settings) -> dict:
+    return dict(
+        api_key=settings.DEEPINFRA_API_KEY,
+        model=settings.RAG_CHAT_MODEL,
+        cache_file=qc_report.cache_path(dm.data_dir, dataset_id),
+    )
+
+
+@router.get("/datasets/{dataset_id}/qc-report")
+async def get_qc_report(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """The cached report for the dataset's current facts, or an empty report
+    with the facts. Never calls the LLM, so opening the tab costs nothing;
+    ``llm_available`` says whether a new report would be written or laid out."""
+    facts = await _qc_facts(dataset_id, dm)
+    return qc_report.cached_report(facts, **_report_kwargs(dataset_id, dm, settings)).model_dump()
+
+
+@router.post("/datasets/{dataset_id}/qc-report")
+async def post_qc_report(
+    dataset_id: str,
+    body: QCReportRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Write (or replay from the cache) the QC report in four fixed sections,
+    grounded only on the deterministic facts. Deterministic layout with no key."""
+    facts = await _qc_facts(dataset_id, dm)
+    report = await qc_report.build_report(
+        facts, regenerate=body.regenerate, **_report_kwargs(dataset_id, dm, settings)
+    )
+    return report.model_dump()
+
+
+@router.post("/datasets/{dataset_id}/qc-report-stream")
+async def stream_qc_report(
+    dataset_id: str,
+    body: QCReportRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Streaming variant (SSE): one ``facts`` event, ``delta`` text, then ``done``."""
+    facts = await _qc_facts(dataset_id, dm)
+
+    async def event_generator():
+        try:
+            async for ev in qc_report.report_events(
+                facts, regenerate=body.regenerate, **_report_kwargs(dataset_id, dm, settings)
+            ):
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as e:
+            logger.error("QC report stream failed for %s: %s", dataset_id, e, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

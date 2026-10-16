@@ -1,6 +1,7 @@
 import { Sparkles } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { AssistantChat } from "@/components/assistant/AssistantChat";
+import { RagSourcesNote } from "@/components/assistant/RagSourcesNote";
 
 export function AssistantPanel() {
   const datasetName = useDatasetStore((s) => s.currentDataset?.name);
@@ -15,6 +16,7 @@ export function AssistantPanel() {
             Grounded in {datasetName ?? "your dataset"}&apos;s analysis &amp; results, plus the
             methods/literature corpora — every answer cites its sources.
           </p>
+          <RagSourcesNote />
         </div>
       </div>
       <div className="min-h-0 flex-1">

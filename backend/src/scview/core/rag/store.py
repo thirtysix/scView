@@ -185,3 +185,24 @@ async def corpus_counts(dsn: str) -> dict[str, int]:
     async with pool.acquire() as conn:
         recs = await conn.fetch(f"SELECT corpus, count(*) AS n FROM {_TABLE} GROUP BY corpus;")
     return {r["corpus"]: int(r["n"]) for r in recs}
+
+
+async def corpus_stats(dsn: str) -> dict[str, dict[str, Any]]:
+    """Per corpus: chunks, distinct documents (papers / tutorial pages) and when the
+    newest chunk was first added. One read-only SELECT; nothing is written."""
+    pool = await get_pool(dsn)
+    async with pool.acquire() as conn:
+        recs = await conn.fetch(
+            f"SELECT corpus, count(*) AS chunks, count(DISTINCT doc_id) AS docs, "
+            f"max(created_at) AS last FROM {_TABLE} GROUP BY corpus;"
+        )
+    return {
+        r["corpus"]: {
+            "chunks": int(r["chunks"]),
+            "documents": int(r["docs"]),
+            # created_at is set on insert only, so a re-ingest that updates
+            # existing chunks doesn't move it.
+            "last_added": r["last"].isoformat() if r["last"] is not None else None,
+        }
+        for r in recs
+    }

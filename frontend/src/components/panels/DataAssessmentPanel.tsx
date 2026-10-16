@@ -7,6 +7,8 @@ import { apiFetch } from "@/api/client";
 import { getDataset } from "@/api/datasets";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
+import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
+import { QcReportCard } from "@/components/panels/QcReportCard";
 import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import {
   ClipboardCheck,
@@ -725,6 +727,9 @@ export function DataAssessmentPanel() {
             )}
           </div>
 
+          {/* "Explain this data": written QC report from the assessment facts */}
+          <QcReportCard datasetId={datasetId} refreshKey={qcRefreshKey} />
+
           {/* Cell-type annotation */}
           <AnnotationControl onAnnotate={annotate} running={running} />
 
@@ -1184,7 +1189,8 @@ export function DataAssessmentPanel() {
       )}
         </div>
         {/* Right: QC distributions */}
-        <div className="w-full flex-shrink-0 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
+        <div className="w-full flex-shrink-0 space-y-4 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
+          {datasetId && <ClusterQcTable datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <QcPlots datasetId={datasetId} refreshKey={qcRefreshKey} />}
         </div>
       </div>
