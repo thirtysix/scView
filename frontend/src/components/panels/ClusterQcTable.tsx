@@ -11,6 +11,7 @@ export const FLAG_LABELS: Record<ClusterFlag, string> = {
   high_mito: "High mito",
   low_genes: "Few genes",
   doublet_rich: "Doublet-rich",
+  stress_driven: "Stress-driven",
   small: "Very small",
 };
 
@@ -19,6 +20,7 @@ const FLAG_STYLES: Record<ClusterFlag, string> = {
   high_mito: "border-amber-200 bg-amber-50 text-amber-800",
   low_genes: "border-amber-200 bg-amber-50 text-amber-800",
   doublet_rich: "border-violet-200 bg-violet-50 text-violet-700",
+  stress_driven: "border-orange-200 bg-orange-50 text-orange-800",
   small: "border-slate-200 bg-slate-50 text-slate-600",
 };
 
@@ -153,6 +155,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                   {has("pct_ribo") && <th className="px-2 py-1 text-right font-medium" title="Median % ribosomal">Ribo</th>}
                   {has("doublet_fraction") && <th className="px-2 py-1 text-right font-medium" title="Share of predicted doublets">Doublets</th>}
                   {!has("doublet_fraction") && has("doublet_score") && <th className="px-2 py-1 text-right font-medium" title="Median doublet score">Dbl score</th>}
+                  {has("stress_score") && <th className="px-2 py-1 text-right font-medium" title="Median dissociation-stress score (immediate-early and heat-shock genes)">Stress</th>}
                   <th className="px-2 py-1 font-medium">Flags</th>
                 </tr>
               </thead>
@@ -166,6 +169,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                   {has("pct_ribo") && <td className="px-2 py-1 text-right">{fmt(data.typical.median_pct_ribo, "pct")}</td>}
                   {has("doublet_fraction") && <td className="px-2 py-1 text-right">{fmt(data.typical.doublet_fraction, "frac")}</td>}
                   {!has("doublet_fraction") && has("doublet_score") && <td className="px-2 py-1 text-right">{data.typical.median_doublet_score?.toFixed(2) ?? "—"}</td>}
+                  {has("stress_score") && <td className="px-2 py-1 text-right">{data.typical.median_stress_score?.toFixed(2) ?? "—"}</td>}
                   <td className="px-2 py-1" />
                 </tr>
                 {data.clusters.map((c) => (
@@ -190,6 +194,14 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                     {has("pct_ribo") && <td className="px-2 py-1 text-right tabular-nums">{fmt(c.median_pct_ribo, "pct")}</td>}
                     {has("doublet_fraction") && <td className="px-2 py-1 text-right tabular-nums">{fmt(c.doublet_fraction, "frac")}</td>}
                     {!has("doublet_fraction") && has("doublet_score") && <td className="px-2 py-1 text-right tabular-nums">{c.median_doublet_score?.toFixed(2) ?? "—"}</td>}
+                    {has("stress_score") && (
+                      <td
+                        className="px-2 py-1 text-right tabular-nums"
+                        title={c.stress_markers?.length ? `Stress genes among its top markers: ${c.stress_markers.join(", ")}` : undefined}
+                      >
+                        {c.median_stress_score?.toFixed(2) ?? "—"}
+                      </td>
+                    )}
                     <td className="px-2 py-1">
                       <div className="flex flex-wrap items-center gap-1">
                         {c.flags.map((f, i) => (

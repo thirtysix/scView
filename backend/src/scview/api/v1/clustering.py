@@ -17,6 +17,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from scview.core import resolution_sweep as rs
+from scview.core import subcluster as sc_sub
+from scview.core.confounding import recorded_batch_key
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
 from scview.dependencies import get_dataset_manager
@@ -41,6 +43,12 @@ class SweepRequest(BaseModel):
 class KeepRequest(BaseModel):
     resolution: float
     method: str | None = None
+
+
+class SubclusterRequest(BaseModel):
+    column: str
+    group: str
+    resolution: float = sc_sub.DEFAULT_RESOLUTION
 
 
 def _method(adata, requested: str | None) -> str:
@@ -179,5 +187,43 @@ async def keep_resolution(
             await dm.load_dataset(dataset_id)
         else:
             # The cached dataset is the edited one and now matches the file.
+            dm.saved_in_place(dataset_id, adaptor, output_path)
+        return result
+
+
+@router.post("/datasets/{dataset_id}/clustering/subcluster")
+async def subcluster_group(
+    dataset_id: str,
+    body: SubclusterRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Split one group of a column into sub-clusters on its own graph, saved as
+    ``<column>_sub`` (core/subcluster.py)."""
+    async with dataset_lock(dataset_id):
+        adaptor = await _adata(dm, dataset_id)
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = getattr(adaptor.adata, "isbacked", False)
+
+        def _run():
+            work = adaptor.adata.to_memory() if backed else adaptor.adata
+            before = uns_snapshot(work)
+            result = sc_sub.subcluster(work, body.column, body.group, body.resolution,
+                                       batch_key=recorded_batch_key(work))
+            write_derived(work, output_path, adaptor.h5ad_path, before)
+            return result
+
+        try:
+            # HVG + PCA + graph + Leiden on the group: seconds, so in a worker thread.
+            result = await asyncio.to_thread(_run)
+        except sc_sub.SubclusterError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))  # raised before any change
+        except Exception as exc:
+            dm.evict(dataset_id)  # the cached copy may hold a column that was never saved
+            logger.error("Sub-clustering failed for %s: %s", dataset_id, exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Sub-clustering failed: {exc!s}")
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
             dm.saved_in_place(dataset_id, adaptor, output_path)
         return result

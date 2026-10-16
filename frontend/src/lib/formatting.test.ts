@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   formatNumber,
   formatPValue,
+  formatFoldChange,
   prettyObsLabel,
   prettyEmbeddingLabel,
   isRedundantClusterCol,
@@ -52,5 +53,13 @@ describe("prettyEmbeddingLabel", () => {
     expect(prettyEmbeddingLabel("X_umap_3d")).toBe("UMAP");
     expect(prettyEmbeddingLabel("X_umap_uncorrected")).toBe("UMAP (uncorrected)");
     expect(prettyEmbeddingLabel("X_pca_harmony")).toBe("PCA (HARMONY)");
+  });
+});
+
+describe("formatFoldChange", () => {
+  it("formats a number and marks a missing one", () => {
+    expect(formatFoldChange(1.23456, 2)).toBe("1.23");
+    expect(formatFoldChange(null, 2)).toBe("–");
+    expect(formatFoldChange(Number.NaN, 4, "")).toBe("");
   });
 });

@@ -5,10 +5,12 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
 import { computeDE, computeDECompare, type DEResponse } from "@/api/de";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
+import { DEEnrichment } from "@/components/unified/DEEnrichment";
 import { downloadCsv } from "@/lib/csv";
 import {
   deGeneQuestion,
   deResultQuestion,
+  isSignificant,
   replicateColumns,
   suggestReplicateColumn,
   type DEComparison,
@@ -39,13 +41,15 @@ function defaultSplit(cols: ObsColumnInfo[]): string {
 
 interface Props {
   onGeneClick: (gene: string) => void;
+  /** Scores an enriched gene set on the scatter (from the DE enrichment). */
+  onScoreGeneSet: (scores: Float32Array, name: string) => void;
 }
 
 /**
  * Differential expression for the current cell selection (lasso or a clicked
  * cluster) vs the rest, shown as a volcano plot + a significant-gene table.
  */
-export function UnifiedDESubtab({ onGeneClick }: Props) {
+export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const dataset = useDatasetStore((s) => s.currentDataset);
   const selected = useSelectionStore((s) => s.selectedCellIndices);
@@ -162,7 +166,7 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
   const sigGenes = useMemo(() => {
     if (!result) return [];
     return result.genes
-      .filter((g) => g.pval_adj <= pThreshold && Math.abs(g.logfoldchange) >= fcThreshold)
+      .filter((g) => isSignificant(g, pThreshold, fcThreshold))
       .sort((a, b) => a.pval_adj - b.pval_adj || Math.abs(b.logfoldchange) - Math.abs(a.logfoldchange));
   }, [result, pThreshold, fcThreshold]);
 
@@ -469,6 +473,17 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
                 )}
               </span>
             )}
+            {result.confounding && (
+              <span
+                role="alert"
+                className="mt-1 block rounded border border-red-200 bg-red-50 px-1.5 py-1 text-red-800"
+              >
+                Batch and comparison coincide: {result.confounding.message} Read these genes as
+                &ldquo;{result.label.split(" (")[0]} vs {refLabel}, batch included&rdquo;, not as a
+                pure {result.confounding.condition === result.confounding.batch
+                  ? "biological" : `'${result.confounding.condition}'`} effect.
+              </span>
+            )}
           </div>
 
           {/* Volcano */}
@@ -533,6 +548,18 @@ export function UnifiedDESubtab({ onGeneClick }: Props) {
               </tbody>
             </table>
           </div>
+
+          {/* Significant up / down genes -> pathway enrichment */}
+          <DEEnrichment
+            datasetId={datasetId}
+            result={result}
+            labelA={comparison?.a ?? result.label}
+            labelB={comparison?.b ?? refLabel}
+            pThreshold={pThreshold}
+            fcThreshold={fcThreshold}
+            onScoreGeneSet={onScoreGeneSet}
+            onGeneClick={onGeneClick}
+          />
         </>
       )}
     </div>

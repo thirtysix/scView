@@ -8,6 +8,7 @@
  * is plain arrays in, typed arrays out, so it can be tested without WebGL.
  */
 import type { ObsColumnInfo } from "@/api/types";
+import { rankGroupingColumns } from "@/lib/obsColumns";
 import {
   mapCategoryToColor,
   mapValueToColor,
@@ -21,7 +22,7 @@ import {
   composeScatterPng,
   downloadCanvasPng,
   type CapturableDeck,
-  type ScatterLegend,
+  type ScatterLegends,
 } from "@/lib/scatterExport";
 
 export const SPLIT_MIN_VALUES = 2;
@@ -68,6 +69,52 @@ export function splitColumnOptions(columns: readonly ObsColumnInfo[]): SplitColu
       Number(a.disabledReason != null) - Number(b.disabledReason != null) ||
       a.name.localeCompare(b.name),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Compare colourings: the same cells coloured by 2–4 columns, one panel each
+// ---------------------------------------------------------------------------
+
+export const COMPARE_MIN_COLUMNS = 2;
+export const COMPARE_MAX_COLUMNS = 4;
+
+export interface CompareColumnOption {
+  name: string;
+  nValues: number;
+}
+
+/**
+ * Columns the "Compare colourings" control offers: every grouping a dataset
+ * can be coloured by (2–100 groups, no ids), best first (lib/obsColumns.ts).
+ */
+export function compareColumnOptions(
+  columns: readonly ObsColumnInfo[],
+  nCells?: number | null,
+  activeClustering?: string | null,
+): CompareColumnOption[] {
+  const byName = new Map(columns.map((c) => [c.name, c]));
+  return rankGroupingColumns(columns, { nCells, activeClustering }).map(({ name }) => ({
+    name,
+    nValues: byName.get(name)!.n_unique,
+  }));
+}
+
+/**
+ * What the control ticks when it opens: the current colouring (when it is one
+ * of the options), then the best of the others, two columns in all.
+ */
+export function initialCompareSelection(options: readonly string[], colorBy: string): string[] {
+  const first = options.includes(colorBy) ? [colorBy] : [];
+  const rest = options.filter((o) => o !== colorBy);
+  return [...first, ...rest].slice(0, COMPARE_MIN_COLUMNS);
+}
+
+/** The cells every compare panel draws: the sample, or all `total` cells. */
+export function drawnIndices(total: number, sample: Uint32Array | null): Uint32Array {
+  if (sample) return sample;
+  const all = new Uint32Array(total);
+  for (let i = 0; i < total; i++) all[i] = i;
+  return all;
 }
 
 // ---------------------------------------------------------------------------
@@ -386,10 +433,21 @@ export function panelOfLayer(layerId: string | undefined): number | null {
   return m ? Number(m[1]) : null;
 }
 
-/** deck.gl layerFilter: the grey context in every view, each panel's cells in its own. */
+/** Layer `split-label-<i>` (and `-hl`, its highlighted label) draws panel i's group labels. */
+export const splitLabelLayerId = (i: number) => `split-label-${i}`;
+
+function panelOfLabelLayer(layerId: string): number | null {
+  const m = layerId.match(/^split-label-(\d+)(-hl)?$/);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * deck.gl layerFilter (called with each root layer): the grey context in
+ * every view, each panel's cells and labels in its own.
+ */
 export function layerInView(layerId: string, viewId: string): boolean {
   if (layerId === SPLIT_CONTEXT_LAYER) return true;
-  const p = panelOfLayer(layerId);
+  const p = panelOfLayer(layerId) ?? panelOfLabelLayer(layerId);
   return p != null && viewId === splitViewId(p);
 }
 
@@ -411,8 +469,9 @@ export function downloadSplitPng(
   deck: CapturableDeck,
   opts: {
     grid: SplitGrid;
-    panels: Pick<SplitPanel, "label" | "count">[];
-    legend: ScatterLegend | null;
+    /** Each panel's title; a number count is shown as "N cells" */
+    panels: { label: string; count: number | string }[];
+    legend: ScatterLegends;
     colormap: ColormapName;
     filename: string;
     note?: string;
@@ -436,7 +495,8 @@ export function downloadSplitPng(
     opts.grid.cells.forEach((cell, i) => {
       const p = opts.panels[i];
       if (!p) return;
-      const { label, count } = panelTitle(p);
+      const { label, count } =
+        typeof p.count === "number" ? panelTitle({ label: p.label, count: p.count }) : { label: p.label, count: p.count };
       const y = cell.title.y + cell.title.height / 2;
       ctx.font = LEGEND_TITLE_FONT;
       ctx.fillStyle = "#334155";

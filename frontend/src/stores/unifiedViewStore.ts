@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { LabelChoice } from "@/lib/centroidLabels";
 
 type ScatterOverlay =
   | { type: "obs"; column: string }
@@ -44,9 +45,17 @@ interface UnifiedViewState {
 
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
+
+  // Group labels on the plot: the user's on/off for one colouring (a column, or
+  // a compare set); any other colouring gets the default (lib/centroidLabels.ts).
+  centroidLabels: LabelChoice | null;
+  setCentroidLabels: (choice: LabelChoice | null) => void;
 }
 
 export const useUnifiedViewStore = create<UnifiedViewState>((set) => ({
+  centroidLabels: null,
+  setCentroidLabels: (choice) => set({ centroidLabels: choice }),
+
   activeSubtab: "markers",
   setActiveSubtab: (tab) => set({ activeSubtab: tab }),
 

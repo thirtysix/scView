@@ -179,6 +179,14 @@ function MixingScore({ mixing }: { mixing: BatchMixing }) {
         the datasets sit apart; the ideal is what perfect mixing gives for these dataset sizes. High
         mixing is only expected where the datasets share cell types.
       </p>
+      {mixing.ilisi && (
+        <p className="mt-2 text-xs text-slate-600">
+          Datasets per neighbourhood (iLISI): <span className="font-mono">{fmt(mixing.ilisi.uncorrected)}</span>{" "}
+          before, <span className="font-mono">{fmt(mixing.ilisi.corrected)}</span> after; ideal{" "}
+          <span className="font-mono">{fmt(mixing.ilisi.ideal)}</span> (1 = each cell sees one dataset).
+        </p>
+      )}
+      {mixing.conservation && <Conservation cons={mixing.conservation} warning={mixing.overcorrection} />}
       {mixing.datasets.length > 0 && (
         <table className="mt-2 w-full text-xs">
           <thead>
@@ -202,6 +210,37 @@ function MixingScore({ mixing }: { mixing: BatchMixing }) {
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+/** Bio-conservation: does correction keep cell types apart? */
+export function Conservation({
+  cons,
+  warning,
+}: {
+  cons: NonNullable<BatchMixing["conservation"]>;
+  warning?: string | null;
+}) {
+  const fmt = (v: number | null) => (v == null ? "–" : v.toFixed(2));
+  const what = cons.kind === "shared"
+    ? `its '${cons.label_column}' label`
+    : "its own dataset's cluster (neighbours from the same dataset)";
+  return (
+    <div className="mt-3">
+      <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Cell types kept apart
+      </h4>
+      <p className="text-xs text-slate-600">
+        Share of a cell&apos;s neighbours with {what}: <span className="font-mono">{fmt(cons.uncorrected)}</span>{" "}
+        before, <span className="font-mono">{fmt(cons.corrected)}</span> after correction. A big drop means the
+        correction is merging distinct cell types.
+      </p>
+      {warning && (
+        <p role="alert" className="mt-1.5 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-800">
+          {warning}
+        </p>
       )}
     </div>
   );

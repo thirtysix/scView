@@ -63,23 +63,27 @@ reviewer can audit. scView closes both gaps:
 - **AI-assisted assessment.** A deterministic assessor reports the state of ~15 preprocessing
   steps; an LLM advisor recommends the next steps with reasons and sized parameters; *you* always
   approve before anything runs. A one-line "I notice…" insight on open points you at the right next step.
-  **Cluster QC** flags clusters that look low quality, doublet-rich or very small against the
-  typical cluster, and **Explain this data** writes a short, cited QC report from the same numbers
+  **Cluster QC** flags clusters that look low quality, doublet-rich, very small or driven by
+  dissociation stress against the typical cluster; QC plots split by sample, batch or cluster; a
+  batch that coincides with the condition is flagged before it can mislead DE; and **Explain this data** writes a short, cited QC report from the same numbers
   (saved per dataset, so reopening it costs nothing).
 - **Provenance: "git for the h5ad".** Every step is recorded into the data as a commit-style,
   replayable recipe with dependency-aware *edit and re-run from here*. Originals stay immutable.
 - **Cell-type annotation, three ways.** Tissue-agnostic LLM-from-markers (default, no reference model
   to pick), reference-based CellTypist, or an offline marker-score method; labels are editable inline.
 - **Forgiving multi-format ingestion.** h5ad, 10x MEX/HDF5, loom, zarr, dense CSV, Seurat `.rds`,
-  and nf-core/scrnaseq outputs, via a guided "Add Data" flow.
+  and nf-core/scrnaseq outputs, via a guided "Add Data" flow. Human or mouse is detected from the
+  gene names, and cell-cycle scoring works on both.
 - **Unified, linked, server-backed exploration.** A Kana-style single screen: scatter plus tabbed
   Markers/Expression/Gene Sets/Enrichment/DE plus violin, scaling to ~200k cells via a FastAPI
   backend, Apache Arrow, and deck.gl. Lasso (or click) a population for a **volcano of differential
   expression**, and export any table to CSV. **Compare two datasets'** cell-type composition side by
   side, gauge **batch-integration quality**, and your workspace is **restored across reloads**.
   **Split the plot by a condition** into linked panels that share one camera and one expression
-  scale, **label cells by hand** from a selection (with undo), **compare clustering resolutions**
-  before keeping one, and compute **diffusion pseudotime** from a start cluster you pick.
+  scale, **compare 2-4 colourings** side by side, **label cells by hand** from a selection (with
+  undo), **split one cluster into sub-clusters** on its own graph, **compare clustering
+  resolutions** before keeping one, and compute **diffusion pseudotime** from a start cluster you
+  pick. Datasets open coloured by their cell types, with each group's name on the plot.
 - **Donor-aware statistics.** Between-groups DE can run as **pseudobulk** (each donor's counts
   summed and tested with DESeq2, paired when every donor is in both groups), and the cell-level
   test reports how many donors stand behind each side, so a condition effect isn't confused with
@@ -90,7 +94,8 @@ reviewer can audit. scView closes both gaps:
   on the shared genes (recovering counts from the original upload if processing replaced them),
   then processes them together with Harmony: one UMAP, one clustering and one marker set, with a
   `dataset` column for each cell's origin and the uncorrected UMAP kept for a before/after check,
-  plus a mixing score before and after correction and each cluster's make-up by dataset.
+  plus mixing (iLISI) and cell-type conservation before and after correction, a warning when
+  correction looks like it merged real cell types, and each cluster's make-up by dataset.
   The DE tab's **Between groups** mode then compares datasets or conditions within a single cell
   type or cluster. The source datasets are never modified.
 - **Pathway enrichment that stays readable.** Over-representation analysis against MSigDB
@@ -99,7 +104,8 @@ reviewer can audit. scView closes both gaps:
   terms into a few biological programs (clustered on their shared genes and ranked by significance),
   and ribosomal/mitochondrial genes are filtered from the query by default, so cell-type and pathway
   labels stay tissue-appropriate instead of drowning in a generic "translation" signal. Click any
-  term or program to score its genes on the embedding. **Upload your own gene-set collections**
+  term or program to score its genes on the embedding, or send any **DE result's up and down
+  genes** straight to enrichment. **Upload your own gene-set collections**
   (`.gmt`, or a gene_set,gene CSV) to use alongside MSigDB, or without it.
 
 > Trust by design: the *facts* about your data are computed deterministically and reproducibly; the

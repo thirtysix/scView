@@ -37,12 +37,14 @@ _DEPENDS_ON: dict[str, tuple[str, ...]] = {
     "marker_genes": ("clustering",),
     "enrichment": ("marker_genes",),
     "cell_cycle": ("log_transform",),
+    "dissociation_stress": ("log_transform",),
 }
 
 # Steps re-runnable in place against existing artifacts (no X/graph recompute,
 # no anchor restore). Everything else, when edited, needs a full reprocess.
 INPLACE_RERUNNABLE = frozenset(
-    {"clustering", "embeddings", "marker_genes", "enrichment", "cell_cycle"}
+    {"clustering", "embeddings", "marker_genes", "enrichment", "cell_cycle",
+     "dissociation_stress"}
 )
 
 

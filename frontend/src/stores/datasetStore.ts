@@ -3,6 +3,7 @@ import type { DatasetInfo } from "@/api/types";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
+import { defaultColorBy } from "@/lib/obsColumns";
 
 /** Per-dataset view state lives in other stores; a selection of cell indices or a
  *  column name from the previous dataset means nothing (or the wrong thing) in
@@ -12,8 +13,11 @@ function resetViewForDataset(dataset: DatasetInfo | null) {
   const keep = (col: string) => (col && columns.has(col) ? col : "");
   useSelectionStore.getState().clearSelection();
   useSelectionStore.getState().setHighlight(null);
+  // A colouring the user chose stays when the new dataset has that column;
+  // otherwise the dataset opens coloured by its best grouping (cell type first).
   const settings = useSettingsStore.getState();
-  settings.setColorBy(keep(settings.colorBy) || keep(dataset?.active_clustering ?? ""));
+  const chosen = settings.colorByChosen ? keep(settings.colorBy) : "";
+  if (!chosen) settings.setDefaultColorBy(defaultColorBy(dataset));
   const unified = useUnifiedViewStore.getState();
   unified.setGroupByColumn(keep(unified.groupByColumn));
   unified.clearOverlayState();

@@ -10,7 +10,7 @@ import { missingGenes } from "@/lib/geneList";
 
 interface MarkerRow {
   gene: string;
-  logfoldchange: number;
+  logfoldchange: number | null;
 }
 
 interface ByGroup {
@@ -34,7 +34,7 @@ export function pickMarkerGenes(
     let n = 0;
     for (const m of markers[group] ?? []) {
       if (n >= perGroup) break;
-      if (!(m.logfoldchange > 0) || seen.has(m.gene)) continue;
+      if (!((m.logfoldchange ?? 0) > 0) || seen.has(m.gene)) continue;
       seen.add(m.gene);
       out.push({ gene: m.gene, group });
       n++;

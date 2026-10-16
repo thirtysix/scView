@@ -170,11 +170,14 @@ async def integration_summary(
     if origin != "integrated" and info.get("source") != "integrated":
         return {"dataset_id": dataset_id, "joint": False}
 
+    def _stale(m):  # scored before the iLISI / conservation metrics existed
+        return m is None or "ilisi" not in m
+
     mixing = read_batch_mixing(adata)
-    if mixing is None:
+    if _stale(mixing):
         async with dataset_lock(dataset_id):  # saving writes the dataset's file
             mixing = read_batch_mixing(adata)  # another request may have scored it
-            if mixing is None:
+            if _stale(mixing):
                 mixing = await asyncio.to_thread(record_batch_mixing, adata)
                 if mixing is not None:
                     try:

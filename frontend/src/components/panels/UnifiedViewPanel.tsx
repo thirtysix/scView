@@ -18,13 +18,21 @@ import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentS
 import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
-import { useSplitViewStore } from "@/stores/splitViewStore";
+import { CompareColoringsGrid } from "@/components/unified/CompareColoringsGrid";
+import { isGridActive, useSplitViewStore } from "@/stores/splitViewStore";
 import type { ScatterLegend } from "@/lib/scatterExport";
 import { mapCategoryToColor } from "@/lib/colors";
+import { isCategoricalDtype } from "@/lib/obsColumns";
+import { colorByLine, type HoverLine } from "@/lib/hoverInfo";
+import { HoverLineRow } from "@/components/plots/HoverLineRow";
+import { useCategoryColors } from "@/hooks/useCategoryColors";
+import { labelsShown } from "@/lib/centroidLabels";
 import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { getDataset, renameObsCategory } from "@/api/datasets";
+import { subclusterGroup } from "@/api/clustering";
+import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -93,6 +101,10 @@ export function UnifiedViewPanel() {
   // which stays mounted underneath so leaving the split shows it as it was) ---
   const splitBy = useSplitViewStore((s) => s.splitBy);
   const splitActive = !!(splitBy && datasetId && positions);
+  // ...or the same cells coloured by 2-4 columns side by side (same machinery)
+  const compareColumns = useSplitViewStore((s) => s.compareColumns);
+  const compareActive = !!(compareColumns && datasetId && positions);
+  const gridActive = splitActive || compareActive;
 
   // --- Overlay loading flag (transient; values/label persist in the store) ---
   const [isLoadingOverlay, setIsLoadingOverlay] = useState(false);
@@ -406,7 +418,7 @@ export function UnifiedViewPanel() {
       // Don't intercept when typing in inputs
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if ((e.key === "l" || e.key === "L") && !useSplitViewStore.getState().splitBy) {
+      if ((e.key === "l" || e.key === "L") && !isGridActive(useSplitViewStore.getState())) {
         const store = useSelectionStore.getState();
         store.setSelectionMode(store.selectionMode === "lasso" ? "none" : "lasso");
       }
@@ -420,20 +432,22 @@ export function UnifiedViewPanel() {
   }, [clearSelection, handleClearOverlay]);
 
   // --- Hover tooltip ---
+  // `lines`: the cell's value in each compared column, from the compare grid.
   const [hoveredCell, setHoveredCell] = useState<{
     x: number; y: number; index: number;
     metadata: Record<string, unknown> | null;
+    lines?: HoverLine[];
   } | null>(null);
   const hoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleHover = useCallback(
-    (info: { index: number; x: number; y: number } | null) => {
+    (info: { index: number; x: number; y: number; lines?: HoverLine[] } | null) => {
       if (hoverDebounceRef.current) {
         clearTimeout(hoverDebounceRef.current);
         hoverDebounceRef.current = null;
       }
       if (!info) { setHoveredCell(null); return; }
-      setHoveredCell({ x: info.x, y: info.y, index: info.index, metadata: null });
+      setHoveredCell({ x: info.x, y: info.y, index: info.index, metadata: null, lines: info.lines });
       if (datasetId) {
         hoverDebounceRef.current = setTimeout(() => {
           apiFetch<Record<string, unknown>>(
@@ -452,6 +466,45 @@ export function UnifiedViewPanel() {
   useEffect(() => {
     return () => { if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current); };
   }, []);
+
+  // The tooltip's first line: what the plot is coloured by, and the cell's value
+  // (from the arrays the plot draws, so it needs no request). The column is the
+  // one the colour buffer belongs to, which lags colorBy while a new one loads.
+  const colorColumnInfo = useMemo(
+    () => dataset?.obs_columns.find((c) => c.name === colorColumnName) ?? null,
+    [dataset, colorColumnName],
+  );
+  const colorOfCategory = useCategoryColors(colorColumnName);
+
+  // Group labels at their centroids, for a categorical colouring (no overlay):
+  // on by default up to 40 groups, else as toggled in the toolbar.
+  const labelChoice = useUnifiedViewStore((s) => s.centroidLabels);
+  const labelCategories =
+    !scatterOverlay && colorColumnInfo && isCategoricalDtype(colorColumnInfo.dtype)
+      ? colorColumnInfo.values ?? null
+      : null;
+  const showLabels =
+    !!labelCategories && !!colorColumnName && labelsShown(labelChoice, colorColumnName, labelCategories.length);
+  const hoverColorLine = (index: number, metadata: Record<string, unknown> | null): HoverLine | null => {
+    if (scatterOverlay && overlayValues) {
+      return colorByLine({
+        label: `${overlayLabel} ${scatterOverlay.type === "expression" ? "expression" : "score"}`,
+        values: overlayValues,
+        index,
+        type: "continuous",
+      });
+    }
+    if (!colorColumnName || !colors) return null;
+    return colorByLine({
+      label: prettyObsLabel(colorColumnName),
+      values: colors,
+      index,
+      type: colorColumnInfo && !isCategoricalDtype(colorColumnInfo.dtype) ? "continuous" : "categorical",
+      categories: colorColumnInfo?.values,
+      colorOf: (_code, category) => colorOfCategory(category),
+      fallback: metadata?.[colorColumnName],
+    });
+  };
 
   // --- Legend click (category selection) ---
   const handleCategoryClick = useCallback(
@@ -493,6 +546,8 @@ export function UnifiedViewPanel() {
     appliedHighlight.current = hl;
     setSelection(indices);
   }, [highlightedGroup, colorBy, colorColumnName, colors, categories, setSelection]);
+  // ...and keeps its label while the others fade.
+  const labelHighlight = highlightedGroup?.column === colorColumnName ? highlightedGroup.value : null;
 
   // Inline-rename a categorical label (e.g. correct a cell-type annotation).
   // Persists to the derived layer, then refreshes the dataset metadata + the
@@ -510,6 +565,33 @@ export function UnifiedViewPanel() {
       }
     },
     [datasetId, colorBy, setCurrentDataset, queryClient],
+  );
+
+  // Split one group into sub-clusters on its own graph (saved as <column>_sub),
+  // then colour by the result.
+  const refreshDataset = useDatasetRefresh();
+  const [split, setSplit] = useState<{ cat: string; status: string; error?: boolean } | null>(null);
+  const handleSubcluster = useCallback(
+    async (cat: string) => {
+      if (!datasetId || !colorBy) return;
+      setSplit({ cat, status: `Splitting "${cat}" on its own graph…` });
+      try {
+        const res = await subclusterGroup(datasetId, colorBy, cat);
+        await refreshDataset(datasetId, res.column);
+        setHighlight(null);
+        useSettingsStore.getState().setColorBy(res.column);
+        setSplit({
+          cat: "",
+          status: `"${cat}" split into ${res.n_subclusters} (${res.groups.join(", ")}); colour: ${prettyObsLabel(res.column)}.`,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message.replace(/^API error \d+: /, "") : String(err);
+        let detail = msg;
+        try { detail = String(JSON.parse(msg).detail ?? msg); } catch { /* plain text */ }
+        setSplit({ cat: "", status: `Could not split "${cat}": ${detail}`, error: true });
+      }
+    },
+    [datasetId, colorBy, refreshDataset, setHighlight],
   );
 
   // "Ask about this" — highlight the group and pose a contextual question to the
@@ -609,9 +691,12 @@ export function UnifiedViewPanel() {
                 dimensions={dimensions}
                 exportName={scatterExportName}
                 exportLegend={scatterExportLegend}
+                categories={labelCategories}
+                showLabels={showLabels}
+                highlightCategory={labelHighlight}
               />
             )}
-            {dimensions === 2 && !splitActive && (
+            {dimensions === 2 && !gridActive && (
               <LassoSelector
                 active={selectionMode === "lasso"}
                 positions={positions}
@@ -632,6 +717,20 @@ export function UnifiedViewPanel() {
                 onHover={handleHover}
                 exportName={scatterExportName}
                 exportLegend={scatterExportLegend}
+                labelCategories={labelCategories}
+                showLabels={showLabels}
+                highlightCategory={labelHighlight}
+              />
+            )}
+            {compareColumns && datasetId && positions && (
+              <CompareColoringsGrid
+                datasetId={datasetId}
+                embedding={embedding}
+                columns={compareColumns}
+                positions={positions}
+                dimensions={dimensions}
+                selectedIndices={selectedIndices}
+                onHover={handleHover}
               />
             )}
 
@@ -645,7 +744,9 @@ export function UnifiedViewPanel() {
 
             {/* Overlay chip stacked above the legend (bottom-left): one flex
                 column, so a tall legend pushes the chip up instead of covering it.
-                While split, it sits in the legend column the grid keeps free. */}
+                While split, it sits in the legend column the grid keeps free;
+                the compare grid draws a legend per column there instead. */}
+            {!compareActive && (
             <div className={`pointer-events-none absolute z-10 flex flex-col items-start gap-1.5 ${
               splitActive ? "right-2 top-10 max-h-[calc(100%-3rem)]" : "left-3 bottom-3 max-h-[calc(100%-1.5rem)]"
             }`}>
@@ -687,18 +788,40 @@ export function UnifiedViewPanel() {
                   onCategoryClick={handleCategoryClick}
                   onRenameCategory={handleRenameCategory}
                   onAskAbout={handleAskAboutCategory}
+                  onSubcluster={handleSubcluster}
+                  splittingCategory={split?.cat || null}
                 />
               ) : null}
+              {split?.status && (
+                <p
+                  role={split.error ? "alert" : "status"}
+                  className={`mt-1 max-w-[220px] text-[11px] ${split.error ? "text-red-600" : "text-slate-500"}`}
+                >
+                  {split.status}
+                </p>
+              )}
             </div>
             </div>
+            )}
 
-            {/* Hover tooltip */}
-            {hoveredCell && (
+            {/* Hover tooltip: the colour-by value first, then the cell's metadata */}
+            {hoveredCell && (() => {
+              const compared = !!hoveredCell.lines;
+              const colorLine = compared ? null : hoverColorLine(hoveredCell.index, hoveredCell.metadata);
+              const lines = hoveredCell.lines ?? (colorLine ? [colorLine] : []);
+              return (
               <div
                 className="pointer-events-none absolute z-20 max-w-xs rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg"
                 style={{ left: hoveredCell.x + 14, top: hoveredCell.y - 14 }}
               >
-                <div className="mb-1 font-semibold text-slate-700">
+                {lines.length > 0 && (
+                  <div className="mb-1 space-y-0.5">
+                    {lines.map((line) => (
+                      <HoverLineRow key={line.label} line={line} />
+                    ))}
+                  </div>
+                )}
+                <div className={`mb-1 ${lines.length > 0 ? "text-[11px] text-slate-400" : "font-semibold text-slate-700"}`}>
                   Cell {hoveredCell.index.toLocaleString()}
                 </div>
                 {hoveredCell.metadata ? (() => {
@@ -707,7 +830,17 @@ export function UnifiedViewPanel() {
                     return k.startsWith("x_") ||
                       /^(umap|tsne|t-?sne|pca|phate|diffmap|draw_graph|harmony|pc)[-_]?\d*$/i.test(key);
                   };
-                  const entries = Object.entries(hoveredCell.metadata).filter(([key]) => !isEmbeddingCol(key));
+                  // The colour-by (or compared) columns are already listed first.
+                  const shown = new Set<string>(
+                    compared
+                      ? compareColumns ?? []
+                      : colorLine && !(scatterOverlay && overlayValues) && colorColumnName
+                        ? [colorColumnName]
+                        : [],
+                  );
+                  const entries = Object.entries(hoveredCell.metadata).filter(
+                    ([key]) => !isEmbeddingCol(key) && !shown.has(key),
+                  );
                   return (
                     <dl className="space-y-0.5">
                       {entries.slice(0, 8).map(([key, val]) => (
@@ -727,7 +860,8 @@ export function UnifiedViewPanel() {
                   <div className="text-slate-400">Loading...</div>
                 )}
               </div>
-            )}
+              );
+            })()}
             </div>
           </div>
           {/* Distribution — matches the UMAP width; frees the right column to extend down */}
@@ -836,7 +970,9 @@ export function UnifiedViewPanel() {
                 setGroupByColumn={setGroupByColumn}
               />
             )}
-            {activeSubtab === "de" && <UnifiedDESubtab onGeneClick={handleGeneClick} />}
+            {activeSubtab === "de" && (
+              <UnifiedDESubtab onGeneClick={handleGeneClick} onScoreGeneSet={handleScoreComplete} />
+            )}
           </div>
         </div>
       </div>

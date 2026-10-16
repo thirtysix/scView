@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scview.config import Settings
 from scview.core import enrichment_network as network
@@ -23,6 +23,7 @@ from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
 from scview.core.gene_filters import select_query_genes
 from scview.core.geneset_sources import (
+    dataset_gene_names,
     label_records,
     match_query_case,
     resolve_gene_sets,
@@ -35,6 +36,7 @@ from scview.core.ora_background import (
     resolve_markers_key,
     write_meta,
 )
+from scview.core.species import detect_species, human_genesets_warning
 from scview.core.uns_keys import enrichment_key
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
@@ -124,6 +126,49 @@ class EnrichmentResponse(BaseModel):
     n_genes_used: int
     results: list[EnrichmentResult]
     source: str  # "gseapy" | "precomputed" | "marker_list" | "msigdb_local"
+    # Set when the gene sets (human symbols) may not fit the dataset's species.
+    warning: str = ""
+
+
+# Far above any genome; caps the request body, not a real list.
+MAX_GENE_LIST = 100_000
+
+
+class GeneListEnrichmentRequest(BaseModel):
+    """Body for ORA on explicit gene lists (a DE result's significant genes)."""
+
+    up: list[str] = Field(default=[], max_length=MAX_GENE_LIST)
+    down: list[str] = Field(default=[], max_length=MAX_GENE_LIST)
+    # The genes that were tested, i.e. the universe both lists were drawn from.
+    background: list[str] = Field(min_length=1, max_length=MAX_GENE_LIST)
+    collections: list[str] = DEFAULT_COLLECTIONS
+    # See EnrichmentComputeRequest.exclude_ribo_mito (query only, never the background).
+    exclude_ribo_mito: bool = True
+    # Most significant terms returned per list. A 500-gene DE list overlaps ~8,000
+    # terms of the default collections (Kang CD14 Mono STIM vs CTRL: 4.5 MB of
+    # JSON); past the first thousand they are 1-gene overlaps with p near 1.
+    max_terms: int = Field(default=1000, ge=1, le=20_000)
+
+
+class GeneListSide(BaseModel):
+    """ORA of one list: how many genes went in, and the enriched terms."""
+
+    n_genes_requested: int
+    n_genes_used: int  # in the background and not filtered out
+    n_excluded_ribo_mito: int
+    n_terms: int  # terms sharing a gene with the list; ``results`` keeps the top max_terms
+    n_significant: int  # of n_terms, adjusted p < 0.05
+    results: list[EnrichmentResult]
+
+
+class GeneListEnrichmentResponse(BaseModel):
+    background_n: int  # tested genes the dataset measures
+    collections: list[str]
+    exclude_ribo_mito: bool
+    up: GeneListSide
+    down: GeneListSide
+    source: str = "msigdb_local"
+    warning: str = ""  # e.g. a mouse dataset against human gene sets
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +372,7 @@ async def enrichment_network(
         "group": enrichment.group,
         "groupby": enrichment.groupby,
         "n_genes_used": enrichment.n_genes_used,
+        "warning": enrichment.warning,
         "n_significant": graph["n_terms"],
         "n_edges": n_edges,
         **graph,
@@ -362,6 +408,7 @@ def _compute_local(
     # Custom collections need no MSigDB, so only an MSigDB-only request fails here.
     if loader is None and not any(is_custom_id(c) for c in body.collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
+    warning = human_genesets_warning(detect_species(adaptor.adata))
 
     col = body.column
     if not col:
@@ -401,6 +448,7 @@ def _compute_local(
                 n_genes_used=0,
                 results=results,
                 source="precomputed",
+                warning=warning,
             )
 
     # Existence check. n_genes must be passed through: get_markers defaults to 100,
@@ -426,44 +474,7 @@ def _compute_local(
     )
 
     try:
-        import gseapy as gp
-
-        # Load the selected MSigDB and custom collections as one merged dict
-        resolved = resolve_gene_sets(body.collections, loader, store)
-        if resolved.missing_custom:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "A selected custom collection no longer exists (it was deleted): "
-                    f"{', '.join(resolved.missing_custom)}. Deselect it and run again."
-                ),
-            )
-        if not resolved.gene_sets:
-            raise HTTPException(
-                status_code=400,
-                detail="No gene sets found for the selected collections.",
-            )
-        gene_sets_dict = match_query_case(resolved, top_genes, background)
-
-        enr = gp.enrich(
-            gene_list=top_genes,
-            gene_sets=gene_sets_dict,
-            background=background,
-            outdir=None,
-            no_plot=True,
-            cutoff=0.5,
-        )
-
-        all_results: list[dict[str, Any]] = []
-        # With no overlap at all gseapy leaves results as an empty list, not a frame.
-        if not getattr(enr.results, "empty", True):
-            for _, row in enr.results.iterrows():
-                all_results.append(_normalize_gseapy_record(row.to_dict()))
-        # Which collection each term came from (and a custom one's name)
-        tag_records(all_results, resolved)
-
-        # Sort by adjusted p-value
-        all_results.sort(key=lambda r: r.get("adjusted_pvalue", 1.0))
+        all_results = _ora_records(top_genes, background, body.collections, loader, store)
 
         # Cache the result
         if col:
@@ -485,6 +496,7 @@ def _compute_local(
             n_genes_used=len(top_genes),
             results=[EnrichmentResult(**r) for r in label_records(all_results, store)],
             source="msigdb_local",
+            warning=warning,
         )
 
     except ImportError:
@@ -521,6 +533,7 @@ async def compute_enrichment(
 
 
 def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> EnrichmentResponse:
+    warning = human_genesets_warning(detect_species(adaptor.adata))
     # Resolve which obs column's markers to use
     col = body.column or body.groupby
     if not col:
@@ -561,6 +574,7 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
                 n_genes_used=0,
                 results=results,
                 source="precomputed",
+                warning=warning,
             )
 
     # Existence check; see compute-local above for the query/background split.
@@ -617,6 +631,7 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
             n_genes_used=len(top_genes),
             results=[EnrichmentResult(**r) for r in results],
             source="gseapy",
+            warning=warning,
         )
 
     except ImportError:
@@ -654,6 +669,7 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
             n_genes_used=len(top_genes),
             results=marker_results,
             source="marker_list",
+            warning=warning,
         )
 
     except Exception as e:
@@ -661,9 +677,137 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
         raise HTTPException(status_code=500, detail=f"Enrichment analysis failed: {e!s}")
 
 
+@router.post(
+    "/datasets/{dataset_id}/enrichment/gene-lists",
+    response_model=GeneListEnrichmentResponse,
+)
+async def compute_enrichment_gene_lists(
+    dataset_id: str,
+    body: GeneListEnrichmentRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+) -> GeneListEnrichmentResponse:
+    """Over-representation of explicit gene lists, e.g. a DE result's up and down genes.
+
+    ``background`` is the set the lists were drawn from (the genes the DE tested),
+    so the hypergeometric test asks "more of this set than chance among the tested
+    genes", not among every gene MSigDB names. Each list is tested on its own:
+    pooling up and down would mix two programs into one weaker one.
+    """
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    # Two gseapy runs over the selected collections: off the event loop.
+    return await asyncio.to_thread(_compute_gene_lists, dataset_id, adaptor, body, settings)
+
+
+def _compute_gene_lists(
+    dataset_id: str, adaptor, body: GeneListEnrichmentRequest, settings: Settings
+) -> GeneListEnrichmentResponse:
+    loader = get_msigdb_loader(settings.MSIGDB_DIR)
+    store = get_custom_store(settings.DATA_DIR)
+    if loader is None and not any(is_custom_id(c) for c in body.collections):
+        raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
+
+    # Only genes this dataset measures: a list from another dataset (or a typo)
+    # must not widen the universe the test is conditioned on.
+    measured = dataset_gene_names(adaptor)
+    background = [g for g in dict.fromkeys(body.background) if g in measured]
+    if not background:
+        raise HTTPException(
+            status_code=400, detail="None of the background genes are in this dataset."
+        )
+    universe = set(background)
+
+    def side(genes: list[str]) -> GeneListSide:
+        # A query gene outside the universe would break the hypergeometric test.
+        query = [g for g in dict.fromkeys(genes) if g in universe]
+        kept = select_query_genes(query, len(query), exclude_ribo_mito=body.exclude_ribo_mito)
+        records = _ora_records(kept, background, body.collections, loader, store) if kept else []
+        top = records[: body.max_terms]  # already most significant first
+        return GeneListSide(
+            n_genes_requested=len(genes),
+            n_genes_used=len(kept),
+            n_excluded_ribo_mito=len(query) - len(kept),
+            n_terms=len(records),
+            n_significant=sum(r.get("adjusted_pvalue", 1.0) < 0.05 for r in records),
+            results=[EnrichmentResult(**r) for r in label_records(top, store)],
+        )
+
+    try:
+        up, down = side(body.up), side(body.down)
+    except ImportError:
+        raise HTTPException(status_code=500, detail="gseapy is required for enrichment analysis.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Gene-list enrichment failed for dataset %s: %s", dataset_id, e)
+        raise HTTPException(status_code=500, detail=f"Enrichment analysis failed: {e!s}")
+
+    return GeneListEnrichmentResponse(
+        background_n=len(background),
+        collections=list(body.collections),
+        exclude_ribo_mito=body.exclude_ribo_mito,
+        up=up,
+        down=down,
+        warning=human_genesets_warning(detect_species(adaptor.adata)),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _ora_records(
+    query: list[str],
+    background: list[str] | None,
+    collections: list[str],
+    loader,
+    store,
+) -> list[dict[str, Any]]:
+    """gseapy ORA of ``query`` against the selected MSigDB/custom collections over
+    ``background``: normalised records tagged with their collection, most
+    significant first. A deleted custom collection or an empty selection is a 400."""
+    import gseapy as gp
+
+    # Load the selected MSigDB and custom collections as one merged dict
+    resolved = resolve_gene_sets(collections, loader, store)
+    if resolved.missing_custom:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "A selected custom collection no longer exists (it was deleted): "
+                f"{', '.join(resolved.missing_custom)}. Deselect it and run again."
+            ),
+        )
+    if not resolved.gene_sets:
+        raise HTTPException(
+            status_code=400,
+            detail="No gene sets found for the selected collections.",
+        )
+    gene_sets_dict = match_query_case(resolved, query, background)
+
+    enr = gp.enrich(
+        gene_list=query,
+        gene_sets=gene_sets_dict,
+        background=background,
+        outdir=None,
+        no_plot=True,
+        cutoff=0.5,
+    )
+
+    records: list[dict[str, Any]] = []
+    # With no overlap at all gseapy leaves results as an empty list, not a frame.
+    if not getattr(enr.results, "empty", True):
+        for _, row in enr.results.iterrows():
+            records.append(_normalize_gseapy_record(row.to_dict()))
+    # Which collection each term came from (and a custom one's name)
+    tag_records(records, resolved)
+
+    # Sort by adjusted p-value
+    records.sort(key=lambda r: r.get("adjusted_pvalue", 1.0))
+    return records
 
 
 def _normalize_gseapy_record(row: dict[str, Any]) -> dict[str, Any]:

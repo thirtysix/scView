@@ -9,7 +9,9 @@ cluster cannot hide by inflating the spread. Absolute floors stop near-identical
 clusters from turning a tiny difference into a flag.
 
 Flags: ``low_quality`` (few genes AND high mito), ``high_mito``, ``low_genes``,
-``doublet_rich`` and ``small``. The same numbers ground the co-pilot, so "which
+``doublet_rich``, ``stress_driven`` (dissociation-stress score far above the
+others AND stress genes among its top markers; see ``core/stress.py``) and
+``small``. The same numbers ground the co-pilot, so "which
 clusters look low quality?" is answered from them (``grounding_block``).
 """
 
@@ -22,6 +24,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
+from scview.core import stress
 from scview.core.anndata_adaptor import per_cell_qc
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,7 @@ _SCALE_FLOOR = {
     "pct_mt": 1.0,
     "doublet_fraction": 0.02,
     "doublet_score": 0.02,
+    "stress": stress.SCALE_FLOOR,
 }
 _SMALL_MIN_CELLS = 20
 _SMALL_FRACTION = 0.0025
@@ -58,6 +62,7 @@ FLAG_HELP = {
         "Many predicted doublets: the cluster may be two cells captured together "
         "rather than a real population."
     ),
+    "stress_driven": stress.FLAG_HELP,
     "small": (
         "Very few cells: its markers and DE results are unreliable; it may be a rare "
         "cell type or an artifact."
@@ -79,6 +84,8 @@ class ClusterQC(BaseModel):
     median_pct_ribo: float | None = None
     doublet_fraction: float | None = None
     median_doublet_score: float | None = None
+    median_stress_score: float | None = None
+    stress_markers: list[str] = []  # signature genes among its top markers
     flags: list[str] = []
     reasons: list[str] = []  # one plain-language sentence per flag, with the numbers
 
@@ -182,6 +189,11 @@ def cluster_qc(
     if "doublet_score" in adata.obs.columns:
         frame["doublet_score"] = pd.to_numeric(adata.obs["doublet_score"], errors="coerce").to_numpy()
         metrics.append("doublet_score")
+    sig_markers: dict[str, list[str]] | None = None
+    if stress.SCORE_COLUMN in adata.obs.columns:
+        frame["stress"] = pd.to_numeric(adata.obs[stress.SCORE_COLUMN], errors="coerce").to_numpy()
+        metrics.append("stress_score")
+        sig_markers = stress.signature_markers(adata, column)
 
     grouped = frame.groupby(labels.astype(str).where(labels.notna()).to_numpy(), sort=False)
     sizes = grouped.size()
@@ -206,6 +218,8 @@ def cluster_qc(
             z["doublet"] = _robust_z(medians["doublet"], _SCALE_FLOOR["doublet_fraction"])
         if "doublet_score" in medians:
             z["doublet_score"] = _robust_z(medians["doublet_score"], _SCALE_FLOOR["doublet_score"])
+        if "stress" in medians:
+            z["stress"] = _robust_z(medians["stress"], _SCALE_FLOOR["stress"])
 
     small_cut = max(_SMALL_MIN_CELLS, _SMALL_FRACTION * n)
     rows: list[ClusterQC] = []
@@ -221,13 +235,21 @@ def cluster_qc(
             median_pct_ribo=_num(m.get("pct_ribo")),
             doublet_fraction=_num(m.get("doublet"), 4),
             median_doublet_score=_num(m.get("doublet_score"), 4),
+            median_stress_score=_num(m.get("stress"), 3),
+            stress_markers=(sig_markers or {}).get(g, []),
         )
-        _flag(row, {k: float(v.loc[g]) for k, v in z.items()}, typical, small_cut)
+        _flag(row, {k: float(v.loc[g]) for k, v in z.items()}, typical, small_cut,
+              markers_checked=sig_markers is not None)
         rows.append(row)
 
     names = {"genes": "median_genes", "counts": "median_counts", "pct_mt": "median_pct_mt",
              "pct_ribo": "median_pct_ribo", "doublet": "doublet_fraction",
-             "doublet_score": "median_doublet_score"}
+             "doublet_score": "median_doublet_score", "stress": "median_stress_score"}
+    # A score outlier that couldn't be checked against markers isn't flagged: say so.
+    unchecked = [] if sig_markers is not None or "stress" not in z else [
+        g for g in order if _stress_outlier(float(z["stress"].loc[g]),
+                                            medians.loc[g].get("stress"), typical.get("stress"))
+    ]
     return ClusterQCReport(
         column=column,
         n_cells=n,
@@ -241,6 +263,12 @@ def cluster_qc(
             else f"Only {len(order)} groups: too few to say which stands out; only size is flagged.",
             "" if cells.get("has_mt", True)
             else NO_MT_NOTE,
+            "" if not unchecked
+            else (("Clusters " + ", ".join(unchecked) + " have" if len(unchecked) > 1
+                   else f"Cluster {unchecked[0]} has")
+                  + " a high dissociation-stress score, but "
+                  f"'{column}' has no marker genes to check it against: compute markers to "
+                  "see whether it is stress-driven."),
         ) if n),
     )
 
@@ -270,7 +298,15 @@ def _fmt(v: float) -> str:
     return f"{v:,.0f}"
 
 
-def _flag(row: ClusterQC, z: dict[str, float], typical: dict[str, float], small_cut: float) -> None:
+def _stress_outlier(z: float, score, typical) -> bool:
+    try:
+        return z >= stress.Z_OUTLIER and float(score) - float(typical) >= stress.MIN_DIFF
+    except (TypeError, ValueError):
+        return False
+
+
+def _flag(row: ClusterQC, z: dict[str, float], typical: dict[str, float], small_cut: float,
+          markers_checked: bool = False) -> None:
     """Attach flags + plain-language reasons to one cluster's row."""
     genes, mito = row.median_genes, row.median_pct_mt
     t_genes, t_mito = typical.get("genes"), typical.get("pct_mt")
@@ -315,6 +351,17 @@ def _flag(row: ClusterQC, z: dict[str, float], typical: dict[str, float], small_
                 f"Doublet-rich: median doublet score {score:.2f} vs {t_score:.2f} in a typical cluster."
             )
 
+    st, t_st = row.median_stress_score, typical.get("stress")
+    hits = row.stress_markers
+    if markers_checked and _stress_outlier(z.get("stress", 0.0), st, t_st) \
+            and len(hits) >= stress.MIN_SIGNATURE_MARKERS:
+        row.flags.append("stress_driven")
+        row.reasons.append(
+            f"Possibly dissociation stress: median stress score {st:.2f} vs {t_st:.2f} in "
+            f"a typical cluster, and {len(hits)} of its top {stress.TOP_MARKERS} markers are "
+            f"stress genes ({', '.join(hits[:6])})."
+        )
+
     if row.n_cells < small_cut:
         row.flags.append("small")
         row.reasons.append(
@@ -339,7 +386,8 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
     typ = [f"{_fmt(t['median_genes'])} genes/cell" if "median_genes" in t else "",
            f"{_fmt(t['median_counts'])} counts/cell" if "median_counts" in t else "",
            f"{t['median_pct_mt']:.1f}% mito" if "median_pct_mt" in t else "",
-           f"{t['doublet_fraction']:.0%} doublets" if "doublet_fraction" in t else ""]
+           f"{t['doublet_fraction']:.0%} doublets" if "doublet_fraction" in t else "",
+           f"stress score {t['median_stress_score']:.2f}" if "median_stress_score" in t else ""]
     head = f"result:qc:{report.column}"
     lines = [
         f"\n## Per-cluster QC (deterministic; column '{report.column}', {report.n_groups} groups)",
@@ -355,7 +403,8 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
         cites.append((tag, f"{c.group}: " + "; ".join(c.flags)))
     rest = report.n_groups - len(flagged)
     if not flagged:
-        checked = ["genes", "counts"] + [w for m, w in (("pct_mt", "mito"), ("doublet_fraction", "doublets"))
+        checked = ["genes", "counts"] + [w for m, w in (("pct_mt", "mito"), ("doublet_fraction", "doublets"),
+                                                        ("stress_score", "dissociation stress"))
                                          if m in report.metrics]
         lines.append("- No cluster stands out: all are within the normal range on "
                      + ", ".join(checked[:-1]) + " and " + checked[-1] + ".")

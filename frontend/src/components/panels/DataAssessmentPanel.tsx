@@ -54,12 +54,27 @@ interface PreprocessingState {
   marker_genes: StepStatus;
   enrichment: StepStatus;
   cell_cycle: StepStatus;
+  dissociation_stress: StepStatus;
+}
+
+/** Which species the gene names say (backend core/species.py). */
+interface SpeciesCall {
+  species: "human" | "mouse" | "unknown";
+  method: string;
+  evidence: string;
+}
+
+/** The assessment response: the step entries plus facts that are not steps. */
+interface AssessmentResponse extends PreprocessingState {
+  species?: SpeciesCall;
 }
 
 interface PipelineResult {
   steps_run: string[];
   steps_skipped: string[];
   errors: Record<string, string>;
+  /** Steps that had nothing to do on this dataset, and why (not errors). */
+  notes?: Record<string, string>;
   elapsed_seconds: number;
   output_path: string | null;
 }
@@ -100,6 +115,7 @@ const STEP_ORDER: {
   { key: "marker_genes", label: "Marker Genes", description: "Find differentially expressed genes per obs column" },
   { key: "enrichment", label: "Pathway Enrichment", description: "Run pathway enrichment on marker genes" },
   { key: "cell_cycle", label: "Cell Cycle", description: "Score cell cycle phases" },
+  { key: "dissociation_stress", label: "Dissociation Stress", description: "Score immediate-early / heat-shock genes induced by tissue dissociation; flags clusters driven by it" },
 ];
 
 interface ParamConfig {
@@ -206,6 +222,33 @@ function confidenceBadge(confidence: "high" | "medium" | "low") {
   );
 }
 
+/** One line under the step summary: the species and the evidence for it. */
+export function SpeciesNote({ call }: { call?: SpeciesCall }) {
+  if (!call) return null;
+  return (
+    <p className="mt-2 text-xs text-slate-500">
+      Species: <span className="font-medium text-slate-700">{call.species}</span>. {call.evidence}
+    </p>
+  );
+}
+
+/** Steps a run skipped because they had nothing to do (e.g. too few signature
+ *  genes), with the reason: not errors, so not in red. */
+export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
+  const entries = Object.entries(notes ?? {});
+  if (entries.length === 0) return null;
+  return (
+    <div className="mt-2 text-slate-600">
+      <p className="font-medium">Skipped:</p>
+      {entries.map(([step, why]) => (
+        <p key={step} className="ml-2">
+          {STEP_ORDER.find((s) => s.key === step)?.label ?? step}: {why}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 /** Shown when a pipeline run finishes: a way on to the results, not a jump. */
 export function OpenInUnifiedView() {
   const setPanel = useViewStore((s) => s.setPanel);
@@ -233,7 +276,7 @@ export function DataAssessmentPanel() {
   const setPipelineRunning = useSettingsStore((s) => s.setPipelineRunning);
   const queryClient = useQueryClient();
 
-  const [state, setState] = useState<PreprocessingState | null>(null);
+  const [state, setState] = useState<AssessmentResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Bumped after each pipeline run so the QC plots refetch (e.g. to pick up a
@@ -292,7 +335,7 @@ export function DataAssessmentPanel() {
     setRunResult(null);
     setSuggestions(null);
     try {
-      const data = await apiFetch<PreprocessingState>(
+      const data = await apiFetch<AssessmentResponse>(
         `/datasets/${datasetId}/assessment`
       );
       setState(data);
@@ -505,9 +548,10 @@ export function DataAssessmentPanel() {
       try {
         const updated = await getDataset(datasetId);
         useDatasetStore.getState().setCurrentDataset(updated);
-        // Auto-select the active clustering column for colorBy
+        // Show the new clustering; as a default, so another dataset opened
+        // later still gets its own best colouring.
         if (updated.active_clustering) {
-          useSettingsStore.getState().setColorBy(updated.active_clustering);
+          useSettingsStore.getState().setDefaultColorBy(updated.active_clustering);
         }
       } catch { /* best-effort */ }
       queryClient.invalidateQueries({ queryKey: ["embedding", datasetId] });
@@ -725,6 +769,7 @@ export function DataAssessmentPanel() {
                 </button>
               </div>
             )}
+            <SpeciesNote call={state.species} />
           </div>
 
           {/* "Explain this data": written QC report from the assessment facts */}
@@ -854,6 +899,7 @@ export function DataAssessmentPanel() {
                   ))}
                 </div>
               )}
+              <SkippedSteps notes={runResult.notes} />
               {!running &&
                 runResult.steps_run.length > 0 &&
                 (dataset?.available_embeddings.length ?? 0) > 0 && <OpenInUnifiedView />}

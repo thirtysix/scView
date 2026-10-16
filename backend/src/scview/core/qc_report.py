@@ -33,6 +33,7 @@ from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
 from scview.core.assistant import DEEPINFRA_BASE_URL, DEFAULT_MODEL, ChatSource
 from scview.core.llm import chat_extra
+from scview.core.confounding import BATCH_RE, CONDITION_RE, in_design
 from scview.core.pseudobulk import MIN_CELLS_PER_SAMPLE, MIN_REPLICATES
 
 logger = logging.getLogger(__name__)
@@ -41,11 +42,8 @@ PROMPT_VERSION = "1"  # part of the cache key: bump when the prompt changes
 SECTIONS = ("Overview", "Quality", "Concerns", "Suggested next steps")
 _MAX_ITEMS = 6
 
-_CONDITION_RE = re.compile(
-    r"condition|stim|treat|disease|status|genotype|timepoint|time_point|infect|perturb|group",
-    re.I,
-)
-_BATCH_RE = re.compile(r"batch|library|lane|plate|chip|^dataset$|^run$|seq_?run", re.I)
+_CONDITION_RE = CONDITION_RE
+_BATCH_RE = BATCH_RE
 _SKIP_RE = re.compile(r"cell_?type|celltypeanno|leiden|louvain|cluster|phase|doublet", re.I)
 
 
@@ -263,6 +261,15 @@ def build_facts(adaptor) -> QCFacts:
             concern("qc:design", f"No donor/sample column was found, so replicates per '{c}' "
                                  "group are unknown and cell-level DE p-values between them "
                                  "will be optimistic.")
+    for hit in in_design(adata)[:2]:
+        concern("qc:design", hit.message)
+        if hit.role == "correction":
+            step("qc:design", f"Re-run batch correction with a technical batch column (sequencing "
+                              f"run, library, sample) instead of '{hit.batch}', or none.")
+        elif hit.kind == "confounded":
+            step("qc:design", f"Treat '{hit.condition}' comparisons as exploratory: with each "
+                              f"'{hit.batch}' holding one '{hit.condition}', no analysis can "
+                              "separate the two.")
     if batches and not state.batch_correction.done:
         b = batches[0]
         step("qc:design", f"If cells separate by '{b}' rather than biology on the UMAP, run "
@@ -282,6 +289,14 @@ def build_facts(adaptor) -> QCFacts:
         )))
         if mixing["corrected"] < 0.5 * mixing["ideal"]:
             concern("qc:mixing", "Batches are still poorly mixed after correction.")
+        cons = mixing.get("conservation") or {}
+        if cons.get("uncorrected") is not None and cons.get("corrected") is not None:
+            f.overview.append(_fact("qc:conservation", (
+                f"Neighbours sharing a cell's '{cons['label_column']}' label: "
+                f"{cons['uncorrected']:.2f} before and {cons['corrected']:.2f} after correction."
+            )))
+        if mixing.get("overcorrection"):
+            concern("qc:conservation", mixing["overcorrection"])
 
     # --- Per-cluster QC flags ---
     try:
@@ -302,9 +317,16 @@ def build_facts(adaptor) -> QCFacts:
             if set(c.flags) - {"small"}:
                 concern(tag, f"Cluster {c.group} stands out: " + ", ".join(
                     x.replace("_", " ") for x in c.flags if x != "small") + ".")
-        if any(set(c.flags) - {"small"} for c in report.flagged):
+        if any(set(c.flags) - {"small", "stress_driven"} for c in report.flagged):
             step(head, "Look at the flagged clusters in the Unified View; if they are damaged "
                        "cells or doublets, tighten the QC filters and re-run.")
+        stressed = [c.group for c in report.flagged if "stress_driven" in c.flags]
+        if stressed:
+            step(cluster_qc.qc_tag(report.column, stressed[0]), (
+                f"Before naming cluster {', '.join(stressed)} as a cell type, colour the Unified "
+                "View by dissociation_stress_score and check its markers: it may be cells "
+                "stressed by tissue dissociation."
+            ))
 
     # --- Pipeline progression when little else needs doing ---
     if len(f.next_steps) < 2:

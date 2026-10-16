@@ -78,6 +78,7 @@ The possible preprocessing steps are:
 - embeddings: Compute UMAP/t-SNE embedding
 - marker_genes: Find marker genes per cluster
 - cell_cycle: Score cell cycle phase
+- dissociation_stress: Score each cell for immediate-early / heat-shock genes induced by tissue dissociation; flags clusters that may be a handling artifact
 
 Consider the dataset size when suggesting parameters:
 - Small datasets (<5k cells): lower n_neighbors (10-15), fewer PCs (20-30)
@@ -114,7 +115,8 @@ def _build_user_message(
     lines.append("## Current Preprocessing State")
 
     for step_name, status in preprocessing_state.items():
-        if isinstance(status, dict):
+        # Step entries only: the assessment also carries e.g. "species".
+        if isinstance(status, dict) and "done" in status:
             done = status.get("done", False)
             confidence = status.get("confidence", "unknown")
             details = status.get("details", "")
@@ -533,6 +535,21 @@ def get_rule_based_suggestions(
                     "biological question. It is useful when cell cycle effects "
                     "may confound clustering, e.g., in proliferating tissues "
                     "or cancer samples."
+                ),
+                suggested_params={},
+            )
+        )
+
+    # --- Dissociation stress (cheap; the per-cluster QC uses it) ---
+    if not _is_step_done(preprocessing_state, "dissociation_stress"):
+        suggestions.append(
+            LLMSuggestion(
+                step="dissociation_stress",
+                recommended=True,
+                reasoning=(
+                    "Scoring immediate-early and heat-shock genes is quick, and the "
+                    "per-cluster QC then flags clusters that may be an artifact of "
+                    "enzymatic tissue dissociation rather than a cell type."
                 ),
                 suggested_params={},
             )

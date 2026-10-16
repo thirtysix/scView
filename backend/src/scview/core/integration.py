@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -232,6 +233,8 @@ class IntegrationPlan(BaseModel):
     shared_columns: list[str] = Field(default_factory=list)
     est_cells: int = 0
     blocking: list[str] = Field(default_factory=list)
+    # Design notes (not blocking): e.g. each dataset holds one condition.
+    notes: list[str] = Field(default_factory=list)
     ok: bool = False
 
 
@@ -317,8 +320,36 @@ def build_plan(
         if genes == 0:
             blocking.append("These datasets share no genes, so they can't be embedded together.")
 
+    if len(units) >= 2:
+        plan.notes = confounding_notes(units)
     plan.ok = not blocking
     return plan
+
+
+def confounding_notes(units: dict[str, "Unit"]) -> list[str]:
+    """When each dataset holds one condition, joining them corrects the condition
+    away with the datasets: say so before the user reads the mixing as success."""
+    import pandas as pd
+
+    from scview.core.confounding import check, condition_columns
+
+    frames = [u.adata.obs.assign(**{"__dataset": lab}) for lab, u in units.items()]
+    shared = set.intersection(*(set(f.columns) for f in frames))
+    obs = pd.concat([f[sorted(shared)] for f in frames], ignore_index=True)
+    notes = []
+    for cond in condition_columns(obs):
+        hit = check(obs, "__dataset", cond)
+        if hit is None:
+            continue
+        shape = "one" if hit.kind == "confounded" else "a single"
+        notes.append(
+            f"Each dataset holds {shape} '{cond}' group, so Harmony removes the '{cond}' difference "
+            "from the joint embedding along with the dataset difference: a high mixing score is "
+            f"expected, and cells of different '{cond}' groups can share clusters. Expression "
+            f"values are not corrected, so DE between '{cond}' groups within a cell type still "
+            "works (use pseudobulk across donors)."
+        )
+    return notes[:2]
 
 
 # ---------------------------------------------------------------------------
@@ -423,18 +454,64 @@ MIXING_MAX_SCORED = 10_000
 _MIXING_SPACES = (("uncorrected", "X_pca"), ("corrected", "X_pca_harmony"))
 
 
-def _cross_dataset_fraction(
-    X: np.ndarray, codes: np.ndarray, query: np.ndarray, k: int
-) -> np.ndarray:
-    """Per query cell, the fraction of its k nearest neighbours from another dataset."""
+def _neighbours(X: np.ndarray, query: np.ndarray, k: int) -> np.ndarray:
+    """Indices of each query cell's k nearest neighbours, itself excluded."""
     from sklearn.neighbors import NearestNeighbors
 
     idx = NearestNeighbors(n_neighbors=k + 1).fit(X).kneighbors(X[query], return_distance=False)
     # Drop the cell itself; among duplicate points it need not come first.
     not_self = idx != query[:, None]
     order = np.argsort(~not_self, axis=1, kind="stable")
-    idx = np.take_along_axis(idx, order, axis=1)[:, :k]
+    return np.take_along_axis(idx, order, axis=1)[:, :k]
+
+
+def _cross_dataset_fraction(
+    X: np.ndarray, codes: np.ndarray, query: np.ndarray, k: int
+) -> np.ndarray:
+    """Per query cell, the fraction of its k nearest neighbours from another dataset."""
+    idx = _neighbours(X, query, k)
     return (codes[idx] != codes[query][:, None]).mean(axis=1)
+
+
+def _ilisi(idx: np.ndarray, codes: np.ndarray, n_sets: int) -> np.ndarray:
+    """Per query cell, the inverse Simpson index of its neighbours' datasets: the
+    effective number of datasets around it (1 = one dataset; uniform kNN weights,
+    a simplification of LISI's perplexity-weighted neighbourhood)."""
+    counts = np.stack([(codes[idx] == d).sum(axis=1) for d in range(n_sets)], axis=1)
+    p = counts / idx.shape[1]
+    return 1.0 / (p ** 2).sum(axis=1)
+
+
+# Cell-type-like columns that, shared by every dataset, show whether correction
+# kept cell types apart (bio-conservation); most specific first.
+_CONSERVATION_RE = re.compile(r"cell_?type|celltype|annotation|^labels?$|^cluster$", re.I)
+OVERCORRECTION_DROP = 0.10  # neighbour label agreement lost to correction that warrants a warning
+
+
+def _conservation_label(adata: ad.AnnData, label_column: str) -> tuple[str | None, str]:
+    """(column, kind): a shared cell-type column ("shared"), else each dataset's
+    own clusters, compared within the dataset ("within_dataset")."""
+    obs = adata.obs
+    for col in obs.columns:
+        name = str(col)
+        if (name != label_column and not name.startswith("scview_") and _CONSERVATION_RE.search(name)
+                and obs[col].notna().mean() >= 0.9 and 2 <= obs[col].nunique() <= 100):
+            return name, "shared"
+    if "source_cluster" in obs.columns:
+        return "source_cluster", "within_dataset"
+    return None, ""
+
+
+def _label_agreement(idx: np.ndarray, labels: np.ndarray, codes: np.ndarray,
+                     query: np.ndarray, within_dataset: bool) -> np.ndarray:
+    """Per query cell, the share of its neighbours with its label (NaN when it
+    has no neighbour to compare: e.g. none from its own dataset)."""
+    same = labels[idx] == labels[query][:, None]
+    if not within_dataset:
+        return same.mean(axis=1)
+    mine = codes[idx] == codes[query][:, None]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(mine.sum(axis=1) > 0, (same & mine).sum(axis=1) / mine.sum(axis=1), np.nan)
 
 
 def batch_mixing(
@@ -483,15 +560,66 @@ def batch_mixing(
             for i, lab in enumerate(names)
         ],
     }
+    shares = sizes / n
+    out["ilisi"] = {"ideal": round(float(1.0 / (shares ** 2).sum()), 4),
+                    "uncorrected": None, "corrected": None}
+    cons_col, cons_kind = _conservation_label(adata, label_column)
+    cons_labels = (adata.obs[cons_col].astype(str).to_numpy() if cons_col else None)
+    agreement: dict[str, np.ndarray] = {}
     for name, key in spaces:
-        frac = _cross_dataset_fraction(
-            np.asarray(adata.obsm[key], dtype=np.float32), codes, query, k
-        )
+        idx = _neighbours(np.asarray(adata.obsm[key], dtype=np.float32), query, k)
+        frac = (codes[idx] != q_codes[:, None]).mean(axis=1)
         out[name] = round(float(frac.mean()), 4)
         for i, row in enumerate(out["datasets"]):
             mine = frac[q_codes == i]
             row[name] = round(float(mine.mean()), 4) if mine.size else None
+        out["ilisi"][name] = round(float(_ilisi(idx, codes, len(names)).mean()), 4)
+        if cons_labels is not None:
+            agreement[name] = _label_agreement(idx, cons_labels, codes, query,
+                                               cons_kind == "within_dataset")
+    out["conservation"] = _conservation(cons_col, cons_kind, cons_labels, query, agreement)
+    out["overcorrection"] = _overcorrection_note(out["conservation"])
     return out
+
+
+def _conservation(col, kind, labels, query, agreement) -> dict[str, Any] | None:
+    """Mean label agreement per space, and the labels that lost the most."""
+    if col is None or not agreement:
+        return None
+    res: dict[str, Any] = {"label_column": col, "kind": kind, "uncorrected": None,
+                           "corrected": None, "labels": []}
+    for name, vals in agreement.items():
+        res[name] = round(float(np.nanmean(vals)), 4) if np.isfinite(vals).any() else None
+    if "uncorrected" in agreement and "corrected" in agreement and kind == "shared":
+        q_labels = labels[query]
+        rows = []
+        for lab in np.unique(q_labels):
+            m = q_labels == lab
+            if m.sum() < 20:
+                continue
+            before = float(np.nanmean(agreement["uncorrected"][m]))
+            after = float(np.nanmean(agreement["corrected"][m]))
+            rows.append({"label": str(lab), "n_scored": int(m.sum()),
+                         "uncorrected": round(before, 4), "corrected": round(after, 4)})
+        rows.sort(key=lambda r: r["corrected"] - r["uncorrected"])
+        res["labels"] = rows[:5]
+    return res
+
+
+def _overcorrection_note(cons: dict[str, Any] | None) -> str | None:
+    """A warning when correction cost cell-type separation, naming who lost most."""
+    if not cons or cons.get("uncorrected") is None or cons.get("corrected") is None:
+        return None
+    before, after = cons["uncorrected"], cons["corrected"]
+    if before - after < OVERCORRECTION_DROP:
+        return None
+    worst = [r["label"] for r in cons.get("labels", [])
+             if r["uncorrected"] - r["corrected"] >= OVERCORRECTION_DROP][:3]
+    what = (f"its '{cons['label_column']}' label" if cons["kind"] == "shared"
+            else "its own dataset's cluster")
+    return (f"After correction a cell's nearest neighbours share {what} {after:.0%} of the time, "
+            f"down from {before:.0%}: the correction may be merging distinct cell types"
+            + (f" (most for {', '.join(worst)})." if worst else "."))
 
 
 def record_batch_mixing(adata: ad.AnnData) -> dict[str, Any] | None:

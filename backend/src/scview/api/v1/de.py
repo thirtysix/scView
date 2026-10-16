@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.dependencies import get_dataset_manager
+from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
 
@@ -75,6 +76,8 @@ class DEResponse(BaseModel):
     design: str | None = None
     counts_source: str | None = None
     dropped_samples: list[str] = []
+    # /de/compare: the two sides are also different batches (core/confounding.py).
+    confounding: dict | None = None
 
 
 def _detect_replicate_key(obs, exclude: set[str], mask_a=None, mask_b=None) -> str | None:
@@ -236,8 +239,19 @@ async def differential_expression_compare(
                     f"({body.group_a}: {n_a}, {body.group_b}: {n_b})."),
         )
 
+    # The two sides being different batches (datasets, libraries, runs): the
+    # result then mixes the batch effect with any biological one.
+    # The batch-correction key counts unless it is the compared column itself:
+    # Harmony changes the embedding, not the expression this test runs on.
+    batch_key = recorded_batch_key(adata)
+    extra = [batch_key] if batch_key and batch_key != body.split_by else []
+    hit = for_comparison(obs, body.split_by, mask_a | mask_b, extra)
+    confounding = hit.to_dict() if hit else None
+
     if body.method == "pseudobulk":
-        return await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id)
+        resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id)
+        resp.confounding = confounding
+        return resp
 
     # Subset before copying: only the compared cells are materialised.
     keep = mask_a | mask_b
@@ -253,7 +267,8 @@ async def differential_expression_compare(
         obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
-    return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes, **guard)
+    return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes,
+                      confounding=confounding, **guard)
 
 
 async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str):
