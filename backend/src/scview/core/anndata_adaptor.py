@@ -313,7 +313,8 @@ class AnnDataAdaptor:
         # Optional metrics contributed by later QC analyses (doublet detection,
         # cell-cycle scoring, ribo/hemo QC) — included once they exist in obs, so
         # the plot set grows as the user runs more steps.
-        for name in ("doublet_score", "S_score", "G2M_score", "pct_counts_ribo", "pct_counts_hb"):
+        for name in ("doublet_score", "S_score", "G2M_score", "dissociation_stress_score",
+                     "pct_counts_ribo", "pct_counts_hb"):
             col = _col(name)
             if col is not None:
                 metrics[name] = self._qc_summary(col, n_bins)

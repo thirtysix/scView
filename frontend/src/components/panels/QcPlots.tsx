@@ -44,6 +44,7 @@ const METRIC_LABELS: Record<string, string> = {
   doublet_score: "Doublet score",
   S_score: "Cell-cycle S score",
   G2M_score: "Cell-cycle G2M score",
+  dissociation_stress_score: "Dissociation stress score",
   pct_counts_ribo: "% Ribosomal",
   pct_counts_hb: "% Hemoglobin",
 };

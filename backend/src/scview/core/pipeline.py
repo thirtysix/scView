@@ -21,7 +21,7 @@ import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
 
-from scview.core import provenance
+from scview.core import provenance, stress
 from scview.core.llm import chat_extra
 from scview.core.gene_filters import is_ribo_mito, select_query_genes
 from scview.core.geneset_sources import (
@@ -122,11 +122,20 @@ class PipelineResult:
     steps_run: list[str] = field(default_factory=list)
     steps_skipped: list[str] = field(default_factory=list)
     errors: dict[str, str] = field(default_factory=dict)
+    # Steps that ran but had nothing to do, and why (not errors; see StepSkipped).
+    notes: dict[str, str] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
     output_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class StepSkipped(Exception):
+    """A step with nothing to do on this dataset, e.g. too few signature genes.
+
+    Not an error: the run goes on, nothing is recorded in provenance, and the
+    reason is returned in ``PipelineResult.notes``."""
 
 
 # Ordered list of all steps
@@ -148,6 +157,7 @@ ALL_STEPS = [
     "marker_genes",
     "enrichment",
     "cell_cycle",
+    "dissociation_stress",
     "cell_type_annotation",
 ]
 
@@ -764,6 +774,38 @@ def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]
     return {"species": species, "n_s_genes": len(s_present), "n_g2m_genes": len(g2m_present)}
 
 
+def _run_dissociation_stress(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
+    """Score each cell for the dissociation-stress signature (see core/stress.py).
+
+    On log-normalised expression: ``.raw`` after scaling, else X. Skipped, not
+    failed, when too few signature genes are present."""
+    if adata.raw is not None and not looks_like_counts(adata.raw.X):
+        use_raw, names = True, adata.raw.var_names
+    elif not looks_like_counts(adata.X):
+        use_raw, names = False, adata.var_names
+    else:
+        raise ValueError(
+            "The dissociation-stress score needs log-normalised expression: run "
+            "normalization and log transform first."
+        )
+    genes = stress.signature_genes(names)
+    if len(genes) < stress.MIN_GENES:
+        raise StepSkipped(
+            f"Only {len(genes)} of the {len(stress.STRESS_GENES)} dissociation-stress genes "
+            f"are in this dataset (at least {stress.MIN_GENES} are needed), so no score "
+            "was written."
+        )
+    n_pool = len(names) - len(genes)
+    sc.tl.score_genes(
+        adata, genes, score_name=stress.SCORE_COLUMN, use_raw=use_raw,
+        ctrl_size=max(1, min(50, n_pool)), random_state=0,
+    )
+    species = detect_species(adata).species
+    logger.info("Dissociation stress scored (%s; %d genes) -> obs['%s']",
+                species, len(genes), stress.SCORE_COLUMN)
+    return {"species": species, "n_genes": len(genes), "genes": genes}
+
+
 def _resolve_annotation_groupby(adata: ad.AnnData, params: PipelineParams) -> str:
     """Clustering column to take per-cluster consensus over, or "" if none exists.
 
@@ -1117,6 +1159,7 @@ _STEP_RUNNERS: dict[str, Any] = {
     "marker_genes": _run_marker_genes,
     "enrichment": _run_enrichment,
     "cell_cycle": _run_cell_cycle,
+    "dissociation_stress": _run_dissociation_stress,
     "cell_type_annotation": _run_cell_type_annotation,
 }
 
@@ -1146,6 +1189,7 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "enrichment": ("scview.enrichment",
                    ("enrichment_columns", "enrichment_n_genes", "enrichment_collections")),
     "cell_cycle": ("scanpy.tl.score_genes_cell_cycle", ()),
+    "dissociation_stress": ("scanpy.tl.score_genes (van den Brink 2017 dissociation genes)", ()),
     "cell_type_annotation": ("scview.cell_type_annotation",
                              ("annotation_method", "celltypist_model", "annotation_llm_model",
                               "annotation_tissue", "annotation_groupby", "annotation_target")),
@@ -1282,6 +1326,9 @@ def run_pipeline(
                 adata = ret
             result.steps_run.append(step_name)
             _record_pipeline_step(adata, step_name, params, ret)
+        except StepSkipped as e:
+            logger.info("Step '%s' skipped: %s", step_name, e)
+            result.notes[step_name] = str(e)
         except Exception as e:
             logger.error("Step '%s' failed: %s", step_name, e)
             result.errors[step_name] = str(e)
@@ -1381,6 +1428,11 @@ def run_pipeline_streamed(
             _record_pipeline_step(adata, step_name, params, ret)
             elapsed = round(time.time() - step_t0, 2)
             yield ("step_done", {"step": step_name, "index": idx, "elapsed": elapsed})
+        except StepSkipped as e:
+            logger.info("Step '%s' skipped: %s", step_name, e)
+            result.notes[step_name] = str(e)
+            yield ("step_done", {"step": step_name, "index": idx, "skipped": True,
+                                 "note": str(e), "elapsed": round(time.time() - step_t0, 2)})
         except Exception as e:
             logger.error("Step '%s' failed: %s", step_name, e)
             result.errors[step_name] = str(e)

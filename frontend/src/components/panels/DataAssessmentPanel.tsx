@@ -54,6 +54,7 @@ interface PreprocessingState {
   marker_genes: StepStatus;
   enrichment: StepStatus;
   cell_cycle: StepStatus;
+  dissociation_stress: StepStatus;
 }
 
 /** Which species the gene names say (backend core/species.py). */
@@ -72,6 +73,8 @@ interface PipelineResult {
   steps_run: string[];
   steps_skipped: string[];
   errors: Record<string, string>;
+  /** Steps that had nothing to do on this dataset, and why (not errors). */
+  notes?: Record<string, string>;
   elapsed_seconds: number;
   output_path: string | null;
 }
@@ -112,6 +115,7 @@ const STEP_ORDER: {
   { key: "marker_genes", label: "Marker Genes", description: "Find differentially expressed genes per obs column" },
   { key: "enrichment", label: "Pathway Enrichment", description: "Run pathway enrichment on marker genes" },
   { key: "cell_cycle", label: "Cell Cycle", description: "Score cell cycle phases" },
+  { key: "dissociation_stress", label: "Dissociation Stress", description: "Score immediate-early / heat-shock genes induced by tissue dissociation; flags clusters driven by it" },
 ];
 
 interface ParamConfig {
@@ -225,6 +229,23 @@ export function SpeciesNote({ call }: { call?: SpeciesCall }) {
     <p className="mt-2 text-xs text-slate-500">
       Species: <span className="font-medium text-slate-700">{call.species}</span>. {call.evidence}
     </p>
+  );
+}
+
+/** Steps a run skipped because they had nothing to do (e.g. too few signature
+ *  genes), with the reason: not errors, so not in red. */
+export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
+  const entries = Object.entries(notes ?? {});
+  if (entries.length === 0) return null;
+  return (
+    <div className="mt-2 text-slate-600">
+      <p className="font-medium">Skipped:</p>
+      {entries.map(([step, why]) => (
+        <p key={step} className="ml-2">
+          {STEP_ORDER.find((s) => s.key === step)?.label ?? step}: {why}
+        </p>
+      ))}
+    </div>
   );
 }
 
@@ -877,6 +898,7 @@ export function DataAssessmentPanel() {
                   ))}
                 </div>
               )}
+              <SkippedSteps notes={runResult.notes} />
               {!running &&
                 runResult.steps_run.length > 0 &&
                 (dataset?.available_embeddings.length ?? 0) > 0 && <OpenInUnifiedView />}

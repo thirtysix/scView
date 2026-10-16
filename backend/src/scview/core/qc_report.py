@@ -317,9 +317,16 @@ def build_facts(adaptor) -> QCFacts:
             if set(c.flags) - {"small"}:
                 concern(tag, f"Cluster {c.group} stands out: " + ", ".join(
                     x.replace("_", " ") for x in c.flags if x != "small") + ".")
-        if any(set(c.flags) - {"small"} for c in report.flagged):
+        if any(set(c.flags) - {"small", "stress_driven"} for c in report.flagged):
             step(head, "Look at the flagged clusters in the Unified View; if they are damaged "
                        "cells or doublets, tighten the QC filters and re-run.")
+        stressed = [c.group for c in report.flagged if "stress_driven" in c.flags]
+        if stressed:
+            step(cluster_qc.qc_tag(report.column, stressed[0]), (
+                f"Before naming cluster {', '.join(stressed)} as a cell type, colour the Unified "
+                "View by dissociation_stress_score and check its markers: it may be cells "
+                "stressed by tissue dissociation."
+            ))
 
     # --- Pipeline progression when little else needs doing ---
     if len(f.next_steps) < 2:

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from scipy import sparse
 
 from scview.core import provenance
+from scview.core.stress import SCORE_COLUMN
 from scview.core.uns_keys import enrichment_column, markers_column
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ _PROV_STEP_TO_FIELD = {
     "marker_genes": "marker_genes",
     "enrichment": "enrichment",
     "cell_cycle": "cell_cycle",
+    "dissociation_stress": "dissociation_stress",
 }
 
 
@@ -69,6 +71,7 @@ class PreprocessingState(BaseModel):
     marker_genes: StepStatus
     enrichment: StepStatus
     cell_cycle: StepStatus
+    dissociation_stress: StepStatus
 
 
 # ---------------------------------------------------------------------------
@@ -767,6 +770,15 @@ def _check_cell_cycle(adata: Any) -> StepStatus:
         return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
 
 
+def _check_dissociation_stress(adata: Any) -> StepStatus:
+    """Check for the per-cell dissociation-stress score in obs."""
+    if SCORE_COLUMN in adata.obs.columns:
+        return StepStatus(done=True, confidence="high", details=f"Found {SCORE_COLUMN} in obs")
+    return StepStatus(
+        done=False, confidence="high", details="No dissociation-stress score in obs"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main assessment function
 # ---------------------------------------------------------------------------
@@ -807,6 +819,7 @@ def assess_preprocessing(adata: Any) -> PreprocessingState:
         marker_genes=_check_marker_genes(adata),
         enrichment=_check_enrichment(adata),
         cell_cycle=_check_cell_cycle(adata),
+        dissociation_stress=_check_dissociation_stress(adata),
     )
     return _apply_recorded_provenance(adata, state)
 

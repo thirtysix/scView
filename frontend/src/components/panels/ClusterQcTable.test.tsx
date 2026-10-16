@@ -56,6 +56,28 @@ describe("ClusterQcTable", () => {
     expect(useViewStore.getState().activePanel).toBe("unified");
   });
 
+  it("shows the stress score column and a stress-driven flag", async () => {
+    const STRESSED = row("4", {
+      median_stress_score: 1.42,
+      stress_markers: ["FOS", "JUN", "HSPA1A"],
+      flags: ["stress_driven"],
+      reasons: ["Possibly dissociation stress: median stress score 1.42 vs 0.21 in a typical cluster, and 3 of its top 20 markers are stress genes (FOS, JUN, HSPA1A)."],
+    });
+    getClusterQc.mockResolvedValue({
+      ...report([row("0", { median_stress_score: 0.2 }), row("1", { median_stress_score: 0.21 }), STRESSED]),
+      metrics: ["genes", "counts", "pct_mt", "pct_ribo", "doublet_fraction", "stress_score"],
+      typical: { median_genes: 1400, median_counts: 4200, median_pct_mt: 2.1, median_pct_ribo: 20, doublet_fraction: 0.02, median_stress_score: 0.21 },
+      flag_help: { stress_driven: "Possibly driven by dissociation stress." },
+    });
+    render(<ClusterQcTable datasetId="d1" />);
+    expect(await screen.findByText("1 of 3 clusters stand out")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Stress" })).toBeInTheDocument();
+    expect(screen.getByText("1.42")).toHaveAttribute("title", "Stress genes among its top markers: FOS, JUN, HSPA1A");
+    expect(screen.getByText("Stress-driven")).toHaveAttribute("title", STRESSED.reasons[0]);
+    expect(screen.getByText(/Possibly driven by dissociation stress/)).toBeInTheDocument();
+    expect(askQuestion("leiden", STRESSED)).toContain("flagged as stress-driven");
+  });
+
   it("stays collapsed to one line when nothing stands out", async () => {
     getClusterQc.mockResolvedValue(report([row("0"), row("1"), row("2")]));
     render(<ClusterQcTable datasetId="d1" />);
