@@ -78,7 +78,7 @@ class DEResponse(BaseModel):
 
 
 _DONOR_COL_RE = re.compile(
-    r"donor|patient|individual|subject|sample|participant|replicate|^ind$|orig\.ident", re.I
+    r"donor|patient|individual|subject|sample|participant|replicate|^ind$|orig[._]ident", re.I
 )
 
 

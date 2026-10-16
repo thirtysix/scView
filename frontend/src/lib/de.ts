@@ -13,7 +13,7 @@ const REPLICATE_PATTERNS: RegExp[] = [
   /participant/i,
   /replicate/i,
   /sample/i,
-  /orig\.ident/i,
+  /orig[._]ident/i,
 ];
 
 /** The backend caps pseudobulk samples at this (core/pseudobulk.py MAX_SAMPLES);

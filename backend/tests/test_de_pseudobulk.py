@@ -93,6 +93,8 @@ async def test_pseudobulk_unpaired_when_donors_nested_in_condition():
 async def test_pseudobulk_detects_ind_column_and_scopes_within():
     a = _donor_counts(DONORS, DONORS, donor_col="ind")
     assert _detect_replicate_key(a.obs, {"cond"}) == "ind"
+    for name in ("orig.ident", "orig_ident"):  # Seurat's per-sample column, either spelling
+        assert _detect_replicate_key(a.obs.rename(columns={"ind": name}), {"cond"}) == name
     res = await differential_expression_compare(
         "x", _req(within_column="ct", within_value="X"), _DM(a)
     )

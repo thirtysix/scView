@@ -44,6 +44,7 @@ describe("suggestReplicateColumn", () => {
     expect(suggestReplicateColumn([col("seurat_clusters", 10), col("orig.ident", 6)])).toBe(
       "orig.ident",
     );
+    expect(suggestReplicateColumn([col("orig_ident", 6)])).toBe("orig_ident");
   });
 });
 
