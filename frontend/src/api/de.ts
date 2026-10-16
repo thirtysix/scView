@@ -19,6 +19,14 @@ export interface DEResponse {
   top_donor_share_a?: number | null;
   top_donor_share_b?: number | null;
   underreplicated?: boolean;
+  /** Pseudobulk (method "pseudobulk") only. */
+  method?: "wilcoxon" | "pseudobulk";
+  n_samples_a?: number | null;
+  n_samples_b?: number | null;
+  n_genes_tested?: number | null;
+  design?: string | null;
+  counts_source?: string | null;
+  dropped_samples?: string[];
 }
 
 /**
@@ -43,12 +51,15 @@ export interface DECompareRequest {
   within_column?: string;
   within_value?: string;
   replicate_key?: string;
+  /** "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key). */
+  method?: "wilcoxon" | "pseudobulk";
 }
 
 /**
- * Wilcoxon DE between two groups of one obs column (A vs B), optionally within
- * one subgroup — e.g. dataset STIM vs CTRL within one cell type. In the response,
- * `n_selected` / `n_rest` are the A / B cell counts.
+ * DE between two groups of one obs column (A vs B), optionally within one
+ * subgroup — e.g. dataset STIM vs CTRL within one cell type: cell-level Wilcoxon,
+ * or donor-aware pseudobulk DESeq2. In the response, `n_selected` / `n_rest` are
+ * the A / B cell counts.
  */
 export async function computeDECompare(
   datasetId: string,

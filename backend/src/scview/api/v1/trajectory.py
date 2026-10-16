@@ -1,17 +1,22 @@
 """Trajectory / pseudotime analysis endpoints – Phase 5.
 
 Provides endpoints for discovering, retrieving, and visualising pseudotime
-columns and gene expression along pseudotime.
+columns and gene expression along pseudotime, and for computing diffusion
+pseudotime in-app (``core/trajectory.py``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from scview.core.dataset_manager import DatasetManager
+from scview.core.trajectory import TrajectoryError, compute_dpt, graph_source, read_params
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -44,7 +49,65 @@ async def list_pseudotime_columns(
         "dataset_id": dataset_id,
         "pseudotime_columns": columns,
         "n_columns": len(columns),
+        # How the in-app column was computed (root group, graph), if it was.
+        "computed": read_params(adaptor.adata),
     }
+
+
+class DPTRequest(BaseModel):
+    root_column: str  # obs column holding the start group (cluster / cell type)
+    root_value: str
+
+
+@router.post("/datasets/{dataset_id}/trajectory/dpt")
+async def compute_pseudotime(
+    dataset_id: str,
+    body: DPTRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Compute diffusion pseudotime rooted in one group, save it as an obs
+    column of the dataset's derived file, and reload the dataset."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    adata = adaptor.adata
+    if body.root_column not in adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{body.root_column}' not found.")
+    # Cheap checks first, so a bad request costs no copy, write or reload.
+    col = adata.obs[body.root_column]
+    if not (col.astype(str).where(col.notna()) == body.root_value).any():
+        raise HTTPException(
+            status_code=400,
+            detail=f"No cells have {body.root_column} = '{body.root_value}'.",
+        )
+    try:
+        graph_source(adata)
+    except TrajectoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+
+    def _run():
+        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
+        params = compute_dpt(work, body.root_column, body.root_value)
+        # Write beside, then swap in: a backed dataset may be reading this path.
+        partial = output_path + ".partial"
+        work.write_h5ad(partial, compression="gzip")
+        os.replace(partial, output_path)
+        return params
+
+    try:
+        params = await asyncio.to_thread(_run)
+    except TrajectoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("Pseudotime failed for %s: %s", dataset_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Pseudotime failed: {exc!s}")
+    finally:
+        # The cached copy may hold the new column without it being saved.
+        dm.evict(dataset_id)
+    await dm.load_dataset(dataset_id)
+    return {"dataset_id": dataset_id, **params}
 
 
 @router.get("/datasets/{dataset_id}/trajectory/{column}")

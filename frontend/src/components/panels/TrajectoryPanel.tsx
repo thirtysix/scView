@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect } from "react";
-import { GitBranch, Loader2, AlertCircle } from "lucide-react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { GitBranch, Loader2, AlertCircle, Play } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -7,15 +8,28 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useEmbedding } from "@/hooks/useEmbedding";
 import { apiFetch } from "@/api/client";
+import { getDataset } from "@/api/datasets";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { Panel } from "@/components/common/Panel";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { ColorLegend } from "@/components/plots/ColorLegend";
-import { formatNumber } from "@/lib/formatting";
+import { formatNumber, prettyObsLabel } from "@/lib/formatting";
+import { DPT_COLUMN, defaultRootColumn, rootGroupColumns } from "@/lib/trajectory";
+
+/** How the in-app pseudotime column was computed (POST /trajectory/dpt). */
+interface DPTParams {
+  column: string;
+  root_column: string;
+  root_value: string;
+  root_cell: string;
+  graph: string;
+  n_unreachable: number;
+}
 
 interface TrajectoryColumnsResponse {
   pseudotime_columns: string[];
   n_columns: number;
+  computed?: DPTParams | null;
 }
 
 interface PseudotimeValuesResponse {
@@ -48,6 +62,9 @@ export function TrajectoryPanel() {
   const plotBackground = useSettingsStore((s) => s.plotBackground);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
+  const highlighted = useSelectionStore((s) => s.highlightedGroup);
+  const setCurrentDataset = useDatasetStore((s) => s.setCurrentDataset);
+  const queryClient = useQueryClient();
 
   const { positions, numCells, isLoading: embeddingLoading } = useEmbedding();
 
@@ -67,6 +84,38 @@ export function TrajectoryPanel() {
   >({});
   const [isLoadingGenes, setIsLoadingGenes] = useState(false);
 
+  // In-app pseudotime: a root group picked from a categorical column.
+  const [computed, setComputed] = useState<DPTParams | null>(null);
+  // Bumped after pseudotime is (re)computed, so columns, values and trends refetch.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [isComputing, setIsComputing] = useState(false);
+  const [computeError, setComputeError] = useState<string | null>(null);
+  const rootCols = useMemo(() => rootGroupColumns(dataset?.obs_columns), [dataset]);
+  const [rootColumn, setRootColumn] = useState("");
+  const [rootValue, setRootValue] = useState("");
+  const rootValues = useMemo(
+    () => rootCols.find((c) => c.name === rootColumn)?.values ?? [],
+    [rootCols, rootColumn],
+  );
+
+  useEffect(() => {
+    if (!rootCols.some((c) => c.name === rootColumn)) {
+      setRootColumn(defaultRootColumn(rootCols, dataset?.active_clustering));
+    }
+  }, [rootCols, rootColumn, dataset]);
+
+  useEffect(() => {
+    if (!rootValues.includes(rootValue)) setRootValue(rootValues[0] ?? "");
+  }, [rootValues, rootValue]);
+
+  // A group clicked in a legend elsewhere becomes the suggested root.
+  useEffect(() => {
+    if (highlighted && rootCols.some((c) => c.name === highlighted.column)) {
+      setRootColumn(highlighted.column);
+      setRootValue(highlighted.value);
+    }
+  }, [highlighted, rootCols]);
+
   // Fetch available pseudotime columns
   useEffect(() => {
     if (!datasetId) return;
@@ -79,16 +128,18 @@ export function TrajectoryPanel() {
     )
       .then((data) => {
         setAvailableColumns(data.pseudotime_columns);
-        if (data.pseudotime_columns.length > 0 && !selectedColumn) {
-          setSelectedColumn(data.pseudotime_columns[0]!);
-        }
+        setComputed(data.computed ?? null);
+        // Keep the current column if this dataset has it (after a recompute it does).
+        setSelectedColumn((prev) =>
+          data.pseudotime_columns.includes(prev) ? prev : (data.pseudotime_columns[0] ?? ""),
+        );
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : String(err));
         setAvailableColumns([]);
       })
       .finally(() => setIsLoadingColumns(false));
-  }, [datasetId]);
+  }, [datasetId, refreshKey]);
 
   // Fetch pseudotime values when column changes
   useEffect(() => {
@@ -112,7 +163,45 @@ export function TrajectoryPanel() {
         setPseudotimeValues(null);
       })
       .finally(() => setIsLoadingPseudotime(false));
-  }, [datasetId, selectedColumn]);
+  }, [datasetId, selectedColumn, refreshKey]);
+
+  // Plotted genes follow the pseudotime: refetch their trends when it changes.
+  const genesRef = useRef<string[]>([]);
+  genesRef.current = selectedGenes;
+  useEffect(() => {
+    const genes = genesRef.current;
+    if (!datasetId || !selectedColumn || genes.length === 0) return;
+    apiFetch<TrajectoryGenesResponse>(
+      `/datasets/${datasetId}/trajectory/${encodeURIComponent(selectedColumn)}/genes?genes=${encodeURIComponent(genes.join(","))}`,
+    )
+      .then((data) => setGeneTrajectories(data.genes))
+      .catch(() => setGeneTrajectories({}));
+  }, [datasetId, selectedColumn, refreshKey]);
+
+  // Compute diffusion pseudotime from the chosen root group, then show it.
+  const computePseudotime = useCallback(async () => {
+    if (!datasetId || !rootColumn || !rootValue) return;
+    setIsComputing(true);
+    setComputeError(null);
+    try {
+      const res = await apiFetch<DPTParams>(`/datasets/${datasetId}/trajectory/dpt`, {
+        method: "POST",
+        body: JSON.stringify({ root_column: rootColumn, root_value: rootValue }),
+      });
+      // The new obs column joins the colour-by lists, and any cached colouring
+      // by it is stale. Skip if the user has moved to another dataset meanwhile.
+      if (useDatasetStore.getState().currentDatasetId === datasetId) {
+        setCurrentDataset(await getDataset(datasetId));
+      }
+      await queryClient.invalidateQueries({ queryKey: ["embedding", datasetId] });
+      setSelectedColumn(res.column);
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setComputeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsComputing(false);
+    }
+  }, [datasetId, rootColumn, rootValue, setCurrentDataset, queryClient]);
 
   // Handle gene selection — add to list and fetch trajectory data
   const handleGeneSelect = useCallback(
@@ -159,6 +248,51 @@ export function TrajectoryPanel() {
     "#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed",
   ];
 
+  const selectCls =
+    "rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100";
+
+  const computeCard = (
+    <div className="flex-shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm">
+      {rootCols.length === 0 ? (
+        <p className="text-xs text-slate-500">
+          No categorical column (cluster or cell type) to pick a start group from.
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-slate-600">Compute pseudotime from</span>
+          <select value={rootColumn} onChange={(e) => setRootColumn(e.target.value)} className={selectCls}>
+            {rootCols.map((c) => (
+              <option key={c.name} value={c.name}>
+                {prettyObsLabel(c.name)}
+              </option>
+            ))}
+          </select>
+          <select value={rootValue} onChange={(e) => setRootValue(e.target.value)} className={selectCls}>
+            {rootValues.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={computePseudotime}
+            disabled={isComputing || !rootValue}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
+          >
+            {isComputing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+            {isComputing ? "Computing..." : "Compute"}
+          </button>
+        </div>
+      )}
+      <p className="mt-1.5 text-xs text-slate-500">
+        Diffusion pseudotime (scanpy DPT) on the neighbour graph, measured from the start
+        group&apos;s most central cell. Saved to the dataset as <code>{DPT_COLUMN}</code>; cells the
+        start group cannot reach are left grey.
+      </p>
+      {computeError && <p className="mt-1.5 text-xs text-red-600">{computeError}</p>}
+    </div>
+  );
+
   // No dataset
   if (!dataset || !datasetId) {
     return (
@@ -188,11 +322,12 @@ export function TrajectoryPanel() {
             No pseudotime columns found
           </p>
           <p className="text-xs text-amber-600">
-            This dataset does not contain pseudotime or trajectory data.
-            Run trajectory inference (e.g. diffusion pseudotime, Monocle) on
-            your data and re-upload to use this feature.
+            This dataset does not contain pseudotime or trajectory data yet.
+            Compute diffusion pseudotime below (needs a processed dataset with a
+            PCA), or upload a file that already has a pseudotime column.
           </p>
         </div>
+        {computeCard}
       </div>
     );
   }
@@ -252,6 +387,17 @@ export function TrajectoryPanel() {
           </span>
         )}
       </div>
+
+      {computeCard}
+
+      {selectedColumn === DPT_COLUMN && computed && (
+        <p className="-mt-2 flex-shrink-0 text-xs text-slate-500">
+          Current <code>{DPT_COLUMN}</code>: started from {computed.root_value} (
+          {prettyObsLabel(computed.root_column)}), {computed.graph}.
+          {computed.n_unreachable > 0 &&
+            ` ${formatNumber(computed.n_unreachable)} cells are unreachable from it (grey).`}
+        </p>
+      )}
 
       {/* Selected genes chips */}
       {selectedGenes.length > 0 && (
