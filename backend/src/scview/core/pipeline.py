@@ -26,6 +26,7 @@ from scview.core.llm import chat_extra
 from scview.core.gene_filters import select_query_genes
 from scview.core.ora_background import write_meta
 from scview.core.uns_keys import (
+    BATCH_MIXING_KEY,
     enrichment_column,
     enrichment_key,
     enrichment_prefix,
@@ -348,6 +349,7 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> None:
     # A Harmony embedding of the previous PCA would otherwise still be picked up
     # by the neighbour graph; the batch-correction step rebuilds it if it runs.
     adata.obsm.pop("X_pca_harmony", None)
+    adata.uns.pop(BATCH_MIXING_KEY, None)  # scored the previous PCA
     logger.info("PCA: %d components", n_comps)
 
 
@@ -399,6 +401,7 @@ def _run_batch_correction(adata: ad.AnnData, params: PipelineParams) -> None:
             f"Harmony output shape {Z.shape} does not match n_cells={n}."
         )
     adata.obsm["X_pca_harmony"] = np.ascontiguousarray(Z)
+    adata.uns.pop(BATCH_MIXING_KEY, None)  # scored the previous correction
     logger.info("Harmony batch correction using key '%s' -> X_pca_harmony %s",
                 params.batch_key, adata.obsm["X_pca_harmony"].shape)
 

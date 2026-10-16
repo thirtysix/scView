@@ -22,6 +22,10 @@ MARKERS_PREFIX = "rank_genes_groups__"
 ENRICHMENT_PREFIX = "enrichment__"
 META_PREFIX = "ora_meta__"
 
+# A joint dataset's batch-mixing score (core/integration.py). It describes the
+# current PCA spaces, so re-running PCA or batch correction drops it.
+BATCH_MIXING_KEY = "scview_batch_mixing"
+
 _SEP = "__"
 _SLASH = "%2F"
 

@@ -4,7 +4,11 @@ import type { DatasetInfo } from "@/api/types";
 
 const { listDatasets } = vi.hoisted(() => ({ listDatasets: vi.fn() }));
 vi.mock("@/api/datasets", () => ({ listDatasets, getDataset: vi.fn() }));
-vi.mock("@/api/integration", () => ({ planIntegration: vi.fn(), runIntegration: vi.fn() }));
+vi.mock("@/api/integration", () => ({
+  planIntegration: vi.fn(),
+  runIntegration: vi.fn(),
+  getJointSummary: vi.fn().mockResolvedValue({ dataset_id: "", joint: false }),
+}));
 
 import { JointEmbedding } from "./JointEmbedding";
 

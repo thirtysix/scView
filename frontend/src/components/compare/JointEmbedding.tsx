@@ -13,6 +13,7 @@ import {
 } from "@/api/integration";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
 import type { DatasetInfo } from "@/api/types";
+import { JointSummary } from "./JointSummary";
 
 /** Pipeline steps of a joint run, in order, with display labels. */
 const STEP_LABELS: Record<string, string> = {
@@ -189,6 +190,10 @@ export function JointEmbedding() {
         <code className="mx-1 rounded bg-slate-100 px-1 text-xs">dataset</code>column records
         where each cell came from. The source datasets are left untouched.
       </p>
+
+      {current && current.id !== resultId && (
+        <JointSummary datasetId={current.id} title={`Open joint dataset: ${current.name}`} />
+      )}
 
       {/* Dataset picker */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -382,6 +387,8 @@ export function JointEmbedding() {
           )}
         </div>
       )}
+
+      {resultId && <JointSummary datasetId={resultId} title="How well the datasets mixed" />}
     </div>
   );
 }
