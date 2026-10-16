@@ -47,10 +47,17 @@ describe("DEActivity", () => {
     render(<DEActivity datasetId="d1" result={RESULT} labelA="STIM" labelB="CTRL" onScore={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /score/i }));
     await waitFor(() => screen.getByText("STAT1"));
-    expect(getDEActivity).toHaveBeenCalledWith("d1", "collectri", ["ISG15", "CD14"], [56, -9]);
+    expect(getDEActivity).toHaveBeenCalledWith("d1", "collectri", ["ISG15", "CD14"], [56, -9], undefined);
     expect(screen.getByText("19.10").className).toContain("text-red-600");
     expect(screen.getByText("-7.40").className).toContain("text-blue-600");
     expect(screen.getByText(/2 of 2 with adj. p < 0.05/)).toBeTruthy();
+  });
+
+  it("names the DE result by its id when the server kept it", async () => {
+    render(<DEActivity datasetId="d1" result={{ ...RESULT, result_id: "r1" }} labelA="STIM" labelB="CTRL" onScore={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /score/i }));
+    await waitFor(() => screen.getByText("STAT1"));
+    expect(getDEActivity).toHaveBeenCalledWith("d1", "collectri", ["ISG15", "CD14"], [56, -9], "r1");
   });
 
   it("colours the cells by a row's source, and scores pathways on switching", async () => {
@@ -64,7 +71,7 @@ describe("DEActivity", () => {
 
     getDEActivity.mockResolvedValueOnce({ ...TF, network: "progeny", kind: "pathway", results: [] });
     fireEvent.click(screen.getByRole("button", { name: "Pathways (PROGENy)" }));
-    await waitFor(() => expect(getDEActivity).toHaveBeenLastCalledWith("d1", "progeny", ["ISG15", "CD14"], [56, -9]));
+    await waitFor(() => expect(getDEActivity).toHaveBeenLastCalledWith("d1", "progeny", ["ISG15", "CD14"], [56, -9], undefined));
   });
 
   it("cannot score a DE result without statistics (an older backend)", () => {

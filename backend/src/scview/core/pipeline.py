@@ -21,7 +21,15 @@ import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
 
-from scview.core import cluster_qc, doublets, normalization, provenance, qc_filter, stress
+from scview.core import (
+    cluster_qc,
+    doublets,
+    marker_specificity,
+    normalization,
+    provenance,
+    qc_filter,
+    stress,
+)
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.cell_cycle import near_zero_phase_calls
 from scview.core.llm import chat_extra
@@ -628,6 +636,7 @@ def _run_marker_genes(adata: ad.AnnData, params: PipelineParams, cb: SubstepCall
         sc.tl.rank_genes_groups(adata, groupby=col, method="wilcoxon", pts=True)
         # Store under namespaced key
         adata.uns[markers_key(col)] = adata.uns["rank_genes_groups"].copy()
+        marker_specificity.attach(adata, adata.uns[markers_key(col)], col)
         drop_enrichment_cache(adata, col)
         computed += 1
 
@@ -1214,6 +1223,7 @@ def _markers_for_column(adata: ad.AnnData, col: str) -> None:
         sc.tl.rank_genes_groups(
             adata, groupby=col, method="wilcoxon", pts=True, key_added=markers_key(col)
         )
+        marker_specificity.attach(adata, adata.uns[markers_key(col)], col)
         drop_enrichment_cache(adata, col)
     except Exception as exc:
         logger.warning("Markers for '%s' failed: %s", col, exc)

@@ -426,3 +426,30 @@ async def test_pseudobulk_de_returns_the_wald_statistic():
     by = {g.gene: g for g in res.genes}
     assert by["G0"].stat is not None and by["G0"].stat > 5
     assert all(g.stat is not None for g in res.genes)
+
+
+
+async def test_de_endpoint_takes_a_stored_result_by_id(client, dataset_manager, networks):
+    # A whole transcriptome sent back can pass the 512 KB request cap, so the DE
+    # response's id can name the stored result instead; same answer either way.
+    from scview.core import de_results
+
+    did = _register(dataset_manager, _lognorm(_cells()), "deid")
+    rng = np.random.default_rng(0)
+    y = rng.normal(0, 1, N_GENES)
+    y[0:20] += 5
+    genes = [f"G{i}" for i in range(N_GENES)]
+
+    class G:
+        def __init__(self, gene, stat):
+            self.gene, self.logfoldchange, self.pval, self.stat = gene, 1.0, 0.01, stat
+
+    rid = de_results.remember(did, [G(g, v) for g, v in zip(genes, y)] + [G("NOSTAT", None)])
+    by_id = await client.post(f"{API}/datasets/{did}/activity/collectri/de", json={"result_id": rid})
+    by_value = await client.post(f"{API}/datasets/{did}/activity/collectri/de",
+                                 json={"genes": genes, "stats": y.tolist()})
+    assert by_id.status_code == 200, by_id.text
+    assert by_id.json()["results"] == by_value.json()["results"]
+    assert by_id.json()["n_genes"] == N_GENES  # the gene without a statistic is left out
+    gone = await client.post(f"{API}/datasets/{did}/activity/collectri/de", json={"result_id": "nope"})
+    assert gone.status_code == 404 and "run the DE again" in gone.json()["detail"]

@@ -49,7 +49,7 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
       setLoading(true);
       setError(null);
       try {
-        const res = await getDEActivity(datasetId, n, profile.genes, profile.stats);
+        const res = await getDEActivity(datasetId, n, profile.genes, profile.stats, result.result_id);
         setData((d) => ({ ...d, [n]: res }));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -57,7 +57,7 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
         setLoading(false);
       }
     },
-    [datasetId, profile],
+    [datasetId, profile, result.result_id],
   );
 
   const pick = (n: ActivityNetwork) => {

@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import activity, activity_nets
+from scview.core import activity, activity_nets, de_results
 from scview.core.dataset_manager import DatasetManager
 from scview.core.object_cache import ObjectCache
 from scview.core.species import detect_species
@@ -47,10 +47,13 @@ _MODELS = ObjectCache()
 
 
 class DEActivityRequest(BaseModel):
-    """A DE result's per-gene statistic (Wilcoxon z-score or DESeq2 Wald statistic)."""
+    """A DE result's per-gene statistic (Wilcoxon z-score or DESeq2 Wald statistic):
+    by the id the DE response carried (core/de_results.py), which keeps a whole
+    transcriptome out of the request, or as explicit genes and stats."""
 
-    genes: list[str] = Field(max_length=MAX_DE_GENES)
-    stats: list[float] = Field(max_length=MAX_DE_GENES)
+    result_id: str | None = Field(default=None, max_length=64)
+    genes: list[str] = Field(default_factory=list, max_length=MAX_DE_GENES)
+    stats: list[float] = Field(default_factory=list, max_length=MAX_DE_GENES)
 
 
 def _spec(network: str) -> activity_nets.NetworkSpec:
@@ -219,19 +222,29 @@ async def activity_de(
     """ULM on a DE result's per-gene statistic: each source's activity (t), p-value
     and BH-adjusted p, strongest first."""
     s = _spec(network)
-    if len(body.genes) != len(body.stats):
+    if body.result_id:
+        stored = de_results.recall(dataset_id, body.result_id)
+        if stored is None:
+            raise HTTPException(
+                status_code=404,
+                detail="That DE result is no longer kept on the server: run the DE again.",
+            )
+        genes, stats = stored.profile()
+    else:
+        genes, stats = body.genes, body.stats
+    if len(genes) != len(stats):
         raise HTTPException(status_code=400, detail="genes and stats must have the same length.")
-    if not body.genes:
+    if not genes:
         raise HTTPException(status_code=400, detail="No genes given.")
     adata = await _dataset(dm, dataset_id)
     _check_species(adata)
 
     def _run() -> dict:
-        res = activity.score_profile(body.stats, body.genes, _network(network, _net_dir(settings)))
+        res = activity.score_profile(stats, genes, _network(network, _net_dir(settings)))
         res = res.reindex(res["score"].abs().sort_values(ascending=False).index)
         return {
             "network": s.name, "label": s.label, "kind": s.kind, "citation": s.citation,
-            "n_genes": len(body.genes),
+            "n_genes": len(genes),
             "results": [
                 {"source": r.source, "score": round(float(r.score), 3), "pvalue": float(r.pvalue),
                  "padj": float(r.padj), "n_targets": int(r.n_targets)}

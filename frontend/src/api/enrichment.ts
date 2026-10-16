@@ -62,3 +62,80 @@ export async function enrichGeneLists(
     body: JSON.stringify(body),
   });
 }
+
+/** One gene of a DE result for GSEA: ranked by `score` when every gene has one. */
+export interface GseaGene {
+  gene: string;
+  logfoldchange?: number | null;
+  pval?: number | null;
+  score?: number | null;
+}
+
+export interface GseaRequest {
+  /** A DE result by the id its response carried (the server keeps the last few) ... */
+  de_result_id?: string;
+  /** ... or every gene it tested (a whole transcriptome is past the request size cap) ... */
+  genes?: GseaGene[];
+  /** ... or a marker group, ranked by scanpy's score. */
+  column?: string;
+  group?: string;
+  collections: string[];
+  exclude_ribo_mito: boolean;
+  /** Left unset, the backend picks as many as its cost budget allows. */
+  permutations?: number;
+  max_terms?: number;
+}
+
+/** One gene set's GSEA result (backend GseaTerm). */
+export interface GseaTerm {
+  term: string;
+  es: number;
+  /** > 0: the set's genes sit at the top of the ranking. */
+  nes: number;
+  /** Nominal, from permutations; 0 means below 1/permutations. */
+  pvalue: number;
+  fdr: number;
+  /** The set's genes in the ranking. */
+  set_size: number;
+  /** The genes driving the score, in ranking order. */
+  leading_edge: string[];
+  collection: string;
+  collection_name?: string;
+}
+
+export interface GseaSide {
+  n_terms: number;
+  /** FDR < 0.05, counted before `results` is capped. */
+  n_significant: number;
+  results: GseaTerm[];
+}
+
+export interface GseaResponse {
+  rank_metric: "wilcoxon_score" | "signed_log10_p" | "marker_score";
+  rank_metric_label: string;
+  n_genes_ranked: number;
+  n_excluded_ribo_mito: number;
+  n_sets_tested: number;
+  permutations: number;
+  min_size: number;
+  max_size: number;
+  collections: string[];
+  exclude_ribo_mito: boolean;
+  /** NES > 0, and NES < 0. */
+  up: GseaSide;
+  down: GseaSide;
+  /** Seconds the run took; 0 when served from the backend's cache. */
+  seconds: number;
+  cached: boolean;
+  column?: string;
+  group?: string;
+  warning?: string;
+}
+
+/** Preranked GSEA (gseapy prerank) of a DE result or a marker group. */
+export async function runGsea(datasetId: string, body: GseaRequest): Promise<GseaResponse> {
+  return apiFetch<GseaResponse>(`/datasets/${datasetId}/enrichment/gsea`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}

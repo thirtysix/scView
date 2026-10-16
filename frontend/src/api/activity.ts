@@ -78,9 +78,12 @@ export async function getDEActivity(
   network: ActivityNetwork,
   genes: string[],
   stats: number[],
+  resultId?: string | null,
 ): Promise<DEActivityResponse> {
+  // By the id the DE response carried when there is one: a whole transcriptome
+  // sent back can pass the backend's 512 KB request cap.
   return apiFetch<DEActivityResponse>(`/datasets/${datasetId}/activity/${network}/de`, {
     method: "POST",
-    body: JSON.stringify({ genes, stats }),
+    body: JSON.stringify(resultId ? { result_id: resultId } : { genes, stats }),
   });
 }
