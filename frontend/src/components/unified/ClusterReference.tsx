@@ -4,6 +4,7 @@ import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { mapCategoryToColor } from "@/lib/colors";
+import { useObsRevision } from "@/stores/obsRevisionStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -38,6 +39,7 @@ export function ClusterReference({
 }) {
   const paletteName = useSettingsStore((s) => s.categoricalPalette);
   const [clusterValues, setClusterValues] = useState<Int32Array | null>(null);
+  const revision = useObsRevision(datasetId, column); // refetch after hand labels
   const highlightedGroup = useSelectionStore((s) => s.highlightedGroup);
   const setHighlightedGroup = useSelectionStore((s) => s.setHighlight);
   // Index of the highlighted group in this column's categories (null when the
@@ -75,7 +77,7 @@ export function ClusterReference({
     return () => {
       cancelled = true;
     };
-  }, [datasetId, embedding, column]);
+  }, [datasetId, embedding, column, revision]);
 
   const selectedIndices = useMemo(() => {
     if (highlight == null || !clusterValues) return null;

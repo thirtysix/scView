@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Sparkles } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useObsRevision } from "@/stores/obsRevisionStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
@@ -51,6 +52,7 @@ export function UnifiedMarkersSubtab({
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const askCopilot = useViewStore((s) => s.askCopilot);
   const highlighted = useSelectionStore((s) => s.highlightedGroup);
+  const revision = useObsRevision(datasetId, groupByColumn); // refetch after hand labels
 
   const [markersData, setMarkersData] = useState<MarkersResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -111,7 +113,7 @@ export function UnifiedMarkersSubtab({
     return () => {
       cancelled = true;
     };
-  }, [datasetId, groupByColumn]);
+  }, [datasetId, groupByColumn, revision]);
 
   // A cluster clicked in the legend, the cluster map or an Observations row
   // (or highlighted by the co-pilot) opens its markers, when it is a group of

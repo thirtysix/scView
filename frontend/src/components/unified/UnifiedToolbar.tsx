@@ -7,6 +7,8 @@ import { useSplitViewStore } from "@/stores/splitViewStore";
 import { SplitByControl } from "@/components/unified/SplitByControl";
 import { Lasso, RotateCcw, X } from "lucide-react";
 import { formatNumber, prettyObsLabel, prettyEmbeddingLabel, isRedundantClusterCol } from "@/lib/formatting";
+import { LabelSelectionControls } from "@/components/unified/LabelSelection";
+import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -268,6 +270,8 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
           </button>
         </span>
       )}
+      <LabelSelectionControls />
+      <ResolutionSweepControl />
 
       {/* Spacer */}
       <div className="flex-1" />
