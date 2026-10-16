@@ -25,6 +25,8 @@ interface EnrichmentResponse {
   n_genes_used: number;
   results: EnrichmentResult[];
   source: string;
+  /** Set when the (human) gene sets may not fit the dataset, e.g. a mouse dataset. */
+  warning?: string;
 }
 
 interface UnifiedEnrichmentSubtabProps {
@@ -60,6 +62,7 @@ export function UnifiedEnrichmentSubtab({
   const [results, setResults] = useState<EnrichmentResult[]>([]);
   const [isComputing, setIsComputing] = useState(false);
   const [computeError, setComputeError] = useState<string | null>(null);
+  const [warning, setWarning] = useState("");
 
   // Programs: the same enrichment, collapsed by gene overlap into clusters.
   const [network, setNetwork] = useState<EnrichmentNetworkResponse | null>(null);
@@ -90,6 +93,7 @@ export function UnifiedEnrichmentSubtab({
     setNoMarkers(false);
     setMarkersError(null);
     setResults([]);
+    setWarning("");
     setNetwork(null);
     setNetworkError(null);
 
@@ -132,6 +136,7 @@ export function UnifiedEnrichmentSubtab({
   groupRef.current = selectedGroup;
   useEffect(() => {
     setResults([]);
+    setWarning("");
     setNetwork(null);
     setNetworkError(null);
     setComputeError(null);
@@ -203,6 +208,7 @@ export function UnifiedEnrichmentSubtab({
       );
       if (groupRef.current !== selectedGroup) return;
       setResults(data.results ?? []);
+      setWarning(data.warning ?? "");
       void buildNetwork(resolution);
     } catch (err) {
       setComputeError(err instanceof Error ? err.message : String(err));
@@ -403,6 +409,11 @@ export function UnifiedEnrichmentSubtab({
       {computeError && (
         <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
           {computeError}
+        </div>
+      )}
+      {warning && (
+        <div role="note" className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+          {warning}
         </div>
       )}
 

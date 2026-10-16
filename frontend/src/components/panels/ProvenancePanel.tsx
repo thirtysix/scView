@@ -27,6 +27,7 @@ const RERUNNABLE = new Set([
   "marker_genes",
   "enrichment",
   "cell_cycle",
+  "dissociation_stress",
 ]);
 
 // Steps with a single high-value editable parameter.

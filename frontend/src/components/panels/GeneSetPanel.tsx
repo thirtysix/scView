@@ -88,6 +88,8 @@ interface EnrichmentResponse {
   n_genes_used: number;
   results: EnrichmentResult[];
   source: string;
+  /** Set when the (human) gene sets may not fit the dataset, e.g. a mouse dataset. */
+  warning?: string;
 }
 
 type SortField = "term" | "pvalue" | "adjusted_pvalue" | "overlap_count";
@@ -1200,6 +1202,11 @@ export function GeneSetPanel() {
               <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
                 <AlertCircle className="h-4 w-4 flex-shrink-0" />
                 {enrichError}
+              </div>
+            )}
+            {enrichment?.warning && (
+              <div role="note" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                {enrichment.warning}
               </div>
             )}
 

@@ -13,11 +13,21 @@ export interface ClusterQc {
   median_pct_ribo: number | null;
   doublet_fraction: number | null;
   median_doublet_score: number | null;
+  /** Median dissociation-stress score, when the dataset has one. */
+  median_stress_score?: number | null;
+  /** Stress-signature genes among the cluster's top markers. */
+  stress_markers?: string[];
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
 }
 
-export type ClusterFlag = "low_quality" | "high_mito" | "low_genes" | "doublet_rich" | "small";
+export type ClusterFlag =
+  | "low_quality"
+  | "high_mito"
+  | "low_genes"
+  | "doublet_rich"
+  | "stress_driven"
+  | "small";
 
 /** Per-cluster QC for one grouping column (deterministic, no LLM). */
 export interface ClusterQcReport {
