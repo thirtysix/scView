@@ -40,6 +40,44 @@ export interface IntegrateRequest {
   params?: Record<string, number>;
 }
 
+/** Batch mixing of one source dataset (values as in BatchMixing). */
+export interface BatchMixingDataset {
+  label: string;
+  n_cells: number;
+  ideal: number;
+  uncorrected: number | null;
+  corrected: number | null;
+}
+
+/**
+ * Mean fraction of each cell's `k` nearest neighbours that come from another source
+ * dataset, in the uncorrected and the corrected PCA; `ideal` is the value perfect
+ * mixing gives for these dataset sizes.
+ */
+export interface BatchMixing {
+  k: number;
+  label_column: string;
+  n_cells: number;
+  n_scored: number;
+  ideal: number;
+  uncorrected: number | null;
+  corrected: number | null;
+  datasets: BatchMixingDataset[];
+}
+
+export interface JointSummary {
+  dataset_id: string;
+  joint: boolean;
+  label_column?: string | null;
+  cluster_column?: string | null;
+  mixing?: BatchMixing | null;
+}
+
+/** A joint dataset's batch-mixing score; `joint` is false for any other dataset. */
+export async function getJointSummary(datasetId: string): Promise<JointSummary> {
+  return apiFetch<JointSummary>(`/datasets/${datasetId}/integration/summary`);
+}
+
 /** Read-only compatibility check (counts available, shared genes, annotations). */
 export async function planIntegration(datasetIds: string[], labels?: string[]): Promise<IntegrationPlan> {
   return apiFetch<IntegrationPlan>("/integrate/plan", {

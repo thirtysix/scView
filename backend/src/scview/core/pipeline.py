@@ -25,6 +25,15 @@ from scview.core import provenance
 from scview.core.llm import chat_extra
 from scview.core.gene_filters import select_query_genes
 from scview.core.ora_background import write_meta
+from scview.core.uns_keys import (
+    BATCH_MIXING_KEY,
+    enrichment_column,
+    enrichment_key,
+    enrichment_prefix,
+    markers_column,
+    markers_key,
+    meta_prefix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +180,7 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
 
     # Clear uns entries (fixed keys + multi-column marker/enrichment keys)
     for key in ["neighbors", "rank_genes_groups", "scview_active_clustering",
-                "pca", "umap", "leiden", "louvain"]:
+                "pca", "umap", "leiden", "louvain", BATCH_MIXING_KEY]:
         if key in adata.uns:
             del adata.uns[key]
     multi_keys = [k for k in list(adata.uns.keys())
@@ -340,6 +349,7 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> None:
     # A Harmony embedding of the previous PCA would otherwise still be picked up
     # by the neighbour graph; the batch-correction step rebuilds it if it runs.
     adata.obsm.pop("X_pca_harmony", None)
+    adata.uns.pop(BATCH_MIXING_KEY, None)  # scored the previous PCA
     logger.info("PCA: %d components", n_comps)
 
 
@@ -391,6 +401,7 @@ def _run_batch_correction(adata: ad.AnnData, params: PipelineParams) -> None:
             f"Harmony output shape {Z.shape} does not match n_cells={n}."
         )
     adata.obsm["X_pca_harmony"] = np.ascontiguousarray(Z)
+    adata.uns.pop(BATCH_MIXING_KEY, None)  # scored the previous correction
     logger.info("Harmony batch correction using key '%s' -> X_pca_harmony %s",
                 params.batch_key, adata.obsm["X_pca_harmony"].shape)
 
@@ -513,13 +524,13 @@ def _run_marker_genes(adata: ad.AnnData, params: PipelineParams, cb: SubstepCall
             adata.obs[col] = adata.obs[col].astype(str).astype("category")
         sc.tl.rank_genes_groups(adata, groupby=col, method="wilcoxon", pts=True)
         # Store under namespaced key
-        adata.uns[f"rank_genes_groups__{col}"] = adata.uns["rank_genes_groups"].copy()
+        adata.uns[markers_key(col)] = adata.uns["rank_genes_groups"].copy()
         drop_enrichment_cache(adata, col)
         computed += 1
 
     # Leave rank_genes_groups pointing to the active clustering for backward compat
-    if active_clustering and f"rank_genes_groups__{active_clustering}" in adata.uns:
-        adata.uns["rank_genes_groups"] = adata.uns[f"rank_genes_groups__{active_clustering}"]
+    if active_clustering and markers_key(active_clustering) in adata.uns:
+        adata.uns["rank_genes_groups"] = adata.uns[markers_key(active_clustering)]
     elif computed > 0:
         # Point to the first computed column
         first_key = next(k for k in adata.uns if k.startswith("rank_genes_groups__"))
@@ -585,7 +596,7 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
     # Build a flat list of (col, uns_key, groups) for progress tracking
     work_items: list[tuple[str, str, str]] = []  # (col, uns_key, group)
     for col in columns:
-        uns_key = f"rank_genes_groups__{col}"
+        uns_key = markers_key(col)
         if uns_key not in adata.uns:
             if "rank_genes_groups" in adata.uns:
                 rgg = adata.uns["rank_genes_groups"]
@@ -630,7 +641,7 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
                 no_plot=True,
                 cutoff=0.5,
             )
-            store_key = f"enrichment__{col}__{group}"
+            store_key = enrichment_key(col, group)
             if enr.results is not None and not enr.results.empty:
                 from scview.api.v1.enrichment import _normalize_gseapy_record
                 normalized = [
@@ -773,7 +784,7 @@ def _annotate_celltypist(
 
 def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 15) -> dict[str, list[str]]:
     """Top-n marker genes per cluster, reusing precomputed rank_genes_groups when present."""
-    key = f"rank_genes_groups__{groupby}"
+    key = markers_key(groupby)
     if key in adata.uns:
         rgg = adata.uns[key]
     elif (
@@ -965,7 +976,7 @@ def drop_enrichment_cache(adata: ad.AnnData, col: str) -> None:
     The cache is keyed by column and group name only, so after re-annotation or
     new markers a surviving label would otherwise be served its old result.
     """
-    for prefix in (f"enrichment__{col}__", f"ora_meta__{col}__"):
+    for prefix in (enrichment_prefix(col), meta_prefix(col)):
         for k in [k for k in adata.uns if isinstance(k, str) and k.startswith(prefix)]:
             del adata.uns[k]
 
@@ -979,7 +990,7 @@ def _markers_for_column(adata: ad.AnnData, col: str) -> None:
         if adata.obs[col].dtype.name != "category":
             adata.obs[col] = adata.obs[col].astype(str).astype("category")
         sc.tl.rank_genes_groups(
-            adata, groupby=col, method="wilcoxon", pts=True, key_added=f"rank_genes_groups__{col}"
+            adata, groupby=col, method="wilcoxon", pts=True, key_added=markers_key(col)
         )
         drop_enrichment_cache(adata, col)
     except Exception as exc:
@@ -1069,25 +1080,25 @@ def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list
         if embs:
             current["embeddings"] = embs
         active = adata.uns.get("scview_active_clustering")
-        if active:
+        if active and "clustering" in ran:
             current["clustering"] = {
                 "column": active,
                 "method": params.clustering_method,
                 "resolution": params.clustering_resolution,
             }
+        elif active:
+            # Clustering did not run, so params.clustering_* are just defaults: keep
+            # what the run that made the column recorded.
+            recorded = provenance.read_provenance(adata)["current"].get("clustering") or {}
+            if recorded.get("column") != active:
+                current["clustering"] = {"column": active}
         markers_for = sorted(
-            k.split("__", 1)[1]
-            for k in adata.uns
-            if isinstance(k, str) and k.startswith("rank_genes_groups__")
+            c for c in (markers_column(k) for k in adata.uns) if c is not None
         )
         if markers_for:
             current["markers_for"] = markers_for
         enr_for = sorted(
-            {
-                k.split("__")[1]
-                for k in adata.uns
-                if isinstance(k, str) and k.startswith("enrichment__") and len(k.split("__")) >= 2
-            }
+            {c for c in (enrichment_column(k) for k in adata.uns) if c is not None}
         )
         if enr_for:
             current["enrichment_for"] = enr_for

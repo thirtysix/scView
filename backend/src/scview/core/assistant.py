@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from scview.core.assessor import assess_preprocessing
 from scview.core import provenance
 from scview.core.llm import chat_extra
+from scview.core.uns_keys import enrichment_column
 
 logger = logging.getLogger(__name__)
 
@@ -332,7 +333,7 @@ def build_grounding_context(
             else []
         )
         if enr_keys:
-            cols = sorted({k.split("__", 1)[1] for k in enr_keys})
+            cols = sorted({enrichment_column(k) for k in enr_keys})
             lines.append("\n## Pathway enrichment computed for: " + ", ".join(cols))
             sources.append(ChatSource(
                 kind="result", ref="result:enrichment",

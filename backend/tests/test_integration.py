@@ -16,6 +16,7 @@ from scview.core.ingestion.merge import MergeJoin
 from scview.core.integration import (
     LABEL_COLUMN,
     IntegrationError,
+    batch_mixing,
     build_plan,
     build_unit,
     carried_obs,
@@ -23,10 +24,12 @@ from scview.core.integration import (
     load_units,
     looks_like_counts,
     merge_joint,
+    read_batch_mixing,
     recover_counts,
     run_integration_streamed,
     unique_labels,
 )
+from scview.core.uns_keys import BATCH_MIXING_KEY
 
 _TYPES = ["T", "B", "Mono"]
 
@@ -226,6 +229,17 @@ def test_integration_end_to_end_mixes_batches(tmp_path):
     before = _cross_batch_fraction(out.obsm["X_pca"], batch)
     after = _cross_batch_fraction(out.obsm["X_pca_harmony"], batch)
     assert after > before + 0.15, (before, after)
+
+    # The same before/after mixing, scored at integration time and saved with it.
+    assert ("substep", {"step": "batch_correction", "message": "Scoring batch mixing"}) in events
+    mixing = read_batch_mixing(out)
+    assert mixing["uncorrected"] == pytest.approx(
+        _cross_batch_fraction(out.obsm["X_pca"], batch, 30), abs=1e-4
+    )
+    assert mixing["corrected"] == pytest.approx(
+        _cross_batch_fraction(out.obsm["X_pca_harmony"], batch, 30), abs=1e-4
+    )
+    assert mixing["ideal"] == pytest.approx(180 / 359, abs=1e-4)
     ct = out.obs["cell_type"].astype(str).to_numpy()
     assert _cross_batch_fraction(out.obsm["X_pca_harmony"], ct) < 0.05  # biology kept
 
@@ -235,7 +249,7 @@ def test_integration_end_to_end_mixes_batches(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_integrate_endpoints(client, tmp_data_dir):
+async def test_integrate_endpoints(client, tmp_data_dir, dataset_manager):
     _add_dataset(tmp_data_dir, "a", "A", _counts_dataset(seed=1))
     _add_dataset(tmp_data_dir, "b", "B", _counts_dataset(seed=2, batch_shift=3.0))
 
@@ -261,3 +275,109 @@ async def test_integrate_endpoints(client, tmp_data_dir):
     assert info["name"] == "AB"
     assert "X_umap_uncorrected" in info["available_embeddings"]
     assert {"dataset", "cell_type"} <= {c["name"] for c in info["obs_columns"]}
+
+    # The batch-mixing score is part of the joint dataset.
+    r = await client.get(f"/api/v1/datasets/{new_id}/integration/summary")
+    assert r.status_code == 200, r.text
+    summary = r.json()
+    assert summary["joint"] is True
+    assert summary["label_column"] == "dataset"
+    assert summary["cluster_column"] == info["active_clustering"]
+    assert summary["mixing"]["corrected"] is not None
+    assert [d["label"] for d in summary["mixing"]["datasets"]] == ["ctrl", "stim"]
+
+    r = await client.get("/api/v1/datasets/a/integration/summary")
+    assert r.json() == {"dataset_id": "a", "joint": False}
+    r = await client.get("/api/v1/datasets/ghost/integration/summary")
+    assert r.status_code == 404
+
+    # A joint dataset built before the score existed is scored on first view, and saved.
+    import h5py
+
+    derived = next((tmp_data_dir / "derived" / new_id).glob("*.h5ad"))
+    with h5py.File(derived, "a") as f:
+        del f["uns"][BATCH_MIXING_KEY]
+    dataset_manager.evict(new_id)
+    r = await client.get(f"/api/v1/datasets/{new_id}/integration/summary")
+    assert r.json()["mixing"] == summary["mixing"]
+    assert BATCH_MIXING_KEY in ad.read_h5ad(derived).uns
+
+
+# ---------------------------------------------------------------------------
+# Batch mixing
+# ---------------------------------------------------------------------------
+
+
+def _two_datasets(n_a: int, n_b: int, *, separated: bool, seed: int = 0) -> ad.AnnData:
+    """Random 10-d points labelled A/B; ``separated`` moves B far away (no mixing)."""
+    rng = np.random.default_rng(seed)
+    X = rng.normal(size=(n_a + n_b, 10)).astype(np.float32)
+    if separated:
+        X[n_a:] += 100
+    a = ad.AnnData(np.zeros((n_a + n_b, 1), dtype=np.float32))
+    a.obs[LABEL_COLUMN] = pd.Categorical(["A"] * n_a + ["B"] * n_b)
+    a.obsm["X_pca"] = X
+    return a
+
+
+def test_batch_mixing_separated_vs_mixed():
+    a = _two_datasets(200, 200, separated=True)
+    a.obsm["X_pca_harmony"] = _two_datasets(200, 200, separated=False).obsm["X_pca"]
+    m = batch_mixing(a)
+    assert m["k"] == 30 and m["n_scored"] == 400
+    assert m["uncorrected"] == 0.0
+    assert m["ideal"] == pytest.approx(200 / 399, abs=1e-4)
+    assert m["corrected"] == pytest.approx(m["ideal"], abs=0.05)
+    assert m["spaces"] == {"uncorrected": "X_pca", "corrected": "X_pca_harmony"}
+
+
+def test_batch_mixing_ideal_follows_the_dataset_proportions():
+    # 300 A + 100 B: an A cell expects 100/399 others, a B cell 300/399.
+    m = batch_mixing(_two_datasets(300, 100, separated=False))
+    rows = {d["label"]: d for d in m["datasets"]}
+    assert rows["A"]["ideal"] == pytest.approx(100 / 399, abs=1e-4)
+    assert rows["B"]["ideal"] == pytest.approx(300 / 399, abs=1e-4)
+    assert m["ideal"] == pytest.approx((300 * 100 + 100 * 300) / 399 / 400, abs=1e-4)
+    assert m["corrected"] is None, "no corrected space, no corrected score"
+
+
+def test_batch_mixing_excludes_the_cell_itself_among_duplicates():
+    # All points identical: the neighbour order is arbitrary, but with k = n - 1
+    # every cell's neighbours are exactly all the other cells.
+    a = _two_datasets(25, 25, separated=False)
+    a.obsm["X_pca"] = np.zeros_like(a.obsm["X_pca"])
+    m = batch_mixing(a, k=49)
+    assert m["uncorrected"] == pytest.approx(25 / 49, abs=1e-4)
+
+
+def test_batch_mixing_scores_a_subset_of_a_large_dataset():
+    m = batch_mixing(_two_datasets(300, 300, separated=True), max_scored=50)
+    assert m["n_scored"] == 50 and m["n_cells"] == 600
+    assert m["uncorrected"] == 0.0
+
+
+def test_batch_mixing_needs_two_datasets_and_a_pca():
+    assert batch_mixing(_two_datasets(30, 0, separated=False)) is None
+    no_pca = _two_datasets(30, 30, separated=False)
+    del no_pca.obsm["X_pca"]
+    assert batch_mixing(no_pca) is None
+    assert batch_mixing(ad.AnnData(np.zeros((5, 1), dtype=np.float32))) is None
+
+
+def test_redoing_pca_drops_the_mixing_score():
+    from scview.core.pipeline import PipelineParams, run_pipeline
+
+    a = _counts_dataset()
+    a.uns[BATCH_MIXING_KEY] = "{}"
+    out, res = run_pipeline(a, ["normalization", "log_transform", "pca"], PipelineParams(n_comps=10))
+    assert res.errors == {}
+    assert BATCH_MIXING_KEY not in out.uns
+
+
+def test_reset_to_counts_drops_the_mixing_score():
+    from scview.core.pipeline import PipelineParams, _run_reset_to_counts
+
+    a = _counts_dataset()
+    a.layers["counts"] = a.X.copy()
+    a.uns[BATCH_MIXING_KEY] = "{}"
+    assert BATCH_MIXING_KEY not in _run_reset_to_counts(a, PipelineParams()).uns

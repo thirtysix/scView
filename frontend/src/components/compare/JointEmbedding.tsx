@@ -13,6 +13,7 @@ import {
 } from "@/api/integration";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
 import type { DatasetInfo } from "@/api/types";
+import { JointSummary } from "./JointSummary";
 
 /** Pipeline steps of a joint run, in order, with display labels. */
 const STEP_LABELS: Record<string, string> = {
@@ -52,6 +53,7 @@ export function JointEmbedding() {
   const setPanel = useViewStore((s) => s.setPanel);
 
   const [all, setAll] = useState<DatasetInfo[]>([]);
+  const [listing, setListing] = useState(true);
   const [selected, setSelected] = useState<string[]>(current ? [current.id] : []);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [name, setName] = useState("");
@@ -70,7 +72,8 @@ export function JointEmbedding() {
   useEffect(() => {
     listDatasets()
       .then((ds) => setAll(ds.filter((d) => d.status === "ready")))
-      .catch(() => setAll([]));
+      .catch(() => setAll([]))
+      .finally(() => setListing(false));
   }, []);
 
   const byId = useMemo(() => new Map(all.map((d) => [d.id, d])), [all]);
@@ -188,10 +191,20 @@ export function JointEmbedding() {
         where each cell came from. The source datasets are left untouched.
       </p>
 
+      {current && current.id !== resultId && (
+        <JointSummary datasetId={current.id} title={`Open joint dataset: ${current.name}`} />
+      )}
+
       {/* Dataset picker */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="mb-2 text-sm font-semibold text-slate-700">Datasets to integrate</h3>
-        {all.length === 0 && <p className="text-sm text-slate-400">No ready datasets in the library.</p>}
+        {listing ? (
+          <p className="flex items-center gap-2 text-sm text-slate-400">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading datasets…
+          </p>
+        ) : (
+          all.length === 0 && <p className="text-sm text-slate-400">No ready datasets in the library.</p>
+        )}
         <div className="space-y-1.5">
           {all.map((d) => {
             const on = selected.includes(d.id);
@@ -374,6 +387,8 @@ export function JointEmbedding() {
           )}
         </div>
       )}
+
+      {resultId && <JointSummary datasetId={resultId} title="How well the datasets mixed" />}
     </div>
   );
 }
