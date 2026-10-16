@@ -207,4 +207,16 @@ def _run_deseq2(counts_df: pd.DataFrame, meta: pd.DataFrame, design: str):
         if not (np.isfinite(lfc) and np.isfinite(p)):
             continue
         out.append((str(gene), float(lfc), float(p), float(padj) if np.isfinite(padj) else 1.0))
+    # Rank like the Wilcoxon results (scanpy's score order): strongest up first,
+    # strongest down last. Callers take "the top genes" from the front of each
+    # side, and DESeq2 returns genes in input (genome) order.
+    stat = res["stat"].to_dict() if "stat" in res else {}
+
+    def _rank(row: tuple[str, float, float, float]) -> float:
+        s = stat.get(row[0])
+        if s is not None and np.isfinite(s):
+            return float(s)
+        return float(np.sign(row[1]) * -np.log10(max(row[2], 1e-300)))
+
+    out.sort(key=_rank, reverse=True)
     return out

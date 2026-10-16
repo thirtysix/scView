@@ -182,3 +182,13 @@ def test_detect_replicate_key_skips_a_sample_column_that_is_the_condition():
     obs2 = obs.assign(Donor=["d1"] * 4 + ["d2"] * 4, sample=["s1", "s2"] * 4)
     assert _detect_replicate_key(obs2, {"stim"}) == "Donor"
     assert _detect_replicate_key(obs2, {"stim"}, a, b) == "sample"
+
+
+@pytest.mark.asyncio
+async def test_pseudobulk_genes_are_ranked_like_wilcoxon():
+    # Strongest up first, strongest down last; DESeq2 itself returns input order,
+    # and "top genes" (co-pilot questions) are read from the front of each side.
+    a = _donor_counts(DONORS, DONORS)
+    res = await differential_expression_compare("x", _req(), _DM(a))
+    assert res.genes[0].gene == "G0"
+    assert res.genes[-1].gene == "G1"
