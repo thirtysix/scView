@@ -1079,7 +1079,7 @@ export function DataAssessmentPanel() {
                                           disabled={running}
                                           className="h-3.5 w-3.5 rounded border-slate-300 text-blue-500 focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                         />
-                                        <span>{Boolean(currentVal) ? "Yes" : "No"}</span>
+                                        <span>{currentVal ? "Yes" : "No"}</span>
                                       </label>
                                     ) : pc.type === "number" ? (
                                       <input
