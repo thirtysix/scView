@@ -13,6 +13,8 @@ import { useSettingsStore } from "@/stores/settingsStore";
 
 /** Cell values are written in the heatmap up to this many groups. */
 const MAX_LABELLED = 15;
+const MIN_HEIGHT = 240;
+const MAX_HEIGHT = 420;
 
 /**
  * Distances between the groups of a column in the PCs the neighbour graph was
@@ -24,14 +26,12 @@ export function ClusterDistanceHeatmap({
   datasetId,
   defaultColumn,
   columns,
-  height,
 }: {
   datasetId: string;
   /** The column shown until the user picks another (the plot's grouping) */
   defaultColumn: string;
   /** Categorical columns to choose from */
   columns: readonly { name: string; n_unique: number }[];
-  height: number;
 }) {
   const [picked, setPicked] = useState<{ datasetId: string; column: string } | null>(null);
   const column =
@@ -65,6 +65,8 @@ export function ClusterDistanceHeatmap({
   );
   const focus = highlighted && data && highlighted.column === column ? highlighted.value : null;
   const nearest = focus && data ? nearestGroups(data, focus) : [];
+  // Tall enough for a row label per group, but it shares the column with the plot.
+  const height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, (heat?.labels.length ?? 0) * 16 + 110));
 
   return (
     <div className="space-y-1 text-[11px] text-slate-500">

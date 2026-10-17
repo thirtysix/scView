@@ -47,7 +47,6 @@ export function UnifiedBottomPanel({
     `truncate rounded px-1.5 py-0.5 hover:bg-slate-100 ${
       isOpen && shown === v ? "font-semibold text-slate-700" : "text-slate-500"
     }`;
-  const nGroups = Math.max(2, distanceColumns.find((c) => c.name === distanceColumn)?.n_unique ?? 10);
 
   return (
     <div className="flex-shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -87,7 +86,6 @@ export function UnifiedBottomPanel({
             datasetId={datasetId}
             defaultColumn={distanceColumn}
             columns={distanceColumns}
-            height={Math.min(420, Math.max(240, nGroups * 16 + 110))}
           />
         </div>
       )}

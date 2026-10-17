@@ -107,8 +107,8 @@ export function SplitScatterGrid({
     () => (ready ? buildSplitPanels(codes, categories, sample) : { panels: [], missing: 0 }),
     [ready, codes, categories, sample],
   );
-  // Each panel draws its cells in the seeded order the single plot uses, a
-  // selection last (lib/drawOrder.ts); slot s of panel p is cell orders[p][s].
+  // Each panel draws its cells in a seeded random order, a selection last
+  // (lib/drawOrder.ts); slot s of panel p is cell orders[p][s].
   const shuffled = useMemo(() => panels.map((p) => shuffledOrder(p.indices)), [panels]);
   const orders = useMemo(() => shuffled.map((o) => selectedLast(o, selectedIndices)), [shuffled, selectedIndices]);
   const panelPositions = useMemo(

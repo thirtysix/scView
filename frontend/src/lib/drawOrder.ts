@@ -30,7 +30,13 @@ function mulberry32(seed: number): () => number {
 /** The cells `cells` (all 0..n-1 when a number) in a seeded random order
  *  (Fisher-Yates): the same input gives the same order. */
 export function shuffledOrder(cells: Uint32Array | number, seed = DRAW_SEED): Uint32Array {
-  const out = typeof cells === "number" ? Uint32Array.from({ length: cells }, (_, i) => i) : Uint32Array.from(cells);
+  let out: Uint32Array;
+  if (typeof cells === "number") {
+    out = new Uint32Array(cells);
+    for (let i = 0; i < cells; i++) out[i] = i;
+  } else {
+    out = Uint32Array.from(cells);
+  }
   const rand = mulberry32(seed);
   for (let i = out.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));

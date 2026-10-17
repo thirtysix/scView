@@ -49,7 +49,7 @@ const trace = () => (plotProps.current!.data as Trace[])[0]!;
 function renderHeatmap(defaultColumn = "cluster") {
   return render(
     <QueryClientProvider client={new QueryClient()}>
-      <ClusterDistanceHeatmap datasetId="kang" defaultColumn={defaultColumn} columns={COLUMNS} height={300} />
+      <ClusterDistanceHeatmap datasetId="kang" defaultColumn={defaultColumn} columns={COLUMNS} />
     </QueryClientProvider>,
   );
 }
@@ -70,6 +70,7 @@ describe("ClusterDistanceHeatmap", () => {
     expect(trace().z[2]).toEqual([17.6, 13.9, null, 8.6]);
     expect(trace().text[2]![3]).toContain("<b>CD14 Mono</b> to <b>CD16 Mono</b><br>distance 8.60");
     expect(trace().texttemplate).toBe("%{z:.1f}"); // few groups: values written in
+    expect((plotProps.current!.layout as { height: number }).height).toBe(240); // the minimum
     expect(screen.getByText(/50 Harmony-corrected PCs, the space the neighbour graph was built in/)).toBeInTheDocument();
     expect(screen.getByText(/3 cells without a group are left out/)).toBeInTheDocument();
   });

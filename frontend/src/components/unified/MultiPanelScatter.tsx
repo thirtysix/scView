@@ -339,7 +339,7 @@ export function MultiPanelScatter({
         <span className="truncate">{header}</span>
         {sampledBadge && <span className="flex-shrink-0 text-[10px] text-slate-400">{sampledBadge}</span>}
         <div className="flex-1" />
-        <EmbeddingCaveat embedding={embedding} className="flex-shrink-0 px-0" />
+        <EmbeddingCaveat embedding={embedding} className="flex-shrink-0" />
         {headerControls}
         <button
           onClick={resetView}
