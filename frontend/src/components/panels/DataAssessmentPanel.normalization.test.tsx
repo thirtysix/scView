@@ -10,6 +10,7 @@ vi.mock("@/components/panels/QcPlots", () => ({ QcPlots: () => null }));
 vi.mock("@/components/panels/ClusterQcTable", () => ({ ClusterQcTable: () => null }));
 vi.mock("@/components/panels/QcReportCard", () => ({ QcReportCard: () => null }));
 vi.mock("@/components/panels/AnnotationControl", () => ({ AnnotationControl: () => null }));
+vi.mock("@/components/panels/AnnotationConfidenceCard", () => ({ AnnotationConfidenceCard: () => null }));
 vi.mock("@/components/panels/MeanVariancePlot", () => ({ MeanVariancePlot: () => null }));
 
 import { DataAssessmentPanel } from "./DataAssessmentPanel";

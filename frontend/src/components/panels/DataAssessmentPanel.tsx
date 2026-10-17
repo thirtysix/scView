@@ -12,6 +12,7 @@ import { QcPlots } from "@/components/panels/QcPlots";
 import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
 import { QcReportCard } from "@/components/panels/QcReportCard";
 import { AnnotationControl } from "@/components/panels/AnnotationControl";
+import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfidenceCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { flattenStepParams, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
@@ -866,6 +867,9 @@ export function DataAssessmentPanel() {
 
           {/* Cell-type annotation */}
           <AnnotationControl onAnnotate={annotate} running={running} />
+
+          {/* How well each cell's label fits (conformal prediction sets) */}
+          <AnnotationConfidenceCard datasetId={datasetId} />
 
           {/* Pipeline progress bar — visible while running or just completed */}
           {(running || runResult) && runProgress && (
