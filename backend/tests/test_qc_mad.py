@@ -227,6 +227,24 @@ def test_the_run_records_the_mode_k_and_each_samples_thresholds():
     assert "qc_thresholds" not in p and "qc_mad_k" not in p
 
 
+def test_the_methods_text_gets_one_line_not_every_samples_bounds():
+    from types import SimpleNamespace
+
+    from scview.core.assistant import _methods_skeleton
+
+    a = _qc({"d1": 300, "d2": 300, "tiny": 40})
+    out, _ = run_pipeline(a, ["filtering"], PipelineParams(min_cells=0))
+    applied = provenance.read_provenance(out)["history"][-1]["params"]["qc_thresholds"]
+    line = qc_filter.applied_summary(applied)
+    assert line.startswith("outliers beyond median +/- 5.0 MADs of log1p counts and genes")
+    assert "within each Donor (3 samples, 1 too small and judged on all cells)" in line
+    assert "counts per cell kept from" in line and "% mito below" in line
+    text = _methods_skeleton(SimpleNamespace(adata=out))
+    assert "cell thresholds: outliers beyond median" in text and "'skipped'" not in text
+    pooled = dict(applied, column=None, samples=[])
+    assert "over all cells (no sample column)" in qc_filter.applied_summary(pooled)
+
+
 def test_a_bad_mode_fails_the_step_not_the_run():
     a = _qc({"d1": 300})
     out, res = run_pipeline(a, ["filtering"], PipelineParams(qc_threshold_mode="loose"))
@@ -272,6 +290,15 @@ def test_filtering_again_with_the_same_settings_reuses_the_thresholds():
     assert out["mad"]["reused_from"] is None and out["n_removed"] > 0
     blank = _qc({"d1": 300})
     assert qc_filter.preview(blank, per_cell_qc(blank), MAD)["previous"] is None
+
+
+def test_a_malformed_record_is_not_reused():
+    a = _qc({"d1": 300, "d2": 300})
+    once, _ = run_pipeline(a, ["filtering"], PipelineParams(min_cells=0))
+    rec = qc_filter.recorded_filtering(once)
+    rec["qc_thresholds"]["samples"][0]["max_genes"] = "lots"
+    b = qc_filter.mad_bounds(per_cell_qc(once), MAD, qc_filter.samples_of(once), rec)
+    assert b.reused_from is None
 
 
 def test_a_fixed_run_before_is_not_reused():

@@ -231,6 +231,10 @@ def _reusable(recorded: dict | None, t: Thresholds, column: str | None,
     rec = recorded.get("qc_thresholds")
     if not isinstance(rec, dict) or not isinstance(rec.get("pooled"), dict):
         return None
+    rows = [rec["pooled"], *(rec.get("samples") or [])]
+    if not all(isinstance(r, dict) and all(r.get(b) is None or isinstance(r.get(b), (int, float))
+                                           for b in _BOUNDS) for r in rows):
+        return None  # not a record this code wrote: work them out afresh
     same = (rec.get("k"), rec.get("k_mt"), rec.get("ceiling_pct_mt"), rec.get("column"))
     return rec if same == (t.mad_k, t.mad_k_mt, ceiling, column) else None
 
@@ -367,6 +371,37 @@ def judge(adata, cells: dict, t: Thresholds, samples: Samples | None = None
     bounds = mad_bounds(cells, t, samples if samples is not None else samples_of(adata),
                         recorded_filtering(adata))
     return removed_by(cells, t, calls, bounds), bounds
+
+
+def applied_summary(applied: dict) -> str:
+    """A MAD run's recorded thresholds (``MadBounds.to_dict``) in one line, for a
+    methods text: the rule, the samples, and the range of each bound across them."""
+    samples = applied.get("samples") or []
+    rows = samples or [applied.get("pooled") or {}]
+
+    def span(key: str, digits: int = 0) -> str | None:
+        vals = [float(r[key]) for r in rows if isinstance(r.get(key), (int, float))]
+        if not vals:
+            return None
+        lo, hi = f"{min(vals):,.{digits}f}", f"{max(vals):,.{digits}f}"
+        return lo if lo == hi else f"{lo}-{hi}"
+
+    parts = []
+    for label, below, above in (("counts", "min_counts", "max_counts"),
+                                ("genes", "min_genes", "max_genes")):
+        a, b = span(below), span(above)
+        if a or b:
+            parts.append(f"{label} per cell kept from {a or 'any'} to {b or 'any'}")
+    mt = span("max_pct_mt", 1)
+    if mt:
+        parts.append(f"% mito below {mt}")
+    n_pooled = sum(1 for s in samples if s.get("pooled"))
+    where = (f"within each {applied['column']} ({len(samples)} samples"
+             + (f", {n_pooled} too small and judged on all cells" if n_pooled else "") + ")"
+             if applied.get("column") else "over all cells (no sample column)")
+    rule = (f"outliers beyond median +/- {applied.get('k')} MADs of log1p counts and genes"
+            f" and above median + {applied.get('k_mt')} MADs of % mito")
+    return f"{rule}, {where}" + (": " + "; ".join(parts) if parts else "")
 
 
 def recorded_filtering(adata) -> dict | None:
