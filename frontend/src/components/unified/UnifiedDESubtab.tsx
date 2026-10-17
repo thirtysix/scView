@@ -7,9 +7,11 @@ import { useDESettingsStore, type DEMode, type DETest } from "@/stores/deSetting
 import { computeDE, computeDECompare, type DEResponse } from "@/api/de";
 import type { ActivityRef } from "@/api/activity";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
+import { DetectionHistogram } from "@/components/plots/DetectionHistogram";
 import { DEEnrichment } from "@/components/unified/DEEnrichment";
 import { DEActivity } from "@/components/unified/DEActivity";
 import { downloadCsv } from "@/lib/csv";
+import { describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
 import {
   deGeneQuestion,
   deResultQuestion,
@@ -78,6 +80,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const withinVal = useDESettingsStore((s) => s.withinVal);
   const test = useDESettingsStore((s) => s.test);
   const replicateKey = useDESettingsStore((s) => s.replicateKey);
+  const minPct = useDESettingsStore((s) => s.minPct);
   const update = useDESettingsStore((s) => s.update);
   const setMode = (m: Mode) => update({ mode: m });
   const setFcThreshold = (v: number) => update({ fcThreshold: v });
@@ -147,7 +150,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     setError(null);
     try {
       const label = highlighted?.value ?? "selection";
-      const res = await computeDE(datasetId, Array.from(selected), label);
+      const res = await computeDE(datasetId, Array.from(selected), label, minPct);
       setResult(res);
       setRefLabel("rest");
       setComparison({ a: label, b: "rest", betweenGroups: false });
@@ -156,7 +159,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [datasetId, selected, highlighted]);
+  }, [datasetId, selected, highlighted, minPct]);
 
   const runCompare = useCallback(async () => {
     if (!datasetId || !splitBy || !groupA || !groupB) return;
@@ -169,7 +172,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
         group_a: groupA,
         group_b: groupB,
         ...(scoped ? { within_column: withinCol, within_value: withinVal } : {}),
-        ...(test === "pseudobulk" ? { method: "pseudobulk", replicate_key: replicateKey } : {}),
+        ...(test === "pseudobulk"
+          ? { method: "pseudobulk", replicate_key: replicateKey }
+          : { min_pct: minPct }),
       });
       setResult(res);
       setRefLabel(groupB);
@@ -184,7 +189,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey]);
+  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey, minPct]);
 
   // Significant genes, most significant first, for the table.
   const sigGenes = useMemo(() => {
@@ -225,6 +230,33 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
 
   const selectCls =
     "min-w-0 flex-1 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700";
+
+  // The cell-level test's gene prefilter (pseudobulk filters on summed counts).
+  const minPctRow = (
+    <div className="flex items-center gap-1.5">
+      <span
+        className="w-12 font-medium text-slate-500"
+        title="Test only genes detected (> 0) in at least this share of the cells of either group: fewer tests, so a fairer multiple-testing correction, and no near-absent genes at the edges of the volcano."
+      >
+        Genes
+      </span>
+      <select
+        aria-label="Genes tested"
+        value={minPct}
+        onChange={(e) => update({ minPct: Number(e.target.value) })}
+        className={selectCls}
+      >
+        {minPctChoices(minPct).map((c) => (
+          <option key={c.value} value={c.value}>
+            {c.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+  const shownMinPct = result?.min_pct ?? 0;
+  const pendingMinPct =
+    result?.detection && result.method !== "pseudobulk" && minPct !== shownMinPct ? minPct : null;
 
   return (
     <div className="flex flex-col gap-3">
@@ -342,6 +374,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                   ))}
                 </div>
               </div>
+              {test !== "pseudobulk" && minPctRow}
               {test === "pseudobulk" && (
                 <>
                   <div className="flex items-center gap-1.5">
@@ -390,7 +423,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
           )}
         </div>
       ) : (
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs">
+      <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs">
         {nSelected < 3 ? (
           <div className="flex items-start gap-2 text-slate-500">
             <Lasso className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
@@ -415,6 +448,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             </button>
           </div>
         )}
+        {minPctRow}
       </div>
       )}
 
@@ -459,6 +493,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             {result.label} (n={result.n_selected.toLocaleString()}) vs {refLabel} (n=
             {result.n_rest.toLocaleString()}) · {sigGenes.length.toLocaleString()} significant of{" "}
             {result.genes.length.toLocaleString()} genes · click a point or row to overlay it
+            {result.method !== "pseudobulk" && describePrefilter(result) && (
+              <span className="mt-0.5 block">{describePrefilter(result)}</span>
+            )}
             {result.method === "pseudobulk" ? (
               <span className="mt-0.5 block">
                 Pseudobulk DESeq2 (Wald test, design <code>{result.design}</code>): donors (
@@ -508,6 +545,33 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
               </span>
             )}
           </div>
+
+          {/* Gene detection, with the prefilter's cut-off */}
+          {result.detection && result.detection.length > 1 && (
+            <div className="rounded-lg border border-slate-200 px-2 pt-1.5 text-[10px] text-slate-500">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-medium text-slate-600">Gene detection</span>
+                <span className="truncate">
+                  genes by the larger share of cells they are detected in, of the two groups
+                </span>
+              </div>
+              <DetectionHistogram
+                detection={result.detection}
+                minPct={shownMinPct}
+                pending={pendingMinPct}
+              />
+              <p className="pb-1.5">
+                {shownMinPct > 0
+                  ? `Grey: left out (under ${formatPct(shownMinPct)}, dashed line). `
+                  : "Every gene was tested. "}
+                {pendingMinPct != null &&
+                  `${pendingMinPct > 0 ? `At ${formatPct(pendingMinPct)} (dotted line)` : "With no cut-off"}, ${genesPassing(
+                    result.detection,
+                    pendingMinPct,
+                  ).toLocaleString()} genes would be tested: compute again to apply.`}
+              </p>
+            </div>
+          )}
 
           {/* Volcano */}
           <div className="rounded-lg border border-slate-200">

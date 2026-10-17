@@ -58,6 +58,15 @@ describe("DEActivity", () => {
     fireEvent.click(screen.getByRole("button", { name: /score/i }));
     await waitFor(() => screen.getByText("STAT1"));
     expect(getDEActivity).toHaveBeenCalledWith("d1", "collectri", ["ISG15", "CD14"], [56, -9], "r1");
+    expect(screen.queryByText(/genes the DE tested/)).toBeNull();
+  });
+
+  it("says when only the genes a prefiltered DE tested were scored", async () => {
+    getDEActivity.mockResolvedValueOnce({ ...TF, n_genes: 8123, de_min_pct: 0.1, de_n_genes_skipped: 5930 });
+    render(<DEActivity datasetId="d1" result={{ ...RESULT, result_id: "r1" }} labelA="STIM" labelB="CTRL" onScore={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /score/i }));
+    await waitFor(() => screen.getByText("STAT1"));
+    expect(screen.getByText(/Scored on the 8,123 genes the DE tested \(detected in at least 10% of either group\)/)).toBeTruthy();
   });
 
   it("colours the cells by a row's source, and scores pathways on switching", async () => {

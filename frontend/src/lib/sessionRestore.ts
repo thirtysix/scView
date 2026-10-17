@@ -103,6 +103,7 @@ export function captureSession(now: Date = new Date()): SessionFile {
       test: de.test,
       replicate_key: de.replicateKey,
       fc_threshold: de.fcThreshold,
+      min_pct: de.minPct,
     },
     colors: {
       categorical_palette: settings.categoricalPalette,
@@ -338,6 +339,7 @@ function applyDE(session: SessionFile, d: DatasetInfo, notes: string[]) {
     ...(de.mode ? { mode: de.mode } : {}),
     ...(de.test ? { test: de.test } : {}),
     ...(de.fc_threshold != null ? { fcThreshold: de.fc_threshold } : {}),
+    ...(de.min_pct != null ? { minPct: de.min_pct } : {}),
   });
   if (de.split_by) {
     if (has(de.split_by)) {

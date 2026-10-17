@@ -52,6 +52,9 @@ export interface DEActivityResponse {
   kind: "tf" | "pathway";
   citation: string;
   n_genes: number;
+  /** A stored DE result's detection prefilter: only the genes it tested are scored. */
+  de_min_pct?: number | null;
+  de_n_genes_skipped?: number | null;
   results: DEActivityResult[];
 }
 

@@ -222,6 +222,7 @@ async def activity_de(
     """ULM on a DE result's per-gene statistic: each source's activity (t), p-value
     and BH-adjusted p, strongest first."""
     s = _spec(network)
+    prefilter: dict = {}
     if body.result_id:
         stored = de_results.recall(dataset_id, body.result_id)
         if stored is None:
@@ -230,6 +231,9 @@ async def activity_de(
                 detail="That DE result is no longer kept on the server: run the DE again.",
             )
         genes, stats = stored.profile()
+        # Only the genes the DE's detection prefilter let through have a statistic.
+        if stored.min_pct is not None:
+            prefilter = {"de_min_pct": stored.min_pct, "de_n_genes_skipped": stored.n_skipped}
     else:
         genes, stats = body.genes, body.stats
     if len(genes) != len(stats):
@@ -245,6 +249,7 @@ async def activity_de(
         return {
             "network": s.name, "label": s.label, "kind": s.kind, "citation": s.citation,
             "n_genes": len(genes),
+            **prefilter,
             "results": [
                 {"source": r.source, "score": round(float(r.score), 3), "pvalue": float(r.pvalue),
                  "padj": float(r.padj), "n_targets": int(r.n_targets)}

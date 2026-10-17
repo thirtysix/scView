@@ -1,5 +1,6 @@
 import type { DEGene, DEResponse } from "@/api/de";
 import type { ObsColumnInfo } from "@/api/types";
+import { formatPct } from "@/lib/deDetection";
 import { formatPValue } from "@/lib/formatting";
 
 /** Most-specific first: a donor column beats a per-sample one, which may also
@@ -116,7 +117,11 @@ function describeTest(c: DEComparison, r: DEResponse): string {
     : r.underreplicated
       ? "; under-replicated, so p-values are optimistic"
       : "; p-values are optimistic if the groups also differ by donor";
-  return `${c.a} vs ${c.b}${where}, cell-level Wilcoxon (${cells}${caveat})`;
+  // A gene left out by the prefilter was not tested, which is not "no difference".
+  const genes = r.min_pct
+    ? `; ${num(r.n_genes_tested)} genes detected in at least ${formatPct(r.min_pct)} of either group tested`
+    : "";
+  return `${c.a} vs ${c.b}${where}, cell-level Wilcoxon (${cells}${genes}${caveat})`;
 }
 
 /** Question about one gene of a DE result. */

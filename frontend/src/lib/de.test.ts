@@ -96,6 +96,14 @@ describe("DE co-pilot questions", () => {
     );
   });
 
+  it("says which genes a prefiltered result tested", () => {
+    const r: DEResponse = { n_selected: 40, n_rest: 60, label: "A", genes, min_pct: 0.1, n_genes_tested: 8123 };
+    expect(describeComparison({ a: "B cells", b: "rest", betweenGroups: false }, r)).toBe(
+      "B cells vs rest, cell-level Wilcoxon (40 vs 60 cells; 8,123 genes detected in at least 10% " +
+        "of either group tested)",
+    );
+  });
+
   it("says which side a gene is higher in", () => {
     const q = deGeneQuestion(groups, pseudobulkRes, genes[2]!);
     expect(q).toContain("CCL2 has log2 fold change -1.50 (higher in CTRL), adjusted p 0.0010");

@@ -12,6 +12,7 @@ import {
 import { InfoTip } from "@/components/common/InfoTip";
 import { activityLabel, deProfile } from "@/lib/activity";
 import { downloadCsv } from "@/lib/csv";
+import { formatPct } from "@/lib/deDetection";
 import { formatPValue } from "@/lib/formatting";
 
 interface Props {
@@ -184,6 +185,10 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
           <p className="text-[10px] text-slate-400">
             Strongest {Math.min(SHOWN, shown.results.length)} by |activity|; the CSV has all. {shown.label}:{" "}
             {shown.citation}. Higher in {labelB} means a negative score.
+            {shown.de_min_pct
+              ? ` Scored on the ${shown.n_genes.toLocaleString()} genes the DE tested (detected in at least ` +
+                `${formatPct(shown.de_min_pct)} of either group); targets it left out are not used.`
+              : ""}
           </p>
         </>
       )}
