@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-17
+
 ### Added
 - **Seurat v3 variable genes.** Processing offers the Seurat v3 HVG flavour, which ranks genes by
   the standardised variance of the raw counts (with a batch column, by how many batches pick them).
