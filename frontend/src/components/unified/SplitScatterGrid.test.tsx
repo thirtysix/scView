@@ -146,6 +146,12 @@ describe("SplitScatterGrid", () => {
     expect(vs["split-0"]).toBe(vs["split-1"]);
   });
 
+  it("notes in its header that a UMAP's cluster gaps aren't distances", async () => {
+    renderGrid();
+    await screen.findByTestId("deck");
+    expect(screen.getByTestId("embedding-caveat")).toHaveTextContent("UMAP: gaps between clusters");
+  });
+
   it("links the cameras: panning one panel moves them all", async () => {
     renderGrid();
     await screen.findByTestId("deck");
@@ -162,10 +168,18 @@ describe("SplitScatterGrid", () => {
     renderGrid(onHover);
     await screen.findByTestId("deck");
     const hover = deckProps.current!.onHover as (info: unknown) => void;
-    onHover.mockClear();
-    hover({ picked: true, index: 2, x: 10, y: 20, layer: { id: "split-fg-1" } });
-    // STIM's third drawn cell is cell 5.
-    expect(onHover).toHaveBeenCalledWith(expect.objectContaining({ index: 5 }));
+    // Panels draw their cells in a shuffled order: each slot reports the cell it
+    // draws (cell c sits at x = c), and STIM's slots cover its cells 1, 3, 5.
+    const stim = (deckProps.current!.layers as { id: string; props: { data: { attributes: { getPosition: { value: Float32Array } } } } }[])
+      .find((l) => l.id === "split-fg-1")!.props.data.attributes.getPosition.value;
+    const reported = [0, 1, 2].map((s) => {
+      onHover.mockClear();
+      hover({ picked: true, index: s, x: 10, y: 20, layer: { id: "split-fg-1" } });
+      const { index } = onHover.mock.calls[0]![0] as { index: number };
+      expect(index).toBe(stim[s * 2]);
+      return index;
+    });
+    expect(reported.sort()).toEqual([1, 3, 5]);
     hover({ picked: false, index: -1, x: 0, y: 0, layer: null });
     expect(onHover).toHaveBeenLastCalledWith(null);
   });
