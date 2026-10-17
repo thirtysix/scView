@@ -198,6 +198,9 @@ export type FilterCriterion =
   | "max_pct_mt"
   | "doublets";
 
+/** A sample's QC medians set it apart from the other samples (backend qc_groups.sample_summary). */
+export type SampleFlag = "few_cells" | "low_genes" | "high_genes" | "low_counts" | "high_counts" | "high_mito";
+
 export interface FilterGroupLoss {
   name: string;
   n_cells: number;
@@ -205,6 +208,13 @@ export interface FilterGroupLoss {
   fraction: number;
   /** Cells each threshold removes from the group on its own. */
   by_criterion: Partial<Record<FilterCriterion, number>>;
+  /** Samples only: the median per cell (no % mito key when it can't be measured). */
+  median_genes?: number | null;
+  median_counts?: number | null;
+  median_pct_mt?: number | null;
+  flags?: SampleFlag[];
+  /** One sentence per flag, with the numbers. */
+  reasons?: string[];
 }
 
 export interface FilterGrouping {
@@ -213,6 +223,11 @@ export interface FilterGrouping {
   groups: FilterGroupLoss[];
   /** Set when the column has too many groups to list. */
   note?: string;
+  /** Samples only: the median of the sample medians, keyed like the group fields. */
+  typical?: Partial<Record<"median_genes" | "median_counts" | "median_pct_mt", number>>;
+  flag_help?: Partial<Record<SampleFlag, string>>;
+  /** Enough samples (3+) to say which stands out. */
+  compared?: boolean;
 }
 
 /** One sample's MAD bounds, in counts, genes and % (null: none, its MAD was 0). */

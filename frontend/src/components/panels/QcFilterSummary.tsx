@@ -5,12 +5,12 @@ import {
   type FilterGrouping,
   type FilterPreview,
   type FilterThresholds,
-  type MadThresholds,
   type QcThresholdMode,
 } from "@/api/qc";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { qcGroupOptions } from "@/lib/qcGroups";
 import { bound, pct, thresholdMode } from "@/lib/qcThresholds";
+import { SampleQcTable } from "@/components/panels/SampleQcTable";
 
 const DEBOUNCE_MS = 150;
 const ROWS = 6; // per table, more behind "show all"
@@ -65,94 +65,6 @@ function LossTable({ title, grouping }: { title: string; grouping: FilterGroupin
         <button type="button" onClick={() => setAll((v) => !v)} className="text-[11px] text-primary hover:underline">
           {all ? "Show fewer" : `Show all ${rows.length}`}
         </button>
-      )}
-    </div>
-  );
-}
-
-/** A count range a sample keeps: "312–9,870"; a side without a bound reads "any". */
-function keptRange(lo: number | null, hi: number | null): string {
-  if (lo === null && hi === null) return "any";
-  return `${lo === null ? "any" : bound(lo)}–${hi === null ? "any" : bound(hi)}`;
-}
-
-/** MAD mode: each sample's bounds and what they remove, in the samples' own order. */
-export function SampleThresholds({ mad }: { mad: MadThresholds }) {
-  const [all, setAll] = useState(false);
-  if (!mad.column) {
-    const p = mad.pooled;
-    return (
-      <p className="text-[11px] text-slate-600" data-testid="mad-pooled">
-        No sample column found, so all cells are one group: kept with {keptRange(p.min_counts, p.max_counts)} counts
-        and {keptRange(p.min_genes, p.max_genes)} genes per cell
-        {p.max_pct_mt !== null ? `, under ${bound(p.max_pct_mt, 1)}% mito` : ""}.
-      </p>
-    );
-  }
-  const shown = all ? mad.samples : mad.samples.slice(0, ROWS);
-  const hasMt = mad.samples.some((s) => s.max_pct_mt !== null);
-  const skipped = (s: MadThresholds["samples"][number], metric: string) =>
-    s.skipped.includes(metric) ? "Its MAD is 0 (most cells alike): no bound from it here." : undefined;
-  return (
-    <div>
-      <p className="mb-0.5 text-[11px] font-medium text-slate-600">
-        Thresholds per sample <span className="font-normal text-slate-400">({mad.column}; cells kept within)</span>
-      </p>
-      <table className="w-full text-[11px]" aria-label="Thresholds per sample">
-        <thead>
-          <tr className="text-left text-slate-400">
-            <th className="font-medium">{mad.column}</th>
-            <th className="text-right font-medium">Cells</th>
-            <th className="text-right font-medium">Counts</th>
-            <th className="text-right font-medium">Genes</th>
-            {hasMt && <th className="text-right font-medium">Max % mito</th>}
-            <th className="text-right font-medium">Removed</th>
-          </tr>
-        </thead>
-        <tbody className="text-slate-600">
-          {shown.map((s) => (
-            <tr key={s.name}>
-              <td
-                className="max-w-[8rem] truncate pr-2"
-                title={
-                  s.pooled
-                    ? `${s.name}: fewer than ${mad.min_sample_cells} cells, so judged against all cells pooled`
-                    : s.name
-                }
-              >
-                {s.name}
-                {s.pooled && <span className="text-slate-400"> (pooled)</span>}
-              </td>
-              <td className="text-right">{s.n_cells.toLocaleString()}</td>
-              <td className="text-right" title={skipped(s, "total_counts")}>
-                {keptRange(s.min_counts, s.max_counts)}
-              </td>
-              <td className="text-right" title={skipped(s, "n_genes")}>
-                {keptRange(s.min_genes, s.max_genes)}
-              </td>
-              {hasMt && (
-                <td className="text-right" title={skipped(s, "pct_mt")}>
-                  {s.max_pct_mt === null ? "any" : `< ${bound(s.max_pct_mt, 1)}`}
-                </td>
-              )}
-              <td className="text-right">
-                {s.n_removed === undefined
-                  ? "—"
-                  : `${s.n_removed.toLocaleString()} (${pct(s.n_cells ? s.n_removed / s.n_cells : 0)})`}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {mad.samples.length > ROWS && (
-        <button type="button" onClick={() => setAll((v) => !v)} className="text-[11px] text-primary hover:underline">
-          {all ? "Show fewer" : `Show all ${mad.samples.length}`}
-        </button>
-      )}
-      {mad.n_unlabelled > 0 && (
-        <p className="text-[11px] text-slate-400">
-          {mad.n_unlabelled.toLocaleString()} cells without a {mad.column} value are judged against all cells pooled.
-        </p>
       )}
     </div>
   );
@@ -347,68 +259,68 @@ export function QcFilterSummary({
   );
   const mad = mode === "mad" ? (preview.mad ?? null) : null;
   return (
-    <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="qc-loss-summary">
-      {header}
-      {mode === "mad" && <MadControls thresholds={thresholds} preview={preview} onChange={onChange} />}
-      {error && (
-        <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          {error}
+    <>
+      <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="qc-loss-summary">
+        {header}
+        {mode === "mad" && <MadControls thresholds={thresholds} preview={preview} onChange={onChange} />}
+        {error && (
+          <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {error}
+          </p>
+        )}
+        <p className="text-[11px] text-slate-700">
+          <span className="font-semibold">
+            {preview.n_removed.toLocaleString()} of {preview.n_cells.toLocaleString()} cells (
+            {pct(preview.fraction_removed)})
+          </span>
+          {parts.length > 0 ? `; each threshold on its own: ${parts.join(", ")}` : ": no threshold is on"}.
         </p>
-      )}
-      <p className="text-[11px] text-slate-700">
-        <span className="font-semibold">
-          {preview.n_removed.toLocaleString()} of {preview.n_cells.toLocaleString()} cells (
-          {pct(preview.fraction_removed)})
-        </span>
-        {parts.length > 0 ? `; each threshold on its own: ${parts.join(", ")}` : ": no threshold is on"}.
-      </p>
-      <PreviousNote preview={preview} mode={mode} />
-      {preview.warnings.length > 0 && (
-        <ul className="space-y-1" aria-label="Cell-loss warnings">
-          {(allWarnings ? preview.warnings : preview.warnings.slice(0, WARNINGS)).map((w) => (
-            <li
-              key={`${w.kind}:${w.group}`}
-              className={`flex items-start gap-1.5 rounded-md px-2 py-1 text-[11px] ${
-                w.whole ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-800"
-              }`}
-            >
-              <AlertTriangle className="mt-0.5 h-3 w-3 flex-shrink-0" />
-              <span>{w.message}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {preview.warnings.length > WARNINGS && (
-        <button
-          type="button"
-          onClick={() => setAllWarnings((v) => !v)}
-          className="text-[11px] text-primary hover:underline"
-        >
-          {allWarnings ? "Fewer warnings" : `Show all ${preview.warnings.length} warnings`}
-        </button>
-      )}
-      {mad && <SampleThresholds mad={mad} />}
-      <div className="grid gap-3 sm:grid-cols-2">
-        {preview.samples && !mad?.column && <LossTable title="Per sample" grouping={preview.samples} />}
+        <PreviousNote preview={preview} mode={mode} />
+        {preview.warnings.length > 0 && (
+          <ul className="space-y-1" aria-label="Cell-loss warnings">
+            {(allWarnings ? preview.warnings : preview.warnings.slice(0, WARNINGS)).map((w) => (
+              <li
+                key={`${w.kind}:${w.group}`}
+                className={`flex items-start gap-1.5 rounded-md px-2 py-1 text-[11px] ${
+                  w.whole ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-800"
+                }`}
+              >
+                <AlertTriangle className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                <span>{w.message}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {preview.warnings.length > WARNINGS && (
+          <button
+            type="button"
+            onClick={() => setAllWarnings((v) => !v)}
+            className="text-[11px] text-primary hover:underline"
+          >
+            {allWarnings ? "Fewer warnings" : `Show all ${preview.warnings.length} warnings`}
+          </button>
+        )}
+        {/* Per sample: the card below, with each sample's QC and loss. */}
         {preview.clusters && <LossTable title="Per cluster" grouping={preview.clusters} />}
+        {preview.doublet_calls && onChange && (
+          <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
+            <input
+              type="checkbox"
+              checked={thresholds.drop_doublets}
+              onChange={(e) => onChange({ drop_doublets: e.target.checked })}
+              className="h-3 w-3"
+            />
+            Also drop predicted doublets
+          </label>
+        )}
+        <p className="text-[11px] text-slate-400">
+          {preview.has_mt ? "" : "% mito can't be measured here, so no mito threshold applies. "}
+          {mode === "mad" ? "The fixed genes and counts cut-offs are not used in MAD mode. " : ""}
+          These are the Cell/Gene Filtering step&apos;s parameters: they apply when that step runs (tick it,
+          or Reprocess from Scratch).
+        </p>
       </div>
-      {preview.doublet_calls && onChange && (
-        <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
-          <input
-            type="checkbox"
-            checked={thresholds.drop_doublets}
-            onChange={(e) => onChange({ drop_doublets: e.target.checked })}
-            className="h-3 w-3"
-          />
-          Also drop predicted doublets
-        </label>
-      )}
-      <p className="text-[11px] text-slate-400">
-        {preview.has_mt ? "" : "% mito can't be measured here, so no mito threshold applies. "}
-        {mode === "mad" ? "The fixed genes and counts cut-offs are not used in MAD mode. " : ""}
-        These are the Cell/Gene Filtering step&apos;s parameters: they apply when that step runs (tick it,
-        or Reprocess from Scratch).
-      </p>
-    </div>
+      <SampleQcTable preview={preview} mad={mad} />
+    </>
   );
 }

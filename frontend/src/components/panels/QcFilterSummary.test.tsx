@@ -152,7 +152,8 @@ describe("QcFilterSummary in MAD mode", () => {
   it("lists each sample's thresholds and loss, and offers the mode, k and samples", async () => {
     const onChange = vi.fn();
     render(<QcFilterSummary datasetId="d1" thresholds={M} onChange={onChange} />);
-    const table = await screen.findByRole("table", { name: "Thresholds per sample" });
+    fireEvent.click(await screen.findByRole("button", { name: "Thresholds" }));
+    const table = screen.getByRole("table", { name: "Thresholds per sample" });
     const rows = within(table).getAllByRole("row").map((r) => r.textContent ?? "");
     expect(rows[1]).toContain("312–9,870");
     expect(rows[1]).toContain("211–3,100");
