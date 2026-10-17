@@ -45,6 +45,7 @@ import pandas as pd
 
 from scview.core import normalization, provenance
 from scview.core import resolution_sweep as rs
+from scview.core.anndata_adaptor import CLUSTERING_CANDIDATES
 from scview.core.obs_writes import forget_column_results
 
 logger = logging.getLogger(__name__)
@@ -140,12 +141,16 @@ def _last_params(history: list[dict], step: str) -> dict[str, Any] | None:
 
 
 def active_clustering(adata) -> str | None:
-    """The dataset's active clustering column, else the one provenance recorded."""
+    """The dataset's active clustering column, else the one provenance recorded,
+    else the column the rest of the app shows as the clustering (a file processed
+    elsewhere: Kang's ``cluster``)."""
     active = adata.uns.get("scview_active_clustering")
     if isinstance(active, str) and active in adata.obs.columns:
         return active
     col = (provenance.read_provenance(adata)["current"].get("clustering") or {}).get("column")
-    return col if isinstance(col, str) and col in adata.obs.columns else None
+    if isinstance(col, str) and col in adata.obs.columns:
+        return col
+    return next((c for c in CLUSTERING_CANDIDATES if c in adata.obs.columns), None)
 
 
 def _method_resolution(adata, reference: str, history: list[dict], notes: list[str]) -> tuple[str, float]:

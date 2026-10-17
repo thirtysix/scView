@@ -479,3 +479,19 @@ async def test_the_run_leaves_the_loop_free(client, dataset_manager, monkeypatch
     ))
     assert "event: complete" in resp.text
     assert stall < 0.3
+
+
+
+def test_a_file_processed_elsewhere_compares_with_the_clustering_the_app_shows():
+    # No scView provenance and no active-clustering record, but a `cluster`
+    # column, as in Kang's upload: the app shows it as the clustering, so the
+    # check compares with it rather than refusing.
+    from scview.core.hvg_sensitivity import active_clustering
+
+    a = ad.AnnData(np.zeros((6, 3), dtype="float32"))
+    a.obs["cluster"] = pd.Categorical(["a", "a", "b", "b", "c", "c"])
+    assert active_clustering(a) == "cluster"
+    a.obs["leiden"] = pd.Categorical(["0", "1", "0", "1", "0", "1"])
+    assert active_clustering(a) == "leiden"  # the same order as the app's own pick
+    del a.obs["cluster"], a.obs["leiden"]
+    assert active_clustering(a) is None
