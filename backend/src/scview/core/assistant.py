@@ -175,6 +175,14 @@ def build_grounding_context(
     lines.append("## Dataset")
     lines.append(f"- Cells: {n_cells:,} | Genes: {n_genes:,} | Species: {detect_species(adata).species}")
     lines.append(f"- Embeddings present: {', '.join(embeddings) if embeddings else 'none'}")
+    prot = adaptor.protein_info()
+    if prot:
+        targets = [n for n in prot["names"] if n not in prot["controls"]]
+        lines.append(
+            f"- CITE-seq protein panel: {len(targets)} antibodies ({', '.join(targets)})"
+            + (f"; isotype controls {', '.join(prot['controls'])}" if prot["controls"] else "")
+            + ". CLR-normalised per cell, kept apart from the genes; the Unified View's Protein tab "
+            "colours cells by a protein and compares it with its gene's RNA.")
     sources.append(ChatSource(
         kind="dataset", ref="dataset:summary",
         detail=f"{n_cells:,} cells × {n_genes:,} genes; embeddings: "

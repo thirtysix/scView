@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from scview.core.anndata_adaptor import AnnDataAdaptor
+from scview.core import protein
 from scview.core.assistant import build_grounding_context
 
 API = "/api/v1"
@@ -46,6 +47,21 @@ def _build_h5ad(path: Path, n: int = 120, g: int = 80) -> None:
     a.obs_names = [f"C{i}" for i in range(n)]
     a.obs["cluster"] = pd.Categorical(["A"] * (n // 2) + ["B"] * (n - n // 2))
     a.write_h5ad(path)
+
+
+def test_grounding_names_the_protein_panel(tmp_path: Path):
+    p = tmp_path / "d.h5ad"
+    _build_h5ad(p)
+    a = ad.read_h5ad(p)
+    rng = np.random.default_rng(2)
+    protein.attach(a, rng.poisson(9, (a.n_obs, 3)), ["CD3_TotalSeqB", "CD19_TotalSeqB", "IgG1_control_TotalSeqB"],
+                   protein.ProteinSplit())
+    a.write_h5ad(p)
+    context, _ = build_grounding_context(AnnDataAdaptor(str(p)))
+    assert "CITE-seq protein panel: 2 antibodies (CD3, CD19); isotype controls IgG1_control" in context
+    plain = tmp_path / "plain.h5ad"
+    _build_h5ad(plain)
+    assert "CITE-seq" not in build_grounding_context(AnnDataAdaptor(str(plain)))[0]
 
 
 def test_build_grounding_context_includes_facts(tmp_path: Path):
