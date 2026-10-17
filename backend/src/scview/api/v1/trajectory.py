@@ -309,15 +309,12 @@ async def get_expression_along_pseudotime(
         bin_indices = np.digitize(pseudotime, bin_edges) - 1
         bin_indices = np.clip(bin_indices, 0, n_bins - 1)
 
-        bin_means = np.zeros(n_bins)
-        bin_counts = np.zeros(n_bins)
-        for i in range(len(pseudotime)):
-            b = bin_indices[i]
-            bin_means[b] += expr[i]
-            bin_counts[b] += 1
-
-        mask = bin_counts > 0
-        bin_means[mask] /= bin_counts[mask]
+        bin_counts = np.bincount(bin_indices, minlength=n_bins)
+        bin_sums = np.bincount(bin_indices, weights=expr, minlength=n_bins)
+        # A bin no cell falls in (DPT's sparse tail) is a gap, not a mean of 0.
+        bin_means = [
+            float(s / c) if c > 0 else None for s, c in zip(bin_sums, bin_counts)
+        ]
 
         # ---- Sub-sampled raw scatter ----
         max_scatter = 5000
@@ -336,7 +333,7 @@ async def get_expression_along_pseudotime(
             "scatter_pseudotime": scatter_pt,
             "scatter_expression": scatter_expr,
             "binned_pseudotime": bin_centres.tolist(),
-            "binned_expression": bin_means.tolist(),
+            "binned_expression": bin_means,
             "binned_counts": bin_counts.astype(int).tolist(),
         }
 

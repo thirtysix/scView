@@ -52,7 +52,8 @@ interface GeneAlongPseudotime {
   scatter_pseudotime?: number[];
   scatter_expression?: number[];
   binned_pseudotime?: number[];
-  binned_expression?: number[];
+  /** null for a bin no cell falls in: drawn as a gap */
+  binned_expression?: (number | null)[];
   binned_counts?: number[];
 }
 
