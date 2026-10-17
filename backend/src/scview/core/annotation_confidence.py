@@ -18,10 +18,13 @@ Each checked cell gets a flag:
 - *unsure*: the set is empty, no label fits well enough at this alpha;
 - *doesn't fit*: the set holds other labels but not the cell's own.
 
-Unsure and doesn't-fit cells are the rejected ones: about alpha of all cells are
-rejected even when every label is right, because the threshold is set so that
+Unsure and doesn't-fit cells are the rejected ones: up to about alpha of all cells
+are rejected even when every label is right, because the threshold is set so that
 1 - alpha of the labels are kept. A label with far more than alpha of its cells
-rejected fits its neighbourhood worse than the rest. When the classifier is
+rejected fits its neighbourhood worse than the rest. Probabilities of at least
+``CERTAIN`` count as equally certain (their scores tie at 0, which keeps the
+guarantee, conservatively): otherwise near-perfect labels would still lose alpha
+of their cells over differences in the fourth decimal. When the classifier is
 right more often than 1 - alpha, sets shrink rather than grow: in-between cells
 come out unsure rather than ambiguous (Kang's published labels at alpha 0.1),
 and a smaller alpha shows which labels they are torn between.
@@ -85,6 +88,7 @@ MIN_CELLS = 200
 MAX_PCS = 50
 MAX_TRAIN = 25_000  # training cells per model; a stratified sample beyond this
 K_NEIGHBORS = 15  # for classifier="knn" (the pipeline's neighbour count)
+CERTAIN = 0.95  # a label this probable or more is as certain as any (see the module doc)
 SEED = 0
 CLASSIFIERS = ("logreg", "knn", "celltypist")
 DEFAULT_CLASSIFIER = "logreg"
@@ -469,6 +473,7 @@ def assess(
     own = codes[rows]
     at_own = np.arange(rows.size), own
     scores = 1.0 - P[rows]  # LAC score of every label for every checked cell
+    scores[scores <= 1.0 - CERTAIN] = 0.0
     own_score = scores[at_own]
     in_set = np.zeros((rows.size, L), dtype=bool)
     fit = np.zeros(rows.size, dtype=np.float64)

@@ -98,6 +98,25 @@ def test_overlapping_labels_are_ambiguous_with_each_other():
     assert hi["counts"][conf.AMBIGUOUS] == 0 and hi["counts"][conf.UNSURE] > 0
 
 
+def test_labels_that_are_all_certain_lose_no_cells():
+    """Without a floor, cleanly separated labels lost alpha of their cells (as unsure)
+    over probabilities like 0.9999 against 0.99999."""
+    rng = np.random.default_rng(0)
+    labels = np.repeat(list("ABCD"), 250)
+    X = rng.normal(size=(labels.size, 10))
+    X[:, :4] += 30 * (labels[:, None] == np.array(list("ABCD")))
+    a = ad.AnnData(X=np.zeros((labels.size, 1), dtype=np.float32))
+    a.obsm["X_pca"] = X
+    a.obs["cl"] = pd.Categorical(labels)
+    res = conf.assess(a, "cl", alpha=0.1)
+    assert res["counts"][conf.CONFIDENT] == a.n_obs
+    assert res["coverage"]["held_out"] == 1.0  # conservative, and still valid
+    # A cell whose own label is merely likely is still judged against the others.
+    a.obsm["X_pca"][:5, :4] = 15 * (np.array(list("ABCD")) == "A") + 15 * (np.array(list("ABCD")) == "B")
+    res = conf.assess(a, "cl", alpha=0.1)
+    assert (a.obs[res["columns"]["flag"]].iloc[:5].astype(str) != conf.CONFIDENT).any()
+
+
 def test_flag_fit_and_set_size_agree():
     a = _blobs()
     for alpha in (0.05, 0.1, 0.2):

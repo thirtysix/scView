@@ -238,8 +238,9 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
             </div>
           )}
           <p className="mb-3 text-[11px] text-slate-400">
-            About α of all cells are rejected (unsure or doesn&apos;t fit) even when every label is right: read
-            each label&apos;s rejected share against α. A smaller α rejects fewer cells and makes sets larger.
+            Up to about α of all cells are rejected (unsure or doesn&apos;t fit) even when every label is right, the
+            least typical ones: read each label&apos;s rejected share against α. A smaller α rejects fewer cells and
+            makes sets larger.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <button
