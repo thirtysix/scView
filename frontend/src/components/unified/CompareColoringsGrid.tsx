@@ -9,6 +9,7 @@ import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { colorByLine, type HoverLine } from "@/lib/hoverInfo";
 import type { ScatterLegend } from "@/lib/scatterExport";
 import { drawnIndices, gatherPositions, panelColors, sampleCellIndices } from "@/lib/splitView";
+import { selectedLast, shuffledOrder } from "@/lib/drawOrder";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { MultiPanelScatter, type GridHover, type GridPanel } from "@/components/unified/MultiPanelScatter";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -99,11 +100,11 @@ export function CompareColoringsGrid({
 
   // --- Every panel draws the same cells (the single plot's sample, if any) ---
   const sample = useMemo(() => sampleCellIndices(total, maxRenderedCells), [total, maxRenderedCells]);
-  const indices = useMemo(() => drawnIndices(total, sample), [total, sample]);
-  const drawnPositions = useMemo(
-    () => (sample ? gatherPositions(positions, sample, stride) : positions),
-    [sample, positions, stride],
-  );
+  // ...in the single plot's seeded draw order, a selection last (lib/drawOrder.ts):
+  // slot s of every panel is cell indices[s].
+  const shuffled = useMemo(() => shuffledOrder(drawnIndices(total, sample)), [total, sample]);
+  const indices = useMemo(() => selectedLast(shuffled, selectedIndices), [shuffled, selectedIndices]);
+  const drawnPositions = useMemo(() => gatherPositions(positions, indices, stride), [positions, indices, stride]);
   const panelRgba = useMemo(
     () =>
       ready

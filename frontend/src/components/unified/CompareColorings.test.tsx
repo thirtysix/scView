@@ -239,9 +239,14 @@ describe("CompareColoringsGrid", () => {
     renderGrid(onHover);
     await screen.findByTestId("deck");
     onHover.mockClear();
+    // The panels draw their cells shuffled: hover the slot that draws cell 3 (x = 3).
+    type L = { id: string; props: { data: { attributes: { getPosition: { value: Float32Array } } } } };
+    const drawn = (deckProps.current!.layers as L[]).find((l) => l.id === "split-fg-1")!.props.data.attributes
+      .getPosition.value;
+    const slot = Array.from({ length: 6 }, (_, s) => s).find((s) => drawn[s * 2] === 3)!;
     (deckProps.current!.onHover as (i: unknown) => void)({
       picked: true,
-      index: 3,
+      index: slot,
       x: 10,
       y: 20,
       layer: { id: "split-fg-1" },

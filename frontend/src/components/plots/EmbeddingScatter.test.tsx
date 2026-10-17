@@ -33,8 +33,22 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 const positions = Float32Array.from([0, 0, 1, 1, 2, 2]);
-const hover = (index: number) =>
-  act(() => (deckProps.current!.onHover as (i: unknown) => void)({ picked: true, index, x: 5, y: 5 }));
+
+type PointLayer = {
+  id: string;
+  props: { data: { length: number; attributes: { getPosition: { value: Float32Array }; getFillColor: { value: Uint8Array } } } };
+};
+const pointLayer = () => (deckProps.current!.layers as PointLayer[]).find((l) => l.id === "embedding-scatter")!;
+const drawnPositions = () => pointLayer().props.data.attributes.getPosition.value;
+/** The slot that draws the cell at x = `x` (cells are drawn in a shuffled order). */
+const slotAtX = (x: number) => {
+  const pos = drawnPositions();
+  for (let s = 0; s < pos.length / 2; s++) if (pos[s * 2] === x) return s;
+  throw new Error(`nothing drawn at x = ${x}`);
+};
+// Cell c of `positions` sits at (c, c).
+const hover = (cell: number) =>
+  act(() => (deckProps.current!.onHover as (i: unknown) => void)({ picked: true, index: slotAtX(cell), x: 5, y: 5 }));
 
 describe("EmbeddingScatter built-in tooltip", () => {
   it("leads with the colour-by value: the gene and the cell's expression", async () => {
@@ -193,6 +207,94 @@ describe("EmbeddingScatter restored camera", () => {
     rerender(<EmbeddingScatter positions={Float32Array.from([5, 5, 9, 9])} restoreViewState={null} cameraKey="pbmc:X_umap" {...props} />);
     expect(viewState().zoom).not.toBe(6);
     expect(viewState().target).not.toEqual(restored.target);
+  });
+});
+
+describe("EmbeddingScatter draw order", () => {
+  // 60 cells on a line (cell i at x = i), stored cluster by cluster: 50 of A, then 10 of B.
+  const n = 60;
+  const line = Float32Array.from({ length: n * 2 }, (_, k) => (k % 2 === 0 ? k / 2 : 0));
+  const codes = Int32Array.from({ length: n }, (_, i) => (i < 50 ? 0 : 1));
+  const cellAt = (s: number) => drawnPositions()[s * 2]!;
+
+  it("draws the cells shuffled, and a picked point still names its own cell", async () => {
+    const onHover = vi.fn();
+    const onClick = vi.fn();
+    render(
+      <EmbeddingScatter
+        positions={line}
+        colorValues={codes}
+        colorType="categorical"
+        onHover={onHover}
+        onClick={onClick}
+      />,
+    );
+    await screen.findByTestId("deck");
+    const drawn = Array.from({ length: n }, (_, s) => cellAt(s));
+    expect([...drawn].sort((a, b) => a - b)).toEqual(Array.from({ length: n }, (_, i) => i)); // every cell once
+    expect(drawn.slice(50).every((c) => c >= 50)).toBe(false); // B is not simply painted last
+    // Each slot's colour is its own cell's group colour.
+    const fill = pointLayer().props.data.attributes.getFillColor.value;
+    const colourOf = (s: number) => Array.from(fill.slice(s * 4, s * 4 + 3)).join(",");
+    expect(colourOf(slotAtX(55))).toBe(colourOf(slotAtX(59)));
+    expect(colourOf(slotAtX(55))).not.toBe(colourOf(slotAtX(3)));
+    // Hover and click report the cell drawn in the picked slot.
+    const s = slotAtX(55);
+    act(() => (deckProps.current!.onHover as (i: unknown) => void)({ picked: true, index: s, x: 1, y: 2 }));
+    expect(onHover).toHaveBeenLastCalledWith({ index: 55, x: 1, y: 2 });
+    act(() => (deckProps.current!.onClick as (i: unknown) => void)({ picked: true, index: s }));
+    expect(onClick).toHaveBeenLastCalledWith(55);
+  });
+
+  it("keeps the order and the very position buffer for another colouring", async () => {
+    const { rerender } = render(<EmbeddingScatter positions={line} colorValues={codes} colorType="categorical" />);
+    await screen.findByTestId("deck");
+    const before = drawnPositions();
+    rerender(
+      <EmbeddingScatter
+        positions={line}
+        colorValues={Float32Array.from({ length: n }, (_, i) => i)}
+        colorType="continuous"
+      />,
+    );
+    expect(drawnPositions()).toBe(before); // same array: nothing re-uploaded, no reshuffle
+  });
+
+  it("draws a selection over the rest, and its cells still pick as themselves", async () => {
+    const onClick = vi.fn();
+    render(
+      <EmbeddingScatter
+        positions={line}
+        colorValues={codes}
+        colorType="categorical"
+        selectedIndices={new Set([3, 7, 1000])}
+        onClick={onClick}
+      />,
+    );
+    await screen.findByTestId("deck");
+    expect([cellAt(n - 2), cellAt(n - 1)].sort((a, b) => a - b)).toEqual([3, 7]);
+    act(() => (deckProps.current!.onClick as (i: unknown) => void)({ picked: true, index: n - 1 }));
+    expect(onClick).toHaveBeenLastCalledWith(cellAt(n - 1));
+  });
+
+  it("draws only the sample when there are too many cells, shuffled, mapping picks back", async () => {
+    const onClick = vi.fn();
+    render(
+      <EmbeddingScatter positions={line} colorValues={codes} colorType="categorical" maxRenderedCells={20} onClick={onClick} />,
+    );
+    await screen.findByTestId("deck");
+    expect(pointLayer().props.data.length).toBe(20);
+    expect(screen.getByText(/cells \(sampled\)/)).toBeInTheDocument();
+    act(() => (deckProps.current!.onClick as (i: unknown) => void)({ picked: true, index: 7 }));
+    expect(onClick).toHaveBeenLastCalledWith(cellAt(7));
+  });
+
+  it("lets the camera zoom out past the fit (2D)", async () => {
+    render(<EmbeddingScatter positions={line} colorValues={null} colorType="continuous" />);
+    await screen.findByTestId("deck");
+    const vs = deckProps.current!.viewState as { zoom: number; minZoom: number; maxZoom: number };
+    expect(vs.minZoom).toBeCloseTo(vs.zoom - 4);
+    expect(vs.maxZoom).toBeGreaterThan(vs.zoom);
   });
 });
 

@@ -17,6 +17,8 @@ import {
   type Box,
 } from "@/lib/centroidLabels";
 import { fitAvoiding } from "@/lib/scatterFit";
+import { gatherByOrder, selectedLast, shuffledOrder } from "@/lib/drawOrder";
+import { sampleCellIndices } from "@/lib/splitView";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 import { EmbeddingCaveat } from "@/components/plots/EmbeddingCaveat";
 
@@ -343,78 +345,32 @@ export function EmbeddingScatter({
     return rgba;
   }, [colorValues, colorType, opacity, selectedIndices, totalCells, dimToGray, categoricalPalette, continuousColormap]);
 
-  // Downsampling: when cell count exceeds threshold, render a random subset
-  const { renderPositions, renderColors, indexMap, isSampled } = useMemo(() => {
-    if (!positions || totalCells === 0) {
-      return { renderPositions: null, renderColors: null, indexMap: null, isSampled: false };
-    }
-
-    if (totalCells <= maxRenderedCells) {
-      return { renderPositions: positions, renderColors: colorArray, indexMap: null, isSampled: false };
-    }
-
-    // Deterministic reservoir sample (seeded for stability)
-    const sampleSize = maxRenderedCells;
-    const indices = new Uint32Array(sampleSize);
-
-    // Fill first sampleSize slots
-    for (let i = 0; i < sampleSize; i++) {
-      indices[i] = i;
-    }
-
-    // Seeded PRNG (mulberry32)
-    let seed = totalCells; // Deterministic seed based on data size
-    const rand = () => {
-      seed |= 0;
-      seed = (seed + 0x6d2b79f5) | 0;
-      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-
-    // Reservoir sampling (Algorithm R)
-    for (let i = sampleSize; i < totalCells; i++) {
-      const j = Math.floor(rand() * (i + 1));
-      if (j < sampleSize) {
-        indices[j] = i;
-      }
-    }
-
-    // Sort for better GPU cache coherence
-    indices.sort();
-
-    // Build compact sampled buffers
-    const sampledPos = new Float32Array(sampleSize * stride);
-    const sampledCol = new Uint8Array(sampleSize * 4);
-
-    for (let s = 0; s < sampleSize; s++) {
-      const orig = indices[s]!;
-      for (let d = 0; d < stride; d++) {
-        sampledPos[s * stride + d] = positions[orig * stride + d]!;
-      }
-      sampledCol[s * 4] = colorArray[orig * 4]!;
-      sampledCol[s * 4 + 1] = colorArray[orig * 4 + 1]!;
-      sampledCol[s * 4 + 2] = colorArray[orig * 4 + 2]!;
-      sampledCol[s * 4 + 3] = colorArray[orig * 4 + 3]!;
-    }
-
-    return {
-      renderPositions: sampledPos,
-      renderColors: sampledCol,
-      indexMap: indices,
-      isSampled: true,
-    };
-  }, [positions, colorArray, totalCells, maxRenderedCells, stride]);
+  // The cells drawn: all of them, or a seeded sample (sorted) over maxRenderedCells...
+  const sample = useMemo(() => sampleCellIndices(totalCells, maxRenderedCells), [totalCells, maxRenderedCells]);
+  const isSampled = sample !== null;
+  // ...in a seeded random order, so no group covers another just by being stored
+  // after it; the same for every colouring. A selection is drawn over the rest.
+  // Slot s draws cell indexMap[s]: picking maps back through it (lib/drawOrder.ts).
+  const shuffled = useMemo(() => shuffledOrder(sample ?? totalCells), [sample, totalCells]);
+  const indexMap = useMemo(() => selectedLast(shuffled, selectedIndices), [shuffled, selectedIndices]);
+  const renderPositions = useMemo(
+    () => (positions && totalCells > 0 ? gatherByOrder(positions, indexMap, stride) : null),
+    [positions, totalCells, indexMap, stride],
+  );
+  const renderColors = useMemo(
+    () => (totalCells > 0 ? gatherByOrder(colorArray, indexMap, 4) : null),
+    [colorArray, totalCells, indexMap],
+  );
 
   const renderCount = renderPositions ? renderPositions.length / stride : 0;
 
   // Group labels where most of each group's drawn cells are; a group with no
-  // drawn cell (sampled away) gets none.
+  // drawn cell (sampled away) gets none. (The draw order does not matter here.)
   const centroids = useMemo(() => {
     if (!showLabels || !positions || !categories || !(colorValues instanceof Int32Array)) return null;
     if (colorType !== "categorical") return null;
-    return groupCentroids(positions, stride, colorValues, categories, indexMap);
-  }, [showLabels, positions, categories, colorValues, colorType, stride, indexMap]);
+    return groupCentroids(positions, stride, colorValues, categories, sample);
+  }, [showLabels, positions, categories, colorValues, colorType, stride, sample]);
 
   // The automatic fit to the data bounds (all positions, not only those drawn)
   const baseViewState = useMemo(() => {

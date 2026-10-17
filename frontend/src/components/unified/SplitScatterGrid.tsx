@@ -20,6 +20,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import { MultiPanelScatter, type GridPanel } from "@/components/unified/MultiPanelScatter";
 import { groupCentroids } from "@/lib/centroidLabels";
+import { selectedLast, shuffledOrder } from "@/lib/drawOrder";
 
 interface SplitScatterGridProps {
   datasetId: string;
@@ -106,9 +107,13 @@ export function SplitScatterGrid({
     () => (ready ? buildSplitPanels(codes, categories, sample) : { panels: [], missing: 0 }),
     [ready, codes, categories, sample],
   );
+  // Each panel draws its cells in the seeded order the single plot uses, a
+  // selection last (lib/drawOrder.ts); slot s of panel p is cell orders[p][s].
+  const shuffled = useMemo(() => panels.map((p) => shuffledOrder(p.indices)), [panels]);
+  const orders = useMemo(() => shuffled.map((o) => selectedLast(o, selectedIndices)), [shuffled, selectedIndices]);
   const panelPositions = useMemo(
-    () => panels.map((p) => gatherPositions(positions, p.indices, stride)),
-    [panels, positions, stride],
+    () => orders.map((o) => gatherPositions(positions, o, stride)),
+    [orders, positions, stride],
   );
   const contextPositions = useMemo(
     () => (sample ? gatherPositions(positions, sample, stride) : positions),
@@ -125,8 +130,8 @@ export function SplitScatterGrid({
   );
   const panelRgba = useMemo(
     () =>
-      panels.map((p) =>
-        panelColors(p.indices, {
+      orders.map((o) =>
+        panelColors(o, {
           colorValues,
           colorType,
           range,
@@ -136,7 +141,7 @@ export function SplitScatterGrid({
           colormap,
         }),
       ),
-    [panels, colorValues, colorType, range, opacity, selectedIndices, palette, colormap],
+    [orders, colorValues, colorType, range, opacity, selectedIndices, palette, colormap],
   );
 
   const drawnCells = sample ? sample.length : total;
@@ -161,14 +166,14 @@ export function SplitScatterGrid({
           key: p.code,
           title: label,
           subtitle: count,
-          indices: p.indices,
+          indices: orders[i]!,
           positions: panelPositions[i]!,
           colors: panelRgba[i]!,
           labels: panelLabels?.[i] ?? null,
           highlight: highlightCategory,
         };
       }),
-    [panels, panelPositions, panelRgba, panelLabels, highlightCategory],
+    [panels, orders, panelPositions, panelRgba, panelLabels, highlightCategory],
   );
 
   return (

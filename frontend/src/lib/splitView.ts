@@ -123,9 +123,9 @@ export function drawnIndices(total: number, sample: Uint32Array | null): Uint32A
 // ---------------------------------------------------------------------------
 
 /**
- * The cells EmbeddingScatter draws when a dataset is over `max` cells: the same
- * seeded reservoir sample, sorted, so the panels show the cells the single plot
- * showed. null when every cell is drawn.
+ * The cells drawn when a dataset is over `max` cells: a seeded reservoir
+ * sample, sorted. EmbeddingScatter draws it too, so the panels show the cells
+ * the single plot showed. null when every cell is drawn.
  */
 export function sampleCellIndices(total: number, max: number): Uint32Array | null {
   if (total <= max) return null;
