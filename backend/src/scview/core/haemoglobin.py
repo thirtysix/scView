@@ -82,7 +82,7 @@ ERYTHROID_NOTE = (
 def hb_genes(names, species: str = "unknown") -> list[str]:
     """The haemoglobin genes present, in the dataset's own spelling, for ``species``
     (``core/species.py``); both lists when it is unknown (they never collide)."""
-    pool = HUMAN_HB if species == "human" else MOUSE_HB if species == "mouse" else HUMAN_HB + MOUSE_HB
+    pool = {"human": HUMAN_HB, "mouse": MOUSE_HB}.get(species, HUMAN_HB + MOUSE_HB)
     return match_genes(pool, names)
 
 

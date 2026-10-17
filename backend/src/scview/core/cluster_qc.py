@@ -482,10 +482,13 @@ def _flag(row: ClusterQC, z: dict[str, float], typical: dict[str, float], small_
     if row.erythroid:
         # Said only where its haemoglobin is high enough to be mistaken for ambient RNA.
         if hb is not None and hb > 0 and (t_hb is None or hb >= haemoglobin.AMBIENT_FOLD * t_hb):
-            if len(haemoglobin.lineage_markers(row.erythroid_markers)) >= haemoglobin.MIN_ERYTHROID_MARKERS:
-                why = f"its top markers include red-cell genes ({', '.join(row.erythroid_markers[:5])})"
+            lineage = haemoglobin.lineage_markers(row.erythroid_markers)
+            if len(lineage) >= haemoglobin.MIN_ERYTHROID_MARKERS:
+                genes = ", ".join(row.erythroid_markers[:5])
+                why = f"its top markers include red-cell genes ({genes})"
             else:
-                why = f"its median cell is {_pct(median_pct_hb or 0.0)} haemoglobin, a red-cell level"
+                level = _pct(median_pct_hb or 0.0)
+                why = f"its median cell is {level} haemoglobin, a red-cell level"
             vs = f" vs {_pct(t_hb)} in a typical non-erythroid cluster" if t_hb is not None else ""
             row.notes.append(
                 f"Erythroid: {why}, and haemoglobin is {_pct(hb)} of its reads{vs}. Real "

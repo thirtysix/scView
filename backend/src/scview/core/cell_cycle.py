@@ -56,9 +56,9 @@ _G2M_NAMES = ("G2M_score", "G2M.Score")
 
 FLAG_HELP = (
     "Mostly cycling cells: most of its cells have clear S or G2M cell-cycle scores, far "
-    "more than in the typical cluster. It may be a proliferating state of another cell type "
-    "rather than a cell type of its own; if the cell cycle is not the biology of interest, "
-    "regress out the S and G2M scores before clustering."
+    "more than in the typical cluster. The cell cycle may be what sets it apart: a cell type "
+    "that divides, or a dividing state of another. If the cell cycle is not the biology of "
+    "interest, regress out the S and G2M scores before clustering."
 )
 
 
