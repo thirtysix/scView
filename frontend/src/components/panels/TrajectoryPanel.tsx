@@ -1,19 +1,24 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { GitBranch, Loader2, AlertCircle, Play } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { GitBranch, Loader2, AlertCircle, Play, X } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useEmbedding } from "@/hooks/useEmbedding";
-import { apiFetch } from "@/api/client";
+import { apiFetch, apiFetchBinary } from "@/api/client";
 import { getDataset } from "@/api/datasets";
+import { computePaga, getPaga, rankTrendGenes } from "@/api/trajectory";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { Panel } from "@/components/common/Panel";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { ColorLegend } from "@/components/plots/ColorLegend";
+import { PagaCard } from "@/components/trajectory/PagaCard";
+import { TrendGenesView } from "@/components/trajectory/TrendGenesView";
+import { decodeArrowBuffer } from "@/lib/arrow";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
+import { DEFAULT_PAGA_THRESHOLD, branchEnds as pagaBranchEnds, pagaLayers, treePath, visibleEdges } from "@/lib/paga";
 import { DPT_COLUMN, defaultRootColumn, rootGroupColumns } from "@/lib/trajectory";
 
 /** How the in-app pseudotime column was computed (POST /trajectory/dpt). */
@@ -30,6 +35,8 @@ interface TrajectoryColumnsResponse {
   pseudotime_columns: string[];
   n_columns: number;
   computed?: DPTParams | null;
+  /** The dataset has spliced + unspliced layers (RNA velocity input) */
+  velocity_layers?: boolean;
 }
 
 interface PseudotimeValuesResponse {
@@ -64,9 +71,10 @@ export function TrajectoryPanel() {
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
   const highlighted = useSelectionStore((s) => s.highlightedGroup);
   const setCurrentDataset = useDatasetStore((s) => s.setCurrentDataset);
+  const embedding = useSettingsStore((s) => s.embedding);
   const queryClient = useQueryClient();
 
-  const { positions, numCells, isLoading: embeddingLoading } = useEmbedding();
+  const { positions, numCells, dimensions, isLoading: embeddingLoading } = useEmbedding();
 
   // Pseudotime state
   const [availableColumns, setAvailableColumns] = useState<string[]>([]);
@@ -86,6 +94,7 @@ export function TrajectoryPanel() {
 
   // In-app pseudotime: a root group picked from a categorical column.
   const [computed, setComputed] = useState<DPTParams | null>(null);
+  const [velocityLayers, setVelocityLayers] = useState(false);
   // Bumped after pseudotime is (re)computed, so columns, values and trends refetch.
   const [refreshKey, setRefreshKey] = useState(0);
   const [isComputing, setIsComputing] = useState(false);
@@ -129,6 +138,7 @@ export function TrajectoryPanel() {
       .then((data) => {
         setAvailableColumns(data.pseudotime_columns);
         setComputed(data.computed ?? null);
+        setVelocityLayers(!!data.velocity_layers);
         // Keep the current column if this dataset has it (after a recompute it does).
         setSelectedColumn((prev) =>
           data.pseudotime_columns.includes(prev) ? prev : (data.pseudotime_columns[0] ?? ""),
@@ -203,10 +213,145 @@ export function TrajectoryPanel() {
     }
   }, [datasetId, rootColumn, rootValue, setCurrentDataset, queryClient]);
 
+  // ---- PAGA: a graph of one column's groups, drawn over the embedding ----
+  const [pagaGroupby, setPagaGroupby] = useState("");
+  const [showPaga, setShowPaga] = useState(true);
+  const [pagaThreshold, setPagaThreshold] = useState(DEFAULT_PAGA_THRESHOLD);
+  const [treeOnly, setTreeOnly] = useState(false);
+  const [pagaComputing, setPagaComputing] = useState(false);
+  const [pagaError, setPagaError] = useState<string | null>(null);
+
+  const pagaQuery = useQuery({
+    queryKey: ["paga", datasetId, embedding, refreshKey],
+    queryFn: () => getPaga(datasetId!, embedding),
+    enabled: !!datasetId && !!embedding,
+    retry: false,
+  });
+  const pagaView = pagaQuery.data ?? null;
+  const paga = pagaView?.paga ?? null;
+  const pagaUsable = !!paga && !pagaView?.stale;
+
+  // The active clustering by default; once a graph exists, the column it was built on.
+  const pagaColumn = paga?.groupby;
+  useEffect(() => {
+    if (pagaColumn && rootCols.some((c) => c.name === pagaColumn)) setPagaGroupby(pagaColumn);
+  }, [pagaColumn, rootCols]);
+  useEffect(() => {
+    if (rootCols.some((c) => c.name === pagaGroupby)) return;
+    const active = dataset?.active_clustering;
+    setPagaGroupby(
+      active && rootCols.some((c) => c.name === active) ? active : defaultRootColumn(rootCols, active),
+    );
+  }, [rootCols, pagaGroupby, dataset]);
+
+  const runPaga = useCallback(async () => {
+    if (!datasetId || !pagaGroupby) return;
+    setPagaComputing(true);
+    setPagaError(null);
+    try {
+      await computePaga(datasetId, pagaGroupby);
+      setShowPaga(true);
+      await queryClient.invalidateQueries({ queryKey: ["paga", datasetId] });
+    } catch (err) {
+      setPagaError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPagaComputing(false);
+    }
+  }, [datasetId, pagaGroupby, queryClient]);
+
+  // ---- Genes changing along pseudotime, on all cells or one PAGA branch ----
+  const [rightTab, setRightTab] = useState<"changing" | "trends">("changing");
+  const [branchEnd, setBranchEnd] = useState("");
+  const rootGroup = pagaView?.root_group ?? null;
+  const ends = useMemo(
+    () => (paga && pagaUsable && rootGroup ? pagaBranchEnds(paga, rootGroup) : []),
+    [paga, pagaUsable, rootGroup],
+  );
+  useEffect(() => {
+    if (branchEnd && !ends.includes(branchEnd)) setBranchEnd("");
+  }, [ends, branchEnd]);
+  const branchPath = useMemo(
+    () => (paga && rootGroup && branchEnd ? treePath(paga, rootGroup, branchEnd) : null),
+    [paga, rootGroup, branchEnd],
+  );
+  const branchNote = !paga
+    ? "Compute a PAGA graph to rank genes along one branch only."
+    : pagaView?.stale
+      ? "The PAGA graph is out of date; recompute it to pick a branch."
+      : !rootGroup
+        ? "Compute pseudotime from a start group to pick a branch from it."
+        : null;
+
+  const trendQuery = useQuery({
+    queryKey: ["trend-genes", datasetId, selectedColumn, branchPath && paga ? [paga.groupby, ...branchPath] : null, refreshKey],
+    queryFn: ({ signal }) =>
+      rankTrendGenes(
+        datasetId!,
+        selectedColumn,
+        branchPath && paga ? { groups_column: paga.groupby, groups: branchPath } : {},
+        signal,
+      ),
+    enabled: !!datasetId && !!selectedColumn && rightTab === "changing",
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+    // The last ranking of this pseudotime stays up while another branch's loads.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey[1] === datasetId && prevQuery?.queryKey[2] === selectedColumn ? prev : undefined,
+  });
+
+  const overlayLayers = useMemo(() => {
+    if (!showPaga || !paga || !pagaUsable || !pagaView?.positions) return null;
+    return pagaLayers({
+      record: paga,
+      positions: pagaView.positions,
+      threshold: pagaThreshold,
+      treeOnly,
+      path: branchPath,
+      dark: plotBackground === "dark",
+    });
+  }, [showPaga, paga, pagaUsable, pagaView, pagaThreshold, treeOnly, branchPath, plotBackground]);
+  const nVisibleEdges = paga ? visibleEdges(paga, pagaThreshold, treeOnly).length : 0;
+
+  // A gene clicked in the heatmap colours the embedding by its expression.
+  const [focusGene, setFocusGene] = useState<string | null>(null);
+  const [geneColour, setGeneColour] = useState<{ gene: string; values: Float32Array; min: number; max: number } | null>(null);
+  useEffect(() => {
+    setFocusGene(null);
+  }, [datasetId]);
+  useEffect(() => {
+    if (!datasetId || !focusGene) {
+      setGeneColour(null);
+      return;
+    }
+    let cancelled = false;
+    apiFetchBinary(`/datasets/${datasetId}/expression?genes=${encodeURIComponent(focusGene)}`)
+      .then((buffer) => {
+        const decoded = decodeArrowBuffer(buffer);
+        const col = decoded[focusGene] ?? decoded[Object.keys(decoded)[0]!];
+        if (cancelled || !col) return;
+        const values = col instanceof Float32Array ? col : Float32Array.from(col);
+        let min = Infinity;
+        let max = -Infinity;
+        for (const v of values) {
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+        setGeneColour({ gene: focusGene, values, min, max: max > min ? max : min + 1 });
+      })
+      .catch(() => {
+        if (!cancelled) setGeneColour(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId, focusGene]);
+  const colourByGene = geneColour && geneColour.gene === focusGene ? geneColour : null;
+
   // Handle gene selection — add to list and fetch trajectory data
   const handleGeneSelect = useCallback(
     async (gene: string) => {
       if (!datasetId || !selectedColumn) return;
+      setRightTab("trends");
 
       // Add gene if not already selected (up to 5 genes)
       setSelectedGenes((prev) => {
@@ -293,6 +438,14 @@ export function TrajectoryPanel() {
     </div>
   );
 
+  const velocityNote = velocityLayers ? (
+    <p className="flex-shrink-0 text-xs text-slate-500" data-testid="velocity-note">
+      This dataset has <code>spliced</code> and <code>unspliced</code> layers, the input for RNA
+      velocity. scView does not compute velocity yet: run scVelo on the exported .h5ad, and its{" "}
+      <code>latent_time</code> column, uploaded back, is listed here as a pseudotime.
+    </p>
+  ) : null;
+
   // No dataset
   if (!dataset || !datasetId) {
     return (
@@ -328,6 +481,7 @@ export function TrajectoryPanel() {
           </p>
         </div>
         {computeCard}
+        {velocityNote}
       </div>
     );
   }
@@ -399,6 +553,26 @@ export function TrajectoryPanel() {
         </p>
       )}
 
+      <PagaCard
+        columns={rootCols}
+        groupby={pagaGroupby}
+        onGroupbyChange={setPagaGroupby}
+        view={pagaView}
+        computing={pagaComputing}
+        error={pagaError}
+        onCompute={runPaga}
+        show={showPaga}
+        onShowChange={setShowPaga}
+        threshold={pagaThreshold}
+        onThresholdChange={setPagaThreshold}
+        treeOnly={treeOnly}
+        onTreeOnlyChange={setTreeOnly}
+        nVisible={nVisibleEdges}
+        unplaced={!!paga && !pagaQuery.isFetching && !pagaView?.positions}
+      />
+
+      {velocityNote}
+
       {/* Selected genes chips */}
       {selectedGenes.length > 0 && (
         <div className="flex flex-shrink-0 flex-wrap items-center gap-2">
@@ -434,12 +608,22 @@ export function TrajectoryPanel() {
       )}
 
       {/* Main content: embedding + gene trajectory plot */}
-      <div className="flex min-h-0 flex-1 gap-4">
-        {/* Left: Embedding scatter colored by pseudotime */}
+      <div className="flex min-h-[520px] flex-1 gap-4">
+        {/* Left: Embedding scatter colored by pseudotime (or a clicked gene) */}
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <h3 className="text-sm font-semibold text-slate-700">
-            Embedding Colored by Pseudotime
-          </h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-slate-700">
+              {colourByGene ? `Embedding Colored by ${colourByGene.gene}` : "Embedding Colored by Pseudotime"}
+            </h3>
+            {colourByGene && (
+              <button
+                onClick={() => setFocusGene(null)}
+                className="flex items-center gap-1 rounded-full border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-50"
+              >
+                <X className="h-3 w-3" /> Back to pseudotime
+              </button>
+            )}
+          </div>
           <Panel className="min-h-0 flex-1" bodyClassName="relative min-h-0 p-0">
             {(embeddingLoading || isLoadingPseudotime) && !positions ? (
               <div className="flex h-full items-center justify-center">
@@ -448,40 +632,86 @@ export function TrajectoryPanel() {
             ) : (
               <EmbeddingScatter
                 positions={positions}
-                colorValues={pseudotimeValues}
+                colorValues={colourByGene ? colourByGene.values : pseudotimeValues}
                 colorType="continuous"
                 pointSize={pointSize}
                 opacity={opacity}
                 selectedIndices={selectedIndices}
                 background={plotBackground}
                 maxRenderedCells={maxRenderedCells}
-                exportName={`pseudotime_${selectedColumn}`}
-                colorLabel={prettyObsLabel(selectedColumn) || "Pseudotime"}
-                exportLegend={
-                  pseudotimeValues ? { type: "continuous", title: selectedColumn, ...pseudotimeMinMax } : null
+                dimensions={dimensions}
+                exportName={colourByGene ? `trajectory_${colourByGene.gene}` : `pseudotime_${selectedColumn}`}
+                colorLabel={
+                  colourByGene ? `${colourByGene.gene} expression` : prettyObsLabel(selectedColumn) || "Pseudotime"
                 }
+                exportLegend={
+                  colourByGene
+                    ? { type: "continuous", title: colourByGene.gene, min: colourByGene.min, max: colourByGene.max }
+                    : pseudotimeValues
+                      ? { type: "continuous", title: selectedColumn, ...pseudotimeMinMax }
+                      : null
+                }
+                overlayLayers={overlayLayers}
               />
             )}
           </Panel>
-          {pseudotimeValues && (
+          {colourByGene ? (
             <div className="flex-shrink-0 px-2">
-              <ColorLegend
-                type="continuous"
-                min={pseudotimeMinMax.min}
-                max={pseudotimeMinMax.max}
-                label={selectedColumn}
-              />
+              <ColorLegend type="continuous" min={colourByGene.min} max={colourByGene.max} label={colourByGene.gene} />
             </div>
+          ) : (
+            pseudotimeValues && (
+              <div className="flex-shrink-0 px-2">
+                <ColorLegend
+                  type="continuous"
+                  min={pseudotimeMinMax.min}
+                  max={pseudotimeMinMax.max}
+                  label={selectedColumn}
+                />
+              </div>
+            )
           )}
         </div>
 
-        {/* Right: Gene expression along pseudotime */}
+        {/* Right: genes changing along pseudotime | chosen genes' trends */}
         <div className="flex w-[480px] flex-shrink-0 flex-col gap-2">
-          <h3 className="text-sm font-semibold text-slate-700">
-            Gene Expression Along Pseudotime
-          </h3>
+          <div className="flex items-center gap-1" role="tablist">
+            {(
+              [
+                ["changing", "Genes changing along pseudotime"],
+                ["trends", `Gene trends${selectedGenes.length ? ` (${selectedGenes.length})` : ""}`],
+              ] as const
+            ).map(([tab, label]) => (
+              <button
+                key={tab}
+                role="tab"
+                aria-selected={rightTab === tab}
+                onClick={() => setRightTab(tab)}
+                className={`rounded-md px-2.5 py-1 text-sm font-semibold transition ${
+                  rightTab === tab ? "bg-slate-200 text-slate-800" : "text-slate-500 hover:bg-slate-100"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="flex-1 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
-            {selectedGenes.length === 0 ? (
+            {rightTab === "changing" ? (
+              <TrendGenesView
+                result={trendQuery.data ?? null}
+                loading={trendQuery.isFetching}
+                error={trendQuery.error ? (trendQuery.error as Error).message : null}
+                focusGene={focusGene}
+                onFocusGene={setFocusGene}
+                branchEnds={ends}
+                branchEnd={branchEnd}
+                onBranchEndChange={setBranchEnd}
+                path={branchPath}
+                branchNote={branchNote}
+                groupby={paga?.groupby ?? null}
+                exportName={selectedColumn}
+              />
+            ) : selectedGenes.length === 0 ? (
               <div className="flex h-full items-center justify-center">
                 <div className="text-center">
                   <GitBranch className="mx-auto mb-2 h-8 w-8 text-slate-300" />

@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { DeckGL, type DeckGLRef } from "@deck.gl/react";
-import { OrthographicView, OrbitView } from "@deck.gl/core";
+import { OrthographicView, OrbitView, type Layer } from "@deck.gl/core";
 import { ScatterplotLayer, PointCloudLayer } from "@deck.gl/layers";
 import { mapCategoryToColor, mapValueToColor } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -62,6 +62,9 @@ interface EmbeddingScatterProps {
   showLabels?: boolean;
   /** A highlighted category: its label stays, the others fade */
   highlightCategory?: string | null;
+  /** Extra layers drawn over the points and labels, in data coordinates (the
+   *  Trajectory panel's PAGA graph); the PNG download includes them */
+  overlayLayers?: readonly Layer[] | null;
 }
 
 /**
@@ -178,6 +181,7 @@ export function EmbeddingScatter({
   categories = null,
   showLabels = false,
   highlightCategory = null,
+  overlayLayers = null,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<DeckGLRef>(null);
@@ -597,7 +601,10 @@ export function EmbeddingScatter({
       highlight: highlightCategory,
     });
   }, [centroids, viewState, views, containerSize.width, containerSize.height, background, highlightCategory]);
-  const layers = useMemo(() => [...pointLayers, ...labelLayers], [pointLayers, labelLayers]);
+  const layers = useMemo(
+    () => [...pointLayers, ...labelLayers, ...(overlayLayers ?? [])],
+    [pointLayers, labelLayers, overlayLayers],
+  );
 
   // One-off high-resolution redraw on click; see downloadDeckPng.
   const downloadPng = useCallback(() => {
