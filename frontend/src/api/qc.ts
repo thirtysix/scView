@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import { API_BASE } from "@/lib/constants";
+import { thresholdMode } from "@/lib/qcThresholds";
 import type { ChatSource } from "./assistant";
 
 /** One cluster's QC numbers + the flags it earned against the other clusters. */
@@ -167,17 +168,35 @@ export async function applyDoubletThreshold(datasetId: string, threshold: number
   }
 }
 
+export type QcThresholdMode = "mad" | "fixed";
+
 /** The Cell/Gene Filtering step's cell thresholds (pipeline params); 0 turns
- *  min/max genes and min counts off. % mito is applied only when measurable. */
+ *  min/max genes and min counts off. % mito is applied only when measurable.
+ *  `qc_threshold_mode` "mad" judges each sample's outliers instead of the genes /
+ *  counts cut-offs (max % mito is then a ceiling); a caller that sets no mode gets
+ *  the fixed cut-offs, as before MAD mode existed. */
 export interface FilterThresholds {
   min_genes: number;
   max_genes: number;
   min_counts: number;
   max_pct_mt: number;
   drop_doublets: boolean;
+  qc_threshold_mode?: QcThresholdMode;
+  /** MADs from the median for counts and genes (log scale), both sides. */
+  qc_mad_k?: number;
+  /** MADs above the median for % mito. */
+  qc_mad_k_mt?: number;
+  /** The samples for MAD mode; "" = the one the backend detects. */
+  qc_sample_column?: string;
 }
 
-export type FilterCriterion = "min_genes" | "max_genes" | "min_counts" | "max_pct_mt" | "doublets";
+export type FilterCriterion =
+  | "min_genes"
+  | "max_genes"
+  | "min_counts"
+  | "max_counts"
+  | "max_pct_mt"
+  | "doublets";
 
 export interface FilterGroupLoss {
   name: string;
@@ -196,17 +215,57 @@ export interface FilterGrouping {
   note?: string;
 }
 
+/** One sample's MAD bounds, in counts, genes and % (null: none, its MAD was 0). */
+export interface MadSampleBounds {
+  name: string;
+  n_cells: number;
+  /** Too few cells for bounds of its own: judged against all cells pooled. */
+  pooled: boolean;
+  min_counts: number | null;
+  max_counts: number | null;
+  min_genes: number | null;
+  max_genes: number | null;
+  /** The lower of median + k_mt MADs and the ceiling; null when mito isn't measurable. */
+  max_pct_mt: number | null;
+  /** Metrics whose MAD was 0 in this sample ("total_counts" | "n_genes" | "pct_mt"). */
+  skipped: string[];
+  n_removed?: number;
+}
+
+/** MAD mode's per-sample thresholds (backend qc_filter.MadBounds.to_dict). */
+export interface MadThresholds {
+  /** null: no sample column, all cells are one pooled group. */
+  column: string | null;
+  reason: string | null;
+  k: number;
+  k_mt: number;
+  ceiling_pct_mt: number | null;
+  min_sample_cells: number;
+  samples: MadSampleBounds[];
+  pooled: Omit<MadSampleBounds, "name" | "pooled">;
+  n_unlabelled: number;
+  /** The run whose recorded thresholds these are (a same-settings re-run), if any. */
+  reused_from?: string | null;
+}
+
 /** What the thresholds would remove (backend core/qc_filter.py). */
 export interface FilterPreview {
   n_cells: number;
   n_removed: number;
   n_kept: number;
   fraction_removed: number;
-  thresholds: Omit<FilterThresholds, "max_pct_mt"> & { max_pct_mt: number | null };
+  thresholds: Omit<FilterThresholds, "max_pct_mt" | "qc_mad_k" | "qc_mad_k_mt" | "qc_threshold_mode"> & {
+    max_pct_mt: number | null;
+    mode?: QcThresholdMode;
+    mad_k?: number;
+    mad_k_mt?: number;
+  };
   has_mt: boolean;
   /** The dataset has doublet calls, so "drop predicted doublets" has something to drop. */
   doublet_calls: boolean;
   by_criterion: Partial<Record<FilterCriterion, { label: string; n_removed: number }>>;
+  /** MAD mode only (older backends omit it). */
+  mad?: MadThresholds | null;
   samples: FilterGrouping | null;
   clusters: FilterGrouping | null;
   warnings: {
@@ -220,6 +279,8 @@ export interface FilterPreview {
     criterion: FilterCriterion | null;
     message: string;
   }[];
+  /** How scView last filtered this dataset, if it did. */
+  previous?: { mode: QcThresholdMode; timestamp: string | null } | null;
 }
 
 export async function getFilterPreview(datasetId: string, t: FilterThresholds): Promise<FilterPreview> {
@@ -229,7 +290,11 @@ export async function getFilterPreview(datasetId: string, t: FilterThresholds): 
     min_counts: String(t.min_counts),
     max_pct_mt: String(t.max_pct_mt),
     drop_doublets: String(t.drop_doublets),
+    mode: thresholdMode(t),
   });
+  if (t.qc_mad_k !== undefined) q.set("mad_k", String(t.qc_mad_k));
+  if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
+  if (t.qc_sample_column) q.set("sample_column", t.qc_sample_column);
   try {
     return await apiFetch<FilterPreview>(`/datasets/${datasetId}/qc/filter-preview?${q.toString()}`);
   } catch (e) {

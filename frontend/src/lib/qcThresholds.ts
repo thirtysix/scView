@@ -1,5 +1,18 @@
 /** Helpers for QC thresholds set on a histogram (components/plots/ThresholdHistogram). */
 
+import type { FilterThresholds, QcThresholdMode } from "@/api/qc";
+
+/** The mode a set of thresholds is in (none set: the fixed cut-offs). */
+export function thresholdMode(t: Pick<FilterThresholds, "qc_threshold_mode">): QcThresholdMode {
+  return t.qc_threshold_mode === "mad" ? "mad" : "fixed";
+}
+
+/** A count bound for display: whole numbers with separators; null = none. */
+export function bound(v: number | null | undefined, digits = 0): string {
+  if (v === null || v === undefined || !isFinite(v)) return "—";
+  return digits > 0 ? v.toFixed(digits) : Math.round(v).toLocaleString();
+}
+
 /**
  * Where a dragged threshold line ended up, from a Plotly relayout(ing) event:
  * `shapes[i].x0` / `x1`. Dragging the line moves both ends; dragging one end
