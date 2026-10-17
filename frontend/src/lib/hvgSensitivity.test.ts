@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import type { HvgClusterMatch, HvgRow } from "@/api/clustering";
+import type { HvgClusterMatch, HvgRecorded, HvgRow } from "@/api/clustering";
 import {
   clusterStability,
+  controlMismatchReason,
   describeMatch,
   formatDuration,
   jaccardTone,
@@ -127,5 +128,24 @@ describe("perCellValues", () => {
     expect(Number.isNaN(out[2]!)).toBe(true);
     expect(Number.isNaN(out[3]!)).toBe(true);
     expect(out[4]).toBeCloseTo(0.4);
+  });
+});
+
+describe("controlMismatchReason", () => {
+  const rec: HvgRecorded = {
+    reference: "cluster", method: "leiden", resolution: 1, flavor: "seurat", n_top_genes: 2000,
+    hvg_batch_key: null, target_sum: 1e4, n_comps: 50, n_neighbors: 15, batch_key: "stim", notes: [],
+    reference_from_file: false, pcs_made_by: "0.16.1", pcs_made_on: "2026-10-17", pcs_older: false,
+  };
+  it("falls back to the generic reason", () => {
+    expect(controlMismatchReason(rec)).toMatch(/data or the graph changed/);
+    expect(controlMismatchReason(null)).toMatch(/data or the graph changed/);
+  });
+  it("names older processing and a reference from the file", () => {
+    const old = { ...rec, pcs_older: true, pcs_made_by: "0.1.0", pcs_made_on: "2026-06-10" };
+    expect(controlMismatchReason(old)).toMatch(/older scView \(scView 0\.1\.0, 2026-06-10\)/);
+    const both = controlMismatchReason({ ...old, reference_from_file: true });
+    expect(both).toMatch(/^“cluster” came with the file/);
+    expect(both).toMatch(/; and the dataset was processed by an older scView/);
   });
 });

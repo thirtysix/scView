@@ -1,6 +1,6 @@
 /** Helpers for the variable-gene sensitivity check (components/unified/HvgSensitivity). */
 
-import type { HvgClusterMatch, HvgClusterStatus, HvgFlavor, HvgRow } from "@/api/clustering";
+import type { HvgClusterMatch, HvgClusterStatus, HvgFlavor, HvgRecorded, HvgRow } from "@/api/clustering";
 
 /** Jaccard at or above which a cluster counts as found again (Hennig 2007; the backend's STABLE). */
 export const STABLE = 0.75;
@@ -147,4 +147,20 @@ export function verdictLabel(s: Pick<ClusterStability, "verdict" | "nStable" | "
   if (s.verdict === "unstable") return "unstable";
   if (s.verdict === "depends") return `stable in ${s.nStable} of ${s.matches.filter((m) => m).length}`;
   return "—";
+}
+
+/** Why re-running the current setting may not give back the reference clusters. */
+export function controlMismatchReason(rec: HvgRecorded | null | undefined): string {
+  const reasons: string[] = [];
+  if (rec?.reference_from_file) {
+    reasons.push(`“${rec.reference}” came with the file rather than from scView’s clustering`);
+  }
+  if (rec?.pcs_older) {
+    const when = [rec.pcs_made_by && `scView ${rec.pcs_made_by}`, rec.pcs_made_on].filter(Boolean).join(", ");
+    reasons.push(
+      `the dataset was processed by an older scView (${when}) and the check rebuilds the PCs with this version`,
+    );
+  }
+  if (reasons.length === 0) return "the stored clusters can’t be reproduced exactly (the data or the graph changed after clustering)";
+  return `${reasons.join("; and ")}, so the stored clusters can’t be reproduced exactly`;
 }

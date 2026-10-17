@@ -17,6 +17,7 @@ import { decodeArrowBuffer } from "@/lib/arrow";
 import { prettyObsLabel } from "@/lib/formatting";
 import {
   clusterStability,
+  controlMismatchReason,
   describeMatch,
   formatDuration,
   jaccardTone,
@@ -431,8 +432,8 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
 
       {control && control.ari < 0.99 && (
         <p className="rounded bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
-          Re-running the current setting gives ARI {control.ari.toFixed(2)}, not 1: the stored clusters can&rsquo;t be
-          reproduced exactly (the data or the graph changed after clustering), so read the other rows against this one.
+          Re-running the current setting gives ARI {control.ari.toFixed(2)}, not 1: {controlMismatchReason(rec)}. Read
+          the other rows against this one.
         </p>
       )}
 

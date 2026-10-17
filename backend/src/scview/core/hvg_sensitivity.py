@@ -119,6 +119,11 @@ class Recorded:
     n_neighbors: int
     batch_key: str | None  # Harmony's, when the graph was built on X_pca_harmony
     notes: list[str] = field(default_factory=list)
+    # Why the control may not reproduce the reference, for the UI to say:
+    reference_from_file: bool = False  # the column came with the file, not from scView's clustering
+    pcs_made_by: str | None = None  # scView version that made the graph's PCs (None: not recorded)
+    pcs_made_on: str | None = None  # and the date
+    pcs_older: bool = False  # by an older scView: the re-runs build them with this version's pipeline
 
     @property
     def current(self) -> Setting:
@@ -138,6 +143,19 @@ def _last_params(history: list[dict], step: str) -> dict[str, Any] | None:
         if entry.get("step") == step:
             return entry.get("params") or {}
     return None
+
+
+def _last_entry(history: list[dict], step: str) -> dict[str, Any] | None:
+    return next((e for e in reversed(history) if e.get("step") == step), None)
+
+
+def _older_than_this(made_by: str | None) -> bool:
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        return made_by is not None and Version(made_by) < Version(provenance._scview_version())
+    except InvalidVersion:
+        return False
 
 
 def active_clustering(adata) -> str | None:
@@ -245,11 +263,18 @@ def recorded(adata, reference: str | None = None) -> Recorded:
     hvg_batch_key = hvg.get("hvg_batch_key") or None
     if hvg_batch_key and hvg_batch_key not in adata.obs.columns:
         hvg_batch_key = None
+    made = _last_entry(history, "batch_correction" if batch_key else "pca") or {}
+    made_by = made.get("scview_version")
+    current_col = (provenance.read_provenance(adata)["current"].get("clustering") or {}).get("column")
     return Recorded(
         reference=reference, method=method if method in rs.METHODS else "leiden",
         resolution=float(resolution), flavor=flavor, n_top_genes=int(n_top),
         hvg_batch_key=hvg_batch_key, target_sum=float(norm.get("target_sum") or 1e4),
         n_comps=n_comps, n_neighbors=n_neighbors, batch_key=batch_key, notes=notes,
+        reference_from_file=not reference.startswith("scview_") and not reference.endswith("_sub")
+        and reference != current_col,
+        pcs_made_by=made_by, pcs_made_on=(made.get("timestamp") or "")[:10] or None,
+        pcs_older=_older_than_this(made_by),
     )
 
 

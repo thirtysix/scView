@@ -186,6 +186,13 @@ export interface HvgRecorded {
   batch_key: string | null;
   /** What had to be assumed */
   notes: string[];
+  /** The reference came with the file, not from scView's clustering */
+  reference_from_file: boolean;
+  /** scView version and date that made the graph's PCs (null: not recorded) */
+  pcs_made_by: string | null;
+  pcs_made_on: string | null;
+  /** Made by an older scView: the re-runs build the PCs with this version's pipeline */
+  pcs_older: boolean;
 }
 
 export interface HvgSensitivityInfo {
