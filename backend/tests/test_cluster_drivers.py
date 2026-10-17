@@ -102,13 +102,13 @@ def test_per_cell_haemoglobin_share_from_counts_or_obs():
 
 
 def test_erythroid_cluster_is_noted_never_called_contamination():
-    a = _markers(_blood({"5": 100.0}), {"5": ["HBB", "HBA1", "HBA2"]})
+    a = _markers(_blood({"5": 100.0}), {"5": ["HBB", "HBA1", "HBA2", "ALAS2", "G1", "KLF1"]})
     report = cluster_qc(a)
     rows = _rows(report)
     ery = rows["5"]
     assert ery.erythroid and ery.flags == [] and ery.mean_pct_hb > 40
-    assert ery.erythroid_markers == ["HBB", "HBA1", "HBA2"]
-    assert "not ambient contamination" in ery.notes[0] and "HBB" in ery.notes[0]
+    assert ery.erythroid_markers == ["HBB", "HBA1", "HBA2", "ALAS2", "KLF1"]
+    assert "not ambient contamination" in ery.notes[0] and "red-cell genes (HBB" in ery.notes[0]
     assert not report.flagged and report.ambient_hb == ""
     assert "pct_hb" in report.metrics and report.typical["mean_pct_hb"] < 0.05  # non-erythroid
     lines, cites = grounding_block(report)
@@ -125,6 +125,16 @@ def test_haemoglobin_without_erythroid_markers_is_flagged_as_ambient():
     assert "ambient RNA" in rows["5"].reasons[0] and rows["5"].mean_pct_hb > 1
     for g in "01234":
         assert rows[g].flags == [], rows[g].reasons
+
+
+def test_haemoglobin_genes_leading_the_markers_do_not_make_a_cluster_erythroid():
+    # Ambient Hb gathered in one cluster makes HBB/HBA its markers too (Kang's Mk
+    # with 3% Hb added, markers recomputed): only other red-cell genes count.
+    a = _markers(_blood({"5": 2.5}), {"5": ["HBB", "HBA1", "HBA2", "G7"]})
+    row = _rows(cluster_qc(a))["5"]
+    assert row.flags == ["hb_ambient"] and not row.erythroid
+    assert row.erythroid_markers == ["HBB", "HBA1", "HBA2"]
+    assert "no red-cell genes besides haemoglobin" in row.reasons[0]
 
 
 def test_erythroid_progenitors_are_known_by_their_markers_not_their_level():
@@ -144,7 +154,7 @@ def test_without_markers_elevated_haemoglobin_is_not_judged():
 
 
 def test_haemoglobin_across_all_clusters_is_reported_as_ambient():
-    a = _markers(_blood({"5": 100.0}, base=1.0), {"5": ["HBB", "HBA1", "HBA2"]})
+    a = _markers(_blood({"5": 100.0}, base=1.0), {"5": ["HBB", "HBA1", "HBA2", "ALAS2", "RHD"]})
     report = cluster_qc(a)
     assert not report.flagged  # spread evenly: no one cluster stands out
     assert "spread across the non-erythroid clusters" in report.ambient_hb

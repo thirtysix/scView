@@ -347,9 +347,12 @@ def build_facts(adaptor) -> QCFacts:
             ))
         cycling = [c.group for c in report.flagged if "cycling" in c.flags]
         if cycling:
+            many = len(cycling) > 1
             step(cluster_qc.qc_tag(report.column, cycling[0]), (
-                f"Colour the Unified View by phase: cluster {', '.join(cycling)} is mostly "
-                "cycling cells, which may be a dividing state of a neighbouring cell type."
+                f"Colour the Unified View by phase: cluster{'s' if many else ''} "
+                f"{', '.join(cycling)} {'are' if many else 'is'} mostly cycling cells; check "
+                f"whether the cell cycle rather than cell identity sets {'them' if many else 'it'} "
+                "apart before naming a cell type."
             ))
         if report.ambient_hb:
             f.quality.append(_fact(head, report.ambient_hb, "result"))

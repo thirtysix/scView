@@ -6,10 +6,12 @@ during sample preparation that RNA floats free and lands in every droplet
 means different things, so a cluster is read against its own markers
 (``core/cluster_qc.py``):
 
-- Erythroid: at least MIN_ERYTHROID_MARKERS of its top markers are haemoglobin
-  or other red-cell-lineage genes, or its median cell is at least
+- Erythroid: at least MIN_ERYTHROID_MARKERS of its top markers are red-cell
+  lineage genes other than haemoglobin, or its median cell is at least
   ERYTHROID_MEDIAN_PCT haemoglobin (no other cell gets there). Its haemoglobin is
-  its own and is never called contamination.
+  its own and is never called contamination. Haemoglobin markers alone don't
+  count: ambient haemoglobin gathered in one cluster (platelet aggregates,
+  red-cell doublets) puts HBB and HBA among that cluster's markers too.
 - Ambient in one cluster (flag ``hb_ambient``): no erythroid markers, and a mean
   haemoglobin share far above the other non-erythroid clusters.
 - Ambient across the data (a dataset note): the typical non-erythroid cluster
@@ -20,12 +22,13 @@ cells, since most non-erythroid cells have no haemoglobin read and the median is
 0. Measured on scView's own processing, 2026-10-17:
 
 - Kang 2018 PBMC (13 cell types): Eryth median 52% and mean 48%, top markers
-  HBB, HBA2, HBA1, HBM, HBD; the 12 other clusters 0.008-0.015% (Mk 0.015%).
+  HBB, HBA2, HBA1, ALAS2, HBM, HBD, CA1, AHSP; the 12 other clusters
+  0.008-0.015% (Mk 0.015%).
 - paul15 mouse marrow (19 clusters; Hba-a2 and Hbb-b1 are the only haemoglobin
-  genes in its panel): 1Ery mean 0.48% with both among its top markers; 2Ery-4Ery
-  0.01-0.06% with no haemoglobin marker but Klf1, Rhd, Ermap, Cpox or Car1 in
-  their top 20; non-erythroid clusters at most 0.009%. Haemoglobin level alone
-  cannot find erythroid progenitors; their markers can.
+  genes in its panel): 1Ery mean 0.48% (Rhd, Hemgn, Cpox among its top 20 with
+  both haemoglobins); 2Ery-6Ery 0.004-0.06% with no haemoglobin marker but two to
+  five of Klf1, Rhd, Ermap, Cpox, Car1; non-erythroid clusters at most 0.009%.
+  Haemoglobin level alone cannot find erythroid progenitors; their markers can.
 """
 
 from __future__ import annotations
@@ -49,7 +52,7 @@ ERYTHROID_GENES = ("ALAS2", "GYPA", "GYPB", "KLF1", "CA1", "RHD", "RHAG", "ERMAP
 ERYTHROID_ALIASES = {"CA1": ("Car1",)}  # the mouse symbol differs
 
 TOP_MARKERS = 20  # top markers looked at, after dropping ribosomal/mito genes
-MIN_ERYTHROID_MARKERS = 2
+MIN_ERYTHROID_MARKERS = 2  # red-cell genes other than haemoglobin (paul15's 6Ery has 2)
 # Kang's red cells: median 52%. Ambient RNA is a small share of a droplet's
 # reads, and red cells only part of it, so no other cell type reaches 20%.
 ERYTHROID_MEDIAN_PCT = 20.0
@@ -66,9 +69,9 @@ AMBIENT_WIDE_PCT = 0.5
 
 FLAG_HELP = (
     "Haemoglobin RNA without erythroid markers: far more haemoglobin than the other "
-    "non-erythroid clusters, while its own markers are not red-cell genes. Likely ambient "
-    "RNA from lysed red cells or red-cell doublets, not a cell type; it can blur markers "
-    "and DE."
+    "non-erythroid clusters, while its markers hold no red-cell genes besides haemoglobin "
+    "(ALAS2, KLF1, CA1 ...). Likely ambient RNA from lysed red cells or red-cell doublets, "
+    "not a cell type; it can blur markers and DE."
 )
 ERYTHROID_NOTE = (
     "Erythroid: red-cell lineage by its own markers. Its haemoglobin is real expression, "
@@ -101,9 +104,16 @@ def erythroid_markers(adata, column: str) -> dict[str, list[str]] | None:
     return {g: [x for x in genes if x.upper() in wanted] for g, genes in top.items()}
 
 
+def lineage_markers(markers: list[str] | None) -> list[str]:
+    """The red-cell genes among ``markers`` that are not haemoglobin."""
+    hb = {g.upper() for g in (*HUMAN_HB, *MOUSE_HB)}
+    return [m for m in markers or [] if m.upper() not in hb]
+
+
 def is_erythroid(markers: list[str] | None, median_pct) -> bool:
-    """Erythroid by its markers, or by a red-cell level of haemoglobin."""
-    if markers is not None and len(markers) >= MIN_ERYTHROID_MARKERS:
+    """Erythroid by its markers (``erythroid_markers``; haemoglobin genes there
+    don't count), or by a red-cell level of haemoglobin."""
+    if len(lineage_markers(markers)) >= MIN_ERYTHROID_MARKERS:
         return True
     try:
         return float(median_pct) >= ERYTHROID_MEDIAN_PCT
