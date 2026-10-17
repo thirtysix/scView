@@ -234,10 +234,15 @@ def test_conditions_that_are_batches_are_flagged():
 
 def test_correcting_for_the_condition_is_flagged():
     obs = _obs(T2_SAMPLES, T2)
-    r = composition_test(obs, "cond", "donor", "group", batch_key="cond")
+    obs["scview_leiden_r0.5"] = obs["group"]
+    # A clustering made on the corrected embedding: a warning.
+    r = composition_test(obs, "cond", "donor", "scview_leiden_r0.5", batch_key="cond")
     assert any("batch-corrected for 'cond', which is the condition" in w for w in r.warnings)
-    r = composition_test(obs, "cond", "donor", "group", batch_key="donor")
-    assert r.warnings == []  # donors span both conditions
+    # Labels that may predate it (imported, per-cell annotation): a note.
+    r = composition_test(obs, "cond", "donor", "group", batch_key="cond")
+    assert r.warnings == [] and "if 'group' was built on that embedding" in r.notes[0]
+    r = composition_test(obs, "cond", "donor", "scview_leiden_r0.5", batch_key="donor")
+    assert r.warnings == [] and r.notes == []  # donors span both conditions
 
 
 def test_clusters_made_of_one_condition_are_flagged():
@@ -337,7 +342,7 @@ async def test_endpoint_errors(client, dataset_manager):
 
 async def test_endpoint_warns_when_clusters_were_corrected_for_the_condition(
         client, dataset_manager):
-    obs = _obs(T2_SAMPLES, T2)
+    obs = _obs(T2_SAMPLES, T2).rename(columns={"group": "leiden"})
     a = ad.AnnData(np.zeros((len(obs), 3), dtype="float32"), obs=obs)
     provenance.record_step(a, step="batch_correction", tool="harmony",
                            params={"batch_key": "cond", "batch_method": "harmony"})
@@ -347,7 +352,7 @@ async def test_endpoint_warns_when_clusters_were_corrected_for_the_condition(
     a.var_names = ["G0", "G1", "G2"]
     a.write_h5ad(d / "data.h5ad")
     r = await client.post("/api/v1/datasets/ds/composition/test",
-                          json={"condition_key": "cond", "group_key": "group"})
+                          json={"condition_key": "cond", "group_key": "leiden"})
     assert r.status_code == 200
     assert any("batch-corrected for 'cond'" in w for w in r.json()["warnings"])
 

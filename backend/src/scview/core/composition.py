@@ -33,6 +33,7 @@ test against, so only the proportions are returned.
 
 from __future__ import annotations
 
+import re
 import threading
 import weakref
 from dataclasses import dataclass, field
@@ -369,7 +370,9 @@ def composition_test(
         result.groups.append(GroupResult(
             group=name, props=means, fold_change=fc,
             n_cells={k: int(cell_counts[i, gi]) for i, k in enumerate(chosen)}))
-    result.warnings += design_warnings(obs, condition_key, keep.to_numpy(), batch_key)
+    warnings, notes = design_warnings(obs, condition_key, group_key, keep.to_numpy(), batch_key)
+    result.warnings += warnings
+    result.notes += notes
     only = _one_condition_groups(cell_counts, groups)
     if only:
         shown = ", ".join(only[:5]) + (f" and {len(only) - 5} more" if len(only) > 5 else "")
@@ -451,26 +454,39 @@ def _one_condition_groups(cell_counts: np.ndarray, groups: list[str]) -> list[st
     return [g for g, s, b in zip(groups, share, big) if b and s >= ONE_CONDITION_SHARE]
 
 
-def design_warnings(obs: pd.DataFrame, condition_key: str, mask: np.ndarray,
-                    batch_key: str | None) -> list[str]:
-    """Where the design, not the test, limits what a composition difference
-    means (core/confounding.py): conditions that are also batches, and clusters
-    built on an embedding corrected for the condition."""
-    out: list[str] = []
+# Clusterings scView (or scanpy, Seurat) makes on an embedding; imported labels
+# and per-cell annotations are not built on it.
+CLUSTERING_RE = re.compile(r"^scview_|^(leiden|louvain|seurat_clusters)$|_sub$", re.I)
+
+
+def design_warnings(obs: pd.DataFrame, condition_key: str, group_key: str, mask: np.ndarray,
+                    batch_key: str | None) -> tuple[list[str], list[str]]:
+    """(warnings, notes) where the design, not the test, limits what a
+    composition difference means (core/confounding.py): conditions that are also
+    batches, and groups built on an embedding corrected for the condition."""
+    warnings: list[str] = []
+    notes: list[str] = []
     extra = [batch_key] if batch_key and batch_key != condition_key else []
     hit = for_comparison(obs, condition_key, mask, extra)
     if hit is not None:
-        out.append(f"{hit.message} A difference in composition is then also a difference "
-                   "between batches (capture, dissociation, sequencing run).")
+        warnings.append(f"{hit.message} A difference in composition is then also a difference "
+                        "between batches (capture, dissociation, sequencing run).")
     if batch_key and batch_key in obs.columns:
         same = batch_key == condition_key
         if same or check(obs, batch_key, condition_key, mask) is not None:
             how = "is the condition" if same else "lines up with the condition"
-            out.append(
-                f"The embedding was batch-corrected for '{batch_key}', which {how}. Clusters "
-                "built on it are pulled towards an even mix of the conditions, which can hide "
-                "composition differences; labels assigned before the correction are unaffected.")
-    return out
+            if CLUSTERING_RE.search(group_key):
+                warnings.append(
+                    f"The embedding was batch-corrected for '{batch_key}', which {how}. Clusters "
+                    "built on it are pulled towards an even mix of the conditions, which can hide "
+                    "composition differences.")
+            else:
+                notes.append(
+                    f"The embedding was batch-corrected for '{batch_key}', which {how}: if "
+                    f"'{group_key}' was built on that embedding, the correction can hide "
+                    "composition differences (labels imported or assigned from expression are "
+                    "unaffected).")
+    return warnings, notes
 
 
 # ---------------------------------------------------------------------------
