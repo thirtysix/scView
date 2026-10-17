@@ -370,6 +370,14 @@ def composition_test(
             group=name, props=means, fold_change=fc,
             n_cells={k: int(cell_counts[i, gi]) for i, k in enumerate(chosen)}))
     result.warnings += design_warnings(obs, condition_key, keep.to_numpy(), batch_key)
+    only = _one_condition_groups(cell_counts, groups)
+    if only:
+        shown = ", ".join(only[:5]) + (f" and {len(only) - 5} more" if len(only) > 5 else "")
+        result.warnings.append(
+            f"{len(only)} of {len(groups)} groups are almost only in one condition (95%+ of their "
+            f"cells, adjusted for condition size): {shown}. Clusters built where the conditions "
+            "separate (a stimulation response, an uncorrected batch) mark a change of state, not "
+            "of abundance; compare cell types, or clusters from a batch-corrected embedding.")
 
     if sample is None:
         result.warnings.append(
@@ -425,6 +433,22 @@ def composition_test(
 def _finite(v) -> float | None:
     v = float(v)
     return v if np.isfinite(v) else None
+
+
+ONE_CONDITION_SHARE = 0.95
+ONE_CONDITION_MIN_CELLS = 20
+
+
+def _one_condition_groups(cell_counts: np.ndarray, groups: list[str]) -> list[str]:
+    """Groups whose cells come almost all from one condition, after scaling each
+    condition to the same size (conditions x groups counts)."""
+    totals = cell_counts.sum(axis=1, keepdims=True)
+    if (totals == 0).any():
+        return []
+    rate = cell_counts / totals
+    share = rate.max(axis=0) / np.maximum(rate.sum(axis=0), 1e-300)
+    big = cell_counts.sum(axis=0) >= ONE_CONDITION_MIN_CELLS
+    return [g for g, s, b in zip(groups, share, big) if b and s >= ONE_CONDITION_SHARE]
 
 
 def design_warnings(obs: pd.DataFrame, condition_key: str, mask: np.ndarray,

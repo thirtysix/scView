@@ -240,6 +240,20 @@ def test_correcting_for_the_condition_is_flagged():
     assert r.warnings == []  # donors span both conditions
 
 
+def test_clusters_made_of_one_condition_are_flagged():
+    """Kang clustered without integration: the IFN response splits monocytes into
+    a CTRL cluster and a STIM cluster, a change of state rather than abundance."""
+    counts = [row[:] for row in T2]
+    for i in range(4):  # g3 and g4 only in A
+        counts[i][4] = 40
+        counts[i + 4][3] = counts[i + 4][4] = 0
+    r = composition_test(_obs(T2_SAMPLES, counts), "cond", "donor", "group")
+    assert r.tested and len(r.warnings) == 1
+    assert r.warnings[0].startswith("2 of 5 groups are almost only in one condition")
+    assert "g3, g4" in r.warnings[0]
+    assert composition_test(_obs(T2_SAMPLES, T2), "cond", "donor", "group").warnings == []
+
+
 def test_bad_requests():
     obs = _obs(T2_SAMPLES, T2)
     with pytest.raises(CompositionError, match="different"):
