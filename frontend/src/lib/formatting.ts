@@ -36,17 +36,30 @@ export function formatBytes(bytes: number): string {
   return `${v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)} ${units[i]}`;
 }
 
+const CONFIDENCE_LABELS: Record<string, string> = {
+  flag: "label fit",
+  fit: "fit p-value",
+  set_size: "label set size",
+  alt: "nearest other label",
+  unknown: "Unknown where rejected",
+};
+
 /**
  * Human-friendly label for an obs column name, keeping the raw name as the value.
  *  - scview_leiden_r0.5        -> "Leiden (res 0.5)"
  *  - scview_louvain_r1.0       -> "Louvain (res 1.0)"
  *  - <grouping>_celltypeAnno   -> "<pretty grouping> · cell types"
+ *  - scview_conf_<column>_flag -> "<pretty column> · label fit" (and _fit,
+ *    _set_size, _alt, _unknown: the annotation confidence check's columns)
  * Anything else is returned unchanged.
  */
 export function prettyObsLabel(name: string | null | undefined): string {
   if (!name) return "";
   const anno = name.match(/^(.*)_celltypeAnno$/);
   if (anno) return `${prettyObsLabel(anno[1])} · cell types`;
+
+  const conf = name.match(/^scview_conf_(.+)_(flag|fit|set_size|alt|unknown)$/);
+  if (conf) return `${prettyObsLabel(conf[1])} · ${CONFIDENCE_LABELS[conf[2] ?? ""] ?? conf[2]}`;
 
   const clust = name.match(/^scview_(leiden|louvain)_r([\d.]+)$/);
   if (clust) {
