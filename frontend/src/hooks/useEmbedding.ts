@@ -139,13 +139,15 @@ export function useEmbedding() {
           }
         }
 
-        setEmbeddingData({
-          positions,
+        // Another colouring of the same embedding brings the same coordinates:
+        // keep the old array, so the camera, sampling and labels don't start over.
+        setEmbeddingData((prev) => ({
+          positions: sameValues(prev.positions, positions) ? prev.positions : positions,
           colors,
           numCells: numRows,
           colorColumnName: colorColName,
           dimensions: is3D ? 3 : 2,
-        });
+        }));
       };
 
       worker.addEventListener("message", handler);
@@ -174,4 +176,13 @@ export function useEmbedding() {
     isLoading: isFetching || isDecoding,
     error: fetchError ? String(fetchError) : decodeError,
   };
+}
+
+/** Same length and the same values (NaN equal to NaN). */
+export function sameValues(a: Float32Array | null, b: Float32Array | null): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i] && !(Number.isNaN(a[i]) && Number.isNaN(b[i]))) return false;
+  }
+  return true;
 }

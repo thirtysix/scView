@@ -19,6 +19,8 @@ All notable changes to scView are documented here. The format is based on
   put cells under the legend (Kang's T cells sat half under it), the cells are fitted beside it
   instead, as long as that keeps at least half the zoom; a camera you moved yourself is left
   alone. Group labels keep clear of the legend too.
+- **Changing the colouring keeps your zoom.** Every colour change used to re-fit the camera to the
+  whole embedding; the coordinates are now recognised as unchanged and the view stays put.
 
 ### Added
 - **Design and variance choices in the composition test.** A Design menu forces paired (by

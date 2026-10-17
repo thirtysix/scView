@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { fitAvoiding, HIDDEN_MAX } from "./scatterFit";
 
 /** Screen position of a data point under a fit (OrthographicView, flipY false). */
-const project = (fit: { target: number[]; zoom: number }, x: number, y: number, w: number, h: number) => {
+const project = (fit: { target: number[]; zoom: number }, x: number, y: number, w: number, h: number): [number, number] => {
   const s = 2 ** fit.zoom;
   return [w / 2 + (x - fit.target[0]!) * s, h / 2 - (y - fit.target[1]!) * s];
 };
