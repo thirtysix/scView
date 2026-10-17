@@ -53,11 +53,35 @@ export async function runSweep(
   body: { resolutions: number[]; method?: string },
   handlers: { onStart?: (s: SweepStart) => void; onResult: (r: SweepRow) => void; signal?: AbortSignal },
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/datasets/${datasetId}/clustering/sweep`, {
+  await streamEvents(
+    `/datasets/${datasetId}/clustering/sweep`,
+    body,
+    (event, data) => {
+      if (event === "start") handlers.onStart?.(data as SweepStart);
+      else if (event === "result") handlers.onResult(data as SweepRow);
+    },
+    "The sweep",
+    handlers.signal,
+  );
+}
+
+/**
+ * POST `body` to a server-sent-events endpoint and hand each event to `onEvent`
+ * as it arrives. Rejects with the server's reason, on an `error` event, or when
+ * the stream ends before `complete`; aborting `signal` stops reading.
+ */
+async function streamEvents(
+  path: string,
+  body: unknown,
+  onEvent: (event: string, data: unknown) => void,
+  what: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: handlers.signal,
+    signal,
   });
   if (!res.ok) {
     let detail = await res.text();
@@ -87,14 +111,13 @@ export async function runSweep(
       } else if (line.startsWith("data: ") && event) {
         const data = JSON.parse(line.slice(6));
         if (event === "error") throw new Error(String(data.error));
-        if (event === "start") handlers.onStart?.(data as SweepStart);
-        else if (event === "result") handlers.onResult(data as SweepRow);
-        else if (event === "complete") complete = true;
+        if (event === "complete") complete = true;
+        else onEvent(event, data);
         event = "";
       }
     }
   }
-  if (!complete) throw new Error("The sweep stopped before it finished.");
+  if (!complete) throw new Error(`${what} stopped before it finished.`);
 }
 
 /** Save one resolution's clusters as its scview_<method>_r<res> column (once). */
@@ -130,5 +153,141 @@ export function subclusterGroup(
   return apiFetch(`/datasets/${datasetId}/clustering/subcluster`, {
     method: "POST",
     body: JSON.stringify({ column, group, resolution }),
+  });
+}
+
+// --- Variable-gene sensitivity check (backend core/hvg_sensitivity.py) ---
+
+export type HvgFlavor = "seurat" | "cell_ranger" | "seurat_v3" | "pearson_residuals";
+
+/** One variable-gene setting: a flavour and how many genes. */
+export interface HvgSetting {
+  flavor: HvgFlavor;
+  n_top_genes: number;
+  /** `${flavor}_${n_top_genes}` */
+  key: string;
+  /** "Seurat, 2,000 genes" */
+  label: string;
+}
+
+/** How the dataset's clustering was made, as provenance recorded it. */
+export interface HvgRecorded {
+  /** The obs column compared with */
+  reference: string;
+  method: "leiden" | "louvain";
+  resolution: number;
+  flavor: HvgFlavor;
+  n_top_genes: number;
+  hvg_batch_key: string | null;
+  target_sum: number;
+  n_comps: number;
+  n_neighbors: number;
+  /** Harmony's key, when the neighbour graph was batch-corrected */
+  batch_key: string | null;
+  /** What had to be assumed */
+  notes: string[];
+}
+
+export interface HvgSensitivityInfo {
+  available: boolean;
+  reason: string | null;
+  n_cells: number;
+  n_genes: number;
+  max_settings: number;
+  min_genes: number;
+  max_genes: number;
+  max_cells: number;
+  /** Extra seconds the first run after a server start takes (compiling) */
+  first_run_seconds: number;
+  // Present when available:
+  recorded?: HvgRecorded;
+  current?: HvgSetting;
+  default_settings?: HvgSetting[];
+  /** Each flavour, with why it can't run here (null when it can) */
+  flavors?: { flavor: HvgFlavor; label: string; unavailable: string | null }[];
+  estimate_seconds?: number;
+  seconds_per_setting?: number;
+}
+
+export interface HvgStart {
+  n_cells: number;
+  reference: string;
+  recorded: HvgRecorded;
+  current: HvgSetting;
+  settings: HvgSetting[];
+  n_current_hvgs: number | null;
+  estimate_seconds: number;
+}
+
+export type HvgClusterStatus = "stable" | "splits" | "merges" | "dissolves";
+
+/** What became of one current cluster under a setting. */
+export interface HvgClusterMatch {
+  cluster: string;
+  n_cells: number;
+  /** Best-match Jaccard index in the new clustering */
+  jaccard: number;
+  /** The new cluster it matches best */
+  match: string;
+  /** Share of its cells in the new cluster holding most of them */
+  contained: number;
+  /** Share of that new cluster made of its cells */
+  purity: number;
+  /** New clusters holding at least 10% of its cells */
+  parts: number;
+  status: HvgClusterStatus;
+}
+
+export interface HvgRow extends HvgSetting {
+  /** The current setting, re-run as a control */
+  is_current: boolean;
+  n_hvgs: number;
+  /** Variable genes shared with the current ones (null when the dataset has none marked) */
+  shared_hvgs: number | null;
+  ari: number;
+  ami: number;
+  n_clusters: number;
+  sizes: number[];
+  clusters: HvgClusterMatch[];
+  seconds: number;
+  /** The column "Keep" saves it as */
+  column: string;
+  exists: boolean;
+}
+
+export function getHvgSensitivityInfo(datasetId: string): Promise<HvgSensitivityInfo> {
+  return apiFetch(`/datasets/${datasetId}/clustering/hvg-sensitivity`);
+}
+
+/**
+ * Re-cluster under each variable-gene setting without changing the dataset,
+ * calling `onStart` once and `onResult` per setting. Rejects with the server's
+ * reason; aborting `signal` stops reading and, on the server, the run.
+ */
+export async function runHvgSensitivity(
+  datasetId: string,
+  body: { settings: { flavor: HvgFlavor; n_top_genes: number }[] },
+  handlers: { onStart?: (s: HvgStart) => void; onResult: (r: HvgRow) => void; signal?: AbortSignal },
+): Promise<void> {
+  await streamEvents(
+    `/datasets/${datasetId}/clustering/hvg-sensitivity`,
+    body,
+    (event, data) => {
+      if (event === "start") handlers.onStart?.(data as HvgStart);
+      else if (event === "result") handlers.onResult(data as HvgRow);
+    },
+    "The check",
+    handlers.signal,
+  );
+}
+
+/** Save one setting's clusters as a column (once). */
+export function keepHvgSetting(
+  datasetId: string,
+  setting: { flavor: HvgFlavor; n_top_genes: number },
+): Promise<{ column: string; created: boolean; n_clusters: number }> {
+  return apiFetch(`/datasets/${datasetId}/clustering/hvg-sensitivity/keep`, {
+    method: "POST",
+    body: JSON.stringify({ flavor: setting.flavor, n_top_genes: setting.n_top_genes }),
   });
 }

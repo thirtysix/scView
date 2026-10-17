@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { runSweep, subclusterGroup, type SweepRow } from "./clustering";
+import { keepHvgSetting, runHvgSensitivity, runSweep, subclusterGroup, type HvgRow, type SweepRow } from "./clustering";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -72,5 +72,49 @@ describe("subclusterGroup", () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain("/datasets/ds/clustering/subcluster");
     expect(JSON.parse(init.body)).toEqual({ column: "cl", group: "B", resolution: 0.5 });
+  });
+});
+
+describe("runHvgSensitivity", () => {
+  const hvgRow = { key: "seurat_1000", flavor: "seurat", n_top_genes: 1000, ari: 0.9 } as HvgRow;
+
+  it("reports the start and each setting's result", async () => {
+    const text =
+      `event: start\ndata: ${JSON.stringify({ n_cells: 10, reference: "cl" })}\n\n` +
+      `event: result\ndata: ${JSON.stringify(hvgRow)}\n\nevent: complete\ndata: {}\n\n`;
+    const fetchMock = vi.fn().mockResolvedValue(streamed([text.slice(0, 30), text.slice(30)]));
+    vi.stubGlobal("fetch", fetchMock);
+    const onStart = vi.fn();
+    const results: HvgRow[] = [];
+    const settings = [{ flavor: "seurat" as const, n_top_genes: 1000 }];
+    await runHvgSensitivity("ds", { settings }, { onStart, onResult: (r) => results.push(r) });
+    expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ reference: "cl" }));
+    expect(results.map((r) => r.key)).toEqual(["seurat_1000"]);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("/api/v1/datasets/ds/clustering/hvg-sensitivity");
+    expect(JSON.parse(init.body)).toEqual({ settings });
+  });
+
+  it("rejects with the server's reason or a stream cut short", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "no clustering to compare with" }), { status: 400 })),
+    );
+    await expect(runHvgSensitivity("ds", { settings: [] }, { onResult: () => {} })).rejects.toThrow(/no clustering/);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamed([`event: result\ndata: ${JSON.stringify(hvgRow)}\n\n`])));
+    await expect(runHvgSensitivity("ds", { settings: [] }, { onResult: () => {} })).rejects.toThrow(
+      "The check stopped before it finished.",
+    );
+  });
+
+  it("keeps a setting by its flavour and gene count", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ column: "c", created: true, n_clusters: 3 }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await keepHvgSetting("ds", hvgRow);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toContain("/datasets/ds/clustering/hvg-sensitivity/keep");
+    expect(JSON.parse(init.body)).toEqual({ flavor: "seurat", n_top_genes: 1000 });
   });
 });
