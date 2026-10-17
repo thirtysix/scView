@@ -53,6 +53,8 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
   const [excluded, setExcluded] = useState<string[]>([]);
   const [reference, setReference] = useState(""); // "" = the first value
   const [transform, setTransform] = useState<"logit" | "asin">("logit");
+  const [pairing, setPairing] = useState<"auto" | "paired" | "unpaired">("auto");
+  const [robust, setRobust] = useState(true);
   const [result, setResult] = useState<CompositionResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +115,9 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
     setSampleKey("");
   }, [conditionKey, conditionValues]);
 
+  // Whether the samples pair up depends on the columns: back to auto.
+  useEffect(() => setPairing("auto"), [conditionKey, sampleKey]);
+
   const included = useMemo(
     () => conditionValues.filter((v) => !excluded.includes(v)),
     [conditionValues, excluded],
@@ -138,6 +143,8 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
       ...(excluded.length ? { conditions: included } : {}),
       ...(reference && included.includes(reference) ? { reference } : {}),
       transform,
+      ...(pairing !== "auto" ? { paired: pairing === "paired" } : {}),
+      ...(robust ? {} : { robust: false }),
     })
       .then((r) => !cancelled && setResult(r))
       .catch((e) => {
@@ -149,7 +156,10 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
     return () => {
       cancelled = true;
     };
-  }, [datasetId, conditionKey, groupKey, sampleKey, excluded, included, reference, transform, conditionValues]);
+  }, [
+    datasetId, conditionKey, groupKey, sampleKey, excluded, included, reference, transform, pairing,
+    robust, conditionValues,
+  ]);
 
   const rows = useMemo(() => (result ? sortedGroups(result) : []), [result]);
 
@@ -251,6 +261,35 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
             >
               <option value="logit">Logit (default)</option>
               <option value="asin">Arcsin square root</option>
+            </select>
+          </label>
+          <label className="text-xs font-medium text-slate-500">
+            <span className="mb-1 block">Design</span>
+            <select
+              aria-label="Design"
+              title="Paired blocks on the sample column: each donor is compared with itself across conditions"
+              value={pairing}
+              onChange={(e) => setPairing(e.target.value as "auto" | "paired" | "unpaired")}
+              className={selectCls}
+            >
+              <option value="auto">
+                {pairing === "auto" && result?.design ? `Auto (${result.design})` : "Auto"}
+              </option>
+              <option value="paired">Paired by sample</option>
+              <option value="unpaired">Unpaired</option>
+            </select>
+          </label>
+          <label className="text-xs font-medium text-slate-500">
+            <span className="mb-1 block">Variances</span>
+            <select
+              aria-label="Variance moderation"
+              title="Robust (propeller's default) keeps a group with an outlying variance from pulling the shared prior"
+              value={robust ? "robust" : "plain"}
+              onChange={(e) => setRobust(e.target.value === "robust")}
+              className={selectCls}
+            >
+              <option value="robust">Robust eBayes (default)</option>
+              <option value="plain">Plain eBayes</option>
             </select>
           </label>
         </div>

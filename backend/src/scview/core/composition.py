@@ -21,10 +21,11 @@ instead, which is what this module does:
 3. a linear model per group, with the donor as a blocking factor when every
    donor was sampled in every condition (paired, as on Kang), then a moderated
    t-test for two conditions or an F-test for more. The residual variances are
-   shrunk towards their common value by limma's empirical Bayes (``squeezeVar``
-   with ``fitFDist``, reimplemented here in numpy/scipy). propeller calls it with
-   ``robust=TRUE``, which also down-weights outlying variances; that variant is
-   not reimplemented, so this matches propeller run with ``robust=FALSE``;
+   shrunk towards their common value by limma's empirical Bayes (``squeezeVar``,
+   reimplemented here in numpy/scipy). By default robustly, as propeller calls it
+   (``robust=TRUE``, ``fitFDistRobustly``): a group whose variance is an outlier
+   gets a smaller prior df, so it is shrunk less and cannot inflate the prior
+   for the rest. With fewer than ten groups limma's robust fit is the plain one;
 4. Benjamini-Hochberg across the groups.
 
 With fewer than two samples in a condition there is no replicate variance to
@@ -41,7 +42,7 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
-from scipy import special, stats
+from scipy import optimize, special, stats
 
 from scview.core.confounding import check, condition_columns, for_comparison
 
@@ -68,6 +69,7 @@ class GroupResult:
     stat: float | None = None  # moderated t (2 conditions) or F (more)
     pval: float | None = None
     fdr: float | None = None
+    df_prior: float | None = None  # this group's prior df (robust: smaller for an outlier)
 
 
 @dataclass
@@ -89,11 +91,13 @@ class CompositionResult:
     n_samples: dict[str, int]
     n_cells: dict[str, int]
     transform: str
+    robust: bool = True
     tested: bool = False
     design: str | None = None  # "paired" | "unpaired"
     test: str | None = None  # "moderated t" | "moderated F"
     df_residual: int | None = None
     df_prior: float | None = None  # None with ``tested``: infinite (variances pooled)
+    n_outliers: int = 0  # robust: groups given a smaller prior df than the rest
     n_significant: int = 0
     # The same groups tested with a chi-square on the pooled cell counts, for the
     # warning only: how many it would call significant at the same FDR.
@@ -108,6 +112,7 @@ class CompositionResult:
             "group_key": self.group_key, "conditions": self.conditions,
             "reference": self.conditions[0], "transform": self.transform,
             "tested": self.tested, "design": self.design, "test": self.test,
+            "robust": self.robust, "n_outliers": self.n_outliers,
             "df_residual": self.df_residual, "df_prior": self.df_prior,
             "n_samples": self.n_samples, "n_cells": self.n_cells,
             "n_significant": self.n_significant, "fdr_threshold": FDR,
@@ -171,18 +176,136 @@ def fit_f_dist(s2: np.ndarray, df: float) -> tuple[float, float]:
     return float(x.mean()), float("inf")
 
 
+# 128-point Gauss-Legendre on [0, 1] (statmod's gauss.quad.prob, uniform).
+_GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(128)
+_GL_NODES, _GL_WEIGHTS = (_GL_NODES + 1) / 2, _GL_WEIGHTS / 2
+
+
+def _f_ppf(p: np.ndarray, df1: float, df2: float) -> np.ndarray:
+    if np.isinf(df2):
+        return stats.chi2.ppf(p, df1) / df1
+    return stats.f.ppf(p, df1, df2)
+
+
+def _f_pdf(x: np.ndarray, df1: float, df2: float) -> np.ndarray:
+    if np.isinf(df2):
+        return df1 * stats.chi2.pdf(df1 * x, df1)
+    return stats.f.pdf(x, df1, df2)
+
+
+def _winsorized_moments(df1: float, df2: float, tail: tuple[float, float]) -> tuple[float, float]:
+    """Mean and variance of log(F(df1, df2)) winsorized at the ``tail``
+    probabilities (limma's winsorizedMoments, by quadrature on x / (1 + x))."""
+    fq = _f_ppf(np.array([tail[0], 1 - tail[1]]), df1, df2)
+    zq = np.log(fq)
+    q = fq / (1 + fq)
+    nodes = q[0] + (q[1] - q[0]) * _GL_NODES
+    fnodes = nodes / (1 - nodes)
+    znodes = np.log(fnodes)
+    f = _f_pdf(fnodes, df1, df2) / (1 - nodes) ** 2
+    q21 = q[1] - q[0]
+    m = q21 * float((_GL_WEIGHTS * f * znodes).sum()) + float((zq * tail).sum())
+    v = (q21 * float((_GL_WEIGHTS * f * (znodes - m) ** 2).sum())
+         + float(((zq - m) ** 2 * tail).sum()))
+    return m, v
+
+
+def fit_f_dist_robust(s2: np.ndarray, df: float, tail: tuple[float, float] = (0.05, 0.1),
+                      ) -> tuple[float, np.ndarray]:
+    """(prior variance, prior df per value) of residual variances ``s2`` with
+    ``df`` degrees of freedom each: limma's fitFDistRobustly (no covariate, one
+    df). The prior df is estimated from the winsorized log-variances, so a few
+    outlying variances do not drag it down, and each outlier then gets a smaller
+    prior df of its own, by how unlikely its variance is under the prior."""
+    x = np.asarray(s2, dtype=np.float64)
+    n = len(x)
+    s0, df2_plain = fit_f_dist(x, df)
+    if n < 3 or all(t < 1 / n for t in tail):
+        return s0, np.full(n, df2_plain)  # limma: the plain fit
+    m = float(np.median(x))
+    if m <= 0:
+        raise CompositionError("The groups' variances are mostly zero.")
+    x = np.maximum(x, m * 1e-12)
+    tail_a = np.array(tail, dtype=np.float64)
+
+    z = np.log(x)
+    ztrend = float(stats.trim_mean(z, tail[1]))
+    zresid = z - ztrend
+    lo, hi = np.quantile(zresid, [tail[0], 1 - tail[1]])
+    zwins = np.clip(zresid, lo, hi)
+    zwmean = float(zwins.mean())
+    zwvar = float(((zwins - zwmean) ** 2).mean()) * n / (n - 1)
+
+    mean_inf, var_inf = _winsorized_moments(df, np.inf, tail_a)
+    funval_inf = np.log(zwvar / var_inf)
+    rank = stats.rankdata(z)  # = rank of the F statistics (same order)
+    if funval_inf <= 0:
+        s20 = float(np.exp(ztrend + zwmean - mean_inf))
+        fstat = np.exp(z) / s20
+        tail_p = stats.chi2.sf(fstat * df, df)
+        not_outlier = np.minimum(tail_p / ((n - rank + 0.5) / n), 1)
+        shrunk = np.full(n, np.inf)
+        out = not_outlier < 1
+        if out.any():
+            shrunk[out] = not_outlier[out] * n * df
+            o = np.argsort(tail_p, kind="stable")
+            shrunk[o] = np.maximum.accumulate(shrunk[o])
+        return s20, shrunk
+
+    if not np.isfinite(df2_plain):
+        return s0, np.full(n, df2_plain)
+
+    def fun(u: float) -> float:
+        if u >= 1:
+            return funval_inf
+        return float(np.log(zwvar / _winsorized_moments(df, u / (1 - u), tail_a)[1]))
+
+    rbx = df2_plain / (1 + df2_plain)
+    funval_low = fun(rbx)
+    if funval_low >= 0:
+        df2 = df2_plain
+    else:
+        u = optimize.brentq(fun, rbx, 1, xtol=1e-8)
+        df2 = u / (1 - u) if u < 1 else np.inf
+    mean_df2, _ = _winsorized_moments(df, df2, tail_a)
+    s20 = float(np.exp(ztrend + zwmean - mean_df2))
+    fstat = np.exp(z) / s20
+    log_tail_p = stats.f.logsf(fstat, df, df2)
+    log_not_outlier = np.minimum(log_tail_p - (np.log(n - rank + 0.5) - np.log(n)), 0)
+    if not (log_not_outlier < 0).any():
+        return s20, np.full(n, df2)
+    not_outlier = np.exp(log_not_outlier)
+    p_outlier = -np.expm1(log_not_outlier)
+    min_log_tail_p = float(log_tail_p.min())
+    if min_log_tail_p == -np.inf:
+        shrunk = not_outlier * df2
+    else:
+        df2_out = np.log(0.5) / min_log_tail_p * df2
+        df2_out = np.log(0.5) / float(stats.f.logsf(fstat.max(), df, df2_out)) * df2_out
+        shrunk = not_outlier * df2 + p_outlier * df2_out
+    o = np.argsort(log_tail_p, kind="stable")
+    ordered = shrunk[o]
+    running = np.cumsum(ordered) / np.arange(1, n + 1)
+    imin = int(np.argmin(running))
+    ordered[: imin + 1] = running[imin]
+    shrunk[o] = np.maximum.accumulate(ordered)
+    return s20, shrunk
+
+
 @dataclass
 class _Fit:
     stat: np.ndarray
     pval: np.ndarray
     df_residual: int
-    df_prior: float
+    df_prior: float  # the common prior df (robust: the non-outliers')
+    df_prior_each: np.ndarray  # per group
 
 
-def moderated_test(Y: np.ndarray, X: np.ndarray, coefs: list[int]) -> _Fit:
+def moderated_test(Y: np.ndarray, X: np.ndarray, coefs: list[int], robust: bool = False) -> _Fit:
     """Per column of ``Y`` (samples x groups), least squares on design ``X``,
     variances squeezed by empirical Bayes, then a moderated t-test of the one
-    coefficient in ``coefs`` or an F-test of them all (limma lmFit + eBayes)."""
+    coefficient in ``coefs`` or an F-test of them all (limma lmFit + eBayes,
+    ``robust`` as eBayes' argument)."""
     n, p = X.shape
     if np.linalg.matrix_rank(X) < p:
         raise CompositionError("The design has no residual degrees of freedom to test against.")
@@ -194,15 +317,22 @@ def moderated_test(Y: np.ndarray, X: np.ndarray, coefs: list[int]) -> _Fit:
     resid = Y - X @ beta
     s2 = (resid**2).sum(axis=0) / df
 
-    s0, df_prior = fit_f_dist(s2, df)
-    if not np.isfinite(s0):
-        s_post, df_prior = s2, 0.0  # nothing to borrow from: plain t / F
-    elif np.isfinite(df_prior):
-        s_post = (df * s2 + df_prior * s0) / (df + df_prior)
+    G = Y.shape[1]
+    if G < 3:  # limma's squeezeVar: nothing to borrow from, plain t / F
+        s0, prior = float("nan"), np.zeros(G)
+    elif robust:
+        s0, prior = fit_f_dist_robust(s2, df)
     else:
-        s_post = np.full_like(s2, s0)
+        s0, d = fit_f_dist(s2, df)
+        prior = np.full(G, d)
+    if not np.isfinite(s0):
+        s_post, prior = s2, np.zeros(G)
+    else:
+        with np.errstate(invalid="ignore"):
+            s_post = np.where(np.isfinite(prior), (df * s2 + prior * s0) / (df + prior), s0)
+    df_prior = float(np.max(prior)) if len(prior) else 0.0
     # limma caps the total df at the residual df pooled over every group.
-    df_total = min(df + df_prior, df * Y.shape[1])
+    df_total = np.minimum(df + prior, df * G)
 
     with np.errstate(divide="ignore", invalid="ignore"):
         if len(coefs) == 1:
@@ -216,9 +346,10 @@ def moderated_test(Y: np.ndarray, X: np.ndarray, coefs: list[int]) -> _Fit:
             stat = np.einsum("ig,ij,jg->g", b, W, b) / (r * s_post)
             # limma's F (classifyTestsF) takes df.residual + df.prior uncapped,
             # and a chi-square once that passes 1e6 (an infinite prior df).
-            df2 = df + df_prior
-            pval = (stats.chi2.sf(r * stat, r) if df2 > 1e6 else stats.f.sf(stat, r, df2))
-    return _Fit(stat=stat, pval=pval, df_residual=df, df_prior=float(df_prior))
+            df2 = df + prior
+            pval = np.where(df2 > 1e6, stats.chi2.sf(r * stat, r),
+                            stats.f.sf(stat, r, np.minimum(df2, 1e6)))
+    return _Fit(stat=stat, pval=pval, df_residual=df, df_prior=df_prior, df_prior_each=prior)
 
 
 def _bh(p: np.ndarray) -> np.ndarray:
@@ -279,12 +410,14 @@ def composition_test(
     transform: Transform = "logit",
     paired: bool | None = None,
     batch_key: str | None = None,
+    robust: bool = True,
 ) -> CompositionResult:
     """Test each group of ``group_key`` for a different share of the cells
     between the conditions of ``condition_key``, with the samples of
     ``sample_key`` (one per value per condition) as replicates. ``paired`` None
     pairs by sample when every sample value occurs in every condition.
-    ``batch_key`` is the dataset's batch-correction key, if any."""
+    ``batch_key`` is the dataset's batch-correction key, if any. ``robust``
+    (propeller's default) squeezes the variances robustly."""
     for col in (condition_key, group_key, sample_key):
         if col and col not in obs.columns:
             raise CompositionError(f"Column '{col}' not found.")
@@ -346,7 +479,7 @@ def composition_test(
     result = CompositionResult(
         condition_key=condition_key, sample_key=sample_key, group_key=group_key,
         conditions=chosen, groups=[], samples=[], n_samples={}, n_cells={},
-        transform=transform,
+        transform=transform, robust=robust,
     )
     ok = n_per >= MIN_CELLS_PER_SAMPLE if sample is not None else np.ones(len(n_per), bool)
     result.dropped_samples = [f"{s_donor[i]} ({s_cond[i]}, {n_per[i]} cells)"
@@ -415,18 +548,20 @@ def composition_test(
         X_cols += [(s_donor == d).astype(float) for d in donors[1:]]
     X = np.column_stack(X_cols)
     Y = transform_props(counts, transform)
-    fit = moderated_test(Y, X, list(range(1, len(chosen))))
+    fit = moderated_test(Y, X, list(range(1, len(chosen))), robust=robust)
 
     fdr = _bh(fit.pval)
     for gi, gr in enumerate(result.groups):
         gr.stat = _finite(fit.stat[gi])
         gr.pval = _finite(fit.pval[gi])
         gr.fdr = _finite(fdr[gi])
+        gr.df_prior = _finite(fit.df_prior_each[gi])
     result.tested = True
     result.design = design
     result.test = "moderated t" if len(chosen) == 2 else "moderated F"
     result.df_residual = fit.df_residual
     result.df_prior = fit.df_prior if np.isfinite(fit.df_prior) else None
+    result.n_outliers = int((fit.df_prior_each < fit.df_prior).sum()) if robust else 0
     result.n_significant = int(np.nansum(fdr < FDR))
     cell_fdr = _bh(cell_level_pvals(cell_counts))
     result.n_significant_cell_level = int(np.nansum(cell_fdr < FDR))

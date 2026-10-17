@@ -6,6 +6,19 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- **The composition test moderates variances robustly, as propeller does.** limma's robust
+  empirical Bayes (`eBayes(robust=TRUE)`) is now the default: a group whose sample-to-sample
+  variance is an outlier gets a smaller prior df of its own, so it neither borrows strength it
+  shouldn't nor pulls the shared prior for the rest. Matches R limma to numerical precision. With
+  fewer than ten groups limma's robust fit is the plain one, so results there are unchanged. On
+  Kang by cluster, Eryth and pDC are flagged; CD14 Mono moves from FDR 0.053 to 0.056.
+
+### Added
+- **Design and variance choices in the composition test.** A Design menu forces paired (by
+  sample) or unpaired, with Auto showing what it picked; a Variances menu switches back to plain
+  eBayes. The CSV export carries each group's prior df.
+
 ## [0.17.0] - 2026-10-17
 
 ### Added

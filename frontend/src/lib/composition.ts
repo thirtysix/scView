@@ -59,8 +59,11 @@ export function describeTest(r: CompositionResult): string {
   if (!r.tested) return "Proportions only: not tested.";
   const reps = r.conditions.map((k) => `${k} ${r.n_samples[k] ?? 0}`).join(", ");
   const scale = r.transform === "logit" ? "logit" : "arcsin-square-root";
-  const prior =
+  let prior =
     r.df_prior == null ? "variances fully pooled across groups" : `prior df ${r.df_prior.toFixed(1)}`;
+  if (r.robust && r.n_outliers > 0)
+    prior += `; robust: ${r.n_outliers} outlying group${r.n_outliers === 1 ? "" : "s"} shrunk less`;
+  else if (r.robust) prior += "; robust";
   const design =
     r.design === "paired" ? `paired by ${r.sample_key}` : `samples from ${r.sample_key} treated as independent`;
   return (
@@ -80,6 +83,7 @@ export function compositionCsv(r: CompositionResult): { headers: string[]; rows:
     r.test === "moderated F" ? "F" : "t",
     "pval",
     "fdr",
+    "df_prior",
     ...r.conditions.map((k) => `n_cells_${k}`),
     ...r.conditions.map((k) => `n_samples_${k}`),
   ];
@@ -92,6 +96,7 @@ export function compositionCsv(r: CompositionResult): { headers: string[]; rows:
     num(g.stat, 6),
     num(g.pval, 6),
     num(g.fdr, 6),
+    r.tested && g.stat != null ? (g.df_prior == null ? "Inf" : num(g.df_prior, 6)) : "",
     ...r.conditions.map((k) => g.n_cells[k] ?? 0),
     ...r.conditions.map((k) => r.n_samples[k] ?? 0),
   ]);

@@ -12,6 +12,8 @@ export interface CompositionRequest {
   transform?: "logit" | "asin";
   /** Left out: paired when every donor is in every condition. */
   paired?: boolean;
+  /** limma's robust empirical Bayes (propeller's default); false: the plain fit. */
+  robust?: boolean;
 }
 
 export interface CompositionGroup {
@@ -25,6 +27,8 @@ export interface CompositionGroup {
   stat: number | null;
   pval: number | null;
   fdr: number | null;
+  /** This group's prior df; smaller for an outlying variance (robust). null: infinite. */
+  df_prior: number | null;
 }
 
 export interface CompositionSample {
@@ -44,11 +48,14 @@ export interface CompositionResult {
   conditions: string[];
   reference: string;
   transform: "logit" | "asin";
+  robust: boolean;
+  /** Robust: groups whose variance is an outlier, given a smaller prior df. */
+  n_outliers: number;
   tested: boolean;
   design: "paired" | "unpaired" | null;
   test: "moderated t" | "moderated F" | null;
   df_residual: number | null;
-  /** Empirical-Bayes prior df; null when tested means infinite (variances pooled). */
+  /** Empirical-Bayes prior df (robust: the non-outliers'); null when tested means infinite. */
   df_prior: number | null;
   n_samples: Record<string, number>;
   n_cells: Record<string, number>;

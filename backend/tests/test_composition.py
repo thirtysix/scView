@@ -3,7 +3,9 @@
 The reference numbers come from R limma 3.x run on the same tables: per-sample
 logit / arcsin-sqrt shares, ``lmFit(y, model.matrix(~cond [+ donor]))``, then
 ``eBayes(robust=FALSE)``; for three conditions the F-test of the condition
-coefficients. That is propeller's computation with robust=FALSE.
+coefficients. With five groups limma's robust fit is the plain one, so these
+tables check both. The robust fit proper (10+ groups, an outlying group) is
+checked against ``fixtures/composition_robust`` (``eBayes(robust=TRUE)``).
 """
 
 from __future__ import annotations
@@ -110,6 +112,47 @@ def test_three_conditions_match_limma_f_test(transform, design):
         assert g.stat == pytest.approx(stat, abs=2e-6)
         assert g.pval == pytest.approx(p, rel=1e-4)
         assert g.fold_change is None  # no single ratio for three conditions
+
+
+ROBUST = Path(__file__).parent / "fixtures" / "composition_robust"
+
+
+def _table_obs(tag: str) -> pd.DataFrame:
+    m = pd.read_csv(ROBUST / f"{tag}.tsv", sep="\t", index_col=0)
+    return _obs(list(m.index), m.to_numpy().tolist(), list(m.columns))
+
+
+@pytest.mark.parametrize("tag", ["t2", "t3", "t2b"])
+@pytest.mark.parametrize("transform", ["logit", "asin"])
+@pytest.mark.parametrize("design", ["paired", "unpaired"])
+def test_robust_matches_limma(tag, transform, design):
+    ref = pd.read_csv(ROBUST / "limma_robust.tsv", sep="\t")
+    ref = ref[(ref.tag == tag) & (ref.tr == transform) & (ref.des == design)].set_index("g")
+    r = composition_test(_table_obs(tag), "cond", "donor", "group",
+                         transform=transform, paired=design == "paired")
+    assert r.tested and r.robust and r.design == design
+    for g in r.groups:
+        row = ref.loc[g.group]
+        assert g.stat == pytest.approx(row.stat, rel=1e-6)
+        assert g.pval == pytest.approx(row.p, rel=1e-6)
+        if np.isfinite(row.dfp):
+            assert g.df_prior == pytest.approx(row.dfp, rel=1e-6)
+        else:
+            assert g.df_prior is None
+    common = ref.dfp.max()
+    assert r.n_outliers == int((ref.dfp < common).sum())
+    assert r.df_prior == (None if not np.isfinite(common) else pytest.approx(common, rel=1e-6))
+
+
+def test_the_outlying_group_is_shrunk_less():
+    obs = _table_obs("t2")
+    robust = composition_test(obs, "cond", "donor", "group")
+    plain = composition_test(obs, "cond", "donor", "group", robust=False)
+    assert not plain.robust and plain.n_outliers == 0
+    assert len({g.df_prior for g in plain.groups}) == 1
+    g3 = next(g for g in robust.groups if g.group == "g3")  # the planted noisy group
+    assert g3.df_prior == min(g.df_prior or np.inf for g in robust.groups)
+    assert robust.n_outliers >= 1
 
 
 def test_reported_shares_fold_change_and_fdr():
