@@ -64,7 +64,17 @@ export function TrendGenesView({
       colorscale: "Viridis",
       zmin: 0,
       zmax: 1,
-      colorbar: { title: { text: "scaled", side: "right" as const }, thickness: 10, len: 0.5 },
+      // Each row runs from its own min (0) to max (1).
+      colorbar: {
+        title: { text: "row<br>scaled", side: "top" as const, font: { size: 10, color: "#64748b" } },
+        thickness: 10,
+        len: 110,
+        lenmode: "pixels" as const,
+        y: 1,
+        yanchor: "top" as const,
+        tickvals: [0, 1],
+        tickfont: { size: 10, color: "#64748b" },
+      },
       hovertemplate:
         "<b>%{y}</b> (%{customdata[2]})<br>pseudotime %{customdata[0]:.3f}<br>mean %{customdata[1]:.3f}<extra></extra>",
     };

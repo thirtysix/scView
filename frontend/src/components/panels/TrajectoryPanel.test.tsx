@@ -120,7 +120,7 @@ describe("TrajectoryPanel: PAGA graph and genes along pseudotime", () => {
     await waitFor(() => expect(getPaga).toHaveBeenCalledWith("d1", "X_umap"));
     await waitFor(() => {
       const ids = ((scatterProps.current?.overlayLayers as { id: string }[] | null) ?? []).map((l) => l.id);
-      expect(ids).toEqual(["paga-edges", "paga-nodes", "paga-labels"]);
+      expect(ids).toEqual(["paga-edges-halo", "paga-edges", "paga-nodes", "paga-labels"]);
     });
     expect(screen.getByTestId("paga-summary")).toHaveTextContent("3 of 3 edges shown");
     expect(screen.getByTestId("velocity-note")).toHaveTextContent("spliced");
@@ -142,7 +142,7 @@ describe("TrajectoryPanel: PAGA graph and genes along pseudotime", () => {
     );
     expect(screen.getByTestId("trend-path")).toHaveTextContent("MEP → Ery1 → Ery2");
     // The branch is what the graph highlights.
-    const edges = (scatterProps.current!.overlayLayers as { id: string; props: { data: { onPath: boolean }[] } }[])[0]!;
+    const edges = (scatterProps.current!.overlayLayers as { id: string; props: { data: { onPath: boolean }[] } }[])[1]!;
     expect(edges.props.data.filter((e) => e.onPath)).toHaveLength(2);
 
     // Clicking a gene plots its trend and colours the embedding by it.

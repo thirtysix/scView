@@ -58,18 +58,33 @@ describe("branches along the spanning tree", () => {
 });
 
 describe("pagaLayers", () => {
-  type AnyLayer = { id: string; props: { data: unknown[]; getColor?: unknown; getLineColor?: unknown } };
+  type AnyLayer = {
+    id: string;
+    props: { data: unknown[]; getColor?: unknown; getWidth?: unknown; pickable?: boolean };
+  };
+  type Edge = { i: number; j: number; weight: number; onPath: boolean };
   const positions = [[0, 0], [1, 0], [2, 0], [0, 1], null, [5, 5]];
 
-  it("draws edges between placed groups, nodes and their names, none pickable", () => {
+  it("draws edges between placed groups (over a halo), nodes and their names, none pickable", () => {
     const layers = pagaLayers({ record: RECORD, positions, threshold: 0.1 }) as unknown as AnyLayer[];
-    expect(layers.map((l) => l.id)).toEqual(["paga-edges", "paga-nodes", "paga-labels"]);
-    const [edges, nodes, labels] = layers;
+    expect(layers.map((l) => l.id)).toEqual(["paga-edges-halo", "paga-edges", "paga-nodes", "paga-labels"]);
+    const [halo, edges, nodes, labels] = layers;
     // Mono has no position: its edge (GMP-Mono) and node are left out.
     expect(edges!.props.data.length).toBe(3);
+    expect(halo!.props.data).toBe(edges!.props.data);
     expect((nodes!.props.data as { group: string }[]).map((n) => n.group)).toEqual(["MEP", "Ery1", "Ery2", "GMP", "DC"]);
     expect((labels!.props.data as { label: string; offset: number[] }[])[0]).toMatchObject({ label: "MEP" });
-    expect(layers.every((l) => (l as unknown as { props: { pickable: boolean } }).props.pickable === false)).toBe(true);
+    expect(layers.every((l) => l.props.pickable === false)).toBe(true);
+  });
+
+  it("sizes edges relative to the strongest one drawn, so weak graphs still read", () => {
+    const weak: PagaRecord = { ...RECORD, edges: RECORD.edges.map(([i, j, w]) => [i, j, w / 5]) };
+    const layers = pagaLayers({ record: weak, positions, threshold: 0 }) as unknown as AnyLayer[];
+    const width = layers[1]!.props.getWidth as (d: Edge) => number;
+    expect(width({ i: 0, j: 1, weight: 0.18, onPath: false })).toBeCloseTo(7); // the strongest (0.9 / 5)
+    expect(width({ i: 0, j: 1, weight: 0.09, onPath: false })).toBeCloseTo(4);
+    const haloWidth = layers[0]!.props.getWidth as (d: Edge) => number;
+    expect(haloWidth({ i: 0, j: 1, weight: 0.18, onPath: false })).toBeCloseTo(10);
   });
 
   it("draws the chosen branch in amber", () => {
@@ -79,12 +94,12 @@ describe("pagaLayers", () => {
       threshold: 0.1,
       path: ["MEP", "Ery1", "Ery2"],
     }) as unknown as AnyLayer[];
-    const edges = layers[0]!.props.data as { i: number; j: number; onPath: boolean }[];
+    const edges = layers[1]!.props.data as Edge[];
     expect(edges.filter((e) => e.onPath).map((e) => [e.i, e.j])).toEqual([[0, 1], [1, 2]]);
-    const colour = layers[0]!.props.getColor as (d: { onPath: boolean; weight: number }) => number[];
-    expect(colour({ onPath: true, weight: 0.5 }).slice(0, 3)).toEqual([217, 119, 6]);
-    expect(colour({ onPath: false, weight: 0.5 }).slice(0, 3)).toEqual([30, 41, 59]);
-    const nodes = layers[1]!.props.data as { group: string; onPath: boolean }[];
+    const colour = layers[1]!.props.getColor as (d: Edge) => number[];
+    expect(colour({ i: 0, j: 1, onPath: true, weight: 0.5 }).slice(0, 3)).toEqual([217, 119, 6]);
+    expect(colour({ i: 0, j: 3, onPath: false, weight: 0.5 }).slice(0, 3)).toEqual([30, 41, 59]);
+    const nodes = layers[2]!.props.data as { group: string; onPath: boolean }[];
     expect(nodes.filter((n) => n.onPath).map((n) => n.group)).toEqual(["MEP", "Ery1", "Ery2"]);
   });
 });

@@ -2,8 +2,9 @@
  * The PAGA graph drawn over the embedding (Trajectory panel): one node per
  * group at the median of its cells, sized by its cell count, and an edge
  * between two groups whose PAGA connectivity reaches the threshold, wider and
- * darker the stronger it is. A branch (the groups on PAGA's spanning tree from
- * the pseudotime root to a chosen end group) is drawn in amber.
+ * darker the stronger it is (relative to the strongest edge drawn). A branch
+ * (the groups on PAGA's spanning tree from the pseudotime root to a chosen end
+ * group) is drawn in amber.
  */
 import { LineLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { Layer } from "@deck.gl/core";
@@ -132,18 +133,28 @@ export function pagaLayers(opts: PagaLayerOptions): Layer[] {
     if (from && to) edges.push({ ...e, from, to, onPath: pathPairs.has(pairKey(e.i, e.j)) });
   }
   const ink: [number, number, number] = dark ? [226, 232, 240] : [30, 41, 59];
+  const halo: [number, number, number, number] = dark ? [15, 23, 42, 200] : [255, 255, 255, 210];
+  // Widths and shades are relative to the graph's strongest edge, so a graph of
+  // weak connectivities (a few coarse clusters) still reads.
+  const strongest = Math.max(1e-9, ...edges.map((e) => e.weight));
+  const width = (d: DrawnEdge) => (d.onPath ? 2.5 : 1) + 6 * (d.weight / strongest);
   const over = { depthCompare: "always", depthWriteEnabled: false } as const;
+  const line = {
+    data: edges,
+    getSourcePosition: (d: DrawnEdge) => d.from as [number, number],
+    getTargetPosition: (d: DrawnEdge) => d.to as [number, number],
+    widthUnits: "pixels" as const,
+    pickable: false,
+    parameters: over,
+  };
   return [
+    // A light (dark) band under each edge keeps it visible over dense points.
+    new LineLayer<DrawnEdge>({ ...line, id: "paga-edges-halo", getWidth: (d) => width(d) + 3, getColor: halo }),
     new LineLayer<DrawnEdge>({
+      ...line,
       id: "paga-edges",
-      data: edges,
-      getSourcePosition: (d) => d.from as [number, number],
-      getTargetPosition: (d) => d.to as [number, number],
-      getWidth: (d) => (d.onPath ? 2.5 : 1) + 6 * d.weight,
-      widthUnits: "pixels",
-      getColor: (d) => (d.onPath ? [...AMBER, 235] : [...ink, Math.round(70 + 150 * d.weight)]),
-      pickable: false,
-      parameters: over,
+      getWidth: width,
+      getColor: (d) => (d.onPath ? [...AMBER, 240] : [...ink, Math.round(90 + 150 * (d.weight / strongest))]),
     }),
     new ScatterplotLayer<PagaNode>({
       id: "paga-nodes",
@@ -151,9 +162,10 @@ export function pagaLayers(opts: PagaLayerOptions): Layer[] {
       getPosition: (d) => d.position as [number, number],
       getRadius: (d) => d.radius,
       radiusUnits: "pixels",
+      billboard: true, // facing the camera in a 3-D embedding
       filled: true,
       stroked: true,
-      getFillColor: dark ? [30, 41, 59, 230] : [255, 255, 255, 235],
+      getFillColor: dark ? [30, 41, 59, 255] : [255, 255, 255, 255], // opaque: edges end under it
       getLineColor: (d) => (d.onPath ? [...AMBER, 255] : [...ink, 230]),
       getLineWidth: (d) => (d.onPath ? 3 : 1.5),
       lineWidthUnits: "pixels",
