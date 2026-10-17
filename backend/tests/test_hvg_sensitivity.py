@@ -75,6 +75,20 @@ def test_recorded_takes_the_reference_columns_own_method_and_resolution():
     assert (rec.method, rec.resolution) == ("leiden", 0.5) and rec.notes
 
 
+def test_recorded_says_where_the_reference_and_the_pcs_came_from():
+    a = _processed()
+    rec = hs.recorded(a)
+    assert not rec.reference_from_file and not rec.pcs_older
+    assert rec.pcs_made_by == provenance._scview_version() and rec.pcs_made_on
+    assert hs.recorded(a, "type").reference_from_file
+    # PCs made by an earlier release: the re-runs build them with this one's pipeline.
+    hist = provenance.read_provenance(a)["history"]
+    next(e for e in reversed(hist) if e["step"] == "pca")["scview_version"] = "0.1.0"
+    a.uns[provenance.UNS_KEY] = json.dumps({**provenance.read_provenance(a), "history": hist})
+    rec = hs.recorded(a)
+    assert rec.pcs_older and rec.pcs_made_by == "0.1.0"
+
+
 def test_recorded_follows_pearson_residuals_and_harmony():
     a = _processed(steps=[*STEPS[:5], "batch_correction", *STEPS[5:]], batch_key="batch",
                    normalization_method="pearson_residuals")

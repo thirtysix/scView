@@ -18,6 +18,12 @@ export const NORMALIZATION_LABELS: Record<string, string> = {
   pearson_residuals: "Analytic Pearson residuals",
 };
 
+export const HVG_FLAVOR_OPTION_LABELS: Record<string, string> = {
+  seurat: "Seurat",
+  cell_ranger: "Cell Ranger",
+  seurat_v3: "Seurat v3 (ranks raw counts)",
+};
+
 /** Flattened params for running `steps`, or null when there are none. */
 export function flattenStepParams(steps: string[], stepParams: StepParams): Record<string, unknown> | null {
   const flat: Record<string, unknown> = {};
