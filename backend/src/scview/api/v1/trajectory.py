@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from scview.core import pseudotime_genes as ptg
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
+from scview.core.obs_writes import uns_snapshot, write_derived
 from scview.core.processing import run_exclusive
 from scview.core.trajectory import (
     TrajectoryError,
@@ -146,12 +146,6 @@ async def compute_pseudotime(
 ):
     """Compute diffusion pseudotime rooted in one group, save it as an obs
     column of the dataset's derived file, and reload the dataset."""
-    # One edit of the derived file at a time (labels, a kept resolution, a run).
-    async with dataset_lock(dataset_id):
-        return await _compute_pseudotime(dataset_id, body, dm)
-
-
-async def _compute_pseudotime(dataset_id: str, body: DPTRequest, dm: DatasetManager):
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
@@ -170,28 +164,27 @@ async def _compute_pseudotime(dataset_id: str, body: DPTRequest, dm: DatasetMana
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-
-    def _run():
-        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
+    def _run(adaptor):
+        work = adaptor.adata.to_memory() if getattr(adaptor.adata, "isbacked", False) else adaptor.adata
         params = compute_dpt(work, body.root_column, body.root_value)
         # Write beside, then swap in: a backed dataset may be reading this path.
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
         partial = output_path + ".partial"
         work.write_h5ad(partial, compression="gzip")
         os.replace(partial, output_path)
         return params
 
     try:
-        params = await asyncio.to_thread(_run)
+        # In a worker thread with the dataset to itself (busy, locked until the
+        # thread ends even if the client goes away); then served from disk.
+        params = await run_exclusive(dm, dataset_id, _run)
+    except HTTPException:
+        raise
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error("Pseudotime failed for %s: %s", dataset_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Pseudotime failed: {exc!s}")
-    finally:
-        # The cached copy may hold the new column without it being saved.
-        dm.evict(dataset_id)
-    await dm.load_dataset(dataset_id)
     return {"dataset_id": dataset_id, **params}
 
 

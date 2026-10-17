@@ -166,3 +166,26 @@ async def test_endpoint_rejects_bad_requests(client, dataset_manager):
     assert r.status_code == 400
     r = await client.post(url, json={"root_column": "stage", "root_value": "early"})
     assert r.status_code == 400 and "PCA" in r.json()["detail"]
+
+
+async def test_endpoint_runs_with_the_dataset_to_itself(client, dataset_manager, monkeypatch):
+    # Like a pipeline run: the dataset is marked busy for the whole thread, so a
+    # client that disconnects mid-write can't hand the lock to another edit early.
+    from scview.api.v1 import trajectory as traj_api
+
+    a, _ = _path_adata()
+    did, _ = _register(dataset_manager, a)
+    seen = {}
+    real = traj_api.compute_dpt
+
+    def spy(adata, column, value):
+        seen["busy"] = dataset_manager.is_busy(did)
+        return real(adata, column, value)
+
+    monkeypatch.setattr(traj_api, "compute_dpt", spy)
+    r = await client.post(
+        f"{API}/datasets/{did}/trajectory/dpt", json={"root_column": "stage", "root_value": "early"}
+    )
+    assert r.status_code == 200, r.text
+    assert seen["busy"] is True
+    assert not dataset_manager.is_busy(did)
