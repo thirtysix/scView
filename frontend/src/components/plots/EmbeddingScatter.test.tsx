@@ -195,3 +195,14 @@ describe("EmbeddingScatter restored camera", () => {
     expect(viewState().target).not.toEqual(restored.target);
   });
 });
+
+describe("EmbeddingScatter overlay layers", () => {
+  it("draws a panel's overlay (the PAGA graph) over the points", async () => {
+    const { ScatterplotLayer } = await import("@deck.gl/layers");
+    const overlay = [new ScatterplotLayer({ id: "paga-nodes", data: [] })];
+    render(<EmbeddingScatter positions={positions} colorValues={null} colorType="continuous" overlayLayers={overlay} />);
+    await screen.findByTestId("deck");
+    const ids = (deckProps.current!.layers as { id: string }[]).map((l) => l.id);
+    expect(ids).toEqual(["embedding-scatter", "paga-nodes"]);
+  });
+});
