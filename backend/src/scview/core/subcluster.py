@@ -20,7 +20,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from scview.core import provenance
+from scview.core import leiden, provenance
 from scview.core.obs_writes import forget_column_results
 
 logger = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ def subcluster(
         _run_batch_correction(sub, PipelineParams(batch_key=batch_key))
         rep = "X_pca_harmony"
     sc.pp.neighbors(sub, n_neighbors=min(N_NEIGHBORS, n - 1), use_rep=rep, random_state=SEED)
-    sc.tl.leiden(sub, resolution=resolution, key_added="s", random_state=SEED)
+    leiden.leiden(sub, resolution, "s", random_state=SEED)
     codes = sub.obs["s"].astype(str).to_numpy()  # Leiden numbers communities by size
     new_cats = [f"{group}.{k}" for k in sorted(set(codes), key=int)]
 
