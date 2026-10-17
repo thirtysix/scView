@@ -28,6 +28,7 @@ Design principles (mirroring ``llm_advisor.py``):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -36,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
 from scview.core import cluster_qc, composition, provenance
+from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.species import detect_species
 from scview.core.uns_keys import enrichment_column
@@ -64,6 +66,8 @@ class ChatSource(BaseModel):
     kind: str  # "dataset" | "preprocessing" | "provenance" | "result"
     ref: str   # short citable tag, e.g. "result:markers:B" or "provenance:clustering"
     detail: str
+    # The context lines behind this fact, for the claims check. Server-side only.
+    evidence: str = Field("", exclude=True)
 
 
 class ChatMessage(BaseModel):
@@ -105,6 +109,7 @@ class ChatResponse(BaseModel):
     followups: list[str] = []  # suggested next questions
     actions: list[AssistantAction] = []  # allow-listed UI actions to execute (NL commands)
     model: str | None = None  # which LLM produced the answer (transparency); None = no LLM
+    claims: list[Claim] = []  # the claims ledger: each checkable sentence and its verdict
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +177,7 @@ def build_grounding_context(
     n_cells = adaptor.n_cells()
     n_genes = adaptor.n_genes()
     embeddings = [e["name"] for e in adaptor.available_embeddings()]
-    lines.append("## Dataset")
+    lines.append("## Dataset [dataset:summary]")
     lines.append(f"- Cells: {n_cells:,} | Genes: {n_genes:,} | Species: {detect_species(adata).species}")
     lines.append(f"- Embeddings present: {', '.join(embeddings) if embeddings else 'none'}")
     prot = adaptor.protein_info()
@@ -187,6 +192,7 @@ def build_grounding_context(
         kind="dataset", ref="dataset:summary",
         detail=f"{n_cells:,} cells × {n_genes:,} genes; embeddings: "
                f"{', '.join(embeddings) or 'none'}",
+        evidence="\n".join(lines[1:]),
     ))
 
     # --- 1b. Dataset identity / source (so "what's the paper?" can be answered) ---
@@ -216,12 +222,13 @@ def build_grounding_context(
                 "and could be added by the user."
             )
     if ident:
-        lines.append("\n## Dataset identity & source "
+        lines.append("\n## Dataset identity & source [dataset:source] "
                      "(use to answer questions about the dataset's paper/origin)")
         lines.extend(ident)
         sources.append(ChatSource(
             kind="dataset", ref="dataset:source",
             detail=(_uns_str(adata, "about_title") or prov_src.get("original_filename") or "source"),
+            evidence="\n".join(ident),
         ))
 
     # --- 2. Preprocessing state (the assessor) ------------------------------
@@ -231,7 +238,8 @@ def build_grounding_context(
         for step, st in state.items():
             if isinstance(st, dict) and "done" in st:
                 (done if st.get("done") else notdone).append(step)
-        lines.append("\n## Preprocessing state (deterministic assessment)")
+        start = len(lines)
+        lines.append("\n## Preprocessing state (deterministic assessment) [preprocessing:state]")
         lines.append(f"- Done: {', '.join(done) if done else 'none'}")
         lines.append(f"- Not done: {', '.join(notdone) if notdone else 'none'}")
         # surface a few high-signal details verbatim
@@ -242,6 +250,7 @@ def build_grounding_context(
         sources.append(ChatSource(
             kind="preprocessing", ref="preprocessing:state",
             detail=f"done={done}; not_done={notdone}",
+            evidence="\n".join(lines[start + 1:]),
         ))
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("assistant: assessment failed: %s", exc)
@@ -251,7 +260,9 @@ def build_grounding_context(
         if provenance.has_provenance(adata):
             steps = provenance.recipe(adata)
             if steps:
-                lines.append("\n## Provenance — recorded analysis steps (in order)")
+                start = len(lines)
+                lines.append("\n## Provenance — recorded analysis steps, in order "
+                             "[provenance:recipe]")
                 for s in steps:
                     params = s.get("params") or {}
                     pstr = ", ".join(f"{k}={v}" for k, v in list(params.items())[:6])
@@ -259,6 +270,7 @@ def build_grounding_context(
                 sources.append(ChatSource(
                     kind="provenance", ref="provenance:recipe",
                     detail=" → ".join(s["step"] for s in steps),
+                    evidence="\n".join(lines[start + 1:]),
                 ))
             issues = provenance.reconcile(adata)
             if issues:
@@ -275,7 +287,7 @@ def build_grounding_context(
             if nun is not None and 1 < nun <= _MAX_CATEGORICAL_UNIQUE and "values" in info:
                 cat_cols.append(info["name"])
     if cat_cols:
-        lines.append("\n## Cell groupings (obs columns)")
+        lines.append("\n## Cell groupings (obs columns); cite as [result:groups:<column>]")
         for col in cat_cols[:_MAX_CATEGORICAL_COLUMNS]:
             try:
                 summary = adaptor.get_obs_summary(col)
@@ -284,7 +296,7 @@ def build_grounding_context(
                 lines.append(f"- **{col}**: {shown}")
                 sources.append(ChatSource(
                     kind="result", ref=f"result:groups:{col}",
-                    detail=f"{col} = {shown}",
+                    detail=f"{col} = {shown}", evidence=lines[-1],
                 ))
             except Exception as exc:  # pragma: no cover
                 logger.debug("assistant: obs summary failed for %s: %s", col, exc)
@@ -297,7 +309,8 @@ def build_grounding_context(
             lines.extend(comp_lines)
             if comp_detail:
                 sources.append(ChatSource(kind="result", ref="result:composition",
-                                          detail=comp_detail))
+                                          detail=comp_detail,
+                                          evidence="\n".join(comp_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: composition grounding failed: %s", exc)
 
@@ -314,12 +327,15 @@ def build_grounding_context(
         if not mapping:
             continue
         src = acol[: -len(_ANNO_SUFFIX)] if acol.endswith(_ANNO_SUFFIX) else "the clustering"
-        lines.append(f"\n## Cell-type annotation '{acol}' — {src} cluster → cell type")
+        lines.append(f"\n## Cell-type annotation '{acol}' — {src} cluster → cell type "
+                     f"[result:celltypes:{acol}]")
+        start = len(lines)
         for cl, ct in list(mapping.items())[:_MAX_CATEGORICAL_UNIQUE]:
             lines.append(f"- cluster **{cl}** = {ct}")
         sources.append(ChatSource(
             kind="result", ref=f"result:celltypes:{acol}",
             detail=f"{acol}: " + "; ".join(f"{k}={v}" for k, v in list(mapping.items())[:12]),
+            evidence="\n".join(lines[start:]),
         ))
 
     # 4a-ter. Per-cluster QC flags (deterministic), so "which clusters look low
@@ -328,7 +344,11 @@ def build_grounding_context(
         try:
             qc_lines, qc_cites = cluster_qc.grounding_block(cluster_qc.for_adaptor(adaptor))
             lines.extend(qc_lines)
-            sources.extend(ChatSource(kind="result", ref=t, detail=d) for t, d in qc_cites)
+            head = qc_cites[0][0] if qc_cites else ""
+            untagged = [ln.strip() for ln in qc_lines if "[result:qc:" not in ln]
+            for t, d in qc_cites:
+                ev = [ln for ln in qc_lines if f"[{t}]" in ln] + (untagged if t == head else [])
+                sources.append(ChatSource(kind="result", ref=t, detail=d, evidence="\n".join(ev)))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: cluster QC failed: %s", exc)
 
@@ -343,13 +363,15 @@ def build_grounding_context(
         df = adaptor.get_markers(column=mcol, n_genes=_MAX_MARKER_GENES)
         if df is None or df.empty:
             continue
-        lines.append(f"\n## Top marker genes per group (column: {mcol})")
+        lines.append(f"\n## Top marker genes per group (column: {mcol}); cite as "
+                     "[result:markers:<group>]")
         for group, sub in df.groupby("group", sort=False):
             genes = list(sub["gene"])[:_MAX_MARKER_GENES]
             lines.append(f"- **{group}**: {', '.join(genes)}")
             sources.append(ChatSource(
                 kind="result", ref=f"result:markers:{group}",
                 detail=f"{group} top markers: {', '.join(genes)}",
+                evidence=f"Top markers by {mcol}\n{lines[-1]}",
             ))
         # group cap to keep the prompt bounded
         if df["group"].nunique() > _MAX_MARKER_GROUPS:
@@ -365,7 +387,8 @@ def build_grounding_context(
         )
         if enr_keys:
             cols = sorted({enrichment_column(k) for k in enr_keys})
-            lines.append("\n## Pathway enrichment computed for: " + ", ".join(cols))
+            lines.append("\n## Pathway enrichment computed for: " + ", ".join(cols)
+                         + " [result:enrichment]")
             sources.append(ChatSource(
                 kind="result", ref="result:enrichment",
                 detail="enrichment available for: " + ", ".join(cols),
@@ -407,7 +430,10 @@ _FEATURE_GUIDE = (
     "cluster proportions differ between conditions with the donors/samples as replicates "
     "(per-sample shares, logit, moderated t or F test, BH FDR, table + CSV); or two "
     "datasets' proportions side by side, descriptive only), "
-    "History (provenance: what was done + edit-&-re-run), and this AI Co-pilot. "
+    "History (provenance: what was done + edit-&-re-run), and this AI Co-pilot, whose "
+    "answers list each claim with a number, gene or citation as supported, refuted or "
+    "uncertain against the fact it cites (a 'Check claims' button asks the model about the "
+    "uncertain ones). "
     "This list is complete: scView has no other plots or tools."
 )
 
@@ -420,11 +446,13 @@ def build_app_context(
     Answers questions like "what datasets do we have?" / "how do I load data?"
     without touching the RAG corpora.
     """
-    lines = ["## scView app", f"- {_FEATURE_GUIDE}"]
-    sources = [ChatSource(kind="app", ref="app:features", detail="scView tabs and capabilities")]
+    lines = ["## scView app [app:features]", f"- {_FEATURE_GUIDE}"]
+    sources = [ChatSource(kind="app", ref="app:features", detail="scView tabs and capabilities",
+                          evidence=lines[1])]
 
     datasets = datasets or []
-    lines.append(f"\n## Dataset library ({len(datasets)} dataset(s) available)")
+    lines.append(f"\n## Dataset library ({len(datasets)} dataset(s) available) [app:library]")
+    start = len(lines)
     if not datasets:
         lines.append("- (no datasets loaded yet — use the Data tab to import one)")
     for d in datasets[:50]:
@@ -442,6 +470,7 @@ def build_app_context(
     sources.append(ChatSource(
         kind="app", ref="app:library",
         detail=f"{len(datasets)} dataset(s): " + ", ".join(d.get("name", "?") for d in datasets[:20]),
+        evidence="\n".join(lines[start - 1:]),
     ))
     return "\n".join(lines), sources
 
@@ -881,6 +910,15 @@ def _assemble(
     return context, sources
 
 
+def _ledger(answer: str, sources: list[ChatSource], context: str, adaptor) -> list[Claim]:
+    """The deterministic claims check for one answer; never breaks the answer."""
+    try:
+        return check_answer(answer, sources, context, vocab_for(adaptor))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("assistant: claims check failed: %s", exc)
+        return []
+
+
 def _build_messages(query: str, context: str, history: list[ChatMessage] | None) -> list[dict]:
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     for m in (history or [])[-6:]:  # keep the last few turns
@@ -1264,9 +1302,10 @@ async def answer_query(
         if not answer:
             return _fallback_answer(query, context, sources, route)
         followups = await suggest_followups(query, answer, api_key, model)
+        claims = await asyncio.to_thread(_ledger, answer, sources, context, adaptor)
         return ChatResponse(
             answer=answer, sources=sources, grounded=True, raw_response=answer,
-            route=route, followups=followups, model=model,
+            route=route, followups=followups, model=model, claims=claims,
         )
     except Exception as exc:
         logger.warning("assistant: LLM call failed (%s); using fallback", exc)
@@ -1384,7 +1423,9 @@ async def stream_answer(
 
     answer = "".join(parts).strip()
     followups = await suggest_followups(query, answer, api_key, model) if answer else []
-    yield {"type": "done", "followups": followups, "model": model}
+    claims = await asyncio.to_thread(_ledger, answer, sources, context, adaptor) if answer else []
+    yield {"type": "done", "followups": followups, "model": model,
+           "claims": [c.model_dump() for c in claims]}
 
 
 def _fallback_answer(

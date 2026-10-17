@@ -9,12 +9,14 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
+from scview.core import claims as claims_mod
 from scview.core.assistant import (
+    DEEPINFRA_BASE_URL,
     ChatMessage,
     ChatResponse,
     DatasetInsight,
@@ -52,6 +54,53 @@ class FeedbackRequest(BaseModel):
     model: str | None = None
     route: list[str] | None = None
     dataset_id: str | None = None
+
+
+class ClaimToJudge(BaseModel):
+    id: int
+    text: str = Field(max_length=2 * claims_mod.MAX_CLAIM_CHARS)
+    evidence: str = Field("", max_length=2 * claims_mod.MAX_EVIDENCE_CHARS)
+
+
+class CheckClaimsRequest(BaseModel):
+    claims: list[ClaimToJudge]
+
+
+class JudgedClaim(BaseModel):
+    id: int
+    verdict: str
+    reason: str
+
+
+class CheckClaimsResponse(BaseModel):
+    claims: list[JudgedClaim]
+    model: str
+
+
+@router.post("/assistant/check-claims", response_model=CheckClaimsResponse)
+async def check_claims(
+    body: CheckClaimsRequest, settings: Settings = Depends(get_settings_dep)
+) -> CheckClaimsResponse:
+    """The ledger's "Check claims" button: one small LLM call judges the claims the
+    rules left uncertain, each against only the fact snippet it cited."""
+    if not body.claims:
+        raise HTTPException(status_code=400, detail="No claims to check.")
+    if len(body.claims) > claims_mod.MAX_JUDGE_CLAIMS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many claims (max {claims_mod.MAX_JUDGE_CLAIMS} per check).",
+        )
+    if not settings.DEEPINFRA_API_KEY:
+        raise HTTPException(status_code=503, detail="The language model is not configured.")
+    try:
+        judged = await claims_mod.judge_claims(
+            [c.model_dump() for c in body.claims], settings.DEEPINFRA_API_KEY,
+            settings.RAG_CHAT_MODEL, DEEPINFRA_BASE_URL,
+        )
+    except Exception as exc:
+        logger.warning("claims judge failed: %s", exc)
+        raise HTTPException(status_code=502, detail="The claims check failed; try again.")
+    return CheckClaimsResponse(claims=judged, model=settings.RAG_CHAT_MODEL)
 
 
 @router.post("/assistant/feedback")
