@@ -16,6 +16,7 @@ interface Props {
 
 const TESTED = "#60a5fa";
 const SKIPPED = "#cbd5e1";
+const UNDER_GAP = 0.35; // log10 units between the "<0.1%" bar and the 0.1% edge
 const STYLE = { width: "100%" } as const;
 
 /**
@@ -33,7 +34,7 @@ export function DetectionHistogram({ detection, minPct, pending = null, height =
     return [
       {
         type: "bar",
-        x: [bins.minLog - 0.25, ...bins.lo.map((lo) => lo + bins.width / 2)],
+        x: [bins.minLog - UNDER_GAP, ...bins.lo.map((lo) => lo + bins.width / 2)],
         y: [bins.below, ...bins.counts],
         width: [0.3, ...bins.lo.map(() => bins.width)],
         marker: {
@@ -66,9 +67,10 @@ export function DetectionHistogram({ detection, minPct, pending = null, height =
       bargap: 0,
       showlegend: false,
       xaxis: {
-        range: [bins.minLog - 0.45, 0.05],
-        tickvals: [bins.minLog - 0.25, -3, -2, -1, 0],
-        ticktext: ["<0.1%", "0.1%", "1%", "10%", "100%"],
+        range: [bins.minLog - UNDER_GAP - 0.2, 0.05],
+        // No "0.1%" tick: beside the "<0.1%" bar's label the two would overprint.
+        tickvals: [bins.minLog - UNDER_GAP, -2, -1, 0],
+        ticktext: ["<0.1%", "1%", "10%", "100%"],
         tickfont: { size: 9 },
         fixedrange: true,
       },
