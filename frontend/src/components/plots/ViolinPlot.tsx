@@ -1,7 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Plot from "@/components/plots/Plot";
 import { useCategoryColors, useCategoryOrder } from "@/hooks/useCategoryColors";
 import { rgbCss, sortByCategoryOrder } from "@/lib/categoryColors";
+import { pseudoLog, pseudoLogTicks, summary } from "@/lib/logAxis";
 import { plotConfig } from "@/lib/plotConfig";
 
 interface ViolinPlotProps {
@@ -14,6 +15,14 @@ interface ViolinPlotProps {
   height?: number;
 }
 
+const STATS = [
+  ["max", "max"],
+  ["q3", "upper quartile"],
+  ["median", "median"],
+  ["q1", "lower quartile"],
+  ["min", "min"],
+] as const;
+
 export function ViolinPlot({
   data,
   groupColumn,
@@ -24,16 +33,19 @@ export function ViolinPlot({
 }: ViolinPlotProps) {
   const colorOf = useCategoryColors(groupColumn);
   const order = useCategoryOrder(groupColumn);
+  // A log value axis, per plot (lib/logAxis.ts: zeros and negatives stay).
+  const [log, setLog] = useState(false);
+  const groups = useMemo(() => sortByCategoryOrder(Object.keys(data), order), [data, order]);
   const traces = useMemo(() => {
-    const groups = sortByCategoryOrder(Object.keys(data), order);
-    return groups.map((group) => {
+    const violins = groups.map((group) => {
       const color = colorOf(group);
       const rgbStr = rgbCss(color);
       const rgbaStr = rgbCss(color, 0.5);
+      const values = data[group] ?? [];
 
       return {
         type: "violin" as const,
-        y: data[group] ?? [],
+        y: log ? values.map(pseudoLog) : values,
         name: group,
         box: { visible: true },
         meanline: { visible: true },
@@ -42,9 +54,51 @@ export function ViolinPlot({
         spanmode: "soft" as const,
         scalemode: "width" as const,
         points: false as const,
+        // On the log axis Plotly's hover would give the box on that scale: the
+        // markers below give it in the original units instead.
+        ...(log ? { hoverinfo: "skip" as const } : {}),
       };
     });
-  }, [data, colorOf, order]);
+    if (!log) return violins;
+    // Invisible markers at each group's quartiles and range, for the hover.
+    const x: string[] = [];
+    const y: number[] = [];
+    const text: string[] = [];
+    for (const group of groups) {
+      const s = summary(data[group] ?? []);
+      if (!s) continue;
+      for (const [key, label] of STATS) {
+        x.push(group);
+        y.push(pseudoLog(s[key]));
+        text.push(`${label} ${statText(s[key])}`);
+      }
+    }
+    const stats = {
+      type: "scatter" as const,
+      mode: "markers" as const,
+      x,
+      y,
+      customdata: text,
+      marker: { size: 14, opacity: 0 },
+      hovertemplate: "<b>%{x}</b><br>%{customdata}<extra></extra>",
+      showlegend: false,
+      name: "summary",
+    };
+    return [...violins, stats];
+  }, [data, groups, colorOf, log]);
+
+  const ticks = useMemo(() => {
+    if (!log) return null;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const values of Object.values(data)) {
+      for (const v of values) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+    return pseudoLogTicks(min, max);
+  }, [data, log]);
 
   const layout = useMemo(
     () => ({
@@ -60,11 +114,14 @@ export function ViolinPlot({
         automargin: true,
       },
       yaxis: {
-        title: yLabel ? { text: yLabel, font: { size: 12, color: "#64748b" } } : undefined,
+        title: yLabel
+          ? { text: log ? `${yLabel} (log scale)` : yLabel, font: { size: 12, color: "#64748b" } }
+          : undefined,
         tickfont: { size: 11, color: "#64748b" },
         gridcolor: "#f1f5f9",
         zeroline: false,
         automargin: true,
+        ...(ticks ? { tickmode: "array" as const, tickvals: ticks.tickvals, ticktext: ticks.ticktext } : {}),
       },
       showlegend: false,
       margin: { t: title ? 40 : 20, r: 20, b: xLabel ? 50 : 30, l: yLabel ? 60 : 45 },
@@ -74,7 +131,7 @@ export function ViolinPlot({
       autosize: true,
       height,
     }),
-    [title, xLabel, yLabel, height],
+    [title, xLabel, yLabel, height, log, ticks],
   );
 
   if (Object.keys(data).length === 0) {
@@ -86,13 +143,27 @@ export function ViolinPlot({
   }
 
   return (
-    <Plot
-      data={traces}
-      layout={layout}
-      config={plotConfig("violin")}
-      useResizeHandler
-      className="w-full"
-      style={{ width: "100%", height }}
-    />
+    <div className="relative">
+      <label
+        className="absolute left-1 top-1 z-10 flex cursor-pointer items-center gap-1 text-[10px] text-slate-500"
+        title="Log value axis: sign(v) x log10(1 + |v|), so zeros and negative values stay; ticks in the original units"
+      >
+        <input type="checkbox" checked={log} onChange={(e) => setLog(e.target.checked)} className="h-3 w-3" />
+        log scale
+      </label>
+      <Plot
+        data={traces}
+        layout={layout}
+        config={plotConfig("violin")}
+        useResizeHandler
+        className="w-full"
+        style={{ width: "100%", height }}
+      />
+    </div>
   );
+}
+
+/** A summary value for the hover: three significant digits, whole from 1,000. */
+function statText(v: number): string {
+  return Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : String(Number(v.toPrecision(3)));
 }

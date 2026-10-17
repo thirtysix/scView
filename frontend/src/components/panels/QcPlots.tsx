@@ -135,6 +135,7 @@ function HistCard({
   thresholds,
   onDrag,
   onCommit,
+  logY = false,
 }: {
   label: string;
   metric: QcMetric;
@@ -142,6 +143,8 @@ function HistCard({
   thresholds?: { param: ThresholdParam; label: string; value: number }[];
   onDrag?: (param: ThresholdParam, value: number) => void;
   onCommit?: (param: ThresholdParam, value: number) => void;
+  /** Cell counts on a log axis */
+  logY?: boolean;
 }) {
   const refLines = useMemo<RefLine[]>(
     () => [{ value: metric.median, label: "median", color: "#94a3b8", dash: "dot" }],
@@ -159,6 +162,7 @@ function HistCard({
             counts={metric.hist.counts}
             lines={lines}
             refLines={refLines}
+            logY={logY}
             plotName={`qc_${label}`}
             onDrag={onDrag ? (id, v) => onDrag(id as ThresholdParam, v) : undefined}
             onCommit={onCommit ? (id, v) => onCommit(id as ThresholdParam, v) : undefined}
@@ -313,6 +317,8 @@ export function QcPlots({
   const [grouped, setGrouped] = useState<QcByGroup | null>(null);
   const [groupLoading, setGroupLoading] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
+  // The histograms' cell counts on a log axis: a long tail of a few cells shows.
+  const [logHist, setLogHist] = useState(false);
 
   // A threshold being dragged, before the drag ends and it is handed to `filter`.
   const [live, setLive] = useState<Partial<FilterThresholds>>({});
@@ -458,6 +464,10 @@ export function QcPlots({
           ))}
         </select>
         {groupLoading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
+        <label className="ml-auto flex flex-shrink-0 cursor-pointer items-center gap-1">
+          <input type="checkbox" checked={logHist} onChange={(e) => setLogHist(e.target.checked)} className="h-3 w-3" />
+          Histograms on a log scale
+        </label>
       </div>
       {groupError && (
         <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -483,6 +493,7 @@ export function QcPlots({
             }
             onDrag={thresholds ? dragThreshold : undefined}
             onCommit={thresholds ? commitThreshold : undefined}
+            logY={logHist}
           />
         ))}
       </PlotGrid>
