@@ -45,6 +45,9 @@ _MAX_ITEMS = 6
 _CONDITION_RE = CONDITION_RE
 _BATCH_RE = BATCH_RE
 _SKIP_RE = re.compile(r"cell_?type|celltypeanno|leiden|louvain|cluster|phase|doublet", re.I)
+# Cluster flags that mean damaged cells or doublets: tightening the filters helps.
+_DAMAGE_FLAGS = {"low_quality", "high_mito", "low_genes", "doublet_rich"}
+_FLAG_WORDS = {"hb_ambient": "haemoglobin without erythroid markers"}
 
 
 class QCFacts(BaseModel):
@@ -314,14 +317,18 @@ def build_facts(adaptor) -> QCFacts:
             f"Clustering '{report.column}': {report.n_groups} clusters, "
             f"{len(report.flagged)} stand out on QC against the typical cluster."
         ), "result"))
-        for c in report.flagged:
+        for c in report.clusters:
+            if not (c.flags or c.notes):
+                continue
             tag = cluster_qc.qc_tag(report.column, c.group)
             f.quality.append(_fact(tag, f"Cluster {c.group} ({_n(c.n_cells)} cells): "
-                                        + " ".join(c.reasons), "result"))
-            if set(c.flags) - {"small"}:
+                                        + " ".join(c.reasons + c.notes), "result"))
+            # Cycling cells are biology to name, not a QC problem to fix.
+            if set(c.flags) - {"small", "cycling"}:
                 concern(tag, f"Cluster {c.group} stands out: " + ", ".join(
-                    x.replace("_", " ") for x in c.flags if x != "small") + ".")
-        if any(set(c.flags) - {"small", "stress_driven"} for c in report.flagged):
+                    _FLAG_WORDS.get(x, x.replace("_", " ")) for x in c.flags
+                    if x not in ("small", "cycling")) + ".")
+        if any(set(c.flags) & _DAMAGE_FLAGS for c in report.flagged):
             step(head, "Look at the flagged clusters in the Unified View; if they are damaged "
                        "cells or doublets, tighten the QC filters and re-run.")
         stressed = [c.group for c in report.flagged if "stress_driven" in c.flags]
@@ -331,6 +338,34 @@ def build_facts(adaptor) -> QCFacts:
                 "View by dissociation_stress_score and check its markers: it may be cells "
                 "stressed by tissue dissociation."
             ))
+        ambient = [c.group for c in report.flagged if "hb_ambient" in c.flags]
+        if ambient:
+            step(cluster_qc.qc_tag(report.column, ambient[0]), (
+                f"Colour the Unified View by a haemoglobin gene for cluster {', '.join(ambient)}: "
+                "haemoglobin without erythroid markers is ambient RNA or red-cell doublets, so "
+                "don't name it as a cell type from that signal."
+            ))
+        cycling = [c.group for c in report.flagged if "cycling" in c.flags]
+        if cycling:
+            many = len(cycling) > 1
+            step(cluster_qc.qc_tag(report.column, cycling[0]), (
+                f"Colour the Unified View by phase: cluster{'s' if many else ''} "
+                f"{', '.join(cycling)} {'are' if many else 'is'} mostly cycling cells; check "
+                f"whether the cell cycle rather than cell identity sets {'them' if many else 'it'} "
+                "apart before naming a cell type."
+            ))
+        if report.ambient_hb:
+            f.quality.append(_fact(head, report.ambient_hb, "result"))
+            concern(head, "Haemoglobin RNA is spread across the non-erythroid clusters "
+                          "(ambient RNA from lysed red cells).")
+        for d in report.drivers:
+            f.quality.append(_fact(head, d.reason, "result"))
+            if d.inside_clusters:
+                concern(head, f"{d.label} is an axis of the embedding: it tracks PC{d.pc} "
+                              f"(r = {d.r:.2f}) inside clusters too (r = {d.r_within:.2f}).")
+                if d.score == "log_counts":
+                    step(head, "Re-run normalisation with Pearson residuals, which model "
+                               "sequencing depth, and compare the clusters.")
 
     # --- Pipeline progression when little else needs doing ---
     if len(f.next_steps) < 2:

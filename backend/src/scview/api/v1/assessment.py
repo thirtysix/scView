@@ -92,9 +92,10 @@ async def get_cluster_qc(
     groupby: str | None = None,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
-    """Per-cluster QC (size, median genes/counts/% mito/% ribo, doublets) with
-    plain-language flags for clusters that stand out (deterministic, no LLM).
-    ``groupby`` defaults to the active clustering."""
+    """Per-cluster QC (size, median genes/counts/% mito/% ribo, doublets, % haemoglobin,
+    cycling cells) with plain-language flags for clusters that stand out, erythroid
+    notes, ambient haemoglobin and technical scores that track the clustering's
+    leading PCs (deterministic, no LLM). ``groupby`` defaults to the active clustering."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")

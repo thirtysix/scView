@@ -23,6 +23,14 @@ The margin, measured on scView's own steps (counts -> normalise to 1e4 -> log1p
 A margin scaled to each dataset's own negative-side spread was tried and
 rejected: in a dividing population negative scores are biology (S-phase cells'
 G2M score), and it put 80% of paul15 inside.
+
+The per-cluster ``cycling`` flag (``core/cluster_qc.py``) counts a cell as cycling
+only when its S or G2M score clears the same margin, so calls that rest on noise
+never make a cluster look proliferative. Measured on scView's own processing,
+2026-10-17: Kang's 13 cell types have 0.2-12.6% such cells (T activated the
+most) although 28-75% are called S or G2M; paul15's typical cluster 61%, its
+erythroid progenitors 1Ery-4Ery 86-98% (median G2M score 0.13-0.45), the
+megakaryocyte-erythroid progenitors 17%.
 """
 
 from __future__ import annotations
@@ -36,6 +44,22 @@ NEAR_ZERO_MARGIN = 0.1
 # Caution when at least this share of cells is near zero (paul15, which really
 # divides, has 5.6%; the PBMC sets 85-95%).
 CAUTION_SHARE = 0.10
+# The per-cluster flag: most of a cluster's cells cycling, and clearly more than
+# in the typical cluster, so a dataset where every cluster divides (progenitors)
+# flags only the ones that stand out. A PBMC cluster would need four times
+# Kang's highest share.
+CYCLING_SHARE = 0.5
+CYCLING_MARGIN = 0.25
+# Score columns as scanpy and Seurat (CellCycleScoring) name them.
+_S_NAMES = ("S_score", "S.Score")
+_G2M_NAMES = ("G2M_score", "G2M.Score")
+
+FLAG_HELP = (
+    "Mostly cycling cells: most of its cells have clear S or G2M cell-cycle scores, far "
+    "more than in the typical cluster. The cell cycle may be what sets it apart: a cell type "
+    "that divides, or a dividing state of another. If the cell cycle is not the biology of "
+    "interest, regress out the S and G2M scores before clustering."
+)
 
 
 def near_zero_phase_calls(obs: Any) -> dict[str, Any] | None:
@@ -75,3 +99,24 @@ def phase_caution(counts: dict[str, Any] | None) -> str | None:
         f"±{counts['near_zero_margin']:g} of 0{called}: phase calls for these cells are "
         "not reliable."
     )
+
+
+def cell_cycle_scores(obs: Any) -> tuple[np.ndarray, np.ndarray] | None:
+    """Per-cell S and G2M scores from obs (scanpy or Seurat names), or None."""
+    s = next((c for c in _S_NAMES if c in obs.columns), None)
+    g = next((c for c in _G2M_NAMES if c in obs.columns), None)
+    if s is None or g is None:
+        return None
+    return (np.asarray(obs[s], dtype=float), np.asarray(obs[g], dtype=float))
+
+
+def cycling_cells(obs: Any) -> np.ndarray | None:
+    """Per cell: True when its S or G2M score is at least NEAR_ZERO_MARGIN, i.e.
+    clearly cycling, not a phase call resting on noise. None without scores (a
+    phase column alone cannot be checked against the noise, so it is not used)."""
+    scores = cell_cycle_scores(obs)
+    if scores is None:
+        return None
+    s, g = scores
+    with np.errstate(invalid="ignore"):
+        return np.fmax(s, g) >= NEAR_ZERO_MARGIN

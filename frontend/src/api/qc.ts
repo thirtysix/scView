@@ -17,8 +17,18 @@ export interface ClusterQc {
   median_stress_score?: number | null;
   /** Stress-signature genes among the cluster's top markers. */
   stress_markers?: string[];
+  /** Mean % of reads from haemoglobin genes (mean: most cells have none). */
+  mean_pct_hb?: number | null;
+  /** Red-cell lineage by its own markers (or a red-cell haemoglobin level). */
+  erythroid?: boolean;
+  /** Haemoglobin / erythroid genes among its top markers. */
+  erythroid_markers?: string[];
+  /** Share of its cells with a clear S or G2M score (outside the near-zero noise band). */
+  cycling_fraction?: number | null;
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
+  /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
+  notes?: string[];
 }
 
 export type ClusterFlag =
@@ -27,7 +37,23 @@ export type ClusterFlag =
   | "low_genes"
   | "doublet_rich"
   | "stress_driven"
+  | "hb_ambient"
+  | "cycling"
   | "small";
+
+/** A technical score that tracks one of the clustering's leading PCs (backend core/qc_drivers.py). */
+export interface QcDriver {
+  score: string;
+  label: string;
+  pc: number; // 1-based
+  r: number;
+  /** The same correlation inside clusters (cluster means removed). */
+  r_within: number | null;
+  pc_share: number;
+  /** True: the score moves along the PC inside clusters too (an axis of the embedding). */
+  inside_clusters: boolean;
+  reason: string;
+}
 
 /** Per-cluster QC for one grouping column (deterministic, no LLM). */
 export interface ClusterQcReport {
@@ -40,6 +66,13 @@ export interface ClusterQcReport {
   flag_help: Record<string, string>;
   computed_on_demand: boolean;
   note: string;
+  /** Haemoglobin RNA spread across the non-erythroid clusters (ambient RNA); "" if none. */
+  ambient_hb?: string;
+  drivers?: QcDriver[];
+  /** The technical scores looked at, and the space and number of PCs they were checked against. */
+  drivers_checked?: string[];
+  drivers_space?: string | null;
+  drivers_n_pcs?: number;
 }
 
 export async function getClusterQc(datasetId: string, groupby?: string): Promise<ClusterQcReport> {

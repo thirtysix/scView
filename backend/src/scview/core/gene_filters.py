@@ -50,3 +50,31 @@ def select_query_genes(
     if exclude_ribo_mito:
         genes = [g for g in genes if not is_ribo_mito(g)]
     return genes[:n]
+
+
+def top_markers(adata, column: str, n: int) -> dict[str, list[str]] | None:
+    """Per group of ``column``: its top ``n`` stored markers, best first, with
+    ribosomal/mitochondrial genes dropped (as for the ORA query). Used to check a
+    cluster's identity against a signature (stress, erythroid genes).
+
+    None when ``column`` has no stored markers."""
+    from scview.core.ora_background import resolve_markers_key
+
+    key = resolve_markers_key(adata.uns, column)
+    if key is None:
+        return None
+    try:
+        names = adata.uns[key]["names"]
+        groups = list(names.dtype.names)
+    except (KeyError, TypeError, AttributeError):
+        return None
+    out: dict[str, list[str]] = {}
+    for g in groups:
+        top: list[str] = []
+        for x in names[g]:  # the full ranked list: stop once the top are in
+            if len(top) == n:
+                break
+            if not is_ribo_mito(str(x)):
+                top.append(str(x))
+        out[str(g)] = top
+    return out

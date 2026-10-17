@@ -609,13 +609,11 @@ def build_insight(adaptor) -> DatasetInsight:
             report = cluster_qc.for_adaptor(adaptor)
         except Exception:  # pragma: no cover - defensive
             report = None
-        bad = [
-            c for c in (report.flagged if report else [])
-            if set(c.flags) & {"low_quality", "doublet_rich", "high_mito", "low_genes"}
-        ]
+        bad_flags = {"low_quality", "doublet_rich", "high_mito", "low_genes", "hb_ambient"}
+        bad = [c for c in (report.flagged if report else []) if set(c.flags) & bad_flags]
         if bad:
             first = bad[0]
-            reason = next(r for f, r in zip(first.flags, first.reasons) if f != "small")
+            reason = next(r for f, r in zip(first.flags, first.reasons) if f in bad_flags)
             more = (
                 f" {len(bad) - 1} more cluster{'s' if len(bad) > 2 else ''} also flagged."
                 if len(bad) > 1 else ""
@@ -626,6 +624,12 @@ def build_insight(adaptor) -> DatasetInsight:
                     "Details are in the cluster QC table on Data Assessment."
                 ),
                 question="Which clusters look low quality?",
+                severity="suggestion",
+            )
+        if report and report.ambient_hb:
+            return DatasetInsight(
+                insight=f"{report.ambient_hb} Details are in the cluster QC table on Data Assessment.",
+                question="Is there ambient haemoglobin RNA in my clusters?",
                 severity="suggestion",
             )
 

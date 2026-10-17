@@ -10,8 +10,9 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from scview.core import marker_specificity, protein
+from scview.core import haemoglobin, marker_specificity, protein
 from scview.core.ora_background import resolve_markers_key
+from scview.core.species import detect_species
 from scview.core.uns_keys import markers_column, repair_slash_keys
 from scview.core.user_labels import user_columns
 
@@ -81,12 +82,14 @@ _QC_OBS_NAMES = {
     "n_genes": ("n_genes_by_counts", "n_genes", "nFeature_RNA"),
     "pct_mt": ("pct_counts_mt", "percent.mt", "pct_counts_mito", "percent_mito"),
     "pct_ribo": ("pct_counts_ribo", "percent.ribo", "percent.rb", "pct_counts_rb"),
+    "pct_hb": ("pct_counts_hb", "percent.hb", "percent.HB", "pct_counts_hemo"),
 }
 
 
 def per_cell_qc(adata, ribo: bool = False) -> dict:
-    """Per-cell QC arrays: ``total_counts``, ``n_genes``, ``pct_mt`` and, when it
-    can be had cheaply, ``pct_ribo`` (else None).
+    """Per-cell QC arrays: ``total_counts``, ``n_genes``, ``pct_mt`` and, when they
+    can be had cheaply, ``pct_ribo`` and ``pct_hb`` (haemoglobin genes for the
+    dataset's species, ``core/haemoglobin.py``; else None).
 
     Read from ``obs`` when present, otherwise computed from the counts matrix in
     one chunked pass (no mutation of the AnnData, no disk write). ``computed`` is
@@ -106,19 +109,25 @@ def per_cell_qc(adata, ribo: bool = False) -> dict:
 
     out = {k: _first(names) for k, names in _QC_OBS_NAMES.items()}
     need = [k for k in ("total_counts", "n_genes", "pct_mt") if out[k] is None]
-    # Ribosomal % is a bonus: worked out in the pass the core metrics need, or,
-    # when ``ribo`` asks for it, in a pass of its own if the matrix is in memory
-    # (one sparse pass is cheap; a backed file would be read again from disk).
-    want_ribo = out["pct_ribo"] is None and (bool(need) or (ribo and not adata.isbacked))
+    # Ribosomal and haemoglobin % are a bonus: worked out in the pass the core
+    # metrics need, or, when ``ribo`` asks for them, in a pass of their own if the
+    # matrix is in memory (one sparse pass is cheap; a backed file would be read
+    # again from disk).
+    extra_ok = bool(need) or (ribo and not adata.isbacked)
+    want_ribo = out["pct_ribo"] is None and extra_ok
+    want_hb = out["pct_hb"] is None and extra_ok
     has_mt = True
-    if need or want_ribo:
+    if need or want_ribo or want_hb:
         M, var_names = _counts_matrix(adata)
         mt_mask = np.asarray(var_names.str.startswith("MT-") | var_names.str.startswith("mt-"))
-        ribo_mask = np.asarray(var_names.str.startswith(("RPS", "RPL", "Rps", "Rpl")))
-        if not (want_ribo and _looks_like_counts(M)):
-            ribo_mask = np.zeros_like(ribo_mask)  # log or scaled X: no meaningful %
-        if need or ribo_mask.any():
-            tc, ng, (mt_counts, ribo_counts) = _row_sums(M, [mt_mask, ribo_mask])
+        none = np.zeros(len(var_names), dtype=bool)
+        ribo_mask = np.asarray(var_names.str.startswith(("RPS", "RPL", "Rps", "Rpl"))) \
+            if want_ribo else none
+        hb_mask = haemoglobin.hb_mask(var_names, detect_species(adata).species) if want_hb else none
+        if (want_ribo or want_hb) and not _looks_like_counts(M):
+            ribo_mask = hb_mask = none  # log or scaled X: no meaningful %
+        if need or ribo_mask.any() or hb_mask.any():
+            tc, ng, (mt_counts, ribo_counts, hb_counts) = _row_sums(M, [mt_mask, ribo_mask, hb_mask])
             with np.errstate(divide="ignore", invalid="ignore"):
                 pct = lambda part: np.where(tc > 0, part / tc * 100.0, 0.0)  # noqa: E731
                 if out["pct_mt"] is None:
@@ -126,6 +135,8 @@ def per_cell_qc(adata, ribo: bool = False) -> dict:
                     out["pct_mt"] = pct(mt_counts) if has_mt else np.zeros_like(tc)
                 if ribo_mask.any():
                     out["pct_ribo"] = pct(ribo_counts)
+                if hb_mask.any():
+                    out["pct_hb"] = pct(hb_counts)
             if out["total_counts"] is None:
                 out["total_counts"] = tc
             if out["n_genes"] is None:
