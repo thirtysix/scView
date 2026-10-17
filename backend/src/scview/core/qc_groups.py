@@ -98,6 +98,16 @@ def group_codes(raw: pd.Series) -> tuple[list[str], np.ndarray]:
     return order, np.asarray(pd.Categorical(labels, categories=order).codes)
 
 
+def members(codes: np.ndarray, k: int) -> list[np.ndarray]:
+    """Each group's cell indices (``codes`` from ``group_codes``), in one sort
+    rather than one pass over the cells per group."""
+    idx = np.argsort(codes, kind="stable")
+    ordered = codes[idx]
+    starts = np.searchsorted(ordered, np.arange(k), side="left")
+    ends = np.searchsorted(ordered, np.arange(k), side="right")
+    return [idx[s:e] for s, e in zip(starts, ends)]
+
+
 def _quantiles(values: np.ndarray, k: int) -> list[float]:
     """``k`` evenly spaced quantiles of ``values``, or all of them, sorted, when fewer."""
     values = values[np.isfinite(values)]
