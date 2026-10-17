@@ -32,6 +32,23 @@ describe("prettyObsLabel", () => {
   it("prettifies cell-type annotation columns recursively", () => {
     expect(prettyObsLabel("scview_leiden_r0.5_celltypeAnno")).toBe("Leiden (res 0.5) · cell types");
   });
+  it("names the annotation confidence check's columns after their label column", () => {
+    expect(prettyObsLabel("scview_conf_cell_type_flag")).toBe("cell_type · label fit");
+    expect(prettyObsLabel("scview_conf_cell_type_set_size")).toBe("cell_type · label set size");
+    expect(prettyObsLabel("scview_conf_cluster_2_alt")).toBe("cluster_2 · nearest other label");
+    expect(prettyObsLabel("scview_conf_scview_leiden_r0.5_unknown")).toBe(
+      "Leiden (res 0.5) · Unknown where rejected",
+    );
+    expect(prettyObsLabel("scview_conf_x_fit")).toBe("x · fit p-value");
+  });
+  it("names a clustering kept from the variable-gene check by its genes", () => {
+    expect(prettyObsLabel("scview_leiden_r0.5_hvg_cell_ranger_2000")).toBe(
+      "Leiden (res 0.5) · Cell Ranger, 2,000 genes",
+    );
+    expect(prettyObsLabel("scview_louvain_r1.0_hvg_pearson_residuals_3000_celltypeAnno")).toBe(
+      "Louvain (res 1.0) · Pearson residuals, 3,000 genes · cell types",
+    );
+  });
   it("passes through unknown names and handles nullish input", () => {
     expect(prettyObsLabel("cell_type")).toBe("cell_type");
     expect(prettyObsLabel(null)).toBe("");

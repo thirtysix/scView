@@ -15,6 +15,11 @@ from scview.core.ora_background import resolve_markers_key
 from scview.core.uns_keys import markers_column, repair_slash_keys
 from scview.core.user_labels import user_columns
 
+# Obs columns taken as the clustering when none is recorded (a file processed elsewhere).
+CLUSTERING_CANDIDATES = (
+    "leiden", "louvain", "cluster", "clusters", "seurat_clusters", "cell_type",
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -551,9 +556,7 @@ class AnnDataAdaptor:
     # Clustering helpers
     # ------------------------------------------------------------------
 
-    _CLUSTERING_CANDIDATES = (
-        "leiden", "louvain", "cluster", "clusters", "seurat_clusters", "cell_type",
-    )
+    _CLUSTERING_CANDIDATES = CLUSTERING_CANDIDATES
 
     def active_clustering_column(self) -> str | None:
         """Return the best clustering column name.

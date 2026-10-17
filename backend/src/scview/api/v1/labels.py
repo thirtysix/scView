@@ -7,7 +7,6 @@ Both save the derived file, so the dataset is evicted and reloaded afterwards.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Callable
 
@@ -15,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.user_labels import UNASSIGNED, LabelError, label_cells, restore, user_columns
 from scview.dependencies import get_dataset_manager
 
@@ -46,7 +45,7 @@ async def _edit_and_save(
     dm: DatasetManager, dataset_id: str, edit: Callable[[Any], dict[str, Any]]
 ) -> dict[str, Any]:
     """Run ``edit`` on the dataset, save it, and reload it, one request at a time."""
-    async with dataset_lock(dataset_id):
+    async with dataset_edit(dataset_id) as held:
         adaptor = await dm.get_or_load_dataset(dataset_id)
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
@@ -63,7 +62,7 @@ async def _edit_and_save(
             return result
 
         try:
-            result = await asyncio.to_thread(_run)
+            result = await held.run(_run)
         except LabelError as exc:
             # Raised before anything changed: the cached copy is still the file.
             raise HTTPException(status_code=exc.status, detail=str(exc))

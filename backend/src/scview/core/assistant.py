@@ -35,7 +35,7 @@ import re
 from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
-from scview.core import cluster_qc, provenance
+from scview.core import cluster_qc, composition, provenance
 from scview.core.llm import chat_extra
 from scview.core.species import detect_species
 from scview.core.uns_keys import enrichment_column
@@ -281,6 +281,18 @@ def build_grounding_context(
             except Exception as exc:  # pragma: no cover
                 logger.debug("assistant: obs summary failed for %s: %s", col, exc)
 
+    # 4a, continued. Composition between conditions: the last replicate-aware
+    # test, and a caution against cell-level chi-square / Fisher tests.
+    if want("groups"):
+        try:
+            comp_lines, comp_detail = composition.grounding_lines(adaptor, adata.obs)
+            lines.extend(comp_lines)
+            if comp_detail:
+                sources.append(ChatSource(kind="result", ref="result:composition",
+                                          detail=comp_detail))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: composition grounding failed: %s", exc)
+
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).
     anno_cols = [
@@ -383,7 +395,10 @@ _FEATURE_GUIDE = (
     "Trajectory, Compare (Joint "
     "embedding: merge 2+ library datasets on shared genes into a new dataset with one "
     "Harmony-corrected UMAP, joint clusters and a 'dataset' column, plus an uncorrected UMAP "
-    "for before/after; Composition: cell-type proportions of two datasets side by side), "
+    "for before/after; Composition: within the open dataset, a test of whether cell-type or "
+    "cluster proportions differ between conditions with the donors/samples as replicates "
+    "(per-sample shares, logit, moderated t or F test, BH FDR, table + CSV); or two "
+    "datasets' proportions side by side, descriptive only), "
     "History (provenance: what was done + edit-&-re-run), and this AI Co-pilot. "
     "This list is complete: scView has no other plots or tools."
 )

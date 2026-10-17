@@ -7,6 +7,7 @@ from pathlib import Path
 
 import anndata as ad
 import numpy as np
+import pytest
 
 API = "/api/v1"
 
@@ -55,3 +56,16 @@ async def test_gene_trends_skip_missing_cells(client, dataset_manager):
     assert g["NOPE"] == {"found": False}
     assert sum(g["G1"]["binned_counts"]) == 35
     assert all(np.isfinite(g["G1"]["binned_pseudotime"]))
+
+
+async def test_gene_trends_leave_empty_bins_as_gaps(client, dataset_manager):
+    # 35 cells over 100 bins: most bins hold no cell, and were drawn as a mean of 0.
+    did = _register(dataset_manager)
+    r = await client.get(f"{API}/datasets/{did}/trajectory/dpt_pseudotime/genes", params={"genes": "G1"})
+    g = r.json()["genes"]["G1"]
+    counts, means = g["binned_counts"], g["binned_expression"]
+    assert any(c == 0 for c in counts)
+    assert all((m is None) == (c == 0) for m, c in zip(means, counts))
+    a = ad.read_h5ad(Path(dataset_manager.data_dir) / "uploads" / did / "data.h5ad")
+    expected = np.asarray(a.X)[5:, 1].mean()  # the cells with a finite pseudotime
+    assert sum(m * c for m, c in zip(means, counts) if c) / 35 == pytest.approx(expected)
