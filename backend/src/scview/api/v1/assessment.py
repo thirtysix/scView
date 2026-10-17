@@ -166,6 +166,7 @@ async def get_filter_preview(
     mode: str | None = None,
     mad_k: float | None = None,
     mad_k_mt: float | None = None,
+    mad_upper: bool | None = None,
     sample_column: str = "",
     cluster_column: str = "",
     dm: DatasetManager = Depends(get_dataset_manager),
@@ -185,7 +186,8 @@ async def get_filter_preview(
     for key, value in (("min_genes", min_genes), ("max_genes", max_genes),
                        ("min_counts", min_counts), ("max_pct_mt", max_pct_mt),
                        ("drop_doublets", drop_doublets), ("qc_threshold_mode", mode),
-                       ("qc_mad_k", mad_k), ("qc_mad_k_mt", mad_k_mt)):
+                       ("qc_mad_k", mad_k), ("qc_mad_k_mt", mad_k_mt),
+                       ("qc_mad_upper", mad_upper)):
         if value is not None:
             setattr(params, key, value)
     thresholds = qc_filter.Thresholds.from_params(params)

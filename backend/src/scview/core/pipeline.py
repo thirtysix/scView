@@ -69,8 +69,9 @@ class PipelineParams:
     # Filtering (cells: see core/qc_filter.py; 0 turns a threshold off)
     # "mad": each sample's outliers (median +/- k MADs); "fixed": the cut-offs below.
     qc_threshold_mode: str = "mad"
-    qc_mad_k: float = 5.0  # counts and genes per cell (log1p), both sides
+    qc_mad_k: float = 5.0  # counts and genes per cell (log1p), below the median
     qc_mad_k_mt: float = 3.0  # % mito, above only
+    qc_mad_upper: bool = False  # also cut counts / genes above median + k MADs (opt-in)
     qc_sample_column: str = ""  # the samples for MAD mode (empty = detected)
     min_genes: int = 200  # fixed mode only, as are max_genes and min_counts
     max_genes: int = 0
@@ -305,7 +306,7 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
         logger.info("Filtering: %s removes %d cells on its own", name, int(mask.sum()))
     # Only the params this mode used, so the record says what was applied.
     used = (("min_genes", "max_genes", "min_counts") if t.mode == "fixed"
-            else ("qc_mad_k", "qc_mad_k_mt", "qc_sample_column"))
+            else ("qc_mad_k", "qc_mad_k_mt", "qc_mad_upper", "qc_sample_column"))
     found: dict[str, Any] = {k: getattr(params, k) for k in used}
     if bounds is not None:
         found["qc_thresholds"] = bounds.to_dict(~keep)

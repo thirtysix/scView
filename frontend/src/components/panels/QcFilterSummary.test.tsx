@@ -171,6 +171,11 @@ describe("QcFilterSummary in MAD mode", () => {
     expect(onChange).toHaveBeenLastCalledWith({ qc_mad_k: 4 });
     fireEvent.change(screen.getByLabelText("MADs for % mito"), { target: { value: "0" } });
     expect(onChange).toHaveBeenCalledTimes(1); // not a positive number: ignored
+    expect(screen.getByTestId("mad-controls")).toHaveTextContent(/below the median −/);
+    const upper = screen.getByLabelText(/Also above the median \+ 5 MADs/);
+    expect(upper).not.toBeChecked(); // the upper bounds are opt-in
+    fireEvent.click(upper);
+    expect(onChange).toHaveBeenLastCalledWith({ qc_mad_upper: true });
     expect(screen.getByRole("option", { name: "Detected: Donor" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Sample column for MAD thresholds"), { target: { value: "lane" } });
     expect(onChange).toHaveBeenLastCalledWith({ qc_sample_column: "lane" });

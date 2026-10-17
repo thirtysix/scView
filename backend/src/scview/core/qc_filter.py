@@ -8,12 +8,16 @@ genes or much mitochondrial RNA (platelets, neutrophils, cardiomyocytes) is lost
 that way without anyone noticing.
 
 Two modes. ``fixed``: the cut-offs above, one set for every cell. ``mad`` (the
-default for new runs): each sample's own outliers, as the single-cell best
-practices book has them (Heumos et al. 2023): cells outside median +/- 5 MADs of
-log1p(counts) and of log1p(genes) per cell in their sample, and above median +
-3 MADs of % mito. The MAD is the raw median absolute deviation (scipy's default
-scale), as in the book. In MAD mode the fixed genes / counts cut-offs are not
-used; "max % mito" stays on as a ceiling over the per-sample bound, because a
+default for new runs): each sample's own outliers, after the single-cell best
+practices book (Heumos et al. 2023): cells below median - 5 MADs of
+log1p(counts) or of log1p(genes) per cell in their sample, and above median +
+3 MADs of % mito. The book also cuts above median + 5 MADs of counts and genes;
+that is opt-in here (``mad_upper``): on Kang it took 12.3 % of the dendritic
+cells, 10 % of the erythrocytes and 9.3 % of the pDCs (large cells with more RNA),
+and doublet detection already covers the high tail. The MAD is the raw median
+absolute deviation (scipy's default scale), as in the book. In MAD mode the fixed
+genes / counts cut-offs are not used; "max % mito" stays on as a ceiling over
+the per-sample bound, because a
 sample whose cells are mostly damaged has a high median and a wide MAD, and
 median + 3 MADs would keep them (the book adds a hard 8 % for PBMCs; the 20 %
 default suits tissues with more mitochondrial RNA, such as heart or kidney).
@@ -52,7 +56,7 @@ HALF = 0.5  # warn when a threshold removes more than this share of a group
 MAX_CLUSTERS = cluster_qc.MAX_GROUPS
 
 MODES = ("mad", "fixed")
-MAD_K = 5.0  # counts and genes: outside median +/- this many MADs (log1p values)
+MAD_K = 5.0  # counts and genes: below median - this many MADs (log1p), above too if mad_upper
 MAD_K_MT = 3.0  # % mito: above median + this many MADs
 MIN_SAMPLE_CELLS = 100  # fewer cells: the pooled median and MAD (module docstring)
 MAX_SAMPLES = cluster_qc.MAX_GROUPS  # per-sample thresholds for at most this many samples
@@ -89,6 +93,7 @@ class Thresholds:
     mode: str = "fixed"  # "fixed" | "mad"
     mad_k: float = MAD_K
     mad_k_mt: float = MAD_K_MT
+    mad_upper: bool = False  # MAD mode: also cut counts / genes above median + k MADs
 
     @classmethod
     def from_params(cls, params) -> Thresholds:
@@ -103,6 +108,7 @@ class Thresholds:
             mode=str(getattr(params, "qc_threshold_mode", "fixed") or "fixed"),
             mad_k=float(getattr(params, "qc_mad_k", MAD_K)),
             mad_k_mt=float(getattr(params, "qc_mad_k_mt", MAD_K_MT)),
+            mad_upper=bool(getattr(params, "qc_mad_upper", False)),
         )
 
     def check(self) -> None:
@@ -171,6 +177,7 @@ class MadBounds:
             "reason": self.samples.reason,
             "k": self.t.mad_k,
             "k_mt": self.t.mad_k_mt,
+            "upper": self.t.mad_upper,
             "ceiling_pct_mt": self.t.max_pct_mt if "pct_mt" in self.hi else None,
             "min_sample_cells": MIN_SAMPLE_CELLS,
             "samples": groups,
@@ -201,14 +208,15 @@ _BOUNDS = ("min_counts", "max_counts", "min_genes", "max_genes", "max_pct_mt")
 
 def _bounds(stats: dict[str, tuple[float, float]], t: Thresholds, ceiling: float | None) -> dict:
     """One sample's bounds in counts, genes and % from the (median, MAD) of each
-    metric (log1p for counts and genes); None where a MAD of 0 sets none."""
+    metric (log1p for counts and genes); None where a MAD of 0 sets none, and for
+    the counts / genes upper bounds unless ``t.mad_upper``."""
     skipped = [m for m, (_, mad) in stats.items() if not (mad > 0)]  # 0, or no values
     out: dict = {}
     for key, below, above in _MAD_METRICS:
         med, mad = stats[key]
         on = key not in skipped
         out[below] = max(0.0, math.expm1(med - t.mad_k * mad)) if on else None
-        out[above] = math.expm1(med + t.mad_k * mad) if on else None
+        out[above] = math.expm1(med + t.mad_k * mad) if on and t.mad_upper else None
     mt = None
     if "pct_mt" in stats:
         med, mad = stats["pct_mt"]
@@ -235,16 +243,19 @@ def _reusable(recorded: dict | None, t: Thresholds, column: str | None,
     if not all(isinstance(r, dict) and all(r.get(b) is None or isinstance(r.get(b), (int, float))
                                            for b in _BOUNDS) for r in rows):
         return None  # not a record this code wrote: work them out afresh
-    same = (rec.get("k"), rec.get("k_mt"), rec.get("ceiling_pct_mt"), rec.get("column"))
-    return rec if same == (t.mad_k, t.mad_k_mt, ceiling, column) else None
+    # Records from before the upper bounds were opt-in had them on.
+    same = (rec.get("k"), rec.get("k_mt"), bool(rec.get("upper", True)), rec.get("ceiling_pct_mt"),
+            rec.get("column"))
+    return rec if same == (t.mad_k, t.mad_k_mt, t.mad_upper, ceiling, column) else None
 
 
 def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,
                recorded: dict | None = None) -> MadBounds:
-    """Per-sample bounds: median +/- ``t.mad_k`` MADs of log1p(counts) and of
-    log1p(genes), median + ``t.mad_k_mt`` MADs of % mito (capped by
-    ``t.max_pct_mt``). Small samples and unlabelled cells take the pooled bounds;
-    a MAD of 0 sets no bound (that metric is listed in ``skipped``).
+    """Per-sample bounds: median - ``t.mad_k`` MADs of log1p(counts) and of
+    log1p(genes) (and + ``t.mad_k`` MADs when ``t.mad_upper``), median +
+    ``t.mad_k_mt`` MADs of % mito (capped by ``t.max_pct_mt``). Small samples and
+    unlabelled cells take the pooled bounds; a MAD of 0 sets no bound (that metric
+    is listed in ``skipped``).
 
     ``recorded`` is ``recorded_filtering``'s output: a MAD run with the same
     settings already filtered these cells, and its thresholds are used again."""
@@ -345,7 +356,8 @@ def _removed_by_mad(cells: dict, t: Thresholds, bounds: MadBounds) -> dict[str, 
             v = np.log1p(_values(cells, key))
             ok = np.isfinite(v)
             out[below] = ok & (v < bounds.lo[key])  # strictly outside, as the book has it
-            out[above] = ok & (v > bounds.hi[key])
+            if t.mad_upper:
+                out[above] = ok & (v > bounds.hi[key])
         if "pct_mt" in bounds.hi:
             pct = _values(cells, "pct_mt")
             ok = np.isfinite(pct)
@@ -390,8 +402,10 @@ def applied_summary(applied: dict) -> str:
     for label, below, above in (("counts", "min_counts", "max_counts"),
                                 ("genes", "min_genes", "max_genes")):
         a, b = span(below), span(above)
-        if a or b:
-            parts.append(f"{label} per cell kept from {a or 'any'} to {b or 'any'}")
+        if a and b:
+            parts.append(f"{label} per cell kept from {a} to {b}")
+        elif a or b:
+            parts.append(f"{label} per cell at least {a}" if a else f"{label} per cell at most {b}")
     mt = span("max_pct_mt", 1)
     if mt:
         parts.append(f"% mito below {mt}")
@@ -399,7 +413,8 @@ def applied_summary(applied: dict) -> str:
     where = (f"within each {applied['column']} ({len(samples)} samples"
              + (f", {n_pooled} too small and judged on all cells" if n_pooled else "") + ")"
              if applied.get("column") else "over all cells (no sample column)")
-    rule = (f"outliers beyond median +/- {applied.get('k')} MADs of log1p counts and genes"
+    side = "beyond median +/-" if applied.get("upper", True) else "below median -"
+    rule = (f"outliers {side} {applied.get('k')} MADs of log1p counts and genes"
             f" and above median + {applied.get('k_mt')} MADs of % mito")
     return f"{rule}, {where}" + (": " + "; ".join(parts) if parts else "")
 
@@ -539,6 +554,7 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
             "drop_doublets": t.drop_doublets,
             "mad_k": t.mad_k,
             "mad_k_mt": t.mad_k_mt,
+            "mad_upper": t.mad_upper,
         },
         "has_mt": has_mt,
         "doublet_calls": cluster_qc.doublet_calls(adata.obs) is not None,  # "drop doublets" can act
