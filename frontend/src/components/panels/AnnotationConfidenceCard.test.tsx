@@ -89,6 +89,9 @@ describe("AnnotationConfidenceCard", () => {
     const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
     expect(rows[0]!.textContent).toMatch(/^CD4 Memory T/);
     expect(within(rows[0]!).getByText("21.2%").className).toMatch(/amber/);
+    // Number columns don't wrap or run together when a label's neighbours wrap.
+    const headers = within(screen.getByRole("table")).getAllByRole("columnheader");
+    for (const h of headers.slice(1, 5)) expect(h.className).toMatch(/whitespace-nowrap.*pl-2/);
     expect(rows[0]!.textContent).toMatch(/CD4 Naive T 12.0%/);
     expect(screen.getByText(/Not checked \(fewer than 20 cells\): Eryth \(12\)/)).toBeTruthy();
   });

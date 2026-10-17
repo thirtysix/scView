@@ -311,7 +311,7 @@ def test_reference_probabilities_score_the_cells():
 
 def test_reference_probabilities_that_cannot_be_used_say_why():
     a = _blobs()
-    with pytest.raises(conf.ConfidenceError, match="only a column annotated with CellTypist"):
+    with pytest.raises(conf.ConfidenceError, match="only a column annotated with CellTypist.*again"):
         conf.assess(a, "cl", classifier="celltypist")
     conf.store_reference_probabilities(a, "cl", _reference(a, np.array([], int)), "m.pkl")
     key = json.loads(a.uns[conf.REFERENCE_KEY])["cl"]["obsm"]

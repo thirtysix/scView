@@ -27,6 +27,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 
 const ROWS = 8; // more behind "show all"
+const NUM = "whitespace-nowrap pl-2 text-right align-top"; // a number column of the label table
 
 const FLAG_STYLES: { key: keyof ConfidenceResult["counts"]; label: string; className: string }[] = [
   { key: "confident", label: "confident", className: "bg-emerald-50 text-emerald-800" },
@@ -285,10 +286,10 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
             <thead>
               <tr className="text-left text-slate-400">
                 <th className="font-medium">Label</th>
-                <th className="text-right font-medium">Cells</th>
-                <th className="text-right font-medium">Confident</th>
-                <th className="text-right font-medium">Ambiguous</th>
-                <th className="text-right font-medium" title="Unsure (fits no label) or doesn't fit (fits another label)">
+                <th className={`${NUM} font-medium`}>Cells</th>
+                <th className={`${NUM} font-medium`}>Confident</th>
+                <th className={`${NUM} font-medium`}>Ambiguous</th>
+                <th className={`${NUM} font-medium`} title="Unsure (fits no label) or doesn't fit (fits another label)">
                   Rejected
                 </th>
                 <th className="pl-3 font-medium" title="The labels its flagged cells are nearest to, as a share of its cells">
@@ -299,16 +300,16 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
             <tbody className="text-slate-600">
               {shown.map((r) => (
                 <tr key={r.label}>
-                  <td className="truncate pr-2">{r.label}</td>
-                  <td className="text-right">{r.n_cells.toLocaleString()}</td>
-                  <td className="text-right">{pct(r.confident)}</td>
-                  <td className="text-right">{pct(r.ambiguous)}</td>
+                  <td className="truncate pr-2 align-top">{r.label}</td>
+                  <td className={NUM}>{r.n_cells.toLocaleString()}</td>
+                  <td className={NUM}>{pct(r.confident)}</td>
+                  <td className={NUM}>{pct(r.ambiguous)}</td>
                   <td
-                    className={`text-right ${rejectedShare(r) > 2 * result.alpha ? "font-semibold text-amber-700" : ""}`}
+                    className={`${NUM} ${rejectedShare(r) > 2 * result.alpha ? "font-semibold text-amber-700" : ""}`}
                   >
                     {pct(rejectedShare(r))}
                   </td>
-                  <td className="pl-3 text-slate-500">{confusedWithText(r)}</td>
+                  <td className="pl-3 align-top text-slate-500">{confusedWithText(r)}</td>
                 </tr>
               ))}
             </tbody>

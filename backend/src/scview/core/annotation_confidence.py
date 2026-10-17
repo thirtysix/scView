@@ -312,7 +312,7 @@ def reference_probabilities(adata, column: str) -> tuple[np.ndarray, list[str], 
     if not isinstance(entry, dict):
         raise ConfidenceError(
             f"No CellTypist probabilities are kept for '{column}': only a column annotated "
-            "with CellTypist (scView 0.16 or later) has them."
+            "with CellTypist has them (annotate it again if that was before they were kept)."
         )
     P = adata.obsm.get(entry.get("obsm", "")) if entry.get("obsm") else None
     labels = entry.get("labels") or []
