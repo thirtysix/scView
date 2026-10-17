@@ -17,7 +17,7 @@ from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing, recorded_normalization_method
 from scview.core import cluster_qc, doublets, qc_filter, qc_groups, qc_report
-from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
@@ -236,7 +236,7 @@ async def apply_doublet_threshold(
     """Write the calls at ``threshold`` into ``predicted_doublet`` (what the
     filtering step drops), keeping Scrublet's own call in
     ``predicted_doublet_scrublet``; save, and answer with the new summary."""
-    async with dataset_lock(dataset_id):
+    async with dataset_edit(dataset_id) as held:
         adaptor = await dm.get_or_load_dataset(dataset_id)
         if adaptor is None:
             raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
@@ -251,7 +251,7 @@ async def apply_doublet_threshold(
             return result
 
         try:
-            result = await asyncio.to_thread(_run)
+            result = await held.run(_run)
         except doublets.DoubletError as e:
             raise HTTPException(status_code=400, detail=str(e))  # raised before any change
         except Exception as e:

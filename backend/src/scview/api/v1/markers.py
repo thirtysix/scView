@@ -1,6 +1,5 @@
 """Marker gene endpoints."""
 
-import asyncio
 import logging
 
 import math
@@ -14,7 +13,7 @@ from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core import marker_specificity
 from scview.core.arrow_serializer import dataframe_to_arrow_ipc
-from scview.core.obs_writes import dataset_lock
+from scview.core.obs_writes import dataset_edit
 from scview.core.ora_background import resolve_markers_key
 from scview.core.pipeline import drop_enrichment_cache
 from scview.core.uns_keys import markers_column, markers_key
@@ -127,14 +126,14 @@ async def ensure_specificity(dm: DatasetManager, dataset_id: str, adaptor, colum
     saved with the markers, as on-demand markers are. Returns the current adaptor."""
     if _specificity_target(adaptor.adata, column) is None:
         return adaptor
-    async with dataset_lock(dataset_id):
+    async with dataset_edit(dataset_id) as held:
         adaptor = await dm.get_or_load_dataset(dataset_id)
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
         target = _specificity_target(adaptor.adata, column)
         if target is not None:
             # Group means over the whole matrix: a second or so, in a worker thread.
-            await asyncio.to_thread(_attach_and_save, dm, dataset_id, adaptor, *target)
+            await held.run(_attach_and_save, dm, dataset_id, adaptor, *target)
     return adaptor
 
 
@@ -162,14 +161,14 @@ async def get_markers(
         if not adaptor.has_markers(column=groupby_column):
             # Saving rewrites the dataset's file, so one edit at a time; a request
             # that waited here usually finds the markers already computed.
-            async with dataset_lock(dataset_id):
+            async with dataset_edit(dataset_id) as held:
                 adaptor = await dm.get_or_load_dataset(dataset_id)
                 if adaptor is None:
                     raise HTTPException(status_code=404, detail="Dataset not found.")
                 if not adaptor.has_markers(column=groupby_column):
                     # Seconds to tens of seconds: in a worker thread, so the server
                     # keeps answering meanwhile.
-                    await asyncio.to_thread(_compute_and_save, dm, dataset_id, adaptor, groupby_column)
+                    await held.run(_compute_and_save, dm, dataset_id, adaptor, groupby_column)
         adaptor = await ensure_specificity(dm, dataset_id, adaptor, groupby_column)
         df = adaptor.get_markers(
             groupby=groupby if groupby else None,

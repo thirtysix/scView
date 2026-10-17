@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from scview.core import annotation_confidence as conf
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ async def annotation_confidence(
 async def _edit(dm: DatasetManager, dataset_id: str, edit, what: str):
     """Run ``edit(adata)`` in a worker thread holding the dataset's edit lock, then
     save the obs/uns change (core/obs_writes.write_derived)."""
-    async with dataset_lock(dataset_id):
+    async with dataset_edit(dataset_id) as held:
         adaptor = await _adaptor(dm, dataset_id)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
         backed = getattr(adaptor.adata, "isbacked", False)
@@ -137,7 +137,7 @@ async def _edit(dm: DatasetManager, dataset_id: str, edit, what: str):
             return result
 
         try:
-            result = await asyncio.to_thread(_run)
+            result = await held.run(_run)
         except conf.ConfidenceError as exc:  # raised before any change
             raise HTTPException(status_code=exc.status, detail=str(exc))
         except Exception as exc:

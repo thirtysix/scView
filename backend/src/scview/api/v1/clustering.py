@@ -25,7 +25,7 @@ from scview.core import resolution_sweep as rs
 from scview.core import subcluster as sc_sub
 from scview.core.confounding import recorded_batch_key
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ async def keep_resolution(
 ):
     """Save one resolution's clusters as the pipeline's ``scview_<method>_r<res>``
     column (unchanged when it exists), then reload the dataset."""
-    async with dataset_lock(dataset_id):
+    async with dataset_edit(dataset_id) as held:
         adaptor = await _adata(dm, dataset_id)
         adata = adaptor.adata
         method = _method(adata, body.method)
@@ -197,7 +197,7 @@ async def keep_resolution(
             return result
 
         try:
-            result = await asyncio.to_thread(_run)
+            result = await held.run(_run)
         except Exception as exc:
             dm.evict(dataset_id)  # the cached copy may hold the column without it being saved
             logger.error("Keeping resolution %s failed for %s: %s", resolution, dataset_id, exc,
@@ -220,7 +220,7 @@ async def subcluster_group(
 ):
     """Split one group of a column into sub-clusters on its own graph, saved as
     ``<column>_sub`` (core/subcluster.py)."""
-    async with dataset_lock(dataset_id):
+    async with dataset_edit(dataset_id) as held:
         adaptor = await _adata(dm, dataset_id)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
         backed = getattr(adaptor.adata, "isbacked", False)
@@ -235,7 +235,7 @@ async def subcluster_group(
 
         try:
             # HVG + PCA + graph + Leiden on the group: seconds, so in a worker thread.
-            result = await asyncio.to_thread(_run)
+            result = await held.run(_run)
         except sc_sub.SubclusterError as exc:
             raise HTTPException(status_code=400, detail=str(exc))  # raised before any change
         except Exception as exc:
@@ -384,7 +384,7 @@ async def keep_hvg_setting(
 ):
     """Save one setting's clusters as ``scview_<method>_r<res>_hvg_<flavor>_<n>``
     (unchanged when it exists): the labels the check showed, while still cached."""
-    async with dataset_lock(dataset_id):
+    async with dataset_edit(dataset_id) as held:
         adaptor = await _adata(dm, dataset_id)
         adata = adaptor.adata
         setting_in = [{"flavor": body.flavor, "n_top_genes": body.n_top_genes}]
@@ -395,7 +395,7 @@ async def keep_hvg_setting(
             return rec, hs.clean_settings(adata, rec, setting_in)[0]
 
         try:
-            rec, setting = await asyncio.to_thread(_plan)
+            rec, setting = await held.run(_plan)
         except hs.SensitivityError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         column = hs.column_name(rec, setting)
@@ -411,7 +411,7 @@ async def keep_hvg_setting(
 
         try:
             # A cache miss re-runs the setting (seconds to a minute): in a worker thread.
-            result = await asyncio.to_thread(_run)
+            result = await held.run(_run)
         except Exception as exc:
             dm.evict(dataset_id)  # the cached copy may hold the column without it being saved
             logger.error("Keeping variable-gene setting %s failed for %s: %s", setting.key, dataset_id,

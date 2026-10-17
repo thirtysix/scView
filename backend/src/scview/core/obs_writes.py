@@ -10,6 +10,7 @@ Writes to one dataset are serialised: two requests writing the same
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import os
 import shutil
 import weakref
@@ -46,6 +47,48 @@ def dataset_lock(dataset_id: str) -> asyncio.Lock:
     if lock is None:
         lock = locks[dataset_id] = asyncio.Lock()
     return lock
+
+
+class DatasetEdit:
+    """Work run inside ``dataset_edit``: each ``run`` is a worker thread the lock
+    waits for, even when the request is cancelled."""
+
+    def __init__(self) -> None:
+        self.tasks: list[asyncio.Future] = []
+
+    async def run(self, fn, *args):
+        task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+        self.tasks.append(task)
+        # Shielded: a cancelled request stops waiting, the thread carries on.
+        return await asyncio.shield(task)
+
+
+@asynccontextmanager
+async def dataset_edit(dataset_id: str):
+    """Hold the dataset's edit lock for a request that edits it in worker threads
+    (``edit.run(fn, ...)``). A client that goes away cancels the request, but the
+    thread keeps writing; the lock is then handed back only when the thread ends,
+    so no other edit can start on a half-written file."""
+    lock = dataset_lock(dataset_id)
+    await lock.acquire()
+    edit = DatasetEdit()
+    try:
+        yield edit
+    finally:
+        running = [t for t in edit.tasks if not t.done()]
+        if not running:
+            lock.release()
+        else:
+            left = len(running)
+
+            def _done(_t) -> None:
+                nonlocal left
+                left -= 1
+                if left == 0:
+                    lock.release()
+
+            for t in running:
+                t.add_done_callback(_done)
 
 
 def is_locked(dataset_id: str) -> bool:

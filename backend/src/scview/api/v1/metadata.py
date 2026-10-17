@@ -1,6 +1,5 @@
 """Metadata endpoints – obs column info, values, and summaries."""
 
-import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -9,7 +8,7 @@ from pydantic import BaseModel
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import series_to_arrow_ipc
-from scview.core.obs_writes import dataset_lock, write_derived
+from scview.core.obs_writes import dataset_edit, write_derived
 from scview.core.uns_keys import enrichment_key, markers_key
 
 router = APIRouter()
@@ -186,7 +185,7 @@ async def rename_obs_category(
         raise HTTPException(status_code=400, detail="New label must not be empty.")
 
     # One edit of the dataset's file at a time (markers, labels, a run).
-    async with dataset_lock(dataset_id):
+    async with dataset_edit(dataset_id) as held:
         adaptor = await dm.get_or_load_dataset(dataset_id)
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
@@ -219,7 +218,7 @@ async def rename_obs_category(
 
         try:
             # Markers may be recomputed on a merge: seconds, so in a worker thread.
-            await asyncio.to_thread(_run)
+            await held.run(_run)
         except HTTPException:
             raise  # raised before anything changed
         except Exception as exc:
