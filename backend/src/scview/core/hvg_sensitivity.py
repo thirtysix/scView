@@ -195,7 +195,7 @@ def recorded(adata, reference: str | None = None) -> Recorded:
     n_groups = adata.obs[reference].nunique()
     if not 2 <= n_groups <= MAX_REFERENCE_GROUPS:
         raise SensitivityError(
-            f"'{reference}' has {n_groups} groups; the comparison needs between 2 and "
+            f"'{reference}' has {n_groups} group{'' if n_groups == 1 else 's'}; the comparison needs between 2 and "
             f"{MAX_REFERENCE_GROUPS}."
         )
     history = provenance.read_provenance(adata).get("history", [])

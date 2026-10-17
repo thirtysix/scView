@@ -87,7 +87,7 @@ def test_recorded_explains_what_it_cannot_compare():
     with pytest.raises(hs.SensitivityError, match="no clustering"):
         hs.recorded(a)
     a.obs["one"] = "x"
-    with pytest.raises(hs.SensitivityError, match="1 groups"):
+    with pytest.raises(hs.SensitivityError, match="has 1 group;"):
         hs.recorded(a, "one")
     with pytest.raises(hs.SensitivityError, match="not found"):
         hs.recorded(a, "nope")
