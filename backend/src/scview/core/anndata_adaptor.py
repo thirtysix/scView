@@ -10,7 +10,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from scview.core import marker_specificity
+from scview.core import marker_specificity, protein
 from scview.core.ora_background import resolve_markers_key
 from scview.core.uns_keys import markers_column, repair_slash_keys
 from scview.core.user_labels import user_columns
@@ -146,6 +146,9 @@ def _has_mt_genes(adata) -> bool:
         names.append(adata.raw.var_names)
     return any(bool(n.str.startswith(("MT-", "mt-")).any()) for n in names)
 
+
+# Layer key -> obsm key of the protein modality (core/protein.py).
+PROTEIN_LAYERS = {"protein": protein.CLR_KEY, "protein_counts": protein.COUNTS_KEY}
 
 class AnnDataAdaptor:
     """Provides read-only access to a single h5ad file.
@@ -371,7 +374,11 @@ class AnnDataAdaptor:
     # ------------------------------------------------------------------
 
     def _var_names_for_layer(self, layer: str) -> list[str]:
-        """Return gene names for a given expression layer key."""
+        """Return gene names for a given expression layer key. The protein
+        modality (CITE-seq) is read as two more layers: ``protein`` (CLR) and
+        ``protein_counts``, with the protein names as its genes."""
+        if layer in PROTEIN_LAYERS and protein.has_protein(self.adata):
+            return protein.protein_names(self.adata)
         if layer == "raw":
             if self.adata.raw is not None:
                 return self.adata.raw.var_names.tolist()
@@ -387,6 +394,8 @@ class AnnDataAdaptor:
 
     def _get_matrix_for_layer(self, layer: str):
         """Return the expression matrix for a given layer key."""
+        if layer in PROTEIN_LAYERS and protein.has_protein(self.adata):
+            return self.adata.obsm[PROTEIN_LAYERS[layer]].to_numpy(dtype=np.float32)
         if layer == "raw":
             if self.adata.raw is not None:
                 return self.adata.raw.X
@@ -429,6 +438,20 @@ class AnnDataAdaptor:
             })
 
         return layers
+
+    def protein_info(self) -> dict | None:
+        """The protein modality (CITE-seq antibodies), or None: names in panel
+        order, the isotype controls among them, and the layer keys to read it."""
+        names = protein.protein_names(self.adata)
+        if not names:
+            return None
+        return {
+            "names": names,
+            "controls": [n for n in names if protein.is_control(n)],
+            "layer": "protein",
+            "counts_layer": "protein_counts",
+            "normalisation": "CLR per cell",
+        }
 
     def default_expression_layer(self) -> str:
         """Return the default layer key — prefers 'raw' if available, else 'X'."""
