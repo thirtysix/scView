@@ -67,7 +67,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
 The possible preprocessing steps are:
 - qc_metrics: Calculate quality control metrics (n_genes, total_counts, pct_mt)
 - doublet_detection: Flag likely doublets with Scrublet, writing doublet_score + predicted_doublet to obs (params: expected_doublet_rate; leave it out to use the rate suggested from the cells per sample, ~0.8% per 1,000 cells). Run before filtering on raw counts; removal is opt-in via filtering's drop_doublets.
-- filtering: Filter low-quality cells and genes (params: min_genes, max_genes, min_counts, min_cells, max_pct_mt, drop_doublets; 0 turns max_genes / min_counts off)
+- filtering: Filter low-quality cells and genes (params: qc_threshold_mode, "mad" (default: each sample's outliers, median +/- qc_mad_k MADs of log counts and genes, % mito above median + qc_mad_k_mt MADs, max_pct_mt as a ceiling) or "fixed" (min_genes, max_genes, min_counts, max_pct_mt cut-offs; 0 turns max_genes / min_counts off); min_cells, drop_doublets)
 - normalization: Normalize counts per cell (params: target_sum)
 - log_transform: Log1p transform the data
 - highly_variable_genes: Select highly variable genes (params: n_top_genes)
@@ -354,11 +354,11 @@ def get_rule_based_suggestions(
                 recommended=True,
                 reasoning=(
                     "Cells and genes have not been filtered. Removing low-quality "
-                    "cells (few genes, high mitochondrial %) and rarely-expressed "
-                    "genes is critical."
+                    "cells (outliers in genes, counts or mitochondrial % within "
+                    "their sample) and rarely-expressed genes is critical."
                 ),
                 suggested_params={
-                    "min_genes": 200,
+                    "qc_threshold_mode": "mad",
                     "min_cells": 3,
                     "max_pct_mt": 20.0,
                 },

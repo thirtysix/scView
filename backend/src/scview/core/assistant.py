@@ -36,7 +36,7 @@ import re
 from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
-from scview.core import cluster_qc, composition, provenance
+from scview.core import cluster_qc, composition, provenance, qc_filter
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.species import detect_species
@@ -265,7 +265,7 @@ def build_grounding_context(
                              "[provenance:recipe]")
                 for s in steps:
                     params = s.get("params") or {}
-                    pstr = ", ".join(f"{k}={v}" for k, v in list(params.items())[:6])
+                    pstr = ", ".join(_param_text(k, v) for k, v in list(params.items())[:6])
                     lines.append(f"- {s['step']}" + (f" ({pstr})" if pstr else ""))
                 sources.append(ChatSource(
                     kind="provenance", ref="provenance:recipe",
@@ -748,6 +748,17 @@ class MethodsResponse(BaseModel):
     model: str | None = None
 
 
+def _param_text(key: str, value) -> str:
+    """One recorded param for a prompt: the filtering step's per-sample thresholds
+    as one line (a dict per sample would flood the prompt), the rest as k=v."""
+    if key == "qc_thresholds" and isinstance(value, dict):
+        try:
+            return f"cell thresholds: {qc_filter.applied_summary(value)}"
+        except Exception:  # a malformed record never breaks the prompt
+            return "cell thresholds: per sample (recorded)"
+    return f"{key}={value}"
+
+
 def _methods_skeleton(adaptor) -> str:
     """A compact, factual recipe digest: dataset size + each recorded step with
     its tool and parameters, in order. This is the *only* thing the methods writer
@@ -773,7 +784,7 @@ def _methods_skeleton(adaptor) -> str:
         tool = h.get("tool", "")
         params = h.get("params", {}) or {}
         pstr = ", ".join(
-            f"{k}={v}" for k, v in params.items() if v not in (None, "", [], {})
+            _param_text(k, v) for k, v in params.items() if v not in (None, "", [], {})
         )
         line = f"- {step}"
         if tool:

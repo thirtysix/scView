@@ -17,7 +17,7 @@ import { PlotGrid } from "@/components/common/PlotGrid";
 import { DoubletCard } from "@/components/panels/DoubletCard";
 import { QcFilterSummary } from "@/components/panels/QcFilterSummary";
 import { ThresholdHistogram, type RefLine, type ThresholdLine } from "@/components/plots/ThresholdHistogram";
-import { roundTo } from "@/lib/qcThresholds";
+import { roundTo, thresholdMode } from "@/lib/qcThresholds";
 
 interface QcMetric {
   min: number;
@@ -79,6 +79,17 @@ export const HIST_THRESHOLDS: Record<string, { param: ThresholdParam; label: str
   total_counts: [{ param: "min_counts", label: "Min" }],
   pct_counts_mt: [{ param: "max_pct_mt", label: "Max" }],
 };
+
+/** A histogram's thresholds with their values. In MAD mode only the % mito ceiling:
+ *  the genes / counts bounds are each sample's own (listed under the loss summary). */
+export function histThresholds(metric: string, t: FilterThresholds | null) {
+  const mad = t ? thresholdMode(t) === "mad" : false;
+  const list = (t && HIST_THRESHOLDS[metric]) || [];
+  const shown = list
+    .filter((h) => !mad || h.param === "max_pct_mt")
+    .map((h) => ({ ...h, label: mad ? "Ceiling" : h.label, value: t![h.param] }));
+  return shown.length ? shown : undefined;
+}
 
 const THRESHOLD_STEP: Record<ThresholdParam, number> = { min_genes: 1, max_genes: 1, min_counts: 1, max_pct_mt: 0.1 };
 
@@ -486,11 +497,7 @@ export function QcPlots({
             key={k}
             label={METRIC_LABELS[k] ?? k}
             metric={data.metrics[k]!}
-            thresholds={
-              thresholds && HIST_THRESHOLDS[k]
-                ? HIST_THRESHOLDS[k]!.map((t) => ({ ...t, value: thresholds[t.param] }))
-                : undefined
-            }
+            thresholds={histThresholds(k, thresholds)}
             onDrag={thresholds ? dragThreshold : undefined}
             onCommit={thresholds ? commitThreshold : undefined}
             logY={logHist}
@@ -502,7 +509,7 @@ export function QcPlots({
           datasetId={datasetId}
           thresholds={thresholds}
           refreshKey={refreshKey}
-          onDropDoublets={(on) => filter.onChange({ drop_doublets: on })}
+          onChange={filter.onChange}
         />
       )}
       {data.metrics.doublet_score && (

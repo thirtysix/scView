@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { filterThresholds, OpenInUnifiedView, SkippedSteps, SpeciesNote, StepCaution, SuggestedRateNote } from "./DataAssessmentPanel";
+import {
+  filterThresholds,
+  OpenInUnifiedView,
+  SkippedSteps,
+  SpeciesNote,
+  StepCaution,
+  SuggestedRateNote,
+  withSuggestedMode,
+} from "./DataAssessmentPanel";
 import { useViewStore } from "@/stores/viewStore";
 
 describe("StepCaution", () => {
@@ -84,11 +92,28 @@ describe("OpenInUnifiedView", () => {
 
 describe("filterThresholds", () => {
   it("takes the filtering step's params as set, else their defaults", () => {
+    const mad = { qc_threshold_mode: "mad", qc_mad_k: 5, qc_mad_k_mt: 3, qc_sample_column: "" };
     expect(filterThresholds(undefined)).toEqual({
-      min_genes: 200, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: false,
+      min_genes: 200, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: false, ...mad,
     });
     expect(filterThresholds({ min_genes: 500, drop_doublets: true, min_cells: 5 })).toEqual({
-      min_genes: 500, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: true,
+      min_genes: 500, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: true, ...mad,
     });
+    expect(
+      filterThresholds({ qc_threshold_mode: "fixed", qc_mad_k: 4, qc_sample_column: "lane" }),
+    ).toMatchObject({ qc_threshold_mode: "fixed", qc_mad_k: 4, qc_sample_column: "lane" });
+  });
+});
+
+describe("withSuggestedMode", () => {
+  it("turns suggested fixed cut-offs into the fixed mode, unless a mode is named", () => {
+    expect(withSuggestedMode("filtering", { min_genes: 200, max_pct_mt: 20 })).toEqual({
+      min_genes: 200, max_pct_mt: 20, qc_threshold_mode: "fixed",
+    });
+    const mad = { qc_threshold_mode: "mad", min_genes: 200 };
+    expect(withSuggestedMode("filtering", mad)).toBe(mad);
+    const ceiling = { max_pct_mt: 15, min_cells: 3 };
+    expect(withSuggestedMode("filtering", ceiling)).toBe(ceiling); // no cut-off MAD would ignore
+    expect(withSuggestedMode("pca", { min_genes: 1 })).toEqual({ min_genes: 1 });
   });
 });
