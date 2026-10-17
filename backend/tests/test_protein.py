@@ -124,3 +124,14 @@ def test_a_merge_keeps_the_shared_panel_and_renormalises():
     c, _ = protein.split_features(_mixed(seed=3))
     plain = _mixed()[:, :4].copy()
     assert protein.common_panel([c, plain]) == [] and not protein.has_protein(c)
+
+
+def test_counts_alone_get_their_clr_when_the_dataset_opens(tmp_path):
+    # As the converter writes a Seurat ADT assay: counts in obsm, no CLR.
+    genes, _ = protein.split_features(_mixed())
+    del genes.obsm[protein.CLR_KEY]
+    genes.write_h5ad(tmp_path / "seurat.h5ad")
+    a = AnnDataAdaptor(str(tmp_path / "seurat.h5ad"))
+    assert a.protein_info()["names"] == ["CD3", "CD19", "IgG1_control"]
+    assert np.allclose(a.get_expression(["CD3"], layer="protein")[:, 0],
+                       protein.clr(genes.obsm[protein.COUNTS_KEY].to_numpy())[:, 0])

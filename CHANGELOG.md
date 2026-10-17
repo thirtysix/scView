@@ -30,7 +30,8 @@ All notable changes to scView are documented here. The format is based on
   violin), shows every protein by group, keeps isotype controls apart as background, and sets a
   protein against the gene of its target (Spearman ρ and how often the RNA drops out). Protein
   colourings are saved in sessions, and the joint embedding and multi-sample uploads keep the
-  antibodies every dataset measured. Not yet: Seurat objects' ADT assay, DSB normalisation.
+  antibodies every dataset measured. A Seurat object's ADT (or Protein) assay converts with it.
+  Not yet: DSB normalisation, which needs the empty droplets.
 - **Design and variance choices in the composition test.** A Design menu forces paired (by
   sample) or unpaired, with Auto showing what it picked; a Variances menu switches back to plain
   eBayes. The CSV export carries each group's prior df.

@@ -177,6 +177,10 @@ class AnnDataAdaptor:
                 logger.info("Loaded in memory (%d bytes)", file_size)
             if repair_slash_keys(self._adata.uns):
                 logger.info("Re-keyed cached results saved under '/' keys")
+            if not self._adata.isbacked:
+                # Protein counts that came without the CLR (a converted Seurat ADT
+                # assay, totalVI's obsm): normalised here, in memory.
+                protein.adopt_obsm(self._adata)
         return self._adata
 
     # ------------------------------------------------------------------
