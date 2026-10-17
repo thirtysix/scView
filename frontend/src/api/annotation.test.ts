@@ -25,6 +25,8 @@ describe("annotation confidence client", () => {
     expect(url).toBe("/api/v1/datasets/ds/annotation/confidence");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body)).toEqual({ column: "cluster", alpha: 0.05 });
+    await runAnnotationConfidence("ds", "cell_type", 0.1, "celltypist");
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({ column: "cell_type", alpha: 0.1, classifier: "celltypist" });
   });
 
   it("posts the column for the Unknown copy, and rejects with the server's reason", async () => {

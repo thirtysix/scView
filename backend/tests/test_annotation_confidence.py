@@ -252,6 +252,102 @@ def test_a_changed_label_column_makes_the_check_stale():
 
 
 # ---------------------------------------------------------------------------
+# Scoring by a reference model's probabilities (CellTypist)
+# ---------------------------------------------------------------------------
+
+
+def _reference(a: ad.AnnData, disagree: np.ndarray) -> pd.DataFrame:
+    """CellTypist-like one-vs-rest probabilities over the labels plus a class the
+    column lacks: high for the cell's own label, except at ``disagree``, where the
+    model calls B. Rows don't sum to 1, and some are near 0 throughout."""
+    rng = np.random.default_rng(3)
+    truth = a.obs["cl"].astype(str).to_numpy()
+    classes = ["A", "B", "C", "D", "Plasma cells"]
+    P = rng.uniform(0.001, 0.05, size=(a.n_obs, len(classes)))
+    for j, c in enumerate(classes[:4]):
+        P[truth == c, j] = rng.uniform(0.6, 0.99, size=(truth == c).sum())
+    P[disagree] = 0.01
+    P[disagree, 1] = 0.95
+    P[::97] *= 1e-3  # the model is unsure of everything here
+    return pd.DataFrame(P, index=a.obs_names, columns=classes)
+
+
+def test_reference_probabilities_score_the_cells():
+    a = _blobs()
+    planted = np.flatnonzero(a.obs["cl"] == "A")[:30]
+    conf.store_reference_probabilities(a, "cl", _reference(a, planted), "Immune_All_Low.pkl")
+    assert conf.reference_columns(a) == {"cl": "Immune_All_Low.pkl"}
+    del a.obsm["X_pca"]  # no PCA needed: nothing is fitted to the dataset
+    res = conf.assess(a, "cl", alpha=0.1, classifier="celltypist")
+    assert res["representation"] == "CellTypist Immune_All_Low" and res["n_pcs"] == 0
+    assert res["note"] == conf.REFERENCE_NOTE and "CellTypist" in res["note"]
+    assert res["coverage"]["within_sampling_error"]
+    flag = _flags(a, res)
+    assert (flag[planted] == conf.NOT_FIT).all()
+    assert (a.obs[res["columns"]["alt"]].astype(str).to_numpy()[planted] == "B").all()
+    others = np.setdiff1d(np.flatnonzero(a.obs["cl"] == "A"), planted)
+    assert (flag[others] == conf.CONFIDENT).mean() >= 0.9
+    assert "CellTypist" in provenance.read_provenance(a)["history"][-1]["tool"]
+
+
+def test_reference_probabilities_that_cannot_be_used_say_why():
+    a = _blobs()
+    with pytest.raises(conf.ConfidenceError, match="only a column annotated with CellTypist"):
+        conf.assess(a, "cl", classifier="celltypist")
+    conf.store_reference_probabilities(a, "cl", _reference(a, np.array([], int)), "m.pkl")
+    key = json.loads(a.uns[conf.REFERENCE_KEY])["cl"]["obsm"]
+    assert a.obsm[key].shape == (a.n_obs, 4) and a.obsm[key].dtype == np.float32
+    # Renamed labels no longer match the probabilities.
+    a.obs["cl"] = a.obs["cl"].cat.rename_categories({"D": "D cells"})
+    assert conf.reference_columns(a) == {}
+    with pytest.raises(conf.ConfidenceError, match="changed since CellTypist annotated it"):
+        conf.assess(a, "cl", classifier="celltypist")
+    assert conf.REGISTRY_KEY not in a.uns
+    conf.drop_reference_probabilities(a, "cl")
+    assert key not in a.obsm and json.loads(a.uns[conf.REFERENCE_KEY]) == {}
+    conf.drop_reference_probabilities(a, "cl")  # nothing left to drop: no error
+
+
+def test_celltypist_annotation_keeps_its_probabilities_and_others_drop_them(monkeypatch):
+    """The pipeline step stores CellTypist's probabilities of the target's labels;
+    annotating the same column another way forgets them."""
+    import sys
+    import types
+
+    from scview.core import pipeline as P
+
+    a = ad.AnnData(X=np.random.RandomState(0).poisson(1, (40, 5)).astype("float32"))
+    a.obs_names = [f"c{i}" for i in range(40)]
+    a.obs["cluster"] = pd.Categorical(["a", "b"] * 20)
+    classes = ["T cells", "B cells", "NK cells"]
+
+    def annotate(inp, model, majority_voting, over_clustering=None):
+        votes = np.where(inp.obs["cluster"].astype(str) == "a", "T cells", "B cells")
+        labels = pd.DataFrame({"predicted_labels": votes, "majority_voting": votes}, index=inp.obs_names)
+        prob = pd.DataFrame(np.random.RandomState(1).uniform(size=(inp.n_obs, 3)),
+                            index=inp.obs_names, columns=classes)
+        return types.SimpleNamespace(predicted_labels=labels, probability_matrix=prob)
+
+    fake = types.SimpleNamespace(
+        annotate=annotate, models=types.SimpleNamespace(download_models=lambda **_: None))
+    monkeypatch.setitem(sys.modules, "celltypist", fake)
+    P._annotate_celltypist(a, P.PipelineParams(), "cluster", "cell_type")
+    assert conf.reference_columns(a) == {"cell_type": "Immune_All_Low.pkl"}
+    entry = json.loads(a.uns[conf.REFERENCE_KEY])["cell_type"]
+    assert entry["labels"] == sorted(["T cells", "B cells"])  # the column's own labels only
+    assert a.obsm[entry["obsm"]].shape == (40, 2)
+
+    def marker_score(adata, params, groupby, target):
+        adata.obs[target] = pd.Categorical(["T cells"] * adata.n_obs)
+
+    monkeypatch.setattr(P, "_annotate_marker_score", marker_score)
+    monkeypatch.setattr(P, "_markers_for_column", lambda adata, col: None)
+    P._run_cell_type_annotation(a, P.PipelineParams(
+        annotation_method="marker_score", annotation_groupby="cluster", annotation_target="cell_type"))
+    assert conf.reference_columns(a) == {} and entry["obsm"] not in a.obsm
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -269,6 +365,7 @@ async def test_endpoints_run_save_and_report(client, dataset_manager):
     assert info["available"] is True and info["representation"] == "X_pca"
     assert info["result"] is None and info["checked_columns"] == []
     assert info["default_alpha"] == 0.1 and "not whether the label is right" in info["note"]
+    assert info["reference_columns"] == {} and "celltypist" in info["classifiers"]
 
     r = await client.post("/api/v1/datasets/ds/annotation/confidence",
                           json={"column": "cl", "alpha": 0.05})

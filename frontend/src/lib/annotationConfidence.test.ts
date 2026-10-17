@@ -8,6 +8,7 @@ import {
   defaultConfidenceColumn,
   isConfidenceOutput,
   rejectedShare,
+  scoredBy,
   shrinkHint,
   smallerAlpha,
   sortLabelRows,
@@ -68,6 +69,18 @@ describe("coverageText", () => {
   it("states held-out coverage against the target with its sampling spread", () => {
     const r = { coverage: { target: 0.9, held_out: 0.8941, n_held_out: 6911, calibration: 0.9, n_calibration: 6925, sd: 0.0051, within_sampling_error: true } };
     expect(coverageText(r)).toBe("89.4% of 6,911 held-out cells kept their label in their set (target 90.0%; sampling spread ±1.0%).");
+  });
+});
+
+describe("scoredBy", () => {
+  it("names the classifier and its input, or the reference model", () => {
+    expect(scoredBy({ classifier: "logreg", representation: "X_pca_harmony", n_pcs: 50 })).toBe(
+      "Logistic regression on X_pca_harmony (50 PCs), trained on one half of the cells to score the other",
+    );
+    expect(scoredBy({ classifier: "knn", representation: "X_pca", n_pcs: 30 })).toMatch(/^Nearest-neighbour vote on X_pca/);
+    expect(scoredBy({ classifier: "celltypist", representation: "CellTypist Immune_All_Low", n_pcs: 0 })).toBe(
+      "CellTypist Immune_All_Low's probabilities, rescaled over the column's labels (nothing fitted to this dataset)",
+    );
   });
 });
 

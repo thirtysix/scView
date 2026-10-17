@@ -111,6 +111,9 @@ async def annotation_confidence(
             "max_labels": conf.MAX_LABELS,
             "classifiers": list(conf.CLASSIFIERS),
             "note": conf.NOTE,
+            "reference_note": conf.REFERENCE_NOTE,
+            # Columns CellTypist annotated, which its probabilities can score: {column: model}
+            "reference_columns": conf.reference_columns(adata),
             "checked_columns": checked,
             "result": conf.summary(adata, column) if column else None,
         }

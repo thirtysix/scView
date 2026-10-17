@@ -84,6 +84,15 @@ export function shrinkHint(r: Pick<ConfidenceResult, "alpha" | "accuracy" | "cou
   );
 }
 
+/** What scored the cells, for the card's footer. */
+export function scoredBy(r: Pick<ConfidenceResult, "classifier" | "representation" | "n_pcs">): string {
+  if (r.classifier === "celltypist") {
+    return `${r.representation}'s probabilities, rescaled over the column's labels (nothing fitted to this dataset)`;
+  }
+  const model = r.classifier === "knn" ? "Nearest-neighbour vote" : "Logistic regression";
+  return `${model} on ${r.representation} (${r.n_pcs} PCs), trained on one half of the cells to score the other`;
+}
+
 /** "CD4 Naive T 13.6%, CD8 T 4.0%" */
 export function confusedWithText(row: ConfidenceLabelRow): string {
   return row.confused_with.map((c) => `${c.label} ${pct(c.share)}`).join(", ");

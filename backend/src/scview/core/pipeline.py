@@ -960,6 +960,11 @@ def _annotate_celltypist(
         adata.obs[f"{target}_confidence"] = np.asarray(
             pred.probability_matrix.max(axis=1), dtype="float32"
         )
+        # The probabilities of the target's labels, for the annotation confidence
+        # check to score cells by the reference model (core/annotation_confidence.py).
+        from scview.core.annotation_confidence import store_reference_probabilities
+
+        store_reference_probabilities(adata, target, pred.probability_matrix, model_name)
     logger.info(
         "CellTypist: annotated %d cells -> obs['%s'] (model=%s, groupby=%s, %d types)",
         adata.n_obs, target, model_name, groupby or "celltypist-internal",
@@ -1195,6 +1200,10 @@ def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None
         raise ValueError(
             f"Unknown annotation method '{method}' (expected celltypist | llm | marker_score)."
         )
+    if method != "celltypist":
+        from scview.core.annotation_confidence import drop_reference_probabilities
+
+        drop_reference_probabilities(adata, target)  # an earlier CellTypist run's
 
     # Marker genes for the new column, so enrichment and the marker plots can use it
     # straight away. The default rank_genes_groups stays on the clustering.

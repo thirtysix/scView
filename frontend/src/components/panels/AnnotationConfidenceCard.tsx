@@ -15,6 +15,7 @@ import {
   coverageText,
   defaultConfidenceColumn,
   rejectedShare,
+  scoredBy,
   shrinkHint,
   sortLabelRows,
 } from "@/lib/annotationConfidence";
@@ -63,6 +64,7 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
   const [copied, setCopied] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [allRows, setAllRows] = useState(false);
+  const [scorer, setScorer] = useState<"pca" | "celltypist">("pca");
   const refresh = useDatasetRefresh();
   const request = useRef(0); // answers for an older column or dataset are dropped
 
@@ -89,6 +91,10 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
         setInfo(i);
         setResult(i.result);
         if (i.result) setAlphaText(String(i.result.alpha));
+        // A CellTypist column is scored by CellTypist's own probabilities when they were kept.
+        const hasReference = !!(column && i.reference_columns?.[column]);
+        const last = i.result?.classifier;
+        setScorer(hasReference && (last === undefined || last === "celltypist") ? "celltypist" : "pca");
       })
       .catch((e) => {
         if (id === request.current) setError(errorText(e));
@@ -99,6 +105,9 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
   const maxAlpha = info?.max_alpha ?? 0.5;
   const alpha = Number(alphaText);
   const alphaOk = alphaText.trim() !== "" && isFinite(alpha) && alpha >= minAlpha && alpha <= maxAlpha;
+  const referenceModel = column ? info?.reference_columns?.[column] : undefined;
+  const byReference = scorer === "celltypist" && !!referenceModel;
+  const note = result?.note ?? (byReference ? info?.reference_note : info?.note) ?? CONFIDENCE_NOTE;
 
   const run = async () => {
     const id = ++request.current;
@@ -106,7 +115,7 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
     setError(null);
     setCopied(null);
     try {
-      const r = await runAnnotationConfidence(datasetId, column, alpha);
+      const r = await runAnnotationConfidence(datasetId, column, alpha, byReference ? "celltypist" : undefined);
       await refresh(datasetId, r.columns.flag);
       const bump = useObsRevisionStore.getState().bump;
       for (const c of [r.columns.alt, r.unknown_column]) if (c) bump(datasetId, c);
@@ -151,11 +160,11 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
         <h3 className="text-sm font-semibold text-slate-900">Annotation confidence</h3>
       </div>
       <p className="mb-1 text-xs text-slate-500">
-        How well each cell&apos;s label fits: a classifier learns the labels from the PCA, and split conformal
-        prediction gives every cell the set of labels its expression fits at error rate α. A cell&apos;s own label
-        is in its set for at least 1 − α of cells.
+        How well each cell&apos;s label fits: a classifier learns the labels from the PCA (or the CellTypist model
+        that made the column scores them), and split conformal prediction gives every cell the set of labels that
+        fit it at error rate α. A cell&apos;s own label is in its set for at least 1 − α of cells.
       </p>
-      <p className="mb-3 text-xs font-medium text-slate-600">{info?.note ?? CONFIDENCE_NOTE}</p>
+      <p className="mb-3 text-xs font-medium text-slate-600">{note}</p>
 
       {info && !info.available ? (
         <p className="text-xs text-slate-500">{info.reason}</p>
@@ -199,6 +208,35 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
               />
             </div>
           </div>
+          {referenceModel && (
+            <div className="mb-3 text-xs">
+              <span className="mr-2 font-medium text-slate-600">Score with</span>
+              <div className="inline-flex rounded-lg border border-slate-200 p-0.5">
+                {(
+                  [
+                    ["celltypist", `CellTypist (${referenceModel.replace(/\.pkl$/, "")})`],
+                    ["pca", "Classifier on the PCA"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setScorer(key)}
+                    aria-pressed={scorer === key}
+                    className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
+                      scorer === key ? "bg-primary text-white" : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-[11px] text-slate-400">
+                CellTypist&apos;s own call for each cell is independent of the clusters its labels were voted over,
+                so it also catches a cluster that holds two cell types; its sets are larger.
+              </p>
+            </div>
+          )}
           <p className="mb-3 text-[11px] text-slate-400">
             About α of all cells are rejected (unsure or doesn&apos;t fit) even when every label is right: read
             each label&apos;s rejected share against α. A smaller α rejects fewer cells and makes sets larger.
@@ -315,11 +353,9 @@ export function AnnotationConfidenceCard({ datasetId }: { datasetId: string }) {
           </div>
           {copied && <p className="text-[11px] text-emerald-700">{copied}</p>}
           <p className="text-[11px] text-slate-400">
-            {result.classifier === "knn" ? "Nearest-neighbour vote" : "Logistic regression"} on {result.representation} (
-            {result.n_pcs} PCs), trained on one half of the cells to score the other; LAC score; agrees with the label
-            for {pct(result.accuracy)} of cells; {result.elapsed_seconds} s. Columns: {result.columns.flag},{" "}
-            {result.columns.fit} (own label&apos;s conformal p-value), {result.columns.set_size},{" "}
-            {result.columns.alt} (nearest other label).
+            {scoredBy(result)}; LAC score; the most probable label is the cell&apos;s own for {pct(result.accuracy)} of
+            cells; {result.elapsed_seconds} s. Columns: {result.columns.flag}, {result.columns.fit} (own label&apos;s
+            conformal p-value), {result.columns.set_size}, {result.columns.alt} (nearest other label).
           </p>
         </div>
       )}

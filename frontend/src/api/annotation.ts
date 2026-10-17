@@ -67,6 +67,10 @@ export interface ConfidenceInfo {
   max_labels: number;
   classifiers: string[];
   note: string;
+  /** What a check scored by CellTypist's probabilities measures */
+  reference_note: string;
+  /** Columns CellTypist annotated, which its probabilities can score: column -> model */
+  reference_columns: Record<string, string>;
   checked_columns: string[];
   /** The last check of the asked-for column, or null */
   result: ConfidenceResult | null;
@@ -78,15 +82,20 @@ export function getAnnotationConfidence(datasetId: string, column?: string): Pro
   return apiFetch(`/datasets/${datasetId}/annotation/confidence${q}`);
 }
 
-/** Check how well each cell's label in `column` fits, at error rate `alpha`. */
+/**
+ * Check how well each cell's label in `column` fits, at error rate `alpha`,
+ * scored by a classifier on the PCA (default) or by "celltypist", the
+ * probabilities CellTypist kept when it made the column.
+ */
 export function runAnnotationConfidence(
   datasetId: string,
   column: string,
   alpha: number,
+  classifier?: string,
 ): Promise<ConfidenceResult> {
   return apiFetch(`/datasets/${datasetId}/annotation/confidence`, {
     method: "POST",
-    body: JSON.stringify({ column, alpha }),
+    body: JSON.stringify(classifier ? { column, alpha, classifier } : { column, alpha }),
   });
 }
 

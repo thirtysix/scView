@@ -28,12 +28,14 @@ const DATASET = {
 } as DatasetInfo;
 
 const NOTE = "This measures how well each cell's label agrees with the expression neighbourhood of the cells carrying that label, not whether the label is right.";
+const REFERENCE_NOTE = "This measures how well each cell's label agrees with the CellTypist reference model's call for that cell, not whether the label is right.";
 
 function info(result: ConfidenceResult | null = null, extra: Partial<ConfidenceInfo> = {}): ConfidenceInfo {
   return {
     available: true, reason: null, representation: "X_pca_harmony", n_pcs: 50, default_alpha: 0.1,
-    min_alpha: 0.01, max_alpha: 0.5, min_label_cells: 20, max_labels: 100, classifiers: ["logreg", "knn"],
-    note: NOTE, checked_columns: result ? [result.column] : [], result, ...extra,
+    min_alpha: 0.01, max_alpha: 0.5, min_label_cells: 20, max_labels: 100, classifiers: ["logreg", "knn", "celltypist"],
+    note: NOTE, reference_note: REFERENCE_NOTE, reference_columns: {},
+    checked_columns: result ? [result.column] : [], result, ...extra,
   };
 }
 
@@ -78,7 +80,7 @@ describe("AnnotationConfidenceCard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Check labels/ }));
     await screen.findByTestId("confidence-result");
-    expect(runAnnotationConfidence).toHaveBeenCalledWith("d1", "cell_type", 0.1);
+    expect(runAnnotationConfidence).toHaveBeenCalledWith("d1", "cell_type", 0.1, undefined); // the PCA classifier
     expect(refresh).toHaveBeenCalledWith("d1", "scview_conf_cell_type_flag");
     expect(screen.getByText(/89.4% of 6,911 held-out cells kept their label/)).toBeTruthy();
     expect(screen.getByText(/unsure 673 \(4.9%\)/)).toBeTruthy();
@@ -89,6 +91,30 @@ describe("AnnotationConfidenceCard", () => {
     expect(within(rows[0]!).getByText("21.2%").className).toMatch(/amber/);
     expect(rows[0]!.textContent).toMatch(/CD4 Naive T 12.0%/);
     expect(screen.getByText(/Not checked \(fewer than 20 cells\): Eryth \(12\)/)).toBeTruthy();
+  });
+
+  it("scores a CellTypist column by CellTypist's probabilities, or by the PCA classifier", async () => {
+    getAnnotationConfidence.mockResolvedValue(info(null, { reference_columns: { cell_type: "Immune_All_Low.pkl" } }));
+    render(<AnnotationConfidenceCard datasetId="d1" />);
+    const ct = await screen.findByRole("button", { name: "CellTypist (Immune_All_Low)" });
+    expect(ct.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText(REFERENCE_NOTE)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Check labels/ }));
+    await screen.findByTestId("confidence-result");
+    expect(runAnnotationConfidence).toHaveBeenLastCalledWith("d1", "cell_type", 0.1, "celltypist");
+
+    fireEvent.click(screen.getByRole("button", { name: "Classifier on the PCA" }));
+    fireEvent.click(screen.getByRole("button", { name: /Check labels/ }));
+    await waitFor(() => expect(runAnnotationConfidence).toHaveBeenLastCalledWith("d1", "cell_type", 0.1, undefined));
+  });
+
+  it("offers no choice for a column CellTypist did not make", async () => {
+    getAnnotationConfidence.mockResolvedValue(info(null, { reference_columns: { cluster: "Immune_All_Low.pkl" } }));
+    render(<AnnotationConfidenceCard datasetId="d1" />);
+    await waitFor(() => expect(getAnnotationConfidence).toHaveBeenLastCalledWith("d1", "cell_type"));
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: /CellTypist \(/ })).toBeNull();
+    expect(screen.getByText(NOTE)).toBeTruthy();
   });
 
   it("opens on the column's last check, at its alpha", async () => {

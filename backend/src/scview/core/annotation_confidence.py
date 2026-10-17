@@ -46,6 +46,17 @@ The classifier is a multinomial logistic regression on the standardised PCs. A
 threshold, and a small label can't win a vote among cells of a big one: on Kang
 it rejected 44 % of "T activated" cells (logistic regression: 22 %) and caught
 88 % of planted wrong labels as doesn't fit (95 %).
+
+A column annotated by CellTypist can be scored by the reference model instead
+(``classifier="celltypist"``): the pipeline keeps CellTypist's per-cell
+probabilities for the column's labels (:func:`store_reference_probabilities`),
+rescaled here to sum to 1 over those labels (CellTypist's are one-vs-rest, and
+spread over its ~100 finer classes; unscaled, a 90 % coverage needed p >= 0.005
+and most sets held most labels). No model is fitted to the dataset, so the score
+is independent of the clusters the labels were voted over: on Kang's Leiden 0.5
+clusters it rejected 35 % of the "CD16+ NK cells" cluster, which also holds the
+CD8 T cells (logistic regression: 17 %). Its sets are larger, since the model's
+own call per cell matched its cluster's vote for 78 % of cells.
 """
 
 from __future__ import annotations
@@ -75,11 +86,12 @@ MAX_PCS = 50
 MAX_TRAIN = 25_000  # training cells per model; a stratified sample beyond this
 K_NEIGHBORS = 15  # for classifier="knn" (the pipeline's neighbour count)
 SEED = 0
-CLASSIFIERS = ("logreg", "knn")
+CLASSIFIERS = ("logreg", "knn", "celltypist")
 DEFAULT_CLASSIFIER = "logreg"
 _CLASSIFIER_NAMES = {
     "logreg": "multinomial logistic regression",
     "knn": f"{K_NEIGHBORS}-nearest-neighbour label vote",
+    "celltypist": "CellTypist reference model's probabilities",
 }
 
 CONFIDENT = "confident"
@@ -100,6 +112,13 @@ NOTE = (
     "This measures how well each cell's label agrees with the expression "
     "neighbourhood of the cells carrying that label, not whether the label is right."
 )
+REFERENCE_NOTE = (
+    "This measures how well each cell's label agrees with the CellTypist reference "
+    "model's call for that cell, not whether the label is right."
+)
+# uns: JSON {label column: {"obsm": key, "labels": [...], "model": ..., "fingerprint": ...}}
+# for CellTypist's per-cell probabilities of the column's labels (obsm[key]).
+REFERENCE_KEY = "scview_reference_probabilities"
 _SAFE = re.compile(r"[^A-Za-z0-9_.\-]+")
 N_CONFUSIONS = 3  # per label
 
@@ -178,13 +197,16 @@ def representation(adata) -> tuple[str, int]:
     )
 
 
+def _as_labels(col: pd.Series) -> pd.Series:
+    return col.astype(str).where(col.notna())
+
+
 def _label_values(adata, column: str) -> pd.Series:
     if column not in adata.obs.columns:
         raise ConfidenceError(f"Column '{column}' not found.", status=404)
     if is_output(column):
         raise ConfidenceError("That column is an output of the confidence check; pick a label column.")
-    col = adata.obs[column]
-    return col.astype(str).where(col.notna())
+    return _as_labels(adata.obs[column])
 
 
 def fingerprint(values: pd.Series) -> str:
@@ -232,6 +254,85 @@ def _quarters(codes: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     return q
 
 
+# ---------------------------------------------------------------------------
+# A reference model's probabilities (CellTypist)
+# ---------------------------------------------------------------------------
+
+
+def _reference_registry(adata) -> dict[str, dict[str, Any]]:
+    raw = adata.uns.get(REFERENCE_KEY)
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else {}
+    except ValueError:
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def store_reference_probabilities(adata, column: str, probabilities: pd.DataFrame, model: str) -> None:
+    """Keep a reference model's per-cell probabilities of ``column``'s labels
+    (CellTypist's ``probability_matrix``, cells x model classes) for the check."""
+    col = adata.obs[column]
+    cats = col.cat.categories if isinstance(col.dtype, pd.CategoricalDtype) else col.dropna().unique()
+    labels = [str(c) for c in cats if str(c) in probabilities.columns]
+    reg = _reference_registry(adata)
+    old = reg.get(column, {}).get("obsm") if isinstance(reg.get(column), dict) else None
+    if old:
+        adata.obsm.pop(old, None)
+    if not labels:
+        reg.pop(column, None)
+    else:
+        key = "scview_refprob_" + hashlib.sha1(column.encode()).hexdigest()[:10]
+        frame = probabilities.reindex(index=adata.obs_names, columns=labels)
+        adata.obsm[key] = frame.fillna(0.0).to_numpy(dtype=np.float32)
+        reg[column] = {"obsm": key, "labels": labels, "model": model,
+                       "fingerprint": fingerprint(_as_labels(col))}
+    adata.uns[REFERENCE_KEY] = json.dumps(reg)
+
+
+def drop_reference_probabilities(adata, column: str) -> None:
+    """Forget the reference probabilities of ``column`` (it was annotated again
+    another way)."""
+    reg = _reference_registry(adata)
+    entry = reg.pop(column, None)
+    if entry is None:
+        return
+    if isinstance(entry, dict) and entry.get("obsm"):
+        adata.obsm.pop(entry["obsm"], None)
+    adata.uns[REFERENCE_KEY] = json.dumps(reg)
+
+
+def reference_probabilities(adata, column: str) -> tuple[np.ndarray, list[str], str]:
+    """(probabilities, their labels, model) stored for ``column``; a
+    ConfidenceError saying why when there are none to use."""
+    entry = _reference_registry(adata).get(column)
+    if not isinstance(entry, dict):
+        raise ConfidenceError(
+            f"No CellTypist probabilities are kept for '{column}': only a column annotated "
+            "with CellTypist (scView 0.16 or later) has them."
+        )
+    P = adata.obsm.get(entry.get("obsm", "")) if entry.get("obsm") else None
+    labels = entry.get("labels") or []
+    if P is None or np.asarray(P).shape != (adata.n_obs, len(labels)):
+        raise ConfidenceError(f"The CellTypist probabilities kept for '{column}' are incomplete; annotate again.")
+    if column not in adata.obs.columns or fingerprint(_as_labels(adata.obs[column])) != entry.get("fingerprint"):
+        raise ConfidenceError(
+            f"'{column}' changed since CellTypist annotated it, so its probabilities no longer "
+            "match; annotate again or score with a classifier on the PCA."
+        )
+    return np.asarray(P), [str(lab) for lab in labels], str(entry.get("model") or "CellTypist")
+
+
+def reference_columns(adata) -> dict[str, str]:
+    """Label columns whose CellTypist probabilities can be used: {column: model}."""
+    out = {}
+    for column in _reference_registry(adata):
+        try:
+            out[column] = reference_probabilities(adata, column)[2]
+        except ConfidenceError:
+            pass
+    return out
+
+
 def _subsample(y: np.ndarray, cap: int, rng: np.random.Generator) -> np.ndarray:
     """Indices of at most ~``cap`` cells, every label kept in proportion."""
     if y.size <= cap:
@@ -271,6 +372,22 @@ def _fit_predict(
     model = LogisticRegression(max_iter=1000).fit(scaler.transform(X_train), y_train)
     P[:, model.classes_] = model.predict_proba(scaler.transform(X_test))
     return P
+
+
+def _reference_scores(adata, column: str, labels: list[str]) -> tuple[np.ndarray, str]:
+    """The stored reference probabilities of ``labels``, rescaled to sum to 1
+    per cell, and what they came from."""
+    ref, ref_labels, model = reference_probabilities(adata, column)
+    missing = [lab for lab in labels if lab not in ref_labels]
+    if missing:
+        raise ConfidenceError(
+            f"The CellTypist probabilities kept for '{column}' lack {', '.join(missing[:3])}; "
+            "annotate again."
+        )
+    P = ref[:, [ref_labels.index(lab) for lab in labels]].astype(np.float64)
+    total = P.sum(axis=1, keepdims=True)
+    P = np.divide(P, total, out=np.full_like(P, 1.0 / len(labels)), where=total > 0)
+    return P, f"CellTypist {model.removesuffix('.pkl')}"
 
 
 def _threshold(cal_scores: np.ndarray, alpha: float) -> float:
@@ -326,22 +443,27 @@ def assess(
             f"Unknown classifier '{classifier}' (expected one of {', '.join(CLASSIFIERS)})."
         )
     values, labels, codes, skipped = _labels(adata, column)
-    rep, n_pcs = representation(adata)
-    X = np.asarray(adata.obsm[rep])[:, :n_pcs].astype(np.float64)
-    if not np.isfinite(X).all():
-        raise ConfidenceError(f"'{rep}' holds missing or infinite values; re-run the pipeline.")
-
+    L = len(labels)
     rng = np.random.default_rng(SEED)
     quarter = _quarters(codes, rng)
     half = np.where(quarter >= 0, quarter % 2, -1)
-    L = len(labels)
 
-    P = np.zeros((adata.n_obs, L), dtype=np.float64)
-    for h in (0, 1):
-        train = np.flatnonzero(half == 1 - h)
-        train = train[_subsample(codes[train], MAX_TRAIN, rng)]
-        test = np.flatnonzero(half == h)
-        P[test] = _fit_predict(classifier, X[train], codes[train], X[test], L)
+    if classifier == "celltypist":
+        P, rep = _reference_scores(adata, column, labels)
+        n_pcs = 0
+        tool = f"split conformal prediction (LAC) over {rep} probabilities"
+    else:
+        rep, n_pcs = representation(adata)
+        X = np.asarray(adata.obsm[rep])[:, :n_pcs].astype(np.float64)
+        if not np.isfinite(X).all():
+            raise ConfidenceError(f"'{rep}' holds missing or infinite values; re-run the pipeline.")
+        P = np.zeros((adata.n_obs, L), dtype=np.float64)
+        for h in (0, 1):  # a model of each half scores the other
+            train = np.flatnonzero(half == 1 - h)
+            train = train[_subsample(codes[train], MAX_TRAIN, rng)]
+            test = np.flatnonzero(half == h)
+            P[test] = _fit_predict(classifier, X[train], codes[train], X[test], L)
+        tool = f"split conformal prediction (LAC) over a {_CLASSIFIER_NAMES[classifier]} on {rep}"
 
     rows = np.flatnonzero(quarter >= 0)
     own = codes[rows]
@@ -436,7 +558,7 @@ def assess(
         provenance.record_step(
             adata,
             step="annotation_confidence",
-            tool=f"split conformal prediction (LAC) over a {_CLASSIFIER_NAMES[classifier]} on {rep}",
+            tool=tool,
             params={"column": column, "alpha": alpha, "classifier": classifier,
                     "representation": rep, "n_pcs": n_pcs, "seed": SEED,
                     "coverage_held_out": entry["coverage"]["held_out"],
@@ -505,7 +627,7 @@ def summary(adata, column: str) -> dict[str, Any] | None:
     out["unknown_column"] = unknown if unknown and unknown in adata.obs.columns else None
     out["column"] = column
     out["stale"] = fingerprint(_label_values(adata, column)) != entry.get("fingerprint")
-    out["note"] = NOTE
+    out["note"] = REFERENCE_NOTE if entry.get("classifier") == "celltypist" else NOTE
     return out
 
 
