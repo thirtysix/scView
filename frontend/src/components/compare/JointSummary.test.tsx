@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { BatchMixing, JointSummary as Summary } from "@/api/integration";
 
-const { getJointSummary, apiFetch } = vi.hoisted(() => ({
+const { getJointSummary, apiFetch, getDataset, testComposition } = vi.hoisted(() => ({
   getJointSummary: vi.fn(),
   apiFetch: vi.fn(),
+  getDataset: vi.fn(),
+  testComposition: vi.fn(),
 }));
 vi.mock("@/api/integration", () => ({ getJointSummary }));
 vi.mock("@/api/client", () => ({ apiFetch }));
+vi.mock("@/api/datasets", () => ({ getDataset }));
+vi.mock("@/api/composition", () => ({ testComposition }));
+vi.mock("@/components/plots/Plot", () => ({ default: () => null }));
 
 import { JointSummary, compositionRows, shareOfIdeal, type Crosstab } from "./JointSummary";
 
@@ -96,6 +101,30 @@ describe("JointSummary", () => {
     expect(screen.getByText("All cells")).toBeInTheDocument();
     expect(screen.getByTitle("CTRL: 100.0% (30 cells)")).toBeInTheDocument();
     expect(screen.getByTitle("STIM: 50.0% (50 cells)")).toBeInTheDocument();
+  });
+
+  it("says the bars count cells and opens a replicate-aware test of the clusters", async () => {
+    getJointSummary.mockResolvedValue(joint(KANG));
+    getDataset.mockResolvedValue({
+      id: "j", name: "joint", filename: "j.h5ad", n_cells: 130, n_genes: 10, status: "ready",
+      available_embeddings: [], created_at: "",
+      obs_columns: [
+        { name: "dataset", dtype: "category", n_unique: 2, values: ["CTRL", "STIM"] },
+        { name: "leiden", dtype: "category", n_unique: 2, values: ["0", "1"] },
+        { name: "Donor", dtype: "category", n_unique: 8 },
+      ],
+    });
+    testComposition.mockReturnValue(new Promise(() => {}));
+    render(<JointSummary datasetId="j" title="Checks" />);
+    expect(await screen.findByText(/These bars count cells/)).toBeInTheDocument();
+    expect(screen.getByText(/chi-square or Fisher test on the cell counts/)).toBeInTheDocument();
+    expect(testComposition).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Test cluster shares across samples" }));
+    await waitFor(() =>
+      expect(testComposition).toHaveBeenCalledWith("j", {
+        condition_key: "dataset", group_key: "leiden", transform: "logit",
+      }),
+    );
   });
 
   it("has no 'after' row when nothing was corrected", async () => {

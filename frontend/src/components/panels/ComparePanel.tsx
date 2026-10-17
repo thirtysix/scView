@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { GitCompare, Loader2, AlertCircle, Sparkles } from "lucide-react";
+import { CompositionTest } from "@/components/compare/CompositionTest";
 import { JointEmbedding } from "@/components/compare/JointEmbedding";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
@@ -70,7 +71,53 @@ export function ComparePanel() {
           </button>
         ))}
       </div>
-      {tab === "joint" ? <JointEmbedding /> : <CompositionCompare />}
+      {tab === "joint" ? <JointEmbedding /> : <CompositionTab />}
+    </div>
+  );
+}
+
+type CompositionMode = "conditions" | "datasets";
+
+/** Composition: a replicate-aware test between conditions of the open dataset,
+ *  or two datasets side by side (descriptive). */
+function CompositionTab() {
+  const [mode, setMode] = useState<CompositionMode>("conditions");
+  const dataset = useDatasetStore((s) => s.currentDataset);
+  return (
+    <div className="space-y-4">
+      <div className="flex w-fit rounded-md border border-slate-200 p-0.5 text-sm">
+        {(
+          [
+            ["conditions", "Between conditions"],
+            ["datasets", "Two datasets"],
+          ] as const
+        ).map(([m, label]) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className={`rounded px-3 py-1 font-medium transition ${
+              mode === m ? "bg-primary text-white" : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {mode === "datasets" ? (
+        <CompositionCompare />
+      ) : dataset ? (
+        <>
+          <p className="text-sm text-slate-500">
+            Do the cell-type or cluster proportions of <span className="font-medium">{dataset.name}</span>{" "}
+            differ between conditions? Each donor or sample is one replicate.
+          </p>
+          <CompositionTest key={dataset.id} datasetId={dataset.id} info={dataset} />
+        </>
+      ) : (
+        <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-400">
+          Load a dataset first to test its composition between conditions.
+        </div>
+      )}
     </div>
   );
 }
@@ -167,6 +214,7 @@ function CompositionCompare() {
       .join("; ");
     askCopilot(
       `Compare the ${column} composition of "${datasetA.name}" (A) vs "${datasetB.name}" (B): ${top}. ` +
+        `Each dataset is one sample here, so these differences are descriptive, not tested. ` +
         `What are the most notable differences and what might explain them?`,
     );
   }, [categories, datasetA, datasetB, propsA, propsB, column, askCopilot]);
@@ -298,6 +346,14 @@ function CompositionCompare() {
             />
           </div>
 
+          <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-600">
+            Each dataset counts as one sample here, so these differences are descriptive: nothing can
+            tell them apart from sample-to-sample variation. A chi-square or Fisher test on these cell
+            counts would treat every cell as an independent replicate and overstate significance. To
+            test, merge the datasets (Joint embedding) and use <span className="font-medium">Between
+            conditions</span> with a donor or sample column.
+          </p>
+
           {/* Δ table */}
           <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
             <table className="w-full text-sm">
@@ -346,7 +402,8 @@ function Header() {
       <div>
         <h2 className="text-2xl font-bold text-slate-900">Compare datasets</h2>
         <p className="text-sm text-slate-500">
-          Embed several datasets together, or compare the composition of two side by side.
+          Embed several datasets together, or compare compositions: between conditions with
+          samples as replicates, or two datasets side by side.
         </p>
       </div>
     </div>

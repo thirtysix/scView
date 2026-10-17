@@ -4,6 +4,7 @@ import { getJointSummary, type BatchMixing, type JointSummary as Summary } from 
 import { getPalette } from "@/lib/colors";
 import { prettyObsLabel } from "@/lib/formatting";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { CompositionTest } from "./CompositionTest";
 
 /** A score as a share of the ideal, for bar widths: 0 = datasets apart, 1 = ideal. */
 export function shareOfIdeal(value: number | null | undefined, ideal: number): number {
@@ -79,6 +80,41 @@ export function JointSummary({ datasetId, title }: { datasetId: string; title: s
       )}
       {crosstab && summary.cluster_column && (
         <ClusterComposition crosstab={crosstab} clusterColumn={summary.cluster_column} />
+      )}
+      {crosstab && summary.cluster_column && (
+        <ReplicateTest
+          datasetId={datasetId}
+          labelColumn={summary.label_column}
+          clusterColumn={summary.cluster_column}
+        />
+      )}
+    </div>
+  );
+}
+
+/** The bars count cells; testing a cluster's share needs samples as replicates. */
+function ReplicateTest({
+  datasetId,
+  labelColumn,
+  clusterColumn,
+}: {
+  datasetId: string;
+  labelColumn: string | null | undefined;
+  clusterColumn: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-slate-500">
+        These bars count cells. Whether a cluster&apos;s share really differs between datasets or
+        conditions needs the donors or samples as replicates: a chi-square or Fisher test on the cell
+        counts treats every cell as independent and overstates significance.{" "}
+        <button onClick={() => setOpen((o) => !o)} className="font-medium text-primary hover:underline">
+          {open ? "Hide the test" : "Test cluster shares across samples"}
+        </button>
+      </p>
+      {open && (
+        <CompositionTest datasetId={datasetId} defaultCondition={labelColumn} defaultGroup={clusterColumn} />
       )}
     </div>
   );
