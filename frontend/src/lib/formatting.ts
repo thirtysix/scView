@@ -44,6 +44,13 @@ const CONFIDENCE_LABELS: Record<string, string> = {
   unknown: "Unknown where rejected",
 };
 
+const HVG_FLAVOR_LABELS: Record<string, string> = {
+  seurat: "Seurat",
+  cell_ranger: "Cell Ranger",
+  seurat_v3: "Seurat v3",
+  pearson_residuals: "Pearson residuals",
+};
+
 /**
  * Human-friendly label for an obs column name, keeping the raw name as the value.
  *  - scview_leiden_r0.5        -> "Leiden (res 0.5)"
@@ -51,6 +58,8 @@ const CONFIDENCE_LABELS: Record<string, string> = {
  *  - <grouping>_celltypeAnno   -> "<pretty grouping> · cell types"
  *  - scview_conf_<column>_flag -> "<pretty column> · label fit" (and _fit,
  *    _set_size, _alt, _unknown: the annotation confidence check's columns)
+ *  - scview_leiden_r0.5_hvg_cell_ranger_2000 -> "Leiden (res 0.5) · Cell Ranger, 2,000 genes"
+ *    (kept from the variable-gene check)
  * Anything else is returned unchanged.
  */
 export function prettyObsLabel(name: string | null | undefined): string {
@@ -60,6 +69,11 @@ export function prettyObsLabel(name: string | null | undefined): string {
 
   const conf = name.match(/^scview_conf_(.+)_(flag|fit|set_size|alt|unknown)$/);
   if (conf) return `${prettyObsLabel(conf[1])} · ${CONFIDENCE_LABELS[conf[2] ?? ""] ?? conf[2]}`;
+  const hvg = name.match(/^(scview_(?:leiden|louvain)_r[\d.]+)_hvg_(seurat|cell_ranger|seurat_v3|pearson_residuals)_(\d+)$/);
+  if (hvg) {
+    const flavor = HVG_FLAVOR_LABELS[hvg[2] ?? ""] ?? hvg[2];
+    return `${prettyObsLabel(hvg[1])} · ${flavor}, ${Number(hvg[3]).toLocaleString("en-US")} genes`;
+  }
 
   const clust = name.match(/^scview_(leiden|louvain)_r([\d.]+)$/);
   if (clust) {
