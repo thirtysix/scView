@@ -14,6 +14,12 @@ All notable changes to scView are documented here. The format is based on
   fewer than ten groups limma's robust fit is the plain one, so results there are unchanged. On
   Kang by cluster, Eryth and pDC are flagged; CD14 Mono moves from FDR 0.053 to 0.056.
 
+### Fixed
+- **The legend no longer hides cells or labels in the Unified View.** When the automatic fit would
+  put cells under the legend (Kang's T cells sat half under it), the cells are fitted beside it
+  instead, as long as that keeps at least half the zoom; a camera you moved yourself is left
+  alone. Group labels keep clear of the legend too.
+
 ### Added
 - **Design and variance choices in the composition test.** A Design menu forces paired (by
   sample) or unpaired, with Auto showing what it picked; a Variances menu switches back to plain

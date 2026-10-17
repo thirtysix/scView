@@ -9,7 +9,14 @@ import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
 import { exportFilename } from "@/lib/exportFilename";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { colorByLine } from "@/lib/hoverInfo";
-import { centroidLabelLayers, groupCentroids, labelViewOf, placeLabels } from "@/lib/centroidLabels";
+import {
+  centroidLabelLayers,
+  groupCentroids,
+  labelViewOf,
+  placeLabels,
+  type Box,
+} from "@/lib/centroidLabels";
+import { fitAvoiding } from "@/lib/scatterFit";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 
 interface EmbeddingScatterProps {
@@ -62,54 +69,12 @@ interface EmbeddingScatterProps {
   showLabels?: boolean;
   /** A highlighted category: its label stays, the others fade */
   highlightCategory?: string | null;
+  /** An element drawn over the plot (its legend): the automatic fit (2D) and
+   *  the group labels keep clear of it */
+  overlayElement?: HTMLElement | null;
   /** Extra layers drawn over the points and labels, in data coordinates (the
    *  Trajectory panel's PAGA graph); the PNG download includes them */
   overlayLayers?: readonly Layer[] | null;
-}
-
-/**
- * Compute the initial view state that auto-fits the data bounds into the
- * viewport with some padding. Supports 2D and 3D.
- */
-function computeInitialViewState2D(
-  positions: Float32Array,
-  width: number,
-  height: number,
-) {
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-
-  for (let i = 0; i < positions.length; i += 2) {
-    const x = positions[i]!;
-    const y = positions[i + 1]!;
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x;
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
-
-  const dataWidth = maxX - minX || 1;
-  const dataHeight = maxY - minY || 1;
-  const padding = 0.05;
-  const paddedW = dataWidth * (1 + padding * 2);
-  const paddedH = dataHeight * (1 + padding * 2);
-
-  const scaleX = (width || 800) / paddedW;
-  const scaleY = (height || 600) / paddedH;
-  const zoom = Math.log2(Math.min(scaleX, scaleY));
-
-  return {
-    target: [minX + dataWidth / 2, minY + dataHeight / 2, 0] as [
-      number,
-      number,
-      number,
-    ],
-    zoom,
-    minZoom: zoom - 4,
-    maxZoom: zoom + 10,
-  };
 }
 
 function computeInitialViewState3D(
@@ -181,6 +146,7 @@ export function EmbeddingScatter({
   categories = null,
   showLabels = false,
   highlightCategory = null,
+  overlayElement = null,
   overlayLayers = null,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -216,6 +182,33 @@ export function EmbeddingScatter({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // The box the fit and the labels keep clear of (the legend), relative to this
+  // plot; measured again whenever either resizes (a legend grows with its groups).
+  const [avoidBox, setAvoidBox] = useState<Box | null>(null);
+  useEffect(() => {
+    const el = overlayElement;
+    const host = containerRef.current;
+    if (!el || !host) {
+      setAvoidBox(null);
+      return;
+    }
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      const h = host.getBoundingClientRect();
+      const box = { x0: r.left - h.left, y0: r.top - h.top, x1: r.right - h.left, y1: r.bottom - h.top };
+      setAvoidBox((prev) =>
+        r.width > 0 && r.height > 0
+          ? prev && Object.keys(box).every((k) => prev[k as keyof Box] === box[k as keyof Box]) ? prev : box
+          : null,
+      );
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [overlayElement]);
 
   // Proactively release the WebGL context when this scatter unmounts. Browsers
   // cap the number of live WebGL contexts (~16); navigating between deck.gl
@@ -418,18 +411,21 @@ export function EmbeddingScatter({
     return groupCentroids(positions, stride, colorValues, categories, indexMap);
   }, [showLabels, positions, categories, colorValues, colorType, stride, indexMap]);
 
-  // Compute initial view state from data bounds (use full positions for bounds)
-  const initialViewState = useMemo(() => {
+  // The automatic fit to the data bounds (all positions, not only those drawn)
+  const baseViewState = useMemo(() => {
     if (!positions || positions.length === 0) return null;
     if (dimensions === 3) {
       return computeInitialViewState3D(positions, containerSize.width, containerSize.height);
     }
-    return computeInitialViewState2D(
-      positions,
-      containerSize.width,
-      containerSize.height,
-    );
+    const { target, zoom } = fitAvoiding(positions, containerSize.width || 800, containerSize.height || 600);
+    return { target, zoom, minZoom: zoom - 4, maxZoom: zoom + 10 };
   }, [positions, containerSize.width, containerSize.height, dimensions]);
+  // ...moved clear of the legend when it would hide cells (2D; zoom limits as the plain fit's)
+  const initialViewState = useMemo(() => {
+    if (!baseViewState || !positions || dimensions === 3 || !avoidBox) return baseViewState;
+    const { target, zoom } = fitAvoiding(positions, containerSize.width, containerSize.height, avoidBox);
+    return { ...baseViewState, target, zoom };
+  }, [baseViewState, positions, dimensions, avoidBox, containerSize.width, containerSize.height]);
 
   // A restored camera (restoreViewState) stays until the user moves the camera;
   // `fitted` says whether the camera shown is the automatic fit.
@@ -446,13 +442,17 @@ export function EmbeddingScatter({
   }, [initialViewState]);
 
   // When initial view state changes (new data), reset (to a restored camera if
-  // there is one; the fit's zoom limits still apply)
+  // there is one; the fit's zoom limits still apply). When only the legend
+  // changed, the fit follows it only while the camera is still the fit.
+  const lastBaseRef = useRef(baseViewState);
   useEffect(() => {
-    if (initialViewState) {
-      fittedRef.current = !restoredRef.current;
-      setViewState({ ...initialViewState, ...restoredRef.current });
-    }
-  }, [initialViewState]);
+    if (!initialViewState) return;
+    const newData = lastBaseRef.current !== baseViewState;
+    lastBaseRef.current = baseViewState;
+    if (!newData && !fittedRef.current) return;
+    fittedRef.current = !restoredRef.current;
+    setViewState({ ...initialViewState, ...restoredRef.current });
+  }, [initialViewState, baseViewState]);
 
   // Another dataset or embedding: the restored camera meant the old one.
   useEffect(() => {
@@ -596,11 +596,15 @@ export function EmbeddingScatter({
     if (!centroids || !viewState) return [];
     const view = labelViewOf(views, containerSize.width, containerSize.height, viewState);
     if (!view) return [];
-    return centroidLabelLayers("embedding-labels", placeLabels(centroids, view, { highlight: highlightCategory }), {
+    const placed = placeLabels(centroids, view, {
+      highlight: highlightCategory,
+      avoid: avoidBox ? [avoidBox] : [],
+    });
+    return centroidLabelLayers("embedding-labels", placed, {
       dark: background === "dark",
       highlight: highlightCategory,
     });
-  }, [centroids, viewState, views, containerSize.width, containerSize.height, background, highlightCategory]);
+  }, [centroids, viewState, views, containerSize.width, containerSize.height, background, highlightCategory, avoidBox]);
   const layers = useMemo(
     () => [...pointLayers, ...labelLayers, ...(overlayLayers ?? [])],
     [pointLayers, labelLayers, overlayLayers],

@@ -123,6 +123,8 @@ export function UnifiedViewPanel() {
   const setOpacity = useSettingsStore((s) => s.setOpacity);
 
   const autoAdjustedRef = useRef<string | null>(null);
+  // The legend column over the scatter: the fit and the group labels keep clear of it.
+  const [legendColumn, setLegendColumn] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     const dsId = dataset?.id ?? null;
     if (numCells > 0 && dsId && autoAdjustedRef.current !== dsId) {
@@ -751,6 +753,7 @@ export function UnifiedViewPanel() {
                 categories={labelCategories}
                 showLabels={showLabels}
                 highlightCategory={labelHighlight}
+                overlayElement={splitActive ? null : legendColumn}
               />
             )}
             {dimensions === 2 && !gridActive && (
@@ -804,7 +807,7 @@ export function UnifiedViewPanel() {
                 While split, it sits in the legend column the grid keeps free;
                 the compare grid draws a legend per column there instead. */}
             {!compareActive && (
-            <div className={`pointer-events-none absolute z-10 flex flex-col items-start gap-1.5 ${
+            <div ref={setLegendColumn} className={`pointer-events-none absolute z-10 flex flex-col items-start gap-1.5 ${
               splitActive ? "right-2 top-10 max-h-[calc(100%-3rem)]" : "left-3 bottom-3 max-h-[calc(100%-1.5rem)]"
             }`}>
             {scatterOverlay && (

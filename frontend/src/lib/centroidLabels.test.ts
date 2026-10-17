@@ -164,6 +164,21 @@ describe("placeLabels", () => {
     ]);
   });
 
+  it("keeps labels off a box drawn over the plot (the legend)", () => {
+    const legend = { x0: 0, y0: 55, x1: 80, y1: 100 };
+    const placed = placeLabels(
+      [at("B", 40, 50), at("NK", 40, 90, 10, 1), at("T", 150, 90, 10, 2)],
+      view,
+      { measure, avoid: [legend] },
+    );
+    // B's line would touch the legend's edge, so it moves up; NK sits inside it
+    // (a line up or down still overlaps) and waits; T is clear of it.
+    expect(placed.map((p) => [p.label, p.offset])).toEqual([
+      ["B", [0, -18]],
+      ["T", [0, 0]],
+    ]);
+  });
+
   it("places a highlighted group first, whatever its size", () => {
     const placed = placeLabels([at("CD8+ T", 100, 50, 900, 0), at("Mk", 100, 50, 50, 1)], view, {
       measure,
