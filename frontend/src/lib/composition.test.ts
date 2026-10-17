@@ -5,6 +5,7 @@ import {
   compositionCsv,
   conditionColumns,
   describeTest,
+  formatRatio,
   isShifted,
   sortedGroups,
   suggestConditionColumn,
@@ -13,7 +14,7 @@ import {
 const col = (name: string, n_unique: number, dtype = "category"): ObsColumnInfo => ({ name, dtype, n_unique });
 
 // Kang: stim CTRL/STIM, Donor 8, cluster 13 cell types (logit, paired).
-export const KANG: CompositionResult = {
+const KANG: CompositionResult = {
   condition_key: "stim",
   sample_key: "Donor",
   sample_key_detected: true,
@@ -75,6 +76,14 @@ describe("result helpers", () => {
     const untested = { ...KANG, tested: false };
     expect(sortedGroups(untested).map((g) => g.group)).toEqual(["CD14 Mono", "B", "Eryth"]);
     expect(untested.groups.some((g) => isShifted(g, untested))).toBe(false);
+  });
+
+  it("formats ratios without rounding small ones to zero", () => {
+    expect(formatRatio(1.2057)).toBe("×1.21");
+    expect(formatRatio(275.789)).toBe("×275.79");
+    expect(formatRatio(0.0026)).toBe("×0.0026");
+    expect(formatRatio(0)).toBe("×0.00");
+    expect(formatRatio(null)).toBe("–");
   });
 
   it("describes the test in words", () => {

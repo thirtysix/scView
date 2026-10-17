@@ -48,7 +48,13 @@ export function isShifted(g: CompositionGroup, r: CompositionResult): boolean {
   return r.tested && g.fdr != null && g.fdr < r.fdr_threshold;
 }
 
-/** One line on what was tested and how, for under the table and the CSV name. */
+/** A ratio of mean shares: "×1.21", small ones to two significant digits ("×0.0026"). */
+export function formatRatio(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "–";
+  return `×${v > 0 && v < 0.1 ? v.toPrecision(2) : v.toFixed(2)}`;
+}
+
+/** One line on what was tested and how, for under the table. */
 export function describeTest(r: CompositionResult): string {
   if (!r.tested) return "Proportions only: not tested.";
   const reps = r.conditions.map((k) => `${k} ${r.n_samples[k] ?? 0}`).join(", ");

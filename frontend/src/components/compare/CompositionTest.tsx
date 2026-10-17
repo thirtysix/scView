@@ -10,6 +10,7 @@ import {
   compositionCsv,
   conditionColumns,
   describeTest,
+  formatRatio,
   isShifted,
   sortedGroups,
   suggestConditionColumn,
@@ -180,7 +181,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
     );
   }
 
-  const color = (i: number) => `rgb(${palette[(i * 3) % palette.length]!.join(",")})`;
+  const color = (i: number) => `rgb(${palette[i % palette.length]!.join(",")})`;
   const tested = result?.tested ?? false;
   const two = (result?.conditions.length ?? 0) === 2;
 
@@ -391,7 +392,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
                         ))}
                         {two && (
                           <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">
-                            {g.fold_change == null ? "–" : `×${g.fold_change.toFixed(2)}`}
+                            {formatRatio(g.fold_change)}
                           </td>
                         )}
                         {tested && (
