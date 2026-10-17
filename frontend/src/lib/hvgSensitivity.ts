@@ -141,8 +141,10 @@ export function shortSettingLabel(s: { flavor: HvgFlavor; n_top_genes: number })
   return `${SHORT_FLAVOR[s.flavor] ?? s.flavor} ${genes}`;
 }
 
-export const VERDICT_TEXT: Record<Verdict, string> = {
-  robust: "robust",
-  depends: "depends on the genes",
-  unstable: "unstable",
-};
+/** A cluster's verdict for its row: "robust", "stable in 3 of 4", "unstable". */
+export function verdictLabel(s: Pick<ClusterStability, "verdict" | "nStable" | "matches">): string {
+  if (s.verdict === "robust") return "robust";
+  if (s.verdict === "unstable") return "unstable";
+  if (s.verdict === "depends") return `stable in ${s.nStable} of ${s.matches.filter((m) => m).length}`;
+  return "—";
+}

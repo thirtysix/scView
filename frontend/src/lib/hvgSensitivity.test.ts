@@ -9,6 +9,7 @@ import {
   perCellValues,
   secondsLeft,
   shortSettingLabel,
+  verdictLabel,
 } from "./hvgSensitivity";
 
 const match = (cluster: string, jaccard: number, extra: Partial<HvgClusterMatch> = {}): HvgClusterMatch => ({
@@ -63,7 +64,12 @@ describe("clusterStability", () => {
   it("has no verdict before any other setting has run", () => {
     const out = clusterStability([rows[0]!]);
     expect(out.map((s) => s.verdict)).toEqual([null, null, null]);
+    expect(out.map(verdictLabel)).toEqual(["—", "—", "—"]);
     expect(otherSettings([rows[0]!])).toEqual([]);
+  });
+
+  it("says in how many settings a cluster that depends on them is stable", () => {
+    expect(clusterStability(rows).map(verdictLabel)).toEqual(["unstable", "stable in 1 of 2", "robust"]);
   });
 
   it("marks a cluster a setting lacks as missing", () => {

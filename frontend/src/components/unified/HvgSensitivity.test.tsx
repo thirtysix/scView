@@ -155,8 +155,13 @@ describe("HvgSensitivityPanel", () => {
     const clusterRows = screen.getAllByTitle("Highlight this cluster on the plot");
     expect(within(clusterRows[0]!).getByText("B")).toBeInTheDocument();
     expect(within(clusterRows[0]!).getByText("0.60")).toBeInTheDocument(); // mean of 0.4 and 0.8
+    expect(within(clusterRows[0]!).getByText("stable in 1 of 2")).toBeInTheDocument();
+    expect(within(clusterRows[1]!).getByText("robust")).toBeInTheDocument();
+    // The highlight shows once the plot is coloured by the compared clustering.
+    useSettingsStore.setState({ colorBy: "cell_type" });
     fireEvent.click(clusterRows[0]!);
     expect(useSelectionStore.getState().highlightedGroup).toEqual({ column: REF, value: "B" });
+    expect(useSettingsStore.getState().colorBy).toBe(REF);
   });
 
   it("keeps a setting and colours the plot by it", async () => {

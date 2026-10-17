@@ -24,7 +24,7 @@ import {
   perCellValues,
   secondsLeft,
   shortSettingLabel,
-  VERDICT_TEXT,
+  verdictLabel,
   type ClusterStability,
 } from "@/lib/hvgSensitivity";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -205,8 +205,11 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
   const colourByRow = (row: HvgRow) =>
     void colour(new Map(row.clusters.map((c) => [c.cluster, c.jaccard])), `Jaccard under ${row.label}`);
 
-  const highlight = (cluster: string) =>
+  // A highlight selects the group's cells once the plot is coloured by its column.
+  const highlight = (cluster: string) => {
+    if (useSettingsStore.getState().colorBy !== reference) showColumn(reference);
     useSelectionStore.getState().setHighlight({ column: reference, value: cluster });
+  };
 
   const total = start?.settings.length ?? selected.length;
   const left = running
@@ -534,7 +537,7 @@ function StabilityTable({
                 {s.mean == null ? "—" : s.mean.toFixed(2)}
               </td>
               <td className={`py-0.5 pl-1 ${s.verdict ? VERDICT_TONE[s.verdict] : "text-slate-400"}`}>
-                {s.verdict ? VERDICT_TEXT[s.verdict] : "—"}
+                {verdictLabel(s)}
               </td>
             </tr>
           ))}
