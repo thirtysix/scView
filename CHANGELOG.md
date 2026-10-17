@@ -6,6 +6,12 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **The app no longer freezes while it clusters.** Leiden clustering (processing, re-clustering,
+  the resolution sweep, sub-clustering and the variable-gene check) now runs in a separate process.
+  Before, every other request waited for it, for up to about 5 s at a time on a 14k-cell dataset.
+  The clusters are identical to before; each clustering takes about 1 s longer.
+
 ## [0.16.0] - 2026-10-17
 
 ### Added

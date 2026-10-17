@@ -24,6 +24,7 @@ import scipy.sparse as sp
 from scview.core import (
     cluster_qc,
     doublets,
+    leiden,
     marker_specificity,
     normalization,
     provenance,
@@ -556,7 +557,7 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
     # "louvain") would overwrite a clustering the dataset came with.
     scview_col = f"scview_{method}_r{params.clustering_resolution}"
     if method == "leiden":
-        sc.tl.leiden(adata, resolution=params.clustering_resolution, key_added=scview_col)
+        leiden.leiden(adata, params.clustering_resolution, scview_col)  # in a child process
     else:
         _louvain_igraph(adata, params.clustering_resolution, scview_col)
     adata.uns["scview_active_clustering"] = scview_col

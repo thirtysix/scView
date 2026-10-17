@@ -22,7 +22,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from scview.core import provenance
+from scview.core import leiden, provenance
 from scview.core.obs_writes import forget_column_results
 
 logger = logging.getLogger(__name__)
@@ -111,17 +111,14 @@ def dataset_method(adata) -> str:
 
 def cluster(adata, method: str, resolution: float) -> pd.Categorical:
     """Cluster labels at ``resolution``, numbered by size; ``adata`` is not changed."""
-    import scanpy as sc
-
     from scview.core.pipeline import _louvain_igraph
 
     graph = _graph(adata)
+    if method == "leiden":
+        return leiden.labels(graph, resolution)
     work = ad.AnnData(obs=pd.DataFrame(index=adata.obs_names.copy()))
     work.obsp["connectivities"] = graph
-    if method == "leiden":
-        sc.tl.leiden(work, resolution=resolution, key_added="c", adjacency=graph)
-    else:
-        _louvain_igraph(work, resolution, "c")
+    _louvain_igraph(work, resolution, "c")
     return pd.Categorical(work.obs["c"])
 
 
