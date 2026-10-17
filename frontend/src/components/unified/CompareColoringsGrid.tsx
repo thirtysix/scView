@@ -220,6 +220,7 @@ export function CompareColoringsGrid({
         dataset?.name,
         `${prettyEmbeddingLabel(embedding || "embedding")}_compare_${columns.join("_")}`,
       )}
+      embedding={embedding}
       legend={
         <div className="flex flex-col gap-3 p-2">
           {columns.map((column, i) => (

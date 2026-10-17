@@ -146,6 +146,12 @@ describe("SplitScatterGrid", () => {
     expect(vs["split-0"]).toBe(vs["split-1"]);
   });
 
+  it("notes in its header that a UMAP's cluster gaps aren't distances", async () => {
+    renderGrid();
+    await screen.findByTestId("deck");
+    expect(screen.getByTestId("embedding-caveat")).toHaveTextContent("UMAP: gaps between clusters");
+  });
+
   it("links the cameras: panning one panel moves them all", async () => {
     renderGrid();
     await screen.findByTestId("deck");

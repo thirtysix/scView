@@ -18,6 +18,7 @@ import {
 } from "@/lib/centroidLabels";
 import { fitAvoiding } from "@/lib/scatterFit";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
+import { EmbeddingCaveat } from "@/components/plots/EmbeddingCaveat";
 
 interface EmbeddingScatterProps {
   positions: Float32Array | null;
@@ -75,6 +76,9 @@ interface EmbeddingScatterProps {
   /** Extra layers drawn over the points and labels, in data coordinates (the
    *  Trajectory panel's PAGA graph); the PNG download includes them */
   overlayLayers?: readonly Layer[] | null;
+  /** The embedding's obsm key: a UMAP or t-SNE gets a note that its cluster
+   *  gaps aren't distances, linking to the cluster-distance view */
+  embedding?: string | null;
 }
 
 function computeInitialViewState3D(
@@ -148,6 +152,7 @@ export function EmbeddingScatter({
   highlightCategory = null,
   overlayElement = null,
   overlayLayers = null,
+  embedding = null,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<DeckGLRef>(null);
@@ -702,6 +707,9 @@ export function EmbeddingScatter({
           Showing {(renderCount / 1000).toFixed(0)}K of {(totalCells / 1000).toFixed(0)}K cells (sampled)
         </div>
       )}
+
+      {/* UMAP / t-SNE: the gaps between clusters aren't distances */}
+      {!minimal && <EmbeddingCaveat embedding={embedding} className="absolute bottom-2 right-2 z-10" />}
 
       {/* Tooltip — suppressed when parent provides onHover (custom tooltip) */}
       {!minimal && tooltip && !onHover && (() => {

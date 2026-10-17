@@ -653,6 +653,7 @@ export function TrajectoryPanel() {
                       : null
                 }
                 overlayLayers={overlayLayers}
+                embedding={embedding}
               />
             )}
           </Panel>

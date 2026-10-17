@@ -156,6 +156,32 @@ export function subclusterGroup(
   });
 }
 
+/** Distances between a column's groups in the PCs the neighbour graph used. */
+export interface GroupDistances {
+  column: string;
+  /** Groups with cells, in the column's own order */
+  groups: string[];
+  sizes: number[];
+  /** distances[i][j]: Euclidean distance between the centroids of groups i and j */
+  distances: number[][];
+  /** Group indices in complete-linkage leaf order (similar groups adjacent) */
+  order: number[];
+  /** obsm key of the PCs (X_pca_harmony when the graph was built on them) */
+  representation: string;
+  n_pcs: number;
+  /** graph: the graph's own space; missing: the graph's space is not in the
+   *  file; no_graph: no neighbour graph recorded */
+  rep_source: "graph" | "missing" | "no_graph";
+  linkage: string;
+  metric: string;
+  /** Cells without a value (or with non-finite PCs), left out */
+  n_left_out: number;
+}
+
+export function getGroupDistances(datasetId: string, column: string): Promise<GroupDistances> {
+  return apiFetch(`/datasets/${datasetId}/clustering/distances?column=${encodeURIComponent(column)}`);
+}
+
 // --- Variable-gene sensitivity check (backend core/hvg_sensitivity.py) ---
 
 export type HvgFlavor = "seurat" | "cell_ranger" | "seurat_v3" | "pearson_residuals";

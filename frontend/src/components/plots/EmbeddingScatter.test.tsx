@@ -196,6 +196,19 @@ describe("EmbeddingScatter restored camera", () => {
   });
 });
 
+describe("EmbeddingScatter embedding caveat", () => {
+  it("notes on a UMAP that cluster gaps aren't distances, but not on PCA or the reference map", async () => {
+    const props = { positions, colorValues: null, colorType: "continuous" as const };
+    const { rerender } = render(<EmbeddingScatter {...props} embedding="X_umap" />);
+    await screen.findByTestId("deck");
+    expect(screen.getByTestId("embedding-caveat")).toHaveTextContent("UMAP: gaps between clusters");
+    rerender(<EmbeddingScatter {...props} embedding="X_pca" />);
+    expect(screen.queryByTestId("embedding-caveat")).toBeNull();
+    rerender(<EmbeddingScatter {...props} embedding="X_umap" minimal />);
+    expect(screen.queryByTestId("embedding-caveat")).toBeNull();
+  });
+});
+
 describe("EmbeddingScatter overlay layers", () => {
   it("draws a panel's overlay (the PAGA graph) over the points", async () => {
     const { ScatterplotLayer } = await import("@deck.gl/layers");

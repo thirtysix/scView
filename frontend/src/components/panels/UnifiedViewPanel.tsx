@@ -773,6 +773,7 @@ export function UnifiedViewPanel() {
                 showLabels={showLabels}
                 highlightCategory={labelHighlight}
                 overlayElement={splitActive ? null : legendColumn}
+                embedding={embedding}
               />
             )}
             {dimensions === 2 && !gridActive && (
@@ -950,6 +951,9 @@ export function UnifiedViewPanel() {
             violinGroupLabel={groupByColumn ? prettyObsLabel(groupByColumn) : groupByColumn}
             violinGroupColumn={groupByColumn}
             isLoading={isLoadingViolin}
+            datasetId={datasetId}
+            distanceColumn={labelCategories && colorColumnName ? colorColumnName : groupByColumn}
+            distanceColumns={categoricalColumns}
           />
         </div>
 

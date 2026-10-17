@@ -11,6 +11,7 @@ import {
 import { PointCloudLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { AlertTriangle, ImageDown, Loader2, RotateCcw, X } from "lucide-react";
 import type { ScatterLegend } from "@/lib/scatterExport";
+import { EmbeddingCaveat } from "@/components/plots/EmbeddingCaveat";
 import { centroidLabelLayers, labelViewOf, placeLabels, type GroupCentroid } from "@/lib/centroidLabels";
 import {
   SPLIT_CONTEXT_LAYER,
@@ -87,6 +88,8 @@ interface MultiPanelScatterProps {
   exportFilename: string;
   /** Content of the legend column; empty when UnifiedViewPanel floats its own there */
   legend?: ReactNode;
+  /** The embedding's obsm key: a UMAP or t-SNE gets the cluster-distance caveat in the header */
+  embedding?: string | null;
 }
 
 /**
@@ -115,6 +118,7 @@ export function MultiPanelScatter({
   exportLegend = null,
   exportFilename,
   legend,
+  embedding = null,
 }: MultiPanelScatterProps) {
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
@@ -335,6 +339,7 @@ export function MultiPanelScatter({
         <span className="truncate">{header}</span>
         {sampledBadge && <span className="flex-shrink-0 text-[10px] text-slate-400">{sampledBadge}</span>}
         <div className="flex-1" />
+        <EmbeddingCaveat embedding={embedding} className="flex-shrink-0 px-0" />
         {headerControls}
         <button
           onClick={resetView}

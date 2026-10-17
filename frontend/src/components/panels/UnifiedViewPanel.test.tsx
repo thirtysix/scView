@@ -10,7 +10,7 @@ import { useSelectionStore } from "@/stores/selectionStore";
 
 // The panel's scatter, data hook and side panels are stubbed: these tests look
 // at what the panel itself draws over the plot (tooltip) and hands the scatter.
-const { embedding, scatterProps, compareProps, apiFetch, stub } = vi.hoisted(() => ({
+const { embedding, scatterProps, compareProps, bottomProps, apiFetch, stub } = vi.hoisted(() => ({
   stub: (name: string) => () => ({ [name]: () => null }),
   embedding: {
     current: {
@@ -25,6 +25,7 @@ const { embedding, scatterProps, compareProps, apiFetch, stub } = vi.hoisted(() 
   },
   scatterProps: { current: null as Record<string, unknown> | null },
   compareProps: { current: null as Record<string, unknown> | null },
+  bottomProps: { current: null as Record<string, unknown> | null },
   apiFetch: vi.fn(),
 }));
 vi.mock("@/hooks/useEmbedding", () => ({ useEmbedding: () => embedding.current }));
@@ -36,7 +37,12 @@ vi.mock("@/components/plots/EmbeddingScatter", () => ({
 }));
 vi.mock("@/api/client", () => ({ apiFetch, apiFetchBinary: vi.fn() }));
 vi.mock("@/components/unified/UnifiedToolbar", stub("UnifiedToolbar"));
-vi.mock("@/components/unified/UnifiedBottomPanel", stub("UnifiedBottomPanel"));
+vi.mock("@/components/unified/UnifiedBottomPanel", () => ({
+  UnifiedBottomPanel: (props: Record<string, unknown>) => {
+    bottomProps.current = props;
+    return null;
+  },
+}));
 vi.mock("@/components/unified/UnifiedMarkersSubtab", stub("UnifiedMarkersSubtab"));
 vi.mock("@/components/unified/UnifiedExpressionSubtab", stub("UnifiedExpressionSubtab"));
 vi.mock("@/components/unified/UnifiedGeneSetsSubtab", stub("UnifiedGeneSetsSubtab"));
@@ -223,6 +229,16 @@ describe("Unified View group labels", () => {
     });
     renderPanel();
     expect(scatterProps.current!.showLabels).toBe(false);
+  });
+});
+
+describe("Unified View cluster distances", () => {
+  it("gives the scatter its embedding (for the UMAP caveat) and the distances the plot's grouping", () => {
+    useUnifiedViewStore.setState({ groupByColumn: "cell_type" });
+    renderPanel();
+    expect(scatterProps.current!.embedding).toBe("X_umap");
+    expect(bottomProps.current).toMatchObject({ datasetId: "kang", distanceColumn: "cell_type" });
+    expect((bottomProps.current!.distanceColumns as { name: string }[]).map((c) => c.name)).toEqual(["cell_type"]);
   });
 });
 

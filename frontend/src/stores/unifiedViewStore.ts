@@ -14,6 +14,8 @@ type ScatterOverlay =
 
 type Subtab = UnifiedSubtab;
 
+export type BottomView = "distribution" | "distances";
+
 /** A camera on one dataset's embedding. */
 export interface PlacedCamera {
   datasetId: string;
@@ -51,6 +53,11 @@ interface UnifiedViewState {
   bottomPanelOpen: boolean;
   toggleBottomPanel: () => void;
   openBottomPanel: () => void;
+  // What the panel under the scatter shows: the violin, or the distances
+  // between groups in PC space (the UMAP / t-SNE caveat opens it there).
+  bottomView: BottomView;
+  setBottomView: (view: BottomView) => void;
+  showDistances: () => void;
 
   activeGene: string | null;
   setActiveGene: (gene: string | null) => void;
@@ -116,7 +123,11 @@ export const useUnifiedViewStore = create<UnifiedViewState>((set) => ({
 
   bottomPanelOpen: false,
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
-  openBottomPanel: () => set({ bottomPanelOpen: true }),
+  // A new gene or score is shown in the violin, so it brings that view back.
+  openBottomPanel: () => set({ bottomPanelOpen: true, bottomView: "distribution" }),
+  bottomView: "distribution",
+  setBottomView: (view) => set({ bottomView: view }),
+  showDistances: () => set({ bottomPanelOpen: true, bottomView: "distances" }),
 
   activeGene: null,
   setActiveGene: (gene) => set({ activeGene: gene }),

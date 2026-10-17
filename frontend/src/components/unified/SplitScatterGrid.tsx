@@ -210,6 +210,7 @@ export function SplitScatterGrid({
       onHover={onHover}
       exportLegend={exportLegend}
       exportFilename={exportFilename(useDatasetStore.getState().currentDataset?.name, `${exportName}_split_${column}`)}
+      embedding={embedding}
     />
   );
 }
