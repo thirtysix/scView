@@ -259,7 +259,7 @@ def recorded(adata, reference: str | None = None) -> Recorded:
 
 
 def seurat_v3_available() -> bool:
-    """scanpy's seurat_v3 flavour fits a loess with scikit-misc, not in the image."""
+    """scanpy's seurat_v3 flavour fits a loess with scikit-misc (in the image since v0.17)."""
     return importlib.util.find_spec("skmisc") is not None
 
 

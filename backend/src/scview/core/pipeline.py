@@ -18,6 +18,7 @@ from typing import Any, Callable, Generator
 
 import anndata as ad
 import numpy as np
+import pandas as pd
 import scanpy as sc
 import scipy.sparse as sp
 
@@ -360,9 +361,41 @@ def _run_log_transform(adata: ad.AnnData, params: PipelineParams) -> None:
     logger.info("Applied log1p transformation")
 
 
-# Flavours offered in the UI. `seurat_v3` is deliberately absent: it needs
-# scikit-misc, which is not installed.
-HVG_FLAVORS: tuple[str, ...] = ("seurat", "cell_ranger")
+# Flavours offered in the UI. `seurat_v3` ranks the raw counts (loess via scikit-misc).
+HVG_FLAVORS: tuple[str, ...] = ("seurat", "cell_ranger", "seurat_v3")
+
+
+def _var_from_hvg_frame(adata: ad.AnnData, df: pd.DataFrame) -> None:
+    """Replace the variable-gene columns in ``var`` with one flavour's results."""
+    for col in ("dispersions", "dispersions_norm", "variances", "variances_norm",
+                "highly_variable_rank", "residual_variances"):  # another flavour's, now stale
+        if col in adata.var.columns and col not in df.columns:
+            del adata.var[col]
+    for col in df.columns:
+        adata.var[col] = df[col].to_numpy()
+    adata.var["highly_variable"] = adata.var["highly_variable"].astype(bool)
+
+
+def _seurat_v3_hvg(adata: ad.AnnData, params: PipelineParams, batch_key: str | None) -> dict[str, Any]:
+    """Variable genes ranked by the standardised variance of the counts (Seurat v3)."""
+    _keep_raw_counts(adata)
+    try:
+        counts, source = normalization.find_counts(adata)
+    except ValueError:
+        raise ValueError(
+            "The Seurat v3 flavour ranks raw counts (layers['counts'], .raw or X), and this "
+            "dataset has none: choose the Seurat or Cell Ranger flavour."
+        ) from None
+    tmp = ad.AnnData(X=counts, obs=adata.obs[[batch_key]] if batch_key else None)
+    tmp.var_names = adata.var_names
+    df = sc.pp.highly_variable_genes(
+        tmp, flavor="seurat_v3", n_top_genes=min(params.n_top_genes, adata.n_vars),
+        batch_key=batch_key, inplace=False,
+    )
+    _var_from_hvg_frame(adata, df)
+    logger.info("Selected %d highly variable genes (Seurat v3; counts from %s, batch_key=%s)",
+                int(adata.var["highly_variable"].sum()), source, batch_key)
+    return {"counts_source": source}
 
 
 def _pearson_hvg(adata: ad.AnnData, params: PipelineParams, batch_key: str | None) -> dict[str, Any]:
@@ -375,12 +408,7 @@ def _pearson_hvg(adata: ad.AnnData, params: PipelineParams, batch_key: str | Non
         tmp, flavor="pearson_residuals", n_top_genes=min(params.n_top_genes, adata.n_vars),
         batch_key=batch_key, theta=normalization.THETA, inplace=False,
     )
-    for col in ("dispersions", "dispersions_norm"):  # the other flavour's, now stale
-        if col in adata.var.columns:
-            del adata.var[col]
-    for col in df.columns:
-        adata.var[col] = df[col].to_numpy()
-    adata.var["highly_variable"] = adata.var["highly_variable"].astype(bool)
+    _var_from_hvg_frame(adata, df)
     logger.info("Selected %d highly variable genes (Pearson residuals; counts from %s, "
                 "batch_key=%s)", int(adata.var["highly_variable"].sum()), source, batch_key)
     return {"hvg_flavor": "pearson_residuals", "theta": normalization.THETA,
@@ -402,6 +430,8 @@ def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None
         raise ValueError(f"HVG batch key '{batch_key}' not found in obs columns.")
     if method == "pearson_residuals":
         return _pearson_hvg(adata, params, batch_key)
+    if params.hvg_flavor == "seurat_v3":
+        return _seurat_v3_hvg(adata, params, batch_key)
     sc.pp.highly_variable_genes(
         adata,
         n_top_genes=params.n_top_genes,

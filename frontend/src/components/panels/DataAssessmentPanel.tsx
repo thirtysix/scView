@@ -14,7 +14,7 @@ import { QcReportCard } from "@/components/panels/QcReportCard";
 import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfidenceCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
-import { flattenStepParams, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
+import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
   ClipboardCheck,
   Check,
@@ -174,7 +174,14 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
   ],
   highly_variable_genes: [
     { param: "n_top_genes", label: "N top genes", type: "number", min: 500, max: 10000, step: 100, default: 2000 },
-    { param: "hvg_flavor", label: "HVG flavor", type: "select", options: ["seurat", "cell_ranger"], default: "seurat" },
+    {
+      param: "hvg_flavor",
+      label: "HVG flavor",
+      type: "select",
+      options: ["seurat", "cell_ranger", "seurat_v3"],
+      optionLabels: HVG_FLAVOR_OPTION_LABELS,
+      default: "seurat",
+    },
     { param: "hvg_batch_key", label: "HVG batch column", type: "select", options: [], default: "" },
   ],
   pca: [
