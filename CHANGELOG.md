@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-17
+
 ### Changed
 - **The composition test moderates variances robustly, as propeller does.** limma's robust
   empirical Bayes (`eBayes(robust=TRUE)`) is now the default: a group whose sample-to-sample

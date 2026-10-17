@@ -10,7 +10,7 @@ name: scview
 
 services:
   backend:
-    image: ghcr.io/thirtysix/scview-backend:${SCVIEW_VERSION:-0.17.0}
+    image: ghcr.io/thirtysix/scview-backend:${SCVIEW_VERSION:-0.18.0}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -38,7 +38,7 @@ services:
       start_period: 120s
 
   frontend:
-    image: ghcr.io/thirtysix/scview-frontend:${SCVIEW_VERSION:-0.17.0}
+    image: ghcr.io/thirtysix/scview-frontend:${SCVIEW_VERSION:-0.18.0}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -49,7 +49,7 @@ services:
         condition: service_healthy
 
   converter:
-    image: ghcr.io/thirtysix/scview-converter:${SCVIEW_VERSION:-0.17.0}
+    image: ghcr.io/thirtysix/scview-converter:${SCVIEW_VERSION:-0.18.0}
     build:
       context: ./converter
       dockerfile: Dockerfile
