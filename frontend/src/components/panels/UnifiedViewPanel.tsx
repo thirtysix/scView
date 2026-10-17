@@ -188,14 +188,19 @@ export function UnifiedViewPanel() {
     setGroupByColumn(match?.name ?? categoricalColumns[0]!.name);
   }, [categoricalColumns, groupByColumn, dataset, setGroupByColumn]);
 
-  // --- View state for lasso ---
+  // --- The camera the user moved, linking the main plot and the cluster map ---
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(null);
 
   // The main plot's camera, kept in the store for "Save session"; a camera from
   // "Open session" is shown once this dataset and embedding are on screen.
   const setCamera = useUnifiedViewStore((s) => s.setCamera);
+  // The camera on screen, whatever set it (fit, reset, legend, user): the lasso
+  // reads it when it closes. A ref, so camera moves don't re-render the panel.
+  const shownCamera = useRef<Record<string, unknown> | null>(null);
+  const getShownCamera = useCallback(() => shownCamera.current, []);
   const handleCameraChange = useCallback(
     (vs: Record<string, unknown>, fitted: boolean) => {
+      shownCamera.current = vs;
       const camera = fitted ? null : cameraFromViewState(vs);
       setCamera(camera && datasetId ? { datasetId, embedding, camera } : null);
     },
@@ -208,7 +213,7 @@ export function UnifiedViewPanel() {
       ? (pendingCamera.camera as unknown as Record<string, unknown>)
       : null;
   const handleCameraRestored = useCallback(() => {
-    setViewState(restoreCamera); // the lasso and the cluster map follow it
+    setViewState(restoreCamera); // the cluster map follows it
     setPendingCamera(null);
   }, [restoreCamera, setPendingCamera]);
 
@@ -780,7 +785,7 @@ export function UnifiedViewPanel() {
               <LassoSelector
                 active={selectionMode === "lasso"}
                 positions={positions}
-                viewState={viewState}
+                getViewState={getShownCamera}
                 onSelectionComplete={handleSelectionComplete}
               />
             )}

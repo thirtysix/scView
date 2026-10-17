@@ -10,7 +10,7 @@ import { useSelectionStore } from "@/stores/selectionStore";
 
 // The panel's scatter, data hook and side panels are stubbed: these tests look
 // at what the panel itself draws over the plot (tooltip) and hands the scatter.
-const { embedding, scatterProps, compareProps, bottomProps, apiFetch, stub } = vi.hoisted(() => ({
+const { embedding, scatterProps, compareProps, bottomProps, lassoProps, apiFetch, stub } = vi.hoisted(() => ({
   stub: (name: string) => () => ({ [name]: () => null }),
   embedding: {
     current: {
@@ -26,6 +26,7 @@ const { embedding, scatterProps, compareProps, bottomProps, apiFetch, stub } = v
   scatterProps: { current: null as Record<string, unknown> | null },
   compareProps: { current: null as Record<string, unknown> | null },
   bottomProps: { current: null as Record<string, unknown> | null },
+  lassoProps: { current: null as Record<string, unknown> | null },
   apiFetch: vi.fn(),
 }));
 vi.mock("@/hooks/useEmbedding", () => ({ useEmbedding: () => embedding.current }));
@@ -50,7 +51,12 @@ vi.mock("@/components/unified/UnifiedEnrichmentSubtab", stub("UnifiedEnrichmentS
 vi.mock("@/components/unified/UnifiedDESubtab", stub("UnifiedDESubtab"));
 vi.mock("@/components/unified/ClusterReference", stub("ClusterReference"));
 vi.mock("@/components/unified/SplitScatterGrid", stub("SplitScatterGrid"));
-vi.mock("@/components/plots/LassoSelector", () => ({ LassoSelector: () => <div data-testid="lasso" /> }));
+vi.mock("@/components/plots/LassoSelector", () => ({
+  LassoSelector: (props: Record<string, unknown>) => {
+    lassoProps.current = props;
+    return <div data-testid="lasso" />;
+  },
+}));
 vi.mock("@/components/unified/CompareColoringsGrid", () => ({
   CompareColoringsGrid: (props: Record<string, unknown>) => {
     compareProps.current = props;
@@ -229,6 +235,21 @@ describe("Unified View group labels", () => {
     });
     renderPanel();
     expect(scatterProps.current!.showLabels).toBe(false);
+  });
+});
+
+describe("Unified View lasso", () => {
+  it("maps the lasso with the camera on screen, the automatic fit included", () => {
+    renderPanel();
+    const getViewState = lassoProps.current!.getViewState as () => unknown;
+    expect(getViewState()).toBeNull();
+    // The scatter reports every camera change: the fit (never a user move)...
+    const onCamera = scatterProps.current!.onCameraChange as (vs: unknown, fitted: boolean) => void;
+    act(() => onCamera({ target: [1, 1, 0], zoom: 3 }, true));
+    expect(getViewState()).toEqual({ target: [1, 1, 0], zoom: 3 });
+    // ...and a pan.
+    act(() => onCamera({ target: [4, 2, 0], zoom: 5 }, false));
+    expect(getViewState()).toEqual({ target: [4, 2, 0], zoom: 5 });
   });
 });
 

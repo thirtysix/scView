@@ -3,7 +3,9 @@ import { useCallback, useRef, useState } from "react";
 interface LassoSelectorProps {
   active: boolean;
   positions: Float32Array | null;
-  viewState: Record<string, unknown> | null;
+  /** The scatter's camera as shown when the lasso closes (the fit, a reset or
+   *  the user's own), read then rather than passed on every camera move */
+  getViewState: () => Record<string, unknown> | null;
   onSelectionComplete: (indices: Set<number>) => void;
 }
 
@@ -28,25 +30,24 @@ export function pointInPolygon(
 }
 
 /**
- * Convert screen-space coordinates (pixels) to data-space coordinates using
- * the orthographic view state from deck.gl.
+ * Convert screen-space coordinates (pixels from the plot's top-left) to
+ * data-space coordinates using the orthographic view state from deck.gl. The
+ * scatter's OrthographicView has flipY false: data y grows upwards while
+ * screen y grows downwards.
  */
-function screenToData(
+export function screenToData(
   screenX: number,
   screenY: number,
   viewState: Record<string, unknown>,
-  container: HTMLElement,
+  width: number,
+  height: number,
 ): [number, number] {
   const target = (viewState.target as number[]) ?? [0, 0, 0];
   const zoom = (viewState.zoom as number) ?? 0;
   const scale = Math.pow(2, zoom);
-  const rect = container.getBoundingClientRect();
 
-  const cx = rect.width / 2;
-  const cy = rect.height / 2;
-
-  const dataX = (screenX - cx) / scale + target[0]!;
-  const dataY = (screenY - cy) / scale + target[1]!;
+  const dataX = target[0]! + (screenX - width / 2) / scale;
+  const dataY = target[1]! - (screenY - height / 2) / scale;
 
   return [dataX, dataY];
 }
@@ -54,7 +55,7 @@ function screenToData(
 export function LassoSelector({
   active,
   positions,
-  viewState,
+  getViewState,
   onSelectionComplete,
 }: LassoSelectorProps) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -96,15 +97,16 @@ export function LassoSelector({
     if (!isDrawing || !active) return;
     setIsDrawing(false);
 
+    const viewState = getViewState();
     if (points.length < 3 || !positions || !viewState || !svgRef.current) {
       setPoints([]);
       return;
     }
 
     // Convert screen-space polygon to data-space
-    const container = svgRef.current;
+    const rect = svgRef.current.getBoundingClientRect();
     const dataPolygon: [number, number][] = points.map(([sx, sy]) =>
-      screenToData(sx, sy, viewState, container as unknown as HTMLElement),
+      screenToData(sx, sy, viewState, rect.width, rect.height),
     );
 
     // Find all cell indices inside the polygon
@@ -120,7 +122,7 @@ export function LassoSelector({
 
     onSelectionComplete(selected);
     setPoints([]);
-  }, [isDrawing, active, points, positions, viewState, onSelectionComplete]);
+  }, [isDrawing, active, points, positions, getViewState, onSelectionComplete]);
 
   if (!active) return null;
 
