@@ -97,17 +97,23 @@ def _block(counts, j0: int, j1: int, cells, genes, total, theta, clip) -> np.nda
 
 
 def pearson_residuals(
-    counts, theta: float = THETA, clip: float | None = None, chunk: int = _CHUNK
+    counts, theta: float = THETA, clip: float | None = None, chunk: int = _CHUNK,
+    columns=None,
 ) -> np.ndarray:
     """Analytic Pearson residuals of a cells x genes count matrix, as float32.
 
     The same values as ``sc.experimental.pp.normalize_pearson_residuals`` (cell and
     gene totals over the whole matrix, residuals clipped at +-sqrt(n_cells) by
     default), but built a block of genes at a time: scanpy holds several dense
-    float64 copies of the matrix at once (~4 GB for 14k cells x 14k genes)."""
+    float64 copies of the matrix at once (~4 GB for 14k cells x 14k genes).
+    ``columns`` (gene indices): only those genes' residuals, the cell totals
+    still taken over every gene, as the pipeline's PCA reads them."""
     n, g = counts.shape
     clip = default_clip(n) if clip is None else float(clip)
     cells, genes, total = _sums(counts)
+    if columns is not None:
+        columns = np.asarray(columns, dtype=np.int64)
+        counts, genes, g = counts[:, columns], genes[columns], columns.size
     out = np.empty((n, g), dtype=np.float32)
     for j0 in range(0, g, chunk):
         j1 = min(g, j0 + chunk)

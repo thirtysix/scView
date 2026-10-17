@@ -1,8 +1,11 @@
-"""Clustering resolution sweep (``core/resolution_sweep.py``).
+"""Clustering resolution sweep (``core/resolution_sweep.py``) and the
+variable-gene sensitivity check (``core/hvg_sensitivity.py``).
 
 ``GET /clustering/sweep`` says whether a sweep can run and with what defaults;
 ``POST /clustering/sweep`` streams one SSE ``result`` per resolution without
 changing the dataset; ``POST /clustering/keep`` saves one resolution's labels.
+``/clustering/hvg-sensitivity`` (GET, POST, POST ``/keep``) does the same for
+re-clustering under other variable-gene settings.
 """
 
 from __future__ import annotations
@@ -10,12 +13,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from scview.core import hvg_sensitivity as hs
 from scview.core import resolution_sweep as rs
 from scview.core import subcluster as sc_sub
 from scview.core.confounding import recorded_batch_key
@@ -49,6 +54,22 @@ class SubclusterRequest(BaseModel):
     column: str
     group: str
     resolution: float = sc_sub.DEFAULT_RESOLUTION
+
+
+class HvgSetting(BaseModel):
+    flavor: str
+    n_top_genes: int
+
+
+class HvgSensitivityRequest(BaseModel):
+    settings: list[HvgSetting] | None = None  # default hs.default_settings
+    reference: str | None = None  # default: the active clustering
+
+
+class HvgKeepRequest(BaseModel):
+    flavor: str
+    n_top_genes: int
+    reference: str | None = None
 
 
 def _method(adata, requested: str | None) -> str:
@@ -226,4 +247,175 @@ async def subcluster_group(
             await dm.load_dataset(dataset_id)
         else:
             dm.saved_in_place(dataset_id, adaptor, output_path)
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Variable-gene sensitivity check (core/hvg_sensitivity.py)
+# ---------------------------------------------------------------------------
+
+_hvg_running: set[str] = set()  # datasets with a check running: one at a time each
+
+
+def _hvg_limits() -> dict[str, Any]:
+    return {
+        "max_settings": hs.MAX_SETTINGS,
+        "min_genes": hs.MIN_GENES,
+        "max_genes": hs.MAX_GENES,
+        "max_cells": hs.MAX_CELLS,
+        "first_run_seconds": hs.FIRST_RUN_SECONDS,
+    }
+
+
+@router.get("/datasets/{dataset_id}/clustering/hvg-sensitivity")
+async def hvg_sensitivity_info(
+    dataset_id: str,
+    reference: str | None = Query(None),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Whether the check can run (and if not, why), what the dataset's clustering
+    was made with, the default settings and their time estimate."""
+    adata = (await _adata(dm, dataset_id)).adata
+
+    def _info() -> dict[str, Any]:
+        base = {"n_cells": int(adata.n_obs), "n_genes": int(adata.n_vars), **_hvg_limits()}
+        try:
+            hs.check(adata)
+            rec = hs.recorded(adata, reference)
+        except hs.SensitivityError as exc:
+            return {"available": False, "reason": str(exc), **base}
+        settings = hs.default_settings(adata, rec)
+        return {
+            "available": True,
+            "reason": None,
+            **base,
+            "recorded": rec.to_dict(),
+            "current": rec.current.to_dict(),
+            "default_settings": [s.to_dict() for s in settings],
+            "flavors": [{"flavor": f, "label": hs.FLAVOR_LABELS[f], "unavailable": why}
+                        for f, why in hs.flavors_available(adata).items()],
+            "estimate_seconds": hs.estimate_seconds(adata.n_obs, len(settings), rec),
+            "seconds_per_setting": hs.estimate_seconds(adata.n_obs, 1, rec),
+        }
+
+    # Finding the counts can copy a matrix (counts held in .raw): off the loop.
+    return await asyncio.to_thread(_info)
+
+
+@router.post("/datasets/{dataset_id}/clustering/hvg-sensitivity")
+async def run_hvg_sensitivity(
+    dataset_id: str,
+    body: HvgSensitivityRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Re-cluster under each variable-gene setting and stream the comparison with
+    the current clustering, leaving the dataset as it is.
+
+    Events: ``start`` (the recorded settings, the time estimate), one ``result``
+    per setting, then ``complete``, or ``error``. A client that goes away stops
+    the run before its next sub-step.
+    """
+    adata = (await _adata(dm, dataset_id)).adata
+    requested = [s.model_dump() for s in body.settings] if body.settings else None
+
+    def _plan():
+        hs.check(adata)
+        rec = hs.recorded(adata, body.reference)
+        return rec, hs.clean_settings(adata, rec, requested)
+
+    try:
+        rec, settings = await asyncio.to_thread(_plan)
+    except hs.SensitivityError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if dataset_id in _hvg_running:
+        raise HTTPException(status_code=409, detail="A variable-gene check is already running on this dataset.")
+
+    async def events():
+        if dataset_id in _hvg_running:  # another request started between the check and here
+            yield _sse("error", {"error": "A variable-gene check is already running on this dataset."})
+            return
+        _hvg_running.add(dataset_id)
+        stop = threading.Event()
+        gen = hs.iter_sensitivity(adata, settings, rec, stop=stop.is_set)
+        pending: asyncio.Future | None = None
+
+        def finish(fut: asyncio.Future | None = None) -> None:
+            if fut is not None and not fut.cancelled():
+                fut.exception()  # retrieved: a cancelled run is not an error
+            gen.close()
+            _hvg_running.discard(dataset_id)
+
+        try:
+            event = "start"
+            while True:
+                # Each setting runs in a worker thread: the server stays responsive.
+                # Shielded, so a client going away cancels this wait, not the
+                # thread's future, whose callback then releases the dataset.
+                pending = asyncio.ensure_future(asyncio.to_thread(next, gen, _DONE))
+                item = await asyncio.shield(pending)
+                pending = None
+                if item is _DONE:
+                    break
+                yield _sse(event, item)
+                event = "result"
+            yield _sse("complete", {})
+        except Exception as e:  # noqa: BLE001 — surface to the client, keep the server up
+            logger.error("Variable-gene check failed for %s: %s", dataset_id, e, exc_info=True)
+            yield _sse("error", {"error": str(e)})
+        finally:
+            stop.set()  # a thread mid-setting stops at its next sub-step
+            if pending is not None and not pending.done():
+                pending.add_done_callback(finish)
+            else:
+                finish()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/datasets/{dataset_id}/clustering/hvg-sensitivity/keep")
+async def keep_hvg_setting(
+    dataset_id: str,
+    body: HvgKeepRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Save one setting's clusters as ``scview_<method>_r<res>_hvg_<flavor>_<n>``
+    (unchanged when it exists): the labels the check showed, while still cached."""
+    async with dataset_lock(dataset_id):
+        adaptor = await _adata(dm, dataset_id)
+        adata = adaptor.adata
+        setting_in = [{"flavor": body.flavor, "n_top_genes": body.n_top_genes}]
+
+        def _plan():
+            hs.check(adata)
+            rec = hs.recorded(adata, body.reference)
+            return rec, hs.clean_settings(adata, rec, setting_in)[0]
+
+        try:
+            rec, setting = await asyncio.to_thread(_plan)
+        except hs.SensitivityError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        column = hs.column_name(rec, setting)
+        if column in adata.obs.columns:
+            return {"column": column, "created": False, "n_clusters": int(adata.obs[column].nunique())}
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+
+        def _run():
+            before = uns_snapshot(adata)
+            result = hs.keep(adata, setting, rec)
+            write_derived(adata, output_path, adaptor.h5ad_path, before)
+            return result
+
+        try:
+            # A cache miss re-runs the setting (seconds to a minute): in a worker thread.
+            result = await asyncio.to_thread(_run)
+        except Exception as exc:
+            dm.evict(dataset_id)  # the cached copy may hold the column without it being saved
+            logger.error("Keeping variable-gene setting %s failed for %s: %s", setting.key, dataset_id,
+                         exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Could not save the clustering: {exc!s}")
+        dm.saved_in_place(dataset_id, adaptor, output_path)
         return result
