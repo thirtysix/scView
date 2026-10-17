@@ -23,6 +23,7 @@ from scview.api.v1 import (
     ingest,
     integration,
     cells,
+    composition,
     normalization,
 )
 
@@ -49,3 +50,4 @@ api_router.include_router(integration.router, tags=["integration"])
 api_router.include_router(normalization.router, tags=["assessment"])
 api_router.include_router(activity.router, tags=["activity"])
 api_router.include_router(cells.router, tags=["cells"])
+api_router.include_router(composition.router, tags=["composition"])
