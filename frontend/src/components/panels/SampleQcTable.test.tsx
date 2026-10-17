@@ -32,8 +32,13 @@ function preview(): FilterPreview {
 
 const MAD: MadThresholds = {
   column: "Donor", reason: "donor", k: 5, k_mt: 3, ceiling_pct_mt: 20, min_sample_cells: 100,
-  samples: [{ name: "d1", n_cells: 1000, pooled: false, min_counts: 300, max_counts: 9000, min_genes: 200,
-    max_genes: 1500, max_pct_mt: 7, skipped: [], n_removed: 10 }],
+  samples: [
+    { name: "d1", n_cells: 1000, pooled: false, min_counts: 300, max_counts: 9000, min_genes: 200,
+      max_genes: 1500, max_pct_mt: 7, skipped: [], n_removed: 10 },
+    // The default: no upper bounds on counts / genes.
+    { name: "d2", n_cells: 1000, pooled: false, min_counts: 280, max_counts: null, min_genes: 190,
+      max_genes: null, max_pct_mt: 6.5, skipped: [], n_removed: 5 },
+  ],
   pooled: { n_cells: 2100, min_counts: 300, max_counts: 9000, min_genes: 200, max_genes: 1500, max_pct_mt: 7, skipped: [] },
   n_unlabelled: 0,
 };
@@ -83,6 +88,7 @@ describe("SampleQcTable", () => {
     fireEvent.click(screen.getByRole("button", { name: "Thresholds" }));
     const rows = within(screen.getByRole("table", { name: "Thresholds per sample" })).getAllByRole("row");
     expect(rows[1]!.textContent).toBe("d11,000300–9,000200–1,500< 7.010 (1.0%)");
+    expect(rows[2]!.textContent).toBe("d21,000≥ 280≥ 190< 6.55 (0.5%)");
   });
 
   it("says when there is nothing to compare or too many samples", () => {

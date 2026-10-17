@@ -77,6 +77,9 @@ describe("DataAssessmentPanel filtering mode", () => {
     expect(input("Min genes/cell")).toBeDisabled();
     expect(input("MADs for counts / genes")).not.toBeDisabled();
     expect(input("MADs for counts / genes")).toHaveValue(5);
+    const upper = input("Also cut high counts / genes"); // opt-in: the low tail only by default
+    expect(upper).not.toBeChecked();
+    expect(upper).not.toBeDisabled();
     expect(screen.getAllByText("Not used: per-sample MAD mode.")).toHaveLength(3);
     const samples = input("Samples");
     expect([...samples.querySelectorAll("option")].map((o) => o.textContent)).toEqual([
@@ -94,7 +97,8 @@ describe("DataAssessmentPanel filtering mode", () => {
     expect(input("Cell thresholds")).toHaveValue("fixed");
     expect(input("Min genes/cell")).not.toBeDisabled();
     expect(input("MADs for % mito")).toBeDisabled();
-    expect(screen.getAllByText("Not used: fixed cut-offs.")).toHaveLength(3);
+    expect(screen.getAllByText("Not used: fixed cut-offs.")).toHaveLength(4);
+    expect(input("Also cut high counts / genes")).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /re-run this step/i }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string)).toEqual({

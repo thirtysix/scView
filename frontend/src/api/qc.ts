@@ -215,10 +215,12 @@ export interface FilterThresholds {
   max_pct_mt: number;
   drop_doublets: boolean;
   qc_threshold_mode?: QcThresholdMode;
-  /** MADs from the median for counts and genes (log scale), both sides. */
+  /** MADs below the median for counts and genes (log scale); above too with `qc_mad_upper`. */
   qc_mad_k?: number;
   /** MADs above the median for % mito. */
   qc_mad_k_mt?: number;
+  /** Also cut counts / genes above the median + k MADs (opt-in: trims large cell types). */
+  qc_mad_upper?: boolean;
   /** The samples for MAD mode; "" = the one the backend detects. */
   qc_sample_column?: string;
 }
@@ -287,6 +289,8 @@ export interface MadThresholds {
   reason: string | null;
   k: number;
   k_mt: number;
+  /** The counts / genes upper bounds were on (null max_* bounds when off). */
+  upper?: boolean;
   ceiling_pct_mt: number | null;
   min_sample_cells: number;
   samples: MadSampleBounds[];
@@ -302,11 +306,15 @@ export interface FilterPreview {
   n_removed: number;
   n_kept: number;
   fraction_removed: number;
-  thresholds: Omit<FilterThresholds, "max_pct_mt" | "qc_mad_k" | "qc_mad_k_mt" | "qc_threshold_mode"> & {
+  thresholds: Omit<
+    FilterThresholds,
+    "max_pct_mt" | "qc_mad_k" | "qc_mad_k_mt" | "qc_mad_upper" | "qc_threshold_mode"
+  > & {
     max_pct_mt: number | null;
     mode?: QcThresholdMode;
     mad_k?: number;
     mad_k_mt?: number;
+    mad_upper?: boolean;
   };
   has_mt: boolean;
   /** The dataset has doublet calls, so "drop predicted doublets" has something to drop. */
@@ -342,6 +350,7 @@ export async function getFilterPreview(datasetId: string, t: FilterThresholds): 
   });
   if (t.qc_mad_k !== undefined) q.set("mad_k", String(t.qc_mad_k));
   if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
+  if (t.qc_mad_upper !== undefined) q.set("mad_upper", String(t.qc_mad_upper));
   if (t.qc_sample_column) q.set("sample_column", t.qc_sample_column);
   try {
     return await apiFetch<FilterPreview>(`/datasets/${datasetId}/qc/filter-preview?${q.toString()}`);

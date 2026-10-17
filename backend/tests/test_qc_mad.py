@@ -1,11 +1,12 @@
 """Per-sample MAD thresholds (core/qc_filter.py MAD mode) and the per-sample QC
 table (core/qc_groups.py sample_summary).
 
-MAD mode removes each sample's own outliers: log1p counts and genes outside
-median +/- k MADs, % mito above median + k_mt MADs or at the ceiling. The
-preview and the filtering step must judge with the same masks, small samples
-and unlabelled cells take the pooled bounds, a MAD of 0 sets no bound, and the
-run records the mode, k and the thresholds each sample got.
+MAD mode removes each sample's own outliers: log1p counts and genes below
+median - k MADs (and above median + k MADs when the upper bounds are opted in),
+% mito above median + k_mt MADs or at the ceiling. The preview and the filtering
+step must judge with the same masks, small samples and unlabelled cells take the
+pooled bounds, a MAD of 0 sets no bound, and the run records the mode, k and the
+thresholds each sample got.
 """
 
 from __future__ import annotations
@@ -26,7 +27,8 @@ from scview.core.pipeline import PipelineParams, _run_filtering, run_pipeline
 from scview.core.qc_filter import Thresholds
 
 API = "/api/v1"
-MAD = Thresholds(mode="mad", max_pct_mt=20.0)
+MAD = Thresholds(mode="mad", max_pct_mt=20.0)  # the default: low tails of counts and genes
+BOTH = Thresholds(mode="mad", max_pct_mt=20.0, mad_upper=True)  # + the opt-in upper bounds
 
 
 def _qc(groups: dict[str, int], depth: dict[str, float] | None = None,
@@ -64,18 +66,36 @@ def test_bounds_are_median_plus_minus_k_mads_of_log1p_per_sample():
     cells = per_cell_qc(a)
     samples = qc_filter.samples_of(a)
     assert (samples.column, samples.reason) == ("Donor", "donor")
-    b = qc_filter.mad_bounds(cells, MAD, samples)
+    b = qc_filter.mad_bounds(cells, BOTH, samples)
     d2 = a.obs["Donor"].to_numpy() == "d2"
     lo, hi = _log_bounds(cells["total_counts"][d2], 5)
     g = {row["name"]: row for row in b.groups}["d2"]
     assert g["min_counts"] == pytest.approx(math.expm1(lo), abs=0.05)
     assert g["max_counts"] == pytest.approx(math.expm1(hi), abs=0.05)
     assert not g["pooled"] and g["skipped"] == []
-    removed = qc_filter.removed_by(cells, MAD, None, b)
+    removed = qc_filter.removed_by(cells, BOTH, None, b)
     logc = np.log1p(cells["total_counts"])
     assert removed["min_counts"][d2].tolist() == (logc[d2] < lo).tolist()
     assert removed["max_counts"][d2].tolist() == (logc[d2] > hi).tolist()
     assert set(removed) == {"min_counts", "max_counts", "min_genes", "max_genes", "max_pct_mt"}
+
+
+def test_by_default_only_the_low_tail_of_counts_and_genes_is_cut():
+    a = _qc({"d1": 400, "d2": 400}, seed=2)
+    big = a.obs_names[:30]
+    a.obs.loc[big, "total_counts"] *= 20  # far above any sample's median + 5 MADs
+    a.obs.loc[big, "n_genes_by_counts"] *= 8
+    a.obs.loc["c40", ["total_counts", "n_genes_by_counts"]] = [60, 25]  # far below
+    cells = per_cell_qc(a)
+    removed, b = qc_filter.judge(a, cells, MAD)
+    assert set(removed) == {"min_counts", "min_genes", "max_pct_mt"}  # no max_* criteria
+    assert all(g["max_counts"] is None and g["max_genes"] is None for g in b.groups)
+    assert np.isinf(b.hi["total_counts"]).all() and np.isinf(b.hi["n_genes"]).all()
+    drop = ~qc_filter.keep_mask(removed, a.n_obs)
+    assert drop[40] and not drop[np.isin(a.obs_names, big)].any()
+    # Opted in, the same big cells go.
+    both, _ = qc_filter.judge(a, cells, BOTH)
+    assert both["max_counts"][np.isin(a.obs_names, big)].all()
 
 
 def test_a_cell_is_judged_against_its_own_sample():
@@ -146,7 +166,7 @@ def test_no_mito_genes_and_no_sample_column():
 def test_missing_values_are_not_removed():
     a = _qc({"d1": 300})
     a.obs.loc["c0", "total_counts"] = np.nan
-    removed, _ = qc_filter.judge(a, per_cell_qc(a), MAD, qc_filter.samples_of(a, "Donor"))
+    removed, _ = qc_filter.judge(a, per_cell_qc(a), BOTH, qc_filter.samples_of(a, "Donor"))
     assert not removed["min_counts"][0] and not removed["max_counts"][0]
 
 
@@ -166,7 +186,8 @@ def test_bad_modes_multipliers_and_too_many_samples_are_refused():
 def test_mode_defaults():
     assert PipelineParams().qc_threshold_mode == "mad"  # new runs
     t = Thresholds.from_params(PipelineParams())
-    assert (t.mode, t.mad_k, t.mad_k_mt, t.max_pct_mt) == ("mad", 5.0, 3.0, 20.0)
+    assert (t.mode, t.mad_k, t.mad_k_mt, t.max_pct_mt, t.mad_upper) == ("mad", 5.0, 3.0, 20.0, False)
+    assert Thresholds.from_params(PipelineParams(qc_mad_upper=True)).mad_upper
 
     class Old:  # anything without the new fields keeps the fixed cut-offs
         min_genes = 200
@@ -176,13 +197,24 @@ def test_mode_defaults():
 # --- the preview and the step ----------------------------------------------------
 
 
-def test_the_preview_is_what_the_mad_step_removes():
+def _tails(seed: int = 5) -> tuple[ad.AnnData, np.ndarray, np.ndarray]:
+    """Three samples (one small) with 40 doublet-like cells, 40 small ones and
+    doublet calls."""
     a = _qc({"d1": 500, "d2": 400, "d3": 50}, depth={"d2": 6000}, mito={"d3": 8.0})
-    rng = np.random.default_rng(5)
-    hit = rng.choice(a.n_obs, 40, replace=False)
-    a.obs.iloc[hit, a.obs.columns.get_loc("total_counts")] *= 12  # doublet-like
+    rng = np.random.default_rng(seed)
+    picks = rng.choice(a.n_obs, 80, replace=False)
+    high, low = picks[:40], picks[40:]
+    col = a.obs.columns.get_loc("total_counts")
+    a.obs.iloc[high, col] *= 12
+    a.obs.iloc[low, col] /= 12
     a.obs["predicted_doublet"] = np.arange(a.n_obs) % 97 == 0
-    params = PipelineParams(min_cells=0, drop_doublets=True, qc_mad_k=4.0)
+    return a, high, low
+
+
+@pytest.mark.parametrize("upper", [False, True])
+def test_the_preview_is_what_the_mad_step_removes(upper):
+    a, high, low = _tails()
+    params = PipelineParams(min_cells=0, drop_doublets=True, qc_mad_k=4.0, qc_mad_upper=upper)
     out = qc_filter.preview(a, per_cell_qc(a), Thresholds.from_params(params))
     kept, found = _run_filtering(a.copy(), params)
     gone = ~np.isin(a.obs_names, kept.obs_names)
@@ -191,7 +223,15 @@ def test_the_preview_is_what_the_mad_step_removes():
         s["name"]: s["n_removed"] for s in found["qc_thresholds"]["samples"]}
     assert out["mad"]["samples"] == found["qc_thresholds"]["samples"]
     assert out["thresholds"]["mode"] == "mad" and out["thresholds"]["mad_k"] == 4.0
-    assert set(out["by_criterion"]) >= {"max_counts", "doublets"}
+    assert out["thresholds"]["mad_upper"] is upper and out["mad"]["upper"] is upper
+    removed, _ = qc_filter.judge(a, per_cell_qc(a), Thresholds.from_params(params))
+    assert removed["min_counts"][low].sum() >= 35  # the low tail goes either way
+    if upper:
+        assert set(out["by_criterion"]) >= {"max_counts", "doublets"}
+        assert removed["max_counts"][high].sum() >= 35
+    else:  # nothing cuts the high tail of counts (doublet calls, mito or genes still may)
+        assert "max_counts" not in out["by_criterion"] and "max_genes" not in out["by_criterion"]
+        assert "max_counts" not in removed and not removed["min_counts"][high].any()
     json.dumps(out, allow_nan=False)  # no inf / nan reaches the browser
 
 
@@ -212,9 +252,11 @@ def test_the_run_records_the_mode_k_and_each_samples_thresholds():
     entry = provenance.read_provenance(out)["history"][-1]
     p = entry["params"]
     assert p["qc_threshold_mode"] == "mad" and (p["qc_mad_k"], p["qc_mad_k_mt"]) == (5.0, 3.0)
+    assert p["qc_mad_upper"] is False
     assert "min_genes" not in p  # not used in MAD mode, so not recorded
     applied = p["qc_thresholds"]
     assert applied["column"] == "Donor" and applied["ceiling_pct_mt"] == 20.0
+    assert applied["upper"] is False and applied["samples"][0]["max_counts"] is None
     assert [s["name"] for s in applied["samples"]] == ["d1", "d2"]
     assert sum(s["n_removed"] for s in applied["samples"]) == a.n_obs - out.n_obs
     assert {"min_counts", "max_counts", "min_genes", "max_genes", "max_pct_mt"} <= set(
@@ -236,13 +278,17 @@ def test_the_methods_text_gets_one_line_not_every_samples_bounds():
     out, _ = run_pipeline(a, ["filtering"], PipelineParams(min_cells=0))
     applied = provenance.read_provenance(out)["history"][-1]["params"]["qc_thresholds"]
     line = qc_filter.applied_summary(applied)
-    assert line.startswith("outliers beyond median +/- 5.0 MADs of log1p counts and genes")
+    assert line.startswith("outliers below median - 5.0 MADs of log1p counts and genes")
     assert "within each Donor (3 samples, 1 too small and judged on all cells)" in line
-    assert "counts per cell kept from" in line and "% mito below" in line
+    assert "counts per cell at least" in line and "% mito below" in line
     text = _methods_skeleton(SimpleNamespace(adata=out))
-    assert "cell thresholds: outliers beyond median" in text and "'skipped'" not in text
+    assert "cell thresholds: outliers below median" in text and "'skipped'" not in text
     pooled = dict(applied, column=None, samples=[])
     assert "over all cells (no sample column)" in qc_filter.applied_summary(pooled)
+
+    both, _ = run_pipeline(_qc({"d1": 300}), ["filtering"], PipelineParams(min_cells=0, qc_mad_upper=True))
+    line = qc_filter.applied_summary(provenance.read_provenance(both)["history"][-1]["params"]["qc_thresholds"])
+    assert line.startswith("outliers beyond median +/- 5.0 MADs") and "counts per cell kept from" in line
 
 
 def test_a_bad_mode_fails_the_step_not_the_run():
@@ -290,6 +336,18 @@ def test_filtering_again_with_the_same_settings_reuses_the_thresholds():
     assert out["mad"]["reused_from"] is None and out["n_removed"] > 0
     blank = _qc({"d1": 300})
     assert qc_filter.preview(blank, per_cell_qc(blank), MAD)["previous"] is None
+
+
+def test_reuse_needs_the_same_upper_setting_and_old_records_had_it_on():
+    a = _heavy_tailed()
+    once, _ = run_pipeline(a, ["filtering"], PipelineParams(min_cells=0))
+    rec = qc_filter.recorded_filtering(once)
+    cells, samples = per_cell_qc(once), qc_filter.samples_of(once)
+    assert qc_filter.mad_bounds(cells, MAD, samples, rec).reused_from is not None
+    assert qc_filter.mad_bounds(cells, BOTH, samples, rec).reused_from is None
+    del rec["qc_thresholds"]["upper"]  # a record from before the upper bounds were opt-in
+    assert qc_filter.mad_bounds(cells, MAD, samples, rec).reused_from is None
+    assert qc_filter.mad_bounds(cells, BOTH, samples, rec).reused_from is not None
 
 
 def test_a_malformed_record_is_not_reused():
@@ -395,6 +453,10 @@ async def test_preview_endpoint_takes_the_mode_k_and_sample_column(client, datas
     body = (await client.get(f"{API}/datasets/{did}/qc/filter-preview",
                              params={"mad_k": 3, "sample_column": "lane"})).json()
     assert body["thresholds"]["mad_k"] == 3.0 and body["mad"]["column"] == "lane"
+    assert body["thresholds"]["mad_upper"] is False and "max_counts" not in body["by_criterion"]
+    upper = (await client.get(f"{API}/datasets/{did}/qc/filter-preview",
+                              params={"mad_upper": "true"})).json()
+    assert upper["mad"]["upper"] is True and "max_counts" in upper["by_criterion"]
     fixed = (await client.get(f"{API}/datasets/{did}/qc/filter-preview",
                               params={"mode": "fixed", "min_genes": 10})).json()
     assert fixed["mad"] is None and set(fixed["by_criterion"]) == {"min_genes", "max_pct_mt"}

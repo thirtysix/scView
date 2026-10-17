@@ -126,12 +126,14 @@ function MadControls({
   const chosen = thresholds.qc_sample_column ?? "";
   const detected = !chosen && preview?.mad ? preview.mad.column : null;
   const mito = preview?.has_mt !== false;
+  const upper = Boolean(thresholds.qc_mad_upper);
   return (
     <div className="space-y-1 text-[11px] leading-relaxed text-slate-600" data-testid="mad-controls">
       <p>
-        Removes each sample&apos;s outliers: counts and genes per cell outside the median ±
+        Removes each sample&apos;s outliers: counts and genes per cell below the median{upper ? " ±" : " −"}
         {onChange ? <KInput label="MADs for counts and genes" value={k} onCommit={(v) => onChange({ qc_mad_k: v })} /> : ` ${k} `}
         MADs (log scale)
+        {upper ? " and above it" : ""}
         {mito && (
           <>
             , % mito above the median +
@@ -145,6 +147,17 @@ function MadControls({
         )}
         .
       </p>
+      {onChange && (
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={upper}
+            onChange={(e) => onChange({ qc_mad_upper: e.target.checked })}
+            className="h-3 w-3"
+          />
+          Also above the median + {k} MADs (mostly doublets; trims large cell types)
+        </label>
+      )}
       {onChange && (
         <label className="flex flex-wrap items-center gap-1.5">
           <span className="font-medium text-slate-500">Samples</span>

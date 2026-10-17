@@ -167,12 +167,20 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
       optionLabels: QC_MODE_OPTION_LABELS,
       default: "mad",
       help:
-        "Per-sample MAD (default): each sample's outliers, outside the median ± k MADs of log counts and " +
+        "Per-sample MAD (default): each sample's outliers, below the median − k MADs of log counts and " +
         "genes per cell, and % mito above the median + k MADs (single-cell best practices). Fixed: one set " +
         "of cut-offs for every cell.",
     },
     { param: "qc_mad_k", label: "MADs for counts / genes", type: "number", min: 1, max: 20, step: 0.5, default: 5, mode: "mad" },
     { param: "qc_mad_k_mt", label: "MADs for % mito", type: "number", min: 1, max: 20, step: 0.5, default: 3, mode: "mad" },
+    {
+      param: "qc_mad_upper",
+      label: "Also cut high counts / genes",
+      type: "boolean",
+      default: false,
+      mode: "mad",
+      help: "Above the median + k MADs: mostly doublets, but it also trims large cell types (DCs, erythrocytes).",
+    },
     { param: "qc_sample_column", label: "Samples", type: "select", options: [], default: "", mode: "mad" },
     { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200, mode: "fixed" },
     { param: "max_genes", label: "Max genes/cell (0 = off)", type: "number", min: 0, max: 20000, step: 100, default: 0, mode: "fixed" },
@@ -248,6 +256,7 @@ export function filterThresholds(set: Record<string, unknown> | undefined): Filt
     qc_threshold_mode: value("qc_threshold_mode") === "fixed" ? "fixed" : "mad",
     qc_mad_k: Number(value("qc_mad_k")),
     qc_mad_k_mt: Number(value("qc_mad_k_mt")),
+    qc_mad_upper: Boolean(value("qc_mad_upper")),
     qc_sample_column: String(value("qc_sample_column") ?? ""),
   };
 }
@@ -1279,7 +1288,7 @@ export function DataAssessmentPanel() {
                                           onChange={(e) =>
                                             setStepParam(step.key, pc.param, e.target.checked)
                                           }
-                                          disabled={running}
+                                          disabled={running || unused}
                                           className="h-3.5 w-3.5 rounded border-slate-300 text-blue-500 focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                         />
                                         <span>{currentVal ? "Yes" : "No"}</span>

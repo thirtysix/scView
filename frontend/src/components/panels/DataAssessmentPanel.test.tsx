@@ -92,7 +92,7 @@ describe("OpenInUnifiedView", () => {
 
 describe("filterThresholds", () => {
   it("takes the filtering step's params as set, else their defaults", () => {
-    const mad = { qc_threshold_mode: "mad", qc_mad_k: 5, qc_mad_k_mt: 3, qc_sample_column: "" };
+    const mad = { qc_threshold_mode: "mad", qc_mad_k: 5, qc_mad_k_mt: 3, qc_mad_upper: false, qc_sample_column: "" };
     expect(filterThresholds(undefined)).toEqual({
       min_genes: 200, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: false, ...mad,
     });

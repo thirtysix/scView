@@ -38,10 +38,12 @@ function columnMax(rows: FilterGroupLoss[], pick: (g: FilterGroupLoss) => number
   }, 0);
 }
 
-/** A count range a sample keeps: "312–9,870"; a side without a bound reads "any". */
+/** A count range a sample keeps: "312–9,870", or "≥ 312" with no upper bound (the
+ *  default: only the low tail is cut); a side without a bound reads "any". */
 function keptRange(lo: number | null, hi: number | null): string {
   if (lo === null && hi === null) return "any";
-  return `${lo === null ? "any" : bound(lo)}–${hi === null ? "any" : bound(hi)}`;
+  if (hi === null) return `≥ ${bound(lo)}`;
+  return `${lo === null ? "any" : bound(lo)}–${bound(hi)}`;
 }
 
 /** MAD mode: each sample's bounds and what they remove, in the samples' own order. */
