@@ -66,9 +66,10 @@ MAX_REFERENCE_GROUPS = 500
 STABLE = 0.75  # Jaccard: Hennig (2007), a cluster found again at 0.75 or more is stable
 PART = 0.1  # a new cluster holding this share of a cluster's cells is one of its parts
 
-# Time estimate (Kang copy, 13,836 cells, 2 cores, measured 2026-10-17).
+# Time estimate (Kang copy, 13,836 cells, 2 cores, measured 2026-10-17): 9-20 s a
+# setting once warm, 65 s for the five defaults; Harmony adds 0.3 s.
 SECONDS_PER_1K_CELLS = 1.0
-HARMONY_SECONDS_PER_1K_CELLS = 0.6
+HARMONY_SECONDS_PER_1K_CELLS = 0.05
 FIRST_RUN_SECONDS = 30.0  # numba compiling the neighbour search after a server start
 
 _DEFAULT_GENES = 2000
@@ -440,10 +441,14 @@ def _pcs(inp: _Inputs, mask: np.ndarray, s: Setting, rec: Recorded) -> np.ndarra
     idx = np.flatnonzero(mask)
     if s.flavor == "pearson_residuals":
         X = normalization.pearson_residuals(inp.counts, columns=idx)
-        sub = ad.AnnData(X=X)
     else:
         sub = ad.AnnData(X=inp.log[:, idx])
         sc.pp.scale(sub, max_value=10)
+        X = sub.X
+    # Column-major, as the pipeline's PCA reads the variable genes (a masked view
+    # of X): row-major moved Kang's PCA by one float32 step, enough to change a
+    # Harmony-corrected Leiden partition (ARI 0.85).
+    sub = ad.AnnData(X=np.asfortranarray(X))
     n_comps = max(2, min(rec.n_comps, sub.n_obs - 1, sub.n_vars - 1))
     sc.tl.pca(sub, n_comps=n_comps, svd_solver="arpack")
     return np.asarray(sub.obsm["X_pca"])

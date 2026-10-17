@@ -188,13 +188,15 @@ def test_the_log_matrix_is_the_pipelines_own_in_the_counts_dtype():
 
 
 def test_the_control_reproduces_the_dataset():
+    """Bit for bit: on Kang, a PCA one float32 step off (row-major input) changed
+    a Harmony-corrected Leiden partition (ARI 0.85)."""
     a = _processed()
     rec = hs.recorded(a)
     inp = hs._inputs(a, rec)
     mask, labels = hs.run_setting(inp, rec.current, rec)
     assert (mask == a.var["highly_variable"].to_numpy()).all()
     X = hs._pcs(inp, mask, rec.current, rec)
-    assert np.allclose(np.abs(X), np.abs(a.obsm["X_pca"]), atol=1e-6)
+    assert np.array_equal(X, a.obsm["X_pca"])
     assert adjusted_rand_score(a.obs[rec.reference], np.asarray(labels)) == 1.0
 
 
@@ -204,13 +206,17 @@ def test_the_pearson_control_reproduces_the_dataset():
     inp = hs._inputs(a, rec)
     mask, labels = hs.run_setting(inp, rec.current, rec)
     assert (mask == a.var["highly_variable"].to_numpy()).all()
+    assert np.array_equal(hs._pcs(inp, mask, rec.current, rec), a.obsm["X_pca"])
     assert adjusted_rand_score(a.obs[rec.reference], np.asarray(labels)) == 1.0
 
 
 def test_the_harmony_control_reproduces_the_dataset():
     a = _processed(steps=[*STEPS[:5], "batch_correction", *STEPS[5:]], batch_key="batch")
     rec = hs.recorded(a)
-    _, labels = hs.run_setting(hs._inputs(a, rec), rec.current, rec)
+    inp = hs._inputs(a, rec)
+    mask, labels = hs.run_setting(inp, rec.current, rec)
+    X = hs._harmony(hs._pcs(inp, mask, rec.current, rec), inp, rec)
+    assert np.array_equal(X, a.obsm["X_pca_harmony"])
     assert adjusted_rand_score(a.obs[rec.reference], np.asarray(labels)) == 1.0
 
 
