@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from scview.core import provenance
+from scview.core import protein, provenance
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion.bundling import UnitFormat, build_bundle
 from scview.core.ingestion.loading import IngestLoadError, load_unit
@@ -54,6 +54,19 @@ class IngestOptions(BaseModel):
     sample_label: str = "sample"
     apply_reconciliation: bool = True
     genes_in_rows: bool = True
+
+
+def _protein_params(adata) -> dict:
+    """The CITE-seq panel split off at load, for the ingest history entry."""
+    names = protein.protein_names(adata)
+    if not names:
+        return {}
+    return {"protein": {
+        "n_proteins": len(names),
+        "controls": [n for n in names if protein.is_control(n)],
+        "normalisation": "CLR per cell (Seurat margin = 2)",
+        "location": "obsm protein_counts / protein_clr",
+    }}
 
 
 class IngestSessionManager:
@@ -236,6 +249,7 @@ class IngestSessionManager:
                 params={
                     "formats": sorted({u.format.value for u in loadable}),
                     "genes_in_rows": opts.genes_in_rows,
+                    **_protein_params(adata),
                 },
             )
         except Exception as e:  # provenance must never block ingest
@@ -248,9 +262,12 @@ class IngestSessionManager:
             return next(iter(adatas.values()))
         plan = plan_merge(adatas)
         recon = plan.reconciliation if opts.apply_reconciliation else None
-        return merge_units(
+        protein.common_panel(list(adatas.values()))  # CITE-seq: the shared antibodies, or none
+        merged = merge_units(
             adatas, join=opts.join, sample_label=opts.sample_label, reconciliation=recon
         )
+        protein.renormalise(merged)
+        return merged
 
     def _persist_dataset(self, dataset_id: str, name: str, adata, originals: list[Path]) -> None:
         # Originals → uploads/{id}/ (read-only), the untouched source.

@@ -169,3 +169,29 @@ def values(adata: ad.AnnData, name: str, normalised: bool = True) -> np.ndarray:
     if not isinstance(m, pd.DataFrame) or name not in m.columns:
         raise KeyError(name)
     return m[name].to_numpy(dtype=np.float32)
+
+
+def common_panel(adatas: list[ad.AnnData]) -> list[str]:
+    """For a merge: keep the proteins every dataset measured (counts only; the
+    CLR is made again on the merged panel) and drop the modality from all of
+    them when one has none. Returns the shared panel ([] when dropped)."""
+    if not adatas or not all(COUNTS_KEY in a.obsm for a in adatas):
+        for a in adatas:
+            for key in (COUNTS_KEY, CLR_KEY):
+                a.obsm.pop(key, None)
+        return []
+    shared = [str(c) for c in adatas[0].obsm[COUNTS_KEY].columns
+              if all(c in a.obsm[COUNTS_KEY].columns for a in adatas[1:])]
+    for a in adatas:
+        a.obsm[COUNTS_KEY] = a.obsm[COUNTS_KEY][shared]
+        a.obsm.pop(CLR_KEY, None)
+    return shared
+
+
+def renormalise(adata: ad.AnnData) -> None:
+    """The CLR again from the counts (after a merge changed the panel)."""
+    m = adata.obsm.get(COUNTS_KEY)
+    if isinstance(m, pd.DataFrame) and m.shape[1] > 0:
+        adata.obsm[CLR_KEY] = pd.DataFrame(clr(m.to_numpy()), index=adata.obs_names, columns=list(m.columns))
+    else:
+        adata.obsm.pop(COUNTS_KEY, None)

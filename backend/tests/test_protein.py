@@ -107,3 +107,20 @@ def test_the_adaptor_reads_proteins_as_layers(tmp_path):
     assert by["genes"] == ["CD3"] and by["groups"] == ["a", "b"]
     ad.AnnData(np.ones((2, 2), dtype=np.float32)).write_h5ad(tmp_path / "plain.h5ad")
     assert AnnDataAdaptor(str(tmp_path / "plain.h5ad")).protein_info() is None
+
+
+def test_a_merge_keeps_the_shared_panel_and_renormalises():
+    a, _ = protein.split_features(_mixed(seed=1))
+    b, _ = protein.split_features(_mixed(seed=2))
+    b.obsm[protein.COUNTS_KEY] = b.obsm[protein.COUNTS_KEY][["CD19", "CD3"]]  # a smaller panel
+    assert protein.common_panel([a, b]) == ["CD3", "CD19"]
+    assert protein.CLR_KEY not in a.obsm and list(b.obsm[protein.COUNTS_KEY].columns) == ["CD3", "CD19"]
+    merged = ad.concat([a, b], index_unique="-")
+    protein.renormalise(merged)
+    assert list(merged.obsm[protein.CLR_KEY].columns) == ["CD3", "CD19"]
+    assert np.allclose(merged.obsm[protein.CLR_KEY].to_numpy(),
+                       protein.clr(merged.obsm[protein.COUNTS_KEY].to_numpy()))
+    # One dataset without antibodies: the modality goes from all of them.
+    c, _ = protein.split_features(_mixed(seed=3))
+    plain = _mixed()[:, :4].copy()
+    assert protein.common_panel([c, plain]) == [] and not protein.has_protein(c)
