@@ -318,7 +318,9 @@ def _register_transcriptome(dm, did: str = "big", n_genes: int = 15_000) -> str:
 
 async def test_a_whole_transcriptome_goes_by_the_de_results_id(client, dataset_manager):
     did = _register_transcriptome(dataset_manager)
-    r = await client.post(f"{API}/datasets/{did}/de", json={"indices": list(range(30)), "label": "A"})
+    # Every gene tested (min_pct 0), whatever the default detection cut-off.
+    r = await client.post(f"{API}/datasets/{did}/de",
+                          json={"indices": list(range(30)), "label": "A", "min_pct": 0})
     assert r.status_code == 200, r.text
     de = r.json()
     assert de["result_id"] and len(de["genes"]) == 15_000
@@ -336,6 +338,23 @@ async def test_a_whole_transcriptome_goes_by_the_de_results_id(client, dataset_m
     assert body["n_genes_ranked"] == 15_000
     assert _terms(body["up"])["HALLMARK_TOP"]["fdr"] < 0.05
     assert _terms(body["down"])["HALLMARK_BOTTOM"]["nes"] < 0
+    assert (body["de_min_pct"], body["de_n_genes_skipped"]) == (0.0, 0)
+
+
+async def test_gsea_of_a_prefiltered_de_result_ranks_its_tested_genes(client, dataset_manager):
+    did = _register_transcriptome(dataset_manager, n_genes=400)
+    r = await client.post(f"{API}/datasets/{did}/de",
+                          json={"indices": list(range(30)), "min_pct": 0.3})
+    de = r.json()
+    assert de["n_genes_skipped"] > 0
+    assert de["n_genes_tested"] + de["n_genes_skipped"] == 400
+    body = (await _gsea(client, did, de_result_id=de["result_id"])).json()
+    # The ranking holds only what the DE tested, and the response says why.
+    assert body["n_genes_ranked"] == len(de["genes"]) <= de["n_genes_tested"]
+    assert (body["de_min_pct"], body["de_n_genes_skipped"]) == (0.3, de["n_genes_skipped"])
+    # A gene list or a marker group carries no DE prefilter.
+    other = (await _gsea(client, did, genes=_de_genes())).json()
+    assert other["de_min_pct"] is None and other["de_n_genes_skipped"] is None
 
 
 async def test_an_unknown_or_foreign_result_id_is_404(client, dataset_manager):

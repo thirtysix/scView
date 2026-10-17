@@ -2,6 +2,7 @@ import type { DEResponse } from "@/api/de";
 import type { GseaGene, GseaRequest, GseaResponse, GseaTerm } from "@/api/enrichment";
 import { collectionLabel } from "@/api/genesets";
 import type { CsvCell } from "@/lib/csv";
+import { formatPct } from "@/lib/deDetection";
 import { formatPValue } from "@/lib/formatting";
 
 /**
@@ -72,10 +73,15 @@ export function describeGseaRun(d: GseaResponse): string {
   const fmt = (n: number) => n.toLocaleString("en-US");
   const out = d.n_excluded_ribo_mito > 0 ? ` (${fmt(d.n_excluded_ribo_mito)} ribosomal / mito left out)` : "";
   const took = d.cached ? "from cache" : `${d.seconds.toFixed(1)} s`;
+  // A prefiltered DE result ranks only the genes it tested.
+  const pre = d.de_min_pct
+    ? ` The DE tested only genes detected in at least ${formatPct(d.de_min_pct)} of either ` +
+      `group (${fmt(d.de_n_genes_skipped ?? 0)} left out), so only those are ranked.`
+    : "";
   return (
     `${fmt(d.n_genes_ranked)} genes ranked by ${d.rank_metric_label}${out}. ` +
     `${fmt(d.n_sets_tested)} gene sets with ${d.min_size}-${d.max_size} genes in the ranking, ` +
-    `${fmt(d.permutations)} permutations (${took}).`
+    `${fmt(d.permutations)} permutations (${took}).${pre}`
   );
 }
 

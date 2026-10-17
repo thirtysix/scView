@@ -130,6 +130,9 @@ export interface GseaResponse {
   column?: string;
   group?: string;
   warning?: string;
+  /** A stored DE result's detection prefilter: only the genes it tested are ranked. */
+  de_min_pct?: number | null;
+  de_n_genes_skipped?: number | null;
 }
 
 /** Preranked GSEA (gseapy prerank) of a DE result or a marker group. */

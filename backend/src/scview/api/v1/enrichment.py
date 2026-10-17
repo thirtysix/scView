@@ -243,6 +243,10 @@ class GseaResponse(BaseModel):
     column: str = ""
     group: str = ""
     warning: str = ""
+    # A stored DE result's detection prefilter (core/de_prefilter.py): the
+    # ranking holds only the genes that DE tested.
+    de_min_pct: float | None = None
+    de_n_genes_skipped: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -882,6 +886,15 @@ def _gsea_ranking(dataset_id: str, adaptor, body: GseaRequest) -> gsea.Ranking:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+def _de_prefilter_fields(dataset_id: str, body: GseaRequest) -> dict:
+    """A stored DE result's detection prefilter, for the response (none for the
+    other sources)."""
+    stored = de_results.recall(dataset_id, body.de_result_id) if body.de_result_id else None
+    if stored is None or stored.min_pct is None:
+        return {}
+    return {"de_min_pct": stored.min_pct, "de_n_genes_skipped": stored.n_skipped}
+
+
 def _collections_fingerprint(collections: list[str], store) -> list[str]:
     """Collection ids for the cache key; a custom collection can be edited, so its
     current contents count too (MSigDB files are versioned and fixed)."""
@@ -901,6 +914,7 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
     if loader is None and not any(is_custom_id(c) for c in body.collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
     ranking = _gsea_ranking(dataset_id, adaptor, body)
+    prefilter = _de_prefilter_fields(dataset_id, body)
 
     params = {
         "min_size": body.min_size, "max_size": body.max_size,
@@ -967,6 +981,7 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
         column=body.column if body.group else "",
         group=body.group,
         warning=human_genesets_warning(detect_species(adaptor.adata)),
+        **prefilter,
     )
 
 

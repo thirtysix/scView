@@ -30,6 +30,10 @@ class StoredResult:
     pvals: np.ndarray
     stats: np.ndarray  # the test statistic; NaN where there is none
     method: str = "wilcoxon"  # or "pseudobulk"
+    # The DE's detection prefilter (core/de_prefilter.py): GSEA ranks and
+    # activity scores only the genes it tested, so their responses say so.
+    min_pct: float | None = None
+    n_skipped: int = 0
 
     def rows(self) -> list[dict[str, Any]]:
         """The genes as GSEA takes them (core/gsea.py ranking_from_de). GSEA ranks
@@ -57,9 +61,16 @@ _results: OrderedDict[str, StoredResult] = OrderedDict()
 _lock = threading.Lock()
 
 
-def remember(dataset_id: str, genes: Iterable[Any], method: str = "wilcoxon") -> str:
+def remember(
+    dataset_id: str,
+    genes: Iterable[Any],
+    method: str = "wilcoxon",
+    min_pct: float | None = None,
+    n_skipped: int = 0,
+) -> str:
     """Keep a DE result's genes (objects with gene, logfoldchange, pval and an
-    optional stat); returns the id to ask for them by."""
+    optional stat) and the prefilter that chose them; returns the id to ask for
+    them by."""
     rows = list(genes)
     stored = StoredResult(
         dataset_id=dataset_id,
@@ -70,6 +81,8 @@ def remember(dataset_id: str, genes: Iterable[Any], method: str = "wilcoxon") ->
             [np.nan if getattr(g, "stat", None) is None else g.stat for g in rows], dtype=np.float64
         ),
         method=method,
+        min_pct=min_pct,
+        n_skipped=n_skipped,
     )
     result_id = uuid.uuid4().hex
     with _lock:

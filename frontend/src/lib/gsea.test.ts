@@ -77,6 +77,14 @@ describe("describeGseaRun", () => {
     expect(text).toContain("163 ribosomal / mito left out");
     expect(text).toContain("50 gene sets with 15-500 genes in the ranking, 1,000 permutations (1.6 s)");
     expect(describeGseaRun({ ...RUN, cached: true, seconds: 0 })).toContain("(from cache)");
+    expect(text).not.toContain("detected in");
+  });
+
+  it("says when the DE behind it tested only the genes detected in enough cells", () => {
+    expect(describeGseaRun({ ...RUN, de_min_pct: 0.1, de_n_genes_skipped: 5930 })).toContain(
+      "The DE tested only genes detected in at least 10% of either group (5,930 left out), so only those are ranked.",
+    );
+    expect(describeGseaRun({ ...RUN, de_min_pct: 0, de_n_genes_skipped: 0 })).not.toContain("detected in");
   });
 });
 
