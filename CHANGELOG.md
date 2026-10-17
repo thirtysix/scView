@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-17
+
 ### Added
 - **Claims ledger under every co-pilot answer.** Each sentence that states a number, names a
   gene or cites a fact is checked against the text of the fact it cites, for free and without a
