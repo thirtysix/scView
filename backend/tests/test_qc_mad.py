@@ -1,4 +1,5 @@
-"""Per-sample MAD thresholds (core/qc_filter.py MAD mode).
+"""Per-sample MAD thresholds (core/qc_filter.py MAD mode) and the per-sample QC
+table (core/qc_groups.py sample_summary).
 
 MAD mode removes each sample's own outliers: log1p counts and genes outside
 median +/- k MADs, % mito above median + k_mt MADs or at the ceiling. The
@@ -19,7 +20,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from scview.core import provenance, qc_filter
+from scview.core import provenance, qc_filter, qc_groups
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.pipeline import PipelineParams, _run_filtering, run_pipeline
 from scview.core.qc_filter import Thresholds
@@ -306,6 +307,47 @@ def test_the_mad_preview_is_fast_at_200k_cells():
     assert len(out["mad"]["samples"]) == 16 and len(out["samples"]["groups"]) == 16
     assert took < 1.0, f"{took:.3f} s"
     assert len(json.dumps(out)) < 60_000
+
+
+# --- the per-sample QC table -----------------------------------------------------
+
+
+def test_sample_medians_and_range_flags():
+    a = _qc({"d1": 500, "d2": 500, "d3": 500, "d4": 500, "poor": 500, "few": 30},
+            depth={"poor": 400}, mito={"d4": 12.0})
+    cells = per_cell_qc(a)
+    names, codes = qc_groups.group_codes(a.obs["Donor"])
+    s = qc_groups.sample_summary(cells, names, codes, qc_filter.MIN_SAMPLE_CELLS)
+    rows = {r["name"]: r for r in s["rows"]}
+    d1 = a.obs["Donor"].to_numpy() == "d1"
+    assert rows["d1"]["median_genes"] == pytest.approx(np.median(cells["n_genes"][d1]), abs=0.01)
+    assert rows["d1"]["n_cells"] == 500 and rows["d1"]["flags"] == []
+    assert {"low_counts", "low_genes"} <= set(rows["poor"]["flags"])
+    assert rows["d4"]["flags"] == ["high_mito"]
+    assert "few_cells" in rows["few"]["flags"] and rows["few"]["reasons"][0].startswith("Few cells")
+    assert s["compared"] and set(s["typical"]) == {"median_genes", "median_counts", "median_pct_mt"}
+
+
+def test_near_identical_samples_do_not_flag_and_two_are_not_compared():
+    a = _qc({f"d{i}": 400 for i in range(5)}, depth={"d0": 2100, "d1": 1900})
+    names, codes = qc_groups.group_codes(a.obs["Donor"])
+    s = qc_groups.sample_summary(per_cell_qc(a), names, codes, 100)
+    assert all(r["flags"] == [] for r in s["rows"])  # 5 % depth differences: under the floors
+    b = _qc({"d1": 400, "d2": 400}, depth={"d2": 400})
+    names, codes = qc_groups.group_codes(b.obs["Donor"])
+    s = qc_groups.sample_summary(per_cell_qc(b), names, codes, 100)
+    assert not s["compared"] and all(r["flags"] == [] for r in s["rows"])
+
+
+def test_the_preview_carries_the_table():
+    a = _qc({"d1": 400, "d2": 400, "d3": 400, "low": 400}, depth={"low": 300}, mt=False)
+    a.obs["pct_counts_mt"] = 0.0
+    out = qc_filter.preview(a, per_cell_qc(a), MAD)
+    groups = {g["name"]: g for g in out["samples"]["groups"]}
+    assert "median_pct_mt" not in groups["d1"]  # no MT- genes: not measurable
+    assert {"low_counts", "low_genes"} <= set(groups["low"]["flags"])
+    assert groups["d1"]["n_removed"] == out["mad"]["samples"][0]["n_removed"]
+    assert out["samples"]["typical"]["median_genes"] > 0 and out["samples"]["flag_help"]
 
 
 # --- the endpoints ---------------------------------------------------------------

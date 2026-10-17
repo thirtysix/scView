@@ -5,6 +5,10 @@ cluster of damaged cells. Here each group's per-cell QC values (genes and counts
 per cell, % mito when measurable) are summarised for violins, and the
 counts-vs-genes scatter is sampled with each point's group, for colouring.
 
+``sample_summary`` is the per-sample table beside the QC filter: each sample's
+cells and median genes, counts and % mito, flagged when a median sits far from
+the other samples' or the sample has few cells.
+
 The payload does not grow with the cell count: a group's distribution is sent as
 its quantiles (``N_QUANTILES`` values from 0 to 100 %), not as its cells, and the
 scatter is a sample stratified by group. Plotly draws a violin from those values
@@ -106,6 +110,109 @@ def members(codes: np.ndarray, k: int) -> list[np.ndarray]:
     starts = np.searchsorted(ordered, np.arange(k), side="left")
     ends = np.searchsorted(ordered, np.arange(k), side="right")
     return [idx[s:e] for s, e in zip(starts, ends)]
+
+
+# Sample medians judged against the median of all sample medians, with the MAD
+# around it scaled to a standard deviation; floors on that spread in each metric's
+# own units, as cluster QC has them, so near-identical samples never flag.
+_MAD_TO_SD = cluster_qc._MAD_TO_SD
+_Z_RANGE = 3.0
+_RANGE_FLOOR = {"genes": 0.05, "counts": 0.05, "pct_mt": 1.0}  # log1p, log1p, % points
+FEW_CELLS_SHARE = 0.1  # a sample under a tenth of the median sample size is "few cells"
+MIN_SAMPLES_TO_COMPARE = cluster_qc.MIN_GROUPS
+
+SAMPLE_FLAG_HELP = {
+    "few_cells": "Far fewer cells than a typical sample: its medians, and any thresholds "
+                 "of its own, rest on few cells.",
+    "low_genes": "Median genes per cell far below the other samples: a poor capture, or "
+                 "a different cell mix.",
+    "high_genes": "Median genes per cell far above the other samples: deeper sequencing, "
+                  "or many doublets.",
+    "low_counts": "Median counts per cell far below the other samples: shallow "
+                  "sequencing or a poor capture.",
+    "high_counts": "Median counts per cell far above the other samples: deeper "
+                   "sequencing, or many doublets.",
+    "high_mito": "Median % mitochondrial far above the other samples: stressed or "
+                 "damaged cells in that sample.",
+}
+
+
+def _robust_z(values: np.ndarray, floor: float) -> np.ndarray:
+    finite = values[np.isfinite(values)]
+    if finite.size < MIN_SAMPLES_TO_COMPARE:
+        return np.zeros_like(values)
+    med = float(np.median(finite))
+    mad = float(np.median(np.abs(finite - med)))
+    return (values - med) / max(_MAD_TO_SD * mad, floor)
+
+
+def sample_summary(cells: dict, names: list[str], codes: np.ndarray, min_cells: int) -> dict:
+    """Per sample: cells and median genes, counts and % mito per cell, with range
+    flags for a sample whose median is more than 3 MADs from the median of the
+    sample medians (3 or more samples), or which has few cells (under
+    ``min_cells``, or a tenth of the median sample size).
+
+    ``codes`` as ``group_codes`` gives them for ``names``; ``cells`` is
+    ``per_cell_qc``'s output. Returns ``{"rows": [...], "typical": {...}}``."""
+    k = len(names)
+    groups = members(codes, k)
+    has_mt = bool(cells.get("has_mt", True)) and cells.get("pct_mt") is not None
+    metrics = {"genes": cells["n_genes"], "counts": cells["total_counts"]}
+    if has_mt:
+        metrics["pct_mt"] = cells["pct_mt"]
+    medians: dict[str, np.ndarray] = {}
+    for name, raw in metrics.items():
+        values = np.asarray(raw, dtype=np.float64)
+        med = np.full(k, np.nan)
+        for i, m in enumerate(groups):
+            v = values[m]
+            v = v[np.isfinite(v)]
+            if v.size:
+                med[i] = float(np.median(v))
+        medians[name] = med
+    sizes = np.array([m.size for m in groups], dtype=np.int64)
+
+    z = {} if k < MIN_SAMPLES_TO_COMPARE else {
+        name: _robust_z(np.log1p(med) if name != "pct_mt" else med, _RANGE_FLOOR[name])
+        for name, med in medians.items()
+    }
+    typical = {f"median_{n}": round(float(np.nanmedian(v)), 2) for n, v in medians.items()
+               if np.isfinite(v).any()}
+    typical_size = float(np.median(sizes)) if k else 0.0
+    few_cut = max(min_cells, FEW_CELLS_SHARE * typical_size)
+    word = {"genes": "genes per cell", "counts": "counts per cell", "pct_mt": "% mito"}
+    stem = {"genes": "genes", "counts": "counts", "pct_mt": "mito"}
+
+    def fmt(name: str, v: float) -> str:
+        return f"{v:.1f}%" if name == "pct_mt" else f"{v:,.0f}"
+
+    rows = []
+    for i, name in enumerate(names):
+        flags, reasons = [], []
+        n = int(sizes[i])
+        if n < few_cut:
+            flags.append("few_cells")
+            reasons.append(f"Few cells: {n:,} against a median of {typical_size:,.0f} per sample.")
+        for metric, zs in z.items():
+            v, t = medians[metric][i], typical.get(f"median_{metric}")
+            if not np.isfinite(zs[i]) or t is None:
+                continue
+            side = "high" if zs[i] > _Z_RANGE else "low" if zs[i] < -_Z_RANGE else None
+            if side is None or (metric == "pct_mt" and side == "low"):
+                continue
+            flags.append(f"{side}_{stem[metric]}")
+            reasons.append(f"Median {word[metric]} {fmt(metric, v)} against {fmt(metric, t)} "
+                           f"across samples (over {_Z_RANGE:.0f} MADs {'above' if side == 'high' else 'below'}).")
+        rows.append({
+            "name": name,
+            "n_cells": n,
+            **{f"median_{m}": (round(float(v[i]), 2) if np.isfinite(v[i]) else None)
+               for m, v in medians.items()},
+            "flags": flags,
+            "reasons": reasons,
+        })
+    return {"rows": rows, "typical": typical, "flag_help": SAMPLE_FLAG_HELP,
+            "compared": k >= MIN_SAMPLES_TO_COMPARE}
 
 
 def _quantiles(values: np.ndarray, k: int) -> list[float]:

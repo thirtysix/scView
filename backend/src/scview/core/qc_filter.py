@@ -460,8 +460,9 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
     donor / sample column, else a batch column) and per cluster (the active
     clustering), plus warnings for groups it empties or more than halves.
 
-    In MAD mode ``mad`` holds each sample's thresholds (``MadBounds.to_dict``),
-    the samples being the same groups.
+    Each sample also carries its QC medians and range flags
+    (``qc_groups.sample_summary``); in MAD mode ``mad`` holds each sample's
+    thresholds (``MadBounds.to_dict``), the samples being the same groups.
     ``previous`` is how scView last filtered the dataset, if it did.
 
     ``cells`` is ``AnnDataAdaptor.qc_per_cell()``. Raises ValueError for a named
@@ -476,6 +477,12 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
     c_reason = "requested" if cluster_column else ("clustering" if c_col else None)
     samples = _grouped(adata, samp.column, samp.reason, removed, drop, qc_groups.MAX_GROUPS,
                        coded=(samp.names, samp.codes))
+    if samples and samples["groups"]:
+        summary = qc_groups.sample_summary(cells, samp.names, samp.codes, MIN_SAMPLE_CELLS)
+        for g, row in zip(samples["groups"], summary["rows"]):
+            g.update({k: v for k, v in row.items() if k not in ("name", "n_cells")})
+        samples.update(typical=summary["typical"], flag_help=summary["flag_help"],
+                       compared=summary["compared"])
     clusters = None if c_col and c_col == samp.column else _grouped(
         adata, c_col, c_reason, removed, drop, MAX_CLUSTERS)
 
