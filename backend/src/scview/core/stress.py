@@ -19,8 +19,7 @@ from __future__ import annotations
 
 import logging
 
-from scview.core.gene_filters import is_ribo_mito
-from scview.core.ora_background import resolve_markers_key
+from scview.core.gene_filters import top_markers
 from scview.core.species import match_genes
 
 logger = logging.getLogger(__name__)
@@ -66,22 +65,8 @@ def signature_markers(adata, column: str) -> dict[str, list[str]] | None:
 
     None when ``column`` has no stored markers (nothing to check the score against).
     """
-    key = resolve_markers_key(adata.uns, column)
-    if key is None:
-        return None
-    try:
-        names = adata.uns[key]["names"]
-        groups = list(names.dtype.names)
-    except (KeyError, TypeError, AttributeError):
+    top = top_markers(adata, column, TOP_MARKERS)
+    if top is None:
         return None
     wanted = {g.upper() for g in STRESS_GENES}
-    out: dict[str, list[str]] = {}
-    for g in groups:
-        top: list[str] = []
-        for x in names[g]:  # the full ranked list: stop once the top are in
-            if len(top) == TOP_MARKERS:
-                break
-            if not is_ribo_mito(str(x)):
-                top.append(str(x))
-        out[str(g)] = [x for x in top if x.upper() in wanted]
-    return out
+    return {g: [x for x in genes if x.upper() in wanted] for g, genes in top.items()}
