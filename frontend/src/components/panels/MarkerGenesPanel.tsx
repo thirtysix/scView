@@ -14,30 +14,27 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
+import type { MarkersResponse } from "@/api/markers";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
+import {
+  MARKER_CSV_HEADERS,
+  SPECIFICITY_HELP,
+  detectionRatio,
+  formatPct,
+  formatRatio,
+  formatTau,
+  hasSpecificity,
+  markerCsvRow,
+  sortMarkers,
+  type MarkerSortField,
+} from "@/lib/markerSpecificity";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
+import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { MAX_PLOT_GENES, mergeGeneLists, parseGeneList } from "@/lib/geneList";
 
-interface MarkerGene {
-  gene: string;
-  group: string;
-  /** null when scanpy's fold change was NaN. */
-  logfoldchange: number | null;
-  pval: number;
-  pval_adj: number;
-  pct_in?: number;
-  pct_out?: number;
-  score?: number;
-}
-
-interface MarkersResponse {
-  groups: string[];
-  markers: Record<string, MarkerGene[]>;
-}
-
-type SortField = "gene" | "logfoldchange" | "pval" | "pval_adj" | "pct_in" | "score";
+type SortField = MarkerSortField;
 type SortDir = "asc" | "desc";
 
 export function MarkerGenesPanel() {
@@ -99,58 +96,53 @@ export function MarkerGenesPanel() {
   // Fetch markers — first try pre-computed, then on-demand with groupbyColumn
   useEffect(() => {
     if (!datasetId) return;
+    // A request made before the default column was picked can answer after the
+    // column's own markers: only the latest run may set state.
+    let cancelled = false;
 
     setIsLoading(true);
     setError(null);
     setNoMarkers(false);
 
+    const show = (data: MarkersResponse) => {
+      if (cancelled) return;
+      setMarkersData(data);
+      setNoMarkers(false);
+      setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
+      initialFetchDone.current = true;
+    };
+    const fail = (err: unknown) => {
+      if (cancelled) return;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("404")) setNoMarkers(true);
+      else setError(msg);
+    };
+    const onDemand = () =>
+      apiFetch<MarkersResponse>(
+        `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupbyColumn)}`,
+      );
+
     // On initial load, try pre-computed markers first (no groupby_column)
     // On subsequent changes to groupbyColumn, compute on-the-fly
     const useOnDemand = initialFetchDone.current && groupbyColumn;
-    const url = useOnDemand
-      ? `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupbyColumn)}`
-      : `/datasets/${datasetId}/markers?format=json`;
+    const first = useOnDemand ? onDemand() : apiFetch<MarkersResponse>(`/datasets/${datasetId}/markers?format=json`);
 
-    apiFetch<MarkersResponse>(url)
-      .then((data) => {
-        setMarkersData(data);
-        setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
-        initialFetchDone.current = true;
-      })
+    first
+      .then(show)
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("404") && !useOnDemand) {
-          // No pre-computed markers — try on-demand if we have a groupby column
-          if (groupbyColumn) {
-            apiFetch<MarkersResponse>(
-              `/datasets/${datasetId}/markers?format=json&groupby_column=${encodeURIComponent(groupbyColumn)}`,
-            )
-              .then((data) => {
-                setMarkersData(data);
-                setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
-                initialFetchDone.current = true;
-              })
-              .catch((innerErr) => {
-                const innerMsg = innerErr instanceof Error ? innerErr.message : String(innerErr);
-                if (innerMsg.includes("404")) {
-                  setNoMarkers(true);
-                } else {
-                  setError(innerMsg);
-                }
-              })
-              .finally(() => setIsLoading(false));
-            return;
-          }
-          setNoMarkers(true);
-        } else if (msg.includes("404")) {
-          setNoMarkers(true);
-        } else {
-          setError(msg);
+        // No pre-computed markers — try on-demand if we have a groupby column
+        if (msg.includes("404") && !useOnDemand && groupbyColumn && !cancelled) {
+          return onDemand().then(show, fail);
         }
-        setIsLoading(false);
-        return;
+        fail(err);
       })
-      .then(() => setIsLoading(false));
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [datasetId, groupbyColumn]);
 
   // Current markers for selected group
@@ -166,47 +158,12 @@ export function MarkerGenesPanel() {
     return currentMarkers.filter((m) => m.gene.toLowerCase().includes(q));
   }, [currentMarkers, filterQuery]);
 
-  // Sorted markers
-  const sortedMarkers = useMemo(() => {
-    const sorted = [...filteredMarkers];
-    sorted.sort((a, b) => {
-      let aVal: number;
-      let bVal: number;
-
-      switch (sortField) {
-        case "gene":
-          return sortDir === "asc"
-            ? a.gene.localeCompare(b.gene)
-            : b.gene.localeCompare(a.gene);
-        case "logfoldchange":
-          aVal = a.logfoldchange ?? 0;
-          bVal = b.logfoldchange ?? 0;
-          break;
-        case "pval":
-          aVal = a.pval;
-          bVal = b.pval;
-          break;
-        case "pval_adj":
-          aVal = a.pval_adj;
-          bVal = b.pval_adj;
-          break;
-        case "pct_in":
-          aVal = a.pct_in ?? 0;
-          bVal = b.pct_in ?? 0;
-          break;
-        case "score":
-          aVal = a.score ?? 0;
-          bVal = b.score ?? 0;
-          break;
-        default:
-          return 0;
-      }
-
-      return sortDir === "asc" ? aVal - bVal : bVal - aVal;
-    });
-
-    return sorted;
-  }, [filteredMarkers, sortField, sortDir]);
+  // Sorted markers; a missing value sorts last either way.
+  const sortedMarkers = useMemo(
+    () => sortMarkers(filteredMarkers, sortField, sortDir),
+    [filteredMarkers, sortField, sortDir],
+  );
+  const specificity = useMemo(() => hasSpecificity(currentMarkers), [currentMarkers]);
 
   // Handle sort click
   const handleSort = useCallback(
@@ -252,17 +209,8 @@ export function MarkerGenesPanel() {
     if (sortedMarkers.length === 0) return;
     downloadCsv(
       `markers_${selectedGroup}_${datasetId}.csv`,
-      ["gene", "group", "log_fold_change", "p_value", "p_value_adjusted", "pct_in", "pct_out", "score"],
-      sortedMarkers.map((m) => [
-        m.gene,
-        m.group,
-        formatFoldChange(m.logfoldchange, 4, ""),
-        m.pval.toExponential(4),
-        m.pval_adj.toExponential(4),
-        m.pct_in?.toFixed(3) ?? "",
-        m.pct_out?.toFixed(3) ?? "",
-        m.score?.toFixed(4) ?? "",
-      ]),
+      MARKER_CSV_HEADERS,
+      sortedMarkers.map(markerCsvRow),
     );
   }, [sortedMarkers, selectedGroup, datasetId]);
 
@@ -529,7 +477,28 @@ export function MarkerGenesPanel() {
           />
         </div>
       ) : (
-      /* Marker genes table */
+      <div className="space-y-4">
+      {specificity && (
+        <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="mb-1 flex items-baseline gap-2">
+            <h3 className="text-sm font-semibold text-slate-700">
+              Specificity vs fold change: {selectedGroup}
+            </h3>
+            <span className="text-xs text-slate-400">
+              Top right: strong and found in this group only. A strong marker low on the plot is
+              shared with other groups.
+            </span>
+          </div>
+          <MarkerSpecificityPlot
+            markers={currentMarkers}
+            name={selectedGroup}
+            onGeneClick={handleGeneClick}
+            height={260}
+            maxLabels={10}
+          />
+        </div>
+      )}
+      {/* Marker genes table */}
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="max-h-[600px] overflow-auto">
           <table className="w-full text-sm">
@@ -576,6 +545,32 @@ export function MarkerGenesPanel() {
                     % In {sortIcon("pct_in")}
                   </span>
                 </th>
+                {specificity && (
+                  <>
+                    <th
+                      onClick={() => handleSort("tau")}
+                      title={SPECIFICITY_HELP.tau}
+                      className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                    >
+                      <span className="flex items-center justify-end gap-1">Tau {sortIcon("tau")}</span>
+                    </th>
+                    <th
+                      title={SPECIFICITY_HELP.detection}
+                      className="px-4 py-2.5 text-right font-medium text-slate-600"
+                    >
+                      % Next group
+                    </th>
+                    <th
+                      onClick={() => handleSort("pct_ratio")}
+                      title={SPECIFICITY_HELP.ratio}
+                      className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                    >
+                      <span className="flex items-center justify-end gap-1">
+                        Detection ratio {sortIcon("pct_ratio")}
+                      </span>
+                    </th>
+                  </>
+                )}
                 {currentMarkers.some((m) => m.score != null) && (
                   <th
                     onClick={() => handleSort("score")}
@@ -630,6 +625,22 @@ export function MarkerGenesPanel() {
                     <td className="px-4 py-2 text-right tabular-nums text-slate-600">
                       {marker.pct_in != null ? `${(marker.pct_in * 100).toFixed(1)}%` : "-"}
                     </td>
+                    {specificity && (
+                      <>
+                        <td className="px-4 py-2 text-right tabular-nums text-slate-600">
+                          {formatTau(marker.tau)}
+                        </td>
+                        <td className="px-4 py-2 text-right tabular-nums text-slate-600">
+                          {formatPct(marker.pct_max_other)}
+                          {marker.max_other_group && (
+                            <span className="ml-1 text-xs text-slate-400">{marker.max_other_group}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-right tabular-nums text-slate-600">
+                          {formatRatio(detectionRatio(marker))}
+                        </td>
+                      </>
+                    )}
                     {currentMarkers.some((m) => m.score != null) && (
                       <td className="px-4 py-2 text-right tabular-nums text-slate-600">
                         {marker.score?.toFixed(3) ?? "-"}
@@ -650,7 +661,7 @@ export function MarkerGenesPanel() {
               })}
               {sortedMarkers.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                  <td colSpan={specificity ? 10 : 7} className="px-4 py-8 text-center text-slate-400">
                     {filterQuery
                       ? "No genes match the current filter"
                       : "No marker genes for this group"}
@@ -660,6 +671,7 @@ export function MarkerGenesPanel() {
             </tbody>
           </table>
         </div>
+      </div>
       </div>
       )}
     </div>

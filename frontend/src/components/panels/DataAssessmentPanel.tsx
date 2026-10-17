@@ -5,11 +5,15 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { getDataset } from "@/api/datasets";
+import { getDoublets, type DoubletRateSuggestion, type FilterThresholds } from "@/api/qc";
+import { pct } from "@/lib/qcThresholds";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
 import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
 import { QcReportCard } from "@/components/panels/QcReportCard";
 import { AnnotationControl } from "@/components/panels/AnnotationControl";
+import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
+import { flattenStepParams, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
   ClipboardCheck,
   Check,
@@ -36,6 +40,8 @@ interface StepStatus {
   done: boolean;
   confidence: "high" | "medium" | "low";
   details: string;
+  /** A one-line warning about the step's result (e.g. unreliable phase calls) */
+  caution?: string | null;
 }
 
 interface PreprocessingState {
@@ -67,6 +73,8 @@ interface SpeciesCall {
 /** The assessment response: the step entries plus facts that are not steps. */
 interface AssessmentResponse extends PreprocessingState {
   species?: SpeciesCall;
+  /** How scView last normalised it for HVG/PCA ("log" | "pearson_residuals"); null if never. */
+  normalization_method?: string | null;
 }
 
 interface PipelineResult {
@@ -126,22 +134,42 @@ interface ParamConfig {
   max?: number;
   step?: number;
   options?: string[];
+  /** Display text per select option (the value is sent). */
+  optionLabels?: Record<string, string>;
+  /** One line of guidance under the input. */
+  help?: string;
   default: unknown;
   dynamicOptions?: "categorical_obs_columns";
+  /** Shown (and used by the backend) until the user types a value. */
+  dynamicDefault?: "suggested_doublet_rate";
 }
 
 const STEP_PARAMS: Record<string, ParamConfig[]> = {
   doublet_detection: [
-    { param: "expected_doublet_rate", label: "Expected doublet rate", type: "number", min: 0.0, max: 0.5, step: 0.01, default: 0.06 },
+    { param: "expected_doublet_rate", label: "Expected doublet rate", type: "number", min: 0.0, max: 0.5, step: 0.001, default: null, dynamicDefault: "suggested_doublet_rate" },
   ],
   filtering: [
     { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200 },
+    { param: "max_genes", label: "Max genes/cell (0 = off)", type: "number", min: 0, max: 20000, step: 100, default: 0 },
+    { param: "min_counts", label: "Min counts/cell (0 = off)", type: "number", min: 0, max: 100000, step: 100, default: 0 },
     { param: "min_cells", label: "Min cells/gene", type: "number", min: 0, max: 100, step: 1, default: 3 },
     { param: "max_pct_mt", label: "Max % mito", type: "number", min: 0, max: 100, step: 1, default: 20 },
     { param: "drop_doublets", label: "Drop predicted doublets", type: "boolean", default: false },
   ],
   normalization: [
     { param: "target_sum", label: "Target sum", type: "number", min: 1000, max: 100000, step: 1000, default: 10000 },
+    {
+      param: "normalization_method",
+      label: "For variable genes + PCA",
+      type: "select",
+      options: ["log", "pearson_residuals"],
+      optionLabels: NORMALIZATION_LABELS,
+      default: "log",
+      help:
+        "The shifted log is the default: benchmarks find it performs well. Pearson residuals " +
+        "(Lause 2021) pick variable genes by residual variance and replace the z-scores PCA reads. " +
+        "Markers, DE, scores and plots keep the log-normalised values either way.",
+    },
   ],
   highly_variable_genes: [
     { param: "n_top_genes", label: "N top genes", type: "number", min: 500, max: 10000, step: 100, default: 2000 },
@@ -173,6 +201,20 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
     { param: "enrichment_collections", label: "MSigDB Collections", type: "msigdb_tree", default: [] },
   ],
 };
+
+/** The filtering step's cell thresholds: the step's params as set, else their defaults.
+ *  The QC histograms set the same params, so either place changes both. */
+export function filterThresholds(set: Record<string, unknown> | undefined): FilterThresholds {
+  const value = (param: string) =>
+    set?.[param] ?? STEP_PARAMS.filtering!.find((pc) => pc.param === param)!.default;
+  return {
+    min_genes: Number(value("min_genes")),
+    max_genes: Number(value("max_genes")),
+    min_counts: Number(value("min_counts")),
+    max_pct_mt: Number(value("max_pct_mt")),
+    drop_doublets: Boolean(value("drop_doublets")),
+  };
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -232,6 +274,13 @@ export function SpeciesNote({ call }: { call?: SpeciesCall }) {
   );
 }
 
+/** A step's warning about its result (e.g. phase calls on resting cells), shown
+ *  in full under the step's one-line details. */
+export function StepCaution({ caution }: { caution?: string | null }) {
+  if (!caution) return null;
+  return <p className="mt-0.5 text-xs text-amber-700">{caution}</p>;
+}
+
 /** Steps a run skipped because they had nothing to do (e.g. too few signature
  *  genes), with the reason: not errors, so not in red. */
 export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
@@ -246,6 +295,19 @@ export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
         </p>
       ))}
     </div>
+  );
+}
+
+/** Under the expected doublet rate: where the default comes from. */
+export function SuggestedRateNote({ suggestion }: { suggestion: DoubletRateSuggestion | null }) {
+  if (!suggestion) return null;
+  const where = suggestion.column
+    ? `the cells per ${suggestion.column} sample (${suggestion.samples.length})`
+    : "all cells as one channel (no sample column found)";
+  return (
+    <span className="text-[10px] text-slate-400" title={suggestion.basis}>
+      Default {pct(suggestion.rate)}, from {where}: a rule of thumb, ~0.8 % per 1,000 cells captured.
+    </span>
   );
 }
 
@@ -282,6 +344,8 @@ export function DataAssessmentPanel() {
   // Bumped after each pipeline run so the QC plots refetch (e.g. to pick up a
   // newly computed doublet_score) without needing a tab switch.
   const [qcRefreshKey, setQcRefreshKey] = useState(0);
+  // Bumped when doublet calls are re-thresholded: the cluster QC and report count them.
+  const [callsRevision, setCallsRevision] = useState(0);
 
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<PipelineResult | null>(null);
@@ -296,6 +360,33 @@ export function DataAssessmentPanel() {
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   const [selectedSteps, setSelectedSteps] = useState<Set<string>>(new Set());
   const [stepParams, setStepParams] = useState<Record<string, Record<string, unknown>>>({});
+
+  // The doublet step's default expected rate, from the cells per sample.
+  const [doubletRate, setDoubletRate] = useState<DoubletRateSuggestion | null>(null);
+  useEffect(() => {
+    if (!datasetId) return;
+    let cancelled = false;
+    setDoubletRate(null);
+    getDoublets(datasetId)
+      .then((s) => {
+        if (!cancelled) setDoubletRate(s.suggestion ?? null);
+      })
+      .catch(() => {
+        /* the backend falls back to the same suggestion; the input just shows none */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId, qcRefreshKey]);
+
+  // The QC histograms set the filtering step's thresholds: one state, two places.
+  const filterValues = useMemo(() => filterThresholds(stepParams.filtering), [stepParams.filtering]);
+  const setFilter = useCallback(
+    (patch: Partial<FilterThresholds>) =>
+      setStepParams((prev) => ({ ...prev, filtering: { ...prev.filtering, ...patch } })),
+    [],
+  );
+  const qcFilter = useMemo(() => ({ values: filterValues, onChange: setFilter }), [filterValues, setFilter]);
 
   /* ---- Categorical obs columns (shared by batch, markers, enrichment) ---- */
   const categoricalObsColumns = useMemo(() => {
@@ -318,13 +409,7 @@ export function DataAssessmentPanel() {
     if (!confirm("This will reset to raw counts and reprocess everything from scratch. Continue?")) return;
     // All steps including reset_to_counts
     const allSteps = ["reset_to_counts", ...STEP_ORDER.filter((s) => s.key !== "batch_correction").map((s) => s.key)];
-    // Flatten current params
-    const flatParams: Record<string, unknown> = {};
-    for (const stepKey of allSteps) {
-      const sp = stepParams[stepKey];
-      if (sp) Object.assign(flatParams, sp);
-    }
-    runSteps(allSteps, Object.keys(flatParams).length > 0 ? flatParams : null);
+    runSteps(allSteps, flattenStepParams(allSteps, stepParams));
   };
 
   /* ---- Fetch assessment ---- */
@@ -339,6 +424,16 @@ export function DataAssessmentPanel() {
         `/datasets/${datasetId}/assessment`
       );
       setState(data);
+      // Re-running a step keeps the method the dataset was processed with,
+      // unless the user picked one.
+      const recorded = data.normalization_method;
+      if (recorded) {
+        setStepParams((prev) =>
+          prev.normalization?.normalization_method
+            ? prev
+            : { ...prev, normalization: { ...prev.normalization, normalization_method: recorded } },
+        );
+      }
       // Auto-select all missing steps
       const skipByDefault = new Set(["batch_correction", "enrichment"]);
       const missing = STEP_ORDER.filter((s) => !data[s.key].done && !skipByDefault.has(s.key)).map((s) => s.key);
@@ -573,14 +668,7 @@ export function DataAssessmentPanel() {
       .filter((s) => selectedSteps.has(s.key))
       .map((s) => s.key);
     // Flatten per-step params into a single dict for PipelineParams
-    const flatParams: Record<string, unknown> = {};
-    for (const stepKey of stepsToRun) {
-      const sp = stepParams[stepKey];
-      if (sp) {
-        Object.assign(flatParams, sp);
-      }
-    }
-    runSteps(stepsToRun, Object.keys(flatParams).length > 0 ? flatParams : null);
+    runSteps(stepsToRun, flattenStepParams(stepsToRun, stepParams));
   };
 
   /* ---- Run cell-type annotation, then color by the new labels ---- */
@@ -643,6 +731,7 @@ export function DataAssessmentPanel() {
     : 0;
   const doneCount = state ? STEP_ORDER.length - missingCount : 0;
   const selectedCount = selectedSteps.size;
+  const pearson = normalizationMethod(stepParams, state?.normalization_method) === "pearson_residuals";
 
   /* ---- Find suggestion for a step ---- */
   const suggestionForStep = (key: string): LLMSuggestion | undefined =>
@@ -773,7 +862,7 @@ export function DataAssessmentPanel() {
           </div>
 
           {/* "Explain this data": written QC report from the assessment facts */}
-          <QcReportCard datasetId={datasetId} refreshKey={qcRefreshKey} />
+          <QcReportCard datasetId={datasetId} refreshKey={qcRefreshKey + callsRevision} />
 
           {/* Cell-type annotation */}
           <AnnotationControl onAnnotate={annotate} running={running} />
@@ -1009,6 +1098,7 @@ export function DataAssessmentPanel() {
                         <p className="mt-0.5 truncate text-xs text-slate-400">
                           {status.details}
                         </p>
+                        <StepCaution caution={status.caution} />
                       </button>
 
                       {/* Expand chevron */}
@@ -1052,13 +1142,15 @@ export function DataAssessmentPanel() {
                             </p>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
                               {STEP_PARAMS[step.key]!.map((pc) => {
-                                const currentVal = stepParams[step.key]?.[pc.param] ?? pc.default;
+                                const suggested =
+                                  pc.dynamicDefault === "suggested_doublet_rate" ? doubletRate?.rate : undefined;
+                                const currentVal = stepParams[step.key]?.[pc.param] ?? suggested ?? pc.default;
                                 const resolvedOptions =
                                   pc.dynamicOptions === "categorical_obs_columns"
                                     ? augmentedCategoricalOptions
                                     : (pc.options ?? []);
                                 return (
-                                  <div key={pc.param} className={`flex flex-col gap-0.5 ${pc.type === "checkbox_list" || pc.type === "msigdb_tree" ? "col-span-2" : ""}`}>
+                                  <div key={pc.param} className={`flex flex-col gap-0.5 ${pc.type === "checkbox_list" || pc.type === "msigdb_tree" || pc.help ? "col-span-2" : ""}`}>
                                     <label className="text-[10px] font-medium text-slate-500">
                                       {pc.label}
                                     </label>
@@ -1152,7 +1244,12 @@ export function DataAssessmentPanel() {
                                         onChange={(e) =>
                                           setStepParam(step.key, pc.param, e.target.value)
                                         }
-                                        disabled={running}
+                                        disabled={running || (pc.param === "hvg_flavor" && pearson)}
+                                        title={
+                                          pc.param === "hvg_flavor" && pearson
+                                            ? "Pearson residuals rank genes by residual variance (Normalization step)"
+                                            : undefined
+                                        }
                                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                       >
                                         {pc.param === "batch_key" || pc.param === "hvg_batch_key" ? (
@@ -1164,10 +1261,22 @@ export function DataAssessmentPanel() {
                                           </>
                                         ) : (
                                           pc.options?.map((opt) => (
-                                            <option key={opt} value={opt}>{opt}</option>
+                                            <option key={opt} value={opt}>{pc.optionLabels?.[opt] ?? opt}</option>
                                           ))
                                         )}
                                       </select>
+                                    )}
+                                    {pc.dynamicDefault === "suggested_doublet_rate" &&
+                                      stepParams[step.key]?.[pc.param] == null && (
+                                        <SuggestedRateNote suggestion={doubletRate} />
+                                      )}
+                                    {pc.help && (
+                                      <p className="text-[10px] leading-snug text-slate-400">{pc.help}</p>
+                                    )}
+                                    {pc.param === "hvg_flavor" && pearson && (
+                                      <p className="text-[10px] leading-snug text-slate-400">
+                                        Not used: Pearson residuals (chosen on Normalization) rank genes by residual variance.
+                                      </p>
                                     )}
                                   </div>
                                 );
@@ -1206,10 +1315,7 @@ export function DataAssessmentPanel() {
                         )}
                         {/* Per-step run button */}
                         <button
-                          onClick={() => {
-                            const sp = stepParams[step.key];
-                            runSteps([step.key], sp && Object.keys(sp).length > 0 ? sp : null);
-                          }}
+                          onClick={() => runSteps([step.key], flattenStepParams([step.key], stepParams))}
                           disabled={running}
                           className={`mt-3 inline-flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium transition disabled:opacity-50 ${
                             status.done
@@ -1236,8 +1342,16 @@ export function DataAssessmentPanel() {
         </div>
         {/* Right: QC distributions */}
         <div className="w-full flex-shrink-0 space-y-4 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
-          {datasetId && <ClusterQcTable datasetId={datasetId} refreshKey={qcRefreshKey} />}
-          {datasetId && <QcPlots datasetId={datasetId} refreshKey={qcRefreshKey} />}
+          {datasetId && <ClusterQcTable datasetId={datasetId} refreshKey={qcRefreshKey + callsRevision} />}
+          {datasetId && (
+            <QcPlots
+              datasetId={datasetId}
+              refreshKey={qcRefreshKey}
+              onDoubletsApplied={() => setCallsRevision((r) => r + 1)}
+              filter={qcFilter}
+            />
+          )}
+          {datasetId && <MeanVariancePlot datasetId={datasetId} refreshKey={qcRefreshKey} />}
         </div>
       </div>
     </div>

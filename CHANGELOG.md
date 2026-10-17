@@ -6,6 +6,55 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-17
+
+### Added
+- **QC thresholds on the histograms.** Set min/max genes, min counts and max % mito (when it can
+  be measured) by dragging a line or typing, with a live summary of the cells removed overall, per
+  sample and per cluster, and a warning when a threshold removes a whole sample or cluster or more
+  than half of one. The values are the filtering step's own, which gains max genes and min counts.
+- **Doublet threshold.** A histogram of the doublet score on Data Assessment: drag or type a
+  threshold to see the cells it calls, overall and per sample, beside the rate expected from each
+  sample's size (a 10x rule of thumb, ~0.8% per 1,000 cells). Applying it writes
+  `predicted_doublet`, keeps Scrublet's call in `predicted_doublet_scrublet`, and can put it back.
+  The doublet step's expected rate now defaults to that suggestion instead of a fixed 6%.
+- **GSEA.** Next to over-representation, GSEA on a DE result's whole ranked gene list, or a marker
+  group's, against the chosen collections: NES, p, FDR and the leading-edge genes, with CSV. Click a
+  term to score its leading edge on the plot.
+- **TF and pathway activity.** CollecTRI transcription factors and PROGENy pathways scored per cell
+  (decoupler's univariate linear model; scores match decoupler's to 5 decimals): colour the plot by
+  one, see a group x source heatmap in Unified View → Activity, and score any DE result in the DE
+  tab. The networks download on first use; human data only for now.
+- **Marker specificity.** Marker tables show tau (how specific a gene is across groups) and its
+  detection in the group against the next-best group, also in the CSV/Excel exports, with a plot of
+  fold change against tau.
+- **Pearson residuals.** Normalisation can use analytic Pearson residuals instead of the shifted log
+  (the default). They choose the variable genes and feed PCA; markers, DE, scores and plots keep the
+  log-normalised values. A mean-variance plot on Data Assessment compares them.
+- **Filter cells.** Combine conditions on genes (expression above or below a value) and metadata
+  (values of a column, a numeric range) with AND/OR, with a live count; "Select" makes the matching
+  cells the selection for DE, labelling and highlighting.
+- **Session files.** "Session" in the header saves the workspace (dataset, view, colouring, camera,
+  overlays, selection, DE settings, colours) as a small JSON file, and opens one again, listing
+  anything that no longer applies (a missing dataset, changed cells, a missing column or gene).
+- **Cell-cycle caution.** Data Assessment and the QC report warn when most cells have S and G2M
+  scores near 0, where phase calls are noise (Kang PBMCs: 95% of cells). Phase calls are unchanged.
+
+### Changed
+- **Group labels** stay inside the plot, no longer overlap (the bigger group keeps its place; the
+  others move or wait for zoom), and sit where most of a group's cells are.
+- **Hand-label columns** are picked as the default colouring and offered first in Compare, whatever
+  they are called.
+- **DE settings** survive switching tabs, and DE results carry each gene's test statistic.
+
+### Fixed
+- **DE on an unprocessed upload** tested the counts held in `.raw`, so fold changes were of counts
+  (Kang: ISG15 log2FC 184 instead of 8.6). Cell-cycle scoring had the same problem. Both now use
+  log-normalised expression.
+- **Filtering** re-run on processed data counted genes in the scaled matrix instead of detected
+  genes, and a % mito threshold on data without MT- genes removed every cell.
+- **Marker Genes** could show "No marker genes available" when an earlier request answered last.
+
 ## [0.14.0] - 2026-10-16
 
 ### Added

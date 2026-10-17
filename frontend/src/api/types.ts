@@ -15,8 +15,12 @@ export interface DatasetInfo {
   embedding_dimensions?: Record<string, number>;
   obs_columns: ObsColumnInfo[];
   active_clustering?: string;
+  /** Hand-label columns made in the app (uns scview_user_annotations) */
+  user_annotation_columns?: string[];
   expression_layers?: ExpressionLayerInfo[];
   default_expression_layer?: string;
+  /** Hash of the cell barcodes in order: equal for the same cells (saved sessions) */
+  cells_fingerprint?: string;
   created_at: string;
   error_message?: string;
 }

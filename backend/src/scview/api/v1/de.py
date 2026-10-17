@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.dependencies import get_dataset_manager
+from scview.core import de_results
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
@@ -54,6 +55,10 @@ class DEGene(BaseModel):
     logfoldchange: float
     pval: float
     pval_adj: float
+    # The test statistic: Wilcoxon z-score, or DESeq2's Wald statistic for
+    # pseudobulk. TF and pathway activity is scored on it, GSEA ranks a Wilcoxon
+    # result by it (p-values saturate at 0 for strong genes).
+    stat: float | None = None
 
 
 class DEResponse(BaseModel):
@@ -78,6 +83,9 @@ class DEResponse(BaseModel):
     dropped_samples: list[str] = []
     # /de/compare: the two sides are also different batches (core/confounding.py).
     confounding: dict | None = None
+    # Names this result for a follow-up such as GSEA (core/de_results.py), which
+    # could not take every gene back within the request size cap.
+    result_id: str | None = None
 
 
 def _detect_replicate_key(obs, exclude: set[str], mask_a=None, mask_b=None) -> str | None:
@@ -121,10 +129,19 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
     import pandas as pd
     import scanpy as sc
 
+    from scview.core.pipeline import looks_like_counts
+
     keep = mask_a | mask_b
     if not keep.all():
         work = work[keep].copy()
         mask_a = mask_a[keep]
+    # Log-normalised expression, never counts: an unprocessed upload can hold counts
+    # in .raw beside a log-normalised X, or counts alone, and the fold change is
+    # taken of whatever is tested (Kang: ISG15 log2FC 184 on counts).
+    use_raw = work.raw is not None and not looks_like_counts(work.raw.X)
+    if not use_raw and looks_like_counts(work.X):
+        sc.pp.normalize_total(work, target_sum=1e4)
+        sc.pp.log1p(work)
     work.obs["_de_group"] = pd.Categorical(
         np.where(mask_a, "selection", "rest"), categories=["rest", "selection"]
     )
@@ -135,13 +152,15 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
             groups=["selection"],
             reference="rest",
             method="wilcoxon",
+            use_raw=use_raw,
             # Every tested gene: the test runs on .raw when present, which can hold
             # more genes than X (an HVG subset); capping at X's width kept only the
             # top-scoring, i.e. up-regulated, genes.
-            n_genes=work.raw.n_vars if work.raw is not None else work.n_vars,
+            n_genes=work.raw.n_vars if use_raw else work.n_vars,
         )
         rgg = work.uns["rank_genes_groups"]
         names = rgg["names"]["selection"]
+        scores = rgg["scores"]["selection"]
         lfc = rgg["logfoldchanges"]["selection"]
         pv = rgg["pvals"]["selection"]
         pv_adj = rgg["pvals_adj"]["selection"]
@@ -157,7 +176,9 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
         # Drop non-finite rows (a gene with zero variance yields NaNs).
         if not (np.isfinite(lf) and np.isfinite(p) and np.isfinite(pa)):
             continue
-        genes.append(DEGene(gene=str(names[i]), logfoldchange=lf, pval=p, pval_adj=pa))
+        z = float(scores[i])
+        genes.append(DEGene(gene=str(names[i]), logfoldchange=lf, pval=p, pval_adj=pa,
+                            stat=z if np.isfinite(z) else None))
     return genes
 
 
@@ -198,7 +219,8 @@ async def differential_expression(
 
     # Seconds on a large dataset: in a worker thread, so the server keeps answering.
     genes = await asyncio.to_thread(_run)
-    return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=genes)
+    return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=genes,
+                      result_id=de_results.remember(dataset_id, genes, method="wilcoxon"))
 
 
 @router.post("/datasets/{dataset_id}/de/compare", response_model=DEResponse)
@@ -268,6 +290,7 @@ async def differential_expression_compare(
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes,
+                      result_id=de_results.remember(dataset_id, genes, method="wilcoxon"),
                       confounding=confounding, **guard)
 
 
@@ -308,11 +331,14 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         raise HTTPException(status_code=500, detail=f"Pseudobulk DE failed: {exc!s}")
 
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
+    genes = [DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa, stat=res.stats.get(g))
+             for g, lf, p, pa in res.genes]
     return DEResponse(
         n_selected=res.n_cells_a,
         n_rest=res.n_cells_b,
         label=label,
-        genes=[DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa) for g, lf, p, pa in res.genes],
+        genes=genes,
+        result_id=de_results.remember(dataset_id, genes, method="pseudobulk"),
         replicate_key=key,
         n_donors_a=res.n_samples_a,
         n_donors_b=res.n_samples_b,

@@ -1,31 +1,31 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Sparkles } from "lucide-react";
+import {
+  Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Sparkles, ChevronDown, ChevronRight,
+} from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useObsRevision } from "@/stores/obsRevisionStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
+import type { MarkersResponse } from "@/api/markers";
+import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
+import {
+  MARKER_CSV_HEADERS,
+  SPECIFICITY_HELP,
+  detectionRatio,
+  formatPct,
+  formatRatio,
+  formatTau,
+  hasSpecificity,
+  markerCsvRow,
+  sortMarkers,
+  type MarkerSortField,
+} from "@/lib/markerSpecificity";
 
-interface MarkerGene {
-  gene: string;
-  group: string;
-  /** null when scanpy's fold change was NaN (e.g. a gene absent from both sides). */
-  logfoldchange: number | null;
-  pval: number;
-  pval_adj: number;
-  pct_in?: number;
-  score?: number;
-}
-
-interface MarkersResponse {
-  groups: string[];
-  markers: Record<string, MarkerGene[]>;
-}
-
-type SortField = "gene" | "logfoldchange" | "pval_adj";
+type SortField = MarkerSortField;
 
 /** The highlighted group's name when it is a group of the markers' column, else null. */
 export function highlightedMarkerGroup(
@@ -84,6 +84,7 @@ export function UnifiedMarkersSubtab({
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filterQuery, setFilterQuery] = useState("");
   const [minAbsFC, setMinAbsFC] = useState(0);
+  const [showPlot, setShowPlot] = useState(false);
 
   const groupbyColumns = useMemo(() => {
     if (!dataset) return [];
@@ -167,19 +168,12 @@ export function UnifiedMarkersSubtab({
     return filtered;
   }, [currentMarkers, filterQuery, minAbsFC]);
 
-  const sortedMarkers = useMemo(() => {
-    const sorted = [...filteredMarkers];
-    sorted.sort((a, b) => {
-      if (sortField === "gene")
-        return sortDir === "asc" ? a.gene.localeCompare(b.gene) : b.gene.localeCompare(a.gene);
-      const aVal = sortField === "logfoldchange" ? a.logfoldchange : a.pval_adj;
-      const bVal = sortField === "logfoldchange" ? b.logfoldchange : b.pval_adj;
-      // A missing fold change sorts last either way.
-      if (aVal == null || bVal == null) return (aVal == null ? 1 : 0) - (bVal == null ? 1 : 0);
-      return sortDir === "asc" ? aVal - bVal : bVal - aVal;
-    });
-    return sorted;
-  }, [filteredMarkers, sortField, sortDir]);
+  // A missing value (a NaN fold change, no specificity) sorts last either way.
+  const sortedMarkers = useMemo(
+    () => sortMarkers(filteredMarkers, sortField, sortDir),
+    [filteredMarkers, sortField, sortDir],
+  );
+  const specificity = useMemo(() => hasSpecificity(currentMarkers), [currentMarkers]);
 
   const handleSort = useCallback(
     (field: SortField) => {
@@ -203,13 +197,8 @@ export function UnifiedMarkersSubtab({
     if (sortedMarkers.length === 0) return;
     downloadCsv(
       `markers_${selectedGroup}_${datasetId}.csv`,
-      ["gene", "group", "log_fold_change", "p_value_adjusted"],
-      sortedMarkers.map((m) => [
-        m.gene,
-        m.group,
-        formatFoldChange(m.logfoldchange, 4, ""),
-        m.pval_adj.toExponential(4),
-      ]),
+      MARKER_CSV_HEADERS,
+      sortedMarkers.map(markerCsvRow),
     );
   }, [sortedMarkers, selectedGroup, datasetId]);
 
@@ -328,6 +317,34 @@ export function UnifiedMarkersSubtab({
         </span>
       </div>
 
+      {/* Effect size vs specificity for the group's markers */}
+      {specificity && (
+        <div>
+          <button
+            onClick={() => setShowPlot((v) => !v)}
+            aria-expanded={showPlot}
+            className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700"
+          >
+            {showPlot ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            Specificity vs fold change
+          </button>
+          {showPlot && (
+            <div className="mt-1 rounded-lg border border-slate-200 p-1">
+              <MarkerSpecificityPlot
+                markers={currentMarkers}
+                name={selectedGroup}
+                onGeneClick={onGeneClick}
+                height={220}
+              />
+              <p className="px-1 text-[10px] leading-snug text-slate-400">
+                Top right: strong and found in this group only. A strong marker low on the plot is
+                shared with other groups. Click a point to view the gene.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Compact table */}
       <div className="max-h-[calc(100vh-340px)] overflow-auto rounded-lg border border-slate-200">
         <table className="w-full text-xs">
@@ -352,6 +369,31 @@ export function UnifiedMarkersSubtab({
               >
                 <span className="flex items-center justify-end gap-1">Adj.P {sortIcon("pval_adj")}</span>
               </th>
+              {specificity && (
+                <>
+                  <th
+                    onClick={() => handleSort("tau")}
+                    title={SPECIFICITY_HELP.tau}
+                    className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                  >
+                    <span className="flex items-center justify-end gap-1">Tau {sortIcon("tau")}</span>
+                  </th>
+                  <th
+                    onClick={() => handleSort("pct_in")}
+                    title={SPECIFICITY_HELP.detection}
+                    className="cursor-pointer whitespace-nowrap px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                  >
+                    <span className="flex items-center justify-end gap-1">In / next {sortIcon("pct_in")}</span>
+                  </th>
+                  <th
+                    onClick={() => handleSort("pct_ratio")}
+                    title={SPECIFICITY_HELP.ratio}
+                    className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                  >
+                    <span className="flex items-center justify-end gap-1">Ratio {sortIcon("pct_ratio")}</span>
+                  </th>
+                </>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -386,11 +428,27 @@ export function UnifiedMarkersSubtab({
                     {formatPValue(marker.pval_adj)}
                   </span>
                 </td>
+                {specificity && (
+                  <>
+                    <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">
+                      {formatTau(marker.tau)}
+                    </td>
+                    <td
+                      className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-slate-600"
+                      title={marker.max_other_group ? `Next-best group: ${marker.max_other_group}` : undefined}
+                    >
+                      {formatPct(marker.pct_in)} / {formatPct(marker.pct_max_other)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">
+                      {formatRatio(detectionRatio(marker))}
+                    </td>
+                  </>
+                )}
               </tr>
             ))}
             {sortedMarkers.length === 0 && (
               <tr>
-                <td colSpan={3} className="px-2 py-4 text-center text-slate-400">
+                <td colSpan={specificity ? 6 : 3} className="px-2 py-4 text-center text-slate-400">
                   {filterQuery ? "No genes match filter" : "No markers for this group"}
                 </td>
               </tr>

@@ -6,12 +6,13 @@ import { apiFetch } from "@/api/client";
 import { runPipelineSteps } from "@/api/assistant";
 import { getDataset } from "@/api/datasets";
 import { collectionLabel } from "@/api/genesets";
-import type { EnrichmentResult } from "@/api/enrichment";
+import { runGsea, type EnrichmentResult, type GseaResponse, type GseaTerm } from "@/api/enrichment";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { downloadCsv } from "@/lib/csv";
 import { InfoTip } from "@/components/common/InfoTip";
 import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
+import { GseaResults } from "@/components/unified/GseaResults";
 import { useEnrichmentSort } from "@/hooks/useEnrichmentSort";
 import { useGeneSetScoring } from "@/hooks/useGeneSetScoring";
 import {
@@ -31,7 +32,7 @@ interface EnrichmentResponse {
 
 interface UnifiedEnrichmentSubtabProps {
   onTermClick: (gene: string) => void;
-  onScoreGeneSet: (scores: Float32Array, name: string) => void;
+  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
 }
@@ -72,6 +73,11 @@ export function UnifiedEnrichmentSubtab({
   const [showGraph, setShowGraph] = useState(true);
   const [excludeRiboMito, setExcludeRiboMito] = useState(true);
 
+  // Preranked GSEA of the group's whole marker ranking (scanpy's score vs the rest).
+  const [gsea, setGsea] = useState<GseaResponse | null>(null);
+  const [isRunningGsea, setIsRunningGsea] = useState(false);
+  const [gseaError, setGseaError] = useState<string | null>(null);
+
   const categoricalColumns = useMemo(() => {
     if (!dataset) return [];
     const nCells = dataset.n_cells ?? 0;
@@ -96,6 +102,8 @@ export function UnifiedEnrichmentSubtab({
     setWarning("");
     setNetwork(null);
     setNetworkError(null);
+    setGsea(null);
+    setGseaError(null);
 
     type GroupsResp = { groups: string[] };
     const setGroupsFromData = (data: GroupsResp) => {
@@ -140,6 +148,8 @@ export function UnifiedEnrichmentSubtab({
     setNetwork(null);
     setNetworkError(null);
     setComputeError(null);
+    setGsea(null);
+    setGseaError(null);
   }, [selectedGroup]);
 
   const buildNetwork = useCallback(
@@ -217,6 +227,25 @@ export function UnifiedEnrichmentSubtab({
     }
   }, [datasetId, groupByColumn, selectedGroup, topN, selectedCollections, excludeRiboMito, buildNetwork, resolution]);
 
+  const handleGsea = useCallback(async () => {
+    if (!datasetId || !groupByColumn || !selectedGroup) return;
+    setIsRunningGsea(true);
+    setGseaError(null);
+    try {
+      const data = await runGsea(datasetId, {
+        column: groupByColumn,
+        group: selectedGroup,
+        collections: Array.from(selectedCollections),
+        exclude_ribo_mito: excludeRiboMito,
+      });
+      if (groupRef.current === selectedGroup) setGsea(data);
+    } catch (err) {
+      setGseaError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsRunningGsea(false);
+    }
+  }, [datasetId, groupByColumn, selectedGroup, selectedCollections, excludeRiboMito]);
+
   const handleResolutionChange = useCallback(
     (r: number) => {
       setResolution(r);
@@ -246,6 +275,23 @@ export function UnifiedEnrichmentSubtab({
           `named after its most significant member "${label}". The member terms are: ${terms.slice(0, 12).join(", ")}` +
           `${terms.length > 12 ? ", ..." : ""}. Genes driving it: ${genes.slice(0, 15).join(", ")}. ` +
           `What single biological programme does this describe, and what does it suggest about these cells?`,
+      );
+    },
+    [askCopilot, selectedGroup],
+  );
+
+  const gseaLabels = useMemo(
+    () => ({ up: `Up in ${selectedGroup}`, down: `Down in ${selectedGroup}` }),
+    [selectedGroup],
+  );
+
+  const askAboutGseaTerm = useCallback(
+    (r: GseaTerm) => {
+      askCopilot(
+        `In a GSEA of the ${selectedGroup} group's marker ranking (every gene ranked by its Wilcoxon ` +
+          `score against the other cells), "${r.term}" (${collectionLabel(r)}) has NES ${r.nes.toFixed(2)} ` +
+          `(${r.nes > 0 ? "higher" : "lower"} in ${selectedGroup}), FDR ${r.fdr.toExponential(2)}. ` +
+          `Leading-edge genes: ${r.leading_edge.slice(0, 15).join(", ")}. What does this tell me about these cells?`,
       );
     },
     [askCopilot, selectedGroup],
@@ -368,6 +414,21 @@ export function UnifiedEnrichmentSubtab({
           {isComputing && <Loader2 className="h-3 w-3 animate-spin" />}
           Compute
         </button>
+        <button
+          onClick={handleGsea}
+          disabled={isRunningGsea || !selectedGroup || selectedCollections.size === 0}
+          title="GSEA on every gene, ranked by its marker score: no top-N cut-off"
+          className="flex items-center gap-1.5 rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary transition hover:bg-primary/5 disabled:opacity-50"
+        >
+          {isRunningGsea && <Loader2 className="h-3 w-3 animate-spin" />}
+          GSEA
+        </button>
+        <InfoTip width={300}>
+          Compute tests the top N markers as a set (over-representation). GSEA ranks every gene by
+          its marker score (Wilcoxon, this group against the other cells) and asks whether a gene
+          set bunches at the top or bottom of that ranking, so it needs no top-N cut-off. The
+          leading edge is the genes that drive the score; click a row to score them on the scatter.
+        </InfoTip>
         {sortedResults.length > 0 && (
           <button
             onClick={handleExportCSV}
@@ -472,6 +533,30 @@ export function UnifiedEnrichmentSubtab({
           />
         </div>
         </div>
+        </div>
+      )}
+
+      {gseaError && (
+        <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">GSEA: {gseaError}</div>
+      )}
+      {isRunningGsea && !gsea && (
+        <p className="text-[10px] text-slate-400">
+          Running GSEA: a few seconds for Hallmark, up to ~30 s for many collections.
+        </p>
+      )}
+      {gsea && (
+        <div className="text-xs">
+          <div className="mb-1 flex items-center gap-1 px-0.5">
+            <h4 className="text-[11px] font-semibold text-slate-700">GSEA: {selectedGroup}, every gene ranked</h4>
+          </div>
+          <GseaResults
+            data={gsea}
+            labels={gseaLabels}
+            csvName={`gsea_${groupByColumn}_${selectedGroup}_${datasetId}`}
+            onTermClick={(r) => scoreGenes(r.leading_edge, r.term)}
+            onAsk={askAboutGseaTerm}
+            scoringTerm={scoringTerm}
+          />
         </div>
       )}
 

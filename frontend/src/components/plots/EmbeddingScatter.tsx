@@ -9,7 +9,7 @@ import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
 import { exportFilename } from "@/lib/exportFilename";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { colorByLine } from "@/lib/hoverInfo";
-import { centroidLabelLayers, groupCentroids } from "@/lib/centroidLabels";
+import { centroidLabelLayers, groupCentroids, labelViewOf, placeLabels } from "@/lib/centroidLabels";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 
 interface EmbeddingScatterProps {
@@ -39,6 +39,16 @@ interface EmbeddingScatterProps {
    * conjunction yet each stays fitted to its container. deck.gl only emits
    * onViewStateChange on user interaction, so this won't feedback-loop. */
   externalViewState?: Record<string, unknown> | null;
+  /** A camera to show instead of the fitted one (a restored session): it is
+   *  kept when the data reloads or the plot resizes, until the user moves the
+   *  camera or resets the view. `onRestoreViewState` fires once it is shown. */
+  restoreViewState?: Record<string, unknown> | null;
+  onRestoreViewState?: () => void;
+  /** What the camera is on (dataset + embedding): a change drops a restored camera. */
+  cameraKey?: string;
+  /** Every camera change, whatever caused it; `fitted` while the camera is the
+   *  automatic fit to the data. */
+  onCameraChange?: (viewState: Record<string, unknown>, fitted: boolean) => void;
   /** Legend drawn beside the points in the "Download PNG" image */
   exportLegend?: ScatterLegend | null;
   /** Plot part of the PNG's filename (scview_<dataset>_<exportName>.png) */
@@ -158,6 +168,10 @@ export function EmbeddingScatter({
   minimal = false,
   dimToGray = false,
   externalViewState = null,
+  restoreViewState = null,
+  onRestoreViewState,
+  cameraKey = "",
+  onCameraChange,
   exportLegend = null,
   exportName = "embedding",
   colorLabel = "Value",
@@ -392,7 +406,7 @@ export function EmbeddingScatter({
 
   const renderCount = renderPositions ? renderPositions.length / stride : 0;
 
-  // Group labels at the median of each group's drawn cells; a group with no
+  // Group labels where most of each group's drawn cells are; a group with no
   // drawn cell (sampled away) gets none.
   const centroids = useMemo(() => {
     if (!showLabels || !positions || !categories || !(colorValues instanceof Int32Array)) return null;
@@ -413,24 +427,56 @@ export function EmbeddingScatter({
     );
   }, [positions, containerSize.width, containerSize.height, dimensions]);
 
+  // A restored camera (restoreViewState) stays until the user moves the camera;
+  // `fitted` says whether the camera shown is the automatic fit.
+  const restoredRef = useRef<Record<string, unknown> | null>(null);
+  const fittedRef = useRef(true);
+
   // Reset view to initial
   const resetView = useCallback(() => {
     if (initialViewState) {
+      restoredRef.current = null;
+      fittedRef.current = true;
       setViewState({ ...initialViewState });
     }
   }, [initialViewState]);
 
-  // When initial view state changes (new data), reset
+  // When initial view state changes (new data), reset (to a restored camera if
+  // there is one; the fit's zoom limits still apply)
   useEffect(() => {
     if (initialViewState) {
-      setViewState({ ...initialViewState });
+      fittedRef.current = !restoredRef.current;
+      setViewState({ ...initialViewState, ...restoredRef.current });
     }
   }, [initialViewState]);
+
+  // Another dataset or embedding: the restored camera meant the old one.
+  useEffect(() => {
+    restoredRef.current = null;
+  }, [cameraKey]);
+
+  const onRestoreRef = useRef(onRestoreViewState);
+  onRestoreRef.current = onRestoreViewState;
+  useEffect(() => {
+    if (!restoreViewState) return;
+    restoredRef.current = restoreViewState;
+    if (!initialViewState) return; // applied with the first fit
+    fittedRef.current = false;
+    setViewState({ ...initialViewState, ...restoreViewState });
+    onRestoreRef.current?.();
+  }, [restoreViewState, initialViewState]);
+
+  const onCameraRef = useRef(onCameraChange);
+  onCameraRef.current = onCameraChange;
+  useEffect(() => {
+    if (viewState) onCameraRef.current?.(viewState, fittedRef.current);
+  }, [viewState]);
 
   // Follow a linked view's camera (orientation + pan) when controlled, keeping
   // our own zoom so each view stays fitted to its container.
   useEffect(() => {
     if (!externalViewState) return;
+    fittedRef.current = false;
     setViewState((prev) => {
       if (!prev) return { ...externalViewState };
       return {
@@ -445,6 +491,8 @@ export function EmbeddingScatter({
 
   const handleViewStateChange = useCallback(
     ({ viewState: vs }: { viewState: Record<string, unknown> }) => {
+      restoredRef.current = null;
+      fittedRef.current = false;
       setViewState(vs);
       onViewStateChange?.(vs);
     },
@@ -478,16 +526,6 @@ export function EmbeddingScatter({
     [onClick, indexMap],
   );
 
-  const labelLayers = useMemo(
-    () =>
-      centroids
-        ? centroidLabelLayers("embedding-labels", centroids, {
-            dark: background === "dark",
-            highlight: highlightCategory,
-          })
-        : [],
-    [centroids, background, highlightCategory],
-  );
 
   // Binary attribute data path — feeds typed arrays directly to GPU
   const pointLayers = useMemo(() => {
@@ -540,8 +578,6 @@ export function EmbeddingScatter({
       }),
     ];
   }, [renderCount, renderPositions, renderColors, pointSize, dimensions]);
-  const layers = useMemo(() => [...pointLayers, ...labelLayers], [pointLayers, labelLayers]);
-
   const views = useMemo(
     () =>
       dimensions === 3
@@ -549,6 +585,19 @@ export function EmbeddingScatter({
         : new OrthographicView({ id: "ortho", flipY: false, controller: true }),
     [dimensions],
   );
+
+  // Labels are placed for the current camera: kept inside the plot, and off
+  // each other (the bigger group keeps its spot).
+  const labelLayers = useMemo(() => {
+    if (!centroids || !viewState) return [];
+    const view = labelViewOf(views, containerSize.width, containerSize.height, viewState);
+    if (!view) return [];
+    return centroidLabelLayers("embedding-labels", placeLabels(centroids, view, { highlight: highlightCategory }), {
+      dark: background === "dark",
+      highlight: highlightCategory,
+    });
+  }, [centroids, viewState, views, containerSize.width, containerSize.height, background, highlightCategory]);
+  const layers = useMemo(() => [...pointLayers, ...labelLayers], [pointLayers, labelLayers]);
 
   // One-off high-resolution redraw on click; see downloadDeckPng.
   const downloadPng = useCallback(() => {

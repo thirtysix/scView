@@ -53,6 +53,7 @@ class PseudobulkResult:
     paired: bool
     counts_source: str
     dropped_samples: list[str] = field(default_factory=list)
+    stats: dict[str, float] = field(default_factory=dict)  # gene -> Wald statistic
 
 
 def raw_counts(adata):
@@ -168,7 +169,7 @@ def pseudobulk_de(
     paired = bool((by_donor == 2).all())
     design = "~donor + condition" if paired else "~condition"
 
-    genes = _run_deseq2(counts_df, meta, design)
+    genes, wald = _run_deseq2(counts_df, meta, design)
     return PseudobulkResult(
         genes=genes,
         n_samples_a=n_a,
@@ -180,10 +181,15 @@ def pseudobulk_de(
         paired=paired,
         counts_source=source,
         dropped_samples=dropped,
+        stats=wald,
     )
 
 
-def _run_deseq2(counts_df: pd.DataFrame, meta: pd.DataFrame, design: str):
+def _run_deseq2(
+    counts_df: pd.DataFrame, meta: pd.DataFrame, design: str
+) -> tuple[list[tuple[str, float, float, float]], dict[str, float]]:
+    """(gene, log2FC, p, adjusted p) per tested gene, strongest up first, and each
+    gene's Wald statistic."""
     from pydeseq2.dds import DeseqDataSet
     from pydeseq2.default_inference import DefaultInference
     from pydeseq2.ds import DeseqStats
@@ -219,4 +225,5 @@ def _run_deseq2(counts_df: pd.DataFrame, meta: pd.DataFrame, design: str):
         return float(np.sign(row[1]) * -np.log10(max(row[2], 1e-300)))
 
     out.sort(key=_rank, reverse=True)
-    return out
+    wald = {str(g): float(s) for g, s in stat.items() if s is not None and np.isfinite(s)}
+    return out, wald

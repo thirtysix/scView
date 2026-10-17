@@ -10,6 +10,8 @@ import { GroupLabelsToggle } from "@/components/unified/GroupLabelsToggle";
 import { Lasso, RotateCcw, X } from "lucide-react";
 import { formatNumber, prettyObsLabel, prettyEmbeddingLabel, isRedundantClusterCol } from "@/lib/formatting";
 import { LabelSelectionControls } from "@/components/unified/LabelSelection";
+import { CellFilterControl } from "@/components/unified/CellFilter";
+import { describeFilter } from "@/lib/cellFilter";
 import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 
 interface UnifiedToolbarProps {
@@ -43,6 +45,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
   const setSelectionMode = useSelectionStore((s) => s.setSelectionMode);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
   const clearSelection = useSelectionStore((s) => s.clearSelection);
+  const selectionFilter = useSelectionStore((s) => s.selectionFilter);
   const gridActive = useSplitViewStore(isGridActive);
 
   const availableEmbeddings = dataset?.available_embeddings ?? [];
@@ -265,12 +268,22 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
         <Lasso className="h-3.5 w-3.5" />
         Lasso
       </button>
+      <CellFilterControl />
 
-      {/* Selection info */}
+      {/* Selection info; a filter's selection says which filter */}
       {selectedIndices && selectedIndices.size > 0 && (
-        <span className="flex items-center gap-1 text-xs text-orange-600">
+        <span className="flex min-w-0 items-center gap-1 text-xs text-orange-600">
           {formatNumber(selectedIndices.size)} selected
-          <button onClick={clearSelection} className="rounded p-0.5 hover:bg-orange-100">
+          {selectionFilter && (
+            <span
+              className="max-w-[260px] truncate text-slate-500"
+              title={describeFilter(selectionFilter)}
+              aria-label="Selection filter"
+            >
+              by {describeFilter(selectionFilter)}
+            </span>
+          )}
+          <button onClick={clearSelection} aria-label="Clear selection" className="rounded p-0.5 hover:bg-orange-100">
             <X className="h-3 w-3" />
           </button>
         </span>

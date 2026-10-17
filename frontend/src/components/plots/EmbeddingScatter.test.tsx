@@ -73,20 +73,42 @@ describe("EmbeddingScatter built-in tooltip", () => {
 });
 
 describe("EmbeddingScatter group labels", () => {
-  type L = { id: string; props: { data: { label: string; position: number[] }[]; opacity: number } };
+  type L = {
+    id: string;
+    props: { data: { label: string; position: number[]; offset: number[] }[]; opacity: number };
+  };
   const labelLayers = () => (deckProps.current!.layers as L[]).filter((l) => l.id.startsWith("embedding-labels"));
   const codes = Int32Array.from([0, 1, 1]);
 
-  it("draws each category's name at its centroid when asked", async () => {
+  it("draws each category's name among its cells when asked", async () => {
     render(
       <EmbeddingScatter positions={positions} colorValues={codes} colorType="categorical" categories={["B", "NK"]} showLabels />,
     );
     await screen.findByTestId("deck");
     const [layer] = labelLayers();
-    expect(layer!.props.data.map((d) => [d.label, d.position])).toEqual([
-      ["B", [0, 0]],
-      ["NK", [1.5, 1.5]],
+    expect(layer!.props.data.map((d) => [d.label, d.position, d.offset])).toEqual([
+      ["B", [0, 0], [0, 0]],
+      ["NK", [1, 1], [0, 0]],
     ]);
+  });
+
+  it("keeps a label near the plot's edge inside it", async () => {
+    // A wide embedding: the fitted view puts x = 0 about 18 px from the left
+    // edge of the 400 px plot, and x = 100 as far from the right one.
+    render(
+      <EmbeddingScatter
+        positions={Float32Array.from([0, 0, 100, 1])}
+        colorValues={Int32Array.from([0, 1])}
+        colorType="categorical"
+        categories={["CD4+ memory T cell", "Megakaryocyte"]}
+        showLabels
+      />,
+    );
+    await screen.findByTestId("deck");
+    const [layer] = labelLayers();
+    const [left, right] = layer!.props.data.map((d) => d.offset[0]!);
+    expect(left).toBeGreaterThan(40);
+    expect(right).toBeLessThan(-30);
   });
 
   it("keeps the highlighted group's label and fades the others", async () => {
@@ -125,5 +147,51 @@ describe("EmbeddingScatter group labels", () => {
     );
     await screen.findByTestId("deck");
     expect(labelLayers()).toHaveLength(0);
+  });
+});
+
+describe("EmbeddingScatter restored camera", () => {
+  const viewState = () => deckProps.current!.viewState as Record<string, unknown>;
+  const userMoves = (vs: Record<string, unknown>) =>
+    act(() => (deckProps.current!.onViewStateChange as (e: unknown) => void)({ viewState: vs }));
+
+  it("shows a restored camera over the fit, keeps it through a data reload, and drops it when the user moves", async () => {
+    const onRestored = vi.fn();
+    const onCamera = vi.fn();
+    const restored = { target: [1.5, 1.5, 0], zoom: 6 };
+    const props = { colorValues: null, colorType: "continuous" as const, onCameraChange: onCamera };
+    const { rerender } = render(
+      <EmbeddingScatter positions={positions} restoreViewState={restored} onRestoreViewState={onRestored} {...props} />,
+    );
+    await screen.findByTestId("deck");
+    expect(viewState()).toMatchObject(restored);
+    expect(typeof viewState().minZoom).toBe("number"); // the fit's limits stay
+    expect(onRestored).toHaveBeenCalled();
+    expect(onCamera).toHaveBeenLastCalledWith(expect.objectContaining(restored), false);
+
+    // A recolour reloads the positions: the restored camera stays (the panel
+    // has cleared restoreViewState by then).
+    rerender(<EmbeddingScatter positions={Float32Array.from(positions)} restoreViewState={null} {...props} />);
+    expect(viewState()).toMatchObject(restored);
+
+    userMoves({ ...viewState(), target: [0, 0, 0] });
+    expect(onCamera).toHaveBeenLastCalledWith(expect.objectContaining({ target: [0, 0, 0] }), false);
+    rerender(<EmbeddingScatter positions={Float32Array.from(positions)} restoreViewState={null} {...props} />);
+    expect(viewState().zoom).not.toBe(6); // fitted again, as before
+    expect(onCamera).toHaveBeenLastCalledWith(expect.anything(), true);
+  });
+
+  it("drops a restored camera when another dataset or embedding is shown", async () => {
+    const restored = { target: [1.5, 1.5, 0], zoom: 6 };
+    const props = { colorValues: null, colorType: "continuous" as const };
+    const { rerender } = render(
+      <EmbeddingScatter positions={positions} restoreViewState={restored} cameraKey="kang:X_umap" {...props} />,
+    );
+    await screen.findByTestId("deck");
+    expect(viewState()).toMatchObject(restored);
+    rerender(<EmbeddingScatter positions={positions} restoreViewState={null} cameraKey="pbmc:X_umap" {...props} />);
+    rerender(<EmbeddingScatter positions={Float32Array.from([5, 5, 9, 9])} restoreViewState={null} cameraKey="pbmc:X_umap" {...props} />);
+    expect(viewState().zoom).not.toBe(6);
+    expect(viewState().target).not.toEqual(restored.target);
   });
 });

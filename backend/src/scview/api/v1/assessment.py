@@ -15,8 +15,9 @@ from pydantic import BaseModel
 from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
-from scview.core.assessor import assess_preprocessing
-from scview.core import cluster_qc, qc_groups, qc_report
+from scview.core.assessor import assess_preprocessing, recorded_normalization_method
+from scview.core import cluster_qc, doublets, qc_filter, qc_groups, qc_report
+from scview.core.obs_writes import dataset_lock, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
@@ -67,9 +68,10 @@ async def get_assessment(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
 
     def _assess(adata) -> dict:
-        # Not a step, so beside the step entries rather than one of them.
+        # Not steps, so beside the step entries rather than among them.
         return {**assess_preprocessing(adata).model_dump(),
-                "species": detect_species(adata).model_dump()}
+                "species": detect_species(adata).model_dump(),
+                "normalization_method": recorded_normalization_method(adata)}
 
     try:
         # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop.
@@ -142,6 +144,126 @@ async def get_qc_by_group(
     except Exception as e:
         logger.error("QC by group failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"QC by group failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/qc/filter-preview
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/filter-preview")
+async def get_filter_preview(
+    dataset_id: str,
+    min_genes: float | None = None,
+    max_genes: float | None = None,
+    min_counts: float | None = None,
+    max_pct_mt: float | None = None,
+    drop_doublets: bool | None = None,
+    sample_column: str = "",
+    cluster_column: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The cells the filtering step's thresholds would remove (core/qc_filter.py):
+    overall, per threshold, per sample and per cluster, with warnings for a sample
+    or cluster lost whole or more than half. Thresholds left out take the
+    pipeline's defaults. Small and fast at any cell count (one pass over cached
+    per-cell values), so the QC plots ask again on every threshold change."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    params = PipelineParams()
+    for key, value in (("min_genes", min_genes), ("max_genes", max_genes),
+                       ("min_counts", min_counts), ("max_pct_mt", max_pct_mt),
+                       ("drop_doublets", drop_doublets)):
+        if value is not None:
+            setattr(params, key, value)
+    thresholds = qc_filter.Thresholds.from_params(params)
+
+    def _run() -> dict:
+        return qc_filter.preview(adaptor.adata, adaptor.qc_per_cell(), thresholds,
+                                 sample_column or None, cluster_column or None)
+
+    try:
+        # Per-cell metrics may need a pass over the counts the first time: off the loop.
+        return await asyncio.to_thread(_run)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Filter preview failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Filter preview failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Doublet score threshold (core/doublets.py)
+# ---------------------------------------------------------------------------
+
+
+class DoubletThresholdRequest(BaseModel):
+    """Call doublets above ``threshold``; ``None`` puts Scrublet's own call back."""
+    threshold: float | None = None
+    column: str = ""  # the sample column for the per-sample counts (default: detected)
+
+
+@router.get("/datasets/{dataset_id}/qc/doublets")
+async def get_doublets(
+    dataset_id: str,
+    threshold: float | None = None,
+    column: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The doublet-score histogram and how many cells ``threshold`` (default: the
+    applied one, else Scrublet's) calls doublets, overall and per sample, with
+    the expected doublet rate suggested from the cells per sample. Without scores
+    only the suggestion is returned (``available`` false)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:
+        return await asyncio.to_thread(doublets.summary, adaptor.adata, threshold, column or None)
+    except doublets.DoubletError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Doublet summary failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Doublet summary failed: {e}")
+
+
+@router.post("/datasets/{dataset_id}/qc/doublets/threshold")
+async def apply_doublet_threshold(
+    dataset_id: str,
+    body: DoubletThresholdRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Write the calls at ``threshold`` into ``predicted_doublet`` (what the
+    filtering step drops), keeping Scrublet's own call in
+    ``predicted_doublet_scrublet``; save, and answer with the new summary."""
+    async with dataset_lock(dataset_id):
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = getattr(adaptor.adata, "isbacked", False)
+
+        def _run():
+            work = adaptor.adata.to_memory() if backed else adaptor.adata
+            before = uns_snapshot(work)
+            result = doublets.apply_threshold(work, body.threshold, body.column or None)
+            write_derived(work, output_path, adaptor.h5ad_path, before)
+            return result
+
+        try:
+            result = await asyncio.to_thread(_run)
+        except doublets.DoubletError as e:
+            raise HTTPException(status_code=400, detail=str(e))  # raised before any change
+        except Exception as e:
+            dm.evict(dataset_id)  # the cached copy may hold calls that were never saved
+            logger.error("Doublet threshold failed for %s: %s", dataset_id, e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Could not save the doublet calls: {e!s}")
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
+        return result
 
 
 # ---------------------------------------------------------------------------

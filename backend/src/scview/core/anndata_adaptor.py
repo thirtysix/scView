@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -9,8 +10,10 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from scview.core import marker_specificity
 from scview.core.ora_background import resolve_markers_key
 from scview.core.uns_keys import markers_column, repair_slash_keys
+from scview.core.user_labels import user_columns
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +153,7 @@ class AnnDataAdaptor:
         self._adata: ad.AnnData | None = None
         self._qc_cache: dict | None = None
         self._qc_cells: dict | None = None
+        self._fingerprint: tuple[pd.Index, str] | None = None  # (obs_names hashed, hash)
 
     @property
     def adata(self) -> ad.AnnData:
@@ -173,6 +177,22 @@ class AnnDataAdaptor:
 
     def n_cells(self) -> int:
         return self.adata.n_obs
+
+    def cells_fingerprint(self) -> str:
+        """A short hash of the cell barcodes in order: equal for two datasets
+        whose cell i is the same cell, so a saved session's cell indices and
+        camera still mean the same cells. Labels, embeddings and genes don't
+        change it; filtering or reordering cells does."""
+        names = self.adata.obs_names
+        if self._fingerprint is not None and self._fingerprint[0] is names:
+            return self._fingerprint[1]
+        h = hashlib.sha256(f"{len(names)}\n".encode())
+        for start in range(0, len(names), 100_000):
+            h.update("\n".join(map(str, names[start:start + 100_000])).encode())
+            h.update(b"\n")
+        fingerprint = h.hexdigest()[:24]
+        self._fingerprint = (names, fingerprint)
+        return fingerprint
 
     def n_genes(self) -> int:
         return self.adata.n_vars
@@ -549,6 +569,10 @@ class AnnDataAdaptor:
                 return candidate
         return None
 
+    def user_annotation_columns(self) -> list[str]:
+        """The hand-label columns (uns ``scview_user_annotations``) still in obs."""
+        return user_columns(self.adata)
+
     # ------------------------------------------------------------------
     # Marker genes
     # ------------------------------------------------------------------
@@ -587,7 +611,9 @@ class AnnDataAdaptor:
         n_genes : int
             Max genes to return per group (default 100).
 
-        Returns a DataFrame with columns: group, gene, logfoldchange, pval, pval_adj, pct.
+        Returns a DataFrame with columns: group, gene, logfoldchange, pval, pval_adj,
+        pct_in, pct_out, and the specificity columns of ``core/marker_specificity.py``
+        (tau, pct_max_other, max_other_group, pct_ratio) when they can be computed.
         """
         # A file's own markers are often under the bare key with params.groupby set.
         uns_key = resolve_markers_key(self.adata.uns, column or "")
@@ -606,6 +632,8 @@ class AnnDataAdaptor:
                 continue
             total_genes = len(rgg["names"][group])
             limit = min(n_genes, total_genes)
+            genes = [str(g) for g in rgg["names"][group][:limit]]
+            spec = marker_specificity.columns_for_group(rgg, str(group), genes)
             for i in range(limit):
                 gene_name = str(rgg["names"][group][i])
                 row = {
@@ -638,6 +666,9 @@ class AnnDataAdaptor:
                             row["pct_out"] = float(pts_rest[group][i])
                     except (KeyError, IndexError):
                         pass
+                for field, values in spec.items():
+                    value = values[i]
+                    row[field] = value if value is None or isinstance(value, str) else float(value)
                 rows.append(row)
 
         return pd.DataFrame(rows)

@@ -107,6 +107,16 @@ describe("CompareColoringsControl", () => {
     expect(useSplitViewStore.getState().compareColumns).toEqual(["stim", "cell_type", "leiden"]);
   });
 
+  it("lists the dataset's hand-label columns first, and ticks one as the best other column", () => {
+    const labelled = { ...dataset([STIM, CELL_TYPE, LEIDEN, SAMPLE]), user_annotation_columns: ["sample"] };
+    useDatasetStore.setState({ currentDataset: labelled, currentDatasetId: "ds1" });
+    render(<CompareColoringsControl />);
+    fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
+    const ticked = screen.getAllByRole("checkbox").filter((c) => (c as HTMLInputElement).checked);
+    expect(screen.getAllByRole("checkbox")[0]!.closest("label")!.textContent).toBe("sample2");
+    expect(ticked.map((c) => c.closest("label")!.textContent)).toEqual(["sample2", "stim2"]);
+  });
+
   it("allows at most four columns and needs two", () => {
     useDatasetStore.setState({
       currentDataset: dataset([STIM, CELL_TYPE, LEIDEN, SAMPLE, { ...SAMPLE, name: "donor" }]),
@@ -193,6 +203,20 @@ describe("CompareColoringsGrid", () => {
     // Both legends, by their categories.
     expect(screen.getByText("NK")).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
+  });
+
+  it("keeps a long label at a panel's left edge inside the panel", async () => {
+    // "CD4+ memory T cell" sits on the leftmost cells, ~26 px from the panel's
+    // edge; its ~134 px of text would lose its first characters there.
+    const long = { ...CELL_TYPE, values: ["CD4+ memory T cell", "NK", "T"] };
+    useDatasetStore.setState({ currentDataset: dataset([long, LEIDEN]), currentDatasetId: "ds1" });
+    renderGrid();
+    await screen.findByTestId("deck");
+    type L = { id: string; props: { data: { label: string; offset: number[] }[] } };
+    const layer = (deckProps.current!.layers as L[]).find((l) => l.id === "split-label-0")!;
+    const offsetX = (label: string) => layer.props.data.find((d) => d.label === label)!.offset[0]!;
+    expect(offsetX("CD4+ memory T cell")).toBeGreaterThan(30);
+    expect(offsetX("NK")).toBe(0);
   });
 
   it("drops the labels when toggled off for this set of columns, and fades all but a highlighted group", async () => {

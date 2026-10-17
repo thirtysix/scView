@@ -16,6 +16,7 @@ import { UnifiedExpressionSubtab } from "@/components/unified/UnifiedExpressionS
 import { UnifiedGeneSetsSubtab } from "@/components/unified/UnifiedGeneSetsSubtab";
 import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentSubtab";
 import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
+import { UnifiedActivitySubtab } from "@/components/unified/UnifiedActivitySubtab";
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
 import { CompareColoringsGrid } from "@/components/unified/CompareColoringsGrid";
@@ -27,11 +28,14 @@ import { colorByLine, type HoverLine } from "@/lib/hoverInfo";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { labelsShown } from "@/lib/centroidLabels";
+import { cameraFromViewState } from "@/lib/session";
 import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { getDataset, renameObsCategory } from "@/api/datasets";
 import { subclusterGroup } from "@/api/clustering";
+import { getActivityCells, type ActivityRef } from "@/api/activity";
+import { activityLabel } from "@/lib/activity";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { useQueryClient } from "@tanstack/react-query";
@@ -42,6 +46,7 @@ const SUBTABS = [
   { id: "genesets" as const, label: "Gene Sets" },
   { id: "enrichment" as const, label: "Enrichment" },
   { id: "de" as const, label: "DE" },
+  { id: "activity" as const, label: "Activity" },
 ] as const;
 
 interface ViolinResponse {
@@ -181,6 +186,27 @@ export function UnifiedViewPanel() {
 
   // --- View state for lasso ---
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(null);
+
+  // The main plot's camera, kept in the store for "Save session"; a camera from
+  // "Open session" is shown once this dataset and embedding are on screen.
+  const setCamera = useUnifiedViewStore((s) => s.setCamera);
+  const handleCameraChange = useCallback(
+    (vs: Record<string, unknown>, fitted: boolean) => {
+      const camera = fitted ? null : cameraFromViewState(vs);
+      setCamera(camera && datasetId ? { datasetId, embedding, camera } : null);
+    },
+    [datasetId, embedding, setCamera],
+  );
+  const pendingCamera = useUnifiedViewStore((s) => s.pendingCamera);
+  const setPendingCamera = useUnifiedViewStore((s) => s.setPendingCamera);
+  const restoreCamera =
+    pendingCamera && pendingCamera.datasetId === datasetId && pendingCamera.embedding === embedding
+      ? (pendingCamera.camera as unknown as Record<string, unknown>)
+      : null;
+  const handleCameraRestored = useCallback(() => {
+    setViewState(restoreCamera); // the lasso and the cluster map follow it
+    setPendingCamera(null);
+  }, [restoreCamera, setPendingCamera]);
 
   // --- Resizable split pane ---
   const [splitFraction, setSplitFraction] = useState(0.6); // left panel fraction (0.3–0.8)
@@ -348,11 +374,12 @@ export function UnifiedViewPanel() {
   }, [expressionLayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Gene set score handler ---
+  // `genes`: the set scored, so a saved session can score it again.
   const handleScoreComplete = useCallback(
-    (scores: Float32Array, name: string) => {
+    (scores: Float32Array, name: string, genes?: string[], activity?: ActivityRef) => {
       setOverlayValues(scores);
       setOverlayLabel(name);
-      setScatterOverlay({ type: "score", name });
+      setScatterOverlay({ type: "score", name, genes, activity });
       if (datasetId) setOverlayDatasetId(datasetId);
 
       // Build violin from scores grouped by the active groupBy column
@@ -382,6 +409,32 @@ export function UnifiedViewPanel() {
     [setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId,
      setViolinData, setViolinTitle, groupByColumn, dataset, datasetId, openBottomPanel],
   );
+
+  // --- An overlay from "Open session", drawn once this dataset is on screen ---
+  const pendingOverlay = useUnifiedViewStore((s) => s.pendingOverlay);
+  const setPendingOverlay = useUnifiedViewStore((s) => s.setPendingOverlay);
+  useEffect(() => {
+    if (!pendingOverlay || !datasetId || pendingOverlay.datasetId !== datasetId) return;
+    const o = pendingOverlay.overlay;
+    setPendingOverlay(null);
+    if (o.type === "expression") {
+      handleGeneClick(o.gene);
+      return;
+    }
+    if (o.type === "activity") {
+      const ref = { network: o.network, source: o.source };
+      getActivityCells(datasetId, o.network, o.source)
+        .then((res) => handleScoreComplete(new Float32Array(res.scores), activityLabel(o.network, o.source), undefined, ref))
+        .catch((err) => console.error("Failed to restore the activity overlay:", err));
+      return;
+    }
+    apiFetch<{ scores: number[] }>(`/datasets/${datasetId}/genesets/score`, {
+      method: "POST",
+      body: JSON.stringify({ gene_set: o.genes, score_name: o.name }),
+    })
+      .then((res) => handleScoreComplete(new Float32Array(res.scores), o.name, o.genes))
+      .catch((err) => console.error("Failed to restore the gene-set overlay:", err));
+  }, [pendingOverlay, datasetId, handleGeneClick, handleScoreComplete, setPendingOverlay]);
 
   // --- Clear overlay (revert to obs coloring) ---
   const handleClearOverlay = useCallback(() => {
@@ -687,6 +740,10 @@ export function UnifiedViewPanel() {
                 maxRenderedCells={maxRenderedCells}
                 externalViewState={viewState}
                 onViewStateChange={setViewState}
+                restoreViewState={restoreCamera}
+                onRestoreViewState={handleCameraRestored}
+                cameraKey={`${datasetId}:${embedding}`}
+                onCameraChange={handleCameraChange}
                 onHover={handleHover}
                 dimensions={dimensions}
                 exportName={scatterExportName}
@@ -972,6 +1029,13 @@ export function UnifiedViewPanel() {
             )}
             {activeSubtab === "de" && (
               <UnifiedDESubtab onGeneClick={handleGeneClick} onScoreGeneSet={handleScoreComplete} />
+            )}
+            {activeSubtab === "activity" && (
+              <UnifiedActivitySubtab
+                onScore={handleScoreComplete}
+                groupByColumn={groupByColumn}
+                setGroupByColumn={setGroupByColumn}
+              />
             )}
           </div>
         </div>

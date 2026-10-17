@@ -5,6 +5,9 @@ export interface DEGene {
   logfoldchange: number;
   pval: number;
   pval_adj: number;
+  /** Test statistic (Wilcoxon z, DESeq2 Wald): TF / pathway activity is scored on
+   *  it, and GSEA ranks a Wilcoxon result by it. */
+  stat?: number | null;
 }
 
 export interface DEResponse {
@@ -29,6 +32,8 @@ export interface DEResponse {
   dropped_samples?: string[];
   /** /de/compare: the two sides are also different batches (datasets, runs). */
   confounding?: DEConfounding | null;
+  /** Names this result for GSEA, which could not send every gene back. */
+  result_id?: string | null;
 }
 
 export interface DEConfounding {

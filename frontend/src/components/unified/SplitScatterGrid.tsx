@@ -144,7 +144,7 @@ export function SplitScatterGrid({
     ? `Showing ${drawnCells.toLocaleString()} of ${total.toLocaleString()} cells (sampled)`
     : undefined;
 
-  // Each panel labels the colour groups it has cells of, at their centre in it.
+  // Each panel labels the colour groups it has cells of, where most of them are in it.
   const panelLabels = useMemo(
     () =>
       showLabels && labelCategories && colorValues instanceof Int32Array && colorType === "categorical"

@@ -225,3 +225,54 @@ describe("Unified View group labels", () => {
     expect(scatterProps.current!.showLabels).toBe(false);
   });
 });
+
+describe("Unified View and a restored session", () => {
+  beforeEach(() => {
+    useUnifiedViewStore.setState({ camera: null, pendingCamera: null, pendingOverlay: null });
+  });
+
+  it("shows the session's camera, then keeps the camera shown for the next save", () => {
+    const camera = { target: [1, 2, 0], zoom: 3 };
+    useUnifiedViewStore.setState({ pendingCamera: { datasetId: "kang", embedding: "X_umap", camera } });
+    renderPanel();
+    expect(scatterProps.current!.restoreViewState).toEqual(camera);
+    act(() => (scatterProps.current!.onRestoreViewState as () => void)());
+    expect(useUnifiedViewStore.getState().pendingCamera).toBeNull();
+
+    const onCamera = scatterProps.current!.onCameraChange as (vs: Record<string, unknown>, fitted: boolean) => void;
+    act(() => onCamera({ target: [4, 5, 0], zoom: 1.5, minZoom: -3, width: 400 }, false));
+    expect(useUnifiedViewStore.getState().camera).toEqual({
+      datasetId: "kang",
+      embedding: "X_umap",
+      camera: { target: [4, 5, 0], zoom: 1.5 },
+    });
+    act(() => onCamera({ target: [0, 0, 0], zoom: 1 }, true)); // fitted again: nothing to save
+    expect(useUnifiedViewStore.getState().camera).toBeNull();
+  });
+
+  it("leaves a camera for another embedding or dataset alone", () => {
+    useUnifiedViewStore.setState({
+      pendingCamera: { datasetId: "kang", embedding: "X_pca", camera: { target: [1, 2], zoom: 3 } },
+    });
+    renderPanel();
+    expect(scatterProps.current!.restoreViewState).toBeNull();
+  });
+
+  it("scores the session's gene set again and overlays it", async () => {
+    apiFetch.mockImplementation(async (path: string) =>
+      path.endsWith("/genesets/score") ? { scores: [0.5, 1, 1.5] } : {},
+    );
+    useUnifiedViewStore.setState({
+      pendingOverlay: { datasetId: "kang", overlay: { type: "score", name: "IFN", genes: ["ISG15", "MX1"] } },
+    });
+    renderPanel();
+    await vi.waitFor(() => expect(useUnifiedViewStore.getState().scatterOverlay).not.toBeNull());
+    const [path, init] = apiFetch.mock.calls.find(([p]) => String(p).endsWith("/genesets/score"))!;
+    expect(path).toBe("/datasets/kang/genesets/score");
+    expect(JSON.parse(init.body)).toEqual({ gene_set: ["ISG15", "MX1"], score_name: "IFN" });
+    const u = useUnifiedViewStore.getState();
+    expect(u.scatterOverlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15", "MX1"] });
+    expect(Array.from(u.overlayValues!)).toEqual([0.5, 1, 1.5]);
+    expect(u.pendingOverlay).toBeNull();
+  });
+});

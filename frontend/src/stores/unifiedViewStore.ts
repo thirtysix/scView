@@ -1,13 +1,24 @@
 import { create } from "zustand";
 import type { LabelChoice } from "@/lib/centroidLabels";
+import type { UnifiedSubtab } from "@/lib/constants";
+import type { Camera, SessionOverlay } from "@/lib/session";
 
 type ScatterOverlay =
   | { type: "obs"; column: string }
   | { type: "expression"; gene: string }
-  | { type: "score"; name: string }
+  // genes: the set scored, so a saved session can score it again; activity: the
+  // TF / pathway whose per-cell activity this is, for the same reason
+  | { type: "score"; name: string; genes?: string[]; activity?: { network: "collectri" | "progeny"; source: string } }
   | null;
 
-type Subtab = "markers" | "expression" | "genesets" | "enrichment" | "de";
+type Subtab = UnifiedSubtab;
+
+/** A camera on one dataset's embedding. */
+export interface PlacedCamera {
+  datasetId: string;
+  embedding: string;
+  camera: Camera;
+}
 
 interface UnifiedViewState {
   activeSubtab: Subtab;
@@ -50,11 +61,29 @@ interface UnifiedViewState {
   // a compare set); any other colouring gets the default (lib/centroidLabels.ts).
   centroidLabels: LabelChoice | null;
   setCentroidLabels: (choice: LabelChoice | null) => void;
+
+  // The main plot's camera once the user has moved it (null = fitted), kept
+  // for "Save session"; nothing renders from it.
+  camera: PlacedCamera | null;
+  setCamera: (camera: PlacedCamera | null) => void;
+  // From "Open session", applied by the Unified View when it shows that
+  // dataset (and, for the camera, that embedding).
+  pendingCamera: PlacedCamera | null;
+  setPendingCamera: (camera: PlacedCamera | null) => void;
+  pendingOverlay: { datasetId: string; overlay: SessionOverlay } | null;
+  setPendingOverlay: (pending: { datasetId: string; overlay: SessionOverlay } | null) => void;
 }
 
 export const useUnifiedViewStore = create<UnifiedViewState>((set) => ({
   centroidLabels: null,
   setCentroidLabels: (choice) => set({ centroidLabels: choice }),
+
+  camera: null,
+  setCamera: (camera) => set({ camera }),
+  pendingCamera: null,
+  setPendingCamera: (camera) => set({ pendingCamera: camera }),
+  pendingOverlay: null,
+  setPendingOverlay: (pending) => set({ pendingOverlay: pending }),
 
   activeSubtab: "markers",
   setActiveSubtab: (tab) => set({ activeSubtab: tab }),

@@ -91,9 +91,10 @@ export function compareColumnOptions(
   columns: readonly ObsColumnInfo[],
   nCells?: number | null,
   activeClustering?: string | null,
+  userColumns?: readonly string[],
 ): CompareColumnOption[] {
   const byName = new Map(columns.map((c) => [c.name, c]));
-  return rankGroupingColumns(columns, { nCells, activeClustering }).map(({ name }) => ({
+  return rankGroupingColumns(columns, { nCells, activeClustering, userColumns }).map(({ name }) => ({
     name,
     nValues: byName.get(name)!.n_unique,
   }));

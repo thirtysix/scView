@@ -25,10 +25,14 @@ from scview.core.species import match_genes
 
 logger = logging.getLogger(__name__)
 
-# A core subset of van den Brink et al.'s dissociation-affected genes: the AP-1,
-# EGR and NR4A immediate-early transcription factors, other early-response genes,
-# and the heat-shock chaperones. Human symbols; each mouse ortholog is the
-# title-cased symbol (Fos, Hspa1a), so matching ignores case.
+# A subset of van den Brink et al.'s Supplementary Table 5 (140 mouse genes up in
+# the dissociation-affected clusters; all 22 below are on it, checked against the
+# supplement): the AP-1, EGR and NR4A immediate-early transcription factors, other
+# early-response genes, and the heat-shock chaperones. The full table also holds
+# broadly expressed genes (Actg1, Eif1, Ubc, Ddx5) and muscle genes (Des, Ankrd1)
+# from the muscle stem cells it was measured in, which would dilute a score in
+# other tissues. Human symbols; each mouse ortholog is the title-cased symbol
+# (Fos, Hspa1a), so matching ignores case.
 STRESS_GENES = (
     "FOS", "FOSB", "JUN", "JUNB", "JUND", "ATF3", "EGR1", "NR4A1",
     "IER2", "IER3", "ZFP36", "DUSP1", "KLF6", "SOCS3", "BTG2", "PPP1R15A",

@@ -1,5 +1,6 @@
 """Dataset management endpoints – upload, list, get info, delete."""
 
+import asyncio
 import json
 import logging
 import uuid
@@ -174,12 +175,16 @@ async def get_dataset_info(
         embs = adaptor.available_embeddings()
         info["obs_columns"] = adaptor.obs_columns_info()
         info["active_clustering"] = adaptor.active_clustering_column()
+        info["user_annotation_columns"] = adaptor.user_annotation_columns()
         info["available_embeddings"] = [e["name"] for e in embs]
         info["embedding_dimensions"] = {e["name"]: e["dimensions"] for e in embs}
         info["n_cells"] = adaptor.n_cells()
         info["n_genes"] = adaptor.n_genes()
         info["expression_layers"] = adaptor.available_expression_layers()
         info["default_expression_layer"] = adaptor.default_expression_layer()
+        # Which cells, in which order: a saved session checks it (hashing a
+        # million barcodes takes a moment the first time, so off the loop).
+        info["cells_fingerprint"] = await asyncio.to_thread(adaptor.cells_fingerprint)
 
     return info
 

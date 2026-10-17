@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { plotlyColorscale } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import Plot from "@/components/plots/Plot";
@@ -7,13 +7,17 @@ import { plotConfig } from "@/lib/plotConfig";
 import { Loader2, Sparkles } from "lucide-react";
 
 import { apiFetch } from "@/api/client";
-import { getQcByGroup, type QcByGroup } from "@/api/qc";
+import { getQcByGroup, type FilterThresholds, type QcByGroup } from "@/api/qc";
 import { useCategoryColors, useCategoryOrder } from "@/hooks/useCategoryColors";
 import { groupScatterTraces, qcGroupOptions, qcGroupReason, QC_MAX_GROUPS } from "@/lib/qcGroups";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { Panel } from "@/components/common/Panel";
 import { PlotGrid } from "@/components/common/PlotGrid";
+import { DoubletCard } from "@/components/panels/DoubletCard";
+import { QcFilterSummary } from "@/components/panels/QcFilterSummary";
+import { ThresholdHistogram, type RefLine, type ThresholdLine } from "@/components/plots/ThresholdHistogram";
+import { roundTo } from "@/lib/qcThresholds";
 
 interface QcMetric {
   min: number;
@@ -63,52 +67,114 @@ function fmt(v: number): string {
   return v.toFixed(2);
 }
 
-function HistCard({ label, metric }: { label: string; metric: QcMetric }) {
-  const edges = metric.hist.bin_edges;
-  const counts = metric.hist.counts;
-  const mids = counts.map((_, i) => (edges[i]! + edges[i + 1]!) / 2);
-  const width = edges.length > 1 ? edges[1]! - edges[0]! : 1;
+/** A filtering-step threshold set on a QC histogram. */
+type ThresholdParam = "min_genes" | "max_genes" | "min_counts" | "max_pct_mt";
+
+/** Which thresholds each histogram carries. */
+export const HIST_THRESHOLDS: Record<string, { param: ThresholdParam; label: string }[]> = {
+  n_genes_by_counts: [
+    { param: "min_genes", label: "Min" },
+    { param: "max_genes", label: "Max" },
+  ],
+  total_counts: [{ param: "min_counts", label: "Min" }],
+  pct_counts_mt: [{ param: "max_pct_mt", label: "Max" }],
+};
+
+const THRESHOLD_STEP: Record<ThresholdParam, number> = { min_genes: 1, max_genes: 1, min_counts: 1, max_pct_mt: 0.1 };
+
+/** 0 turns min / max genes and min counts off; max % mito has no off (100 keeps every cell). */
+export function thresholdOn(param: ThresholdParam, value: number): boolean {
+  return param === "max_pct_mt" ? value < 100 : value > 0;
+}
+
+/** A number input for one threshold: empty = off (min/max genes, min counts). The text
+ *  is the user's while they type, and follows the value again when they leave. */
+function ThresholdInput({
+  param,
+  label,
+  value,
+  onCommit,
+}: {
+  param: ThresholdParam;
+  label: string;
+  value: number;
+  onCommit: (param: ThresholdParam, value: number) => void;
+}) {
+  const shown = thresholdOn(param, value) || param === "max_pct_mt" ? String(value) : "";
+  const [text, setText] = useState<string | null>(null);
+  // What was typed stays while it still says the value; a value set elsewhere (a drag
+  // on the plot, which keeps the input focused) replaces it.
+  const keep = text !== null && (text.trim() === "" || Number(text) === value);
+  return (
+    <label className="flex items-center gap-1">
+      {label}
+      <input
+        type="number"
+        min={0}
+        step={THRESHOLD_STEP[param]}
+        value={keep ? text! : shown}
+        placeholder="off"
+        aria-label={`${label} ${param}`}
+        onChange={(e) => {
+          setText(e.target.value);
+          const raw = e.target.value.trim();
+          const v = Number(raw);
+          if (raw === "" && param !== "max_pct_mt") onCommit(param, 0);
+          else if (raw !== "" && isFinite(v) && v >= 0) onCommit(param, v);
+        }}
+        onBlur={() => setText(null)}
+        className="w-16 rounded border border-slate-200 px-1 py-0 text-[10px] text-slate-600"
+      />
+    </label>
+  );
+}
+
+function HistCard({
+  label,
+  metric,
+  thresholds,
+  onDrag,
+  onCommit,
+}: {
+  label: string;
+  metric: QcMetric;
+  /** The filtering thresholds this histogram sets, with their current values. */
+  thresholds?: { param: ThresholdParam; label: string; value: number }[];
+  onDrag?: (param: ThresholdParam, value: number) => void;
+  onCommit?: (param: ThresholdParam, value: number) => void;
+}) {
+  const refLines = useMemo<RefLine[]>(
+    () => [{ value: metric.median, label: "median", color: "#94a3b8", dash: "dot" }],
+    [metric.median],
+  );
+  const lines: ThresholdLine[] = (thresholds ?? [])
+    .filter((t) => thresholdOn(t.param, t.value))
+    .map((t) => ({ id: t.param, value: t.value, label: `${t.label.toLowerCase()} ${fmt(t.value)}` }));
   return (
     <Panel title={label}>
       <div className="flex h-full flex-col">
         <div className="min-h-0 flex-1">
-          <Plot
-            data={[
-              {
-                type: "bar",
-                x: mids,
-                y: counts,
-                width,
-                marker: { color: "#60a5fa" },
-                hovertemplate: "%{x:.1f}: %{y} cells<extra></extra>",
-              },
-            ]}
-            layout={{
-              autosize: true,
-              margin: { l: 40, r: 10, t: 8, b: 24 },
-              xaxis: { tickfont: { size: 9 } },
-              yaxis: { tickfont: { size: 9 } },
-              bargap: 0.02,
-              showlegend: false,
-              shapes: [
-                {
-                  type: "line",
-                  x0: metric.median,
-                  x1: metric.median,
-                  yref: "paper",
-                  y0: 0,
-                  y1: 1,
-                  line: { color: "#ef4444", width: 1, dash: "dot" },
-                },
-              ],
-            }}
-            config={plotConfig(`qc_${label}`)}
-            style={FILL_STYLE}
-            useResizeHandler
+          <ThresholdHistogram
+            edges={metric.hist.bin_edges}
+            counts={metric.hist.counts}
+            lines={lines}
+            refLines={refLines}
+            plotName={`qc_${label}`}
+            onDrag={onDrag ? (id, v) => onDrag(id as ThresholdParam, v) : undefined}
+            onCommit={onCommit ? (id, v) => onCommit(id as ThresholdParam, v) : undefined}
           />
         </div>
-        <div className="flex-shrink-0 px-1 pt-1 text-[10px] text-slate-400">
-          median {fmt(metric.median)} · IQR {fmt(metric.q1)}–{fmt(metric.q3)} · max {fmt(metric.max)}
+        <div className="flex flex-shrink-0 flex-wrap items-center gap-x-2 px-1 pt-1 text-[10px] text-slate-400">
+          <span>
+            median {fmt(metric.median)} · IQR {fmt(metric.q1)}–{fmt(metric.q3)} · max {fmt(metric.max)}
+          </span>
+          {thresholds && onCommit && (
+            <span className="ml-auto flex items-center gap-2 text-slate-500">
+              {thresholds.map((t) => (
+                <ThresholdInput key={t.param} param={t.param} label={t.label} value={t.value} onCommit={onCommit} />
+              ))}
+            </span>
+          )}
         </div>
       </div>
     </Panel>
@@ -212,7 +278,25 @@ function GroupedQc({ data }: { data: QcByGroup }) {
   );
 }
 
-export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refreshKey?: number }) {
+/** The filtering step's thresholds, owned by the caller (they are its parameters). */
+export interface QcFilterControl {
+  values: FilterThresholds;
+  onChange: (patch: Partial<FilterThresholds>) => void;
+}
+
+export function QcPlots({
+  datasetId,
+  refreshKey = 0,
+  onDoubletsApplied,
+  filter,
+}: {
+  datasetId: string;
+  refreshKey?: number;
+  /** After new doublet calls were saved (other QC views count them). */
+  onDoubletsApplied?: () => void;
+  /** Set the filtering thresholds on the histograms, with a live cell-loss summary. */
+  filter?: QcFilterControl;
+}) {
   const [data, setData] = useState<QcResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -229,6 +313,26 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
   const [grouped, setGrouped] = useState<QcByGroup | null>(null);
   const [groupLoading, setGroupLoading] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
+
+  // A threshold being dragged, before the drag ends and it is handed to `filter`.
+  const [live, setLive] = useState<Partial<FilterThresholds>>({});
+  const thresholds = useMemo(() => (filter ? { ...filter.values, ...live } : null), [filter, live]);
+  const onFilterChange = filter?.onChange;
+  const dragThreshold = useCallback(
+    (param: ThresholdParam, v: number) => setLive((l) => ({ ...l, [param]: roundTo(v, THRESHOLD_STEP[param]) })),
+    [],
+  );
+  const commitThreshold = useCallback(
+    (param: ThresholdParam, v: number) => {
+      setLive((l) => {
+        const next = { ...l };
+        delete next[param];
+        return next;
+      });
+      onFilterChange?.({ [param]: roundTo(v, THRESHOLD_STEP[param]) });
+    },
+    [onFilterChange],
+  );
 
   const askAboutQc = () => {
     if (!data) return;
@@ -310,7 +414,8 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
     ) : null;
   }
 
-  const metricKeys = Object.keys(data.metrics);
+  // The doublet score has a card of its own, with its threshold.
+  const metricKeys = Object.keys(data.metrics).filter((k) => k !== "doublet_score");
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -367,9 +472,31 @@ export function QcPlots({ datasetId, refreshKey = 0 }: { datasetId: string; refr
       )}
       <PlotGrid minTile={300} rowHeight={240}>
         {metricKeys.map((k) => (
-          <HistCard key={k} label={METRIC_LABELS[k] ?? k} metric={data.metrics[k]!} />
+          <HistCard
+            key={k}
+            label={METRIC_LABELS[k] ?? k}
+            metric={data.metrics[k]!}
+            thresholds={
+              thresholds && HIST_THRESHOLDS[k]
+                ? HIST_THRESHOLDS[k]!.map((t) => ({ ...t, value: thresholds[t.param] }))
+                : undefined
+            }
+            onDrag={thresholds ? dragThreshold : undefined}
+            onCommit={thresholds ? commitThreshold : undefined}
+          />
         ))}
       </PlotGrid>
+      {filter && thresholds && (
+        <QcFilterSummary
+          datasetId={datasetId}
+          thresholds={thresholds}
+          refreshKey={refreshKey}
+          onDropDoublets={(on) => filter.onChange({ drop_doublets: on })}
+        />
+      )}
+      {data.metrics.doublet_score && (
+        <DoubletCard datasetId={datasetId} refreshKey={refreshKey} onApplied={onDoubletsApplied} />
+      )}
       {grouped?.column ? <GroupedQc data={grouped} /> : <ScatterCard scatter={data.scatter} />}
     </div>
   );

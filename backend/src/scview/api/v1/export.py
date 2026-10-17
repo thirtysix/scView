@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from scview.api.v1.markers import ensure_specificity
 from scview.core.dataset_manager import DatasetManager
 from scview.dependencies import get_dataset_manager
 
@@ -196,6 +197,8 @@ async def export_dataset(
         columns = [column] if column else (adaptor.marker_columns() or [""])
         frames: dict[str, pd.DataFrame] = {}
         for col in columns:
+            # Markers saved before the specificity columns get them now, as in the table.
+            adaptor = await ensure_specificity(dm, dataset_id, adaptor, col)
             part = adaptor.get_markers(
                 groupby=group if group else None, column=col or None, n_genes=n_genes,
             )
