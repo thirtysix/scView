@@ -5,7 +5,9 @@ variable-gene sensitivity check (``core/hvg_sensitivity.py``).
 ``POST /clustering/sweep`` streams one SSE ``result`` per resolution without
 changing the dataset; ``POST /clustering/keep`` saves one resolution's labels.
 ``/clustering/hvg-sensitivity`` (GET, POST, POST ``/keep``) does the same for
-re-clustering under other variable-gene settings.
+re-clustering under other variable-gene settings. ``GET /clustering/distances``
+gives the distances between a column's groups in the graph's PC space
+(``core/cluster_distances.py``).
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from scview.core import cluster_distances as cd
 from scview.core import hvg_sensitivity as hs
 from scview.core import resolution_sweep as rs
 from scview.core import subcluster as sc_sub
@@ -419,3 +422,22 @@ async def keep_hvg_setting(
             raise HTTPException(status_code=500, detail=f"Could not save the clustering: {exc!s}")
         dm.saved_in_place(dataset_id, adaptor, output_path)
         return result
+
+
+@router.get("/datasets/{dataset_id}/clustering/distances")
+async def group_distances(
+    dataset_id: str,
+    column: str = Query(..., min_length=1),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Distances between the centroids of ``column``'s groups in the PCs the
+    neighbour graph was built on (Harmony PCs when it used them; ``representation``
+    says which), with the groups' order under complete-linkage clustering."""
+    adata = (await _adata(dm, dataset_id)).adata
+    if column not in adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
+    try:
+        # One pass over every cell's PCs: off the loop.
+        return await asyncio.to_thread(cd.group_distances, adata, column)
+    except cd.DistanceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
