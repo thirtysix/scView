@@ -227,6 +227,24 @@ manual_convert <- function(obj, output_path, version_info) {
     }
   }
 
+  # ---- CITE-seq antibody counts (an ADT / Protein assay) ---------------------
+  # scView reads them from obsm["protein_counts"] (cells x proteins) and adds the
+  # CLR itself; a panel is small, so it goes over as a dense table.
+  protein_df <- NULL
+  assays <- tryCatch(SeuratObject::Assays(obj), error = function(e) character(0))
+  adt_name <- intersect(c("ADT", "Protein", "protein", "adt", "CITE", "Antibody"), assays)[1]
+  if (!is.na(adt_name)) {
+    adt <- tryCatch(
+      SeuratObject::GetAssayData(obj, assay = adt_name, layer = "counts"),
+      error = function(e) NULL
+    )
+    if (!is.null(adt) && nrow(adt) > 0 && nrow(adt) <= 1000 &&
+        identical(colnames(adt), colnames(counts))) {
+      protein_df <- as.data.frame(as.matrix(Matrix::t(adt)))
+      cat(sprintf("[convert]   added %s assay: %d proteins\n", adt_name, ncol(protein_df)))
+    }
+  }
+
   # ---- build AnnData object ------------------------------------------------
   cat("[convert] Building AnnData object ...\n")
 
@@ -241,6 +259,9 @@ manual_convert <- function(obj, output_path, version_info) {
     for (key in names(obsm)) {
       adata$obsm[key] <- obsm[[key]]
     }
+  }
+  if (!is.null(protein_df)) {
+    adata$obsm["protein_counts"] <- r_to_py(protein_df)
   }
 
   # ---- write ---------------------------------------------------------------

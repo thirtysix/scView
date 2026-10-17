@@ -28,6 +28,7 @@ import anndata as ad
 import pandas as pd
 import scanpy as sc
 
+from scview.core import protein
 from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,8 @@ def load_unit(unit: IngestUnit, options: dict | None = None) -> ad.AnnData:
 
     adata.var_names_make_unique()
     adata.obs_names_make_unique()
+    # CITE-seq antibodies (and other non-gene features) out of the gene matrix.
+    adata, _ = protein.split_features(adata)
     return adata
 
 
@@ -100,7 +103,8 @@ def _load_mex(unit: IngestUnit, options: dict) -> ad.AnnData:
 
 
 def _load_tenx_h5(unit: IngestUnit, options: dict) -> ad.AnnData:
-    return sc.read_10x_h5(_single(unit))
+    # Every feature type: antibodies are split off after loading (core/protein.py).
+    return sc.read_10x_h5(_single(unit), gex_only=False)
 
 
 def _load_anndata(unit: IngestUnit, options: dict) -> ad.AnnData:

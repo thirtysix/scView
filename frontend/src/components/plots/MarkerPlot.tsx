@@ -69,6 +69,7 @@ export function MarkerPlot({
   kind,
   perGroup,
   genes: chosenGenes,
+  layer,
 }: {
   datasetId: string;
   groupby: string;
@@ -78,6 +79,8 @@ export function MarkerPlot({
   perGroup: number;
   /** Plot these genes instead of the top markers (empty or absent: top markers). */
   genes?: string[];
+  /** Expression layer to read (default: the dataset's), e.g. "protein" */
+  layer?: string;
 }) {
   const colormapName = useSettingsStore((s) => s.continuousColormap);
   const custom = (chosenGenes?.length ?? 0) > 0;
@@ -98,14 +101,14 @@ export function MarkerPlot({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    const qs = new URLSearchParams({ groupby });
+    const qs = new URLSearchParams({ groupby, ...(layer ? { layer } : {}) });
     for (const p of picked) qs.append("genes", p.gene);
     apiFetch<ByGroup>(`/datasets/${datasetId}/expression/by-group?${qs}`)
       .then((d) => { if (!cancelled) setData(d); })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [datasetId, groupby, picked]);
+  }, [datasetId, groupby, picked, layer]);
 
   if (picked.length === 0) {
     return <p className="py-8 text-center text-sm text-slate-400">No up-regulated marker genes to plot.</p>;
@@ -217,14 +220,21 @@ export function MarkerPlot({
           {missing.join(", ")}.
         </p>
       )}
-      <p className="mt-1 text-xs text-slate-500">
-        {custom
-          ? `Your ${genes.length} gene${genes.length === 1 ? "" : "s"} across the ${groupby} groups.`
-          : `Top ${perGroup} up-regulated markers of each ${groupby} group.`}{" "}
-        Colour: mean expression, scaled to 0-1 per gene.
-        {kind === "dotplot" && " Dot size: share of cells in the group that express the gene."}
-        {` Layer: ${layerLabel}.`}
-      </p>
+      {layer === "protein" ? (
+        <p className="mt-1 text-xs text-slate-500">
+          {genes.length} protein{genes.length === 1 ? "" : "s"} across the {groupby} groups. Colour: mean
+          protein level (CLR), scaled to 0-1 per protein.
+        </p>
+      ) : (
+        <p className="mt-1 text-xs text-slate-500">
+          {custom
+            ? `Your ${genes.length} gene${genes.length === 1 ? "" : "s"} across the ${groupby} groups.`
+            : `Top ${perGroup} up-regulated markers of each ${groupby} group.`}{" "}
+          Colour: mean expression, scaled to 0-1 per gene.
+          {kind === "dotplot" && " Dot size: share of cells in the group that express the gene."}
+          {` Layer: ${layerLabel}.`}
+        </p>
+      )}
     </div>
   );
 }

@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
+from scview.core import protein
 from scview.core.dataset_manager import DatasetManager
 from scview.core.ingestion.merge import MergeJoin
 from scview.core.integration import (
@@ -151,6 +152,24 @@ def test_merge_joint_labels_cells_and_keeps_unshared_columns():
     assert list(joint.obs[LABEL_COLUMN].cat.categories) == ["A", "B"]
     assert "condition" in joint.obs.columns
     assert joint.obs.loc[joint.obs[LABEL_COLUMN] == "B", "condition"].isna().all()
+
+
+def test_merge_joint_carries_the_shared_proteins():
+    a, b = _counts_dataset(seed=1), _counts_dataset(seed=2)
+    rng = np.random.default_rng(0)
+    for d, panel in ((a, ["CD3", "CD19", "CD14"]), (b, ["CD19", "CD3"])):
+        protein.attach(d, rng.poisson(20, (d.n_obs, len(panel))), panel, protein.ProteinSplit())
+    units = {
+        "A": build_unit(a, dataset_id="a", name="A", label="A", fallback_paths=[]),
+        "B": build_unit(b, dataset_id="b", name="B", label="B", fallback_paths=[]),
+    }
+    joint = merge_joint(units)
+    assert protein.protein_names(joint) == ["CD3", "CD19"]
+    counts = joint.obsm[protein.COUNTS_KEY]
+    assert counts.shape == (a.n_obs + b.n_obs, 2)
+    a_rows = (joint.obs[LABEL_COLUMN] == "A").to_numpy()
+    assert np.array_equal(counts[a_rows].to_numpy(), a.obsm[protein.COUNTS_KEY][["CD3", "CD19"]].to_numpy())
+    assert np.allclose(joint.obsm[protein.CLR_KEY].to_numpy(), protein.clr(counts.to_numpy()))
 
 
 def test_plan_blocks_single_dataset_and_cell_cap(tmp_path):

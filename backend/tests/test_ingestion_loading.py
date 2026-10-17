@@ -32,16 +32,18 @@ def _barcode(i: int) -> str:
 
 
 def _mex(tmp: Path, prefix: str = "", *, n_genes: int = 3, n_cells: int = 2,
-         ncols: int = 3, gz: bool = False) -> list[Path]:
-    # matrix is genes x cells (10x convention)
-    dense = np.arange(1, n_genes * n_cells + 1).reshape(n_genes, n_cells)
+         ncols: int = 3, gz: bool = False, antibodies: int = 0) -> list[Path]:
+    # matrix is genes x cells (10x convention); antibodies (CITE-seq) after the genes
+    n_feat = n_genes + antibodies
+    dense = np.arange(1, n_feat * n_cells + 1).reshape(n_feat, n_cells)
     mtx = tmp / f"{prefix}matrix.mtx"
     scipy.io.mmwrite(str(mtx), sp.csr_matrix(dense))
     bc = tmp / f"{prefix}barcodes.tsv"
     bc.write_text("".join(_barcode(i) + "\n" for i in range(n_cells)))
     ft = tmp / f"{prefix}features.tsv"
     if ncols == 3:
-        ft.write_text("".join(f"ENSG{i:011d}\tGENE{i}\tGene Expression\n" for i in range(n_genes)))
+        ft.write_text("".join(f"ENSG{i:011d}\tGENE{i}\tGene Expression\n" for i in range(n_genes))
+                      + "".join(f"AB{i}\tCD{i}_TotalSeqB\tAntibody Capture\n" for i in range(antibodies)))
     else:  # v2: id + symbol
         ft.write_text("".join(f"ENSG{i:011d}\tGENE{i}\n" for i in range(n_genes)))
     paths = [mtx, bc, ft]
@@ -65,20 +67,26 @@ def _h5ad(p: Path, n_obs: int = 5, n_var: int = 4) -> Path:
     return p
 
 
-def _tenx_h5(p: Path, n_genes: int = 3, n_cells: int = 2) -> Path:
-    dense = np.arange(1, n_genes * n_cells + 1).reshape(n_genes, n_cells)
+def _tenx_h5(p: Path, n_genes: int = 3, n_cells: int = 2, antibodies: int = 0) -> Path:
+    n_feat = n_genes + antibodies
+    dense = np.arange(1, n_feat * n_cells + 1).reshape(n_feat, n_cells)
     m = sp.csc_matrix(dense)
     with h5py.File(p, "w") as f:
         g = f.create_group("matrix")
         g.create_dataset("data", data=m.data.astype("int32"))
         g.create_dataset("indices", data=m.indices.astype("int64"))
         g.create_dataset("indptr", data=m.indptr.astype("int64"))
-        g.create_dataset("shape", data=np.array([n_genes, n_cells], dtype="int32"))
+        g.create_dataset("shape", data=np.array([n_feat, n_cells], dtype="int32"))
         g.create_dataset("barcodes", data=np.array([_barcode(i).encode() for i in range(n_cells)]))
         ff = g.create_group("features")
-        ff.create_dataset("id", data=np.array([f"ENSG{i}".encode() for i in range(n_genes)]))
-        ff.create_dataset("name", data=np.array([f"GENE{i}".encode() for i in range(n_genes)]))
-        ff.create_dataset("feature_type", data=np.array([b"Gene Expression"] * n_genes))
+        ab = range(antibodies)
+        ff.create_dataset("id", data=np.array([f"ENSG{i}".encode() for i in range(n_genes)]
+                                              + [f"AB{i}".encode() for i in ab]))
+        ff.create_dataset("name", data=np.array([f"GENE{i}".encode() for i in range(n_genes)]
+                                                + [f"CD{i}_TotalSeqB".encode() for i in ab]))
+        ff.create_dataset("feature_type", data=np.array([b"Gene Expression"] * n_genes
+                                                        + [b"Antibody Capture"] * antibodies))
+        ff.create_dataset("genome", data=np.array([b"GRCh38"] * n_feat))
     return p
 
 
@@ -127,6 +135,20 @@ def test_load_h5ad(tmp_path):
 def test_load_tenx_h5(tmp_path):
     adata = load_unit(_only_unit([_tenx_h5(tmp_path / "f.h5", n_genes=3, n_cells=2)]))
     assert adata.shape == (2, 3)
+
+
+def test_cite_seq_antibodies_become_the_protein_modality(tmp_path):
+    # Both 10x formats: the antibodies leave the gene matrix (an .h5 used to drop
+    # them, a MEX to keep them as genes).
+    for unit in (_only_unit([_tenx_h5(tmp_path / "f.h5", n_genes=3, n_cells=2, antibodies=2)]),
+                 _only_unit(_mex(tmp_path, n_genes=3, n_cells=2, antibodies=2))):
+        adata = load_unit(unit)
+        assert list(adata.var_names) == ["GENE0", "GENE1", "GENE2"]
+        counts = adata.obsm["protein_counts"]
+        assert list(counts.columns) == ["CD0", "CD1"]
+        # Features 3 and 4 (genes x cells 1..10, row-major): cells get 7, 9 and 8, 10.
+        assert counts.to_numpy().tolist() == [[7, 9], [8, 10]]
+        assert "protein_clr" in adata.obsm
 
 
 def test_load_loom(tmp_path):

@@ -7,7 +7,8 @@
  * Placement is redone for the current camera (placeLabels): a label is pushed
  * back inside the view when its text would cross an edge, and where labels
  * would overlap the bigger group keeps its label (the smaller one moves a line
- * up or down, or waits until zooming in makes room).
+ * up or down, or waits until zooming in makes room). Boxes drawn over the plot
+ * (its legend) are kept clear the same way.
  */
 import { TextLayer } from "@deck.gl/layers";
 import type { View } from "@deck.gl/core";
@@ -254,7 +255,8 @@ export interface PlacedLabel extends GroupCentroid {
   offset: [number, number];
 }
 
-interface Box {
+/** A screen box (px from the view's top-left, y down). */
+export interface Box {
   x0: number;
   y0: number;
   x1: number;
@@ -277,14 +279,15 @@ const overlaps = (a: Box, b: Box) =>
  * anchor is out of view is left out; one whose text would cross an edge is
  * shifted back inside. Labels are placed biggest group first (a highlighted
  * group before all), each at its anchor, else a line above, else a line below;
- * a label that fits nowhere is left out until zooming in makes room.
+ * a label that fits nowhere is left out until zooming in makes room. `avoid`
+ * boxes (the legend over the plot) count as already taken.
  */
 export function placeLabels(
   centroids: readonly GroupCentroid[],
   view: LabelView,
-  opts: { highlight?: string | null; measure?: (text: string) => number } = {},
+  opts: { highlight?: string | null; measure?: (text: string) => number; avoid?: readonly Box[] } = {},
 ): PlacedLabel[] {
-  const { highlight = null, measure = labelWidth } = opts;
+  const { highlight = null, measure = labelWidth, avoid = [] } = opts;
   const order = centroids
     .map((_, i) => i)
     .sort((a, b) => {
@@ -296,7 +299,7 @@ export function placeLabels(
         ca.code - cb.code
       );
     });
-  const placed: Box[] = [];
+  const placed: Box[] = [...avoid];
   const offsets = new Map<number, [number, number]>();
   const h = LABEL_SIZE + 2 * HALO;
   for (const i of order) {

@@ -30,7 +30,7 @@ import pandas as pd
 import scipy.sparse as sp
 from pydantic import BaseModel, Field
 
-from scview.core import provenance
+from scview.core import protein, provenance
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.session import _make_readonly, _safe_name
 from scview.core.pipeline import PipelineParams, looks_like_counts, run_pipeline_streamed
@@ -196,6 +196,8 @@ def build_unit(
     obs = carried_obs(adata, label)
     obs.index = obs.index.astype(str)
     unit = ad.AnnData(X=counts.X, obs=obs, var=var)
+    if protein.has_protein(adata):  # CITE-seq counts ride along (same cells, same order)
+        unit.obsm[protein.COUNTS_KEY] = adata.obsm[protein.COUNTS_KEY].set_axis(obs.index)
     return Unit(dataset_id, name, label, unit, counts.source)
 
 
@@ -371,9 +373,11 @@ def merge_joint(
                 a.obs[c] = None
         a.obs = a.obs[cols]
     recon = plan_merge(adatas).reconciliation if apply_reconciliation else None
+    protein.common_panel(list(adatas.values()))  # proteins all of them measured, or none
     joint = merge_units(adatas, join=join, sample_label=LABEL_COLUMN, reconciliation=recon)
     for c in cols:
         joint.obs[c] = joint.obs[c].astype("category")
+    protein.renormalise(joint)
     return joint
 
 

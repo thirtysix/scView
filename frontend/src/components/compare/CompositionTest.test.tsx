@@ -41,6 +41,8 @@ const RESULT: CompositionResult = {
   conditions: ["CTRL", "STIM"],
   reference: "CTRL",
   transform: "logit",
+  robust: true,
+  n_outliers: 0,
   tested: true,
   design: "paired",
   test: "moderated t",
@@ -53,11 +55,11 @@ const RESULT: CompositionResult = {
   n_significant_cell_level: 3,
   groups: [
     { group: "B", props: { CTRL: 0.064, STIM: 0.072 }, n_cells: { CTRL: 420, STIM: 530 },
-      fold_change: 1.13, stat: 1.87, pval: 0.094, fdr: 0.14 },
+      fold_change: 1.13, stat: 1.87, pval: 0.094, fdr: 0.14, df_prior: 2.06 },
     { group: "CD14 Mono", props: { CTRL: 0.35, STIM: 0.3 }, n_cells: { CTRL: 2300, STIM: 1925 },
-      fold_change: 0.86, stat: -3.82, pval: 0.004, fdr: 0.012 },
+      fold_change: 0.86, stat: -3.82, pval: 0.004, fdr: 0.012, df_prior: 2.06 },
     { group: "pDC", props: { CTRL: 0.0057, STIM: 0.0108 }, n_cells: { CTRL: 38, STIM: 78 },
-      fold_change: 1.91, stat: 1.14, pval: 0.28, fdr: 0.28 },
+      fold_change: 1.91, stat: 1.14, pval: 0.28, fdr: 0.28, df_prior: 2.06 },
   ],
   samples: [
     { sample: "SNG-101", condition: "CTRL", n_cells: 498, props: [0.06, 0.35, 0.005] },
@@ -131,7 +133,7 @@ describe("CompositionTest", () => {
       n_samples: { CTRL: 1, STIM: 1 },
       n_significant: 0,
       n_significant_cell_level: null,
-      groups: RESULT.groups.map((g) => ({ ...g, stat: null, pval: null, fdr: null })),
+      groups: RESULT.groups.map((g) => ({ ...g, stat: null, pval: null, fdr: null, df_prior: null })),
       warnings: ["CTRL: 1, STIM: 1 sample(s) of 'orig_ident': a test needs at least 2 per condition."],
     });
     render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
@@ -139,6 +141,26 @@ describe("CompositionTest", () => {
     expect(screen.getByRole("alert").textContent).toContain("at least 2 per condition");
     expect(screen.getByText(/read these differences as descriptive/)).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "FDR" })).toBeNull();
+  });
+
+  it("sends the design and variance choices, and shows the auto design", async () => {
+    render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
+    await screen.findByText("1 of 3 groups shift (FDR < 0.05)");
+    expect(screen.getByLabelText("Design")).toHaveDisplayValue("Auto (paired)");
+    fireEvent.change(screen.getByLabelText("Design"), { target: { value: "unpaired" } });
+    await waitFor(() =>
+      expect(testComposition).toHaveBeenLastCalledWith("kang", expect.objectContaining({ paired: false })),
+    );
+    fireEvent.change(screen.getByLabelText("Variance moderation"), { target: { value: "plain" } });
+    await waitFor(() =>
+      expect(testComposition).toHaveBeenLastCalledWith(
+        "kang", expect.objectContaining({ paired: false, robust: false })),
+    );
+    // A new sample column: pairing back to auto.
+    fireEvent.change(screen.getByLabelText("Sample column"), { target: { value: "Donor" } });
+    await waitFor(() => expect(screen.getByLabelText("Design")).toHaveValue("auto"));
+    const last = testComposition.mock.calls.at(-1)![1];
+    expect(last).not.toHaveProperty("paired");
   });
 
   it("exports the table as CSV", async () => {

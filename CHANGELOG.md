@@ -6,6 +6,38 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-17
+
+### Changed
+- **The composition test moderates variances robustly, as propeller does.** limma's robust
+  empirical Bayes (`eBayes(robust=TRUE)`) is now the default: a group whose sample-to-sample
+  variance is an outlier gets a smaller prior df of its own, so it neither borrows strength it
+  shouldn't nor pulls the shared prior for the rest. Matches R limma to numerical precision. With
+  fewer than ten groups limma's robust fit is the plain one, so results there are unchanged. On
+  Kang by cluster, Eryth and pDC are flagged; CD14 Mono moves from FDR 0.053 to 0.056.
+
+### Fixed
+- **The legend no longer hides cells or labels in the Unified View.** When the automatic fit would
+  put cells under the legend (Kang's T cells sat half under it), the cells are fitted beside it
+  instead, as long as that keeps at least half the zoom; a camera you moved yourself is left
+  alone. Group labels keep clear of the legend too.
+- **Changing the colouring keeps your zoom.** Every colour change used to re-fit the camera to the
+  whole embedding; the coordinates are now recognised as unchanged and the view stays put.
+
+### Added
+- **CITE-seq: antibodies as a protein modality.** A 10x feature-barcoding upload (`.h5` or MEX) or
+  an h5ad with `feature_types` keeps its antibody counts apart from the genes (they used to be
+  dropped from an `.h5`, or read as genes from a MEX), normalised by centred log-ratio per cell as
+  Seurat does. A new Protein tab in the Unified View colours the cells by a protein (with its
+  violin), shows every protein by group, keeps isotype controls apart as background, and sets a
+  protein against the gene of its target (Spearman ρ and how often the RNA drops out). Protein
+  colourings are saved in sessions, and the joint embedding and multi-sample uploads keep the
+  antibodies every dataset measured. A Seurat object's ADT (or Protein) assay converts with it.
+  Not yet: DSB normalisation, which needs the empty droplets.
+- **Design and variance choices in the composition test.** A Design menu forces paired (by
+  sample) or unpaired, with Auto showing what it picked; a Variances menu switches back to plain
+  eBayes. The CSV export carries each group's prior df.
+
 ## [0.17.0] - 2026-10-17
 
 ### Added

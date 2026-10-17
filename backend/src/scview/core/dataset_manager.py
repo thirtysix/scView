@@ -426,6 +426,7 @@ class DatasetManager:
                 # Kept so the dataset can be described while a run works on it.
                 "expression_layers": adaptor.available_expression_layers(),
                 "default_expression_layer": adaptor.default_expression_layer(),
+                "protein": adaptor.protein_info(),
                 "status": "ready",
             }
         except Exception as e:

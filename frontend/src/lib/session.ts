@@ -47,7 +47,8 @@ export function cameraFromViewState(vs: Record<string, unknown>): Camera | null 
 }
 
 export type SessionOverlay =
-  | { type: "expression"; gene: string }
+  // layer: a protein (CITE-seq) is read from the protein layer
+  | { type: "expression"; gene: string; layer?: string }
   | { type: "score"; name: string; genes: string[] }
   // A TF or pathway's per-cell activity (Activity subtab), computed again on open.
   | { type: "activity"; network: "collectri" | "progeny"; source: string };
@@ -246,7 +247,11 @@ function parseCamera(x: unknown, where: string): Camera {
 
 function parseOverlay(x: unknown, where: string): SessionOverlay {
   const o = object(x, where);
-  if (o.type === "expression") return { type: "expression", gene: text(o.gene, `${where}.gene`, { empty: false }) };
+  if (o.type === "expression") {
+    const gene = text(o.gene, `${where}.gene`, { empty: false });
+    return o.layer === undefined ? { type: "expression", gene }
+      : { type: "expression", gene, layer: text(o.layer, `${where}.layer`, { empty: false }) };
+  }
   if (o.type === "score") {
     return {
       type: "score",

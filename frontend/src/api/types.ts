@@ -19,6 +19,8 @@ export interface DatasetInfo {
   user_annotation_columns?: string[];
   expression_layers?: ExpressionLayerInfo[];
   default_expression_layer?: string;
+  /** CITE-seq antibodies (protein modality), or null/absent without them */
+  protein?: ProteinInfo | null;
   /** Hash of the cell barcodes in order: equal for the same cells (saved sessions) */
   cells_fingerprint?: string;
   created_at: string;
@@ -51,4 +53,15 @@ export interface PreprocessingState {
   markers_computed: boolean;
   cell_cycle_scored: boolean;
   details: Record<string, string>;
+}
+
+/** A dataset's protein modality: antibody targets in panel order, read as the
+ *  expression layer `layer` (CLR per cell) or `counts_layer` (raw counts). */
+export interface ProteinInfo {
+  names: string[];
+  /** Isotype controls among the names (background, not targets) */
+  controls: string[];
+  layer: string;
+  counts_layer: string;
+  normalisation: string;
 }

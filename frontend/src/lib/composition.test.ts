@@ -22,6 +22,8 @@ const KANG: CompositionResult = {
   conditions: ["CTRL", "STIM"],
   reference: "CTRL",
   transform: "logit",
+  robust: true,
+  n_outliers: 0,
   tested: true,
   design: "paired",
   test: "moderated t",
@@ -34,11 +36,11 @@ const KANG: CompositionResult = {
   n_significant_cell_level: 4,
   groups: [
     { group: "B", props: { CTRL: 0.0641, STIM: 0.0724 }, n_cells: { CTRL: 420, STIM: 530 },
-      fold_change: 1.128, stat: 1.868, pval: 0.0944, fdr: 0.336 },
+      fold_change: 1.128, stat: 1.868, pval: 0.0944, fdr: 0.336, df_prior: 2.061 },
     { group: "CD14 Mono", props: { CTRL: 0.3496, STIM: 0.3003 }, n_cells: { CTRL: 2300, STIM: 1925 },
-      fold_change: 0.859, stat: -3.817, pval: 0.00406, fdr: 0.0427 },
+      fold_change: 0.859, stat: -3.817, pval: 0.00406, fdr: 0.0427, df_prior: 2.061 },
     { group: "Eryth", props: { CTRL: 0.0042, STIM: 0.004 }, n_cells: { CTRL: 30, STIM: 30 },
-      fold_change: null, stat: null, pval: null, fdr: null },
+      fold_change: null, stat: null, pval: null, fdr: null, df_prior: null },
   ],
   samples: [],
   warnings: [],
@@ -92,6 +94,9 @@ describe("result helpers", () => {
     expect(d).toContain("paired by Donor (CTRL 8, STIM 8 samples)");
     expect(d).toContain("prior df 2.1");
     expect(describeTest({ ...KANG, df_prior: null })).toContain("fully pooled");
+    expect(d).toContain("prior df 2.1; robust)");
+    expect(describeTest({ ...KANG, n_outliers: 2 })).toContain("robust: 2 outlying groups shrunk less");
+    expect(describeTest({ ...KANG, robust: false })).not.toContain("robust");
     expect(describeTest({ ...KANG, tested: false })).toMatch(/not tested/);
   });
 
@@ -99,13 +104,15 @@ describe("result helpers", () => {
     const { headers, rows } = compositionCsv(KANG);
     expect(headers).toEqual([
       "cluster", "pct_CTRL", "pct_STIM", "fold_change", "log2_fold_change", "t", "pval", "fdr",
-      "n_cells_CTRL", "n_cells_STIM", "n_samples_CTRL", "n_samples_STIM",
+      "df_prior", "n_cells_CTRL", "n_cells_STIM", "n_samples_CTRL", "n_samples_STIM",
     ]);
     expect(rows[0]![0]).toBe("CD14 Mono");
     expect(rows[0]![1]).toBeCloseTo(34.96, 6);
     expect(rows[0]![4]).toBeCloseTo(Math.log2(0.859), 5);
     expect(rows[0]!.slice(-4)).toEqual([2300, 1925, 8, 8]);
-    expect(rows[2]!.slice(3, 8)).toEqual(["", "", "", "", ""]); // missing values stay empty
+    expect(rows[2]!.slice(3, 9)).toEqual(["", "", "", "", "", ""]); // missing values stay empty
+    expect(rows[0]![8]).toBe(2.061);
+    expect(compositionCsv({ ...KANG, groups: [{ ...KANG.groups[1]!, df_prior: null }] }).rows[0]![8]).toBe("Inf");
     const three = compositionCsv({ ...KANG, conditions: ["A", "B", "C"], test: "moderated F" });
     expect(three.headers).toContain("F");
     expect(three.headers).not.toContain("fold_change");

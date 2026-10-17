@@ -29,6 +29,7 @@ class CompositionRequest(BaseModel):
     reference: str | None = None  # the baseline condition (default: the first)
     transform: Literal["logit", "asin"] = "logit"
     paired: bool | None = None  # None: paired when every donor is in every condition
+    robust: bool = True  # limma's robust empirical Bayes, propeller's default
 
 
 def _detect_sample_key(obs, body: CompositionRequest) -> str | None:
@@ -62,7 +63,7 @@ async def composition_test(
         result = comp.composition_test(
             obs, body.condition_key, key, body.group_key,
             conditions=body.conditions, reference=body.reference,
-            transform=body.transform, paired=body.paired,
+            transform=body.transform, paired=body.paired, robust=body.robust,
             batch_key=recorded_batch_key(adata),
         )
         return result, not body.sample_key and key is not None

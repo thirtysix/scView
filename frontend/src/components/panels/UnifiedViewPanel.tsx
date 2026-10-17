@@ -13,6 +13,7 @@ import { UnifiedToolbar } from "@/components/unified/UnifiedToolbar";
 import { UnifiedBottomPanel } from "@/components/unified/UnifiedBottomPanel";
 import { UnifiedMarkersSubtab } from "@/components/unified/UnifiedMarkersSubtab";
 import { UnifiedExpressionSubtab } from "@/components/unified/UnifiedExpressionSubtab";
+import { UnifiedProteinSubtab } from "@/components/unified/UnifiedProteinSubtab";
 import { UnifiedGeneSetsSubtab } from "@/components/unified/UnifiedGeneSetsSubtab";
 import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentSubtab";
 import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
@@ -43,6 +44,7 @@ import { useQueryClient } from "@tanstack/react-query";
 const SUBTABS = [
   { id: "markers" as const, label: "Markers" },
   { id: "expression" as const, label: "Expression" },
+  { id: "protein" as const, label: "Protein" },
   { id: "genesets" as const, label: "Gene Sets" },
   { id: "enrichment" as const, label: "Enrichment" },
   { id: "de" as const, label: "DE" },
@@ -123,6 +125,8 @@ export function UnifiedViewPanel() {
   const setOpacity = useSettingsStore((s) => s.setOpacity);
 
   const autoAdjustedRef = useRef<string | null>(null);
+  // The legend column over the scatter: the fit and the group labels keep clear of it.
+  const [legendColumn, setLegendColumn] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     const dsId = dataset?.id ?? null;
     if (numCells > 0 && dsId && autoAdjustedRef.current !== dsId) {
@@ -287,14 +291,14 @@ export function UnifiedViewPanel() {
   }, [effectiveColorType, effectiveColorValues]);
 
   // --- Fetch expression ---
+  // `layer` given: a protein (its own layer), else the chosen expression layer.
   const fetchExpression = useCallback(
-    async (gene: string) => {
+    async (gene: string, layer?: string) => {
       if (!datasetId) return;
       setIsLoadingOverlay(true);
       try {
-        const layerQuery = expressionLayer
-          ? `&layer=${encodeURIComponent(expressionLayer)}`
-          : "";
+        const useLayer = layer ?? expressionLayer;
+        const layerQuery = useLayer ? `&layer=${encodeURIComponent(useLayer)}` : "";
         const buffer = await apiFetchBinary(
           `/datasets/${datasetId}/expression?genes=${encodeURIComponent(gene)}${layerQuery}`,
         );
@@ -308,7 +312,7 @@ export function UnifiedViewPanel() {
           setOverlayValues(f32);
         }
         setOverlayLabel(gene);
-        setScatterOverlay({ type: "expression", gene });
+        setScatterOverlay(layer ? { type: "expression", gene, layer } : { type: "expression", gene });
         setOverlayDatasetId(datasetId);
       } catch (err) {
         console.error("Failed to fetch expression:", err);
@@ -321,18 +325,17 @@ export function UnifiedViewPanel() {
 
   // --- Fetch violin ---
   const fetchViolin = useCallback(
-    async (gene: string, group: string) => {
+    async (gene: string, group: string, layer?: string) => {
       if (!datasetId || !group) return;
       setIsLoadingViolin(true);
       try {
-        const layerQuery = expressionLayer
-          ? `&layer=${encodeURIComponent(expressionLayer)}`
-          : "";
+        const useLayer = layer ?? expressionLayer;
+        const layerQuery = useLayer ? `&layer=${encodeURIComponent(useLayer)}` : "";
         const data = await apiFetch<ViolinResponse>(
           `/datasets/${datasetId}/expression/violin?gene=${encodeURIComponent(gene)}&groupby=${encodeURIComponent(group)}${layerQuery}`,
         );
         setViolinData(data.groups ?? {});
-        setViolinTitle(`${gene} expression`);
+        setViolinTitle(layer ? `${gene} protein (CLR)` : `${gene} expression`);
         openBottomPanel();
       } catch {
         setViolinData({});
@@ -352,6 +355,23 @@ export function UnifiedViewPanel() {
     [fetchExpression, fetchViolin, groupByColumn],
   );
 
+  // --- Protein click (CITE-seq): the same overlay + violin, from the protein layer ---
+  const proteinLayer = dataset?.protein?.layer;
+  const handleProteinClick = useCallback(
+    (protein: string) => {
+      if (!proteinLayer) return;
+      fetchExpression(protein, proteinLayer);
+      if (groupByColumn) fetchViolin(protein, groupByColumn, proteinLayer);
+    },
+    [fetchExpression, fetchViolin, groupByColumn, proteinLayer],
+  );
+  const activeProtein =
+    scatterOverlay?.type === "expression" && scatterOverlay.layer ? overlayLabel : null;
+  // A dataset without proteins has no Protein tab to stay on.
+  useEffect(() => {
+    if (activeSubtab === "protein" && dataset && !dataset.protein) setActiveSubtab("markers");
+  }, [activeSubtab, dataset, setActiveSubtab]);
+
   // Default the expression layer to the dataset's default; re-default when the
   // current layer key isn't valid for the (possibly newly selected) dataset.
   useEffect(() => {
@@ -367,7 +387,7 @@ export function UnifiedViewPanel() {
   useEffect(() => {
     if (prevLayerRef.current === expressionLayer) return;
     prevLayerRef.current = expressionLayer;
-    if (scatterOverlay?.type === "expression" && overlayLabel) {
+    if (scatterOverlay?.type === "expression" && !scatterOverlay.layer && overlayLabel) {
       fetchExpression(overlayLabel);
       if (groupByColumn) fetchViolin(overlayLabel, groupByColumn);
     }
@@ -418,7 +438,8 @@ export function UnifiedViewPanel() {
     const o = pendingOverlay.overlay;
     setPendingOverlay(null);
     if (o.type === "expression") {
-      handleGeneClick(o.gene);
+      if (o.layer) handleProteinClick(o.gene);
+      else handleGeneClick(o.gene);
       return;
     }
     if (o.type === "activity") {
@@ -434,7 +455,7 @@ export function UnifiedViewPanel() {
     })
       .then((res) => handleScoreComplete(new Float32Array(res.scores), o.name, o.genes))
       .catch((err) => console.error("Failed to restore the gene-set overlay:", err));
-  }, [pendingOverlay, datasetId, handleGeneClick, handleScoreComplete, setPendingOverlay]);
+  }, [pendingOverlay, datasetId, handleGeneClick, handleProteinClick, handleScoreComplete, setPendingOverlay]);
 
   // --- Clear overlay (revert to obs coloring) ---
   const handleClearOverlay = useCallback(() => {
@@ -541,7 +562,7 @@ export function UnifiedViewPanel() {
   const hoverColorLine = (index: number, metadata: Record<string, unknown> | null): HoverLine | null => {
     if (scatterOverlay && overlayValues) {
       return colorByLine({
-        label: `${overlayLabel} ${scatterOverlay.type === "expression" ? "expression" : "score"}`,
+        label: `${overlayLabel} ${scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}`,
         values: overlayValues,
         index,
         type: "continuous",
@@ -751,6 +772,7 @@ export function UnifiedViewPanel() {
                 categories={labelCategories}
                 showLabels={showLabels}
                 highlightCategory={labelHighlight}
+                overlayElement={splitActive ? null : legendColumn}
               />
             )}
             {dimensions === 2 && !gridActive && (
@@ -804,14 +826,14 @@ export function UnifiedViewPanel() {
                 While split, it sits in the legend column the grid keeps free;
                 the compare grid draws a legend per column there instead. */}
             {!compareActive && (
-            <div className={`pointer-events-none absolute z-10 flex flex-col items-start gap-1.5 ${
+            <div ref={setLegendColumn} className={`pointer-events-none absolute z-10 flex flex-col items-start gap-1.5 ${
               splitActive ? "right-2 top-10 max-h-[calc(100%-3rem)]" : "left-3 bottom-3 max-h-[calc(100%-1.5rem)]"
             }`}>
             {scatterOverlay && (
               <div className="pointer-events-auto flex flex-shrink-0 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50/90 px-2 py-1 text-xs text-blue-700">
                 <span className="font-medium">{overlayLabel}</span>
                 <span className="text-blue-500">
-                  {scatterOverlay.type === "expression" ? "expression" : "score"}
+                  {scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}
                 </span>
                 <button
                   onClick={handleClearOverlay}
@@ -972,14 +994,18 @@ export function UnifiedViewPanel() {
                 <InfoRow label="Embedding" value={prettyEmbeddingLabel(embedding)} />
                 <InfoRow
                   label="Overlay"
-                  value={scatterOverlay ? `${overlayLabel} (${scatterOverlay.type})` : "—"}
+                  value={
+                    scatterOverlay
+                      ? `${overlayLabel} (${scatterOverlay.type === "expression" && scatterOverlay.layer ? "protein" : scatterOverlay.type})`
+                      : "—"
+                  }
                 />
               </div>
             </div>
           )}
           {/* Tab bar */}
           <div className="flex flex-shrink-0 border-b border-slate-200">
-            {SUBTABS.map((tab) => (
+            {SUBTABS.filter((tab) => tab.id !== "protein" || dataset?.protein).map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveSubtab(tab.id)}
@@ -1010,6 +1036,17 @@ export function UnifiedViewPanel() {
                 groupByColumn={groupByColumn}
                 setGroupByColumn={setGroupByColumn}
                 expressionMinMax={scatterOverlay?.type === "expression" ? colorMinMax : null}
+              />
+            )}
+            {activeSubtab === "protein" && dataset?.protein && datasetId && (
+              <UnifiedProteinSubtab
+                datasetId={datasetId}
+                protein={dataset.protein}
+                onProteinSelect={handleProteinClick}
+                activeProtein={activeProtein}
+                groupByColumn={groupByColumn}
+                setGroupByColumn={setGroupByColumn}
+                proteinMinMax={activeProtein ? colorMinMax : null}
               />
             )}
             {activeSubtab === "genesets" && (

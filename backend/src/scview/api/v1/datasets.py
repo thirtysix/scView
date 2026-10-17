@@ -182,6 +182,7 @@ async def get_dataset_info(
         info["n_genes"] = adaptor.n_genes()
         info["expression_layers"] = adaptor.available_expression_layers()
         info["default_expression_layer"] = adaptor.default_expression_layer()
+        info["protein"] = adaptor.protein_info()
         # Which cells, in which order: a saved session checks it (hashing a
         # million barcodes takes a moment the first time, so off the loop).
         info["cells_fingerprint"] = await asyncio.to_thread(adaptor.cells_fingerprint)
