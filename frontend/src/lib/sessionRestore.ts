@@ -59,7 +59,11 @@ export function captureSession(now: Date = new Date()): SessionFile {
   }
   const overlay = unified.scatterOverlay;
   if (dataset && overlay && unified.overlayDatasetId === dataset.id) {
-    if (overlay.type === "expression") view.overlay = { type: "expression", gene: overlay.gene };
+    if (overlay.type === "expression") {
+      view.overlay = overlay.layer
+        ? { type: "expression", gene: overlay.gene, layer: overlay.layer }
+        : { type: "expression", gene: overlay.gene };
+    }
     else if (overlay.type === "score" && overlay.activity) {
       view.overlay = { type: "activity", ...overlay.activity };
     } else if (overlay.type === "score" && overlay.genes?.length) {
@@ -306,7 +310,9 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
 
   if (v.overlay) {
     const o = v.overlay;
-    if (o.type === "expression" && !(await geneInDataset(d.id, o.gene))) {
+    if (o.type === "expression" && o.layer && !(d.protein?.names ?? []).includes(o.gene)) {
+      notes.push(`Protein overlay ${o.gene}: the protein is not in this dataset.`);
+    } else if (o.type === "expression" && !o.layer && !(await geneInDataset(d.id, o.gene))) {
       notes.push(`Gene overlay ${o.gene}: the gene is not in this dataset.`);
     } else {
       unified.setPendingOverlay({ datasetId: d.id, overlay: o });

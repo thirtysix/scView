@@ -23,6 +23,14 @@ All notable changes to scView are documented here. The format is based on
   whole embedding; the coordinates are now recognised as unchanged and the view stays put.
 
 ### Added
+- **CITE-seq: antibodies as a protein modality.** A 10x feature-barcoding upload (`.h5` or MEX) or
+  an h5ad with `feature_types` keeps its antibody counts apart from the genes (they used to be
+  dropped from an `.h5`, or read as genes from a MEX), normalised by centred log-ratio per cell as
+  Seurat does. A new Protein tab in the Unified View colours the cells by a protein (with its
+  violin), shows every protein by group, keeps isotype controls apart as background, and sets a
+  protein against the gene of its target (Spearman ρ and how often the RNA drops out). Protein
+  colourings are saved in sessions. Not yet: Seurat objects' ADT assay, DSB normalisation, and
+  proteins in the joint embedding.
 - **Design and variance choices in the composition test.** A Design menu forces paired (by
   sample) or unpaired, with Auto showing what it picked; a Variances menu switches back to plain
   eBayes. The CSV export carries each group's prior df.

@@ -5,7 +5,8 @@ import type { Camera, SessionOverlay } from "@/lib/session";
 
 type ScatterOverlay =
   | { type: "obs"; column: string }
-  | { type: "expression"; gene: string }
+  // layer: set for a protein (CITE-seq), whose values come from its own layer
+  | { type: "expression"; gene: string; layer?: string }
   // genes: the set scored, so a saved session can score it again; activity: the
   // TF / pathway whose per-cell activity this is, for the same reason
   | { type: "score"; name: string; genes?: string[]; activity?: { network: "collectri" | "progeny"; source: string } }

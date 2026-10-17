@@ -146,6 +146,27 @@ describe("save then open on the same dataset", () => {
     });
   });
 
+  it("saves a protein colouring (CITE-seq) and restores it only where the protein exists", async () => {
+    const protein = { names: ["CD19"], controls: [], layer: "protein", counts_layer: "protein_counts", normalisation: "CLR" };
+    api.getDataset.mockResolvedValue({ ...kang(), protein });
+    buildWorkspace("lasso");
+    useUnifiedViewStore.getState().setScatterOverlay({ type: "expression", gene: "CD19", layer: "protein" });
+    const file = sessionJson(captureSession(new Date("2026-10-16T20:00:00Z")));
+    resetStores();
+    const session = parseSession(JSON.parse(file));
+    expect(session.view?.overlay).toEqual({ type: "expression", gene: "CD19", layer: "protein" });
+    await restoreSession(session);
+    expect(useUnifiedViewStore.getState().pendingOverlay).toEqual({
+      datasetId: "kang",
+      overlay: { type: "expression", gene: "CD19", layer: "protein" },
+    });
+    resetStores();
+    api.getDataset.mockResolvedValue(kang()); // no proteins
+    const report = await restoreSession(session);
+    expect(report.notes).toContain("Protein overlay CD19: the protein is not in this dataset.");
+    expect(useUnifiedViewStore.getState().pendingOverlay).toBeNull();
+  });
+
   it("restores the whole workspace", async () => {
     buildWorkspace("lasso");
     const session = saveAndReset();
