@@ -70,7 +70,9 @@ reviewer can audit. scView closes both gaps:
   with a live count of the cells each would remove per sample and cluster, and the **doublet
   threshold** on a score histogram beside the rate expected from each sample's size.
   Normalisation can use **analytic Pearson residuals** instead of the shifted log, with a
-  mean–variance plot to compare them.
+  mean–variance plot to compare them. **Annotation confidence** gives every cell a calibrated
+  label-fit flag (conformal prediction sets), and a **variable-gene check** re-clusters under
+  other gene selections to show which clusters are robust.
 - **Provenance: "git for the h5ad".** Every step is recorded into the data as a commit-style,
   replayable recipe with dependency-aware *edit and re-run from here*. Originals stay immutable.
 - **Cell-type annotation, three ways.** Tissue-agnostic LLM-from-markers (default, no reference model
@@ -87,7 +89,7 @@ reviewer can audit. scView closes both gaps:
   scale, **compare 2-4 colourings** side by side, **label cells by hand** from a selection (with
   undo), **split one cluster into sub-clusters** on its own graph, **compare clustering
   resolutions** before keeping one, and compute **diffusion pseudotime** from a start cluster you
-  pick. Datasets open coloured by their cell types, with each group's name on the plot.
+  pick, with a **PAGA** graph of the groups and the **genes that change along it** (per branch). Datasets open coloured by their cell types, with each group's name on the plot.
   **Filter cells** by gene expression and metadata with AND/OR conditions into a selection, and
   **save the whole workspace as a session file** to open again later or send to a colleague.
 - **Donor-aware statistics.** Between-groups DE can run as **pseudobulk** (each donor's counts
@@ -103,7 +105,8 @@ reviewer can audit. scView closes both gaps:
   plus mixing (iLISI) and cell-type conservation before and after correction, a warning when
   correction looks like it merged real cell types, and each cluster's make-up by dataset.
   The DE tab's **Between groups** mode then compares datasets or conditions within a single cell
-  type or cluster. The source datasets are never modified.
+  type or cluster. The source datasets are never modified. **Composition** between conditions is
+  tested with donors or samples as replicates (propeller-style), not cells.
 - **Pathway enrichment that stays readable.** Over-representation analysis against MSigDB
   collections (downloaded from the Broad Institute on first start) (Hallmark, GO, Reactome, KEGG, cell-type signatures), scored against the genes your
   experiment actually measured. A **Programs view** then collapses the usual wall of near-duplicate

@@ -6,6 +6,51 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-17
+
+### Added
+- **Composition testing between conditions.** Compare → Composition → Between conditions tests
+  whether cell-type or cluster proportions differ, with donors or samples as the replicates
+  (propeller-style: per-sample shares, logit or arcsin-square-root, a moderated t or F test, paired
+  by donor when every donor is in every condition, Benjamini-Hochberg). The statistics match R
+  limma. A table, CSV and per-sample box plot, with the donor column found for you. It warns when a
+  condition has fewer than 2 samples, when conditions are also batches, and when clusters were
+  built on an embedding corrected for the condition.
+- **PAGA.** The Trajectory panel computes a PAGA graph of any grouping and draws it over the
+  embedding (node size by cells, edges by connectivity, a threshold and a spanning-tree switch).
+- **Genes changing along pseudotime.** A heatmap of the genes whose expression changes most along
+  pseudotime (spline F-test), on all cells or on one PAGA branch from the root, ordered by where
+  they peak; click a gene to plot its trend and colour the embedding. CSV export.
+- **Variable-gene check.** Unified View → Variable genes re-clusters under other variable-gene
+  settings (half and 1.5x the gene count, Cell Ranger, Pearson residuals) at the dataset's own
+  clustering settings, without changing the dataset, and compares each with the current clusters
+  (ARI, AMI, and each cluster's stability). The current setting is re-run as a control. "Keep this
+  one" saves a setting's clusters as a column.
+- **Annotation confidence.** Data Assessment → Annotation confidence gives every cell of a label
+  column a flag (confident, ambiguous, unsure, doesn't fit) from split conformal prediction sets at
+  an error rate you choose, with held-out coverage, the worst-fitting labels and what they are
+  confused with. Colour the embedding by the flags, or copy the column with rejected cells set to
+  "Unknown". It measures how well a label agrees with the expression of the cells carrying it, not
+  whether it is right. A CellTypist column can be scored with CellTypist's own probabilities, which
+  the annotation step now keeps.
+- **A note in Trajectory when a dataset has spliced/unspliced layers** (scView does not compute RNA
+  velocity yet).
+
+### Changed
+- **The co-pilot warns against chi-square or Fisher tests on cell counts** for composition, and the
+  two-dataset composition view and the joint embedding's per-cluster bars say their differences are
+  descriptive. The co-pilot sees the last composition test.
+- **The Trajectory panel draws 3-D embeddings in 3-D.**
+
+### Fixed
+- **An edit interrupted by closing the tab could overlap the next one.** Eleven actions that save
+  a dataset (labels, renames, markers, keeping a clustering, sub-clusters, the doublet threshold,
+  annotation checks, saving a joint embedding, pseudotime) released its lock as soon as the request
+  ended, while their write could still be running. The lock is now held until the write finishes.
+- **The variable-gene check** works on datasets processed outside scView, comparing with the
+  clustering the rest of the app shows.
+- **An empty pseudotime bin in a gene trend** is a gap, not 0.
+
 ## [0.15.0] - 2026-10-17
 
 ### Added
