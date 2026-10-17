@@ -32,6 +32,7 @@ cells have none and a few a great deal.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from pydantic import BaseModel
 
 LEADING_PCS = 10  # the PCs with most of the variance; later ones carry little
@@ -118,18 +119,19 @@ def check(rep: str | None, X, labels: np.ndarray, scores: dict[str, np.ndarray],
     limit a score to some cells (haemoglobin: non-erythroid cells)."""
     if X is None:
         return DriverCheck()
-    X = np.asarray(X, dtype=np.float64)
+    X = np.asarray(X)
     n = X.shape[0]
     if X.ndim != 2 or n != len(labels) or n < MIN_CELLS:
         return DriverCheck()
-    var = X.var(axis=0)
+    var = X.var(axis=0, dtype=np.float64)
     total = float(var.sum())
     k = min(LEADING_PCS, X.shape[1])
     keep = np.arange(n)
     if n > MAX_CELLS:
         keep = np.sort(np.random.default_rng(SEED).choice(n, size=MAX_CELLS, replace=False))
+    lead = np.asarray(X[keep, :k], dtype=np.float64)  # the leading PCs, subsampled
     lab = np.asarray(labels, dtype=object)[keep]
-    ok_lab = np.array([v is not None and v == v for v in lab])  # drop unlabelled (NaN) cells
+    ok_lab = ~pd.isna(lab)  # unlabelled cells sit in no cluster
     out = DriverCheck(representation=rep, n_pcs=k)
     for key, values in scores.items():
         if values is None or len(values) != n:
@@ -141,7 +143,7 @@ def check(rep: str | None, X, labels: np.ndarray, scores: dict[str, np.ndarray],
         if use.sum() < MIN_CELLS or np.ptp(v[use]) == 0:
             continue
         out.checked.append(LABELS[key])
-        Y = X[keep][use][:, :k]
+        Y = lead[use]
         r = _corr(v[use], Y)
         if not np.any(np.isfinite(r)):
             continue

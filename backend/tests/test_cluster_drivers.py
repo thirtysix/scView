@@ -247,11 +247,16 @@ def test_a_score_moving_along_a_pc_inside_clusters_is_an_axis():
     depth = rng.normal(8, 0.5, labels.size)
     X = rng.normal(0, 0.3, (labels.size, 12))
     X[:, 0] = (depth - 8) * 4 + rng.normal(0, 0.3, labels.size)
-    out = qc_drivers.check("X_pca", X, labels, {"log_counts": depth})
+    out = qc_drivers.check("X_pca", X.astype("float32"), labels, {"log_counts": depth})
     (d,) = out.drivers
     assert d.pc == 1 and d.r > 0.9 and d.inside_clusters and d.r_within > 0.9
     assert "inside clusters too" in d.reason and "Pearson-residual" in d.reason
     assert out.n_pcs == 10 and out.checked == ["Log total counts"] and 0.5 < d.pc_share < 1
+    # Unlabelled cells (NaN in the clustering) are left out, not a cluster of their own.
+    holes = labels.astype(object)
+    holes[::7] = np.nan
+    (d2,) = qc_drivers.check("X_pca", X, holes, {"log_counts": depth}).drivers
+    assert d2.inside_clusters and abs(d2.r - d.r) < 0.02
 
 
 def test_a_score_that_only_differs_between_clusters_is_said_to_be_so():
