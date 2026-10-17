@@ -96,6 +96,7 @@ async def retrieve_context(
         if len(snippet) > 500:
             snippet = snippet[:500] + "…"
         lines.append(f"\n[{ref}] {detail}\n{snippet}")
-        sources.append(ChatSource(kind=kind, ref=ref, detail=detail or snippet[:120]))
+        sources.append(ChatSource(kind=kind, ref=ref, detail=detail or snippet[:120],
+                                  evidence=f"{detail}\n{snippet}".strip()))
 
     return "\n".join(lines), sources

@@ -13,15 +13,18 @@ import { PANEL_LABELS, type PanelId } from "@/lib/constants";
 import {
   assistantChat,
   assistantChatStream,
+  checkClaims,
   getMethods,
   runPipelineSteps,
   sendFeedback,
   type AssistantAction,
   type ChatMessage,
+  type Claim,
   type ChatSource,
   type ViewContext,
 } from "@/api/assistant";
 import { MarkdownLite } from "@/components/assistant/MarkdownLite";
+import { ClaimsLedger, mergeVerdicts, toCheck } from "@/components/assistant/ClaimsLedger";
 
 interface Turn {
   role: "user" | "assistant";
@@ -33,6 +36,7 @@ interface Turn {
   pendingAction?: AssistantAction; // a confirm-gated mutating action awaiting the user
   model?: string; // which LLM produced this answer (trust/transparency)
   feedback?: "up" | "down"; // the user's per-answer rating
+  claims?: Claim[]; // the claims ledger: checkable sentences and their verdicts
 }
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -91,6 +95,8 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [checkingTurn, setCheckingTurn] = useState<number | null>(null);
+  const [claimsError, setClaimsError] = useState<Record<number, string>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -109,6 +115,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
   }, [key]);
   useEffect(() => {
     epoch.current += 1;
+    setClaimsError({});
     loadThread();
   }, [loadThread]);
 
@@ -203,6 +210,33 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
     [datasetId],
   );
 
+  // "Check claims": one small model call judges the claims the rules left uncertain.
+  const checkTurnClaims = useCallback(
+    async (index: number) => {
+      const batch = toCheck(turns[index]?.claims ?? []);
+      if (!batch.length) return;
+      const started = epoch.current;
+      setCheckingTurn(index);
+      setClaimsError((e) => ({ ...e, [index]: "" }));
+      try {
+        const res = await checkClaims(batch);
+        if (started !== epoch.current) return;
+        setTurns((prev) =>
+          prev.map((t, i) =>
+            i === index && t.claims ? { ...t, claims: mergeVerdicts(t.claims, res.claims) } : t,
+          ),
+        );
+      } catch (e) {
+        if (started !== epoch.current) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        setClaimsError((prev) => ({ ...prev, [index]: `Check failed: ${msg}` }));
+      } finally {
+        setCheckingTurn(null);
+      }
+    },
+    [turns],
+  );
+
   // An "ask about this" affordance elsewhere in the UI queues a question here.
   const pendingAsk = useViewStore((s) => s.pendingAsk);
   const clearPendingAsk = useViewStore((s) => s.clearPendingAsk);
@@ -239,7 +273,12 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
           patchLast((t) => ({ ...t, sources: ev.sources, route: ev.route, grounded: ev.grounded })),
         onDelta: (text) => patchLast((t) => ({ ...t, content: t.content + text })),
         onDone: (ev) => {
-          patchLast((t) => ({ ...t, followups: ev.followups, model: ev.model ?? undefined }));
+          patchLast((t) => ({
+            ...t,
+            followups: ev.followups,
+            model: ev.model ?? undefined,
+            claims: ev.claims,
+          }));
           executeActions(ev.actions);
         },
         onError: (msg) =>
@@ -257,6 +296,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
           route: res.route,
           followups: res.followups,
           model: res.model ?? undefined,
+          claims: res.claims,
         }));
         executeActions(res.actions);
       } catch (e2) {
@@ -487,6 +527,15 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
                 <div className="mt-1 text-xs italic text-amber-600">
                   Language model not configured — showing grounded facts directly.
                 </div>
+              )}
+              {t.role === "assistant" && t.claims && t.claims.length > 0 && (
+                <ClaimsLedger
+                  claims={t.claims}
+                  canCheck={t.grounded !== false}
+                  checking={checkingTurn === i}
+                  error={claimsError[i]}
+                  onCheck={() => checkTurnClaims(i)}
+                />
               )}
               {t.role === "assistant" && t.pendingAction && (
                 <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">

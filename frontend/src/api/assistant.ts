@@ -7,6 +7,19 @@ export interface ChatSource {
   detail: string;
 }
 
+/** One checkable sentence of an answer: the claims ledger. "rules" verdicts come
+ *  free with every answer; "model" ones from the on-demand Check claims call. */
+export interface Claim {
+  id: number;
+  text: string;
+  cites: string[];
+  refs: string[];
+  verdict: "supported" | "refuted" | "uncertain";
+  reason: string;
+  evidence: string;
+  checked_by: "rules" | "model";
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -121,6 +134,20 @@ export interface ChatResponse {
   followups?: string[]; // suggested next questions
   actions?: AssistantAction[]; // UI actions to execute
   model?: string | null; // which LLM produced the answer (transparency)
+  claims?: Claim[]; // the claims ledger
+}
+
+/** Judge claims the rules left uncertain: one small LLM call over each claim and
+ *  the fact snippet it cited. */
+export async function checkClaims(
+  claims: Pick<Claim, "id" | "text" | "evidence">[],
+): Promise<{ claims: Pick<Claim, "id" | "verdict" | "reason">[]; model: string }> {
+  return apiFetch(`/assistant/check-claims`, {
+    method: "POST",
+    body: JSON.stringify({
+      claims: claims.map(({ id, text, evidence }) => ({ id, text, evidence })),
+    }),
+  });
 }
 
 /** Record a per-answer 👍/👎 (best-effort; failures are swallowed). */
@@ -170,7 +197,12 @@ export async function assistantChat(
 export interface StreamHandlers {
   onSources?: (ev: { sources: ChatSource[]; route: string[]; grounded: boolean }) => void;
   onDelta?: (text: string) => void;
-  onDone?: (ev: { followups: string[]; actions: AssistantAction[]; model?: string | null }) => void;
+  onDone?: (ev: {
+    followups: string[];
+    actions: AssistantAction[];
+    model?: string | null;
+    claims?: Claim[];
+  }) => void;
   onError?: (msg: string) => void;
 }
 
@@ -218,6 +250,7 @@ export async function assistantChatStream(
           followups: (ev.followups as string[]) ?? [],
           actions: (ev.actions as AssistantAction[]) ?? [],
           model: (ev.model as string | null) ?? null,
+          claims: (ev.claims as Claim[]) ?? [],
         });
       } else if (ev.type === "error") {
         handlers.onError?.(String(ev.error ?? "stream error"));

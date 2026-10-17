@@ -6,6 +6,23 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Claims ledger under every co-pilot answer.** Each sentence that states a number, names a
+  gene or cites a fact is checked against the text of the fact it cites, for free and without a
+  model call: supported (its numbers and genes are in that fact, allowing rounding, "1.5k" and
+  totals or shares recomputed from one line), refuted (the fact has a different number for the
+  same group and statistic), or uncertain. Refuted claims stay visible; the rest fold into a
+  one-line count. Negations, comparisons, ratios and hedged numbers ("about", "over") are never
+  more than uncertain by rule. A **Check claims** button sends only the uncertain claims, each
+  with its cited snippet, to one small model call (`POST /assistant/check-claims`, at most 12).
+  On 23 real answers about Kang, pbmc_1k_v3 and ovary: 126 of 194 claims supported by rule,
+  none refuted, and no wrong verdict found by hand.
+
+### Changed
+- **The co-pilot's context names its citation tags**, so answers cite facts that exist. Before,
+  the model invented tags such as `[obs:stim]`, `[dataset]` or `[provenance]`: 10 of 24 tags in
+  five Kang answers matched a real fact; with the tags shown, 26 of 26. Loose tags still resolve.
+
 ## [0.18.0] - 2026-10-17
 
 ### Changed
