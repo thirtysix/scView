@@ -10,8 +10,10 @@ import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { DetectionHistogram } from "@/components/plots/DetectionHistogram";
 import { DEEnrichment } from "@/components/unified/DEEnrichment";
 import { DEActivity } from "@/components/unified/DEActivity";
+import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
 import { downloadCsv } from "@/lib/csv";
 import { describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
+import { describeSize } from "@/lib/transcriptomeSize";
 import {
   deGeneQuestion,
   deResultQuestion,
@@ -183,6 +185,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
         b: groupB,
         scope: scoped ? `${withinCol} = ${withinVal}` : undefined,
         betweenGroups: true,
+        column: splitBy,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -254,6 +257,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
       </select>
     </div>
   );
+  // Display names of the result's two sides.
+  const labelA = comparison?.a ?? result?.label ?? "";
+  const labelB = comparison?.b ?? refLabel;
   const shownMinPct = result?.min_pct ?? 0;
   const pendingMinPct =
     result?.detection && result.method !== "pseudobulk" && minPct !== shownMinPct ? minPct : null;
@@ -496,6 +502,11 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             {result.method !== "pseudobulk" && describePrefilter(result) && (
               <span className="mt-0.5 block">{describePrefilter(result)}</span>
             )}
+            {result.transcriptome_size && !result.transcriptome_size.caution && (
+              <span className="mt-0.5 block">
+                {describeSize(result.transcriptome_size, labelA, labelB)}
+              </span>
+            )}
             {result.method === "pseudobulk" ? (
               <span className="mt-0.5 block">
                 Pseudobulk DESeq2 (Wald test, design <code>{result.design}</code>): donors (
@@ -545,6 +556,16 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
               </span>
             )}
           </div>
+
+          {/* The two sides differ a lot in RNA content */}
+          {result.transcriptome_size?.caution && (
+            <DETranscriptomeSize
+              size={result.transcriptome_size}
+              labelA={labelA}
+              labelB={labelB}
+              groupColumn={comparison?.column}
+            />
+          )}
 
           {/* Gene detection, with the prefilter's cut-off */}
           {result.detection && result.detection.length > 1 && (

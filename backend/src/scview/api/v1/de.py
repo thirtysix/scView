@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.dependencies import get_dataset_manager
-from scview.core import de_prefilter, de_results
+from scview.core import de_prefilter, de_results, transcriptome_size
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
@@ -71,6 +71,22 @@ class DEGene(BaseModel):
     stat: float | None = None
 
 
+class TranscriptomeSize(BaseModel):
+    """Median raw total counts per cell of the two sides (core/transcriptome_size.py):
+    ``caution`` when one is ``threshold``-fold the other or more, since
+    library-size normalisation then shifts fold changes of broadly expressed genes."""
+
+    source: str  # the obs column, or where the counts were summed from
+    median_a: float
+    median_b: float
+    ratio: float | None  # larger over smaller; None when a median is 0
+    caution: bool
+    threshold: float
+    # A seeded sample of each side's per-cell totals, for a violin.
+    values_a: list[float]
+    values_b: list[float]
+
+
 class DEResponse(BaseModel):
     n_selected: int
     n_rest: int
@@ -103,6 +119,8 @@ class DEResponse(BaseModel):
     min_pct: float | None = None
     n_genes_skipped: int | None = None
     detection: list[int] | None = None
+    # The two sides' RNA content; None when the dataset holds no raw counts.
+    transcriptome_size: TranscriptomeSize | None = None
 
 
 def _detect_replicate_key(obs, exclude: set[str], mask_a=None, mask_b=None) -> str | None:
@@ -266,14 +284,16 @@ async def differential_expression(
     mask = np.zeros(n, dtype=bool)
     mask[idx] = True
 
-    def _run() -> _Wilcoxon:
+    def _run() -> tuple[_Wilcoxon, dict | None]:
         work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
-        return _wilcoxon(work, mask, ~mask, dataset_id, body.min_pct)
+        size = transcriptome_size.check(work, mask, ~mask)  # before X is normalised
+        return _wilcoxon(work, mask, ~mask, dataset_id, body.min_pct), size
 
     # Seconds on a large dataset: in a worker thread, so the server keeps answering.
-    res = await asyncio.to_thread(_run)
+    res, size = await asyncio.to_thread(_run)
     return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=res.genes,
-                      result_id=_remember(dataset_id, res), **res.fields())
+                      result_id=_remember(dataset_id, res), transcriptome_size=size,
+                      **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/compare", response_model=DEResponse)
@@ -331,19 +351,20 @@ async def differential_expression_compare(
     # Subset before copying: only the compared cells are materialised.
     keep = mask_a | mask_b
 
-    def _run() -> _Wilcoxon:
+    def _run() -> tuple[_Wilcoxon, dict | None]:
         sub = adata[keep]
         work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
-        return _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id, body.min_pct)
+        size = transcriptome_size.check(work, mask_a[keep], mask_b[keep])  # before X is normalised
+        return _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id, body.min_pct), size
 
-    res = await asyncio.to_thread(_run)
+    res, size = await asyncio.to_thread(_run)
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
     key = body.replicate_key or _detect_replicate_key(
         obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=res.genes,
-                      result_id=_remember(dataset_id, res),
+                      result_id=_remember(dataset_id, res), transcriptome_size=size,
                       confounding=confounding, **guard, **res.fields())
 
 
@@ -370,13 +391,15 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         sub = adata[keep]
         if getattr(adata, "isbacked", False):
             sub = sub.to_memory()
-        return pseudobulk_de(
+        res = pseudobulk_de(
             sub, mask_a[keep], sub.obs[key],
             label_a=body.group_a, label_b=body.group_b, donor_key=key,
         )
+        # DESeq2's size factors normalise library size too.
+        return res, transcriptome_size.check(sub, mask_a[keep], mask_b[keep])
 
     try:
-        res = await asyncio.to_thread(_run)
+        res, size = await asyncio.to_thread(_run)
     except PseudobulkError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -402,4 +425,5 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         design=res.design,
         counts_source=res.counts_source,
         dropped_samples=res.dropped_samples,
+        transcriptome_size=size,
     )

@@ -170,3 +170,48 @@ describe("UnifiedDESubtab gene prefilter", () => {
     expect(screen.queryByRole("combobox", { name: "Genes tested" })).toBeNull();
   });
 });
+
+const SIZE = {
+  source: "obs['n_counts']",
+  median_a: 3873,
+  median_b: 1403,
+  ratio: 2.761,
+  caution: true,
+  threshold: 1.5,
+  values_a: [3500, 3900, 4200],
+  values_b: [1300, 1400, 1500],
+};
+
+describe("UnifiedDESubtab transcriptome-size caution", () => {
+  beforeEach(() => {
+    plots.props = [];
+    computeDECompare.mockReset();
+    useDESettingsStore.getState().update({ mode: "groups", splitBy: "cell_type", groupA: "NK", groupB: "T" });
+  });
+
+  it("warns and draws each side's total counts as a violin", async () => {
+    computeDECompare.mockResolvedValue({ ...RESULT, label: "NK", transcriptome_size: SIZE });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    const alert = await screen.findByText(/Transcriptome size differs/);
+    expect(alert.parentElement!.textContent).toContain("NK cells hold 2.76x the RNA of T cells");
+    expect(alert.parentElement!.textContent).toContain("reads as log2FC -1.46 here");
+    const violin = plots.props.find((p) => (p.data as { type?: string }[])[0]?.type === "violin")!;
+    const traces = violin.data as unknown as { name: string; y: number[] }[];
+    expect(traces.map((t) => [t.name, t.y])).toEqual([
+      ["NK", [3500, 3900, 4200]],
+      ["T", [1300, 1400, 1500]],
+    ]);
+  });
+
+  it("only notes the medians when they are close", async () => {
+    computeDECompare.mockResolvedValue({
+      ...RESULT, label: "NK", transcriptome_size: { ...SIZE, median_a: 1500, ratio: 1.069, caution: false },
+    });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await screen.findByText(/Median total counts per cell: NK 1,500, T 1,403 \(1.07x/);
+    expect(screen.queryByText(/Transcriptome size differs/)).toBeNull();
+    expect(plots.props.some((p) => (p.data as { type?: string }[])[0]?.type === "violin")).toBe(false);
+  });
+});

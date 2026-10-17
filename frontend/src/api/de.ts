@@ -41,6 +41,24 @@ export interface DEResponse {
   /** Every gene's larger detection fraction of the two sides, binned at 0.01 %:
    *  `detection[k]` genes were detected in [k, k + 1) / 10,000 of the cells. */
   detection?: number[] | null;
+  /** The two sides' RNA content; null when the dataset holds no raw counts. */
+  transcriptome_size?: TranscriptomeSize | null;
+}
+
+/** Median raw total counts per cell of the two sides (backend core/transcriptome_size.py). */
+export interface TranscriptomeSize {
+  /** The obs column, or where the counts were summed from. */
+  source: string;
+  median_a: number;
+  median_b: number;
+  /** Larger median over smaller; null when one is 0. */
+  ratio: number | null;
+  /** The ratio is `threshold` or more: fold changes of broadly expressed genes shift. */
+  caution: boolean;
+  threshold: number;
+  /** A sample of each side's per-cell totals, for a violin. */
+  values_a: number[];
+  values_b: number[];
 }
 
 export interface DEConfounding {

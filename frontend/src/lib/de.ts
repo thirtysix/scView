@@ -2,6 +2,7 @@ import type { DEGene, DEResponse } from "@/api/de";
 import type { ObsColumnInfo } from "@/api/types";
 import { formatPct } from "@/lib/deDetection";
 import { formatPValue } from "@/lib/formatting";
+import { sizeCautionForCopilot } from "@/lib/transcriptomeSize";
 
 /** Most-specific first: a donor column beats a per-sample one, which may also
  *  encode the condition (sample = donor x condition still works, unpaired). */
@@ -90,15 +91,21 @@ export interface DEComparison {
   scope?: string;
   /** Between groups of a column (vs a cell selection against the rest). */
   betweenGroups: boolean;
+  /** Between groups: the column `a` and `b` are values of. */
+  column?: string;
 }
 
 const num = (n: number | null | undefined) => (n ?? 0).toLocaleString("en-US");
 
 /** One-line description of the comparison and the test behind it. */
 export function describeComparison(c: DEComparison, r: DEResponse): string {
-  const base = describeTest(c, r);
-  // The co-pilot must not read a batch difference as biology.
-  return r.confounding ? `${base}. Caution: ${r.confounding.message}` : base;
+  let text = describeTest(c, r);
+  // The co-pilot must not read a batch difference as biology...
+  if (r.confounding) text += `. Caution: ${r.confounding.message}`;
+  // ... nor a difference in RNA content as down-regulation.
+  const size = r.transcriptome_size;
+  if (size?.caution) text += `. Caution: ${sizeCautionForCopilot(size, c.a, c.b)}`;
+  return text;
 }
 
 function describeTest(c: DEComparison, r: DEResponse): string {
