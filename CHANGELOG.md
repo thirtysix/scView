@@ -6,13 +6,16 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-18
+
 ### Added
 - **Several genes at once** (Unified View → Expression): pick 2 to 9 genes to see the embedding
   coloured by each, side by side on one camera (each gene on its own scale or one shared scale,
   expressing cells drawn on top, PNG export), or as a stacked violin across the group-by. The
   genes load in one request.
 - **Two genes compared.** *Blend* shows gene A, gene B and both blended on the embedding (A red,
-  B green, both yellow, as Seurat does) with a 2D colour key and a choice of where each gene's
+  B green, both yellow, as Seurat does; or magenta / green with both dark, for red-green colour
+  blindness) with a 2D colour key and a choice of where each gene's
   scale tops out (99th or 95th percentile of its expressing cells, or max). *Gene vs gene*
   plots each cell's A against its B by group, with Pearson and Spearman r (all cells and within
   the highlighted group) and the cells expressing both, one or neither; select the co-expressing
@@ -36,10 +39,12 @@ All notable changes to scView are documented here. The format is based on
   cells on a fixed scale with a size legend, and groups under 5% expressing are drawn hollow.
 - **Legend order and multi-select.** Drag or move categories, or sort them A-Z (numbers by
   value) or by size; the order is saved to the dataset, so legends, violins, dot plots and
-  composition bars follow it, and the colours follow the order. Ctrl/Cmd/Shift-click picks
+  composition bars follow it, while each label keeps its colour (through renames and merges too).
+  Ctrl/Cmd/Shift-click picks
   several groups; *Select these cells* makes them the selection.
-- **CellTypist checks its fit.** The model list puts the dataset's species first and defaults
-  to one of its models, with a warning for a model of another species. Each run records how many
+- **CellTypist checks its fit.** The model list puts the dataset's species first, with a warning
+  for a model of another species; mouse data starts with no model picked, since every mouse
+  model is tissue-specific (there is no general mouse blood model). Each run records how many
   of the model's genes the dataset has (warns under 50%) and shows each label's cells, median
   confidence, % under 0.5 and agreement with the per-cell call, flags low labels, and cautions
   when the median is under 0.5. *Colour embedding by confidence* is one click (Kang with
@@ -48,6 +53,7 @@ All notable changes to scView are documented here. The format is based on
   returns `tree` and `correlation`; `/metadata/crosstab` takes `facet`; new
   `GET /expression/per-donor`, `GET /annotation/celltypist` and
   `POST /metadata/{column}/order`. The CellTypist catalog lists each model's `species`.
+  Dataset `obs_columns` carry `color_slots` (palette slot per category) once an order is saved.
 
 ## [0.20.0] - 2026-10-18
 
