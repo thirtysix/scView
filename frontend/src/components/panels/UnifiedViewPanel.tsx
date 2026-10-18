@@ -21,6 +21,7 @@ import { UnifiedActivitySubtab } from "@/components/unified/UnifiedActivitySubta
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
 import { CompareColoringsGrid } from "@/components/unified/CompareColoringsGrid";
+import { GeneFeatureGrid } from "@/components/unified/GeneFeatureGrid";
 import { isGridActive, useSplitViewStore } from "@/stores/splitViewStore";
 import type { ScatterLegend } from "@/lib/scatterExport";
 import { mapCategoryToColor } from "@/lib/colors";
@@ -111,7 +112,10 @@ export function UnifiedViewPanel() {
   // ...or the same cells coloured by 2-4 columns side by side (same machinery)
   const compareColumns = useSplitViewStore((s) => s.compareColumns);
   const compareActive = !!(compareColumns && datasetId && positions);
-  const gridActive = splitActive || compareActive;
+  // ...or several genes side by side / a two-gene blend (the gene grid's own legends)
+  const geneGrid = useSplitViewStore((s) => s.geneGrid);
+  const geneGridActive = !!(geneGrid && geneGrid.datasetId === datasetId && positions);
+  const gridActive = splitActive || compareActive || geneGridActive;
 
   // --- Overlay loading flag (transient; values/label persist in the store) ---
   const [isLoadingOverlay, setIsLoadingOverlay] = useState(false);
@@ -818,6 +822,17 @@ export function UnifiedViewPanel() {
                 onHover={handleHover}
               />
             )}
+            {geneGridActive && datasetId && positions && (
+              <GeneFeatureGrid
+                datasetId={datasetId}
+                embedding={embedding}
+                grid={geneGrid!}
+                positions={positions}
+                dimensions={dimensions}
+                selectedIndices={selectedIndices}
+                onHover={handleHover}
+              />
+            )}
 
             {/* Loading overlay indicator */}
             {isLoadingOverlay && (
@@ -831,7 +846,7 @@ export function UnifiedViewPanel() {
                 column, so a tall legend pushes the chip up instead of covering it.
                 While split, it sits in the legend column the grid keeps free;
                 the compare grid draws a legend per column there instead. */}
-            {!compareActive && (
+            {!compareActive && !geneGridActive && (
             <div ref={setLegendColumn} className={`pointer-events-none absolute z-10 flex flex-col items-start gap-1.5 ${
               splitActive ? "right-2 top-10 max-h-[calc(100%-3rem)]" : "left-3 bottom-3 max-h-[calc(100%-1.5rem)]"
             }`}>

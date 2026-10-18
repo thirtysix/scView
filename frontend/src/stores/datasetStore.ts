@@ -4,6 +4,7 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
+import { useSplitViewStore } from "@/stores/splitViewStore";
 import { defaultColorBy } from "@/lib/obsColumns";
 
 /** Per-dataset view state lives in other stores; a selection of cell indices or a
@@ -27,6 +28,8 @@ export function resetViewForDataset(dataset: DatasetInfo | null) {
   unified.setPendingCamera(null);
   unified.setPendingOverlay(null);
   useDESettingsStore.getState().reset();
+  // Genes picked on the last dataset (the split/compare grids keep their columns if found).
+  useSplitViewStore.getState().setGeneGrid(null);
 }
 
 interface DatasetState {
