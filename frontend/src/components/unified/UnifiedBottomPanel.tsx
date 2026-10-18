@@ -4,6 +4,19 @@ import { useUnifiedViewStore, type BottomView } from "@/stores/unifiedViewStore"
 import { ViolinPlot } from "@/components/plots/ViolinPlot";
 import { ClusterDistanceHeatmap } from "@/components/unified/ClusterDistanceHeatmap";
 import { PerDonorExpression } from "@/components/unified/PerDonorExpression";
+import { SelectionHistogram } from "@/components/unified/SelectionHistogram";
+
+type DistributionMode = "cells" | "donor" | "histogram";
+
+const MODES: { id: DistributionMode; label: string; title: string }[] = [
+  { id: "cells", label: "Cells", title: "Every cell (violin)" },
+  { id: "donor", label: "Per donor", title: "One pseudobulk value per donor in each group, split by condition" },
+  {
+    id: "histogram",
+    label: "Histogram",
+    title: "The selection (or a group) against the rest, as two overlaid normalised histograms",
+  },
+];
 
 interface UnifiedBottomPanelProps {
   violinData: Record<string, number[]>;
@@ -34,8 +47,10 @@ export function UnifiedBottomPanel({
   const view = useUnifiedViewStore((s) => s.bottomView);
   const setView = useUnifiedViewStore((s) => s.setBottomView);
   const overlay = useUnifiedViewStore((s) => s.scatterOverlay);
-  // The distribution as cells (violin) or as one pseudobulk value per donor.
-  const [perDonor, setPerDonor] = useState(false);
+  // The distribution as cells (violin), as one pseudobulk value per donor, or as
+  // overlaid histograms of a selection or group against the rest (N18).
+  const [mode, setMode] = useState<DistributionMode>("cells");
+  const perDonor = mode === "donor";
   const gene = overlay?.type === "expression" && !overlay.layer ? overlay.gene : null;
   const noGeneReason =
     overlay?.type === "score"
@@ -81,7 +96,7 @@ export function UnifiedBottomPanel({
           aria-label={isOpen ? "Collapse" : "Expand"}
           className="ml-auto flex flex-shrink-0 items-center gap-2 rounded px-1 py-0.5 text-slate-600 hover:bg-slate-100"
         >
-          {shown === "distribution" &&
+          {shown === "distribution" && mode !== "histogram" &&
             (isLoading ? (
               <span className="text-slate-400">Loading…</span>
             ) : (
@@ -103,24 +118,26 @@ export function UnifiedBottomPanel({
       )}
       {isOpen && shown === "distribution" && (
         <div className="border-t border-slate-100 px-2 py-1">
-          {datasetId && violinGroupColumn && (
+          {datasetId && (
             <div className="mb-1 flex justify-end">
               <div className="flex overflow-hidden rounded border border-slate-300 text-[11px]" role="group" aria-label="Distribution of">
-                {([false, true] as const).map((on) => (
+                {MODES.filter((m) => m.id !== "donor" || violinGroupColumn).map((m) => (
                   <button
-                    key={String(on)}
-                    aria-pressed={perDonor === on}
-                    onClick={() => setPerDonor(on)}
-                    title={on ? "One pseudobulk value per donor in each group, split by condition" : "Every cell (violin)"}
-                    className={`px-1.5 py-0.5 ${perDonor === on ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                    key={m.id}
+                    aria-pressed={mode === m.id}
+                    onClick={() => setMode(m.id)}
+                    title={m.title}
+                    className={`px-1.5 py-0.5 ${mode === m.id ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
                   >
-                    {on ? "Per donor" : "Cells"}
+                    {m.label}
                   </button>
                 ))}
               </div>
             </div>
           )}
-          {perDonor && datasetId && violinGroupColumn ? (
+          {mode === "histogram" && datasetId ? (
+            <SelectionHistogram datasetId={datasetId} groupColumn={violinGroupColumn} />
+          ) : perDonor && datasetId && violinGroupColumn ? (
             <PerDonorExpression
               datasetId={datasetId}
               gene={gene}
