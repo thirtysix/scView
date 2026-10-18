@@ -130,7 +130,9 @@ export function GeneFeatureGrid({
     return out;
   }, [ready, blend, genes, values, shuffled, selectedIndices, ranges, opacity, colormap, positions, stride, clip]);
 
-  const legendGenes = blend ? genes.slice(0, 2) : genes;
+  // Memoised: the hover handler depends on it, and MultiPanelScatter clears the
+  // tooltip whenever that handler changes (a new array per render would clear it on every hover).
+  const legendGenes = useMemo(() => (blend ? genes.slice(0, 2) : genes), [blend, genes]);
   const oneLegend = sharedScale && !blend && legendGenes.length > 1;
   const exportLegend = useMemo<ScatterLegend[]>(() => {
     if (!ready) return [];

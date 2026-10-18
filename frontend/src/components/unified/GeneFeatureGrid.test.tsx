@@ -157,6 +157,22 @@ describe("GeneFeatureGrid", () => {
     expect(info.lines.map((l: { label: string; value: string }) => `${l.label}=${l.value}`)).toEqual(["CD3D=0", "MS4A1=10"]);
   });
 
+  it("keeps the tooltip when the parent re-renders (the hover handler stays the same)", async () => {
+    const onHover = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const grid: GeneGrid = { datasetId: "ds1", kind: "features", genes: ["CD3D", "MS4A1"] };
+    const ui = () => (
+      <QueryClientProvider client={client}>
+        <GeneFeatureGrid datasetId="ds1" embedding="X_umap" grid={grid} positions={positions} dimensions={2} onHover={onHover} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui());
+    await screen.findByTestId("deck");
+    onHover.mockClear();
+    rerender(ui()); // as the tooltip's own state change re-renders UnifiedViewPanel
+    expect(onHover).not.toHaveBeenCalledWith(null);
+  });
+
   it("blends two genes in a third panel: A red, B green, neither grey, with the 2D key", async () => {
     renderGrid({ datasetId: "ds1", kind: "blend", genes: ["CD3D", "MS4A1"] });
     await screen.findByTestId("deck");
