@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -311,5 +311,54 @@ describe("Unified View and a restored session", () => {
     expect(u.scatterOverlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15", "MX1"] });
     expect(Array.from(u.overlayValues!)).toEqual([0.5, 1, 1.5]);
     expect(u.pendingOverlay).toBeNull();
+  });
+});
+
+describe("Unified View legend controls", () => {
+  beforeEach(() => {
+    useSelectionStore.setState({ selectedCellIndices: null, highlightedGroup: null });
+  });
+  const shown = () => [...((scatterProps.current!.selectedIndices as Set<number> | null) ?? [])].sort();
+
+  it("highlights Ctrl-clicked groups together, then makes them the selection", () => {
+    renderPanel();
+    fireEvent.click(screen.getByText("B"), { ctrlKey: true });
+    expect(shown()).toEqual([0]);
+    fireEvent.click(screen.getByText("NK"), { metaKey: true });
+    expect(shown()).toEqual([0, 1, 2]);
+    expect(useSelectionStore.getState().selectedCellIndices).toBeNull(); // highlighted, not selected
+    expect(screen.getByText(/2 groups · 3 cells/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Select these cells"));
+    expect([...useSelectionStore.getState().selectedCellIndices!].sort()).toEqual([0, 1, 2]);
+    expect(screen.queryByText("Select these cells")).toBeNull();
+  });
+
+  it("starts from a plain-clicked group, and Escape or a plain click drops the picks", () => {
+    renderPanel();
+    fireEvent.click(screen.getByText("B"));
+    expect(shown()).toEqual([0]);
+    fireEvent.click(screen.getByText("NK"), { shiftKey: true });
+    expect(shown()).toEqual([0, 1, 2]);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(screen.queryByText("Select these cells")).toBeNull();
+    fireEvent.click(screen.getByText("NK"), { ctrlKey: true });
+    expect(shown()).toEqual([1, 2]);
+    fireEvent.click(screen.getByText("B"));
+    expect(screen.queryByText("Select these cells")).toBeNull();
+    expect(shown()).toEqual([0]);
+  });
+
+  it("saves a quick sort of the colour column and reloads the dataset", async () => {
+    apiFetch.mockImplementation((path: string) =>
+      Promise.resolve(path.endsWith("/order") ? { column: "cell_type", order: ["NK", "B"] } : DATASET));
+    renderPanel();
+    fireEvent.click(screen.getByLabelText("Reorder categories"));
+    fireEvent.click(screen.getByText("By size"));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/datasets/kang"));
+    const [path, init] = apiFetch.mock.calls.find((c) => String(c[0]).endsWith("/order"))!;
+    expect(path).toBe("/datasets/kang/metadata/cell_type/order");
+    expect(JSON.parse(init.body)).toEqual({ sort: "size" });
   });
 });

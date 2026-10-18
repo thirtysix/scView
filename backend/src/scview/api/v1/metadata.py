@@ -1,14 +1,16 @@
 """Metadata endpoints – obs column info, values, and summaries."""
 
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from scview.dependencies import get_dataset_manager
+from scview.core import category_order
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import series_to_arrow_ipc
-from scview.core.obs_writes import dataset_edit, write_derived
+from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.uns_keys import enrichment_key, markers_key
 
 router = APIRouter()
@@ -161,6 +163,52 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
                          (meta_key(column, old), meta_key(column, new))):
         if k_old in adata.uns:
             adata.uns[k_new] = adata.uns.pop(k_old)
+
+
+class CategoryOrderBody(BaseModel):
+    # Every category once, in the new order; or a quick sort instead.
+    order: list[str] | None = None
+    sort: Literal["natural", "size"] | None = None
+
+
+@router.post("/datasets/{dataset_id}/metadata/{column}/order")
+async def set_category_order(
+    dataset_id: str,
+    column: str,
+    body: CategoryOrderBody,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Set the order of a label column's categories (core/category_order.py), which
+    the legend, violin, dot plot and composition views list groups by. Persists to
+    the derived layer, never the original upload."""
+    async with dataset_edit(dataset_id) as held:
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = getattr(adaptor.adata, "isbacked", False)
+
+        def _run() -> list[str]:
+            adata = adaptor.adata.to_memory() if backed else adaptor.adata
+            before = uns_snapshot(adata)
+            order = category_order.reorder(adata, column, body.order, body.sort)
+            # Only obs (and a colours list in uns) changed: no matrix rewrite.
+            write_derived(adata, output_path, adaptor.h5ad_path, before)
+            return order
+
+        try:
+            order = await held.run(_run)
+        except category_order.OrderError as exc:  # raised before any change
+            raise HTTPException(status_code=exc.status, detail=str(exc))
+        except Exception as exc:
+            dm.evict(dataset_id)  # may hold an order that was never saved
+            raise HTTPException(status_code=500, detail=f"Could not save the order: {exc!s}")
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
+    return {"column": column, "order": order}
 
 
 class RenameCategoryBody(BaseModel):
