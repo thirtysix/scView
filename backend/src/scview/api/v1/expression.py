@@ -1,11 +1,14 @@
 """Expression / gene query endpoints."""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import expression_to_arrow_ipc
+from scview.core import donor_expression
 
 router = APIRouter()
 
@@ -83,6 +86,40 @@ async def get_expression_violin(
         )
 
     return {"gene": gene, "groupby": groupby, "groups": result}
+
+
+@router.get("/datasets/{dataset_id}/expression/per-donor")
+async def get_expression_per_donor(
+    dataset_id: str,
+    gene: str = Query(..., description="Gene name"),
+    groupby: str = Query(default="", description="Obs column to group by"),
+    sample: str = Query(default="", description="Donor / sample column (default: detected)"),
+    condition: str = Query(default="", description="Condition column to split each group by"),
+    method: str = Query(default="mean", description="mean (log-normalised) or cpm (log2 CPM of summed counts)"),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """One pseudobulk value per donor (x condition) in each group, for a box +
+    strip plot (core/donor_expression.py). No donor column: 200 with a message."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    if not groupby:
+        groupby = adaptor.active_clustering_column() or ""
+    if not groupby:
+        raise HTTPException(status_code=400, detail="No grouping column.")
+
+    def _run() -> dict:
+        return donor_expression.per_donor_expression(
+            adaptor.adata, gene, groupby, sample_key=sample or None,
+            condition_key=condition or None, method=method,  # type: ignore[arg-type]
+        )
+
+    try:
+        # A column of every cell, and the counts' row sums for CPM: off the loop.
+        return await asyncio.to_thread(_run)
+    except donor_expression.DonorExpressionError as exc:
+        status = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc))
 
 
 @router.get("/datasets/{dataset_id}/expression/by-group")
