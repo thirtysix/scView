@@ -17,6 +17,7 @@ import {
   type RerunPlan,
 } from "@/api/provenance";
 import { getDataset } from "@/api/datasets";
+import { paramText } from "@/lib/provenanceParams";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 
@@ -307,7 +308,7 @@ function StepRow({ step }: { step: ProvStep }) {
           <div className="mt-1 flex flex-wrap gap-1">
             {params.map(([k, v]) => (
               <span key={k} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
-                {k}={Array.isArray(v) ? v.join(", ") : String(v)}
+                {paramText(k, v)}
               </span>
             ))}
           </div>

@@ -1,8 +1,9 @@
 """Differential expression for an arbitrary cell selection (lasso/cluster) vs the rest.
 
 Powers the volcano plot: the user lassoes (or clicks) a set of cells, and we run a
-one-vs-rest Wilcoxon test over all genes, returning log fold-change and adjusted
-p-values per gene. Unlike the marker endpoint (which groups by an obs column), the
+one-vs-rest Wilcoxon test over the genes detected in enough cells
+(``core/de_prefilter.py``), returning log fold-change and adjusted p-values per
+gene. Unlike the marker endpoint (which groups by an obs column), the
 group here is an ad-hoc list of cell indices. Between-groups comparisons can
 instead run donor-aware pseudobulk DESeq2 (``core/pseudobulk.py``).
 """
@@ -11,13 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scview.dependencies import get_dataset_manager
-from scview.core import de_results
+from scview.core import de_prefilter, de_results, transcriptome_size
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
@@ -30,9 +32,15 @@ router = APIRouter()
 _MIN_GROUP = 3
 
 
+# Test only genes detected in at least this fraction of the cells of either
+# group (core/de_prefilter.py); 0 tests every gene.
+_MinPct = Field(default=de_prefilter.DEFAULT_MIN_PCT, ge=0.0, le=1.0)
+
+
 class DERequest(BaseModel):
     indices: list[int]  # cell indices forming the "selection" group
     label: str = "selection"  # display label for the selection group
+    min_pct: float = _MinPct
 
 
 class DECompareRequest(BaseModel):
@@ -48,6 +56,8 @@ class DECompareRequest(BaseModel):
     # "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key
     # or a detectable donor column, and raw counts).
     method: Literal["wilcoxon", "pseudobulk"] = "wilcoxon"
+    # The cell-level test only: pseudobulk filters genes on their summed counts.
+    min_pct: float = _MinPct
 
 
 class DEGene(BaseModel):
@@ -59,6 +69,22 @@ class DEGene(BaseModel):
     # pseudobulk. TF and pathway activity is scored on it, GSEA ranks a Wilcoxon
     # result by it (p-values saturate at 0 for strong genes).
     stat: float | None = None
+
+
+class TranscriptomeSize(BaseModel):
+    """Median raw total counts per cell of the two sides (core/transcriptome_size.py):
+    ``caution`` when one is ``threshold``-fold the other or more, since
+    library-size normalisation then shifts fold changes of broadly expressed genes."""
+
+    source: str  # the obs column, or where the counts were summed from
+    median_a: float
+    median_b: float
+    ratio: float | None  # larger over smaller; None when a median is 0
+    caution: bool
+    threshold: float
+    # A seeded sample of each side's per-cell totals, for a violin.
+    values_a: list[float]
+    values_b: list[float]
 
 
 class DEResponse(BaseModel):
@@ -86,6 +112,15 @@ class DEResponse(BaseModel):
     # Names this result for a follow-up such as GSEA (core/de_results.py), which
     # could not take every gene back within the request size cap.
     result_id: str | None = None
+    # Wilcoxon: the detection cut-off applied (None when there is none: scaled
+    # expression, or pseudobulk), the genes it left out (n_genes_tested above
+    # counts the rest), and every gene's larger detection fraction of the two
+    # sides as a histogram (core/de_prefilter.py HIST_BINS).
+    min_pct: float | None = None
+    n_genes_skipped: int | None = None
+    detection: list[int] | None = None
+    # The two sides' RNA content; None when the dataset holds no raw counts.
+    transcriptome_size: TranscriptomeSize | None = None
 
 
 def _detect_replicate_key(obs, exclude: set[str], mask_a=None, mask_b=None) -> str | None:
@@ -122,9 +157,23 @@ def _replicate_guard(obs, mask_a, mask_b, key: str | None) -> dict:
     }
 
 
-def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
+@dataclass
+class _Wilcoxon:
+    genes: list[DEGene]
+    prefilter: de_prefilter.Prefilter
+
+    def fields(self) -> dict:
+        """The response's prefilter fields."""
+        pre = self.prefilter
+        return {"min_pct": pre.min_pct, "n_genes_tested": pre.n_tested,
+                "n_genes_skipped": pre.n_skipped, "detection": pre.histogram or None}
+
+
+def _wilcoxon(work, mask_a, mask_b, dataset_id: str, min_pct: float = 0.0) -> _Wilcoxon:
     """Wilcoxon DE of the ``mask_a`` cells against the ``mask_b`` cells of ``work``
-    (an in-memory AnnData the caller may modify), over all genes."""
+    (an in-memory AnnData the caller may modify), over the genes detected in at
+    least ``min_pct`` of either side's cells (every gene at 0)."""
+    import anndata as ad
     import numpy as np
     import pandas as pd
     import scanpy as sc
@@ -142,23 +191,39 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
     if not use_raw and looks_like_counts(work.X):
         sc.pp.normalize_total(work, target_sum=1e4)
         sc.pp.log1p(work)
-    work.obs["_de_group"] = pd.Categorical(
-        np.where(mask_a, "selection", "rest"), categories=["rest", "selection"]
+    # Every gene of the tested matrix: .raw can hold more genes than X (an HVG
+    # subset), and testing only X's width kept the up-regulated genes alone.
+    M = work.raw.X if use_raw else work.X
+    names = work.raw.var_names if use_raw else work.var_names
+    pre = de_prefilter.prefilter(M, mask_a, min_pct)
+    if not pre.keep.any():
+        raise HTTPException(
+            status_code=400,
+            detail=(f"No gene is detected in {min_pct * 100:g}% or more of the cells of "
+                    "either group; lower the minimum detection."),
+        )
+    test = ad.AnnData(
+        X=M if pre.keep.all() else M[:, pre.keep],
+        obs=pd.DataFrame(
+            {"_de_group": pd.Categorical(np.where(mask_a, "selection", "rest"),
+                                         categories=["rest", "selection"])},
+            index=pd.RangeIndex(len(mask_a)).astype(str),
+        ),
+        var=pd.DataFrame(index=names[pre.keep]),
+        # The log base scanpy undoes to take the fold change.
+        uns={"log1p": work.uns["log1p"]} if "log1p" in work.uns else {},
     )
     try:
         sc.tl.rank_genes_groups(
-            work,
+            test,
             groupby="_de_group",
             groups=["selection"],
             reference="rest",
             method="wilcoxon",
-            use_raw=use_raw,
-            # Every tested gene: the test runs on .raw when present, which can hold
-            # more genes than X (an HVG subset); capping at X's width kept only the
-            # top-scoring, i.e. up-regulated, genes.
-            n_genes=work.raw.n_vars if use_raw else work.n_vars,
+            use_raw=False,
+            n_genes=test.n_vars,  # every tested gene, not the top-scoring ones
         )
-        rgg = work.uns["rank_genes_groups"]
+        rgg = test.uns["rank_genes_groups"]
         names = rgg["names"]["selection"]
         scores = rgg["scores"]["selection"]
         lfc = rgg["logfoldchanges"]["selection"]
@@ -179,7 +244,12 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str) -> list[DEGene]:
         z = float(scores[i])
         genes.append(DEGene(gene=str(names[i]), logfoldchange=lf, pval=p, pval_adj=pa,
                             stat=z if np.isfinite(z) else None))
-    return genes
+    return _Wilcoxon(genes, pre)
+
+
+def _remember(dataset_id: str, res: _Wilcoxon) -> str:
+    return de_results.remember(dataset_id, res.genes, method="wilcoxon",
+                               min_pct=res.prefilter.min_pct, n_skipped=res.prefilter.n_skipped)
 
 
 @router.post("/datasets/{dataset_id}/de", response_model=DEResponse)
@@ -188,7 +258,8 @@ async def differential_expression(
     body: DERequest,
     dm: DatasetManager = Depends(get_dataset_manager),
 ) -> DEResponse:
-    """One-vs-rest Wilcoxon DE for the selected cells, over all genes (for a volcano)."""
+    """One-vs-rest Wilcoxon DE for the selected cells, over the genes detected in
+    at least ``min_pct`` of either side's cells (for a volcano)."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
@@ -213,14 +284,16 @@ async def differential_expression(
     mask = np.zeros(n, dtype=bool)
     mask[idx] = True
 
-    def _run() -> list[DEGene]:
+    def _run() -> tuple[_Wilcoxon, dict | None]:
         work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
-        return _wilcoxon(work, mask, ~mask, dataset_id)
+        size = transcriptome_size.check(work, mask, ~mask)  # before X is normalised
+        return _wilcoxon(work, mask, ~mask, dataset_id, body.min_pct), size
 
     # Seconds on a large dataset: in a worker thread, so the server keeps answering.
-    genes = await asyncio.to_thread(_run)
-    return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=genes,
-                      result_id=de_results.remember(dataset_id, genes, method="wilcoxon"))
+    res, size = await asyncio.to_thread(_run)
+    return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=res.genes,
+                      result_id=_remember(dataset_id, res), transcriptome_size=size,
+                      **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/compare", response_model=DEResponse)
@@ -278,20 +351,21 @@ async def differential_expression_compare(
     # Subset before copying: only the compared cells are materialised.
     keep = mask_a | mask_b
 
-    def _run() -> list[DEGene]:
+    def _run() -> tuple[_Wilcoxon, dict | None]:
         sub = adata[keep]
         work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
-        return _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id)
+        size = transcriptome_size.check(work, mask_a[keep], mask_b[keep])  # before X is normalised
+        return _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id, body.min_pct), size
 
-    genes = await asyncio.to_thread(_run)
+    res, size = await asyncio.to_thread(_run)
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
     key = body.replicate_key or _detect_replicate_key(
         obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
-    return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=genes,
-                      result_id=de_results.remember(dataset_id, genes, method="wilcoxon"),
-                      confounding=confounding, **guard)
+    return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=res.genes,
+                      result_id=_remember(dataset_id, res), transcriptome_size=size,
+                      confounding=confounding, **guard, **res.fields())
 
 
 async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str):
@@ -317,13 +391,15 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         sub = adata[keep]
         if getattr(adata, "isbacked", False):
             sub = sub.to_memory()
-        return pseudobulk_de(
+        res = pseudobulk_de(
             sub, mask_a[keep], sub.obs[key],
             label_a=body.group_a, label_b=body.group_b, donor_key=key,
         )
+        # DESeq2's size factors normalise library size too.
+        return res, transcriptome_size.check(sub, mask_a[keep], mask_b[keep])
 
     try:
-        res = await asyncio.to_thread(_run)
+        res, size = await asyncio.to_thread(_run)
     except PseudobulkError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -349,4 +425,5 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         design=res.design,
         counts_source=res.counts_source,
         dropped_samples=res.dropped_samples,
+        transcriptome_size=size,
     )

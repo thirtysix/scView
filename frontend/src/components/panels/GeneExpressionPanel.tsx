@@ -26,6 +26,7 @@ export function GeneExpressionPanel() {
   const opacity = useSettingsStore((s) => s.opacity);
   const plotBackground = useSettingsStore((s) => s.plotBackground);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
+  const embedding = useSettingsStore((s) => s.embedding);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
 
   const { positions, numCells, dimensions, isLoading: embeddingLoading } = useEmbedding();
@@ -357,6 +358,7 @@ export function GeneExpressionPanel() {
                   exportLegend={
                     expressionValues ? { type: "continuous", title: selectedGene ?? "", ...expressionMinMax } : null
                   }
+                  embedding={embedding}
                 />
               )}
             </Panel>

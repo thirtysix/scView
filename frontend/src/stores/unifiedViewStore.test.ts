@@ -39,4 +39,12 @@ describe("unifiedViewStore", () => {
     useUnifiedViewStore.getState().setActiveSubtab("de");
     expect(useUnifiedViewStore.getState().activeSubtab).toBe("de");
   });
+
+  it("opens the panel under the plot on the cluster distances, and on the violin for a new gene", () => {
+    useUnifiedViewStore.setState({ bottomPanelOpen: false, bottomView: "distribution" });
+    useUnifiedViewStore.getState().showDistances();
+    expect(useUnifiedViewStore.getState()).toMatchObject({ bottomPanelOpen: true, bottomView: "distances" });
+    useUnifiedViewStore.getState().openBottomPanel();
+    expect(useUnifiedViewStore.getState()).toMatchObject({ bottomPanelOpen: true, bottomView: "distribution" });
+  });
 });

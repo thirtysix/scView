@@ -55,6 +55,7 @@ const full: SessionFile = {
     test: "pseudobulk",
     replicate_key: "ind",
     fc_threshold: 1.5,
+    min_pct: 0.05,
   },
   colors: {
     categorical_palette: "tableau20",
@@ -107,6 +108,7 @@ describe("parseSession", () => {
     ["a bad filter", { selection: { filter: { op: "and", items: [{ kind: "gene", gene: "CD14", op: ">", value: "1" }] } } },
       /selection.filter.items\[0\].value must be a number/],
     ["an unknown DE test", { de: { test: "t-test" } }, /de.test must be one of/],
+    ["a detection cut-off over 100%", { de: { min_pct: 10 } }, /de.min_pct/],
     ["an unknown palette", { colors: { categorical_palette: "toString" } }, /colors.categorical_palette/],
     ["a huge point size", { colors: { point_size: 1e6 } }, /colors.point_size/],
   ])("rejects %s", (_name, patch, message) => {

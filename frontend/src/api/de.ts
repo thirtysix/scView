@@ -34,6 +34,31 @@ export interface DEResponse {
   confounding?: DEConfounding | null;
   /** Names this result for GSEA, which could not send every gene back. */
   result_id?: string | null;
+  /** Wilcoxon: the detection cut-off applied (null: none, as for pseudobulk or
+   *  scaled expression) and the genes it left out; `n_genes_tested` counts the rest. */
+  min_pct?: number | null;
+  n_genes_skipped?: number | null;
+  /** Every gene's larger detection fraction of the two sides, binned at 0.01 %:
+   *  `detection[k]` genes were detected in [k, k + 1) / 10,000 of the cells. */
+  detection?: number[] | null;
+  /** The two sides' RNA content; null when the dataset holds no raw counts. */
+  transcriptome_size?: TranscriptomeSize | null;
+}
+
+/** Median raw total counts per cell of the two sides (backend core/transcriptome_size.py). */
+export interface TranscriptomeSize {
+  /** The obs column, or where the counts were summed from. */
+  source: string;
+  median_a: number;
+  median_b: number;
+  /** Larger median over smaller; null when one is 0. */
+  ratio: number | null;
+  /** The ratio is `threshold` or more: fold changes of broadly expressed genes shift. */
+  caution: boolean;
+  threshold: number;
+  /** A sample of each side's per-cell totals, for a violin. */
+  values_a: number[];
+  values_b: number[];
 }
 
 export interface DEConfounding {
@@ -51,10 +76,11 @@ export async function computeDE(
   datasetId: string,
   indices: number[],
   label = "selection",
+  minPct?: number,
 ): Promise<DEResponse> {
   return apiFetch<DEResponse>(`/datasets/${datasetId}/de`, {
     method: "POST",
-    body: JSON.stringify({ indices, label }),
+    body: JSON.stringify({ indices, label, ...(minPct != null ? { min_pct: minPct } : {}) }),
   });
 }
 
@@ -67,6 +93,8 @@ export interface DECompareRequest {
   replicate_key?: string;
   /** "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key). */
   method?: "wilcoxon" | "pseudobulk";
+  /** Wilcoxon: test only genes detected in this fraction of either group's cells. */
+  min_pct?: number;
 }
 
 /**

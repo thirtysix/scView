@@ -92,6 +92,8 @@ _FACET_HINTS = {
     "qc": (
         "quality", "qc", "mito", "doublet", "dying", "damaged", "ribosom", "outlier",
         "stand out", "stands out", "artifact", "artefact",
+        "haemoglobin", "hemoglobin", "ambient", "contaminat", "cell cycle", "cell-cycle",
+        "cycling", "proliferat", "sequencing depth", "technical",
     ),
 }
 

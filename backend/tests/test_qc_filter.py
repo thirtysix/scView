@@ -28,6 +28,11 @@ from scview.core.qc_filter import Thresholds
 API = "/api/v1"
 
 
+def _fixed(**kw) -> PipelineParams:
+    """Params for the fixed cut-offs (MAD per sample is the default)."""
+    return PipelineParams(qc_threshold_mode="fixed", **kw)
+
+
 def _cells(genes, counts, pct=None, has_mt=True) -> dict:
     genes = np.asarray(genes, dtype=float)
     return {"n_genes": genes, "total_counts": np.asarray(counts, dtype=float),
@@ -143,10 +148,10 @@ def test_preview_is_what_the_filtering_step_removes():
     a = _dataset()
     run_pipeline(a, ["qc_metrics"], PipelineParams())  # obs QC columns, as the plots read them
     a.obs["predicted_doublet"] = np.arange(a.n_obs) % 50 == 0
-    params = PipelineParams(min_genes=150, max_genes=290, min_counts=200, max_pct_mt=15,
-                            drop_doublets=True, min_cells=0)
+    params = _fixed(min_genes=150, max_genes=290, min_counts=200, max_pct_mt=15,
+                    drop_doublets=True, min_cells=0)
     out = qc_filter.preview(a, per_cell_qc(a), Thresholds.from_params(params))
-    kept = _run_filtering(a.copy(), params)
+    kept, _ = _run_filtering(a.copy(), params)
     assert kept.n_obs == out["n_kept"] and out["n_removed"] > 0
     assert set(out["by_criterion"]) == {"min_genes", "max_genes", "min_counts", "max_pct_mt", "doublets"}
 
@@ -196,9 +201,9 @@ def test_the_step_takes_max_genes_and_min_counts():
     a = _dataset(mt=False)
     genes = per_cell_qc(a)["n_genes"]
     counts = per_cell_qc(a)["total_counts"]
-    out = _run_filtering(a.copy(), PipelineParams(min_genes=0, min_cells=0, max_genes=250))
+    out, _ = _run_filtering(a.copy(), _fixed(min_genes=0, min_cells=0, max_genes=250))
     assert out.n_obs == int((genes <= 250).sum())
-    out = _run_filtering(a.copy(), PipelineParams(min_genes=0, min_cells=0, min_counts=280))
+    out, _ = _run_filtering(a.copy(), _fixed(min_genes=0, min_cells=0, min_counts=280))
     assert out.n_obs == int((counts >= 280).sum())
 
 
@@ -220,16 +225,16 @@ def test_the_step_judges_cells_on_counts_when_x_is_scaled():
     genes = per_cell_qc(a)["n_genes"]
     above_mean = np.asarray((a.X > 0).sum(axis=1)).ravel()
     assert (genes >= 180).sum() > (above_mean >= 180).sum() + 100  # the two disagree here
-    out = _run_filtering(a.copy(), PipelineParams(min_genes=180, min_cells=0))
+    out, _ = _run_filtering(a.copy(), _fixed(min_genes=180, min_cells=0))
     assert out.n_obs == int((genes >= 180).sum())
-    out = _run_filtering(a, PipelineParams(min_genes=0, min_cells=0, max_genes=210))
+    out, _ = _run_filtering(a, _fixed(min_genes=0, min_cells=0, max_genes=210))
     assert out.n_obs == int((genes <= 210).sum()) > 0
 
 
 def test_the_step_skips_mito_when_unmeasurable():
     a = _dataset(mt=False)
     a.obs["pct_counts_mt"] = 0.0  # what the QC step writes without MT- genes
-    out = _run_filtering(a, PipelineParams(min_genes=0, min_cells=0, max_pct_mt=0))
+    out, _ = _run_filtering(a, _fixed(min_genes=0, min_cells=0, max_pct_mt=0))
     assert out.n_obs == a.n_obs
 
 
@@ -255,7 +260,8 @@ async def test_endpoint_previews_in_a_worker_thread(client, dataset_manager, mon
 
     monkeypatch.setattr(qc_filter, "preview", spy)
     r = await client.get(f"{API}/datasets/{did}/qc/filter-preview",
-                         params={"min_genes": 150, "max_pct_mt": 20, "max_genes": 0})
+                         params={"mode": "fixed", "min_genes": 150, "max_pct_mt": 20,
+                                 "max_genes": 0})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["thresholds"]["min_genes"] == 150 and body["n_removed"] >= 200
@@ -267,9 +273,15 @@ async def test_endpoint_defaults_to_the_pipelines_thresholds(client, dataset_man
     did = _register(dataset_manager, _dataset())
     body = (await client.get(f"{API}/datasets/{did}/qc/filter-preview")).json()
     p = PipelineParams()
-    assert body["thresholds"] == {"min_genes": p.min_genes, "max_genes": 0, "min_counts": 0,
-                                  "max_pct_mt": p.max_pct_mt, "drop_doublets": False}
+    assert body["thresholds"] == {"mode": "mad", "min_genes": p.min_genes, "max_genes": 0,
+                                  "min_counts": 0, "max_pct_mt": p.max_pct_mt,
+                                  "drop_doublets": False, "mad_k": 5.0, "mad_k_mt": 3.0,
+                                  "mad_upper": False}
+    assert body["mad"]["column"] == "Donor" and len(body["mad"]["samples"]) == 4
     r = await client.get(f"{API}/datasets/{did}/qc/filter-preview", params={"sample_column": "nope"})
     assert r.status_code == 400
+    for bad in ({"mode": "strict"}, {"mad_k": 0}, {"mad_k_mt": -1}):
+        r = await client.get(f"{API}/datasets/{did}/qc/filter-preview", params=bad)
+        assert r.status_code == 400, bad
     r = await client.get(f"{API}/datasets/ghost/qc/filter-preview")
     assert r.status_code == 404

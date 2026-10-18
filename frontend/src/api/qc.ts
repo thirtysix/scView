@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import { API_BASE } from "@/lib/constants";
+import { thresholdMode } from "@/lib/qcThresholds";
 import type { ChatSource } from "./assistant";
 
 /** One cluster's QC numbers + the flags it earned against the other clusters. */
@@ -17,8 +18,18 @@ export interface ClusterQc {
   median_stress_score?: number | null;
   /** Stress-signature genes among the cluster's top markers. */
   stress_markers?: string[];
+  /** Mean % of reads from haemoglobin genes (mean: most cells have none). */
+  mean_pct_hb?: number | null;
+  /** Red-cell lineage by its own markers (or a red-cell haemoglobin level). */
+  erythroid?: boolean;
+  /** Haemoglobin / erythroid genes among its top markers. */
+  erythroid_markers?: string[];
+  /** Share of its cells with a clear S or G2M score (outside the near-zero noise band). */
+  cycling_fraction?: number | null;
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
+  /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
+  notes?: string[];
 }
 
 export type ClusterFlag =
@@ -27,7 +38,23 @@ export type ClusterFlag =
   | "low_genes"
   | "doublet_rich"
   | "stress_driven"
+  | "hb_ambient"
+  | "cycling"
   | "small";
+
+/** A technical score that tracks one of the clustering's leading PCs (backend core/qc_drivers.py). */
+export interface QcDriver {
+  score: string;
+  label: string;
+  pc: number; // 1-based
+  r: number;
+  /** The same correlation inside clusters (cluster means removed). */
+  r_within: number | null;
+  pc_share: number;
+  /** True: the score moves along the PC inside clusters too (an axis of the embedding). */
+  inside_clusters: boolean;
+  reason: string;
+}
 
 /** Per-cluster QC for one grouping column (deterministic, no LLM). */
 export interface ClusterQcReport {
@@ -40,6 +67,13 @@ export interface ClusterQcReport {
   flag_help: Record<string, string>;
   computed_on_demand: boolean;
   note: string;
+  /** Haemoglobin RNA spread across the non-erythroid clusters (ambient RNA); "" if none. */
+  ambient_hb?: string;
+  drivers?: QcDriver[];
+  /** The technical scores looked at, and the space and number of PCs they were checked against. */
+  drivers_checked?: string[];
+  drivers_space?: string | null;
+  drivers_n_pcs?: number;
 }
 
 export async function getClusterQc(datasetId: string, groupby?: string): Promise<ClusterQcReport> {
@@ -167,17 +201,40 @@ export async function applyDoubletThreshold(datasetId: string, threshold: number
   }
 }
 
+export type QcThresholdMode = "mad" | "fixed";
+
 /** The Cell/Gene Filtering step's cell thresholds (pipeline params); 0 turns
- *  min/max genes and min counts off. % mito is applied only when measurable. */
+ *  min/max genes and min counts off. % mito is applied only when measurable.
+ *  `qc_threshold_mode` "mad" judges each sample's outliers instead of the genes /
+ *  counts cut-offs (max % mito is then a ceiling); a caller that sets no mode gets
+ *  the fixed cut-offs, as before MAD mode existed. */
 export interface FilterThresholds {
   min_genes: number;
   max_genes: number;
   min_counts: number;
   max_pct_mt: number;
   drop_doublets: boolean;
+  qc_threshold_mode?: QcThresholdMode;
+  /** MADs below the median for counts and genes (log scale); above too with `qc_mad_upper`. */
+  qc_mad_k?: number;
+  /** MADs above the median for % mito. */
+  qc_mad_k_mt?: number;
+  /** Also cut counts / genes above the median + k MADs (opt-in: trims large cell types). */
+  qc_mad_upper?: boolean;
+  /** The samples for MAD mode; "" = the one the backend detects. */
+  qc_sample_column?: string;
 }
 
-export type FilterCriterion = "min_genes" | "max_genes" | "min_counts" | "max_pct_mt" | "doublets";
+export type FilterCriterion =
+  | "min_genes"
+  | "max_genes"
+  | "min_counts"
+  | "max_counts"
+  | "max_pct_mt"
+  | "doublets";
+
+/** A sample's QC medians set it apart from the other samples (backend qc_groups.sample_summary). */
+export type SampleFlag = "few_cells" | "low_genes" | "high_genes" | "low_counts" | "high_counts" | "high_mito";
 
 export interface FilterGroupLoss {
   name: string;
@@ -186,6 +243,13 @@ export interface FilterGroupLoss {
   fraction: number;
   /** Cells each threshold removes from the group on its own. */
   by_criterion: Partial<Record<FilterCriterion, number>>;
+  /** Samples only: the median per cell (no % mito key when it can't be measured). */
+  median_genes?: number | null;
+  median_counts?: number | null;
+  median_pct_mt?: number | null;
+  flags?: SampleFlag[];
+  /** One sentence per flag, with the numbers. */
+  reasons?: string[];
 }
 
 export interface FilterGrouping {
@@ -194,6 +258,46 @@ export interface FilterGrouping {
   groups: FilterGroupLoss[];
   /** Set when the column has too many groups to list. */
   note?: string;
+  /** Samples only: the median of the sample medians, keyed like the group fields. */
+  typical?: Partial<Record<"median_genes" | "median_counts" | "median_pct_mt", number>>;
+  flag_help?: Partial<Record<SampleFlag, string>>;
+  /** Enough samples (3+) to say which stands out. */
+  compared?: boolean;
+}
+
+/** One sample's MAD bounds, in counts, genes and % (null: none, its MAD was 0). */
+export interface MadSampleBounds {
+  name: string;
+  n_cells: number;
+  /** Too few cells for bounds of its own: judged against all cells pooled. */
+  pooled: boolean;
+  min_counts: number | null;
+  max_counts: number | null;
+  min_genes: number | null;
+  max_genes: number | null;
+  /** The lower of median + k_mt MADs and the ceiling; null when mito isn't measurable. */
+  max_pct_mt: number | null;
+  /** Metrics whose MAD was 0 in this sample ("total_counts" | "n_genes" | "pct_mt"). */
+  skipped: string[];
+  n_removed?: number;
+}
+
+/** MAD mode's per-sample thresholds (backend qc_filter.MadBounds.to_dict). */
+export interface MadThresholds {
+  /** null: no sample column, all cells are one pooled group. */
+  column: string | null;
+  reason: string | null;
+  k: number;
+  k_mt: number;
+  /** The counts / genes upper bounds were on (null max_* bounds when off). */
+  upper?: boolean;
+  ceiling_pct_mt: number | null;
+  min_sample_cells: number;
+  samples: MadSampleBounds[];
+  pooled: Omit<MadSampleBounds, "name" | "pooled">;
+  n_unlabelled: number;
+  /** The run whose recorded thresholds these are (a same-settings re-run), if any. */
+  reused_from?: string | null;
 }
 
 /** What the thresholds would remove (backend core/qc_filter.py). */
@@ -202,11 +306,22 @@ export interface FilterPreview {
   n_removed: number;
   n_kept: number;
   fraction_removed: number;
-  thresholds: Omit<FilterThresholds, "max_pct_mt"> & { max_pct_mt: number | null };
+  thresholds: Omit<
+    FilterThresholds,
+    "max_pct_mt" | "qc_mad_k" | "qc_mad_k_mt" | "qc_mad_upper" | "qc_threshold_mode"
+  > & {
+    max_pct_mt: number | null;
+    mode?: QcThresholdMode;
+    mad_k?: number;
+    mad_k_mt?: number;
+    mad_upper?: boolean;
+  };
   has_mt: boolean;
   /** The dataset has doublet calls, so "drop predicted doublets" has something to drop. */
   doublet_calls: boolean;
   by_criterion: Partial<Record<FilterCriterion, { label: string; n_removed: number }>>;
+  /** MAD mode only (older backends omit it). */
+  mad?: MadThresholds | null;
   samples: FilterGrouping | null;
   clusters: FilterGrouping | null;
   warnings: {
@@ -220,6 +335,8 @@ export interface FilterPreview {
     criterion: FilterCriterion | null;
     message: string;
   }[];
+  /** How scView last filtered this dataset, if it did. */
+  previous?: { mode: QcThresholdMode; timestamp: string | null } | null;
 }
 
 export async function getFilterPreview(datasetId: string, t: FilterThresholds): Promise<FilterPreview> {
@@ -229,7 +346,12 @@ export async function getFilterPreview(datasetId: string, t: FilterThresholds): 
     min_counts: String(t.min_counts),
     max_pct_mt: String(t.max_pct_mt),
     drop_doublets: String(t.drop_doublets),
+    mode: thresholdMode(t),
   });
+  if (t.qc_mad_k !== undefined) q.set("mad_k", String(t.qc_mad_k));
+  if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
+  if (t.qc_mad_upper !== undefined) q.set("mad_upper", String(t.qc_mad_upper));
+  if (t.qc_sample_column) q.set("sample_column", t.qc_sample_column);
   try {
     return await apiFetch<FilterPreview>(`/datasets/${datasetId}/qc/filter-preview?${q.toString()}`);
   } catch (e) {

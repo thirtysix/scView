@@ -5,7 +5,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
 import { getDataset } from "@/api/datasets";
-import { getDoublets, type DoubletRateSuggestion, type FilterThresholds } from "@/api/qc";
+import { getDoublets, type DoubletRateSuggestion, type FilterThresholds, type QcThresholdMode } from "@/api/qc";
 import { pct } from "@/lib/qcThresholds";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
@@ -76,6 +76,8 @@ interface AssessmentResponse extends PreprocessingState {
   species?: SpeciesCall;
   /** How scView last normalised it for HVG/PCA ("log" | "pearson_residuals"); null if never. */
   normalization_method?: string | null;
+  /** How scView last filtered it ("fixed" for runs before MAD mode); null if never. */
+  qc_threshold_mode?: QcThresholdMode | null;
 }
 
 interface PipelineResult {
@@ -143,18 +145,48 @@ interface ParamConfig {
   dynamicOptions?: "categorical_obs_columns";
   /** Shown (and used by the backend) until the user types a value. */
   dynamicDefault?: "suggested_doublet_rate";
+  /** Used only in this filtering mode (qc_threshold_mode); disabled in the other. */
+  mode?: QcThresholdMode;
 }
+
+const QC_MODE_OPTION_LABELS: Record<string, string> = {
+  mad: "Per-sample MAD outliers (default)",
+  fixed: "Fixed cut-offs",
+};
 
 const STEP_PARAMS: Record<string, ParamConfig[]> = {
   doublet_detection: [
     { param: "expected_doublet_rate", label: "Expected doublet rate", type: "number", min: 0.0, max: 0.5, step: 0.001, default: null, dynamicDefault: "suggested_doublet_rate" },
   ],
   filtering: [
-    { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200 },
-    { param: "max_genes", label: "Max genes/cell (0 = off)", type: "number", min: 0, max: 20000, step: 100, default: 0 },
-    { param: "min_counts", label: "Min counts/cell (0 = off)", type: "number", min: 0, max: 100000, step: 100, default: 0 },
+    {
+      param: "qc_threshold_mode",
+      label: "Cell thresholds",
+      type: "select",
+      options: ["mad", "fixed"],
+      optionLabels: QC_MODE_OPTION_LABELS,
+      default: "mad",
+      help:
+        "Per-sample MAD (default): each sample's outliers, below the median − k MADs of log counts and " +
+        "genes per cell, and % mito above the median + k MADs (single-cell best practices). Fixed: one set " +
+        "of cut-offs for every cell.",
+    },
+    { param: "qc_mad_k", label: "MADs for counts / genes", type: "number", min: 1, max: 20, step: 0.5, default: 5, mode: "mad" },
+    { param: "qc_mad_k_mt", label: "MADs for % mito", type: "number", min: 1, max: 20, step: 0.5, default: 3, mode: "mad" },
+    {
+      param: "qc_mad_upper",
+      label: "Also cut high counts / genes",
+      type: "boolean",
+      default: false,
+      mode: "mad",
+      help: "Above the median + k MADs: mostly doublets, but it also trims large cell types (DCs, erythrocytes).",
+    },
+    { param: "qc_sample_column", label: "Samples", type: "select", options: [], default: "", mode: "mad" },
+    { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200, mode: "fixed" },
+    { param: "max_genes", label: "Max genes/cell (0 = off)", type: "number", min: 0, max: 20000, step: 100, default: 0, mode: "fixed" },
+    { param: "min_counts", label: "Min counts/cell (0 = off)", type: "number", min: 0, max: 100000, step: 100, default: 0, mode: "fixed" },
     { param: "min_cells", label: "Min cells/gene", type: "number", min: 0, max: 100, step: 1, default: 3 },
-    { param: "max_pct_mt", label: "Max % mito", type: "number", min: 0, max: 100, step: 1, default: 20 },
+    { param: "max_pct_mt", label: "Max % mito (ceiling in MAD mode)", type: "number", min: 0, max: 100, step: 1, default: 20 },
     { param: "drop_doublets", label: "Drop predicted doublets", type: "boolean", default: false },
   ],
   normalization: [
@@ -221,7 +253,20 @@ export function filterThresholds(set: Record<string, unknown> | undefined): Filt
     min_counts: Number(value("min_counts")),
     max_pct_mt: Number(value("max_pct_mt")),
     drop_doublets: Boolean(value("drop_doublets")),
+    qc_threshold_mode: value("qc_threshold_mode") === "fixed" ? "fixed" : "mad",
+    qc_mad_k: Number(value("qc_mad_k")),
+    qc_mad_k_mt: Number(value("qc_mad_k_mt")),
+    qc_mad_upper: Boolean(value("qc_mad_upper")),
+    qc_sample_column: String(value("qc_sample_column") ?? ""),
   };
+}
+
+/** Fixed cut-offs among an AI suggestion's filtering params mean the fixed mode,
+ *  unless it names a mode: in MAD mode they would do nothing. */
+export function withSuggestedMode(step: string, params: Record<string, unknown>): Record<string, unknown> {
+  if (step !== "filtering" || "qc_threshold_mode" in params) return params;
+  const fixed = ["min_genes", "max_genes", "min_counts"].some((p) => p in params);
+  return fixed ? { ...params, qc_threshold_mode: "fixed" } : params;
 }
 
 /* ------------------------------------------------------------------ */
@@ -440,6 +485,16 @@ export function DataAssessmentPanel() {
           prev.normalization?.normalization_method
             ? prev
             : { ...prev, normalization: { ...prev.normalization, normalization_method: recorded } },
+        );
+      }
+      // Likewise the filtering mode: a dataset filtered with fixed cut-offs (before
+      // MAD mode) keeps them; one never filtered by scView gets the MAD default.
+      const filteredWith = data.qc_threshold_mode;
+      if (filteredWith) {
+        setStepParams((prev) =>
+          prev.filtering?.qc_threshold_mode
+            ? prev
+            : { ...prev, filtering: { ...prev.filtering, qc_threshold_mode: filteredWith } },
         );
       }
       // Auto-select all missing steps
@@ -705,7 +760,7 @@ export function DataAssessmentPanel() {
     if (Object.keys(suggestion.suggested_params).length > 0) {
       setStepParams((prev) => ({
         ...prev,
-        [stepKey]: { ...prev[stepKey], ...suggestion.suggested_params },
+        [stepKey]: { ...prev[stepKey], ...withSuggestedMode(stepKey, suggestion.suggested_params) },
       }));
     }
     setSelectedSteps((prev) => new Set(prev).add(stepKey));
@@ -1156,6 +1211,8 @@ export function DataAssessmentPanel() {
                                 const suggested =
                                   pc.dynamicDefault === "suggested_doublet_rate" ? doubletRate?.rate : undefined;
                                 const currentVal = stepParams[step.key]?.[pc.param] ?? suggested ?? pc.default;
+                                // A filtering param of the other threshold mode: shown, not used.
+                                const unused = pc.mode !== undefined && pc.mode !== filterValues.qc_threshold_mode;
                                 const resolvedOptions =
                                   pc.dynamicOptions === "categorical_obs_columns"
                                     ? augmentedCategoricalOptions
@@ -1231,7 +1288,7 @@ export function DataAssessmentPanel() {
                                           onChange={(e) =>
                                             setStepParam(step.key, pc.param, e.target.checked)
                                           }
-                                          disabled={running}
+                                          disabled={running || unused}
                                           className="h-3.5 w-3.5 rounded border-slate-300 text-blue-500 focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                         />
                                         <span>{currentVal ? "Yes" : "No"}</span>
@@ -1246,7 +1303,7 @@ export function DataAssessmentPanel() {
                                         onChange={(e) =>
                                           setStepParam(step.key, pc.param, parseFloat(e.target.value) || pc.default)
                                         }
-                                        disabled={running}
+                                        disabled={running || unused}
                                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                       />
                                     ) : (
@@ -1255,7 +1312,7 @@ export function DataAssessmentPanel() {
                                         onChange={(e) =>
                                           setStepParam(step.key, pc.param, e.target.value)
                                         }
-                                        disabled={running || (pc.param === "hvg_flavor" && pearson)}
+                                        disabled={running || unused || (pc.param === "hvg_flavor" && pearson)}
                                         title={
                                           pc.param === "hvg_flavor" && pearson
                                             ? "Pearson residuals rank genes by residual variance (Normalization step)"
@@ -1263,9 +1320,15 @@ export function DataAssessmentPanel() {
                                         }
                                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                       >
-                                        {pc.param === "batch_key" || pc.param === "hvg_batch_key" ? (
+                                        {pc.param === "batch_key" || pc.param === "hvg_batch_key" || pc.param === "qc_sample_column" ? (
                                           <>
-                                            <option value="">{pc.param === "hvg_batch_key" ? "None (pooled)" : "Select batch column..."}</option>
+                                            <option value="">
+                                              {pc.param === "hvg_batch_key"
+                                                ? "None (pooled)"
+                                                : pc.param === "qc_sample_column"
+                                                  ? "Detect (donor / sample column)"
+                                                  : "Select batch column..."}
+                                            </option>
                                             {batchColumnOptions.map((opt) => (
                                               <option key={opt} value={opt}>{opt}</option>
                                             ))}
@@ -1283,6 +1346,11 @@ export function DataAssessmentPanel() {
                                       )}
                                     {pc.help && (
                                       <p className="text-[10px] leading-snug text-slate-400">{pc.help}</p>
+                                    )}
+                                    {unused && (
+                                      <p className="text-[10px] leading-snug text-slate-400">
+                                        {pc.mode === "fixed" ? "Not used: per-sample MAD mode." : "Not used: fixed cut-offs."}
+                                      </p>
                                     )}
                                     {pc.param === "hvg_flavor" && pearson && (
                                       <p className="text-[10px] leading-snug text-slate-400">

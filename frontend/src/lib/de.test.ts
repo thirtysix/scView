@@ -96,6 +96,14 @@ describe("DE co-pilot questions", () => {
     );
   });
 
+  it("says which genes a prefiltered result tested", () => {
+    const r: DEResponse = { n_selected: 40, n_rest: 60, label: "A", genes, min_pct: 0.1, n_genes_tested: 8123 };
+    expect(describeComparison({ a: "B cells", b: "rest", betweenGroups: false }, r)).toBe(
+      "B cells vs rest, cell-level Wilcoxon (40 vs 60 cells; 8,123 genes detected in at least 10% " +
+        "of either group tested)",
+    );
+  });
+
   it("says which side a gene is higher in", () => {
     const q = deGeneQuestion(groups, pseudobulkRes, genes[2]!);
     expect(q).toContain("CCL2 has log2 fold change -1.50 (higher in CTRL), adjusted p 0.0010");
@@ -124,6 +132,21 @@ describe("describeComparison with confounding", () => {
     };
     const text = describeComparison({ a: "STIM", b: "CTRL", betweenGroups: true }, r);
     expect(text).toContain("Caution: The two sides are different 'dataset' groups");
+  });
+
+  it("passes a transcriptome-size caution, and only a caution", () => {
+    const size = {
+      source: "X", median_a: 3000, median_b: 1000, ratio: 3, caution: true, threshold: 1.5,
+      values_a: [], values_b: [],
+    };
+    const r: DEResponse = { n_selected: 60, n_rest: 60, label: "Mono", genes: [], transcriptome_size: size };
+    const c = { a: "Mono", b: "T", betweenGroups: true, column: "cell_type" };
+    expect(describeComparison(c, r)).toContain(
+      ". Caution: median total counts differ 3.00x (Mono 3,000 vs T 1,000), so library-size " +
+        "normalisation shifts fold changes of broadly expressed genes by about -1.58 log2",
+    );
+    const calm = { ...r, transcriptome_size: { ...size, median_a: 1100, ratio: 1.1, caution: false } };
+    expect(describeComparison(c, calm)).not.toContain("Caution");
   });
 });
 

@@ -23,7 +23,6 @@ import scanpy as sc
 import scipy.sparse as sp
 
 from scview.core import (
-    cluster_qc,
     doublets,
     leiden,
     marker_specificity,
@@ -68,11 +67,18 @@ class PipelineParams:
     """Parameters for each preprocessing step."""
 
     # Filtering (cells: see core/qc_filter.py; 0 turns a threshold off)
-    min_genes: int = 200
+    # "mad": each sample's outliers (median +/- k MADs); "fixed": the cut-offs below.
+    qc_threshold_mode: str = "mad"
+    qc_mad_k: float = 5.0  # counts and genes per cell (log1p), below the median
+    qc_mad_k_mt: float = 3.0  # % mito, above only
+    qc_mad_upper: bool = False  # also cut counts / genes above median + k MADs (opt-in)
+    qc_sample_column: str = ""  # the samples for MAD mode (empty = detected)
+    min_genes: int = 200  # fixed mode only, as are max_genes and min_counts
     max_genes: int = 0
     min_counts: int = 0
     min_cells: int = 3
-    max_pct_mt: float = 20.0  # used only when % mito can be measured (MT- genes)
+    # Used only when % mito can be measured (MT- genes); a ceiling in MAD mode.
+    max_pct_mt: float = 20.0
     drop_doublets: bool = False  # drop cells flagged by doublet detection (opt-in)
 
     # Doublet detection
@@ -279,27 +285,36 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     return found
 
 
-def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> ad.AnnData:
-    """Filter cells on QC thresholds, then genes seen in too few cells. Returns new AnnData.
+def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnData, dict[str, Any]]:
+    """Filter cells on QC thresholds, then genes seen in too few cells.
 
-    Cells are judged on the per-cell QC values the QC plots show (``per_cell_qc``:
-    obs QC columns, else computed from the counts) with ``qc_filter``'s masks, so
-    the loss the Data Assessment tab previews is what this removes, and a re-run
-    on processed data (X scaled, every gene "detected") still counts genes in
-    the counts. % mito is used only when measurable; predicted doublets are
-    dropped when ``drop_doublets`` is set.
+    Returns the new AnnData and what to record beside the params: in MAD mode
+    each sample's thresholds and loss (``qc_thresholds``). Cells are judged on
+    the per-cell QC values the QC plots show (``per_cell_qc``: obs QC columns,
+    else computed from the counts) by ``qc_filter.judge``, as the Data Assessment
+    preview is, so its loss is what this removes, and a re-run on processed data
+    (X scaled, every gene "detected") still counts genes in the counts. % mito is
+    used only when measurable; predicted doublets are dropped when
+    ``drop_doublets`` is set.
     """
     n_before = adata.n_obs
-    calls = cluster_qc.doublet_calls(adata.obs)
-    removed = qc_filter.removed_by(per_cell_qc(adata), qc_filter.Thresholds.from_params(params), calls)
+    t = qc_filter.Thresholds.from_params(params)
+    samples = qc_filter.samples_of(adata, params.qc_sample_column or None)
+    removed, bounds = qc_filter.judge(adata, per_cell_qc(adata), t, samples)
     keep = qc_filter.keep_mask(removed, n_before)
     for name, mask in removed.items():
         logger.info("Filtering: %s removes %d cells on its own", name, int(mask.sum()))
+    # Only the params this mode used, so the record says what was applied.
+    used = (("min_genes", "max_genes", "min_counts") if t.mode == "fixed"
+            else ("qc_mad_k", "qc_mad_k_mt", "qc_mad_upper", "qc_sample_column"))
+    found: dict[str, Any] = {k: getattr(params, k) for k in used}
+    if bounds is not None:
+        found["qc_thresholds"] = bounds.to_dict(~keep)
     if not keep.all():
         adata = adata[keep, :].copy()
     sc.pp.filter_genes(adata, min_cells=params.min_cells)
-    logger.info("Filtering: %d -> %d cells", n_before, adata.n_obs)
-    return adata
+    logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, adata.n_obs)
+    return adata, found
 
 
 # Non-zero values sampled when deciding whether a matrix holds raw counts.
@@ -1292,8 +1307,18 @@ _STEP_RUNNERS: dict[str, Any] = {
     "cell_type_annotation": _run_cell_type_annotation,
 }
 
-# Steps that return a new AnnData object (instead of modifying in-place)
+# Steps that return a new AnnData object (instead of modifying in-place), alone or
+# with a dict of what to record (see _new_adata)
 _STEPS_RETURNING_ADATA = {"filtering", "reset_to_counts"}
+
+
+def _new_adata(step_name: str, ret: Any) -> tuple[ad.AnnData | None, Any]:
+    """(the step's new AnnData or None, what to record) from a runner's return."""
+    if step_name not in _STEPS_RETURNING_ADATA:
+        return None, ret
+    if isinstance(ret, tuple) and len(ret) == 2 and isinstance(ret[0], ad.AnnData):
+        return ret
+    return (ret, None) if isinstance(ret, ad.AnnData) else (None, ret)
 
 
 # step -> (human tool label, PipelineParams fields worth recording)
@@ -1301,9 +1326,10 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "reset_to_counts": ("scview.reset_to_counts", ()),
     "qc_metrics": ("scanpy.pp.calculate_qc_metrics", ()),
     "doublet_detection": ("scanpy.pp.scrublet", ("doublet_method", "expected_doublet_rate")),
+    # The mode's own params (fixed cut-offs, or k and per-sample thresholds) come
+    # back from the step itself.
     "filtering": ("scview.qc_filter + scanpy.pp.filter_genes",
-                  ("min_genes", "max_genes", "min_counts", "min_cells", "max_pct_mt",
-                   "drop_doublets")),
+                  ("qc_threshold_mode", "min_cells", "max_pct_mt", "drop_doublets")),
     "normalization": ("scanpy.pp.normalize_total", ("target_sum", "normalization_method")),
     "log_transform": ("scanpy.pp.log1p", ()),
     "highly_variable_genes": ("scanpy.pp.highly_variable_genes",
@@ -1464,9 +1490,10 @@ def run_pipeline(
             logger.info("Running step: %s", step_name)
             ret = runner(adata, params)
             # Some steps return a new AnnData object
-            if step_name in _STEPS_RETURNING_ADATA and isinstance(ret, ad.AnnData):
-                provenance.carry(adata, ret)  # keep history across the new object
-                adata = ret
+            new, ret = _new_adata(step_name, ret)
+            if new is not None:
+                provenance.carry(adata, new)  # keep history across the new object
+                adata = new
             result.steps_run.append(step_name)
             _record_pipeline_step(adata, step_name, params, ret)
         except StepSkipped as e:
@@ -1564,9 +1591,10 @@ def run_pipeline_streamed(
             else:
                 ret = runner(adata, params)
 
-            if step_name in _STEPS_RETURNING_ADATA and isinstance(ret, ad.AnnData):
-                provenance.carry(adata, ret)  # keep history across the new object
-                adata = ret
+            new, ret = _new_adata(step_name, ret)
+            if new is not None:
+                provenance.carry(adata, new)  # keep history across the new object
+                adata = new
             result.steps_run.append(step_name)
             _record_pipeline_step(adata, step_name, params, ret)
             elapsed = round(time.time() - step_t0, 2)

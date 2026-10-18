@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { DEFAULT_MIN_PCT } from "@/lib/deDetection";
 
 export type DEMode = "selection" | "groups";
 export type DETest = "wilcoxon" | "pseudobulk";
@@ -18,6 +19,8 @@ export interface DESettings {
   replicateKey: string;
   /** |log2FC| a gene needs to be listed */
   fcThreshold: number;
+  /** Cell-level test: fraction of either group's cells a gene must be detected in */
+  minPct: number;
 }
 
 export const DE_DEFAULTS: DESettings = {
@@ -30,6 +33,7 @@ export const DE_DEFAULTS: DESettings = {
   test: "wilcoxon",
   replicateKey: "",
   fcThreshold: 1,
+  minPct: DEFAULT_MIN_PCT,
 };
 
 interface DESettingsState extends DESettings {

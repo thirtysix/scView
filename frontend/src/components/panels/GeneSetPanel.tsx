@@ -107,6 +107,7 @@ export function GeneSetPanel() {
   const plotBackground = useSettingsStore((s) => s.plotBackground);
   const colormapName = useSettingsStore((s) => s.continuousColormap);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
+  const embedding = useSettingsStore((s) => s.embedding);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
 
   const { positions, numCells, dimensions, isLoading: embeddingLoading } =
@@ -976,6 +977,7 @@ export function GeneSetPanel() {
                         exportLegend={
                           scoreValues ? { type: "continuous", title: scoreName, ...scoreMinMax } : null
                         }
+                        embedding={embedding}
                       />
                     )}
                   </div>

@@ -95,6 +95,7 @@ export interface SessionDE {
   test?: DETest;
   replicate_key?: string;
   fc_threshold?: number;
+  min_pct?: number;
 }
 
 export interface SessionColors {
@@ -376,6 +377,7 @@ export function parseSession(x: unknown): SessionFile {
       test: (v, at) => oneOf(v, ["wilcoxon", "pseudobulk"] as const, at),
       replicate_key: (v, at) => text(v, at),
       fc_threshold: (v, at) => number(v, at, 0, 20),
+      min_pct: (v, at) => number(v, at, 0, 1),
     });
   }
 

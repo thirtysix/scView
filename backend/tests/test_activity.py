@@ -453,3 +453,8 @@ async def test_de_endpoint_takes_a_stored_result_by_id(client, dataset_manager, 
     assert by_id.json()["n_genes"] == N_GENES  # the gene without a statistic is left out
     gone = await client.post(f"{API}/datasets/{did}/activity/collectri/de", json={"result_id": "nope"})
     assert gone.status_code == 404 and "run the DE again" in gone.json()["detail"]
+    # The DE's detection prefilter rides along: only the genes it tested are scored.
+    assert "de_min_pct" not in by_id.json() and "de_min_pct" not in by_value.json()
+    rid = de_results.remember(did, [G(g, v) for g, v in zip(genes, y)], min_pct=0.1, n_skipped=7)
+    pre = await client.post(f"{API}/datasets/{did}/activity/collectri/de", json={"result_id": rid})
+    assert (pre.json()["de_min_pct"], pre.json()["de_n_genes_skipped"]) == (0.1, 7)

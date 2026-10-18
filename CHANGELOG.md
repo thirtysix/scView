@@ -6,6 +6,59 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-18
+
+### Changed
+- **QC filtering judges each sample's own outliers by default.** New filtering runs remove cells
+  whose counts or genes per cell fall more than 5 MADs below their sample's median (on log1p),
+  and cells whose % mito is more than 3 MADs above it, with the max % mito kept as a ceiling.
+  Samples are detected as for the other checks (Kang: Donor); a sample under 100 cells is judged
+  with the pooled cells. The upper bounds (median + 5 MADs) are opt-in: on Kang they took 12.3%
+  of DCs, 10% of Eryth and 9.3% of pDCs, and doublet detection already covers the high tail.
+  Fixed cut-offs stay one switch away, and a dataset filtered with them before keeps them on a
+  re-run. A re-run with the same MAD settings reuses the recorded thresholds instead of trimming
+  the tails again (Kang with upper bounds: 170 cells the first time, 0 the second). The Data
+  Assessment tab shows each sample's thresholds and loss, and History and the methods text show
+  them in one line.
+- **DE tests only genes detected in at least 1% of either group's cells** (Seurat v5's default;
+  5, 10 and 25% in the Genes menu). On Kang CD14 Mono vs CD4 Naive T this leaves out 6,016 of
+  14,053 genes, and 1,586 of the 1,708 |log2FC| > 10 artefacts with them, while more genes pass
+  BH (2,305 vs 2,161). The result says how many genes were tested and skipped and shows a
+  detection histogram with the cut-off; GSEA and TF activity on a stored result say they rank
+  only the tested genes. Pseudobulk keeps its own count filter.
+- **Cells are drawn in a seeded random order**, the same for every colouring, with a selection
+  drawn last, so a cluster stored late no longer paints over the others.
+
+### Added
+- **Per-sample QC table** on the Data Assessment tab: cells, median genes, UMIs and % mito per
+  sample, the cells the current thresholds remove, and flags for a sample whose median sits over
+  3 MADs from the others' or with few cells.
+- **Cluster QC checks haemoglobin, the cell cycle and technical drivers.** A cluster is called
+  erythroid by its red-cell markers other than haemoglobin (ALAS2, KLF1, CA1 ...) or a red-cell
+  Hb level, and gets a note, never a flag; haemoglobin without them is flagged as likely ambient
+  RNA from lysed red cells. Clusters of clearly cycling cells (S or G2M score above 0.1) are
+  flagged. Total counts and % mito, ribosomal and haemoglobin reads are correlated with the
+  clustering's first 10 PCs, over all cells and inside clusters: on paul15 log total counts tracks
+  PC2 at r = 0.95 inside clusters, which the panel raises as a concern. These reach the co-pilot,
+  the QC report and the insight banner.
+- **Transcriptome-size caution on DE.** When one side's cells hold 1.5x or more the RNA of the
+  other's (median raw total counts), the DE subtab says so with a violin of total counts: equal
+  transcript numbers then read as a fold change. CD14 Mono vs CD4 Naive T on Kang is 1.79x; STIM
+  vs CTRL within CD14 Mono is 1.12x and stays quiet.
+- **UMAP and t-SNE plots note that gaps between clusters aren't distances**, with a link to a
+  heatmap of distances between group centroids in the PCs the neighbour graph used (Harmony PCs
+  when it did), ordered by complete linkage, under the Unified View's plot
+  (`GET /clustering/distances`).
+- **Log scale toggles** on violins (expression, gene-set scores, QC by group), with ticks and hover
+  in the original units, and on the QC histograms' cell counts.
+
+### Fixed
+- **The lasso selects the cells under it.** It selected the cells mirrored about the plot's
+  vertical centre, selected nothing before the first pan, and used a stale camera after Reset
+  view.
+- **The Data Assessment tab no longer overflows the window.** At 1600 px wide the QC plots pushed
+  the page past the right edge and cut off the header's Session and Download buttons.
+
 ## [0.19.0] - 2026-10-17
 
 ### Added

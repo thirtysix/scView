@@ -17,7 +17,7 @@ import { PlotGrid } from "@/components/common/PlotGrid";
 import { DoubletCard } from "@/components/panels/DoubletCard";
 import { QcFilterSummary } from "@/components/panels/QcFilterSummary";
 import { ThresholdHistogram, type RefLine, type ThresholdLine } from "@/components/plots/ThresholdHistogram";
-import { roundTo } from "@/lib/qcThresholds";
+import { roundTo, thresholdMode } from "@/lib/qcThresholds";
 
 interface QcMetric {
   min: number;
@@ -80,6 +80,17 @@ export const HIST_THRESHOLDS: Record<string, { param: ThresholdParam; label: str
   pct_counts_mt: [{ param: "max_pct_mt", label: "Max" }],
 };
 
+/** A histogram's thresholds with their values. In MAD mode only the % mito ceiling:
+ *  the genes / counts bounds are each sample's own (listed under the loss summary). */
+export function histThresholds(metric: string, t: FilterThresholds | null) {
+  const mad = t ? thresholdMode(t) === "mad" : false;
+  const list = (t && HIST_THRESHOLDS[metric]) || [];
+  const shown = list
+    .filter((h) => !mad || h.param === "max_pct_mt")
+    .map((h) => ({ ...h, label: mad ? "Ceiling" : h.label, value: t![h.param] }));
+  return shown.length ? shown : undefined;
+}
+
 const THRESHOLD_STEP: Record<ThresholdParam, number> = { min_genes: 1, max_genes: 1, min_counts: 1, max_pct_mt: 0.1 };
 
 /** 0 turns min / max genes and min counts off; max % mito has no off (100 keeps every cell). */
@@ -135,6 +146,7 @@ function HistCard({
   thresholds,
   onDrag,
   onCommit,
+  logY = false,
 }: {
   label: string;
   metric: QcMetric;
@@ -142,6 +154,8 @@ function HistCard({
   thresholds?: { param: ThresholdParam; label: string; value: number }[];
   onDrag?: (param: ThresholdParam, value: number) => void;
   onCommit?: (param: ThresholdParam, value: number) => void;
+  /** Cell counts on a log axis */
+  logY?: boolean;
 }) {
   const refLines = useMemo<RefLine[]>(
     () => [{ value: metric.median, label: "median", color: "#94a3b8", dash: "dot" }],
@@ -159,6 +173,7 @@ function HistCard({
             counts={metric.hist.counts}
             lines={lines}
             refLines={refLines}
+            logY={logY}
             plotName={`qc_${label}`}
             onDrag={onDrag ? (id, v) => onDrag(id as ThresholdParam, v) : undefined}
             onCommit={onCommit ? (id, v) => onCommit(id as ThresholdParam, v) : undefined}
@@ -313,6 +328,8 @@ export function QcPlots({
   const [grouped, setGrouped] = useState<QcByGroup | null>(null);
   const [groupLoading, setGroupLoading] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
+  // The histograms' cell counts on a log axis: a long tail of a few cells shows.
+  const [logHist, setLogHist] = useState(false);
 
   // A threshold being dragged, before the drag ends and it is handed to `filter`.
   const [live, setLive] = useState<Partial<FilterThresholds>>({});
@@ -458,6 +475,10 @@ export function QcPlots({
           ))}
         </select>
         {groupLoading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
+        <label className="ml-auto flex flex-shrink-0 cursor-pointer items-center gap-1">
+          <input type="checkbox" checked={logHist} onChange={(e) => setLogHist(e.target.checked)} className="h-3 w-3" />
+          Histograms on a log scale
+        </label>
       </div>
       {groupError && (
         <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -476,13 +497,10 @@ export function QcPlots({
             key={k}
             label={METRIC_LABELS[k] ?? k}
             metric={data.metrics[k]!}
-            thresholds={
-              thresholds && HIST_THRESHOLDS[k]
-                ? HIST_THRESHOLDS[k]!.map((t) => ({ ...t, value: thresholds[t.param] }))
-                : undefined
-            }
+            thresholds={histThresholds(k, thresholds)}
             onDrag={thresholds ? dragThreshold : undefined}
             onCommit={thresholds ? commitThreshold : undefined}
+            logY={logHist}
           />
         ))}
       </PlotGrid>
@@ -491,7 +509,7 @@ export function QcPlots({
           datasetId={datasetId}
           thresholds={thresholds}
           refreshKey={refreshKey}
-          onDropDoublets={(on) => filter.onChange({ drop_doublets: on })}
+          onChange={filter.onChange}
         />
       )}
       {data.metrics.doublet_score && (

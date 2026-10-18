@@ -69,9 +69,13 @@ async def get_assessment(
 
     def _assess(adata) -> dict:
         # Not steps, so beside the step entries rather than among them.
+        filtered = qc_filter.recorded_filtering(adata)
         return {**assess_preprocessing(adata).model_dump(),
                 "species": detect_species(adata).model_dump(),
-                "normalization_method": recorded_normalization_method(adata)}
+                "normalization_method": recorded_normalization_method(adata),
+                # Re-filtering keeps the mode the dataset was filtered with (fixed
+                # before MAD existed); None: never filtered by scView.
+                "qc_threshold_mode": filtered["qc_threshold_mode"] if filtered else None}
 
     try:
         # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop.
@@ -92,9 +96,10 @@ async def get_cluster_qc(
     groupby: str | None = None,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
-    """Per-cluster QC (size, median genes/counts/% mito/% ribo, doublets) with
-    plain-language flags for clusters that stand out (deterministic, no LLM).
-    ``groupby`` defaults to the active clustering."""
+    """Per-cluster QC (size, median genes/counts/% mito/% ribo, doublets, % haemoglobin,
+    cycling cells) with plain-language flags for clusters that stand out, erythroid
+    notes, ambient haemoglobin and technical scores that track the clustering's
+    leading PCs (deterministic, no LLM). ``groupby`` defaults to the active clustering."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
@@ -159,22 +164,31 @@ async def get_filter_preview(
     min_counts: float | None = None,
     max_pct_mt: float | None = None,
     drop_doublets: bool | None = None,
+    mode: str | None = None,
+    mad_k: float | None = None,
+    mad_k_mt: float | None = None,
+    mad_upper: bool | None = None,
     sample_column: str = "",
     cluster_column: str = "",
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The cells the filtering step's thresholds would remove (core/qc_filter.py):
     overall, per threshold, per sample and per cluster, with warnings for a sample
-    or cluster lost whole or more than half. Thresholds left out take the
-    pipeline's defaults. Small and fast at any cell count (one pass over cached
-    per-cell values), so the QC plots ask again on every threshold change."""
+    or cluster lost whole or more than half, each sample's QC medians and range
+    flags, and in MAD mode (``mode``, the default) each sample's thresholds.
+    ``sample_column`` names the samples (default: detected), as the step's
+    ``qc_sample_column`` does. Thresholds left out take the pipeline's defaults.
+    Small and fast at any cell count (one pass over cached per-cell values), so
+    the QC plots ask again on every threshold change."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     params = PipelineParams()
     for key, value in (("min_genes", min_genes), ("max_genes", max_genes),
                        ("min_counts", min_counts), ("max_pct_mt", max_pct_mt),
-                       ("drop_doublets", drop_doublets)):
+                       ("drop_doublets", drop_doublets), ("qc_threshold_mode", mode),
+                       ("qc_mad_k", mad_k), ("qc_mad_k_mt", mad_k_mt),
+                       ("qc_mad_upper", mad_upper)):
         if value is not None:
             setattr(params, key, value)
     thresholds = qc_filter.Thresholds.from_params(params)

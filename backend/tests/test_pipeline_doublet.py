@@ -51,14 +51,16 @@ def test_filtering_drops_predicted_doublets_when_enabled():
     flags = np.zeros(100, dtype=bool)
     flags[:10] = True  # mark 10 cells as doublets
     a.obs["predicted_doublet"] = flags
-    out = _run_filtering(a, PipelineParams(min_genes=0, min_cells=0, drop_doublets=True))
+    out, _ = _run_filtering(a, PipelineParams(qc_threshold_mode="fixed", min_genes=0, min_cells=0,
+                                              drop_doublets=True))
     assert out.n_obs == 90
 
 
 def test_filtering_keeps_doublets_when_disabled():
     a = _synthetic(n_cells=100, n_genes=50)
     a.obs["predicted_doublet"] = np.array([True] * 10 + [False] * 90)
-    out = _run_filtering(a, PipelineParams(min_genes=0, min_cells=0, drop_doublets=False))
+    out, _ = _run_filtering(a, PipelineParams(qc_threshold_mode="fixed", min_genes=0, min_cells=0,
+                                              drop_doublets=False))
     assert out.n_obs == 100
 
 

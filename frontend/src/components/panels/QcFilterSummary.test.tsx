@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { FilterPreview, FilterThresholds } from "@/api/qc";
+import type { DatasetInfo } from "@/api/types";
 
 const { getFilterPreview } = vi.hoisted(() => ({ getFilterPreview: vi.fn() }));
 vi.mock("@/api/qc", () => ({ getFilterPreview }));
 
 import { QcFilterSummary } from "./QcFilterSummary";
+import { useDatasetStore } from "@/stores/datasetStore";
 
 const T: FilterThresholds = { min_genes: 200, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: false };
 
@@ -97,15 +99,118 @@ describe("QcFilterSummary", () => {
   });
 
   it("offers dropping the predicted doublets when there are calls", async () => {
-    const onDropDoublets = vi.fn();
-    render(<QcFilterSummary datasetId="d1" thresholds={T} onDropDoublets={onDropDoublets} />);
+    const onChange = vi.fn();
+    render(<QcFilterSummary datasetId="d1" thresholds={T} onChange={onChange} />);
     fireEvent.click(await screen.findByLabelText("Also drop predicted doublets"));
-    expect(onDropDoublets).toHaveBeenCalledWith(true);
+    expect(onChange).toHaveBeenCalledWith({ drop_doublets: true });
   });
 
   it("shows the server's reason when the preview fails", async () => {
     getFilterPreview.mockRejectedValue(new Error("Column 'x' not found."));
     render(<QcFilterSummary datasetId="d1" thresholds={T} />);
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Column 'x' not found."));
+  });
+});
+
+describe("QcFilterSummary in MAD mode", () => {
+  const M: FilterThresholds = { ...T, qc_threshold_mode: "mad", qc_mad_k: 5, qc_mad_k_mt: 3, qc_sample_column: "" };
+
+  function madPreview(): FilterPreview {
+    const p = preview(150);
+    p.thresholds = { ...p.thresholds, mode: "mad", mad_k: 5, mad_k_mt: 3 };
+    p.by_criterion = {
+      max_counts: { label: "Max counts", n_removed: 40 },
+      max_genes: { label: "Max genes", n_removed: 120 },
+    };
+    const bounds = { min_counts: 312.4, max_counts: 9870.2, min_genes: 210.6, max_genes: 3100, max_pct_mt: 6.12 };
+    p.mad = {
+      column: "Donor", reason: "donor", k: 5, k_mt: 3, ceiling_pct_mt: 20, min_sample_cells: 100,
+      samples: [
+        { name: "d1", n_cells: 500, pooled: false, ...bounds, skipped: [], n_removed: 20 },
+        { name: "d2", n_cells: 60, pooled: true, ...bounds, max_pct_mt: null, skipped: ["pct_mt"], n_removed: 3 },
+      ],
+      pooled: { n_cells: 1000, ...bounds, skipped: [] },
+      n_unlabelled: 4,
+      reused_from: null,
+    };
+    return p;
+  }
+
+  beforeEach(() => {
+    getFilterPreview.mockReset().mockResolvedValue(madPreview());
+    useDatasetStore.setState({
+      currentDataset: {
+        id: "d1",
+        obs_columns: [
+          { name: "Donor", dtype: "category", n_unique: 2 },
+          { name: "lane", dtype: "category", n_unique: 4 },
+        ],
+      } as unknown as DatasetInfo,
+    });
+  });
+
+  it("lists each sample's thresholds and loss, and offers the mode, k and samples", async () => {
+    const onChange = vi.fn();
+    render(<QcFilterSummary datasetId="d1" thresholds={M} onChange={onChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Thresholds" }));
+    const table = screen.getByRole("table", { name: "Thresholds per sample" });
+    const rows = within(table).getAllByRole("row").map((r) => r.textContent ?? "");
+    expect(rows[1]).toContain("312–9,870");
+    expect(rows[1]).toContain("211–3,100");
+    expect(rows[1]).toContain("< 6.1");
+    expect(rows[1]).toContain("20 (4.0%)");
+    expect(rows[2]).toContain("d2 (pooled)");
+    expect(rows[2]).toContain("any"); // its mito MAD was 0: no bound from it
+    expect(screen.getByText(/4 cells without a Donor value/)).toBeInTheDocument();
+    // In MAD mode the per-sample loss sits in the thresholds table, not twice.
+    expect(screen.queryByText("Per sample")).not.toBeInTheDocument();
+    expect(screen.getByText(/fixed genes and counts cut-offs are not used/)).toBeInTheDocument();
+
+    expect(screen.getByRole("button", { name: "Per-sample MAD" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.change(screen.getByLabelText("MADs for counts and genes"), { target: { value: "4" } });
+    expect(onChange).toHaveBeenLastCalledWith({ qc_mad_k: 4 });
+    fireEvent.change(screen.getByLabelText("MADs for % mito"), { target: { value: "0" } });
+    expect(onChange).toHaveBeenCalledTimes(1); // not a positive number: ignored
+    expect(screen.getByTestId("mad-controls")).toHaveTextContent(/below the median −/);
+    const upper = screen.getByLabelText(/Also above the median \+ 5 MADs/);
+    expect(upper).not.toBeChecked(); // the upper bounds are opt-in
+    fireEvent.click(upper);
+    expect(onChange).toHaveBeenLastCalledWith({ qc_mad_upper: true });
+    expect(screen.getByRole("option", { name: "Detected: Donor" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Sample column for MAD thresholds"), { target: { value: "lane" } });
+    expect(onChange).toHaveBeenLastCalledWith({ qc_sample_column: "lane" });
+    fireEvent.click(screen.getByRole("button", { name: "Fixed cut-offs" }));
+    expect(onChange).toHaveBeenLastCalledWith({ qc_threshold_mode: "fixed" });
+  });
+
+  it("says when the dataset was filtered before and its thresholds are used again", async () => {
+    const p = madPreview();
+    p.previous = { mode: "mad", timestamp: "2026-10-17T19:29:10+00:00" };
+    p.mad!.reused_from = "2026-10-17T19:29:10+00:00";
+    getFilterPreview.mockResolvedValue(p);
+    render(<QcFilterSummary datasetId="d1" thresholds={M} />);
+    expect(await screen.findByTestId("qc-previous")).toHaveTextContent(
+      /Filtered before by scView on 2026-10-17 \(per-sample MAD\)\. With the same settings/,
+    );
+  });
+
+  it("gives the pooled bounds when there is no sample column", async () => {
+    const p = madPreview();
+    p.mad = { ...p.mad!, column: null, reason: null, samples: [], n_unlabelled: 0 };
+    p.samples = null;
+    getFilterPreview.mockResolvedValue(p);
+    render(<QcFilterSummary datasetId="d1" thresholds={M} />);
+    expect(await screen.findByTestId("mad-pooled")).toHaveTextContent(
+      "all cells are one group: kept with 312–9,870 counts and 211–3,100 genes per cell, under 6.1% mito",
+    );
+  });
+
+  it("keeps the mode switch when the preview fails, so fixed cut-offs stay reachable", async () => {
+    getFilterPreview.mockRejectedValue(new Error("'cell' has 900 groups; per-sample thresholds take at most 200."));
+    const onChange = vi.fn();
+    render(<QcFilterSummary datasetId="d1" thresholds={M} onChange={onChange} />);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("at most 200"));
+    fireEvent.click(screen.getByRole("button", { name: "Fixed cut-offs" }));
+    expect(onChange).toHaveBeenCalledWith({ qc_threshold_mode: "fixed" });
   });
 });

@@ -177,7 +177,8 @@ def test_filtering_drops_the_applied_calls():
     a = _scored()
     a.X = np.ones((a.n_obs, 3), dtype="float32")
     out = doublets.apply_threshold(a, 0.2)
-    kept = pl._run_filtering(a, pl.PipelineParams(min_genes=0, min_cells=0, drop_doublets=True))
+    kept, _ = pl._run_filtering(a, pl.PipelineParams(qc_threshold_mode="fixed", min_genes=0,
+                                                     min_cells=0, drop_doublets=True))
     assert kept.n_obs == a.n_obs - out["n_called"]
 
 

@@ -10,9 +10,15 @@ clusters from turning a tiny difference into a flag.
 
 Flags: ``low_quality`` (few genes AND high mito), ``high_mito``, ``low_genes``,
 ``doublet_rich``, ``stress_driven`` (dissociation-stress score far above the
-others AND stress genes among its top markers; see ``core/stress.py``) and
-``small``. The same numbers ground the co-pilot, so "which
-clusters look low quality?" is answered from them (``grounding_block``).
+others AND stress genes among its top markers; see ``core/stress.py``),
+``hb_ambient`` (haemoglobin RNA in a cluster whose markers are not erythroid;
+see ``core/haemoglobin.py``), ``cycling`` (mostly cells with clear S/G2M scores;
+see ``core/cell_cycle.py``) and ``small``. Erythroid clusters get a note, not a
+flag: their haemoglobin is their own. At the dataset level, haemoglobin spread
+across the non-erythroid clusters (ambient RNA) and technical scores that track
+the leading PCs of the clustering's space (``core/qc_drivers.py``) are reported.
+The same numbers ground the co-pilot, so "which clusters look low quality?" is
+answered from them (``grounding_block``).
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from scview.core import stress
+from scview.core import cell_cycle, haemoglobin, qc_drivers, stress
 from scview.core.anndata_adaptor import per_cell_qc
 
 logger = logging.getLogger(__name__)
@@ -63,6 +69,8 @@ FLAG_HELP = {
         "rather than a real population."
     ),
     "stress_driven": stress.FLAG_HELP,
+    "hb_ambient": haemoglobin.FLAG_HELP,
+    "cycling": cell_cycle.FLAG_HELP,
     "small": (
         "Very few cells: its markers and DE results are unreliable; it may be a rare "
         "cell type or an artifact."
@@ -86,8 +94,13 @@ class ClusterQC(BaseModel):
     median_doublet_score: float | None = None
     median_stress_score: float | None = None
     stress_markers: list[str] = []  # signature genes among its top markers
+    mean_pct_hb: float | None = None  # mean, not median: most cells have no Hb read
+    erythroid: bool = False  # red-cell lineage by its markers (or a red-cell Hb level)
+    erythroid_markers: list[str] = []  # haemoglobin / erythroid genes among its top markers
+    cycling_fraction: float | None = None  # share of cells with a clear S or G2M score
     flags: list[str] = []
     reasons: list[str] = []  # one plain-language sentence per flag, with the numbers
+    notes: list[str] = []  # not a problem, but worth saying (erythroid: Hb is real)
 
 
 NO_MT_NOTE = ("No mitochondrial (MT-) genes in this dataset, so % mito can't be measured "
@@ -104,6 +117,11 @@ class ClusterQCReport(BaseModel):
     flag_help: dict[str, str] = FLAG_HELP
     computed_on_demand: bool = False  # genes/counts/mito worked out from counts
     note: str = ""
+    ambient_hb: str = ""  # haemoglobin RNA across the non-erythroid clusters, if any
+    drivers: list[qc_drivers.Driver] = []  # technical scores tracking a leading PC
+    drivers_checked: list[str] = []  # the scores looked at
+    drivers_space: str | None = None  # obsm key of the clustering's space
+    drivers_n_pcs: int = 0  # leading PCs looked at
 
     @property
     def flagged(self) -> list[ClusterQC]:
@@ -194,12 +212,25 @@ def cluster_qc(
         frame["stress"] = pd.to_numeric(adata.obs[stress.SCORE_COLUMN], errors="coerce").to_numpy()
         metrics.append("stress_score")
         sig_markers = stress.signature_markers(adata, column)
+    ery_markers: dict[str, list[str]] | None = None
+    if cells.get("pct_hb") is not None:
+        frame["pct_hb"] = cells["pct_hb"]
+        metrics.append("pct_hb")
+        ery_markers = haemoglobin.erythroid_markers(adata, column)
+    cycling = cell_cycle.cycling_cells(adata.obs)
+    if cycling is not None:
+        frame["cycling"] = cycling.astype(np.float64)
+        metrics.append("cycling_fraction")
 
     grouped = frame.groupby(labels.astype(str).where(labels.notna()).to_numpy(), sort=False)
     sizes = grouped.size()
     medians = grouped.median()
     if "doublet" in frame.columns:
         medians["doublet"] = grouped["doublet"].mean()  # a fraction, not a median
+    if "cycling" in frame.columns:
+        medians["cycling"] = grouped["cycling"].mean()
+    if "pct_hb" in frame.columns:
+        medians["hb"] = grouped["pct_hb"].mean()  # the median cell has no Hb read
     # Keep the column's own category order (cluster 0, 1, 2 …), not first-seen order.
     order = (
         [str(c) for c in labels.cat.categories] if hasattr(labels, "cat")
@@ -209,6 +240,17 @@ def cluster_qc(
     sizes, medians = sizes.loc[order], medians.loc[order]
 
     typical = {k: float(np.nanmedian(v)) for k, v in medians.items()}
+    # Haemoglobin: erythroid clusters first; the others are compared with each
+    # other (a typical cluster's Hb is a typical NON-erythroid cluster's).
+    erythroid: set[str] = set()
+    others = list(order)
+    if "hb" in medians:
+        erythroid = {g for g in order if haemoglobin.is_erythroid(
+            None if ery_markers is None else ery_markers.get(g, []), medians.loc[g, "pct_hb"])}
+        others = [g for g in order if g not in erythroid]
+        typical.pop("hb")
+        if others:
+            typical["hb"] = float(np.nanmedian(medians.loc[others, "hb"]))
     z: dict[str, pd.Series] = {}
     if len(order) >= MIN_GROUPS:
         z["genes"] = _robust_z(np.log1p(medians["genes"]), _SCALE_FLOOR["log_genes"])
@@ -220,6 +262,12 @@ def cluster_qc(
             z["doublet_score"] = _robust_z(medians["doublet_score"], _SCALE_FLOOR["doublet_score"])
         if "stress" in medians:
             z["stress"] = _robust_z(medians["stress"], _SCALE_FLOOR["stress"])
+        if "hb" in medians and len(others) >= MIN_GROUPS:
+            # Centre and spread from the non-erythroid clusters only.
+            hb = medians["hb"]
+            med = float(np.nanmedian(hb.loc[others]))
+            mad = float(np.nanmedian(np.abs(hb.loc[others] - med)))
+            z["hb"] = (hb - med) / max(_MAD_TO_SD * mad, haemoglobin.SCALE_FLOOR)
 
     small_cut = max(_SMALL_MIN_CELLS, _SMALL_FRACTION * n)
     rows: list[ClusterQC] = []
@@ -237,19 +285,38 @@ def cluster_qc(
             median_doublet_score=_num(m.get("doublet_score"), 4),
             median_stress_score=_num(m.get("stress"), 3),
             stress_markers=(sig_markers or {}).get(g, []),
+            mean_pct_hb=_num(m.get("hb"), 4),
+            erythroid=g in erythroid,
+            erythroid_markers=(ery_markers or {}).get(g, []),
+            cycling_fraction=_num(m.get("cycling"), 3),
         )
         _flag(row, {k: float(v.loc[g]) for k, v in z.items()}, typical, small_cut,
-              markers_checked=sig_markers is not None)
+              markers_checked=sig_markers is not None, hb_checked=ery_markers is not None,
+              compare=len(order) >= MIN_GROUPS, median_pct_hb=_num(m.get("pct_hb")))
         rows.append(row)
 
     names = {"genes": "median_genes", "counts": "median_counts", "pct_mt": "median_pct_mt",
              "pct_ribo": "median_pct_ribo", "doublet": "doublet_fraction",
-             "doublet_score": "median_doublet_score", "stress": "median_stress_score"}
+             "doublet_score": "median_doublet_score", "stress": "median_stress_score",
+             "hb": "mean_pct_hb", "cycling": "cycling_fraction"}
     # A score outlier that couldn't be checked against markers isn't flagged: say so.
     unchecked = [] if sig_markers is not None or "stress" not in z else [
         g for g in order if _stress_outlier(float(z["stress"].loc[g]),
                                             medians.loc[g].get("stress"), typical.get("stress"))
     ]
+    hb_unchecked = [] if ery_markers is not None or "hb" not in z else [
+        g for g in others if haemoglobin.ambient_outlier(
+            float(z["hb"].loc[g]), medians.loc[g, "hb"], typical.get("hb"))
+    ]
+    ambient = ""
+    if typical.get("hb") is not None and typical["hb"] >= haemoglobin.AMBIENT_WIDE_PCT:
+        ambient = (
+            f"Haemoglobin RNA is spread across the non-erythroid clusters ({_pct(typical['hb'])} "
+            "of the reads in a typical one): likely ambient RNA from lysed red cells. It adds "
+            "red-cell genes to every cluster and can blur markers and DE; ambient-RNA removal "
+            "before import (SoupX, CellBender) cleans it."
+        )
+    drivers = _drivers(adata, labels, cells, frame, erythroid)
     return ClusterQCReport(
         column=column,
         n_cells=n,
@@ -269,8 +336,45 @@ def cluster_qc(
                   + " a high dissociation-stress score, but "
                   f"'{column}' has no marker genes to check it against: compute markers to "
                   "see whether it is stress-driven."),
+            "" if not hb_unchecked
+            else (("Clusters " + ", ".join(hb_unchecked) + " have" if len(hb_unchecked) > 1
+                   else f"Cluster {hb_unchecked[0]} has")
+                  + " far more haemoglobin RNA than the other clusters, but "
+                  f"'{column}' has no marker genes to tell erythroid cells from ambient RNA: "
+                  "compute markers to see which it is."),
         ) if n),
+        ambient_hb=ambient,
+        drivers=drivers.drivers,
+        drivers_checked=drivers.checked,
+        drivers_space=drivers.representation,
+        drivers_n_pcs=drivers.n_pcs,
     )
+
+
+def _drivers(adata, labels: pd.Series, cells: dict, frame: pd.DataFrame,
+             erythroid: set[str]) -> qc_drivers.DriverCheck:
+    """Technical scores against the leading PCs (``core/qc_drivers.py``). Never
+    fails the per-cluster table."""
+    try:
+        lab = labels.astype(str).where(labels.notna()).to_numpy()
+        scores: dict[str, np.ndarray] = {
+            "log_counts": np.log1p(np.asarray(cells["total_counts"], dtype=np.float64)),
+        }
+        if "pct_mt" in frame.columns:
+            scores["pct_mt"] = frame["pct_mt"].to_numpy(dtype=np.float64)
+        if "pct_ribo" in frame.columns:
+            scores["pct_ribo"] = frame["pct_ribo"].to_numpy(dtype=np.float64)
+        masks: dict[str, np.ndarray] = {}
+        if "pct_hb" in frame.columns:
+            scores["pct_hb"] = np.log1p(frame["pct_hb"].to_numpy(dtype=np.float64))
+            masks["pct_hb"] = ~np.isin(lab, list(erythroid))
+        cc = cell_cycle.cell_cycle_scores(adata.obs)
+        if cc is not None:
+            scores["S_score"], scores["G2M_score"] = cc
+        return qc_drivers.for_adata(adata, lab, scores, masks)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("cluster QC: driver check failed: %s", exc)
+        return qc_drivers.DriverCheck()
 
 
 def for_adaptor(adaptor, groupby: str | None = None) -> ClusterQCReport:
@@ -298,6 +402,15 @@ def _fmt(v: float) -> str:
     return f"{v:,.0f}"
 
 
+def _pct(v: float) -> str:
+    """A haemoglobin share, readable from red cells (50%) down to ambient traces."""
+    if v >= 1:
+        return f"{v:.1f}%"
+    if v >= 0.01:
+        return f"{v:.2f}%"
+    return "<0.01%" if v > 0 else "0%"
+
+
 def _stress_outlier(z: float, score, typical) -> bool:
     try:
         return z >= stress.Z_OUTLIER and float(score) - float(typical) >= stress.MIN_DIFF
@@ -306,8 +419,11 @@ def _stress_outlier(z: float, score, typical) -> bool:
 
 
 def _flag(row: ClusterQC, z: dict[str, float], typical: dict[str, float], small_cut: float,
-          markers_checked: bool = False) -> None:
-    """Attach flags + plain-language reasons to one cluster's row."""
+          markers_checked: bool = False, hb_checked: bool = False, compare: bool = True,
+          median_pct_hb: float | None = None) -> None:
+    """Attach flags + plain-language reasons (and notes) to one cluster's row.
+
+    ``compare`` is False when there are too few clusters to say one stands out."""
     genes, mito = row.median_genes, row.median_pct_mt
     t_genes, t_mito = typical.get("genes"), typical.get("pct_mt")
     few_genes = genes is not None and bool(t_genes) and z.get("genes", 0.0) <= -_Z_PAIR \
@@ -362,6 +478,42 @@ def _flag(row: ClusterQC, z: dict[str, float], typical: dict[str, float], small_
             f"stress genes ({', '.join(hits[:6])})."
         )
 
+    hb, t_hb = row.mean_pct_hb, typical.get("hb")
+    if row.erythroid:
+        # Said only where its haemoglobin is high enough to be mistaken for ambient RNA.
+        if hb is not None and hb > 0 and (t_hb is None or hb >= haemoglobin.AMBIENT_FOLD * t_hb):
+            lineage = haemoglobin.lineage_markers(row.erythroid_markers)
+            if len(lineage) >= haemoglobin.MIN_ERYTHROID_MARKERS:
+                genes = ", ".join(row.erythroid_markers[:5])
+                why = f"its top markers include red-cell genes ({genes})"
+            else:
+                level = _pct(median_pct_hb or 0.0)
+                why = f"its median cell is {level} haemoglobin, a red-cell level"
+            vs = f" vs {_pct(t_hb)} in a typical non-erythroid cluster" if t_hb is not None else ""
+            row.notes.append(
+                f"Erythroid: {why}, and haemoglobin is {_pct(hb)} of its reads{vs}. Real "
+                "red-cell expression, not ambient contamination."
+            )
+    elif hb_checked and compare and haemoglobin.ambient_outlier(z.get("hb", 0.0), hb, t_hb):
+        row.flags.append("hb_ambient")
+        row.reasons.append(
+            f"Haemoglobin RNA without erythroid markers: {_pct(hb)} of its reads are haemoglobin "
+            f"vs {_pct(t_hb)} in a typical non-erythroid cluster, and its top markers hold no "
+            "red-cell genes besides haemoglobin. Likely ambient RNA from lysed red cells, or "
+            "red-cell doublets."
+        )
+
+    cyc, t_cyc = row.cycling_fraction, typical.get("cycling")
+    if compare and cyc is not None and t_cyc is not None and cyc >= cell_cycle.CYCLING_SHARE \
+            and cyc - t_cyc >= cell_cycle.CYCLING_MARGIN:
+        row.flags.append("cycling")
+        row.reasons.append(
+            f"Mostly cycling cells: {cyc:.0%} have a clear S or G2M score (above "
+            f"{cell_cycle.NEAR_ZERO_MARGIN:g}) vs {t_cyc:.0%} in a typical cluster. The cell cycle "
+            "may be what sets it apart (a dividing cell type, or a dividing state of another); "
+            "regress out the S and G2M scores if that is not the biology of interest."
+        )
+
     if row.n_cells < small_cut:
         row.flags.append("small")
         row.reasons.append(
@@ -378,8 +530,10 @@ def qc_tag(column: str, group: str) -> str:
 def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str, str]]]:
     """Compact prompt lines + ``(tag, detail)`` citations for the co-pilot.
 
-    Only the typical values and the flagged clusters, so the prompt stays small;
-    an unflagged cluster is covered by the "within the normal range" line."""
+    Only the typical values, the flagged clusters and the ones with a note
+    (erythroid), so the prompt stays small; an unflagged cluster is covered by the
+    "within the normal range" line. Dataset-level findings (ambient haemoglobin,
+    technical drivers of the PCs) cite the column's own tag."""
     if not report.column or not report.clusters:
         return [], []
     t = report.typical
@@ -387,7 +541,9 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
            f"{_fmt(t['median_counts'])} counts/cell" if "median_counts" in t else "",
            f"{t['median_pct_mt']:.1f}% mito" if "median_pct_mt" in t else "",
            f"{t['doublet_fraction']:.0%} doublets" if "doublet_fraction" in t else "",
-           f"stress score {t['median_stress_score']:.2f}" if "median_stress_score" in t else ""]
+           f"stress score {t['median_stress_score']:.2f}" if "median_stress_score" in t else "",
+           f"{_pct(t['mean_pct_hb'])} haemoglobin" if "mean_pct_hb" in t else "",
+           f"{t['cycling_fraction']:.0%} cycling cells" if "cycling_fraction" in t else ""]
     head = f"result:qc:{report.column}"
     lines = [
         f"\n## Per-cluster QC (deterministic; column '{report.column}', {report.n_groups} groups)",
@@ -397,19 +553,35 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
     cites: list[tuple[str, str]] = [(head, f"{report.column}: {len(report.flagged)} of "
                                             f"{report.n_groups} clusters flagged")]
     flagged = report.flagged
-    for c in flagged:
+    listed = [c for c in report.clusters if c.flags or c.notes]
+    for c in listed:
         tag = qc_tag(report.column, c.group)
-        lines.append(f"- **{c.group}** ({c.n_cells:,} cells) [{tag}]: " + " ".join(c.reasons))
-        cites.append((tag, f"{c.group}: " + "; ".join(c.flags)))
-    rest = report.n_groups - len(flagged)
+        lines.append(f"- **{c.group}** ({c.n_cells:,} cells) [{tag}]: " + " ".join(c.reasons + c.notes))
+        cites.append((tag, f"{c.group}: " + "; ".join(c.flags + (["erythroid"] if c.notes else []))))
+    rest = report.n_groups - len(listed)
     if not flagged:
         checked = ["genes", "counts"] + [w for m, w in (("pct_mt", "mito"), ("doublet_fraction", "doublets"),
-                                                        ("stress_score", "dissociation stress"))
+                                                        ("stress_score", "dissociation stress"),
+                                                        ("pct_hb", "haemoglobin"),
+                                                        ("cycling_fraction", "cell cycle"))
                                          if m in report.metrics]
         lines.append("- No cluster stands out: all are within the normal range on "
-                     + ", ".join(checked[:-1]) + " and " + checked[-1] + ".")
+                     + ", ".join(checked[:-1]) + " and " + checked[-1]
+                     + (" (an erythroid cluster's haemoglobin is its own)." if listed else "."))
     elif rest:
         lines.append(f"- The other {rest} clusters are within the normal range.")
+    if report.ambient_hb:
+        lines.append(f"- Ambient haemoglobin: {report.ambient_hb} [{head}]")
+    if report.drivers_n_pcs:
+        space = f"first {report.drivers_n_pcs} PCs of {report.drivers_space}"
+        for d in report.drivers:
+            lines.append(f"- Technical driver ({space}): {d.reason} [{head}]")
+        if not report.drivers and report.drivers_checked:
+            names = [s[:1].lower() + s[1:] if s[1:2].islower() else s
+                     for s in report.drivers_checked]  # "log total counts", "G2M score"
+            lines.append(f"- Technical scores vs the clustering's PCs ({space}): none of "
+                         + ", ".join(names) + f" correlates strongly with one (|r| >= "
+                         f"{qc_drivers.DRIVER_R:g}). [{head}]")
     if report.note:
         lines.append(f"- Note: {report.note}")
     return lines, cites
