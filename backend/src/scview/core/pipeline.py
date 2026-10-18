@@ -957,8 +957,11 @@ def _resolve_annotation_groupby(adata: ad.AnnData, params: PipelineParams) -> st
 
 def _annotate_celltypist(
     adata: ad.AnnData, params: PipelineParams, groupby: str, target: str
-) -> None:
-    """Reference-based annotation with CellTypist, per-cluster consensus (majority voting)."""
+) -> dict[str, Any]:
+    """Reference-based annotation with CellTypist, per-cluster consensus (majority voting).
+
+    Returns what the run used (model, species, gene overlap) for provenance; the
+    same record is kept in uns for the per-label summary (core/celltypist_fit.py)."""
     try:
         import celltypist
         from celltypist import models
@@ -989,7 +992,30 @@ def _annotate_celltypist(
     inp.var_names = var_names
     sc.pp.normalize_total(inp, target_sum=1e4)
     sc.pp.log1p(inp)
-    annotate_kwargs: dict[str, Any] = {"model": model_name, "majority_voting": True}
+
+    # How well the model suits the data (core/celltypist_fit.py): its species
+    # against the dataset's, and the share of its genes the dataset has.
+    from scview.core import celltypist_fit
+    from scview.core.species import detect_species
+
+    dataset_species = detect_species(adata).species
+    model: Any = model_name
+    run: dict[str, Any] = {"model": model_name, "dataset_species": dataset_species,
+                           "model_species": celltypist_fit.model_species(model_name)}
+    try:
+        model = models.Model.load(model=model_name)
+        details = str((getattr(model, "description", None) or {}).get("details", ""))
+        run["model_species"] = celltypist_fit.model_species(model_name, details)
+        run.update(celltypist_fit.gene_overlap(model.features, inp.var_names))
+    except Exception as e:  # no local copy: CellTypist's own load below says why
+        logger.warning("CellTypist model %s not loaded for the overlap check: %s", model_name, e)
+    if run.get("n_shared_genes") == 0:
+        warning = celltypist_fit.species_warning(run["model_species"], dataset_species)
+        raise ValueError(
+            f"None of the {run['n_model_genes']:,} genes of {model_name} are in this dataset. "
+            + (warning or "CellTypist needs gene symbols matching the model's (not Ensembl ids).")
+        )
+    annotate_kwargs: dict[str, Any] = {"model": model, "majority_voting": True}
     if groupby:
         inp.obs[groupby] = adata.obs[groupby].values  # consensus over the user's clusters
         annotate_kwargs["over_clustering"] = groupby
@@ -1011,11 +1037,16 @@ def _annotate_celltypist(
         from scview.core.annotation_confidence import store_reference_probabilities
 
         store_reference_probabilities(adata, target, pred.probability_matrix, model_name)
+    else:
+        adata.obs.drop(columns=[f"{target}_confidence"], errors="ignore", inplace=True)
+    celltypist_fit.record_run(adata, target, run)
     logger.info(
-        "CellTypist: annotated %d cells -> obs['%s'] (model=%s, groupby=%s, %d types)",
+        "CellTypist: annotated %d cells -> obs['%s'] (model=%s, groupby=%s, %d types, "
+        "gene overlap %s)",
         adata.n_obs, target, model_name, groupby or "celltypist-internal",
-        int(adata.obs[target].nunique()),
+        int(adata.obs[target].nunique()), run.get("gene_overlap"),
     )
+    return run
 
 
 def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 15) -> dict[str, list[str]]:
@@ -1214,7 +1245,9 @@ def _annotate_marker_score(
                 len(mapping), target, len(score_cols))
 
 
-def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None:
+def _run_cell_type_annotation(
+    adata: ad.AnnData, params: PipelineParams
+) -> dict[str, Any] | None:
     """Annotate cell types per cluster, writing a reviewable obs[target] column.
 
     Methods: 'llm' (LLM-from-markers, tissue-agnostic, default), 'celltypist'
@@ -1236,8 +1269,9 @@ def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None
             )
             method = "celltypist"
 
+    fit: dict[str, Any] | None = None
     if method == "celltypist":
-        _annotate_celltypist(adata, params, groupby, target)
+        fit = _annotate_celltypist(adata, params, groupby, target)
     elif method == "llm":
         _annotate_llm(adata, params, groupby, target)
     elif method == "marker_score":
@@ -1248,12 +1282,16 @@ def _run_cell_type_annotation(adata: ad.AnnData, params: PipelineParams) -> None
         )
     if method != "celltypist":
         from scview.core.annotation_confidence import drop_reference_probabilities
+        from scview.core.celltypist_fit import drop_run
 
         drop_reference_probabilities(adata, target)  # an earlier CellTypist run's
+        drop_run(adata, target)
 
     # Marker genes for the new column, so enrichment and the marker plots can use it
     # straight away. The default rank_genes_groups stays on the clustering.
     _markers_for_column(adata, target)
+    # Recorded with the step: the model's species and gene overlap (CellTypist only).
+    return {k: v for k, v in (fit or {}).items() if k != "model"} or None
 
 
 def drop_enrichment_cache(adata: ad.AnnData, col: str) -> None:
