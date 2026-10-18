@@ -138,7 +138,10 @@ describe("CompositionTest", () => {
     });
     render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
     expect(await screen.findByText("Proportions by cluster (not tested)")).toBeInTheDocument();
-    expect(screen.getByRole("alert").textContent).toContain("at least 2 per condition");
+    const alerts = screen.getAllByRole("alert").map((a) => a.textContent);
+    expect(alerts[0]).toContain("at least 2 per condition");
+    // The per-sample plot warns that one point per condition is no distribution.
+    expect(alerts[1]).toContain("Fewer than 3 donors (CTRL: 1, STIM: 1)");
     expect(screen.getByText(/read these differences as descriptive/)).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "FDR" })).toBeNull();
   });
@@ -186,5 +189,25 @@ describe("CompositionTest", () => {
     testComposition.mockRejectedValue(new Error("'stim' has fewer than two groups"));
     render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
     expect(await screen.findByText("'stim' has fewer than two groups")).toBeInTheDocument();
+  });
+  it("plots one point per donor with the donors counted per condition", async () => {
+    render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
+    const caption = await screen.findByTestId("donor-caption");
+    // RESULT has one donor (SNG-101) in each condition.
+    expect(caption.textContent).toContain("One point per Donor (n = 1: CTRL 1, STIM 1)");
+    expect(screen.getByRole("button", { name: "Panel per group" })).toBeInTheDocument();
+  });
+
+  it("says a sample column is needed instead of plotting conditions as samples", async () => {
+    testComposition.mockResolvedValue({
+      ...RESULT, sample_key: null, sample_key_detected: false, tested: false,
+      samples: [
+        { sample: "CTRL", condition: "CTRL", n_cells: 6573, props: [0.06, 0.35, 0.005] },
+        { sample: "STIM", condition: "STIM", n_cells: 7263, props: [0.07, 0.3, 0.01] },
+      ],
+    });
+    render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
+    expect((await screen.findByTestId("needs-sample")).textContent).toContain("need a sample or donor column");
+    expect(screen.queryByTestId("donor-caption")).toBeNull();
   });
 });
