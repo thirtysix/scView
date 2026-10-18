@@ -81,3 +81,30 @@ export async function downloadTable(
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 }
+
+export type RecipeFile = "script" | "manifest";
+
+/**
+ * Download the replay script (.py) or RUN_MANIFEST (.json) written from the
+ * dataset's recorded steps (GET /datasets/{id}/recipe/{script|manifest}).
+ */
+export async function downloadRecipeFile(id: string, file: RecipeFile): Promise<void> {
+  const res = await fetch(`${API_BASE}/datasets/${id}/recipe/${file}`);
+  if (!res.ok) {
+    let detail = await res.text();
+    try {
+      detail = String(JSON.parse(detail).detail ?? detail);
+    } catch {
+      /* plain-text error */
+    }
+    throw new Error(detail || `Download failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const fallback = file === "script" ? "replay.py" : "RUN_MANIFEST.json";
+  try {
+    downloadUrl(url, filenameFromDisposition(res.headers.get("content-disposition"), fallback));
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}

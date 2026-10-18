@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  downloadRecipeFile,
   downloadTable,
   downloadUrl,
   getH5adInfo,
@@ -19,7 +20,8 @@ interface DatasetDownloadMenuProps {
 
 /**
  * "Download" menu for one dataset: the .h5ad scView works on (size shown before
- * the download starts), the cell metadata, and the marker tables.
+ * the download starts), the cell metadata, the marker tables, and the replay
+ * script + run manifest of its recorded steps.
  */
 export function DatasetDownloadMenu({ datasetId, compact = false, className }: DatasetDownloadMenuProps) {
   const [info, setInfo] = useState<H5adInfo | null>(null);
@@ -78,6 +80,21 @@ export function DatasetDownloadMenu({ datasetId, compact = false, className }: D
       label: "Marker genes (.xlsx)",
       hint: "One sheet per grouping",
       onSelect: () => downloadTable(datasetId, "markers", "xlsx"),
+    },
+    {
+      key: "replay-script",
+      icon: "csv",
+      label: "Replay script (.py)",
+      hint: "Python (scanpy) that repeats the recorded steps",
+      dividerBefore: true,
+      onSelect: () => downloadRecipeFile(datasetId, "script"),
+    },
+    {
+      key: "run-manifest",
+      icon: "csv",
+      label: "Run manifest (.json)",
+      hint: "Versions, input checksum and every step",
+      onSelect: () => downloadRecipeFile(datasetId, "manifest"),
     },
   ];
 

@@ -160,9 +160,12 @@ def record_step(
 
 def recipe(adata) -> list[dict[str, Any]]:
     """Return the ordered, replayable recipe (step + params per commit) — a
-    portable record that reproduces this dataset's processing elsewhere."""
+    portable record that reproduces this dataset's processing elsewhere — with
+    each step's tool, time and scView version for the recipe viewer."""
     return [
-        {"commit_id": h.get("commit_id"), "step": h["step"], "params": h.get("params", {})}
+        {"commit_id": h.get("commit_id"), "step": h["step"], "params": h.get("params", {}),
+         "tool": h.get("tool"), "timestamp": h.get("timestamp"),
+         "scview_version": h.get("scview_version"), "effect": h.get("effect")}
         for h in read_provenance(adata).get("history", [])
     ]
 

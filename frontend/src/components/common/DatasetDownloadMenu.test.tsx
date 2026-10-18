@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 const api = vi.hoisted(() => ({
   getH5adInfo: vi.fn(),
   downloadTable: vi.fn(),
+  downloadRecipeFile: vi.fn(),
   downloadUrl: vi.fn(),
   h5adDownloadUrl: (id: string) => `/api/v1/datasets/${id}/export/h5ad`,
 }));
@@ -37,6 +38,19 @@ describe("DatasetDownloadMenu", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     expect(await screen.findByText("No .h5ad file available yet")).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Dataset \(\.h5ad\)/ })).toBeDisabled();
+  });
+
+  it("offers the replay script and the run manifest", async () => {
+    api.getH5adInfo.mockResolvedValue({ filename: "f.h5ad", size_bytes: 10, source: "uploads", source_label: "as uploaded" });
+    api.downloadRecipeFile.mockResolvedValue(undefined);
+    render(<DatasetDownloadMenu datasetId="abc" />);
+    fireEvent.click(screen.getByRole("button", { name: /download/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Replay script \(\.py\)/ }));
+    expect(api.downloadRecipeFile).toHaveBeenCalledWith("abc", "script");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /download/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Run manifest \(\.json\)/ }));
+    expect(api.downloadRecipeFile).toHaveBeenLastCalledWith("abc", "manifest");
   });
 
   it("asks for the marker table and shows a failure in the menu", async () => {
