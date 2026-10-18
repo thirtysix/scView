@@ -1,8 +1,9 @@
 import { useMemo } from "react";
-import { BarChart3, Grid2x2, Loader2, X } from "lucide-react";
+import { BarChart3, Blend, Grid2x2, Loader2, ScatterChart, X } from "lucide-react";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { Panel } from "@/components/common/Panel";
 import { StackedViolin } from "@/components/plots/StackedViolin";
+import { GeneVsGene } from "@/components/unified/GeneVsGene";
 import { useGeneExpression } from "@/hooks/useGeneExpression";
 import { useObsCodes } from "@/hooks/useObsCodes";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -24,7 +25,8 @@ interface MultiGenePanelProps {
 /**
  * The Expression subtab's "Several genes" section: pick 2–9 genes, then see
  * the embedding coloured by each side by side (GeneFeatureGrid over the plot)
- * or a stacked violin of them across the group-by.
+ * or a stacked violin of them across the group-by; and for two of them, their
+ * blend on the embedding or one against the other, cell by cell.
  */
 export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps) {
   const storeDataset = useGeneGridStore((s) => s.datasetId);
@@ -32,6 +34,10 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
   const setGenes = useGeneGridStore((s) => s.setGenes);
   const showViolins = useGeneGridStore((s) => s.showViolins);
   const setShowViolins = useGeneGridStore((s) => s.setShowViolins);
+  const storedPair = useGeneGridStore((s) => s.pair);
+  const setPair = useGeneGridStore((s) => s.setPair);
+  const showScatter = useGeneGridStore((s) => s.showScatter);
+  const setShowScatter = useGeneGridStore((s) => s.setShowScatter);
   const geneGrid = useSplitViewStore((s) => s.geneGrid);
   const setGeneGrid = useSplitViewStore((s) => s.setGeneGrid);
   // Picks made on another dataset do not carry over.
@@ -39,12 +45,24 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
   const enough = genes.length >= MIN_GRID_GENES;
   const full = genes.length >= MAX_GRID_GENES;
 
+  const pair = enough && storedPair && storedPair.every((g) => genes.includes(g)) ? storedPair : null;
+  const blendOn = geneGrid?.kind === "blend" && geneGrid.datasetId === datasetId;
+
   const update = (next: string[]) => {
     setGenes(datasetId, next);
-    // An open feature grid follows the picks (and closes below two genes).
-    if (geneGrid?.kind === "features" && geneGrid.datasetId === datasetId) {
+    if (geneGrid?.datasetId !== datasetId) return;
+    // An open feature grid follows the picks (and closes below two genes)...
+    if (geneGrid.kind === "features") {
       setGeneGrid(next.length >= MIN_GRID_GENES ? { datasetId, kind: "features", genes: next.slice(0, MAX_GRID_GENES) } : null);
     }
+    // ...and a blend closes when one of its genes goes.
+    if (geneGrid.kind === "blend" && !geneGrid.genes.every((g) => next.includes(g))) setGeneGrid(null);
+  };
+  const choosePair = (which: 0 | 1, gene: string) => {
+    if (!pair) return;
+    const next: [string, string] = which === 0 ? [gene, pair[1]] : [pair[0], gene];
+    setPair(next);
+    if (blendOn) setGeneGrid({ datasetId, kind: "blend", genes: next });
   };
   const add = (text: string) => update(mergeGeneLists(genes, parseGeneList(text), MAX_GRID_GENES));
   const remove = (gene: string) => update(genes.filter((g) => g !== gene));
@@ -124,7 +142,81 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
       {showViolins && enough && groupByColumn && (
         <StackedViolinSection datasetId={datasetId} genes={genes} groupByColumn={groupByColumn} />
       )}
+
+      {pair && (
+        <div className="space-y-1.5 border-t border-slate-100 pt-2">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-[11px] font-medium text-slate-500">Two genes</span>
+            <PairSelect label="Gene A" value={pair[0]} other={pair[1]} genes={genes} onChange={(g) => choosePair(0, g)} />
+            <span className="text-slate-400">vs</span>
+            <PairSelect label="Gene B" value={pair[1]} other={pair[0]} genes={genes} onChange={(g) => choosePair(1, g)} />
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              aria-pressed={blendOn}
+              onClick={() => setGeneGrid(blendOn ? null : { datasetId, kind: "blend", genes: [...pair] })}
+              title="The embedding coloured by A, by B, and by both blended (A red, B green, both yellow)"
+              className={`flex items-center gap-1 rounded border px-2 py-1 text-xs font-medium ${
+                blendOn ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              <Blend className="h-3.5 w-3.5" />
+              {blendOn ? "Hide blend" : "Blend"}
+            </button>
+            <button
+              type="button"
+              aria-pressed={showScatter}
+              disabled={!groupByColumn}
+              onClick={() => setShowScatter(!showScatter)}
+              title="Each cell's A against its B, with correlations and co-expression counts"
+              className={`flex items-center gap-1 rounded border px-2 py-1 text-xs font-medium disabled:opacity-50 ${
+                showScatter ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              <ScatterChart className="h-3.5 w-3.5" />
+              Gene vs gene
+            </button>
+          </div>
+          {showScatter && groupByColumn && (
+            <Panel title={`${pair[0]} vs ${pair[1]}`} bodyClassName="p-2">
+              <GeneVsGene datasetId={datasetId} geneA={pair[0]} geneB={pair[1]} groupColumn={groupByColumn} />
+            </Panel>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+function PairSelect({
+  label,
+  value,
+  other,
+  genes,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  other: string;
+  genes: string[];
+  onChange: (gene: string) => void;
+}) {
+  return (
+    <select
+      aria-label={label}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-700"
+    >
+      {genes
+        .filter((g) => g !== other)
+        .map((g) => (
+          <option key={g} value={g}>
+            {g}
+          </option>
+        ))}
+    </select>
   );
 }
 

@@ -157,6 +157,25 @@ describe("GeneFeatureGrid", () => {
     expect(info.lines.map((l: { label: string; value: string }) => `${l.label}=${l.value}`)).toEqual(["CD3D=0", "MS4A1=10"]);
   });
 
+  it("blends two genes in a third panel: A red, B green, neither grey, with the 2D key", async () => {
+    renderGrid({ datasetId: "ds1", kind: "blend", genes: ["CD3D", "MS4A1"] });
+    await screen.findByTestId("deck");
+    expect(layers().map((l) => l.id)).toEqual(["split-fg-0", "split-fg-1", "split-fg-2"]);
+    expect(screen.getByText("CD3D + MS4A1")).toBeInTheDocument();
+    const blend = colorsByCell(2);
+    // Top of each scale (clip 99th pct of the expressing cells) is pure red / green.
+    expect(blend[2]!.slice(0, 3)).toEqual([255, 0, 0]);
+    expect(blend[4]!.slice(0, 3)).toEqual([0, 255, 0]);
+    expect(blend[5]!.slice(0, 3)).toEqual([211, 211, 211]);
+    // Neither-expressing cells are drawn first, under the rest.
+    expect(drawOrder(2)[0]).toBe(5);
+    expect(screen.getByLabelText(/Blend key: CD3D red, MS4A1 green/)).toBeInTheDocument();
+    // Scale top at the max instead: CD3D's 2 of 3 is no longer near-full red.
+    const before = blend[1]!;
+    fireEvent.change(screen.getByRole("combobox", { name: "Blend scale top" }), { target: { value: "1" } });
+    await waitFor(() => expect(colorsByCell(2)[1]).not.toEqual(before));
+  });
+
   it("closes from its header", async () => {
     useSplitViewStore.setState({ geneGrid: { datasetId: "ds1", kind: "features", genes: ["CD3D", "MS4A1"] } });
     renderGrid(useSplitViewStore.getState().geneGrid!);

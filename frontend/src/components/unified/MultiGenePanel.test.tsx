@@ -138,4 +138,26 @@ describe("MultiGenePanel", () => {
     expect(fetchGeneExpression.mock.calls[1]![1]).toEqual(["GNLY"]);
     await waitFor(() => expect((plots.at(-1)!.data as unknown[]).length).toBe(9));
   });
+
+  it("blends the chosen pair on the embedding, and the blend follows the pair", () => {
+    render(withQuery(<MultiGenePanel datasetId="ds1" groupByColumn="cell_type" />));
+    paste("CD3D MS4A1 GNLY");
+    expect((screen.getByRole("combobox", { name: "Gene A" }) as HTMLSelectElement).value).toBe("CD3D");
+    fireEvent.click(screen.getByRole("button", { name: /Blend/ }));
+    expect(useSplitViewStore.getState().geneGrid).toEqual({ datasetId: "ds1", kind: "blend", genes: ["CD3D", "MS4A1"] });
+    fireEvent.change(screen.getByRole("combobox", { name: "Gene B" }), { target: { value: "GNLY" } });
+    expect(useSplitViewStore.getState().geneGrid?.genes).toEqual(["CD3D", "GNLY"]);
+    // A gene list without one of the pair closes the blend.
+    fireEvent.click(screen.getByRole("button", { name: "Remove GNLY" }));
+    expect(useSplitViewStore.getState().geneGrid).toBeNull();
+    expect(useGeneGridStore.getState().pair).toEqual(["CD3D", "MS4A1"]);
+  });
+
+  it("opens gene vs gene for the pair", async () => {
+    render(withQuery(<MultiGenePanel datasetId="ds1" groupByColumn="cell_type" />));
+    paste("CD3D MS4A1");
+    fireEvent.click(screen.getByRole("button", { name: /Gene vs gene/ }));
+    expect(await screen.findByText("CD3D vs MS4A1")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Select co-expressing cells \(0\)/ })).toBeDisabled();
+  });
 });
