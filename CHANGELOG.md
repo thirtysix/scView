@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-18
+
 ### Added
 - **More DE tests.** Pick the cell-level test: Wilcoxon (default), Welch t-test or logistic
   regression. Logistic regression gives coefficients and no p-values, so the volcano plots the
