@@ -15,6 +15,7 @@ import { CATEGORICAL_PALETTES, COLORMAP_STOPS, type CategoricalPaletteName, type
 import { PANEL_IDS, UNIFIED_SUBTABS, type PanelId, type UnifiedSubtab } from "@/lib/constants";
 import { exportFilename } from "@/lib/exportFilename";
 import type { DEMode, DETest } from "@/stores/deSettingsStore";
+import type { CellMethod } from "@/lib/deMethods";
 
 export const SESSION_FORMAT = "scview-session";
 export const SESSION_VERSION = 1;
@@ -96,6 +97,8 @@ export interface SessionDE {
   replicate_key?: string;
   fc_threshold?: number;
   min_pct?: number;
+  /** The cell-level test: wilcoxon | t-test | logreg. */
+  cell_method?: CellMethod;
 }
 
 export interface SessionColors {
@@ -378,6 +381,7 @@ export function parseSession(x: unknown): SessionFile {
       replicate_key: (v, at) => text(v, at),
       fc_threshold: (v, at) => number(v, at, 0, 20),
       min_pct: (v, at) => number(v, at, 0, 1),
+      cell_method: (v, at) => oneOf(v, ["wilcoxon", "t-test", "logreg"] as const, at),
     });
   }
 

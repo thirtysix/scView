@@ -6,8 +6,13 @@ import { DE_DEFAULTS, useDESettingsStore } from "@/stores/deSettingsStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 
-const { computeDE, computeDECompare } = vi.hoisted(() => ({ computeDE: vi.fn(), computeDECompare: vi.fn() }));
-vi.mock("@/api/de", () => ({ computeDE, computeDECompare }));
+const { computeDE, computeDECompare, computeDEMethods, computeDECompareMethods } = vi.hoisted(() => ({
+  computeDE: vi.fn(),
+  computeDECompare: vi.fn(),
+  computeDEMethods: vi.fn(),
+  computeDECompareMethods: vi.fn(),
+}));
+vi.mock("@/api/de", () => ({ computeDE, computeDECompare, computeDEMethods, computeDECompareMethods }));
 // The follow-up cards fetch on their own; not what is under test here.
 vi.mock("@/components/unified/DEEnrichment", () => ({ DEEnrichment: () => null }));
 vi.mock("@/components/unified/DEActivity", () => ({ DEActivity: () => null }));
@@ -213,5 +218,125 @@ describe("UnifiedDESubtab transcriptome-size caution", () => {
     await screen.findByText(/Median total counts per cell: NK 1,500, T 1,403 \(1.07x/);
     expect(screen.queryByText(/Transcriptome size differs/)).toBeNull();
     expect(plots.props.some((p) => (p.data as { type?: string }[])[0]?.type === "violin")).toBe(false);
+  });
+});
+
+const LOGREG: DEResponse = {
+  n_selected: 40,
+  n_rest: 60,
+  label: "selection",
+  method: "logreg",
+  genes: [
+    { gene: "CD14", logfoldchange: 3, pval: null, pval_adj: null, stat: 0.42 },
+    { gene: "LYZ", logfoldchange: 2, pval: null, pval_adj: null, stat: 0.9 },
+  ],
+  min_pct: 0.01,
+  n_genes_tested: 2,
+  n_genes_skipped: 0,
+};
+
+const AGREEMENT = {
+  n_selected: 4,
+  n_rest: 96,
+  label: "selection",
+  top_n: 50,
+  methods: [
+    { method: "wilcoxon", label: "Wilcoxon rank-sum", stat_label: "z-score", has_pvalues: true, n_significant: 3242, seconds: 11.7 },
+    { method: "t-test", label: "Welch t-test", stat_label: "t statistic", has_pvalues: true, n_significant: 6938, seconds: 0.5 },
+    { method: "logreg", label: "Logistic regression", stat_label: "coefficient", has_pvalues: false, n_significant: null, seconds: 1 },
+  ],
+  pairs: [
+    { a: "wilcoxon", b: "t-test", jaccard_up: 0.9608, shared_up: 49, jaccard_down: 0.6667, shared_down: 40, spearman: 0.9765 },
+  ],
+  unique: [{ gene: "PPBP", method: "logreg", side: "down", ranks: { wilcoxon: 2464, "t-test": 2702, logreg: 1 } }],
+  unavailable: { MAST: "MAST is an R package." },
+  min_pct: 0.01,
+  n_genes_tested: 8086,
+  n_genes_skipped: 5967,
+};
+
+describe("UnifiedDESubtab cell-level method", () => {
+  beforeEach(() => {
+    plots.props = [];
+    computeDE.mockReset().mockResolvedValue(RESULT);
+    computeDECompare.mockReset().mockResolvedValue(RESULT);
+    computeDEMethods.mockReset().mockResolvedValue(AGREEMENT);
+    computeDECompareMethods.mockReset().mockResolvedValue({ ...AGREEMENT, label: "STIM" });
+  });
+
+  it("sends the picked test, and no method field for the Wilcoxon default", async () => {
+    act(() => useSelectionStore.getState().setSelection(new Set([1, 2, 3, 4])));
+    renderDE();
+    const pick = screen.getByRole("combobox", { name: "Cell-level test" }) as HTMLSelectElement;
+    expect(pick.value).toBe("wilcoxon");
+    // MAST is listed, but cannot be picked.
+    const mast = Array.from(pick.options).find((o) => o.value === "mast")!;
+    expect(mast.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await waitFor(() => expect(computeDE).toHaveBeenCalledTimes(1));
+    expect(computeDE.mock.calls[0]![4]).toBe("wilcoxon");
+    fireEvent.change(pick, { target: { value: "t-test" } });
+    expect(useDESettingsStore.getState().cellMethod).toBe("t-test");
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await waitFor(() => expect(computeDE).toHaveBeenCalledTimes(2));
+    expect(computeDE.mock.calls[1]![4]).toBe("t-test");
+  });
+
+  it("passes the test between groups, not for pseudobulk", async () => {
+    useDESettingsStore.getState().update({ mode: "groups", cellMethod: "logreg" });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await waitFor(() => expect(computeDECompare).toHaveBeenCalled());
+    expect(computeDECompare.mock.calls[0]![1]).toMatchObject({ method: "logreg" });
+    fireEvent.click(screen.getByRole("button", { name: "Pseudobulk (donor-aware)" }));
+    expect(screen.queryByRole("combobox", { name: "Cell-level test" })).toBeNull();
+  });
+
+  it("shows a logistic regression by coefficient, without p-values", async () => {
+    computeDE.mockResolvedValue(LOGREG);
+    useDESettingsStore.getState().update({ cellMethod: "logreg" });
+    act(() => useSelectionStore.getState().setSelection(new Set([1, 2, 3, 4])));
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await screen.findByText(/gives a coefficient per gene and no p-values/);
+    expect(screen.getByText("Coef.")).toBeTruthy();
+    expect(screen.queryByText("Adj.P")).toBeNull();
+    expect(screen.getByText(/2 listed of 2 genes/)).toBeTruthy();
+    // Largest coefficient first.
+    const rows = screen.getAllByRole("row").slice(1).map((r) => r.textContent);
+    expect(rows[0]).toContain("LYZ");
+    expect(rows[0]).toContain("0.900");
+    const volcano = plots.props.at(-1)!;
+    expect((volcano.layout as { yaxis?: { title?: { text?: string } } }).yaxis?.title?.text).toBe(
+      "logistic regression coefficient",
+    );
+  });
+
+  it("compares every test on the selection and shows the agreement", async () => {
+    act(() => useSelectionStore.getState().setSelection(new Set([1, 2, 3, 4])));
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: "Compare methods" }));
+    await screen.findByText("Method agreement");
+    expect(computeDEMethods.mock.calls[0]![1]).toMatchObject({ indices: [1, 2, 3, 4], min_pct: 0.01 });
+    const pairs = screen.getByRole("table", { name: "Agreement between tests" });
+    expect(pairs.textContent).toContain("Wilcoxon rank-sum vs Welch t-test");
+    expect(pairs.textContent).toContain("0.96 (49)");
+    const only = screen.getByRole("table", { name: "Genes only one test ranks top" });
+    expect(only.textContent).toContain("PPBP");
+    expect(only.textContent).toContain("2,464");
+    expect(screen.getByText(/MAST not run/)).toBeTruthy();
+    expect(screen.getByText("no p-values")).toBeTruthy();
+  });
+
+  it("compares every test between groups with the scope", async () => {
+    useDESettingsStore.getState().update({
+      mode: "groups", splitBy: "stim", groupA: "STIM", groupB: "CTRL", withinCol: "cell_type", withinVal: "NK",
+    });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: "Compare methods" }));
+    await screen.findByText("Method agreement");
+    expect(computeDECompareMethods.mock.calls[0]![1]).toEqual({
+      split_by: "stim", group_a: "STIM", group_b: "CTRL", within_column: "cell_type", within_value: "NK", min_pct: 0.01,
+    });
   });
 });

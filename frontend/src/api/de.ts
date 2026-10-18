@@ -1,14 +1,20 @@
 import { apiFetch } from "./client";
+import type { CellMethod } from "@/lib/deMethods";
 
 export interface DEGene {
   gene: string;
   logfoldchange: number;
-  pval: number;
-  pval_adj: number;
-  /** Test statistic (Wilcoxon z, DESeq2 Wald): TF / pathway activity is scored on
-   *  it, and GSEA ranks a Wilcoxon result by it. */
+  /** null for logistic regression, which gives no p-values. */
+  pval: number | null;
+  pval_adj: number | null;
+  /** Test statistic (Wilcoxon z, Welch t, logistic regression coefficient, DESeq2
+   *  Wald): TF / pathway activity is scored on it, and GSEA ranks a cell-level
+   *  result by it. */
   stat?: number | null;
 }
+
+/** The DE test: cell-level (wilcoxon, Welch "t-test", "logreg") or pseudobulk. */
+export type DEMethod = CellMethod | "pseudobulk";
 
 export interface DEResponse {
   n_selected: number;
@@ -22,8 +28,9 @@ export interface DEResponse {
   top_donor_share_a?: number | null;
   top_donor_share_b?: number | null;
   underreplicated?: boolean;
+  /** The test that ran (absent from older servers: Wilcoxon). */
+  method?: DEMethod;
   /** Pseudobulk (method "pseudobulk") only. */
-  method?: "wilcoxon" | "pseudobulk";
   n_samples_a?: number | null;
   n_samples_b?: number | null;
   n_genes_tested?: number | null;
@@ -77,10 +84,16 @@ export async function computeDE(
   indices: number[],
   label = "selection",
   minPct?: number,
+  method?: CellMethod,
 ): Promise<DEResponse> {
   return apiFetch<DEResponse>(`/datasets/${datasetId}/de`, {
     method: "POST",
-    body: JSON.stringify({ indices, label, ...(minPct != null ? { min_pct: minPct } : {}) }),
+    body: JSON.stringify({
+      indices,
+      label,
+      ...(minPct != null ? { min_pct: minPct } : {}),
+      ...(method && method !== "wilcoxon" ? { method } : {}),
+    }),
   });
 }
 
@@ -91,9 +104,10 @@ export interface DECompareRequest {
   within_column?: string;
   within_value?: string;
   replicate_key?: string;
-  /** "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key). */
-  method?: "wilcoxon" | "pseudobulk";
-  /** Wilcoxon: test only genes detected in this fraction of either group's cells. */
+  /** "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key);
+   *  the others are cell-level tests (Wilcoxon when absent). */
+  method?: DEMethod;
+  /** Cell-level: test only genes detected in this fraction of either group's cells. */
   min_pct?: number;
 }
 
@@ -108,6 +122,74 @@ export async function computeDECompare(
   body: DECompareRequest,
 ): Promise<DEResponse> {
   return apiFetch<DEResponse>(`/datasets/${datasetId}/de/compare`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** One cell-level test of a methods comparison (backend core/de_methods.py). */
+export interface DEMethodSummary {
+  method: CellMethod;
+  label: string;
+  stat_label: string;
+  has_pvalues: boolean;
+  /** Genes with adjusted p <= 0.05; null without p-values (logistic regression). */
+  n_significant: number | null;
+  seconds: number;
+}
+
+/** Two tests' agreement: Jaccard of their top-N genes on each side and the
+ *  Spearman correlation of their statistics. */
+export interface DEMethodPair {
+  a: CellMethod;
+  b: CellMethod;
+  jaccard_up: number | null;
+  shared_up: number;
+  jaccard_down: number | null;
+  shared_down: number;
+  spearman: number | null;
+}
+
+/** A gene in one test's top N on a side and no other test's: each test's rank. */
+export interface DEMethodUnique {
+  gene: string;
+  method: CellMethod;
+  side: "up" | "down";
+  ranks: Record<string, number | null>;
+}
+
+export interface DEMethodsResponse {
+  n_selected: number;
+  n_rest: number;
+  label: string;
+  top_n: number;
+  methods: DEMethodSummary[];
+  pairs: DEMethodPair[];
+  unique: DEMethodUnique[];
+  /** Tests that cannot run here, with the reason (MAST). */
+  unavailable: Record<string, string>;
+  min_pct?: number | null;
+  n_genes_tested: number;
+  n_genes_skipped?: number | null;
+}
+
+/** The selection vs the rest under every cell-level test, and their agreement. */
+export async function computeDEMethods(
+  datasetId: string,
+  body: { indices: number[]; label?: string; min_pct?: number; top_n?: number },
+): Promise<DEMethodsResponse> {
+  return apiFetch<DEMethodsResponse>(`/datasets/${datasetId}/de/methods`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** A vs B (as computeDECompare) under every cell-level test, and their agreement. */
+export async function computeDECompareMethods(
+  datasetId: string,
+  body: Omit<DECompareRequest, "method"> & { top_n?: number },
+): Promise<DEMethodsResponse> {
+  return apiFetch<DEMethodsResponse>(`/datasets/${datasetId}/de/compare/methods`, {
     method: "POST",
     body: JSON.stringify(body),
   });

@@ -55,6 +55,8 @@ export interface DEActivityResponse {
   /** A stored DE result's detection prefilter: only the genes it tested are scored. */
   de_min_pct?: number | null;
   de_n_genes_skipped?: number | null;
+  /** A stored DE result's test: wilcoxon | t-test | logreg | pseudobulk. */
+  de_method?: string | null;
   results: DEActivityResult[];
 }
 

@@ -152,6 +152,20 @@ describe("DEEnrichment", () => {
     expect(screen.getByRole("button", { name: "GSEA" })).toBeEnabled();
   });
 
+  it("has nothing to enrich from a logistic regression, which gives no p-values", () => {
+    const logreg: DEResponse = {
+      ...RESULT,
+      method: "logreg",
+      genes: RESULT.genes.map((g) => ({ ...g, pval: null, pval_adj: null })),
+    };
+    setup(0, logreg);
+    expect(screen.getByText("0 up · 0 down")).toBeInTheDocument();
+    const enrich = screen.getByRole("button", { name: "Enrich" });
+    expect(enrich).toBeDisabled();
+    expect(enrich.getAttribute("title")).toMatch(/no p-values.*GSEA ranks every gene by its coefficient/);
+    expect(screen.getByRole("button", { name: "GSEA" })).toBeEnabled();
+  });
+
   it("runs GSEA on every tested gene with its statistic and shows each direction", async () => {
     runGsea.mockResolvedValue(GSEA);
     setup();

@@ -236,18 +236,23 @@ async def test_de_runs_in_a_worker_thread(client, dataset_manager, monkeypatch):
 
     _dataset(Path(dataset_manager.data_dir))
     threads: list[threading.Thread] = []
-    real = de._wilcoxon
+    real_test, real_methods = de._cell_test, de._methods
 
-    def spy(*args, **kwargs):
-        threads.append(threading.current_thread())
-        return real(*args, **kwargs)
+    def spy(real):
+        def wrapped(*args, **kwargs):
+            threads.append(threading.current_thread())
+            return real(*args, **kwargs)
+        return wrapped
 
-    monkeypatch.setattr(de, "_wilcoxon", spy)
+    monkeypatch.setattr(de, "_cell_test", spy(real_test))
+    monkeypatch.setattr(de, "_methods", spy(real_methods))
+    scope = {"split_by": "grp", "group_a": "a", "group_b": "b"}
     sel = await client.post("/api/v1/datasets/ds/de", json={"indices": list(range(60))})
-    cmp_ = await client.post("/api/v1/datasets/ds/de/compare",
-                             json={"split_by": "grp", "group_a": "a", "group_b": "b"})
-    assert sel.status_code == cmp_.status_code == 200
-    assert len(threads) == 2 and all(t is not MAIN for t in threads)
+    cmp_ = await client.post("/api/v1/datasets/ds/de/compare", json=scope)
+    sel_m = await client.post("/api/v1/datasets/ds/de/methods", json={"indices": list(range(60))})
+    cmp_m = await client.post("/api/v1/datasets/ds/de/compare/methods", json=scope)
+    assert sel.status_code == cmp_.status_code == sel_m.status_code == cmp_m.status_code == 200
+    assert len(threads) == 4 and all(t is not MAIN for t in threads)
 
 
 async def test_enrichment_computes_in_a_worker_thread(client, dataset_manager, monkeypatch):
