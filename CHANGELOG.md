@@ -6,6 +6,49 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Several genes at once** (Unified View → Expression): pick 2 to 9 genes to see the embedding
+  coloured by each, side by side on one camera (each gene on its own scale or one shared scale,
+  expressing cells drawn on top, PNG export), or as a stacked violin across the group-by. The
+  genes load in one request.
+- **Two genes compared.** *Blend* shows gene A, gene B and both blended on the embedding (A red,
+  B green, both yellow, as Seurat does) with a 2D colour key and a choice of where each gene's
+  scale tops out (99th or 95th percentile of its expressing cells, or max). *Gene vs gene*
+  plots each cell's A against its B by group, with Pearson and Spearman r (all cells and within
+  the highlighted group) and the cells expressing both, one or neither; select the co-expressing
+  cells or any quadrant (Kang CD3D vs GNLY: 350 both, r -0.03).
+- **Per-donor plots.** The Unified View violin has a *Per donor* mode: one pseudobulk value per
+  donor in each group, split by condition, as the mean log-normalised expression (default) or
+  log2 CPM of summed counts; donors with under 10 cells in a group are left out. The composition
+  test's per-sample plot is a box + strip with one point per donor, on one axis or a panel per
+  cell type. Both captions give the donors per condition and warn under 3; without a sample
+  column they say one is needed instead of plotting each condition as a sample.
+- **Composition bars** (Observations): sort by stored order, name, size or the share of any
+  stacked category; counts or %; split by a third column, with a one-click *Per donor by
+  condition* view; click a bar for a 10 x 10 waffle; the CSV exports the view as shown.
+- **Group dendrogram and correlation.** The cluster-distance heatmap draws its complete-linkage
+  tree and toggles to the Pearson correlation of the group centroids (in the graph's PC space,
+  where mean expression would put nearly every pair above 0.5). Marker dot plots and heatmaps
+  can order their groups by the same tree and draw it alongside.
+- **Comparable dot plots.** Colour by the mean over all cells or the mean in expressing cells,
+  scaled per gene or on a fixed range for the layer (0 to its 99th percentile of non-zero
+  values, editable; Kang 0-5) that stays put between plots. Dot area is the share of expressing
+  cells on a fixed scale with a size legend, and groups under 5% expressing are drawn hollow.
+- **Legend order and multi-select.** Drag or move categories, or sort them A-Z (numbers by
+  value) or by size; the order is saved to the dataset, so legends, violins, dot plots and
+  composition bars follow it, and the colours follow the order. Ctrl/Cmd/Shift-click picks
+  several groups; *Select these cells* makes them the selection.
+- **CellTypist checks its fit.** The model list puts the dataset's species first and defaults
+  to one of its models, with a warning for a model of another species. Each run records how many
+  of the model's genes the dataset has (warns under 50%) and shows each label's cells, median
+  confidence, % under 0.5 and agreement with the per-cell call, flags low labels, and cautions
+  when the median is under 0.5. *Colour embedding by confidence* is one click (Kang with
+  Immune_All_Low: 65% of model genes, median 0.69, DC2 and Late erythroid flagged).
+- API: `/expression/by-group` returns `mean_expressing` and `scale_range`; `/clustering/distances`
+  returns `tree` and `correlation`; `/metadata/crosstab` takes `facet`; new
+  `GET /expression/per-donor`, `GET /annotation/celltypist` and
+  `POST /metadata/{column}/order`. The CellTypist catalog lists each model's `species`.
+
 ## [0.20.0] - 2026-10-18
 
 ### Changed
