@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { MultiGenePanel } from "@/components/unified/MultiGenePanel";
+import { CoexpressedGenes } from "@/components/unified/CoexpressedGenes";
 
 interface UnifiedExpressionSubtabProps {
   onGeneSelect: (gene: string) => void;
@@ -112,6 +113,11 @@ export function UnifiedExpressionSubtab({
           ))}
         </select>
       </div>
+
+      {/* Genes that rise and fall with the overlaid one */}
+      {activeGene && (
+        <CoexpressedGenes datasetId={datasetId} activeGene={activeGene} onGeneSelect={onGeneSelect} />
+      )}
 
       {/* Several genes: feature grid, stacked violin */}
       <MultiGenePanel datasetId={datasetId} groupByColumn={groupByColumn} />

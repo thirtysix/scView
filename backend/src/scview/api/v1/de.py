@@ -1,11 +1,14 @@
 """Differential expression for an arbitrary cell selection (lasso/cluster) vs the rest.
 
 Powers the volcano plot: the user lassoes (or clicks) a set of cells, and we run a
-one-vs-rest Wilcoxon test over the genes detected in enough cells
+one-vs-rest cell-level test (Wilcoxon by default; Welch t-test or logistic
+regression, ``core/de_methods.py``) over the genes detected in enough cells
 (``core/de_prefilter.py``), returning log fold-change and adjusted p-values per
 gene. Unlike the marker endpoint (which groups by an obs column), the
 group here is an ad-hoc list of cell indices. Between-groups comparisons can
-instead run donor-aware pseudobulk DESeq2 (``core/pseudobulk.py``).
+instead run donor-aware pseudobulk DESeq2 (``core/pseudobulk.py``). The
+``/methods`` endpoints run one comparison under every cell-level test and say
+how far they agree.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.dependencies import get_dataset_manager
-from scview.core import de_prefilter, de_results, transcriptome_size
+from scview.core import de_methods, de_prefilter, de_results, transcriptome_size
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
@@ -28,22 +31,35 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Below this many cells on either side, a Wilcoxon test isn't meaningful.
+# Below this many cells on either side, a cell-level test isn't meaningful.
 _MIN_GROUP = 3
 
 
 # Test only genes detected in at least this fraction of the cells of either
 # group (core/de_prefilter.py); 0 tests every gene.
 _MinPct = Field(default=de_prefilter.DEFAULT_MIN_PCT, ge=0.0, le=1.0)
+# The cell-level tests (core/de_methods.py): "t-test" is Welch's.
+CellMethod = Literal["wilcoxon", "t-test", "logreg"]
+_TopN = Field(default=de_methods.TOP_N, ge=5, le=de_methods.MAX_TOP_N)
 
 
 class DERequest(BaseModel):
     indices: list[int]  # cell indices forming the "selection" group
     label: str = "selection"  # display label for the selection group
     min_pct: float = _MinPct
+    method: CellMethod = "wilcoxon"
 
 
-class DECompareRequest(BaseModel):
+class DEMethodsRequest(BaseModel):
+    """Selection vs rest under every cell-level test (``/de/methods``)."""
+
+    indices: list[int]
+    label: str = "selection"
+    min_pct: float = _MinPct
+    top_n: int = _TopN
+
+
+class _CompareScope(BaseModel):
     """Group A vs group B of one obs column, optionally within one subgroup —
     e.g. dataset=STIM vs dataset=CTRL within cell_type=CD14 Mono."""
 
@@ -53,21 +69,33 @@ class DECompareRequest(BaseModel):
     within_column: str | None = None
     within_value: str | None = None
     replicate_key: str | None = None  # donor/sample obs column; overrides detection
+
+
+class DECompareRequest(_CompareScope):
     # "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key
-    # or a detectable donor column, and raw counts).
-    method: Literal["wilcoxon", "pseudobulk"] = "wilcoxon"
+    # or a detectable donor column, and raw counts); the others are cell-level.
+    method: Literal["wilcoxon", "t-test", "logreg", "pseudobulk"] = "wilcoxon"
     # The cell-level test only: pseudobulk filters genes on their summed counts.
     min_pct: float = _MinPct
+
+
+class DECompareMethodsRequest(_CompareScope):
+    """A vs B under every cell-level test (``/de/compare/methods``)."""
+
+    min_pct: float = _MinPct
+    top_n: int = _TopN
 
 
 class DEGene(BaseModel):
     gene: str
     logfoldchange: float
-    pval: float
-    pval_adj: float
-    # The test statistic: Wilcoxon z-score, or DESeq2's Wald statistic for
-    # pseudobulk. TF and pathway activity is scored on it, GSEA ranks a Wilcoxon
-    # result by it (p-values saturate at 0 for strong genes).
+    # None for logistic regression, which gives no p-value (core/de_methods.py).
+    pval: float | None
+    pval_adj: float | None
+    # The test statistic: Wilcoxon z-score, Welch t, the logistic regression
+    # coefficient, or DESeq2's Wald statistic for pseudobulk. TF and pathway
+    # activity is scored on it, GSEA ranks a cell-level result by it (p-values
+    # saturate at 0 for strong genes).
     stat: float | None = None
 
 
@@ -99,8 +127,9 @@ class DEResponse(BaseModel):
     top_donor_share_a: float | None = None
     top_donor_share_b: float | None = None
     underreplicated: bool = False
-    # Pseudobulk only (method="pseudobulk"); additive, all optional.
+    # The test: wilcoxon | t-test | logreg (cell-level) | pseudobulk.
     method: str = "wilcoxon"
+    # Pseudobulk only (method="pseudobulk"); additive, all optional.
     n_samples_a: int | None = None
     n_samples_b: int | None = None
     n_genes_tested: int | None = None
@@ -121,6 +150,54 @@ class DEResponse(BaseModel):
     detection: list[int] | None = None
     # The two sides' RNA content; None when the dataset holds no raw counts.
     transcriptome_size: TranscriptomeSize | None = None
+
+
+class DEMethodSummary(BaseModel):
+    method: str
+    label: str  # e.g. "Welch t-test"
+    stat_label: str  # what its statistic is: z-score, t statistic, coefficient
+    has_pvalues: bool
+    n_significant: int | None  # adjusted p <= 0.05; None without p-values
+    seconds: float
+
+
+class DEMethodPair(BaseModel):
+    """Two tests' agreement: Jaccard of their top-N genes higher in A (``up``)
+    and higher in B (``down``), and the Spearman correlation of the statistics."""
+
+    a: str
+    b: str
+    jaccard_up: float | None
+    shared_up: int
+    jaccard_down: float | None
+    shared_down: int
+    spearman: float | None
+
+
+class DEMethodUnique(BaseModel):
+    """A gene in one test's top N on a side and no other test's: each test's
+    rank of it on that side (1 = top)."""
+
+    gene: str
+    method: str
+    side: Literal["up", "down"]
+    ranks: dict[str, int | None]
+
+
+class DEMethodsResponse(BaseModel):
+    n_selected: int
+    n_rest: int
+    label: str
+    top_n: int
+    methods: list[DEMethodSummary]
+    pairs: list[DEMethodPair]
+    unique: list[DEMethodUnique]
+    # Tests asked about that cannot run here, with the reason (MAST: R only).
+    unavailable: dict[str, str]
+    # The prefilter every test ran behind (as in DEResponse).
+    min_pct: float | None = None
+    n_genes_tested: int
+    n_genes_skipped: int | None = None
 
 
 def _detect_replicate_key(obs, exclude: set[str], mask_a=None, mask_b=None) -> str | None:
@@ -158,21 +235,25 @@ def _replicate_guard(obs, mask_a, mask_b, key: str | None) -> dict:
 
 
 @dataclass
-class _Wilcoxon:
+class _CellTest:
     genes: list[DEGene]
     prefilter: de_prefilter.Prefilter
+    method: str = "wilcoxon"
 
     def fields(self) -> dict:
         """The response's prefilter fields."""
         pre = self.prefilter
         return {"min_pct": pre.min_pct, "n_genes_tested": pre.n_tested,
-                "n_genes_skipped": pre.n_skipped, "detection": pre.histogram or None}
+                "n_genes_skipped": pre.n_skipped, "detection": pre.histogram or None,
+                "method": self.method}
 
 
-def _wilcoxon(work, mask_a, mask_b, dataset_id: str, min_pct: float = 0.0) -> _Wilcoxon:
-    """Wilcoxon DE of the ``mask_a`` cells against the ``mask_b`` cells of ``work``
-    (an in-memory AnnData the caller may modify), over the genes detected in at
-    least ``min_pct`` of either side's cells (every gene at 0)."""
+def _prepare(work, mask_a, mask_b, min_pct: float = 0.0):
+    """The AnnData a cell-level test runs on: the ``mask_a`` cells (group
+    "selection") and the ``mask_b`` cells ("rest") of ``work`` (an in-memory
+    AnnData the caller may modify), log-normalised, over the genes detected in
+    at least ``min_pct`` of either side's cells (every gene at 0); and that
+    prefilter."""
     import anndata as ad
     import numpy as np
     import pandas as pd
@@ -213,63 +294,82 @@ def _wilcoxon(work, mask_a, mask_b, dataset_id: str, min_pct: float = 0.0) -> _W
         # The log base scanpy undoes to take the fold change.
         uns={"log1p": work.uns["log1p"]} if "log1p" in work.uns else {},
     )
+    return test, pre
+
+
+def _run_method(test, method: str, dataset_id: str) -> de_methods.MethodResult:
     try:
-        sc.tl.rank_genes_groups(
-            test,
-            groupby="_de_group",
-            groups=["selection"],
-            reference="rest",
-            method="wilcoxon",
-            use_raw=False,
-            n_genes=test.n_vars,  # every tested gene, not the top-scoring ones
-        )
-        rgg = test.uns["rank_genes_groups"]
-        names = rgg["names"]["selection"]
-        scores = rgg["scores"]["selection"]
-        lfc = rgg["logfoldchanges"]["selection"]
-        pv = rgg["pvals"]["selection"]
-        pv_adj = rgg["pvals_adj"]["selection"]
+        return de_methods.run(test, method)
     except Exception as exc:
-        logger.error("DE computation failed for %s: %s", dataset_id, exc)
+        logger.error("DE (%s) failed for %s: %s", method, dataset_id, exc)
         raise HTTPException(status_code=500, detail=f"DE computation failed: {exc!s}")
 
+
+def _de_genes(res: de_methods.MethodResult) -> list[DEGene]:
+    """The response rows, highest statistic first. A gene without a finite fold
+    change (or p-value, for a test that gives one) is dropped: zero variance."""
+    import numpy as np
+
+    order = np.argsort(-np.nan_to_num(res.scores, nan=-np.inf), kind="stable")
     genes: list[DEGene] = []
-    for i in range(len(names)):
-        lf = float(lfc[i])
-        p = float(pv[i])
-        pa = float(pv_adj[i])
-        # Drop non-finite rows (a gene with zero variance yields NaNs).
-        if not (np.isfinite(lf) and np.isfinite(p) and np.isfinite(pa)):
-            continue
-        z = float(scores[i])
-        genes.append(DEGene(gene=str(names[i]), logfoldchange=lf, pval=p, pval_adj=pa,
+    for i in order:
+        lf = float(res.logfoldchanges[i])
+        z = float(res.scores[i])
+        if res.pvals is None:
+            if not (np.isfinite(lf) and np.isfinite(z)):
+                continue
+            p = pa = None
+        else:
+            p, pa = float(res.pvals[i]), float(res.pvals_adj[i])
+            if not (np.isfinite(lf) and np.isfinite(p) and np.isfinite(pa)):
+                continue
+        genes.append(DEGene(gene=str(res.genes[i]), logfoldchange=lf, pval=p, pval_adj=pa,
                             stat=z if np.isfinite(z) else None))
-    return _Wilcoxon(genes, pre)
+    return genes
 
 
-def _remember(dataset_id: str, res: _Wilcoxon) -> str:
-    return de_results.remember(dataset_id, res.genes, method="wilcoxon",
+def _cell_test(work, mask_a, mask_b, dataset_id: str, min_pct: float = 0.0,
+               method: str = "wilcoxon") -> _CellTest:
+    """``method`` DE of the ``mask_a`` cells against the ``mask_b`` cells of
+    ``work`` over the genes the prefilter keeps (``_prepare``)."""
+    test, pre = _prepare(work, mask_a, mask_b, min_pct)
+    return _CellTest(_de_genes(_run_method(test, method, dataset_id)), pre, method)
+
+
+def _methods(work, mask_a, mask_b, dataset_id: str, min_pct: float, top_n: int) -> dict:
+    """Every cell-level test on the same prefiltered genes, and their agreement."""
+    test, pre = _prepare(work, mask_a, mask_b, min_pct)
+    results = [_run_method(test, m, dataset_id) for m in de_methods.METHODS]
+    agree = de_methods.agreement(results, top_n)
+    summaries = []
+    for r in results:
+        sig = None
+        if r.pvals_adj is not None:
+            sig = int((r.pvals_adj <= 0.05).sum())
+        summaries.append(DEMethodSummary(
+            method=r.method, label=de_methods.LABELS[r.method],
+            stat_label=de_methods.STAT_LABELS[r.method],
+            has_pvalues=de_methods.HAS_PVALUES[r.method], n_significant=sig,
+            seconds=round(r.seconds, 2),
+        ))
+    return {
+        "methods": summaries, "unavailable": de_methods.UNAVAILABLE,
+        "min_pct": pre.min_pct, "n_genes_tested": pre.n_tested,
+        "n_genes_skipped": pre.n_skipped, **agree,
+    }
+
+
+def _remember(dataset_id: str, res: _CellTest) -> str:
+    return de_results.remember(dataset_id, res.genes, method=res.method,
                                min_pct=res.prefilter.min_pct, n_skipped=res.prefilter.n_skipped)
 
 
-@router.post("/datasets/{dataset_id}/de", response_model=DEResponse)
-async def differential_expression(
-    dataset_id: str,
-    body: DERequest,
-    dm: DatasetManager = Depends(get_dataset_manager),
-) -> DEResponse:
-    """One-vs-rest Wilcoxon DE for the selected cells, over the genes detected in
-    at least ``min_pct`` of either side's cells (for a volcano)."""
-    adaptor = await dm.get_or_load_dataset(dataset_id)
-    if adaptor is None:
-        raise HTTPException(status_code=404, detail="Dataset not found.")
-
+def _selection_mask(adata, indices: list[int]):
+    """The selected cells as a mask; 400 when either side is too small."""
     import numpy as np
 
-    adata = adaptor.adata
     n = int(adata.n_obs)
-
-    idx = sorted({int(i) for i in body.indices if 0 <= int(i) < n})
+    idx = sorted({int(i) for i in indices if 0 <= int(i) < n})
     if len(idx) < _MIN_GROUP:
         raise HTTPException(
             status_code=400,
@@ -280,38 +380,69 @@ async def differential_expression(
             status_code=400,
             detail="The selection covers (almost) all cells; nothing to compare against.",
         )
-
     mask = np.zeros(n, dtype=bool)
     mask[idx] = True
-
-    def _run() -> tuple[_Wilcoxon, dict | None]:
-        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
-        size = transcriptome_size.check(work, mask, ~mask)  # before X is normalised
-        return _wilcoxon(work, mask, ~mask, dataset_id, body.min_pct), size
-
-    # Seconds on a large dataset: in a worker thread, so the server keeps answering.
-    res, size = await asyncio.to_thread(_run)
-    return DEResponse(n_selected=len(idx), n_rest=n - len(idx), label=body.label, genes=res.genes,
-                      result_id=_remember(dataset_id, res), transcriptome_size=size,
-                      **res.fields())
+    return mask
 
 
-@router.post("/datasets/{dataset_id}/de/compare", response_model=DEResponse)
-async def differential_expression_compare(
+@router.post("/datasets/{dataset_id}/de", response_model=DEResponse)
+async def differential_expression(
     dataset_id: str,
-    body: DECompareRequest,
+    body: DERequest,
     dm: DatasetManager = Depends(get_dataset_manager),
 ) -> DEResponse:
-    """Wilcoxon DE between two groups of an obs column (A vs B), optionally
-    restricted to one subgroup — the cross-dataset / cross-condition comparison
-    for a joint dataset. ``n_selected``/``n_rest`` are the A/B cell counts."""
+    """One-vs-rest cell-level DE (``method``, Wilcoxon by default) for the
+    selected cells, over the genes detected in at least ``min_pct`` of either
+    side's cells (for a volcano)."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
+    adata = adaptor.adata
+    mask = _selection_mask(adata, body.indices)
+    n_sel = int(mask.sum())
+
+    def _run() -> tuple[_CellTest, dict | None]:
+        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
+        size = transcriptome_size.check(work, mask, ~mask)  # before X is normalised
+        return _cell_test(work, mask, ~mask, dataset_id, body.min_pct, body.method), size
+
+    # Seconds on a large dataset: in a worker thread, so the server keeps answering.
+    res, size = await asyncio.to_thread(_run)
+    return DEResponse(n_selected=n_sel, n_rest=int(adata.n_obs) - n_sel, label=body.label,
+                      genes=res.genes, result_id=_remember(dataset_id, res),
+                      transcriptome_size=size, **res.fields())
+
+
+@router.post("/datasets/{dataset_id}/de/methods", response_model=DEMethodsResponse)
+async def differential_expression_methods(
+    dataset_id: str,
+    body: DEMethodsRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+) -> DEMethodsResponse:
+    """The selection vs the rest under every cell-level test (Wilcoxon, Welch
+    t-test, logistic regression) on the same genes, and how far they agree."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    adata = adaptor.adata
+    mask = _selection_mask(adata, body.indices)
+    n_sel = int(mask.sum())
+
+    def _run() -> dict:
+        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
+        return _methods(work, mask, ~mask, dataset_id, body.min_pct, body.top_n)
+
+    out = await asyncio.to_thread(_run)
+    return DEMethodsResponse(n_selected=n_sel, n_rest=int(adata.n_obs) - n_sel,
+                             label=body.label, **out)
+
+
+def _compare_masks(adata, body: _CompareScope):
+    """Group A's and group B's cells (within the scope); 404 for an unknown
+    column, 400 when the groups are the same or too small."""
     import numpy as np
 
-    adata = adaptor.adata
     obs = adata.obs
     for col in (body.split_by, body.within_column, body.replicate_key):
         if col and col not in obs.columns:
@@ -333,6 +464,31 @@ async def differential_expression_compare(
             detail=(f"Each group needs at least {_MIN_GROUP} cells{scope} "
                     f"({body.group_a}: {n_a}, {body.group_b}: {n_b})."),
         )
+    return mask_a, mask_b
+
+
+def _compare_label(body: _CompareScope) -> str:
+    return body.group_a + (f" ({body.within_value})" if body.within_column else "")
+
+
+@router.post("/datasets/{dataset_id}/de/compare", response_model=DEResponse)
+async def differential_expression_compare(
+    dataset_id: str,
+    body: DECompareRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+) -> DEResponse:
+    """Cell-level DE (``method``, Wilcoxon by default) or pseudobulk between two
+    groups of an obs column (A vs B), optionally restricted to one subgroup —
+    the cross-dataset / cross-condition comparison for a joint dataset.
+    ``n_selected``/``n_rest`` are the A/B cell counts."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+
+    adata = adaptor.adata
+    obs = adata.obs
+    mask_a, mask_b = _compare_masks(adata, body)
+    n_a, n_b = int(mask_a.sum()), int(mask_b.sum())
 
     # The two sides being different batches (datasets, libraries, runs): the
     # result then mixes the batch effect with any biological one.
@@ -351,21 +507,46 @@ async def differential_expression_compare(
     # Subset before copying: only the compared cells are materialised.
     keep = mask_a | mask_b
 
-    def _run() -> tuple[_Wilcoxon, dict | None]:
+    def _run() -> tuple[_CellTest, dict | None]:
         sub = adata[keep]
         work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
         size = transcriptome_size.check(work, mask_a[keep], mask_b[keep])  # before X is normalised
-        return _wilcoxon(work, mask_a[keep], mask_b[keep], dataset_id, body.min_pct), size
+        res = _cell_test(work, mask_a[keep], mask_b[keep], dataset_id, body.min_pct, body.method)
+        return res, size
 
     res, size = await asyncio.to_thread(_run)
-    label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
     key = body.replicate_key or _detect_replicate_key(
         obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
-    return DEResponse(n_selected=n_a, n_rest=n_b, label=label, genes=res.genes,
+    return DEResponse(n_selected=n_a, n_rest=n_b, label=_compare_label(body), genes=res.genes,
                       result_id=_remember(dataset_id, res), transcriptome_size=size,
                       confounding=confounding, **guard, **res.fields())
+
+
+@router.post("/datasets/{dataset_id}/de/compare/methods", response_model=DEMethodsResponse)
+async def differential_expression_compare_methods(
+    dataset_id: str,
+    body: DECompareMethodsRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+) -> DEMethodsResponse:
+    """A vs B (as ``/de/compare``) under every cell-level test on the same
+    genes, and how far they agree."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    adata = adaptor.adata
+    mask_a, mask_b = _compare_masks(adata, body)
+    keep = mask_a | mask_b
+
+    def _run() -> dict:
+        sub = adata[keep]
+        work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
+        return _methods(work, mask_a[keep], mask_b[keep], dataset_id, body.min_pct, body.top_n)
+
+    out = await asyncio.to_thread(_run)
+    return DEMethodsResponse(n_selected=int(mask_a.sum()), n_rest=int(mask_b.sum()),
+                             label=_compare_label(body), **out)
 
 
 async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str):

@@ -247,6 +247,8 @@ class GseaResponse(BaseModel):
     # ranking holds only the genes that DE tested.
     de_min_pct: float | None = None
     de_n_genes_skipped: int | None = None
+    # A stored DE result's test: wilcoxon | t-test | logreg | pseudobulk.
+    de_method: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -869,7 +871,8 @@ def _gsea_ranking(dataset_id: str, adaptor, body: GseaRequest) -> gsea.Ranking:
                     ),
                 )
             return gsea.ranking_from_de(
-                stored.rows(), rank_by=body.rank_by, exclude_ribo_mito=body.exclude_ribo_mito
+                stored.rows(), rank_by=body.rank_by, exclude_ribo_mito=body.exclude_ribo_mito,
+                score_metric=stored.score_metric,
             )
         if body.genes:
             return gsea.ranking_from_de(
@@ -887,12 +890,15 @@ def _gsea_ranking(dataset_id: str, adaptor, body: GseaRequest) -> gsea.Ranking:
 
 
 def _de_prefilter_fields(dataset_id: str, body: GseaRequest) -> dict:
-    """A stored DE result's detection prefilter, for the response (none for the
+    """A stored DE result's test and detection prefilter, for the response (none for the
     other sources)."""
     stored = de_results.recall(dataset_id, body.de_result_id) if body.de_result_id else None
-    if stored is None or stored.min_pct is None:
+    if stored is None:
         return {}
-    return {"de_min_pct": stored.min_pct, "de_n_genes_skipped": stored.n_skipped}
+    out = {"de_method": stored.method}
+    if stored.min_pct is not None:
+        out.update(de_min_pct=stored.min_pct, de_n_genes_skipped=stored.n_skipped)
+    return out
 
 
 def _collections_fingerprint(collections: list[str], store) -> list[str]:

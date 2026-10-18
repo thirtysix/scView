@@ -19,6 +19,7 @@ import { useGeneSetScoring } from "@/hooks/useGeneSetScoring";
 import { downloadCsv } from "@/lib/csv";
 import { deEnrichmentQuery } from "@/lib/de";
 import { gseaSourceFromDE } from "@/lib/gsea";
+import { hasPValues } from "@/lib/deMethods";
 import { useViewStore } from "@/stores/viewStore";
 
 type Side = "up" | "down";
@@ -186,6 +187,8 @@ export function DEEnrichment({
     ranWith !== null &&
     (ranWith.pThreshold !== pThreshold || ranWith.fcThreshold !== fcThreshold);
   const nothingToTest = query.up.length === 0 && query.down.length === 0;
+  // Logistic regression gives no p-values, so no gene is significant to test.
+  const noPValues = !hasPValues(result);
   const fmt = (n: number) => n.toLocaleString();
 
   return (
@@ -198,7 +201,8 @@ export function DEEnrichment({
           genes in the table above: the genes higher in {labelA} and, separately, those higher in{" "}
           {labelB}, so two opposing programmes are not blurred into one. The background is every
           gene this DE tested, not every gene the collections name. GSEA instead ranks every tested
-          gene (by the Wilcoxon statistic, or sign(log2FC) × −log10(p) for pseudobulk) and asks
+          gene (by the test&apos;s statistic: Wilcoxon z, Welch t or the logistic regression
+          coefficient; sign(log2FC) × −log10(p) for pseudobulk) and asks
           whether a set&apos;s genes bunch at the top or bottom, so it needs no cut-off and finds
           programmes of many small shifts; the leading edge is the genes that drive it.
         </InfoTip>
@@ -208,7 +212,13 @@ export function DEEnrichment({
         <button
           onClick={run}
           disabled={loading || nothingToTest || collections.size === 0}
-          title={nothingToTest ? "No genes pass the thresholds" : "Enrich the up and down genes"}
+          title={
+            noPValues
+              ? "Logistic regression gives no p-values, so no genes are significant to enrich: GSEA ranks every gene by its coefficient"
+              : nothingToTest
+                ? "No genes pass the thresholds"
+                : "Enrich the up and down genes"
+          }
           className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
         >
           {loading && <Loader2 className="h-3 w-3 animate-spin" />}

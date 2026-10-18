@@ -1,14 +1,17 @@
 """Expression / gene query endpoints."""
 
 import asyncio
+from typing import Literal
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import expression_to_arrow_ipc
-from scview.core import donor_expression
+from scview.core import coexpression, donor_expression
 
 router = APIRouter()
 
@@ -148,6 +151,59 @@ async def get_expression_by_group(
     if not result["genes"]:
         raise HTTPException(status_code=404, detail="None of the requested genes are in this layer.")
     return result
+
+
+class CoexpressionRequest(BaseModel):
+    """A query gene, and the cells to correlate over: every cell, a selection
+    (``indices``) or one group (``column`` = ``value``)."""
+
+    gene: str = Field(min_length=1, max_length=200)
+    method: Literal["pearson", "spearman"] = "pearson"
+    indices: list[int] | None = None
+    column: str | None = None
+    value: str | None = None
+    top_n: int = Field(default=coexpression.TOP_N, ge=1, le=coexpression.MAX_TOP_N)
+
+
+@router.post("/datasets/{dataset_id}/expression/coexpression")
+async def get_coexpression(
+    dataset_id: str,
+    body: CoexpressionRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The genes most positively and most negatively correlated with ``gene``
+    across the chosen cells, on the log-normalised expression the overlays use
+    (core/coexpression.py), with the number of cells used and of genes skipped."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    adata = adaptor.adata
+    if body.indices is not None and body.column:
+        raise HTTPException(status_code=400, detail="Send a selection or a group, not both.")
+    rows = None
+    scope = "all cells"
+    if body.indices is not None:
+        rows = np.asarray(body.indices, dtype=np.int64)
+        scope = "selection"
+    elif body.column:
+        if body.column not in adata.obs.columns:
+            raise HTTPException(status_code=404, detail=f"Column '{body.column}' not found.")
+        if body.value is None:
+            raise HTTPException(status_code=400, detail="Name the group's value too.")
+        rows = np.flatnonzero(adata.obs[body.column].astype(str).to_numpy() == body.value)
+        scope = f"{body.column} = {body.value}"
+
+    def _run() -> dict:
+        return coexpression.coexpression(adata, body.gene, rows=rows, method=body.method,
+                                         top_n=body.top_n)
+
+    try:
+        # One pass over every gene of the matrix: off the loop.
+        out = await asyncio.to_thread(_run)
+    except coexpression.CoexpressionError as exc:
+        status = 404 if "not found" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc))
+    return {**out, "scope": scope}
 
 
 @router.get("/datasets/{dataset_id}/genes")

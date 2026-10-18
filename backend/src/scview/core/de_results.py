@@ -20,6 +20,8 @@ from typing import Any
 import numpy as np
 
 KEEP = 8  # ~1 MB each for 14k genes
+# The cell-level methods, whose statistic GSEA ranks by, and its metric name.
+SCORE_METRICS = {"wilcoxon": "wilcoxon_score", "t-test": "t_score", "logreg": "logreg_coef"}
 
 
 @dataclass(frozen=True)
@@ -29,17 +31,26 @@ class StoredResult:
     logfoldchanges: np.ndarray
     pvals: np.ndarray
     stats: np.ndarray  # the test statistic; NaN where there is none
-    method: str = "wilcoxon"  # or "pseudobulk"
+    # wilcoxon | t-test | logreg (cell-level, core/de_methods.py) | pseudobulk
+    method: str = "wilcoxon"
     # The DE's detection prefilter (core/de_prefilter.py): GSEA ranks and
     # activity scores only the genes it tested, so their responses say so.
     min_pct: float | None = None
     n_skipped: int = 0
 
+    @property
+    def score_metric(self) -> str:
+        """What GSEA calls a ranking by this result's statistic (core/gsea.py
+        RANK_LABELS)."""
+        return SCORE_METRICS.get(self.method, "wilcoxon_score")
+
     def rows(self) -> list[dict[str, Any]]:
         """The genes as GSEA takes them (core/gsea.py ranking_from_de). GSEA ranks
-        a Wilcoxon result by its z-score and a pseudobulk one by signed -log10 p,
-        so a pseudobulk result's Wald statistic is not passed as a score."""
-        use_stat = self.method == "wilcoxon"
+        a cell-level result by its statistic (Wilcoxon z, Welch t, logistic
+        regression coefficient) and a pseudobulk one by signed -log10 p, so a
+        pseudobulk result's Wald statistic is not passed as a score. A logistic
+        regression has no p-value: its pval is NaN."""
+        use_stat = self.method in SCORE_METRICS
         out = []
         for g, lfc, p, s in zip(self.genes, self.logfoldchanges, self.pvals, self.stats):
             out.append({
@@ -76,7 +87,7 @@ def remember(
         dataset_id=dataset_id,
         genes=[str(g.gene) for g in rows],
         logfoldchanges=np.array([g.logfoldchange for g in rows], dtype=np.float64),
-        pvals=np.array([g.pval for g in rows], dtype=np.float64),
+        pvals=np.array([np.nan if g.pval is None else g.pval for g in rows], dtype=np.float64),
         stats=np.array(
             [np.nan if getattr(g, "stat", None) is None else g.stat for g in rows], dtype=np.float64
         ),

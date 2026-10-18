@@ -56,6 +56,7 @@ const full: SessionFile = {
     replicate_key: "ind",
     fc_threshold: 1.5,
     min_pct: 0.05,
+    cell_method: "t-test",
   },
   colors: {
     categorical_palette: "tableau20",
@@ -109,6 +110,7 @@ describe("parseSession", () => {
       /selection.filter.items\[0\].value must be a number/],
     ["an unknown DE test", { de: { test: "t-test" } }, /de.test must be one of/],
     ["a detection cut-off over 100%", { de: { min_pct: 10 } }, /de.min_pct/],
+    ["an unavailable cell-level test", { de: { cell_method: "mast" } }, /de.cell_method must be one of/],
     ["an unknown palette", { colors: { categorical_palette: "toString" } }, /colors.categorical_palette/],
     ["a huge point size", { colors: { point_size: 1e6 } }, /colors.point_size/],
   ])("rejects %s", (_name, patch, message) => {

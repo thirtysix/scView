@@ -4,16 +4,33 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDESettingsStore, type DEMode, type DETest } from "@/stores/deSettingsStore";
-import { computeDE, computeDECompare, type DEResponse } from "@/api/de";
+import {
+  computeDE,
+  computeDECompare,
+  computeDECompareMethods,
+  computeDEMethods,
+  type DEMethodsResponse,
+  type DEResponse,
+} from "@/api/de";
 import type { ActivityRef } from "@/api/activity";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { DetectionHistogram } from "@/components/plots/DetectionHistogram";
 import { DEEnrichment } from "@/components/unified/DEEnrichment";
 import { DEActivity } from "@/components/unified/DEActivity";
 import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
+import { DEMethodsAgreement } from "@/components/unified/DEMethodsAgreement";
 import { downloadCsv } from "@/lib/csv";
 import { describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
 import { describeSize } from "@/lib/transcriptomeSize";
+import {
+  CELL_METHODS,
+  MAST_NOTE,
+  cellMethodInfo,
+  hasPValues,
+  listedGenes,
+  methodLabel,
+  type CellMethod,
+} from "@/lib/deMethods";
 import {
   deGeneQuestion,
   deResultQuestion,
@@ -71,6 +88,10 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pThreshold] = useState(0.05);
+  // "Compare methods": the same comparison under every cell-level test.
+  const [methods, setMethods] = useState<{ res: DEMethodsResponse; a: string; b: string } | null>(null);
+  const [methodsLoading, setMethodsLoading] = useState(false);
+  const [methodsError, setMethodsError] = useState<string | null>(null);
 
   // The settings live in a store (they survive a tab switch; a session restores them).
   const mode = useDESettingsStore((s) => s.mode);
@@ -83,6 +104,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const test = useDESettingsStore((s) => s.test);
   const replicateKey = useDESettingsStore((s) => s.replicateKey);
   const minPct = useDESettingsStore((s) => s.minPct);
+  const cellMethod = useDESettingsStore((s) => s.cellMethod);
   const update = useDESettingsStore((s) => s.update);
   const setMode = (m: Mode) => update({ mode: m });
   const setFcThreshold = (v: number) => update({ fcThreshold: v });
@@ -113,6 +135,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
 
   useEffect(() => {
     setResult(null);
+    setMethods(null);
   }, [datasetId]);
 
   // Pickers this dataset can't use fall back to the defaults (the joint
@@ -152,7 +175,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     setError(null);
     try {
       const label = highlighted?.value ?? "selection";
-      const res = await computeDE(datasetId, Array.from(selected), label, minPct);
+      const res = await computeDE(datasetId, Array.from(selected), label, minPct, cellMethod);
       setResult(res);
       setRefLabel("rest");
       setComparison({ a: label, b: "rest", betweenGroups: false });
@@ -161,7 +184,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [datasetId, selected, highlighted, minPct]);
+  }, [datasetId, selected, highlighted, minPct, cellMethod]);
 
   const runCompare = useCallback(async () => {
     if (!datasetId || !splitBy || !groupA || !groupB) return;
@@ -176,7 +199,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
         ...(scoped ? { within_column: withinCol, within_value: withinVal } : {}),
         ...(test === "pseudobulk"
           ? { method: "pseudobulk", replicate_key: replicateKey }
-          : { min_pct: minPct }),
+          : { min_pct: minPct, ...(cellMethod !== "wilcoxon" ? { method: cellMethod } : {}) }),
       });
       setResult(res);
       setRefLabel(groupB);
@@ -192,15 +215,44 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey, minPct]);
+  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey, minPct, cellMethod]);
 
-  // Significant genes, most significant first, for the table.
-  const sigGenes = useMemo(() => {
-    if (!result) return [];
-    return result.genes
-      .filter((g) => isSignificant(g, pThreshold, fcThreshold))
-      .sort((a, b) => a.pval_adj - b.pval_adj || Math.abs(b.logfoldchange) - Math.abs(a.logfoldchange));
-  }, [result, pThreshold, fcThreshold]);
+  // The current comparison under every cell-level test, and their agreement.
+  const runMethods = useCallback(async () => {
+    if (!datasetId) return;
+    setMethodsLoading(true);
+    setMethodsError(null);
+    try {
+      if (mode === "groups") {
+        const scoped = withinCol && withinVal;
+        const res = await computeDECompareMethods(datasetId, {
+          split_by: splitBy,
+          group_a: groupA,
+          group_b: groupB,
+          ...(scoped ? { within_column: withinCol, within_value: withinVal } : {}),
+          min_pct: minPct,
+        });
+        setMethods({ res, a: res.label, b: groupB });
+      } else {
+        if (!selected || selected.size < 3) return;
+        const label = highlighted?.value ?? "selection";
+        const res = await computeDEMethods(datasetId, { indices: Array.from(selected), label, min_pct: minPct });
+        setMethods({ res, a: label, b: "rest" });
+      }
+    } catch (e) {
+      setMethodsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMethodsLoading(false);
+    }
+  }, [datasetId, mode, splitBy, groupA, groupB, withinCol, withinVal, minPct, selected, highlighted]);
+
+  // The genes the table lists: significant ones, most significant first; for a
+  // test without p-values (logistic regression), the largest coefficients.
+  const sigGenes = useMemo(
+    () => (result ? listedGenes(result, pThreshold, fcThreshold, isSignificant) : []),
+    [result, pThreshold, fcThreshold],
+  );
+  const withP = result ? hasPValues(result) : true;
 
   const askAboutGene = useCallback(
     (gene: DEResponse["genes"][number]) => {
@@ -216,13 +268,15 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const exportCSV = useCallback(() => {
     if (!result) return;
     downloadCsv(
-      `de_${result.method === "pseudobulk" ? "pseudobulk_" : ""}${result.label}_${datasetId}.csv`,
-      ["gene", "log2_fold_change", "p_value", "p_value_adjusted"],
+      `de_${result.method && result.method !== "wilcoxon" ? `${result.method}_` : ""}${result.label}_${datasetId}.csv`,
+      ["gene", "log2_fold_change", "p_value", "p_value_adjusted", "statistic"],
+      // No p-value (logistic regression) stays an empty cell, never a number.
       result.genes.map((g) => [
         g.gene,
         g.logfoldchange.toFixed(4),
-        g.pval.toExponential(4),
-        g.pval_adj.toExponential(4),
+        g.pval == null ? null : g.pval.toExponential(4),
+        g.pval_adj == null ? null : g.pval_adj.toExponential(4),
+        g.stat == null ? null : g.stat.toPrecision(5),
       ]),
     );
   }, [result, datasetId]);
@@ -255,6 +309,46 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
           </option>
         ))}
       </select>
+    </div>
+  );
+  const methodInfo = cellMethodInfo(cellMethod);
+  const methodRow = (
+    <div className="flex items-center gap-1.5">
+      <span
+        className="w-12 font-medium text-slate-500"
+        title={`${CELL_METHODS.map((m) => `${m.label}: ${m.help}`).join("\n\n")}\n\n${MAST_NOTE}`}
+      >
+        Method
+      </span>
+      <select
+        aria-label="Cell-level test"
+        value={cellMethod}
+        onChange={(e) => update({ cellMethod: e.target.value as CellMethod })}
+        title={`${methodInfo.help} ${MAST_NOTE}`}
+        className={selectCls}
+      >
+        {CELL_METHODS.map((m) => (
+          <option key={m.value} value={m.value}>
+            {m.label}
+            {m.hasPValues ? "" : " (no p-values)"}
+          </option>
+        ))}
+        <option value="mast" disabled>
+          MAST (R only, not available)
+        </option>
+      </select>
+      <button
+        onClick={runMethods}
+        disabled={
+          methodsLoading ||
+          (mode === "groups" ? !groupA || !groupB || groupA === groupB : nSelected < 3)
+        }
+        title="Run this comparison under every cell-level test (Wilcoxon, Welch t-test, logistic regression) and show how far they agree"
+        className="flex items-center gap-1 whitespace-nowrap rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+      >
+        {methodsLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+        Compare methods
+      </button>
     </div>
   );
   // Display names of the result's two sides.
@@ -364,7 +458,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 <div className="flex min-w-0 flex-1 rounded border border-slate-300 bg-white p-0.5">
                   {(
                     [
-                      ["wilcoxon", "Cell-level (Wilcoxon)"],
+                      ["wilcoxon", "Cell-level"],
                       ["pseudobulk", "Pseudobulk (donor-aware)"],
                     ] as const
                   ).map(([t, label]) => (
@@ -380,6 +474,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                   ))}
                 </div>
               </div>
+              {test !== "pseudobulk" && methodRow}
               {test !== "pseudobulk" && minPctRow}
               {test === "pseudobulk" && (
                 <>
@@ -454,12 +549,32 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             </button>
           </div>
         )}
+        {methodRow}
         {minPctRow}
       </div>
       )}
 
       {error && (
         <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">{error}</div>
+      )}
+      {methodsError && (
+        <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+          Compare methods: {methodsError}
+        </div>
+      )}
+      {methodsLoading && !methods && (
+        <p className="text-[10px] text-slate-400">
+          Running Wilcoxon, Welch t-test and logistic regression: Wilcoxon takes longest (about 10 s on 14k cells).
+        </p>
+      )}
+      {methods && (
+        <DEMethodsAgreement
+          result={methods.res}
+          labelA={methods.a}
+          labelB={methods.b}
+          csvName={`de_methods_${methods.res.label}_${datasetId}`}
+          onGeneClick={onGeneClick}
+        />
       )}
 
       {result && (
@@ -497,8 +612,18 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
 
           <div className="text-[10px] text-slate-400">
             {result.label} (n={result.n_selected.toLocaleString()}) vs {refLabel} (n=
-            {result.n_rest.toLocaleString()}) · {sigGenes.length.toLocaleString()} significant of{" "}
+            {result.n_rest.toLocaleString()}) · {methodLabel(result.method)} ·{" "}
+            {sigGenes.length.toLocaleString()} {withP ? "significant" : "listed"} of{" "}
             {result.genes.length.toLocaleString()} genes · click a point or row to overlay it
+            {!withP && (
+              <span className="mt-0.5 block rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-slate-600">
+                Logistic regression gives a coefficient per gene and no p-values, so nothing here is
+                &ldquo;significant&rdquo;: the table lists genes past the |log2FC| cut-off whose
+                coefficient has the same sign, largest first. Coefficients are joint (each given the
+                other genes) and penalised; over-representation needs significant genes, GSEA ranks
+                by the coefficient.
+              </span>
+            )}
             {result.method !== "pseudobulk" && describePrefilter(result) && (
               <span className="mt-0.5 block">{describePrefilter(result)}</span>
             )}
@@ -525,9 +650,11 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                     : ""
                 }`}
               >
-                Cell-level Wilcoxon: cells are treated as independent, so p-values are optimistic
-                when the groups also differ by donor or sample (the pseudobulk test allows for
-                donors).
+                Cell-level {methodLabel(result.method)}: cells are treated as independent
+                {withP
+                  ? ", so p-values are optimistic when the groups also differ by donor or sample"
+                  : ", so donor-to-donor differences count as group differences"}{" "}
+                (the pseudobulk test allows for donors).
                 {result.replicate_key ? (
                   <>
                     {" "}
@@ -601,6 +728,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
               fcThreshold={fcThreshold}
               pThreshold={pThreshold}
               onGeneClick={onGeneClick}
+              yMode={withP ? "p" : "coefficient"}
             />
           </div>
 
@@ -611,7 +739,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="px-2 py-1.5 text-left font-medium text-slate-600">Gene</th>
                   <th className="px-2 py-1.5 text-right font-medium text-slate-600">log2FC</th>
-                  <th className="px-2 py-1.5 text-right font-medium text-slate-600">Adj.P</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-slate-600">
+                    {withP ? "Adj.P" : "Coef."}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -642,7 +772,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                       </span>
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">
-                      {formatPValue(g.pval_adj)}
+                      {g.pval_adj != null ? formatPValue(g.pval_adj) : (g.stat ?? 0).toFixed(3)}
                     </td>
                   </tr>
                 ))}

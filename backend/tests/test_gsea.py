@@ -395,3 +395,16 @@ async def test_pseudobulk_and_compare_results_carry_an_id(client, dataset_manage
                           json={"split_by": "cell_type", "group_a": "T", "group_b": "B"})
     assert r.status_code == 200, r.text
     assert de_results.recall(did, r.json()["result_id"]) is not None
+
+
+async def test_gsea_of_a_logreg_result_ranks_by_its_coefficient(client, dataset_manager):
+    did = _register_transcriptome(dataset_manager, n_genes=400)
+    r = await client.post(f"{API}/datasets/{did}/de",
+                          json={"indices": list(range(30)), "method": "logreg"})
+    assert r.status_code == 200, r.text
+    de = r.json()
+    assert de["method"] == "logreg" and de["genes"][0]["pval"] is None
+    body = (await _gsea(client, did, de_result_id=de["result_id"])).json()
+    assert body["rank_metric"] == "logreg_coef" and body["de_method"] == "logreg"
+    assert "coefficient" in body["rank_metric_label"]
+    assert _terms(body["up"])["HALLMARK_TOP"]["nes"] > 0
