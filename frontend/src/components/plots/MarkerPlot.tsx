@@ -7,6 +7,9 @@ import { plotConfig } from "@/lib/plotConfig";
 import { apiFetch } from "@/api/client";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { missingGenes } from "@/lib/geneList";
+import { getGroupDistances, type GroupDistances } from "@/api/clustering";
+import { dendrogramRowOrder, dendrogramSegments, rowDendrogram } from "@/lib/dendrogram";
+import { useObsRevision } from "@/stores/obsRevisionStore";
 import {
   DOT_LEGEND,
   MIN_FRACTION,
@@ -67,7 +70,7 @@ function DotSizeLegend() {
   const items = DOT_LEGEND.map((f) => {
     const d = dotSize(f);
     const cx = x + d / 2;
-    x += d + 30;
+    x += d + 36; // room for the "100%" label
     return { f, d, cx };
   });
   const ringX = x + ring / 2;
@@ -91,6 +94,19 @@ function DotSizeLegend() {
 }
 
 const selectClass = "rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-700";
+/** The plot's share of the width when the dendrogram is drawn on its right. */
+const PLOT_DOMAIN: [number, number] = [0, 0.88];
+const TREE_DOMAIN: [number, number] = [0.9, 1];
+
+/** The server's reason ("API error 400: {detail}") as a sentence. */
+function errorText(err: unknown): string {
+  const msg = err instanceof Error ? err.message.replace(/^API error \d+: /, "") : String(err);
+  try {
+    return String(JSON.parse(msg).detail ?? msg);
+  } catch {
+    return msg;
+  }
+}
 
 export function MarkerPlot({
   datasetId,
@@ -130,6 +146,20 @@ export function MarkerPlot({
   // The user's own top of the fixed range, kept for the layer it was set on.
   const [fixedMax, setFixedMax] = useState<{ layer: string; value: number } | null>(null);
   const layers = useDatasetStore((s) => s.currentDataset?.expression_layers);
+  // Order the groups by the clustering of their centroid distances (C043).
+  const [byTree, setByTree] = useState(false);
+  const revision = useObsRevision(datasetId, groupby); // hand labels move cells between groups
+  const treeKey = `${datasetId}\u0000${groupby}\u0000${revision}`;
+  const [tree, setTree] = useState<{ key: string; d: GroupDistances | null; error: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!byTree || !groupby || tree?.key === treeKey) return;
+    let cancelled = false;
+    getGroupDistances(datasetId, groupby)
+      .then((d) => { if (!cancelled) setTree({ key: treeKey, d, error: null }); })
+      .catch((e) => { if (!cancelled) setTree({ key: treeKey, d: null, error: errorText(e) }); });
+    return () => { cancelled = true; };
+  }, [byTree, datasetId, groupby, treeKey, tree?.key]);
 
   useEffect(() => {
     if (picked.length === 0) return;
@@ -175,11 +205,10 @@ export function MarkerPlot({
 
   // Rows in the marker table's group order (chosen genes: the column's own
   // order, as the legend lists it); genes in the order they were picked.
-  const rowIdx = custom
+  const baseIdx = custom
     ? data.groups.map((_, i) => i)
     : groups.map((g) => data.groups.indexOf(g)).filter((i) => i >= 0);
-  const rows = rowIdx.map((i) => data.groups[i]!);
-  if (rows.length === 0) {
+  if (baseIdx.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-slate-400">
         These markers were computed for a different column than {groupby}. Choose the column
@@ -187,6 +216,18 @@ export function MarkerPlot({
       </p>
     );
   }
+  // Dendrogram order when asked for and fetched; the tree is drawn when it has
+  // exactly the plotted groups.
+  const treeData = byTree && tree?.key === treeKey ? tree.d : null;
+  const baseRows = baseIdx.map((i) => data.groups[i]!);
+  const rows = treeData ? dendrogramRowOrder(treeData.groups, treeData.order, baseRows) : baseRows;
+  const rowIdx = rows.map((g) => data.groups.indexOf(g));
+  const sameGroups =
+    !!treeData && treeData.groups.length === rows.length && treeData.groups.every((g) => rows.includes(g));
+  const lines = sameGroups && treeData?.tree ? dendrogramSegments(treeData.tree, treeData.order) : null;
+  const dendro = lines ? rowDendrogram(lines, TREE_DOMAIN) : null;
+  const treeLoading = byTree && tree?.key !== treeKey;
+  const treeError = byTree && tree?.key === treeKey ? tree.error : null;
   const layerLabel = layers?.find((l) => l.key === data.layer)?.label ?? data.layer;
   const markerOf = new Map(picked.map((p) => [p.gene, p.group]));
   const genes = data.genes;
@@ -268,6 +309,9 @@ export function MarkerPlot({
             },
           },
         ];
+  const treeNote = treeData
+    ? ` Groups ordered by the complete-linkage clustering of their centroid distances in PCA space${dendro ? " (tree on the right)" : ""}.`
+    : "";
   const blankNote =
     kind === "heatmap" && meanOf === "expressing" && meanExpressing
       ? ` Blank: under ${Math.round(MIN_FRACTION * 100)}% of the group's cells express it.`
@@ -320,14 +364,39 @@ export function MarkerPlot({
             )}
           </span>
         )}
+        <label className="ml-auto flex items-center gap-1" title="Order the groups by the complete-linkage clustering of their centroid distances in PCA space">
+          <input type="checkbox" checked={byTree} onChange={(e) => setByTree(e.target.checked)} />
+          Order groups by dendrogram
+        </label>
+        {treeLoading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </div>
+      {treeError && (
+        <p role="alert" className="mb-1 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-800">
+          Can&apos;t order by dendrogram: {treeError}
+        </p>
+      )}
       <Plot
-        data={traces}
+        data={dendro ? [...traces, dendro.trace] : traces}
         layout={{
           height: Math.max(260, rows.length * 28 + 150),
           margin: { l: 120, r: 20, t: 10, b: 110 },
-          xaxis: { type: "category", tickangle: -60, automargin: true, categoryarray: genes, categoryorder: "array" },
-          yaxis: { type: "category", autorange: "reversed", automargin: true, categoryarray: rows, categoryorder: "array" },
+          xaxis: {
+            type: "category",
+            tickangle: -60,
+            automargin: true,
+            categoryarray: genes,
+            categoryorder: "array",
+            ...(dendro ? { domain: PLOT_DOMAIN } : {}),
+          },
+          yaxis: {
+            type: "category",
+            automargin: true,
+            categoryarray: rows,
+            categoryorder: "array",
+            // An explicit range so the dendrogram's leaves meet the rows.
+            ...(dendro ? { range: [rows.length - 0.5, -0.5] } : { autorange: "reversed" as const }),
+          },
+          ...(dendro ? dendro.layout : {}),
           paper_bgcolor: "rgba(0,0,0,0)",
           plot_bgcolor: "rgba(0,0,0,0)",
         }}
@@ -347,6 +416,7 @@ export function MarkerPlot({
           {genes.length} protein{genes.length === 1 ? "" : "s"} across the {groupby} groups. Protein
           level: CLR. {colours.caption}
           {blankNote}
+          {treeNote}
         </p>
       ) : (
         <p className="mt-1 text-xs text-slate-500">
@@ -357,6 +427,7 @@ export function MarkerPlot({
           {kind === "dotplot" &&
             ` Dot size: share of the group's cells that express the gene (area, same scale in every plot); hollow: under ${Math.round(MIN_FRACTION * 100)}%, no colour.`}
           {blankNote}
+          {treeNote}
           {` Layer: ${layerLabel}.`}
         </p>
       )}
