@@ -16,7 +16,9 @@ from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing, recorded_normalization_method
-from scview.core import cluster_qc, doublets, qc_filter, qc_groups, qc_report, sex_check
+from scview.core import (
+    cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
+)
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
@@ -179,6 +181,53 @@ async def get_sex_check(
     except Exception as e:
         logger.error("Sex check failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Sex check failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/qc/pseudobulk
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/pseudobulk")
+async def get_pseudobulk_qc(
+    dataset_id: str,
+    sample_column: str = "",
+    split_by: str | None = None,
+    celltype_column: str = "",
+    celltype: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Sample-level QC on pseudobulk profiles (core/sample_pseudobulk.py): PCA of each
+    sample's summed counts (per sample x condition when the samples carry several),
+    each PC's association with the sample-level covariates (incl. the inferred sex),
+    and outlier profiles. ``split_by`` absent: detected; empty: none. ``celltype``
+    limits the profiles to one value of ``celltype_column``."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    adata = adaptor.adata
+
+    def _run() -> dict:
+        column = sample_column or qc_groups.sample_grouping(adata)[0]
+        calls = None
+        if column:
+            try:
+                sex = sex_check.sex_check(adata, column)
+                calls = {g["name"]: g["call"] for g in sex["groups"]}
+            except Exception as exc:  # the sex covariate is optional
+                logger.debug("pseudobulk QC: no sex calls: %s", exc)
+        return sample_pseudobulk.pseudobulk_qc(
+            adata, sample_column or None, split_by, celltype_column=celltype_column or None,
+            celltype=celltype or None, sex_calls=calls)
+
+    try:
+        # Sums the counts of every cell and runs a PCA: off the loop.
+        return await asyncio.to_thread(_run)
+    except sample_pseudobulk.SampleQcError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Pseudobulk QC failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Pseudobulk QC failed: {e}")
 
 
 # ---------------------------------------------------------------------------

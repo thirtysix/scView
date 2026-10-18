@@ -58,3 +58,89 @@ export async function getSexCheck(datasetId: string, column?: string | null): Pr
   const q = column ? `?column=${encodeURIComponent(column)}` : "";
   return apiFetch<SexCheck>(`/datasets/${datasetId}/qc/sex${q}`);
 }
+
+/** One pseudobulk profile: a sample, or a sample x condition, optionally within one cell type. */
+export interface PseudobulkProfile {
+  id: string;
+  sample: string;
+  split: string | null;
+  n_cells: number;
+  total_counts: number;
+  /** Scores on PC1..PCk. */
+  pcs: number[];
+  /** Leave-one-out distance on the first PCs (absent with too few profiles). */
+  distance?: number;
+  outlier?: boolean;
+}
+
+export interface PseudobulkCovariate {
+  name: string;
+  kind: "categorical" | "numeric";
+  /** Computed by scView (cells, library size, inferred sex), not an obs column. */
+  derived: boolean;
+  /** Other obs columns that split the profiles the same way (Kang's orig_ident = stim). */
+  same_as: string[];
+  /** One value per profile, in `profiles` order. */
+  values: (string | number)[];
+}
+
+export interface PcAssociation {
+  pc: number;
+  r2: number | null;
+  p: number | null;
+  /** Kruskal-Wallis p for a categorical covariate. */
+  p_rank: number | null;
+  rho?: number;
+}
+
+export interface PcAssociationRow {
+  covariate: string;
+  kind: string;
+  same_as: string[];
+  test: string;
+  pcs: PcAssociation[];
+}
+
+export interface PseudobulkQc {
+  sample_column: string | null;
+  reason: string | null;
+  split_by: string | null;
+  celltype_column: string | null;
+  celltype: string | null;
+  celltype_levels: { name: string; n_cells: number }[];
+  n_cells: number;
+  n_cells_used: number;
+  min_cells: number;
+  profiles: PseudobulkProfile[];
+  dropped: { sample: string; split: string | null; n_cells: number }[];
+  n_genes: number;
+  n_top: number;
+  explained_variance: number[];
+  covariates: PseudobulkCovariate[];
+  association: PcAssociationRow[];
+  drivers: Record<string, { covariate: string; r2: number; p: number } | null>;
+  loadings: Record<string, { positive: string[]; negative: string[] }>;
+  outliers: { id: string; distance: number; cutoff: number; pc: number; few_cells: boolean; reason: string }[];
+  outlier_rule: string | null;
+  counts_source: string | null;
+  notes: string[];
+  /** Why there is no PCA (no samples, no counts, too few profiles). */
+  message: string | null;
+}
+
+export interface PseudobulkQcParams {
+  /** undefined: detected; "": none. */
+  splitBy?: string;
+  celltypeColumn?: string | null;
+  celltype?: string | null;
+}
+
+/** PCA of the samples' pseudobulk profiles, PC-covariate association and outliers. */
+export async function getPseudobulkQc(datasetId: string, p: PseudobulkQcParams = {}): Promise<PseudobulkQc> {
+  const q = new URLSearchParams();
+  if (p.splitBy !== undefined) q.set("split_by", p.splitBy);
+  if (p.celltypeColumn) q.set("celltype_column", p.celltypeColumn);
+  if (p.celltype) q.set("celltype", p.celltype);
+  const qs = q.toString();
+  return apiFetch<PseudobulkQc>(`/datasets/${datasetId}/qc/pseudobulk${qs ? `?${qs}` : ""}`);
+}
