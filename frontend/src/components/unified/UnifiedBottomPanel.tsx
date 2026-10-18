@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useUnifiedViewStore, type BottomView } from "@/stores/unifiedViewStore";
 import { ViolinPlot } from "@/components/plots/ViolinPlot";
 import { ClusterDistanceHeatmap } from "@/components/unified/ClusterDistanceHeatmap";
+import { PerDonorExpression } from "@/components/unified/PerDonorExpression";
 
 interface UnifiedBottomPanelProps {
   violinData: Record<string, number[]>;
@@ -31,6 +33,16 @@ export function UnifiedBottomPanel({
   const toggle = useUnifiedViewStore((s) => s.toggleBottomPanel);
   const view = useUnifiedViewStore((s) => s.bottomView);
   const setView = useUnifiedViewStore((s) => s.setBottomView);
+  const overlay = useUnifiedViewStore((s) => s.scatterOverlay);
+  // The distribution as cells (violin) or as one pseudobulk value per donor.
+  const [perDonor, setPerDonor] = useState(false);
+  const gene = overlay?.type === "expression" && !overlay.layer ? overlay.gene : null;
+  const noGeneReason =
+    overlay?.type === "score"
+      ? "Per-donor values are for one gene; a score is per cell. Pick a gene."
+      : overlay?.type === "expression"
+        ? "Per-donor values are for genes; proteins are not supported yet."
+        : undefined;
 
   const hasData = Object.keys(violinData).length > 0;
   const canDistances = !!datasetId && !!distanceColumn;
@@ -91,7 +103,31 @@ export function UnifiedBottomPanel({
       )}
       {isOpen && shown === "distribution" && (
         <div className="border-t border-slate-100 px-2 py-1">
-          {hasData ? (
+          {datasetId && violinGroupColumn && (
+            <div className="mb-1 flex justify-end">
+              <div className="flex overflow-hidden rounded border border-slate-300 text-[11px]" role="group" aria-label="Distribution of">
+                {([false, true] as const).map((on) => (
+                  <button
+                    key={String(on)}
+                    aria-pressed={perDonor === on}
+                    onClick={() => setPerDonor(on)}
+                    title={on ? "One pseudobulk value per donor in each group, split by condition" : "Every cell (violin)"}
+                    className={`px-1.5 py-0.5 ${perDonor === on ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                  >
+                    {on ? "Per donor" : "Cells"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {perDonor && datasetId && violinGroupColumn ? (
+            <PerDonorExpression
+              datasetId={datasetId}
+              gene={gene}
+              noGeneReason={noGeneReason}
+              groupColumn={violinGroupColumn}
+            />
+          ) : hasData ? (
             <ViolinPlot
               data={violinData}
               groupColumn={violinGroupColumn}

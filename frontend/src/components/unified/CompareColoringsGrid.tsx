@@ -93,6 +93,10 @@ export function CompareColoringsGrid({
     () => columns.map((c) => dataset?.obs_columns.find((o) => o.name === c)?.values ?? []),
     [columns, dataset],
   );
+  const slotLists = useMemo(
+    () => columns.map((c) => dataset?.obs_columns.find((o) => o.name === c)?.color_slots),
+    [columns, dataset],
+  );
 
   const stride = dimensions === 3 ? 3 : 2;
   const total = positions.length / stride;
@@ -108,7 +112,7 @@ export function CompareColoringsGrid({
   const panelRgba = useMemo(
     () =>
       ready
-        ? codes.map((c) =>
+        ? codes.map((c, i) =>
             panelColors(indices, {
               colorValues: c,
               colorType: "categorical",
@@ -116,10 +120,11 @@ export function CompareColoringsGrid({
               opacity,
               selected: selectedIndices,
               palette,
+              slots: slotLists[i],
             }),
           )
         : [],
-    [ready, codes, indices, opacity, selectedIndices, palette],
+    [ready, codes, indices, opacity, selectedIndices, palette, slotLists],
   );
   // Group labels per panel: on by default for a column with few groups, or as
   // the user toggled them for this set of columns.
@@ -154,8 +159,9 @@ export function CompareColoringsGrid({
 
   // Legend swatches as the panels draw them (category code -> palette slot).
   const swatches = useMemo(
-    () => categories.map((cats) => cats.map((_, k) => mapCategoryToColor(k, palette).slice(0, 3) as RGB)),
-    [categories, palette],
+    () =>
+      categories.map((cats, i) => cats.map((_, k) => mapCategoryToColor(k, palette, slotLists[i]).slice(0, 3) as RGB)),
+    [categories, palette, slotLists],
   );
   const exportLegend = useMemo<ScatterLegend[]>(
     () =>
@@ -183,13 +189,13 @@ export function CompareColoringsGrid({
             index: info.index,
             type: "categorical",
             categories: categories[i],
-            colorOf: (_code, cat) => categoryColor(datasetId, column, categories[i]!, cat, palette),
+            colorOf: (_code, cat) => categoryColor(datasetId, column, categories[i]!, cat, palette, slotLists[i]),
           }),
         )
         .filter((l): l is HoverLine => l != null);
       onHover?.({ index: info.index, x: info.x, y: info.y, lines });
     },
-    [columns, codes, categories, datasetId, palette, onHover],
+    [columns, codes, categories, slotLists, datasetId, palette, onHover],
   );
 
   const sampledNote = sample

@@ -928,7 +928,7 @@ export function DataAssessmentPanel() {
           <QcReportCard datasetId={datasetId} refreshKey={qcRefreshKey + callsRevision} />
 
           {/* Cell-type annotation */}
-          <AnnotationControl onAnnotate={annotate} running={running} />
+          <AnnotationControl onAnnotate={annotate} running={running} species={state.species?.species} />
 
           {/* How well each cell's label fits (conformal prediction sets) */}
           <AnnotationConfidenceCard datasetId={datasetId} />

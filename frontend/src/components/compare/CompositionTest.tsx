@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, AlertTriangle, Download, Loader2, Sparkles } from "lucide-react";
-import Plot from "@/components/plots/Plot";
+import { DonorBoxPlot } from "@/components/plots/DonorBoxPlot";
 import { getDataset } from "@/api/datasets";
 import { testComposition, type CompositionResult } from "@/api/composition";
 import type { DatasetInfo } from "@/api/types";
-import { getPalette } from "@/lib/colors";
+import { categoryColor, rgbCss } from "@/lib/categoryColors";
 import {
   MAX_CONDITIONS,
   compositionCsv,
@@ -19,7 +19,7 @@ import { downloadCsv } from "@/lib/csv";
 import { replicateColumns } from "@/lib/de";
 import { formatPValue, prettyObsLabel } from "@/lib/formatting";
 import { rankGroupingColumns } from "@/lib/obsColumns";
-import { plotConfig } from "@/lib/plotConfig";
+import type { DonorPoint } from "@/lib/donorPlot";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 
@@ -34,6 +34,7 @@ interface Props {
 
 const selectCls = "rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700";
 const pct = (v: number | null | undefined) => (v == null ? "–" : `${(v * 100).toFixed(1)}`);
+const fmtPct = (v: number) => `${v.toFixed(1)}%`;
 
 /**
  * Do a column's groups (cell types, clusters) make up different shares of the
@@ -42,7 +43,7 @@ const pct = (v: number | null | undefined) => (v == null ? "–" : `${(v * 100).
  * plot, and a warning against reading cell-level counts as a test.
  */
 export function CompositionTest({ datasetId, info, defaultCondition, defaultGroup }: Props) {
-  const palette = getPalette(useSettingsStore((s) => s.categoricalPalette));
+  const paletteName = useSettingsStore((s) => s.categoricalPalette);
   const askCopilot = useViewStore((s) => s.askCopilot);
 
   const [fetched, setFetched] = useState<DatasetInfo | null>(null);
@@ -162,6 +163,37 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
   ]);
 
   const rows = useMemo(() => (result ? sortedGroups(result) : []), [result]);
+  // One point per sample in each group, as % of the sample's cells.
+  const donorPoints = useMemo<DonorPoint[]>(
+    () =>
+      result
+        ? result.samples.flatMap((s) =>
+            result.groups.map((g, gi) => ({
+              group: g.group,
+              condition: s.condition,
+              sample: s.sample,
+              n_cells: s.n_cells,
+              value: (s.props[gi] ?? 0) * 100,
+            })),
+          )
+        : [],
+    [result],
+  );
+  // The conditions keep the colours they have on the scatter and in its legend.
+  const conditionColor = useCallback(
+    (k: string) =>
+      rgbCss(
+        categoryColor(
+          datasetId,
+          result?.condition_key ?? "",
+          cols.find((c) => c.name === result?.condition_key)?.values ?? [],
+          k,
+          paletteName,
+          cols.find((c) => c.name === result?.condition_key)?.color_slots,
+        ),
+      ),
+    [datasetId, result, cols, paletteName],
+  );
 
   const exportCsv = useCallback(() => {
     if (!result) return;
@@ -191,7 +223,6 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
     );
   }
 
-  const color = (i: number) => `rgb(${palette[i % palette.length]!.join(",")})`;
   const tested = result?.tested ?? false;
   const two = (result?.conditions.length ?? 0) === 2;
 
@@ -464,53 +495,30 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
             </p>
           </div>
 
-          {result.samples.length > 0 && (
+          {result.sample_key && donorPoints.length > 0 && (
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <Plot
-                data={result.conditions.map((k, ci) => {
-                  const samples = result.samples.filter((s) => s.condition === k);
-                  const order = rows.map((g) => result.groups.indexOf(g));
-                  return {
-                    type: "box" as const,
-                    name: k,
-                    x: samples.flatMap(() => order.map((gi) => result.groups[gi]!.group)),
-                    y: samples.flatMap((s) => order.map((gi) => (s.props[gi] ?? 0) * 100)),
-                    text: samples.flatMap((s) => order.map(() => `${s.sample} (${s.n_cells.toLocaleString()} cells)`)),
-                    boxpoints: "all" as const,
-                    jitter: 0.4,
-                    pointpos: 0,
-                    marker: { color: color(ci), size: 5 },
-                    line: { width: 1 },
-                    hovertemplate: "%{x}: %{y:.1f}%<br>%{text}<extra>" + k + "</extra>",
-                  };
-                })}
-                layout={{
-                  boxmode: "group",
-                  autosize: true,
-                  height: 380,
-                  margin: { t: 30, r: 16, b: 110, l: 56 },
-                  title: {
-                    text: `${prettyObsLabel(result.group_key)}: share of each sample's cells`,
-                    font: { size: 14, color: "#334155" },
-                  },
-                  xaxis: { tickangle: -45, tickfont: { size: 10, color: "#64748b" } },
-                  yaxis: {
-                    title: { text: "% of the sample's cells", font: { size: 11, color: "#64748b" } },
-                    gridcolor: "#f1f5f9",
-                    tickfont: { size: 10 },
-                  },
-                  legend: { orientation: "h", y: 1.12, font: { size: 11 } },
-                  paper_bgcolor: "white",
-                  plot_bgcolor: "white",
-                }}
-                config={plotConfig(`composition_samples_${result.group_key}`, dataset.name)}
-                useResizeHandler
-                style={{ width: "100%" }}
+              <DonorBoxPlot
+                points={donorPoints}
+                groups={rows.map((g) => g.group)}
+                conditions={result.conditions}
+                sampleKey={prettyObsLabel(result.sample_key)}
+                colorOf={conditionColor}
+                valueLabel="% of the sample's cells"
+                format={fmtPct}
+                title={`${prettyObsLabel(result.group_key)}: share of each sample's cells`}
+                plotName={`composition_samples_${result.group_key}`}
+                datasetName={dataset.name}
+                note="The test asks whether the conditions differ by more than the samples within a condition do."
               />
-              <p className="mt-1 text-xs text-slate-500">
-                One point per sample. The test asks whether the conditions differ by more than the
-                samples within a condition do.
-              </p>
+            </div>
+          )}
+          {!result.sample_key && (
+            <div
+              data-testid="needs-sample"
+              className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600"
+            >
+              Per-donor proportions need a sample or donor column (one value per person or
+              sample). Pick it under Samples (replicates), or add one to the dataset.
             </div>
           )}
         </>

@@ -253,6 +253,8 @@ export interface PanelColorOptions {
   /** Cells outside a non-empty selection are faded, as in the single plot. */
   selected?: Set<number> | null;
   palette?: CategoricalPaletteName;
+  /** Palette slot per category code (the column's `color_slots`). */
+  slots?: readonly number[];
   colormap?: ColormapName;
 }
 
@@ -262,7 +264,7 @@ export interface PanelColorOptions {
  * the shared range), so a panel is that plot's cells for one value.
  */
 export function panelColors(indices: Uint32Array, opts: PanelColorOptions): Uint8Array {
-  const { colorValues, range, opacity, selected, palette, colormap } = opts;
+  const { colorValues, range, opacity, selected, palette, slots, colormap } = opts;
   const rgba = new Uint8Array(indices.length * 4);
   const full = Math.round(opacity * 255);
   const faded = Math.round(opacity * 0.15 * 255);
@@ -274,7 +276,7 @@ export function panelColors(indices: Uint32Array, opts: PanelColorOptions): Uint
     if (colorValues && colorValues.length > 0) {
       [r, g, b] =
         type === "categorical"
-          ? mapCategoryToColor(colorValues[i] ?? 0, palette)
+          ? mapCategoryToColor(colorValues[i] ?? 0, palette, slots)
           : mapValueToColor(colorValues[i] ?? 0, range.min, range.max, colormap);
     }
     rgba[s * 4] = r;

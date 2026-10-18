@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.core import annotation_confidence as conf
+from scview.core import celltypist_fit as fit
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.dependencies import get_dataset_manager
@@ -34,6 +35,8 @@ DEFAULT_CELLTYPIST_MODEL = "Immune_All_Low.pkl"
 class CellTypistModel(BaseModel):
     model: str
     description: str
+    # human | mouse | other, from the name and description (core/celltypist_fit.py)
+    species: str = "human"
 
 
 class CellTypistModelsResponse(BaseModel):
@@ -55,7 +58,8 @@ def _model_catalog() -> list[tuple[str, str]]:
 def list_celltypist_models() -> CellTypistModelsResponse:
     """List CellTypist models (name + description) for the annotation picker."""
     try:
-        items = [CellTypistModel(model=m, description=d) for m, d in _model_catalog()]
+        items = [CellTypistModel(model=m, description=d, species=fit.model_species(m, d))
+                 for m, d in _model_catalog()]
     except Exception as e:  # offline / celltypist unavailable: still return the default
         logger.warning("Could not list CellTypist models (%s); returning default only.", e)
         items = [CellTypistModel(
@@ -63,6 +67,29 @@ def list_celltypist_models() -> CellTypistModelsResponse:
             description="immune sub-populations combined from 20 tissues of 18 studies",
         )]
     return CellTypistModelsResponse(default=DEFAULT_CELLTYPIST_MODEL, models=items)
+
+
+@router.get("/datasets/{dataset_id}/annotation/celltypist")
+async def celltypist_summary(
+    dataset_id: str,
+    column: str | None = None,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The columns CellTypist annotated, the dataset's species, and for ``column``
+    the run's model, species and gene overlap with a per-label confidence table
+    and its cautions (null when the column has no CellTypist confidence)."""
+    adata = (await _adaptor(dm, dataset_id)).adata
+
+    def _read():
+        from scview.core.species import detect_species
+
+        return {
+            "columns": fit.run_columns(adata),
+            "dataset_species": detect_species(adata).species,
+            "result": fit.summarize(adata, column) if column else None,
+        }
+
+    return await asyncio.to_thread(_read)  # a median per label over every cell: off the loop
 
 
 class ConfidenceRequest(BaseModel):

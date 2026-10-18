@@ -39,6 +39,18 @@ async def test_mean_and_fraction_per_group(client, dataset_manager):
     assert body["genes"] == ["G0", "G1"]
     assert body["mean"] == [[0.0, 1.5], [3.0, 0.5]]
     assert body["fraction"] == [[0.0, 0.5], [1.0, 0.5]]
+    # over the expressing cells only: no expressing cell gives 0, not NaN
+    assert body["mean_expressing"] == [[0.0, 3.0], [3.0, 1.0]]
+    # the layer's fixed range: 99th percentile of the non-zero values (1-4), rounded up
+    assert body["scale_range"] == [0.0, 4.0]
+
+
+async def test_scale_range_does_not_depend_on_the_genes_or_groups(client, dataset_manager):
+    did = _register(dataset_manager)
+    url = f"{API}/datasets/{did}/expression/by-group"
+    one = (await client.get(url, params={"genes": ["G1"], "groupby": "cluster", "layer": "X"})).json()
+    both = (await client.get(url, params={"genes": ["G0", "G1"], "groupby": "cluster", "layer": "X"})).json()
+    assert one["scale_range"] == both["scale_range"] == [0.0, 4.0]
 
 
 async def test_unknown_genes_are_dropped(client, dataset_manager):

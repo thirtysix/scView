@@ -32,6 +32,8 @@ interface SplitScatterGridProps {
   /** What the single plot is coloured by: obs codes, or a gene/score overlay */
   colorValues: Float32Array | Int32Array | null;
   colorType: "categorical" | "continuous";
+  /** Palette slot per category code of the colour-by column (`color_slots`). */
+  categorySlots?: readonly number[];
   selectedIndices?: Set<number> | null;
   /** Hovered cell (original index) with x/y in this grid's (= the scatter area's) pixels */
   onHover?: (info: { index: number; x: number; y: number } | null) => void;
@@ -62,6 +64,7 @@ export function SplitScatterGrid({
   dimensions,
   colorValues,
   colorType,
+  categorySlots,
   selectedIndices = null,
   onHover,
   exportLegend = null,
@@ -138,10 +141,11 @@ export function SplitScatterGrid({
           opacity,
           selected: selectedIndices,
           palette,
+          slots: categorySlots,
           colormap,
         }),
       ),
-    [orders, colorValues, colorType, range, opacity, selectedIndices, palette, colormap],
+    [orders, colorValues, colorType, range, opacity, selectedIndices, palette, categorySlots, colormap],
   );
 
   const drawnCells = sample ? sample.length : total;

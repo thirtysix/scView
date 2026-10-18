@@ -89,6 +89,47 @@ describe("ClusterDistanceHeatmap", () => {
     expect(screen.queryByTestId("nearest-groups")).toBeNull();
   });
 
+  it("draws the dendrogram beside the rows and switches to the correlation in the same order", async () => {
+    getGroupDistances.mockReset().mockResolvedValue({
+      ...KANG,
+      // CD14 + CD16 at 8.6, then B at 13.9, then NK at 17.6: leaves NK, B, CD14, CD16
+      tree: [[1, 3, 8.6, 2], [0, 4, 13.9, 3], [2, 5, 17.6, 4]],
+      correlation: [
+        [1, -0.2, 0.1, 0.05],
+        [-0.2, 1, -0.6, 0.5],
+        [0.1, -0.6, 1, -0.4],
+        [0.05, 0.5, -0.4, 1],
+      ],
+      correlation_method: "pearson",
+    } satisfies GroupDistances);
+    renderHeatmap();
+    await screen.findByTestId("plot");
+    const data = () => plotProps.current!.data as { x: unknown[]; y: unknown[]; xaxis?: string; zmin?: number }[];
+    const layout = () => plotProps.current!.layout as { yaxis: { range?: number[] }; yaxis2?: { range: number[] } };
+    expect(data()).toHaveLength(2);
+    const tree = data()[1]!;
+    expect(tree.xaxis).toBe("x2");
+    // The first bracket joins CD14 Mono (row 2) and CD16 Mono (row 3) at 8.6.
+    expect(tree.y.slice(0, 4)).toEqual([2, 2, 3, 3]);
+    expect(tree.x.slice(0, 4)).toEqual([0, 8.6, 8.6, 0]);
+    expect(layout().yaxis.range).toEqual([3.5, -0.5]);
+    expect(layout().yaxis2!.range).toEqual([3.5, -0.5]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Correlation" }));
+    expect(trace().y).toEqual(["NK", "B", "CD14 Mono", "CD16 Mono"]);
+    expect(trace().z[2]).toEqual([-0.6, -0.2, null, 0.5]); // CD14 Mono to NK, B, -, CD16 Mono
+    expect(trace().text[2]![3]).toContain("correlation 0.50");
+    expect(data()[0]!.zmin).toBe(-1);
+    expect(screen.getByText(/Pearson correlation between group centroids/)).toBeInTheDocument();
+  });
+
+  it("has no correlation toggle or tree from a server that sends neither", async () => {
+    renderHeatmap();
+    await screen.findByTestId("plot");
+    expect(screen.queryByRole("button", { name: "Correlation" })).toBeNull();
+    expect(plotProps.current!.data as unknown[]).toHaveLength(1);
+  });
+
   it("asks again for another column, and shows the server's reason when it can't", async () => {
     renderHeatmap();
     await screen.findByTestId("plot");

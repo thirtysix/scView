@@ -4,6 +4,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { ColorLegend } from "@/components/plots/ColorLegend";
+import { MultiGenePanel } from "@/components/unified/MultiGenePanel";
 
 interface UnifiedExpressionSubtabProps {
   onGeneSelect: (gene: string) => void;
@@ -111,6 +112,9 @@ export function UnifiedExpressionSubtab({
           ))}
         </select>
       </div>
+
+      {/* Several genes: feature grid, stacked violin */}
+      <MultiGenePanel datasetId={datasetId} groupByColumn={groupByColumn} />
 
       {/* Instructions */}
       {!activeGene && (

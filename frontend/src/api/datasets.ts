@@ -41,6 +41,22 @@ export async function pruneDatasets(): Promise<{
 }
 
 /**
+ * Save a label column's category order: every category in the new order, or a
+ * quick sort ("natural": A-Z with numbers by value; "size": most cells first).
+ * Every view lists the groups in this order; the scatter's colours follow it.
+ */
+export async function setCategoryOrder(
+  id: string,
+  column: string,
+  change: { order: string[] } | { sort: "natural" | "size" },
+): Promise<{ column: string; order: string[] }> {
+  return apiFetch(`/datasets/${id}/metadata/${encodeURIComponent(column)}/order`, {
+    method: "POST",
+    body: JSON.stringify(change),
+  });
+}
+
+/**
  * Rename a category in a categorical obs column (e.g. correct a cell-type label).
  * Persists to the derived layer; never touches the original upload. Returns once
  * the backend has rewritten + reloaded the dataset.

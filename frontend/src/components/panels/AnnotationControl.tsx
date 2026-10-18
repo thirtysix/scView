@@ -1,19 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
-import { Tags, Loader2, Check } from "lucide-react";
-import { API_BASE } from "@/lib/constants";
+import { AlertTriangle, Tags, Loader2, Check } from "lucide-react";
+import { getCellTypistModels, getCellTypistSummary, type CellTypistModel } from "@/api/annotation";
+import { CellTypistSummary } from "@/components/panels/CellTypistSummary";
+import { defaultModel, orderModels, speciesMismatch, type DatasetSpecies } from "@/lib/celltypistModels";
 import { prettyObsLabel, isRedundantClusterCol } from "@/lib/formatting";
 import { useDatasetStore } from "@/stores/datasetStore";
-
-interface CellTypistModel {
-  model: string;
-  description: string;
-}
 
 interface Props {
   /** Run the cell_type_annotation pipeline step with these PipelineParams. Resolves on completion. */
   onAnnotate: (params: Record<string, unknown>) => Promise<void>;
   running: boolean;
+  /** The dataset's species from its gene names (assessment), to order and check models */
+  species?: DatasetSpecies;
 }
+
+const SPECIES_GROUP: Record<CellTypistModel["species"], string> = {
+  human: "Human models",
+  mouse: "Mouse models",
+  other: "Other species",
+};
 
 /**
  * Cell-type annotation control for the Data Assessment panel.
@@ -22,8 +27,9 @@ interface Props {
  * Leiden resolutions into separate columns), choose the method (default: any-tissue
  * LLM, no reference model to pick), and the output obs column is shown explicitly.
  */
-export function AnnotationControl({ onAnnotate, running }: Props) {
+export function AnnotationControl({ onAnnotate, running, species }: Props) {
   const dataset = useDatasetStore((s) => s.currentDataset);
+  const datasetId = useDatasetStore((s) => s.currentDatasetId);
 
   // Candidate grouping (clustering) columns: categorical, 2..100 groups.
   const groupings = useMemo(() => {
@@ -44,7 +50,13 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
   const [method, setMethod] = useState<"llm" | "celltypist" | "marker_score">("llm");
   const [tissue, setTissue] = useState("");
   const [model, setModel] = useState("Immune_All_Low.pkl");
+  const [modelPicked, setModelPicked] = useState(false);
   const [models, setModels] = useState<CellTypistModel[]>([]);
+  const [serverDefault, setServerDefault] = useState("Immune_All_Low.pkl");
+  // Columns with a CellTypist run (their summary shows under the button), and a
+  // counter bumped by each run so the summary refetches.
+  const [ctColumns, setCtColumns] = useState<string[]>([]);
+  const [ctRuns, setCtRuns] = useState(0);
   const [groupby, setGroupby] = useState<string>("");
   const [target, setTarget] = useState("cell_type");
   const [targetEdited, setTargetEdited] = useState(false);
@@ -66,16 +78,49 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
   // Lazily load the CellTypist catalog only when that method is selected.
   useEffect(() => {
     if (method !== "celltypist" || models.length > 0) return;
-    fetch(`${API_BASE}/annotation/celltypist-models`)
-      .then((r) => r.json())
-      .then((d: { default?: string; models?: CellTypistModel[] }) => {
+    getCellTypistModels()
+      .then((d) => {
         setModels(d.models ?? []);
-        if (d.default) setModel(d.default);
+        if (d.default) setServerDefault(d.default);
       })
       .catch(() => {
         /* offline: keep the default model */
       });
   }, [method, models.length]);
+
+  // Start from a model of the dataset's species, until the user picks one.
+  useEffect(() => {
+    if (!modelPicked && models.length > 0) setModel(defaultModel(models, species, serverDefault));
+  }, [models, species, serverDefault, modelPicked]);
+
+  const groups = useMemo(() => {
+    const out: { species: CellTypistModel["species"]; models: CellTypistModel[] }[] = [];
+    for (const m of orderModels(models, species)) {
+      const last = out[out.length - 1];
+      if (last && last.species === m.species) last.models.push(m);
+      else out.push({ species: m.species, models: [m] });
+    }
+    return out;
+  }, [models, species]);
+  const mismatch = speciesMismatch(models.find((m) => m.model === model), species);
+
+  // Which columns have a CellTypist run, for showing a stored run's summary.
+  useEffect(() => {
+    if (!datasetId) return;
+    let live = true;
+    getCellTypistSummary(datasetId)
+      .then((info) => live && setCtColumns(info.columns))
+      .catch(() => live && setCtColumns([]));
+    return () => {
+      live = false;
+    };
+  }, [datasetId, ctRuns]);
+  const summaryColumn =
+    lastWritten && ctColumns.includes(lastWritten)
+      ? lastWritten
+      : ctColumns.includes(target.trim())
+        ? target.trim()
+        : null;
 
   const handleAnnotate = async () => {
     const tgt = target.trim() || "cell_type";
@@ -93,6 +138,7 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
       setLastWritten(tgt);
     } finally {
       setAnnotating(false);
+      setCtRuns((n) => n + 1); // another method's run forgets the column's CellTypist run
     }
   };
 
@@ -186,19 +232,46 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
           </label>
           <select
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e) => {
+              setModel(e.target.value);
+              setModelPicked(true);
+            }}
+            aria-label="CellTypist model"
             className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
           >
             {models.length === 0 && <option value={model}>{model.replace(/\.pkl$/, "")}</option>}
-            {models.map((m) => (
-              <option key={m.model} value={m.model}>
-                {m.model.replace(/\.pkl$/, "")} — {m.description.slice(0, 64)}
+            {model === "" && (
+              <option value="" disabled>
+                Pick the {species ?? ""} model nearest your tissue…
               </option>
+            )}
+            {groups.map((g) => (
+              <optgroup
+                key={g.species}
+                label={`${SPECIES_GROUP[g.species]}${g.species === species ? " (this dataset)" : ""}${
+                  g.species === "mouse" ? " · tissue-specific, no tissue match guaranteed" : ""
+                }`}
+              >
+                {g.models.map((m) => (
+                  <option key={m.model} value={m.model}>
+                    {m.model.replace(/\.pkl$/, "")} — {m.description.slice(0, 64)}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
-          <p className="mt-1 text-[11px] text-slate-400">
-            CellTypist models are tissue-specific; a mismatch mislabels cells.
-          </p>
+          {mismatch ? (
+            <p role="alert" className="mt-1 flex gap-1 text-[11px] text-amber-700">
+              <AlertTriangle className="mt-0.5 h-3 w-3 flex-shrink-0" />
+              <span>{mismatch}</span>
+            </p>
+          ) : (
+            <p className="mt-1 text-[11px] text-slate-400">
+              CellTypist models are tissue-specific; a mismatch mislabels cells.
+              {species === "mouse" &&
+                " There is no general mouse model (none covers every tissue): pick the one nearest yours."}
+            </p>
+          )}
         </div>
       )}
 
@@ -206,7 +279,8 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
         <button
           type="button"
           onClick={handleAnnotate}
-          disabled={busy || !groupby}
+          disabled={busy || !groupby || (method === "celltypist" && !model)}
+          title={method === "celltypist" && !model ? "Pick a reference model first" : undefined}
           className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Tags className="h-4 w-4" />}
@@ -221,6 +295,9 @@ export function AnnotationControl({ onAnnotate, running }: Props) {
           </span>
         )}
       </div>
+      {datasetId && summaryColumn && (
+        <CellTypistSummary datasetId={datasetId} column={summaryColumn} refreshKey={ctRuns} />
+      )}
     </div>
   );
 }
