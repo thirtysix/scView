@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-18
+
 ### Changed
 - **QC filtering judges each sample's own outliers by default.** New filtering runs remove cells
   whose counts or genes per cell fall more than 5 MADs below their sample's median (on log1p),
