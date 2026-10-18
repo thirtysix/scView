@@ -1,5 +1,7 @@
 """Expression / gene query endpoints."""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
@@ -93,8 +95,9 @@ async def get_expression_by_group(
     layer: str = Query(default="", description="Expression layer key (e.g. raw, X, counts)"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
-    """Mean expression and fraction of expressing cells per group, for the
-    marker dot plot and heatmap."""
+    """Mean expression (over all cells and over expressing cells only) and the
+    fraction of expressing cells per group, with the layer's fixed colour range,
+    for the marker dot plot and heatmap."""
     if len(genes) > 300:
         raise HTTPException(status_code=400, detail="At most 300 genes per request.")
     adaptor = await dm.get_or_load_dataset(dataset_id)
@@ -103,7 +106,8 @@ async def get_expression_by_group(
     if not groupby:
         groupby = adaptor.active_clustering_column() or ""
     try:
-        result = adaptor.expression_by_group(genes, groupby, layer=layer or None)
+        # Reads every cell's values for up to 300 genes: off the loop.
+        result = await asyncio.to_thread(adaptor.expression_by_group, genes, groupby, layer=layer or None)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     if not result["genes"]:

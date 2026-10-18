@@ -7,6 +7,16 @@ import { plotConfig } from "@/lib/plotConfig";
 import { apiFetch } from "@/api/client";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { missingGenes } from "@/lib/geneList";
+import {
+  DOT_LEGEND,
+  MIN_FRACTION,
+  dotSize,
+  markerColours,
+  type ColourScale,
+  type MeanOf,
+} from "@/lib/markerPlot";
+
+export { scalePerGene } from "@/lib/markerPlot";
 
 interface MarkerRow {
   gene: string;
@@ -19,7 +29,11 @@ interface ByGroup {
   groups: string[];
   genes: string[];
   mean: number[][]; // [group][gene]
+  /** Mean over the expressing cells only (absent from older servers) */
+  mean_expressing?: number[][];
   fraction: number[][]; // [group][gene]
+  /** The layer's fixed colour range, the same for any genes and groups */
+  scale_range?: [number, number];
 }
 
 /** The top `perGroup` up-regulated markers of each group, in group order, each gene once. */
@@ -43,23 +57,40 @@ export function pickMarkerGenes(
   return out;
 }
 
-/** Scale each gene (column) to 0-1 across groups, as scanpy's standard_scale="var". */
-export function scalePerGene(mean: number[][]): number[][] {
-  const nGenes = mean[0]?.length ?? 0;
-  const lo: number[] = [];
-  const hi: number[] = [];
-  for (let j = 0; j < nGenes; j++) {
-    const col = mean.map((row) => row[j] ?? 0);
-    lo.push(Math.min(...col));
-    hi.push(Math.max(...col));
-  }
-  return mean.map((row) =>
-    row.map((v, j) => {
-      const range = (hi[j] ?? 0) - (lo[j] ?? 0);
-      return range > 0 ? (v - (lo[j] ?? 0)) / range : 0;
-    }),
+const pct = (f: number) => `${Math.round(f * 100)}%`;
+
+/** Fixed dot-size key: the same sizes as the plot's dots, for every plot. */
+function DotSizeLegend() {
+  const h = dotSize(1) + 4;
+  const ring = Math.max(dotSize(MIN_FRACTION / 2), 5);
+  let x = 0;
+  const items = DOT_LEGEND.map((f) => {
+    const d = dotSize(f);
+    const cx = x + d / 2;
+    x += d + 30;
+    return { f, d, cx };
+  });
+  const ringX = x + ring / 2;
+  return (
+    <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-500" data-testid="dot-size-legend">
+      <span>Cells expressing:</span>
+      <svg width={ringX + ring / 2 + 34} height={h} role="img" aria-label="Dot size legend">
+        {items.map(({ f, d, cx }) => (
+          <g key={f}>
+            <circle cx={cx} cy={h / 2} r={d / 2} fill="#94a3b8" stroke="#64748b" strokeWidth={0.5} />
+            <text x={cx + d / 2 + 2} y={h / 2 + 3.5} fontSize={10} fill="#64748b">{pct(f)}</text>
+          </g>
+        ))}
+        <circle cx={ringX} cy={h / 2} r={ring / 2} fill="none" stroke="#94a3b8" strokeWidth={1.5} />
+        <text x={ringX + ring / 2 + 2} y={h / 2 + 3.5} fontSize={10} fill="#64748b">
+          &lt;{pct(MIN_FRACTION)}
+        </text>
+      </svg>
+    </div>
   );
 }
+
+const selectClass = "rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-700";
 
 export function MarkerPlot({
   datasetId,
@@ -94,6 +125,10 @@ export function MarkerPlot({
   const [data, setData] = useState<ByGroup | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [meanOf, setMeanOf] = useState<MeanOf>("all");
+  const [scale, setScale] = useState<ColourScale>("gene");
+  // The user's own top of the fixed range, kept for the layer it was set on.
+  const [fixedMax, setFixedMax] = useState<{ layer: string; value: number } | null>(null);
   const layers = useDatasetStore((s) => s.currentDataset?.expression_layers);
 
   useEffect(() => {
@@ -157,56 +192,142 @@ export function MarkerPlot({
   const genes = data.genes;
   const missing = custom ? missingGenes(chosenGenes!, genes) : [];
   const mean = rowIdx.map((i) => data.mean[i]!);
+  const meanExpressing = data.mean_expressing ? rowIdx.map((i) => data.mean_expressing![i]!) : null;
   const fraction = rowIdx.map((i) => data.fraction[i]!);
-  const scaled = scalePerGene(mean);
+  const isProtein = layer === "protein";
+  const noun = isProtein ? "protein" : "gene";
+  const serverRange: [number, number] = data.scale_range ?? [0, Math.max(1, ...mean.flat())];
+  const range: [number, number] = [
+    serverRange[0],
+    fixedMax && fixedMax.layer === data.layer ? fixedMax.value : serverRange[1],
+  ];
+  const colours = markerColours({ mean, meanExpressing, fraction }, meanOf, scale, range, noun);
   const hover = rows.map((g, r) =>
     genes.map(
       (gene, c) =>
         `<b>${gene}</b>${custom ? "" : ` (marker of ${markerOf.get(gene) ?? "?"})`}<br>${groupby}: ${g}` +
         `<br>mean ${(mean[r]?.[c] ?? 0).toFixed(2)}` +
+        (meanExpressing ? `<br>mean in expressing cells ${(meanExpressing[r]?.[c] ?? 0).toFixed(2)}` : "") +
         `<br>${Math.round((fraction[r]?.[c] ?? 0) * 100)}% of cells express it`,
     ),
   );
+  const colorbar = { title: { text: colours.title }, thickness: 12 };
 
-  const trace =
+  // Dot plot: dots with too few expressing cells are hollow rings without a colour.
+  const points = rows.flatMap((g, r) => genes.map((gene, c) => ({ g, gene, r, c })));
+  const solid = points.filter(({ r, c }) => (fraction[r]?.[c] ?? 0) >= MIN_FRACTION && colours.z[r]?.[c] != null);
+  const hollow = points.filter(({ r, c }) => !((fraction[r]?.[c] ?? 0) >= MIN_FRACTION && colours.z[r]?.[c] != null));
+  const traces =
     kind === "heatmap"
-      ? {
-          type: "heatmap" as const,
-          x: genes,
-          y: rows,
-          z: scaled,
-          text: hover as unknown as string[],
-          hoverinfo: "text" as const,
-          colorscale: plotlyColorscale(colormapName),
-          colorbar: { title: { text: "Mean<br>(scaled)" }, thickness: 12 },
-        }
-      : {
-          type: "scatter" as const,
-          mode: "markers" as const,
-          x: rows.flatMap(() => genes),
-          y: rows.flatMap((g) => genes.map(() => g)),
-          text: hover.flat(),
-          hoverinfo: "text" as const,
-          marker: {
-            size: fraction.flat().map((f) => Math.max(f * 22, 1)),
-            color: scaled.flat(),
-            colorscale: "Reds",
-            cmin: 0,
-            cmax: 1,
-            line: { width: 0.5, color: "#94a3b8" },
-            colorbar: { title: { text: "Mean<br>(scaled)" }, thickness: 12 },
+      ? [
+          {
+            type: "heatmap" as const,
+            x: genes,
+            y: rows,
+            z: colours.z,
+            zmin: colours.cmin,
+            zmax: colours.cmax,
+            text: hover as unknown as string[],
+            hoverinfo: "text" as const,
+            colorscale: plotlyColorscale(colormapName),
+            colorbar,
           },
-        };
+        ]
+      : [
+          {
+            type: "scatter" as const,
+            mode: "markers" as const,
+            x: solid.map((p) => p.gene),
+            y: solid.map((p) => p.g),
+            text: solid.map((p) => hover[p.r]![p.c]!),
+            hoverinfo: "text" as const,
+            showlegend: false,
+            marker: {
+              size: solid.map((p) => dotSize(fraction[p.r]![p.c]!)),
+              color: solid.map((p) => colours.z[p.r]![p.c]!),
+              colorscale: "Reds",
+              cmin: colours.cmin,
+              cmax: colours.cmax,
+              line: { width: 0.5, color: "#94a3b8" },
+              colorbar,
+            },
+          },
+          {
+            type: "scatter" as const,
+            mode: "markers" as const,
+            x: hollow.map((p) => p.gene),
+            y: hollow.map((p) => p.g),
+            text: hollow.map((p) => hover[p.r]![p.c]!),
+            hoverinfo: "text" as const,
+            showlegend: false,
+            marker: {
+              symbol: "circle-open",
+              size: hollow.map((p) => Math.max(dotSize(fraction[p.r]![p.c]!), 5)),
+              color: "#94a3b8",
+              line: { width: 1.5 },
+            },
+          },
+        ];
+  const blankNote =
+    kind === "heatmap" && meanOf === "expressing" && meanExpressing
+      ? ` Blank: under ${Math.round(MIN_FRACTION * 100)}% of the group's cells express it.`
+      : "";
 
   return (
     <div>
+      <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
+        <label htmlFor="marker-colour-mean" className="font-medium">Colour:</label>
+        <select
+          id="marker-colour-mean"
+          value={meanOf}
+          onChange={(e) => setMeanOf(e.target.value as MeanOf)}
+          className={selectClass}
+        >
+          <option value="all">mean over all cells</option>
+          <option value="expressing" disabled={!meanExpressing}>mean in expressing cells</option>
+        </select>
+        <select
+          aria-label="Colour scale"
+          value={scale}
+          onChange={(e) => setScale(e.target.value as ColourScale)}
+          className={selectClass}
+        >
+          <option value="gene">scaled per {noun}</option>
+          <option value="fixed">fixed range</option>
+        </select>
+        {scale === "fixed" && (
+          <span className="flex items-center gap-1">
+            <span>{range[0]} to</span>
+            <input
+              type="number"
+              aria-label="Top of the fixed colour range"
+              step={0.5}
+              value={range[1]}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && v > range[0]) setFixedMax({ layer: data.layer, value: v });
+              }}
+              className="w-16 rounded border border-slate-300 bg-white px-1 py-0.5 text-xs text-slate-700"
+            />
+            {range[1] !== serverRange[1] && (
+              <button
+                onClick={() => setFixedMax(null)}
+                className="text-xs font-medium text-primary hover:underline"
+                title="The layer's 99th percentile of non-zero values"
+              >
+                reset ({serverRange[1]})
+              </button>
+            )}
+          </span>
+        )}
+      </div>
       <Plot
-        data={[trace]}
+        data={traces}
         layout={{
           height: Math.max(260, rows.length * 28 + 150),
           margin: { l: 120, r: 20, t: 10, b: 110 },
           xaxis: { type: "category", tickangle: -60, automargin: true, categoryarray: genes, categoryorder: "array" },
-          yaxis: { type: "category", autorange: "reversed", automargin: true },
+          yaxis: { type: "category", autorange: "reversed", automargin: true, categoryarray: rows, categoryorder: "array" },
           paper_bgcolor: "rgba(0,0,0,0)",
           plot_bgcolor: "rgba(0,0,0,0)",
         }}
@@ -214,24 +335,28 @@ export function MarkerPlot({
         useResizeHandler
         style={{ width: "100%" }}
       />
+      {kind === "dotplot" && <DotSizeLegend />}
       {missing.length > 0 && (
         <p className="mt-1 text-xs text-amber-700">
           Not in this dataset&apos;s {layerLabel} layer, so not plotted (names are case-sensitive):{" "}
           {missing.join(", ")}.
         </p>
       )}
-      {layer === "protein" ? (
+      {isProtein ? (
         <p className="mt-1 text-xs text-slate-500">
-          {genes.length} protein{genes.length === 1 ? "" : "s"} across the {groupby} groups. Colour: mean
-          protein level (CLR), scaled to 0-1 per protein.
+          {genes.length} protein{genes.length === 1 ? "" : "s"} across the {groupby} groups. Protein
+          level: CLR. {colours.caption}
+          {blankNote}
         </p>
       ) : (
         <p className="mt-1 text-xs text-slate-500">
           {custom
             ? `Your ${genes.length} gene${genes.length === 1 ? "" : "s"} across the ${groupby} groups.`
             : `Top ${perGroup} up-regulated markers of each ${groupby} group.`}{" "}
-          Colour: mean expression, scaled to 0-1 per gene.
-          {kind === "dotplot" && " Dot size: share of cells in the group that express the gene."}
+          {colours.caption}
+          {kind === "dotplot" &&
+            ` Dot size: share of the group's cells that express the gene (area, same scale in every plot); hollow: under ${Math.round(MIN_FRACTION * 100)}%, no colour.`}
+          {blankNote}
           {` Layer: ${layerLabel}.`}
         </p>
       )}
