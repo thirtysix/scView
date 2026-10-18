@@ -6,6 +6,44 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **More DE tests.** Pick the cell-level test: Wilcoxon (default), Welch t-test or logistic
+  regression. Logistic regression gives coefficients and no p-values, so the volcano plots the
+  coefficient, the table lists genes by it and over-representation is off (GSEA still works).
+  MAST is listed as unavailable (R only). *Compare methods* runs the same comparison under every
+  test and shows how far they agree: top-50 Jaccard per side, Spearman of the statistics, and the
+  genes only one test ranks top (Kang CD14 Mono vs rest: Wilcoxon vs Welch 0.96 of the top 50 up).
+  GSEA and TF/pathway activity from a DE result name the test and rank by its statistic.
+- **Co-expressed genes** (Unified View → Expression): the genes most correlated with the overlaid
+  gene (Pearson or Spearman) over all cells, the selection or the highlighted group, positive and
+  negative, with click to overlay and *To grid* to send them to Several genes. Rare and constant
+  genes are skipped and counted, never returned as NaN (Kang ISG15: IFIT3 0.85, IFIT1 0.85, IFI6 0.82).
+- **Per-sample sex check.** Each sample is called female / male / mixed from XIST/TSIX against
+  Y-chromosome genes (share of cells and pseudobulk CPM), shown as a Sex column and caption in the
+  per-sample QC table. It flags disagreement with a sex metadata column (possible sample swap),
+  mixed samples (pooled donors or cross-donor doublets) and sex confounded with a condition, and
+  says so when the marker genes are missing; the QC report states the calls.
+- **Sample-level (pseudobulk) QC** on the Data Assessment tab: a PCA of each sample's (x
+  condition's) summed counts, coloured by any sample-level covariate, optionally within one cell
+  type. Each PC is tested against the covariates (R² and p, driver marked) and outlier profiles
+  are listed with the rule used; profiles under 10 cells are left out and listed (Kang: PC1 75% =
+  stim, PC2 = donor).
+- **Overlay histograms.** The Unified View distribution panel has a *Histogram* mode: a selection
+  (lasso, legend picks, cell filter) or a group against the rest or another group, as overlaid
+  normalised histograms or densities of the plotted gene or score or any numeric QC column, with
+  n, medians, % expressing, median difference, KS distance and Mann-Whitney AUC as descriptive
+  numbers, and a log / linear axis.
+- **Reproduce this analysis** (History): download a standalone Python (scanpy) script that replays
+  the recorded steps from the input file, and a RUN_MANIFEST.json with app and package versions,
+  the input file's SHA-256 and every step. Each step is marked exact / approximate / from record /
+  not replayable. On Kang and paul15 the script reproduced scView's cells, variable genes,
+  clusters, PCA / Harmony / UMAP and markers exactly. Both files are also in the Download menu.
+
+### Fixed
+- Opening a dataset without UMAP no longer requests the UMAP of the dataset opened before (a 404
+  on every open).
+- The QC and pseudobulk scatter's plot buttons no longer cover the legend's first entry.
+
 ## [0.21.0] - 2026-10-18
 
 ### Added
