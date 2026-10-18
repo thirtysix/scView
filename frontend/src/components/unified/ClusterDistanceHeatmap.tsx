@@ -137,7 +137,7 @@ export function ClusterDistanceHeatmap({
                 text: hover as unknown as string[],
                 hoverinfo: "text",
                 ...(correlation
-                  ? { colorscale: "RdBu", reversescale: true, zmin: -1, zmax: 1 }
+                  ? { colorscale: "RdBu", zmin: -1, zmax: 1 } // Plotly's RdBu: blue low, red high
                   : { colorscale: plotlyColorscale(colormap) }),
                 colorbar: {
                   title: { text: correlation ? "correlation" : "distance", font: { size: 10 } },
