@@ -7,10 +7,26 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch } from "@/api/client";
-import { useCategoryColors } from "@/hooks/useCategoryColors";
-import { rgbCss } from "@/lib/categoryColors";
+import { useCategoryColors, useCategoryOrder } from "@/hooks/useCategoryColors";
+import { rgbCss, sortByCategoryOrder } from "@/lib/categoryColors";
 import { formatNumber } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
+import { suggestReplicateColumn } from "@/lib/de";
+import { conditionColumns, suggestConditionColumn } from "@/lib/composition";
+import {
+  barLabel,
+  barValue,
+  crosstabBars,
+  sortBars,
+  type Bar,
+  type BarSort,
+  type Crosstab,
+} from "@/lib/compositionBars";
+import { WaffleChart } from "@/components/plots/WaffleChart";
+
+/** The waffle's "every cell" option, beside one bar per row. */
+const ALL_CELLS = "\u0000all";
+const ctlCls = "rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700";
 
 interface MetadataSummaryRaw {
   groupby: string | null;
@@ -23,11 +39,7 @@ interface MetadataSummary {
   total: number;
 }
 
-interface CrosstabResponse {
-  row_values: string[];
-  col_values: string[];
-  counts: number[][];
-}
+type CrosstabResponse = Crosstab;
 
 export function ObservationsPanel() {
   const dataset = useDatasetStore((s) => s.currentDataset);
@@ -45,10 +57,20 @@ export function ObservationsPanel() {
 
   const [crosstab, setCrosstab] = useState<CrosstabResponse | null>(null);
   const [isLoadingCrosstab, setIsLoadingCrosstab] = useState(false);
+  // Composition bars: a third column to split the bars by (e.g. the condition,
+  // with one bar per donor), their order, counts or shares, and a waffle.
+  const [splitCol, setSplitCol] = useState("");
+  const [barSort, setBarSort] = useState<BarSort>("category");
+  const [shareOf, setShareOf] = useState("");
+  const [percent, setPercent] = useState(false);
+  const [waffleKey, setWaffleKey] = useState(""); // a bar's label, ALL_CELLS, or "" = off
 
   // Each column's categories keep the colours they have on the embedding.
   const primaryColor = useCategoryColors(primaryCol);
   const colorByColor = useCategoryColors(colorByCol);
+  // ...and the order they are stored in (bars, stacks and legend follow it).
+  const primaryOrder = useCategoryOrder(primaryCol);
+  const colorByOrder = useCategoryOrder(colorByCol);
 
   // All categorical columns, excluding non-informative ones
   const allCategoricalCols = useMemo(() => {
@@ -75,7 +97,8 @@ export function ObservationsPanel() {
   }, [allCategoricalCols, primaryCol, dataset]);
 
   useEffect(() => {
-    if (!colorByCol && allCategoricalCols.length > 1) {
+    // After the group-by default, or both could land on the same column.
+    if (!colorByCol && primaryCol && allCategoricalCols.length > 1) {
       const other = allCategoricalCols.find((c) => c.name !== primaryCol);
       if (other) setColorByCol(other.name);
     }
@@ -108,6 +131,9 @@ export function ObservationsPanel() {
       .finally(() => setIsLoading(false));
   }, [datasetId, primaryCol]);
 
+  // The split only counts when it is a third column.
+  const facetCol = splitCol && splitCol !== primaryCol && splitCol !== colorByCol ? splitCol : "";
+
   // Fetch crosstab when both columns are set and different
   useEffect(() => {
     if (!datasetId || !primaryCol || !colorByCol || primaryCol === colorByCol) {
@@ -115,14 +141,42 @@ export function ObservationsPanel() {
       return;
     }
 
+    let cancelled = false;
     setIsLoadingCrosstab(true);
     apiFetch<CrosstabResponse>(
-      `/datasets/${datasetId}/metadata/crosstab?row=${encodeURIComponent(primaryCol)}&col=${encodeURIComponent(colorByCol)}`,
+      `/datasets/${datasetId}/metadata/crosstab?row=${encodeURIComponent(primaryCol)}&col=${encodeURIComponent(colorByCol)}` +
+        (facetCol ? `&facet=${encodeURIComponent(facetCol)}` : ""),
     )
-      .then((data) => setCrosstab(data))
-      .catch(() => setCrosstab(null))
-      .finally(() => setIsLoadingCrosstab(false));
-  }, [datasetId, primaryCol, colorByCol]);
+      .then((data) => !cancelled && setCrosstab(data))
+      .catch(() => !cancelled && setCrosstab(null))
+      .finally(() => !cancelled && setIsLoadingCrosstab(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId, primaryCol, colorByCol, facetCol]);
+
+  // A waffle and a share-of choice belong to the columns they were made for.
+  useEffect(() => setWaffleKey(""), [primaryCol, colorByCol, facetCol]);
+  useEffect(() => setShareOf(""), [colorByCol]);
+
+  // One bar per donor / sample, split by condition, when the dataset has both.
+  const perSample = useMemo(() => {
+    const donor = suggestReplicateColumn(allCategoricalCols);
+    if (!donor) return null;
+    const condition = suggestConditionColumn(conditionColumns(allCategoricalCols, [donor]));
+    return { donor, condition };
+  }, [allCategoricalCols]);
+  const showPerSample = useCallback(() => {
+    if (!perSample) return;
+    // The stack keeps the cell types (or whatever the bars were before).
+    const stack =
+      primaryCol !== perSample.donor && primaryCol !== perSample.condition ? primaryCol : colorByCol;
+    setPrimaryCol(perSample.donor);
+    if (stack && stack !== perSample.donor) setColorByCol(stack);
+    setSplitCol(perSample.condition);
+    setSelectedGroup(null);
+    setHighlight(null);
+  }, [perSample, primaryCol, colorByCol, setHighlight]);
 
   // Handle row click: highlight cells on embedding
   const handleGroupClick = useCallback(
@@ -155,16 +209,37 @@ export function ObservationsPanel() {
     downloadCsv(`observations_${primaryCol}_${datasetId}.csv`, [primaryCol, "cell_count", "percentage"], rows);
   }, [summary, primaryCol, datasetId]);
 
-  // Export the full row×column composition matrix when a crosstab is available.
+  // The bars in display order: one per row, or per (split value, row) with cells.
+  const split = !!(facetCol && crosstab?.facet_values);
+  const bars = useMemo<Bar[]>(() => {
+    if (!crosstab) return [];
+    return sortBars(crosstabBars(crosstab, split), barSort, {
+      rowOrder: primaryOrder,
+      colValues: crosstab.col_values,
+      shareOf: shareOf || crosstab.col_values[0],
+      facetOrder: crosstab.facet_values,
+    });
+  }, [crosstab, split, barSort, primaryOrder, shareOf]);
+  // Stacked bottom-up, and listed, in the stacked column's stored order.
+  const stackOrder = useMemo(
+    () => (crosstab ? sortByCategoryOrder(crosstab.col_values, colorByOrder) : []),
+    [crosstab, colorByOrder],
+  );
+
+  // Export the composition matrix (one row per bar, as shown) when a crosstab is available.
   const handleExportCrosstab = useCallback(() => {
     if (!crosstab) return;
-    const headers = [primaryCol, ...crosstab.col_values];
-    const rows = crosstab.row_values.map((rv, ri) => [
-      rv,
-      ...crosstab.col_values.map((_, ci) => crosstab.counts[ri]?.[ci] ?? 0),
+    const headers = [...(split ? [facetCol] : []), primaryCol, ...stackOrder];
+    const idx = stackOrder.map((v) => crosstab.col_values.indexOf(v));
+    const rows = bars.map((b) => [
+      ...(split ? [b.facet ?? ""] : []),
+      b.row,
+      ...idx.map((ci) => (percent ? barValue(b, ci, true).toFixed(2) : barValue(b, ci, false))),
     ]);
-    downloadCsv(`composition_${primaryCol}_by_${colorByCol}_${datasetId}.csv`, headers, rows);
-  }, [crosstab, primaryCol, colorByCol, datasetId]);
+    const what = percent ? "percent" : "counts";
+    const by = split ? `_split_${facetCol}` : "";
+    downloadCsv(`composition_${primaryCol}_by_${colorByCol}${by}_${what}_${datasetId}.csv`, headers, rows);
+  }, [crosstab, bars, stackOrder, split, facetCol, percent, primaryCol, colorByCol, datasetId]);
 
   // Batch-integration quality: how evenly each cluster mixes across the colorBy
   // groups (e.g. batches/conditions), via normalized Shannon entropy. 1.0 = a
@@ -200,14 +275,30 @@ export function ObservationsPanel() {
   }, [crosstab]);
 
   // Build bar chart traces — stacked bars when crosstab is available
+  // Without a second column: one bar per group, in the chosen order.
+  const summaryBars = useMemo<Bar[]>(() => {
+    if (!summary) return [];
+    const plain = Object.entries(summary.groups).map(([row, g]) => ({
+      row,
+      facet: null,
+      counts: [g.count],
+      total: g.count,
+    }));
+    return sortBars(plain, barSort === "share" ? "size" : barSort, { rowOrder: primaryOrder, colValues: [] });
+  }, [summary, barSort, primaryOrder]);
+
   const compositionTraces = useMemo(() => {
     // Stacked bars from crosstab
-    if (crosstab && crosstab.row_values.length > 0 && crosstab.col_values.length > 0) {
-      return crosstab.col_values.map((colVal, ci) => {
+    if (crosstab && bars.length > 0 && crosstab.col_values.length > 0) {
+      const x = split ? [bars.map((b) => b.facet ?? ""), bars.map((b) => b.row)] : bars.map((b) => b.row);
+      return stackOrder.map((colVal) => {
+        const ci = crosstab.col_values.indexOf(colVal);
         return {
           type: "bar" as const,
-          x: crosstab.row_values,
-          y: crosstab.row_values.map((_, ri) => crosstab.counts[ri]?.[ci] ?? 0),
+          x,
+          y: bars.map((b) => barValue(b, ci, percent)),
+          customdata: bars.map((b) => [b.counts[ci] ?? 0, barValue(b, ci, true), barLabel(b)]),
+          hovertemplate: `%{customdata[2]}<br>${colVal}: %{customdata[0]:,} cells (%{customdata[1]:.1f}%)<extra></extra>`,
           name: colVal,
           marker: {
             color: rgbCss(colorByColor(colVal)),
@@ -217,43 +308,42 @@ export function ObservationsPanel() {
     }
 
     // Fallback: simple bars from summary
-    if (!summary) return [];
-
-    const groupNames = Object.keys(summary.groups).sort(
-      (a, b) => (summary.groups[b]?.count ?? 0) - (summary.groups[a]?.count ?? 0),
-    );
-
+    if (summaryBars.length === 0) return [];
+    const total = summary?.total ?? 0;
+    const groupNames = summaryBars.map((b) => b.row);
     return [
       {
         type: "bar" as const,
         x: groupNames,
-        y: groupNames.map((s) => summary.groups[s]?.count ?? 0),
+        y: summaryBars.map((b) => (percent ? (total > 0 ? (b.total / total) * 100 : 0) : b.total)),
         name: "Cell count",
         marker: {
           color: groupNames.map((name) => rgbCss(primaryColor(name))),
         },
       },
     ];
-  }, [summary, crosstab, primaryColor, colorByColor]);
+  }, [crosstab, bars, split, stackOrder, percent, summaryBars, summary, primaryColor, colorByColor]);
 
   const compositionLayout = useMemo(
     () => ({
       barmode: "stack" as const,
       title: {
         text: crosstab
-          ? `${colorByCol} Composition per ${primaryCol}`
+          ? `${colorByCol} Composition per ${primaryCol}${split ? ` by ${facetCol}` : ""}`
           : `Cell Counts per ${primaryCol}`,
         font: { size: 14, color: "#334155" },
       },
       xaxis: {
-        title: { text: primaryCol, font: { size: 12, color: "#64748b" } },
+        title: { text: split ? `${facetCol} / ${primaryCol}` : primaryCol, font: { size: 12, color: "#64748b" } },
         tickfont: { size: 10, color: "#64748b" },
         tickangle: -45,
+        ...(split ? { type: "multicategory" as const } : {}),
       },
       yaxis: {
-        title: { text: "Count", font: { size: 12, color: "#64748b" } },
+        title: { text: percent ? "% of cells" : "Count", font: { size: 12, color: "#64748b" } },
         tickfont: { size: 11, color: "#64748b" },
         gridcolor: "#f1f5f9",
+        ...(percent ? { range: [0, 100] } : {}),
       },
       legend: {
         font: { size: 10 },
@@ -266,8 +356,33 @@ export function ObservationsPanel() {
       autosize: true,
       height: 420,
     }),
-    [primaryCol, colorByCol, crosstab],
+    [primaryCol, colorByCol, crosstab, split, facetCol, percent],
   );
+
+  // The waffle: one bar's make-up, or every cell's, by the stacked column.
+  const waffle = useMemo(() => {
+    if (!crosstab || !waffleKey) return null;
+    const idx = stackOrder.map((v) => crosstab.col_values.indexOf(v));
+    let counts: number[];
+    let title: string;
+    if (waffleKey === ALL_CELLS) {
+      counts = idx.map((ci) => crosstab.counts.reduce((a, row) => a + (row[ci] ?? 0), 0));
+      title = `All cells by ${colorByCol}`;
+    } else {
+      const bar = bars.find((b) => barLabel(b) === waffleKey);
+      if (!bar) return null;
+      counts = idx.map((ci) => bar.counts[ci] ?? 0);
+      title = `${primaryCol} ${barLabel(bar)} by ${colorByCol}`;
+    }
+    return {
+      title,
+      categories: stackOrder.map((name, i) => ({
+        name,
+        count: counts[i] ?? 0,
+        color: rgbCss(colorByColor(name)),
+      })),
+    };
+  }, [crosstab, waffleKey, stackOrder, bars, primaryCol, colorByCol, colorByColor]);
 
   // No dataset
   if (!dataset || !datasetId) {
@@ -551,26 +666,132 @@ export function ObservationsPanel() {
 
           {/* Composition bar chart */}
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            {crosstab && (
-              <div className="mb-2 flex justify-end">
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-slate-500">
+              <label className="flex items-center gap-1.5">
+                Sort
+                <select
+                  aria-label="Sort bars"
+                  value={barSort}
+                  onChange={(e) => setBarSort(e.target.value as BarSort)}
+                  className={ctlCls}
+                >
+                  <option value="category">Stored order</option>
+                  <option value="name">Name</option>
+                  <option value="size">Size</option>
+                  {crosstab && <option value="share">Share of…</option>}
+                </select>
+              </label>
+              {crosstab && barSort === "share" && (
+                <select
+                  aria-label="Share of"
+                  value={shareOf || stackOrder[0] || ""}
+                  onChange={(e) => setShareOf(e.target.value)}
+                  className={ctlCls}
+                >
+                  {stackOrder.map((v) => (
+                    <option key={v} value={v}>
+                      % {v}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <div className="flex overflow-hidden rounded-md border border-slate-300" role="group" aria-label="Bar values">
+                {(["Counts", "%"] as const).map((label) => {
+                  const on = (label === "%") === percent;
+                  return (
+                    <button
+                      key={label}
+                      aria-pressed={on}
+                      onClick={() => setPercent(label === "%")}
+                      className={`px-2 py-1 ${on ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              {crosstab && (
+                <label className="flex items-center gap-1.5">
+                  Split by
+                  <select
+                    aria-label="Split bars by"
+                    value={facetCol}
+                    onChange={(e) => setSplitCol(e.target.value)}
+                    className={ctlCls}
+                  >
+                    <option value="">None</option>
+                    {allCategoricalCols
+                      .filter((c) => c.name !== primaryCol && c.name !== colorByCol && c.n_unique <= 20)
+                      .map((c) => (
+                        <option key={c.name} value={c.name}>
+                          {c.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+              {perSample && !(primaryCol === perSample.donor && facetCol === perSample.condition) && (
+                <button
+                  onClick={showPerSample}
+                  title={`One bar per ${perSample.donor}${perSample.condition ? `, split by ${perSample.condition}` : ""}`}
+                  className="rounded-md border border-primary/30 px-2 py-1 font-medium text-primary hover:bg-primary/10"
+                >
+                  Per {perSample.donor}
+                  {perSample.condition ? ` by ${perSample.condition}` : ""}
+                </button>
+              )}
+              {crosstab && (
+                <label className="flex items-center gap-1.5">
+                  Waffle
+                  <select
+                    aria-label="Waffle of"
+                    value={waffleKey}
+                    onChange={(e) => setWaffleKey(e.target.value)}
+                    className={`${ctlCls} max-w-[12rem]`}
+                  >
+                    <option value="">Off</option>
+                    <option value={ALL_CELLS}>All cells</option>
+                    {bars.map((b) => (
+                      <option key={barLabel(b)} value={barLabel(b)}>
+                        {barLabel(b)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {crosstab && (
                 <button
                   onClick={handleExportCrosstab}
-                  title="Export composition matrix as CSV"
-                  className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                  title="Export the composition as shown (counts or %) as CSV"
+                  className="ml-auto flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
                 >
                   <Download className="h-3.5 w-3.5" />
                   CSV
                 </button>
-              </div>
-            )}
+              )}
+            </div>
             <Plot
               data={compositionTraces}
               layout={compositionLayout}
               config={plotConfig(`composition_${primaryCol}`)}
+              onClick={(e) => {
+                // A bar's click shows its waffle.
+                const i = e.points?.[0]?.pointIndex;
+                const bar = typeof i === "number" ? bars[i] : undefined;
+                if (crosstab && bar) setWaffleKey(barLabel(bar));
+              }}
               useResizeHandler
               className="w-full"
               style={{ width: "100%" }}
             />
+            {crosstab && !waffle && (
+              <p className="mt-1 text-[11px] text-slate-400">Click a bar to see its make-up as a 10 x 10 waffle.</p>
+            )}
+            {waffle && (
+              <div className="mt-3 border-t border-slate-100 pt-3">
+                <WaffleChart categories={waffle.categories} title={waffle.title} />
+              </div>
+            )}
           </div>
         </>
       )}

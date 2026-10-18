@@ -79,14 +79,15 @@ async def get_crosstab(
     dataset_id: str,
     row: str = Query(...),
     col: str = Query(...),
+    facet: str = Query(default="", description="Optional third column: counts per its value too"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
-    """Return a cross-tabulation of two obs columns."""
+    """Return a cross-tabulation of two obs columns (optionally per value of a third)."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
     try:
-        return adaptor.get_obs_crosstab(row, col)
+        return adaptor.get_obs_crosstab(row, col, facet or None)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

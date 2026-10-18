@@ -9,6 +9,12 @@ vi.mock("@/components/unified/ClusterDistanceHeatmap", () => ({
   ),
 }));
 
+vi.mock("@/components/unified/PerDonorExpression", () => ({
+  PerDonorExpression: ({ gene, groupColumn, noGeneReason }: { gene: string | null; groupColumn: string; noGeneReason?: string }) => (
+    <div data-testid="per-donor">{`${gene ?? noGeneReason ?? "none"} by ${groupColumn}`}</div>
+  ),
+}));
+
 import { UnifiedBottomPanel } from "./UnifiedBottomPanel";
 
 const COLUMNS = [{ name: "cluster", n_unique: 13 }];
@@ -54,6 +60,24 @@ describe("UnifiedBottomPanel", () => {
     useUnifiedViewStore.setState({ bottomPanelOpen: true, bottomView: "distances" });
     renderPanel({ distanceColumn: "" });
     expect(screen.queryByRole("button", { name: "Cluster distances" })).toBeNull();
+    expect(screen.getByTestId("violin")).toBeInTheDocument();
+  });
+
+  it("switches the distribution to one value per donor for the gene on the scatter", () => {
+    useUnifiedViewStore.setState({
+      bottomPanelOpen: true,
+      bottomView: "distribution",
+      scatterOverlay: { type: "expression", gene: "ISG15" },
+    });
+    renderPanel({ violinGroupColumn: "cluster" });
+    expect(screen.getByTestId("violin")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Per donor" }));
+    expect(screen.queryByTestId("violin")).toBeNull();
+    expect(screen.getByTestId("per-donor")).toHaveTextContent("ISG15 by cluster");
+    // A score is per cell: no gene, and a reason.
+    act(() => useUnifiedViewStore.setState({ scatterOverlay: { type: "score", name: "IFN" } }));
+    expect(screen.getByTestId("per-donor")).toHaveTextContent("a score is per cell");
+    fireEvent.click(screen.getByRole("button", { name: "Cells" }));
     expect(screen.getByTestId("violin")).toBeInTheDocument();
   });
 });

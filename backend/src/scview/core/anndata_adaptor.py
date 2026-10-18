@@ -753,19 +753,38 @@ class AnnDataAdaptor:
     # Cross-tabulation
     # ------------------------------------------------------------------
 
-    def get_obs_crosstab(self, row_col: str, col_col: str) -> dict:
+    def get_obs_crosstab(self, row_col: str, col_col: str, facet_col: str | None = None) -> dict:
         """Return a cross-tabulation of two obs columns.
 
-        Returns dict with keys: row_values, col_values, counts (2-D list).
+        Returns dict with keys: row_values, col_values, counts (2-D list). With
+        ``facet_col`` (e.g. the condition, for one bar per sample split by
+        condition) also facet_values and facet_counts[facet][row][col], on the
+        same rows and columns.
         """
         row_series = self.get_obs_column(row_col)
         col_series = self.get_obs_column(col_col)
         ct = pd.crosstab(row_series, col_series)
-        return {
+        out = {
             "row_values": [str(v) for v in ct.index.tolist()],
             "col_values": [str(v) for v in ct.columns.tolist()],
             "counts": ct.values.tolist(),
         }
+        if facet_col:
+            facet = self.get_obs_column(facet_col)
+            if isinstance(facet.dtype, pd.CategoricalDtype):
+                present = set(facet.dropna().astype(str))
+                facet_values = [str(c) for c in facet.cat.categories if str(c) in present]
+            else:
+                facet_values = sorted({str(v) for v in facet.dropna()})
+            labels = facet.astype(str).where(facet.notna())
+            out["facet_values"] = facet_values
+            out["facet_counts"] = [
+                pd.crosstab(row_series[(labels == f).to_numpy()], col_series[(labels == f).to_numpy()])
+                .reindex(index=ct.index, columns=ct.columns, fill_value=0)
+                .astype(int).values.tolist()
+                for f in facet_values
+            ]
+        return out
 
     # ------------------------------------------------------------------
     # Lifecycle
