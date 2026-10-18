@@ -278,7 +278,7 @@ function GroupedQc({ data }: { data: QcByGroup }) {
             data={traces}
             layout={{
               autosize: true,
-              margin: { l: 54, r: 10, t: 8, b: 40 },
+              margin: { l: 54, r: 10, t: 28, b: 40 }, // room for the modebar above the legend
               xaxis: { title: { text: data.scatter.x_label, font: { size: 10 } }, tickfont: { size: 9 } },
               yaxis: { title: { text: data.scatter.y_label, font: { size: 10 } }, tickfont: { size: 9 } },
               showlegend: true,

@@ -232,7 +232,7 @@ export function PseudobulkQc({ datasetId, refreshKey = 0 }: { datasetId: string;
                   data={traces}
                   layout={{
                     autosize: true,
-                    margin: { l: 50, r: 10, t: 8, b: 40 },
+                    margin: { l: 50, r: 10, t: 28, b: 40 }, // room for the modebar above the legend
                     xaxis: { title: { text: pcLabel(1, data.explained_variance), font: { size: 10 } }, tickfont: { size: 9 }, zeroline: false },
                     yaxis: { title: { text: pcLabel(2, data.explained_variance), font: { size: 10 } }, tickfont: { size: 9 }, zeroline: false },
                     showlegend: true,
