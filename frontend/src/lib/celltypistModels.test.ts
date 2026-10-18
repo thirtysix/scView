@@ -23,7 +23,7 @@ describe("CellTypist model choice", () => {
 
   it("defaults to a model of the dataset's species", () => {
     expect(defaultModel(CATALOG, "human", "Immune_All_Low.pkl")).toBe("Immune_All_Low.pkl");
-    expect(defaultModel(CATALOG, "mouse", "Immune_All_Low.pkl")).toBe("Adult_Mouse_Gut.pkl");
+    expect(defaultModel(CATALOG, "mouse", "Immune_All_Low.pkl")).toBe(""); // no general mouse model: user picks
     expect(defaultModel(CATALOG, "unknown", "Immune_All_Low.pkl")).toBe("Immune_All_Low.pkl");
     expect(defaultModel([m("Immune_All_Low.pkl", "human")], "mouse", "Immune_All_Low.pkl")).toBe("Immune_All_Low.pkl");
   });

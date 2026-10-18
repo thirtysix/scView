@@ -53,14 +53,18 @@ describe("AnnotationControl (CellTypist)", () => {
       Promise.resolve({ columns: ["ct"], dataset_species: "mouse", result: column ? summary() : null }));
   });
 
-  it("lists mouse models first for a mouse dataset, defaults to one, and warns on a human pick", async () => {
+  it("lists mouse models first for a mouse dataset, preselects none, and warns on a human pick", async () => {
     render(<AnnotationControl onAnnotate={vi.fn()} running={false} species="mouse" />);
     fireEvent.click(screen.getByText("CellTypist (reference)"));
     const select = (await screen.findByLabelText("CellTypist model")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("Adult_Mouse_Gut.pkl"));
+    // No general mouse model: nothing preselected, and Annotate waits for a pick.
+    await waitFor(() => expect(select.value).toBe(""));
+    expect(screen.getByText("Annotate cell types").closest("button")).toBeDisabled();
     const groups = Array.from(select.querySelectorAll("optgroup")).map((g) => g.label);
-    expect(groups).toEqual(["Mouse models (this dataset)", "Human models"]);
+    expect(groups).toEqual(["Mouse models (this dataset) · tissue-specific, no tissue match guaranteed", "Human models"]);
     expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.change(select, { target: { value: "Adult_Mouse_Gut.pkl" } });
+    expect(screen.getByText("Annotate cell types").closest("button")).toBeEnabled();
     fireEvent.change(select, { target: { value: "Immune_All_Low.pkl" } });
     expect(screen.getByRole("alert")).toHaveTextContent(/looks mouse, but this model was trained on human cells/);
   });
@@ -70,6 +74,9 @@ describe("AnnotationControl (CellTypist)", () => {
     render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="mouse" />);
     fireEvent.click(screen.getByText("CellTypist (reference)"));
     fireEvent.change(screen.getByDisplayValue("paul15_clusters_celltypeAnno"), { target: { value: "ct" } });
+    const select = (await screen.findByLabelText("CellTypist model")) as HTMLSelectElement;
+    await waitFor(() => expect(select.querySelector("optgroup")).not.toBeNull());
+    fireEvent.change(select, { target: { value: "Adult_Mouse_Gut.pkl" } });
     fireEvent.click(screen.getByText("Annotate cell types"));
     await waitFor(() => expect(onAnnotate).toHaveBeenCalled());
     expect(onAnnotate.mock.calls[0]![0]).toMatchObject({ annotation_method: "celltypist", annotation_target: "ct" });

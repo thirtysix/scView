@@ -24,7 +24,11 @@ export function orderModels(models: CellTypistModel[], species: DatasetSpecies |
 }
 
 /** The model to start from: the server's default when it suits the dataset's
- *  species (or the species is unknown), else the first model of that species. */
+ *  species (or the species is unknown). Otherwise none (""): every mouse model
+ *  is tissue-specific and there is no general mouse blood model, so the user
+ *  picks the one nearest their tissue rather than inheriting the first listed.
+ *  A catalog without a model of that species keeps the server default (the
+ *  picker then warns about the mismatch). */
 export function defaultModel(
   models: CellTypistModel[],
   species: DatasetSpecies | undefined,
@@ -33,7 +37,7 @@ export function defaultModel(
   if (!known(species)) return serverDefault;
   const def = models.find((m) => m.model === serverDefault);
   if (def?.species === species) return serverDefault;
-  return models.find((m) => m.species === species)?.model ?? serverDefault;
+  return models.some((m) => m.species === species) ? "" : serverDefault;
 }
 
 /** A warning when the picked model's species is not the dataset's ("" when it

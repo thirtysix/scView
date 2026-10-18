@@ -240,10 +240,17 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
             className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
           >
             {models.length === 0 && <option value={model}>{model.replace(/\.pkl$/, "")}</option>}
+            {model === "" && (
+              <option value="" disabled>
+                Pick the {species ?? ""} model nearest your tissue…
+              </option>
+            )}
             {groups.map((g) => (
               <optgroup
                 key={g.species}
-                label={`${SPECIES_GROUP[g.species]}${g.species === species ? " (this dataset)" : ""}`}
+                label={`${SPECIES_GROUP[g.species]}${g.species === species ? " (this dataset)" : ""}${
+                  g.species === "mouse" ? " · tissue-specific, no tissue match guaranteed" : ""
+                }`}
               >
                 {g.models.map((m) => (
                   <option key={m.model} value={m.model}>
@@ -261,7 +268,8 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           ) : (
             <p className="mt-1 text-[11px] text-slate-400">
               CellTypist models are tissue-specific; a mismatch mislabels cells.
-              {species === "mouse" && " Mouse models are listed first; none covers every tissue."}
+              {species === "mouse" &&
+                " There is no general mouse model (none covers every tissue): pick the one nearest yours."}
             </p>
           )}
         </div>
@@ -271,7 +279,8 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
         <button
           type="button"
           onClick={handleAnnotate}
-          disabled={busy || !groupby}
+          disabled={busy || !groupby || (method === "celltypist" && !model)}
+          title={method === "celltypist" && !model ? "Pick a reference model first" : undefined}
           className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Tags className="h-4 w-4" />}
