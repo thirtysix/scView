@@ -34,7 +34,8 @@ import { cameraFromViewState } from "@/lib/session";
 import { prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
-import { getDataset, renameObsCategory } from "@/api/datasets";
+import { getDataset, renameObsCategory, setCategoryOrder } from "@/api/datasets";
+import { cellsInCategories, togglePicked } from "@/lib/categoryOrder";
 import { subclusterGroup } from "@/api/clustering";
 import { getActivityCells, type ActivityRef } from "@/api/activity";
 import { activityLabel } from "@/lib/activity";
@@ -77,6 +78,9 @@ export function UnifiedViewPanel() {
   const clearSelection = useSelectionStore((s) => s.clearSelection);
   const setHighlight = useSelectionStore((s) => s.setHighlight);
   const setPanel = useViewStore((s) => s.setPanel);
+  // Legend groups picked together (Ctrl/Cmd/Shift-click), for the current colouring.
+  const [picked, setPicked] = useState<string[]>([]);
+  useEffect(() => setPicked([]), [colorBy, datasetId]);
   const askCopilot = useViewStore((s) => s.askCopilot);
 
   const activeSubtab = useUnifiedViewStore((s) => s.activeSubtab);
@@ -489,6 +493,7 @@ export function UnifiedViewPanel() {
   const handleSelectionComplete = useCallback(
     (indices: Set<number>) => {
       setHighlight(null);
+      setPicked([]);
       if (indices.size === 0) clearSelection();
       else setSelection(indices);
     },
@@ -508,6 +513,7 @@ export function UnifiedViewPanel() {
       if (e.key === "Escape") {
         clearSelection();
         handleClearOverlay();
+        setPicked([]);
       }
     };
     window.addEventListener("keydown", handler);
@@ -592,6 +598,7 @@ export function UnifiedViewPanel() {
   // --- Legend click (category selection) ---
   const handleCategoryClick = useCallback(
     (cat: string) => {
+      setPicked([]);
       if (!colors || !categories) return;
       const catIndex = categories.indexOf(cat);
       if (catIndex < 0) return;
@@ -612,6 +619,36 @@ export function UnifiedViewPanel() {
     },
     [colors, categories, selectedIndices, setSelection, clearSelection, colorBy, setHighlight],
   );
+
+  // --- Legend multi-select: Ctrl/Cmd/Shift-click picks several groups, shown
+  // together on the scatter; "Select these cells" makes them the selection ---
+  const handleCategoryToggle = useCallback(
+    (cat: string) => {
+      setPicked((prev) => {
+        // Starting from a plain-clicked group (still selected) carries it into the picks.
+        const { highlightedGroup: hl, selectedCellIndices } = useSelectionStore.getState();
+        const carry = prev.length === 0 && selectedCellIndices && hl?.column === colorBy && hl.value !== cat;
+        const start = carry ? [hl.value] : prev;
+        return togglePicked(start, cat);
+      });
+    },
+    [colorBy],
+  );
+  const pickedCells = useMemo(
+    () =>
+      picked.length > 0 && colors && categories && colorColumnName === colorBy
+        ? cellsInCategories(colors, categories, picked)
+        : null,
+    [picked, colors, categories, colorColumnName, colorBy],
+  );
+  const handleSelectPicked = useCallback(() => {
+    if (!pickedCells) return;
+    setHighlight(null);
+    setSelection(pickedCells);
+    setPicked([]);
+  }, [pickedCells, setHighlight, setSelection]);
+  // The picks stand in for the selection on the plots while there are any.
+  const shownSelection = pickedCells ?? selectedIndices;
 
   // A group highlighted elsewhere (an Observations row, the co-pilot's "highlight
   // the NK cluster") selects its cells here once the plot is coloured by its
@@ -650,9 +687,33 @@ export function UnifiedViewPanel() {
     [datasetId, colorBy, setCurrentDataset, queryClient],
   );
 
+  const refreshDataset = useDatasetRefresh();
+  // Save the colour column's category order (legend order mode), then refresh
+  // the dataset so the legend, violins and dot plots list the groups that way.
+  const [orderBusy, setOrderBusy] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
+  const handleOrderChange = useCallback(
+    async (change: { order: string[] } | { sort: "natural" | "size" }) => {
+      if (!datasetId || !colorBy) return;
+      setOrderBusy(true);
+      setOrderError(null);
+      try {
+        await setCategoryOrder(datasetId, colorBy, change);
+        await refreshDataset(datasetId, colorBy);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message.replace(/^API error \d+: /, "") : String(err);
+        let detail = msg;
+        try { detail = String(JSON.parse(msg).detail ?? msg); } catch { /* plain text */ }
+        setOrderError(`Could not save the order: ${detail}`);
+      } finally {
+        setOrderBusy(false);
+      }
+    },
+    [datasetId, colorBy, refreshDataset],
+  );
+
   // Split one group into sub-clusters on its own graph (saved as <column>_sub),
   // then colour by the result.
-  const refreshDataset = useDatasetRefresh();
   const [split, setSplit] = useState<{ cat: string; status: string; error?: boolean } | null>(null);
   const handleSubcluster = useCallback(
     async (cat: string) => {
@@ -765,7 +826,7 @@ export function UnifiedViewPanel() {
                 colorType={effectiveColorType}
                 pointSize={pointSize}
                 opacity={opacity}
-                selectedIndices={selectedIndices}
+                selectedIndices={shownSelection}
                 background={plotBackground}
                 maxRenderedCells={maxRenderedCells}
                 externalViewState={viewState}
@@ -802,7 +863,7 @@ export function UnifiedViewPanel() {
                 dimensions={dimensions}
                 colorValues={effectiveColorValues}
                 colorType={effectiveColorType}
-                selectedIndices={selectedIndices}
+                selectedIndices={shownSelection}
                 onHover={handleHover}
                 exportName={scatterExportName}
                 exportLegend={scatterExportLegend}
@@ -890,8 +951,19 @@ export function UnifiedViewPanel() {
                   onAskAbout={handleAskAboutCategory}
                   onSubcluster={handleSubcluster}
                   splittingCategory={split?.cat || null}
+                  onCategoryToggle={handleCategoryToggle}
+                  pickedCategories={picked}
+                  pickedCellCount={pickedCells?.size}
+                  onSelectPicked={handleSelectPicked}
+                  onClearPicked={() => setPicked([])}
+                  onReorder={(order) => handleOrderChange({ order })}
+                  onSortCategories={(sort) => handleOrderChange({ sort })}
+                  orderBusy={orderBusy}
                 />
               ) : null}
+              {orderError && (
+                <p role="alert" className="mt-1 max-w-[220px] text-[11px] text-red-600">{orderError}</p>
+              )}
               {split?.status && (
                 <p
                   role={split.error ? "alert" : "status"}

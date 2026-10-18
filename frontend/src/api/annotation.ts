@@ -99,6 +99,71 @@ export function runAnnotationConfidence(
   });
 }
 
+/** A CellTypist catalog model; `species` is read from its name and description. */
+export interface CellTypistModel {
+  model: string;
+  description: string;
+  species: "human" | "mouse" | "other";
+}
+
+export interface CellTypistModels {
+  default: string;
+  models: CellTypistModel[];
+}
+
+export function getCellTypistModels(): Promise<CellTypistModels> {
+  return apiFetch("/annotation/celltypist-models");
+}
+
+/** One label of a CellTypist run (core/celltypist_fit.py). */
+export interface CellTypistLabelRow {
+  label: string;
+  n_cells: number;
+  /** Median of the cells' highest class probability */
+  median_confidence: number | null;
+  /** Percent of the label's cells below the low-confidence cut */
+  pct_below: number | null;
+  low_confidence: boolean;
+  /** Percent of its cells whose own best class is this label (majority-vote runs) */
+  pct_agree?: number;
+}
+
+export interface CellTypistSummary {
+  column: string;
+  confidence_column: string;
+  percell_column: string | null;
+  model: string | null;
+  model_species: string | null;
+  dataset_species: string | null;
+  /** Share (0-1) of the model's genes in the dataset; null for runs before it was kept */
+  gene_overlap: number | null;
+  n_model_genes: number | null;
+  n_shared_genes: number | null;
+  n_cells: number;
+  median_confidence: number | null;
+  pct_below: number | null;
+  n_low_labels: number;
+  labels: CellTypistLabelRow[];
+  /** Species mismatch, low gene overlap, low median confidence: plain sentences */
+  cautions: string[];
+  low_confidence: number;
+  min_overlap: number;
+  note: string;
+}
+
+export interface CellTypistInfo {
+  /** Columns with a recorded CellTypist run */
+  columns: string[];
+  dataset_species: "human" | "mouse" | "unknown";
+  result: CellTypistSummary | null;
+}
+
+/** The CellTypist runs of a dataset, and the summary of `column`'s if asked. */
+export function getCellTypistSummary(datasetId: string, column?: string): Promise<CellTypistInfo> {
+  const q = column ? `?column=${encodeURIComponent(column)}` : "";
+  return apiFetch(`/datasets/${datasetId}/annotation/celltypist${q}`);
+}
+
 /** Copy `column` with the cells its last check rejected set to "Unknown". */
 export function makeUnknownColumn(
   datasetId: string,
