@@ -28,7 +28,8 @@ export function useSexCheck(datasetId: string, column: string | null | undefined
     let cancelled = false;
     getSexCheck(datasetId, column ?? null)
       .then((d) => {
-        if (!cancelled) setData(d);
+        // Only a sex-check payload: the table must not break on anything else.
+        if (!cancelled) setData(d && Array.isArray(d.groups) && d.summary ? d : null);
       })
       .catch(() => {
         if (!cancelled) setData(null);
