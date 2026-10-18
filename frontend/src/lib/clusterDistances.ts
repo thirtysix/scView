@@ -16,14 +16,18 @@ export function nonlinearEmbedding(key: string | null | undefined): "UMAP" | "t-
   return null;
 }
 
-/** The heatmap in the clustering's order, rows top to bottom. The diagonal is
- *  null: a group's 0 to itself would stretch the colour scale. */
-export function orderedHeatmap(d: GroupDistances): { labels: string[]; sizes: number[]; z: (number | null)[][] } {
+/** The heatmap of `matrix` (the distances, or another group x group matrix
+ *  such as the correlation) in the clustering's order, rows top to bottom. The
+ *  diagonal is null: a group's 0 (or 1) to itself would stretch the colour scale. */
+export function orderedHeatmap(
+  d: GroupDistances,
+  matrix: number[][] = d.distances,
+): { labels: string[]; sizes: number[]; z: (number | null)[][] } {
   const order = d.order.length === d.groups.length ? d.order : d.groups.map((_, i) => i);
   return {
     labels: order.map((i) => d.groups[i]!),
     sizes: order.map((i) => d.sizes[i]!),
-    z: order.map((i) => order.map((j) => (i === j ? null : d.distances[i]![j]!))),
+    z: order.map((i) => order.map((j) => (i === j ? null : matrix[i]![j]!))),
   };
 }
 

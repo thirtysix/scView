@@ -432,7 +432,8 @@ async def group_distances(
 ):
     """Distances between the centroids of ``column``'s groups in the PCs the
     neighbour graph was built on (Harmony PCs when it used them; ``representation``
-    says which), with the groups' order under complete-linkage clustering."""
+    says which), with the groups' order under complete-linkage clustering, the
+    clustering's tree (scipy linkage rows) and the centroids' Pearson correlation."""
     adata = (await _adata(dm, dataset_id)).adata
     if column not in adata.obs.columns:
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")

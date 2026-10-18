@@ -10,7 +10,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from scview.core import haemoglobin, marker_specificity, protein
+from scview.core import expression_range, haemoglobin, marker_specificity, protein
 from scview.core.ora_background import resolve_markers_key
 from scview.core.species import detect_species
 from scview.core.uns_keys import markers_column, repair_slash_keys
@@ -173,6 +173,7 @@ class AnnDataAdaptor:
         self._qc_cache: dict | None = None
         self._qc_cells: dict | None = None
         self._fingerprint: tuple[pd.Index, str] | None = None  # (obs_names hashed, hash)
+        self._ranges: dict[tuple, tuple[float, float]] = {}  # (layer, id, shape) -> colour range
 
     @property
     def adata(self) -> ad.AnnData:
@@ -567,7 +568,13 @@ class AnnDataAdaptor:
         """Mean expression and fraction of expressing cells per group, for the
         marker dot plot and heatmap. Genes missing from the layer are dropped.
 
-        ``mean`` and ``fraction`` are indexed [group][gene].
+        ``mean``, ``mean_expressing`` and ``fraction`` are indexed [group][gene].
+        ``mean`` is over all of a group's cells, so it mixes how many cells
+        express a gene with how much; ``mean_expressing`` is over the cells
+        with a value above 0 only (0 when none), so it carries the level alone
+        (Seurat / scanpy's ``mean_only_expressed``). ``scale_range`` is the
+        layer's fixed colour range (``core/expression_range.py``), the same
+        whatever genes and groups are asked for.
         """
         if layer is None:
             layer = self.default_expression_layer()
@@ -580,15 +587,32 @@ class AnnDataAdaptor:
             groups = sorted(str(v) for v in col.dropna().unique())
         labels = col.astype(str).to_numpy()
         expr = self.get_expression(genes, layer=layer) if genes else np.zeros((len(labels), 0))
-        mean, fraction = [], []
+        mean, mean_expressing, fraction = [], [], []
         for g in groups:
             sub = expr[labels == g]
+            expressing = sub > 0
+            n_expressing = expressing.sum(axis=0)
+            level = np.where(sub > 0, sub, 0).sum(axis=0) / np.maximum(n_expressing, 1)
             mean.append([round(float(v), 4) for v in sub.mean(axis=0)])
-            fraction.append([round(float(v), 4) for v in (sub > 0).mean(axis=0)])
+            mean_expressing.append([round(float(v), 4) for v in level])
+            fraction.append([round(float(v), 4) for v in expressing.mean(axis=0)])
         return {
             "groupby": groupby, "layer": layer, "groups": groups, "genes": genes,
-            "mean": mean, "fraction": fraction,
+            "mean": mean, "mean_expressing": mean_expressing, "fraction": fraction,
+            "scale_range": list(self.layer_scale_range(layer)),
         }
+
+    def layer_scale_range(self, layer: str) -> tuple[float, float]:
+        """The layer's fixed colour range for marker plots, cached per matrix."""
+        source = (
+            self.adata.obsm[PROTEIN_LAYERS[layer]]
+            if layer in PROTEIN_LAYERS and protein.has_protein(self.adata)
+            else self._get_matrix_for_layer(layer)
+        )
+        key = (layer, id(source), tuple(source.shape))
+        if key not in self._ranges:
+            self._ranges[key] = expression_range.layer_range(self._get_matrix_for_layer(layer))
+        return self._ranges[key]
 
     # ------------------------------------------------------------------
     # Clustering helpers

@@ -81,6 +81,34 @@ def test_representation_without_a_graph_or_with_its_space_missing():
     assert (rep, how, X.shape[1]) == ("X_pca_harmony", "missing", 4)  # n_pcs belongs to the missing space
 
 
+def test_the_tree_is_the_linkage_behind_the_order_and_the_correlation_is_of_the_centroids():
+    from scipy.cluster.hierarchy import leaves_list
+
+    a = _adata({"n_neighbors": 15})
+    out = cd.group_distances(a, "cluster")
+    tree = np.array(out["tree"], dtype=float)
+    assert tree.shape == (2, 4)  # n - 1 merges of [a, b, height, size]
+    assert leaves_list(tree).tolist() == out["order"]
+    # The first merge joins A (index 1) and B (index 2) at their distance; the
+    # root's height is the complete-linkage (largest) distance to C.
+    assert sorted(tree[0, :2].tolist()) == [1, 2]
+    assert tree[0, 2] == pytest.approx(out["distances"][1][2], abs=1e-3)
+    assert tree[1, 2] == pytest.approx(max(out["distances"][0][1], out["distances"][0][2]), abs=1e-3)
+    assert tree[-1, 3] == 3
+    centroids = np.array([_centroid(a, "X_pca", g) for g in out["groups"]])
+    R = np.array(out["correlation"])
+    assert np.allclose(R, np.corrcoef(centroids), atol=1e-3)
+    assert np.allclose(np.diag(R), 1) and np.allclose(R, R.T)
+    assert out["correlation_method"] == "pearson"
+    json.dumps(out)
+
+
+def test_a_flat_centroid_correlates_zero_not_nan():
+    R = cd.centroid_correlation(np.array([[1.0, 1.0, 1.0], [1.0, 2.0, 3.0], [3.0, 2.0, 1.0]]))
+    assert R[0].tolist() == [1.0, 0.0, 0.0]
+    assert R[1, 2] == pytest.approx(-1.0)
+
+
 def test_errors_without_pcs_or_with_too_few_or_too_many_groups(monkeypatch):
     a = _adata()
     del a.obsm["X_pca"]
@@ -130,6 +158,7 @@ async def test_distances_endpoint(client, dataset_manager):
     body = r.json()
     assert body["groups"] == ["C", "A", "B"] and body["representation"] == "X_pca_harmony"
     assert len(body["distances"]) == 3 and len(body["order"]) == 3
+    assert len(body["tree"]) == 2 and len(body["correlation"]) == 3
     r = await client.get(f"{API}/datasets/{did}/clustering/distances", params={"column": "nope"})
     assert r.status_code == 404
     r = await client.get(f"{API}/datasets/{did}/clustering/distances", params={"column": "one"})
