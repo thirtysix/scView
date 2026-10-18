@@ -10,7 +10,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from scview.core import expression_range, haemoglobin, marker_specificity, protein
+from scview.core import category_order, expression_range, haemoglobin, marker_specificity, protein
 from scview.core.ora_background import resolve_markers_key
 from scview.core.species import detect_species
 from scview.core.uns_keys import markers_column, repair_slash_keys
@@ -261,6 +261,10 @@ class AnnDataAdaptor:
                 # branch and omit values beyond the cap.
                 if len(cats) <= 100:
                     info["values"] = [str(c) for c in cats]
+                    # Palette slot per value once a reorder pinned colours to labels.
+                    slots = category_order.color_slots(self.adata, col)
+                    if slots is not None:
+                        info["color_slots"] = slots
             elif pd.api.types.is_bool_dtype(series):
                 # A two-level categorical; the colour codes are int(value), see embeddings.
                 info["n_unique"] = int(series.nunique())

@@ -6,6 +6,13 @@ the embedding endpoint sends (so a group's palette colour follows its position,
 as in scanpy). ``reorder`` sets it from an explicit order or a quick sort; a text
 column becomes a categorical in that order. A scanpy ``uns['<column>_colors']``
 list is permuted with it so it stays matched to its categories.
+
+A reorder does not recolour the groups: each category keeps its palette slot
+(its position before the first reorder), recorded in
+``uns['scview_color_slots'][column]`` as the labels it was written for and their
+slots. ``color_slots`` serves it only while those labels are still the column's
+categories (in any order), so a column rewritten later (re-clustered, merged by
+another route) falls back to colour by position.
 """
 
 from __future__ import annotations
@@ -16,7 +23,10 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from scview.core.uns_keys import encode
+
 Sort = Literal["natural", "size"]
+SLOTS_KEY = "scview_color_slots"
 _DIGITS = re.compile(r"(\d+)")
 
 
@@ -43,6 +53,46 @@ def _categories(col: pd.Series) -> list:
     ):
         raise OrderError("Only a categorical or text column has an order to set.")
     return list(pd.unique(col.dropna()))
+
+
+def color_slots(adata, column: str) -> list[int] | None:
+    """The palette slot of each of ``column``'s categories, in category order, or
+    None when colours follow position (no reorder yet, or the column changed since)."""
+    entry = (adata.uns.get(SLOTS_KEY) or {}).get(encode(column))
+    col = adata.obs[column] if column in adata.obs.columns else None
+    if not isinstance(entry, dict) or col is None or not isinstance(col.dtype, pd.CategoricalDtype):
+        return None
+    labels = [str(x) for x in np.asarray(entry.get("labels", []), dtype=object)]
+    slots = [int(x) for x in np.asarray(entry.get("slots", []))]
+    cats = [str(c) for c in col.cat.categories]
+    if len(labels) != len(slots) or sorted(labels) != sorted(cats):
+        return None
+    by_label = dict(zip(labels, slots))
+    return [by_label[c] for c in cats]
+
+
+def _save_slots(adata, column: str, labels: list[str], slots: list[int]) -> None:
+    store = dict(adata.uns.get(SLOTS_KEY) or {})
+    store[encode(column)] = {"labels": np.asarray(labels, dtype=str), "slots": np.asarray(slots, dtype=np.int64)}
+    adata.uns[SLOTS_KEY] = store
+
+
+def follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
+    """Keep a pinned colour with its category through a rename; on a merge the
+    merged-away label's slot goes and the target keeps its own."""
+    entry = (adata.uns.get(SLOTS_KEY) or {}).get(encode(column))
+    if not isinstance(entry, dict):
+        return
+    labels = [str(x) for x in np.asarray(entry.get("labels", []), dtype=object)]
+    slots = [int(x) for x in np.asarray(entry.get("slots", []))]
+    if old not in labels or len(labels) != len(slots):
+        return
+    i = labels.index(old)
+    if merge:
+        del labels[i], slots[i]
+    else:
+        labels[i] = new
+    _save_slots(adata, column, labels, slots)
 
 
 def reorder(adata, column: str, order: list[str] | None = None, sort: Sort | None = None) -> list[str]:
@@ -79,6 +129,10 @@ def reorder(adata, column: str, order: list[str] | None = None, sort: Sort | Non
         raise OrderError("Give either an order or a sort ('natural' or 'size').")
 
     new = [by_name[n] for n in order]
+    # Colours stay with their labels: the slot each category had before this reorder.
+    had = color_slots(adata, column)
+    old_slots = dict(zip(names, had if had is not None else range(len(names))))
+    _save_slots(adata, column, order, [old_slots[n] for n in order])
     if isinstance(col.dtype, pd.CategoricalDtype):
         adata.obs[column] = col.cat.reorder_categories(new)
         perm = [cats.index(c) for c in new]

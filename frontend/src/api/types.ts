@@ -32,6 +32,8 @@ export interface ObsColumnInfo {
   dtype: string;
   n_unique: number;
   values?: string[];
+  /** Palette slot per value, once a saved order pinned colours to labels (core/category_order.py). */
+  color_slots?: number[];
 }
 
 export interface EmbeddingInfo {

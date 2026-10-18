@@ -228,11 +228,18 @@ export function plotlyColorscale(name: ColormapName | undefined): [number, strin
   return stops.map((c, i) => [i / (stops.length - 1), `rgb(${c[0]},${c[1]},${c[2]})`]);
 }
 
+/**
+ * RGBA for category code `index`. `slots` (the column's `color_slots`) maps a
+ * code to its palette slot when a saved order pinned colours to labels; without
+ * it the slot is the code.
+ */
 export function mapCategoryToColor(
-  index: number,
+  code: number,
   paletteName?: CategoricalPaletteName,
+  slots?: readonly number[],
 ): [number, number, number, number] {
   const palette = getPalette(paletteName);
+  const index = slots?.[code] ?? code;
   const safeIdx = Number.isFinite(index)
     ? ((Math.floor(index) % palette.length) + palette.length) % palette.length
     : 0;

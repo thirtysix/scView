@@ -42,6 +42,40 @@ def test_explicit_order_keeps_every_cell_and_moves_its_colour():
     assert list(a.uns["cl_colors"]) == ["#0000cc", "#00bb00", "#aa0000", "#dddddd"]
 
 
+def test_a_reorder_keeps_each_category_on_its_colour_slot():
+    a = _adata()
+    assert co.color_slots(a, "cl") is None  # colours follow position until a reorder
+    co.reorder(a, "cl", order=["1", "2", "10", "empty"])
+    assert co.color_slots(a, "cl") == [2, 1, 0, 3]
+    co.reorder(a, "cl", sort="size")  # ["2", "1", "10", "empty"]
+    assert co.color_slots(a, "cl") == [1, 2, 0, 3]
+    co.reorder(a, "donor", sort="natural")  # a text column starts from first-seen order
+    assert co.color_slots(a, "donor") == [2, 0, 1]
+    # Re-clustered (other labels): back to colour by position.
+    a.obs["cl"] = pd.Categorical(["a"] * a.n_obs, categories=["a", "b", "c", "d"])
+    assert co.color_slots(a, "cl") is None
+
+
+def test_rename_and_merge_keep_pinned_colours():
+    a = _adata()
+    co.reorder(a, "cl", order=["1", "2", "10", "empty"])
+    a.obs["cl"] = a.obs["cl"].cat.rename_categories({"2": "two"})
+    co.follow_rename(a, "cl", "2", "two", merge=False)
+    assert co.color_slots(a, "cl") == [2, 1, 0, 3]
+    a.obs["cl"] = a.obs["cl"].cat.remove_categories(["empty"])
+    co.follow_rename(a, "cl", "empty", "1", merge=True)
+    slots = dict(zip(a.obs["cl"].cat.categories, co.color_slots(a, "cl")))
+    assert slots == {"1": 2, "two": 1, "10": 0}
+
+
+def test_slashes_in_a_column_name_survive_a_write(tmp_path):
+    a = _adata()
+    a.obs["T/NK"] = a.obs["cl"]
+    co.reorder(a, "T/NK", sort="natural")
+    a.write_h5ad(tmp_path / "s.h5ad")
+    assert co.color_slots(ad.read_h5ad(tmp_path / "s.h5ad"), "T/NK") == [2, 1, 0, 3]
+
+
 def test_quick_sorts():
     a = _adata()
     assert co.reorder(a, "cl", sort="natural") == ["1", "2", "10", "empty"]
@@ -108,7 +142,9 @@ async def test_endpoint_saves_the_order_for_every_view(client, dataset_manager):
     assert r.status_code == 200, r.text
     dataset_manager.evict(did)  # read back from disk
     info = (await client.get(f"{API}/datasets/{did}")).json()
-    assert next(c for c in info["obs_columns"] if c["name"] == "cl")["values"] == ["empty", "10", "2", "1"]
+    cl = next(c for c in info["obs_columns"] if c["name"] == "cl")
+    assert cl["values"] == ["empty", "10", "2", "1"]
+    assert cl["color_slots"] == [3, 0, 1, 2]  # each label kept its first colour
 
 
 async def test_endpoint_errors(client, dataset_manager):

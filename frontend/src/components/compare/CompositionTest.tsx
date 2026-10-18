@@ -189,6 +189,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
           cols.find((c) => c.name === result?.condition_key)?.values ?? [],
           k,
           paletteName,
+          cols.find((c) => c.name === result?.condition_key)?.color_slots,
         ),
       ),
     [datasetId, result, cols, paletteName],

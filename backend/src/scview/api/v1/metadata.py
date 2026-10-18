@@ -262,6 +262,7 @@ async def rename_obs_category(
             else:
                 adata.obs[column] = col.cat.rename_categories({body.old: new})
             _follow_rename(adata, column, body.old, new, merge)
+            category_order.follow_rename(adata, column, body.old, new, merge)
             # A full write (markers are edited in place), beside the file then swapped in.
             write_derived(adata, output_path)
 

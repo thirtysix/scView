@@ -25,6 +25,24 @@ describe("category colours", () => {
     }
   });
 
+  it("keeps each category's colour through a saved reorder (color_slots)", () => {
+    const before = ORDER.map((c) => categoryColor("ds1", "cell_type", ORDER, c));
+    // Reordered to T cell, NK, Monocyte, B cell; the backend pins the old slots.
+    const reordered = ["T cell", "NK", "Monocyte", "B cell"];
+    const slots = [3, 2, 1, 0];
+    ORDER.forEach((c, i) => {
+      expect(categoryColor("ds1", "cell_type", reordered, c, undefined, slots)).toEqual(before[i]);
+    });
+    // The scatter (code -> slot) agrees with every panel.
+    reordered.forEach((c, code) => {
+      expect([...categoryColor("ds1", "cell_type", reordered, c, undefined, slots)]).toEqual(
+        mapCategoryToColor(code, undefined, slots).slice(0, 3),
+      );
+    });
+    // A label the order does not list takes a slot no listed category uses.
+    expect(categorySlot("ds1", "cell_type", reordered, "Unknown", slots)).toBe(4);
+  });
+
   it("does not depend on the order a panel lists the categories in", () => {
     const fromViolin = ["NK", "B cell"].map((c) => categoryColor("ds1", "cell_type", ORDER, c));
     const fromTable = ["T cell", "B cell", "NK"].map((c) => categoryColor("ds1", "cell_type", ORDER, c));

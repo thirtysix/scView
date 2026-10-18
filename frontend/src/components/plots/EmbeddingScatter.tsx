@@ -26,6 +26,8 @@ interface EmbeddingScatterProps {
   positions: Float32Array | null;
   colorValues: Float32Array | Int32Array | null;
   colorType: "categorical" | "continuous";
+  /** Palette slot per category code (the column's `color_slots`); default: the code. */
+  categorySlots?: readonly number[];
   pointSize?: number;
   opacity?: number;
   onHover?: (info: { index: number; x: number; y: number } | null) => void;
@@ -130,6 +132,7 @@ export function EmbeddingScatter({
   positions,
   colorValues,
   colorType,
+  categorySlots,
   pointSize = 2,
   opacity = 0.8,
   onHover,
@@ -310,7 +313,7 @@ export function EmbeddingScatter({
           rgba[i * 4 + 2] = 225;
           rgba[i * 4 + 3] = Math.round(opacity * 0.55 * 255);
         } else {
-          const [r, g, b] = mapCategoryToColor(catIdx, categoricalPalette);
+          const [r, g, b] = mapCategoryToColor(catIdx, categoricalPalette, categorySlots);
           rgba[i * 4] = r;
           rgba[i * 4 + 1] = g;
           rgba[i * 4 + 2] = b;
@@ -343,7 +346,7 @@ export function EmbeddingScatter({
     }
 
     return rgba;
-  }, [colorValues, colorType, opacity, selectedIndices, totalCells, dimToGray, categoricalPalette, continuousColormap]);
+  }, [colorValues, colorType, categorySlots, opacity, selectedIndices, totalCells, dimToGray, categoricalPalette, continuousColormap]);
 
   // The cells drawn: all of them, or a seeded sample (sorted) over maxRenderedCells...
   const sample = useMemo(() => sampleCellIndices(totalCells, maxRenderedCells), [totalCells, maxRenderedCells]);
@@ -675,7 +678,7 @@ export function EmbeddingScatter({
           index: tooltip.index,
           type: colorType,
           categories,
-          colorOf: (code) => mapCategoryToColor(code, categoricalPalette).slice(0, 3) as [number, number, number],
+          colorOf: (code) => mapCategoryToColor(code, categoricalPalette, categorySlots).slice(0, 3) as [number, number, number],
         });
         return (
           <div

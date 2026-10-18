@@ -282,8 +282,10 @@ export function UnifiedViewPanel() {
   const categoryColors = useMemo<[number, number, number][] | undefined>(() => {
     if (!categories) return undefined;
     // ColorLegend wants RGB; mapCategoryToColor returns RGBA — drop the alpha.
-    return categories.map((_, i) => mapCategoryToColor(i, paletteName).slice(0, 3) as [number, number, number]);
-  }, [categories, paletteName]);
+    return categories.map(
+      (_, i) => mapCategoryToColor(i, paletteName, obsColumn?.color_slots).slice(0, 3) as [number, number, number],
+    );
+  }, [categories, paletteName, obsColumn]);
 
   // --- Determine what to pass to scatter ---
   const effectiveColorValues = scatterOverlay ? overlayValues : colors;
@@ -824,6 +826,7 @@ export function UnifiedViewPanel() {
                 positions={positions}
                 colorValues={effectiveColorValues}
                 colorType={effectiveColorType}
+                categorySlots={scatterOverlay ? undefined : obsColumn?.color_slots}
                 pointSize={pointSize}
                 opacity={opacity}
                 selectedIndices={shownSelection}
@@ -863,6 +866,7 @@ export function UnifiedViewPanel() {
                 dimensions={dimensions}
                 colorValues={effectiveColorValues}
                 colorType={effectiveColorType}
+                categorySlots={scatterOverlay ? undefined : obsColumn?.color_slots}
                 selectedIndices={shownSelection}
                 onHover={handleHover}
                 exportName={scatterExportName}

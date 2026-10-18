@@ -4,6 +4,7 @@ import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { mapCategoryToColor } from "@/lib/colors";
+import { useCategorySlots } from "@/hooks/useCategoryColors";
 import { useObsRevision } from "@/stores/obsRevisionStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -38,6 +39,7 @@ export function ClusterReference({
   onViewStateChange?: (vs: Record<string, unknown>) => void;
 }) {
   const paletteName = useSettingsStore((s) => s.categoricalPalette);
+  const slots = useCategorySlots(column);
   const [clusterValues, setClusterValues] = useState<Int32Array | null>(null);
   const revision = useObsRevision(datasetId, column); // refetch after hand labels
   const highlightedGroup = useSelectionStore((s) => s.highlightedGroup);
@@ -120,6 +122,7 @@ export function ClusterReference({
           positions={positions}
           colorValues={clusterValues}
           colorType="categorical"
+          categorySlots={slots}
           dimensions={dimensions}
           pointSize={1.5}
           selectedIndices={selectedIndices}
@@ -132,7 +135,7 @@ export function ClusterReference({
       </div>
       <div className="flex flex-wrap gap-1 p-2">
         {categories.map((name, idx) => {
-          const [r, g, b] = mapCategoryToColor(idx, paletteName);
+          const [r, g, b] = mapCategoryToColor(idx, paletteName, slots);
           const active = highlight === idx;
           return (
             <button
