@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
+import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { exportFilename } from "@/lib/exportFilename";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
@@ -78,6 +79,7 @@ export function SplitScatterGrid({
   const colormap = useSettingsStore((s) => s.continuousColormap);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const pipelineRunning = useSettingsStore((s) => s.pipelineRunning);
+  const embeddingOk = useEmbeddingReady(datasetId, embedding);
   const showContext = useSplitViewStore((s) => s.showContext);
   const setShowContext = useSplitViewStore((s) => s.setShowContext);
   const setSplitBy = useSplitViewStore((s) => s.setSplitBy);
@@ -90,7 +92,7 @@ export function SplitScatterGrid({
   const { data: buffer, error } = useQuery({
     queryKey: ["embedding", datasetId, embedding, column],
     queryFn: () => fetchEmbeddingBinary(datasetId, embedding, column),
-    enabled: !!datasetId && !!embedding && !!column && !pipelineRunning,
+    enabled: embeddingOk && !!column && !pipelineRunning,
     staleTime: 5 * 60 * 1000,
     gcTime: 60 * 1000,
   });
