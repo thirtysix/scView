@@ -16,7 +16,7 @@ from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
 from scview.core.assessor import assess_preprocessing, recorded_normalization_method
-from scview.core import cluster_qc, doublets, qc_filter, qc_groups, qc_report
+from scview.core import cluster_qc, doublets, qc_filter, qc_groups, qc_report, sex_check
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
@@ -149,6 +149,36 @@ async def get_qc_by_group(
     except Exception as e:
         logger.error("QC by group failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"QC by group failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/qc/sex
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/sex")
+async def get_sex_check(
+    dataset_id: str,
+    column: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Each sample's sex from its expression (XIST vs Y-chromosome genes, core/sex_check.py):
+    female / male / mixed / ambiguous / undetermined with the evidence, compared with any
+    sex metadata column, plus warnings for mixed samples, mismatches (possible swaps) and
+    sex x condition confounding. ``column`` names the samples (default: detected)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    if column and column not in adaptor.adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
+    try:
+        # Reads a few gene columns and every cell's total counts: off the loop.
+        return await asyncio.to_thread(sex_check.sex_check, adaptor.adata, column or None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Sex check failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Sex check failed: {e}")
 
 
 # ---------------------------------------------------------------------------

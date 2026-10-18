@@ -3,7 +3,7 @@
 Deterministic facts come first (``build_facts``): dataset size, the per-cell
 gene / count / mito distributions, doublets, normalisation state (including the
 wrong-scale warning), filtering, the study design (conditions, donors per
-condition, batches) and the per-cluster QC flags, each with a citation tag. A
+condition, batches, each sample's sex from expression) and the per-cluster QC flags, each with a citation tag. A
 few rules turn those facts into concerns and next steps. The LLM only writes
 them up in four fixed sections and sees nothing else (one call, no history).
 
@@ -28,7 +28,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 from scview.core.replicates import donor_candidates, pick_donor
-from scview.core import cluster_qc
+from scview.core import cluster_qc, sex_check
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
 from scview.core.assistant import DEEPINFRA_BASE_URL, DEFAULT_MODEL, ChatSource
@@ -277,6 +277,26 @@ def build_facts(adaptor) -> QCFacts:
             step("qc:design", f"Treat '{hit.condition}' comparisons as exploratory: with each "
                               f"'{hit.batch}' holding one '{hit.condition}', no analysis can "
                               "separate the two.")
+    # --- Sex from expression, per sample (core/sex_check.py) ---
+    try:
+        sex = sex_check.sex_check(adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("qc report: sex check failed: %s", exc)
+        sex = None
+    if sex is not None:
+        line, sex_concerns = sex_check.report_lines(sex)
+        f.overview.append(_fact("qc:sex", line))
+        for text in sex_concerns[:2]:
+            concern("qc:sex", text)
+        if any(c["kind"] == "confounded" for c in sex["confounding"]):
+            step("qc:sex", "Treat condition differences in sex-linked genes as sex, not condition "
+                           "(XIST, Y genes); with sex confounded no analysis can separate them.")
+        elif sex["confounding"]:
+            step("qc:sex", "Add sex as a covariate when comparing the conditions (or check that "
+                           "sex-linked genes are not among the top DE genes).")
+        if any(r["mismatch"] for r in sex["groups"]):
+            step("qc:sex", f"Check the samples whose expression disagrees with "
+                           f"'{sex['metadata_column']}' for a sample swap before comparing donors.")
     if batches and not state.batch_correction.done:
         b = batches[0]
         step("qc:design", f"If cells separate by '{b}' rather than biology on the UMAP, run "

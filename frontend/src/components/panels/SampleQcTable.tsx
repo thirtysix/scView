@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { FilterGroupLoss, FilterPreview, MadThresholds, SampleFlag } from "@/api/qc";
+import type { SexCheck } from "@/api/sampleQc";
 import { bound, pct } from "@/lib/qcThresholds";
+import { SexCaption, SexChip } from "@/components/panels/SampleSexCheck";
 
 export const SAMPLE_FLAG_LABELS: Record<SampleFlag, string> = {
   few_cells: "Few cells",
@@ -121,8 +123,18 @@ export function SampleThresholds({ mad }: { mad: MadThresholds }) {
 /** Each sample's cells and median genes, UMIs and % mito, shaded per column, with
  *  what the current thresholds remove from it and flags for a sample whose median
  *  is far from the others' (or that has few cells). */
-function SampleMedians({ grouping, hasMt }: { grouping: NonNullable<FilterPreview["samples"]>; hasMt: boolean }) {
+function SampleMedians({
+  grouping,
+  hasMt,
+  sex,
+}: {
+  grouping: NonNullable<FilterPreview["samples"]>;
+  hasMt: boolean;
+  /** The sex check over the same samples (its column must match). */
+  sex?: SexCheck | null;
+}) {
   const rows = grouping.groups;
+  const sexOf = new Map((sex && sex.column === grouping.column ? sex.groups : []).map((g) => [g.name, g]));
   const max = {
     cells: columnMax(rows, (g) => g.n_cells),
     genes: columnMax(rows, (g) => g.median_genes),
@@ -157,6 +169,11 @@ function SampleMedians({ grouping, hasMt }: { grouping: NonNullable<FilterPrevie
           <th className="px-1 text-right font-medium" title="Cells the current thresholds remove">
             Removed
           </th>
+          {sexOf.size > 0 && (
+            <th className="px-1 font-medium" title="Sex from expression: XIST vs Y-chromosome genes">
+              Sex
+            </th>
+          )}
           <th className="pl-1 font-medium">Flags</th>
         </tr>
       </thead>
@@ -187,6 +204,11 @@ function SampleMedians({ grouping, hasMt }: { grouping: NonNullable<FilterPrevie
             >
               {g.n_removed.toLocaleString()} ({pct(g.fraction)})
             </td>
+            {sexOf.size > 0 && (
+              <td className="px-1">
+                {sexOf.get(g.name) && <SexChip group={sexOf.get(g.name)!} metaColumn={sex!.metadata_column} />}
+              </td>
+            )}
             <td className="pl-1">
               <span className="flex flex-wrap gap-0.5">
                 {(g.flags ?? []).map((f, i) => (
@@ -211,6 +233,7 @@ function SampleMedians({ grouping, hasMt }: { grouping: NonNullable<FilterPrevie
           <td className="px-1 text-right">{bound(t.median_counts)}</td>
           {mito && <td className="px-1 text-right">{bound(t.median_pct_mt, 1)}</td>}
           <td />
+          {sexOf.size > 0 && <td />}
           <td />
         </tr>
       </tfoot>
@@ -224,7 +247,16 @@ function SampleMedians({ grouping, hasMt }: { grouping: NonNullable<FilterPrevie
  * shaded per column, what the current thresholds remove from it, and range flags.
  * In MAD mode a second view lists each sample's own thresholds.
  */
-export function SampleQcTable({ preview, mad }: { preview: FilterPreview; mad: MadThresholds | null }) {
+export function SampleQcTable({
+  preview,
+  mad,
+  sex = null,
+}: {
+  preview: FilterPreview;
+  mad: MadThresholds | null;
+  /** Each sample's sex from expression: a Sex column and a caption with the evidence. */
+  sex?: SexCheck | null;
+}) {
   const [view, setView] = useState<"medians" | "thresholds">("medians");
   const grouping = preview.samples;
   const shown = mad ? view : "medians";
@@ -277,7 +309,7 @@ export function SampleQcTable({ preview, mad }: { preview: FilterPreview; mad: M
       ) : (
         <>
           <div className="max-h-72 overflow-auto">
-            <SampleMedians grouping={grouping} hasMt={preview.has_mt} />
+            <SampleMedians grouping={grouping} hasMt={preview.has_mt} sex={sex} />
           </div>
           <p className="text-[10px] text-slate-400">
             Medians per cell. Shading runs from 0 to the column&apos;s highest value; a flag marks a median over 3
@@ -285,6 +317,7 @@ export function SampleQcTable({ preview, mad }: { preview: FilterPreview; mad: M
           </p>
         </>
       )}
+      {sex && (sex.column === (grouping?.column ?? null) || !grouping) && <SexCaption sex={sex} />}
     </div>
   );
 }

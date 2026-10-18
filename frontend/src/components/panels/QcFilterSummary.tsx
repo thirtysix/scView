@@ -11,6 +11,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { qcGroupOptions } from "@/lib/qcGroups";
 import { bound, pct, thresholdMode } from "@/lib/qcThresholds";
 import { SampleQcTable } from "@/components/panels/SampleQcTable";
+import { useSexCheck } from "@/components/panels/SampleSexCheck";
 
 const DEBOUNCE_MS = 150;
 const ROWS = 6; // per table, more behind "show all"
@@ -225,6 +226,9 @@ export function QcFilterSummary({
   const request = useRef(0);
   const key = JSON.stringify(thresholds);
   const mode = thresholdMode(thresholds);
+  // Each sample's sex from expression, for the per-sample table: asked once the
+  // samples are known, and again only when they change (not per threshold).
+  const sex = useSexCheck(datasetId, preview?.samples?.column ?? null, refreshKey, preview !== null);
 
   useEffect(() => {
     const id = ++request.current;
@@ -333,7 +337,7 @@ export function QcFilterSummary({
           or Reprocess from Scratch).
         </p>
       </div>
-      <SampleQcTable preview={preview} mad={mad} />
+      <SampleQcTable preview={preview} mad={mad} sex={sex} />
     </>
   );
 }
