@@ -58,3 +58,26 @@ export async function rerunStep(
     body: JSON.stringify({ edited_step, params }),
   });
 }
+
+/** How the replay script reproduces a step (backend core/replay_script.py). */
+export type ReplayStatus = "exact" | "approximate" | "recorded" | "not_replayable" | "unknown";
+
+export interface RecipeStep {
+  commit_id?: string | null;
+  step: string;
+  params: Record<string, unknown>;
+  tool?: string | null;
+  timestamp?: string | null;
+  scview_version?: string | null;
+  effect?: { n_cells: number; n_genes: number } | null;
+  replay?: { status: ReplayStatus; note: string };
+}
+
+export interface Recipe {
+  recipe: RecipeStep[];
+  source: ProvSource;
+}
+
+export async function getRecipe(id: string): Promise<Recipe> {
+  return apiFetch<Recipe>(`/datasets/${id}/recipe`);
+}

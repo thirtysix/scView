@@ -18,6 +18,7 @@ import {
 } from "@/api/provenance";
 import { getDataset } from "@/api/datasets";
 import { paramText } from "@/lib/provenanceParams";
+import { RecipeViewer } from "@/components/panels/RecipeViewer";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 
@@ -229,6 +230,11 @@ export function ProvenancePanel() {
             </div>
           )}
         </div>
+      )}
+
+      {history.length > 0 && (
+        // Keyed on the step count: a re-run adds steps, and the recipe is fetched again.
+        <RecipeViewer key={`${dataset.id}:${history.length}`} datasetId={dataset.id} />
       )}
 
       {history.length > 0 && (

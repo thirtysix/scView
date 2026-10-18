@@ -15,6 +15,12 @@ vi.mock("@/components/unified/PerDonorExpression", () => ({
   ),
 }));
 
+vi.mock("@/components/unified/SelectionHistogram", () => ({
+  SelectionHistogram: ({ groupColumn }: { groupColumn?: string }) => (
+    <div data-testid="histogram">{groupColumn ?? "no grouping"}</div>
+  ),
+}));
+
 import { UnifiedBottomPanel } from "./UnifiedBottomPanel";
 
 const COLUMNS = [{ name: "cluster", n_unique: 13 }];
@@ -61,6 +67,19 @@ describe("UnifiedBottomPanel", () => {
     renderPanel({ distanceColumn: "" });
     expect(screen.queryByRole("button", { name: "Cluster distances" })).toBeNull();
     expect(screen.getByTestId("violin")).toBeInTheDocument();
+  });
+
+  it("switches the distribution to selection-vs-rest histograms, with or without violin data", () => {
+    useUnifiedViewStore.setState({ bottomPanelOpen: true, bottomView: "distribution" });
+    renderPanel({ violinData: {}, violinGroupColumn: undefined });
+    // Per donor needs a grouping; the histogram does not (a selection is enough).
+    expect(screen.queryByRole("button", { name: "Per donor" })).toBeNull();
+    expect(screen.getByText("No data")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Histogram" }));
+    expect(screen.getByTestId("histogram")).toHaveTextContent("no grouping");
+    expect(screen.queryByText("No data")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cells" }));
+    expect(screen.queryByTestId("histogram")).toBeNull();
   });
 
   it("switches the distribution to one value per donor for the gene on the scatter", () => {
