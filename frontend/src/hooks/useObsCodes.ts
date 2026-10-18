@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useEmbeddingReady } from "./useEmbeddingReady";
 
 /**
  * Per-cell category codes of one obs column, from the embedding buffer that
@@ -15,10 +16,11 @@ export function useObsCodes(
   column: string | null | undefined,
 ): { codes: Int32Array | null; error: boolean } {
   const pipelineRunning = useSettingsStore((s) => s.pipelineRunning);
+  const ready = useEmbeddingReady(datasetId, embedding);
   const { data: buffer, error } = useQuery({
     queryKey: ["embedding", datasetId, embedding, column],
     queryFn: () => fetchEmbeddingBinary(datasetId!, embedding, column!),
-    enabled: !!datasetId && !!embedding && !!column && !pipelineRunning,
+    enabled: ready && !!column && !pipelineRunning,
     staleTime: 5 * 60 * 1000,
     gcTime: 60 * 1000,
   });

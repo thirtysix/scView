@@ -111,7 +111,7 @@ export interface GseaSide {
 }
 
 export interface GseaResponse {
-  rank_metric: "wilcoxon_score" | "signed_log10_p" | "marker_score";
+  rank_metric: "wilcoxon_score" | "t_score" | "logreg_coef" | "signed_log10_p" | "marker_score";
   rank_metric_label: string;
   n_genes_ranked: number;
   n_excluded_ribo_mito: number;
@@ -133,6 +133,8 @@ export interface GseaResponse {
   /** A stored DE result's detection prefilter: only the genes it tested are ranked. */
   de_min_pct?: number | null;
   de_n_genes_skipped?: number | null;
+  /** A stored DE result's test: wilcoxon | t-test | logreg | pseudobulk. */
+  de_method?: string | null;
 }
 
 /** Preranked GSEA (gseapy prerank) of a DE result or a marker group. */

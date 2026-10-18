@@ -3,6 +3,7 @@ import type { ObsColumnInfo } from "@/api/types";
 import { formatPct } from "@/lib/deDetection";
 import { formatPValue } from "@/lib/formatting";
 import { sizeCautionForCopilot } from "@/lib/transcriptomeSize";
+import { hasPValues } from "@/lib/deMethods";
 
 /** Most-specific first: a donor column beats a per-sample one, which may also
  *  encode the condition (sample = donor x condition still works, unpaired). */
@@ -48,7 +49,8 @@ export function suggestReplicateColumn(cols: ObsColumnInfo[]): string {
 
 /** What the DE table calls significant; the enrichment hand-off uses the same rule. */
 export function isSignificant(g: DEGene, pThreshold: number, fcThreshold: number): boolean {
-  return g.pval_adj <= pThreshold && Math.abs(g.logfoldchange) >= fcThreshold;
+  // No p-value (logistic regression): nothing is significant, nothing pretends to be.
+  return g.pval_adj != null && g.pval_adj <= pThreshold && Math.abs(g.logfoldchange) >= fcThreshold;
 }
 
 /** The gene lists an enrichment of a DE result tests. */
@@ -108,6 +110,9 @@ export function describeComparison(c: DEComparison, r: DEResponse): string {
   return text;
 }
 
+/** The cell-level tests as a sentence names them (Wilcoxon otherwise). */
+const COPILOT_TEST_NAMES: Record<string, string> = { "t-test": "Welch t-test", logreg: "logistic regression" };
+
 function describeTest(c: DEComparison, r: DEResponse): string {
   const where = c.scope ? ` within ${c.scope}` : "";
   const cells = `${num(r.n_selected)} vs ${num(r.n_rest)} cells`;
@@ -128,16 +133,23 @@ function describeTest(c: DEComparison, r: DEResponse): string {
   const genes = r.min_pct
     ? `; ${num(r.n_genes_tested)} genes detected in at least ${formatPct(r.min_pct)} of either group tested`
     : "";
-  return `${c.a} vs ${c.b}${where}, cell-level Wilcoxon (${cells}${genes}${caveat})`;
+  const noP = hasPValues(r) ? "" : "; no p-values, genes ranked by coefficient";
+  const caveatShown = hasPValues(r) ? caveat : "";
+  const test = COPILOT_TEST_NAMES[r.method ?? ""] ?? "Wilcoxon";
+  return `${c.a} vs ${c.b}${where}, cell-level ${test} (${cells}${genes}${noP}${caveatShown})`;
 }
 
 /** Question about one gene of a DE result. */
 export function deGeneQuestion(c: DEComparison, r: DEResponse, g: DEGene): string {
   const higher = g.logfoldchange >= 0 ? c.a : c.b;
+  const evidence =
+    g.pval_adj != null
+      ? `adjusted p ${formatPValue(g.pval_adj)}`
+      : `logistic regression coefficient ${(g.stat ?? 0).toFixed(3)} (no p-value)`;
   return (
     `In a differential-expression comparison of ${describeComparison(c, r)}, ${g.gene} has ` +
-    `log2 fold change ${g.logfoldchange.toFixed(2)} (higher in ${higher}), adjusted p ` +
-    `${formatPValue(g.pval_adj)}. What is ${g.gene}, and what could this difference mean biologically?`
+    `log2 fold change ${g.logfoldchange.toFixed(2)} (higher in ${higher}), ${evidence}. ` +
+    `What is ${g.gene}, and what could this difference mean biologically?`
   );
 }
 
@@ -152,6 +164,15 @@ export function deResultQuestion(
   const up = significant.filter((g) => g.logfoldchange > 0).slice(0, maxPerSide);
   const down = significant.filter((g) => g.logfoldchange < 0).slice(0, maxPerSide);
   const list = (gs: DEGene[]) => (gs.length ? gs.map((g) => g.gene).join(", ") : "none");
+  if (!hasPValues(r)) {
+    return (
+      `I ran differential expression: ${describeComparison(c, r)}. ` +
+      `${num(significant.length)} of ${num(r.genes.length)} genes have |log2FC| >= ${fcThreshold} ` +
+      `and a coefficient of the same sign. Largest coefficients higher in ${c.a}: ${list(up)}. ` +
+      `Largest coefficients higher in ${c.b}: ${list(down)}. ` +
+      `What biological programmes or cell states do these differences suggest, and what should I check next?`
+    );
+  }
   return (
     `I ran differential expression: ${describeComparison(c, r)}. ` +
     `${num(significant.length)} of ${num(r.genes.length)} genes pass adjusted p <= 0.05 and ` +

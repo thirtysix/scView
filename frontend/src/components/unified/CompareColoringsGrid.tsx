@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
+import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { categoryColor } from "@/lib/categoryColors";
 import { mapCategoryToColor } from "@/lib/colors";
@@ -70,6 +71,7 @@ export function CompareColoringsGrid({
   const palette = useSettingsStore((s) => s.categoricalPalette);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const pipelineRunning = useSettingsStore((s) => s.pipelineRunning);
+  const embeddingOk = useEmbeddingReady(datasetId, embedding);
   const dataset = useDatasetStore((s) => s.currentDataset);
   const setCompareColumns = useSplitViewStore((s) => s.setCompareColumns);
   const labelChoice = useUnifiedViewStore((s) => s.centroidLabels);
@@ -81,7 +83,7 @@ export function CompareColoringsGrid({
     queries: columns.map((column) => ({
       queryKey: ["embedding", datasetId, embedding, column],
       queryFn: () => fetchEmbeddingBinary(datasetId, embedding, column),
-      enabled: !!datasetId && !!embedding && !pipelineRunning,
+      enabled: embeddingOk && !pipelineRunning,
       staleTime: 5 * 60 * 1000,
       gcTime: 60 * 1000,
     })),

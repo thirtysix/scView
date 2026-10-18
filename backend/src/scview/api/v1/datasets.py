@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import Response
 from pydantic import BaseModel
 
+from scview.api.v1.export import file_stem
 from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
-from scview.core import provenance
+from scview.core import provenance, replay_script, run_manifest
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import is_locked
 from scview.core.conversion import trigger_conversion
@@ -232,11 +234,65 @@ async def get_recipe(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Return the ordered, replayable recipe (commit chain of step+params) — a
-    portable record for reproducing this dataset's processing."""
+    portable record for reproducing this dataset's processing — with how the
+    replay script reproduces each step (``replay``: status + note)."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
-    return {"recipe": provenance.recipe(adaptor.adata)}
+    steps = provenance.recipe(adaptor.adata)
+    replay = replay_script.describe(adaptor.adata)
+    for s, r in zip(steps, replay):
+        s["replay"] = r
+    source = provenance.read_provenance(adaptor.adata).get("source") or {}
+    return {"recipe": steps, "source": source}
+
+
+def _recipe_parts(dm: DatasetManager, dataset_id: str) -> tuple[str, list[str]]:
+    info = dm.get_dataset_info(dataset_id) or {}
+    return str(info.get("name") or dataset_id), dm.h5ad_candidates(dataset_id)
+
+
+@router.get("/datasets/{dataset_id}/recipe/script")
+async def get_recipe_script(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """A standalone Python (scanpy) script that replays the recorded steps from
+    the dataset's input file (``core/replay_script.py``), as a download."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    name, candidates = _recipe_parts(dm, dataset_id)
+
+    def _build() -> str:  # hashes the stored input: off the event loop
+        return replay_script.build_script(
+            adaptor.adata, dataset_id=dataset_id, dataset_name=name,
+            input_file=run_manifest.input_file(candidates))
+
+    script = await asyncio.to_thread(_build)
+    filename = f"{file_stem(name)}_replay.py"
+    return Response(content=script, media_type="text/x-python; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/datasets/{dataset_id}/recipe/manifest")
+async def get_recipe_manifest(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """RUN_MANIFEST.json: app and package versions, the dataset and its input
+    (with the stored file's SHA-256), and every recorded step (``core/run_manifest.py``)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    name, candidates = _recipe_parts(dm, dataset_id)
+    manifest = await asyncio.to_thread(
+        run_manifest.build_manifest, adaptor.adata, dataset_id=dataset_id,
+        dataset_name=name, candidates=candidates)
+    filename = f"{file_stem(name)}_RUN_MANIFEST.json"
+    return Response(content=json.dumps(manifest, indent=2, default=str),
+                    media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 class DatasetRenameBody(BaseModel):

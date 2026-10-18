@@ -16,6 +16,7 @@ import { Panel } from "@/components/common/Panel";
 import { PlotGrid } from "@/components/common/PlotGrid";
 import { DoubletCard } from "@/components/panels/DoubletCard";
 import { QcFilterSummary } from "@/components/panels/QcFilterSummary";
+import { PseudobulkQc } from "@/components/panels/PseudobulkQc";
 import { ThresholdHistogram, type RefLine, type ThresholdLine } from "@/components/plots/ThresholdHistogram";
 import { roundTo, thresholdMode } from "@/lib/qcThresholds";
 
@@ -277,7 +278,7 @@ function GroupedQc({ data }: { data: QcByGroup }) {
             data={traces}
             layout={{
               autosize: true,
-              margin: { l: 54, r: 10, t: 8, b: 40 },
+              margin: { l: 54, r: 10, t: 28, b: 40 }, // room for the modebar above the legend
               xaxis: { title: { text: data.scatter.x_label, font: { size: 10 } }, tickfont: { size: 9 } },
               yaxis: { title: { text: data.scatter.y_label, font: { size: 10 } }, tickfont: { size: 9 } },
               showlegend: true,
@@ -512,6 +513,7 @@ export function QcPlots({
           onChange={filter.onChange}
         />
       )}
+      <PseudobulkQc datasetId={datasetId} refreshKey={refreshKey} />
       {data.metrics.doublet_score && (
         <DoubletCard datasetId={datasetId} refreshKey={refreshKey} onApplied={onDoubletsApplied} />
       )}

@@ -1,7 +1,10 @@
 import { create } from "zustand";
 import { DEFAULT_MIN_PCT } from "@/lib/deDetection";
+import type { CellMethod } from "@/lib/deMethods";
 
 export type DEMode = "selection" | "groups";
+/** Between groups: a cell-level test (named "wilcoxon" for older sessions;
+ *  `cellMethod` says which) or pseudobulk. */
 export type DETest = "wilcoxon" | "pseudobulk";
 
 /** What the DE subtab compares and how: kept here, not in the subtab, so the
@@ -21,6 +24,8 @@ export interface DESettings {
   fcThreshold: number;
   /** Cell-level test: fraction of either group's cells a gene must be detected in */
   minPct: number;
+  /** Which cell-level test: Wilcoxon, Welch t-test or logistic regression */
+  cellMethod: CellMethod;
 }
 
 export const DE_DEFAULTS: DESettings = {
@@ -34,6 +39,7 @@ export const DE_DEFAULTS: DESettings = {
   replicateKey: "",
   fcThreshold: 1,
   minPct: DEFAULT_MIN_PCT,
+  cellMethod: "wilcoxon",
 };
 
 interface DESettingsState extends DESettings {

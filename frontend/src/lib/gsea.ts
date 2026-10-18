@@ -13,7 +13,8 @@ import { formatPValue } from "@/lib/formatting";
 
 /** A DE result's genes as the GSEA request sends them: every tested gene. */
 export function gseaGenesFromDE(r: DEResponse): GseaGene[] {
-  // GSEA ranks a Wilcoxon result by its z-score, a pseudobulk one by signed -log10 p.
+  // GSEA ranks a cell-level result by its statistic (Wilcoxon z, Welch t, logistic
+  // regression coefficient), a pseudobulk one by signed -log10 p.
   const useStat = r.method !== "pseudobulk";
   return r.genes.map((g) => ({
     gene: g.gene,

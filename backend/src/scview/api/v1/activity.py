@@ -47,7 +47,8 @@ _MODELS = ObjectCache()
 
 
 class DEActivityRequest(BaseModel):
-    """A DE result's per-gene statistic (Wilcoxon z-score or DESeq2 Wald statistic):
+    """A DE result's per-gene statistic (Wilcoxon z-score, Welch t, logistic
+    regression coefficient or DESeq2 Wald statistic):
     by the id the DE response carried (core/de_results.py), which keeps a whole
     transcriptome out of the request, or as explicit genes and stats."""
 
@@ -231,9 +232,10 @@ async def activity_de(
                 detail="That DE result is no longer kept on the server: run the DE again.",
             )
         genes, stats = stored.profile()
+        prefilter["de_method"] = stored.method
         # Only the genes the DE's detection prefilter let through have a statistic.
         if stored.min_pct is not None:
-            prefilter = {"de_min_pct": stored.min_pct, "de_n_genes_skipped": stored.n_skipped}
+            prefilter.update(de_min_pct=stored.min_pct, de_n_genes_skipped=stored.n_skipped)
     else:
         genes, stats = body.genes, body.stats
     if len(genes) != len(stats):

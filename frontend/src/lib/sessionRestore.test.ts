@@ -115,6 +115,7 @@ function buildWorkspace(selection: "filter" | "lasso") {
     replicateKey: "ind",
     fcThreshold: 2,
     minPct: 0.25,
+    cellMethod: "logreg",
   });
 }
 
@@ -196,6 +197,7 @@ describe("save then open on the same dataset", () => {
     const de = useDESettingsStore.getState();
     expect([de.mode, de.splitBy, de.groupA, de.groupB, de.withinCol, de.withinVal, de.test, de.replicateKey, de.fcThreshold, de.minPct])
       .toEqual(["groups", "stim", "STIM", "CTRL", "cell_type", "NK", "pseudobulk", "ind", 2, 0.25]);
+    expect(de.cellMethod).toBe("logreg");
     // the restored highlight must not overwrite the restored scope
     expect(de.scopedHighlight).toEqual({ column: "cell_type", value: "CD14 Mono" });
   });

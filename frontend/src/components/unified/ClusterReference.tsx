@@ -5,6 +5,7 @@ import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { mapCategoryToColor } from "@/lib/colors";
 import { useCategorySlots } from "@/hooks/useCategoryColors";
+import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 import { useObsRevision } from "@/stores/obsRevisionStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -42,6 +43,7 @@ export function ClusterReference({
   const slots = useCategorySlots(column);
   const [clusterValues, setClusterValues] = useState<Int32Array | null>(null);
   const revision = useObsRevision(datasetId, column); // refetch after hand labels
+  const ready = useEmbeddingReady(datasetId, embedding);
   const highlightedGroup = useSelectionStore((s) => s.highlightedGroup);
   const setHighlightedGroup = useSelectionStore((s) => s.setHighlight);
   // Index of the highlighted group in this column's categories (null when the
@@ -60,7 +62,7 @@ export function ClusterReference({
   );
 
   useEffect(() => {
-    if (!datasetId || !column || !embedding) {
+    if (!ready || !column) {
       setClusterValues(null);
       return;
     }
@@ -79,7 +81,7 @@ export function ClusterReference({
     return () => {
       cancelled = true;
     };
-  }, [datasetId, embedding, column, revision]);
+  }, [ready, datasetId, embedding, column, revision]);
 
   const selectedIndices = useMemo(() => {
     if (highlight == null || !clusterValues) return null;

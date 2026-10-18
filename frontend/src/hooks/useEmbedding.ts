@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 
 import ArrowWorker from "@/workers/arrowDecoder.worker?worker";
 
@@ -38,6 +39,7 @@ export function useEmbedding() {
   const embedding = useSettingsStore((s) => s.embedding);
   const colorBy = useSettingsStore((s) => s.colorBy);
   const pipelineRunning = useSettingsStore((s) => s.pipelineRunning);
+  const ready = useEmbeddingReady(datasetId, embedding);
 
   const workerRef = useRef<Worker | null>(null);
 
@@ -68,7 +70,7 @@ export function useEmbedding() {
   } = useQuery({
     queryKey: ["embedding", datasetId, embedding, colorBy],
     queryFn: () => fetchEmbeddingBinary(datasetId!, embedding, colorBy || undefined),
-    enabled: !!datasetId && !!embedding && embedding !== "" && !pipelineRunning,
+    enabled: ready && !pipelineRunning,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 60 * 1000, // 1 minute — large binary buffers shouldn't linger
   });

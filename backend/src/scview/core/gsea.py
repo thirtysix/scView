@@ -7,7 +7,9 @@ leading edge is the part of the set that drives the score.
 
 The ranking is the test's own statistic where there is one:
 
-- cell-level Wilcoxon DE: scanpy's z-score of the rank-sum test;
+- cell-level Wilcoxon DE: scanpy's z-score of the rank-sum test (Welch
+  t-test: its t statistic; logistic regression: its coefficient, the only
+  ranking it has, as it gives no p-value);
 - pseudobulk DESeq2: ``sign(log2FC) * -log10(p)`` (the DE result carries no
   statistic, and p alone has no direction);
 - a marker group: scanpy's score for the group against the rest.
@@ -57,6 +59,8 @@ _P_FLOOR = 1e-300
 
 RANK_LABELS = {
     "wilcoxon_score": "Wilcoxon statistic (z-score)",
+    "t_score": "Welch t statistic",
+    "logreg_coef": "logistic regression coefficient",
     "signed_log10_p": "sign(log2FC) × −log10(p)",
     "marker_score": "marker score (Wilcoxon z-score vs the rest)",
 }
@@ -111,15 +115,17 @@ def build_ranking(
 
 
 def ranking_from_de(
-    genes: Iterable[Mapping[str, Any]], *, rank_by: str = "auto", exclude_ribo_mito: bool = True
+    genes: Iterable[Mapping[str, Any]], *, rank_by: str = "auto", exclude_ribo_mito: bool = True,
+    score_metric: str = "wilcoxon_score",
 ) -> Ranking:
-    """A DE result's genes ranked by its statistic, else by signed -log10 p."""
+    """A DE result's genes ranked by its statistic (``score_metric`` names it),
+    else by signed -log10 p."""
     rows = list(genes)
     if rank_by == "auto":
         rank_by = "score" if rows and all(_finite(r.get("score")) for r in rows) else "signed_p"
     if rank_by == "score":
         pairs = [(r["gene"], r.get("score")) for r in rows]
-        metric = "wilcoxon_score"
+        metric = score_metric if score_metric in RANK_LABELS else "wilcoxon_score"
     else:
         pairs = []
         for r in rows:
