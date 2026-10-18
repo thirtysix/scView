@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useObsRevisionStore } from "@/stores/obsRevisionStore";
 
 const apiFetch = vi.fn();
 vi.mock("@/api/client", () => ({ apiFetch: (...a: unknown[]) => apiFetch(...a) }));
@@ -82,5 +83,13 @@ describe("MarkerPlot colour scale and dot sizes", () => {
     fireEvent.change(screen.getByLabelText("Colour scale"), { target: { value: "fixed" } });
     expect(lastTraces()[0]!.z).toEqual([[null, 2.5], [3, null]]);
     expect(screen.getByText(/Blank: under 5%/)).toBeInTheDocument();
+  });
+
+  it("refetches when the column's revision changes (a saved category order)", async () => {
+    renderPlot("dotplot");
+    await screen.findByTestId("plot");
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    act(() => useObsRevisionStore.getState().bump("ds1", "leiden"));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
   });
 });

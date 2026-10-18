@@ -890,7 +890,7 @@ export function UnifiedViewPanel() {
                 grid={geneGrid!}
                 positions={positions}
                 dimensions={dimensions}
-                selectedIndices={selectedIndices}
+                selectedIndices={shownSelection}
                 onHover={handleHover}
               />
             )}

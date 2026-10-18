@@ -173,7 +173,7 @@ export function MarkerPlot({
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [datasetId, groupby, picked, layer]);
+  }, [datasetId, groupby, picked, layer, revision]); // revision: a saved category order or label move
 
   if (picked.length === 0) {
     return <p className="py-8 text-center text-sm text-slate-400">No up-regulated marker genes to plot.</p>;
