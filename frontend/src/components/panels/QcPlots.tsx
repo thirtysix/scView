@@ -16,6 +16,7 @@ import { Panel } from "@/components/common/Panel";
 import { PlotGrid } from "@/components/common/PlotGrid";
 import { DoubletCard } from "@/components/panels/DoubletCard";
 import { QcFilterSummary } from "@/components/panels/QcFilterSummary";
+import { PseudobulkQc } from "@/components/panels/PseudobulkQc";
 import { ThresholdHistogram, type RefLine, type ThresholdLine } from "@/components/plots/ThresholdHistogram";
 import { roundTo, thresholdMode } from "@/lib/qcThresholds";
 
@@ -512,6 +513,7 @@ export function QcPlots({
           onChange={filter.onChange}
         />
       )}
+      <PseudobulkQc datasetId={datasetId} refreshKey={refreshKey} />
       {data.metrics.doublet_score && (
         <DoubletCard datasetId={datasetId} refreshKey={refreshKey} onApplied={onDoubletsApplied} />
       )}
