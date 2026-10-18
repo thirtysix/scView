@@ -345,12 +345,12 @@ export function ObservationsPanel() {
         gridcolor: "#f1f5f9",
         ...(percent ? { range: [0, 100] } : {}),
       },
-      legend: {
-        font: { size: 10 },
-        orientation: "h" as const,
-        y: -0.3,
-      },
-      margin: { t: 40, r: 20, b: 100, l: 60 },
+      // A split axis takes two rows of labels plus its title, which a legend
+      // under the plot would overlap: put it on the right instead.
+      legend: split
+        ? { font: { size: 10 }, orientation: "v" as const, x: 1.01, y: 1 }
+        : { font: { size: 10 }, orientation: "h" as const, y: -0.3 },
+      margin: { t: 40, r: split ? 100 : 20, b: split ? 120 : 100, l: 60 },
       paper_bgcolor: "white",
       plot_bgcolor: "white",
       autosize: true,

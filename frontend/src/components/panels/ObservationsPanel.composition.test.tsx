@@ -27,7 +27,8 @@ interface Trace {
   marker: { color: string };
 }
 const traces = () => (plotProps.current?.data ?? []) as Trace[];
-const layout = () => plotProps.current?.layout as { yaxis: { title: { text: string } }; xaxis: { type?: string } };
+const layout = () =>
+  plotProps.current?.layout as { yaxis: { title: { text: string } }; xaxis: { type?: string }; legend: { orientation: string } };
 
 const INFO = {
   id: "kang",
@@ -106,6 +107,7 @@ describe("ObservationsPanel composition bars", () => {
     );
     await waitFor(() => expect(traces().map((t) => t.name)).toEqual(["CD14 Mono", "B"]));
     expect(layout().xaxis.type).toBe("multicategory");
+    expect(layout().legend.orientation).toBe("v"); // clear of the two-row axis labels
     // d2 has no STIM cells, so no bar for it there; donors keep the stored order.
     expect(traces()[0]!.x).toEqual([
       ["CTRL", "CTRL", "CTRL", "STIM", "STIM"],
