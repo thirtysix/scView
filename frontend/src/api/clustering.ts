@@ -176,6 +176,11 @@ export interface GroupDistances {
   metric: string;
   /** Cells without a value (or with non-finite PCs), left out */
   n_left_out: number;
+  /** The clustering behind `order`: scipy linkage rows [a, b, height, size] */
+  tree?: [number, number, number, number][];
+  /** correlation[i][j]: Pearson correlation of the centroids of groups i and j */
+  correlation?: number[][];
+  correlation_method?: string;
 }
 
 export function getGroupDistances(datasetId: string, column: string): Promise<GroupDistances> {

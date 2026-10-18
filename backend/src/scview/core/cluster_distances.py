@@ -8,7 +8,9 @@ different they are (Chari & Pachter 2023, PLoS Comput Biol 19:e1011288, PMID
 distances, so this module measures them there: each group's centroid (the mean
 of its cells' PCs) and the Euclidean distance between every pair of centroids,
 with a complete-linkage clustering of the groups (scanpy's dendrogram default)
-whose leaf order puts similar groups next to each other in a heatmap. On Kang
+whose leaf order puts similar groups next to each other in a heatmap, and the
+tree itself for a dendrogram beside it. The Pearson correlation between the
+centroids (``centroid_correlation``) is given too, in the same space. On Kang
 PBMC it keeps the T and NK, the B and the myeloid clusters in blocks, where
 average linkage let small far-off groups (Eryth, Mk, pDC) split them.
 
@@ -64,13 +66,31 @@ def _groups(labels: pd.Series) -> pd.Categorical:
     return pd.Categorical(labels.astype(str).where(labels.notna()))
 
 
+def centroid_correlation(centroids: np.ndarray) -> np.ndarray:
+    """Pearson correlation between group centroids (rows) across the PCs, as
+    scanpy's ``tl.dendrogram`` computes it. PCs are centred on the mean cell, so
+    this compares how each group differs from the average cell: two groups
+    that move the same way from it correlate. Correlations of mean log
+    expression (over the variable genes) are high for any two groups, because
+    every group shares the overall expression profile: on Kang PBMC by cell type
+    they run 0.48 to 0.95 (B vs CD4 naive T 0.76), where the centred PCs give
+    -0.77 to 0.69 (B vs CD4 naive T 0.09). A flat centroid correlates 0."""
+    with np.errstate(invalid="ignore", divide="ignore"):
+        r = np.corrcoef(centroids)
+    r = np.nan_to_num(np.atleast_2d(r), nan=0.0)
+    np.fill_diagonal(r, 1.0)
+    return r
+
+
 def group_distances(adata, column: str) -> dict:
     """Centroid-to-centroid distances between the groups of ``column`` in the
     graph's PC space, and the groups' order under complete-linkage clustering.
 
     Groups with no cells are left out, and so are cells without a value or with
     non-finite PCs (``n_left_out``). ``distances[i][j]`` pairs ``groups[i]`` and
-    ``groups[j]``; ``order`` lists group indices, similar groups adjacent.
+    ``groups[j]``; ``order`` lists group indices, similar groups adjacent;
+    ``tree`` is the clustering itself (scipy linkage rows) for drawing the
+    dendrogram, and ``correlation`` the Pearson correlation of the centroids.
     """
     if column not in adata.obs.columns:
         raise DistanceError(f"Column '{column}' not found.")
@@ -96,13 +116,19 @@ def group_distances(adata, column: str) -> dict:
     centroids = np.asarray(member @ X) / counts[:, None]
 
     condensed = pdist(centroids)
-    order = leaves_list(linkage(condensed, method=LINKAGE, optimal_ordering=True))
+    tree = linkage(condensed, method=LINKAGE, optimal_ordering=True)
+    order = leaves_list(tree)
     return {
         "column": column,
         "groups": [str(cats.categories[i]) for i in present],
         "sizes": [int(s) for s in sizes[present]],
         "distances": np.round(squareform(condensed), 4).tolist(),
         "order": [int(i) for i in order],
+        # scipy's linkage matrix: row k merges nodes a and b (< n: a group,
+        # else row a - n) at height h (a distance), into a node of `size` groups.
+        "tree": [[int(a), int(b), round(float(h), 4), int(n)] for a, b, h, n in tree],
+        "correlation": np.round(centroid_correlation(centroids), 4).tolist(),
+        "correlation_method": "pearson",
         "representation": rep,
         "n_pcs": int(X.shape[1]),
         "rep_source": how,
