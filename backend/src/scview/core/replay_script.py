@@ -27,6 +27,7 @@ code into the script.
 from __future__ import annotations
 
 import json
+import pprint
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -73,8 +74,10 @@ def comment_text(value: object, limit: int = 300) -> str:
 
 
 def _lit(value: object) -> str:
-    """A Python literal of a JSON value (str, number, bool, None, list, dict)."""
-    return repr(value)
+    """A Python literal of a JSON value (str, number, bool, None, list, dict);
+    a long list or dict wraps over lines (inside its brackets, so still valid
+    wherever it stands)."""
+    return pprint.pformat(value, width=96, sort_dicts=False)
 
 
 def _comment_block(lines: list[str]) -> list[str]:
