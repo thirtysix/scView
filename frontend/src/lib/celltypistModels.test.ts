@@ -12,12 +12,13 @@ const CATALOG = [
 ];
 
 describe("CellTypist model choice", () => {
-  it("lists the dataset's species first, keeping catalog order within each part", () => {
+  it("groups by species, the dataset's first, keeping catalog order within each group", () => {
     expect(orderModels(CATALOG, "mouse").map((x) => x.model)).toEqual([
       "Adult_Mouse_Gut.pkl", "Mouse_Whole_Brain.pkl",
-      "Immune_All_Low.pkl", "Adult_Pig_Hippocampus.pkl", "Healthy_Human_Liver.pkl",
+      "Immune_All_Low.pkl", "Healthy_Human_Liver.pkl", "Adult_Pig_Hippocampus.pkl",
     ]);
-    expect(orderModels(CATALOG, "unknown")).toBe(CATALOG);
+    // Unknown species: still one run per species, so each optgroup appears once.
+    expect(orderModels(CATALOG, "unknown").map((x) => x.species)).toEqual(["human", "human", "mouse", "mouse", "other"]);
   });
 
   it("defaults to a model of the dataset's species", () => {

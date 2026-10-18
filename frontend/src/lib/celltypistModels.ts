@@ -6,10 +6,21 @@ function known(species: DatasetSpecies | undefined): species is "human" | "mouse
   return species === "human" || species === "mouse";
 }
 
-/** The catalog with the dataset's species first, each part in catalog order. */
+const SPECIES_ORDER: CellTypistModel["species"][] = ["human", "mouse", "other"];
+
+/** The catalog grouped by species, the dataset's species first, each group in
+ *  catalog order (the picker draws one optgroup per run of a species, and the
+ *  catalog interleaves them). */
 export function orderModels(models: CellTypistModel[], species: DatasetSpecies | undefined): CellTypistModel[] {
-  if (!known(species)) return models;
-  return [...models.filter((m) => m.species === species), ...models.filter((m) => m.species !== species)];
+  const order = known(species) ? [species, ...SPECIES_ORDER.filter((s) => s !== species)] : SPECIES_ORDER;
+  const rank = (s: CellTypistModel["species"]) => {
+    const i = order.indexOf(s);
+    return i < 0 ? order.length : i;
+  };
+  return models
+    .map((m, i) => ({ m, i }))
+    .sort((a, b) => rank(a.m.species) - rank(b.m.species) || a.i - b.i)
+    .map(({ m }) => m);
 }
 
 /** The model to start from: the server's default when it suits the dataset's
