@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { MAX_GRID_GENES } from "@/lib/geneCoexpression";
+import { MAX_GRID_GENES, type BlendScheme } from "@/lib/geneCoexpression";
 
 // The genes picked in the Expression subtab's "Several genes" section, and how
 // the gene views show them. A store, so the picks survive the remount
@@ -18,6 +18,9 @@ interface GeneGridState {
   /** Blend: quantile of the expressing cells each gene's scale tops out at */
   blendClip: number;
   setBlendClip: (clip: number) => void;
+  /** Blend colours: Seurat red/green, or magenta/green for red-green colour blindness */
+  blendScheme: BlendScheme;
+  setBlendScheme: (scheme: BlendScheme) => void;
   /** The stacked violin / gene-vs-gene views are open below the picks */
   showViolins: boolean;
   setShowViolins: (show: boolean) => void;
@@ -45,6 +48,8 @@ export const useGeneGridStore = create<GeneGridState>((set) => ({
   setSharedScale: (sharedScale) => set({ sharedScale }),
   blendClip: 0.99,
   setBlendClip: (blendClip) => set({ blendClip }),
+  blendScheme: "seurat",
+  setBlendScheme: (blendScheme) => set({ blendScheme }),
   showViolins: false,
   setShowViolins: (showViolins) => set({ showViolins }),
   showScatter: false,

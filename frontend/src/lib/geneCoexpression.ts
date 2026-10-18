@@ -155,23 +155,42 @@ export function scaled(v: number, s: { lo: number; hi: number }): number {
   return t < 0 ? 0 : t > 1 ? 1 : t;
 }
 
-/** The four corners of the blend map (Seurat FeaturePlot blend: red, green, yellow, light grey). */
-export const BLEND_CORNERS: { neither: RGB; a: RGB; b: RGB; both: RGB } = {
-  neither: [211, 211, 211],
-  a: [255, 0, 0],
-  b: [0, 255, 0],
-  both: [255, 255, 0],
+export type BlendScheme = "seurat" | "magenta-green";
+export interface BlendCorners {
+  neither: RGB;
+  a: RGB;
+  b: RGB;
+  both: RGB;
+}
+
+/**
+ * The four corners of each blend map. "seurat" is Seurat's FeaturePlot blend
+ * (red, green, yellow, light grey), which red-green colour blindness cannot
+ * separate; "magenta-green" keeps the two genes apart for it, with both genes
+ * dark (an additive white would vanish on the white plot).
+ */
+export const BLEND_SCHEMES: Record<BlendScheme, BlendCorners> = {
+  seurat: { neither: [211, 211, 211], a: [255, 0, 0], b: [0, 255, 0], both: [255, 255, 0] },
+  "magenta-green": { neither: [211, 211, 211], a: [230, 0, 230], b: [0, 190, 0], both: [30, 30, 30] },
 };
 
+export const BLEND_SCHEME_OPTIONS: { value: BlendScheme; label: string; title: string }[] = [
+  { value: "seurat", label: "Red / green", title: "Seurat's blend: A red, B green, both yellow" },
+  { value: "magenta-green", label: "Magenta / green", title: "Colour-blind friendly: A magenta, B green, both dark" },
+];
+
+/** The Seurat corners (the default scheme). */
+export const BLEND_CORNERS: BlendCorners = BLEND_SCHEMES.seurat;
+
 /** The colour of a cell at `ta` of gene A's scale and `tb` of gene B's (each 0..1): bilinear between the corners. */
-export function blendColor(ta: number, tb: number): RGB {
+export function blendColor(ta: number, tb: number, scheme: BlendScheme = "seurat"): RGB {
   const a = Math.max(0, Math.min(1, ta));
   const b = Math.max(0, Math.min(1, tb));
   const w0 = (1 - a) * (1 - b);
   const wa = a * (1 - b);
   const wb = (1 - a) * b;
   const wab = a * b;
-  const { neither, a: ca, b: cb, both } = BLEND_CORNERS;
+  const { neither, a: ca, b: cb, both } = BLEND_SCHEMES[scheme] ?? BLEND_CORNERS;
   return [0, 1, 2].map((k) =>
     Math.round(w0 * neither[k]! + wa * ca[k]! + wb * cb[k]! + wab * both[k]!),
   ) as RGB;
@@ -183,6 +202,7 @@ export interface BlendOptions {
   opacity: number;
   /** Cells outside a non-empty selection are faded, as in the other grids */
   selected?: ReadonlySet<number> | null;
+  scheme?: BlendScheme;
 }
 
 /** RGBA for the cells `indices` (draw order) from the blend of genes `a` and `b`. */
@@ -200,7 +220,7 @@ export function blendColors(
   const anySelected = !!opts.selected && opts.selected.size > 0;
   for (let s = 0; s < indices.length; s++) {
     const i = indices[s]!;
-    const [r, g, bl] = blendColor(scaled(a[i]!, sa), scaled(b[i]!, sb));
+    const [r, g, bl] = blendColor(scaled(a[i]!, sa), scaled(b[i]!, sb), opts.scheme);
     rgba[s * 4] = r;
     rgba[s * 4 + 1] = g;
     rgba[s * 4 + 2] = bl;

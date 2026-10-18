@@ -92,7 +92,7 @@ beforeEach(() => {
   );
   useDatasetStore.setState({ currentDataset: dataset, currentDatasetId: "ds1" });
   useSettingsStore.setState({ expressionLayer: "X", opacity: 1, maxRenderedCells: 1_000_000 });
-  useGeneGridStore.setState({ sharedScale: false, blendClip: 0.99 });
+  useGeneGridStore.setState({ sharedScale: false, blendClip: 0.99, blendScheme: "seurat" });
   useSplitViewStore.setState({ splitBy: null, compareColumns: null, geneGrid: null });
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -190,6 +190,15 @@ describe("GeneFeatureGrid", () => {
     const before = blend[1]!;
     fireEvent.change(screen.getByRole("combobox", { name: "Blend scale top" }), { target: { value: "1" } });
     await waitFor(() => expect(colorsByCell(2)[1]).not.toEqual(before));
+  });
+
+  it("switches the blend to magenta / green for red-green colour blindness", async () => {
+    renderGrid({ datasetId: "ds1", kind: "blend", genes: ["CD3D", "MS4A1"] });
+    await screen.findByTestId("deck");
+    fireEvent.change(screen.getByRole("combobox", { name: "Blend colours" }), { target: { value: "magenta-green" } });
+    await waitFor(() => expect(colorsByCell(2)[2]!.slice(0, 3)).toEqual([230, 0, 230]));
+    expect(colorsByCell(2)[4]!.slice(0, 3)).toEqual([0, 190, 0]);
+    expect(screen.getByLabelText(/Blend key: CD3D magenta, MS4A1 green, both dark/)).toBeInTheDocument();
   });
 
   it("closes from its header", async () => {

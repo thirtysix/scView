@@ -6,7 +6,8 @@ import { useGeneExpression } from "@/hooks/useGeneExpression";
 import { exportFilename } from "@/lib/exportFilename";
 import { prettyEmbeddingLabel } from "@/lib/formatting";
 import {
-  BLEND_CORNERS,
+  BLEND_SCHEME_OPTIONS,
+  BLEND_SCHEMES,
   blendColors,
   blendScale,
   scaled,
@@ -66,6 +67,8 @@ export function GeneFeatureGrid({
   const setSharedScale = useGeneGridStore((s) => s.setSharedScale);
   const clip = useGeneGridStore((s) => s.blendClip);
   const setClip = useGeneGridStore((s) => s.setBlendClip);
+  const scheme = useGeneGridStore((s) => s.blendScheme);
+  const setScheme = useGeneGridStore((s) => s.setBlendScheme);
   const blend = grid.kind === "blend";
 
   const { values, missing, isLoading, error } = useGeneExpression(datasetId, grid.genes, layer, !pipelineRunning);
@@ -124,11 +127,11 @@ export function GeneFeatureGrid({
         selectedIndices,
       );
       out.push(
-        make("blend", `${shown[0]} + ${shown[1]}`, "blend", order, blendColors(order, a, b, { clip, opacity, selected: selectedIndices })),
+        make("blend", `${shown[0]} + ${shown[1]}`, "blend", order, blendColors(order, a, b, { clip, opacity, selected: selectedIndices, scheme })),
       );
     }
     return out;
-  }, [ready, blend, genes, values, shuffled, selectedIndices, ranges, opacity, colormap, positions, stride, clip]);
+  }, [ready, blend, genes, values, shuffled, selectedIndices, ranges, opacity, colormap, positions, stride, clip, scheme]);
 
   // Memoised: the hover handler depends on it, and MultiPanelScatter clears the
   // tooltip whenever that handler changes (a new array per render would clear it on every hover).
@@ -141,16 +144,17 @@ export function GeneFeatureGrid({
       : legendGenes.map((g, i) => ({ type: "continuous", title: g, ...ranges[i]! }));
     if (!blend) return continuous;
     const [a, b] = legendGenes;
+    const corners = BLEND_SCHEMES[scheme];
     return [
       ...continuous,
       {
         type: "categorical",
         title: "Blend",
         categories: [`${a} only`, `${b} only`, "both", "neither"],
-        colors: [BLEND_CORNERS.a, BLEND_CORNERS.b, BLEND_CORNERS.both, BLEND_CORNERS.neither],
+        colors: [corners.a, corners.b, corners.both, corners.neither],
       },
     ];
-  }, [ready, oneLegend, legendGenes, ranges, blend]);
+  }, [ready, oneLegend, legendGenes, ranges, blend, scheme]);
 
   // The tooltip leads with the cell's value of every gene shown.
   const handleHover = useCallback(
@@ -196,21 +200,36 @@ export function GeneFeatureGrid({
       }
       headerControls={
         blend ? (
-          <label className="flex flex-shrink-0 items-center gap-1" title="Each gene's colour tops out at this quantile of its expressing cells">
-            Top at
+          <>
             <select
-              aria-label="Blend scale top"
-              value={clip}
-              onChange={(e) => setClip(Number(e.target.value))}
-              className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px]"
+              aria-label="Blend colours"
+              value={scheme}
+              onChange={(e) => setScheme(e.target.value as typeof scheme)}
+              title={BLEND_SCHEME_OPTIONS.find((o) => o.value === scheme)?.title}
+              className="flex-shrink-0 rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px]"
             >
-              {CLIP_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
+              {BLEND_SCHEME_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value} title={o.title}>
                   {o.label}
                 </option>
               ))}
             </select>
-          </label>
+            <label className="flex flex-shrink-0 items-center gap-1" title="Each gene's colour tops out at this quantile of its expressing cells">
+              Top at
+              <select
+                aria-label="Blend scale top"
+                value={clip}
+                onChange={(e) => setClip(Number(e.target.value))}
+                className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px]"
+              >
+                {CLIP_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
         ) : (
           <label
             className="flex flex-shrink-0 cursor-pointer items-center gap-1"
@@ -249,7 +268,7 @@ export function GeneFeatureGrid({
                 <ColorLegend key={g} type="continuous" min={ranges[i]!.min} max={ranges[i]!.max} label={g} />
               ))
             )}
-            {blend && <BlendLegend geneA={legendGenes[0]!} geneB={legendGenes[1]!} />}
+            {blend && <BlendLegend geneA={legendGenes[0]!} geneB={legendGenes[1]!} scheme={scheme} />}
           </div>
         ) : null
       }

@@ -92,6 +92,11 @@ describe("blend", () => {
     // Half of each: the mean of the four corners.
     expect(blendColor(0.5, 0.5)).toEqual([180, 180, 53]);
     expect(blendColor(2, -1)).toEqual([255, 0, 0]);
+    // Magenta/green for red-green colour blindness: both genes dark, not white.
+    expect(blendColor(1, 0, "magenta-green")).toEqual([230, 0, 230]);
+    expect(blendColor(0, 1, "magenta-green")).toEqual([0, 190, 0]);
+    expect(blendColor(1, 1, "magenta-green")).toEqual([30, 30, 30]);
+    expect(blendColor(0, 0, "magenta-green")).toEqual(BLEND_CORNERS.neither);
   });
 
   it("colours cells in draw order and fades cells outside a selection", () => {
