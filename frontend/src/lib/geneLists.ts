@@ -140,7 +140,7 @@ function parseTable(text: string, delimiter: string, name: string): GeneListDraf
  * Throws when the file holds no genes.
  */
 export function parseGeneListFile(filename: string, text: string): GeneListDraft[] {
-  const clean = text.replace(/^﻿/, "");
+  const clean = text.replace(/^\uFEFF/, "");
   const ext = (filename.match(/\.[^.]+$/)?.[0] ?? "").toLowerCase();
   const name = cleanListName(stem(filename));
   const gmtLike = clean.split(/\r?\n/).some((l) => !l.trimStart().startsWith("#") && (l.match(/\t/g)?.length ?? 0) >= 2);
