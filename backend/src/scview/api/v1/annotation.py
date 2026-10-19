@@ -12,7 +12,8 @@ POST runs one, POST ``.../unknown`` copies the column with rejected cells set to
 
 ``/datasets/{id}/annotation/crosscheck`` compares 2-6 label columns made by
 different methods (``core/annotation_crosscheck.py``): GET lists the columns that
-look like annotations, POST runs the comparison.
+look like annotations, POST runs the comparison, POST ``.../save`` writes the
+consensus and per-cell agreement as obs columns.
 """
 
 from __future__ import annotations
@@ -170,7 +171,7 @@ async def _edit(dm: DatasetManager, dataset_id: str, edit, what: str):
 
         try:
             result = await held.run(_run)
-        except conf.ConfidenceError as exc:  # raised before any change
+        except (conf.ConfidenceError, xc.CrosscheckError) as exc:  # raised before any change
             raise HTTPException(status_code=exc.status, detail=str(exc))
         except Exception as exc:
             dm.evict(dataset_id)  # the cached copy may hold columns that were never saved
@@ -220,13 +221,17 @@ class CrosscheckRequest(BaseModel):
     reference: str | None = None
 
 
+class CrosscheckSaveRequest(CrosscheckRequest):
+    name: str = xc.DEFAULT_NAME
+
+
 @router.get("/datasets/{dataset_id}/annotation/crosscheck")
 async def annotation_crosscheck_info(
     dataset_id: str,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The columns that look like annotations (column -> the method that made
-    it), the active clustering and the limits."""
+    it), the active clustering, the limits, and the saved cross-checks."""
     adaptor = await _adaptor(dm, dataset_id)
     return xc.info(adaptor.adata, adaptor.active_clustering_column())
 
@@ -247,3 +252,16 @@ async def run_annotation_crosscheck(
     except xc.CrosscheckError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc))
 
+
+@router.post("/datasets/{dataset_id}/annotation/crosscheck/save")
+async def save_annotation_crosscheck(
+    dataset_id: str,
+    body: CrosscheckSaveRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Write ``{name}_consensus`` and ``{name}_agreement`` to obs."""
+    return await _edit(
+        dm, dataset_id,
+        lambda adata: xc.save(adata, body.columns, body.reference, body.name),
+        "Saving the cross-check",
+    )

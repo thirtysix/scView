@@ -177,6 +177,35 @@ def test_string_and_bool_columns_count_as_labels():
     assert out["comparisons"]["flag"]["mapping"]["True"]["to"] == "A"
 
 
+def test_save_writes_consensus_and_agreement():
+    a = _three_way()
+    res = xc.save(a, ["ref", "o1", "o2"], "ref", "xc")
+    assert res["columns"] == {"consensus": "xc_consensus", "agreement": "xc_agreement"}
+    cons = a.obs["xc_consensus"]
+    assert isinstance(cons.dtype, pd.CategoricalDtype)
+    assert cons.iloc[0] == "Unresolved" and cons.iloc[1] == "B" and cons.iloc[2] == "A"
+    assert list(cons.cat.categories) == ["A", "B", "C", "Unresolved"]
+    agree = a.obs["xc_agreement"].to_numpy()
+    assert agree.dtype == np.float32 and agree[0] == 0 and agree[1] == 0 and (agree[2:] == 1).all()
+    assert json.loads(a.uns[xc.REGISTRY_KEY])["xc"]["reference"] == "ref"
+    # Saving again under the same name replaces its own columns.
+    xc.save(a, ["ref", "o1"], "ref", "xc")
+    assert set(xc.info(a, None)["saved"]) == {"xc"}
+
+
+def test_save_never_overwrites_a_column_it_did_not_write():
+    a = _three_way()
+    a.obs["mine_consensus"] = pd.Categorical(["x"] * a.n_obs)
+    with pytest.raises(xc.CrosscheckError) as e:
+        xc.save(a, ["ref", "o1"], "ref", "mine")
+    assert e.value.status == 409 and "mine_agreement" not in a.obs.columns
+    with pytest.raises(xc.CrosscheckError, match="letters"):
+        xc.save(a, ["ref", "o1"], "ref", "bad name!")
+    xc.save(a, ["ref", "o1"], "ref", "first")
+    with pytest.raises(xc.CrosscheckError, match="compared"):
+        xc.save(a, ["ref", "first_consensus"], "ref", "first")
+
+
 def test_annotation_columns_are_found_by_what_made_them():
     a = _adata(cell_type_llm=REF, cell_type_ms=REF, cell_type_ct=REF, leiden=REF, other=REF)
     a.uns["cell_type_llm_llm_mapping"] = {"0": "A"}
@@ -200,18 +229,26 @@ def _save(dataset_manager, a: ad.AnnData) -> None:
     a.write_h5ad(d / "data.h5ad")
 
 
-async def test_endpoints_check_and_list(client, dataset_manager):
+async def test_endpoints_check_save_and_list(client, dataset_manager):
     a = _three_way()
     a.uns["o1_llm_mapping"] = {"0": "x"}
     _save(dataset_manager, a)
     url = "/api/v1/datasets/ds/annotation/crosscheck"
     info = (await client.get(url)).json()
-    assert info["suggested"]["o1"] == "LLM" and info["max_columns"] == 6
+    assert info["suggested"]["o1"] == "LLM" and info["max_columns"] == 6 and info["saved"] == {}
 
     r = await client.post(url, json={"columns": ["ref", "o1", "o2"], "reference": "ref"})
     assert r.status_code == 200, r.text
     assert r.json()["n_unresolved"] == 1 and r.json()["mean_agreement"] == round(28 / 30, 4)
 
+    s = await client.post(f"{url}/save", json={"columns": ["ref", "o1", "o2"], "reference": "ref", "name": "xc"})
+    assert s.status_code == 200, s.text
+    saved = ad.read_h5ad(dataset_manager.derived_h5ad_path("ds", "data.h5ad"))
+    assert saved.obs["xc_consensus"].iloc[0] == "Unresolved"
+    assert float(saved.obs["xc_agreement"].iloc[2]) == 1.0
+    obs = {c["name"]: c for c in (await client.get("/api/v1/datasets/ds")).json()["obs_columns"]}
+    assert obs["xc_consensus"]["dtype"] == "category" and "xc_agreement" in obs
+    assert set((await client.get(url)).json()["saved"]) == {"xc"}
 
 
 async def test_endpoint_errors(client, dataset_manager):
@@ -222,5 +259,6 @@ async def test_endpoint_errors(client, dataset_manager):
     assert (await client.post(url, json={"columns": ["ref", "score"]})).status_code == 400
     assert (await client.post(url, json={"columns": ["ref"]})).status_code == 400
     assert (await client.post(url, json={"columns": ["ref", "nope"]})).status_code == 404
+    assert (await client.post(f"{url}/save", json={"columns": ["ref", "o1"], "name": "a b"})).status_code == 400
     assert (await client.post("/api/v1/datasets/missing/annotation/crosscheck",
                               json={"columns": ["ref", "o1"]})).status_code == 404

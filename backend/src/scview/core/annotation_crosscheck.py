@@ -24,20 +24,25 @@ agrees fully, while a coarser one ("T cell" over the reference's CD4 and CD8)
 maps to whichever reference label is the bigger part and disagrees on the rest.
 Agreement measures consistency with the reference, not which column is right.
 
-Everything is keyed by label, never by position.
+Everything is keyed by label, never by position. ``save`` writes the consensus
+and agreement as obs columns, to colour the embedding by.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from scview.core import provenance
 from scview.core.hvg_sensitivity import compare
+from scview.core.obs_writes import forget_column_results
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +50,10 @@ MIN_COLUMNS = 2
 MAX_COLUMNS = 6
 MAX_CATEGORIES = 200
 UNRESOLVED = "Unresolved"
+REGISTRY_KEY = "scview_crosscheck"
+DEFAULT_NAME = "crosscheck"
 TOP_CALLS = 3  # what an annotator calls a reference label: its commonest labels there
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$")
 
 NOTE = (
     "Labels of each column are mapped to the reference label most of their cells carry, so "
@@ -318,8 +326,70 @@ def crosscheck(adata, columns: list[str], reference: str | None = None) -> dict[
 
 
 # ---------------------------------------------------------------------------
-# The info for the picker
+# Saving and the info for the picker
 # ---------------------------------------------------------------------------
+
+
+def registry(adata) -> dict[str, dict[str, Any]]:
+    """Saved cross-checks by name (empty when none or unreadable)."""
+    raw = adata.uns.get(REGISTRY_KEY)
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else {}
+    except ValueError:
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def output_columns(name: str) -> dict[str, str]:
+    return {"consensus": f"{name}_consensus", "agreement": f"{name}_agreement"}
+
+
+def save(adata, columns: list[str], reference: str | None, name: str = DEFAULT_NAME) -> dict[str, Any]:
+    """Write ``{name}_consensus`` (categorical: reference labels and Unresolved)
+    and ``{name}_agreement`` (0-1, NaN for cells not compared). Never overwrites a
+    column it did not write; validated and computed before ``adata`` changes."""
+    name = (name or DEFAULT_NAME).strip()
+    if not _NAME.match(name):
+        raise CrosscheckError(
+            "Name the columns with letters, digits, '_', '.' or '-' (up to 60 characters).")
+    outs = output_columns(name)
+    reg = registry(adata)
+    ours = {c for e in reg.values() if isinstance(e, dict) for c in (e.get("columns") or {}).values()}
+    for col in outs.values():
+        if col in columns:
+            raise CrosscheckError(f"'{col}' is one of the compared columns; pick another name.")
+        if col in adata.obs.columns and col not in ours:
+            raise CrosscheckError(
+                f"A column '{col}' already exists and was not written by a cross-check; pick another name.",
+                status=409)
+    cols, ref, labs, *_, agreement, compared, cons = _compute(adata, columns, reference)
+
+    adata.obs[outs["consensus"]] = _consensus_labels(cons, labs[ref][1])
+    adata.obs[outs["agreement"]] = agreement.astype(np.float32)
+    forget_column_results(adata, outs["consensus"])  # markers of the old groups
+    reg[name] = {
+        "columns": outs,
+        "compared": cols,
+        "reference": ref,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    adata.uns[REGISTRY_KEY] = json.dumps(reg)  # a new string: write_derived rewrites it
+    try:
+        provenance.record_step(
+            adata, step="annotation_crosscheck", tool="scview annotation cross-check",
+            params={"columns": cols, "reference": ref, "outputs": list(outs.values()),
+                    "n_unresolved": int((cons == -2).sum())},
+        )
+    except Exception as e:  # provenance must never block the result
+        logger.warning("Could not record annotation cross-check provenance: %s", e)
+    return {
+        "name": name,
+        "columns": outs,
+        "reference": ref,
+        "compared": cols,
+        "n_unresolved": int((cons == -2).sum()),
+        "mean_agreement": _r(agreement[compared].mean()) if compared.any() else None,
+    }
 
 
 def annotation_columns(adata, active_clustering: str | None) -> dict[str, str]:
@@ -341,11 +411,16 @@ def annotation_columns(adata, active_clustering: str | None) -> dict[str, str]:
 
 
 def info(adata, active_clustering: str | None) -> dict[str, Any]:
+    reg = registry(adata)
     return {
         "suggested": annotation_columns(adata, active_clustering),
         "active_clustering": active_clustering,
         "min_columns": MIN_COLUMNS,
         "max_columns": MAX_COLUMNS,
         "max_categories": MAX_CATEGORIES,
+        "default_name": DEFAULT_NAME,
+        "saved": {k: v for k, v in reg.items()
+                  if isinstance(v, dict) and all(c in adata.obs.columns
+                                                 for c in (v.get("columns") or {}).values())},
         "note": NOTE,
     }
