@@ -18,6 +18,15 @@ from scview.core.pipeline import (
 )
 
 
+@pytest.fixture(autouse=True)
+def no_marker_db(monkeypatch, tmp_path):
+    """marker_score here tests the built-in sets: no marker databases, no download."""
+    from scview.core import marker_db
+
+    monkeypatch.setattr(marker_db, "marker_db_dir", lambda: tmp_path / "marker_db")
+    monkeypatch.setattr(marker_db, "auto_download_enabled", lambda: False)
+
+
 def _clustered(n: int = 20) -> ad.AnnData:
     a = ad.AnnData(X=np.random.RandomState(0).poisson(1, (n, 5)).astype("float32"))
     a.obs["cluster"] = pd.Categorical(["a", "b"] * (n // 2))
