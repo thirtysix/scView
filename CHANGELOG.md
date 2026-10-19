@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-19
+
 ### Added
 - **Per-cell marker heatmap.** Marker Genes → Heatmap has a *Group means | Per cell* switch. Per
   cell shows the genes over a seeded sample of each group's cells (50-500 per group, at most
@@ -29,16 +31,19 @@ All notable changes to scView are documented here. The format is based on
   collection. Genes missing from the open dataset are greyed, with a one-click fix for case-only
   differences (CD3E vs Cd3e).
 - **Marker database check** in the annotation cross-check: each label of the reference column is
-  matched by name (with Cell Ontology synonyms and common abbreviations) to PanglaoDB, CellMarker
-  2.0 and ACT cell types, and its database markers are tested against the group's own top 25
-  markers (hypergeometric, measured genes as background): *supported*, *no database support*,
-  *too few database markers* or *not in the databases*, with the shared genes. Each group also gets
-  the 3 PanglaoDB / CellMarker 2.0 types its markers fit best. Human or mouse rows follow the
-  dataset's species (Kang: 13 of 13 labels supported; paul15: 17 of 19). The databases are
-  downloaded from their own sites on first use (`MARKER_DB_AUTO_DOWNLOAD`; ACT's files are checked
-  against pinned SHA-256 sums); none of them states a licence. The sources were chosen by
-  measurement against HPA, Tabula Sapiens, Kang and paul15 (MSigDB C8, Tabula Sapiens, Cell
-  Taxonomy, scType, scCATCH, Azimuth and HCL/MCA added nothing over these three).
+  matched by name (with Cell Ontology synonyms and common abbreviations) to marker-database cell
+  types, and its database markers are tested against the group's own top 25 markers
+  (hypergeometric, measured genes as background): *supported*, *no database support*, *too few
+  database markers* or *not in the databases*, with the shared genes. Verdicts use PanglaoDB +
+  CellMarker 3.0 + ACT for human data and CellMarker 3.0's mouse rows for mouse; each group also
+  gets the 3 PanglaoDB / curated CellMarker types its markers fit best (Kang: 13 of 13 labels
+  supported; paul15: 16 of 19). The databases are downloaded from their own sites on first use
+  (~73 MB, read straight from the zips; `MARKER_DB_AUTO_DOWNLOAD`), with pinned SHA-256 sums for
+  CellMarker 3.0 and ACT; if CellMarker 3.0 is unavailable or has changed, CellMarker 2.0 is used
+  instead and the card says so. None of the databases states a licence. The sources were chosen by
+  measurement against HPA, Tabula Sapiens, Kang and paul15 (`PanglaoDB + CellMarker 3.0 + ACT`:
+  HPA lookup 0.73 against 0.67 for PanglaoDB + CellMarker 2.0; MSigDB C8, Tabula Sapiens, Cell
+  Taxonomy, scType, scCATCH, Azimuth and HCL/MCA added nothing).
 
 ### Changed
 - **Marker-score annotation** names each cluster after the marker-database type its markers fit
