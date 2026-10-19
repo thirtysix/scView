@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from scview.core.sse import keepalive
 from scview.config import Settings
 from scview.core import provenance
 from scview.core.dataset_manager import DatasetManager
@@ -145,7 +146,7 @@ async def run_integration(
             yield _sse("error", {"error": str(e)})
 
     return StreamingResponse(
-        events(),
+        keepalive(events()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
