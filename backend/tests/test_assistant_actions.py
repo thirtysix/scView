@@ -162,3 +162,11 @@ def test_coerce_actions_reaches_compare_panel_and_de_subtab():
         '[{"type":"open_panel","panel":"compare"},{"type":"set_subtab","subtab":"de"}]', **CTX)
     assert [(a.type, a.panel or a.subtab) for a in acts] == [
         ("open_panel", "compare"), ("set_subtab", "de")]
+
+
+def test_coerce_actions_reaches_every_unified_subtab():
+    # every tab in the frontend's UNIFIED_SUBTABS (lib/constants.ts) can be opened by the co-pilot
+    tabs = ["markers", "expression", "protein", "genesets", "enrichment", "de", "activity", "genelists"]
+    for t in tabs:
+        acts = _coerce_actions(f'[{{"type":"set_subtab","subtab":"{t}"}}]', **CTX)
+        assert [a.subtab for a in acts] == [t]

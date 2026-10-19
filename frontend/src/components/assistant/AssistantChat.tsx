@@ -9,7 +9,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
-import { PANEL_LABELS, type PanelId } from "@/lib/constants";
+import { PANEL_LABELS, type PanelId, type UnifiedSubtab } from "@/lib/constants";
 import {
   assistantChat,
   assistantChatStream,
@@ -339,7 +339,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
       } else if (a.type === "set_subtab" && a.subtab) {
         useUnifiedViewStore
           .getState()
-          .setActiveSubtab(a.subtab as "markers" | "expression" | "genesets" | "enrichment" | "de");
+          .setActiveSubtab(a.subtab as UnifiedSubtab);
         useViewStore.getState().setPanel("unified");
       } else if (a.type === "set_groupby" && a.column) {
         useUnifiedViewStore.getState().setGroupByColumn(a.column);
