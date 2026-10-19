@@ -136,6 +136,7 @@ class PipelineParams:
     annotation_target: str = "cell_type"         # obs column to write
     annotation_llm_model: str = ""               # DeepInfra model id for method="llm"
     annotation_tissue: str = ""                  # optional tissue hint for method="llm"
+    annotation_marker_sets: str = "databases"    # marker_score: databases (PanglaoDB+CellMarker 2.0+ACT) | builtin (14 immune sets)
 
 
 @dataclass
@@ -1237,12 +1238,17 @@ def _annotate_marker_score(
         raise ValueError("marker_score annotation needs a clustering; run clustering first.")
     from scview.core import marker_db
 
-    db = _marker_db_or_none()
+    # "builtin" is the user's choice, not a fallback: on PBMC the 14 sets named 8 of
+    # Kang's 11 Leiden clusters right against the databases' 5 (fine T subtypes,
+    # CD14 Mono), while the databases win elsewhere (paul15 11 of 19 against 2).
+    builtin = (params.annotation_marker_sets or "databases").lower() == "builtin"
+    db = None if builtin else _marker_db_or_none()
     if db is not None:
         mapping, info = marker_db.annotate(adata, groupby, db=db)
     else:
         mapping = _marker_set_mapping(adata, groupby)
-        info = {"marker_source": "built-in", "n_types": len(_MARKER_SETS)}
+        info = {"marker_source": "built-in", "n_types": len(_MARKER_SETS),
+                "chosen": builtin}
     adata.obs[target] = (
         adata.obs[groupby].astype(str).map(lambda g: mapping.get(g, "Unknown")).astype("category")
     )
@@ -1415,7 +1421,8 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "dissociation_stress": ("scanpy.tl.score_genes (van den Brink 2017 dissociation genes)", ()),
     "cell_type_annotation": ("scview.cell_type_annotation",
                              ("annotation_method", "celltypist_model", "annotation_llm_model",
-                              "annotation_tissue", "annotation_groupby", "annotation_target")),
+                              "annotation_tissue", "annotation_marker_sets", "annotation_groupby",
+                              "annotation_target")),
 }
 
 

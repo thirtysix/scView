@@ -42,6 +42,15 @@ def test_annotator_falls_back_to_the_built_in_sets(monkeypatch, tmp_path):
     assert not [c for c in a.obs.columns if c.startswith("_ms__")]
 
 
+def test_built_in_sets_when_chosen_even_with_the_databases_installed(annotator_db):
+    from scview.core.pipeline import PipelineParams, _annotate_marker_score
+
+    a = _cells()
+    info = _annotate_marker_score(a, PipelineParams(annotation_marker_sets="builtin"), "lab", "ms")
+    assert info["marker_source"] == "built-in" and info["chosen"] is True
+    assert a.uns["ms_markerscore_mapping"]["B"] == "B cell"
+
+
 def test_replay_writes_database_labels_from_the_record():
     from scview.core.replay_script import RECORDED, _Ctx, _cell_type_annotation
 

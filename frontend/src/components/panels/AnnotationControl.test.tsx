@@ -106,4 +106,19 @@ describe("AnnotationControl (CellTypist)", () => {
     const input = screen.getByDisplayValue("paul15_clusters_celltypeAnno") as HTMLInputElement;
     expect(input.value).toBe("paul15_clusters_celltypeAnno");
   });
+
+  it("sends the marker sets choice for marker-score annotation, databases by default", async () => {
+    const onAnnotate = vi.fn().mockResolvedValue(undefined);
+    render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
+    fireEvent.click(screen.getByText("Marker score (offline)"));
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(1));
+    expect(onAnnotate.mock.calls[0]![0]).toMatchObject({
+      annotation_method: "marker_score", annotation_marker_sets: "databases",
+    });
+    fireEvent.change(screen.getByLabelText("Marker sets"), { target: { value: "builtin" } });
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(2));
+    expect(onAnnotate.mock.calls[1]![0]).toMatchObject({ annotation_marker_sets: "builtin" });
+  });
 });
