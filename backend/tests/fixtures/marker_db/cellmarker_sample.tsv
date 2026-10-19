@@ -1,0 +1,15 @@
+species	tissue_class	tissue_type	uberonongology_id	cancer_type	cell_type	cell_name	cellontology_id	marker	Symbol	GeneID	Genetype	Genename	UNIPROTID	technology_seq	marker_source	PMID	Title	journal	year
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	B cell	CL_0000236	CD79A	CD79A	1	protein_coding	x	x	None	Experiment	1001	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	B cell	CL_0000236	CD79A	CD79A	1	protein_coding	x	x	None	Experiment	1002	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	B cell	CL_0000236	CD79A	CD79A	1	protein_coding	x	x	None	Experiment	1002	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	B cell	CL_0000236	CD22, [MS4A1]	CD22, [MS4A1]	1	protein_coding	x	x	None	Experiment	1003	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Cancer cell	B cell	CL_0000236	CD79A	CD79A	1	protein_coding	x	x	None	Experiment	1004	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	γδ T cell	CL_0000798	TRDC	TRDC	1	protein_coding	x	x	None	Experiment	2001	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	γδ T cell	CL_0000798	TRGC1	TRGC1	1	protein_coding	x	x	None	Experiment	2001	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	γδ T cell	CL_0000798	CD3D	CD3D	1	protein_coding	x	x	None	Experiment	2002	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	Rare cell	NA	XYZ1	XYZ1	1	protein_coding	x	x	None	Experiment	3001	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	Rare cell	NA	XYZ2	XYZ2	1	protein_coding	x	x	None	Experiment	3001	t	j	2020
+Human	Blood	Blood	UBERON_0000178	Normal	Normal cell	Rare cell	NA	CD79A	CD79A	1	protein_coding	x	x	None	Experiment	3001	t	j	2020
+Mouse	Blood	Blood	UBERON_0000178	Normal	Normal cell	Monocyte	CL_0000576	Ly6c2	Ly6c2	1	protein_coding	x	x	None	Experiment	4001	t	j	2020
+Mouse	Blood	Blood	UBERON_0000178	Normal	Normal cell	Monocyte	CL_0000576	Csf1r	Csf1r	1	protein_coding	x	x	None	Experiment	4002	t	j	2020
+Zebrafish	Blood	Blood	UBERON_0000178	Normal	Normal cell	Monocyte	CL_0000576	csf1ra	csf1ra	1	protein_coding	x	x	None	Experiment	4003	t	j	2020

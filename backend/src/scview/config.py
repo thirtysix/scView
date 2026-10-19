@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     MSIGDB_DIR: str = ""
     # Fetch missing MSigDB collections from the Broad Institute on startup.
     MSIGDB_AUTO_DOWNLOAD: bool = True
+    # Fetch the PanglaoDB + CellMarker 2.0 marker databases (and the Cell Ontology)
+    # into DATA_DIR/marker_db on first use (core/marker_db.py).
+    MARKER_DB_AUTO_DOWNLOAD: bool = True
 
     # --- Deployment posture --------------------------------------------------
     # "private" (default): assume a single trusted user on localhost — the only
