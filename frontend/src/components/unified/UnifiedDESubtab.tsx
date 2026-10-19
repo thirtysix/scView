@@ -19,6 +19,7 @@ import { DEEnrichment } from "@/components/unified/DEEnrichment";
 import { DEActivity } from "@/components/unified/DEActivity";
 import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
 import { DEMethodsAgreement } from "@/components/unified/DEMethodsAgreement";
+import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { downloadCsv } from "@/lib/csv";
 import { describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
 import { describeSize } from "@/lib/transcriptomeSize";
@@ -580,7 +581,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
       {result && (
         <>
           {/* Threshold + export */}
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
             <label className="whitespace-nowrap font-medium text-slate-500">|log2FC| &ge;</label>
             <input
               type="range"
@@ -608,6 +609,21 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
               <Download className="h-3 w-3" />
               CSV
             </button>
+            {(["up", "down"] as const).map((side) => {
+              const higher = side === "up" ? labelA : labelB;
+              const genes = sigGenes.filter((g) => (side === "up" ? g.logfoldchange > 0 : g.logfoldchange < 0));
+              return (
+                <AddToGeneListMenu
+                  key={side}
+                  label={side === "up" ? "Up" : "Down"}
+                  genes={() => genes.map((g) => g.gene)}
+                  defaultName={`DE: higher in ${higher}`}
+                  source={`DE ${labelA} vs ${labelB}, higher in ${higher}`}
+                  disabled={genes.length === 0}
+                  title={`Add the ${genes.length} ${withP ? "significant" : "listed"} genes higher in ${higher} (table order) to a gene list`}
+                />
+              );
+            })}
           </div>
 
           <div className="text-[10px] text-slate-400">
