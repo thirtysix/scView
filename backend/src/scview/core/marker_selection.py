@@ -59,6 +59,7 @@ def group_markers(
     key: str | None = None,
     order: Order = "logfc",
     exclude_ribo_mito: bool = True,
+    max_padj: float | None = None,
 ) -> dict[str, list[str]]:
     """Per group of ``groupby`` (by label, in the stored group order): up to ``n``
     marker genes, best first.
@@ -68,7 +69,8 @@ def group_markers(
     counted from the log-normalised matrix (``.raw`` when it holds log values).
     A gene whose fraction or fold change is unknown (NaN) fails that filter; a
     result without fold changes is not filtered or ordered by them. Empty when
-    the column has no stored markers.
+    the column has no stored markers. With ``max_padj`` a gene must also have an
+    adjusted p-value below it (a result without p-values is not filtered by them).
     """
     if order not in ORDERS:
         raise ValueError(f"Unknown marker order '{order}' (expected one of {', '.join(ORDERS)}).")
@@ -87,6 +89,7 @@ def group_markers(
         pts, pts_rest = _fractions(adata, groupby, groups) or (None, None)
 
     has_lfc = "logfoldchanges" in rgg and rgg["logfoldchanges"] is not None
+    has_padj = max_padj is not None and _stored(rgg, "pvals_adj") is not None
     out: dict[str, list[str]] = {}
     for group in groups:
         genes = np.asarray(names[group]).astype(str)
@@ -100,6 +103,9 @@ def group_markers(
                if has_lfc else None)
         if lfc is not None:
             keep &= lfc >= min_logfc
+        padj = np.asarray(rgg["pvals_adj"][group], dtype=float)[: genes.size] if has_padj else None
+        if padj is not None and not np.isnan(padj).all():  # logreg stores no p-values
+            keep &= padj < max_padj
         idx = np.flatnonzero(keep)  # stored (score) order
         if order == "logfc" and lfc is not None:
             idx = idx[np.argsort(-lfc[idx], kind="stable")]
