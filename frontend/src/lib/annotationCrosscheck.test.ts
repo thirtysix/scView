@@ -144,7 +144,7 @@ describe("text", () => {
         },
       },
     };
-    expect(callsText(r, "ms")).toBe("NK cell 80.0% (→ NK), CD8+ T cell 20.0%");
+    expect(callsText(r, "ms")).toBe("NK cell (80.0%, → NK), CD8+ T cell (20.0%)");
     expect(callsText(r, "missing")).toBe("–");
   });
 

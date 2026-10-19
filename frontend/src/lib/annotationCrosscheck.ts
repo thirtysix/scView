@@ -160,13 +160,14 @@ export function sortLabelTable(
 
 /**
  * What one column calls a reference label's cells, with where a call maps when
- * that is another reference label: "Monocyte 80%, T cell 15% (→ CD4 T)".
+ * that is another reference label: "Monocyte (80.0%), T cell (15.0%, → CD4 T)".
+ * The share sits in brackets, so a numeric label ("3") is not read as part of it.
  */
 export function callsText(row: LabelTableRow, column: string): string {
   const a = row.annotators[column];
   if (!a) return "–";
   return a.calls
-    .map((c) => `${c.label} ${pct(c.share)}${c.maps_to && c.maps_to !== row.label ? ` (→ ${c.maps_to})` : ""}`)
+    .map((c) => `${c.label} (${pct(c.share)}${c.maps_to && c.maps_to !== row.label ? `, → ${c.maps_to}` : ""})`)
     .join(", ");
 }
 

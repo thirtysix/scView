@@ -111,7 +111,7 @@ describe("AnnotationCrosscheckCard", () => {
     // Per-label table, worst agreement first by default, saying what the other column calls it.
     const rows = within(screen.getByTestId("crosscheck-labels")).getAllByRole("row").slice(1);
     expect(rows.map((r) => (r as HTMLTableRowElement).cells[0]!.textContent)).toEqual(["T", "Mono"]);
-    expect(rows[0]!.textContent).toContain("1 16.7% (→ Mono)");
+    expect(rows[0]!.textContent).toContain("1 (16.7%, → Mono)");
   });
 
   it("sorts the label table on a header click", async () => {

@@ -319,7 +319,7 @@ export function AnnotationCrosscheckCard({ datasetId }: { datasetId: string }) {
               ]}
               layout={{
                 height: 90 + 34 * result.columns.length,
-                margin: { l: 10, r: 10, t: 6, b: 10 },
+                margin: { l: 10, r: 10, t: 28, b: 10 }, // room for the modebar above the colour bar
                 xaxis: { type: "category", automargin: true, tickfont: { size: 10 }, tickangle: -30 },
                 yaxis: { type: "category", automargin: true, tickfont: { size: 10 }, autorange: "reversed" },
                 paper_bgcolor: "rgba(0,0,0,0)",
@@ -378,7 +378,7 @@ export function AnnotationCrosscheckCard({ datasetId }: { datasetId: string }) {
                 ]}
                 layout={{
                   height: Math.min(560, Math.max(240, order.rows.length * 18 + 130)),
-                  margin: { l: 10, r: 10, t: 6, b: 10 },
+                  margin: { l: 10, r: 10, t: 28, b: 10 }, // room for the modebar above the colour bar
                   xaxis: {
                     type: "category",
                     automargin: true,
@@ -567,10 +567,10 @@ function CrosscheckSankey({
       ]}
       layout={{
         height,
-        margin: { l: 10, r: 10, t: 22, b: 10 },
+        margin: { l: 10, r: 10, t: 28, b: 26 }, // column names below, clear of the modebar
         annotations: [
-          { text: reference, x: 0, y: 1.04, xref: "paper", yref: "paper", showarrow: false, xanchor: "left", font: { size: 10 } },
-          { text: other, x: 1, y: 1.04, xref: "paper", yref: "paper", showarrow: false, xanchor: "right", font: { size: 10 } },
+          { text: reference, x: 0, y: 0, yshift: -6, xref: "paper", yref: "paper", showarrow: false, xanchor: "left", yanchor: "top", font: { size: 10 } },
+          { text: other, x: 1, y: 0, yshift: -6, xref: "paper", yref: "paper", showarrow: false, xanchor: "right", yanchor: "top", font: { size: 10 } },
         ],
         paper_bgcolor: "rgba(0,0,0,0)",
       }}
