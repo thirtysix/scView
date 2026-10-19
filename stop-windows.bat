@@ -14,6 +14,7 @@ if errorlevel 1 (
     where podman >nul 2>&1
     if not errorlevel 1 set "ENGINE=podman"
 )
+set "PODMAN_COMPOSE_WARNING_LOGS=false"
 %ENGINE% compose down
 if errorlevel 1 (
     echo.

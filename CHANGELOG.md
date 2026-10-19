@@ -14,6 +14,15 @@ All notable changes to scView are documented here. The format is based on
   would otherwise take an old `docker-compose` 1.x first. `SCVIEW_ENGINE=docker|podman` chooses
   when both are installed. See *Using Podman instead of Docker* in the README.
 
+### Fixed
+- **Long processing steps no longer fail with "network error".** The app's web server closed a
+  response that had sent nothing for 5 minutes, and a step reports only when it ends: doublet
+  detection on Kang in a Windows virtual machine under Podman took longer than that, the page
+  showed "network error", and the run stopped without saving. Every streamed response (processing,
+  re-clustering, integration, QC report, co-pilot) now sends a keep-alive every 15 seconds.
+- **Without an API key, cell-type annotation starts on Marker score (offline)** instead of the AI,
+  and the AI tab says it needs a key and would run CellTypist instead (`GET /assistant/llm-status`).
+
 ### Changed
 - **Doublet detection is about 5 times faster.** Scrublet now finds neighbours exactly instead
   of with an approximate search, for datasets up to 50,000 cells. The scores are the same (Kang:

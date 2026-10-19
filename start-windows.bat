@@ -93,6 +93,8 @@ echo   Desktop open Settings, then Resources, find Compose and click Setup.
 echo   Then double-click this file again.
 goto :fail
 :podman_compose_ready
+rem Drop the ">>>> Executing external compose provider" banner on every command.
+set "PODMAN_COMPOSE_WARNING_LOGS=false"
 echo   [ok] Podman is running.
 
 :engine_ready
