@@ -9,6 +9,10 @@ column fits its expression neighbourhood, with split conformal prediction sets
 (``core/annotation_confidence.py``): GET returns the last check of a column,
 POST runs one, POST ``.../unknown`` copies the column with rejected cells set to
 "Unknown".
+
+``/datasets/{id}/annotation/crosscheck`` compares 2-6 label columns made by
+different methods (``core/annotation_crosscheck.py``): GET lists the columns that
+look like annotations, POST runs the comparison.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.core import annotation_confidence as conf
+from scview.core import annotation_crosscheck as xc
 from scview.core import celltypist_fit as fit
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
@@ -207,3 +212,38 @@ async def annotation_confidence_unknown(
         lambda adata: conf.make_unknown_column(adata, body.column),
         "The Unknown copy",
     )
+
+
+class CrosscheckRequest(BaseModel):
+    columns: list[str]
+    # One of ``columns``; the first when left out
+    reference: str | None = None
+
+
+@router.get("/datasets/{dataset_id}/annotation/crosscheck")
+async def annotation_crosscheck_info(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The columns that look like annotations (column -> the method that made
+    it), the active clustering and the limits."""
+    adaptor = await _adaptor(dm, dataset_id)
+    return xc.info(adaptor.adata, adaptor.active_clustering_column())
+
+
+@router.post("/datasets/{dataset_id}/annotation/crosscheck")
+async def run_annotation_crosscheck(
+    dataset_id: str,
+    body: CrosscheckRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Compare 2-6 label columns: pairwise ARI/AMI, the reference against each
+    other column (contingency, best matches, label mapping), per-label agreement
+    and the consensus counts. Changes nothing."""
+    adata = (await _adaptor(dm, dataset_id)).adata
+    try:
+        # contingency tables and AMI over every cell: off the loop
+        return await asyncio.to_thread(xc.crosscheck, adata, body.columns, body.reference)
+    except xc.CrosscheckError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+
