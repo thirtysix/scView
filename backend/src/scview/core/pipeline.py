@@ -1190,7 +1190,8 @@ def _label_case(label: str) -> str:
 
 
 # Curated marker sets for the offline 'marker_score' method (common PBMC/immune plus
-# a few stromal/epithelial types). Deterministic and network-free; tissue-limited.
+# a few stromal/epithelial types): the fallback when the marker databases
+# (core/marker_db.py) are not downloaded or their download is turned off.
 _MARKER_SETS: dict[str, list[str]] = {
     "T cell": ["CD3D", "CD3E", "CD3G", "TRAC"],
     "CD4+ T cell": ["CD4", "IL7R"],
@@ -1209,36 +1210,67 @@ _MARKER_SETS: dict[str, list[str]] = {
 }
 
 
+def _marker_db_or_none():
+    """The merged marker database (fetched on first use when allowed), or None."""
+    from scview.core import marker_db
+
+    try:
+        return marker_db.get_db()
+    except Exception as exc:  # not downloaded, download off or failed: use the built-in sets
+        logger.info("marker_score: marker databases unavailable (%s); using the built-in sets", exc)
+        return None
+
+
 def _annotate_marker_score(
     adata: ad.AnnData, params: PipelineParams, groupby: str, target: str
-) -> None:
-    """Offline annotation: score curated marker sets and assign each cluster the
-    top-scoring cell type. Deterministic, no network, no model download."""
+) -> dict[str, Any]:
+    """Offline annotation, one cell type per cluster. Deterministic, no LLM.
+
+    With the marker databases (PanglaoDB + CellMarker 2.0, species-aware; see
+    core/marker_db.py) each cluster gets the database type its top 25 markers
+    over-represent most (hypergeometric against the full database set), "Unknown"
+    when no type shares a marker. Without them, the 14 curated sets above are
+    scored per cell and each cluster gets the highest mean. Which one ran is
+    recorded in ``uns[f"{target}_markerscore_source"]`` and returned for the
+    provenance."""
     if not groupby:
         raise ValueError("marker_score annotation needs a clustering; run clustering first.")
-    upper = {str(g).upper(): str(g) for g in adata.var_names}
-    score_cols: dict[str, str] = {}
-    for ct, genes in _MARKER_SETS.items():
-        present = [upper[g.upper()] for g in genes if g.upper() in upper]
-        if len(present) < 2:
-            continue
-        key = f"_ms__{ct}"
-        sc.tl.score_genes(adata, present, score_name=key, ctrl_size=min(50, adata.n_vars - 1))
-        score_cols[ct] = key
-    if not score_cols:
-        raise ValueError("None of the marker-set genes are present in this dataset.")
-    inv = {v: k for k, v in score_cols.items()}
-    means = adata.obs.groupby(groupby, observed=True)[list(score_cols.values())].mean()
-    mapping = {str(idx): inv[means.loc[idx].idxmax()] for idx in means.index}
+    from scview.core import marker_db
+
+    db = _marker_db_or_none()
+    if db is not None:
+        mapping, info = marker_db.annotate(adata, groupby, db=db)
+    else:
+        mapping = _marker_set_mapping(adata, groupby)
+        info = {"marker_source": "built-in", "n_types": len(_MARKER_SETS)}
     adata.obs[target] = (
         adata.obs[groupby].astype(str).map(lambda g: mapping.get(g, "Unknown")).astype("category")
     )
     adata.uns[f"{target}_markerscore_mapping"] = mapping
-    for key in score_cols.values():
-        if key in adata.obs.columns:
-            del adata.obs[key]
-    logger.info("marker_score: %d clusters -> obs['%s'] (%d cell types scored)",
-                len(mapping), target, len(score_cols))
+    adata.uns[f"{target}_markerscore_source"] = info
+    logger.info("marker_score: %d clusters -> obs['%s'] (%s)", len(mapping), target, info)
+    return info
+
+
+def _marker_set_mapping(adata: ad.AnnData, groupby: str) -> dict[str, str]:
+    """Score the built-in marker sets per cell; each cluster -> the set with the top mean."""
+    upper = {str(g).upper(): str(g) for g in adata.var_names}
+    score_cols: dict[str, str] = {}
+    try:
+        for ct, genes in _MARKER_SETS.items():
+            present = [upper[g.upper()] for g in genes if g.upper() in upper]
+            if len(present) < 2:
+                continue
+            key = f"_ms__{ct}"
+            sc.tl.score_genes(adata, present, score_name=key, ctrl_size=min(50, adata.n_vars - 1))
+            score_cols[ct] = key
+        if not score_cols:
+            raise ValueError("None of the marker-set genes are present in this dataset.")
+        inv = {v: k for k, v in score_cols.items()}
+        means = adata.obs.groupby(groupby, observed=True)[list(score_cols.values())].mean()
+        return {str(idx): inv[means.loc[idx].idxmax()] for idx in means.index}
+    finally:
+        adata.obs.drop(columns=[k for k in score_cols.values() if k in adata.obs.columns], inplace=True)
 
 
 def _run_cell_type_annotation(
@@ -1271,7 +1303,7 @@ def _run_cell_type_annotation(
     elif method == "llm":
         _annotate_llm(adata, params, groupby, target)
     elif method == "marker_score":
-        _annotate_marker_score(adata, params, groupby, target)
+        fit = _annotate_marker_score(adata, params, groupby, target)
     else:
         raise ValueError(
             f"Unknown annotation method '{method}' (expected celltypist | llm | marker_score)."

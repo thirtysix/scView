@@ -14,6 +14,11 @@ POST runs one, POST ``.../unknown`` copies the column with rejected cells set to
 different methods (``core/annotation_crosscheck.py``): GET lists the columns that
 look like annotations, POST runs the comparison, POST ``.../save`` writes the
 consensus and per-cell agreement as obs columns.
+
+``/datasets/{id}/annotation/marker-db`` checks a label column against the
+PanglaoDB + CellMarker 2.0 marker databases (``core/marker_db.py``): GET
+``.../status`` says what is downloaded, POST ``.../check`` fetches them on first
+use and returns each label's database support and the 3 best database types.
 """
 
 from __future__ import annotations
@@ -21,16 +26,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import lru_cache
+from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.core import annotation_confidence as conf
 from scview.core import annotation_crosscheck as xc
+from scview.config import Settings
 from scview.core import celltypist_fit as fit
+from scview.core import marker_db as mdb
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
-from scview.dependencies import get_dataset_manager
+from scview.dependencies import get_dataset_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -265,3 +274,66 @@ async def save_annotation_crosscheck(
         lambda adata: xc.save(adata, body.columns, body.reference, body.name),
         "Saving the cross-check",
     )
+
+
+class MarkerDbCheckRequest(BaseModel):
+    column: str
+    # The dataset's species (core/species.py) when left out
+    species: Literal["human", "mouse"] | None = None
+    # Try a source whose download failed a moment ago again now
+    retry: bool = False
+
+
+def _marker_db_dest(settings: Settings) -> Path:
+    return Path(settings.DATA_DIR) / "marker_db"  # the data volume
+
+
+@router.get("/datasets/{dataset_id}/annotation/marker-db/status")
+async def marker_db_status(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Which marker databases are downloaded (source, release, date, sha256, row
+    counts), which failed and why, whether downloading is on, and the dataset's
+    species."""
+    adata = (await _adaptor(dm, dataset_id)).adata
+
+    def _read():
+        from scview.core.species import detect_species
+
+        return {
+            **mdb.status(_marker_db_dest(settings), auto_download=settings.MARKER_DB_AUTO_DOWNLOAD),
+            "dataset_species": detect_species(adata).species,
+        }
+
+    return await asyncio.to_thread(_read)
+
+
+@router.post("/datasets/{dataset_id}/annotation/marker-db/check")
+async def marker_db_check(
+    dataset_id: str,
+    body: MarkerDbCheckRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Each label of ``column``: its database type(s) and how the name matched, the
+    verdict (supported / no database support / too few database markers / not in
+    database), p, overlapping genes, and the 3 best database types for its cells.
+    Downloads the databases on first use. Changes nothing."""
+    adata = (await _adaptor(dm, dataset_id)).adata
+    if body.column not in adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{body.column}' not found.")
+
+    def _run():
+        db = mdb.get_db(_marker_db_dest(settings), auto_download=settings.MARKER_DB_AUTO_DOWNLOAD,
+                        retry=body.retry)
+        return mdb.check(adata, body.column, body.species, db)
+
+    try:
+        # a download on first use, markers when none are stored: off the loop
+        return await asyncio.to_thread(_run)
+    except mdb.MarkerDBUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))

@@ -1,0 +1,55 @@
+format-version: 1.2
+data-version: cl/releases/2026-06-08/cl-basic.owl
+ontology: cl/cl-basic
+
+[Term]
+id: CL:0000000
+name: cell
+
+[Term]
+id: CL:0000542
+name: lymphocyte
+is_a: CL:0000000 ! cell
+
+[Term]
+id: CL:0000236
+name: B cell
+synonym: "B lymphocyte" EXACT []
+synonym: "B-cell" BROAD []
+is_a: CL:0000542 ! lymphocyte
+
+[Term]
+id: CL:0000980
+name: plasmablast
+is_a: CL:0000236 ! B cell
+
+[Term]
+id: CL:0000084
+name: T cell
+synonym: "T lymphocyte" EXACT []
+is_a: CL:0000542 ! lymphocyte
+
+[Term]
+id: CL:0000798
+name: gamma-delta T cell
+is_a: CL:0000084 ! T cell
+
+[Term]
+id: CL:0000623
+name: natural killer cell
+synonym: "NK cell" EXACT []
+is_a: CL:0000542 ! lymphocyte
+
+[Term]
+id: CL:0000576
+name: monocyte
+is_a: CL:0000000 ! cell
+
+[Term]
+id: CL:9999999
+name: obsolete thing
+is_obsolete: true
+
+[Typedef]
+id: part_of
+name: part of

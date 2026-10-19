@@ -873,6 +873,18 @@ adata.obs[{_lit(target + "_confidence")}] = np.asarray(pred.probability_matrix.m
                 "# in this dataset, so the labels cannot be replayed. Recorded:",
                 *_param_comment(p),
             ], "LLM labels not stored")
+    elif method == "marker_score" and _marker_db_mapping(p, ctx, target):
+        # Named from the marker databases (core/marker_db.py), which the script
+        # does not download: the names scView stored for this column are used.
+        status, note = RECORDED, "marker-database labels written in from the record"
+        code += [
+            "# NOTE: scView named each cluster from the PanglaoDB + CellMarker 2.0 marker",
+            "# databases (fetched on first use, not by this script), so the names it",
+            "# stored for this column are used.",
+            f"mapping = {_lit(_marker_db_mapping(p, ctx, target))}",
+            f"adata.obs[{_lit(target)}] = adata.obs[groupby].astype(str).map(",
+            '    lambda g: mapping.get(g, "Unknown")).astype("category")',
+        ]
     elif method == "marker_score":
         sets = {k: list(v) for k, v in _MARKER_SETS.items()}
         code += _block(f'''
@@ -897,6 +909,14 @@ adata.obs.drop(columns=list(score_cols.values()), inplace=True)
                                  *_param_comment(p)], "unknown annotation method")
     code.append(f"markers_for(adata, {_lit(target)})")
     return Snippet(status, code, note)
+
+
+def _marker_db_mapping(p: dict, ctx: _Ctx, target: str) -> dict[str, str] | None:
+    """The stored marker-score labels when the marker databases made them, else None."""
+    source = getattr(ctx.adata, "uns", {}).get(f"{target}_markerscore_source") if ctx.adata is not None else None
+    from_db = p.get("marker_source") == "database" or (
+        hasattr(source, "get") and source.get("marker_source") == "database")
+    return _uns_mapping(ctx.adata, f"{target}_markerscore_mapping") if from_db else None
 
 
 def _uns_mapping(adata, key: str) -> dict[str, str] | None:

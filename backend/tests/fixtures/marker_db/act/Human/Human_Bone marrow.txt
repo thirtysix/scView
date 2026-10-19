@@ -1,0 +1,2 @@
+Species	Tissue	CellType	Marker	Resource
+Human	Bone marrow	Plasmacytoid dendritic cell	LILRA4, GZMB	5

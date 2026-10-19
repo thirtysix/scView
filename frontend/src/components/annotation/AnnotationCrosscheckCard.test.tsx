@@ -12,6 +12,9 @@ const { getCrosscheckInfo, runCrosscheck, saveCrosscheck, refresh, plots } = vi.
 }));
 vi.mock("@/api/annotation", () => ({ getCrosscheckInfo, runCrosscheck, saveCrosscheck }));
 vi.mock("@/hooks/useDatasetRefresh", () => ({ useDatasetRefresh: () => refresh }));
+vi.mock("@/components/annotation/MarkerDbCheck", () => ({
+  MarkerDbCheck: ({ column }: { column: string }) => <div data-testid="marker-db-mounted">{column}</div>,
+}));
 vi.mock("@/lib/plotly", () => ({ default: { register: vi.fn() } }));
 vi.mock("plotly.js/lib/sankey", () => ({ default: {} }));
 vi.mock("@/lib/plotConfig", () => ({ plotConfig: () => ({}) }));
@@ -94,6 +97,8 @@ describe("AnnotationCrosscheckCard", () => {
     expect(within(group).getByRole("button", { name: /Donor/ }).getAttribute("aria-pressed")).toBe("false");
     // The annotation is the reference, not the clustering.
     expect((screen.getByLabelText("Reference") as HTMLSelectElement).value).toBe("cell_type_llm");
+    // The marker-database check follows the reference.
+    expect(screen.getByTestId("marker-db-mounted").textContent).toBe("cell_type_llm");
 
     fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
     await waitFor(() => expect(screen.getByTestId("crosscheck-result")).toBeTruthy());

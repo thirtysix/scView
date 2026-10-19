@@ -1,0 +1,4 @@
+Species	Tissue	CellType	Marker	Resource
+Human	Blood	B cell	CD79A, MS4A1, CD19	1, 2
+Human	Blood	Plasmacytoid dendritic cell	LILRA4, CLEC4C, IL3RA, IRF7, TCF4	3
+Human	Blood	Monocyte (CD14é)	CD14, LYZ	4

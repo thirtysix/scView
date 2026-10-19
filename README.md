@@ -395,6 +395,19 @@ first start the backend downloads them (~45 MB) from the Broad Institute in the 
 they are subject to [MSigDB's terms](https://www.gsea-msigdb.org/gsea/msigdb_license_terms.jsp).
 Set `MSIGDB_AUTO_DOWNLOAD=false` in `.env` to skip the download.
 
+The annotation cross-check's marker database check and the offline marker-score annotator use
+three cell-type marker databases, which scView does not ship either: the first time you use them,
+the backend downloads them (~11 MB) from the databases' own sites into the data volume:
+[PanglaoDB](https://panglaodb.se/) (Franzén et al. 2019,
+[doi:10.1093/database/baz046](https://doi.org/10.1093/database/baz046)),
+[CellMarker 2.0](http://117.50.127.228/CellMarker/) (Hu et al. 2023,
+[doi:10.1093/nar/gkac947](https://doi.org/10.1093/nar/gkac947)) and
+[ACT](http://xteam.xbio.top/ACT/) (Quan et al. 2023,
+[doi:10.1186/s13073-023-01249-5](https://doi.org/10.1186/s13073-023-01249-5)). None of them states
+a licence for the data, so check the reuse terms with the providers for your purpose. Set
+`MARKER_DB_AUTO_DOWNLOAD=false` in `.env` to skip the download (the annotator then falls back to
+its built-in marker sets).
+
 ### Optional: enable the AI features
 Add a [DeepInfra](https://deepinfra.com/dash/api_keys) API key. The start scripts ask for one on
 the first run; to add or change it later, open the `.env` file in the scView folder in a text
