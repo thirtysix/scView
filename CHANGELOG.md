@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-19
+
 ### Added
 - **Podman support.** `start-windows.bat`, `stop-windows.bat` and `start.sh` use Podman when
   Docker isn't running: on Windows and macOS they start the Podman machine (creating it the first
