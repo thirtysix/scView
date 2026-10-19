@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-10-19
+
 ### Changed
 - **Marker choice needs adjusted p < 0.05.** The markers handed to the AI annotator, the co-pilot,
   the marker database check and the enrichment (ORA) query now also need an adjusted p-value under
