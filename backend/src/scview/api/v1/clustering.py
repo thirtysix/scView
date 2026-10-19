@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from scview.core.sse import keepalive
 from scview.core import cluster_distances as cd
 from scview.core import hvg_sensitivity as hs
 from scview.core import resolution_sweep as rs
@@ -163,7 +164,7 @@ async def run_sweep(
                 pass
 
     return StreamingResponse(
-        events(),
+        keepalive(events()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -373,7 +374,7 @@ async def run_hvg_sensitivity(
                 finish()
 
     return StreamingResponse(
-        events(),
+        keepalive(events()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

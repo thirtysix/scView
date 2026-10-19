@@ -1,7 +1,8 @@
 @echo off
 rem scView launcher for Windows: double-click to start, then use stop-windows.bat.
-rem Starts Docker Desktop if needed, creates .env on first run, builds and starts
-rem the production stack, and opens http://localhost:3000.
+rem Uses Docker Desktop, or Podman (Podman Desktop) when Docker isn't there;
+rem starts it if needed, creates .env on first run, builds and starts the
+rem production stack, and opens http://localhost:3000.
 setlocal EnableExtensions
 title scView
 cd /d "%~dp0"
@@ -18,13 +19,27 @@ if not exist docker-compose.yml (
     goto :fail
 )
 
-where docker >nul 2>&1
-if errorlevel 1 (
-    echo   Docker Desktop is not installed.
-    echo   Install it from https://www.docker.com/products/docker-desktop/
+rem Docker when it is running, else Podman, else Docker (started below).
+set "ENGINE="
+set "ENGINE_APP=Docker Desktop"
+docker info >nul 2>&1
+if not errorlevel 1 set "ENGINE=docker"
+if not defined ENGINE (
+    where podman >nul 2>&1
+    if not errorlevel 1 set "ENGINE=podman"
+)
+if not defined ENGINE (
+    where docker >nul 2>&1
+    if not errorlevel 1 set "ENGINE=docker"
+)
+if not defined ENGINE (
+    echo   Neither Docker Desktop nor Podman is installed. Install one of them:
+    echo     Docker Desktop: https://www.docker.com/products/docker-desktop/
+    echo     Podman Desktop: https://podman-desktop.io/  ^(include Compose when it asks^)
     echo   restart the computer, then double-click this file again.
     goto :fail
 )
+if "%ENGINE%"=="podman" goto :podman
 
 docker info >nul 2>&1
 if not errorlevel 1 goto :docker_ready
@@ -44,6 +59,45 @@ goto :fail
 
 :docker_ready
 echo   [ok] Docker is running.
+goto :engine_ready
+
+:podman
+set "ENGINE_APP=Podman"
+podman info >nul 2>&1
+if not errorlevel 1 goto :podman_ready
+podman machine list --format "{{.Name}}" 2>nul | findstr /r "." >nul
+if not errorlevel 1 goto :podman_start
+echo   Creating the Podman machine, first time only: this takes a few minutes...
+podman machine init
+if errorlevel 1 (
+    echo.
+    echo   Could not create the Podman machine. Open Podman Desktop and follow
+    echo   its setup, then double-click this file again.
+    goto :fail
+)
+:podman_start
+echo   Starting the Podman machine, this can take a minute...
+podman machine start >nul 2>&1
+podman info >nul 2>&1
+if not errorlevel 1 goto :podman_ready
+echo.
+echo   Podman did not start. Open Podman Desktop, start the Podman machine
+echo   there, then double-click this file again.
+goto :fail
+
+:podman_ready
+podman compose version >nul 2>&1
+if not errorlevel 1 goto :podman_compose_ready
+echo   Podman needs Compose to run scView, and it isn't installed. In Podman
+echo   Desktop open Settings, then Resources, find Compose and click Setup.
+echo   Then double-click this file again.
+goto :fail
+:podman_compose_ready
+rem Drop the ">>>> Executing external compose provider" banner on every command.
+set "PODMAN_COMPOSE_WARNING_LOGS=false"
+echo   [ok] Podman is running.
+
+:engine_ready
 
 if exist .env goto :env_ready
 echo.
@@ -64,8 +118,12 @@ echo   can take tens of minutes. Later starts take about a minute.
 echo   You can ignore a "must be built from source" warning: this window
 echo   does that for you.
 echo.
-docker compose pull --ignore-pull-failures
-docker compose up -d
+if "%ENGINE%"=="docker" (
+    docker compose pull --ignore-pull-failures
+) else (
+    podman compose pull
+)
+%ENGINE% compose up -d
 if errorlevel 1 (
     echo.
     echo   scView did not start; the messages above say why.
@@ -89,7 +147,7 @@ start "" http://localhost:3000
 echo.
 echo   scView is running at http://localhost:3000
 echo.
-echo   You can close this window; scView keeps running in Docker Desktop.
+echo   You can close this window; scView keeps running in %ENGINE_APP%.
 echo   To stop it, double-click stop-windows.bat. Your datasets are kept.
 echo.
 pause

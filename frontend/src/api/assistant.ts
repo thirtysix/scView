@@ -97,6 +97,11 @@ export async function getRagStatus(): Promise<RagStatus> {
   return apiFetch<RagStatus>(`/assistant/rag-status`);
 }
 
+/** Whether a language model can be called (a DeepInfra API key is set). */
+export async function getLlmStatus(): Promise<{ available: boolean }> {
+  return apiFetch<{ available: boolean }>(`/assistant/llm-status`);
+}
+
 /** A deterministic one-line "I notice…" nudge surfaced when a dataset opens. */
 export interface DatasetInsight {
   insight: string;

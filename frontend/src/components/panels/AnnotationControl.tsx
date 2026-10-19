@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Tags, Loader2, Check } from "lucide-react";
 import { getCellTypistModels, getCellTypistSummary, type CellTypistModel } from "@/api/annotation";
+import { getLlmStatus } from "@/api/assistant";
 import { CellTypistSummary } from "@/components/panels/CellTypistSummary";
 import { defaultModel, orderModels, speciesMismatch, type DatasetSpecies } from "@/lib/celltypistModels";
 import { prettyObsLabel, isRedundantClusterCol } from "@/lib/formatting";
@@ -25,7 +26,8 @@ const SPECIES_GROUP: Record<CellTypistModel["species"], string> = {
  *
  * Pick the clustering to base predictions on (so you can annotate, e.g., several
  * Leiden resolutions into separate columns), choose the method (default: any-tissue
- * LLM, no reference model to pick), and the output obs column is shown explicitly.
+ * LLM, no reference model to pick; marker scores when no API key is set), and the
+ * output obs column is shown explicitly.
  */
 export function AnnotationControl({ onAnnotate, running, species }: Props) {
   const dataset = useDatasetStore((s) => s.currentDataset);
@@ -48,6 +50,9 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   const primary = dataset?.active_clustering ?? (groupings.includes("cluster") ? "cluster" : groupings[0]);
 
   const [method, setMethod] = useState<"llm" | "celltypist" | "marker_score">("llm");
+  const [methodPicked, setMethodPicked] = useState(false);
+  // null until known; without a key the server runs CellTypist for "llm".
+  const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null);
   const [tissue, setTissue] = useState("");
   const [markerSets, setMarkerSets] = useState<"databases" | "builtin">("databases");
   const [model, setModel] = useState("Immune_All_Low.pkl");
@@ -75,6 +80,23 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
     if (targetEdited || !groupby) return;
     setTarget(`${groupby}_celltypeAnno`);
   }, [groupby, targetEdited]);
+
+  useEffect(() => {
+    let live = true;
+    getLlmStatus()
+      .then((s) => live && setLlmAvailable(s.available))
+      .catch(() => {
+        /* unknown: keep the AI default */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Without an API key start on the offline marker scores, until the user picks.
+  useEffect(() => {
+    if (llmAvailable === false && !methodPicked) setMethod("marker_score");
+  }, [llmAvailable, methodPicked]);
 
   // Lazily load the CellTypist catalog only when that method is selected.
   useEffect(() => {
@@ -148,7 +170,10 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   const tab = (key: "llm" | "celltypist" | "marker_score", label: string) => (
     <button
       type="button"
-      onClick={() => setMethod(key)}
+      onClick={() => {
+        setMethod(key);
+        setMethodPicked(true);
+      }}
       className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
         method === key ? "bg-primary text-white" : "text-slate-600 hover:bg-slate-50"
       }`}
@@ -207,7 +232,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
 
       {/* Method */}
       <div className="mb-3 inline-flex rounded-lg border border-slate-200 p-0.5 text-xs">
-        {tab("llm", "AI (any tissue)")}
+        {tab("llm", llmAvailable === false ? "AI (needs an API key)" : "AI (any tissue)")}
         {tab("celltypist", "CellTypist (reference)")}
         {tab("marker_score", "Marker score (offline)")}
       </div>
@@ -245,6 +270,13 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           <p className="mt-1 text-[11px] text-slate-400">
             No reference model needed: names cell types from each cluster's top marker genes.
           </p>
+          {llmAvailable === false && (
+            <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-700">
+              <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
+              No DeepInfra API key is set, so this runs CellTypist instead. Add DEEPINFRA_API_KEY to
+              the .env file in the scView folder and restart scView to use the AI.
+            </p>
+          )}
         </div>
       ) : (
         <div className="mb-3">

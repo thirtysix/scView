@@ -1,5 +1,5 @@
 @echo off
-rem Stops scView. Uploaded datasets live in a Docker volume and are kept.
+rem Stops scView. Uploaded datasets live in a Docker or Podman volume and are kept.
 setlocal EnableExtensions
 title scView
 cd /d "%~dp0"
@@ -7,10 +7,18 @@ cd /d "%~dp0"
 echo.
 echo   Stopping scView (your datasets are kept)...
 echo.
-docker compose down
+rem The engine start-windows.bat used: Docker when it is running, else Podman.
+set "ENGINE=docker"
+docker info >nul 2>&1
+if errorlevel 1 (
+    where podman >nul 2>&1
+    if not errorlevel 1 set "ENGINE=podman"
+)
+set "PODMAN_COMPOSE_WARNING_LOGS=false"
+%ENGINE% compose down
 if errorlevel 1 (
     echo.
-    echo   Could not stop scView. Is Docker Desktop running?
+    echo   Could not stop scView. Is Docker Desktop or Podman running?
 ) else (
     echo.
     echo   scView has stopped. Double-click start-windows.bat to start it again.

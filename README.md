@@ -35,6 +35,7 @@ https://github.com/user-attachments/assets/486aaf9d-bf77-4a20-9f1f-28bc3bf81e8c
   - [Windows troubleshooting](#windows-troubleshooting)
   - [macOS and Linux](#macos-and-linux)
   - [Other ways to start](#other-ways-to-start)
+  - [Using Podman instead of Docker](#using-podman-instead-of-docker)
   - [Once it's running](#once-its-running)
   - [First steps](#first-steps)
   - [Optional: enable the AI features](#optional-enable-the-ai-features)
@@ -208,7 +209,8 @@ scView runs entirely in Docker, so there is no Python, Node, or R to install. **
 ### Requirements
 
 - **Docker:** Docker Desktop on Windows and macOS, Docker Engine on Linux, with **Docker Compose
-  v2.24 or newer** (current Docker Desktop includes it).
+  v2.24 or newer** (current Docker Desktop includes it). Podman works too: see
+  [Using Podman instead of Docker](#using-podman-instead-of-docker).
 - **RAM:** ~8 GB runs the stack and small-to-medium datasets (up to ~tens of thousands of cells)
   fine. For **large datasets (100k+ cells)**, the **Seurat `.rds` converter**, or heavy steps
   (doublet detection, Harmony, enrichment) on big data, **16 GB+ is recommended**; at 8 GB those
@@ -364,6 +366,27 @@ make up      # prod stack -> http://localhost:3000
 make dev     # dev stack  -> http://localhost:5173
 make down    # stop
 ```
+
+### Using Podman instead of Docker
+
+The launchers use Podman when Docker isn't running, so with Podman installed the steps above are
+the same: double-click `start-windows.bat`, or run `./start.sh --prod`.
+
+- **Windows and macOS:** install [Podman Desktop](https://podman-desktop.io/) and let it set up
+  Podman **and Compose** when it asks. The launcher starts the Podman machine (or creates it the
+  first time). If it says Compose is missing, open Podman Desktop, then **Settings → Resources →
+  Compose → Setup**.
+- **Linux:** install `podman` plus a compose tool that can read scView's compose files: Docker
+  Compose v2.24 or newer, or **podman-compose 1.3 or newer** (`pip install --user
+  'podman-compose>=1.3'`). The podman-compose in Ubuntu 24.04 (1.0.6) is too old, and so is a
+  `docker-compose` 1.x, which `podman compose` would otherwise pick first; `start.sh` chooses a
+  tool that works and tells you which.
+- Set `SCVIEW_ENGINE=podman` (or `docker`) to choose when both are installed. To run Compose by
+  hand, export the `PODMAN_COMPOSE_PROVIDER` line `start.sh` prints, then use `podman compose`
+  as `docker compose` above.
+
+Processing runs at much the same speed: about 7% slower under rootless Podman than under Docker
+on the same Linux laptop.
 
 ### Once it's running
 

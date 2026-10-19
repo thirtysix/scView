@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from scview.core.sse import keepalive
 from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
@@ -461,7 +462,7 @@ async def run_assessment_pipeline_stream(
             yield f"event: error\ndata: {json.dumps({'error': detail})}\n\n"
 
     return StreamingResponse(
-        event_generator(),
+        keepalive(event_generator()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -664,7 +665,7 @@ async def stream_qc_report(
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
     return StreamingResponse(
-        event_generator(),
+        keepalive(event_generator()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

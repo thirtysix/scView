@@ -32,6 +32,12 @@ logger = logging.getLogger(__name__)
 RATE_PER_1000_CELLS = 0.008
 MIN_RATE = 0.004  # 10x's table starts at ~500 cells captured: 0.4 %
 MAX_RATE = 0.25
+# Up to this many cells Scrublet finds neighbours exactly (sklearn) instead of with
+# pynndescent: the same scores (Kang: Pearson 1.0, same top 1-5% of cells) in 18 s
+# instead of 56 s, and 77 s instead of 125 s on 37k cells, with no numba compile on
+# a fresh server. Exact search grows faster with the cell count, so large data keeps
+# the approximate one.
+EXACT_KNN_MAX_CELLS = 50_000
 RULE_OF_THUMB = (
     "Rule of thumb from 10x Genomics: about 0.8 % doublets per 1,000 cells captured "
     "in one channel. Chemistry, loading and filtering before upload all move it."

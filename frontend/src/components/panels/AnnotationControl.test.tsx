@@ -8,6 +8,8 @@ const { getCellTypistModels, getCellTypistSummary } = vi.hoisted(() => ({
   getCellTypistSummary: vi.fn(),
 }));
 vi.mock("@/api/annotation", () => ({ getCellTypistModels, getCellTypistSummary }));
+const { getLlmStatus } = vi.hoisted(() => ({ getLlmStatus: vi.fn() }));
+vi.mock("@/api/assistant", () => ({ getLlmStatus }));
 
 import { AnnotationControl } from "./AnnotationControl";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -49,6 +51,7 @@ describe("AnnotationControl (CellTypist)", () => {
     useDatasetStore.setState({ currentDatasetId: "d1", currentDataset: DATASET });
     useViewStore.getState().setPanel("assessment");
     getCellTypistModels.mockReset().mockResolvedValue(MODELS);
+    getLlmStatus.mockReset().mockResolvedValue({ available: true });
     getCellTypistSummary.mockReset().mockImplementation((_id: string, column?: string) =>
       Promise.resolve({ columns: ["ct"], dataset_species: "mouse", result: column ? summary() : null }));
   });
@@ -120,5 +123,18 @@ describe("AnnotationControl (CellTypist)", () => {
     fireEvent.click(screen.getByText("Annotate cell types"));
     await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(2));
     expect(onAnnotate.mock.calls[1]![0]).toMatchObject({ annotation_marker_sets: "builtin" });
+  });
+
+  it("starts on marker scores without an API key and says what the AI tab would do", async () => {
+    getLlmStatus.mockResolvedValue({ available: false });
+    const onAnnotate = vi.fn().mockResolvedValue(undefined);
+    render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
+    await screen.findByText("AI (needs an API key)");
+    expect(screen.getByLabelText("Marker sets")).toBeTruthy();
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(1));
+    expect(onAnnotate.mock.calls[0]![0]).toMatchObject({ annotation_method: "marker_score" });
+    fireEvent.click(screen.getByText("AI (needs an API key)"));
+    expect(screen.getByText(/runs CellTypist instead/)).toBeTruthy();
   });
 });

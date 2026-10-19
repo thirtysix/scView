@@ -260,6 +260,8 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     ``params.drop_doublets`` is set, so users can inspect the QC distribution first.
     Without an ``expected_doublet_rate`` the rate is suggested from the cells per
     sample (``doublets.suggest_rate``); the rate used is recorded in provenance.
+    Neighbours are exact up to ``doublets.EXACT_KNN_MAX_CELLS`` cells (recorded as
+    ``neighbors``).
     """
     method = (params.doublet_method or "scrublet").lower()
     if method != "scrublet":
@@ -271,7 +273,10 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
         suggestion = doublets.suggest_rate(adata)
         found = {"expected_doublet_rate": suggestion["rate"],
                  "expected_rate_from": suggestion["column"] or "all cells (no sample column)"}
-    sc.pp.scrublet(adata, expected_doublet_rate=found["expected_doublet_rate"])
+    exact = adata.n_obs <= doublets.EXACT_KNN_MAX_CELLS
+    found["neighbors"] = "exact" if exact else "approximate"
+    sc.pp.scrublet(adata, expected_doublet_rate=found["expected_doublet_rate"],
+                   use_approx_neighbors=not exact)
     doublets.clear_threshold(adata)  # set on the previous run's scores
     n_dbl = (
         int(adata.obs["predicted_doublet"].sum())

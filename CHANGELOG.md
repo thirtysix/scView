@@ -6,6 +6,34 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-19
+
+### Added
+- **Podman support.** `start-windows.bat`, `stop-windows.bat` and `start.sh` use Podman when
+  Docker isn't running: on Windows and macOS they start the Podman machine (creating it the first
+  time) and check that Compose is set up. On Linux, `start.sh` picks a compose tool that can read
+  scView's compose files (Docker Compose 2.24+ or podman-compose 1.2+), because `podman compose`
+  would otherwise take an old `docker-compose` 1.x first. `SCVIEW_ENGINE=docker|podman` chooses
+  when both are installed. See *Using Podman instead of Docker* in the README.
+
+### Fixed
+- **Long processing steps no longer fail with "network error".** The app's web server closed a
+  response that had sent nothing for 5 minutes, and a step reports only when it ends: doublet
+  detection on Kang in a Windows virtual machine under Podman took longer than that, the page
+  showed "network error", and the run stopped without saving. Every streamed response (processing,
+  re-clustering, integration, QC report, co-pilot) now sends a keep-alive every 15 seconds.
+- **Without an API key, cell-type annotation starts on Marker score (offline)** instead of the AI,
+  and the AI tab says it needs a key and would run CellTypist instead (`GET /assistant/llm-status`).
+
+### Changed
+- **Doublet detection is about 5 times faster.** Scrublet now finds neighbours exactly instead
+  of with an approximate search, for datasets up to 50,000 cells. The scores are the same (Kang:
+  Pearson correlation 1.0, the same top 1-5% of cells) and the step takes 18 s instead of 93 s
+  on Kang, so processing the whole dataset takes 82 s instead of 142 s. It also skips a numba
+  compilation that cost tens of seconds on the first run after every start. Larger datasets keep
+  the approximate search, which is faster there. The replay script and provenance record which
+  was used.
+
 ## [0.23.1] - 2026-10-19
 
 ### Changed

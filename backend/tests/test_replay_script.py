@@ -106,6 +106,8 @@ _STEPS = [
     ("qc_metrics", {}),
     ("doublet_detection", {"doublet_method": "scrublet", "expected_doublet_rate": 0.06,
                            "expected_rate_from": "sample"}),
+    ("doublet_detection", {"doublet_method": "scrublet", "expected_doublet_rate": 0.06,
+                           "expected_rate_from": "sample", "neighbors": "exact"}),
     ("filtering", {"qc_threshold_mode": "mad", "qc_mad_k": 5.0, "qc_mad_k_mt": 3.0,
                    "qc_mad_upper": False, "qc_sample_column": "", "min_cells": 3,
                    "max_pct_mt": 20.0, "drop_doublets": True}),
