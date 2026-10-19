@@ -50,7 +50,6 @@ DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
 DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash"
 
 # How much result detail to put in the prompt (keep the context bounded).
-_MAX_MARKER_GROUPS = 16
 _MAX_MARKER_GENES = 8
 _MAX_CATEGORICAL_UNIQUE = 30
 _MAX_CATEGORICAL_COLUMNS = 8
@@ -381,10 +380,6 @@ def build_grounding_context(
                 detail=f"{group} top markers: {listed}",
                 evidence=f"Top markers by {mcol}\n{lines[-1]}",
             ))
-        # group cap to keep the prompt bounded
-        if len(top) > _MAX_MARKER_GROUPS:
-            lines.append(f"- (… {len(top)} groups total; showing first "
-                         f"{_MAX_MARKER_GROUPS})")
 
     # 4c. Enrichment results, if present in uns
     try:
