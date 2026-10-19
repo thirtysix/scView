@@ -545,7 +545,8 @@ sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False,
 def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
     rate = p.get("expected_doublet_rate")
     if isinstance(rate, (int, float)) and rate > 0:
-        code = [f"sc.pp.scrublet(adata, expected_doublet_rate={_lit(float(rate))})"]
+        exact = ", use_approx_neighbors=False" if p.get("neighbors") == "exact" else ""
+        code = [f"sc.pp.scrublet(adata, expected_doublet_rate={_lit(float(rate))}{exact})"]
         note = ""
         if p.get("expected_rate_from"):
             code.insert(0, "# The rate scView suggested from the cells per sample "

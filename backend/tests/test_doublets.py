@@ -201,7 +201,7 @@ def test_the_applied_threshold_survives_a_save(tmp_path):
 def test_the_step_takes_the_suggestion_unless_a_rate_is_given(monkeypatch):
     seen: list[float] = []
 
-    def fake_scrublet(adata, expected_doublet_rate):
+    def fake_scrublet(adata, expected_doublet_rate, use_approx_neighbors=None):
         seen.append(expected_doublet_rate)
         adata.obs["doublet_score"] = 0.0
         adata.obs["predicted_doublet"] = False
@@ -211,9 +211,10 @@ def test_the_step_takes_the_suggestion_unless_a_rate_is_given(monkeypatch):
     assert pl.PipelineParams().expected_doublet_rate is None
     found = pl._run_doublet_detection(a, pl.PipelineParams())
     assert seen[-1] == pytest.approx(0.04)
-    assert found == {"expected_doublet_rate": pytest.approx(0.04), "expected_rate_from": "sample"}
+    assert found == {"expected_doublet_rate": pytest.approx(0.04), "expected_rate_from": "sample",
+                     "neighbors": "exact"}
     found = pl._run_doublet_detection(a, pl.PipelineParams(expected_doublet_rate=0.1))
-    assert seen[-1] == 0.1 and found == {"expected_doublet_rate": 0.1}
+    assert seen[-1] == 0.1 and found == {"expected_doublet_rate": 0.1, "neighbors": "exact"}
 
 
 def test_a_real_run_records_its_rate_and_scrublets_threshold_gives_its_calls():
