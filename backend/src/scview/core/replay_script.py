@@ -1032,6 +1032,21 @@ def _label_cells(p: dict, ctx: _Ctx) -> Snippet:
     ], "manual labels: cells not recorded")
 
 
+def _annotation_crosscheck(p: dict, ctx: _Ctx) -> Snippet:
+    outs = [str(c) for c in (p.get("outputs") or []) if c]
+    join = [f"#   adata.obs[{comment_text(repr(c), 80)}] = meta.loc[adata.obs_names, {comment_text(repr(c), 80)}]"
+            for c in outs]
+    return Snippet(NOT_REPLAYABLE, [
+        "# scView's annotation cross-check (consensus + agreement over several label",
+        "# columns) has no scanpy equivalent; it is not replayed. To carry its columns",
+        "# over, join them from scView's cell metadata export by barcode, e.g.:",
+        "#   meta = pd.read_csv('cell_metadata.csv', index_col=0)",
+        *join,
+        "# Recorded:",
+        *_param_comment(p),
+    ], "scView's own cross-check")
+
+
 def _doublet_threshold(p: dict, ctx: _Ctx) -> Snippet:
     t = p.get("threshold")
     if t == "scrublet":
@@ -1083,6 +1098,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "label_cells": _label_cells,
     "undo_label_cells": _label_cells,
     "doublet_threshold": _doublet_threshold,
+    "annotation_crosscheck": _annotation_crosscheck,
 }
 
 

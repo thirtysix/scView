@@ -147,6 +147,8 @@ _STEPS = [
     ("undo_label_cells", {"column": "mine", "n_cells": 3}),
     ("doublet_threshold", {"threshold": 0.3}),
     ("doublet_threshold", {"threshold": "scrublet"}),
+    ("annotation_crosscheck", {"columns": ["ct", "cluster"], "reference": "ct",
+                               "outputs": ["xc_consensus", "xc_agreement"]}),
 ]
 
 
@@ -160,6 +162,7 @@ def test_every_step_type_writes_code_that_compiles():
     assert set(statuses) <= set(replay_script.STATUSES)
     by_step = dict(zip([s for s, _ in _STEPS], statuses))
     assert by_step["label_cells"] == "not_replayable"
+    assert by_step["annotation_crosscheck"] == "not_replayable"
     assert by_step["enrichment"] == "approximate"
     assert by_step["ingest"] == "approximate"  # the antibodies are not moved to obsm
     # helpers are defined once each, before they are used
@@ -184,6 +187,7 @@ def test_recorded_values_cannot_inject_code():
         ("clustering", {"clustering_method": "leiden", "clustering_resolution": evil}),
         ("marker_genes", {"marker_columns": [evil, "a'b\"c"]}),
         ("label_cells", {"column": evil, "label": evil}),
+        ("annotation_crosscheck", {"columns": [evil], "reference": evil, "outputs": [evil]}),
     ])
     provenance.init_source(a, origin=evil, original_filename=evil, fmt=evil)
     script = replay_script.build_script(a, dataset_id=evil, dataset_name=evil)
