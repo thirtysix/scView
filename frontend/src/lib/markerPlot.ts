@@ -14,6 +14,32 @@
  * a gene for that level to mean much get no colour.
  */
 
+export interface MarkerRow {
+  gene: string;
+  logfoldchange: number | null;
+}
+
+/** The top `perGroup` up-regulated markers of each group, in group order, each gene once. */
+export function pickMarkerGenes(
+  groups: string[],
+  markers: Record<string, MarkerRow[]>,
+  perGroup: number,
+): { gene: string; group: string }[] {
+  const seen = new Set<string>();
+  const out: { gene: string; group: string }[] = [];
+  for (const group of groups) {
+    let n = 0;
+    for (const m of markers[group] ?? []) {
+      if (n >= perGroup) break;
+      if (!((m.logfoldchange ?? 0) > 0) || seen.has(m.gene)) continue;
+      seen.add(m.gene);
+      out.push({ gene: m.gene, group });
+      n++;
+    }
+  }
+  return out;
+}
+
 /** "all": mean over every cell of the group; "expressing": over cells above 0 only. */
 export type MeanOf = "all" | "expressing";
 /** "gene": each gene scaled to 0-1 across the groups shown; "fixed": the layer's range. */

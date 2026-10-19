@@ -1,14 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { DatasetInfo } from "@/api/types";
 
 const { apiFetch } = vi.hoisted(() => ({ apiFetch: vi.fn() }));
 vi.mock("@/api/client", () => ({ apiFetch }));
-vi.mock("@/components/plots/MarkerPlot", () => ({ MarkerPlot: () => null }));
+vi.mock("@/components/plots/MarkerPlot", () => ({
+  MarkerPlot: ({ kind }: { kind: string }) => <div data-testid="marker-plot">{kind}</div>,
+}));
+vi.mock("@/components/plots/CellHeatmap", () => ({
+  CellHeatmap: ({ groupby }: { groupby: string }) => <div data-testid="cell-heatmap">{groupby}</div>,
+}));
 vi.mock("@/components/plots/MarkerSpecificityPlot", () => ({ MarkerSpecificityPlot: () => null }));
 
 import { MarkerGenesPanel } from "./MarkerGenesPanel";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useViewStore } from "@/stores/viewStore";
 
 const DATASET = {
   id: "d1", name: "d1", filename: "d1.h5ad", n_cells: 10, n_genes: 5, status: "ready",
@@ -45,5 +51,23 @@ describe("MarkerGenesPanel", () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(screen.queryByText("No marker genes available")).toBeNull();
     expect(screen.getByText("CD3E")).toBeTruthy();
+  });
+
+  it("switches the heatmap between group means and single cells", async () => {
+    apiFetch.mockResolvedValue(MARKERS);
+    useViewStore.setState({ markerView: "heatmap", markerGenes: [] });
+    render(<MarkerGenesPanel />);
+    expect(await screen.findByTestId("marker-plot")).toHaveTextContent("heatmap");
+    fireEvent.click(screen.getByRole("button", { name: "Per cell" }));
+    expect(screen.getByTestId("cell-heatmap")).toHaveTextContent("leiden");
+    expect(screen.queryByTestId("marker-plot")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Group means" }));
+    expect(screen.getByTestId("marker-plot")).toBeTruthy();
+    // the dot plot has no per-cell form
+    fireEvent.click(screen.getByRole("button", { name: "Per cell" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dot plot" }));
+    expect(screen.getByTestId("marker-plot")).toHaveTextContent("dotplot");
+    expect(screen.queryByRole("button", { name: "Per cell" })).toBeNull();
+    useViewStore.setState({ markerView: "table" });
   });
 });

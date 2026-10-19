@@ -15,16 +15,13 @@ import {
   MIN_FRACTION,
   dotSize,
   markerColours,
+  pickMarkerGenes,
   type ColourScale,
+  type MarkerRow,
   type MeanOf,
 } from "@/lib/markerPlot";
 
-export { scalePerGene } from "@/lib/markerPlot";
-
-interface MarkerRow {
-  gene: string;
-  logfoldchange: number | null;
-}
+export { pickMarkerGenes, scalePerGene } from "@/lib/markerPlot";
 
 interface ByGroup {
   groupby: string;
@@ -37,27 +34,6 @@ interface ByGroup {
   fraction: number[][]; // [group][gene]
   /** The layer's fixed colour range, the same for any genes and groups */
   scale_range?: [number, number];
-}
-
-/** The top `perGroup` up-regulated markers of each group, in group order, each gene once. */
-export function pickMarkerGenes(
-  groups: string[],
-  markers: Record<string, MarkerRow[]>,
-  perGroup: number,
-): { gene: string; group: string }[] {
-  const seen = new Set<string>();
-  const out: { gene: string; group: string }[] = [];
-  for (const group of groups) {
-    let n = 0;
-    for (const m of markers[group] ?? []) {
-      if (n >= perGroup) break;
-      if (!((m.logfoldchange ?? 0) > 0) || seen.has(m.gene)) continue;
-      seen.add(m.gene);
-      out.push({ gene: m.gene, group });
-      n++;
-    }
-  }
-  return out;
 }
 
 const pct = (f: number) => `${Math.round(f * 100)}%`;
