@@ -88,3 +88,11 @@ async def test_corpus_stats_is_one_read_only_select(monkeypatch):
     }
     (sql,) = seen
     assert sql.lstrip().upper().startswith("SELECT") and "DISTINCT doc_id" in sql
+
+
+async def test_llm_status_follows_the_api_key(client, test_settings):
+    url = "/api/v1/assistant/llm-status"
+    test_settings.DEEPINFRA_API_KEY = ""
+    assert (await client.get(url)).json() == {"available": False}
+    test_settings.DEEPINFRA_API_KEY = "k"
+    assert (await client.get(url)).json() == {"available": True}

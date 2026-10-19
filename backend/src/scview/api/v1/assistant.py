@@ -124,6 +124,13 @@ _RAG_STATUS_TTL = 600.0
 _rag_status_cache: dict = {}
 
 
+@router.get("/assistant/llm-status")
+async def llm_status(settings: Settings = Depends(get_settings_dep)) -> dict:
+    """Whether the AI features can call a language model: a DeepInfra key is set.
+    Without one they fall back (rules, CellTypist, the facts laid out)."""
+    return {"available": bool(settings.DEEPINFRA_API_KEY)}
+
+
 @router.get("/assistant/rag-status")
 async def rag_status(settings: Settings = Depends(get_settings_dep)) -> dict:
     """Whether the literature/tutorials RAG is configured, and what each corpus
