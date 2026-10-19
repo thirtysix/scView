@@ -270,9 +270,9 @@ def _rgg(groups: dict[str, list[tuple[str, float, float, float]]]):
             "params": {"groupby": "lab"}}
 
 
-def test_markers_are_detected_significant_up_genes_by_fold_change():
+def test_markers_are_detected_up_genes_by_fold_change():
     rows = [("RPL3", 9.0, 1e-9, 0.9), ("MT-ND1", 8.0, 1e-9, 0.9), ("RPLP1", 7.5, 1e-9, 0.9),
-            ("RPSA", 7.4, 1e-9, 0.9), ("LOWPTS", 7.0, 1e-9, 0.1), ("NOTSIG", 6.0, 0.2, 0.9),
+            ("RPSA", 7.4, 1e-9, 0.9), ("LOWPTS", 7.0, 1e-9, 0.1),
             ("DOWN", -2.0, 1e-9, 0.9), ("MID", 2.0, 1e-9, 0.5), ("TOP", 5.0, 1e-3, 0.3)]
     rows += [(f"G{i:02d}", 1.0 - i / 100, 1e-6, 0.4) for i in range(30)]
     other = [(r[0], 0.1, 0.9, 0.1) for r in rows]
@@ -280,10 +280,18 @@ def test_markers_are_detected_significant_up_genes_by_fold_change():
     a.obs["lab"] = pd.Categorical(["x", "x", "y", "y"])
     a.uns["rank_genes_groups__lab"] = _rgg({"x": rows, "y": other})
     out = mdb._markers_for(a, "lab")
-    # logFC order, not score order; ribosomal/mito/low-detection/non-significant/down left out; 25 kept
+    # logFC order, not score order; ribosomal/mito/low-detection/down left out; 25 kept
     assert out["x"][:3] == ["TOP", "MID", "G00"] and len(out["x"]) == 25
-    assert not {"RPL3", "MT-ND1", "RPLP1", "RPSA", "LOWPTS", "NOTSIG", "DOWN"} & set(out["x"])
+    assert not {"RPL3", "MT-ND1", "RPLP1", "RPSA", "LOWPTS", "DOWN"} & set(out["x"])
     assert out["y"] == []
+
+
+def test_markers_of_a_relabelled_column_are_computed_again():
+    a = _cells()
+    a.uns["rank_genes_groups__lab"] = _rgg({"old": [("CD3D", 3.0, 1e-9, 0.9)], "other": [("CD3E", 3.0, 1e-9, 0.9)]})
+    out = mdb._markers_for(a, "lab")
+    assert set(out) == {"B", "T-cells", "Zorblax", "Rare cell"} and "CD79A" in out["B"]
+    assert set(a.uns["rank_genes_groups__lab"]["names"].dtype.names) == {"old", "other"}  # untouched
 
 
 def _cells(seed: int = 0) -> ad.AnnData:

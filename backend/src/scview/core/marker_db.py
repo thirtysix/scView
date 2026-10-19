@@ -67,8 +67,6 @@ TOP_DB = 50  # a label's database set: its 50 best-evidenced measured genes
 N_MARKERS = 25  # a group's markers
 MIN_DB_GENES = 5  # fewer measured database genes than this: abstain
 N_SUGGEST = 3
-MIN_PTS = 0.2  # a marker is detected in at least this share of the group's cells
-MAX_SCAN = 1000  # markers are picked among the top 1000 (by test score) significant up genes
 MAX_GROUPS = 100
 # Mito, ribosomal (incl. RPLP0-2 and RPSA), immunoglobulin / TCR V segments and unnamed genes
 SKIP_GENE = re.compile(r"^(MT-|RP[LS]\d|RPLP\d|RPSA$|IG[HKL]V|TR[ABDG]V|ENSG)", re.I)
@@ -653,27 +651,22 @@ def _group_names(adata, groupby: str) -> list[str]:
     return [c for c in cats if c in present]
 
 
-def _stored_rgg(adata, groupby: str, groups: list[str]):
-    """The stored rank_genes_groups for ``groupby`` when it is usable here: has pts,
-    log fold changes and adjusted p-values, and the column's current groups."""
-    cands = [adata.uns.get(markers_key(groupby))]
-    default = adata.uns.get("rank_genes_groups")
-    if isinstance(default, dict) and dict(default.get("params", {})).get("groupby") == groupby:
-        cands.append(default)
-    for rgg in cands:
-        if not isinstance(rgg, dict) or not all(k in rgg for k in ("names", "logfoldchanges", "pvals_adj", "pts")):
-            continue
-        if not isinstance(rgg["pts"], pd.DataFrame):
-            continue
-        names = getattr(rgg["names"], "dtype", None)
-        if names is None or names.names is None or set(names.names) != set(groups):
-            continue
-        return rgg
-    return None
+def _stored_key(adata, groupby: str, groups: list[str]) -> str | None:
+    """The stored rank_genes_groups key for ``groupby`` when it covers the column's
+    current groups (a column relabelled since its markers were computed does not)."""
+    from scview.core.ora_background import resolve_markers_key
+
+    key = resolve_markers_key(adata.uns, groupby)
+    try:
+        names = adata.uns[key]["names"].dtype.names if key else None
+    except (KeyError, TypeError, AttributeError):
+        names = None
+    return key if names is not None and {str(n) for n in names} == set(groups) else None
 
 
-def _compute_rgg(adata, groupby: str, groups: list[str]):
-    """Wilcoxon markers on a throwaway object sharing the matrix: the dataset is not touched."""
+def _computed(adata, groupby: str, groups: list[str]):
+    """Wilcoxon markers (with pts) on a throwaway object sharing the matrix, so the
+    dataset is not touched; None when fewer than two groups have 3 cells."""
     import anndata as ad
     import scanpy as sc
 
@@ -689,37 +682,26 @@ def _compute_rgg(adata, groupby: str, groups: list[str]):
                        index=adata.obs_names)
     tmp = ad.AnnData(X=X, obs=obs, var=pd.DataFrame(index=src.var_names))
     sc.tl.rank_genes_groups(tmp, groupby=groupby, groups=keep, reference="rest", method="wilcoxon",
-                            pts=True, use_raw=False)
-    return tmp.uns["rank_genes_groups"]
+                            pts=True, use_raw=False, key_added=markers_key(groupby))
+    return tmp
 
 
 def _markers_for(adata, groupby: str) -> dict[str, list[str]]:
-    """Each group's top 25 markers for the database check (the assessment's rule).
-
-    From the stored rank_genes_groups of ``groupby`` when present, else computed:
-    the significant up genes (logFC > 0, adjusted p < 0.05) among the first 1000 by
-    test score, mitochondrial / ribosomal (incl. RPLP*, RPSA) / V-segment genes
-    dropped, detected in >= 20% of the group's cells, sorted by log fold change.
+    """Each group's top 25 markers for the database check: ``core/marker_selection.py``
+    (detected in >= 20% of the group, by log fold change, no ribosomal / mito genes),
+    from the column's stored rank_genes_groups, else computed without saving.
     Score order instead put FTL/CD63/ANXA5 ahead of CD14 in Kang's CD14 monocytes
     and ribosomal genes in the T-cell top 15 (Kang CellMarker lookup 0.46 -> 0.69).
     """
+    from scview.core.marker_selection import group_markers
+
     groups = _group_names(adata, groupby)
-    rgg = _stored_rgg(adata, groupby, groups) or _compute_rgg(adata, groupby, groups)
-    if rgg is None:
-        return {}
-    names = rgg["names"]
-    pts = rgg["pts"]
-    out: dict[str, list[str]] = {}
-    for g in names.dtype.names:
-        gl = [str(x) for x in names[g]]
-        lfc = np.asarray(rgg["logfoldchanges"][g], dtype=np.float64)
-        padj = np.asarray(rgg["pvals_adj"][g], dtype=np.float64)
-        keep = [i for i in range(len(gl)) if lfc[i] > 0 and padj[i] < 0.05][:MAX_SCAN]
-        p = pts[g].reindex([gl[i] for i in keep]).to_numpy(dtype=np.float64) if g in pts.columns else np.zeros(len(keep))
-        rows = [(gl[i], lfc[i]) for i, pi in zip(keep, p) if pi >= MIN_PTS and not SKIP_GENE.match(gl[i])]
-        rows.sort(key=lambda x: -x[1])
-        out[str(g)] = [x[0] for x in rows[:N_MARKERS]]
-    return out
+    key = _stored_key(adata, groupby, groups)
+    out = group_markers(adata, groupby, n=N_MARKERS, key=key) if key else {}
+    if out:
+        return out
+    tmp = _computed(adata, groupby, groups)
+    return group_markers(tmp, groupby, n=N_MARKERS) if tmp is not None else {}
 
 
 # ---------------------------------------------------------------------------
@@ -847,7 +829,7 @@ def check(adata, column: str, species: str | None = None, db: MarkerDB | None = 
         "ontology": db.ontology is not None,
         "sources": [s for s in status(db.dest)["sources"] if s["downloaded"]],
         "params": {"top_db_genes": TOP_DB, "group_markers": N_MARKERS, "min_db_genes": MIN_DB_GENES,
-                   "min_pts": MIN_PTS, "suggestions": N_SUGGEST},
+                   "suggestions": N_SUGGEST},
         "note": NOTE,
         "elapsed_seconds": round(time.monotonic() - t0, 2),
     }

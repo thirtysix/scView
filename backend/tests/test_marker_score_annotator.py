@@ -11,7 +11,7 @@ from tests.test_marker_db import _cells, installed, raw, small_sources  # noqa: 
 
 
 @pytest.fixture()
-def annotator_db(monkeypatch, installed):
+def annotator_db(monkeypatch, installed):  # noqa: F811 (the imported fixture)
     monkeypatch.setattr(mdb, "marker_db_dir", lambda: installed)
     monkeypatch.setattr(mdb, "auto_download_enabled", lambda: False)
 
