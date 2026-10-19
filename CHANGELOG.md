@@ -28,10 +28,35 @@ All notable changes to scView are documented here. The format is based on
   feature grid, dot plot or heatmap, scored, tested for enrichment, or saved as a gene-set
   collection. Genes missing from the open dataset are greyed, with a one-click fix for case-only
   differences (CD3E vs Cd3e).
+- **Marker database check** in the annotation cross-check: each label of the reference column is
+  matched by name (with Cell Ontology synonyms and common abbreviations) to PanglaoDB, CellMarker
+  2.0 and ACT cell types, and its database markers are tested against the group's own top 25
+  markers (hypergeometric, measured genes as background): *supported*, *no database support*,
+  *too few database markers* or *not in the databases*, with the shared genes. Each group also gets
+  the 3 PanglaoDB / CellMarker 2.0 types its markers fit best. Human or mouse rows follow the
+  dataset's species (Kang: 13 of 13 labels supported; paul15: 17 of 19). The databases are
+  downloaded from their own sites on first use (`MARKER_DB_AUTO_DOWNLOAD`; ACT's files are checked
+  against pinned SHA-256 sums); none of them states a licence. The sources were chosen by
+  measurement against HPA, Tabula Sapiens, Kang and paul15 (MSigDB C8, Tabula Sapiens, Cell
+  Taxonomy, scType, scCATCH, Azimuth and HCL/MCA added nothing over these three).
+
+### Changed
+- **Marker-score annotation** names each cluster after the marker-database type its markers fit
+  best (any tissue, human or mouse), or uses the 14 built-in immune sets when you choose them (they
+  remain better on PBMC subtypes) or when the databases are unavailable (paul15: 11 of 19 labels
+  right against 2 with the built-in sets).
+- **Which genes describe a group.** AI annotation, the co-pilot's marker facts and per-group
+  enrichment (over-representation) now use the genes expressed in at least 20% of the group, by
+  fold change, without ribosomal or mitochondrial genes, instead of the top of the Wilcoxon score
+  order, which led Kang's CD14 monocytes with FTL, CD63 and ANXA5 (CD14 at rank 70). Enrichment's
+  *N genes* is now a maximum; cached enrichment results are recomputed when next opened.
 
 ### Fixed
 - The AI co-pilot can open the Protein, Activity and Gene lists tabs.
 - A continuous colour legend under a short label no longer runs its minimum and maximum together.
+- The replay script explains the annotation cross-check step instead of calling it unknown, and
+  writes marker-database labels in from the record.
+- The co-pilot's context no longer claims to show only the first 16 groups' markers (it lists all).
 - The smoke test of the published images retries its first requests, which could reach the
   frontend a moment before it accepted connections.
 
