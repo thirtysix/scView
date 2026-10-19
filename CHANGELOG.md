@@ -21,6 +21,8 @@ All notable changes to scView are documented here. The format is based on
 - **The backend and converter restart by themselves** if they are stopped by an error such as
   running out of memory, instead of leaving scView unreachable until it is started again.
 - README: how much memory processing needs, and that Docker and Podman on Windows get half of it.
+- **Annotation cross-check:** a Compare clicked right after the columns or reference changed could
+  lose its answer (the result, or the server's reason for refusing), as if from an older selection.
 
 ## [0.24.0] - 2026-10-19
 

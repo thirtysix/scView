@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GitCompare, Loader2 } from "lucide-react";
 import sankey from "plotly.js/lib/sankey";
 import Plot from "@/components/plots/Plot";
@@ -123,7 +123,9 @@ export function AnnotationCrosscheckCard({ datasetId }: { datasetId: string }) {
     if (!selected.includes(reference)) setReference(defaultReference(selected, available, info));
   }, [selected, reference, available, info]);
 
-  useEffect(() => {
+  // A layout effect: it must run before anything can click Compare on the new
+  // selection, or the answer to that click is dropped as an older one (CI race).
+  useLayoutEffect(() => {
     request.current++;
     setResult(null);
     setSaved(null);
