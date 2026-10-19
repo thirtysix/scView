@@ -110,6 +110,8 @@ export function geneRowPx(nGenes: number): number {
 }
 
 const STRIP_PX = 16;
+/** Least height of the heatmap rows (px): a few genes still leave room for the colour bar and its title. */
+export const MIN_HEAT_PX = 180;
 const GAP_PX = 4;
 const MARGIN = { l: 90, r: 20, t: 30, b: 90 };
 
@@ -129,7 +131,7 @@ export function cellHeatmapFigure(
   const nCells = codes.length;
   const genes = meta.genes;
   const rowPx = geneRowPx(genes.length);
-  const heatPx = Math.max(genes.length * rowPx, 60);
+  const heatPx = Math.max(genes.length * rowPx, MIN_HEAT_PX);
   const plotPx = heatPx + GAP_PX + STRIP_PX;
   const heatTop = heatPx / plotPx;
   const spans = groupSpans(codes);

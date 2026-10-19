@@ -7,6 +7,8 @@ import {
   DIVERGING_COLORSCALE,
   discreteColorscale,
   groupSpans,
+  MIN_HEAT_PX,
+  type HeatmapCells,
   type HeatmapCellsMeta,
 } from "./cellHeatmap";
 
@@ -143,3 +145,20 @@ describe("cellHeatmapCaption", () => {
     );
   });
 });
+
+describe("cellHeatmapFigure height", () => {
+  it("keeps the heatmap tall enough for a readable colour bar with only a few genes", () => {
+    const codes = new Int32Array([0, 0, 1]);
+    const data = {
+      meta: { ...META, genes: ["A", "B"], groups: ["g0", "g1"] },
+      codes,
+      cells: new Int32Array([0, 1, 2]),
+      values: [new Float32Array([0, 1, -1]), new Float32Array([1, 0, 0])],
+    } satisfies HeatmapCells;
+    const { layout } = cellHeatmapFigure(data, ["#000", "#fff"], [[0, "#000"], [1, "#fff"]]);
+    const yaxis = layout.yaxis as { domain: [number, number] };
+    const plotPx = (layout.height as number) - 30 - 90; // minus the top and bottom margins
+    expect((yaxis.domain[1] - yaxis.domain[0]) * plotPx).toBeGreaterThanOrEqual(MIN_HEAT_PX - 1);
+  });
+});
+
