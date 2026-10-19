@@ -8,12 +8,16 @@ transcripts lead the list: on Kang, score order puts FTL, CD63 and ANXA5 first i
 group.
 
 ``group_markers`` keeps the genes expressed in at least ``min_pts`` of the group
-(0.2) with a log fold change of at least ``min_logfc``, drops ribosomal and
-mitochondrial genes (``gene_filters.is_ribo_mito``, the one definition), and sorts
-by log fold change. Measured on Kang (research/marker-db-assessment, item 7): a
+(0.2) with a log fold change of at least ``min_logfc`` and an adjusted p-value
+under ``max_padj`` (0.05), drops ribosomal and mitochondrial genes
+(``gene_filters.is_ribo_mito``, the one definition), and sorts by log fold change. Measured on Kang (research/marker-db-assessment, item 7): a
 CellMarker 2.0 lookup from these markers named 0.69 of the cell types correctly
 against 0.46 from score order (CD14 Mono and pDC became correct), and 25 markers
-per group did clearly better than 10.
+per group did clearly better than 10. The p-value filter changes only small groups
+(under ~70 cells), whose fold-change leaders are otherwise genes seen in a handful of
+cells: on paul15 the database lookup went 11/19 -> 13/19 and the LLM annotator
+11 -> 12, with nothing lost on Kang (research/marker-db-assessment/padj); 0.01 was
+no better.
 
 The order is a choice (``order``):
 
@@ -46,6 +50,7 @@ ORDERS: tuple[str, ...] = ("logfc", "score", "pts_diff")
 DEFAULT_N = 25
 MIN_PTS = 0.2
 MIN_LOGFC = 0.25
+MAX_PADJ = 0.05
 _CHUNK = 20000  # cells per block when counting expressing cells
 
 
@@ -59,7 +64,7 @@ def group_markers(
     key: str | None = None,
     order: Order = "logfc",
     exclude_ribo_mito: bool = True,
-    max_padj: float | None = None,
+    max_padj: float | None = MAX_PADJ,
 ) -> dict[str, list[str]]:
     """Per group of ``groupby`` (by label, in the stored group order): up to ``n``
     marker genes, best first.
@@ -69,8 +74,9 @@ def group_markers(
     counted from the log-normalised matrix (``.raw`` when it holds log values).
     A gene whose fraction or fold change is unknown (NaN) fails that filter; a
     result without fold changes is not filtered or ordered by them. Empty when
-    the column has no stored markers. With ``max_padj`` a gene must also have an
-    adjusted p-value below it (a result without p-values is not filtered by them).
+    the column has no stored markers. A gene must also have an adjusted p-value
+    under ``max_padj`` (None turns that off); a result without p-values (logreg)
+    is not filtered by them.
     """
     if order not in ORDERS:
         raise ValueError(f"Unknown marker order '{order}' (expected one of {', '.join(ORDERS)}).")
@@ -122,7 +128,8 @@ def ora_query_genes(
     key: str | None = None,
 ) -> list[str]:
     """The over-representation query for one group: ``group_markers``' choice of up
-    to ``n`` genes (expressed in >= 20% of the group, up by fold change), not the
+    to ``n`` genes (expressed in >= 20% of the group, adjusted p < 0.05, up by fold
+    change), not the
     stored score order. Fewer than ``n`` when fewer genes pass; empty when none do.
     With no ``column`` the groupby is read from the stored result's params."""
     groupby = column

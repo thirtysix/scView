@@ -114,8 +114,9 @@ def test_adjusted_p_filter():
     # A's adjusted p by rank: MID (rank 6) and SPEC (rank 4) not significant.
     padj = {"A": [1e-9, 1e-6, 1e-6, 0.2, 1e-3, 0.06] + [1e-3] * 6, "B": [1e-4] * 12}
     rgg["pvals_adj"] = _rec(padj, float)
-    assert group_markers(a, "cluster")["A"] == A_LOGFC  # off unless asked
-    assert group_markers(a, "cluster", max_padj=0.05)["A"] == ["BROAD"]
+    assert group_markers(a, "cluster")["A"] == ["BROAD"]  # 0.05 by default
+    assert ora_query_genes(a, "cluster", "A", 25) == ["BROAD"]
+    assert group_markers(a, "cluster", max_padj=None)["A"] == A_LOGFC
     assert group_markers(a, "cluster", max_padj=0.1)["A"] == ["MID", "BROAD"]
     # A result without p-values (logreg) is not filtered by them.
     rgg["pvals_adj"] = _rec({g: [np.nan] * 12 for g in padj}, float)

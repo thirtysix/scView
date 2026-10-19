@@ -39,7 +39,7 @@ from scview.core.assessor import assess_preprocessing
 from scview.core import cluster_qc, composition, provenance, qc_filter
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
-from scview.core.marker_selection import MIN_PTS, group_markers
+from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
 from scview.core.species import detect_species
 from scview.core.uns_keys import enrichment_column
 
@@ -370,8 +370,8 @@ def build_grounding_context(
         if not top:
             continue
         lines.append(f"\n## Top marker genes per group (column: {mcol}; genes in >= "
-                     f"{MIN_PTS:.0%} of the group by fold change, ribosomal/mito genes left "
-                     "out); cite as [result:markers:<group>]")
+                     f"{MIN_PTS:.0%} of the group with adjusted p < {MAX_PADJ:g}, by fold "
+                     "change, ribosomal/mito genes left out); cite as [result:markers:<group>]")
         for group, genes in top.items():
             listed = ", ".join(genes) or "none pass the filter"
             lines.append(f"- **{group}**: {listed}")

@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 # every pre-v3 payload was computed from a different query gene list.
 # v4: the query is marker_selection.ora_query_genes (genes in >= 20% of the group,
 # by fold change), not the top of the wilcoxon score order.
-ORA_VERSION = 4
+# v5: the query also needs adjusted p < 0.05 (marker_selection.MAX_PADJ).
+ORA_VERSION = 5
 
 META_PREFIX = uns_keys.META_PREFIX
 

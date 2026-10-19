@@ -171,9 +171,10 @@ async def test_compute_local_other_params_recompute(client, dataset_manager):
     did = _register(dataset_manager)
     await client.post(f"{API}/datasets/{did}/enrichment/compute-local", json=_local())
     r = await client.post(f"{API}/datasets/{did}/enrichment/compute-local",
-                          json=_local(n_genes=20))
+                          json=_local(n_genes=5))
     assert r.json()["source"] == "msigdb_local"
-    assert r.json()["n_genes_used"] == 20
+    # Fewer, not more: only 11 genes pass adjusted p < 0.05 in this data.
+    assert r.json()["n_genes_used"] == 5
 
 
 async def test_compute_local_unknown_group_is_404(client, dataset_manager):
