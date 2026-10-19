@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-10-19
+
 ### Fixed
 - **Processing uses much less memory.** Scaling now keeps the expression matrix as float32:
   scanpy turned it into a dense float64 matrix of every gene, 1.5 GB for Kang's 13,836 cells, and
