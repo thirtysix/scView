@@ -1,5 +1,26 @@
 import { describe, it, expect } from "vitest";
-import { DOT_MAX_PX, MIN_FRACTION, dotSize, markerColours, scalePerGene } from "./markerPlot";
+import { DOT_MAX_PX, MIN_FRACTION, dotSize, heatmapBands, markerColours, scalePerGene } from "./markerPlot";
+
+describe("heatmapBands", () => {
+  it("fills the height with the plot when there is nothing above it", () => {
+    expect(heatmapBands(400, 0, 0)).toEqual({ main: [0, 1], strip: null, tree: null, extraPx: 0 });
+  });
+
+  it("stacks plot, gap, strip, gap, tree from the bottom, keeping the plot's px", () => {
+    // 400 + 4 + 12 + 4 + 80 = 500 px in all
+    const b = heatmapBands(400, 12, 80);
+    expect(b.extraPx).toBe(100);
+    expect(b.main).toEqual([0, 400 / 500]);
+    expect(b.strip).toEqual([404 / 500, 416 / 500]);
+    expect(b.tree).toEqual([420 / 500, 1]);
+  });
+
+  it("puts the strip at the top when there is no tree", () => {
+    const b = heatmapBands(400, 12, 0);
+    expect(b.strip![1]).toBe(1);
+    expect(b.tree).toBeNull();
+  });
+});
 
 describe("dotSize", () => {
   it("gives dot area proportional to the share, the same for every plot", () => {

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import expression_to_arrow_ipc
-from scview.core import coexpression, donor_expression
+from scview.core import coexpression, donor_expression, heatmap_cells
 
 router = APIRouter()
 
@@ -151,6 +151,53 @@ async def get_expression_by_group(
     if not result["genes"]:
         raise HTTPException(status_code=404, detail="None of the requested genes are in this layer.")
     return result
+
+
+@router.get("/datasets/{dataset_id}/expression/heatmap-cells")
+async def get_heatmap_cells(
+    dataset_id: str,
+    genes: str = Query(..., description="Comma-separated gene names (at most 100)"),
+    groupby: str = Query(default="", description="Label column to group the cells by"),
+    layer: str = Query(default="", description="Expression layer key (default: the dataset's)"),
+    per_group: int = Query(default=200, ge=1, le=2000, description="Most cells sampled per group"),
+    max_cells: int = Query(default=5000, ge=100, le=20000, description="Most cells in all"),
+    seed: int = Query(default=0, ge=0, le=2**32 - 1),
+    scale: Literal["zscore", "none"] = Query(default="zscore"),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Per-cell values of a few genes in a seeded, stratified sample of cells,
+    grouped in the column's stored order, for the marker heatmap's "Per cell"
+    view (core/heatmap_cells.py). Arrow IPC: ``cell``, ``group``, one column per
+    gene; genes, groups, cells sampled and in total per group, the scale and its
+    range and the genes not found ride in the schema metadata (``scview``)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    if not groupby:
+        groupby = adaptor.active_clustering_column() or ""
+    if groupby not in adaptor.adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{groupby}' not found.")
+    layer_key = layer or adaptor.default_expression_layer()
+    try:
+        var_names = adaptor._var_names_for_layer(layer_key)
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    def _run() -> bytes:
+        result = heatmap_cells.heatmap_cells(
+            adaptor._get_matrix_for_layer(layer_key), var_names, adaptor.adata.obs[groupby],
+            genes.split(","), groupby=groupby, layer=layer_key, per_group=per_group,
+            max_cells=max_cells, seed=seed, scale=scale,
+            layer_range=adaptor.layer_scale_range(layer_key) if scale == "none" else None,
+        )
+        return heatmap_cells.to_arrow_ipc(result)
+
+    try:
+        # Reads a few thousand rows of the matrix (and the layer's range): off the loop.
+        ipc_bytes = await asyncio.to_thread(_run)
+    except heatmap_cells.HeatmapCellsError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    return Response(content=ipc_bytes, media_type=ARROW_CONTENT_TYPE)
 
 
 class CoexpressionRequest(BaseModel):
