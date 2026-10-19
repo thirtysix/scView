@@ -13,6 +13,7 @@ import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
 import { QcReportCard } from "@/components/panels/QcReportCard";
 import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfidenceCard";
+import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCrosscheckCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
@@ -932,6 +933,9 @@ export function DataAssessmentPanel() {
 
           {/* How well each cell's label fits (conformal prediction sets) */}
           <AnnotationConfidenceCard datasetId={datasetId} />
+
+          {/* Do the annotation methods agree? (pairwise ARI/AMI, mapped agreement, consensus) */}
+          <AnnotationCrosscheckCard datasetId={datasetId} />
 
           {/* Pipeline progress bar — visible while running or just completed */}
           {(running || runResult) && runProgress && (

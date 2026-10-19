@@ -198,6 +198,10 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           />
         </div>
       </div>
+      <p className="-mt-1 mb-3 text-[11px] text-slate-400">
+        To compare methods, run each into its own output column (e.g. <code>cell_type_llm</code>,{" "}
+        <code>cell_type_celltypist</code>), then check them against each other in Annotation cross-check below.
+      </p>
 
       {/* Method */}
       <div className="mb-3 inline-flex rounded-lg border border-slate-200 p-0.5 text-xs">
