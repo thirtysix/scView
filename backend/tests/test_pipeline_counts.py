@@ -80,3 +80,17 @@ def test_scaling_a_dense_x_leaves_raw_log_normalised():
     raw = out.raw.X.toarray() if sp.issparse(out.raw.X) else np.asarray(out.raw.X)
     assert raw.min() >= 0
     assert np.asarray(out.X).min() < 0
+
+
+def test_scaled_x_is_dense_float32_from_sparse_or_float64_input():
+    # sc.pp.scale makes a sparse matrix dense float64; on Kang that was 1.5 GB.
+    for to_dense_f64 in (False, True):
+        a = _counts()
+        if to_dense_f64:
+            a.X = a.X.toarray().astype(np.float64)
+        out, res = run_pipeline(a, ["normalization", "log_transform", "scaling"], PipelineParams())
+        assert res.errors == {}
+        assert isinstance(out.X, np.ndarray) and out.X.dtype == np.float32
+        assert np.asarray(out.X).min() < 0
+        raw = out.raw.X.toarray() if sp.issparse(out.raw.X) else np.asarray(out.raw.X)
+        assert raw.min() >= 0  # .raw stays log-normalised

@@ -19,8 +19,11 @@ mid-step, and until it stops it may still be writing the derived file.
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import gc
 import logging
 import threading
+import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any, TypeVar
 
@@ -33,6 +36,25 @@ from scview.core.obs_writes import dataset_lock
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+def _give_back_memory() -> None:
+    """Free the run's copy of the dataset before the saved file is read back.
+
+    A run leaves its arrays to the garbage collector, and glibc keeps freed memory
+    instead of returning it: after Kang the process held 3.1 GB, where a fresh load
+    of the result takes 1.25 GB; this brings it to 2.0 GB. That matters where the
+    container has little memory (WSL gives Podman/Docker half of a Windows PC's).
+    The arrays are in reference cycles (an AnnData and its .raw), so trimming alone
+    frees nothing. The collection holds the GIL even in a worker thread: 0.25 s
+    after a Kang run, once per run."""
+    t = time.perf_counter()
+    gc.collect()
+    logger.info("Freed the run's memory (garbage collection %.0f ms)", 1000 * (time.perf_counter() - t))
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):  # not glibc
+        pass
 
 
 async def _claim(dm: DatasetManager, dataset_id: str) -> tuple[AnnDataAdaptor, Callable[[], None]]:
@@ -78,6 +100,8 @@ async def run_exclusive(
     # Runs on the loop once the thread returns, even if this request is cancelled.
     task.add_done_callback(lambda _t: release())
     result = await asyncio.shield(task)
+    del adaptor
+    await asyncio.to_thread(_give_back_memory)
     await dm.load_dataset(dataset_id)
     return result
 
@@ -145,4 +169,6 @@ async def iterate_exclusive(
             dm.evict(dataset_id)  # nothing may serve the half-run copy
     # The thread has posted its last item; wait for it to return (and release).
     await asyncio.shield(task)
+    adaptor = None  # the thread is done with it  # noqa: F841
+    await asyncio.to_thread(_give_back_memory)
     await dm.load_dataset(dataset_id)

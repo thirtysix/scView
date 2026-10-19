@@ -211,10 +211,12 @@ scView runs entirely in Docker, so there is no Python, Node, or R to install. **
 - **Docker:** Docker Desktop on Windows and macOS, Docker Engine on Linux, with **Docker Compose
   v2.24 or newer** (current Docker Desktop includes it). Podman works too: see
   [Using Podman instead of Docker](#using-podman-instead-of-docker).
-- **RAM:** ~8 GB runs the stack and small-to-medium datasets (up to ~tens of thousands of cells)
-  fine. For **large datasets (100k+ cells)**, the **Seurat `.rds` converter**, or heavy steps
-  (doublet detection, Harmony, enrichment) on big data, **16 GB+ is recommended**; at 8 GB those
-  can be slow or run out of memory.
+- **RAM:** processing a dataset needs roughly **3.5 GB for 14,000 cells** (the Kang PBMC
+  example) and grows with cells × genes. On Linux that is the computer's memory; on **Windows
+  and macOS, Docker and Podman get only part of it** (on Windows half by default), so an 8 GB
+  PC leaves about 4 GB, enough for ~10,000 cells. **16 GB is recommended**, and more for large
+  datasets (100k+ cells), the Seurat `.rds` converter, or Harmony. On Windows you can give it
+  more: see *A large dataset fails* under [Windows troubleshooting](#windows-troubleshooting).
 - **Disk:** about 4 GB for the images; have **10 GB free** for the first start.
 - **Internet on the first start**, to download the images and the MSigDB gene sets.
 - A modern browser.
@@ -292,18 +294,18 @@ in the scView folder, so stopping, restarting, and [updating](#updating) all kee
 | The window says a container "is unhealthy" or "failed to start" | scView took longer than usual to start. Run `start-windows.bat` again. |
 | The download seems stuck near the end | Docker is unpacking what it downloaded, which can take several minutes. Leave the window open. |
 | "port is already allocated" | Another program is using port 3000, 8080, or 8001. Close it or restart the computer, then try again. |
-| A large dataset fails, or the app becomes very slow | Docker on Windows can use only half of the computer's memory by default. To raise it, see below. |
+| A large dataset fails, the app becomes very slow, or processing ends in "network error" | Docker and Podman on Windows can use only half of the computer's memory by default, and running out stops the backend (it restarts by itself; run the processing again). To give it more, see below. |
 | Gene sets or pathway enrichment are empty | On the first start scView downloads the MSigDB gene sets (~45 MB) in the background. Wait a minute and reload the page. This needs internet access to `data.broadinstitute.org`; if the download failed, it is retried on the next start. |
 | Something else | Copy the last lines of the window's text into an [issue](https://github.com/thirtysix/scView/issues). |
 
-To give Docker more memory, create a file named `.wslconfig` in your user folder
+To give Docker or Podman more memory, create a file named `.wslconfig` in your user folder
 (`C:\Users\<your name>`) containing these two lines, adjusting the number to leave a few GB for
 Windows itself:
 ```ini
 [wsl2]
 memory=12GB
 ```
-Then run `wsl --shutdown` in PowerShell and reopen Docker Desktop.
+Then run `wsl --shutdown` in PowerShell and reopen Docker Desktop (or Podman Desktop).
 
 ### macOS and Linux
 
