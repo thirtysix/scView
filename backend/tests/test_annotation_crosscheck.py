@@ -34,6 +34,7 @@ def test_identical_columns_agree_on_everything():
     assert out["mean_agreement"] == 1.0 and out["exact_name_agreement"] == 1.0
     assert out["agreement_counts"] == {"1": 10}
     assert out["consensus_counts"] == {"A": 4, "B": 4, "C": 2} and out["n_unresolved"] == 0
+    assert out["reference_labels"] == ["A", "B", "C"]
     cmp = out["comparisons"]["same"]
     assert {k: v["status"] for k, v in cmp["best_match"].items()} == {"A": "stable", "B": "stable", "C": "stable"}
     assert cmp["best_match"]["C"]["jaccard"] == 1.0 and cmp["best_match"]["C"]["match"] == "C"

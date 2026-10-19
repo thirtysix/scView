@@ -305,6 +305,9 @@ def crosscheck(adata, columns: list[str], reference: str | None = None) -> dict[
     out = {
         "columns": cols,
         "reference": ref,
+        # The reference's labels in its order: a browser lists object keys such
+        # as "0", "1", ... in numeric order, so the order travels as a list.
+        "reference_labels": ref_names,
         "n_cells": int(adata.n_obs),
         "n_compared": int(compared.sum()),
         "pairwise": {"ari": ari, "ami": ami},
