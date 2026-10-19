@@ -13,6 +13,11 @@ services:
     image: ghcr.io/thirtysix/scview-backend:${SCVIEW_VERSION:-0.24.1}
     # Back up by itself if it is killed, e.g. out of memory on a small machine.
     restart: on-failure
+    # SCVIEW_MEMORY_GB (.env, suggested by the start scripts) caps its memory, so a
+    # dataset too big for the machine stops scView rather than the computer.
+    # Unset: no limit. No swap beyond it, which would freeze the machine instead.
+    mem_limit: ${SCVIEW_MEMORY_GB:-0}g
+    memswap_limit: ${SCVIEW_MEMORY_GB:-0}g
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -53,6 +58,8 @@ services:
   converter:
     image: ghcr.io/thirtysix/scview-converter:${SCVIEW_VERSION:-0.24.1}
     restart: on-failure
+    mem_limit: ${SCVIEW_MEMORY_GB:-0}g
+    memswap_limit: ${SCVIEW_MEMORY_GB:-0}g
     build:
       context: ./converter
       dockerfile: Dockerfile

@@ -111,6 +111,43 @@ findstr /v /b /c:"DEEPINFRA_API_KEY=" .env.example > .env
 echo   [ok] Settings saved to .env
 :env_ready
 
+rem Memory limit (SCVIEW_MEMORY_GB, docker-compose.yml): a dataset too big for
+rem the computer stops scView, not Windows. Suggested once: free memory minus
+rem 3 GB to the nearest GB, at most what Docker/Podman has minus 1 GB, at least 4.
+set "MEMGB="
+for /f "tokens=2 delims==" %%a in ('findstr /b /c:"SCVIEW_MEMORY_GB=" .env 2^>nul') do set "MEMGB=%%a"
+if defined MEMGB goto :memory_ready
+set "ENGINE_BYTES=0"
+if "%ENGINE%"=="podman" (
+    for /f %%b in ('podman info --format "{{.Host.MemTotal}}" 2^>nul') do set "ENGINE_BYTES=%%b"
+) else (
+    for /f %%b in ('docker info --format "{{.MemTotal}}" 2^>nul') do set "ENGINE_BYTES=%%b"
+)
+set "FREEGB=?"
+set "ENGGB=?"
+set "SUGGEST=4"
+for /f "tokens=1-3" %%a in ('powershell -NoProfile -Command "$c=[cultureinfo]::InvariantCulture; $f=(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB; $e=%ENGINE_BYTES%/1GB; $s=[math]::Round($f-3); if ($e -gt 0 -and $s -gt [math]::Floor($e-1)) {$s=[math]::Floor($e-1)}; if ($s -lt 4) {$s=4}; $f.ToString('F1',$c)+' '+$e.ToString('F1',$c)+' '+$s"') do (
+    set "FREEGB=%%a"
+    set "ENGGB=%%b"
+    set "SUGGEST=%%c"
+)
+echo.
+echo   Free memory now: %FREEGB% GB (%ENGINE_APP% has %ENGGB% GB).
+echo   How much memory may scView use? A dataset that needs more stops
+echo   scView, not the computer. Press Enter for the suggestion.
+set "ANSWER="
+set /p "ANSWER=  Memory for scView in GB [%SUGGEST%]: "
+set "MEMGB=%SUGGEST%"
+if defined ANSWER (
+    echo %ANSWER%| findstr /r "^[0-9][0-9]*$" >nul && set "MEMGB=%ANSWER%"
+)
+findstr /v /b /c:"SCVIEW_MEMORY_GB=" .env > .env.tmp
+>>.env.tmp echo SCVIEW_MEMORY_GB=%MEMGB%
+move /y .env.tmp .env >nul
+:memory_ready
+echo   [ok] Memory limit: %MEMGB% GB (SCVIEW_MEMORY_GB in the .env file)
+if %MEMGB% lss 4 echo   Under 4 GB: processing a 14,000-cell dataset needs about 3.5 GB.
+
 echo.
 echo   Downloading and starting scView. The first run downloads about 1 GB.
 echo   If a prebuilt part isn't available it is built here instead, which

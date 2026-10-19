@@ -6,6 +6,16 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **A memory limit for scView, and a gauge for it.** The start scripts ask how much memory scView
+  may use on the first start, suggesting free memory minus 3 GB to the nearest GB (at most what
+  Docker or Podman has, at least 4 GB), and store it as `SCVIEW_MEMORY_GB` in `.env`; the backend
+  and converter get it as a container limit with no extra swap. A dataset that needs more stops
+  scView instead of the computer: on Linux nothing else caps Docker or Podman, and a big run could
+  make the whole machine unresponsive. Without the setting there is no limit, as before. The
+  sidebar shows the backend's memory use against its limit (`GET /system/memory`), amber from 75%
+  and red from 90%.
+
 ## [0.24.1] - 2026-10-19
 
 ### Fixed

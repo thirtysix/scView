@@ -252,6 +252,71 @@ else
     ok ".env already exists — using existing configuration."
 fi
 
+# ── Memory limit ────────────────────────────────────────────────────────────
+# SCVIEW_MEMORY_GB caps the backend's memory (docker-compose.yml), so a dataset
+# too big for the machine stops scView, not the computer. Suggested once: free
+# memory minus 3 GB to the nearest whole GB, at most what Docker/Podman has
+# (their virtual machine on macOS) minus 1 GB, and not under MIN_MEMORY_GB.
+MIN_MEMORY_GB=4  # processing a 14,000-cell dataset (Kang) peaks at about 3.5 GB
+
+free_memory_gb() {
+    if [ -r /proc/meminfo ]; then
+        awk '/^MemAvailable:/ {printf "%.1f", $2 / 1048576}' /proc/meminfo
+    elif command -v vm_stat &>/dev/null; then
+        vm_stat | awk '/page size of/ {ps = $8} /Pages (free|inactive|speculative)/ {gsub(/\./, "", $NF); n += $NF}
+                       END {printf "%.1f", n * ps / 1073741824}'
+    fi
+}
+
+engine_memory_gb() {
+    local bytes
+    if [ "$ENGINE" = "podman" ]; then
+        bytes=$(podman info --format '{{.Host.MemTotal}}' 2>/dev/null)
+    else
+        bytes=$(docker info --format '{{.MemTotal}}' 2>/dev/null)
+    fi
+    [ -n "$bytes" ] && awk -v b="$bytes" 'BEGIN {printf "%.1f", b / 1073741824}'
+}
+
+set_env_value() {  # set_env_value KEY VALUE: replace or append the line in .env
+    local tmp
+    tmp=$(mktemp)
+    awk -v k="$1" -v v="$2" 'BEGIN {done = 0}
+        $0 ~ "^" k "=" {print k "=" v; done = 1; next} {print}
+        END {if (!done) print k "=" v}' .env > "$tmp" && mv "$tmp" .env
+}
+
+MEMORY_GB=$(grep -E '^SCVIEW_MEMORY_GB=' .env 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '[:space:]')
+if [ -z "$MEMORY_GB" ]; then
+    FREE_GB=$(free_memory_gb)
+    ENGINE_GB=$(engine_memory_gb)
+    SUGGEST=$(awk -v f="${FREE_GB:-0}" -v e="${ENGINE_GB:-0}" -v m="$MIN_MEMORY_GB" 'BEGIN {
+        s = int(f - 3 + 0.5); if (e > 0 && s > int(e - 1)) s = int(e - 1); if (s < m) s = m; print s}')
+    echo ""
+    info "Free memory now: ${FREE_GB:-?} GB${ENGINE_GB:+ (${ENGINE} has ${ENGINE_GB} GB)}."
+    if [ -n "$FREE_GB" ] && awk -v f="$FREE_GB" -v m="$MIN_MEMORY_GB" 'BEGIN {exit !(f - 3 < m)}'; then
+        warn "That leaves less than ${MIN_MEMORY_GB} GB for scView after 3 GB for the rest of the computer;"
+        warn "close other programs, or expect only small datasets (under ~10,000 cells) to process."
+    fi
+    if [ -t 0 ]; then
+        echo -e "  How much memory may scView use? A dataset that needs more stops scView, not the computer."
+        echo -n "  Memory for scView in GB [${SUGGEST}]: "
+        read -r ANSWER
+        case "$ANSWER" in
+            "") MEMORY_GB=$SUGGEST ;;
+            *[!0-9]*) warn "'${ANSWER}' is not a whole number; using ${SUGGEST}."; MEMORY_GB=$SUGGEST ;;
+            *) MEMORY_GB=$ANSWER ;;
+        esac
+    else
+        MEMORY_GB=$SUGGEST
+    fi
+    set_env_value SCVIEW_MEMORY_GB "$MEMORY_GB"
+fi
+ok "Memory limit: ${MEMORY_GB} GB (SCVIEW_MEMORY_GB in .env)"
+if [ "$MEMORY_GB" -lt "$MIN_MEMORY_GB" ] 2>/dev/null; then
+    warn "Under ${MIN_MEMORY_GB} GB: processing a 14,000-cell dataset needs about 3.5 GB."
+fi
+
 # ── 3. Build and start services ─────────────────────────────────────────────
 if [ "$MODE" = "dev" ]; then
     step "Building and starting services (development mode)"
