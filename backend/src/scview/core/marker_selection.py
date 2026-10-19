@@ -22,8 +22,9 @@ The order is a choice (``order``):
 - ``pts_diff``: fraction expressing in the group minus in the rest; the report
   paired it with ``min_logfc=1``.
 
-The Markers table, dot plot and heatmap show the full stored result, which the
-user sorts and filters; they don't use this.
+Over-representation (ORA) queries use it too (``ora_query_genes``); the ORA
+universe stays the full ranked list. The Markers table, dot plot and heatmap show
+the full stored result, which the user sorts and filters; they don't use this.
 """
 
 from __future__ import annotations
@@ -108,6 +109,26 @@ def group_markers(
                 idx = idx[np.argsort(-(frac[idx] - rest[idx]), kind="stable")]
         out[group] = genes[idx[:n]].tolist()
     return out
+
+
+def ora_query_genes(
+    adata, column: str, group: str, n: int, *, exclude_ribo_mito: bool = True,
+    key: str | None = None,
+) -> list[str]:
+    """The over-representation query for one group: ``group_markers``' choice of up
+    to ``n`` genes (expressed in >= 20% of the group, up by fold change), not the
+    stored score order. Fewer than ``n`` when fewer genes pass; empty when none do.
+    With no ``column`` the groupby is read from the stored result's params."""
+    groupby = column
+    if not groupby:
+        k = key or resolve_markers_key(adata.uns, "")
+        try:
+            groupby = str(adata.uns[k]["params"]["groupby"]) if k else ""
+        except (KeyError, TypeError):
+            groupby = ""
+    return group_markers(
+        adata, groupby, n=n, key=key, exclude_ribo_mito=exclude_ribo_mito,
+    ).get(str(group), [])
 
 
 def _stored(rgg, field: str):

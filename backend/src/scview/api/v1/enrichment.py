@@ -24,6 +24,7 @@ from scview.core import enrichment_network as network
 from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
 from scview.core.gene_filters import select_query_genes
+from scview.core.marker_selection import ora_query_genes
 from scview.core.geneset_sources import (
     dataset_gene_names,
     label_records,
@@ -542,15 +543,14 @@ def _compute_local(
             detail=f"No marker genes found for group '{body.group}'.",
         )
 
-    # Query and background both come from the full rank-ordered marker list. The
-    # query drops ribosomal/mitochondrial genes (an scRNA-seq artifact) BEFORE
-    # taking the top-n, so the ranked list must be the full one, not the truncated
-    # df. The background keeps every measured gene. No re-sort: ORA scores the
-    # query as a set, so ordering it cannot change the result.
+    # The background is the full ranked marker list (every gene the test saw). The
+    # query is marker_selection's choice (genes in >= 20% of the group, up by fold
+    # change, ribosomal/mitochondrial genes left out), not the top of the wilcoxon
+    # score order, which leads with broadly abundant transcripts.
     background = get_background_genes(adaptor.adata, col, body.group)
-    ranked = background if background else df["gene"].tolist()
-    top_genes = select_query_genes(
-        ranked, body.n_genes, exclude_ribo_mito=body.exclude_ribo_mito
+    top_genes = ora_query_genes(
+        adaptor.adata, col or "", body.group, body.n_genes,
+        exclude_ribo_mito=body.exclude_ribo_mito,
     )
 
     try:
@@ -672,9 +672,9 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
         import gseapy as gp
 
         background = get_background_genes(adaptor.adata, col, body.group)
-        ranked = background if background else df["gene"].tolist()
-        top_genes = select_query_genes(
-            ranked, body.n_genes, exclude_ribo_mito=body.exclude_ribo_mito
+        top_genes = ora_query_genes(
+            adaptor.adata, col or "", body.group, body.n_genes,
+            exclude_ribo_mito=body.exclude_ribo_mito,
         )
 
         enr = gp.enrich(

@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from scview.core.marker_selection import group_markers
+from scview.core.marker_selection import group_markers, ora_query_genes
 from scview.core.uns_keys import markers_key
 
 N = 10  # cells per group
@@ -162,3 +162,18 @@ def test_with_scanpys_own_result_a_specific_gene_beats_a_broad_one():
     score_order = [str(g) for g in a.uns[markers_key("cluster")]["names"]["A"]]
     assert score_order.index("BROAD") < score_order.index("SPEC")
     assert group_markers(a, "cluster")["A"][:2] == ["SPEC", "BROAD"]
+
+
+def test_ora_query_is_the_fold_change_choice_not_the_top_of_the_score_order():
+    a = _adata()
+    # Score order with only ribo/mito dropped (the old query) would start BROAD, RARE.
+    assert ora_query_genes(a, "cluster", "A", 2) == ["SPEC", "MID"]
+    assert ora_query_genes(a, "cluster", "A", 100) == A_LOGFC  # fewer than n pass
+    assert ora_query_genes(a, "cluster", "nope", 5) == []
+
+
+def test_ora_query_reads_the_groupby_of_a_bare_result():
+    a = _adata()
+    a.uns["rank_genes_groups"] = a.uns.pop(markers_key("cluster"))
+    assert ora_query_genes(a, "", "A", 3) == A_LOGFC
+

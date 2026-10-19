@@ -34,7 +34,6 @@ from scview.core import (
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.cell_cycle import near_zero_phase_calls
 from scview.core.llm import chat_extra
-from scview.core.gene_filters import select_query_genes
 from scview.core.geneset_sources import (
     ResolvedGeneSets,
     match_query_case,
@@ -785,6 +784,8 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
 
     total_items = len(work_items)
     total_groups = 0
+    queries: dict[str, dict[str, list[str]]] = {}
+    from scview.core.marker_selection import group_markers
 
     for wi, (col, uns_key, group) in enumerate(work_items):
         cb(f"Enrichment: {col} / {group}", wi, total_items)
@@ -794,12 +795,14 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
         # the correct ORA universe. Without it gseapy tests against every gene in
         # the selected collections and p-values come out anti-conservative.
         background = [str(g) for g in rgg["names"][group]]
-        # The query drops ribosomal/mitochondrial genes before taking the top-n,
-        # so it must start from the full ranked list, not a pre-truncated slice.
-        top_genes = select_query_genes(
-            background, params.enrichment_n_genes,
-            exclude_ribo_mito=params.enrichment_exclude_ribo_mito,
-        )
+        # The query is marker_selection's choice (in >= 20% of the group, by fold
+        # change), computed once per column for all its groups.
+        if col not in queries:
+            queries[col] = group_markers(
+                adata, col, n=params.enrichment_n_genes, key=uns_key,
+                exclude_ribo_mito=params.enrichment_exclude_ribo_mito,
+            )
+        top_genes = queries[col].get(str(group), [])
 
         try:
             enr = gp.enrich(
