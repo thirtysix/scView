@@ -133,7 +133,7 @@ def test_top_markers_for_a_new_column_leave_the_default_markers_alone():
     a.var_names = [f"G{i}" for i in range(5)]
     a.uns["rank_genes_groups"] = {"params": {"groupby": "leiden"}}
     out = _top_markers_per_group(a, "cluster", n=3)
-    assert set(out) == {"a", "b"} and all(len(v) == 3 for v in out.values())
+    assert set(out) == {"a", "b"} and all(len(v) <= 3 for v in out.values())
     assert a.uns["rank_genes_groups"]["params"]["groupby"] == "leiden"
     assert "rank_genes_groups__cluster" in a.uns
 
@@ -167,16 +167,27 @@ def test_tissue_line_and_label_case():
 
 def test_annotator_sends_informative_markers_and_records_the_tissue(monkeypatch):
     """Kang's main T-cell cluster: its top markers were all RPS/RPL, and the model
-    called it "Ribosomal cells"; monocytes were "macrophages" without a tissue."""
+    called it "Ribosomal cells"; monocytes were "macrophages" without a tissue.
+    Score order put FTL first in CD14 monocytes, ahead of their own genes."""
     import sys
     import types
 
     from scview.core import pipeline as P
+    from scview.core.uns_keys import markers_key
 
     a = _clustered()
     groups = [str(g) for g in a.obs["cluster"].cat.categories]
-    monkeypatch.setattr(P, "_top_markers_per_group", lambda adata, groupby, n=15: {
-        g: ["RPS14", "RPL32", "MT-CO1", "MRPL3", "CD3D", "IL7R"] for g in groups})
+    # The stored result, in score order: ribosomal/mito genes and FTL (broad, small
+    # fold change) lead; RARE is in 5% of the cluster; CD3D and IL7R are the markers.
+    genes = ["RPS14", "RPL32", "MT-CO1", "MRPL3", "FTL", "RARE", "IL7R", "CD3D"]
+    lfc = [3.0, 3.0, 3.0, 3.0, 0.4, 6.0, 1.5, 2.5]
+    pts = [1.0, 1.0, 1.0, 1.0, 1.0, 0.05, 0.6, 0.7]
+    a.uns[markers_key("cluster")] = {
+        "params": {"groupby": "cluster"},
+        "names": np.rec.fromarrays([np.array(genes, dtype=object)] * 2, names=groups),
+        "logfoldchanges": np.rec.fromarrays([np.array(lfc)] * 2, names=groups),
+        "pts": pd.DataFrame({g: pts for g in groups}, index=genes),
+    }
     sent: list[str] = []
 
     class _Client:
@@ -195,8 +206,7 @@ def test_annotator_sends_informative_markers_and_records_the_tissue(monkeypatch)
     P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
 
     listing = sent[0].split("Clusters and marker genes:")[1]
-    assert "CD3D" in listing and "RPS14" not in listing and "MT-CO1" not in listing
-    assert "MRPL3" not in listing
+    assert listing.strip().splitlines() == ["a: CD3D, IL7R, FTL", "b: CD3D, IL7R, FTL"]
     assert "tissue" in sent[0] and "monocytes, not macrophages" in sent[0]
     assert set(a.obs["cell_type"].astype(str)) == {"T cells"}
     assert a.uns["cell_type_llm_tissue"] == "blood"

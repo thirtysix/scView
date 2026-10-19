@@ -34,7 +34,7 @@ from scview.core import (
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.cell_cycle import near_zero_phase_calls
 from scview.core.llm import chat_extra
-from scview.core.gene_filters import is_ribo_mito, select_query_genes
+from scview.core.gene_filters import select_query_genes
 from scview.core.geneset_sources import (
     ResolvedGeneSets,
     match_query_case,
@@ -1049,28 +1049,23 @@ def _annotate_celltypist(
     return run
 
 
-def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 15) -> dict[str, list[str]]:
-    """Top-n marker genes per cluster, reusing precomputed rank_genes_groups when present."""
-    key = markers_key(groupby)
-    if key in adata.uns:
-        rgg = adata.uns[key]
-    elif (
-        "rank_genes_groups" in adata.uns
-        and adata.uns["rank_genes_groups"].get("params", {}).get("groupby") == groupby
-    ):
-        rgg = adata.uns["rank_genes_groups"]
-    else:
+def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 25) -> dict[str, list[str]]:
+    """Each cluster's markers for the LLM, best first (``core/marker_selection.py``:
+    expressed in >= 20% of the cluster, by fold change, no ribosomal/mito genes).
+
+    Computes wilcoxon markers under the column's own key first when none are
+    stored: the default rank_genes_groups follows the clustering, and the Marker
+    Genes panel reads it."""
+    from scview.core.marker_selection import group_markers
+    from scview.core.ora_background import resolve_markers_key
+
+    if resolve_markers_key(adata.uns, groupby) is None:
         if adata.obs[groupby].dtype.name != "category":
             adata.obs[groupby] = adata.obs[groupby].astype(str).astype("category")
-        # Under the column's own key: the default rank_genes_groups follows the
-        # clustering, and the Marker Genes panel reads it.
         sc.tl.rank_genes_groups(
-            adata, groupby=groupby, method="wilcoxon", pts=True, key_added=key
+            adata, groupby=groupby, method="wilcoxon", pts=True, key_added=markers_key(groupby)
         )
-        rgg = adata.uns[key]
-    names = rgg["names"]
-    groups = list(names.dtype.names) if hasattr(names.dtype, "names") else []
-    return {g: [str(names[g][i]) for i in range(min(n, len(names[g])))] for g in groups}
+    return group_markers(adata, groupby, n=n)
 
 
 def _parse_cluster_labels(raw: str, clusters: list[str]) -> dict[str, str]:
@@ -1106,11 +1101,9 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         raise ValueError("LLM-from-markers annotation needs a clustering; run clustering first.")
     # Ribosomal and mitochondrial genes say nothing about cell type, yet they can
     # fill a large cluster's whole top list (Kang's main T-cell cluster: 15 of 15
-    # were RPS/RPL, and the model called it "Ribosomal cells").
-    marker_map = {
-        g: [x for x in genes if not is_ribo_mito(x)][:20]
-        for g, genes in _top_markers_per_group(adata, groupby, n=60).items()
-    }
+    # were RPS/RPL, and the model called it "Ribosomal cells"); score order put
+    # FTL, CD63, ANXA5 first in CD14 monocytes. See core/marker_selection.py.
+    marker_map = _top_markers_per_group(adata, groupby)
     if not marker_map:
         raise ValueError(f"No marker genes available for '{groupby}'.")
 
