@@ -5,6 +5,7 @@ import type { DatasetInfo } from "@/api/types";
 import { DE_DEFAULTS, useDESettingsStore } from "@/stores/deSettingsStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
+import { useGeneListsStore } from "@/stores/geneListsStore";
 
 const { computeDE, computeDECompare, computeDEMethods, computeDECompareMethods } = vi.hoisted(() => ({
   computeDE: vi.fn(),
@@ -338,5 +339,34 @@ describe("UnifiedDESubtab cell-level method", () => {
     expect(computeDECompareMethods.mock.calls[0]![1]).toEqual({
       split_by: "stim", group_a: "STIM", group_b: "CTRL", within_column: "cell_type", within_value: "NK", min_pct: 0.01,
     });
+  });
+});
+
+describe("UnifiedDESubtab gene lists", () => {
+  it("adds the significant up or down genes, in table order, to a gene list", async () => {
+    useGeneListsStore.setState({ lists: [], selectedId: null });
+    computeDECompare.mockReset().mockResolvedValue({
+      ...RESULT,
+      label: "STIM",
+      genes: [
+        { gene: "ISG15", logfoldchange: 4, pval: 1e-30, pval_adj: 1e-28, stat: 20 },
+        { gene: "RPL3", logfoldchange: -1, pval: 1e-12, pval_adj: 1e-10, stat: -9 },
+        { gene: "IFI6", logfoldchange: 3, pval: 1e-20, pval_adj: 1e-18, stat: 15 },
+        { gene: "NOTSIG", logfoldchange: 2, pval: 0.5, pval_adj: 0.9, stat: 0.1 },
+      ],
+    });
+    useDESettingsStore.getState().update({ mode: "groups", splitBy: "stim", groupA: "STIM", groupB: "CTRL" });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Up" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "New list…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Down" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "New list…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(useGeneListsStore.getState().lists.map((l) => [l.name, l.genes])).toEqual([
+      ["DE: higher in STIM", ["ISG15", "IFI6"]],
+      ["DE: higher in CTRL", ["RPL3"]],
+    ]);
   });
 });

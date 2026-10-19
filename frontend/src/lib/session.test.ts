@@ -66,6 +66,10 @@ const full: SessionFile = {
     background: "dark",
     max_rendered_cells: 50000,
   },
+  gene_lists: [
+    { name: "IFN response", genes: ["ISG15", "IFI6"], source: "DE: higher in STIM" },
+    { name: "Empty", genes: [] },
+  ],
 };
 
 const json = (x: unknown) => JSON.parse(JSON.stringify(x));
@@ -113,6 +117,10 @@ describe("parseSession", () => {
     ["an unavailable cell-level test", { de: { cell_method: "mast" } }, /de.cell_method must be one of/],
     ["an unknown palette", { colors: { categorical_palette: "toString" } }, /colors.categorical_palette/],
     ["a huge point size", { colors: { point_size: 1e6 } }, /colors.point_size/],
+    ["gene lists that are not a list", { gene_lists: { name: "x" } }, /gene_lists must hold at most 200/],
+    ["a gene list without a name", { gene_lists: [{ name: "", genes: ["A"] }] }, /gene_lists\[0\].name/],
+    ["a gene that is not text", { gene_lists: [{ name: "x", genes: ["A", 3] }] }, /gene_lists\[0\].genes\[1\]/],
+    ["a list of too many genes", { gene_lists: [{ name: "x", genes: Array(5001).fill("A") }] }, /gene_lists\[0\].genes must list 0 to 5000/],
   ])("rejects %s", (_name, patch, message) => {
     expect(() => parseSession({ format: "scview-session", version: 1, ...patch })).toThrow(message);
   });

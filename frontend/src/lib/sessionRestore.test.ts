@@ -11,6 +11,7 @@ import { parseSession, sessionJson, type SessionFile } from "@/lib/session";
 import { captureSession, restoreSession } from "@/lib/sessionRestore";
 import { DE_DEFAULTS, useDESettingsStore } from "@/stores/deSettingsStore";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useGeneListsStore } from "@/stores/geneListsStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
@@ -326,5 +327,85 @@ describe("when the dataset differs or is missing", () => {
     );
     expect(report.notes).toEqual(["Selection “CD14 > 1 AND stim = STIM”: Gene 'CD14' is not in layer 'raw'."]);
     expect(useSelectionStore.getState().selectedCellIndices).toBeNull();
+  });
+});
+
+describe("gene lists", () => {
+  const listsNow = () => useGeneListsStore.getState().lists.map((l) => [l.name, l.genes]);
+  beforeEach(() => {
+    localStorage.clear();
+    useGeneListsStore.setState({ lists: [], selectedId: null });
+  });
+
+  it("saves every list and brings them back into an empty workspace", async () => {
+    buildWorkspace("lasso");
+    const s = useGeneListsStore.getState();
+    s.create("IFN", ["ISG15", "IFI6"], "DE: higher in STIM");
+    s.create("Mouse T", ["Cd3e"]);
+    const session = saveAndReset();
+    expect(session.gene_lists).toEqual([
+      { name: "IFN", genes: ["ISG15", "IFI6"], source: "DE: higher in STIM" },
+      { name: "Mouse T", genes: ["Cd3e"] },
+    ]);
+    useGeneListsStore.setState({ lists: [], selectedId: null });
+    const report = await restoreSession(session);
+    expect(listsNow()).toEqual([["IFN", ["ISG15", "IFI6"]], ["Mouse T", ["Cd3e"]]]);
+    expect(useGeneListsStore.getState().lists[0]!.source).toBe("DE: higher in STIM");
+    expect(report.notes).toEqual([]);
+  });
+
+  it("merges without clobbering: the same list is skipped, a taken name with other genes is renamed", async () => {
+    const s = useGeneListsStore.getState();
+    const keep = s.create("IFN", ["ISG15", "IFI6"])!;
+    s.create("T cells", ["CD3E"]);
+    s.select(keep);
+    const session = parseSession({
+      format: "scview-session",
+      version: 1,
+      gene_lists: [
+        { name: "IFN", genes: ["isg15", "IFI6"] }, // same genes (case aside): skipped
+        { name: "T cells", genes: ["CD3E", "CD3D"] }, // name taken by other genes
+        { name: "B cells", genes: ["MS4A1"] },
+      ],
+    });
+    const report = await restoreSession(session);
+    expect(listsNow()).toEqual([
+      ["IFN", ["ISG15", "IFI6"]],
+      ["T cells", ["CD3E"]],
+      ["T cells (session)", ["CD3E", "CD3D"]],
+      ["B cells", ["MS4A1"]],
+    ]);
+    expect(report.notes).toEqual([
+      "Gene lists: “T cells” came in as “T cells (session)”, since a list of that name with other genes was already here.",
+    ]);
+    // the tab keeps showing the list it showed
+    expect(useGeneListsStore.getState().selectedId).toBe(keep);
+
+    // Opening the same session again adds nothing.
+    await restoreSession(session);
+    expect(listsNow()).toHaveLength(4);
+  });
+
+  it("numbers a second renamed copy", async () => {
+    const s = useGeneListsStore.getState();
+    s.create("T cells", ["CD3E"]);
+    s.create("T cells (session)", ["CD8A"]);
+    await restoreSession(
+      parseSession({ format: "scview-session", version: 1, gene_lists: [{ name: "T cells", genes: ["CD4"] }] }),
+    );
+    expect(listsNow().at(-1)).toEqual(["T cells (session 2)", ["CD4"]]);
+  });
+
+  it("restores the lists even when the session's dataset is gone", async () => {
+    api.getDataset.mockRejectedValue(new Error("API error 404: not found"));
+    await restoreSession(
+      parseSession({
+        format: "scview-session",
+        version: 1,
+        dataset: { id: "gone", name: "Gone" },
+        gene_lists: [{ name: "Kept", genes: ["CD14"] }],
+      }),
+    );
+    expect(listsNow()).toEqual([["Kept", ["CD14"]]]);
   });
 });

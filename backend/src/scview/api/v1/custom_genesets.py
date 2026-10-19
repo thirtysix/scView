@@ -1,7 +1,8 @@
-"""Custom gene-set collections: upload, list, rename, delete.
+"""Custom gene-set collections: upload, save from gene lists, list, rename, delete.
 
-A collection is uploaded once (.gmt, or a gene_set,gene .csv/.tsv) and can then
-be used by id wherever an MSigDB collection can; see core/custom_genesets.py.
+A collection is uploaded once (.gmt, or a gene_set,gene .csv/.tsv) or saved from
+the Gene lists tab, and can then be used by id wherever an MSigDB collection
+can; see core/custom_genesets.py.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from scview.core.custom_genesets import (
     get_custom_store,
     is_custom_id,
     parse_gene_set_file,
+    parse_gene_set_lists,
 )
 from scview.core.dataset_manager import DatasetManager
 from scview.core.geneset_sources import custom_collections_for_dataset
@@ -33,6 +35,11 @@ router = APIRouter()
 
 class RenameCollectionRequest(BaseModel):
     name: str
+
+
+class CollectionFromListsRequest(BaseModel):
+    name: str
+    sets: dict[str, list[str]]
 
 
 def _not_found(cid: str) -> HTTPException:
@@ -93,6 +100,27 @@ async def upload_custom_collection(
     store = get_custom_store(settings.DATA_DIR)
     try:
         meta = store.create(display_name, parsed, source_filename=filename)
+    except CustomCollectionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {**meta, "warnings": parsed.warnings}
+
+
+@router.post("/genesets/custom/from-lists", status_code=201)
+async def create_custom_collection_from_lists(
+    body: CollectionFromListsRequest,
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Save named gene lists (the Gene lists tab's) as a custom collection.
+
+    The lists are checked and stored exactly like an uploaded file's sets.
+    """
+    try:
+        parsed = parse_gene_set_lists(body.sets)
+    except GeneSetFileError as e:
+        raise HTTPException(status_code=400, detail={"message": e.message, "problems": e.problems})
+    store = get_custom_store(settings.DATA_DIR)
+    try:
+        meta = store.create(body.name, parsed)
     except CustomCollectionError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {**meta, "warnings": parsed.warnings}

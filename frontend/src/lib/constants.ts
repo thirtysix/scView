@@ -18,7 +18,7 @@ export type PanelId = (typeof PANEL_IDS)[number];
 
 /** The Unified View's side-panel tabs. */
 export const UNIFIED_SUBTABS = [
-  "markers", "expression", "protein", "genesets", "enrichment", "de", "activity",
+  "markers", "expression", "protein", "genesets", "enrichment", "de", "activity", "genelists",
 ] as const;
 
 export type UnifiedSubtab = (typeof UNIFIED_SUBTABS)[number];

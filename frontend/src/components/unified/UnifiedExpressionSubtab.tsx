@@ -3,6 +3,7 @@ import { Dna } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
+import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { MultiGenePanel } from "@/components/unified/MultiGenePanel";
 import { CoexpressedGenes } from "@/components/unified/CoexpressedGenes";
@@ -63,6 +64,13 @@ export function UnifiedExpressionSubtab({
           <div className="flex items-center gap-2">
             <Dna className="h-3.5 w-3.5 text-blue-500" />
             <span className="text-sm font-semibold text-blue-700">{activeGene}</span>
+            <AddToGeneListMenu
+              genes={[activeGene]}
+              defaultName="My genes"
+              source="Expression search"
+              className="ml-auto"
+              title={`Add ${activeGene} to a gene list`}
+            />
           </div>
           {expressionMinMax && (
             <div className="mt-2">

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act, waitFor, within } from "@testing-librar
 import type { CoexpressionResponse } from "@/api/coexpression";
 import { sortCoexpressed } from "@/lib/coexpressedGenes";
 import { useGeneGridStore } from "@/stores/geneGridStore";
+import { useGeneListsStore } from "@/stores/geneListsStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 
@@ -45,6 +46,19 @@ beforeEach(() => {
 });
 
 describe("CoexpressedGenes", () => {
+  it("adds the query and the shown partners to a new gene list", async () => {
+    useGeneListsStore.setState({ lists: [], selectedId: null });
+    renderIt();
+    fireEvent.click(screen.getByRole("button", { name: /Find genes/ }));
+    await screen.findByText("IFIT3");
+    fireEvent.click(screen.getByRole("button", { name: "Negative (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to gene list" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "New list…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const [list] = useGeneListsStore.getState().lists;
+    expect([list!.name, list!.genes]).toEqual(["Co-expressed with ISG15", ["ISG15", "RPL7", "RPL6"]]);
+  });
+
   it("asks for the overlaid gene over every cell and lists both directions", async () => {
     renderIt();
     fireEvent.click(screen.getByRole("button", { name: "Find genes co-expressed with ISG15" }));

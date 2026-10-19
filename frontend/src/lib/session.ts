@@ -24,6 +24,7 @@ export const SESSION_MAX_BYTES = 20 * 1024 * 1024;
 const MAX_CELLS = 50_000_000;
 const MAX_TEXT = 256;
 const MAX_GENES = 5000;
+const MAX_GENE_LISTS = 200;
 
 /** The main plot's camera: deck.gl view state fields, in embedding coordinates. */
 export interface Camera {
@@ -110,6 +111,13 @@ export interface SessionColors {
   max_rendered_cells?: number;
 }
 
+/** One of the user's gene lists (stores/geneListsStore.ts); lists are not tied to the dataset. */
+export interface SessionGeneList {
+  name: string;
+  genes: string[];
+  source?: string;
+}
+
 export interface SessionFile {
   format: typeof SESSION_FORMAT;
   version: typeof SESSION_VERSION;
@@ -119,6 +127,7 @@ export interface SessionFile {
   selection?: SessionSelection | null;
   de?: SessionDE;
   colors?: SessionColors;
+  gene_lists?: SessionGeneList[];
 }
 
 /** A session file that can't be used, with the reason in plain words. */
@@ -394,6 +403,22 @@ export function parseSession(x: unknown): SessionFile {
       opacity: (v, at) => number(v, at, 0.05, 1),
       background: (v, at) => oneOf(v, ["white", "dark"] as const, at),
       max_rendered_cells: (v, at) => number(v, at, 1000, MAX_CELLS, true),
+    });
+  }
+
+  if (x.gene_lists !== undefined) {
+    const lists = x.gene_lists;
+    if (!Array.isArray(lists) || lists.length > MAX_GENE_LISTS) {
+      fail("gene_lists", `must hold at most ${MAX_GENE_LISTS} gene lists`);
+    }
+    session.gene_lists = lists.map((v, i) => {
+      const at = `gene_lists[${i}]`;
+      const o = object(v, at);
+      return {
+        name: text(o.name, `${at}.name`, { empty: false, max: 200 }),
+        genes: texts(o.genes, `${at}.genes`, 0, MAX_GENES),
+        ...fields<Pick<SessionGeneList, "source">>(o, at, { source: (v2, w) => text(v2, w, { max: 300 }) }),
+      };
     });
   }
   return session;
