@@ -40,13 +40,23 @@ function errorText(e: unknown): string {
   }
 }
 
-/** "PanglaoDB (27 Mar 2020) + CellMarker 2.0; fetched 19 Oct 2026", from what is on disk. */
+/** "PanglaoDB (27 Mar 2020) + CellMarker 3.0 (2026-07-22 release, unpublished) + ACT (21 Feb 2024);
+ * fetched 19 Oct 2026", from the sources on disk and in use. */
 export function markerDbSourceText(sources: MarkerDbSource[]): string {
-  const have = sources.filter((s) => s.downloaded);
+  const have = inUse(sources);
   if (!have.length) return "";
   const names = have.map((s) => (s.name === "cellmarker2" ? s.label : `${s.label} (${s.release})`)).join(" + ");
   const dates = have.map((s) => s.fetched_at).filter((d): d is string => !!d).sort();
   return `${names}${dates.length ? `; fetched ${formatDate(dates[dates.length - 1])}` : ""}`;
+}
+
+/** Sources on disk and in use (CellMarker 2.0 sits unused once 3.0 is in). */
+function inUse(sources: MarkerDbSource[]): MarkerDbSource[] {
+  return sources.filter((s) => s.downloaded && s.needed !== false);
+}
+
+function mb(bytes: number): string {
+  return (bytes / 1e6).toFixed(0);
 }
 
 function genesText(genes: string[], max = 6): string {
@@ -56,8 +66,9 @@ function genesText(genes: string[], max = 6): string {
 /**
  * Does each label's database marker list show up among its group's markers?
  * (marker-db extension of C005.) Matches every label of `column` by name to
- * PanglaoDB + CellMarker 2.0, gives a verdict per label and the 3 database
- * types its markers fit best. The databases are fetched once, on first use.
+ * PanglaoDB, CellMarker (3.0, or 2.0 when 3.0 can't be fetched) and ACT, gives a
+ * verdict per label and the 3 database types its markers fit best. The
+ * databases are fetched once, on first use; the download's progress is polled.
  */
 export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column: string }) {
   const [status, setStatus] = useState<MarkerDbStatus | null>(null);
@@ -79,6 +90,15 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
       live = false;
     };
   }, [datasetId]);
+
+  // While a check runs (the first one downloads), follow the download's progress.
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => {
+      getMarkerDbStatus(datasetId).then((s) => s?.sources && setStatus(s), () => undefined);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [running, datasetId]);
 
   useEffect(() => {
     request.current++;
@@ -108,7 +128,13 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
 
   const ready = status?.sources.some((s) => s.downloaded) ?? false;
   const failed = status?.sources.filter((s) => !s.downloaded && s.error) ?? [];
-  const missing = status?.sources.filter((s) => !s.downloaded) ?? [];
+  const missing = status?.sources.filter((s) => !s.downloaded && s.needed !== false && !s.error) ?? [];
+  const fetching = status?.sources.find((s) => s.progress);
+  const cellmarker =
+    result?.cellmarker ??
+    status?.cellmarker ??
+    inUse(status?.sources ?? []).find((s) => s.name.startsWith("cellmarker"))?.label ??
+    null;
   const sourceLine = markerDbSourceText(result?.sources ?? status?.sources ?? []);
   const rows = result ? (allRows ? result.labels : result.labels.slice(0, ROWS)) : [];
 
@@ -120,8 +146,8 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
         <span className="text-[11px] text-slate-400">{prettyObsLabel(column)}</span>
       </div>
       <p className="text-[11px] text-slate-500">
-        Matches each label to PanglaoDB, CellMarker 2.0 and ACT cell types and asks whether the database&apos;s markers
-        for it are among the group&apos;s own top 25 markers, then lists the 3 PanglaoDB / CellMarker 2.0 types the
+        Matches each label to PanglaoDB, CellMarker and ACT cell types and asks whether the database&apos;s markers for
+        it are among the group&apos;s own top 25 markers, then lists the 3 PanglaoDB / curated CellMarker types the
         group&apos;s markers fit best.
       </p>
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -154,11 +180,17 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
       </div>
       {!ready && status?.state !== "disabled" && !running && (
         <p className="text-[11px] text-slate-400">
-          First use downloads PanglaoDB (0.3 MB), CellMarker 2.0 (10 MB) and ACT (0.8 MB in 498 files) from their own
-          sites into the data volume.
+          First use downloads PanglaoDB (0.3 MB), CellMarker 3.0 (72 MB; CellMarker 2.0, 10 MB, if that fails) and ACT
+          (0.8 MB in 498 files) from their own sites into the data volume.
         </p>
       )}
-      {running && !ready && <p className="text-[11px] text-slate-500">Downloading the databases (first use)…</p>}
+      {running && (fetching || !ready) && (
+        <p className="text-[11px] text-slate-500" data-testid="marker-db-progress">
+          {fetching?.progress
+            ? `Downloading ${fetching.label}: ${mb(fetching.progress.done)} of ${mb(fetching.progress.total)} MB…`
+            : "Downloading the databases (first use)…"}
+        </p>
+      )}
       {status?.state === "disabled" && !ready && (
         <p className="text-[11px] text-slate-500" data-testid="marker-db-disabled">
           The marker databases are not downloaded and downloading is turned off (MARKER_DB_AUTO_DOWNLOAD=false).
@@ -170,7 +202,11 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
             {error ??
               `${failed.map((s) => s.label).join(" and ")} could not be downloaded${
                 failed[0]?.error ? ` (${failed[0].error})` : ""
-              }.`}
+              }.${
+                failed.some((s) => s.name === "cellmarker3") && cellmarker === "CellMarker 2.0"
+                  ? " Using CellMarker 2.0 instead."
+                  : ""
+              }`}
           </span>
           {status?.state !== "disabled" && (
             <button
@@ -228,9 +264,7 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
       {sourceLine && (
         <p className="text-[11px] text-slate-400" data-testid="marker-db-source">
           {sourceLine}.{" "}
-          {(result?.sources ?? status?.sources ?? [])
-            .filter((s) => s.downloaded)
-            .map((s, i) => (
+          {inUse(result?.sources ?? status?.sources ?? []).map((s, i) => (
               <span key={s.name}>
                 {i > 0 && " · "}
                 <a href={s.home} target="_blank" rel="noreferrer" className="hover:text-slate-600 hover:underline">
@@ -248,8 +282,13 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
                 )
               </span>
             ))}
-          . Suggestions rank {(result?.suggestion_sources ?? ["PanglaoDB", "CellMarker 2.0"]).join(" + ")} types only.
-          {missing.length > 0 && failed.length === 0 && ` ${missing.map((s) => s.label).join(" and ")} not downloaded.`}{" "}
+          .{result && ` Verdicts use ${result.verdict_sources.join(" + ")} (${result.species}).`} Suggestions rank{" "}
+          {(
+            result?.suggestion_sources ??
+            (cellmarker === "CellMarker 2.0" ? ["PanglaoDB", "CellMarker 2.0"] : ["PanglaoDB", "CellMarker 3.0 (curated)"])
+          ).join(" + ")}{" "}
+          types only.
+          {missing.length > 0 && ` ${missing.map((s) => s.label).join(" and ")} not downloaded.`}{" "}
           None of the databases states a licence; check reuse terms with them.
         </p>
       )}
