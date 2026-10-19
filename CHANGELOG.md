@@ -6,6 +6,20 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **Processing uses much less memory.** Scaling now keeps the expression matrix as float32:
+  scanpy turned it into a dense float64 matrix of every gene, 1.5 GB for Kang's 13,836 cells, and
+  processing Kang peaked at 4.9 GB. It now peaks at about 3.3 GB and runs faster (scaling 18 s →
+  5 s, PCA 27 s → 14 s). The principal components are the same (correlation 1.0); a few cells at
+  cluster edges can change cluster (Kang Leiden: adjusted Rand index 0.987 against before). The
+  HVG check's control and the replay script scale the same way.
+- **Memory is freed after a run.** The process held 4.6 GB after processing Kang, where opening the
+  result takes 1.25 GB; it now holds 2.0 GB. On a Windows PC with 8 GB (about 4 GB for Docker or
+  Podman) the old peak ran out of memory, which stopped the backend and showed "network error".
+- **The backend and converter restart by themselves** if they are stopped by an error such as
+  running out of memory, instead of leaving scView unreachable until it is started again.
+- README: how much memory processing needs, and that Docker and Podman on Windows get half of it.
+
 ## [0.24.0] - 2026-10-19
 
 ### Added

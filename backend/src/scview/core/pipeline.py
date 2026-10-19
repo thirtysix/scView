@@ -486,10 +486,12 @@ def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | 
                     normalization.THETA, clip, source)
         return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source}
     adata.raw = adata
-    # .raw shares a dense X rather than copying it, and scaling works in place:
-    # without a copy .raw would hold the z-scores too (markers then read them).
-    if not sp.issparse(adata.X):
-        adata.X = adata.X.copy()
+    # Scaled X is dense (every gene), so it is kept as float32: sc.pp.scale turns
+    # a sparse matrix into dense float64, which on Kang (13,836 x 13,912) took
+    # 1.5 GB and the run's peak from 3.4 to 4.9 GB (PCs identical, Leiden ARI
+    # 0.987). The new array also keeps .raw, which may share a dense X, log-scaled.
+    X = adata.X.astype(np.float32)
+    adata.X = X.toarray() if sp.issparse(X) else X
     sc.pp.scale(adata, max_value=10)
     logger.info("Scaled expression (max_value=10)")
     return None

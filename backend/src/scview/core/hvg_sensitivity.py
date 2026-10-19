@@ -42,6 +42,7 @@ from typing import Any
 import anndata as ad
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 
 from scview.core import normalization, provenance
 from scview.core import resolution_sweep as rs
@@ -472,7 +473,9 @@ def _pcs(inp: _Inputs, mask: np.ndarray, s: Setting, rec: Recorded) -> np.ndarra
     if s.flavor == "pearson_residuals":
         X = normalization.pearson_residuals(inp.counts, columns=idx)
     else:
-        sub = ad.AnnData(X=inp.log[:, idx])
+        # Dense float32 first, as pipeline._run_scaling scales it.
+        part = inp.log[:, idx].astype(np.float32)
+        sub = ad.AnnData(X=part.toarray() if sp.issparse(part) else part)
         sc.pp.scale(sub, max_value=10)
         X = sub.X
     # Column-major, as the pipeline's PCA reads the variable genes (a masked view

@@ -23,6 +23,7 @@ from scview.api.v1.enrichment import EnrichmentResponse
 from scview.core import pipeline
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_lock
+from scview.core import processing
 from scview.core.processing import iterate_exclusive, run_exclusive
 
 MAIN = threading.main_thread()
@@ -108,7 +109,11 @@ async def test_a_load_overtaken_by_an_evict_is_not_cached(tmp_path, slow_reads):
 # --- pipeline runs ------------------------------------------------------------
 
 
-async def test_a_run_leaves_the_loop_free_and_holds_its_dataset(tmp_path):
+async def test_a_run_leaves_the_loop_free_and_holds_its_dataset(tmp_path, monkeypatch):
+    # The garbage collection after a run holds the GIL for its length (0.25 s
+    # after Kang), and this process's heap is the whole test session's.
+    freed = []
+    monkeypatch.setattr(processing, "_give_back_memory", lambda: freed.append(True))
     _dataset(tmp_path)
     dm = DatasetManager(str(tmp_path))
     await dm.load_dataset("ds")
@@ -142,6 +147,7 @@ async def test_a_run_leaves_the_loop_free_and_holds_its_dataset(tmp_path):
     # Afterwards: released, and the reader got the reloaded dataset.
     assert not dm.is_busy("ds") and not dataset_lock("ds").locked()
     assert await seen["reader"] is dm.get_dataset("ds") is not None
+    assert freed == [True]  # the run's memory is freed before the reload
 
 
 async def test_an_abandoned_run_stops_after_its_step_and_only_then_releases(tmp_path):

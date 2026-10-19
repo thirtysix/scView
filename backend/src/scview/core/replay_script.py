@@ -653,8 +653,8 @@ adata.X = pearson_residuals(counts, theta={_lit(theta)}, clip={clip})
     return Snippet(EXACT, _block('''
 keep_raw_counts(adata)
 adata.raw = adata
-if not sp.issparse(adata.X):
-    adata.X = adata.X.copy()  # .raw shares a dense X: keep it log-normalised
+X = adata.X.astype(np.float32)  # dense float32, a new array: .raw stays log-normalised
+adata.X = X.toarray() if sp.issparse(X) else X
 sc.pp.scale(adata, max_value=10)
 '''))
 
