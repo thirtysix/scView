@@ -39,6 +39,7 @@ from scview.core.assessor import assess_preprocessing
 from scview.core import cluster_qc, composition, provenance, qc_filter
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
+from scview.core.marker_selection import MIN_PTS, group_markers
 from scview.core.species import detect_species
 from scview.core.uns_keys import enrichment_column
 
@@ -360,22 +361,29 @@ def build_grounding_context(
         except Exception:  # pragma: no cover
             marker_cols = []
     for mcol in marker_cols[:2]:  # at most the two primary marker columns
-        df = adaptor.get_markers(column=mcol, n_genes=_MAX_MARKER_GENES)
-        if df is None or df.empty:
+        # Not the stored score order, which led CD14 monocytes with FTL/CD63/ANXA5
+        # and T cells with ribosomal genes (core/marker_selection.py).
+        try:
+            top = group_markers(adata, mcol, n=_MAX_MARKER_GENES)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: markers for %s failed: %s", mcol, exc)
             continue
-        lines.append(f"\n## Top marker genes per group (column: {mcol}); cite as "
-                     "[result:markers:<group>]")
-        for group, sub in df.groupby("group", sort=False):
-            genes = list(sub["gene"])[:_MAX_MARKER_GENES]
-            lines.append(f"- **{group}**: {', '.join(genes)}")
+        if not top:
+            continue
+        lines.append(f"\n## Top marker genes per group (column: {mcol}; genes in >= "
+                     f"{MIN_PTS:.0%} of the group by fold change, ribosomal/mito genes left "
+                     "out); cite as [result:markers:<group>]")
+        for group, genes in top.items():
+            listed = ", ".join(genes) or "none pass the filter"
+            lines.append(f"- **{group}**: {listed}")
             sources.append(ChatSource(
                 kind="result", ref=f"result:markers:{group}",
-                detail=f"{group} top markers: {', '.join(genes)}",
+                detail=f"{group} top markers: {listed}",
                 evidence=f"Top markers by {mcol}\n{lines[-1]}",
             ))
         # group cap to keep the prompt bounded
-        if df["group"].nunique() > _MAX_MARKER_GROUPS:
-            lines.append(f"- (… {df['group'].nunique()} groups total; showing first "
+        if len(top) > _MAX_MARKER_GROUPS:
+            lines.append(f"- (… {len(top)} groups total; showing first "
                          f"{_MAX_MARKER_GROUPS})")
 
     # 4c. Enrichment results, if present in uns
