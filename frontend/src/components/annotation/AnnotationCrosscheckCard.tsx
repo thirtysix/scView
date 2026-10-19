@@ -10,6 +10,7 @@ import {
   type CrosscheckResult,
   type CrosscheckSaved,
 } from "@/api/annotation";
+import { MarkerDbCheck } from "@/components/annotation/MarkerDbCheck";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import {
   agreementSummary,
@@ -510,6 +511,7 @@ export function AnnotationCrosscheckCard({ datasetId }: { datasetId: string }) {
           </p>
         </div>
       )}
+      {reference && <MarkerDbCheck datasetId={datasetId} column={reference} />}
       {error && (
         <p role="alert" className="mt-2 rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
           {error}

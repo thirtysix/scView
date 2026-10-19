@@ -307,3 +307,104 @@ export function saveCrosscheck(
     body: JSON.stringify({ columns, reference, name }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Marker-database check (core/marker_db.py): PanglaoDB + CellMarker 2.0
+// ---------------------------------------------------------------------------
+
+export interface MarkerDbSource {
+  name: string;
+  label: string;
+  release: string;
+  home: string;
+  paper: string;
+  doi: string;
+  url: string;
+  downloaded: boolean;
+  fetched_at: string | null;
+  /** The URL that answered (a mirror when the site was down), or "local file" */
+  served_from: string | null;
+  sha256: string | null;
+  rows: number | null;
+  types: { human: number; mouse: number } | null;
+  download_bytes: number | null;
+  /** Why the last download failed, while it is still missing */
+  error: string | null;
+  failed_at: string | null;
+}
+
+export type MarkerDbState = "ready" | "partial" | "missing" | "failed" | "disabled" | "downloading";
+
+export interface MarkerDbStatus {
+  state: MarkerDbState;
+  auto_download: boolean;
+  sources: MarkerDbSource[];
+  ontology: { downloaded: boolean; url: string; version: string | null; fetched_at: string | null; error: string | null };
+  dataset_species?: "human" | "mouse" | "unknown";
+}
+
+export type MarkerDbVerdict = "supported" | "no_support" | "too_few" | "not_in_db" | "no_markers";
+
+export interface MarkerDbType {
+  cell_type: string;
+  cl_id: string | null;
+  sources: string[];
+  p: number;
+  /** Genes in both the group's markers and the type's database set (the dataset's spelling) */
+  overlap: string[];
+  /** The type's database genes measured here (its top 50 for the verdict, all for suggestions) */
+  n_db_genes: number;
+}
+
+export interface MarkerDbLabel {
+  label: string;
+  /** The group's top 25 markers */
+  markers: string[];
+  match: {
+    types: string[];
+    how: "exact" | "cl" | "subset" | "cl-ancestor" | null;
+    how_text: string | null;
+    via_parent: boolean;
+  };
+  db_type: string | null;
+  cl_id: string | null;
+  sources: string[];
+  p: number | null;
+  overlap: string[];
+  n_db_genes: number;
+  verdict: MarkerDbVerdict;
+  verdict_text: string;
+  /** The 3 database types its markers fit best */
+  suggestions: MarkerDbType[];
+}
+
+export interface MarkerDbResult {
+  column: string;
+  species: "human" | "mouse";
+  species_note: string | null;
+  labels: MarkerDbLabel[];
+  verdict_counts: Record<MarkerDbVerdict, number>;
+  n_measured: number;
+  n_db_types: number;
+  ontology: boolean;
+  sources: MarkerDbSource[];
+  params: Record<string, number>;
+  note: string;
+  elapsed_seconds: number;
+}
+
+export function getMarkerDbStatus(datasetId: string): Promise<MarkerDbStatus> {
+  return apiFetch(`/datasets/${datasetId}/annotation/marker-db/status`);
+}
+
+/** Check `column`'s labels against the marker databases (downloaded on first use). Changes nothing. */
+export function runMarkerDbCheck(
+  datasetId: string,
+  column: string,
+  opts: { species?: "human" | "mouse"; retry?: boolean } = {},
+): Promise<MarkerDbResult> {
+  return apiFetch(`/datasets/${datasetId}/annotation/marker-db/check`, {
+    method: "POST",
+    body: JSON.stringify({ column, ...opts }),
+  });
+}
