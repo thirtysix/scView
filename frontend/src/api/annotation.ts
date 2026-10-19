@@ -174,3 +174,136 @@ export function makeUnknownColumn(
     body: JSON.stringify({ column }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Annotation cross-check (core/annotation_crosscheck.py): every map is keyed by label
+// ---------------------------------------------------------------------------
+
+/** Ref label -> other label -> value; zero entries are left out. */
+export type LabelTable = Record<string, Record<string, number>>;
+
+export interface CrosscheckContingency {
+  /** Reference labels, in the column's order */
+  rows: string[];
+  /** The other column's labels, in its order */
+  cols: string[];
+  counts: LabelTable;
+  /** Counts as a share of the reference label's cells */
+  row_fraction: LabelTable;
+}
+
+export interface CrosscheckBestMatch {
+  n_cells: number;
+  jaccard: number;
+  match: string;
+  contained: number;
+  purity: number;
+  parts: number;
+  status: "stable" | "splits" | "merges" | "dissolves";
+}
+
+export interface CrosscheckComparison {
+  ari: number;
+  ami: number;
+  /** Cells with a label in both columns */
+  n_cells: number;
+  /** Share of those cells whose mapped label is the reference label */
+  mapped_agreement: number | null;
+  /** Other label -> the reference label most of its cells carry, and that share */
+  mapping: Record<string, { to: string; share: number }>;
+  exact_name: { n_shared_labels: number; shared_labels: string[]; agreement: number | null };
+  /** Per reference label: its best match by Jaccard, and what became of it */
+  best_match: Record<string, CrosscheckBestMatch>;
+  contingency: CrosscheckContingency;
+}
+
+export interface CrosscheckAnnotator {
+  /** Share of the label's cells this column maps to the label */
+  agreement: number;
+  disagrees: boolean;
+  /** What the column calls the label's cells, commonest first */
+  calls: { label: string; share: number; maps_to: string | null }[];
+}
+
+export interface CrosscheckLabelRow {
+  n_cells: number;
+  mean_agreement: number | null;
+  disagreeing: string[];
+  annotators: Record<string, CrosscheckAnnotator>;
+}
+
+export interface CrosscheckResult {
+  columns: string[];
+  reference: string;
+  /** The reference's labels in its order (`labels` is keyed by them) */
+  reference_labels: string[];
+  n_cells: number;
+  n_compared: number;
+  pairwise: {
+    ari: Record<string, Record<string, number | null>>;
+    ami: Record<string, Record<string, number | null>>;
+  };
+  mean_agreement: number | null;
+  /** Agreement value ("1", "0.5", ...) -> cells */
+  agreement_counts: Record<string, number>;
+  /** Same-name agreement after normalising case, spaces, "+" and plurals; apart from the mapped one */
+  exact_name_agreement: number | null;
+  consensus_counts: Record<string, number>;
+  n_unresolved: number;
+  /** Other column -> the reference against it */
+  comparisons: Record<string, CrosscheckComparison>;
+  /** Reference label -> its row */
+  labels: Record<string, CrosscheckLabelRow>;
+  note: string;
+  unresolved_label: string;
+  elapsed_seconds: number;
+}
+
+export interface CrosscheckInfo {
+  /** Columns that look like annotations -> the method that made them */
+  suggested: Record<string, string>;
+  active_clustering: string | null;
+  min_columns: number;
+  max_columns: number;
+  max_categories: number;
+  default_name: string;
+  saved: Record<
+    string,
+    { columns: { consensus: string; agreement: string }; compared: string[]; reference: string }
+  >;
+  note: string;
+}
+
+export function getCrosscheckInfo(datasetId: string): Promise<CrosscheckInfo> {
+  return apiFetch(`/datasets/${datasetId}/annotation/crosscheck`);
+}
+
+/** Compare 2-6 label columns against `reference` (one of them). Changes nothing. */
+export function runCrosscheck(datasetId: string, columns: string[], reference: string): Promise<CrosscheckResult> {
+  return apiFetch(`/datasets/${datasetId}/annotation/crosscheck`, {
+    method: "POST",
+    body: JSON.stringify({ columns, reference }),
+  });
+}
+
+export interface CrosscheckSaved {
+  name: string;
+  columns: { consensus: string; agreement: string };
+  reference: string;
+  compared: string[];
+  n_unresolved: number;
+  mean_agreement: number | null;
+}
+
+/** Write `{name}_consensus` and `{name}_agreement` to obs. */
+export function saveCrosscheck(
+  datasetId: string,
+  columns: string[],
+  reference: string,
+  name: string,
+): Promise<CrosscheckSaved> {
+  return apiFetch(`/datasets/${datasetId}/annotation/crosscheck/save`, {
+    method: "POST",
+    body: JSON.stringify({ columns, reference, name }),
+  });
+}

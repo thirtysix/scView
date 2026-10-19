@@ -9,6 +9,11 @@ column fits its expression neighbourhood, with split conformal prediction sets
 (``core/annotation_confidence.py``): GET returns the last check of a column,
 POST runs one, POST ``.../unknown`` copies the column with rejected cells set to
 "Unknown".
+
+``/datasets/{id}/annotation/crosscheck`` compares 2-6 label columns made by
+different methods (``core/annotation_crosscheck.py``): GET lists the columns that
+look like annotations, POST runs the comparison, POST ``.../save`` writes the
+consensus and per-cell agreement as obs columns.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.core import annotation_confidence as conf
+from scview.core import annotation_crosscheck as xc
 from scview.core import celltypist_fit as fit
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
@@ -165,7 +171,7 @@ async def _edit(dm: DatasetManager, dataset_id: str, edit, what: str):
 
         try:
             result = await held.run(_run)
-        except conf.ConfidenceError as exc:  # raised before any change
+        except (conf.ConfidenceError, xc.CrosscheckError) as exc:  # raised before any change
             raise HTTPException(status_code=exc.status, detail=str(exc))
         except Exception as exc:
             dm.evict(dataset_id)  # the cached copy may hold columns that were never saved
@@ -206,4 +212,56 @@ async def annotation_confidence_unknown(
         dm, dataset_id,
         lambda adata: conf.make_unknown_column(adata, body.column),
         "The Unknown copy",
+    )
+
+
+class CrosscheckRequest(BaseModel):
+    columns: list[str]
+    # One of ``columns``; the first when left out
+    reference: str | None = None
+
+
+class CrosscheckSaveRequest(CrosscheckRequest):
+    name: str = xc.DEFAULT_NAME
+
+
+@router.get("/datasets/{dataset_id}/annotation/crosscheck")
+async def annotation_crosscheck_info(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The columns that look like annotations (column -> the method that made
+    it), the active clustering, the limits, and the saved cross-checks."""
+    adaptor = await _adaptor(dm, dataset_id)
+    return xc.info(adaptor.adata, adaptor.active_clustering_column())
+
+
+@router.post("/datasets/{dataset_id}/annotation/crosscheck")
+async def run_annotation_crosscheck(
+    dataset_id: str,
+    body: CrosscheckRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Compare 2-6 label columns: pairwise ARI/AMI, the reference against each
+    other column (contingency, best matches, label mapping), per-label agreement
+    and the consensus counts. Changes nothing."""
+    adata = (await _adaptor(dm, dataset_id)).adata
+    try:
+        # contingency tables and AMI over every cell: off the loop
+        return await asyncio.to_thread(xc.crosscheck, adata, body.columns, body.reference)
+    except xc.CrosscheckError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+
+
+@router.post("/datasets/{dataset_id}/annotation/crosscheck/save")
+async def save_annotation_crosscheck(
+    dataset_id: str,
+    body: CrosscheckSaveRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Write ``{name}_consensus`` and ``{name}_agreement`` to obs."""
+    return await _edit(
+        dm, dataset_id,
+        lambda adata: xc.save(adata, body.columns, body.reference, body.name),
+        "Saving the cross-check",
     )

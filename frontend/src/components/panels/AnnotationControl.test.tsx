@@ -98,4 +98,12 @@ describe("AnnotationControl (CellTypist)", () => {
     await waitFor(() => expect(getCellTypistSummary).toHaveBeenCalledWith("d1"));
     expect(screen.queryByTestId("celltypist-summary")).toBeNull();
   });
+
+  it("points to one output column per method for the cross-check, without changing the default", async () => {
+    render(<AnnotationControl onAnnotate={vi.fn()} running={false} species="human" />);
+    expect(screen.getByText(/run each into its own output column/)).toBeTruthy();
+    expect(screen.getByText("cell_type_celltypist")).toBeTruthy();
+    const input = screen.getByDisplayValue("paul15_clusters_celltypeAnno") as HTMLInputElement;
+    expect(input.value).toBe("paul15_clusters_celltypeAnno");
+  });
 });
