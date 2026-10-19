@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   collectionLabel,
   collectionOptionLabel,
+  customCollectionFromLists,
   deleteCustomCollection,
   describeCoverage,
   GeneSetUploadError,
@@ -86,6 +87,26 @@ describe("custom gene-set collections API", () => {
     expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual({ name: "New" });
     await expect(deleteCustomCollection("custom-abc")).resolves.toBeUndefined();
     expect(fetchMock.mock.calls[1]![0]).toBe("/api/v1/genesets/custom/custom-abc");
+  });
+
+  it("saves gene lists as JSON; a rejection lists the problems", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...col({ format: "lists" }), warnings: [] }), { status: 201 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: { message: "1 problem", problems: ["list 1: 'E' has no genes."] } }), {
+          status: 400,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await customCollectionFromLists("Mine", { T: ["CD3E"] });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("/api/v1/genesets/custom/from-lists");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ name: "Mine", sets: { T: ["CD3E"] } });
+    const err = await customCollectionFromLists("Mine", { E: [] }).catch((e) => e);
+    expect(err).toBeInstanceOf(GeneSetUploadError);
+    expect(err.problems).toEqual(["list 1: 'E' has no genes."]);
   });
 });
 

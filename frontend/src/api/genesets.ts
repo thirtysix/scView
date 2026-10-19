@@ -108,6 +108,18 @@ export async function uploadCustomCollection(file: File, name: string): Promise<
   return send<CustomUploadResult>("/genesets/custom/upload", { method: "POST", body: form });
 }
 
+/** Save named gene lists as one collection (one set per list). Rejected lists throw GeneSetUploadError. */
+export async function customCollectionFromLists(
+  name: string,
+  sets: Record<string, string[]>,
+): Promise<CustomUploadResult> {
+  return send<CustomUploadResult>("/genesets/custom/from-lists", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, sets }),
+  });
+}
+
 export async function renameCustomCollection(id: string, name: string): Promise<CustomCollection> {
   return send<CustomCollection>(`/genesets/custom/${encodeURIComponent(id)}`, {
     method: "PATCH",
