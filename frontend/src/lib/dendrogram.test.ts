@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dendrogramRowOrder, dendrogramSegments, rowDendrogram } from "./dendrogram";
+import { columnDendrogram, dendrogramRowOrder, dendrogramSegments, rowDendrogram } from "./dendrogram";
 
 // Groups 0..3. A (1) and B (2) merge at 1; C (0) and D (3) at 2; the root at 10.
 // scipy: row 0 -> node 4, row 1 -> node 5, row 2 joins 4 and 5.
@@ -54,5 +54,25 @@ describe("rowDendrogram", () => {
     expect(trace).toMatchObject({ xaxis: "x2", yaxis: "y2", mode: "lines" });
     expect(layout.yaxis2!.range).toEqual([3.5, -0.5]);
     expect(layout.xaxis2!.domain).toEqual([0.85, 1]);
+  });
+
+  it("shares the plot's y domain when the plot does not fill the height", () => {
+    const { layout } = rowDendrogram(dendrogramSegments(TREE, ORDER)!, [0.9, 1], [0, 0.8]);
+    expect(layout.yaxis2!.domain).toEqual([0, 0.8]);
+    expect(rowDendrogram(dendrogramSegments(TREE, ORDER)!, [0.9, 1]).layout.yaxis2!.domain).toBeUndefined();
+  });
+});
+
+describe("columnDendrogram", () => {
+  it("puts the leaves on the columns below and the root at the top", () => {
+    const { trace, layout } = columnDendrogram(dendrogramSegments(TREE, ORDER)!, [0, 0.88], [0.85, 1]);
+    expect(trace).toMatchObject({ xaxis: "x3", yaxis: "y3", mode: "lines" });
+    // x carries the leaf positions (columns 0..3), y the merge heights.
+    expect((trace as { x: unknown[] }).x.slice(0, 5)).toEqual([0, 0, 1, 1, null]);
+    expect((trace as { y: unknown[] }).y.slice(0, 5)).toEqual([0, 1, 1, 0, null]);
+    expect(layout.xaxis3!.range).toEqual([-0.5, 3.5]);
+    expect(layout.xaxis3!.domain).toEqual([0, 0.88]);
+    expect(layout.yaxis3!.domain).toEqual([0.85, 1]);
+    expect((layout.yaxis3!.range as number[])[0]).toBe(0); // leaves at the bottom of the band
   });
 });

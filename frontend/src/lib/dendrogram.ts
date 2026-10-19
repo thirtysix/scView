@@ -70,11 +70,13 @@ export function dendrogramRowOrder(treeGroups: readonly string[], order: readonl
  * A Plotly trace and axes that draw the tree beside a plot whose rows are
  * category y values top to bottom (yaxis range [n - 0.5, -0.5]), on its own
  * axes x2 / y2: the leaves face the plot on the left, the root on the right.
- * `domain` is the horizontal strip of the figure it takes.
+ * `domain` is the horizontal strip of the figure it takes; `yDomain` must be
+ * the plot's own y domain when that is not the whole height.
  */
 export function rowDendrogram(
   lines: DendrogramLines,
   domain: [number, number],
+  yDomain?: [number, number],
 ): { trace: Partial<Data>; layout: Partial<Layout> } {
   return {
     trace: {
@@ -99,7 +101,51 @@ export function rowDendrogram(
       },
       yaxis2: {
         anchor: "x2",
+        ...(yDomain ? { domain: yDomain } : {}),
         range: [lines.n - 0.5, -0.5],
+        visible: false,
+        fixedrange: true,
+      },
+    } as Partial<Layout>,
+  };
+}
+
+/**
+ * A Plotly trace and axes that draw the tree above a plot whose columns are
+ * category x values left to right (xaxis range [-0.5, n - 0.5]), on its own
+ * axes x3 / y3: the leaves face the plot below, the root at the top.
+ * `xDomain` must be the plot's own x domain; `yDomain` is the band it takes.
+ */
+export function columnDendrogram(
+  lines: DendrogramLines,
+  xDomain: [number, number],
+  yDomain: [number, number],
+): { trace: Partial<Data>; layout: Partial<Layout> } {
+  return {
+    trace: {
+      type: "scatter",
+      mode: "lines",
+      x: lines.pos,
+      y: lines.height,
+      xaxis: "x3",
+      yaxis: "y3",
+      line: { color: "#64748b", width: 1 },
+      hoverinfo: "skip",
+      showlegend: false,
+      connectgaps: false,
+    } as Partial<Data>,
+    layout: {
+      xaxis3: {
+        domain: xDomain,
+        anchor: "y3",
+        range: [-0.5, lines.n - 0.5],
+        visible: false,
+        fixedrange: true,
+      },
+      yaxis3: {
+        domain: yDomain,
+        anchor: "x3",
+        range: [0, (lines.maxHeight || 1) * 1.04],
         visible: false,
         fixedrange: true,
       },

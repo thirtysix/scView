@@ -40,6 +40,32 @@ export function pickMarkerGenes(
   return out;
 }
 
+/** Gap (px) between the plot and the band above it, and between the two bands. */
+const BAND_GAP_PX = 4;
+
+/**
+ * Vertical domains of a heatmap with optional bands above it: a strip (the
+ * marker group of each gene) and a dendrogram over the genes on top. Heights
+ * are px of the plotting area; `extraPx` is what the bands add to it, so the
+ * heatmap's rows keep their size.
+ */
+export function heatmapBands(
+  mainPx: number,
+  stripPx: number,
+  treePx: number,
+): { main: [number, number]; strip: [number, number] | null; tree: [number, number] | null; extraPx: number } {
+  const strip = stripPx > 0 ? BAND_GAP_PX + stripPx : 0;
+  const tree = treePx > 0 ? BAND_GAP_PX + treePx : 0;
+  const total = mainPx + strip + tree;
+  const top = mainPx / total;
+  return {
+    main: [0, top],
+    strip: stripPx > 0 ? [(mainPx + BAND_GAP_PX) / total, (mainPx + strip) / total] : null,
+    tree: treePx > 0 ? [(mainPx + strip + BAND_GAP_PX) / total, 1] : null,
+    extraPx: strip + tree,
+  };
+}
+
 /** "all": mean over every cell of the group; "expressing": over cells above 0 only. */
 export type MeanOf = "all" | "expressing";
 /** "gene": each gene scaled to 0-1 across the groups shown; "fixed": the layer's range. */
