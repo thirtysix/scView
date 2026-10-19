@@ -60,9 +60,11 @@ jobs:
 
       - name: Page, API proxy and converter respond
         run: |
-          curl -fsS -o /dev/null http://127.0.0.1:3000/
-          curl -fsS http://127.0.0.1:3000/api/v1/datasets > /dev/null
-          curl -fsS http://127.0.0.1:8001/health
+          # compose --wait can report healthy a moment before nginx/uvicorn accept
+          # connections (arm64 run 39147842249: reset by peer), so retry briefly
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 2 -o /dev/null http://127.0.0.1:3000/
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 2 http://127.0.0.1:3000/api/v1/datasets > /dev/null
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 2 http://127.0.0.1:8001/health
 
       - name: Upload a small dataset
         run: |

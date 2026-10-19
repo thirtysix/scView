@@ -136,6 +136,26 @@ async def test_compute_local_finds_the_group_program(client, dataset_manager):
     assert set(top["genes"]) <= set(T_SET)
 
 
+async def test_compute_local_queries_the_fold_change_markers(client, dataset_manager, monkeypatch):
+    from scview.api.v1 import enrichment as enr
+    from scview.core.marker_selection import ora_query_genes
+
+    seen = {}
+    real = enr._ora_records
+
+    def spy(query, *args, **kw):
+        seen["query"] = list(query)
+        return real(query, *args, **kw)
+
+    monkeypatch.setattr(enr, "_ora_records", spy)
+    did = _register(dataset_manager)
+    r = await client.post(f"{API}/datasets/{did}/enrichment/compute-local", json=_local())
+    assert r.status_code == 200, r.text
+    adata = (await dataset_manager.get_or_load_dataset(did)).adata
+    assert seen["query"] == ora_query_genes(adata, "cell_type", "T", 10)
+    assert r.json()["n_genes_used"] == len(seen["query"])
+
+
 async def test_compute_local_second_call_is_served_from_cache(client, dataset_manager):
     did = _register(dataset_manager)
     first = await client.post(f"{API}/datasets/{did}/enrichment/compute-local", json=_local())

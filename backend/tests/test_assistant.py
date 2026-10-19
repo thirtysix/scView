@@ -81,6 +81,39 @@ def test_build_grounding_context_includes_facts(tmp_path: Path):
     assert "A" in context and "B" in context
 
 
+def test_marker_facts_list_fold_change_markers_not_score_order(tmp_path: Path):
+    """Score order led Kang's CD14 monocytes with FTL/CD63 and its T cells with
+    ribosomal genes. The fact lists genes in >= 20% of the group by fold change."""
+    import scanpy as sc
+
+    from scview.core.uns_keys import markers_key
+
+    rng = np.random.default_rng(0)
+    n = 50
+    genes = ["BROAD", "SPEC", "RPL3", "RARE", "FLAT"]
+    X = rng.poisson(1.0, (2 * n, len(genes))).astype("float32")
+    X[:n, 0] += 2  # every A cell, a little: the top wilcoxon score
+    X[: int(0.4 * n), 1] += 30  # 40% of A cells, a lot
+    X[:n, 2] += 3  # ribosomal
+    X[:, 3] = 0
+    X[:3, 3] = 40  # 3 of 50 A cells
+    a = ad.AnnData(np.log1p(X))
+    a.var_names = genes
+    a.obs_names = [f"C{i}" for i in range(2 * n)]
+    a.obs["cluster"] = pd.Categorical(["A"] * n + ["B"] * n)
+    sc.tl.rank_genes_groups(a, "cluster", method="wilcoxon", pts=True,
+                            key_added=markers_key("cluster"))
+    assert [str(g) for g in a.uns[markers_key("cluster")]["names"]["A"]][0] != "SPEC"
+    p = tmp_path / "m.h5ad"
+    a.write_h5ad(p)
+
+    context, sources = build_grounding_context(AnnDataAdaptor(str(p)))
+    assert "- **A**: SPEC, BROAD\n" in context
+    fact = next(s for s in sources if s.ref == "result:markers:A")
+    assert fact.detail == "A top markers: SPEC, BROAD"
+    assert fact.evidence == "Top markers by cluster\n- **A**: SPEC, BROAD"
+
+
 async def test_assistant_chat_grounded_fallback(client, dataset_manager):
     did = _register(dataset_manager)
     r = await client.post(

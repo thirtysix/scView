@@ -36,7 +36,9 @@ logger = logging.getLogger(__name__)
 # sidecar is missing (pre-fix) or older than this are recomputed.
 # v3: ribosomal/mitochondrial genes are excluded from the query by default, so
 # every pre-v3 payload was computed from a different query gene list.
-ORA_VERSION = 3
+# v4: the query is marker_selection.ora_query_genes (genes in >= 20% of the group,
+# by fold change), not the top of the wilcoxon score order.
+ORA_VERSION = 4
 
 META_PREFIX = uns_keys.META_PREFIX
 

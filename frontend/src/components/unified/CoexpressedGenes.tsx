@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Download, Grid2x2, Link2, Loader2 } from "lucide-react";
 import { fetchCoexpression, type CoexpressionMethod, type CoexpressionResponse } from "@/api/coexpression";
+import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { InfoTip } from "@/components/common/InfoTip";
 import { sortCoexpressed, type CoexpressedSort } from "@/lib/coexpressedGenes";
 import { downloadCsv } from "@/lib/csv";
@@ -204,6 +205,13 @@ export function CoexpressedGenes({ datasetId, activeGene, onGeneSelect }: Props)
               <Download className="h-3 w-3" />
               CSV
             </button>
+            <AddToGeneListMenu
+              genes={() => [data.gene, ...shown.map((g) => g.gene)]}
+              defaultName={`Co-expressed with ${data.gene}`}
+              source={`${side === "positive" ? "Positively" : "Negatively"} co-expressed with ${data.gene} (${data.scope})`}
+              disabled={shown.length === 0}
+              title={`Add ${data.gene} and its ${shown.length} ${side} partners (table order) to a gene list`}
+            />
           </div>
 
           {shown.length === 0 ? (

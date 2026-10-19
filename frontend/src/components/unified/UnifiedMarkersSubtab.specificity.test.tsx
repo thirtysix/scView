@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { DatasetInfo } from "@/api/types";
 import type { MarkersResponse } from "@/api/markers";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useGeneListsStore } from "@/stores/geneListsStore";
 
 const { apiFetch, plotProps } = vi.hoisted(() => ({
   apiFetch: vi.fn(),
@@ -53,6 +54,18 @@ beforeEach(() => {
 });
 
 describe("UnifiedMarkersSubtab specificity", () => {
+  it("adds the markers shown, in table order, to a gene list", async () => {
+    useGeneListsStore.setState({ lists: [], selectedId: null });
+    renderTab();
+    await screen.findByText("TSPAN13");
+    fireEvent.click(screen.getByText("Tau")); // sorted by tau
+    fireEvent.click(screen.getByRole("button", { name: "Add to gene list" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "New list…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const [list] = useGeneListsStore.getState().lists;
+    expect([list!.name, list!.genes]).toEqual(["Markers: pDC", ["TSPAN13", "IGJ", "CD74"]]);
+  });
+
   it("shows tau, detection here / next group, and the ratio", async () => {
     renderTab();
     const row = (await screen.findByText("TSPAN13")).closest("tr")!;

@@ -6,6 +6,65 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-19
+
+### Added
+- **Per-cell marker heatmap.** Marker Genes → Heatmap has a *Group means | Per cell* switch. Per
+  cell shows the genes over a seeded sample of each group's cells (50-500 per group, at most
+  5,000 cells), with a strip of group colours, boundaries and names, and each gene's z-score over
+  the sampled cells clipped to ±2.5 (as Seurat's DoHeatmap) or the layer's fixed range. The
+  caption says how many cells were sampled and which groups are shown whole (Kang, 13 cell types
+  at 200: 2,368 of 13,836 cells).
+- **Cluster genes** on the marker heatmap orders the genes by their profiles across groups
+  (correlation distance, average linkage) with a gene dendrogram, next to the existing group
+  dendrogram; top markers show which group each gene is a marker of.
+- **Annotation cross-check** (Data Assessment): compare 2-6 label columns (CellTypist, the AI,
+  marker scores, clusterings, hand labels) with pairwise ARI/AMI, and against a reference with a
+  row-normalised confusion heatmap, a Sankey and per-label agreement. Each column's labels are
+  mapped onto the reference label most of their cells carry, so different names for the same cells
+  agree; same-name agreement is shown separately. The consensus label and per-cell agreement can be
+  saved as columns to colour by (Kang `cluster` vs Leiden 0.5: 73.8% mapped agreement).
+- **Gene lists** (Unified View): named gene lists that survive reloads, dataset switches and
+  session files. Add genes from Markers, DE (up or down), Co-expressed genes and the gene search,
+  or import / export them as txt, csv or gmt. A list can be overlaid gene by gene, shown as a
+  feature grid, dot plot or heatmap, scored, tested for enrichment, or saved as a gene-set
+  collection. Genes missing from the open dataset are greyed, with a one-click fix for case-only
+  differences (CD3E vs Cd3e).
+- **Marker database check** in the annotation cross-check: each label of the reference column is
+  matched by name (with Cell Ontology synonyms and common abbreviations) to marker-database cell
+  types, and its database markers are tested against the group's own top 25 markers
+  (hypergeometric, measured genes as background): *supported*, *no database support*, *too few
+  database markers* or *not in the databases*, with the shared genes. Verdicts use PanglaoDB +
+  CellMarker 3.0 + ACT for human data and CellMarker 3.0's mouse rows for mouse; each group also
+  gets the 3 PanglaoDB / curated CellMarker types its markers fit best (Kang: 13 of 13 labels
+  supported; paul15: 16 of 19). The databases are downloaded from their own sites on first use
+  (~73 MB, read straight from the zips; `MARKER_DB_AUTO_DOWNLOAD`), with pinned SHA-256 sums for
+  CellMarker 3.0 and ACT; if CellMarker 3.0 is unavailable or has changed, CellMarker 2.0 is used
+  instead and the card says so. None of the databases states a licence. The sources were chosen by
+  measurement against HPA, Tabula Sapiens, Kang and paul15 (`PanglaoDB + CellMarker 3.0 + ACT`:
+  HPA lookup 0.73 against 0.67 for PanglaoDB + CellMarker 2.0; MSigDB C8, Tabula Sapiens, Cell
+  Taxonomy, scType, scCATCH, Azimuth and HCL/MCA added nothing).
+
+### Changed
+- **Marker-score annotation** names each cluster after the marker-database type its markers fit
+  best (any tissue, human or mouse), or uses the 14 built-in immune sets when you choose them (they
+  remain better on PBMC subtypes) or when the databases are unavailable (paul15: 11 of 19 labels
+  right against 2 with the built-in sets).
+- **Which genes describe a group.** AI annotation, the co-pilot's marker facts and per-group
+  enrichment (over-representation) now use the genes expressed in at least 20% of the group, by
+  fold change, without ribosomal or mitochondrial genes, instead of the top of the Wilcoxon score
+  order, which led Kang's CD14 monocytes with FTL, CD63 and ANXA5 (CD14 at rank 70). Enrichment's
+  *N genes* is now a maximum; cached enrichment results are recomputed when next opened.
+
+### Fixed
+- The AI co-pilot can open the Protein, Activity and Gene lists tabs.
+- A continuous colour legend under a short label no longer runs its minimum and maximum together.
+- The replay script explains the annotation cross-check step instead of calling it unknown, and
+  writes marker-database labels in from the record.
+- The co-pilot's context no longer claims to show only the first 16 groups' markers (it lists all).
+- The smoke test of the published images retries its first requests, which could reach the
+  frontend a moment before it accepted connections.
+
 ## [0.22.0] - 2026-10-18
 
 ### Added

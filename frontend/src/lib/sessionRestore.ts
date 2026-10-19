@@ -22,6 +22,15 @@ import {
 import { COMPARE_MIN_COLUMNS, compareColumnOptions, splitColumnOptions } from "@/lib/splitView";
 import { resetViewForDataset, useDatasetStore } from "@/stores/datasetStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
+import { useGeneListsStore } from "@/stores/geneListsStore";
+import {
+  cleanListName,
+  dedupeGenes,
+  MAX_LISTS,
+  sameGenes,
+  uniqueListName,
+  type GeneListDraft,
+} from "@/lib/geneLists";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
@@ -114,6 +123,9 @@ export function captureSession(now: Date = new Date()): SessionFile {
       background: settings.plotBackground,
       max_rendered_cells: settings.maxRenderedCells,
     },
+    gene_lists: useGeneListsStore
+      .getState()
+      .lists.map((l) => (l.source ? { name: l.name, genes: l.genes, source: l.source } : { name: l.name, genes: l.genes })),
   };
 }
 
@@ -207,6 +219,8 @@ export async function restoreSession(session: SessionFile): Promise<RestoreRepor
   }
 
   applyColors(session);
+  // The user's lists, not the dataset's: merged whatever dataset opens.
+  applyGeneLists(session, notes);
   if (!target) {
     // Without a dataset only a panel that needs none means anything; a
     // missing dataset leaves the user where they are.
@@ -229,6 +243,47 @@ export async function restoreSession(session: SessionFile): Promise<RestoreRepor
   if (session.view?.panel) useViewStore.getState().setPanel(session.view.panel);
   if (notes.length > 0) level = "warning";
   return { headline, notes, level };
+}
+
+/**
+ * The session's gene lists merged into the user's, never replacing one: a list
+ * already here under the same name with the same genes (or restored before as
+ * "name (session)") is skipped; one whose name is taken by other genes comes in
+ * as "name (session)".
+ */
+export function applyGeneLists(session: SessionFile, notes: string[]) {
+  const saved = session.gene_lists;
+  if (!saved || saved.length === 0) return;
+  const store = useGeneListsStore.getState();
+  const taken = store.lists.map((l) => l.name);
+  const fromSession = (n: number) => (n === 2 ? " (session)" : ` (session ${n - 1})`);
+  const drafts: GeneListDraft[] = [];
+  const renamed: string[] = [];
+  for (const l of saved) {
+    const genes = dedupeGenes(l.genes);
+    const name = cleanListName(l.name) || "Gene list";
+    const lower = name.toLowerCase();
+    const already = [...store.lists, ...drafts].some((x) => {
+      const n = x.name.toLowerCase();
+      return (n === lower || n.startsWith(`${lower} (session`)) && sameGenes(x.genes, genes);
+    });
+    if (already) continue;
+    const unique = uniqueListName(name, taken, fromSession);
+    if (unique !== name) renamed.push(`${quote(name)} came in as ${quote(unique)}`);
+    taken.push(unique);
+    drafts.push({ name: unique, genes, ...(l.source ? { source: l.source } : {}) });
+  }
+  if (drafts.length === 0) return;
+  const before = store.selectedId;
+  const ids = store.addLists(drafts);
+  // Adding lists does not move the Gene lists tab off the list it shows.
+  if (before) useGeneListsStore.getState().select(before);
+  if (ids.length < drafts.length) {
+    notes.push(`Gene lists: ${drafts.length - ids.length} not added, at most ${MAX_LISTS} lists are kept.`);
+  }
+  if (renamed.length > 0) {
+    notes.push(`Gene lists: ${renamed.join(", ")}, since a list of that name with other genes was already here.`);
+  }
 }
 
 function applyColors(session: SessionFile) {

@@ -1,0 +1,12 @@
+species	tissue_class	tissue_type	uberon_id	disease_category	disease	cell_name_class	cell_name	cellontology_id	marker	symbol	gene_id	gene_type	gene_name	uniprot_id	technology_seq	marker_source	pmid	title	journal	year	series_id	method_details
+Human	Blood	Blood	UBERON_0000178	Normal	Normal	B cell	B cell	CL_0000236	CD79A	CD79A	1.0	protein_coding	x	x	None	Experiment	1001.0	t	j	2020.0		
+Human	Blood	Blood	UBERON_0000178	Normal	Normal	B cell	B cell	CL_0000236	CD79A	CD79A	1.0	protein_coding	x	x	None	Single-cell sequencing	1002	t	j	2020.0		
+Human	Blood	Blood	UBERON_0000178	Normal	Normal	B cell	B cell	CL_0000236	CD79A, MS4A1, [CD19], RPL3	CD79A, MS4A1, [CD19], RPL3	1.0	protein_coding	x	x	None	Review	1001	t	j	2020.0		
+Human	Blood	Blood	UBERON_0000178	Normal	Normal	B cell	B cell	CL_0000236	CD22	CD22	1.0	protein_coding	x	x	None	Method		t	j	2020.0	GSE1	COSG
+Human	Blood	Blood	UBERON_0000178	Cancer	Cancer	B cell	B cell	CL_0000236	PAX5	PAX5	1.0	protein_coding	x	x	None	Experiment	1003	t	j	2020.0		
+Human	Blood	Blood	UBERON_0000178	Normal	Normal	Methodcyte	Methodcyte		MTH1, MTH2, MTH3, MTH4, MTH5	MTH1, MTH2, MTH3, MTH4, MTH5	1.0	protein_coding	x	x	None	Method		t	j	2020.0	GSE2	CelliD
+Human	Blood	Blood	UBERON_0000178	Normal	Normal	γδ T cell	γδ T cell	CL_0000798	TRDC, TRGC1, CD3D	TRDC, TRGC1, CD3D	1.0	protein_coding	x	x	None	Experiment	2001	t	j	2020.0		
+Human	Blood	Blood	UBERON_0000178	Normal	Normal	Rare cell	Rare cell		XYZ1, XYZ2, CD79A	XYZ1, XYZ2, CD79A	1.0	protein_coding	x	x	None	Experiment	3001	t	j	2020.0		
+Zebrafish	Blood	Blood	UBERON_0000178	Normal	Normal	Monocyte	Monocyte	CL_0000576	csf1ra	csf1ra	1.0	protein_coding	x	x	None	Experiment	4003	t	j	2020.0		
+Mouse	Blood	Blood	UBERON_0000178	Normal	Normal	Monocyte	Monocyte	CL_0000576	Ly6c2, Csf1r	Ly6c2, Csf1r	1.0	protein_coding	x	x	None	Experiment	4001	t	j	2020.0		
+Mouse	Blood	Blood	UBERON_0000178	Normal	Normal	B cell	B cell	CL_0000236	Cd79a, Ms4a1, Cd19, Bank1, Pax5	Cd79a, Ms4a1, Cd19, Bank1, Pax5	1.0	protein_coding	x	x	None	Method		t	j	2020.0	GSE3	COSG

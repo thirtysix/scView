@@ -8,23 +8,25 @@ import { apiFetch } from "@/api/client";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { missingGenes } from "@/lib/geneList";
 import { getGroupDistances, type GroupDistances } from "@/api/clustering";
-import { dendrogramRowOrder, dendrogramSegments, rowDendrogram } from "@/lib/dendrogram";
+import { columnDendrogram, dendrogramRowOrder, dendrogramSegments, rowDendrogram } from "@/lib/dendrogram";
+import { clusterGenes } from "@/lib/geneClustering";
+import { discreteColorscale } from "@/lib/cellHeatmap";
+import { rgbCss } from "@/lib/categoryColors";
+import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { useObsRevision } from "@/stores/obsRevisionStore";
 import {
   DOT_LEGEND,
   MIN_FRACTION,
   dotSize,
+  heatmapBands,
   markerColours,
+  pickMarkerGenes,
   type ColourScale,
+  type MarkerRow,
   type MeanOf,
 } from "@/lib/markerPlot";
 
-export { scalePerGene } from "@/lib/markerPlot";
-
-interface MarkerRow {
-  gene: string;
-  logfoldchange: number | null;
-}
+export { pickMarkerGenes, scalePerGene } from "@/lib/markerPlot";
 
 interface ByGroup {
   groupby: string;
@@ -37,27 +39,6 @@ interface ByGroup {
   fraction: number[][]; // [group][gene]
   /** The layer's fixed colour range, the same for any genes and groups */
   scale_range?: [number, number];
-}
-
-/** The top `perGroup` up-regulated markers of each group, in group order, each gene once. */
-export function pickMarkerGenes(
-  groups: string[],
-  markers: Record<string, MarkerRow[]>,
-  perGroup: number,
-): { gene: string; group: string }[] {
-  const seen = new Set<string>();
-  const out: { gene: string; group: string }[] = [];
-  for (const group of groups) {
-    let n = 0;
-    for (const m of markers[group] ?? []) {
-      if (n >= perGroup) break;
-      if (!((m.logfoldchange ?? 0) > 0) || seen.has(m.gene)) continue;
-      seen.add(m.gene);
-      out.push({ gene: m.gene, group });
-      n++;
-    }
-  }
-  return out;
 }
 
 const pct = (f: number) => `${Math.round(f * 100)}%`;
@@ -97,6 +78,9 @@ const selectClass = "rounded border border-slate-300 bg-white px-1.5 py-0.5 text
 /** The plot's share of the width when the dendrogram is drawn on its right. */
 const PLOT_DOMAIN: [number, number] = [0, 0.88];
 const TREE_DOMAIN: [number, number] = [0.9, 1];
+/** Heights (px) of the marker-group strip and the gene dendrogram above a heatmap. */
+const STRIP_PX = 12;
+const GENE_TREE_PX = 60;
 
 /** The server's reason ("API error 400: {detail}") as a sentence. */
 function errorText(err: unknown): string {
@@ -151,6 +135,20 @@ export function MarkerPlot({
   const revision = useObsRevision(datasetId, groupby); // hand labels move cells between groups
   const treeKey = `${datasetId}\u0000${groupby}\u0000${revision}`;
   const [tree, setTree] = useState<{ key: string; d: GroupDistances | null; error: string | null } | null>(null);
+  // Order the heatmap's genes by clustering their profiles across groups (C034).
+  const [byGeneTree, setByGeneTree] = useState(false);
+  const colorOf = useCategoryColors(groupby);
+  // On the mean over all cells of the plotted groups; correlation ignores both
+  // the group order and each gene's scale, so the tree is the same for every
+  // colour option and group order.
+  const geneTree = useMemo(() => {
+    if (!byGeneTree || kind !== "heatmap" || !data || data.genes.length < 2) return null;
+    const idx = custom
+      ? data.groups.map((_, i) => i)
+      : groups.map((g) => data.groups.indexOf(g)).filter((i) => i >= 0);
+    if (idx.length < 2) return null;
+    return clusterGenes(data.genes.map((_, c) => idx.map((i) => data.mean[i]?.[c] ?? 0)));
+  }, [byGeneTree, kind, data, custom, groups]);
 
   useEffect(() => {
     if (!byTree || !groupby || tree?.key === treeKey) return;
@@ -225,16 +223,47 @@ export function MarkerPlot({
   const sameGroups =
     !!treeData && treeData.groups.length === rows.length && treeData.groups.every((g) => rows.includes(g));
   const lines = sameGroups && treeData?.tree ? dendrogramSegments(treeData.tree, treeData.order) : null;
-  const dendro = lines ? rowDendrogram(lines, TREE_DOMAIN) : null;
   const treeLoading = byTree && tree?.key !== treeKey;
   const treeError = byTree && tree?.key === treeKey ? tree.error : null;
   const layerLabel = layers?.find((l) => l.key === data.layer)?.label ?? data.layer;
   const markerOf = new Map(picked.map((p) => [p.gene, p.group]));
-  const genes = data.genes;
+  // Genes in the order picked (top markers: in blocks by marker group), or as
+  // the gene tree orders them.
+  const colIdx = geneTree ? geneTree.order : data.genes.map((_, c) => c);
+  const cols = <T,>(row: T[]) => colIdx.map((c) => row[c]!);
+  const genes = cols(data.genes);
   const missing = custom ? missingGenes(chosenGenes!, genes) : [];
-  const mean = rowIdx.map((i) => data.mean[i]!);
-  const meanExpressing = data.mean_expressing ? rowIdx.map((i) => data.mean_expressing![i]!) : null;
-  const fraction = rowIdx.map((i) => data.fraction[i]!);
+  const mean = rowIdx.map((i) => cols(data.mean[i]!));
+  const meanExpressing = data.mean_expressing ? rowIdx.map((i) => cols(data.mean_expressing![i]!)) : null;
+  const fraction = rowIdx.map((i) => cols(data.fraction[i]!));
+  // Bands above a heatmap: which group each top marker came from, then the gene tree.
+  const geneLines = geneTree ? dendrogramSegments(geneTree.tree, geneTree.order) : null;
+  const showStrip = kind === "heatmap" && !custom;
+  const baseHeight = Math.max(260, rows.length * 28 + 150);
+  const margin = { l: 120, r: 20, t: showStrip || geneLines ? 28 : 10, b: 110 };
+  const bands = heatmapBands(baseHeight - 10 - margin.b, showStrip ? STRIP_PX : 0, geneLines ? GENE_TREE_PX : 0);
+  const hasBands = bands.extraPx > 0;
+  const dendro = lines ? rowDendrogram(lines, TREE_DOMAIN, hasBands ? bands.main : undefined) : null;
+  const xDomain: [number, number] = dendro ? PLOT_DOMAIN : [0, 1];
+  const geneDendro = geneLines && bands.tree ? columnDendrogram(geneLines, xDomain, bands.tree) : null;
+  const stripGroups = showStrip ? rows.filter((g) => genes.some((gene) => markerOf.get(gene) === g)) : [];
+  const strip =
+    showStrip && bands.strip
+      ? {
+          type: "heatmap" as const,
+          x: genes,
+          y: ["marker of"],
+          z: [genes.map((gene) => stripGroups.indexOf(markerOf.get(gene) ?? ""))],
+          zmin: -0.5,
+          zmax: stripGroups.length - 0.5,
+          colorscale: discreteColorscale(stripGroups.map((g) => rgbCss(colorOf(g)))),
+          showscale: false,
+          text: [genes.map((gene) => `<b>${gene}</b>: top marker of ${markerOf.get(gene) ?? "?"}`)] as unknown as string[],
+          hoverinfo: "text" as const,
+          xgap: 1,
+          yaxis: "y4",
+        }
+      : null;
   const isProtein = layer === "protein";
   const noun = isProtein ? "protein" : "gene";
   const serverRange: [number, number] = data.scale_range ?? [0, Math.max(1, ...mean.flat())];
@@ -252,7 +281,11 @@ export function MarkerPlot({
         `<br>${Math.round((fraction[r]?.[c] ?? 0) * 100)}% of cells express it`,
     ),
   );
-  const colorbar = { title: { text: colours.title }, thickness: 12 };
+  const colorbar = {
+    title: { text: colours.title },
+    thickness: 12,
+    ...(hasBands ? { len: bands.main[1], y: 0, yanchor: "bottom" as const } : {}),
+  };
 
   // Dot plot: dots with too few expressing cells are hollow rings without a colour.
   const points = rows.flatMap((g, r) => genes.map((gene, c) => ({ g, gene, r, c })));
@@ -316,6 +349,10 @@ export function MarkerPlot({
     kind === "heatmap" && meanOf === "expressing" && meanExpressing
       ? ` Blank: under ${Math.round(MIN_FRACTION * 100)}% of the group's cells express it.`
       : "";
+  const geneTreeNote = geneDendro
+    ? ` ${isProtein ? "Proteins" : "Genes"} ordered by the average-linkage clustering of their mean over all cells across the groups (correlation distance; tree above).`
+    : "";
+  const stripNote = strip ? " Strip above: the group each gene is a top marker of." : "";
 
   return (
     <div>
@@ -364,7 +401,19 @@ export function MarkerPlot({
             )}
           </span>
         )}
-        <label className="ml-auto flex items-center gap-1" title="Order the groups by the complete-linkage clustering of their centroid distances in PCA space">
+        {kind === "heatmap" && (
+          <label
+            className="ml-auto flex items-center gap-1"
+            title="Order the genes by the average-linkage clustering of their mean expression across the groups (correlation distance)"
+          >
+            <input type="checkbox" checked={byGeneTree} onChange={(e) => setByGeneTree(e.target.checked)} />
+            Cluster genes
+          </label>
+        )}
+        <label
+          className={`${kind === "heatmap" ? "" : "ml-auto "}flex items-center gap-1`}
+          title="Order the groups by the complete-linkage clustering of their centroid distances in PCA space"
+        >
           <input type="checkbox" checked={byTree} onChange={(e) => setByTree(e.target.checked)} />
           Order groups by dendrogram
         </label>
@@ -376,10 +425,15 @@ export function MarkerPlot({
         </p>
       )}
       <Plot
-        data={dendro ? [...traces, dendro.trace] : traces}
+        data={[
+          ...traces,
+          ...(strip ? [strip] : []),
+          ...(dendro ? [dendro.trace] : []),
+          ...(geneDendro ? [geneDendro.trace] : []),
+        ]}
         layout={{
-          height: Math.max(260, rows.length * 28 + 150),
-          margin: { l: 120, r: 20, t: 10, b: 110 },
+          height: baseHeight + bands.extraPx + (margin.t - 10),
+          margin,
           xaxis: {
             type: "category",
             tickangle: -60,
@@ -387,16 +441,32 @@ export function MarkerPlot({
             categoryarray: genes,
             categoryorder: "array",
             ...(dendro ? { domain: PLOT_DOMAIN } : {}),
+            // An explicit range so the gene tree's leaves meet the columns.
+            ...(geneDendro ? { range: [-0.5, genes.length - 0.5] } : {}),
           },
           yaxis: {
             type: "category",
             automargin: true,
             categoryarray: rows,
             categoryorder: "array",
+            ...(hasBands ? { domain: bands.main } : {}),
             // An explicit range so the dendrogram's leaves meet the rows.
             ...(dendro ? { range: [rows.length - 0.5, -0.5] } : { autorange: "reversed" as const }),
           },
+          ...(strip && bands.strip
+            ? {
+                yaxis4: {
+                  domain: bands.strip,
+                  anchor: "x",
+                  type: "category",
+                  fixedrange: true,
+                  tickfont: { size: 10, color: "#64748b" },
+                  automargin: true,
+                },
+              }
+            : {}),
           ...(dendro ? dendro.layout : {}),
+          ...(geneDendro ? geneDendro.layout : {}),
           paper_bgcolor: "rgba(0,0,0,0)",
           plot_bgcolor: "rgba(0,0,0,0)",
         }}
@@ -417,6 +487,7 @@ export function MarkerPlot({
           level: CLR. {colours.caption}
           {blankNote}
           {treeNote}
+          {geneTreeNote}
         </p>
       ) : (
         <p className="mt-1 text-xs text-slate-500">
@@ -428,6 +499,8 @@ export function MarkerPlot({
             ` Dot size: share of the group's cells that express the gene (area, same scale in every plot); hollow: under ${Math.round(MIN_FRACTION * 100)}%, no colour.`}
           {blankNote}
           {treeNote}
+          {geneTreeNote}
+          {stripNote}
           {` Layer: ${layerLabel}.`}
         </p>
       )}

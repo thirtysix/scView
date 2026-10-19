@@ -316,7 +316,8 @@ export function ColorLegend({
 
   if (type === "continuous") {
     return (
-      <div className="flex flex-col gap-1">
+      // min width: with a short label the box would shrink until min and max touch ("-1.163.43")
+      <div className="flex min-w-[7rem] flex-col gap-1">
         {label && (
           <div className="mb-0.5 flex items-center justify-between gap-1">
             <span className="text-xs font-medium text-slate-600">{label}</span>
@@ -335,7 +336,7 @@ export function ColorLegend({
           className="h-3 w-full rounded-sm"
           style={gradientStyle}
         />
-        <div className="flex justify-between text-[10px] tabular-nums text-slate-500">
+        <div className="flex justify-between gap-2 text-[10px] tabular-nums text-slate-500">
           <span>{min?.toFixed(2) ?? "0"}</span>
           <span>{max?.toFixed(2) ?? "1"}</span>
         </div>

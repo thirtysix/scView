@@ -384,3 +384,65 @@ async def test_scoring_matches_upper_case_symbols_to_a_mouse_dataset(client, dat
     assert data["genes_found"] == ["Gene0", "Gene1", "Gene2"]
     assert data["genes_missing"] == ["NOSUCH"]
     assert data["n_cells"] == 60
+
+
+# ---------------------------------------------------------------------------
+# Saving the Gene lists tab's lists as a collection
+# ---------------------------------------------------------------------------
+
+
+def test_lists_are_checked_and_cleaned_like_an_upload():
+    p = cg.parse_gene_set_lists({" T cells ": ["cd3e", " CD3D ", "Cd3e"], "B": ["MS4A1"]})
+    assert p.format == "lists"
+    assert p.sets == {"T cells": ["CD3E", "CD3D"], "B": ["MS4A1"]}
+    assert any("repeated gene" in w for w in p.warnings)
+
+
+def test_bad_lists_are_all_reported():
+    with pytest.raises(GeneSetFileError) as exc:
+        cg.parse_gene_set_lists(
+            {"": ["A"], "Empty": [], "Spacey": ["CD3E CD3D"], "a ": ["X"], "a": ["Y"]}
+        )
+    joined = "\n".join(exc.value.problems)
+    assert "4 problems" in exc.value.message
+    assert "no name" in joined
+    assert "'Empty' has no genes" in joined
+    assert "contains a space" in joined
+    assert "'a' appears again" in joined
+
+
+def test_lists_over_the_gene_limit_are_refused(monkeypatch):
+    monkeypatch.setattr(cg, "MAX_GENES_PER_SET", 2)
+    with pytest.raises(GeneSetFileError) as exc:
+        cg.parse_gene_set_lists({"Big": ["A", "B", "C"]})
+    assert "the limit is 2" in exc.value.problems[0]
+
+
+async def test_save_lists_as_a_collection(client, dataset_manager):
+    r = await client.post(
+        f"{API}/genesets/custom/from-lists",
+        json={"name": " My lists ", "sets": {"T": ["Cd3e", "CD3D"], "B": ["ms4a1"]}},
+    )
+    assert r.status_code == 201, r.text
+    meta = r.json()
+    assert meta["name"] == "My lists" and meta["n_sets"] == 2 and meta["n_genes"] == 3
+    assert is_custom_id(meta["id"])
+    # Matched like any custom collection: the mouse dataset's genes count as present.
+    did = _register(dataset_manager)
+    listed = (await client.get(f"{API}/datasets/{did}/genesets/custom")).json()["collections"]
+    assert [(c["name"], c["n_genes_present"]) for c in listed] == [("My lists", 3)]
+
+
+async def test_save_lists_errors_are_400_and_save_nothing(client):
+    url = f"{API}/genesets/custom/from-lists"
+    r = await client.post(url, json={"name": "X", "sets": {"Empty": []}})
+    assert r.status_code == 400
+    assert any("has no genes" in p for p in r.json()["detail"]["problems"])
+    r = await client.post(url, json={"name": "X", "sets": {}})
+    assert r.status_code == 400
+    assert (await client.post(url, json={"name": "Mine", "sets": {"A": ["X"]}})).status_code == 201
+    r = await client.post(url, json={"name": "mine", "sets": {"A": ["X"]}})
+    assert r.status_code == 400 and "already exists" in r.json()["detail"]
+    r = await client.post(url, json={"name": "Y", "sets": {"A": "X"}})
+    assert r.status_code == 422
+    assert len((await client.get(f"{API}/genesets/custom")).json()["collections"]) == 1

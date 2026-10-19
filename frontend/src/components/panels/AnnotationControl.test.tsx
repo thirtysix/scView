@@ -98,4 +98,27 @@ describe("AnnotationControl (CellTypist)", () => {
     await waitFor(() => expect(getCellTypistSummary).toHaveBeenCalledWith("d1"));
     expect(screen.queryByTestId("celltypist-summary")).toBeNull();
   });
+
+  it("points to one output column per method for the cross-check, without changing the default", async () => {
+    render(<AnnotationControl onAnnotate={vi.fn()} running={false} species="human" />);
+    expect(screen.getByText(/run each into its own output column/)).toBeTruthy();
+    expect(screen.getByText("cell_type_celltypist")).toBeTruthy();
+    const input = screen.getByDisplayValue("paul15_clusters_celltypeAnno") as HTMLInputElement;
+    expect(input.value).toBe("paul15_clusters_celltypeAnno");
+  });
+
+  it("sends the marker sets choice for marker-score annotation, databases by default", async () => {
+    const onAnnotate = vi.fn().mockResolvedValue(undefined);
+    render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
+    fireEvent.click(screen.getByText("Marker score (offline)"));
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(1));
+    expect(onAnnotate.mock.calls[0]![0]).toMatchObject({
+      annotation_method: "marker_score", annotation_marker_sets: "databases",
+    });
+    fireEvent.change(screen.getByLabelText("Marker sets"), { target: { value: "builtin" } });
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(2));
+    expect(onAnnotate.mock.calls[1]![0]).toMatchObject({ annotation_marker_sets: "builtin" });
+  });
 });

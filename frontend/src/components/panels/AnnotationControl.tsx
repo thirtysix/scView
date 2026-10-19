@@ -49,6 +49,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
 
   const [method, setMethod] = useState<"llm" | "celltypist" | "marker_score">("llm");
   const [tissue, setTissue] = useState("");
+  const [markerSets, setMarkerSets] = useState<"databases" | "builtin">("databases");
   const [model, setModel] = useState("Immune_All_Low.pkl");
   const [modelPicked, setModelPicked] = useState(false);
   const [models, setModels] = useState<CellTypistModel[]>([]);
@@ -131,6 +132,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
     };
     if (method === "llm") params.annotation_tissue = tissue.trim();
     else if (method === "celltypist") params.celltypist_model = model;
+    else params.annotation_marker_sets = markerSets;
     setAnnotating(true);
     setLastWritten(null);
     try {
@@ -198,6 +200,10 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           />
         </div>
       </div>
+      <p className="-mt-1 mb-3 text-[11px] text-slate-400">
+        To compare methods, run each into its own output column (e.g. <code>cell_type_llm</code>,{" "}
+        <code>cell_type_celltypist</code>), then check them against each other in Annotation cross-check below.
+      </p>
 
       {/* Method */}
       <div className="mb-3 inline-flex rounded-lg border border-slate-200 p-0.5 text-xs">
@@ -207,10 +213,25 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
       </div>
 
       {method === "marker_score" ? (
-        <p className="mb-3 text-[11px] text-slate-400">
-          Offline and deterministic: scores curated marker sets per cluster and assigns the top cell
-          type. No model or network; best for common immune/PBMC types.
-        </p>
+        <div className="mb-3">
+          <label htmlFor="marker-sets" className="mb-1 block text-xs font-medium text-slate-600">
+            Marker sets
+          </label>
+          <select
+            id="marker-sets"
+            value={markerSets}
+            onChange={(e) => setMarkerSets(e.target.value as "databases" | "builtin")}
+            className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
+          >
+            <option value="databases">Marker databases (PanglaoDB, CellMarker)</option>
+            <option value="builtin">Built-in immune sets (14 PBMC types)</option>
+          </select>
+          <p className="mt-1 text-[11px] text-slate-400">
+            {markerSets === "databases"
+              ? "Names each cluster after the database cell type its top markers match best, any tissue, human or mouse. Downloaded on first use; the built-in sets are used if they are unavailable."
+              : "Scores 14 curated immune sets per cluster. Better than the databases on PBMC subtypes (CD4/CD8 T, monocytes), no use outside blood."}
+          </p>
+        </div>
       ) : method === "llm" ? (
         <div className="mb-3">
           <label className="mb-1 block text-xs font-medium text-slate-600">Tissue (optional)</label>

@@ -9,6 +9,16 @@ column fits its expression neighbourhood, with split conformal prediction sets
 (``core/annotation_confidence.py``): GET returns the last check of a column,
 POST runs one, POST ``.../unknown`` copies the column with rejected cells set to
 "Unknown".
+
+``/datasets/{id}/annotation/crosscheck`` compares 2-6 label columns made by
+different methods (``core/annotation_crosscheck.py``): GET lists the columns that
+look like annotations, POST runs the comparison, POST ``.../save`` writes the
+consensus and per-cell agreement as obs columns.
+
+``/datasets/{id}/annotation/marker-db`` checks a label column against the
+PanglaoDB + CellMarker 2.0 marker databases (``core/marker_db.py``): GET
+``.../status`` says what is downloaded, POST ``.../check`` fetches them on first
+use and returns each label's database support and the 3 best database types.
 """
 
 from __future__ import annotations
@@ -16,15 +26,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import lru_cache
+from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.core import annotation_confidence as conf
+from scview.core import annotation_crosscheck as xc
+from scview.config import Settings
 from scview.core import celltypist_fit as fit
+from scview.core import marker_db as mdb
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
-from scview.dependencies import get_dataset_manager
+from scview.dependencies import get_dataset_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -165,7 +180,7 @@ async def _edit(dm: DatasetManager, dataset_id: str, edit, what: str):
 
         try:
             result = await held.run(_run)
-        except conf.ConfidenceError as exc:  # raised before any change
+        except (conf.ConfidenceError, xc.CrosscheckError) as exc:  # raised before any change
             raise HTTPException(status_code=exc.status, detail=str(exc))
         except Exception as exc:
             dm.evict(dataset_id)  # the cached copy may hold columns that were never saved
@@ -207,3 +222,118 @@ async def annotation_confidence_unknown(
         lambda adata: conf.make_unknown_column(adata, body.column),
         "The Unknown copy",
     )
+
+
+class CrosscheckRequest(BaseModel):
+    columns: list[str]
+    # One of ``columns``; the first when left out
+    reference: str | None = None
+
+
+class CrosscheckSaveRequest(CrosscheckRequest):
+    name: str = xc.DEFAULT_NAME
+
+
+@router.get("/datasets/{dataset_id}/annotation/crosscheck")
+async def annotation_crosscheck_info(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The columns that look like annotations (column -> the method that made
+    it), the active clustering, the limits, and the saved cross-checks."""
+    adaptor = await _adaptor(dm, dataset_id)
+    return xc.info(adaptor.adata, adaptor.active_clustering_column())
+
+
+@router.post("/datasets/{dataset_id}/annotation/crosscheck")
+async def run_annotation_crosscheck(
+    dataset_id: str,
+    body: CrosscheckRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Compare 2-6 label columns: pairwise ARI/AMI, the reference against each
+    other column (contingency, best matches, label mapping), per-label agreement
+    and the consensus counts. Changes nothing."""
+    adata = (await _adaptor(dm, dataset_id)).adata
+    try:
+        # contingency tables and AMI over every cell: off the loop
+        return await asyncio.to_thread(xc.crosscheck, adata, body.columns, body.reference)
+    except xc.CrosscheckError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+
+
+@router.post("/datasets/{dataset_id}/annotation/crosscheck/save")
+async def save_annotation_crosscheck(
+    dataset_id: str,
+    body: CrosscheckSaveRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Write ``{name}_consensus`` and ``{name}_agreement`` to obs."""
+    return await _edit(
+        dm, dataset_id,
+        lambda adata: xc.save(adata, body.columns, body.reference, body.name),
+        "Saving the cross-check",
+    )
+
+
+class MarkerDbCheckRequest(BaseModel):
+    column: str
+    # The dataset's species (core/species.py) when left out
+    species: Literal["human", "mouse"] | None = None
+    # Try a source whose download failed a moment ago again now
+    retry: bool = False
+
+
+def _marker_db_dest(settings: Settings) -> Path:
+    return Path(settings.DATA_DIR) / "marker_db"  # the data volume
+
+
+@router.get("/datasets/{dataset_id}/annotation/marker-db/status")
+async def marker_db_status(
+    dataset_id: str,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Which marker databases are downloaded (source, release, date, sha256, row
+    counts), which failed and why, whether downloading is on, and the dataset's
+    species."""
+    adata = (await _adaptor(dm, dataset_id)).adata
+
+    def _read():
+        from scview.core.species import detect_species
+
+        return {
+            **mdb.status(_marker_db_dest(settings), auto_download=settings.MARKER_DB_AUTO_DOWNLOAD),
+            "dataset_species": detect_species(adata).species,
+        }
+
+    return await asyncio.to_thread(_read)
+
+
+@router.post("/datasets/{dataset_id}/annotation/marker-db/check")
+async def marker_db_check(
+    dataset_id: str,
+    body: MarkerDbCheckRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Each label of ``column``: its database type(s) and how the name matched, the
+    verdict (supported / no database support / too few database markers / not in
+    database), p, overlapping genes, and the 3 best database types for its cells.
+    Downloads the databases on first use. Changes nothing."""
+    adata = (await _adaptor(dm, dataset_id)).adata
+    if body.column not in adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{body.column}' not found.")
+
+    def _run():
+        db = mdb.get_db(_marker_db_dest(settings), auto_download=settings.MARKER_DB_AUTO_DOWNLOAD,
+                        retry=body.retry)
+        return mdb.check(adata, body.column, body.species, db)
+
+    try:
+        # a download on first use, markers when none are stored: off the loop
+        return await asyncio.to_thread(_run)
+    except mdb.MarkerDBUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))

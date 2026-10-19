@@ -10,6 +10,7 @@ import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
 import type { MarkersResponse } from "@/api/markers";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
+import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -298,6 +299,13 @@ export function UnifiedMarkersSubtab({
         >
           <Download className="h-3 w-3" />
         </button>
+        <AddToGeneListMenu
+          genes={() => sortedMarkers.map((m) => m.gene)}
+          defaultName={`Markers: ${selectedGroup}`}
+          source={`Markers of ${selectedGroup}${groupByColumn ? ` (${groupByColumn})` : ""}`}
+          disabled={sortedMarkers.length === 0}
+          title="Add the markers shown (after the filters, in table order) to a gene list"
+        />
       </div>
 
       {/* |FC| threshold filter */}

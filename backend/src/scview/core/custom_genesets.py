@@ -1,8 +1,9 @@
 """User-uploaded gene-set collections ("custom collections").
 
-A user uploads a .gmt file, or a two-column gene_set,gene table (.csv/.tsv), and
-it becomes a named collection that sits next to the MSigDB ones: ORA, gene-set
-scoring and the browser all accept its id wherever they accept an MSigDB id.
+A user uploads a .gmt file, or a two-column gene_set,gene table (.csv/.tsv), or
+saves their gene lists (``parse_gene_set_lists``), and it becomes a named
+collection that sits next to the MSigDB ones: ORA, gene-set scoring and the
+browser all accept its id wherever they accept an MSigDB id.
 
 Each collection is stored on the data volume, so it survives restarts and needs
 neither MSigDB nor a network connection:
@@ -299,6 +300,33 @@ def _looks_like_gmt(text: str) -> bool:
             if line.count("\t") >= 2:
                 return True
     return False
+
+
+def parse_gene_set_lists(sets: dict[str, list[str]], label: str = "gene lists") -> ParsedGeneSets:
+    """Named gene lists (the app's own, sent as JSON) checked like an upload.
+
+    Each list goes through the same name and gene checks, limits and
+    upper-casing as a set read from a file, so a collection saved from lists is
+    stored and matched exactly like an uploaded one.
+    """
+    c = _Collector()
+    if len(sets) > MAX_SETS:
+        c.too_many_sets = True
+    for i, (raw_name, genes) in enumerate(list(sets.items())[:MAX_SETS], 1):
+        name = str(raw_name).strip()
+        where = f"list {i}"
+        if not c.check_name(where, name):
+            continue
+        if name in c.sets:
+            c.problem(f"{where}: list '{_short(name)}' appears again (names are trimmed).")
+            continue
+        c.start_set(i, name)
+        before = len(c.problems)
+        for token in genes:
+            c.add_gene(where, name, str(token))
+        if not c.sets[name] and len(c.problems) == before:
+            c.problem(f"{where}: list '{_short(name)}' has no genes.")
+    return c.finish("lists", label, [])
 
 
 def parse_gene_set_file(data: bytes, filename: str) -> ParsedGeneSets:

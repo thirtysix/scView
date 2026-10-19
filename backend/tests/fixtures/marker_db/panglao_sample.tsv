@@ -1,0 +1,34 @@
+species	official gene symbol	cell type	nicknames	ubiquitousness index	product description	gene type	canonical marker	germ layer	organ	sensitivity_human	sensitivity_mouse	specificity_human	specificity_mouse
+Mm Hs	CD79A	B cells	NA	0.01	desc	protein-coding gene	1	Mesoderm	Immune system	0.9	0.9	0.0	0.0
+Mm Hs	MS4A1	B cells	NA	0.01	desc	protein-coding gene	1	Mesoderm	Immune system	0.8	0.8	0.0	0.0
+Mm Hs	CD19	B cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.7	0.7	0.0	0.0
+Mm Hs	BANK1	B cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.6	0.6	0.0	0.0
+Mm Hs	PAX5	B cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.5	0.0	0.0
+Mm Hs	CD79B	B cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.4	0.4	0.0	0.0
+Mm Hs	MT-CO1	B cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.9	0.9	0.0	0.0
+Mm Hs	RPL3	B cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.9	0.9	0.0	0.0
+Mm Hs	CD3D	T cells	NA	0.01	desc	protein-coding gene	1	Mesoderm	Immune system	0.9	0.9	0.0	0.0
+Mm Hs	CD3E	T cells	NA	0.01	desc	protein-coding gene	1	Mesoderm	Immune system	0.8	0.8	0.0	0.0
+Mm Hs	CD3G	T cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.7	0.7	0.0	0.0
+Mm Hs	TRAC	T cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.6	0.6	0.0	0.0
+Mm Hs	CD2	T cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.5	0.0	0.0
+Mm Hs	LCK	T cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.4	0.4	0.0	0.0
+Mm Hs	NKG7	NK cells	NA	0.01	desc	protein-coding gene	1	Mesoderm	Immune system	0.9	0.9	0.0	0.0
+Mm Hs	GNLY	NK cells	NA	0.01	desc	protein-coding gene	1	Mesoderm	Immune system	0.8	0.8	0.0	0.0
+Mm Hs	KLRD1	NK cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.7	0.7	0.0	0.0
+Mm Hs	NCAM1	NK cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.6	0.6	0.0	0.0
+Mm Hs	PRF1	NK cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.5	0.0	0.0
+Mm Hs	GZMB	NK cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	NA	NA	0.0	0.0
+Hs	HUMANONLY1	NK cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.3	0.0	0.0	0.0
+Mm	Ly6c2	Monocytes	NA	0.01	desc	protein-coding gene	1	Mesoderm	Immune system	0.0	0.8	0.0	0.0
+Hs	VIL1	Intestinal cell	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+Hs	CDX2	Intestinal cell	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+Hs	EPCAM	Intestinal cell	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+Hs	KRT20	Intestinal cell	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+Hs	LGALS4	Intestinal cell	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+Hs	MUC2	Goblet cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+Hs	TFF3	Goblet cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+Hs	FCGBP	Goblet cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+Hs	CLCA1	Goblet cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+Hs	SPINK4	Goblet cells	NA	0.01	desc	protein-coding gene	0	Mesoderm	Immune system	0.5	0.0	0.0	0.0
+4	BROKEN

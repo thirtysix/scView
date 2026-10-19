@@ -30,6 +30,7 @@ import {
   type MarkerSortField,
 } from "@/lib/markerSpecificity";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
+import { CellHeatmap } from "@/components/plots/CellHeatmap";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { MAX_PLOT_GENES, mergeGeneLists, parseGeneList } from "@/lib/geneList";
@@ -56,6 +57,8 @@ export function MarkerGenesPanel() {
   const [filterQuery, setFilterQuery] = useState("");
   const [groupbyColumn, setGroupbyColumn] = useState<string>("");
   const [perGroup, setPerGroup] = useState(5);
+  // Heatmap of group means, or of single cells sampled per group (C034).
+  const [heatmapOf, setHeatmapOf] = useState<"means" | "cells">("means");
   const markerView = useViewStore((s) => s.markerView);
   const setMarkerView = useViewStore((s) => s.setMarkerView);
   const markerGenes = useViewStore((s) => s.markerGenes);
@@ -354,6 +357,24 @@ export function MarkerGenesPanel() {
           </div>
         )}
 
+        {markerView === "heatmap" && (
+          <div className="flex overflow-hidden rounded-lg border border-slate-300 text-sm shadow-sm" role="group" aria-label="Heatmap of">
+            {([["means", "Group means"], ["cells", "Per cell"]] as const).map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setHeatmapOf(v)}
+                aria-pressed={heatmapOf === v}
+                title={v === "cells" ? "Single cells, a seeded sample of each group" : "One row per group: the group's mean"}
+                className={`px-3 py-1.5 font-medium transition-colors ${
+                  heatmapOf === v ? "bg-slate-700 text-white" : "bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {markerView !== "table" && markerGenes.length === 0 && (
           <div className="flex items-center gap-2">
             <label htmlFor="marker-pergroup-select" className="text-sm font-medium text-slate-600">
@@ -466,15 +487,26 @@ export function MarkerGenesPanel() {
               </>
             )}
           </div>
-          <MarkerPlot
-            datasetId={datasetId}
-            groupby={groupbyColumn}
-            groups={markersData.groups}
-            markers={markersData.markers}
-            kind={markerView}
-            perGroup={perGroup}
-            genes={markerGenes}
-          />
+          {markerView === "heatmap" && heatmapOf === "cells" ? (
+            <CellHeatmap
+              datasetId={datasetId}
+              groupby={groupbyColumn}
+              groups={markersData.groups}
+              markers={markersData.markers}
+              perGroup={perGroup}
+              genes={markerGenes}
+            />
+          ) : (
+            <MarkerPlot
+              datasetId={datasetId}
+              groupby={groupbyColumn}
+              groups={markersData.groups}
+              markers={markersData.markers}
+              kind={markerView}
+              perGroup={perGroup}
+              genes={markerGenes}
+            />
+          )}
         </div>
       ) : (
       <div className="space-y-4">
