@@ -223,7 +223,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
             onChange={(e) => setMarkerSets(e.target.value as "databases" | "builtin")}
             className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
           >
-            <option value="databases">Marker databases (PanglaoDB, CellMarker 2.0, ACT)</option>
+            <option value="databases">Marker databases (PanglaoDB, CellMarker)</option>
             <option value="builtin">Built-in immune sets (14 PBMC types)</option>
           </select>
           <p className="mt-1 text-[11px] text-slate-400">

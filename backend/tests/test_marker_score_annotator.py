@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from scview.core import marker_db as mdb
-from tests.test_marker_db import _cells, installed, raw, small_sources  # noqa: F401 (fixtures)
+from tests.test_marker_db import _cells, installed, installed_cm3, raw, small_sources  # noqa: F401 (fixtures)
 
 
 @pytest.fixture()
@@ -61,3 +61,16 @@ def test_replay_writes_database_labels_from_the_record():
                                   "annotation_groupby": "lab"}, _Ctx(adata=a))
     assert snip.status == RECORDED and any("'B cells'" in line or '"B cells"' in line for line in snip.code)
     assert not any("MARKER_SETS" in line for line in snip.code)
+
+
+def test_annotator_uses_panglao_and_curated_cellmarker3(monkeypatch, installed_cm3):  # noqa: F811
+    from scview.core.pipeline import PipelineParams, _run_cell_type_annotation
+
+    monkeypatch.setattr(mdb, "marker_db_dir", lambda: installed_cm3)
+    monkeypatch.setattr(mdb, "auto_download_enabled", lambda: False)
+    a = _cells()
+    a.obs["leiden"] = a.obs["lab"].cat.rename_categories(["0", "1", "2", "3"])
+    out = _run_cell_type_annotation(a, PipelineParams(annotation_method="marker_score", annotation_target="ms"))
+    assert a.uns["ms_markerscore_mapping"] == {"0": "B cells", "1": "NK cells", "2": "T cells", "3": "Unknown"}
+    assert out["databases"] == ["PanglaoDB", "CellMarker 3.0 (curated)"] and out["cellmarker"] == "CellMarker 3.0"
+    assert a.uns["ms_markerscore_source"]["cellmarker"] == "CellMarker 3.0"

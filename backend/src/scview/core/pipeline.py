@@ -136,7 +136,7 @@ class PipelineParams:
     annotation_target: str = "cell_type"         # obs column to write
     annotation_llm_model: str = ""               # DeepInfra model id for method="llm"
     annotation_tissue: str = ""                  # optional tissue hint for method="llm"
-    annotation_marker_sets: str = "databases"    # marker_score: databases (PanglaoDB+CellMarker 2.0+ACT) | builtin (14 immune sets)
+    annotation_marker_sets: str = "databases"    # marker_score: databases (core/marker_db.py) | builtin (14 immune sets)
 
 
 @dataclass
@@ -1227,7 +1227,7 @@ def _annotate_marker_score(
 ) -> dict[str, Any]:
     """Offline annotation, one cell type per cluster. Deterministic, no LLM.
 
-    With the marker databases (PanglaoDB + CellMarker 2.0, species-aware; see
+    With the marker databases (PanglaoDB + CellMarker 3.0 curated rows, or 2.0 + ACT; see
     core/marker_db.py) each cluster gets the database type its top 25 markers
     over-represent most (hypergeometric against the full database set), "Unknown"
     when no type shares a marker. Without them, the 14 curated sets above are

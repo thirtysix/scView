@@ -397,13 +397,16 @@ Set `MSIGDB_AUTO_DOWNLOAD=false` in `.env` to skip the download.
 
 The annotation cross-check's marker database check and the offline marker-score annotator use
 three cell-type marker databases, which scView does not ship either: the first time you use them,
-the backend downloads them (~11 MB) from the databases' own sites into the data volume:
+the backend downloads them (~73 MB) from the databases' own sites into the data volume:
 [PanglaoDB](https://panglaodb.se/) (Franzén et al. 2019,
 [doi:10.1093/database/baz046](https://doi.org/10.1093/database/baz046)),
-[CellMarker 2.0](http://117.50.127.228/CellMarker/) (Hu et al. 2023,
+[CellMarker 3.0](https://bio-bigdata.hrbmu.edu.cn/CellMarker/) (2026-07-22 release, unpublished; until
+its paper appears, cite CellMarker 2.0: Hu et al. 2023,
 [doi:10.1093/nar/gkac947](https://doi.org/10.1093/nar/gkac947)) and
 [ACT](http://xteam.xbio.top/ACT/) (Quan et al. 2023,
-[doi:10.1186/s13073-023-01249-5](https://doi.org/10.1186/s13073-023-01249-5)). None of them states
+[doi:10.1186/s13073-023-01249-5](https://doi.org/10.1186/s13073-023-01249-5)). If CellMarker 3.0
+cannot be downloaded or is not the release scView checks for,
+[CellMarker 2.0](http://117.50.127.228/CellMarker/) (10 MB) is used instead. None of them states
 a licence for the data, so check the reuse terms with the providers for your purpose. Set
 `MARKER_DB_AUTO_DOWNLOAD=false` in `.env` to skip the download (the annotator then falls back to
 its built-in marker sets).

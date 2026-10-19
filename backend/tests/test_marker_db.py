@@ -3,8 +3,10 @@ matching, group markers, the support verdict and suggestions, the API and the
 marker-score annotator.
 
 The fixtures in tests/fixtures/marker_db are invented rows in the PanglaoDB TSV,
-CellMarker 2.0 (the xlsx is written from the TSV here) and ACT per-tissue (Latin-1)
-layouts, with ACT's per-file sha256 list, and a nine-term Cell Ontology; downloads go through httpx.MockTransport, so no test touches the
+CellMarker 2.0 (the xlsx is written from the TSV here), CellMarker 3.0 (zipped here)
+and ACT per-tissue (Latin-1) layouts, with ACT's per-file sha256 list, and a
+nine-term Cell Ontology. ``_serve`` leaves CellMarker 3.0 out unless asked
+(``cm3=True``), so most tests run the CellMarker 2.0 fallback path; downloads go through httpx.MockTransport, so no test touches the
 internet. The real numbers (Kang lookup 0.615, paul15 0.579, name coverage 1.00)
 were measured on the downloaded databases and are in the batch-8 report.
 """
@@ -32,6 +34,10 @@ API = "/api/v1"
 FIX = Path(__file__).parent / "fixtures" / "marker_db"
 URLS = {"panglao": ("https://first.test/pg.tsv.gz", "https://mirror.test/pg.tsv.gz"),
         "cellmarker2": ("http://cm.test/Cell_marker_All.xlsx",), "act": ("http://act.test/download.jsp",)}
+CM3_BASE = "https://cm3.test/file/"
+CM3_ZIPS = {"human_cell_marker.zip": "human_cell_marker.txt", "mouse_cell_marker.zip": "mouse_cell_marker.txt"}
+CM3_URLS = [CM3_BASE + f for f in CM3_ZIPS]
+URLS["cellmarker3"] = (CM3_BASE,)
 ACT_BASE = "http://act.test/download/"
 ACT_FILES = ["Human/Human_Blood.txt", "Human/Human_Bone marrow.txt", "Mouse/Mouse_Blood.txt"]
 ACT_URLS = [ACT_BASE + quote(f) for f in ACT_FILES]
@@ -54,19 +60,40 @@ def _cellmarker_bytes(tmp_path: Path) -> bytes:
     return p.read_bytes()
 
 
+def _cm3_zips() -> dict[str, bytes]:
+    """The CellMarker 3.0 fixture split by species into the two zips, as the site does."""
+    import io
+    import zipfile
+
+    head, *rows = (FIX / "cellmarker3_sample.tsv").read_text(encoding="utf-8").splitlines()
+    out = {}
+    for zname, member in CM3_ZIPS.items():
+        keep = [r for r in rows if (r.split("\t")[0] == "Mouse") == zname.startswith("mouse")]
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            info = zipfile.ZipInfo(member, date_time=(2026, 7, 22, 0, 0, 0))
+            z.writestr(info, "\n".join([head, *keep]) + "\n")
+        out[zname] = buf.getvalue()
+    return out
+
+
 @pytest.fixture()
 def raw(tmp_path) -> dict[str, bytes]:
     return {"panglao": _panglao_bytes(), "cellmarker2": _cellmarker_bytes(tmp_path),
             "ontology": (FIX / "cl_sample.obo").read_bytes(),
-            "act": {f: (FIX / "act" / f).read_bytes() for f in ACT_FILES}}
+            "act": {f: (FIX / "act" / f).read_bytes() for f in ACT_FILES},
+            "cellmarker3": _cm3_zips()}
 
 
 @pytest.fixture(autouse=True)
 def small_sources(monkeypatch, raw):
     """Fixture-sized sources pinned to the fixtures' sha256, and no real network."""
     for name, spec in list(mdb.SOURCES.items()):
-        pinned = None if name == "act" else hashlib.sha256(raw[name]).hexdigest()
+        pinned = None if name in ("act", "cellmarker3") else hashlib.sha256(raw[name]).hexdigest()
         monkeypatch.setitem(mdb.SOURCES, name, dataclasses.replace(spec, urls=URLS[name], sha256=pinned, min_rows=1))
+    monkeypatch.setattr(mdb, "CM3_BASE", CM3_BASE)
+    monkeypatch.setattr(mdb, "CM3_FILES", tuple(
+        (f, hashlib.sha256(b).hexdigest(), len(b)) for f, b in raw["cellmarker3"].items()))
     monkeypatch.setattr(mdb, "ACT_BASE", ACT_BASE)
     monkeypatch.setattr(mdb, "ACT_SUMS", FIX / "act_sample.sha256")
     monkeypatch.setattr(mdb, "ACT_DELAY", 0.0)
@@ -82,18 +109,27 @@ def small_sources(monkeypatch, raw):
     mdb._loaded.clear()
 
 
-def _serve(raw: dict[str, bytes], fail: set[str] = frozenset(), calls: list | None = None) -> httpx.Client:
+def _serve(raw: dict[str, bytes], fail: set[str] = frozenset(), calls: list | None = None,
+           cm3: bool = False, on_request=None) -> httpx.Client:
     by_url = {URLS["panglao"][0]: raw["panglao"], URLS["panglao"][1]: raw["panglao"],
               URLS["cellmarker2"][0]: raw["cellmarker2"], "https://cl.test/cl-basic.obo": raw["ontology"],
-              **{u: raw["act"][f] for u, f in zip(ACT_URLS, ACT_FILES)}}
+              **{u: raw["act"][f] for u, f in zip(ACT_URLS, ACT_FILES)},
+              **({u: raw["cellmarker3"][f] for u, f in zip(CM3_URLS, CM3_ZIPS)} if cm3 else {})}
 
     def handler(req: httpx.Request) -> httpx.Response:
         url = str(req.url)
         if calls is not None:
             calls.append(url)
+        if on_request:
+            on_request(req)
         if url in fail or url not in by_url:
             return httpx.Response(504)
-        return httpx.Response(200, content=by_url[url])
+        body = by_url[url]
+        rng = req.headers.get("Range")
+        if rng:  # "bytes=N-": the rest of the file
+            start = int(rng.split("=")[1].rstrip("-"))
+            return httpx.Response(206, content=body[start:])
+        return httpx.Response(200, content=body)
 
     return httpx.Client(transport=httpx.MockTransport(handler))
 
@@ -166,7 +202,8 @@ def test_download_stores_tables_and_manifest_and_falls_back_to_the_mirror(tmp_pa
     assert act["served_from"] == ACT_BASE and act["types"] == {"human": 3, "mouse": 1}
     assert act["sha256"] == hashlib.sha256((FIX / "act_sample.sha256").read_bytes()).hexdigest()
     m = json.loads((dest / "manifest.json").read_text())
-    assert set(m["sources"]) == {"panglao", "cellmarker2", "act", "ontology"} and not m["failures"]
+    assert set(m["sources"]) == {"panglao", "cellmarker2", "act", "ontology"}
+    assert set(m["failures"]) == {"cellmarker3"} and st["cellmarker"] == "CellMarker 2.0"  # 3.0 not served here
     assert st["ontology"]["version"] == "cl/releases/2026-06-08/cl-basic.owl"
     assert (dest / "raw" / mdb.SOURCES["cellmarker2"].filename).is_file()
     assert not list(dest.rglob("*.part*"))
@@ -203,7 +240,7 @@ def test_an_act_file_that_differs_from_its_pinned_hash_keeps_act_out(tmp_path, r
     assert (dest / "raw" / "ACT" / ACT_FILES[0]).is_file()  # verified files stay for a retry
     calls: list[str] = []
     st = mdb.ensure(dest, auto_download=True, retry=True, client=_serve(raw, calls=calls))
-    assert calls == [ACT_URLS[1]] and st["state"] == "ready"
+    assert calls == [CM3_URLS[0], ACT_URLS[1]] and st["state"] == "ready"  # retry tries CellMarker 3.0 again too
 
 
 def test_a_failed_source_waits_for_the_cooldown_unless_retried(tmp_path, raw):
@@ -214,7 +251,7 @@ def test_a_failed_source_waits_for_the_cooldown_unless_retried(tmp_path, raw):
     mdb.ensure(dest, auto_download=True, client=_serve(raw, fail=dead, calls=calls))
     assert calls == []  # failed a moment ago: not tried on every check
     st = mdb.ensure(dest, auto_download=True, retry=True, client=_serve(raw, calls=calls))
-    assert calls == [URLS["cellmarker2"][0]] and st["state"] == "ready"
+    assert calls == [CM3_URLS[0], URLS["cellmarker2"][0]] and st["state"] == "ready"
     assert next(s for s in st["sources"] if s["name"] == "cellmarker2")["error"] is None
 
 
@@ -233,7 +270,7 @@ def test_nothing_is_fetched_with_the_download_off_but_files_put_in_raw_are_used(
 
 
 def test_unreachable_sites_say_so(tmp_path, raw):
-    every = {*URLS["panglao"], *URLS["cellmarker2"], "https://cl.test/cl-basic.obo", *ACT_URLS}
+    every = {*URLS["panglao"], *URLS["cellmarker2"], *CM3_URLS, "https://cl.test/cl-basic.obo", *ACT_URLS}
     with pytest.raises(mdb.MarkerDBUnavailable, match="could not be downloaded.*PanglaoDB.*504"):
         mdb.get_db(tmp_path / "db", auto_download=True, client=_serve(raw, fail=every))
     assert mdb.status(tmp_path / "db", auto_download=True)["state"] == "failed"
@@ -249,8 +286,8 @@ def test_two_requests_at_once_fetch_once(tmp_path, raw):
         t.start()
     for t in threads:
         t.join()
-    assert sorted(calls) == sorted([URLS["panglao"][0], URLS["cellmarker2"][0], "https://cl.test/cl-basic.obo",
-                                    *ACT_URLS])
+    assert sorted(calls) == sorted([URLS["panglao"][0], CM3_URLS[0], URLS["cellmarker2"][0],
+                                    "https://cl.test/cl-basic.obo", *ACT_URLS])
 
 
 # --- merged database and names ---------------------------------------------------
@@ -418,6 +455,111 @@ def test_check_refuses_columns_it_cannot_use(installed):
         mdb.check(a, "one", "human", mdb.load(installed))
 
 
+# --- CellMarker 3.0 ------------------------------------------------------------------
+
+
+@pytest.fixture()
+def installed_cm3(tmp_path, raw) -> Path:
+    dest = tmp_path / "marker_db3"
+    calls: list[str] = []
+    st = mdb.ensure(dest, auto_download=True, client=_serve(raw, cm3=True, calls=calls))
+    assert st["state"] == "ready" and st["cellmarker"] == "CellMarker 3.0", st
+    assert URLS["cellmarker2"][0] not in calls  # the fallback is not fetched
+    return dest
+
+
+def test_cellmarker3_weights_all_and_curated_rows_from_the_zips(tmp_path, raw):
+    root = tmp_path / "CellMarker3"
+    root.mkdir()
+    for f, b in raw["cellmarker3"].items():
+        (root / f).write_bytes(b)
+    rows = {(sp, ct, g): (cl, w, wc) for sp, ct, cl, g, w, wc in mdb._parse_cellmarker3(root)}
+    # CD79A: papers 1001 (as "1001.0" and "1001") and 1002 -> 2, plus 2 of 9 supports / 10
+    assert rows[("human", "B cell", "CD79A")] == ("CL:0000236", pytest.approx(2 + 0.2 / 9), pytest.approx(2 + 0.2 / 9))
+    # CD22 comes from a computational row only (no PMID: its dataset id counts as the paper)
+    assert rows[("human", "B cell", "CD22")][1:] == (pytest.approx(1 + 0.1 / 9), 0.0)
+    assert rows[("human", "Methodcyte", "MTH1")][2] == 0.0
+    assert ("human", "B cell", "PAX5") not in rows  # a disease row
+    assert not any(sp not in ("human", "mouse") for sp, _ct, _g in rows)  # zebrafish
+    assert not any(g.startswith("RPL") for _sp, _ct, g in rows)
+
+
+def test_cellmarker3_replaces_2_and_the_manifest_says_so(installed_cm3):
+    st = mdb.status(installed_cm3, auto_download=True)
+    cm3 = next(s for s in st["sources"] if s["name"] == "cellmarker3")
+    cm2 = next(s for s in st["sources"] if s["name"] == "cellmarker2")
+    assert cm3["downloaded"] and cm3["release"] == "2026-07-22 release, unpublished"
+    assert "36300619" in cm3["paper"]  # cite 2.0 until 3.0 is published
+    assert not cm2["downloaded"] and not cm2["needed"] and cm2["error"] is None
+    m = json.loads((installed_cm3 / "manifest.json").read_text())
+    assert m["sources"]["cellmarker3"]["curated_rows"] > 0 and "cellmarker2" not in m["sources"]
+    assert not list(installed_cm3.rglob("*.part*"))
+    assert sorted(p.name for p in (installed_cm3 / "raw" / "CellMarker3").iterdir()) == sorted(CM3_ZIPS)  # no TSV written out
+
+
+def test_a_changed_cellmarker3_file_fails_closed_and_2_is_used(tmp_path, raw):
+    dest = tmp_path / "db"
+    zips = dict(raw["cellmarker3"])
+    zips["mouse_cell_marker.zip"] = zips["mouse_cell_marker.zip"][:-10] + b"0123456789"
+    st = mdb.ensure(dest, auto_download=True, client=_serve(dict(raw, cellmarker3=zips), cm3=True))
+    cm3 = next(s for s in st["sources"] if s["name"] == "cellmarker3")
+    assert not cm3["downloaded"] and "sha256" in cm3["error"]
+    assert st["cellmarker"] == "CellMarker 2.0" and st["state"] == "ready"
+    assert not (dest / "raw" / "CellMarker3" / "mouse_cell_marker.zip").exists()
+    db = mdb.load(dest)
+    assert db.cellmarker == "cellmarker2" and db.view("suggest", "human") == ["panglao", "cellmarker2"]
+
+
+def test_a_cut_cellmarker3_download_resumes_with_a_range_request(tmp_path, raw):
+    dest = tmp_path / "db"
+    root = dest / "raw" / "CellMarker3"
+    root.mkdir(parents=True)
+    human = raw["cellmarker3"]["human_cell_marker.zip"]
+    (root / "human_cell_marker.part.zip").write_bytes(human[:100])
+    ranges, progress = {}, []
+
+    def seen(req):
+        ranges[str(req.url)] = req.headers.get("Range")
+        if str(req.url) == CM3_URLS[1]:
+            progress.append(mdb.status(dest, auto_download=True)["sources"][1]["progress"])
+
+    st = mdb.ensure(dest, auto_download=True, client=_serve(raw, cm3=True, on_request=seen))
+    assert ranges[CM3_URLS[0]] == "bytes=100-" and ranges[CM3_URLS[1]] is None
+    assert (root / "human_cell_marker.zip").read_bytes() == human and st["cellmarker"] == "CellMarker 3.0"
+    total = sum(len(b) for b in raw["cellmarker3"].values())
+    assert progress == [{"done": len(human), "total": total}]  # the human zip done when the mouse one starts
+
+
+def test_cellmarker3_jobs_use_their_measured_parts(installed_cm3):
+    db = mdb.load(installed_cm3)
+    assert db.view("verdict", "human") == ["panglao", "cellmarker3", "act"]
+    assert db.view("verdict", "mouse") == ["cellmarker3"]
+    assert db.view("suggest", "human") == db.view("annotate", "mouse") == ["panglao", "cellmarker3_curated"]
+    a = _cells(extra={"Methodcyte": ["MTH1", "MTH2", "MTH3", "MTH4", "MTH5"]})
+    res = mdb.check(a, "lab", "human", db)
+    assert res["cellmarker"] == "CellMarker 3.0"
+    assert res["verdict_sources"] == ["PanglaoDB", "CellMarker 3.0", "ACT"]
+    assert res["suggestion_sources"] == ["PanglaoDB", "CellMarker 3.0 (curated)"]
+    by = {r["label"]: r for r in res["labels"]}
+    # A type known only from computational rows judges its label ...
+    assert by["Methodcyte"]["verdict"] == "supported" and by["Methodcyte"]["sources"] == ["CellMarker 3.0"]
+    # ... but is never suggested
+    assert all(s["cell_type"] != "Methodcyte" for r in res["labels"] for s in r["suggestions"])
+    assert by["B"]["verdict"] == "supported" and "CD22" in by["B"]["overlap"]  # a computational marker counts
+    assert by["B"]["suggestions"][0]["cell_type"] == "B cells"
+
+
+def test_mouse_verdicts_use_cellmarker3_mouse_rows_alone(installed_cm3):
+    a = _cells()
+    a.var_names = [g[:1] + g[1:].lower() for g in a.var_names]
+    res = mdb.check(a, "lab", "mouse", mdb.load(installed_cm3))
+    assert res["verdict_sources"] == ["CellMarker 3.0"]
+    b = next(r for r in res["labels"] if r["label"] == "B")
+    assert b["verdict"] == "supported" and b["sources"] == ["CellMarker 3.0"] and "Bank1" in b["overlap"]
+    # T cells is a PanglaoDB type: not in the mouse verdict
+    assert next(r for r in res["labels"] if r["label"] == "T-cells")["verdict"] == "not_in_db"
+
+
 # --- endpoints -------------------------------------------------------------------
 
 
@@ -440,7 +582,7 @@ async def test_status_and_check_endpoints(client, dataset_manager, test_settings
     rawdir = tmp_data_dir / "marker_db" / "raw"
     rawdir.mkdir(parents=True)
     for name, spec in mdb.SOURCES.items():
-        if name != "act":
+        if name not in ("act", "cellmarker3"):
             (rawdir / spec.filename).write_bytes(raw[name])
     (rawdir / mdb.ONTOLOGY_FILE).write_bytes(raw["ontology"])
     for f, data in raw["act"].items():
@@ -451,6 +593,7 @@ async def test_status_and_check_endpoints(client, dataset_manager, test_settings
     body = r.json()
     assert body["verdict_counts"]["supported"] == 1 and body["species"] == "human"
     st = (await client.get(f"{API}/datasets/{did}/annotation/marker-db/status")).json()
-    assert st["state"] == "ready" and all(s["downloaded"] for s in st["sources"])
+    assert st["state"] == "ready" and st["cellmarker"] == "CellMarker 2.0"  # 3.0 not in the volume
+    assert {s["name"] for s in st["sources"] if s["downloaded"]} == {"panglao", "cellmarker2", "act"}
     r = await client.post(f"{API}/datasets/{did}/annotation/marker-db/check", json={"column": "nope"})
     assert r.status_code == 404

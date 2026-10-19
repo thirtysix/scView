@@ -331,12 +331,18 @@ export interface MarkerDbSource {
   /** Why the last download failed, while it is still missing */
   error: string | null;
   failed_at: string | null;
+  /** False for CellMarker 2.0 while 3.0 is installed: not fetched, and not missing */
+  needed?: boolean;
+  /** Bytes so far while it downloads */
+  progress?: { done: number; total: number } | null;
 }
 
 export type MarkerDbState = "ready" | "partial" | "missing" | "failed" | "disabled" | "downloading";
 
 export interface MarkerDbStatus {
   state: MarkerDbState;
+  /** The CellMarker release in use: "CellMarker 3.0", or "CellMarker 2.0" when 3.0 could not be fetched */
+  cellmarker?: string | null;
   auto_download: boolean;
   sources: MarkerDbSource[];
   ontology: { downloaded: boolean; url: string; version: string | null; fetched_at: string | null; error: string | null };
@@ -391,6 +397,7 @@ export interface MarkerDbResult {
   /** Databases the suggestions rank (PanglaoDB + CellMarker 2.0) */
   suggestion_sources: string[];
   ontology: boolean;
+  cellmarker?: string | null;
   sources: MarkerDbSource[];
   params: Record<string, number>;
   note: string;

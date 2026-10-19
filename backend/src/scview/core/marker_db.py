@@ -1,4 +1,4 @@
-"""Marker databases: PanglaoDB + CellMarker 2.0 (+ ACT), merged, checked against a label column.
+"""Marker databases: PanglaoDB + CellMarker 3.0 (or 2.0) + ACT, merged, checked against a label column.
 
 Design and numbers: the marker-database assessment of 2026-10-19 (research/
 marker-db-assessment/REPORT.md). In short:
@@ -21,7 +21,18 @@ marker-db-assessment/REPORT.md). In short:
 - **ACT** (Quan et al. 2023), the optional third source (addendum v2): in the
   verdict and the marker-score annotator (HPA lookup 0.67 -> 0.70, abstentions
   0.15 -> 0.11), not in the suggestions (top-3 0.57 -> 0.55). If it cannot be
-  fetched, PanglaoDB + CellMarker 2.0 work alone.
+  fetched, the others work alone.
+- **CellMarker 3.0** (2026-07-22 release, unpublished; assessment v3) replaces 2.0
+  when it can be fetched. Its 2.5M rows are 91% computational ("Method") markers,
+  which help the verdict and wreck open-set ranking, so (``VIEWS``): the verdict
+  uses PanglaoDB + CellMarker 3.0 (all rows) + ACT for human (HPA-other lookup /
+  AUROC 0.73 / 0.93 vs 0.70 / 0.89, abstain 4% vs 11%; Kang 0.77) and CellMarker
+  3.0 mouse rows alone for mouse (paul15 0.74 / 0.86; unions were lower); the
+  suggestions and the marker-score annotator use PanglaoDB + CellMarker 3.0
+  curated rows (parity with PanglaoDB + CellMarker 2.0 there). When 3.0 is
+  missing, changed or failed, CellMarker 2.0 is fetched instead and the earlier
+  PanglaoDB + CellMarker 2.0 (+ ACT) design applies; which one is in use is in the
+  status, the manifest and every result.
 
 scView does not ship the databases (none states a licence). Each is fetched
 once, on first use, into ``DATA_DIR/marker_db`` (the data volume): the raw file
@@ -63,7 +74,7 @@ from scview.core.uns_keys import markers_key
 
 logger = logging.getLogger(__name__)
 
-MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024  # CellMarker 2.0's Cell_marker_All.xlsx is 10 MB
+MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024  # CellMarker 3.0's human zip is 49 MB
 TIMEOUT = httpx.Timeout(90.0, connect=20.0)  # panglaodb.se can be very slow; a mirror follows
 FAILURE_COOLDOWN = 600  # seconds before a failed source is tried again without an explicit retry
 
@@ -84,7 +95,7 @@ VERDICT_TEXT = {
 }
 
 NOTE = (
-    "Each label is matched by name to PanglaoDB and CellMarker 2.0 cell types; its 50 "
+    "Each label is matched by name to the marker databases' cell types; its 50 "
     "best-evidenced database markers measured here are compared with the group's top 25 "
     "marker genes (detected in at least 20% of its cells, sorted by log fold change, "
     "mitochondrial and ribosomal genes left out) with a hypergeometric test against the "
@@ -195,6 +206,86 @@ def _parse_act(path: Path) -> list[tuple]:
             for (sp, ct, g), n in hit.items() if sp in ("human", "mouse") and ct]
 
 
+def _pmid(x: str) -> str:
+    x = (x or "").strip()
+    return x[:-2] if x.endswith(".0") else x
+
+
+def _parse_cellmarker3(root: Path) -> list[tuple]:
+    """CellMarker 3.0 zips, read as a stream (the 830 MB of TSV is never written out):
+    normal cells of human and mouse. Weight = distinct papers (the dataset id when a
+    computational row has no PMID) plus a < 0.1 tie-breaker from distinct (paper,
+    tissue, method) supports, for all rows and, separately, for the curated rows
+    (marker_source other than "Method"); 0 when a gene has no curated row."""
+    import io
+    import zipfile
+
+    # (species, name, gene) -> [papers, supports (<= 9), curated papers, curated supports (<= 9)]
+    acc: dict[tuple, list] = {}
+    cl: dict[tuple, str] = {}
+    need = {"species", "disease_category", "cell_name", "cellontology_id", "symbol", "marker_source", "pmid",
+            "series_id", "tissue_type", "method_details"}
+    for zpath in sorted(root.glob("*.zip")):
+        with zipfile.ZipFile(zpath) as z:
+            for member in z.infolist():
+                if not member.filename.endswith(".txt"):
+                    continue
+                with z.open(member) as raw:
+                    reader = csv.DictReader(io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline=""),
+                                            delimiter="\t")
+                    if not need <= set(reader.fieldnames or ()):
+                        raise ValueError(f"CellMarker 3.0 file lacks columns {sorted(need - set(reader.fieldnames or ()))}")
+                    for r in reader:
+                        sp = (r["species"] or "").strip().lower()
+                        if sp not in ("human", "mouse") or r["disease_category"] != "Normal":
+                            continue
+                        name = (r["cell_name"] or "").strip()
+                        if not name:
+                            continue
+                        cid = (r["cellontology_id"] or "").strip()
+                        if cid.startswith("CL_"):
+                            cl.setdefault((sp, name), cid.replace("_", ":"))
+                        paper = _pmid(r["pmid"]) or (r["series_id"] or "").strip() or "?"
+                        support = hash((paper, r["tissue_type"], r["method_details"]))
+                        curated = r["marker_source"] != "Method"
+                        for g in re.split(r"[,;]\s*", (r["symbol"] or "").replace("[", "").replace("]", "")):
+                            g = g.strip()
+                            if not g or g in ("NA", "None", "nan") or SKIP_GENE.match(g):
+                                continue
+                            key = (sp, name, g)
+                            a = acc.get(key)
+                            if a is None:
+                                a = acc[key] = [None, None, None, None]
+                            _add(a, 0, paper)
+                            _add(a, 1, support, 9)
+                            if curated:
+                                _add(a, 2, paper)
+                                _add(a, 3, support, 9)
+
+    def w(papers, supports):
+        return _count(papers) + 0.1 * _count(supports) / 9 if papers is not None else 0.0
+
+    return [(sp, name, cl.get((sp, name), ""), g, w(a[0], a[1]), w(a[2], a[3]))
+            for (sp, name, g), a in acc.items()]
+
+
+# Most (type, gene) pairs have one paper: hold a single value until a second one comes
+# (a set per pair would hold CellMarker 3.0's parse at ~0.9 GB).
+def _add(a: list, i: int, v, cap: int | None = None) -> None:
+    cur = a[i]
+    if cur is None:
+        a[i] = v
+    elif isinstance(cur, set):
+        if cap is None or len(cur) < cap:
+            cur.add(v)
+    elif cur != v:
+        a[i] = {cur, v}
+
+
+def _count(x) -> int:
+    return 0 if x is None else len(x) if isinstance(x, set) else 1
+
+
 @dataclass(frozen=True)
 class SourceSpec:
     name: str
@@ -231,6 +322,21 @@ SOURCES: dict[str, SourceSpec] = {
         parse=_parse_panglao,
         min_rows=10_000,
     ),
+    "cellmarker3": SourceSpec(
+        name="cellmarker3",
+        label="CellMarker 3.0",
+        release="2026-07-22 release, unpublished",
+        filename="CellMarker3",
+        urls=("https://bio-bigdata.hrbmu.edu.cn/CellMarker/file/",),
+        sha256=None,  # one pinned sha256 per zip: CM3_FILES
+        home="https://bio-bigdata.hrbmu.edu.cn/CellMarker/",
+        # No 3.0 paper yet; the site asks for the 2.0 paper to be cited.
+        paper="cite CellMarker 2.0: Hu et al. 2023, Nucleic Acids Res (PMID 36300619)",
+        doi="10.1093/nar/gkac947",
+        parse=_parse_cellmarker3,
+        min_rows=200_000,
+        fetch=lambda spec, raw_dir, client: _fetch_cm3(raw_dir / spec.filename, client),
+    ),
     "cellmarker2": SourceSpec(
         name="cellmarker2",
         label="CellMarker 2.0",
@@ -261,9 +367,30 @@ SOURCES: dict[str, SourceSpec] = {
         fetch=lambda spec, raw_dir, client: _fetch_act(raw_dir / spec.filename, client),
     ),
 }
-# The top-3 suggestions rank PanglaoDB + CellMarker 2.0 types only: adding ACT
-# raised label lookup (HPA 0.67 -> 0.70) but lowered open-set top-3 (0.57 -> 0.55).
-SUGGEST_SOURCES = ("panglao", "cellmarker2")
+# Which parts each job uses (a part is a source, or "cellmarker3_curated": CellMarker
+# 3.0 without its computational rows). With CellMarker 3.0 (assessment v3):
+VIEWS_CM3 = {
+    "verdict": {"human": ("panglao", "cellmarker3", "act"), "mouse": ("cellmarker3",)},
+    "suggest": {"human": ("panglao", "cellmarker3_curated"), "mouse": ("panglao", "cellmarker3_curated")},
+    "annotate": {"human": ("panglao", "cellmarker3_curated"), "mouse": ("panglao", "cellmarker3_curated")},
+}
+# Without it (CellMarker 2.0, addendum v2): suggestions on PanglaoDB + CellMarker 2.0
+# only, since adding ACT raised lookup (HPA 0.67 -> 0.70) but lowered top-3 (0.57 -> 0.55).
+VIEWS_CM2 = {
+    "verdict": {"human": ("panglao", "cellmarker2", "act"), "mouse": ("panglao", "cellmarker2", "act")},
+    "suggest": {"human": ("panglao", "cellmarker2"), "mouse": ("panglao", "cellmarker2")},
+    "annotate": {"human": ("panglao", "cellmarker2", "act"), "mouse": ("panglao", "cellmarker2", "act")},
+}
+PART_LABELS = {"panglao": "PanglaoDB", "cellmarker3": "CellMarker 3.0",
+               "cellmarker3_curated": "CellMarker 3.0 (curated)", "cellmarker2": "CellMarker 2.0", "act": "ACT"}
+
+# CellMarker 3.0: the human and mouse zips (48.7 + 23.1 MB; together 32 KB smaller than
+# all_cell_marker.zip, same rows), each pinned. A partial download is resumed.
+CM3_BASE = "https://bio-bigdata.hrbmu.edu.cn/CellMarker/file/"
+CM3_FILES = (
+    ("human_cell_marker.zip", "22fa294165d7cda92d8ffb32c826acd74fa4656e568963aa3e1db3f94672c9fe", 48_740_702),
+    ("mouse_cell_marker.zip", "93af58320bae8436ea811fbd0c7aeefb8218d5e3dd3b3bba60b0b7fb2cd2da4e", 23_071_482),
+)
 
 # ACT: 498 per-tissue files (277 human, 221 mouse). Its host serves https with an
 # expired certificate, so they come over plain http and each is checked against the
@@ -358,6 +485,73 @@ def _download(urls: tuple[str, ...], part: Path, sha256: str | None, client: htt
             part.unlink(missing_ok=True)
             errors.append(f"{url.split('/')[2]}: {e}")
     raise RuntimeError("; ".join(errors) or "no URL")
+
+
+_progress: dict[str, tuple[int, int]] = {}  # source -> (bytes so far, bytes expected), while fetching
+
+
+def _download_resumable(url: str, part: Path, sha256: str, expected: int, client: httpx.Client,
+                        progress: tuple[str, int]) -> None:
+    """Fetch ``url`` into ``part``, continuing a partial ``part`` with a Range request,
+    then check the pinned sha256 (a mismatch deletes it). A network error keeps the
+    partial file for the next try."""
+    key, before = progress
+    start = part.stat().st_size if part.is_file() else 0
+    if start >= expected:
+        start = 0
+        part.unlink(missing_ok=True)
+    headers = {"Range": f"bytes={start}-"} if start else {}
+    with client.stream("GET", url, headers=headers) as resp:
+        resp.raise_for_status()
+        if resp.status_code != 206:
+            start = 0  # the server sent the whole file
+        size = start
+        with open(part, "ab" if start else "wb") as fh:
+            for chunk in resp.iter_bytes():
+                size += len(chunk)
+                if size > MAX_DOWNLOAD_BYTES:
+                    raise ValueError(f"download exceeds {MAX_DOWNLOAD_BYTES} bytes")
+                fh.write(chunk)
+                _progress[key] = (before + size, _progress.get(key, (0, 0))[1])
+    digest = _sha256(part)
+    if digest != sha256:
+        part.unlink(missing_ok=True)
+        raise ValueError(f"{part.name.replace('.part', '')}: sha256 {digest[:12]}... is not the release scView "
+                         f"expects ({sha256[:12]}...)")
+
+
+def _fetch_cm3(root: Path, client: httpx.Client | None) -> tuple[str, str, int]:
+    """Fetch the CellMarker 3.0 zips not yet under ``root``, each checked against its
+    pinned sha256; fails closed (raises) on any mismatch or error."""
+    root.mkdir(parents=True, exist_ok=True)
+    total = sum(n for _, _, n in CM3_FILES)
+    todo = []
+    for name, digest, _n in CM3_FILES:
+        p = root / name
+        if not p.is_file():
+            todo.append(name)
+        elif _sha256(p) != digest:
+            raise ValueError(f"CellMarker 3.0 file {name} is not the release scView expects")
+    if todo:
+        c, own = _client(client)
+        _progress["cellmarker3"] = (0, total)
+        try:
+            done = 0
+            for name, digest, n in CM3_FILES:
+                p = root / name
+                if p.is_file():
+                    done += n
+                    continue
+                part = root / f"{Path(name).stem}.part.zip"
+                _download_resumable(CM3_BASE + name, part, digest, n, c, ("cellmarker3", done))
+                part.replace(p)
+                done += n
+        finally:
+            _progress.pop("cellmarker3", None)
+            if own:
+                c.close()
+    digest = hashlib.sha256("".join(f"{d}  {n}\n" for n, d, _ in CM3_FILES).encode()).hexdigest()
+    return (CM3_BASE if todo else "local file"), digest, total
 
 
 def _act_files() -> list[tuple[str, str]]:
@@ -455,8 +649,10 @@ def _install_source(spec: SourceSpec, dest: Path, client: httpx.Client | None) -
         tmp = dest / f"{spec.name}.tsv.gz.part"
         with gzip.open(tmp, "wt", newline="", encoding="utf-8") as f:
             w = csv.writer(f, delimiter="\t")
-            w.writerow(["species", "cell_type", "cl_id", "gene", "weight"])
-            w.writerows(rows)
+            # curated_weight: the weight from curated rows only (CellMarker 3.0; 0 = computational
+            # rows only); the other sources are all curated
+            w.writerow(["species", "cell_type", "cl_id", "gene", "weight", "curated_weight"])
+            w.writerows(r if len(r) == 6 else (*r, r[4]) for r in rows)
         tmp.replace(_table(dest, spec.name))
         if src == part:
             part.replace(raw)
@@ -465,6 +661,8 @@ def _install_source(spec: SourceSpec, dest: Path, client: httpx.Client | None) -
             rows=len(rows),
             types={sp: len({r[1] for r in rows if r[0] == sp}) for sp in ("human", "mouse")},
         )
+        if any(len(r) == 6 for r in rows[:1]):
+            entry["curated_rows"] = sum(1 for r in rows if r[5] > 0)
         return entry
     finally:
         part.unlink(missing_ok=True)
@@ -515,13 +713,20 @@ _busy = threading.Event()
 def _raw_complete(dest: Path, name: str) -> bool:
     """Every raw file of a source is in raw/ already (put there by hand): nothing to fetch."""
     raw = dest / "raw" / (ONTOLOGY_FILE if name == "ontology" else SOURCES[name].filename)
-    if name != "ontology" and SOURCES[name].fetch is not None:
+    if name == "act":
         return all((raw / rel).is_file() for rel, _ in _act_files())
+    if name == "cellmarker3":
+        return all((raw / f).is_file() for f, _, _ in CM3_FILES)
     return raw.is_file()
 
 
 def _installed(dest: Path, name: str) -> bool:
     return _ontology_table(dest).is_file() if name == "ontology" else _table(dest, name).is_file()
+
+
+def _needed(dest: Path, name: str) -> bool:
+    """CellMarker 2.0 is the fallback: needed only while 3.0 is not installed."""
+    return not (name == "cellmarker2" and _installed(dest, "cellmarker3"))
 
 
 def ensure(
@@ -538,8 +743,8 @@ def ensure(
     a time per process (a lock) and across processes (a lock file): a second
     caller waits, then finds the files in place."""
     auto = auto_download_enabled() if auto_download is None else auto_download
-    names = [*SOURCES, "ontology"]
-    if all(_installed(dest, n) for n in names):
+    names = [*SOURCES, "ontology"]  # CellMarker 3.0 is tried before its 2.0 fallback
+    if all(_installed(dest, n) or not _needed(dest, n) for n in names):
         return status(dest, auto_download=auto)
     with _fetch_lock:
         try:
@@ -560,7 +765,7 @@ def _ensure_locked(dest: Path, names: list[str], auto: bool, retry: bool, client
     m = read_manifest(dest)
     sources, failures = m.setdefault("sources", {}), m.setdefault("failures", {})
     for name in names:
-        if _installed(dest, name):
+        if _installed(dest, name) or not _needed(dest, name):
             continue
         if not auto and not _raw_complete(dest, name):
             continue
@@ -589,10 +794,14 @@ def status(dest: Path, *, auto_download: bool | None = None) -> dict:
     for name, spec in SOURCES.items():
         e = sources.get(name, {}) if _installed(dest, name) else {}
         f = failures.get(name)
+        prog = _progress.get(name)
         out.append({
             "name": name, "label": spec.label, "release": spec.release, "home": spec.home,
             "paper": spec.paper, "doi": spec.doi, "url": spec.urls[0],
             "downloaded": _installed(dest, name),
+            # False for CellMarker 2.0 while 3.0 is installed: not fetched, not missing
+            "needed": _needed(dest, name),
+            "progress": {"done": prog[0], "total": prog[1]} if prog else None,
             "fetched_at": e.get("fetched_at"), "served_from": e.get("served_from"),
             "sha256": e.get("sha256"), "rows": e.get("rows"), "types": e.get("types"),
             "download_bytes": e.get("download_bytes"),
@@ -601,9 +810,11 @@ def status(dest: Path, *, auto_download: bool | None = None) -> dict:
         })
     n = sum(s["downloaded"] for s in out)
     failed = any(s["error"] for s in out)
+    have = {s["name"] for s in out if s["downloaded"]}
+    cellmarker = "cellmarker3" if "cellmarker3" in have else "cellmarker2" if "cellmarker2" in have else None
     state = (
         "downloading" if _busy.is_set()
-        else "ready" if n == len(out)
+        else "ready" if {"panglao", "act"} <= have and cellmarker
         else "partial" if n
         else "failed" if failed
         else "disabled" if not auto
@@ -614,6 +825,8 @@ def status(dest: Path, *, auto_download: bool | None = None) -> dict:
     return {
         "state": state,
         "auto_download": auto,
+        # The CellMarker release in use: 3.0, or 2.0 when 3.0 could not be fetched
+        "cellmarker": SOURCES[cellmarker].label if cellmarker else None,
         "sources": out,
         "ontology": {
             "downloaded": _installed(dest, "ontology"), "url": ONTOLOGY_URL,
@@ -628,14 +841,18 @@ def status(dest: Path, *, auto_download: bool | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _read_types(path: Path) -> dict[str, dict[str, dict]]:
-    """species -> cell type -> {"cl", "w": {gene: weight}, "genes": best first}."""
+def _read_types(path: Path, curated: bool = False) -> dict[str, dict[str, dict]]:
+    """species -> cell type -> {"cl", "w": {gene: weight}, "genes": best first}; with
+    ``curated``, from the curated rows' weights only."""
     out: dict[str, dict[str, dict]] = defaultdict(dict)
     with gzip.open(path, "rt", newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f, delimiter="\t"):
+            wt = float(r.get("curated_weight") or r["weight"]) if curated else float(r["weight"])
+            if wt <= 0:
+                continue
             t = out[r["species"]].setdefault(r["cell_type"], {"cl": r["cl_id"], "w": {}})
             g = r["gene"]
-            t["w"][g] = max(float(r["weight"]), t["w"].get(g, 0.0))
+            t["w"][g] = max(wt, t["w"].get(g, 0.0))
             if r["cl_id"] and not t["cl"]:
                 t["cl"] = r["cl_id"]
     for types in out.values():
@@ -689,8 +906,9 @@ class MarkerDB:
         self._lock = threading.Lock()
 
     def species(self, species: str, sources: list[str] | tuple[str, ...] | None = None) -> SpeciesDB:
-        """One species' merged types, from every source on disk or from ``sources``."""
-        use = [s for s in self.sources if sources is None or s in sources]
+        """One species' merged types, from the parts named in ``sources`` (in that order),
+        or from every source on disk."""
+        use = [s for s in (sources if sources is not None else self.sources) if s in self.per_source]
         key = f"{species}|{','.join(use)}"
         with self._lock:
             if key not in self._species:
@@ -698,11 +916,22 @@ class MarkerDB:
                 self._species[key] = SpeciesDB(species, merge(parts), self.ontology)
             return self._species[key]
 
-    def suggestion_sources(self) -> list[str]:
-        return [s for s in self.sources if s in SUGGEST_SOURCES] or list(self.sources)
+    @property
+    def cellmarker(self) -> str | None:
+        """The CellMarker release in use."""
+        return next((s for s in ("cellmarker3", "cellmarker2") if s in self.sources), None)
+
+    def view(self, job: str, species: str) -> list[str]:
+        """The parts on disk that ``job`` (verdict | suggest | annotate) uses for ``species``."""
+        views = VIEWS_CM3 if self.cellmarker == "cellmarker3" else VIEWS_CM2
+        parts = [p for p in views[job]["mouse" if species == "mouse" else "human"] if p in self.per_source]
+        return parts or list(self.sources)
+
+    def labels(self, parts) -> list[str]:
+        return [PART_LABELS[p] for p in parts]
 
     def source_labels(self) -> list[str]:
-        return [SOURCES[s].label for s in self.sources]
+        return self.labels(self.sources)
 
 
 _loaded: dict[str, tuple[tuple, MarkerDB]] = {}
@@ -728,7 +957,10 @@ def load(dest: Path) -> MarkerDB | None:
                     ontology = Ontology({k: (v[0], list(v[1]), list(v[2])) for k, v in json.load(f).items()})
             except (OSError, ValueError, IndexError) as e:
                 logger.warning("Cell Ontology table unreadable (%s); matching by name only", e)
-        db = MarkerDB(dest, [n for n, _ in present], {n: _read_types(p) for n, p in present}, ontology)
+        parts = {n: _read_types(p) for n, p in present}
+        if "cellmarker3" in parts:
+            parts["cellmarker3_curated"] = _read_types(_table(dest, "cellmarker3"), curated=True)
+        db = MarkerDB(dest, [n for n, _ in present], parts, ontology)
         _loaded[str(dest)] = (stamp, db)
         return db
 
@@ -879,7 +1111,7 @@ class Scorer:
         return {
             "cell_type": t,
             "cl_id": info["cl"] or None,
-            "sources": [SOURCES[x].label for x in info["sources"]],
+            "sources": [PART_LABELS[x] for x in info["sources"]],
             "p": float(10 ** -s) if k else 1.0,
             "overlap": self.genes(Q & sets[t]),
             "n_db_genes": int(n),
@@ -936,13 +1168,13 @@ def check(adata, column: str, species: str | None = None, db: MarkerDB | None = 
         raise ValueError(f"'{column}' has {len(groups)} labels; the check needs 2 to {MAX_GROUPS}.")
     db = db or get_db()
     sp, sp_note = _species(adata, species)
-    sdb = db.species(sp)
+    verdict_from, suggest_from = db.view("verdict", sp), db.view("suggest", sp)
+    sdb = db.species(sp, verdict_from)
     if not sdb.types:
         raise ValueError(f"The marker databases have no {sp} rows.")
     measured = measured_genes(adata)
     sc_ = Scorer(sdb, measured)
-    suggest_from = db.suggestion_sources()
-    sc_suggest = sc_ if suggest_from == db.sources else Scorer(db.species(sp, suggest_from), measured)
+    sc_suggest = sc_ if suggest_from == verdict_from else Scorer(db.species(sp, suggest_from), measured)
     markers = _markers_for(adata, column)
     labels = [_label_row(sc_, sc_suggest, g, markers.get(g, [])) for g in groups]
     counts = Counter(r["verdict"] for r in labels)
@@ -955,9 +1187,10 @@ def check(adata, column: str, species: str | None = None, db: MarkerDB | None = 
         "n_measured": len(sc_.U),
         "n_db_types": len(sdb.types),
         "ontology": db.ontology is not None,
-        "verdict_sources": db.source_labels(),
-        "suggestion_sources": [SOURCES[s].label for s in suggest_from],
-        "sources": [s for s in status(db.dest)["sources"] if s["downloaded"]],
+        "cellmarker": SOURCES[db.cellmarker].label if db.cellmarker else None,
+        "verdict_sources": db.labels(verdict_from),
+        "suggestion_sources": db.labels(suggest_from),
+        "sources": [s for s in status(db.dest)["sources"] if s["downloaded"] and s["needed"]],
         "params": {"top_db_genes": TOP_DB, "group_markers": N_MARKERS, "min_db_genes": MIN_DB_GENES,
                    "suggestions": N_SUGGEST},
         "note": NOTE,
@@ -970,7 +1203,8 @@ def annotate(adata, groupby: str, species: str | None = None, db: MarkerDB | Non
     type shares a marker with it; and what it rests on, for the provenance."""
     db = db or get_db()
     sp, _ = _species(adata, species)
-    sc_ = Scorer(db.species(sp), measured_genes(adata))
+    parts = db.view("annotate", sp)
+    sc_ = Scorer(db.species(sp, parts), measured_genes(adata))
     markers = _markers_for(adata, groupby)
     mapping: dict[str, str] = {}
     for g in _group_names(adata, groupby):
@@ -978,7 +1212,8 @@ def annotate(adata, groupby: str, species: str | None = None, db: MarkerDB | Non
         mapping[g] = top[0]["cell_type"] if top else "Unknown"
     return mapping, {
         "marker_source": "database",
-        "databases": db.source_labels(),
+        "databases": db.labels(parts),
+        "cellmarker": SOURCES[db.cellmarker].label if db.cellmarker else None,
         "species": sp,
         "n_db_types": len(sc_.open_names),
     }

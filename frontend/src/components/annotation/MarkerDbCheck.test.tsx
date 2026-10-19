@@ -141,3 +141,62 @@ describe("MarkerDbCheck", () => {
     await waitFor(() => expect(screen.queryByTestId("marker-db-result")).toBeNull());
   });
 });
+
+const CM3: MarkerDbSource = {
+  ...SRC[1]!, name: "cellmarker3", label: "CellMarker 3.0", release: "2026-07-22 release, unpublished",
+  home: "https://bio-bigdata.hrbmu.edu.cn/CellMarker/",
+  paper: "cite CellMarker 2.0: Hu et al. 2023, Nucleic Acids Res (PMID 36300619)", needed: true,
+};
+const WITH_CM3: MarkerDbStatus = {
+  ...READY, cellmarker: "CellMarker 3.0",
+  sources: [SRC[0]!, CM3, { ...SRC[1]!, downloaded: false, needed: false }, SRC[2]!],
+};
+
+describe("MarkerDbCheck with CellMarker 3.0", () => {
+  beforeEach(() => {
+    getMarkerDbStatus.mockReset().mockResolvedValue(WITH_CM3);
+    runMarkerDbCheck.mockReset().mockResolvedValue({
+      ...RESULT, cellmarker: "CellMarker 3.0", sources: [SRC[0]!, CM3, SRC[2]!],
+      verdict_sources: ["PanglaoDB", "CellMarker 3.0", "ACT"],
+      suggestion_sources: ["PanglaoDB", "CellMarker 3.0 (curated)"],
+    });
+  });
+
+  it("names the release in use, not the unused 2.0 fallback", async () => {
+    render(<MarkerDbCheck datasetId="d1" column="cell_type" />);
+    const line = await screen.findByTestId("marker-db-source");
+    expect(line.textContent).toContain("CellMarker 3.0 (2026-07-22 release, unpublished)");
+    expect(line.textContent).toContain("Suggestions rank PanglaoDB + CellMarker 3.0 (curated) types only");
+    expect(line.textContent).not.toContain("not downloaded");
+    expect(line.textContent).not.toMatch(/CellMarker 2\.0 \(Hu/); // only cited through 3.0
+    fireEvent.click(screen.getByRole("button", { name: "Check against marker databases" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("marker-db-source").textContent).toContain(
+        "Verdicts use PanglaoDB + CellMarker 3.0 + ACT (human)",
+      ),
+    );
+  });
+
+  it("shows the download's progress while the first check runs", async () => {
+    getMarkerDbStatus.mockResolvedValue({
+      ...MISSING, state: "downloading",
+      sources: [...MISSING.sources, { ...CM3, downloaded: false, progress: { done: 30e6, total: 72e6 } }],
+    });
+    runMarkerDbCheck.mockReturnValue(new Promise(() => undefined)); // still downloading
+    render(<MarkerDbCheck datasetId="d1" column="cell_type" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Download databases and check" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("marker-db-progress").textContent).toBe("Downloading CellMarker 3.0: 30 of 72 MB…"),
+    );
+  });
+
+  it("says when CellMarker 2.0 stands in for a failed 3.0", async () => {
+    getMarkerDbStatus.mockResolvedValue({
+      ...READY, cellmarker: "CellMarker 2.0",
+      sources: [...SRC, { ...CM3, downloaded: false, error: "sha256 1234... is not the release scView expects" }],
+    });
+    render(<MarkerDbCheck datasetId="d1" column="cell_type" />);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Using CellMarker 2.0 instead."));
+    expect(screen.getByRole("alert").textContent).toContain("CellMarker 3.0 could not be downloaded");
+  });
+});
