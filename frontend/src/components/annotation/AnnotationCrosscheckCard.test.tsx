@@ -95,10 +95,13 @@ describe("AnnotationCrosscheckCard", () => {
       expect(within(group).getByRole("button", { name: /Cell Type Llm|cell_type_llm/i }).getAttribute("aria-pressed")).toBe("true"),
     );
     expect(within(group).getByRole("button", { name: /Donor/ }).getAttribute("aria-pressed")).toBe("false");
-    // The annotation is the reference, not the clustering.
-    expect((screen.getByLabelText("Reference") as HTMLSelectElement).value).toBe("cell_type_llm");
+    // The annotation is the reference, not the clustering. The reference is set by an
+    // effect after the chips, so wait for it (a slow CI runner saw the frame between).
+    await waitFor(() =>
+      expect((screen.getByLabelText("Reference") as HTMLSelectElement).value).toBe("cell_type_llm"),
+    );
     // The marker-database check follows the reference.
-    expect(screen.getByTestId("marker-db-mounted").textContent).toBe("cell_type_llm");
+    await waitFor(() => expect(screen.getByTestId("marker-db-mounted").textContent).toBe("cell_type_llm"));
 
     fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
     await waitFor(() => expect(screen.getByTestId("crosscheck-result")).toBeTruthy());
