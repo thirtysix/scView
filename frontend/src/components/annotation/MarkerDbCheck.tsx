@@ -44,7 +44,7 @@ function errorText(e: unknown): string {
 export function markerDbSourceText(sources: MarkerDbSource[]): string {
   const have = sources.filter((s) => s.downloaded);
   if (!have.length) return "";
-  const names = have.map((s) => (s.name === "panglao" ? `${s.label} (${s.release})` : s.label)).join(" + ");
+  const names = have.map((s) => (s.name === "cellmarker2" ? s.label : `${s.label} (${s.release})`)).join(" + ");
   const dates = have.map((s) => s.fetched_at).filter((d): d is string => !!d).sort();
   return `${names}${dates.length ? `; fetched ${formatDate(dates[dates.length - 1])}` : ""}`;
 }
@@ -108,6 +108,7 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
 
   const ready = status?.sources.some((s) => s.downloaded) ?? false;
   const failed = status?.sources.filter((s) => !s.downloaded && s.error) ?? [];
+  const missing = status?.sources.filter((s) => !s.downloaded) ?? [];
   const sourceLine = markerDbSourceText(result?.sources ?? status?.sources ?? []);
   const rows = result ? (allRows ? result.labels : result.labels.slice(0, ROWS)) : [];
 
@@ -119,9 +120,9 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
         <span className="text-[11px] text-slate-400">{prettyObsLabel(column)}</span>
       </div>
       <p className="text-[11px] text-slate-500">
-        Matches each label to PanglaoDB and CellMarker 2.0 cell types and asks whether the database&apos;s markers for
-        it are among the group&apos;s own top 25 markers, then lists the 3 database types the group&apos;s markers fit
-        best.
+        Matches each label to PanglaoDB, CellMarker 2.0 and ACT cell types and asks whether the database&apos;s markers
+        for it are among the group&apos;s own top 25 markers, then lists the 3 PanglaoDB / CellMarker 2.0 types the
+        group&apos;s markers fit best.
       </p>
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         <label htmlFor="mdb-species" className="text-slate-600">
@@ -153,7 +154,8 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
       </div>
       {!ready && status?.state !== "disabled" && !running && (
         <p className="text-[11px] text-slate-400">
-          First use downloads PanglaoDB (0.3 MB) and CellMarker 2.0 (10 MB) from their own sites into the data volume.
+          First use downloads PanglaoDB (0.3 MB), CellMarker 2.0 (10 MB) and ACT (0.8 MB in 498 files) from their own
+          sites into the data volume.
         </p>
       )}
       {running && !ready && <p className="text-[11px] text-slate-500">Downloading the databases (first use)…</p>}
@@ -246,7 +248,9 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
                 )
               </span>
             ))}
-          . Neither database states a licence; check reuse terms with them.
+          . Suggestions rank {(result?.suggestion_sources ?? ["PanglaoDB", "CellMarker 2.0"]).join(" + ")} types only.
+          {missing.length > 0 && failed.length === 0 && ` ${missing.map((s) => s.label).join(" and ")} not downloaded.`}{" "}
+          None of the databases states a licence; check reuse terms with them.
         </p>
       )}
     </div>

@@ -1,4 +1,4 @@
-"""Marker databases: PanglaoDB + CellMarker 2.0, merged, checked against a label column.
+"""Marker databases: PanglaoDB + CellMarker 2.0 (+ ACT), merged, checked against a label column.
 
 Design and numbers: the marker-database assessment of 2026-10-19 (research/
 marker-db-assessment/REPORT.md). In short:
@@ -17,9 +17,13 @@ marker-db-assessment/REPORT.md). In short:
   type has < 5 measured database genes. On HPA clusters this flags 8% of correct
   labels and catches 77% of wrong same-tissue labels.
 - **Suggestions**: the 3 database types scoring best against the FULL database
-  set (top-1 right 0.42 on HPA, top-3 0.57).
+  set (top-1 right 0.42 on HPA, top-3 0.57), from PanglaoDB + CellMarker 2.0 only.
+- **ACT** (Quan et al. 2023), the optional third source (addendum v2): in the
+  verdict and the marker-score annotator (HPA lookup 0.67 -> 0.70, abstentions
+  0.15 -> 0.11), not in the suggestions (top-3 0.57 -> 0.55). If it cannot be
+  fetched, PanglaoDB + CellMarker 2.0 work alone.
 
-scView does not ship the databases (neither states a licence). Each is fetched
+scView does not ship the databases (none states a licence). Each is fetched
 once, on first use, into ``DATA_DIR/marker_db`` (the data volume): the raw file
 under ``raw/``, then one normalised table per source (species, cell_type, cl_id,
 gene, weight) and ``manifest.json`` (URL, date, sha256, row counts). The two
@@ -168,6 +172,29 @@ def _parse_cellmarker(path: Path) -> list[tuple]:
     return [(sp, name, cl.get((sp, name), ""), g, float(len(p))) for (sp, name, g), p in cites.items()]
 
 
+def _parse_act(path: Path) -> list[tuple]:
+    """ACT per-tissue files (Species, Tissue, CellType, Marker = ranked comma list,
+    Resource = PMIDs; Latin-1), pooled over tissues: weight = the tissue rows listing
+    the gene plus a small bonus for ranking it early."""
+    hit: Counter = Counter()
+    rank: dict[tuple, float] = defaultdict(float)
+    for f in sorted(path.glob("*/*.txt")):
+        with open(f, encoding="latin-1", newline="") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            if not {"Species", "CellType", "Marker"} <= set(reader.fieldnames or ()):
+                raise ValueError(f"ACT file {f.name} lacks the Species / CellType / Marker columns")
+            for r in reader:
+                sp = (r.get("Species") or "").strip().lower()
+                ct = (r.get("CellType") or "").strip()
+                genes = [g.strip() for g in (r.get("Marker") or "").split(",") if g.strip()]
+                for i, g in enumerate(genes):
+                    k = (sp, ct, g)
+                    hit[k] += 1
+                    rank[k] += (len(genes) - i) / len(genes)
+    return [(sp, ct, "", g, n + rank[(sp, ct, g)] / n / 10)
+            for (sp, ct, g), n in hit.items() if sp in ("human", "mouse") and ct]
+
+
 @dataclass(frozen=True)
 class SourceSpec:
     name: str
@@ -181,6 +208,8 @@ class SourceSpec:
     doi: str
     parse: Callable[[Path], list[tuple]]
     min_rows: int
+    # Fetches a source made of many files into raw/<filename>/: (served_from, sha256, bytes)
+    fetch: Callable[["SourceSpec", Path, httpx.Client | None], tuple[str, str, int]] | None = None
 
 
 SOURCES: dict[str, SourceSpec] = {
@@ -217,7 +246,32 @@ SOURCES: dict[str, SourceSpec] = {
         parse=_parse_cellmarker,
         min_rows=40_000,
     ),
+    "act": SourceSpec(
+        name="act",
+        label="ACT",
+        release="21 Feb 2024",
+        filename="ACT",
+        urls=("http://xteam.xbio.top/ACT/download.jsp",),
+        sha256=None,  # one pinned sha256 per file: marker_db_act.sha256
+        home="http://xteam.xbio.top/ACT/",
+        paper="Quan et al. 2023, Genome Med (15:91)",
+        doi="10.1186/s13073-023-01249-5",
+        parse=_parse_act,
+        min_rows=20_000,
+        fetch=lambda spec, raw_dir, client: _fetch_act(raw_dir / spec.filename, client),
+    ),
 }
+# The top-3 suggestions rank PanglaoDB + CellMarker 2.0 types only: adding ACT
+# raised label lookup (HPA 0.67 -> 0.70) but lowered open-set top-3 (0.57 -> 0.55).
+SUGGEST_SOURCES = ("panglao", "cellmarker2")
+
+# ACT: 498 per-tissue files (277 human, 221 mouse). Its host serves https with an
+# expired certificate, so they come over plain http and each is checked against the
+# sha256 committed in marker_db_act.sha256; one mismatch and ACT is not loaded.
+ACT_BASE = "http://xteam.xbio.top/ACT/download/"
+ACT_SUMS = Path(__file__).with_name("marker_db_act.sha256")
+ACT_WORKERS = 4
+ACT_DELAY = 0.05  # seconds before each request: a small server
 
 ONTOLOGY_URL = "http://purl.obolibrary.org/obo/cl/cl-basic.obo"
 ONTOLOGY_FILE = "cl-basic.obo"
@@ -306,6 +360,60 @@ def _download(urls: tuple[str, ...], part: Path, sha256: str | None, client: htt
     raise RuntimeError("; ".join(errors) or "no URL")
 
 
+def _act_files() -> list[tuple[str, str]]:
+    """(relative path, sha256) of every ACT file, from the committed list."""
+    out = []
+    for line in ACT_SUMS.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            digest, rel = line.split("  ", 1)
+            out.append((rel.strip(), digest.strip()))
+    return out
+
+
+def _fetch_act(root: Path, client: httpx.Client | None) -> tuple[str, str, int]:
+    """Fetch the ACT files not yet under ``root`` (4 at a time, politely), each checked
+    against its pinned sha256. Verified files stay, so a retry resumes; any failure
+    or mismatch raises and ACT is not loaded."""
+    from concurrent.futures import ThreadPoolExecutor
+    from urllib.parse import quote
+
+    files = _act_files()
+    todo = []
+    for rel, digest in files:
+        p = root / rel
+        if not p.is_file():
+            todo.append((rel, digest))
+        elif _sha256(p) != digest:
+            raise ValueError(f"ACT file {rel} is not the release scView expects")
+    if todo:
+        c, own = _client(client)
+
+        def one(item):
+            rel, digest = item
+            time.sleep(ACT_DELAY)
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            part = p.with_name(f"{p.stem}.part{p.suffix}")
+            try:
+                _download((ACT_BASE + quote(rel),), part, digest, c)
+                part.replace(p)
+                return None
+            except Exception as e:
+                part.unlink(missing_ok=True)
+                return f"{rel}: {e}"
+
+        try:
+            with ThreadPoolExecutor(max_workers=ACT_WORKERS) as pool:
+                errors = [e for e in pool.map(one, todo) if e]
+        finally:
+            if own:
+                c.close()
+        if errors:
+            raise RuntimeError(f"{len(errors)} of {len(files)} ACT files failed ({errors[0]})")
+    size = sum((root / rel).stat().st_size for rel, _ in files)
+    return (ACT_BASE if todo else "local file"), hashlib.sha256(ACT_SUMS.read_bytes()).hexdigest(), size
+
+
 def _client(client: httpx.Client | None) -> tuple[httpx.Client, bool]:
     if client is not None:
         return client, False
@@ -322,7 +430,11 @@ def _install_source(spec: SourceSpec, dest: Path, client: httpx.Client | None) -
     stem, suffix = Path(spec.filename).stem, Path(spec.filename).suffix
     part = raw_dir / f"{stem}.part{suffix}"  # openpyxl goes by the extension
     try:
-        if raw.is_file():
+        if spec.fetch is not None:
+            served, digest, size = spec.fetch(spec, raw_dir, client)
+            entry.update(url=spec.urls[0], served_from=served, sha256=digest, download_bytes=size)
+            src = raw
+        elif raw.is_file():
             digest = _sha256(raw)
             if spec.sha256 and digest != spec.sha256:
                 raise ValueError(f"{raw} is not the release scView expects (sha256 {digest[:12]}...)")
@@ -400,6 +512,14 @@ _fetch_lock = threading.Lock()
 _busy = threading.Event()
 
 
+def _raw_complete(dest: Path, name: str) -> bool:
+    """Every raw file of a source is in raw/ already (put there by hand): nothing to fetch."""
+    raw = dest / "raw" / (ONTOLOGY_FILE if name == "ontology" else SOURCES[name].filename)
+    if name != "ontology" and SOURCES[name].fetch is not None:
+        return all((raw / rel).is_file() for rel, _ in _act_files())
+    return raw.is_file()
+
+
 def _installed(dest: Path, name: str) -> bool:
     return _ontology_table(dest).is_file() if name == "ontology" else _table(dest, name).is_file()
 
@@ -442,8 +562,7 @@ def _ensure_locked(dest: Path, names: list[str], auto: bool, retry: bool, client
     for name in names:
         if _installed(dest, name):
             continue
-        filename = ONTOLOGY_FILE if name == "ontology" else SOURCES[name].filename
-        if not auto and not (dest / "raw" / filename).is_file():
+        if not auto and not _raw_complete(dest, name):
             continue
         last = failures.get(name, {}).get("at_epoch", 0)
         if not retry and time.time() - last < FAILURE_COOLDOWN:
@@ -566,15 +685,21 @@ class MarkerDB:
         self.sources = sources
         self.per_source = per_source
         self.ontology = ontology
-        self._species: dict[str, SpeciesDB] = {}
+        self._species: dict[str, SpeciesDB] = {}  # "species|sources" -> merged types
         self._lock = threading.Lock()
 
-    def species(self, species: str) -> SpeciesDB:
+    def species(self, species: str, sources: list[str] | tuple[str, ...] | None = None) -> SpeciesDB:
+        """One species' merged types, from every source on disk or from ``sources``."""
+        use = [s for s in self.sources if sources is None or s in sources]
+        key = f"{species}|{','.join(use)}"
         with self._lock:
-            if species not in self._species:
-                parts = [(s, self.per_source[s].get(species, {})) for s in self.sources]
-                self._species[species] = SpeciesDB(species, merge(parts), self.ontology)
-            return self._species[species]
+            if key not in self._species:
+                parts = [(s, self.per_source[s].get(species, {})) for s in use]
+                self._species[key] = SpeciesDB(species, merge(parts), self.ontology)
+            return self._species[key]
+
+    def suggestion_sources(self) -> list[str]:
+        return [s for s in self.sources if s in SUGGEST_SOURCES] or list(self.sources)
 
     def source_labels(self) -> list[str]:
         return [SOURCES[s].label for s in self.sources]
@@ -772,7 +897,7 @@ def _species(adata, species: str | None) -> tuple[str, str | None]:
     return "human", "The species could not be told from the gene names; human database rows are used."
 
 
-def _label_row(sc_: Scorer, label: str, markers: list[str]) -> dict:
+def _label_row(sc_: Scorer, sc_suggest: Scorer, label: str, markers: list[str]) -> dict:
     Q = sc_.query(markers)
     matched, how = sc_.sdb.matcher.match(label, "C")
     row: dict[str, Any] = {
@@ -782,7 +907,7 @@ def _label_row(sc_: Scorer, label: str, markers: list[str]) -> dict:
                   "how_text": HOW_TEXT.get(how) if matched else None,
                   "via_parent": how == "cl-ancestor"},
         "db_type": None, "cl_id": None, "sources": [], "p": None, "overlap": [], "n_db_genes": 0,
-        "suggestions": sc_.suggest(Q),
+        "suggestions": sc_suggest.suggest(Q),
     }
     if not Q:
         row["verdict"] = "no_markers"
@@ -814,9 +939,12 @@ def check(adata, column: str, species: str | None = None, db: MarkerDB | None = 
     sdb = db.species(sp)
     if not sdb.types:
         raise ValueError(f"The marker databases have no {sp} rows.")
-    sc_ = Scorer(sdb, measured_genes(adata))
+    measured = measured_genes(adata)
+    sc_ = Scorer(sdb, measured)
+    suggest_from = db.suggestion_sources()
+    sc_suggest = sc_ if suggest_from == db.sources else Scorer(db.species(sp, suggest_from), measured)
     markers = _markers_for(adata, column)
-    labels = [_label_row(sc_, g, markers.get(g, [])) for g in groups]
+    labels = [_label_row(sc_, sc_suggest, g, markers.get(g, [])) for g in groups]
     counts = Counter(r["verdict"] for r in labels)
     return {
         "column": column,
@@ -827,6 +955,8 @@ def check(adata, column: str, species: str | None = None, db: MarkerDB | None = 
         "n_measured": len(sc_.U),
         "n_db_types": len(sdb.types),
         "ontology": db.ontology is not None,
+        "verdict_sources": db.source_labels(),
+        "suggestion_sources": [SOURCES[s].label for s in suggest_from],
         "sources": [s for s in status(db.dest)["sources"] if s["downloaded"]],
         "params": {"top_db_genes": TOP_DB, "group_markers": N_MARKERS, "min_db_genes": MIN_DB_GENES,
                    "suggestions": N_SUGGEST},

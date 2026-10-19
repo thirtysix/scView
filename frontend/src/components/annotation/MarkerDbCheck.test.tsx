@@ -23,6 +23,12 @@ const SRC: MarkerDbSource[] = [
     fetched_at: "2026-10-18T03:00:00+00:00", served_from: "u", sha256: "s", rows: 1, types: { human: 1, mouse: 1 },
     download_bytes: 1, error: null, failed_at: null,
   },
+  {
+    name: "act", label: "ACT", release: "21 Feb 2024", home: "http://xteam.xbio.top/ACT/",
+    paper: "Quan et al. 2023, Genome Med (15:91)", doi: "10.1186/s13073-023-01249-5", url: "u", downloaded: true,
+    fetched_at: "2026-10-17T03:00:00+00:00", served_from: "u", sha256: "s", rows: 1, types: { human: 1, mouse: 1 },
+    download_bytes: 1, error: null, failed_at: null,
+  },
 ];
 const ONTO = { downloaded: true, url: "u", version: null, fetched_at: null, error: null };
 const READY: MarkerDbStatus = { state: "ready", auto_download: true, sources: SRC, ontology: ONTO, dataset_species: "human" };
@@ -47,12 +53,15 @@ const RESULT: MarkerDbResult = {
       verdict: "not_in_db", verdict_text: "not in database", suggestions: [] },
   ],
   verdict_counts: { supported: 1, no_support: 1, too_few: 0, not_in_db: 1, no_markers: 0 },
-  n_measured: 100, n_db_types: 10, ontology: true, sources: SRC, params: {}, note: "A reason to look.", elapsed_seconds: 0.2,
+  n_measured: 100, n_db_types: 10, ontology: true, sources: SRC,
+  verdict_sources: ["PanglaoDB", "CellMarker 2.0", "ACT"], suggestion_sources: ["PanglaoDB", "CellMarker 2.0"], params: {}, note: "A reason to look.", elapsed_seconds: 0.2,
 };
 
 describe("markerDbSourceText", () => {
   it("names the sources on disk and the latest fetch", () => {
-    expect(markerDbSourceText(SRC)).toMatch(/^PanglaoDB \(27 Mar 2020\) \+ CellMarker 2\.0; fetched .*2026/);
+    expect(markerDbSourceText(SRC)).toMatch(
+      /^PanglaoDB \(27 Mar 2020\) \+ CellMarker 2\.0 \+ ACT \(21 Feb 2024\); fetched .*19.*2026$/, // the latest fetch
+    );
     expect(markerDbSourceText([{ ...SRC[0]!, downloaded: false }, SRC[1]!])).toMatch(/^CellMarker 2\.0; fetched/);
     expect(markerDbSourceText([])).toBe("");
   });
@@ -72,7 +81,11 @@ describe("MarkerDbCheck", () => {
     expect(links).toEqual([
       "https://panglaodb.se/", "https://doi.org/10.1093/database/baz046",
       "http://117.50.127.228/CellMarker/", "https://doi.org/10.1093/nar/gkac947",
+      "http://xteam.xbio.top/ACT/", "https://doi.org/10.1186/s13073-023-01249-5",
     ]);
+    expect(screen.getByTestId("marker-db-source").textContent).toContain(
+      "Suggestions rank PanglaoDB + CellMarker 2.0 types only",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Check against marker databases" }));
     await waitFor(() => expect(screen.getByTestId("marker-db-result")).toBeTruthy());
     expect(runMarkerDbCheck).toHaveBeenCalledWith("d1", "cell_type", {});
@@ -99,6 +112,15 @@ describe("MarkerDbCheck", () => {
     fireEvent.click(screen.getByRole("button", { name: /Retry download/ }));
     await waitFor(() => expect(screen.getByTestId("marker-db-result")).toBeTruthy());
     expect(runMarkerDbCheck).toHaveBeenLastCalledWith("d1", "cell_type", { retry: true });
+  });
+
+  it("says when ACT is missing but the other two work", async () => {
+    getMarkerDbStatus.mockResolvedValue({
+      ...READY, state: "partial", sources: SRC.map((s) => (s.name === "act" ? { ...s, downloaded: false } : s)),
+    });
+    render(<MarkerDbCheck datasetId="d1" column="cell_type" />);
+    await waitFor(() => expect(screen.getByTestId("marker-db-source").textContent).toContain("ACT not downloaded."));
+    expect(screen.getByRole("button", { name: "Check against marker databases" })).toBeTruthy();
   });
 
   it("says so when downloading is off", async () => {

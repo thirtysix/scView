@@ -27,7 +27,7 @@ def test_annotator_names_clusters_from_the_databases(annotator_db):
     assert m == {"0": "B cells", "1": "NK cells", "2": "T cells", "3": "Unknown"}
     assert list(a.obs["ms"].iloc[[0, 30, 60]]) == ["B cells", "NK cells", "T cells"]
     assert a.uns["ms_markerscore_source"]["marker_source"] == "database"
-    assert out["marker_source"] == "database" and out["databases"] == ["PanglaoDB", "CellMarker 2.0"]
+    assert out["marker_source"] == "database" and out["databases"] == ["PanglaoDB", "CellMarker 2.0", "ACT"]
 
 
 def test_annotator_falls_back_to_the_built_in_sets(monkeypatch, tmp_path):

@@ -386,6 +386,10 @@ export interface MarkerDbResult {
   verdict_counts: Record<MarkerDbVerdict, number>;
   n_measured: number;
   n_db_types: number;
+  /** Databases behind the verdicts (PanglaoDB, CellMarker 2.0, ACT when downloaded) */
+  verdict_sources: string[];
+  /** Databases the suggestions rank (PanglaoDB + CellMarker 2.0) */
+  suggestion_sources: string[];
   ontology: boolean;
   sources: MarkerDbSource[];
   params: Record<string, number>;

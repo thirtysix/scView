@@ -2,9 +2,9 @@
 matching, group markers, the support verdict and suggestions, the API and the
 marker-score annotator.
 
-The fixtures in tests/fixtures/marker_db are invented rows in the PanglaoDB TSV
-and CellMarker 2.0 layouts (the xlsx is written from the TSV here) and a nine-term
-Cell Ontology; downloads go through httpx.MockTransport, so no test touches the
+The fixtures in tests/fixtures/marker_db are invented rows in the PanglaoDB TSV,
+CellMarker 2.0 (the xlsx is written from the TSV here) and ACT per-tissue (Latin-1)
+layouts, with ACT's per-file sha256 list, and a nine-term Cell Ontology; downloads go through httpx.MockTransport, so no test touches the
 internet. The real numbers (Kang lookup 0.615, paul15 0.579, name coverage 1.00)
 were measured on the downloaded databases and are in the batch-8 report.
 """
@@ -17,6 +17,7 @@ import hashlib
 import json
 import threading
 from pathlib import Path
+from urllib.parse import quote
 
 import anndata as ad
 import httpx
@@ -30,7 +31,10 @@ from scview.core import marker_names as mn
 API = "/api/v1"
 FIX = Path(__file__).parent / "fixtures" / "marker_db"
 URLS = {"panglao": ("https://first.test/pg.tsv.gz", "https://mirror.test/pg.tsv.gz"),
-        "cellmarker2": ("http://cm.test/Cell_marker_All.xlsx",)}
+        "cellmarker2": ("http://cm.test/Cell_marker_All.xlsx",), "act": ("http://act.test/download.jsp",)}
+ACT_BASE = "http://act.test/download/"
+ACT_FILES = ["Human/Human_Blood.txt", "Human/Human_Bone marrow.txt", "Mouse/Mouse_Blood.txt"]
+ACT_URLS = [ACT_BASE + quote(f) for f in ACT_FILES]
 
 
 def _panglao_bytes() -> bytes:
@@ -53,15 +57,19 @@ def _cellmarker_bytes(tmp_path: Path) -> bytes:
 @pytest.fixture()
 def raw(tmp_path) -> dict[str, bytes]:
     return {"panglao": _panglao_bytes(), "cellmarker2": _cellmarker_bytes(tmp_path),
-            "ontology": (FIX / "cl_sample.obo").read_bytes()}
+            "ontology": (FIX / "cl_sample.obo").read_bytes(),
+            "act": {f: (FIX / "act" / f).read_bytes() for f in ACT_FILES}}
 
 
 @pytest.fixture(autouse=True)
 def small_sources(monkeypatch, raw):
     """Fixture-sized sources pinned to the fixtures' sha256, and no real network."""
     for name, spec in list(mdb.SOURCES.items()):
-        monkeypatch.setitem(mdb.SOURCES, name, dataclasses.replace(
-            spec, urls=URLS[name], sha256=hashlib.sha256(raw[name]).hexdigest(), min_rows=1))
+        pinned = None if name == "act" else hashlib.sha256(raw[name]).hexdigest()
+        monkeypatch.setitem(mdb.SOURCES, name, dataclasses.replace(spec, urls=URLS[name], sha256=pinned, min_rows=1))
+    monkeypatch.setattr(mdb, "ACT_BASE", ACT_BASE)
+    monkeypatch.setattr(mdb, "ACT_SUMS", FIX / "act_sample.sha256")
+    monkeypatch.setattr(mdb, "ACT_DELAY", 0.0)
     monkeypatch.setattr(mdb, "ONTOLOGY_URL", "https://cl.test/cl-basic.obo")
     monkeypatch.setattr(mdb, "ONTOLOGY_MIN_TERMS", 5)
 
@@ -76,7 +84,8 @@ def small_sources(monkeypatch, raw):
 
 def _serve(raw: dict[str, bytes], fail: set[str] = frozenset(), calls: list | None = None) -> httpx.Client:
     by_url = {URLS["panglao"][0]: raw["panglao"], URLS["panglao"][1]: raw["panglao"],
-              URLS["cellmarker2"][0]: raw["cellmarker2"], "https://cl.test/cl-basic.obo": raw["ontology"]}
+              URLS["cellmarker2"][0]: raw["cellmarker2"], "https://cl.test/cl-basic.obo": raw["ontology"],
+              **{u: raw["act"][f] for u, f in zip(ACT_URLS, ACT_FILES)}}
 
     def handler(req: httpx.Request) -> httpx.Response:
         url = str(req.url)
@@ -126,6 +135,15 @@ def test_cellmarker_counts_distinct_papers_for_normal_human_and_mouse_cells(tmp_
     assert not any(g == "csf1ra" for _sp, _ct, g in rows)  # zebrafish
 
 
+def test_act_pools_tissues_and_reads_latin_1():
+    rows = {(sp, ct, g): w for sp, ct, _cl, g, w in mdb._parse_act(FIX / "act")}
+    # LILRA4: listed first in two tissue rows -> 2 + rank bonus 1/10; IRF7 4th of 5 in one row
+    assert rows[("human", "Plasmacytoid dendritic cell", "LILRA4")] == pytest.approx(2.1)
+    assert rows[("human", "Plasmacytoid dendritic cell", "IRF7")] == pytest.approx(1 + 0.4 / 10)
+    assert ("human", "Monocyte (CD14é)", "CD14") in rows  # Latin-1 decoded
+    assert ("mouse", "B cell", "Cd79a") in rows
+
+
 def test_obo_keeps_live_cl_terms_with_exact_synonyms_and_parents():
     terms = mn.parse_obo((FIX / "cl_sample.obo").read_text())
     assert "CL:9999999" not in terms and "part_of" not in terms
@@ -144,8 +162,11 @@ def test_download_stores_tables_and_manifest_and_falls_back_to_the_mirror(tmp_pa
     assert pg["served_from"] == URLS["panglao"][1]  # the official site timed out
     assert pg["sha256"] == hashlib.sha256(raw["panglao"]).hexdigest() and pg["fetched_at"]
     assert pg["types"]["human"] == 5 and pg["types"]["mouse"] == 4
+    act = next(s for s in st["sources"] if s["name"] == "act")
+    assert act["served_from"] == ACT_BASE and act["types"] == {"human": 3, "mouse": 1}
+    assert act["sha256"] == hashlib.sha256((FIX / "act_sample.sha256").read_bytes()).hexdigest()
     m = json.loads((dest / "manifest.json").read_text())
-    assert set(m["sources"]) == {"panglao", "cellmarker2", "ontology"} and not m["failures"]
+    assert set(m["sources"]) == {"panglao", "cellmarker2", "act", "ontology"} and not m["failures"]
     assert st["ontology"]["version"] == "cl/releases/2026-06-08/cl-basic.owl"
     assert (dest / "raw" / mdb.SOURCES["cellmarker2"].filename).is_file()
     assert not list(dest.rglob("*.part*"))
@@ -168,7 +189,21 @@ def test_a_file_that_is_not_the_pinned_release_is_refused(tmp_path, raw):
     assert not (dest / "raw" / mdb.SOURCES["cellmarker2"].filename).exists()
     assert not list(dest.rglob("*.part*"))
     db = mdb.load(dest)
-    assert db.sources == ["panglao"]
+    assert db.sources == ["panglao", "act"]
+
+
+def test_an_act_file_that_differs_from_its_pinned_hash_keeps_act_out(tmp_path, raw):
+    dest = tmp_path / "db"
+    bad = dict(raw, act={**raw["act"], ACT_FILES[1]: b"Species\tTissue\tCellType\tMarker\nHuman\tX\tEvil\tFOO\n"})
+    st = mdb.ensure(dest, auto_download=True, client=_serve(bad))
+    act = next(s for s in st["sources"] if s["name"] == "act")
+    assert not act["downloaded"] and "1 of 3 ACT files failed" in act["error"] and "sha256" in act["error"]
+    assert st["state"] == "partial" and mdb.load(dest).sources == ["panglao", "cellmarker2"]
+    assert not (dest / "raw" / "ACT" / ACT_FILES[1]).exists()  # never kept
+    assert (dest / "raw" / "ACT" / ACT_FILES[0]).is_file()  # verified files stay for a retry
+    calls: list[str] = []
+    st = mdb.ensure(dest, auto_download=True, retry=True, client=_serve(raw, calls=calls))
+    assert calls == [ACT_URLS[1]] and st["state"] == "ready"
 
 
 def test_a_failed_source_waits_for_the_cooldown_unless_retried(tmp_path, raw):
@@ -198,7 +233,7 @@ def test_nothing_is_fetched_with_the_download_off_but_files_put_in_raw_are_used(
 
 
 def test_unreachable_sites_say_so(tmp_path, raw):
-    every = {*URLS["panglao"], *URLS["cellmarker2"], "https://cl.test/cl-basic.obo"}
+    every = {*URLS["panglao"], *URLS["cellmarker2"], "https://cl.test/cl-basic.obo", *ACT_URLS}
     with pytest.raises(mdb.MarkerDBUnavailable, match="could not be downloaded.*PanglaoDB.*504"):
         mdb.get_db(tmp_path / "db", auto_download=True, client=_serve(raw, fail=every))
     assert mdb.status(tmp_path / "db", auto_download=True)["state"] == "failed"
@@ -214,7 +249,8 @@ def test_two_requests_at_once_fetch_once(tmp_path, raw):
         t.start()
     for t in threads:
         t.join()
-    assert sorted(calls) == sorted([URLS["panglao"][0], URLS["cellmarker2"][0], "https://cl.test/cl-basic.obo"])
+    assert sorted(calls) == sorted([URLS["panglao"][0], URLS["cellmarker2"][0], "https://cl.test/cl-basic.obo",
+                                    *ACT_URLS])
 
 
 # --- merged database and names ---------------------------------------------------
@@ -223,7 +259,7 @@ def test_two_requests_at_once_fetch_once(tmp_path, raw):
 def test_sources_merge_by_name_and_greek_letters_keep_types_apart(installed):
     sdb = mdb.load(installed).species("human")
     b = sdb.types["B cells"]  # PanglaoDB "B cells" + CellMarker "B cell"
-    assert b["sources"] == ["panglao", "cellmarker2"] and b["cl"] == "CL:0000236"
+    assert b["sources"] == ["panglao", "cellmarker2", "act"] and b["cl"] == "CL:0000236"
     assert b["genes"][0] == "CD79A"  # top of both lists
     assert {"CD22", "BANK1"} <= set(b["genes"])
     assert "γδ T cell" in sdb.types and "TRDC" not in sdb.types["T cells"]["genes"]
@@ -294,17 +330,19 @@ def test_markers_of_a_relabelled_column_are_computed_again():
     assert set(a.uns["rank_genes_groups__lab"]["names"].dtype.names) == {"old", "other"}  # untouched
 
 
-def _cells(seed: int = 0) -> ad.AnnData:
-    """Four labelled groups of 30 cells; each group expresses one database type's genes."""
+def _cells(seed: int = 0, extra: dict[str, list[str]] | None = None) -> ad.AnnData:
+    """Four (or more) labelled groups of 30 cells; each group expresses one database type's genes."""
     rng = np.random.default_rng(seed)
     programs = {
         "B": ["CD79A", "MS4A1", "CD19", "BANK1", "PAX5", "CD79B", "CD22"],
         "T-cells": ["NKG7", "GNLY", "KLRD1", "NCAM1", "PRF1", "GZMB"],  # labelled T, expresses NK genes
         "Zorblax": ["CD3D", "CD3E", "CD3G", "TRAC", "CD2", "LCK"],
         "Rare cell": ["XYZ1", "XYZ2", "TRDC"],
+        **(extra or {}),
     }
     genes = sorted({g for v in programs.values() for g in v}) + [f"FILL{i}" for i in range(60)]
-    X = rng.poisson(0.2, size=(120, len(genes))).astype(np.float32)
+    n = 30 * len(programs)
+    X = rng.poisson(0.2, size=(n, len(genes))).astype(np.float32)
     labels = []
     for k, (lab, prog) in enumerate(programs.items()):
         rows = slice(30 * k, 30 * (k + 1))
@@ -313,7 +351,7 @@ def _cells(seed: int = 0) -> ad.AnnData:
         labels += [lab] * 30
     a = ad.AnnData(np.log1p(X))
     a.var_names = genes
-    a.obs_names = [f"c{i}" for i in range(120)]
+    a.obs_names = [f"c{i}" for i in range(n)]
     a.obs["lab"] = pd.Categorical(labels, categories=list(programs))
     return a
 
@@ -336,7 +374,7 @@ def test_check_gives_each_label_its_verdict_and_suggestions(installed):
     # "B" is the database's B cells and its markers are B-cell markers
     assert by["B"]["verdict"] == "supported" and by["B"]["db_type"] == "B cells"
     assert {"CD79A", "MS4A1"} <= set(by["B"]["overlap"]) and by["B"]["p"] < 1e-3
-    assert by["B"]["match"]["how"] == "exact" and by["B"]["sources"] == ["PanglaoDB", "CellMarker 2.0"]
+    assert by["B"]["match"]["how"] == "exact" and by["B"]["sources"] == ["PanglaoDB", "CellMarker 2.0", "ACT"]
     # Labelled T cells, expressing NK genes: none of the T-cell database markers is among its markers
     assert by["T-cells"]["verdict"] == "no_support" and by["T-cells"]["overlap"] == []
     assert by["T-cells"]["verdict_text"] == "no database support"
@@ -349,7 +387,18 @@ def test_check_gives_each_label_its_verdict_and_suggestions(installed):
     assert by["Rare cell"]["verdict"] == "too_few" and by["Rare cell"]["n_db_genes"] == 3
     assert res["verdict_counts"] == {"supported": 1, "no_support": 1, "too_few": 1, "not_in_db": 1, "no_markers": 0}
     assert all(len(r["suggestions"]) <= 3 for r in res["labels"])
-    assert [s["label"] for s in res["sources"]] == ["PanglaoDB", "CellMarker 2.0"] and res["ontology"]
+    assert [s["label"] for s in res["sources"]] == ["PanglaoDB", "CellMarker 2.0", "ACT"] and res["ontology"]
+    assert res["verdict_sources"] == ["PanglaoDB", "CellMarker 2.0", "ACT"]
+    assert res["suggestion_sources"] == ["PanglaoDB", "CellMarker 2.0"]
+
+
+def test_act_types_judge_labels_but_are_not_suggested(installed):
+    a = _cells(extra={"pDC": ["LILRA4", "CLEC4C", "IL3RA", "IRF7", "TCF4"]})
+    res = mdb.check(a, "lab", "human", mdb.load(installed))
+    pdc = next(r for r in res["labels"] if r["label"] == "pDC")
+    assert pdc["db_type"] == "Plasmacytoid dendritic cell" and pdc["sources"] == ["ACT"]
+    assert pdc["verdict"] == "supported" and {"LILRA4", "IRF7"} <= set(pdc["overlap"])
+    assert all(s["cell_type"] != "Plasmacytoid dendritic cell" for r in res["labels"] for s in r["suggestions"])
 
 
 def test_mouse_data_is_checked_against_mouse_rows(installed):
@@ -391,8 +440,12 @@ async def test_status_and_check_endpoints(client, dataset_manager, test_settings
     rawdir = tmp_data_dir / "marker_db" / "raw"
     rawdir.mkdir(parents=True)
     for name, spec in mdb.SOURCES.items():
-        (rawdir / spec.filename).write_bytes(raw[name])
+        if name != "act":
+            (rawdir / spec.filename).write_bytes(raw[name])
     (rawdir / mdb.ONTOLOGY_FILE).write_bytes(raw["ontology"])
+    for f, data in raw["act"].items():
+        (rawdir / "ACT" / f).parent.mkdir(parents=True, exist_ok=True)
+        (rawdir / "ACT" / f).write_bytes(data)
     r = await client.post(f"{API}/datasets/{did}/annotation/marker-db/check", json={"column": "lab"})
     assert r.status_code == 200, r.text
     body = r.json()
