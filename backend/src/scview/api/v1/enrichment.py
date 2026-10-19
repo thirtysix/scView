@@ -544,9 +544,9 @@ def _compute_local(
         )
 
     # The background is the full ranked marker list (every gene the test saw). The
-    # query is marker_selection's choice (genes in >= 20% of the group, up by fold
-    # change, ribosomal/mitochondrial genes left out), not the top of the wilcoxon
-    # score order, which leads with broadly abundant transcripts.
+    # query is marker_selection's choice (genes in >= 20% of the group, adjusted
+    # p < 0.05, up by fold change, ribosomal/mitochondrial genes left out), not the
+    # top of the wilcoxon score order, which leads with broadly abundant transcripts.
     background = get_background_genes(adaptor.adata, col, body.group)
     top_genes = ora_query_genes(
         adaptor.adata, col or "", body.group, body.n_genes,

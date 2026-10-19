@@ -425,7 +425,7 @@ export function UnifiedEnrichmentSubtab({
         </button>
         <InfoTip width={300}>
           Compute tests up to N markers as a set (over-representation): genes in at least 20% of
-          the group&apos;s cells, highest fold change first, ribosomal and mitochondrial genes left out,
+          the group&apos;s cells with adjusted p &lt; 0.05, highest fold change first, ribosomal and mitochondrial genes left out,
           against every gene the marker test saw. GSEA ranks every gene by
           its marker score (Wilcoxon, this group against the other cells) and asks whether a gene
           set bunches at the top or bottom of that ranking, so it needs no top-N cut-off. The

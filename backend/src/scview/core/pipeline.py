@@ -796,8 +796,8 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
         # the correct ORA universe. Without it gseapy tests against every gene in
         # the selected collections and p-values come out anti-conservative.
         background = [str(g) for g in rgg["names"][group]]
-        # The query is marker_selection's choice (in >= 20% of the group, by fold
-        # change), computed once per column for all its groups.
+        # The query is marker_selection's choice (in >= 20% of the group, adjusted
+        # p < 0.05, by fold change), computed once per column for all its groups.
         if col not in queries:
             queries[col] = group_markers(
                 adata, col, n=params.enrichment_n_genes, key=uns_key,
@@ -1055,7 +1055,8 @@ def _annotate_celltypist(
 
 def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 25) -> dict[str, list[str]]:
     """Each cluster's markers for the LLM, best first (``core/marker_selection.py``:
-    expressed in >= 20% of the cluster, by fold change, no ribosomal/mito genes).
+    expressed in >= 20% of the cluster, adjusted p < 0.05, by fold change, no
+    ribosomal/mito genes).
 
     Computes wilcoxon markers under the column's own key first when none are
     stored: the default rank_genes_groups follows the clustering, and the Marker

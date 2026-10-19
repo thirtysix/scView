@@ -97,9 +97,9 @@ VERDICT_TEXT = {
 NOTE = (
     "Each label is matched by name to the marker databases' cell types; its 50 "
     "best-evidenced database markers measured here are compared with the group's top 25 "
-    "marker genes (detected in at least 20% of its cells, sorted by log fold change, "
-    "mitochondrial and ribosomal genes left out) with a hypergeometric test against the "
-    "measured genes. \"No database support\" means none of them is among the top 25: a "
+    "marker genes (detected in at least 20% of its cells, adjusted p < 0.05, sorted by "
+    "log fold change, mitochondrial and ribosomal genes left out) with a hypergeometric "
+    "test against the measured genes. \"No database support\" means none of them is among the top 25: a "
     "reason to look, not proof the label is wrong. Activation states, fine subtypes of one "
     "lineage (CD4 naive vs memory, CD8 T vs NK) and progenitors fail with every database."
 )
@@ -1045,7 +1045,8 @@ def _computed(adata, groupby: str, groups: list[str]):
 
 def _markers_for(adata, groupby: str) -> dict[str, list[str]]:
     """Each group's top 25 markers for the database check: ``core/marker_selection.py``
-    (detected in >= 20% of the group, by log fold change, no ribosomal / mito genes),
+    (detected in >= 20% of the group, adjusted p < 0.05, by log fold change, no
+    ribosomal / mito genes),
     from the column's stored rank_genes_groups, else computed without saving.
     Score order instead put FTL/CD63/ANXA5 ahead of CD14 in Kang's CD14 monocytes
     and ribosomal genes in the T-cell top 15 (Kang CellMarker lookup 0.46 -> 0.69).

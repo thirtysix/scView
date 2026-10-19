@@ -6,6 +6,18 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-10-19
+
+### Changed
+- **Marker choice needs adjusted p < 0.05.** The markers handed to the AI annotator, the co-pilot,
+  the marker database check and the enrichment (ORA) query now also need an adjusted p-value under
+  0.05, besides being detected in at least 20% of the group's cells. Only small groups change
+  (under ~70 cells), where the fold-change leaders were genes seen in a handful of cells: on paul15
+  the database lookup named 13 of 19 cell types correctly instead of 11 and the AI annotator 12
+  instead of 11; Kang's large groups are unchanged, and its megakaryocyte enrichment query drops
+  from 100 genes to 40 with 5 hallmark sets significant instead of 1. Results without p-values
+  (logistic regression) are not filtered by them. Cached enrichment results are recomputed.
+
 ## [0.23.0] - 2026-10-19
 
 ### Added
