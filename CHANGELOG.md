@@ -6,6 +6,35 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Per-cell marker heatmap.** Marker Genes → Heatmap has a *Group means | Per cell* switch. Per
+  cell shows the genes over a seeded sample of each group's cells (50-500 per group, at most
+  5,000 cells), with a strip of group colours, boundaries and names, and each gene's z-score over
+  the sampled cells clipped to ±2.5 (as Seurat's DoHeatmap) or the layer's fixed range. The
+  caption says how many cells were sampled and which groups are shown whole (Kang, 13 cell types
+  at 200: 2,368 of 13,836 cells).
+- **Cluster genes** on the marker heatmap orders the genes by their profiles across groups
+  (correlation distance, average linkage) with a gene dendrogram, next to the existing group
+  dendrogram; top markers show which group each gene is a marker of.
+- **Annotation cross-check** (Data Assessment): compare 2-6 label columns (CellTypist, the AI,
+  marker scores, clusterings, hand labels) with pairwise ARI/AMI, and against a reference with a
+  row-normalised confusion heatmap, a Sankey and per-label agreement. Each column's labels are
+  mapped onto the reference label most of their cells carry, so different names for the same cells
+  agree; same-name agreement is shown separately. The consensus label and per-cell agreement can be
+  saved as columns to colour by (Kang `cluster` vs Leiden 0.5: 73.8% mapped agreement).
+- **Gene lists** (Unified View): named gene lists that survive reloads, dataset switches and
+  session files. Add genes from Markers, DE (up or down), Co-expressed genes and the gene search,
+  or import / export them as txt, csv or gmt. A list can be overlaid gene by gene, shown as a
+  feature grid, dot plot or heatmap, scored, tested for enrichment, or saved as a gene-set
+  collection. Genes missing from the open dataset are greyed, with a one-click fix for case-only
+  differences (CD3E vs Cd3e).
+
+### Fixed
+- The AI co-pilot can open the Protein, Activity and Gene lists tabs.
+- A continuous colour legend under a short label no longer runs its minimum and maximum together.
+- The smoke test of the published images retries its first requests, which could reach the
+  frontend a moment before it accepted connections.
+
 ## [0.22.0] - 2026-10-18
 
 ### Added
