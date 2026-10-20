@@ -77,6 +77,11 @@ if errorlevel 1 (
 )
 :podman_start
 echo   Starting the Podman machine, this can take a minute...
+rem Windows shutting down with the machine running leaves its API socket file
+rem behind; the next start then has no Docker API pipe for Compose
+rem ("win-sshproxy.exe failed to start"). The machine is stopped here, so the
+rem file can only be stale.
+del /q "%TEMP%\podman\*-api.sock" >nul 2>&1
 podman machine start >nul 2>&1
 podman info >nul 2>&1
 if not errorlevel 1 goto :podman_ready
@@ -86,6 +91,16 @@ echo   there, then double-click this file again.
 goto :fail
 
 :podman_ready
+rem Compose reaches Podman through that pipe, podman itself does not. Missing
+rem pipe (a machine Podman Desktop started over a stale socket): restart once.
+powershell -NoProfile -Command "if ([IO.Directory]::GetFiles('\\.\pipe\') -like '*\podman-*') {exit 0} else {exit 1}" >nul 2>&1
+if not errorlevel 1 goto :podman_api_ready
+if defined API_RETRY goto :podman_api_ready
+set "API_RETRY=1"
+echo   Restarting the Podman machine: its connection for Compose did not start...
+podman machine stop >nul 2>&1
+goto :podman_start
+:podman_api_ready
 podman compose version >nul 2>&1
 if not errorlevel 1 goto :podman_compose_ready
 echo   Podman needs Compose to run scView, and it isn't installed. In Podman

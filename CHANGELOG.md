@@ -16,6 +16,13 @@ All notable changes to scView are documented here. The format is based on
   sidebar shows the backend's memory use against its limit (`GET /system/memory`), amber from 75%
   and red from 90%.
 
+### Fixed
+- **Windows + Podman: scView starts after Windows was shut down with Podman running.** That
+  leaves a socket file behind, and the next Podman start then has no connection for Compose
+  (`failed to connect to the docker API at npipe:////./pipe/podman-machine-default`), although
+  Podman itself works. `start-windows.bat` now removes the stale file before starting the Podman
+  machine, and restarts the machine once if the connection is still missing.
+
 ## [0.24.1] - 2026-10-19
 
 ### Fixed
