@@ -41,6 +41,8 @@ const VIEWS: { id: View; label: string }[] = [
   { id: "roles", label: "Roles" },
 ];
 const TABLE_LIMIT = 200;
+/** Circle plot: edges under this share of the strongest are left out (a hairball otherwise). */
+const CIRCLE_MIN_SHARE = 0.1;
 const COLUMNS: { key: SortKey; label: string; title: string; num?: boolean }[] = [
   { key: "source", label: "Sender", title: "Source group (expresses the ligand)" },
   { key: "target", label: "Receiver", title: "Target group (expresses the receptor)" },
@@ -363,7 +365,8 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
             <p className="text-[10px] text-slate-400">
               {weight === "count" ? "Interactions" : "Summed ligand-receptor mean of the interactions"} with
               specificity rank ≤ {result.specific_threshold}, from the full result.
-              {view === "circle" && " Click a group to filter the table by it as sender."}
+              {view === "circle" &&
+                ` Edges under ${CIRCLE_MIN_SHARE * 100}% of the strongest and autocrine ones (in the node's hover) are not drawn; click a group to filter the table by it as sender.`}
             </p>
           )}
 
@@ -371,7 +374,8 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
             <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
               <span>
                 {filtered.length.toLocaleString()} rows
-                {result.rows_shown < result.n_rows && ` (of the ${result.rows_shown.toLocaleString()} strongest)`}
+                {result.rows_shown < result.n_rows &&
+                  ` (from the ${result.rows_shown.toLocaleString()} strongest of ${result.n_rows.toLocaleString()}; the CSV has all)`}
               </span>
               <a
                 href={communicationCsvUrl(datasetId, result.result_id)}
@@ -462,19 +466,21 @@ function DotPlotView({ dot }: { dot: ReturnType<typeof dotPlotData> }) {
       "<br>LR mean %{customdata[2]:.2f}<extra></extra>",
   };
   return (
-    <div style={{ height: Math.max(240, dot.y.length * 17 + 130) }}>
-      <Plot
-        data={[trace]}
-        layout={{
-          autosize: true,
-          margin: { l: 10, r: 6, t: 8, b: 10 },
-          xaxis: { type: "category", tickangle: -45, tickfont: { size: 9 }, automargin: true, categoryarray: dot.x },
-          yaxis: { type: "category", tickfont: { size: 9 }, automargin: true, categoryarray: dot.y },
-        }}
-        config={plotConfig("communication_dotplot")}
-        style={{ width: "100%", height: "100%" }}
-        useResizeHandler
-      />
+    <div>
+      <div style={{ height: Math.max(240, dot.y.length * 17 + 130) }}>
+        <Plot
+          data={[trace]}
+          layout={{
+            autosize: true,
+            margin: { l: 10, r: 6, t: 8, b: 10 },
+            xaxis: { type: "category", tickangle: -45, tickfont: { size: 9 }, automargin: true, categoryarray: dot.x },
+            yaxis: { type: "category", tickfont: { size: 9 }, automargin: true, categoryarray: dot.y },
+          }}
+          config={plotConfig("communication_dotplot")}
+          style={{ width: "100%", height: "100%" }}
+          useResizeHandler
+        />
+      </div>
       <p className="text-[10px] text-slate-400">
         Size: −log10 specificity rank; colour: −log10 magnitude rank. The 15 strongest ligand-receptor pairs of the
         filtered rows.
@@ -496,7 +502,7 @@ function CirclePlot({
   color: (g: string) => string;
   onPick: (g: string) => void;
 }) {
-  const layout = useMemo(() => circleLayout(groups, matrix), [groups, matrix]);
+  const layout = useMemo(() => circleLayout(groups, matrix, 8, CIRCLE_MIN_SHARE), [groups, matrix]);
   const unit = weight === "count" ? "interactions" : "summed LR mean";
   const traces: Data[] = layout.edges.map((e) => ({
     type: "scatter",
@@ -524,14 +530,14 @@ function CirclePlot({
     showlegend: false,
   });
   return (
-    <div style={{ height: 340 }}>
+    <div style={{ height: 420 }}>
       <Plot
         data={traces}
         layout={{
           autosize: true,
-          margin: { l: 10, r: 10, t: 24, b: 24 },
-          xaxis: { visible: false, range: [-1.45, 1.45], fixedrange: true },
-          yaxis: { visible: false, range: [-1.3, 1.3], scaleanchor: "x", fixedrange: true },
+          margin: { l: 4, r: 4, t: 4, b: 4 },
+          xaxis: { visible: false, range: [-1.35, 1.35], fixedrange: true },
+          yaxis: { visible: false, range: [-1.25, 1.25], scaleanchor: "x", fixedrange: true },
           hovermode: "closest",
         }}
         config={plotConfig("communication_circle")}
