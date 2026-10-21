@@ -60,3 +60,30 @@ async def test_counts_in_raw_beside_lognormalised_x():
 async def test_counts_only_are_log_normalised_first():
     got, want = await _lfc(_counts()), await _expected()
     assert np.allclose([got[g] for g in want], list(want.values()), atol=1e-4)
+
+
+def test_prepare_neither_copies_nor_changes_the_dataset(monkeypatch):
+    # A whole-object copy per request cost +2.4 GB on Kang; counts in X must be
+    # normalised in a copy of the tested rows, never in the dataset's own X.
+    import anndata as ad
+    import numpy as np
+    import scipy.sparse as sp
+
+    from scview.api.v1 import de
+
+    rng = np.random.default_rng(0)
+    counts = sp.csr_matrix(rng.poisson(2.0, (40, 12)).astype("float32"))
+    a = ad.AnnData(X=counts.copy())
+    a.var_names = [f"G{i}" for i in range(12)]
+
+    def no_copy(self, *args, **kwargs):
+        raise AssertionError("the dataset was copied whole")
+
+    monkeypatch.setattr(ad.AnnData, "copy", no_copy)
+    sel = np.zeros(40, dtype=bool)
+    sel[:15] = True
+    for rest in (~sel, np.r_[np.zeros(15, bool), np.ones(10, bool), np.zeros(15, bool)]):
+        test, _ = de._prepare(a, sel, rest)
+        assert (a.X != counts).nnz == 0
+        assert test.n_obs == int((sel | rest).sum())
+        assert "log1p" in test.uns and test.X.max() < np.log1p(1e4)

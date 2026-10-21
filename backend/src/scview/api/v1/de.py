@@ -292,12 +292,16 @@ class _CellTest:
                 "method": self.method}
 
 
-def _prepare(work, mask_a, mask_b, min_pct: float = 0.0):
+def _prepare(adata, mask_a, mask_b, min_pct: float = 0.0):
     """The AnnData a cell-level test runs on: the ``mask_a`` cells (group
-    "selection") and the ``mask_b`` cells ("rest") of ``work`` (an in-memory
-    AnnData the caller may modify), log-normalised, over the genes detected in
-    at least ``min_pct`` of either side's cells (every gene at 0); and that
-    prefilter."""
+    "selection") and the ``mask_b`` cells ("rest") of ``adata``, log-normalised,
+    over the genes detected in at least ``min_pct`` of either side's cells (every
+    gene at 0); and that prefilter.
+
+    ``adata`` is read, never changed, and never copied whole: only the tested
+    matrix's rows are taken (and normalised when they are counts). A whole-object
+    copy took +2.4 GB per request on Kang (X, layers, .raw, obsm, obsp), enough to
+    get a backend with a few GB killed."""
     import anndata as ad
     import numpy as np
     import pandas as pd
@@ -306,21 +310,23 @@ def _prepare(work, mask_a, mask_b, min_pct: float = 0.0):
     from scview.core.pipeline import looks_like_counts
 
     keep = mask_a | mask_b
-    if not keep.all():
-        work = work[keep].copy()
-        mask_a = mask_a[keep]
     # Log-normalised expression, never counts: an unprocessed upload can hold counts
     # in .raw beside a log-normalised X, or counts alone, and the fold change is
     # taken of whatever is tested (Kang: ISG15 log2FC 184 on counts).
-    use_raw = work.raw is not None and not looks_like_counts(work.raw.X)
-    if not use_raw and looks_like_counts(work.X):
-        sc.pp.normalize_total(work, target_sum=1e4)
-        sc.pp.log1p(work)
+    use_raw = adata.raw is not None and not looks_like_counts(adata.raw.X)
     # Every gene of the tested matrix: .raw can hold more genes than X (an HVG
     # subset), and testing only X's width kept the up-regulated genes alone.
-    M = work.raw.X if use_raw else work.X
-    names = work.raw.var_names if use_raw else work.var_names
-    pre = de_prefilter.prefilter(M, mask_a, min_pct)
+    M = adata.raw.X if use_raw else adata.X
+    names = adata.raw.var_names if use_raw else adata.var_names
+    log1p = adata.uns["log1p"] if "log1p" in adata.uns else None
+    rows = M if keep.all() else M[np.flatnonzero(keep)]
+    mask_a = mask_a[keep]
+    if not use_raw and looks_like_counts(rows):
+        tmp = ad.AnnData(X=rows.copy() if rows is M else rows)  # never normalise the dataset's own X
+        sc.pp.normalize_total(tmp, target_sum=1e4)
+        sc.pp.log1p(tmp)
+        rows, log1p = tmp.X, tmp.uns["log1p"]
+    pre = de_prefilter.prefilter(rows, mask_a, min_pct)
     if not pre.keep.any():
         raise HTTPException(
             status_code=400,
@@ -328,7 +334,7 @@ def _prepare(work, mask_a, mask_b, min_pct: float = 0.0):
                     "either group; lower the minimum detection."),
         )
     test = ad.AnnData(
-        X=M if pre.keep.all() else M[:, pre.keep],
+        X=rows if pre.keep.all() else rows[:, pre.keep],
         obs=pd.DataFrame(
             {"_de_group": pd.Categorical(np.where(mask_a, "selection", "rest"),
                                          categories=["rest", "selection"])},
@@ -336,7 +342,7 @@ def _prepare(work, mask_a, mask_b, min_pct: float = 0.0):
         ),
         var=pd.DataFrame(index=names[pre.keep]),
         # The log base scanpy undoes to take the fold change.
-        uns={"log1p": work.uns["log1p"]} if "log1p" in work.uns else {},
+        uns={"log1p": log1p} if log1p is not None else {},
     )
     return test, pre
 
@@ -457,8 +463,8 @@ async def differential_expression(
     n_sel = int(mask.sum())
 
     def _run() -> tuple[_CellTest, dict | None]:
-        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
-        size = transcriptome_size.check(work, mask, ~mask)  # before X is normalised
+        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
+        size = transcriptome_size.check(work, mask, ~mask)
         return _cell_test(work, mask, ~mask, dataset_id, body.min_pct, body.method), size
 
     # Seconds on a large dataset: in a worker thread, so the server keeps answering.
@@ -486,7 +492,7 @@ async def differential_expression_methods(
     n_sel = int(mask.sum())
 
     def _run() -> dict:
-        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata.copy()
+        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
         return _methods(work, mask, ~mask, dataset_id, body.min_pct, body.top_n)
 
     out = await asyncio.to_thread(_run)
@@ -601,14 +607,10 @@ async def differential_expression_compare(
         resp.composition = composition
         return resp
 
-    # Subset before copying: only the compared cells are materialised.
-    keep = mask_a | mask_b
-
     def _run() -> tuple[_CellTest, dict | None]:
-        sub = adata[keep]
-        work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
-        size = transcriptome_size.check(work, mask_a[keep], mask_b[keep])  # before X is normalised
-        res = _cell_test(work, mask_a[keep], mask_b[keep], dataset_id, body.min_pct, body.method)
+        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
+        size = transcriptome_size.check(work, mask_a, mask_b)
+        res = _cell_test(work, mask_a, mask_b, dataset_id, body.min_pct, body.method)
         return res, size
 
     res, size = await asyncio.to_thread(_run)
@@ -635,12 +637,10 @@ async def differential_expression_compare_methods(
         raise HTTPException(status_code=404, detail="Dataset not found.")
     adata = adaptor.adata
     mask_a, mask_b = _compare_masks(adata, body)
-    keep = mask_a | mask_b
 
     def _run() -> dict:
-        sub = adata[keep]
-        work = sub.to_memory() if getattr(adata, "isbacked", False) else sub.copy()
-        return _methods(work, mask_a[keep], mask_b[keep], dataset_id, body.min_pct, body.top_n)
+        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
+        return _methods(work, mask_a, mask_b, dataset_id, body.min_pct, body.top_n)
 
     out = await asyncio.to_thread(_run)
     return DEMethodsResponse(n_selected=int(mask_a.sum()), n_rest=int(mask_b.sum()),
