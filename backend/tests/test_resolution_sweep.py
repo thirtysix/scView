@@ -160,9 +160,12 @@ async def test_sweep_endpoint_streams_one_result_per_resolution(client, dataset_
     r = await client.post(f"{API}/datasets/{did}/clustering/sweep", json={"resolutions": [0.4, 1.0]})
     assert r.status_code == 200, r.text
     events = _events(r.text)
-    assert [e for e, _ in events] == ["start", "result", "result", "complete"]
+    assert [e for e, _ in events] == ["start", "result", "result", "tree", "complete"]
     assert events[0][1]["resolutions"] == [0.4, 1.0]
     assert [d["resolution"] for e, d in events if e == "result"] == [0.4, 1.0]
+    tree = events[3][1]["tree"]
+    assert {n["resolution"] for n in tree["nodes"]} == {0.4, 1.0}
+    assert all(e["from_resolution"] == 0.4 and e["to_resolution"] == 1.0 for e in tree["edges"])
     assert not (Path(dataset_manager.data_dir) / "derived" / did).exists()
 
 

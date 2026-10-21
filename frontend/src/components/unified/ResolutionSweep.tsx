@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Layers, Loader2, X } from "lucide-react";
-import { getSweepInfo, keepResolution, runSweep, type SweepInfo, type SweepRow, type SweepStart } from "@/api/clustering";
+import {
+  getSweepInfo,
+  keepResolution,
+  runSweep,
+  type ClusterTree,
+  type SweepInfo,
+  type SweepRow,
+  type SweepStart,
+} from "@/api/clustering";
+import { ClusterTreePlot } from "@/components/unified/ClusterTreePlot";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { prettyEmbeddingLabel } from "@/lib/formatting";
 import { bestSilhouette, formatResolutions, parseResolutions } from "@/lib/resolutionSweep";
@@ -11,7 +20,8 @@ import { useSettingsStore } from "@/stores/settingsStore";
 /**
  * "Resolutions" in the Unified View toolbar: a floating panel that clusters the
  * dataset's neighbour graph at several resolutions without changing the dataset,
- * compares them, and keeps the chosen one as a clustering column.
+ * compares them, draws the clustering tree across them, and keeps the chosen
+ * one as a clustering column.
  */
 export function ResolutionSweepControl() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
@@ -48,6 +58,8 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
   const [text, setText] = useState("");
   const [start, setStart] = useState<SweepStart | null>(null);
   const [rows, setRows] = useState<SweepRow[]>([]);
+  const [tree, setTree] = useState<ClusterTree | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keeping, setKeeping] = useState<number | null>(null);
@@ -81,6 +93,8 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
     setRunning(true);
     setError(null);
     setRows([]);
+    setTree(null);
+    setSelected(null);
     setStart(null);
     try {
       await runSweep(
@@ -89,6 +103,7 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
         {
           onStart: setStart,
           onResult: (r) => setRows((prev) => [...prev, r]),
+          onTree: setTree,
           signal: ctrl.signal,
         },
       );
@@ -125,7 +140,7 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
     <div
       role="dialog"
       aria-label="Try clustering resolutions"
-      className="fixed right-4 top-20 z-50 flex max-h-[calc(100vh-6rem)] w-[30rem] max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 text-xs shadow-xl"
+      className="fixed right-4 top-20 z-50 flex max-h-[calc(100vh-6rem)] w-[36rem] max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 text-xs shadow-xl"
     >
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -215,7 +230,13 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
           </thead>
           <tbody>
             {rows.map((r, i) => (
-              <tr key={r.resolution} className="border-b border-slate-100">
+              <tr
+                key={r.resolution}
+                onClick={() => setSelected(r.resolution)}
+                aria-selected={selected === r.resolution}
+                title="Pick this resolution in the tree"
+                className={`cursor-pointer border-b border-slate-100 ${selected === r.resolution ? "bg-blue-50" : "hover:bg-slate-50"}`}
+              >
                 <td className="py-1 pr-2 font-medium tabular-nums text-slate-700">{formatResolutions([r.resolution])}</td>
                 <td className="py-1 pr-2 tabular-nums text-slate-700">{r.n_clusters}</td>
                 <td className="py-1 pr-2">
@@ -230,7 +251,10 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
                 <td className="py-1 text-right">
                   {r.exists ? (
                     <button
-                      onClick={() => show(r.column)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        show(r.column);
+                      }}
                       title={`Saved as ${r.column}: colour the plot by it`}
                       className="rounded px-1.5 py-0.5 text-blue-600 hover:bg-blue-50"
                     >
@@ -238,7 +262,10 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
                     </button>
                   ) : (
                     <button
-                      onClick={() => void keep(r)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void keep(r);
+                      }}
                       disabled={keeping !== null}
                       title={`Save these clusters as ${r.column}`}
                       className="flex items-center gap-1 rounded border border-slate-300 px-1.5 py-0.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
@@ -252,6 +279,21 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
             ))}
           </tbody>
         </table>
+      )}
+
+      {tree && tree.nodes.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-[11px] font-medium text-slate-600">Clustering tree</div>
+          <ClusterTreePlot tree={tree} selected={selected} onSelect={setSelected} />
+          <p className="text-[10px] leading-snug text-slate-400">
+            Each row is a resolution; an edge carries the cells a cluster shares with one at the next resolution
+            (thicker: more cells; darker: a bigger share of the child; under {Math.round(tree.prop_filter * 100)}% not
+            drawn). Colour: SC3 stability, high when a cluster&rsquo;s cells stay together at the other resolutions.{" "}
+            {tree.n_mixed > 0
+              ? `${tree.n_mixed} cluster${tree.n_mixed === 1 ? " draws" : "s draw"} at least ${Math.round(tree.mixed_prop * 100)}% of ${tree.n_mixed === 1 ? "its" : "their"} cells from each of two or more parents (red outline): cells move between branches there, a sign the resolution is past what the data support.`
+              : "No cluster draws its cells from two parents: the tree only splits."}
+          </p>
+        </div>
       )}
 
       {error && <p role="alert" className="rounded bg-red-50 px-2 py-1.5 text-red-700">{error}</p>}

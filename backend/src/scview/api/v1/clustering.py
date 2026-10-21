@@ -2,8 +2,8 @@
 variable-gene sensitivity check (``core/hvg_sensitivity.py``).
 
 ``GET /clustering/sweep`` says whether a sweep can run and with what defaults;
-``POST /clustering/sweep`` streams one SSE ``result`` per resolution without
-changing the dataset; ``POST /clustering/keep`` saves one resolution's labels.
+``POST /clustering/sweep`` streams one SSE ``result`` per resolution, then the
+clustering tree across them, without changing the dataset;``POST /clustering/keep`` saves one resolution's labels.
 ``/clustering/hvg-sensitivity`` (GET, POST, POST ``/keep``) does the same for
 re-clustering under other variable-gene settings. ``GET /clustering/distances``
 gives the distances between a column's groups in the graph's PC space
@@ -125,7 +125,8 @@ async def run_sweep(
     """Cluster at each resolution and stream the scores, leaving the dataset as it is.
 
     Events: ``start`` (method, cells, the silhouette's representation and
-    subsample), one ``result`` per resolution, then ``complete``, or ``error``.
+    subsample), one ``result`` per resolution, ``tree`` (the clustering tree
+    across them), then ``complete``, or ``error``.
     """
     adata = (await _adata(dm, dataset_id)).adata
     method = _method(adata, body.method)
@@ -150,7 +151,7 @@ async def run_sweep(
                 item = await asyncio.to_thread(next, gen, _DONE)
                 if item is _DONE:
                     break
-                yield _sse(event, item)
+                yield _sse("tree" if "tree" in item else event, item)
                 event = "result"
             yield _sse("complete", {})
         except Exception as e:  # noqa: BLE001 — surface to the client, keep the server up

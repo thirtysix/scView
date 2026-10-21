@@ -39,19 +39,58 @@ export interface SweepRow {
   exists: boolean;
 }
 
+/** One cluster at one resolution of the clustering tree (backend core/cluster_tree.py). */
+export interface ClusterTreeNode {
+  resolution: number;
+  cluster: string;
+  size: number;
+  /** clustree's SC3 stability index, 0-1: high when its cells stay together at the other resolutions */
+  sc3_stability: number;
+  /** Parents at the resolution before giving it at least `prop_filter` of its cells */
+  n_parents: number;
+  /** Draws at least `mixed_prop` of its cells from each of two or more parents */
+  mixed: boolean;
+}
+
+/** Cells shared by a cluster and one at the next resolution. */
+export interface ClusterTreeEdge {
+  from_resolution: number;
+  from: string;
+  to_resolution: number;
+  to: string;
+  count: number;
+  /** Share of the child's cells that came from this parent */
+  in_prop: number;
+}
+
+export interface ClusterTree {
+  /** Edges under this share of the child are left out (clustree's default 0.1) */
+  prop_filter: number;
+  mixed_prop: number;
+  nodes: ClusterTreeNode[];
+  edges: ClusterTreeEdge[];
+  n_mixed: number;
+}
+
 export function getSweepInfo(datasetId: string): Promise<SweepInfo> {
   return apiFetch(`/datasets/${datasetId}/clustering/sweep`);
 }
 
 /**
  * Cluster at each resolution without changing the dataset, calling `onStart`
- * once and `onResult` per resolution as each one finishes. Rejects with the
- * server's reason; aborting `signal` stops reading.
+ * once, `onResult` per resolution as each one finishes, then `onTree` with the
+ * clustering tree across them. Rejects with the server's reason; aborting
+ * `signal` stops reading.
  */
 export async function runSweep(
   datasetId: string,
   body: { resolutions: number[]; method?: string },
-  handlers: { onStart?: (s: SweepStart) => void; onResult: (r: SweepRow) => void; signal?: AbortSignal },
+  handlers: {
+    onStart?: (s: SweepStart) => void;
+    onResult: (r: SweepRow) => void;
+    onTree?: (t: ClusterTree) => void;
+    signal?: AbortSignal;
+  },
 ): Promise<void> {
   await streamEvents(
     `/datasets/${datasetId}/clustering/sweep`,
@@ -59,6 +98,7 @@ export async function runSweep(
     (event, data) => {
       if (event === "start") handlers.onStart?.(data as SweepStart);
       else if (event === "result") handlers.onResult(data as SweepRow);
+      else if (event === "tree") handlers.onTree?.((data as { tree: ClusterTree }).tree);
     },
     "The sweep",
     handlers.signal,
