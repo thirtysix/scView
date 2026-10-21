@@ -41,7 +41,9 @@ export function describePair(p: MergePair, maxGenes: number): string {
   }
   const genes = `${p.n_genes} gene${p.n_genes === 1 ? "" : "s"} distinguish them on the held-out half`;
   const via = p.train_pairs.length ? ` (training pairs ${p.train_pairs.join(", ")})` : "";
-  return p.candidate
-    ? `${genes}${via}: fewer than ${maxGenes}, a merge candidate.`
-    : `${genes}${via}: kept apart.`;
+  if (p.candidate) return `${genes}${via}: fewer than ${maxGenes}, a merge candidate.`;
+  if (p.n_genes != null && p.n_genes < maxGenes) {
+    return `${genes}${via}, but merging them would also join clusters tested as distinct: kept apart.`;
+  }
+  return `${genes}${via}: kept apart.`;
 }

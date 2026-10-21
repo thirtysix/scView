@@ -31,7 +31,10 @@ describe("mergeCheck helpers", () => {
 
   it("says why a pair is or is not a candidate", () => {
     expect(describePair(pair("1", "2"), 10)).toMatch(/3 genes .*training pairs 4\+7.*fewer than 10, a merge candidate/);
-    expect(describePair(pair("1", "2", { candidate: false, n_genes: 1 }), 10)).toMatch(/1 gene distinguish.*kept apart/);
+    expect(describePair(pair("1", "2", { candidate: false, n_genes: 1 }), 10)).toMatch(
+      /1 gene distinguish.*would also join clusters tested as distinct: kept apart/,
+    );
+    expect(describePair(pair("1", "2", { candidate: false, n_genes: 40 }), 10)).toMatch(/40 genes .*4\+7\): kept apart/);
     expect(describePair(pair("1", "2", { evidence: "together", n_genes: null, candidate: false }), 10)).toMatch(
       /never split/,
     );

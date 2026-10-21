@@ -787,7 +787,8 @@ def grounding_lines(adaptor, obs: pd.DataFrame) -> tuple[list[str], str | None]:
     lines = ["\n## Merge check (last run; count splitting, held-out Wilcoxon)",
              f"- {detail} [result:merge_check]."]
     for x in cands[:8]:
-        lines.append(f"- merge candidate: {x['a']} + {x['b']}: {x['n_genes']} genes at adj. p < {t['padj']} "
+        genes = f"{x['n_genes']} gene{'' if x['n_genes'] == 1 else 's'}"
+        lines.append(f"- merge candidate: {x['a']} + {x['b']}: {genes} at adj. p < {t['padj']} "
                      "and >= 2-fold on held-out counts")
     apart = sorted((x for x in held if not x["candidate"]), key=lambda x: -x["adjacency"])[:3]
     for x in apart:

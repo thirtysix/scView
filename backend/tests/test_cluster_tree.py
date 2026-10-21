@@ -43,6 +43,16 @@ def test_edges_carry_counts_and_the_childs_share_and_drop_small_ones():
     assert nodes[(0.5, "x")]["n_parents"] == 2 and not nodes[(0.5, "x")]["mixed"]  # 12.5% < 20%
 
 
+def test_many_clusters_do_not_overflow_small_codes():
+    # Categorical codes are int8 below 128 groups; 30 x 30 clusters overflowed them.
+    low = [str(i // 10) for i in range(300)]
+    high = [str(i // 10) for i in range(300)]
+    tree = ct.build([_level(0.5, low), _level(1.0, high)])
+    assert len(tree["edges"]) == 30 and all(e["in_prop"] == 1.0 for e in tree["edges"])
+    # clustree divides by every level, the cluster's own too: two identical levels give 1/2.
+    assert all(n["sc3_stability"] == 0.5 for n in tree["nodes"])
+
+
 def test_a_child_drawing_on_two_parents_is_mixed():
     low = ["A"] * 50 + ["B"] * 50
     high = ["p"] * 40 + ["q"] * 10 + ["q"] * 10 + ["r"] * 40  # q: half from A, half from B

@@ -36,6 +36,8 @@ def _table(a: np.ndarray, b: np.ndarray, ka: int, kb: int) -> np.ndarray:
 def build(levels: list[tuple[float, np.ndarray, list[str]]]) -> dict[str, Any]:
     """The tree for ``levels``: (resolution, codes 0..k-1 per cell, cluster names),
     lowest resolution first; all levels label the same cells."""
+    # Categorical codes are int8 under 128 groups: a * kb + b would overflow.
+    levels = [(r, np.asarray(codes, dtype=np.int64), names) for r, codes, names in levels]
     sizes = [np.bincount(codes, minlength=len(names)) for _, codes, names in levels]
     n_levels = len(levels)
 
