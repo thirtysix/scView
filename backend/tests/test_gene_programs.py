@@ -306,6 +306,12 @@ def test_replay_script_reproduces_the_saved_usage():
     assert "gene_programs(adata, PROGRAM_GENES, 3, [0, 1, 2], source='raw'" in script
     assert "exact reproduction is not guaranteed" in script
     assert replay_script.describe(a)[-1]["status"] == replay_script.EXACT
+    import ast
+
+    tree = ast.parse(script)
+    assign = next(n for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "PROGRAM_GENES")
+    assert ast.literal_eval(assign.value) == inp.genes
+    assert script.count("\n") < 400  # the 175 genes packed several to a line
     # Run the script's helper on the same dataset: the same usages.
     ns: dict = {}
     head = script.split("adata = read_input(INPUT)")[0]

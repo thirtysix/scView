@@ -1316,6 +1316,19 @@ adata.obs["predicted_doublet"] = np.isfinite(scores) & (scores > {_lit(float(t))
                                     *_param_comment(p)], "threshold not recorded")
 
 
+def _packed(items: list[str], width: int = 92) -> list[str]:
+    """Literal list items, several to a line (a 2,000-gene list one per line is 2,000 lines)."""
+    lines, cur = [], ""
+    for item in items:
+        if cur and len(cur) + len(item) + 2 > width:
+            lines.append("    " + cur.rstrip())
+            cur = ""
+        cur += item + ", "
+    if cur:
+        lines.append("    " + cur.rstrip())
+    return lines
+
+
 def _gene_programs(p: dict, ctx: _Ctx) -> Snippet:
     genes, k, seeds = p.get("genes"), p.get("k"), p.get("seeds")
     if not isinstance(genes, list) or not genes or not isinstance(k, int) or not isinstance(seeds, list):
@@ -1330,7 +1343,9 @@ def _gene_programs(p: dict, ctx: _Ctx) -> Snippet:
         "# NOTE: the same seeds and settings as scView's run; another scikit-learn version, BLAS",
         "# or thread count can still change the result in the last digits or, rarely, which",
         "# replicate spectra k-means groups together, so exact reproduction is not guaranteed.",
-        f"PROGRAM_GENES = {_lit([str(g) for g in genes])}",
+        "PROGRAM_GENES = [",
+        *_packed([repr(str(g)) for g in genes]),
+        "]",
         f"share, usage, spectra = gene_programs(adata, PROGRAM_GENES, {_lit(int(k))}, "
         f"{_lit([int(x) for x in seeds])}, source={_lit(source)}, solver={_lit(p.get('solver', 'cd'))}, "
         f"init={_lit(p.get('init', 'random'))}, beta_loss={_lit(p.get('beta_loss', 'frobenius'))}, "
