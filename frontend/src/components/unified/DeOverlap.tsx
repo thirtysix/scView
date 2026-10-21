@@ -65,6 +65,8 @@ export function DeOverlap({ datasetId, latestResultId, pThreshold, fcThreshold, 
   const [listError, setListError] = useState<string | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const touched = useRef(false);
+  // Result ids already listed: one run since is ticked too, while there is room.
+  const known = useRef<Set<string>>(new Set());
   const [direction, setDirection] = useState<OverlapDirection>("both");
   const [padjOverride, setPadj] = useState<number | null>(null);
   const [lfcOverride, setLfc] = useState<number | null>(null);
@@ -85,6 +87,7 @@ export function DeOverlap({ datasetId, latestResultId, pThreshold, fcThreshold, 
     setList(null);
     setChecked(new Set());
     touched.current = false;
+    known.current = new Set();
     setRes(null);
     setSelectedKey(null);
   }, [datasetId]);
@@ -100,9 +103,15 @@ export function DeOverlap({ datasetId, latestResultId, pThreshold, fcThreshold, 
         setList(l);
         setListError(null);
         const ids = new Set(l.results.map((r) => r.result_id));
+        const added = runOrder(l.results)
+          .map((r) => r.result_id)
+          .filter((id) => !known.current.has(id));
+        known.current = ids;
         setChecked((prev) => {
           if (!touched.current) return new Set(defaultChecked(l.results));
-          return new Set([...prev].filter((id) => ids.has(id)));
+          const next = [...prev].filter((id) => ids.has(id));
+          for (const id of added) if (next.length < l.keep && !next.includes(id)) next.push(id);
+          return new Set(next);
         });
       })
       .catch((e) => !cancelled && setListError(errorText(e)));

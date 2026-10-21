@@ -155,11 +155,21 @@ describe("DeOverlap", () => {
     expect(computeDEOverlap).toHaveBeenCalledTimes(n); // one result: nothing to compare
   });
 
-  it("refreshes the list when the DE subtab has a new result", async () => {
+  it("refreshes the list when the DE subtab has a new result, and ticks the new one", async () => {
     const view = renderOverlap({ latestResultId: "b" });
-    await waitFor(() => expect(listDEResults).toHaveBeenCalledTimes(1));
+    openSection();
+    await waitFor(() => expect(computeDEOverlap).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("checkbox", { name: /CD4 Naive T/ })); // picked by hand from now on
+    await waitFor(() =>
+      expect(computeDEOverlap).toHaveBeenLastCalledWith("ds", expect.objectContaining({ result_ids: ["m", "b"] })),
+    );
+    listDEResults.mockResolvedValue(listing([summary("new", "NK: STIM vs CTRL (Wilcoxon)", 4), ...THREE]));
     view.rerender(<DeOverlap datasetId="ds" pThreshold={0.05} fcThreshold={1} onGeneClick={noop} latestResultId="new" />);
     await waitFor(() => expect(listDEResults).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(computeDEOverlap).toHaveBeenLastCalledWith("ds", expect.objectContaining({ result_ids: ["m", "b", "new"] })),
+    );
+    expect(screen.getByRole("checkbox", { name: /CD4 Naive T/ })).not.toBeChecked(); // unticked stays so
   });
 
   it("shows an intersection's genes with each result's log2FC, to copy or save as a gene list", async () => {
