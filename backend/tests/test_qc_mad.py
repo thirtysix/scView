@@ -391,7 +391,7 @@ def test_the_mad_preview_is_fast_at_200k_cells():
     took = time.perf_counter() - t0
     assert len(out["mad"]["samples"]) == 16 and len(out["samples"]["groups"]) == 16
     assert took < 1.0, f"{took:.3f} s"
-    assert len(json.dumps(out)) < 60_000
+    assert len(json.dumps(out)) < 90_000  # the removal audit adds a 40 clusters x 16 donors table
 
 
 # --- the per-sample QC table -----------------------------------------------------
