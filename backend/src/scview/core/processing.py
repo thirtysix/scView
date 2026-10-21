@@ -27,16 +27,14 @@ dataset reopens as it was before the run.
 from __future__ import annotations
 
 import asyncio
-import ctypes
-import gc
 import logging
 import threading
-import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any, TypeVar
 
 from fastapi import HTTPException
 
+from scview.core import memory_budget
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_lock
@@ -48,22 +46,11 @@ T = TypeVar("T")
 
 
 def _give_back_memory() -> None:
-    """Free the run's copy of the dataset before the saved file is read back.
-
-    A run leaves its arrays to the garbage collector, and glibc keeps freed memory
-    instead of returning it: after Kang the process held 3.1 GB, where a fresh load
-    of the result takes 1.25 GB; this brings it to 2.0 GB. That matters where the
-    container has little memory (WSL gives Podman/Docker half of a Windows PC's).
-    The arrays are in reference cycles (an AnnData and its .raw), so trimming alone
-    frees nothing. The collection holds the GIL even in a worker thread: 0.25 s
-    after a Kang run, once per run."""
-    t = time.perf_counter()
-    gc.collect()
-    logger.info("Freed the run's memory (garbage collection %.0f ms)", 1000 * (time.perf_counter() - t))
-    try:
-        ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except (OSError, AttributeError):  # not glibc
-        pass
+    """Free the run's copy of the dataset before the saved file is read back
+    (``memory_budget.release_memory``): where the container has little memory
+    (WSL gives Podman/Docker half of a Windows PC's) the run's leftovers and the
+    reloaded result must not sit side by side."""
+    memory_budget.release_memory()
 
 
 async def _claim(dm: DatasetManager, dataset_id: str) -> tuple[AnnDataAdaptor, Callable[[], None]]:

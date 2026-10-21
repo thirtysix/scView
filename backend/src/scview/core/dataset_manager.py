@@ -11,6 +11,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from scview.core import memory_budget
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from scview.core.obs_writes import is_locked
 
@@ -58,6 +59,23 @@ class DatasetBusyError(Exception):
     def __init__(self, dataset_id: str) -> None:
         super().__init__(f"Dataset {dataset_id} is being processed.")
         self.dataset_id = dataset_id
+
+
+class DatasetMemoryError(Exception):
+    """Opening a dataset would need more memory than scView has, even with every
+    other dataset closed: refused, instead of the system stopping the backend."""
+
+    def __init__(self, dataset_id: str, need: int, available: int, limit: int) -> None:
+        gb = 1024**3
+        super().__init__(
+            f"Opening this dataset needs about {need / gb:.1f} GB at its peak; scView has "
+            f"{available / gb:.1f} GB free of its {limit / gb:.1f} GB limit, even with the other "
+            "datasets closed. Raise SCVIEW_MEMORY_GB in .env (then restart scView).")
+        self.dataset_id = dataset_id
+
+
+# Room to leave beside a dataset's estimated load peak before opening it.
+LOAD_MARGIN = 1.1
 
 
 class DatasetManager:
@@ -110,7 +128,9 @@ class DatasetManager:
         generation = self._generation.get(dataset_id, 0)
 
         # Make room first, so the new dataset never sits beside a full cache.
-        self._evict_lru(keep=dataset_id, room_for_one=True)
+        if self._evict_lru(keep=dataset_id, room_for_one=True):
+            await asyncio.to_thread(memory_budget.release_memory)
+        await self._make_memory_room(dataset_id, h5ad_path)
 
         adaptor = AnnDataAdaptor(h5ad_path)
         updates = await asyncio.to_thread(self._metadata_updates, dataset_id, adaptor)
@@ -126,22 +146,69 @@ class DatasetManager:
         self._evict_lru(keep=dataset_id)  # two loads may have finished at once
         return adaptor
 
-    def _evict_lru(self, keep: str, room_for_one: bool = False) -> None:
-        """Drop least-recently-used datasets beyond capacity, never ``keep`` or a
-        dataset a pipeline run is still working on."""
+    def _evictable(self, keep: str) -> list[str]:
+        """Cached datasets that may be dropped, least recently used first: never
+        ``keep`` or one a request is working on (its adaptor would re-read the file
+        and lose what the request computed: markers, a pipeline run)."""
+        return [d for d in self._load_order
+                if d != keep and d not in self._busy and not is_locked(d)]
+
+    def _drop(self, dataset_id: str) -> None:
+        self._load_order.remove(dataset_id)
+        adaptor = self._datasets.pop(dataset_id, None)
+        if adaptor:
+            adaptor.close()
+            logger.info("Evicted dataset %s from cache", dataset_id)
+
+    def _evict_lru(self, keep: str, room_for_one: bool = False) -> int:
+        """Drop least-recently-used datasets beyond capacity (see ``_evictable``);
+        how many were dropped."""
         limit = self.max_datasets - 1 if room_for_one else self.max_datasets
-        for evict_id in list(self._load_order):
+        dropped = 0
+        for evict_id in self._evictable(keep):
             if len(self._datasets) <= limit:
                 break
-            # Never one a request is working on: its adaptor would re-read the file
-            # and lose what the request computed (markers, a pipeline run).
-            if evict_id == keep or evict_id in self._busy or is_locked(evict_id):
-                continue
-            self._load_order.remove(evict_id)
-            adaptor = self._datasets.pop(evict_id, None)
-            if adaptor:
-                adaptor.close()
-                logger.info("Evicted dataset %s from cache", evict_id)
+            self._drop(evict_id)
+            dropped += 1
+        return dropped
+
+    async def _make_memory_room(self, dataset_id: str, path: str) -> None:
+        """Before opening ``path``: drop cached datasets, least recently used first,
+        until its estimated load peak (``preflight``, from the file header) fits in
+        the memory left under the container limit, freeing each one for real.
+
+        Three cached datasets fit on a big machine and not under a small limit: on
+        a 6 GB backend holding ovary (3.2 GB, dense counts) and pbmc, opening Kang
+        got the backend killed. Refused (``DatasetMemoryError``) only when even the
+        low end of the estimate's error band is more than what is free with every
+        other dataset closed; without a container limit nothing is checked."""
+        from scview.core import preflight
+
+        try:
+            est = await asyncio.to_thread(
+                lambda: preflight.estimate_load(preflight.read_header(path), ingest=False))
+        except Exception as e:  # never block opening on the estimate itself
+            logger.warning("No load estimate for %s: %s", path, e)
+            return
+        need = int(est.peak_bytes)
+        budget = memory_budget.read_budget()
+        if not budget.limited or budget.limit_bytes is None or budget.used_bytes is None or need <= 0:
+            return
+
+        def free() -> int:
+            return budget.limit_bytes - budget.used_bytes
+
+        if free() < need * LOAD_MARGIN:  # earlier evictions may still await collection
+            await asyncio.to_thread(memory_budget.release_memory)
+            budget = memory_budget.read_budget()
+        for victim in self._evictable(dataset_id):
+            if free() >= need * LOAD_MARGIN:
+                break
+            self._drop(victim)
+            await asyncio.to_thread(memory_budget.release_memory)
+            budget = memory_budget.read_budget()
+        if need * (1 - preflight.ERROR_BAND) > free():
+            raise DatasetMemoryError(dataset_id, need, max(0, free()), budget.limit_bytes)
 
     def get_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
         return self._datasets.get(dataset_id)

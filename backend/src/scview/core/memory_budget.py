@@ -23,11 +23,17 @@ recreate. A marker from the same kernel boot means the previous run was killed.
 
 from __future__ import annotations
 
+import ctypes
+import gc
 import json
+import logging
 import os
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 CGROUP = Path("/sys/fs/cgroup")
 MEMINFO = Path("/proc/meminfo")
@@ -121,6 +127,24 @@ def read_budget(cgroup: Path = CGROUP, meminfo: Path = MEMINFO) -> MemoryBudget:
     if total_kb is not None:
         return MemoryBudget(total_kb * 1024, used, False, "machine", cache)
     return MemoryBudget(None, used, False, "unknown", cache)
+
+
+def release_memory() -> None:
+    """Give memory that dropped datasets or a finished run held back to the system.
+
+    Python frees an evicted dataset only once nothing refers to it, and its arrays
+    sit in reference cycles (an AnnData and its .raw), so they wait for the cycle
+    collector; glibc then keeps freed memory instead of returning it. After a Kang
+    run the process held 3.1 GB where a fresh load takes 1.25 GB; this brought it
+    to 2.0 GB. The collection holds the GIL even in a worker thread (0.25 s after
+    a Kang run), so call it once per run or load, not per request."""
+    t = time.perf_counter()
+    gc.collect()
+    logger.info("Freed memory (garbage collection %.0f ms)", 1000 * (time.perf_counter() - t))
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):  # not glibc
+        pass
 
 
 _unclean_restart: dict | None = None
