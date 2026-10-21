@@ -178,3 +178,18 @@ async def test_free_memory_for_a_run_drops_other_datasets_only_as_needed(dm, mon
     _fake_memory(monkeypatch, dm, need_gb=0.1, limited=False)
     assert await dm.free_memory_for(int(99 * GB), keep="c") is None
     assert dm.cached_ids() == ["c"]
+
+
+def test_a_dropped_adaptor_never_reads_its_file_again(tmp_path, monkeypatch):
+    # A request that took the adaptor before a run and read .adata after the drop
+    # used to re-read the whole file outside the cache (3.2 GB on ovary: killed).
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+
+    path = tmp_path / "d.h5ad"
+    ad.AnnData(X=np.ones((4, 3), dtype="float32")).write_h5ad(path)
+    a = AnnDataAdaptor(str(path))
+    first = a.adata
+    reads = []
+    monkeypatch.setattr(ad, "read_h5ad", lambda *x, **k: reads.append(x) or first)
+    a.close()
+    assert a.adata is first and reads == []

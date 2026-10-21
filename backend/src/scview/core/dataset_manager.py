@@ -233,9 +233,12 @@ class DatasetManager:
         free = await self.free_memory_for(need, keep=dataset_id)
         # A run that just ended may still hold its copy for a moment (the request that
         # follows a stopped ovary run got a 507): give it a few seconds to let go.
-        for _ in range(REFUSAL_WAIT_SECONDS):
+        for i in range(REFUSAL_WAIT_SECONDS):
             if not refused(free):
                 return
+            if i == 0:
+                logger.info("Opening %s needs about %.1f GB; %.1f GB free: waiting up to %d s for memory",
+                            dataset_id, need / 1024**3, max(0, free or 0) / 1024**3, REFUSAL_WAIT_SECONDS)
             await asyncio.sleep(1)
             free = await self.free_memory_for(need, keep=dataset_id)
         if refused(free):
@@ -387,12 +390,14 @@ class DatasetManager:
         that were never saved; re-running steps on it would apply them twice.
         """
         self._generation[dataset_id] = self._generation.get(dataset_id, 0) + 1
-        self._loading.pop(dataset_id, None)  # the next access reads the file again
+        in_flight = self._loading.pop(dataset_id, None)  # the next access reads the file again
         adaptor = self._datasets.pop(dataset_id, None)
         if adaptor:
             adaptor.close()
         if dataset_id in self._load_order:
             self._load_order.remove(dataset_id)
+        logger.info("Dropped dataset %s (%s)", dataset_id,
+                    "a read was in progress" if in_flight is not None and not in_flight.done() else "cached copy")
 
     def remove_dataset(self, dataset_id: str) -> bool:
         if not is_safe_id(dataset_id):
