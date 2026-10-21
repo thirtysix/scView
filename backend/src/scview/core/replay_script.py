@@ -339,6 +339,27 @@ def fixed_drop(qc, min_genes, max_genes, min_counts, max_pct_mt):
             drop |= np.isfinite(pct) & (pct >= max_pct_mt)
     return drop
 ''',
+    "type_mito_drop": '''
+def mito_only(qc):
+    """The QC values with counts and genes blanked: a drop helper then judges % mito alone."""
+    nan = np.full(len(qc["n_genes"]), np.nan)
+    return {**qc, "total_counts": nan, "n_genes": nan}
+
+
+def type_mito_drop(adata, qc, rule, global_mito):
+    """% mito per cell type, as scView's per-type filter: a type with a recorded bound
+    loses its cells above it (or at the cap); the other cells keep the global rule."""
+    if qc["pct_mt"] is None:
+        return np.zeros(adata.n_obs, dtype=bool)
+    col = adata.obs[rule["column"]]
+    labels = col.astype(str).where(col.notna())
+    bounds = {str(r["name"]): float(r["bound"]) for r in rule["types"] if r.get("bound") is not None}
+    hi = labels.map(bounds).to_numpy(dtype=np.float64)  # NaN: no bound of its own
+    pct = qc["pct_mt"]
+    with np.errstate(invalid="ignore"):
+        mine = np.isfinite(pct) & ((pct > hi) | (pct >= rule["cap"]))
+    return np.where(~np.isnan(hi), mine, global_mito)
+''',
     "markers_key": '''
 def markers_key(column):
     """Where scView stores a column's markers in uns."""
@@ -478,7 +499,8 @@ def subcluster(adata, column, group, resolution, batch_key=None, n_top_genes=200
 # The order helpers are written in (later ones call earlier ones).
 _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_from_hvg_frame",
                  "counts_hvg", "pearson_residuals", "per_cell_qc", "doublet_calls",
-                 "mad_thresholds", "apply_thresholds", "fixed_drop", "markers_key", "louvain",
+                 "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "markers_key",
+                 "louvain",
                  "harmony", "lognorm_scoring", "subcluster")
 
 # Helpers another helper calls.
@@ -558,12 +580,28 @@ def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
     ], "doublet rate not recorded: scanpy's default")
 
 
+def _mito_rule(p: dict) -> dict | None:
+    """A per-type filtering's recorded rule, as the script needs it."""
+    rule = p.get("qc_mito_types") if p.get("qc_mito_mode") == "per_type" else None
+    if not isinstance(rule, dict) or not isinstance(rule.get("types"), list) or not rule.get("column"):
+        return None
+    return {"column": rule["column"], "k": rule.get("k"), "cap": rule.get("cap", 50.0),
+            "types": [{"name": r.get("name"), "n_cells": r.get("n_cells"), "median": r.get("median"),
+                       "bound": r.get("bound")} for r in rule["types"] if isinstance(r, dict)]}
+
+
 def _filtering(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "per_cell_qc")
     mode = p.get("qc_threshold_mode") or "fixed"
     min_cells = p.get("min_cells", 3)
     code = ["qc = per_cell_qc(adata)"]
     status, note = EXACT, ""
+    rule = _mito_rule(p)
+    if rule is not None:
+        _need(ctx, "type_mito_drop")
+        code += ["# % mito per cell type (scView's per-type filter): each type's recorded bound,",
+                 "# median + k MADs; types without one keep the global rule below.",
+                 f"MITO_TYPES = {_lit(rule)}"]
     if mode == "mad":
         rec = p.get("qc_thresholds")
         _need(ctx, "apply_thresholds")
@@ -581,14 +619,21 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
                 f"k={_lit(p.get('qc_mad_k', 5.0))}, k_mt={_lit(p.get('qc_mad_k_mt', 3.0))}, "
                 f"upper={_lit(bool(p.get('qc_mad_upper', False)))}, ceiling={_lit(ceiling)})",
             ]
-        code.append("drop = mad_drop(adata, qc, THRESHOLDS)")
+        if rule is None:
+            code.append("drop = mad_drop(adata, qc, THRESHOLDS)")
+        else:
+            code += ['drop = mad_drop(adata, {**qc, "pct_mt": None}, THRESHOLDS)',
+                     "drop |= type_mito_drop(adata, qc, MITO_TYPES, mad_drop(adata, mito_only(qc), THRESHOLDS))"]
     else:
         _need(ctx, "fixed_drop")
-        code.append(
-            f"drop = fixed_drop(qc, min_genes={_lit(p.get('min_genes', 0))}, "
-            f"max_genes={_lit(p.get('max_genes', 0))}, min_counts={_lit(p.get('min_counts', 0))}, "
-            f"max_pct_mt={_lit(p.get('max_pct_mt'))})"
-        )
+        cut = (f"min_genes={_lit(p.get('min_genes', 0))}, max_genes={_lit(p.get('max_genes', 0))}, "
+               f"min_counts={_lit(p.get('min_counts', 0))}")
+        if rule is None:
+            code.append(f"drop = fixed_drop(qc, {cut}, max_pct_mt={_lit(p.get('max_pct_mt'))})")
+        else:
+            code += [f"drop = fixed_drop(qc, {cut}, max_pct_mt=None)",
+                     "drop |= type_mito_drop(adata, qc, MITO_TYPES, fixed_drop(mito_only(qc), 0, 0, 0, "
+                     f"{_lit(p.get('max_pct_mt'))}))"]
         if "min_genes" not in p:
             status, note = APPROXIMATE, "fixed cut-offs not recorded"
             code.insert(0, "# NOTE: this record has no cut-offs (an older scView): none applied.")

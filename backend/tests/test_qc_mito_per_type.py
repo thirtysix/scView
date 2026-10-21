@@ -327,3 +327,55 @@ async def test_the_preview_endpoint_takes_the_mito_mode_and_column(client, datas
     for bad in ({"mito_mode": "per_cluster"}, {"mito_mode": "per_type", "mito_type_column": "nope"}):
         r = await client.get(url, params={**base, **bad})
         assert r.status_code == 400, bad
+
+
+# --- replay -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["fixed", "mad"])
+def test_the_replay_script_keeps_the_same_cells(tmp_path, mode):
+    """The script writes each type's bound in and, run on the input, keeps the cells
+    the app kept (a fresh interpreter, no scView import)."""
+    import subprocess
+    import sys
+
+    from scview.core import replay_script, run_manifest
+
+    inp = _cells(sample=True)
+    p = _per_type(PipelineParams(qc_threshold_mode=mode, min_genes=0, max_pct_mt=10.0, min_cells=0))
+    out, res = run_pipeline(inp.copy(), ["filtering"], p)
+    assert res.errors == {} and out.n_obs < inp.n_obs
+    script = replay_script.build_script(out, dataset_id="t", dataset_name="test")
+    assert "MITO_TYPES = " in script and "'bound': 18.0" in script and "'bound': 6.0" in script
+    assert "type_mito_drop(adata, qc, MITO_TYPES" in script
+    assert replay_script.describe(out)[-1]["status"] == "exact"
+    src, path, dst = tmp_path / "input.h5ad", tmp_path / "replay.py", tmp_path / "replayed.h5ad"
+    inp.write_h5ad(src)
+    path.write_text(script)
+    proc = subprocess.run([sys.executable, str(path), str(src), str(dst)], capture_output=True, text=True,
+                          timeout=300)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    assert list(ad.read_h5ad(dst).obs_names) == list(out.obs_names)
+    steps = run_manifest.build_manifest(out, dataset_id="t", dataset_name="test")["steps"]
+    assert steps[-1]["params"]["qc_mito_types"]["column"] == "cell_type"
+
+
+def test_the_replay_helper_matches_the_filter():
+    """type_mito_drop, run on the fixture, gives the app's % mito masks."""
+    from scview.core import replay_script
+
+    a = _cells(sample=True)
+    ns = {"np": np, "pd": pd, "sp": sp}
+    for name in ("looks_like_counts", "per_cell_qc", "apply_thresholds", "fixed_drop", "type_mito_drop"):
+        exec(replay_script._HELPERS[name], ns)
+    qc = ns["per_cell_qc"](a)
+    for p in (_per_type(), _per_type(PipelineParams(min_cells=0, max_pct_mt=10.0))):
+        t = Thresholds.from_params(p)
+        removed, bounds, types = qc_filter.judge_types(a, per_cell_qc(a), t)
+        rule = replay_script._mito_rule({"qc_mito_mode": "per_type", "qc_mito_types": types.to_dict()})
+        if t.mode == "fixed":
+            glob = ns["fixed_drop"](ns["mito_only"](qc), 0, 0, 0, 10.0)
+        else:
+            glob = ns["mad_drop"](a, ns["mito_only"](qc), bounds.to_dict())
+        assert (glob == types.removed_global).all()
+        assert (ns["type_mito_drop"](a, qc, rule, glob) == removed["max_pct_mt"]).all()
