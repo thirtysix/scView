@@ -1,8 +1,11 @@
-"""Per-cell neighbour preservation of a plot (core/embedding_reliability.py).
+"""Per-cell plot reliability (core/embedding_reliability.py): placement (graph
+neighbours within the cell's nearest 5% of cells on the plot) and the strict
+exact-neighbour score.
 
 Expected values are known in advance (a faithful layout keeps every neighbour, a
-shuffled one keeps about k / (n - 1)) or computed independently here with plain
-numpy (all pairwise distances, argsort).
+shuffled one scores about the window's share of the cells, a cell moved into
+another island scores 0) or computed independently here with plain numpy (all
+pairwise distances, argsort).
 """
 
 from __future__ import annotations
@@ -54,12 +57,24 @@ def _knn_brute(X: np.ndarray, k: int) -> np.ndarray:
     return np.argsort(d, axis=1, kind="stable")[:, :k]
 
 
+def _placement_brute(graph_nn: np.ndarray, Y: np.ndarray, window: int) -> np.ndarray:
+    """Share of each cell's graph neighbours no farther on the plot than its
+    window-th nearest other cell, by all pairwise distances."""
+    d = np.sqrt(((Y[:, None, :] - Y[None, :, :]) ** 2).sum(-1))
+    np.fill_diagonal(d, np.inf)
+    r = np.sort(d, axis=1)[:, window - 1]
+    return np.array([np.mean(d[i, graph_nn[i]] <= r[i]) for i in range(len(Y))])
+
+
 def test_faithful_layout_keeps_every_neighbour():
     a = _blobs()
     res = er.compute(a, "X_umap")
     assert res.meta["k"] == 14 and res.meta["graph"]["source"] == "stored"  # n_neighbors 15 - self
-    assert np.all(res.scores == 1.0)
-    assert res.meta["chance"] == pytest.approx(14 / 299)
+    assert np.all(res.scores == 1.0) and np.all(res.exact == 1.0)
+    # The window: 5% of the 299 other cells, 15 cells (at least k).
+    assert res.meta["window"] == {"share": 0.05, "cells": 15, "radius": "exact", "ref_cells": None}
+    assert res.meta["chance"] == pytest.approx(15 / 299)
+    assert res.meta["exact_chance"] == pytest.approx(14 / 299)
     assert res.meta["n_dims"] == 2 and res.meta["dims"] == [0, 1]
 
 
@@ -69,14 +84,18 @@ def test_shuffled_layout_scores_about_chance(sparse):
     perm = np.random.default_rng(5).permutation(a.n_obs)
     a.obsm["X_shuffled"] = a.obsm["X_umap"][perm]
     res = er.compute(a, "X_shuffled")
-    chance = 14 / (a.n_obs - 1)
-    # A random draw of 14 from 1,999 cells: the per-cell hits are ~Binomial(14, chance).
-    assert res.scores.mean() == pytest.approx(chance, abs=3 * chance)
-    assert np.median(res.scores) == 0.0
+    window = round(0.05 * 1999)
+    chance = window / 1999
+    assert res.meta["window"]["cells"] == window and res.meta["chance"] == pytest.approx(chance)
+    # Each graph neighbour lands in the 100-cell window with probability ~0.05.
+    assert res.scores.mean() == pytest.approx(chance, abs=0.01)
+    assert np.mean(res.scores < er.LOW) > 0.99
+    exact_chance = 14 / 1999
+    assert res.exact.mean() == pytest.approx(exact_chance, abs=3 * exact_chance)
     # The built-in random-placement baseline is a shuffle too, of the faithful layout.
     faithful = er.summarise(a, er.compute(a, "X_umap"))
-    assert faithful["overall"]["median"] == 1.0
-    assert faithful["shuffled"]["mean"] == pytest.approx(chance, abs=3 * chance)
+    assert faithful["overall"]["median"] == 1.0 and faithful["exact"]["median"] == 1.0
+    assert faithful["shuffled"]["mean"] == pytest.approx(chance, abs=0.01)
 
 
 def test_group_moved_into_another_is_low_and_listed_first():
@@ -95,8 +114,20 @@ def test_group_moved_into_another_is_low_and_listed_first():
     assert order == ["g2", "g1", "g0"]
     by = {r["group"]: r for r in summary["groups"]}
     assert by["g0"]["median"] == 1.0 and by["g0"]["share_low"] == 0.0
-    assert by["g2"]["median"] < 0.2 and by["g2"]["share_low"] > 0.5
-    assert by["g1"]["median"] < 1.0
+    assert by["g2"]["median"] < 0.2 and by["g2"]["share_low"] > 0.9
+    assert 0.5 <= by["g1"]["median"] < 1.0  # crowded by the newcomers, still near its own
+    assert by["g0"]["exact_median"] == 1.0 and by["g2"]["exact_median"] < 0.2
+
+
+def test_a_cell_moved_into_another_island_scores_zero():
+    a = _blobs(n_per=150, groups=2)
+    lay = a.obsm["X_umap"].copy()
+    lay[7] = lay[200] + 0.01  # cell 7 (island g0) put inside island g1
+    a.obsm["X_stray"] = lay
+    res = er.compute(a, "X_stray")
+    assert res.scores[7] == 0.0
+    others = np.delete(res.scores, 7)
+    assert np.median(others) == 1.0 and others.min() >= 13 / 14  # one neighbour gone or crowded out
 
 
 def test_scores_match_a_plain_numpy_computation():
@@ -108,28 +139,57 @@ def test_scores_match_a_plain_numpy_computation():
     a.obsm["X_umap"] = rng.normal(size=(n, 2))  # unrelated layout: partial overlap at best
     a.obs["grp"] = pd.Categorical(rng.choice(["x", "y", "z"], size=n))
     k = 10
+    window = round(0.05 * (n - 1))  # 11 cells
     g = _knn_brute(a.obsm["X_pca"], k)
     p = _knn_brute(a.obsm["X_umap"], k)
-    expected = np.array([len(set(g[i]) & set(p[i])) / k for i in range(n)])
+    exact = np.array([len(set(g[i]) & set(p[i])) / k for i in range(n)])
+    placement = _placement_brute(g, a.obsm["X_umap"], window)
     res = er.compute(a, "X_umap")
-    assert res.meta["k"] == k
-    np.testing.assert_allclose(res.scores, expected, atol=1e-6)
+    assert res.meta["k"] == k and res.meta["window"]["cells"] == window
+    np.testing.assert_allclose(res.scores, placement, atol=1e-6)
+    np.testing.assert_allclose(res.exact, exact, atol=1e-6)
+    assert (placement >= exact).all()  # the window holds the k nearest
     s = er.summarise(a, res, "grp")
-    assert s["overall"]["median"] == pytest.approx(np.median(expected))
-    assert s["overall"]["share_low"] == pytest.approx(np.mean(expected < 0.2))
+    assert s["overall"]["median"] == pytest.approx(np.median(placement))
+    assert s["overall"]["share_low"] == pytest.approx(np.mean(placement < 0.5))
+    assert s["exact"]["median"] == pytest.approx(np.median(exact))
     for row in s["groups"]:
-        v = expected[a.obs["grp"].to_numpy() == row["group"]]
+        mask = a.obs["grp"].to_numpy() == row["group"]
+        v = placement[mask]
         assert row["n"] == v.size
         assert row["median"] == pytest.approx(np.median(v))
         assert row["q1"] == pytest.approx(np.quantile(v, 0.25))
         assert row["q3"] == pytest.approx(np.quantile(v, 0.75))
-        assert row["share_low"] == pytest.approx(np.mean(v < 0.2))
+        assert row["share_low"] == pytest.approx(np.mean(v < 0.5))
+        assert row["exact_median"] == pytest.approx(np.median(exact[mask]))
     medians = [r["median"] for r in s["groups"]]
     assert medians == sorted(medians)  # worst first
-    # A smaller k: the graph's 5 nearest against the plot's 5 nearest.
+    # A smaller k: the graph's 5 nearest, the plot's 5 nearest, the same window.
     res5 = er.compute(a, "X_umap", k=5)
     g5, p5 = _knn_brute(a.obsm["X_pca"], 5), _knn_brute(a.obsm["X_umap"], 5)
-    np.testing.assert_allclose(res5.scores, [len(set(g5[i]) & set(p5[i])) / 5 for i in range(n)], atol=1e-6)
+    np.testing.assert_allclose(res5.exact, [len(set(g5[i]) & set(p5[i])) / 5 for i in range(n)], atol=1e-6)
+    np.testing.assert_allclose(res5.scores, _placement_brute(g5, a.obsm["X_umap"], window), atol=1e-6)
+    # Another window share.
+    res20 = er.compute(a, "X_umap", window=0.2)
+    np.testing.assert_allclose(res20.scores, _placement_brute(g, a.obsm["X_umap"], round(0.2 * (n - 1))), atol=1e-6)
+
+
+def test_window_estimated_from_a_sample_above_the_exact_limit(monkeypatch):
+    monkeypatch.setattr(er, "REF_CELLS", 500)
+    rng = np.random.default_rng(6)
+    n = 1200
+    a = ad.AnnData(X=np.zeros((n, 2), dtype=np.float32))
+    a.obsm["X_pca"] = rng.normal(size=(n, 4))
+    sc.pp.neighbors(a, n_neighbors=15, use_rep="X_pca")
+    a.obsm["X_umap"] = a.obsm["X_pca"][:, :2] + rng.normal(scale=0.3, size=(n, 2))  # roughly kept
+    exact = er.compute(a, "X_umap")
+    est = er.compute(a, "X_umap", exact_max=1000)
+    assert exact.meta["window"]["radius"] == "exact"
+    assert est.meta["window"] == {"share": 0.05, "cells": 60, "radius": "estimated", "ref_cells": 500}
+    assert any("seeded sample of 500 cells" in m for m in est.meta["notes"])
+    # The estimated window holds about 60 cells, so the scores barely move.
+    assert np.mean(np.abs(est.scores - exact.scores)) < 0.05
+    assert abs(np.median(est.scores) - np.median(exact.scores)) <= 1 / 14
 
 
 def test_self_stored_as_explicit_zero_is_not_a_neighbour():
@@ -145,7 +205,7 @@ def test_self_stored_as_explicit_zero_is_not_a_neighbour():
     assert with_self.nnz == d.nnz + n  # the zeros are stored, not dropped
     a.obsp["distances"] = with_self
     res = er.compute(a, "X_umap")
-    assert res.meta["k"] == 14 and np.all(res.scores == 1.0)
+    assert res.meta["k"] == 14 and np.all(res.scores == 1.0) and np.all(res.exact == 1.0)
 
 
 def test_drop_self_with_tied_duplicates():
@@ -160,6 +220,7 @@ def test_drop_self_with_tied_duplicates():
     a.obsm["X_dup"] = lay
     res = er.compute(a, "X_dup")
     assert np.isfinite(res.scores).all() and res.scores.max() <= 1.0
+    assert np.isfinite(res.exact).all() and res.exact.max() <= 1.0
 
 
 def test_k_above_the_graph_is_rejected_and_bad_k():
@@ -185,9 +246,9 @@ def test_3d_layout():
     sc.pp.neighbors(b, n_neighbors=15, use_rep="X_pca")
     b.obsm["X_umap_3d"] = b.obsm["X_pca"].copy()
     b.obsm["X_flat"] = np.column_stack([b.obsm["X_pca"][:, :2], np.zeros(300)])
-    full = np.nanmedian(er.compute(b, "X_umap_3d").scores)
-    flat = np.nanmedian(er.compute(b, "X_flat").scores)
-    assert full == 1.0 and flat < full
+    full = er.compute(b, "X_umap_3d")
+    flat = er.compute(b, "X_flat")
+    assert np.all(full.scores == 1.0) and flat.scores.mean() < 0.95 and flat.exact.mean() < full.exact.mean()
 
 
 def test_pca_slice_scores_lower_than_a_faithful_layout():
@@ -197,7 +258,7 @@ def test_pca_slice_scores_lower_than_a_faithful_layout():
     a.obsm["X_pca"] = rng.normal(size=(n, 10))  # ten equally strong directions
     sc.pp.neighbors(a, n_neighbors=15, use_rep="X_pca")
     res = er.compute(a, "X_pca", dims=[0, 1])
-    assert res.meta["dims"] == [0, 1] and np.median(res.scores) < 0.3
+    assert res.meta["dims"] == [0, 1] and np.median(res.scores) < 0.5 and np.median(res.exact) < 0.3
     # No dims on a many-column embedding: the first two, as the plot shows them.
     res2 = er.compute(a, "X_pca")
     assert res2.meta["dims"] == [0, 1] and any("first two" in m for m in res2.meta["notes"])
@@ -308,8 +369,9 @@ async def test_endpoint(client, dataset_manager):
     d = r.json()
     assert len(d["scores"]) == a.n_obs and d["k"] == 14 and d["n_scored"] == a.n_obs
     assert d["groups"][0]["group"] == "g2" and d["group_by"] == "group"
-    assert d["chance"] == pytest.approx(14 / 299)
-    assert {"median", "mean"} <= set(d["shuffled"]) and d["low_threshold"] == 0.2
+    assert d["window"]["cells"] == 15 and d["chance"] == pytest.approx(15 / 299)
+    assert d["exact"]["chance"] == pytest.approx(14 / 299) and "exact_median" in d["groups"][0]
+    assert {"median", "mean"} <= set(d["shuffled"]) and d["low_threshold"] == 0.5
     assert d["cached"] is False
     s = await client.get(f"{url}/summary", params={"group_by": "group"})
     assert s.status_code == 200 and "scores" not in s.json() and s.json()["cached"] is True
@@ -350,10 +412,20 @@ def test_copilot_fact_only_once_computed(tmp_path: Path):
     context, sources = build_grounding_context(adaptor)
     fact = next(s for s in sources if s.ref == er.TAG)
     assert f"[{er.TAG}]" in context
-    assert "Median 1.00" in fact.evidence and "Chance 0.047" in fact.evidence
+    assert "Median 1.00" in fact.evidence and "Chance 0.05" in fact.evidence
+    assert "nearest 15 cells on the plot (5% of the cells)" in fact.evidence
+    assert "Exact neighbours kept: median 14 of 14." in fact.evidence  # faithful: no caveat
     assert "Worst groups of 'group'" in fact.evidence
-    assert fact.detail.startswith("X_umap: median share kept 1.00 of 14 graph neighbours per cell")
-    assert "Small groups score higher by chance alone" in fact.evidence
+    assert fact.detail.startswith("X_umap: median placement 1.00 (share of 14 graph neighbours within "
+                                  "each cell's nearest 15 cells)")
+    assert "A group smaller than the window (15 cells) scores near 1" in fact.evidence
+
+
+def test_exact_sentence_says_few_only_when_few():
+    assert er.exact_sentence(15, 1 / 15, "UMAP") == (
+        "Exact neighbours kept: median 1 of 15; UMAP keeps few exact neighbours anywhere, so read "
+        "positions within an island loosely.")
+    assert er.exact_sentence(15, 0.6) == "Exact neighbours kept: median 9 of 15."
 
 
 def test_claims_resolve_the_tag():
