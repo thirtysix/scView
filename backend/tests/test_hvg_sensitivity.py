@@ -136,9 +136,12 @@ def test_default_settings_are_the_control_two_counts_and_the_other_flavours(monk
     monkeypatch.setattr(hs, "seurat_v3_available", lambda: False)
     keys = [s.key for s in hs.default_settings(_wide(), _rec())]
     assert keys == ["seurat_2000", "seurat_1000", "seurat_3000", "cell_ranger_2000",
-                    "pearson_residuals_2000"]
+                    "pearson_residuals_2000", "seurat_2000_k10", "seurat_2000_k30", "seurat_2000_louvain"]
     monkeypatch.setattr(hs, "seurat_v3_available", lambda: True)
-    assert [s.key for s in hs.default_settings(_wide(), _rec())][-1] == "seurat_v3_2000"
+    assert "seurat_v3_2000" in [s.key for s in hs.default_settings(_wide(), _rec())]
+    # Neighbours other than the recorded k, and the other algorithm.
+    keys = [s.key for s in hs.default_settings(_wide(), _rec(n_neighbors=10, method="louvain"))]
+    assert "seurat_2000_k10" not in keys and "seurat_2000_k30" in keys and keys[-1] == "seurat_2000_leiden"
     # From Pearson residuals, the counts are halved and raised in that flavour.
     keys = [s.key for s in hs.default_settings(_wide(), _rec(flavor="pearson_residuals"))]
     assert keys[:3] == ["pearson_residuals_2000", "pearson_residuals_1000", "pearson_residuals_3000"]
@@ -167,11 +170,31 @@ def test_clean_settings_validates_and_dedupes(monkeypatch):
         ([{"flavor": "seurat", "n_top_genes": 50}], "between"),
         ([{"flavor": "seurat", "n_top_genes": 3600}], "too many"),
         ([{"flavor": "seurat_v3", "n_top_genes": 500}], "scikit-misc"),
-        ([{"flavor": "seurat", "n_top_genes": 300 + 100 * i} for i in range(9)], "at most"),
+        ([{"flavor": "seurat", "n_top_genes": 300 + 100 * i} for i in range(11)], "at most"),
+        ([{"flavor": "seurat", "n_top_genes": 500, "n_neighbors": 2}], "Neighbours must be between"),
+        ([{"flavor": "seurat", "n_top_genes": 500, "n_neighbors": 80}], "60 cells"),
+        ([{"flavor": "seurat", "n_top_genes": 500, "method": "kmeans"}], "Unknown clustering method"),
     ]
     for values, message in bad:
         with pytest.raises(hs.SensitivityError, match=message):
             hs.clean_settings(a, rec, values)
+
+
+def test_clean_settings_reads_neighbours_and_algorithm_as_changes_from_the_record():
+    a, rec = _wide(), _rec()
+    got = hs.clean_settings(a, rec, [
+        {"flavor": "seurat", "n_top_genes": 2000, "n_neighbors": 15, "method": "leiden"},  # the record
+        {"flavor": "seurat", "n_top_genes": 2000, "n_neighbors": 30},
+        {"flavor": "seurat", "n_top_genes": 2000, "method": "louvain"},
+    ])
+    assert got == [hs.Setting("seurat", 2000), hs.Setting("seurat", 2000, n_neighbors=30),
+                   hs.Setting("seurat", 2000, method="louvain")]
+    assert got[0] == rec.current
+    assert [s.label for s in got[1:]] == ["Seurat, 2,000 genes, 30 neighbours", "Seurat, 2,000 genes, Louvain"]
+    eff = got[1].effective(rec)
+    assert eff.n_neighbors == 30 and eff.method == "leiden" and got[2].effective(rec).method == "louvain"
+    assert hs.column_name(rec, got[1]) == "scview_leiden_r0.5_hvg_seurat_2000_k30"
+    assert hs.column_name(rec, got[2]) == "scview_leiden_r0.5_hvg_seurat_2000_louvain"
 
 
 def test_estimate_grows_with_cells_settings_and_harmony():
@@ -179,6 +202,8 @@ def test_estimate_grows_with_cells_settings_and_harmony():
     assert hs.estimate_seconds(20_000, 1, _rec()) > one
     assert hs.estimate_seconds(10_000, 5, _rec()) > 4 * one
     assert hs.estimate_seconds(10_000, 1, _rec(batch_key="b")) > one
+    # Settings sharing their genes cost only the graph and the clustering.
+    assert one < hs.estimate_seconds(10_000, 3, _rec(), 1) < hs.estimate_seconds(10_000, 3, _rec())
 
 
 def test_check_caps_the_cells(monkeypatch):
@@ -295,6 +320,40 @@ def test_iter_sensitivity_streams_each_setting_and_leaves_the_dataset_alone():
     assert np.array_equal(before[2], after[2])
 
 
+def test_neighbour_and_algorithm_settings_share_the_pcs_and_change_only_the_graph(monkeypatch):
+    import scanpy as sc
+
+    from scview.core import resolution_sweep as rs
+
+    a = _processed()
+    rec = hs.recorded(a)
+    embedded, graphs = [], []
+    real_embed, real_neighbors = hs._embed, sc.pp.neighbors
+    monkeypatch.setattr(hs, "_embed", lambda *x, **k: embedded.append(x[1].key) or real_embed(*x, **k))
+    monkeypatch.setattr(sc.pp, "neighbors", lambda ad_, n_neighbors, **k: graphs.append(n_neighbors)
+                        or real_neighbors(ad_, n_neighbors=n_neighbors, **k))
+    methods = []
+    real_cluster = rs.cluster
+    monkeypatch.setattr(rs, "cluster", lambda ad_, m, r: methods.append(m) or real_cluster(ad_, m, r))
+    settings = [rec.current, hs.Setting("seurat", 200, n_neighbors=30), hs.Setting("seurat", 200, method="louvain")]
+    rows = list(hs.iter_sensitivity(a, settings, rec))[1:]
+    assert embedded == ["seurat_200"]  # one PCA for the three
+    assert graphs == [15, 30, 15] and methods == ["leiden", "leiden", "louvain"]
+    assert [r["key"] for r in rows] == ["seurat_200", "seurat_200_k30", "seurat_200_louvain"]
+    assert rows[0]["is_current"] and not rows[1]["is_current"]
+    assert rows[1]["n_neighbors"] == 30 and rows[2]["method"] == "louvain"
+    assert rows[1]["column"] == "scview_leiden_r0.5_hvg_seurat_200_k30"
+    # The three planted types survive a different graph and algorithm.
+    for r in rows:
+        assert {c["status"] for c in r["clusters"]} == {"stable"}, r["key"]
+    # Kept: the effective k and algorithm go into provenance, which the replay script reads.
+    hs.keep(a, settings[2], rec)
+    params = provenance.read_provenance(a)["history"][-1]["params"]
+    assert params["clustering_method"] == "louvain" and params["n_neighbors"] == 15
+    hs.keep(a, settings[1], rec)
+    assert provenance.read_provenance(a)["history"][-1]["params"]["n_neighbors"] == 30
+
+
 def test_a_stop_ends_the_run_before_its_next_substep(monkeypatch):
     a = _processed()
     rec = hs.recorded(a)
@@ -408,6 +467,20 @@ async def test_run_endpoint_streams_one_result_per_setting(client, dataset_manag
     r = await client.post(f"{API}/datasets/{did}/clustering/hvg-sensitivity",
                           json={"settings": [{"flavor": "magic", "n_top_genes": 200}]})
     assert r.status_code == 400 and "Unknown flavour" in r.json()["detail"]
+
+
+async def test_endpoints_take_neighbours_and_algorithm(client, dataset_manager):
+    did = _register(dataset_manager, _processed(), "hk")
+    info = (await client.get(f"{API}/datasets/{did}/clustering/hvg-sensitivity")).json()
+    assert {"seurat_200_k10", "seurat_200_k30", "seurat_200_louvain"} <= {s["key"] for s in info["default_settings"]}
+    assert 0 < info["seconds_per_graph_setting"] < info["seconds_per_setting"]
+    setting = {"flavor": "seurat", "n_top_genes": 200, "n_neighbors": 30}
+    r = await client.post(f"{API}/datasets/{did}/clustering/hvg-sensitivity", json={"settings": [setting]})
+    row = _events(r.text)[1][1]
+    assert row["key"] == "seurat_200_k30" and row["n_neighbors"] == 30
+    r = await client.post(f"{API}/datasets/{did}/clustering/hvg-sensitivity/keep", json=setting)
+    assert r.status_code == 200, r.text
+    assert r.json()["column"] == "scview_leiden_r0.5_hvg_seurat_200_k30"
 
 
 async def test_keep_endpoint_saves_and_reloads(client, dataset_manager):

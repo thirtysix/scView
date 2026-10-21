@@ -19,6 +19,7 @@ import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentS
 import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { UnifiedActivitySubtab } from "@/components/unified/UnifiedActivitySubtab";
 import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSubtab";
+import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
 import { CompareColoringsGrid } from "@/components/unified/CompareColoringsGrid";
@@ -53,6 +54,7 @@ const SUBTABS = [
   { id: "de" as const, label: "DE" },
   { id: "activity" as const, label: "Activity" },
   { id: "genelists" as const, label: "Gene lists" },
+  { id: "communication" as const, label: "Communication" },
 ] as const;
 
 interface ViolinResponse {
@@ -1183,6 +1185,7 @@ export function UnifiedViewPanel() {
                 activeGene={scatterOverlay?.type === "expression" && !scatterOverlay.layer ? overlayLabel : null}
               />
             )}
+            {activeSubtab === "communication" && <UnifiedCommunicationSubtab groupByColumn={groupByColumn} />}
           </div>
         </div>
       </div>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { GitCompare, Loader2, AlertCircle, Sparkles } from "lucide-react";
 import { CompositionTest } from "@/components/compare/CompositionTest";
 import { JointEmbedding } from "@/components/compare/JointEmbedding";
+import { MiloTest } from "@/components/compare/MiloTest";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -76,10 +77,18 @@ export function ComparePanel() {
   );
 }
 
-type CompositionMode = "conditions" | "datasets";
+type CompositionMode = "conditions" | "milo" | "datasets";
 
-/** Composition: a replicate-aware test between conditions of the open dataset,
- *  or two datasets side by side (descriptive). */
+/** When to use which test, shown with both. */
+const WHICH_TEST =
+  "Between conditions tests whether whole cell types or clusters change their share of the cells. " +
+  "Neighbourhoods (Milo) tests small overlapping regions of the cell graph instead, so it finds " +
+  "a shift inside part of a cluster or across cluster borders that a per-group test averages " +
+  "away, and needs no clustering; a small, even shift of a whole type shows more clearly by group.";
+
+/** Composition: a replicate-aware test between conditions of the open dataset
+ *  (by group, or by neighbourhood with Milo), or two datasets side by side
+ *  (descriptive). */
 function CompositionTab() {
   const [mode, setMode] = useState<CompositionMode>("conditions");
   const dataset = useDatasetStore((s) => s.currentDataset);
@@ -89,6 +98,7 @@ function CompositionTab() {
         {(
           [
             ["conditions", "Between conditions"],
+            ["milo", "Neighbourhoods (Milo)"],
             ["datasets", "Two datasets"],
           ] as const
         ).map(([m, label]) => (
@@ -108,10 +118,24 @@ function CompositionTab() {
       ) : dataset ? (
         <>
           <p className="text-sm text-slate-500">
-            Do the cell-type or cluster proportions of <span className="font-medium">{dataset.name}</span>{" "}
-            differ between conditions? Each donor or sample is one replicate.
+            {mode === "milo" ? (
+              <>
+                Which regions of <span className="font-medium">{dataset.name}</span>&apos;s cell graph
+                change in abundance between two conditions? Each donor or sample is one replicate.
+              </>
+            ) : (
+              <>
+                Do the cell-type or cluster proportions of <span className="font-medium">{dataset.name}</span>{" "}
+                differ between conditions? Each donor or sample is one replicate.
+              </>
+            )}
           </p>
-          <CompositionTest key={dataset.id} datasetId={dataset.id} info={dataset} />
+          <p className="text-xs text-slate-500">{WHICH_TEST}</p>
+          {mode === "milo" ? (
+            <MiloTest key={dataset.id} datasetId={dataset.id} info={dataset} />
+          ) : (
+            <CompositionTest key={dataset.id} datasetId={dataset.id} info={dataset} />
+          )}
         </>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-400">
@@ -403,7 +427,7 @@ function Header() {
         <h2 className="text-2xl font-bold text-slate-900">Compare datasets</h2>
         <p className="text-sm text-slate-500">
           Embed several datasets together, or compare compositions: between conditions with
-          samples as replicates, or two datasets side by side.
+          samples as replicates (by group or by neighbourhood), or two datasets side by side.
         </p>
       </div>
     </div>

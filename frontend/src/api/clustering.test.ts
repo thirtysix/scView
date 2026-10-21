@@ -43,6 +43,19 @@ describe("runSweep", () => {
     expect(JSON.parse(init.body)).toEqual({ resolutions: [0.2, 1] });
   });
 
+  it("hands the tree that follows the results to onTree", async () => {
+    const tree = { prop_filter: 0.1, mixed_prop: 0.2, nodes: [], edges: [], n_mixed: 0 };
+    const text =
+      `event: result\ndata: ${JSON.stringify(row(1))}\n\n` +
+      `event: tree\ndata: ${JSON.stringify({ tree })}\n\nevent: complete\ndata: {}\n\n`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamed([text])));
+    const onTree = vi.fn();
+    const results: SweepRow[] = [];
+    await runSweep("ds", { resolutions: [1] }, { onResult: (r) => results.push(r), onTree });
+    expect(results).toHaveLength(1);
+    expect(onTree).toHaveBeenCalledWith(tree);
+  });
+
   it("rejects with the server's reason", async () => {
     vi.stubGlobal(
       "fetch",

@@ -35,6 +35,13 @@ def test_labels_are_scanpys(resolution, seed):
     )
 
 
+def test_a_quick_count_uses_fewer_passes_like_scanpys():
+    a = _adata()
+    sc.tl.leiden(a, resolution=1.0, key_added="ref", n_iterations=2)
+    got = leiden.membership(a.obsp["connectivities"], 1.0, n_iterations=2)
+    assert np.unique(got).size == a.obs["ref"].nunique()
+
+
 def test_pipeline_column_and_params_are_scanpys():
     a = _adata()
     ref = a.copy()

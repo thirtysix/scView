@@ -1,6 +1,14 @@
 /** Helpers for the variable-gene sensitivity check (components/unified/HvgSensitivity). */
 
-import type { HvgClusterMatch, HvgClusterStatus, HvgFlavor, HvgRecorded, HvgRow } from "@/api/clustering";
+import type {
+  HvgClusterMatch,
+  HvgClusterStatus,
+  HvgFlavor,
+  HvgRecorded,
+  HvgRow,
+  HvgSetting,
+  HvgSettingRequest,
+} from "@/api/clustering";
 
 /** Jaccard at or above which a cluster counts as found again (Hennig 2007; the backend's STABLE). */
 export const STABLE = 0.75;
@@ -134,11 +142,46 @@ const SHORT_FLAVOR: Record<HvgFlavor, string> = {
   pearson_residuals: "Pearson",
 };
 
-/** A column header for a setting: "Seurat 1k", "Pearson 2k", "CR 1.5k", "Seurat 800". */
-export function shortSettingLabel(s: { flavor: HvgFlavor; n_top_genes: number }): string {
+/**
+ * A column header for a setting: "Seurat 1k", "Pearson 2k", "CR 1.5k", "Seurat 800",
+ * then "k30" for another neighbour count and "Louv" / "Leid" for another algorithm.
+ */
+export function shortSettingLabel(s: {
+  flavor: HvgFlavor;
+  n_top_genes: number;
+  n_neighbors?: number | null;
+  method?: string | null;
+}): string {
   const n = s.n_top_genes;
   const genes = n >= 1000 ? `${Number((n / 1000).toFixed(1))}k` : String(n);
-  return `${SHORT_FLAVOR[s.flavor] ?? s.flavor} ${genes}`;
+  const k = s.n_neighbors != null ? ` k${s.n_neighbors}` : "";
+  const m = s.method ? ` ${s.method === "louvain" ? "Louv" : "Leid"}` : "";
+  return `${SHORT_FLAVOR[s.flavor] ?? s.flavor} ${genes}${k}${m}`;
+}
+
+/** What the server needs to run or keep a setting: the fields that are set. */
+export function settingRequest(
+  s: Pick<HvgSetting, "flavor" | "n_top_genes" | "n_neighbors" | "method">,
+): HvgSettingRequest {
+  return {
+    flavor: s.flavor,
+    n_top_genes: s.n_top_genes,
+    ...(s.n_neighbors != null ? { n_neighbors: s.n_neighbors } : {}),
+    ...(s.method ? { method: s.method } : {}),
+  };
+}
+
+/**
+ * Seconds for `settings`: settings with the same flavour and gene count share
+ * their PCs, so after the first of them only the graph and the clustering run.
+ */
+export function estimateFor(
+  settings: readonly { flavor: string; n_top_genes: number }[],
+  perSetting: number,
+  perGraphSetting: number | null | undefined,
+): number {
+  const embeddings = new Set(settings.map((s) => `${s.flavor}_${s.n_top_genes}`)).size;
+  return embeddings * perSetting + (settings.length - embeddings) * (perGraphSetting ?? perSetting);
 }
 
 /** A cluster's verdict for its row: "robust", "stable in 3 of 4", "unstable". */

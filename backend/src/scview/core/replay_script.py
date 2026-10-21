@@ -1068,6 +1068,22 @@ def _annotation_crosscheck(p: dict, ctx: _Ctx) -> Snippet:
     ], "scView's own cross-check")
 
 
+def _merge_clusters(p: dict, ctx: _Ctx) -> Snippet:
+    column, target, mapping = p.get("column"), p.get("target"), p.get("mapping")
+    if not column or not target or not isinstance(mapping, dict):
+        return Snippet(NOT_REPLAYABLE, ["# Merged clusters: the merge is not recorded. Recorded:",
+                                        *_param_comment(p)], "merge not recorded")
+    mapping = {str(k): str(v) for k, v in mapping.items()}
+    order = [str(c) for c in (p.get("categories") or dict.fromkeys(mapping.values()))]
+    return Snippet(EXACT, [
+        "# Clusters merged after scView's merge check (count splitting; the check itself is",
+        "# not replayed: it only suggested the merges written here).",
+        f"merged = {_lit(mapping)}",
+        f"adata.obs[{_lit(str(target))}] = pd.Categorical(adata.obs[{_lit(str(column))}].astype(str).map(merged), "
+        f"categories={_lit(order)})",
+    ])
+
+
 def _doublet_threshold(p: dict, ctx: _Ctx) -> Snippet:
     t = p.get("threshold")
     if t == "scrublet":
@@ -1120,6 +1136,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "undo_label_cells": _label_cells,
     "doublet_threshold": _doublet_threshold,
     "annotation_crosscheck": _annotation_crosscheck,
+    "merge_clusters": _merge_clusters,
 }
 
 

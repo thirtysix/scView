@@ -9,6 +9,7 @@ stalled it for seconds too.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import threading
 import time
@@ -42,7 +43,14 @@ def _dataset(data_dir: Path, did: str = "ds", n: int = 120, g: int = 40) -> None
 
 async def _worst_stall(coro, interval: float = 0.01):
     """Await ``coro`` beside a 10 ms heartbeat; return its result and the longest
-    the heartbeat was kept waiting beyond its interval (= time the loop was blocked)."""
+    the heartbeat was kept waiting beyond its interval (= time the loop was blocked).
+
+    The heap left by earlier tests is frozen first: a full garbage collection of it
+    (~0.17 s on CI after the clustering tests) would otherwise land in the window
+    and read as the loop being blocked by the code under test.
+    """
+    gc.collect()
+    gc.freeze()
     gaps: list[float] = []
     done = asyncio.Event()
 
@@ -60,6 +68,7 @@ async def _worst_stall(coro, interval: float = 0.01):
     finally:
         done.set()
         await hb
+        gc.unfreeze()
     return result, max(gaps, default=0.0)
 
 

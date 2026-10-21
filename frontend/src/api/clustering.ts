@@ -1,4 +1,5 @@
 import { API_BASE } from "@/lib/constants";
+import { settingRequest } from "@/lib/hvgSensitivity";
 import { apiFetch, readError } from "./client";
 
 /** Whether a resolution sweep can run on a dataset, and its limits. */
@@ -39,19 +40,58 @@ export interface SweepRow {
   exists: boolean;
 }
 
+/** One cluster at one resolution of the clustering tree (backend core/cluster_tree.py). */
+export interface ClusterTreeNode {
+  resolution: number;
+  cluster: string;
+  size: number;
+  /** clustree's SC3 stability index, 0-1: high when its cells stay together at the other resolutions */
+  sc3_stability: number;
+  /** Parents at the resolution before giving it at least `prop_filter` of its cells */
+  n_parents: number;
+  /** Draws at least `mixed_prop` of its cells from each of two or more parents */
+  mixed: boolean;
+}
+
+/** Cells shared by a cluster and one at the next resolution. */
+export interface ClusterTreeEdge {
+  from_resolution: number;
+  from: string;
+  to_resolution: number;
+  to: string;
+  count: number;
+  /** Share of the child's cells that came from this parent */
+  in_prop: number;
+}
+
+export interface ClusterTree {
+  /** Edges under this share of the child are left out (clustree's default 0.1) */
+  prop_filter: number;
+  mixed_prop: number;
+  nodes: ClusterTreeNode[];
+  edges: ClusterTreeEdge[];
+  n_mixed: number;
+}
+
 export function getSweepInfo(datasetId: string): Promise<SweepInfo> {
   return apiFetch(`/datasets/${datasetId}/clustering/sweep`);
 }
 
 /**
  * Cluster at each resolution without changing the dataset, calling `onStart`
- * once and `onResult` per resolution as each one finishes. Rejects with the
- * server's reason; aborting `signal` stops reading.
+ * once, `onResult` per resolution as each one finishes, then `onTree` with the
+ * clustering tree across them. Rejects with the server's reason; aborting
+ * `signal` stops reading.
  */
 export async function runSweep(
   datasetId: string,
   body: { resolutions: number[]; method?: string },
-  handlers: { onStart?: (s: SweepStart) => void; onResult: (r: SweepRow) => void; signal?: AbortSignal },
+  handlers: {
+    onStart?: (s: SweepStart) => void;
+    onResult: (r: SweepRow) => void;
+    onTree?: (t: ClusterTree) => void;
+    signal?: AbortSignal;
+  },
 ): Promise<void> {
   await streamEvents(
     `/datasets/${datasetId}/clustering/sweep`,
@@ -59,6 +99,7 @@ export async function runSweep(
     (event, data) => {
       if (event === "start") handlers.onStart?.(data as SweepStart);
       else if (event === "result") handlers.onResult(data as SweepRow);
+      else if (event === "tree") handlers.onTree?.((data as { tree: ClusterTree }).tree);
     },
     "The sweep",
     handlers.signal,
@@ -70,7 +111,7 @@ export async function runSweep(
  * as it arrives. Rejects with the server's reason, on an `error` event, or when
  * the stream ends before `complete`; aborting `signal` stops reading.
  */
-async function streamEvents(
+export async function streamEvents(
   path: string,
   body: unknown,
   onEvent: (event: string, data: unknown) => void,
@@ -195,10 +236,22 @@ export type HvgFlavor = "seurat" | "cell_ranger" | "seurat_v3" | "pearson_residu
 export interface HvgSetting {
   flavor: HvgFlavor;
   n_top_genes: number;
-  /** `${flavor}_${n_top_genes}` */
+  /** The neighbour graph's k; null/absent: as recorded */
+  n_neighbors?: number | null;
+  /** The clustering algorithm; null/absent: as recorded */
+  method?: "leiden" | "louvain" | null;
+  /** `${flavor}_${n_top_genes}`, then `_k${n_neighbors}` and `_${method}` when set */
   key: string;
-  /** "Seurat, 2,000 genes" */
+  /** "Seurat, 2,000 genes", then ", 30 neighbours" and ", Louvain" when set */
   label: string;
+}
+
+/** What the server needs to run or keep a setting: the fields that are set (lib/hvgSensitivity settingRequest). */
+export interface HvgSettingRequest {
+  flavor: HvgFlavor;
+  n_top_genes: number;
+  n_neighbors?: number;
+  method?: "leiden" | "louvain";
 }
 
 /** How the dataset's clustering was made, as provenance recorded it. */
@@ -245,6 +298,10 @@ export interface HvgSensitivityInfo {
   flavors?: { flavor: HvgFlavor; label: string; unavailable: string | null }[];
   estimate_seconds?: number;
   seconds_per_setting?: number;
+  /** A setting sharing another's genes: only the graph and the clustering re-run */
+  seconds_per_graph_setting?: number;
+  neighbor_choices?: { min: number; max: number };
+  methods?: { method: "leiden" | "louvain"; label: string }[];
 }
 
 export interface HvgStart {
@@ -304,7 +361,7 @@ export function getHvgSensitivityInfo(datasetId: string): Promise<HvgSensitivity
  */
 export async function runHvgSensitivity(
   datasetId: string,
-  body: { settings: { flavor: HvgFlavor; n_top_genes: number }[] },
+  body: { settings: HvgSettingRequest[] },
   handlers: { onStart?: (s: HvgStart) => void; onResult: (r: HvgRow) => void; signal?: AbortSignal },
 ): Promise<void> {
   await streamEvents(
@@ -322,10 +379,164 @@ export async function runHvgSensitivity(
 /** Save one setting's clusters as a column (once). */
 export function keepHvgSetting(
   datasetId: string,
-  setting: { flavor: HvgFlavor; n_top_genes: number },
+  setting: Pick<HvgSetting, "flavor" | "n_top_genes" | "n_neighbors" | "method">,
 ): Promise<{ column: string; created: boolean; n_clusters: number }> {
   return apiFetch(`/datasets/${datasetId}/clustering/hvg-sensitivity/keep`, {
     method: "POST",
-    body: JSON.stringify({ flavor: setting.flavor, n_top_genes: setting.n_top_genes }),
+    body: JSON.stringify(settingRequest(setting)),
+  });
+}
+
+// --- Merge check: neighbouring clusters tested on held-out counts (backend core/merge_check.py) ---
+
+/** The clustering to check: a column (default the active clustering) or a sweep resolution. */
+export interface MergeTarget {
+  reference?: string;
+  resolution?: number;
+  method?: string;
+}
+
+export interface MergeCheckInfo {
+  available: boolean;
+  reason: string | null;
+  n_cells: number;
+  merge_max_genes: number;
+  padj: number;
+  log2fc: number;
+  max_cells_per_side: number;
+  first_run_seconds: number;
+  // Present when available:
+  reference?: string;
+  /** False for a sweep resolution not saved as a column yet */
+  reference_exists?: boolean;
+  n_clusters?: number;
+  recorded?: HvgRecorded;
+  estimate_seconds?: number;
+}
+
+export interface MergeStart {
+  n_cells: number;
+  reference: string;
+  reference_exists: boolean;
+  recorded: HvgRecorded;
+  estimate_seconds: number;
+  /** The last run's tests are re-read (another threshold): no waiting */
+  cached: boolean;
+}
+
+export interface MergeProgress {
+  step: string;
+  label: string;
+}
+
+/** How a pair of the checked clusters was judged. */
+export type MergeEvidence = "held_out" | "together" | "untested";
+
+export interface MergePair {
+  a: string;
+  b: string;
+  /** Share of the smaller cluster's graph edges joining the two (training graph) */
+  adjacency: number;
+  n_cells_a: number;
+  n_cells_b: number;
+  /** held_out: tested on the held-out half; together: one training cluster holds both
+   *  (never split, so not tested); untested: no clean training counterpart */
+  evidence: MergeEvidence;
+  /** Distinguishing genes on the held-out half (the most distinct training pair) */
+  n_genes: number | null;
+  up: string[];
+  down: string[];
+  /** Training pairs the verdict reads */
+  train_pairs: string[];
+  candidate: boolean;
+}
+
+export interface MergeResult {
+  reference: string;
+  reference_exists: boolean;
+  method: "leiden" | "louvain";
+  resolution: number;
+  /** Resolution the training half was clustered at (to match the cluster count) */
+  train_resolution: number;
+  match_count: boolean;
+  n_reference_clusters: number;
+  epsilon: number;
+  seed: number;
+  max_genes: number;
+  overdispersion: { n_genes_fit: number; n_cells_fit: number; median_theta: number | null; poisson_share: number | null };
+  train: {
+    n_clusters: number;
+    ari: number;
+    ami: number;
+    sizes: number[];
+    n_groups: number;
+    clusters: { cluster: string; n_cells: number; group: number }[];
+  };
+  /** Checked clusters the held-out half can't tell apart, one list per group */
+  groups: string[][];
+  pairs: MergePair[];
+  n_candidates: number;
+  thresholds: {
+    padj: number;
+    log2fc: number;
+    min_pct: number;
+    merge_max_genes: number;
+    max_cells_per_side: number;
+    min_adjacency: number;
+    host_share: number;
+  };
+  seconds: { train?: number; test?: number; total?: number };
+}
+
+function targetQuery(t: MergeTarget): string {
+  const q = new URLSearchParams();
+  if (t.reference) q.set("reference", t.reference);
+  if (t.resolution != null) q.set("resolution", String(t.resolution));
+  if (t.method) q.set("method", t.method);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+export function getMergeCheckInfo(datasetId: string, target: MergeTarget = {}): Promise<MergeCheckInfo> {
+  return apiFetch(`/datasets/${datasetId}/clustering/merge-check${targetQuery(target)}`);
+}
+
+/**
+ * Split the counts, re-cluster the training half and test neighbouring pairs on
+ * the held-out half, without changing the dataset. Calls `onStart`, `onProgress`
+ * per step and `onResult`. Rejects with the server's reason; aborting `signal`
+ * stops reading and, on the server, the run.
+ */
+export async function runMergeCheck(
+  datasetId: string,
+  body: MergeTarget & { max_genes?: number; match_count?: boolean },
+  handlers: {
+    onStart?: (s: MergeStart) => void;
+    onProgress?: (p: MergeProgress) => void;
+    onResult: (r: MergeResult) => void;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  await streamEvents(
+    `/datasets/${datasetId}/clustering/merge-check`,
+    body,
+    (event, data) => {
+      if (event === "start") handlers.onStart?.(data as MergeStart);
+      else if (event === "progress") handlers.onProgress?.(data as MergeProgress);
+      else if (event === "result") handlers.onResult(data as MergeResult);
+    },
+    "The merge check",
+    handlers.signal,
+  );
+}
+
+/** Save the clustering with `pairs` merged as `<column>_merged`. */
+export function saveMergedClustering(
+  datasetId: string,
+  body: MergeTarget & { pairs: [string, string][] },
+): Promise<{ column: string; n_clusters: number; groups: string[] }> {
+  return apiFetch(`/datasets/${datasetId}/clustering/merge-check/save`, {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
