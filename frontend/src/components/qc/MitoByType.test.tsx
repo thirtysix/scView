@@ -115,6 +115,53 @@ describe("MitoByType", () => {
     expect(await screen.findByText("The 10.0% ceiling suits every type (1 types)")).toBeInTheDocument();
   });
 
+  it("offers to re-filter a dataset whose filtering cut a type hard (the actual loss, from its record)", async () => {
+    const lost = type("3", {
+      n_cells: 300, median: 11.8, bound: 16.2, removed_global: 10, removed_global_frac: 0.03,
+      removed_filter: 210, removed_filter_frac: 0.7, flagged: true,
+      reasons: ["The filtering step's % mito rule removed 70% of its 300 cells (median 11.8%)."],
+    });
+    getMitoByType.mockResolvedValue(report({
+      column: "scview_leiden_r0.5", reason: "clustering", filter_mode: "mad", ceiling: 20,
+      types: [lost, type("0", { removed_filter: 4, removed_filter_frac: 0.01 })], includes_removed: 214,
+      assigned_removed: 214,
+      summary: "The filtering step's % mito rule removed 70% of 3 (median 11.8%).",
+    }));
+    render(<MitoByType datasetId="d1" />);
+    expect(await screen.findByText("1 of 2 types cut hard by filtering")).toBeInTheDocument();
+    expect(screen.getByText("Removed by filtering").getAttribute("title")).toMatch(/MAD mode/);
+    expect(screen.getByTestId("mito-row-3").textContent).toContain("210 (70%)");
+    expect(screen.getByRole("button", { name: /Re-filter with per-cluster bounds/ })).toBeInTheDocument();
+    expect(screen.getByText(/Filtered with one global rule/)).toBeInTheDocument();
+  });
+
+  it("reads a dataset filtered with per-type bounds: the bound each type had, no re-filter", async () => {
+    getMitoByType.mockResolvedValue(report({
+      filter_mito_mode: "per_type", filter_type_column: "cell_type", n_flagged: 0,
+      types: [
+        type("LNCaP", { median: 12.1, bound: 15.1, applied_rule: "own", applied_bound: 15.1,
+          removed_global: 260, removed_global_frac: 0.65, note: "Filtered with its own bound, 15.1%." }),
+        type("CAF", { applied_rule: "own", applied_bound: 5.1 }),
+      ],
+      summary: "Filtered with per-type bounds on 'cell_type': 2 of 2 types used their own bound, the rest the global rule.",
+    }));
+    render(<MitoByType datasetId="d1" />);
+    expect(await screen.findByText("Filtered with per-type bounds (2 of 2 types)")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Mito by cell type/ }));
+    expect(screen.getByText("Filtered at")).toBeInTheDocument();
+    expect(screen.getByTestId("mito-row-LNCaP").textContent).toContain("15.1%");
+    expect(screen.getByText(/Filtered with per-type bounds on 'cell_type'\./)).toBeInTheDocument();
+    expect(screen.queryByTestId("mito-refilter")).not.toBeInTheDocument();
+  });
+
+  it("points an unfiltered dataset to the filtering step's per-type choice", async () => {
+    getMitoByType.mockResolvedValue(report({ already_filtered: false, ceiling_source: "default", filter_mode: null }));
+    render(<MitoByType datasetId="d1" />);
+    expect(await screen.findByTestId("mito-per-type-hint")).toHaveTextContent(/Per cell type/);
+    expect(screen.queryByTestId("mito-refilter")).not.toBeInTheDocument();
+    expect(screen.getByText(/Not filtered by scView yet/)).toBeInTheDocument();
+  });
+
   it("shows an error without breaking the panel", async () => {
     getMitoByType.mockRejectedValue(new Error("API error 500: boom"));
     render(<MitoByType datasetId="d1" />);

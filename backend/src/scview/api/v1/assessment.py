@@ -79,7 +79,11 @@ async def get_assessment(
                 "normalization_method": recorded_normalization_method(adata),
                 # Re-filtering keeps the mode the dataset was filtered with (fixed
                 # before MAD existed); None: never filtered by scView.
-                "qc_threshold_mode": filtered["qc_threshold_mode"] if filtered else None}
+                "qc_threshold_mode": filtered["qc_threshold_mode"] if filtered else None,
+                # Likewise the % mito rule (per-type bounds keep their type column).
+                "qc_mito_mode": (filtered.get("qc_mito_mode") or "global") if filtered else None,
+                "qc_mito_type_column": (filtered.get("qc_mito_type_column")
+                                        if filtered and filtered.get("qc_mito_mode") == "per_type" else None)}
 
     try:
         # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop.

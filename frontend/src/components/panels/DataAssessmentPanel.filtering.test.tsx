@@ -27,9 +27,11 @@ const DATASET = {
   available_embeddings: [], obs_columns: [{ name: "Donor", dtype: "category", n_unique: 3 }], created_at: "",
 } as unknown as DatasetInfo;
 
-function assessment(mode: string | null) {
+function assessment(mode: string | null, mito: Record<string, unknown> = {}) {
   const done = { done: true, confidence: "high", details: "Run by scView (recorded)" };
-  return { ...Object.fromEntries(STEPS.map((s) => [s, done])), normalization_method: null, qc_threshold_mode: mode };
+  return {
+    ...Object.fromEntries(STEPS.map((s) => [s, done])), normalization_method: null, qc_threshold_mode: mode, ...mito,
+  };
 }
 
 function streamResponse() {
@@ -61,8 +63,11 @@ describe("DataAssessmentPanel filtering mode", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  async function openFiltering(mode: string | null) {
-    apiFetch.mockImplementation(async (path: string) => (path.endsWith("/assessment") ? assessment(mode) : DATASET));
+  async function openFiltering(mode: string | null, mito: Record<string, unknown> = {},
+                               mitoByType: Record<string, unknown> | null = null) {
+    apiFetch.mockImplementation(async (path: string) =>
+      path.endsWith("/assessment") ? assessment(mode, mito)
+        : mitoByType && path.includes("/qc/mito-by-type") ? mitoByType : DATASET);
     renderPanel();
     await waitFor(() => screen.getByText("Cell/Gene Filtering"));
     fireEvent.click(screen.getByText("Cell/Gene Filtering"));
@@ -105,6 +110,35 @@ describe("DataAssessmentPanel filtering mode", () => {
       steps: ["filtering"],
       params: { qc_threshold_mode: "fixed" },
     });
+  });
+
+  it("sends the per-type % mito rule when it is chosen", async () => {
+    await openFiltering(null);
+    fireEvent.click(screen.getByRole("button", { name: "Per cell type" }));
+    expect(screen.getByLabelText("Cell types for per-type % mito bounds")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /re-run this step/i }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string)).toEqual({
+      steps: ["filtering"],
+      params: { qc_mito_mode: "per_type" },
+    });
+  });
+
+  it("keeps the per-type rule and its column a dataset was filtered with", async () => {
+    await openFiltering("mad", { qc_mito_mode: "per_type", qc_mito_type_column: "scview_mito_type" });
+    expect(screen.getByRole("button", { name: "Per cell type" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: /re-run this step/i }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string)).toEqual({
+      steps: ["filtering"],
+      params: { qc_threshold_mode: "mad", qc_mito_mode: "per_type", qc_mito_type_column: "scview_mito_type" },
+    });
+  });
+
+  it("offers no per-type rule without MT- genes, and says why", async () => {
+    await openFiltering(null, {}, { measurable: false, column: "Donor", types: [], n_flagged: 0 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Per cell type" })).toBeDisabled());
+    expect(screen.getByText(/% mito can't be measured and no per-type mito bound can be set/)).toBeInTheDocument();
   });
 
   it("switches mode from the step's own select", async () => {

@@ -379,3 +379,18 @@ def test_the_replay_helper_matches_the_filter():
             glob = ns["mad_drop"](a, ns["mito_only"](qc), bounds.to_dict())
         assert (glob == types.removed_global).all()
         assert (ns["type_mito_drop"](a, qc, rule, glob) == removed["max_pct_mt"]).all()
+
+
+async def test_the_assessment_reports_the_recorded_mito_rule(client, dataset_manager):
+    a = _cells()
+    did = _register(dataset_manager, a, "mt2")
+    body = (await client.get(f"{API}/datasets/{did}/assessment")).json()
+    assert body["qc_mito_mode"] is None and body["qc_mito_type_column"] is None  # never filtered
+    out, _ = run_pipeline(a.copy(), ["filtering"], _per_type())
+    did = _register(dataset_manager, out, "mt3")
+    body = (await client.get(f"{API}/datasets/{did}/assessment")).json()
+    assert (body["qc_mito_mode"], body["qc_mito_type_column"]) == ("per_type", "cell_type")
+    out, _ = run_pipeline(a.copy(), ["filtering"], FIXED10)
+    did = _register(dataset_manager, out, "mt4")
+    body = (await client.get(f"{API}/datasets/{did}/assessment")).json()
+    assert (body["qc_mito_mode"], body["qc_mito_type_column"]) == ("global", None)
