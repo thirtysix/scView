@@ -90,7 +90,7 @@ export function ShareLinkButton() {
 
   return (
     <div ref={ref} className="relative inline-block">
-      <span title={dataset ? "Copy a link that reopens this view" : "Open a dataset first"}>
+      <span className="inline-flex" title={dataset ? "Copy a link that reopens this view" : "Open a dataset first"}>
         <button
           onClick={() => (open ? close() : void make())}
           disabled={!dataset || busy}

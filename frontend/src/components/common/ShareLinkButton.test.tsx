@@ -51,6 +51,8 @@ describe("ShareLinkButton", () => {
     render(<ShareLinkButton />);
     expect(copyButton()).toBeDisabled();
     expect(copyButton().parentElement).toHaveAttribute("title", "Open a dataset first");
+    // A plain inline span around the flex button took its clicks in Chromium.
+    expect(copyButton().parentElement).toHaveClass("inline-flex");
     openKang();
     expect(copyButton()).toBeEnabled();
   });
