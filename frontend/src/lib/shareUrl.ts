@@ -280,6 +280,7 @@ const SUBTAB_LABELS: Partial<Record<UnifiedSubtab, string>> = {
   activity: "Activity",
   genelists: "Gene lists",
   communication: "Communication",
+  report: "Report",
 };
 
 /** What opening the link restores, one phrase each (the Copy link popover lists them). */
