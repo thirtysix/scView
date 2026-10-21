@@ -16,6 +16,7 @@ import { decodeArrowBuffer } from "@/lib/arrow";
 import {
   applyReliability,
   errorText,
+  exactLine,
   fmtScore,
   fmtShare,
   groupCells,
@@ -42,9 +43,9 @@ const COLUMN_TIPS: Record<GroupSortKey, string> = {
   group: "The group of the column chosen above (default: the clustering)",
   n: "Cells of the group that were scored",
   median:
-    "Median over the group's cells of the share of each cell's graph neighbours that are also among its nearest cells on the plot (1 = all kept); the tooltip on each value gives the interquartile range",
+    "Median over the group's cells of placement: the share of each cell's graph neighbours that lie among its nearest 5% of cells on the plot (1 = all nearby); the tooltip on each value gives the interquartile range and the exact-neighbour median",
   share_low:
-    "Share of the group's cells below the low threshold: fewer than 1 in 5 of their graph neighbours are beside them on the plot",
+    "Share of the group's cells below 0.5: fewer than half of their graph neighbours lie near them on the plot",
 };
 
 /**
@@ -160,7 +161,7 @@ export function EmbeddingReliabilityControl() {
         aria-pressed={!!ref}
         title={
           ready
-            ? "Colour each cell by how many of its graph neighbours (the kNN graph the clustering used) the plot keeps around it, on a fixed 0-1 scale; a low value means its position should not be read closely"
+            ? "Colour each cell by the share of its graph neighbours (the kNN graph the clustering used) that the plot puts near it, on a fixed 0-1 scale; a low value means it sits away from its real neighbours"
             : "No embedding to score"
         }
         className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
@@ -331,7 +332,7 @@ export function EmbeddingReliabilityPanel({
                 </span>
               </dd>
             </div>
-            <div title={`k / (n - 1) = ${summary.k} / ${(summary.n_cells - 1).toLocaleString()}: the score when a cell's plot neighbours are a random draw`}>
+            <div title={`window / (n - 1) = ${summary.window.cells.toLocaleString()} / ${(summary.n_cells - 1).toLocaleString()}: the score when a cell's neighbours are a random draw`}>
               <dt className="text-[10px] text-slate-500">Chance</dt>
               <dd className="font-semibold tabular-nums text-slate-800">{fmtScore(summary.chance)}</dd>
             </div>
@@ -340,6 +341,13 @@ export function EmbeddingReliabilityPanel({
               <dd className="font-semibold tabular-nums text-slate-800">{fmtScore(summary.shuffled.mean)}</dd>
             </div>
           </dl>
+          <p
+            className="text-[11px] leading-snug text-slate-600"
+            data-testid="reliability-exact"
+            title={`The strict score: the share of each cell's ${summary.k} graph neighbours that are also its ${summary.k} nearest cells on the plot`}
+          >
+            {exactLine(summary)}
+          </p>
           {summary.notes.length > 0 && (
             <ul className="list-disc space-y-0.5 pl-4 text-[11px] text-slate-500">
               {summary.notes.map((n) => (
@@ -400,7 +408,11 @@ export function EmbeddingReliabilityPanel({
                       <td className="px-1.5 py-0.5 text-right tabular-nums text-slate-600">{r.n.toLocaleString()}</td>
                       <td
                         className="px-1.5 py-0.5 text-right tabular-nums text-slate-800"
-                        title={`IQR ${fmtScore(r.q1)} to ${fmtScore(r.q3)}; mean ${fmtScore(r.mean)}`}
+                        title={`IQR ${fmtScore(r.q1)} to ${fmtScore(r.q3)}; mean ${fmtScore(r.mean)}${
+                          r.exact_median != null
+                            ? `; exact neighbours kept: median ${Math.round(r.exact_median * summary.k)} of ${summary.k}`
+                            : ""
+                        }`}
                       >
                         {fmtScore(r.median)}
                       </td>
@@ -420,8 +432,9 @@ export function EmbeddingReliabilityPanel({
           )}
           {rows.length > 0 && (
             <Caption n={{ value: rows.length, unit: "groups" }}>
-              {sort ? "Sorted as chosen." : "Worst first (lowest median)."} Click a row to select its cells. Small
-              groups score higher by chance alone (fewer cells to land among), so compare groups of similar size.
+              {sort ? "Sorted as chosen." : "Worst first (lowest median)."} Click a row to select its cells. A group
+              smaller than the window ({summary.window.cells.toLocaleString()} cells) scores near 1 whenever it forms
+              its own island, whatever the order inside it, so compare groups of similar size.
             </Caption>
           )}
         </>

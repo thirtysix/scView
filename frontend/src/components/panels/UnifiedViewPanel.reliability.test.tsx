@@ -107,21 +107,21 @@ beforeEach(() => {
 });
 
 describe("Unified View plot reliability overlay", () => {
-  const ref = { embedding: "X_umap", k: 15, chance: 15 / 13835, random: 0.00107 };
+  const ref = { embedding: "X_umap", k: 15, window: 692, chance: 692 / 13835, random: 0.0501 };
 
   it("draws it on a fixed 0-1 scale whatever the clipping, says so and gives chance", () => {
     useSettingsStore.setState({ colorClip: { preset: "p5" } });
     useUnifiedViewStore.setState({
-      scatterOverlay: { type: "score", name: "Neighbour preservation (UMAP)", reliability: ref },
+      scatterOverlay: { type: "score", name: "Neighbour placement (UMAP)", reliability: ref },
       overlayValues: Float32Array.from([0.2, 0.4, 0.6]),
-      overlayLabel: "Neighbour preservation (UMAP)",
+      overlayLabel: "Neighbour placement (UMAP)",
       overlayDatasetId: "kang",
     });
     renderPanel();
     expect(scatterProps.current!.colorScale).toEqual({ colormap: "viridis", min: 0, max: 1 });
     expect(screen.getByTestId("colour-scale-caption")).toHaveTextContent("Colour range 0 to 1, fixed (not clipped to the data).");
     expect(screen.getByTestId("colour-scale-note")).toHaveTextContent(
-      "1 = all 15 graph neighbours kept around the cell. Chance 0.0011; random placement about 0.0011.",
+      "1 = all 15 graph neighbours among the cell's nearest 692 cells. Chance 0.05; random placement about 0.05.",
     );
     expect(screen.queryByLabelText("Colour range clipping")).toBeNull();
     expect(scatterProps.current!.exportLegend).toMatchObject({ type: "continuous", min: 0, max: 1 });
@@ -148,7 +148,8 @@ describe("Unified View plot reliability overlay", () => {
     apiFetch.mockImplementation(async (path: string) =>
       path.includes("/reliability")
         ? {
-            embedding: "X_umap", dims: [0, 1], n_dims: 2, k: 15, chance: 0.0011,
+            embedding: "X_umap", dims: [0, 1], n_dims: 2, k: 15, chance: 0.05,
+            window: { share: 0.05, cells: 692, radius: "exact", ref_cells: null },
             shuffled: { median: 0, mean: 0.001, seed: 1 }, scores: [0.5, null, 1],
           }
         : {},
@@ -162,8 +163,8 @@ describe("Unified View plot reliability overlay", () => {
     const u = useUnifiedViewStore.getState();
     expect(u.scatterOverlay).toEqual({
       type: "score",
-      name: "Neighbour preservation (UMAP)",
-      reliability: { embedding: "X_umap", k: 15, chance: 0.0011, random: 0.001 },
+      name: "Neighbour placement (UMAP)",
+      reliability: { embedding: "X_umap", k: 15, window: 692, chance: 0.05, random: 0.001 },
     });
     expect(Number.isNaN(u.overlayValues![1]!)).toBe(true);
     expect(u.pendingOverlay).toBeNull();

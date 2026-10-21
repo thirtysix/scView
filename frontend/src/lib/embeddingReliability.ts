@@ -1,8 +1,9 @@
 /**
- * "Plot reliability" (C075): per cell, the share of its graph neighbours (the kNN
- * graph the clustering used) that are also among its k nearest cells on the plot
- * (backend core/embedding_reliability.py). The helpers the toolbar control, the
- * scatter legend and session restore share.
+ * "Plot reliability" (C075): per cell, placement, the share of its graph neighbours
+ * (the kNN graph the clustering used) that lie among its nearest 5% of cells on the
+ * plot; the strict exact-neighbour share is context only (backend
+ * core/embedding_reliability.py). The helpers the toolbar control, the scatter
+ * legend and session restore share.
  */
 import {
   getEmbeddingReliability,
@@ -19,17 +20,24 @@ export interface ReliabilityRef {
   /** The PCA pair plotted, when not the first two */
   dims?: [number, number];
   k: number;
+  /** Placement window, in cells */
+  window: number;
   chance: number;
   /** Mean score after one seeded shuffle of the coordinates */
   random: number | null;
 }
 
-/** "Neighbour preservation (UMAP)", "(UMAP 3D)", "(PCA, PC3 vs PC4)". */
-export function reliabilityName(embedding: string, nDims = 2, dims?: [number, number]): string {
+/** "UMAP", "UMAP 3D", "PCA, PC3 vs PC4". */
+export function plotLabel(embedding: string, nDims = 2, dims?: [number, number]): string {
   let label = prettyEmbeddingLabel(embedding);
   if (nDims === 3) label += " 3D";
   if (dims) label += `, PC${dims[0] + 1} vs PC${dims[1] + 1}`;
-  return `Neighbour preservation (${label})`;
+  return label;
+}
+
+/** "Neighbour placement (UMAP)", "(UMAP 3D)", "(PCA, PC3 vs PC4)". */
+export function reliabilityName(embedding: string, nDims = 2, dims?: [number, number]): string {
+  return `Neighbour placement (${plotLabel(embedding, nDims, dims)})`;
 }
 
 /** Two decimals; two significant digits below 0.1, so a chance of 0.0011 is not "0.00". */
@@ -61,6 +69,7 @@ export function refOf(summary: ReliabilitySummary, dims?: [number, number]): Rel
     embedding: summary.embedding,
     ...(dims ? { dims } : {}),
     k: summary.k,
+    window: summary.window.cells,
     chance: summary.chance,
     random: summary.shuffled.mean,
   };
@@ -114,7 +123,10 @@ export async function showReliability(
 /** The legend's line under the scale's caption (which says the range is fixed): what 1 and chance are. */
 export function reliabilityLegendNote(ref: ReliabilityRef): string {
   const random = ref.random != null ? `; random placement about ${fmtScore(ref.random)}` : "";
-  return `1 = all ${ref.k} graph neighbours kept around the cell. Chance ${fmtScore(ref.chance)}${random}.`;
+  return (
+    `1 = all ${ref.k} graph neighbours among the cell's nearest ${ref.window.toLocaleString()} cells. ` +
+    `Chance ${fmtScore(ref.chance)}${random}.`
+  );
 }
 
 /** What the numbers mean, in one paragraph, with the n. */
@@ -128,13 +140,26 @@ export function reliabilityCaption(s: ReliabilitySummary): string {
     ? `${s.n_scored.toLocaleString()} of ${s.n_cells.toLocaleString()} cells (a seeded sample; the rest are grey)`
     : `${s.n_cells.toLocaleString()} cells`;
   const o = s.overall;
+  const share = `${Math.round(s.window.share * 100)}%`;
   const random = s.shuffled.mean != null ? `; random placement would score about ${fmtScore(s.shuffled.mean)}` : "";
   return (
-    `Each cell: the share of its ${s.k} graph neighbours (${graph}) that are also among its ${s.k} nearest cells on ${plot}. ` +
+    `Each cell: the share of its ${s.k} graph neighbours (${graph}) that lie among its nearest ` +
+    `${s.window.cells.toLocaleString()} cells on ${plot} (${share} of the cells). ` +
     `Median ${fmtScore(o.median)} over ${scored}; ${fmtShare(o.share_low)} are low (${s.low_reason}). ` +
     `Chance is ${fmtScore(s.chance)}${random}. ` +
-    `A low value means the cells around this one on the plot are mostly not its real neighbours: don't read its position closely.`
+    `A low cell sits away from its real neighbours on the plot (a stray in another island, or a bridge between ` +
+    `islands): don't read its position closely.`
   );
+}
+
+/** The strict number as context: how many of k exact neighbours a typical cell keeps. */
+export function exactLine(s: ReliabilitySummary): string {
+  const median = s.exact.median ?? 0;
+  const kept = Math.round(median * s.k);
+  const head = `Exact neighbours kept: median ${kept} of ${s.k} (chance ${fmtScore(s.exact.chance)})`;
+  if (median >= 0.5) return `${head}.`;
+  const plot = plotLabel(s.embedding, s.n_dims, /pca/i.test(s.embedding) ? [s.dims[0]!, s.dims[1]!] : undefined);
+  return `${head}. ${plot} keeps few exact neighbours anywhere, so read positions within an island loosely.`;
 }
 
 export type GroupSortKey = "group" | "n" | "median" | "share_low";
