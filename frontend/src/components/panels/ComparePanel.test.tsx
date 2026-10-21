@@ -13,6 +13,9 @@ vi.mock("@/api/client", () => ({ apiFetch }));
 vi.mock("@/api/composition", () => ({ testComposition }));
 vi.mock("@/components/plots/Plot", () => ({ default: () => null }));
 vi.mock("@/components/compare/JointEmbedding", () => ({ JointEmbedding: () => null }));
+vi.mock("@/components/compare/MiloTest", () => ({
+  MiloTest: ({ datasetId }: { datasetId: string }) => <div data-testid="milo">{datasetId}</div>,
+}));
 
 import { ComparePanel } from "./ComparePanel";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -53,6 +56,16 @@ describe("ComparePanel composition", () => {
         condition_key: "stim", group_key: "cell_type", transform: "logit",
       }),
     );
+  });
+
+  it("offers Milo next to the group test, with when to use which", async () => {
+    render(<ComparePanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Composition" }));
+    expect(screen.getByText(/Between conditions tests whether whole cell types/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Neighbourhoods (Milo)" }));
+    expect(screen.getByTestId("milo").textContent).toBe("a");
+    expect(screen.getByText(/needs no clustering/)).toBeInTheDocument();
+    expect(screen.getByText(/change in abundance between two conditions/)).toBeInTheDocument();
   });
 
   it("calls two datasets' differences descriptive, on screen and to the co-pilot", async () => {

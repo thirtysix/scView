@@ -36,7 +36,7 @@ import re
 from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
-from scview.core import ccc, cluster_qc, composition, provenance, qc_filter
+from scview.core import ccc, cluster_qc, composition, milo, provenance, qc_filter
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -322,6 +322,14 @@ def build_grounding_context(
                                           detail=ccc_detail, evidence="\n".join(ccc_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: communication grounding failed: %s", exc)
+        try:
+            milo_lines, milo_detail = milo.grounding_lines(adaptor)
+            lines.extend(milo_lines)
+            if milo_detail:
+                sources.append(ChatSource(kind="result", ref="result:milo", detail=milo_detail,
+                                          evidence="\n".join(milo_lines[1:])))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: milo grounding failed: %s", exc)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).

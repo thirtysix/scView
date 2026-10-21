@@ -115,8 +115,8 @@ def vocab_for(adaptor) -> Vocab:
 
 _CITE_RX = re.compile(r"\[([^\[\]\n]{2,120})\](?!\()")
 _CITE_FAMILIES = ("dataset", "provenance", "preprocessing", "result", "obs", "lit", "doc",
-                  "app", "composition", "markers", "qc", "groups", "annotation", "celltypes",
-                  "enrichment", "communication")
+                  "app", "composition", "milo", "markers", "qc", "groups", "annotation",
+                  "celltypes", "enrichment", "communication")
 _LIST_RX = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _TICK_RX = re.compile(r"`([^`]+)`")
 _GENE_TOKEN_RX = re.compile(r"(?<![\w\-.])[A-Za-z0-9][A-Za-z0-9\-.]*[A-Za-z0-9](?![\w\-])")
@@ -585,8 +585,8 @@ _FAMILY_PREFIX = {
     "dataset": "dataset:", "provenance": "provenance:", "preprocessing": "preprocessing:",
     "markers": "result:markers:", "groups": "result:groups:", "obs": "result:groups:",
     "celltypes": "result:celltypes:", "annotation": "result:celltypes:",
-    "composition": "result:composition", "qc": "result:qc:", "enrichment": "result:enrichment",
-    "communication": "result:communication",
+    "composition": "result:composition", "milo": "result:milo", "qc": "result:qc:",
+    "enrichment": "result:enrichment", "communication": "result:communication",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -624,7 +624,8 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
             if any_col:
                 return any_col
         if fam_refs and (fam in ("dataset", "provenance", "preprocessing", "markers",
-                                  "composition", "enrichment", "qc", "communication") or not last):
+                                  "composition", "milo", "enrichment", "qc", "communication")
+                         or not last):
             if fam == "dataset":
                 return fam_refs[:1]
             return fam_refs
