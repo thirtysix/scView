@@ -12,7 +12,7 @@ import {
   type DEMethodsResponse,
   type DEResponse,
 } from "@/api/de";
-import type { ActivityRef } from "@/api/activity";
+import type { OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
 import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { DetectionHistogram } from "@/components/plots/DetectionHistogram";
 import { DEEnrichment } from "@/components/unified/DEEnrichment";
@@ -74,7 +74,7 @@ function defaultSplit(cols: ObsColumnInfo[]): string {
 interface Props {
   onGeneClick: (gene: string) => void;
   /** Scores an enriched gene set on the scatter (from the DE enrichment). */
-  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[], activity?: ActivityRef) => void;
+  onScoreGeneSet: OnScoreGeneSet;
 }
 
 /**

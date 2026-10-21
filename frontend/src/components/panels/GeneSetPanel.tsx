@@ -42,6 +42,9 @@ import {
 import { CollectionOptions } from "./CustomCollectionsGroup";
 import { collectionLabel, type CollectionChoice } from "@/api/genesets";
 import { useCustomGeneSetsStore } from "@/stores/customGeneSetsStore";
+import { scoreGeneSet, scoreLabel, type GeneSetScoreResponse } from "@/api/genesetScore";
+import { useScoringMethodStore } from "@/stores/scoringMethodStore";
+import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -58,16 +61,6 @@ interface GeneSetSearchResult {
   collection_name?: string;
   n_genes: number;
   genes: string[];
-}
-
-interface GeneSetScoreResponse {
-  score_name: string;
-  n_cells: number;
-  scores: number[];
-  min_score: number;
-  max_score: number;
-  genes_found: string[];
-  genes_missing: string[];
 }
 
 interface EnrichmentResult {
@@ -151,6 +144,7 @@ export function GeneSetPanel() {
   const [scoringProgram, setScoringProgram] = useState<string | null>(null);
   const [isScoring, setIsScoring] = useState(false);
   const [scoreError, setScoreError] = useState<string | null>(null);
+  const scoringMethod = useScoringMethodStore((s) => s.method);
   const [scoreResult, setScoreResult] = useState<GeneSetScoreResponse | null>(
     null,
   );
@@ -410,16 +404,7 @@ export function GeneSetPanel() {
     setScoreValues(null);
 
     try {
-      const data = await apiFetch<GeneSetScoreResponse>(
-        `/datasets/${datasetId}/genesets/score`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            gene_set: parsedGenes,
-            score_name: scoreName,
-          }),
-        },
-      );
+      const data = await scoreGeneSet(datasetId, parsedGenes, scoreName, scoringMethod);
       setScoreResult(data);
       const f32 = new Float32Array(data.scores.length);
       for (let i = 0; i < data.scores.length; i++) f32[i] = data.scores[i]!;
@@ -433,7 +418,7 @@ export function GeneSetPanel() {
     } finally {
       setIsScoring(false);
     }
-  }, [datasetId, parsedGenes, scoreName, currentGroupBy, dataset]);
+  }, [datasetId, parsedGenes, scoreName, currentGroupBy, dataset, scoringMethod]);
 
   const buildViolinFromScores = useCallback(
     async (scores: number[]) => {
@@ -723,6 +708,9 @@ export function GeneSetPanel() {
     );
   }, [sortedResults, selectedGroup, datasetId]);
 
+  // The method the shown score was computed with, in its labels.
+  const scoredLabel = scoreLabel(scoreName, scoreResult?.method);
+
   // ---- Score range for legend ----
   const scoreMinMax = useMemo(() => {
     if (!scoreResult) return { min: 0, max: 1 };
@@ -911,6 +899,7 @@ export function GeneSetPanel() {
                     </>
                   )}
                 </button>
+                <ScoringMethodChoice label="with" />
                 <div className="flex items-center gap-2">
                   <label className="text-sm font-medium text-slate-600">
                     Group by:
@@ -980,9 +969,9 @@ export function GeneSetPanel() {
                         maxRenderedCells={maxRenderedCells}
                         dimensions={dimensions}
                         exportName={`score_${scoreName}`}
-                        colorLabel={`${scoreName} score`}
+                        colorLabel={`${scoredLabel} score`}
                         exportLegend={
-                          scoreValues ? { type: "continuous", title: scoreName, ...scoreMinMax } : null
+                          scoreValues ? { type: "continuous", title: scoredLabel, ...scoreMinMax } : null
                         }
                         embedding={embedding}
                       />
@@ -994,7 +983,7 @@ export function GeneSetPanel() {
                         type="continuous"
                         min={scoreMinMax.min}
                         max={scoreMinMax.max}
-                        label={scoreName}
+                        label={scoredLabel}
                       />
                     </div>
                   )}
@@ -1012,7 +1001,7 @@ export function GeneSetPanel() {
                       <ViolinPlot
                         data={violinData}
                         groupColumn={currentGroupBy}
-                        title={scoreName}
+                        title={scoredLabel}
                         xLabel={currentGroupBy}
                         yLabel="Score"
                         height={Math.max(

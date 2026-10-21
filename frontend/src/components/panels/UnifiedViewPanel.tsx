@@ -43,6 +43,7 @@ import { getDataset, renameObsCategory, setCategoryOrder } from "@/api/datasets"
 import { cellsInCategories, togglePicked } from "@/lib/categoryOrder";
 import { subclusterGroup } from "@/api/clustering";
 import { getActivityCells, type ActivityRef } from "@/api/activity";
+import { scoreGeneSet, scoreLabel, type ScoreMethod } from "@/api/genesetScore";
 import { activityLabel } from "@/lib/activity";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { decodeArrowBuffer } from "@/lib/arrow";
@@ -442,12 +443,14 @@ export function UnifiedViewPanel() {
   }, [expressionLayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Gene set score handler ---
-  // `genes`: the set scored, so a saved session can score it again.
+  // `genes`: the set scored, so a saved session can score it again; `method`: how
+  // (score_genes when absent), named in the label.
   const handleScoreComplete = useCallback(
-    (scores: Float32Array, name: string, genes?: string[], activity?: ActivityRef) => {
+    (scores: Float32Array, name: string, genes?: string[], activity?: ActivityRef, method?: ScoreMethod) => {
+      const label = scoreLabel(name, method);
       setOverlayValues(scores);
-      setOverlayLabel(name);
-      setScatterOverlay({ type: "score", name, genes, activity });
+      setOverlayLabel(label);
+      setScatterOverlay(method === "aucell" ? { type: "score", name, genes, activity, method } : { type: "score", name, genes, activity });
       if (datasetId) setOverlayDatasetId(datasetId);
 
       // Build violin from scores grouped by the active groupBy column
@@ -467,7 +470,7 @@ export function UnifiedViewPanel() {
                 groups[groupName].push(scores[i]!);
               }
               setViolinData(groups);
-              setViolinTitle(`${name} score`);
+              setViolinTitle(`${label} score`);
               openBottomPanel();
             }
           })
@@ -502,11 +505,10 @@ export function UnifiedViewPanel() {
         .catch((err) => console.error("Failed to restore the activity overlay:", err));
       return;
     }
-    apiFetch<{ scores: number[] }>(`/datasets/${datasetId}/genesets/score`, {
-      method: "POST",
-      body: JSON.stringify({ gene_set: o.genes, score_name: o.name }),
-    })
-      .then((res) => handleScoreComplete(new Float32Array(res.scores), o.name, o.genes))
+    // A session from before the method choice scored with score_genes.
+    const method = o.method ?? "score_genes";
+    scoreGeneSet(datasetId, o.genes, o.name, method)
+      .then((res) => handleScoreComplete(new Float32Array(res.scores), o.name, o.genes, undefined, method))
       .catch((err) => console.error("Failed to restore the gene-set overlay:", err));
   }, [pendingOverlay, datasetId, handleGeneClick, handleProteinClick, handleScoreComplete, setPendingOverlay]);
 
