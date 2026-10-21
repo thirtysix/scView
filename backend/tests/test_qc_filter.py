@@ -189,7 +189,7 @@ def test_the_preview_is_fast_at_200k_cells():
     took = time.perf_counter() - t0
     assert out["n_cells"] == n and len(out["clusters"]["groups"]) == 40
     assert took < 1.0, f"{took:.3f} s"  # ~0.05 s here; a debounced drag must keep up
-    assert len(json.dumps(out)) < 50_000
+    assert len(json.dumps(out)) < 80_000  # ~67 KB: the removal audit adds a 40 x 16 table
 
 
 # --- the filtering step ----------------------------------------------------------

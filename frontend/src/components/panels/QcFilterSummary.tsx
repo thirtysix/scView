@@ -6,12 +6,14 @@ import {
   type FilterPreview,
   type FilterThresholds,
   type QcThresholdMode,
+  type RemovalAuditColumns,
 } from "@/api/qc";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { qcGroupOptions } from "@/lib/qcGroups";
 import { bound, pct, thresholdMode } from "@/lib/qcThresholds";
 import { SampleQcTable } from "@/components/panels/SampleQcTable";
 import { useSexCheck } from "@/components/panels/SampleSexCheck";
+import { RemovalAudit } from "@/components/qc/RemovalAudit";
 
 const DEBOUNCE_MS = 150;
 const ROWS = 6; // per table, more behind "show all"
@@ -206,6 +208,7 @@ function PreviousNote({ preview, mode }: { preview: FilterPreview; mode: QcThres
  * on every change (debounced): overall, by each threshold on its own, per sample and
  * per cluster, with a warning for a sample or cluster removed whole or more than half.
  * In MAD mode (the default for new runs) each sample's own thresholds are listed.
+ * Below it, who gets removed per cell type x condition (`RemovalAudit`).
  */
 export function QcFilterSummary({
   datasetId,
@@ -223,8 +226,12 @@ export function QcFilterSummary({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [allWarnings, setAllWarnings] = useState(false);
+  // The removal audit's columns, kept per dataset: another dataset may not have them.
+  const [audit, setAudit] = useState<{ id: string; columns: RemovalAuditColumns }>({ id: datasetId, columns: {} });
+  const auditColumns = audit.id === datasetId ? audit.columns : {};
   const request = useRef(0);
   const key = JSON.stringify(thresholds);
+  const columnsKey = JSON.stringify(auditColumns);
   const mode = thresholdMode(thresholds);
   // Each sample's sex from expression, for the per-sample table: asked once the
   // samples are known, and again only when they change (not per threshold).
@@ -234,7 +241,9 @@ export function QcFilterSummary({
     const id = ++request.current;
     setLoading(true);
     const timer = setTimeout(() => {
-      getFilterPreview(datasetId, JSON.parse(key) as FilterThresholds)
+      const cols = JSON.parse(columnsKey) as RemovalAuditColumns;
+      const t = JSON.parse(key) as FilterThresholds;
+      (cols.label_column || cols.condition_column ? getFilterPreview(datasetId, t, cols) : getFilterPreview(datasetId, t))
         .then((p) => {
           if (id !== request.current) return; // a newer threshold was asked for
           setPreview(p);
@@ -248,7 +257,7 @@ export function QcFilterSummary({
         });
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [datasetId, key, refreshKey]);
+  }, [datasetId, key, columnsKey, refreshKey]);
 
   const header = (
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -337,6 +346,11 @@ export function QcFilterSummary({
           or Reprocess from Scratch).
         </p>
       </div>
+      <RemovalAudit
+        preview={preview}
+        columns={auditColumns}
+        onColumns={(columns) => setAudit({ id: datasetId, columns })}
+      />
       <SampleQcTable preview={preview} mad={mad} sex={sex} />
     </>
   );

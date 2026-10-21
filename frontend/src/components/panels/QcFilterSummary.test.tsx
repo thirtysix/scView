@@ -213,4 +213,23 @@ describe("QcFilterSummary in MAD mode", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fixed cut-offs" }));
     expect(onChange).toHaveBeenCalledWith({ qc_threshold_mode: "fixed" });
   });
+
+  it("mounts the removal audit and asks again with the columns picked there", async () => {
+    const audit = {
+      label: { column: "leiden", reason: "clustering", n_groups: 1 },
+      condition: null,
+      by_type: [{ name: "0", n_cells: 1000, n_removed: 150, fraction: 0.15, by_criterion: {} }],
+      overall: { name: null, n_cells: 1000, n_removed: 150, fraction: 0.15, by_criterion: {} },
+      n_unlabelled: 0, note: null, rule: "Flagged when ...", flags: [],
+    };
+    getFilterPreview.mockImplementation(() => Promise.resolve({ ...preview(150), audit, recorded: null }));
+    useDatasetStore.setState({
+      currentDataset: { obs_columns: [{ name: "Donor", dtype: "category", n_unique: 2 }] } as unknown as DatasetInfo,
+    });
+    render(<QcFilterSummary datasetId="d1" thresholds={T} />);
+    expect(await screen.findByTestId("removal-audit")).toBeInTheDocument();
+    expect(getFilterPreview).toHaveBeenLastCalledWith("d1", T);
+    fireEvent.change(screen.getByLabelText("Columns column for the removal audit"), { target: { value: "Donor" } });
+    await waitFor(() => expect(getFilterPreview).toHaveBeenLastCalledWith("d1", T, { condition_column: "Donor" }));
+  });
 });

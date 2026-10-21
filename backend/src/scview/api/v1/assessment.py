@@ -251,6 +251,8 @@ async def get_filter_preview(
     mad_upper: bool | None = None,
     sample_column: str = "",
     cluster_column: str = "",
+    label_column: str = "",
+    condition_column: str = "",
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The cells the filtering step's thresholds would remove (core/qc_filter.py):
@@ -259,6 +261,10 @@ async def get_filter_preview(
     flags, and in MAD mode (``mode``, the default) each sample's thresholds.
     ``sample_column`` names the samples (default: detected), as the step's
     ``qc_sample_column`` does. Thresholds left out take the pipeline's defaults.
+    ``audit`` is who they remove per ``label_column`` group (default: an author
+    cell-type column, else the clustering) x ``condition_column`` group (default:
+    a condition-like column, else the samples), with a chi-square per group and
+    flags; ``recorded`` the same for what the last filtering step removed.
     Small and fast at any cell count (one pass over cached per-cell values), so
     the QC plots ask again on every threshold change."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
@@ -276,7 +282,8 @@ async def get_filter_preview(
 
     def _run() -> dict:
         return qc_filter.preview(adaptor.adata, adaptor.qc_per_cell(), thresholds,
-                                 sample_column or None, cluster_column or None)
+                                 sample_column or None, cluster_column or None,
+                                 label_column or None, condition_column or None)
 
     try:
         # Per-cell metrics may need a pass over the counts the first time: off the loop.

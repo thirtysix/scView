@@ -41,16 +41,33 @@ per-cell values (``per_cell_qc``: obs QC columns when present, else computed
 from the counts, as the QC plots show them), so the preview is what the step
 does. A cell without a value for a metric is not removed by it. % mito is used
 only when it can be measured (the dataset has MT- genes).
+
+Who gets removed (``audit``): the loss per cell type (an author label column,
+else the clustering) and per condition (a condition-like column, else the
+samples), with a chi-square test per cell type of removed ~ condition. A fixed
+10 % mito cut-off that took 65 % of one cell type and 1-5 % of another, at a rate
+that followed the drug (p = 2e-21), is a filter that selects a cell state, not
+damaged cells; the flags say so with the numbers. The filtering step keeps a
+record of the cells it removed (``RECORD_KEY`` in uns: their QC values and
+labels), so the same audit is shown for what it actually removed
+(``recorded_audit``), after the cells are gone.
 """
 
 from __future__ import annotations
 
+import logging
 import math
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import numpy as np
+import pandas as pd
+from scipy.stats import chi2_contingency
 
-from scview.core import cluster_qc, provenance, qc_groups
+from scview.core import cluster_qc, confounding, provenance, qc_groups
+
+logger = logging.getLogger(__name__)
 
 HALF = 0.5  # warn when a threshold removes more than this share of a group
 MAX_CLUSTERS = cluster_qc.MAX_GROUPS
@@ -505,7 +522,8 @@ def _warnings(kind: str, grouped: dict | None) -> list[dict]:
 
 
 def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
-            cluster_column: str | None = None) -> dict:
+            cluster_column: str | None = None, label_column: str | None = None,
+            condition_column: str | None = None) -> dict:
     """What ``t`` removes: overall, per threshold on its own, per sample (the
     donor / sample column, else a batch column) and per cluster (the active
     clustering), plus warnings for groups it empties or more than halves.
@@ -514,6 +532,13 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
     (``qc_groups.sample_summary``); in MAD mode ``mad`` holds each sample's
     thresholds (``MadBounds.to_dict``), the samples being the same groups.
     ``previous`` is how scView last filtered the dataset, if it did.
+
+    ``audit``: who the thresholds remove per label group (``label_column``,
+    default an author cell-type column, else the clustering) x condition
+    (``condition_column``, default a condition-like column, else the samples),
+    with a removed ~ condition test per group and flags (``audit_flags``; a group
+    the warnings already cover is not flagged again). ``recorded``: the same for
+    the cells the last filtering step actually removed (``recorded_audit``).
 
     ``cells`` is ``AnnDataAdaptor.qc_per_cell()``. Raises ValueError for a named
     column that does not exist, or for thresholds ``judge`` refuses."""
@@ -540,6 +565,8 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
     warnings = _warnings("sample", samples) + _warnings("cluster", clusters)
     warnings.sort(key=lambda w: (not w["whole"], -w["fraction"]))
     previous = recorded_filtering(adata)
+    who = audit(adata, drop, removed, label_column, condition_column, samp.column,
+                skip={(w["column"], w["group"]) for w in warnings})
     return {
         "n_cells": n,
         "n_removed": n_removed,
@@ -565,4 +592,486 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
         "warnings": warnings,
         "previous": None if previous is None else {
             "mode": previous["qc_threshold_mode"], "timestamp": previous.get("timestamp")},
+        "audit": who,
+        "recorded": recorded_audit(adata, label_column, condition_column),
     }
+
+
+# --- who gets removed: per cell type x condition ------------------------------------
+
+AUDIT_LOSS = 0.30  # flag a cell type that loses more than this share
+AUDIT_P = 0.01  # and a removal rate that depends on the condition at this p ...
+AUDIT_DIFF_PP = 10.0  # ... with at least this many percentage points between conditions
+AUDIT_MIN_CELLS = confounding.MIN_CELLS  # a condition is compared in a cell type with this many cells
+MAX_AUDIT_CONDITIONS = 20  # more conditions (or samples) than this are not split by
+MAX_AUDIT_GROUPS = 100  # label groups (rows); a column with more is summarised by a note
+AUDIT_RULE = (f"Flagged when a filter removes more than {AUDIT_LOSS:.0%} of a group, or its removal "
+              f"rate differs between conditions by {AUDIT_DIFF_PP:g} or more percentage points with "
+              f"p < {AUDIT_P:g} (chi-square of removed vs kept by condition, Yates-corrected for two "
+              f"conditions; conditions with fewer than {AUDIT_MIN_CELLS} cells in the group are left out).")
+
+# Author labels: a cell-type / annotation column, or the author's clusters
+# (paul15_clusters, seurat_clusters), never one scView made (it is remade after
+# filtering, so it cannot label the removed cells).
+_LABEL_RE = re.compile(r"cell_?type|celltype|annotation|^labels?$|clusters?$", re.I)
+_MADE_HERE_RE = re.compile(r"^scview_|leiden|louvain|^phase$|doublet", re.I)
+MAX_LABEL_VALUES = MAX_AUDIT_GROUPS
+
+
+def _few_values(s: pd.Series, most: int = MAX_LABEL_VALUES) -> bool:
+    """A categorical, text, bool or integer column with 2..``most`` values."""
+    if pd.api.types.is_float_dtype(s.dtype):
+        return False
+    return 2 <= int(s.nunique(dropna=True)) <= most
+
+
+def _author_label(name: str) -> bool:
+    return bool(_LABEL_RE.search(name)) and not _MADE_HERE_RE.search(name)
+
+
+def label_grouping(adata, label_column: str | None = None) -> tuple[str | None, str | None]:
+    """(column, why) for the audit's rows: the one named, else an author cell-type
+    column, else the active clustering. Raises ValueError for a named column that
+    does not exist."""
+    obs = adata.obs
+    if label_column:
+        if label_column not in obs.columns:
+            raise ValueError(f"Column '{label_column}' not found.")
+        return label_column, "requested"
+    for c in obs.columns:
+        if _author_label(str(c)) and _few_values(obs[c]):
+            return str(c), "labels"
+    col = cluster_qc.default_grouping(adata)
+    return (col, "clustering") if col else (None, None)
+
+
+def condition_grouping(adata, condition_column: str | None = None, label_column: str | None = None,
+                       sample_column: str | None = None) -> tuple[str | None, str | None]:
+    """(column, why) for the audit's columns: the one named, else the first
+    condition-like column (``confounding.condition_columns``), else the samples,
+    else none. Raises ValueError for a named column that does not exist."""
+    obs = adata.obs
+    if condition_column:
+        if condition_column not in obs.columns:
+            raise ValueError(f"Column '{condition_column}' not found.")
+        return condition_column, "requested"
+    for c in confounding.condition_columns(obs):
+        if c != label_column:
+            return c, "condition"
+    if sample_column and sample_column != label_column:
+        return sample_column, "sample"
+    return None, None
+
+
+def _fmt_p(p: float) -> str:
+    if p <= 0 or p < 1e-300:
+        return "p < 1e-300"
+    return f"p = {p:.0e}" if p < 1e-3 else f"p = {p:.2g}"
+
+
+def rate_test(removed: np.ndarray, sizes: np.ndarray, names: list[str]) -> dict | None:
+    """Removed ~ condition over the conditions with ``AUDIT_MIN_CELLS`` or more
+    cells: chi-square on the 2 x k table (removed, kept), the highest and lowest
+    removal rate and their difference in percentage points. None with fewer than
+    two such conditions; ``p`` None when nothing or everything was removed."""
+    use = np.flatnonzero(np.asarray(sizes) >= AUDIT_MIN_CELLS)
+    if use.size < 2:
+        return None
+    r = np.asarray(removed, dtype=np.int64)[use]
+    n = np.asarray(sizes, dtype=np.int64)[use]
+    rates = r / n
+    hi, lo = int(np.argmax(rates)), int(np.argmin(rates))
+    out = {
+        "compared": [names[i] for i in use],
+        "high": names[use[hi]], "high_rate": round(float(rates[hi]), 4),
+        "low": names[use[lo]], "low_rate": round(float(rates[lo]), 4),
+        "max_diff_pp": round(100.0 * float(rates[hi] - rates[lo]), 1),
+        "p": None, "statistic": None, "dof": None, "low_expected": False,
+    }
+    if 0 < int(r.sum()) < int(n.sum()):
+        chi2, p, dof, expected = chi2_contingency(np.vstack([r, n - r]))  # Yates for 2 x 2
+        out.update(p=float(p), statistic=round(float(chi2), 3), dof=int(dof),
+                   low_expected=bool((expected < 5).any()))
+    return out
+
+
+def _depends(test: dict | None) -> bool:
+    return bool(test and test["p"] is not None and test["p"] < AUDIT_P
+                and test["max_diff_pp"] >= AUDIT_DIFF_PP)
+
+
+def _main_criterion(by_criterion: dict[str, int]) -> tuple[str | None, int]:
+    active = {c: v for c, v in by_criterion.items() if v > 0}
+    return (max(active, key=active.get) if active else None), len(active)
+
+
+def _cell_counts(codes: np.ndarray, k: int, drop: np.ndarray, removed: dict[str, np.ndarray],
+                 where: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    """Per code (cells in ``where``): cells, removed, removed by each criterion alone."""
+    c = codes[where]
+    return (np.bincount(c, minlength=k), np.bincount(codes[where & drop], minlength=k),
+            {name: np.bincount(codes[where & m], minlength=k) for name, m in removed.items()})
+
+
+def _row(name: str | None, n: int, r: int, alone: dict[str, int], cond: dict | None) -> dict:
+    n, r = int(n), int(r)
+    row = {"name": name, "n_cells": n, "n_removed": r,
+           "fraction": round(r / n, 4) if n else 0.0, "by_criterion": {c: int(v) for c, v in alone.items()}}
+    if cond is not None:
+        row["conditions"] = {"n_cells": [int(x) for x in cond["n"]], "n_removed": [int(x) for x in cond["r"]],
+                             "by_criterion": {c: [int(x) for x in v] for c, v in cond["alone"].items()}}
+        row["test"] = rate_test(cond["r"], cond["n"], cond["names"])
+    return row
+
+
+def audit_table(label: tuple[list[str], np.ndarray] | None, condition: tuple[list[str], np.ndarray] | None,
+                drop: np.ndarray, removed: dict[str, np.ndarray], max_groups: int = MAX_AUDIT_GROUPS) -> dict:
+    """The cross-tab on codes (-1 = no value): per label group, its loss overall,
+    per condition and per criterion, and the removed ~ condition test; ``overall``
+    the same over all cells, ignoring the labels."""
+    n = int(drop.size)
+    c_names, c_codes = condition if condition is not None else ([], np.full(n, -1))
+    k_c = len(c_names)
+    has_cond = k_c > 0
+    out: dict = {"by_type": [], "note": None, "n_unlabelled": 0}
+
+    def cond_cells(where: np.ndarray) -> dict | None:
+        if not has_cond:
+            return None
+        cn, cr, ca = _cell_counts(c_codes, k_c, drop, removed, where & (c_codes >= 0))
+        return {"n": cn, "r": cr, "alone": ca, "names": c_names}
+
+    everyone = np.ones(n, dtype=bool)
+    out["overall"] = _row(None, n, int(drop.sum()), {c: int(m.sum()) for c, m in removed.items()},
+                          cond_cells(everyone))
+    if label is None or not label[0]:
+        return out
+    l_names, l_codes = label
+    k_l = len(l_names)
+    labelled = l_codes >= 0
+    out["n_unlabelled"] = int((~labelled).sum())
+    if k_l > max_groups:
+        out["note"] = f"{k_l} groups; the audit is shown for at most {max_groups}."
+        return out
+    sizes, lost, alone = _cell_counts(l_codes, k_l, drop, removed, labelled)
+    per_cond = None
+    if has_cond:
+        both = labelled & (c_codes >= 0)
+        flat = np.where(both, l_codes * k_c + np.maximum(c_codes, 0), -1)
+        n_lc, r_lc, a_lc = _cell_counts(flat, k_l * k_c, drop, removed, both)
+        per_cond = (n_lc.reshape(k_l, k_c), r_lc.reshape(k_l, k_c),
+                    {c: v.reshape(k_l, k_c) for c, v in a_lc.items()})
+    for i, name in enumerate(l_names):
+        cond = None if per_cond is None else {
+            "n": per_cond[0][i], "r": per_cond[1][i], "alone": {c: v[i] for c, v in per_cond[2].items()},
+            "names": c_names}
+        out["by_type"].append(_row(name, sizes[i], lost[i], {c: v[i] for c, v in alone.items()}, cond))
+    return out
+
+
+def _by(main: str | None, n_active: int) -> str:
+    return ("" if main is None else f", by {CRITERIA[main]}" if n_active == 1
+            else f", mostly by {CRITERIA[main]}")
+
+
+def _rate_text(row: dict, test: dict, side: str) -> str:
+    names = row["_cond_names"]
+    i = names.index(test[side])
+    r, n = row["conditions"]["n_removed"][i], row["conditions"]["n_cells"][i]
+    return f"{test[side + '_rate']:.0%} of {test[side]} cells ({r:,} of {n:,})"
+
+
+def audit_flags(audit: dict, skip: set[tuple[str, str]] = frozenset()) -> list[dict]:
+    """Plain sentences with the numbers, shaped as the preview's warnings: a group
+    losing more than ``AUDIT_LOSS`` (unless ``skip`` holds its (column, group): the
+    preview already warns about it), and a removal rate that depends on the
+    condition, per group and over all cells."""
+    label_col = audit["label"]["column"]
+    cond_col = audit["condition"]["column"] if audit.get("condition") else None
+    cond_names = audit["condition"]["names"] if cond_col else []
+    bare = bool(label_col) and _author_label(label_col)
+    flags = []
+
+    def who(name: str) -> str:
+        return name if bare else f"{label_col} {name}"
+
+    def base(kind: str, row: dict, criterion: str | None, message: str) -> dict:
+        return {"kind": kind, "column": label_col if row["name"] is not None else cond_col,
+                "group": row["name"], "n_cells": row["n_cells"], "n_removed": row["n_removed"],
+                "fraction": row["fraction"], "whole": row["n_removed"] >= row["n_cells"] > 0,
+                "criterion": criterion, "message": message}
+
+    rows = [*audit["by_type"], audit["overall"]]
+    for row in rows:
+        main, n_active = _main_criterion(row["by_criterion"])
+        n, r = row["n_cells"], row["n_removed"]
+        if (row["name"] is not None and n and r / n > AUDIT_LOSS
+                and (label_col, row["name"]) not in skip):
+            what = (f"all {n:,} cells of {who(row['name'])}" if r >= n
+                    else f"{r / n:.0%} of {who(row['name'])} ({r:,} of {n:,} cells)")
+            flags.append(base("loss", row, main, f"Removes {what}{_by(main, n_active)}."))
+        test = row.get("test")
+        if not _depends(test):
+            continue
+        row = {**row, "_cond_names": cond_names}
+        agent = ("the thresholds" if main is None else CRITERIA[main] if n_active == 1
+                 else f"the thresholds (mostly {CRITERIA[main]})")
+        where = "Over all cells" if row["name"] is None else f"In {who(row['name'])}"
+        msg = (f"{where}, {agent} remove{'s' if n_active == 1 else ''} {_rate_text(row, test, 'high')} "
+               f"but {_rate_text(row, test, 'low')} ({_fmt_p(test['p'])}): the loss depends on "
+               f"'{cond_col}'.")
+        flag = base("condition", row, main, msg)
+        flag.update(condition=cond_col, p=test["p"], max_diff_pp=test["max_diff_pp"])
+        flags.append(flag)
+    flags.sort(key=lambda f: (f["kind"] != "condition", -f["fraction"]))
+    return flags
+
+
+def _codes_for(adata, column: str | None) -> tuple[list[str], np.ndarray] | None:
+    return qc_groups.group_codes(adata.obs[column]) if column else None
+
+
+def _assemble(label_col: str | None, label_reason: str | None, label: tuple[list[str], np.ndarray] | None,
+              cond_col: str | None, cond_reason: str | None, cond: tuple[list[str], np.ndarray] | None,
+              drop: np.ndarray, removed: dict[str, np.ndarray], skip: set[tuple[str, str]] = frozenset(),
+              notes: list[str] | None = None) -> dict:
+    notes = list(notes or [])
+    if cond_col and cond_col == label_col:
+        cond = None
+        notes.append(f"'{cond_col}' is also the label column, so the cells are not split by it.")
+    elif cond is not None and len(cond[0]) > MAX_AUDIT_CONDITIONS:
+        notes.append(f"'{cond_col}' has {len(cond[0])} groups; the audit splits by at most "
+                     f"{MAX_AUDIT_CONDITIONS}.")
+        cond = None
+    table = audit_table(label, cond, drop, removed)
+    if table["note"]:
+        notes.append(f"'{label_col}' has {table['note']}")
+    out = {
+        "label": {"column": label_col, "reason": label_reason, "n_groups": len(label[0]) if label else 0},
+        "condition": None if cond is None else {"column": cond_col, "reason": cond_reason, "names": cond[0]},
+        **table,
+        "note": " ".join(notes) or None,
+        "rule": AUDIT_RULE,
+    }
+    out["flags"] = audit_flags(out, skip)
+    return out
+
+
+def audit(adata, drop: np.ndarray, removed: dict[str, np.ndarray], label_column: str | None = None,
+          condition_column: str | None = None, sample_column: str | None = None,
+          skip: set[tuple[str, str]] = frozenset()) -> dict:
+    """Who ``removed`` takes from ``adata``: per label group x condition (columns
+    named, else ``label_grouping`` / ``condition_grouping``), with tests and flags."""
+    l_col, l_reason = label_grouping(adata, label_column)
+    c_col, c_reason = condition_grouping(adata, condition_column, l_col, sample_column)
+    return _assemble(l_col, l_reason, _codes_for(adata, l_col), c_col, c_reason, _codes_for(adata, c_col),
+                     drop, removed, skip)
+
+
+# --- what the filtering step removed: a record in uns ------------------------------
+
+RECORD_KEY = "scview_qc_removed"
+RECORD_VERSION = 1
+RECORD_MAX_CELLS = 200_000  # removed cells kept in the record (the counts say how many there were)
+RECORD_MAX_COLUMNS = 8
+
+
+def record_columns(adata, sample_column: str | None) -> list[str]:
+    """The obs columns the record keeps for each removed cell: the samples, the
+    condition-like columns, author label columns, then other categorical author
+    columns, each with 2..100 values; never one scView remakes after filtering."""
+    obs = adata.obs
+    out: list[str] = []
+
+    def add(c, any_dtype: bool = True) -> None:
+        name = str(c)
+        if (name in obs.columns and name not in out and not _MADE_HERE_RE.search(name)
+                and (any_dtype or isinstance(obs[c].dtype, pd.CategoricalDtype)
+                     or obs[c].dtype == object or pd.api.types.is_bool_dtype(obs[c].dtype))
+                and _few_values(obs[c])):
+            out.append(name)
+
+    if sample_column:
+        add(sample_column)
+    for c in confounding.condition_columns(obs):
+        add(c)
+    for c in obs.columns:
+        if _author_label(str(c)):
+            add(c)
+    for c in obs.columns:
+        add(c, any_dtype=False)
+    return out[:RECORD_MAX_COLUMNS]
+
+
+def removal_record(adata, cells: dict, removed: dict[str, np.ndarray], drop: np.ndarray, t: Thresholds,
+                   sample_column: str | None, when: str | None = None) -> dict:
+    """What the filtering step removes, for ``uns[RECORD_KEY]``: per removed cell
+    (at most ``RECORD_MAX_CELLS``) its name, the criteria that removed it (bits in
+    the order of ``criteria``), its QC values and its labels in ``record_columns``
+    (codes into each column's categories). Arrays and strings only, so the h5ad
+    stays writable (no None: "" and NaN stand for none)."""
+    idx = np.flatnonzero(drop)
+    crit = list(removed)
+    keep_idx = idx[:RECORD_MAX_CELLS]
+    bits = np.zeros(keep_idx.size, dtype=np.uint8)
+    for b, c in enumerate(crit):
+        bits |= np.asarray(removed[c])[keep_idx].astype(np.uint8) << b
+    cols = record_columns(adata, sample_column)
+    columns = {}
+    for j, c in enumerate(cols):
+        names, codes = qc_groups.group_codes(adata.obs[c])
+        columns[f"c{j}"] = {"name": c, "categories": np.array(names, dtype=object),
+                            "codes": codes[keep_idx].astype(np.int16)}
+    has_mt = _mito_measurable(cells)
+    conds = set(confounding.condition_columns(adata.obs))
+    pct = _values(cells, "pct_mt")[keep_idx] if has_mt else np.full(keep_idx.size, np.nan)
+    return {
+        "version": RECORD_VERSION,
+        "timestamp": when or datetime.now(timezone.utc).isoformat(),
+        "mode": t.mode,
+        "n_before": int(drop.size),
+        "n_removed": int(idx.size),
+        "n_kept": int(drop.size - idx.size),
+        "truncated": bool(idx.size > keep_idx.size),
+        "criteria": np.array(crit, dtype=object),
+        "obs_names": np.asarray(adata.obs_names[keep_idx], dtype=object),
+        "criterion_bits": bits,
+        "total_counts": _values(cells, "total_counts")[keep_idx].astype(np.float32),
+        "n_genes": _values(cells, "n_genes")[keep_idx].astype(np.float32),
+        "has_mt": bool(has_mt),
+        "pct_mt": pct.astype(np.float32),
+        "sample_column": sample_column or "",
+        "condition_columns": np.array([c for c in cols if c in conds], dtype=object),
+        "label_columns": np.array([c for c in cols if _author_label(c)], dtype=object),
+        "columns": columns,
+    }
+
+
+def _strs(v) -> list[str]:
+    return [str(x) for x in np.atleast_1d(np.asarray(v, dtype=object))] if v is not None else []
+
+
+def _median(v: np.ndarray) -> float | None:
+    v = v[np.isfinite(v)]
+    return round(float(np.median(v)), 2) if v.size else None
+
+
+def recorded_audit(adata, label_column: str | None = None, condition_column: str | None = None) -> dict | None:
+    """The audit of the cells the last filtering step removed (``uns[RECORD_KEY]``):
+    the removed cells from the record, the kept cells from ``adata`` as it is now.
+    None for a dataset without a record (filtered before the record existed, or
+    never); ``stale`` when cells were added or removed since, so the two no longer
+    add up. Columns not recorded fall back to the record's own defaults."""
+    rec = adata.uns.get(RECORD_KEY)
+    if not isinstance(rec, dict):
+        return None
+    try:
+        return _recorded_audit(adata, rec, label_column, condition_column)
+    except Exception as e:  # a malformed record never breaks the preview
+        logger.warning("QC removal record unreadable: %s", e)
+        return None
+
+
+def _recorded_audit(adata, rec: dict, label_column: str | None, condition_column: str | None) -> dict:
+    head = {"timestamp": str(rec.get("timestamp") or ""), "mode": str(rec.get("mode") or ""),
+            "n_before": int(rec["n_before"]), "n_removed": int(rec["n_removed"]),
+            "truncated": bool(rec.get("truncated", False)), "has_mt": bool(rec.get("has_mt", False))}
+    n_kept, rec_kept = int(adata.n_obs), int(rec["n_kept"])
+    if n_kept != rec_kept:
+        return {**head, "stale": True, "columns": [],
+                "note": (f"The dataset has {n_kept:,} cells now, but {rec_kept:,} were kept when it was "
+                         "filtered: cells were added or removed since, so the record no longer adds up.")}
+    cols: dict[str, tuple[list[str], np.ndarray]] = {}
+    for entry in (rec.get("columns") or {}).values():
+        name = str(entry["name"])
+        if name in adata.obs.columns:  # the kept cells' values come from obs
+            cols[name] = (_strs(entry["categories"]), np.asarray(entry["codes"], dtype=np.int64))
+    labels = [c for c in _strs(rec.get("label_columns")) if c in cols]
+    conds = [c for c in _strs(rec.get("condition_columns")) if c in cols]
+    sample = str(rec.get("sample_column") or "")
+    sample = sample if sample in cols else None
+    notes: list[str] = []
+
+    def pick(requested: str | None, defaults: list[tuple[str | None, str]]) -> tuple[str | None, str | None]:
+        if requested:
+            if requested in cols:
+                return requested, "requested"
+            notes.append(f"'{requested}' was not recorded when the cells were filtered.")
+        return next(((c, r) for c, r in defaults if c), (None, None))
+
+    l_col, l_reason = pick(label_column, [(labels[0] if labels else None, "labels")])
+    c_col, c_reason = pick(condition_column, [(next((c for c in conds if c != l_col), None), "condition"),
+                                              (sample if sample != l_col else None, "sample")])
+    m = len(_strs(rec.get("obs_names")))
+
+    def combined(col: str | None) -> tuple[list[str], np.ndarray] | None:
+        if not col:
+            return None
+        names, codes = qc_groups.group_codes(adata.obs[col])
+        rec_names, rec_codes = cols[col]
+        seen = set(names)
+        names = [*names, *(x for x in rec_names if x not in seen)]
+        pos = {x: i for i, x in enumerate(names)}
+        remap = np.array([pos[x] for x in rec_names] + [-1])  # code -1 reads the last slot
+        return names, np.concatenate([codes, remap[rec_codes]])
+
+    drop = np.concatenate([np.zeros(n_kept, dtype=bool), np.ones(m, dtype=bool)])
+    bits = np.asarray(rec.get("criterion_bits"), dtype=np.uint8)
+    removed = {c: np.concatenate([np.zeros(n_kept, dtype=bool), (bits >> b) & 1 > 0])
+               for b, c in enumerate(_strs(rec.get("criteria")))}
+    if head["truncated"]:
+        notes.append(f"Only the first {m:,} of the {head['n_removed']:,} removed cells were recorded, "
+                     "so the losses below are too low.")
+    label = combined(l_col)
+    out = _assemble(l_col, l_reason, label, c_col, c_reason, combined(c_col), drop, removed, notes=notes)
+    if label is not None and out["by_type"]:  # the removed cells' own QC, per group
+        rec_codes = label[1][n_kept:]
+        vals = {k: np.asarray(rec[k], dtype=np.float64) for k in ("total_counts", "n_genes", "pct_mt")}
+        for i, row in enumerate(out["by_type"]):
+            sel = rec_codes == i
+            row["removed_median"] = {k: _median(v[sel]) for k, v in vals.items()
+                                     if k != "pct_mt" or head["has_mt"]} if sel.any() else None
+    return {**head, "stale": False, "columns": list(cols), **out}
+
+
+# --- the co-pilot's fact --------------------------------------------------------
+
+GROUNDING_TAG = "result:qc:removal"
+GROUNDING_FLAGS = 4  # flag sentences in the fact; the rest are counted
+
+
+def grounding_lines(adata, cells: dict, t: Thresholds) -> tuple[list[str], str]:
+    """The co-pilot's fact about who the QC removes, so "did the QC remove a cell
+    type?" is answered from the numbers: what the last filtering step removed
+    (its record), else what ``t`` (the pipeline's defaults) would remove, with the
+    audit's flags. ``(lines, detail)``; no lines without a label column."""
+    rec = recorded_audit(adata)
+    if rec is not None and not rec["stale"]:
+        au = rec
+        when = rec["timestamp"][:10]
+        what = (f"the filtering step{f' on {when}' if when else ''} removed {rec['n_removed']:,} "
+                f"of {rec['n_before']:,} cells")
+    else:
+        au = preview(adata, cells, t)["audit"]
+        what = (f"the default thresholds ({'per-sample MAD' if t.mode == 'mad' else 'fixed cut-offs'}) "
+                f"would remove {au['overall']['n_removed']:,} of {au['overall']['n_cells']:,} cells "
+                "(not applied yet)")
+    label = au["label"]["column"]
+    if not label:
+        return [], ""
+    cond = au["condition"]["column"] if au.get("condition") else None
+    split = f"per '{label}' group" + (f" x '{cond}'" if cond else "")
+    flags = au["flags"]
+    if flags:
+        found = " ".join(f["message"] for f in flags[:GROUNDING_FLAGS])
+        if len(flags) > GROUNDING_FLAGS:
+            found += f" ({len(flags) - GROUNDING_FLAGS} more flags.)"
+    else:
+        found = (f"No '{label}' group loses more than {AUDIT_LOSS:.0%}"
+                 + (f", and no group's removal rate differs between '{cond}' groups by "
+                    f"{AUDIT_DIFF_PP:g}+ points with p < {AUDIT_P:g} (chi-square)." if cond
+                    else " (no condition or sample column to test the removal against)."))
+    lines = ["\n## QC removal audit (deterministic: who the cell QC removes)",
+             f"- {what[0].upper()}{what[1:]}, {split}: {found} [{GROUNDING_TAG}]"]
+    detail = f"{what}; {len(flags)} flag(s) {split}"
+    return lines, detail
