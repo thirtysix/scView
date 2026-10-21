@@ -321,6 +321,20 @@ def test_the_copilot_uses_the_cache_and_skips_large_uncached_datasets(monkeypatc
     assert "No cell_type group shows a second QC state" in "\n".join(lines)
 
 
+def test_the_copilot_context_carries_the_fact(tmp_path):
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+    from scview.core.assistant import build_grounding_context
+
+    rng = np.random.default_rng(14)
+    rp, mt, _ = _two_state(rng, n=800)
+    p = tmp_path / "d.h5ad"
+    _adata({"LNCaP": (rp, mt), "CAF": _cells(rng, 400, 0.25, 0.05)}).write_h5ad(p)
+    context, sources = build_grounding_context(AnnDataAdaptor(str(p)))
+    assert "QC states per cell_type" in context
+    src = next(s for s in sources if s.ref == qc_states.TAG)
+    assert "LNCaP" in src.evidence and "low-RP/high-mito" in src.evidence
+
+
 # --- the endpoints ----------------------------------------------------------
 
 
