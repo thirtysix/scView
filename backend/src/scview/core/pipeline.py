@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -1571,7 +1572,10 @@ def _finish_run(
     control: RunControl | None,
 ) -> None:
     """Finalise and save a run, unless it was cancelled (nothing saved) or stopped
-    before any step ran (nothing to save)."""
+    before any step ran (nothing to save).
+
+    The file is written beside the derived file and then swapped in, so a backend
+    killed mid-write (out of memory) leaves the previous file whole."""
     if result.status == "complete" and control is not None and control.cancelled:
         # Cancelled after the last step ended but before the save.
         _halted(result, ("cancelled", cancelled_reason("before", "saving")))
@@ -1583,7 +1587,13 @@ def _finish_run(
     if output_path and save:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         tw = time.time()
-        adata.write_h5ad(output_path, compression="gzip")
+        partial = output_path + ".partial"
+        try:
+            adata.write_h5ad(partial, compression="gzip")
+            os.replace(partial, output_path)
+        except BaseException:
+            Path(partial).unlink(missing_ok=True)
+            raise
         write_s = round(time.time() - tw, 2)
         result.output_path = output_path
         logger.info("Saved processed dataset to %s", output_path)
