@@ -273,7 +273,14 @@ def test_depth_check_and_sentence():
     assert check["between"]["overall"] == pytest.approx(stats.spearmanr(follows, flat).statistic, abs=1e-12)
     text = aucell.sentence(check, {"score_genes": "score_genes", "aucell": "AUCell"},
                            "total_counts", "within clusters")
-    assert text == (f"score_genes follows depth on this data (rho {sg['within']:.2f} within clusters); "
-                    f"AUCell does not follow depth (rho {au['within']:.2f}).")
+    assert text == (f"score_genes follows depth on this data (rho {sg['within']:.2f} with total counts, "
+                    f"within clusters); AUCell does not follow depth (rho {au['within']:.2f}).")
+    # The measure either method follows most leads: here a detected-genes measure that
+    # AUCell follows inversely, more strongly than score_genes follows the counts.
+    check["methods"]["aucell"]["n_genes"]["within"] = -0.9
+    assert aucell.strongest_metric(check) == "n_genes"
+    check["methods"]["aucell"]["n_genes"]["within"] = 0.0
+    check["methods"]["score_genes"]["n_genes"]["within"] = 0.01
+    assert aucell.strongest_metric(check) == "total_counts"
     assert aucell.verdict(0.2) == "follows depth weakly" and aucell.verdict(-0.35) == "follows depth"
     assert aucell.verdict(None) == "cannot be checked against depth"

@@ -127,7 +127,9 @@ async def test_depth_check_matches_scipy(client, dataset_manager):
     r = await client.post(f"{url}/compare", json={"gene_set": genes, "groupby": "half"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["metric"] == "total_counts" and body["depth"]["total_counts"] == "obs['total_counts']"
+    assert body["depth"]["total_counts"] == "obs['total_counts']"
+    lead = body["metric"]
+    assert lead in ("total_counts", "n_genes")
     assert body["groupby"] == "half" and body["n_groups"] == 2
 
     depth = a.obs["total_counts"].to_numpy()
@@ -141,10 +143,12 @@ async def test_depth_check_matches_scipy(client, dataset_manager):
             assert got["within"] == pytest_approx(within)
     assert body["between"]["overall"] == pytest_approx(stats.spearmanr(sg, au).statistic)
     # The sentence reports the within-group numbers.
-    sg_w = body["methods"]["score_genes"]["total_counts"]["within"]
-    au_w = body["methods"]["aucell"]["total_counts"]["within"]
+    sg_w = body["methods"]["score_genes"][lead]["within"]
+    au_w = body["methods"]["aucell"][lead]["within"]
+    other = "n_genes" if lead == "total_counts" else "total_counts"
+    assert max(abs(sg_w), abs(au_w)) >= max(abs(body["methods"][m][other]["within"]) for m in ("score_genes", "aucell"))
     assert body["sentence"].startswith(f"score_genes {aucell.verdict(sg_w)} on this data ")
-    assert f"(rho {sg_w:.2f} within half groups)" in body["sentence"]
+    assert f"(rho {sg_w:.2f} with {aucell.METRIC_TEXT[lead]}, within half groups)" in body["sentence"]
     assert f"AUCell {aucell.verdict(au_w)} (rho {au_w:.2f})." in body["sentence"]
 
 

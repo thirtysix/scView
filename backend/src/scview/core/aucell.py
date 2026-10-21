@@ -368,14 +368,35 @@ def _rho_text(rho: float | None) -> str:
     return "n/a" if rho is None else f"{rho:.2f}"
 
 
+METRIC_TEXT = {"total_counts": "total counts", "n_genes": "genes detected"}
+
+
+def headline(c: dict) -> float | None:
+    """The within-group rho, else the overall one."""
+    return c["within"] if c["within"] is not None else c["overall"]
+
+
+def strongest_metric(check: dict) -> str:
+    """The depth measure either method follows most (largest |rho|), so the sentence
+    compares both methods on the same measure without hiding the worse one."""
+    def size(metric: str) -> float:
+        rhos = [headline(m[metric]) for m in check["methods"].values()]
+        return max((abs(r) for r in rhos if r is not None), default=-1.0)
+
+    metrics = list(next(iter(check["methods"].values())))
+    return max(metrics, key=size)
+
+
 def sentence(check: dict, labels: dict[str, str], metric: str, where: str) -> str:
-    """'score_genes follows depth on this data (rho 0.41 within clusters); AUCell does
-    not follow depth (rho 0.05).' ``where``: 'within clusters' or 'over all cells'."""
+    """'score_genes follows depth on this data (rho 0.41 with total counts, within
+    clusters); AUCell does not follow depth (rho 0.05).' ``where``: 'within clusters'
+    or 'within <column> groups'."""
     parts = []
     for i, (name, label) in enumerate(labels.items()):
         c = check["methods"][name][metric]
-        rho = c["within"] if c["within"] is not None else c["overall"]
+        rho = headline(c)
         here = where if c["within"] is not None else "over all cells"
-        tail = f" on this data (rho {_rho_text(rho)} {here})" if i == 0 else f" (rho {_rho_text(rho)})"
+        tail = (f" on this data (rho {_rho_text(rho)} with {METRIC_TEXT.get(metric, metric)}, {here})"
+                if i == 0 else f" (rho {_rho_text(rho)})")
         parts.append(f"{label} {verdict(rho)}{tail}")
     return "; ".join(parts) + "."

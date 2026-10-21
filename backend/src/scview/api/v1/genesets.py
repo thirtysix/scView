@@ -399,7 +399,7 @@ async def compare_score_methods(
         depth["n_genes"] = rk.n_detected.astype(np.float64)
         codes = _group_codes(adata, groupby)
         check = aucell.depth_check({"score_genes": sg, "aucell": au}, depth, codes)
-        metric = "total_counts" if "total_counts" in depth else "n_genes"
+        metric = aucell.strongest_metric(check)
         where = "within clusters" if active else f"within {groupby} groups"
         n_groups = check["methods"]["aucell"][metric]["n_groups"]
         return {
