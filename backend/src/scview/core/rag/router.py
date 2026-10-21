@@ -87,6 +87,7 @@ _FACET_HINTS = {
     "groups": (
         "how many", "composition", "proportion", "count", "cell type", "cell types",
         "cluster", "donor", "condition", "sample", "group", "breakdown", "fraction",
+        "abundance", "milo", "neighbourhood", "neighborhood",
     ),
     "enrichment": ("enrichment", "pathway", "gsea", "go term", "ontology"),
     "qc": (
