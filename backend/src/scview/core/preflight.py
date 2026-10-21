@@ -25,14 +25,38 @@ can be wrong, and the user decides.
   scView holds, skip doublet detection, fewer variable genes, subsample; each
   alternative is re-estimated and offered only when it lowers the peak.
 
-Calibration (CALIBRATION_TABLE)
+Calibration
 
 The coefficients come from measured runs, not guesses: one fresh container per
-dataset, 2 CPUs, the "Reprocess from scratch" steps, memory = the cgroup's anon
-memory (which counts the Leiden child process) sampled every 0.1 s, minus the process
-before loading. A run's peak is in doublet detection on every dataset over 10k cells:
-Scrublet copies the whole dataset, so a dense counts layer (ovary_raw stores one) costs
-several copies of it.
+dataset, 2 CPUs (scview-backend image, 2026-10-21), memory = the cgroup's anon memory
+(which counts the Leiden child process) sampled every 0.1 s, or the process's peak RSS
+where that is higher (short reads), minus the process before loading (scanpy imported,
+0.17 GiB). Runs are the "Reprocess from scratch" steps with the UI's marker columns.
+GiB; err = estimate / measured - 1.
+
+    dataset            cells   genes   X stored values      load meas/est  err   run peak meas/est  err  at
+    pbmc 1k 10x .h5     1,222  33,538  2.5M sparse         0.04 / 0.04   -1%   0.63 / 0.72   +15%  (late steps)
+    paul15             2,730   3,451  dense (+2 dense)    0.13 / 0.14   +5%   0.62 / 0.73   +17%  (late steps)
+    Kang              13,836  14,053  dense f64 (+2 sp.)  1.76 / 1.74   -1%   3.00 / 2.99    -0%  doublets
+    ovary 10k sub.    10,000  20,082  12.1M sp. + dense   0.91 / 0.88   -3%   6.17 / 6.22    +1%  doublets
+    ovary 20k sub.    20,000  20,082  24.1M sp. + dense   1.75 / 1.72   -2%  11.73 / 11.27   -4%  doublets
+    ovary_raw         37,104  20,082  44.7M sp. + dense   3.22 / 3.17   -2%  20.86 / 19.91   -5%  doublets
+
+ovary_raw was killed at an 18 GiB limit (in doublet detection) and measured at 26 GiB
+through PCA; its later steps are estimated at 16.5 GiB at most. Its counts layer is
+dense (3 GB), and Scrublet copies the whole dataset, so doublet detection holds several
+copies of it: 15 GiB over the 5.7 the dataset held. The small datasets are over by fixed
+costs (library imports, caches). Ingest (read, save as gzip h5ad, reopen), peak:
+pbmc 10x .h5 0.056 / 0.060 (+7%), the same as MEX 0.144 / 0.148 (+3%), a 1,222 x 5,000
+CSV 0.189 / 0.203 (+7%), paul15 0.140 / 0.147 (+5%), Kang 1.79 / 1.91 (+7%). Not
+measured: loom and zarr reads (8 and 0 bytes per value, reasoned), RDS (a guess), batch
+correction, the uncorrected UMAP and cell-type annotation (reasoned from what they
+allocate; the estimate says so). Header reads take 3-35 ms (Kang's 1.9 GB h5ad: 17 ms).
+
+Time: the same runs' seconds per step, as a function of cells, stored values and
+groups, measured at 2 CPUs and scaled by the square root of the CPU quota; shown as
+half to twice the point estimate, which held every measured run (Kang 116 s within
+70-279 s, ovary 20k 580 s within 264-1054 s).
 """
 
 from __future__ import annotations
@@ -590,13 +614,14 @@ LOAD_FIXED = 20 * MiB
 # Transient while reading, per stored value, by format (the values are converted
 # and the index arrays widened on the way in). Measured on the formats listed.
 READ_BYTES_PER_VALUE = {
-    "h5ad": 0.0, "zarr": 0.0, "10x_h5": 12.0, "mex": 24.0, "loom": 8.0, "table": 60.0,
+    "h5ad": 0.0, "zarr": 0.0, "10x_h5": 8.0, "mex": 46.0, "loom": 8.0, "table": 28.0,
 }
 # Saving an ingested dataset (gzip h5ad): transient per byte of its matrices.
 WRITE_FRACTION = 0.1
-# Rough throughput for the time (bytes of file per second, at 2 CPUs).
-READ_FILE_BPS = {"h5ad": 120e6, "zarr": 120e6, "10x_h5": 60e6, "mex": 15e6, "loom": 30e6,
-                 "table": 3e6, "rds": 20e6}
+# Rough throughput for the time, at 2 CPUs: bytes of file per second, except h5ad and
+# zarr, read at about 400 MB/s of what they hold in memory (gzip or not).
+READ_FILE_BPS = {"10x_h5": 60e6, "mex": 12e6, "loom": 30e6, "table": 5e6, "rds": 20e6}
+READ_MEMORY_BPS = 400e6
 WRITE_BPS = 150e6  # gzip h5ad, bytes of matrices per second
 
 
@@ -654,12 +679,14 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
     other = res - _matrices_bytes(h)
     breakdown.append(("Cell and gene tables, embeddings, results", other))
     peak, stage = res + read, "reading the file"
-    secs = h.file_bytes / READ_FILE_BPS.get(h.format, 30e6)
-    if ingest:
-        write = int(_matrices_bytes(h) * WRITE_FRACTION)
+    mats = _matrices_bytes(h)
+    secs = (mats / READ_MEMORY_BPS if h.format in ("h5ad", "zarr")
+            else h.file_bytes / READ_FILE_BPS.get(h.format, 30e6))
+    if ingest:  # saved as a gzip h5ad, then opened
+        write = int(mats * WRITE_FRACTION)
         if res + write > peak:
             peak, stage = res + write, "saving the dataset"
-        secs += _matrices_bytes(h) / WRITE_BPS + h.file_bytes / READ_FILE_BPS["h5ad"]
+        secs += mats / WRITE_BPS + mats / READ_MEMORY_BPS
     if read:
         breakdown.append(("Reading (converting the values)", read))
     if h.backed:
@@ -1139,8 +1166,8 @@ def available_memory(cgroup: Path | None = None, meminfo: Path | None = None) ->
 # ---------------------------------------------------------------------------
 
 FITS_BELOW = 0.7  # of the memory free: fits; up to 1.0 tight; beyond, won't fit
-# Largest error of the peak estimate on the calibration datasets (see the top).
-ERROR_BAND = 0.3
+# Largest error of the peak estimates on the calibration datasets (17%, see the top), rounded up.
+ERROR_BAND = 0.2
 
 
 def _gb(b: float) -> str:

@@ -55,6 +55,12 @@ CALIBRATION = {
                                             ("layers/counts", False, 401640000, "float32")],
                      uns=10924929, obs_cols=7, var_cols=5),
                   1.75, 11.73, ["cluster", "Cluster"]),
+    # measured through PCA (the steps after it are estimated at 16.5 GiB at most); killed at
+    # 18 GiB in doublet detection, measured at 26 GiB
+    "ovary 37k": (_h("h5ad", 37104, 20082, [("X", True, 44738263, "float32"),
+                                            ("layers/counts", False, 745122528, "float32")],
+                     uns=10924929, obs_cols=7, var_cols=5),
+                  3.22, 20.86, ["cluster", "Cluster"]),
 }
 
 
