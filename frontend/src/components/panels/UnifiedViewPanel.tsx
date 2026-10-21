@@ -8,6 +8,7 @@ import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useViewStore } from "@/stores/viewStore";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { ColorLegend } from "@/components/plots/ColorLegend";
+import { overlayStats, resolveColorScale, scatterScale, type OverlayKind } from "@/lib/colorScale";
 import { LassoSelector } from "@/components/plots/LassoSelector";
 import { UnifiedToolbar } from "@/components/unified/UnifiedToolbar";
 import { UnifiedBottomPanel } from "@/components/unified/UnifiedBottomPanel";
@@ -295,19 +296,39 @@ export function UnifiedViewPanel() {
   const effectiveColorValues = scatterOverlay ? overlayValues : colors;
   const effectiveColorType = scatterOverlay ? "continuous" : colorType;
 
-  // --- Min/max for continuous legend ---
-  const colorMinMax = useMemo(() => {
-    const vals = effectiveColorType === "continuous" ? effectiveColorValues : null;
-    if (!vals) return { min: 0, max: 1 };
-    let min = Infinity;
-    let max = -Infinity;
-    for (let i = 0; i < vals.length; i++) {
-      const v = vals[i]!;
-      if (v < min) min = v;
-      if (v > max) max = v;
-    }
-    return { min, max };
-  }, [effectiveColorType, effectiveColorValues]);
+  // --- The continuous colour scale (lib/colorScale.ts): map, clipped range,
+  // centre; the scatter, split grid, legend and PNG export all draw from it ---
+  const overlayKind: OverlayKind =
+    scatterOverlay?.type === "score"
+      ? "score"
+      : scatterOverlay?.type === "expression"
+        ? scatterOverlay.layer
+          ? "protein"
+          : "expression"
+        : "obs";
+  const sequentialColormap = useSettingsStore((s) => s.continuousColormap);
+  const divergingColormap = useSettingsStore((s) => s.divergingColormap);
+  const signedColormapMode = useSettingsStore((s) => s.signedColormapMode);
+  const defaultClip = useSettingsStore((s) => s.colorClip);
+  const viewClip = useUnifiedViewStore((s) => s.colorClip);
+  const setViewClip = useUnifiedViewStore((s) => s.setColorClip);
+  const clip = viewClip ?? defaultClip;
+  // Sorted once per overlay change (up to 200k cells), not per setting change.
+  const colorStats = useMemo(
+    () => overlayStats(effectiveColorType === "continuous" ? effectiveColorValues : null),
+    [effectiveColorType, effectiveColorValues],
+  );
+  const colorScale = useMemo(
+    () =>
+      resolveColorScale(overlayKind, colorStats, {
+        sequential: sequentialColormap,
+        diverging: divergingColormap,
+        signedMode: signedColormapMode,
+        clip,
+      }),
+    [overlayKind, colorStats, sequentialColormap, divergingColormap, signedColormapMode, clip],
+  );
+  const scatterColorScale = useMemo(() => scatterScale(colorScale), [colorScale]);
 
   // --- Fetch expression ---
   // `layer` given: a protein (its own layer), else the chosen expression layer.
@@ -772,7 +793,14 @@ export function UnifiedViewPanel() {
   const scatterExportName = `${prettyEmbeddingLabel(embedding || "embedding")}_${overlayLabel || colorColumnName || colorBy}`;
   const scatterExportLegend: ScatterLegend | null =
     effectiveColorType === "continuous" && effectiveColorValues
-      ? { type: "continuous", title: overlayLabel || colorColumnName || colorBy, ...colorMinMax }
+      ? {
+          type: "continuous",
+          title: overlayLabel || colorColumnName || colorBy,
+          min: colorScale.min,
+          max: colorScale.max,
+          colormap: colorScale.colormap,
+          centre: colorScale.centre,
+        }
       : categories && categoryColors
         ? { type: "categorical", title: colorColumnName ?? colorBy, categories, colors: categoryColors }
         : null;
@@ -830,6 +858,7 @@ export function UnifiedViewPanel() {
                 positions={positions}
                 colorValues={effectiveColorValues}
                 colorType={effectiveColorType}
+                colorScale={effectiveColorType === "continuous" ? scatterColorScale : null}
                 categorySlots={scatterOverlay ? undefined : obsColumn?.color_slots}
                 pointSize={pointSize}
                 opacity={opacity}
@@ -870,6 +899,7 @@ export function UnifiedViewPanel() {
                 dimensions={dimensions}
                 colorValues={effectiveColorValues}
                 colorType={effectiveColorType}
+                colorScale={effectiveColorType === "continuous" ? colorScale : null}
                 categorySlots={scatterOverlay ? undefined : obsColumn?.color_slots}
                 selectedIndices={shownSelection}
                 onHover={handleHover}
@@ -936,11 +966,13 @@ export function UnifiedViewPanel() {
 
             {/* Legend overlay */}
             <div className="pointer-events-auto max-h-48 min-h-0 max-w-[200px] overflow-y-auto rounded-lg bg-white/90 p-2 shadow">
-              {effectiveColorType === "continuous" && overlayValues ? (
+              {effectiveColorType === "continuous" && effectiveColorValues ? (
                 <ColorLegend
                   type="continuous"
-                  min={colorMinMax.min}
-                  max={colorMinMax.max}
+                  scale={colorScale}
+                  clip={clip}
+                  onClipChange={setViewClip}
+                  clipOverridden={viewClip !== null}
                   label={overlayLabel || colorColumnName || colorBy}
                   onAsk={
                     scatterOverlay?.type === "expression" && overlayLabel
@@ -1139,7 +1171,7 @@ export function UnifiedViewPanel() {
                 activeGene={scatterOverlay?.type === "expression" ? overlayLabel : null}
                 groupByColumn={groupByColumn}
                 setGroupByColumn={setGroupByColumn}
-                expressionMinMax={scatterOverlay?.type === "expression" ? colorMinMax : null}
+                expressionScale={scatterOverlay?.type === "expression" ? colorScale : null}
               />
             )}
             {activeSubtab === "protein" && dataset?.protein && datasetId && (
@@ -1150,7 +1182,7 @@ export function UnifiedViewPanel() {
                 activeProtein={activeProtein}
                 groupByColumn={groupByColumn}
                 setGroupByColumn={setGroupByColumn}
-                proteinMinMax={activeProtein ? colorMinMax : null}
+                proteinScale={activeProtein ? colorScale : null}
               />
             )}
             {activeSubtab === "genesets" && (

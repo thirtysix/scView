@@ -11,12 +11,13 @@ import {
   blendColors,
   blendScale,
   scaled,
-  sharedRange,
   valueOrder,
 } from "@/lib/geneCoexpression";
 import { colorByLine, type HoverLine } from "@/lib/hoverInfo";
 import type { ScatterLegend } from "@/lib/scatterExport";
-import { drawnIndices, gatherPositions, panelColors, sampleCellIndices, valueRange } from "@/lib/splitView";
+import { drawnIndices, gatherPositions, panelColors, sampleCellIndices } from "@/lib/splitView";
+import { mergedStats, overlayStats, resolveColorScale, type ResolvedColorScale } from "@/lib/colorScale";
+import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { selectedLast, shuffledOrder } from "@/lib/drawOrder";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useGeneGridStore } from "@/stores/geneGridStore";
@@ -57,7 +58,13 @@ export function GeneFeatureGrid({
   onHover,
 }: GeneFeatureGridProps) {
   const opacity = useSettingsStore((s) => s.opacity);
-  const colormap = useSettingsStore((s) => s.continuousColormap);
+  const sequentialColormap = useSettingsStore((s) => s.continuousColormap);
+  const divergingColormap = useSettingsStore((s) => s.divergingColormap);
+  const signedColormapMode = useSettingsStore((s) => s.signedColormapMode);
+  const defaultClip = useSettingsStore((s) => s.colorClip);
+  const viewClip = useUnifiedViewStore((s) => s.colorClip);
+  const setViewClip = useUnifiedViewStore((s) => s.setColorClip);
+  const clipSetting = viewClip ?? defaultClip;
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const layer = useSettingsStore((s) => s.expressionLayer);
   const pipelineRunning = useSettingsStore((s) => s.pipelineRunning);
@@ -84,13 +91,18 @@ export function GeneFeatureGrid({
   const sample = useMemo(() => sampleCellIndices(total, maxRenderedCells), [total, maxRenderedCells]);
   const shuffled = useMemo(() => shuffledOrder(drawnIndices(total, sample)), [total, sample]);
 
-  const ranges = useMemo(() => {
+  // Each gene's values sorted once (lib/colorScale.ts); the shared scale pools them.
+  const stats = useMemo(() => (ready ? genes.map((g) => overlayStats(values![g]!)) : []), [ready, genes, values]);
+  const pooled = useMemo(() => (ready && sharedScale && !blend ? mergedStats(stats) : null), [ready, sharedScale, blend, stats]);
+  const ranges = useMemo<ResolvedColorScale[]>(() => {
     if (!ready) return [];
-    const own = genes.map((g) => valueRange(values![g]!));
-    if (!sharedScale || blend) return own;
-    const shared = sharedRange(genes.map((g) => values![g]!));
-    return genes.map(() => shared);
-  }, [ready, genes, values, sharedScale, blend]);
+    const settings = { sequential: sequentialColormap, diverging: divergingColormap, signedMode: signedColormapMode, clip: clipSetting };
+    if (pooled) {
+      const shared = resolveColorScale("expression", pooled, settings);
+      return genes.map(() => shared);
+    }
+    return stats.map((st) => resolveColorScale("expression", st, settings));
+  }, [ready, genes, stats, pooled, sequentialColormap, divergingColormap, signedColormapMode, clipSetting]);
 
   const panels = useMemo<GridPanel[]>(() => {
     if (!ready) return [];
@@ -107,13 +119,14 @@ export function GeneFeatureGrid({
     const out = shown.map((g, i) => {
       const v = values![g]!;
       const order = selectedLast(valueOrder(shuffled, (c) => v[c]!), selectedIndices);
+      const scale = ranges[i]!;
       const colors = panelColors(order, {
         colorValues: v,
         colorType: "continuous",
-        range: ranges[i]!,
+        range: scale,
         opacity,
         selected: selectedIndices,
-        colormap,
+        colormap: scale.colormap,
       });
       return make(g, g, expressingText(v), order, colors);
     });
@@ -131,7 +144,7 @@ export function GeneFeatureGrid({
       );
     }
     return out;
-  }, [ready, blend, genes, values, shuffled, selectedIndices, ranges, opacity, colormap, positions, stride, clip, scheme]);
+  }, [ready, blend, genes, values, shuffled, selectedIndices, ranges, opacity, positions, stride, clip, scheme]);
 
   // Memoised: the hover handler depends on it, and MultiPanelScatter clears the
   // tooltip whenever that handler changes (a new array per render would clear it on every hover).
@@ -139,9 +152,17 @@ export function GeneFeatureGrid({
   const oneLegend = sharedScale && !blend && legendGenes.length > 1;
   const exportLegend = useMemo<ScatterLegend[]>(() => {
     if (!ready) return [];
+    const entry = (title: string, r: ResolvedColorScale): ScatterLegend => ({
+      type: "continuous",
+      title,
+      min: r.min,
+      max: r.max,
+      colormap: r.colormap,
+      centre: r.centre,
+    });
     const continuous: ScatterLegend[] = oneLegend
-      ? [{ type: "continuous", title: "Expression (all genes)", ...ranges[0]! }]
-      : legendGenes.map((g, i) => ({ type: "continuous", title: g, ...ranges[i]! }));
+      ? [entry("Expression (all genes)", ranges[0]!)]
+      : legendGenes.map((g, i) => entry(g, ranges[i]!));
     if (!blend) return continuous;
     const [a, b] = legendGenes;
     const corners = BLEND_SCHEMES[scheme];
@@ -262,10 +283,24 @@ export function GeneFeatureGrid({
         ready ? (
           <div className="flex flex-col gap-3 p-2">
             {oneLegend ? (
-              <ColorLegend type="continuous" min={ranges[0]!.min} max={ranges[0]!.max} label="Expression (all genes)" />
+              <ColorLegend
+                type="continuous"
+                scale={ranges[0]!}
+                clip={clipSetting}
+                onClipChange={setViewClip}
+                clipOverridden={viewClip !== null}
+                label="Expression (all genes)"
+              />
             ) : (
               legendGenes.map((g, i) => (
-                <ColorLegend key={g} type="continuous" min={ranges[i]!.min} max={ranges[i]!.max} label={g} />
+                <ColorLegend
+                  key={g}
+                  type="continuous"
+                  scale={ranges[i]!}
+                  label={g}
+                  // The clip control once, under the first legend; it applies to every panel.
+                  {...(i === 0 ? { clip: clipSetting, onClipChange: setViewClip, clipOverridden: viewClip !== null } : {})}
+                />
               ))
             )}
             {blend && <BlendLegend geneA={legendGenes[0]!} geneB={legendGenes[1]!} scheme={scheme} />}

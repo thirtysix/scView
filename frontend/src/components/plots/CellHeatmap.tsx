@@ -58,6 +58,7 @@ export function CellHeatmap({
   layer?: string;
 }) {
   const colormapName = useSettingsStore((s) => s.continuousColormap);
+  const divergingName = useSettingsStore((s) => s.divergingColormap);
   const layers = useDatasetStore((s) => s.currentDataset?.expression_layers);
   const colorOf = useCategoryColors(groupby);
   const revision = useObsRevision(datasetId, groupby); // a saved order or hand labels move cells
@@ -88,8 +89,8 @@ export function CellHeatmap({
   const figure = useMemo(() => {
     if (!data) return null;
     const colours = data.meta.groups.map((g) => rgbCss(colorOf(g)));
-    return cellHeatmapFigure(data, colours, plotlyColorscale(colormapName));
-  }, [data, colorOf, colormapName]);
+    return cellHeatmapFigure(data, colours, plotlyColorscale(colormapName), plotlyColorscale(divergingName));
+  }, [data, colorOf, colormapName, divergingName]);
 
   if (genes.length === 0) {
     return <p className="py-8 text-center text-sm text-slate-400">No up-regulated marker genes to plot.</p>;

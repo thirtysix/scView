@@ -362,3 +362,64 @@ describe("Unified View legend controls", () => {
     expect(JSON.parse(init.body)).toEqual({ sort: "size" });
   });
 });
+
+describe("Unified View colour scale", () => {
+  it("draws a signed score diverging about 0 and tells the scatter, split grid and legend the same range", () => {
+    useUnifiedViewStore.setState({
+      scatterOverlay: { type: "score", name: "IFN" },
+      overlayValues: Float32Array.from([-1, 0.5, 3]),
+      overlayLabel: "IFN",
+      overlayDatasetId: "kang",
+    });
+    renderPanel();
+    expect(scatterProps.current!.colorScale).toEqual({ colormap: "RdBu", min: -3, max: 3 });
+    expect(screen.getByTestId("colour-scale-caption")).toHaveTextContent("Colour range -3 to 3, centred on 0 (data -1 to 3).");
+    expect(scatterProps.current!.exportLegend).toMatchObject({ type: "continuous", title: "IFN", min: -3, max: 3, colormap: "RdBu", centre: 0 });
+  });
+
+  it("keeps expression sequential, even with a value below 0, and shows a numeric column's legend", () => {
+    useUnifiedViewStore.setState({
+      scatterOverlay: { type: "expression", gene: "CD3E" },
+      overlayValues: Float32Array.from([-0.25, 0.25, 2.5]),
+      overlayLabel: "CD3E",
+      overlayDatasetId: "kang",
+    });
+    const { unmount } = renderPanel();
+    expect(scatterProps.current!.colorScale).toEqual({ colormap: "viridis", min: -0.25, max: 2.5 });
+    expect(screen.getByTestId("colour-scale-caption")).toHaveTextContent("Colour range -0.25 to 2.5.");
+    unmount();
+
+    useUnifiedViewStore.getState().clearOverlayState();
+    useSettingsStore.setState({ colorBy: "n_genes" });
+    embedding.current = { ...embedding.current, colors: Float32Array.from([100, 500, 900]), colorColumnName: "n_genes" };
+    renderPanel();
+    expect(scatterProps.current!.colorScale).toEqual({ colormap: "viridis", min: 100, max: 900 });
+    expect(screen.getByTestId("colour-scale-caption")).toHaveTextContent("Colour range 100 to 900.");
+  });
+
+  it("clips the range from the legend for this view and from the settings by default", () => {
+    useSettingsStore.setState({ colorClip: { preset: "p5" } });
+    const values = Float32Array.from({ length: 100 }, (_, i) => i);
+    useUnifiedViewStore.setState({
+      scatterOverlay: { type: "expression", gene: "CD3E" },
+      overlayValues: values,
+      overlayLabel: "CD3E",
+      overlayDatasetId: "kang",
+    });
+    embedding.current = { ...embedding.current, positions: new Float32Array(200), numCells: 100 };
+    renderPanel();
+    expect(scatterProps.current!.colorScale).toMatchObject({ min: 4.95, max: 94.05 });
+    expect(screen.getByTestId("colour-scale-caption")).toHaveTextContent("clipped at the 5th–95th percentiles");
+    expect(screen.queryByText("default")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Colour range clipping"), { target: { value: "manual" } });
+    expect(useUnifiedViewStore.getState().colorClip).toEqual({ preset: "manual", min: 0, max: 99 });
+    fireEvent.change(screen.getByLabelText("Colour range maximum"), { target: { value: "50" } });
+    expect(scatterProps.current!.colorScale).toMatchObject({ min: 0, max: 50 });
+    expect(screen.getByTestId("colour-scale-caption")).toHaveTextContent("set by hand (data 0 to 99); 49% of cells above.");
+    fireEvent.click(screen.getByText("default"));
+    expect(useUnifiedViewStore.getState().colorClip).toBeNull();
+    expect(scatterProps.current!.colorScale).toMatchObject({ min: 4.95, max: 94.05 });
+    useSettingsStore.setState({ colorClip: { preset: "none" } });
+  });
+});

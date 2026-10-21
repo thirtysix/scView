@@ -21,6 +21,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import { MultiPanelScatter, type GridPanel } from "@/components/unified/MultiPanelScatter";
 import { groupCentroids } from "@/lib/centroidLabels";
+import type { ResolvedColorScale } from "@/lib/colorScale";
 import { selectedLast, shuffledOrder } from "@/lib/drawOrder";
 
 interface SplitScatterGridProps {
@@ -33,6 +34,9 @@ interface SplitScatterGridProps {
   /** What the single plot is coloured by: obs codes, or a gene/score overlay */
   colorValues: Float32Array | Int32Array | null;
   colorType: "categorical" | "continuous";
+  /** Continuous: the single plot's resolved scale (map + clipped range), so
+   *  every panel matches it; without it the values' own range. */
+  colorScale?: ResolvedColorScale | null;
   /** Palette slot per category code of the colour-by column (`color_slots`). */
   categorySlots?: readonly number[];
   selectedIndices?: Set<number> | null;
@@ -65,6 +69,7 @@ export function SplitScatterGrid({
   dimensions,
   colorValues,
   colorType,
+  colorScale = null,
   categorySlots,
   selectedIndices = null,
   onHover,
@@ -76,7 +81,8 @@ export function SplitScatterGrid({
 }: SplitScatterGridProps) {
   const opacity = useSettingsStore((s) => s.opacity);
   const palette = useSettingsStore((s) => s.categoricalPalette);
-  const colormap = useSettingsStore((s) => s.continuousColormap);
+  const defaultColormap = useSettingsStore((s) => s.continuousColormap);
+  const colormap = colorScale?.colormap ?? defaultColormap;
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const pipelineRunning = useSettingsStore((s) => s.pipelineRunning);
   const embeddingOk = useEmbeddingReady(datasetId, embedding);
@@ -129,9 +135,11 @@ export function SplitScatterGrid({
   const range = useMemo(
     () =>
       effectiveColorType(colorValues, colorType) === "continuous"
-        ? valueRange(colorValues)
+        ? colorScale
+          ? { min: colorScale.min, max: colorScale.max }
+          : valueRange(colorValues)
         : { min: 0, max: 1 },
-    [colorValues, colorType],
+    [colorValues, colorType, colorScale],
   );
   const panelRgba = useMemo(
     () =>

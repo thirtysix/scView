@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { ColorLegend } from "@/components/plots/ColorLegend";
+import type { ResolvedColorScale } from "@/lib/colorScale";
 import { MultiGenePanel } from "@/components/unified/MultiGenePanel";
 import { CoexpressedGenes } from "@/components/unified/CoexpressedGenes";
 
@@ -13,7 +14,8 @@ interface UnifiedExpressionSubtabProps {
   activeGene: string | null;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
-  expressionMinMax: { min: number; max: number } | null;
+  /** The active gene's resolved colour scale (the plot's legend, in the subtab) */
+  expressionScale: ResolvedColorScale | null;
 }
 
 export function UnifiedExpressionSubtab({
@@ -21,7 +23,7 @@ export function UnifiedExpressionSubtab({
   activeGene,
   groupByColumn,
   setGroupByColumn,
-  expressionMinMax,
+  expressionScale,
 }: UnifiedExpressionSubtabProps) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
@@ -72,12 +74,11 @@ export function UnifiedExpressionSubtab({
               title={`Add ${activeGene} to a gene list`}
             />
           </div>
-          {expressionMinMax && (
+          {expressionScale && (
             <div className="mt-2">
               <ColorLegend
                 type="continuous"
-                min={expressionMinMax.min}
-                max={expressionMinMax.max}
+                scale={expressionScale}
                 label={`${activeGene} expression`}
               />
             </div>

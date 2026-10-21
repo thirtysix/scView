@@ -69,7 +69,7 @@ describe("UnifiedProteinSubtab", () => {
         activeProtein={null}
         groupByColumn="cell_type"
         setGroupByColumn={() => {}}
-        proteinMinMax={null}
+        proteinScale={null}
         {...props}
       />,
     );

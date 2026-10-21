@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import type { CategoricalPaletteName, ColormapName } from "@/lib/colors";
+import type { CategoricalPaletteName, ColormapName, DivergingColormapName } from "@/lib/colors";
+import { DEFAULT_CLIP, type ClipSetting, type SignedColormapMode } from "@/lib/colorScale";
 
 interface SettingsState {
   embedding: string;
@@ -13,6 +14,11 @@ interface SettingsState {
   plotBackground: "white" | "dark";
   categoricalPalette: CategoricalPaletteName;
   continuousColormap: ColormapName;
+  /** For signed scores (lib/colorScale.ts decides when) */
+  divergingColormap: DivergingColormapName;
+  signedColormapMode: SignedColormapMode;
+  /** Default colour-range clipping; a view may override it (unifiedViewStore.colorClip) */
+  colorClip: ClipSetting;
   maxRenderedCells: number;
   pipelineRunning: boolean;
   setEmbedding: (embedding: string) => void;
@@ -25,6 +31,9 @@ interface SettingsState {
   setPlotBackground: (bg: "white" | "dark") => void;
   setCategoricalPalette: (p: CategoricalPaletteName) => void;
   setContinuousColormap: (m: ColormapName) => void;
+  setDivergingColormap: (m: DivergingColormapName) => void;
+  setSignedColormapMode: (m: SignedColormapMode) => void;
+  setColorClip: (c: ClipSetting) => void;
   setMaxRenderedCells: (max: number) => void;
   setPipelineRunning: (running: boolean) => void;
 }
@@ -39,6 +48,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   plotBackground: "white",
   categoricalPalette: "cvd",
   continuousColormap: "viridis",
+  divergingColormap: "RdBu",
+  signedColormapMode: "auto",
+  colorClip: DEFAULT_CLIP,
   maxRenderedCells: 100_000,
   pipelineRunning: false,
   setEmbedding: (embedding) => set({ embedding }),
@@ -50,6 +62,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setPlotBackground: (bg) => set({ plotBackground: bg }),
   setCategoricalPalette: (categoricalPalette) => set({ categoricalPalette }),
   setContinuousColormap: (continuousColormap) => set({ continuousColormap }),
+  setDivergingColormap: (divergingColormap) => set({ divergingColormap }),
+  setSignedColormapMode: (signedColormapMode) => set({ signedColormapMode }),
+  setColorClip: (colorClip) => set({ colorClip }),
   setMaxRenderedCells: (max) => set({ maxRenderedCells: max }),
   setPipelineRunning: (running) => set({ pipelineRunning: running }),
 }));

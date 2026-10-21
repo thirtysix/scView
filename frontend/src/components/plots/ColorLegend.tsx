@@ -1,7 +1,10 @@
 import { useMemo, useState, type MouseEvent } from "react";
 import { ArrowUpDown, ChevronDown, ChevronUp, GripVertical, Loader2, Pencil, Sparkles, Split } from "lucide-react";
+import { ClipControl } from "@/components/plots/ClipControl";
 import { colormapColor } from "@/lib/colors";
+import { colorScaleCaption, type ClipSetting, type ResolvedColorScale } from "@/lib/colorScale";
 import { moveCategory } from "@/lib/categoryOrder";
+import { fmtValue } from "@/lib/overlayHistogram";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 /** Ctrl, Cmd or Shift held: a click adds to (or takes from) the picked categories. */
@@ -19,6 +22,16 @@ interface ColorLegendProps {
   min?: number;
   /** Maximum value (continuous mode) */
   max?: number;
+  /** Continuous: the resolved scale (lib/colorScale.ts). It sets the map
+   *  (diverging for signed scores), the range over min/max, a "0" at the
+   *  centre, and a caption saying how the range was clipped. */
+  scale?: ResolvedColorScale | null;
+  /** Continuous, with `scale`: the clipping in force, editable beside the bar */
+  clip?: ClipSetting;
+  /** null = back to the settings default */
+  onClipChange?: (clip: ClipSetting | null) => void;
+  /** The view's clipping overrides the settings default */
+  clipOverridden?: boolean;
   /** Axis / column label */
   label?: string;
   /** Fires when a category swatch is clicked */
@@ -61,6 +74,10 @@ export function ColorLegend({
   categoryColors,
   min,
   max,
+  scale = null,
+  clip,
+  onClipChange,
+  clipOverridden = false,
   label,
   onCategoryClick,
   highlightedCategory,
@@ -88,7 +105,8 @@ export function ColorLegend({
     setEditing(null);
     if (v && v !== cat) onRenameCategory?.(cat, v);
   };
-  const colormap = useSettingsStore((s) => s.continuousColormap);
+  const defaultColormap = useSettingsStore((s) => s.continuousColormap);
+  const colormap = scale?.colormap ?? defaultColormap;
   // Build gradient CSS for continuous legend
   const gradientStyle = useMemo(() => {
     if (type !== "continuous") return undefined;
@@ -337,9 +355,24 @@ export function ColorLegend({
           style={gradientStyle}
         />
         <div className="flex justify-between gap-2 text-[10px] tabular-nums text-slate-500">
-          <span>{min?.toFixed(2) ?? "0"}</span>
-          <span>{max?.toFixed(2) ?? "1"}</span>
+          <span>{scale ? fmtValue(scale.min) : (min?.toFixed(2) ?? "0")}</span>
+          {scale?.centre != null && <span title="The centre of the diverging scale">{fmtValue(scale.centre)}</span>}
+          <span>{scale ? fmtValue(scale.max) : (max?.toFixed(2) ?? "1")}</span>
         </div>
+        {scale && (
+          <p className="text-[10px] leading-snug text-slate-400" data-testid="colour-scale-caption">
+            {colorScaleCaption(scale)}
+          </p>
+        )}
+        {scale && clip && onClipChange && (
+          <ClipControl
+            clip={clip}
+            dataMin={scale.dataMin}
+            dataMax={scale.dataMax}
+            onChange={onClipChange}
+            overridden={clipOverridden}
+          />
+        )}
       </div>
     );
   }

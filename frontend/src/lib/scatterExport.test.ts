@@ -59,9 +59,13 @@ describe("legendLayout", () => {
 
   it("draws a colour bar with the value range for continuous colours", () => {
     const l = legendLayout({ type: "continuous", title: "CD3E", min: 0, max: 4.5 }, 600, measure);
-    expect(l.bar).toMatchObject({ maxLabel: "4.50", minLabel: "0.00" });
+    expect(l.bar).toMatchObject({ maxLabel: "4.50", minLabel: "0.00", midLabel: null, colormap: null });
     expect(l.bar!.h).toBe(240);
     expect(l.entries).toHaveLength(0);
+  });
+  it("labels the centre of a diverging scale and carries its map", () => {
+    const l = legendLayout({ type: "continuous", title: "IFN", min: -2, max: 2, colormap: "RdBu", centre: 0 }, 600, measure);
+    expect(l.bar).toMatchObject({ maxLabel: "2.00", midLabel: "0.00", minLabel: "-2.00", colormap: "RdBu" });
   });
 });
 
