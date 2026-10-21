@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-21
+
 ### Added
 - **PCA diagnostics (Data Assessment → PCA).** Each component's share of the variance with the
   cumulative curve, an elbow (Kneedle: the PC farthest below the chord of the scree curve), the
