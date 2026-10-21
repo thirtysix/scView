@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
-import { LassoSelector, screenToData } from "./LassoSelector";
+import { cellsInPolygon3D, LassoSelector, screenToData } from "./LassoSelector";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -46,5 +46,39 @@ describe("LassoSelector", () => {
   it("selects nothing before there is a camera", () => {
     const done = drawLasso(() => null);
     expect(done).not.toHaveBeenCalled();
+  });
+});
+
+describe("3D lasso", () => {
+  // 100 x 100 px plot; OrbitView at zoom 0 draws 1 px per unit on the plane
+  // through the target. Cells: 0 above the centre, 1 below, 2 above and 40
+  // units nearer the camera, 3 right of the centre, 4 left of it.
+  const cells = Float32Array.from([0, 30, 0, 0, -30, 0, 0, 30, 40, 30, 0, 0, -30, 0, 0]);
+  const camera = (rotationOrbit = 0) => ({ target: [0, 0, 0], zoom: 0, rotationOrbit, rotationX: 0 });
+  const topBox: [number, number][] = [[35, 0], [65, 0], [65, 35], [35, 35]];
+  const rightBox: [number, number][] = [[65, 40], [100, 40], [100, 60], [65, 60]];
+
+  it("selects every cell under the outline, at any depth", () => {
+    expect(cellsInPolygon3D(cells, topBox, camera(), 100, 100)).toEqual(new Set([0, 2]));
+  });
+
+  it("follows the rotation: turned half way round, the right of the plot holds the other cell", () => {
+    expect(cellsInPolygon3D(cells, rightBox, camera(0), 100, 100)).toEqual(new Set([3]));
+    expect(cellsInPolygon3D(cells, rightBox, camera(180), 100, 100)).toEqual(new Set([4]));
+  });
+
+  it("draws on a 3D plot instead of leaving the drag to the camera", () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(
+      { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0 } as DOMRect,
+    );
+    const onSelectionComplete = vi.fn();
+    const { container } = render(
+      <LassoSelector active dimensions={3} positions={cells} getViewState={() => camera()} onSelectionComplete={onSelectionComplete} />,
+    );
+    const svg = container.querySelector("svg")!;
+    fireEvent.mouseDown(svg, { clientX: 35, clientY: 0 });
+    for (const [x, y] of [[65, 0], [65, 35], [35, 35]]) fireEvent.mouseMove(svg, { clientX: x, clientY: y });
+    fireEvent.mouseUp(svg);
+    expect(onSelectionComplete).toHaveBeenCalledWith(new Set([0, 2]));
   });
 });

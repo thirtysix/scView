@@ -889,10 +889,11 @@ export function UnifiedViewPanel() {
                 embedding={embedding}
               />
             )}
-            {dimensions === 2 && !gridActive && (
+            {!gridActive && (
               <LassoSelector
                 active={selectionMode === "lasso"}
                 positions={positions}
+                dimensions={dimensions === 3 ? 3 : 2}
                 getViewState={getShownCamera}
                 onSelectionComplete={handleSelectionComplete}
               />
