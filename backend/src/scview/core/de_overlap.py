@@ -237,8 +237,8 @@ def overlap(
     elif any(len(t) != len(common) for t in tested):
         notes.append(
             f"The results tested different genes ({min(len(t) for t in tested):,} to "
-            f"{max(len(t) for t in tested):,}; {len(common):,} in all), so a gene missing from a set "
-            "may not have been tested there."
+            f"{max(len(t) for t in tested):,}; {len(common):,} in all): tick \"only genes tested in "
+            "all\" to count only those."
         )
 
     for s in sets:
@@ -276,7 +276,8 @@ def overlap(
                 ({"sets": list(c), "n": len(gs)} for c, gs in disc.items()),
                 key=lambda x: (-x["n"], x["sets"]),
             ),
-            "genes": [row(g) for g in disc_genes[:MAX_LISTED]],
+            # Each with the sets it is in (its combination).
+            "genes": [{**row(g), "sets": member[g]} for g in disc_genes[:MAX_LISTED]],
         },
         "pairs": pairs,
         "notes": notes,

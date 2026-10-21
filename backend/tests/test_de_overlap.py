@@ -81,7 +81,7 @@ def test_both_keeps_the_sign_a_flip_is_discordant_not_shared():
     assert _inter(out, [0, 1]) is None  # FLIP is not a shared hit of A and B
     assert out["discordant"]["n"] == 1
     assert out["discordant"]["combinations"] == [{"sets": [0, 1], "n": 1}]
-    assert out["discordant"]["genes"] == [{"gene": "FLIP", "lfc": [1.0, -1.0, 0.0]}]
+    assert out["discordant"]["genes"] == [{"gene": "FLIP", "lfc": [1.0, -1.0, 0.0], "sets": [0, 1]}]
     ab = next(p for p in out["pairs"] if (p["a"], p["b"]) == (0, 1))
     # A = {ISG15 IFI6 MONO1 FLIP DOWN1}, B = {ISG15 IFI6 T1 FLIP}: 2 shared, 1 discordant of 6.
     assert (ab["shared"], ab["discordant"], ab["union"]) == (2, 1, 6)
@@ -138,7 +138,7 @@ def test_restrict_to_common_tested():
     free = de_overlap.overlap([("a", a), ("b", b)], direction="up")
     assert {g["gene"] for g in _inter(free, [0])["genes"]} == {"RARE", "B1"}
     assert free["n_common_tested"] == 2
-    assert any("may not have been tested" in n for n in free["notes"])
+    assert any("tested different genes" in n and "2 in all" in n for n in free["notes"])
     common = de_overlap.overlap([("a", a), ("b", b)], direction="up", restrict_to_common_tested=True)
     assert [g["gene"] for g in _inter(common, [0])["genes"]] == ["B1"]
     assert common["sets"][0]["n"] == 2 and common["sets"][0]["n_tested"] == 3

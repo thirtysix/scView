@@ -773,6 +773,7 @@ class DEOverlapSet(BaseModel):
 class DEOverlapGene(BaseModel):
     gene: str
     lfc: list[float | None]  # log2FC in each DE result (request order); None: not tested
+    sets: list[int] | None = None  # discordant genes: the sets the gene is in
 
 
 class DEOverlapIntersection(BaseModel):
