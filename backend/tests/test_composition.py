@@ -236,6 +236,32 @@ def test_pairing_follows_the_donors():
         composition_test(_obs(partial, T2), "cond", "donor", "group", paired=True)
 
 
+def test_paired_donors_get_a_signed_rank_test_on_their_shares():
+    r = composition_test(_obs(T2_SAMPLES, T2), "cond", "donor", "group")
+    assert r.pairing == {"paired": True, "n_pairs": 4, "conditions": ["A", "B"]}
+    t = r.groups[0].paired_test
+    shares = {(s.condition, s.sample): s.props[0] * 100 for s in r.samples}
+    a = [shares[("A", d)] for d in ("d1", "d2", "d3", "d4")]
+    b = [shares[("B", d)] for d in ("d1", "d2", "d3", "d4")]
+    assert t["n_pairs"] == 4
+    assert t["mean_diff"] == pytest.approx(np.mean(np.array(b) - np.array(a)))
+    assert t["wilcoxon_p"] == pytest.approx(stats.wilcoxon(b, a, zero_method="wilcox").pvalue)
+    assert t["ttest_p"] == pytest.approx(stats.ttest_rel(b, a).pvalue)
+    assert "4 pairs" in t["caution"]
+    assert r.to_dict()["groups"][0]["paired_test"] == t and r.to_dict()["pairing"] == r.pairing
+    # Disjoint donors: no pairing, no per-group paired test.
+    nested = [s.replace("__d", "__e") if s.startswith("B") else s for s in T2_SAMPLES]
+    r = composition_test(_obs(nested, T2), "cond", "donor", "group")
+    assert r.pairing["paired"] is False and r.groups[0].paired_test is None
+    # Three conditions: paired, lines only, no test.
+    r = composition_test(_obs(T3_SAMPLES, T3), "cond", "donor", "group")
+    assert r.pairing == {"paired": True, "n_pairs": 3, "conditions": ["A", "B", "C"]}
+    assert r.groups[0].paired_test is None
+    # No sample column: nothing to pair.
+    r = composition_test(_obs(T2_SAMPLES, T2), "cond", None, "group")
+    assert r.pairing["paired"] is False
+
+
 def test_one_sample_per_condition_gives_proportions_only():
     # A "sample" column that just repeats the condition (Kang's orig_ident).
     obs = _obs(T2_SAMPLES, T2)

@@ -18,6 +18,11 @@ Two pseudobulk values are offered:
 
 A sample with fewer than ``MIN_CELLS`` cells of a group is left out, as in
 pseudobulk DE and the composition test: its mean is mostly noise.
+
+When a donor occurs in more than one condition (Kang: every donor in CTRL and
+STIM) the design is paired, and ``design`` says so: the plot joins each donor's
+values with a line, and with exactly two conditions each group gets a Wilcoxon
+signed-rank and a paired t-test on the plotted values (core/paired_design.py).
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from scview.core import paired_design
 from scview.core.replicates import donor_candidates, pick_donor
 
 Method = Literal["mean", "cpm"]
@@ -167,6 +173,7 @@ def per_donor_expression(
         "method": method, "value_label": VALUE_LABELS[method], "source": None,
         "min_cells": MIN_CELLS, "groups": [], "conditions": [], "points": [],
         "n_donors": {}, "n_dropped": 0, "warnings": [], "message": None,
+        "design": {"paired": False, "n_pairs": 0, "conditions": []}, "paired_tests": {},
     }
     if sample_key is None:
         out["message"] = (
@@ -222,6 +229,13 @@ def per_donor_expression(
     out["groups"], out["conditions"], out["points"] = groups, conditions, points
     out["n_donors"] = {k: len({p["sample"] for p in points if p["condition"] == k})
                        for k in conditions}
+    # Pairing is the dataset's design (which donors were sampled in which
+    # conditions), so it is read off the cells, not the samples kept; the tests
+    # use the pairs with a value in both conditions in each group.
+    if condition_key:
+        out["design"] = paired_design.detect_design(set(zip(d, c)), conditions)
+        if out["design"]["paired"] and len(conditions) == 2:
+            out["paired_tests"] = paired_design.group_paired_tests(points, conditions, groups)
     few = {k: n for k, n in out["n_donors"].items() if n < FEW_DONORS}
     if few:
         where = ", ".join(f"{k or 'all cells'}: {n}" for k, n in few.items())

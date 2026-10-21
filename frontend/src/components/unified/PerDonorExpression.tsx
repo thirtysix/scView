@@ -175,6 +175,10 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
           plotName={`per_donor_${result.gene}_${result.group_key}`}
           datasetName={dataset?.name}
           height={height}
+          design={result.design}
+          pairedTests={result.paired_tests}
+          unit={method === "mean" ? "log-norm units" : "log2 CPM"}
+          unitHelp={`Value: ${result.value_label}.`}
           note={
             `Value: ${result.value_label} (${result.source}).` +
             (result.n_dropped > 0

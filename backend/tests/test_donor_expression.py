@@ -11,28 +11,32 @@ import numpy as np
 import pandas as pd
 import pytest
 import scipy.sparse as sp
+from scipy import stats
 
 from scview.core import donor_expression as dx
 
 API = "/api/v1"
 
 
-def _adata(n_donors: int = 3, cells: int = 12, dense: bool = False, with_counts: bool = True):
-    """Donors x CTRL/STIM x types A/B, ``cells`` each. Gene G0 has donor i's
-    counts = i + 1 (+ 2 in STIM), every cell's total 100; G1 fills the rest."""
+def _adata(n_donors: int = 3, cells: int = 12, dense: bool = False, with_counts: bool = True,
+           conditions: tuple[str, ...] = ("CTRL", "STIM"), disjoint: bool = False):
+    """Donors x conditions x types A/B, ``cells`` each. Gene G0 has donor i's
+    counts = i + 1 (+ 2 per condition after the first), every cell's total 100;
+    G1 fills the rest. ``disjoint``: different donors in each condition."""
     rows, obs = [], []
     for i in range(n_donors):
-        for cond in ("CTRL", "STIM"):
+        for ci, cond in enumerate(conditions):
             for typ in ("A", "B"):
                 for _ in range(cells):
-                    g0 = i + 1 + (2 if cond == "STIM" else 0)
+                    g0 = i + 1 + 2 * ci
                     rows.append([g0, 100 - g0])
-                    obs.append({"donor_id": f"D{i}", "stim": cond, "cell_type": typ})
+                    donor = f"D{i}{cond}" if disjoint else f"D{i}"
+                    obs.append({"donor_id": donor, "stim": cond, "cell_type": typ})
     counts = np.array(rows, dtype=np.float32)
     lognorm = np.log1p(counts / counts.sum(axis=1, keepdims=True) * 1e4)
     obs = pd.DataFrame(obs)
     obs.index = [f"c{i}" for i in range(len(obs))]
-    obs["stim"] = pd.Categorical(obs["stim"], categories=["STIM", "CTRL"])  # stored order
+    obs["stim"] = pd.Categorical(obs["stim"], categories=list(reversed(conditions)))  # stored order
     X = lognorm if dense else sp.csr_matrix(lognorm)
     a = ad.AnnData(X, obs=obs)
     a.var_names = ["G0", "G1"]
@@ -121,6 +125,49 @@ def test_bad_requests():
         dx.per_donor_expression(no_counts, "G0", "cell_type")
 
 
+def test_paired_design_tests_each_group_pair_by_pair():
+    r = dx.per_donor_expression(_adata(), "G0", "cell_type", condition_key="stim")
+    assert r["design"] == {"paired": True, "n_pairs": 3, "conditions": ["STIM", "CTRL"]}
+    assert set(r["paired_tests"]) == {"A", "B"}
+    t = r["paired_tests"]["A"]
+    # CTRL - STIM in the stored order (STIM first), by hand from the same points.
+    pts = {(p["condition"], p["sample"]): p["value"] for p in r["points"] if p["group"] == "A"}
+    stim = [pts[("STIM", d)] for d in ("D0", "D1", "D2")]
+    ctrl = [pts[("CTRL", d)] for d in ("D0", "D1", "D2")]
+    assert t["n_pairs"] == 3
+    assert t["mean_diff"] == pytest.approx(np.mean(np.array(ctrl) - np.array(stim)))
+    assert t["wilcoxon_p"] == pytest.approx(stats.wilcoxon(ctrl, stim, zero_method="wilcox").pvalue)
+    assert t["ttest_p"] == pytest.approx(stats.ttest_rel(ctrl, stim).pvalue)
+    assert "3 pairs: read these p-values as descriptive" in t["caution"]
+    # A dropped sample leaves that donor out of the pairs, not the design.
+    a = _adata(n_donors=5)
+    gone = ((a.obs["donor_id"] == "D4") & (a.obs["stim"] == "STIM") & (a.obs["cell_type"] == "A"))
+    a = a[~gone.to_numpy()].copy()
+    r = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim")
+    assert r["design"]["n_pairs"] == 5
+    assert r["paired_tests"]["A"]["n_pairs"] == 4 and r["paired_tests"]["B"]["n_pairs"] == 5
+    assert r["paired_tests"]["B"]["caution"] is None
+
+
+def test_disjoint_donors_are_unpaired_and_unchanged():
+    r = dx.per_donor_expression(_adata(disjoint=True), "G0", "cell_type", condition_key="stim")
+    assert r["design"] == {"paired": False, "n_pairs": 0, "conditions": ["STIM", "CTRL"]}
+    assert r["paired_tests"] == {}
+    assert r["n_donors"] == {"STIM": 3, "CTRL": 3} and len(r["points"]) == 12
+    # Unsplit: nothing to pair.
+    r = dx.per_donor_expression(_adata(), "G0", "cell_type")
+    assert r["design"] == {"paired": False, "n_pairs": 0, "conditions": []}
+
+
+def test_three_timepoints_are_paired_without_a_test():
+    a = _adata(conditions=("T0", "T1", "T2"))
+    r = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim")
+    assert r["conditions"] == ["T2", "T1", "T0"]
+    assert r["design"] == {"paired": True, "n_pairs": 3, "conditions": ["T2", "T1", "T0"]}
+    assert r["paired_tests"] == {}
+    assert len(r["points"]) == 2 * 3 * 3
+
+
 def _register(dm, adata, did: str = "ds") -> str:
     d = Path(dm.data_dir) / "uploads" / did
     d.mkdir(parents=True, exist_ok=True)
@@ -135,6 +182,7 @@ async def test_endpoint(client, dataset_manager):
     r = await client.get(url, params={"gene": "G0", "groupby": "cell_type", "condition": "stim"})
     assert r.status_code == 200, r.text
     assert len(r.json()["points"]) == 12
+    assert r.json()["design"]["paired"] and r.json()["paired_tests"]["A"]["n_pairs"] == 3
     r = await client.get(url, params={"gene": "G0", "groupby": "cell_type", "sample": "donor_id",
                                       "method": "cpm"})
     assert r.status_code == 200, r.text

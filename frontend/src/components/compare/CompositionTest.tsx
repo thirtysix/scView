@@ -163,6 +163,11 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
   ]);
 
   const rows = useMemo(() => (result ? sortedGroups(result) : []), [result]);
+  // Paired donors: each group's signed-rank / paired t on those shares.
+  const pairedTests = useMemo(
+    () => Object.fromEntries((result?.groups ?? []).map((g) => [g.group, g.paired_test])),
+    [result],
+  );
   // One point per sample in each group, as % of the sample's cells.
   const donorPoints = useMemo<DonorPoint[]>(
     () =>
@@ -508,7 +513,22 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
                 title={`${prettyObsLabel(result.group_key)}: share of each sample's cells`}
                 plotName={`composition_samples_${result.group_key}`}
                 datasetName={dataset.name}
-                note="The test asks whether the conditions differ by more than the samples within a condition do."
+                design={result.pairing}
+                pairedTests={pairedTests}
+                unit="percentage points"
+                changeFormat={(v) => v.toFixed(1)}
+                unitHelp="Raw share of the sample's cells, in percent (not the logit the moderated test uses)."
+                note={
+                  result.pairing.paired
+                    ? result.design === "paired"
+                      ? `The moderated ${two ? "t" : "F"}-test above blocked on ${prettyObsLabel(result.sample_key)} ` +
+                        "(paired: each donor compared with itself); the per-group tests here are on the raw shares."
+                      : result.tested
+                        ? `The moderated test above treated the samples as independent (unpaired: not every ` +
+                          `${prettyObsLabel(result.sample_key)} is in every condition); the per-group tests here use the donors in both.`
+                        : "Not tested above; the per-group tests here are on the raw shares of the donors in both conditions."
+                    : "The test asks whether the conditions differ by more than the samples within a condition do."
+                }
               />
             </div>
           )}
