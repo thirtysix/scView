@@ -259,6 +259,12 @@ def test_the_type_column_is_recorded_even_when_scview_made_it():
     assert found["qc_mito_type_column"] == "scview_leiden_r0.5"
     labels, pct, _ = qc_filter.recorded_removed_mito(kept, "scview_leiden_r0.5")
     assert labels.count("B") == 4 and len(pct) == a.n_obs - kept.n_obs
+    # the audit of what was removed splits by the types filtering judged by
+    audit = qc_filter.recorded_audit(kept)
+    assert audit["label"]["column"] == "scview_leiden_r0.5"
+    assert {r["name"]: r["n_removed"] for r in audit["by_type"]}["B"] == 4
+    glob, _ = _run_filtering(a.copy(), FIXED10)  # a global run lists author labels only, as before
+    assert list(glob.uns[qc_filter.RECORD_KEY]["label_columns"]) == ["cell_type"]
 
 
 def test_filtering_again_per_type_reuses_the_bounds():

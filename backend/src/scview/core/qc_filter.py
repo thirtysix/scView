@@ -1208,7 +1208,9 @@ def removal_record(adata, cells: dict, removed: dict[str, np.ndarray], drop: np.
         "pct_mt": pct.astype(np.float32),
         "sample_column": sample_column or "",
         "condition_columns": np.array([c for c in cols if c in conds], dtype=object),
-        "label_columns": np.array([c for c in cols if _author_label(c)], dtype=object),
+        # The types a per-type filter judged by come first (even a scView clustering).
+        "label_columns": np.array([c for c in cols if _author_label(c) or (types is not None and c == types.column)],
+                                  dtype=object),
         "columns": columns,
     }
 
