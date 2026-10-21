@@ -24,6 +24,7 @@ from scview.core import qc_states
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
+from scview.core.run_watchdog import RunControl
 from scview.core.step_names import unknown_steps, unknown_steps_message
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
 from scview.core import provenance
@@ -402,6 +403,7 @@ async def run_assessment_pipeline(
         for key, value in body.params.items():
             if hasattr(params, key):
                 setattr(params, key, value)
+    control = RunControl()
 
     def _run(adaptor):
         # Write processing output to the derived layer, never the original
@@ -412,12 +414,13 @@ async def run_assessment_pipeline(
             steps=body.steps,
             params=params,
             output_path=output_path,
+            control=control,
         )[1]
 
     try:
         # In a worker thread with the dataset to itself; the cached copy is
         # dropped afterwards, so what is served is what is on disk.
-        result = await run_exclusive(dm, dataset_id, _run)
+        result = await run_exclusive(dm, dataset_id, _run, control)
         return result.to_dict()
 
     except HTTPException:
@@ -449,6 +452,7 @@ async def run_assessment_pipeline_stream(
         for key, value in body.params.items():
             if hasattr(params, key):
                 setattr(params, key, value)
+    control = RunControl()
 
     def _events(adaptor):
         # Write processing output to the derived layer, never the original
@@ -458,6 +462,7 @@ async def run_assessment_pipeline_stream(
             steps=body.steps,
             params=params,
             output_path=str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path)),
+            control=control,
         )
 
     async def event_generator():
@@ -468,7 +473,7 @@ async def run_assessment_pipeline_stream(
         try:
             # aclosing: stopping this generator must stop the run at once, not
             # whenever the inner generator is garbage-collected.
-            async with aclosing(iterate_exclusive(dm, dataset_id, _events)) as events:
+            async with aclosing(iterate_exclusive(dm, dataset_id, _events, control)) as events:
                 async for event_type, event_data in events:
                     yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
         except Exception as e:
@@ -585,15 +590,18 @@ async def rerun_step(
             if hasattr(params, key):
                 setattr(params, key, value)
 
+    control = RunControl()
+
     def _run(adaptor):
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
         return run_pipeline(
-            adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path
+            adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path,
+            control=control,
         )[1]
 
     try:
         # As /assessment/run: a worker thread, then serve what is on disk.
-        result = await run_exclusive(dm, dataset_id, _run)
+        result = await run_exclusive(dm, dataset_id, _run, control)
         return {"plan": plan.model_dump(), "result": result.to_dict()}
     except HTTPException:
         raise

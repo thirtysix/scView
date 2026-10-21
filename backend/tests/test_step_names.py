@@ -95,6 +95,7 @@ async def test_run_endpoint_still_runs_known_steps(client, dataset_manager):
     assert r.status_code == 200
     body = r.json()
     assert body["steps_run"] == ["qc_metrics"]
+    assert body["status"] == "complete"
     assert body["unknown_steps"] == []
 
 
