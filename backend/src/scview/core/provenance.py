@@ -132,10 +132,12 @@ def record_step(
     params: dict | None = None,
     note: str | None = None,
     when: str | None = None,
+    resources: dict | None = None,
 ) -> None:
     """Append one step to the history — a replayable recipe entry that is also
     a git-style commit: it carries a content-derived ``commit_id`` and a
-    ``parent`` pointer to the previous commit (the DAG backbone)."""
+    ``parent`` pointer to the previous commit (the DAG backbone). ``resources``
+    (seconds, sampled peak memory) is kept beside the params, outside the commit id."""
     data = read_provenance(adata)
     history = data["history"]
     parent = history[-1].get("commit_id") if history else None
@@ -153,6 +155,8 @@ def record_step(
     }
     if note:
         entry["note"] = note
+    if resources:
+        entry["resources"] = _clean(resources)
     history.append(entry)
     data.setdefault("current", {})["head"] = entry["commit_id"]
     _write(adata, data)

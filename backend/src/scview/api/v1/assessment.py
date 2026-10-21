@@ -23,7 +23,9 @@ from scview.core import (
 from scview.core import qc_states
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
-from scview.core.processing import iterate_exclusive, run_exclusive
+from scview.core.processing import cancel_run, iterate_exclusive, run_exclusive
+from scview.core.run_watchdog import RunControl
+from scview.core.step_names import unknown_steps, unknown_steps_message
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
 from scview.core import provenance
 from scview.core.rerun import plan_rerun
@@ -373,6 +375,16 @@ async def apply_doublet_threshold(
 # ---------------------------------------------------------------------------
 
 
+def _check_steps(steps: list[str]) -> None:
+    """400 for no steps, 422 for names that are not steps (with the likely one meant)."""
+    if not steps:
+        raise HTTPException(status_code=400, detail="No steps specified.")
+    unknown = unknown_steps(steps)
+    if unknown:
+        raise HTTPException(status_code=422, detail=unknown_steps_message(unknown))
+
+
+
 @router.post("/datasets/{dataset_id}/assessment/run")
 async def run_assessment_pipeline(
     dataset_id: str,
@@ -380,12 +392,10 @@ async def run_assessment_pipeline(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Run specified preprocessing steps on the dataset and save the result."""
+    _check_steps(body.steps)  # before loading: a wrong name costs nothing
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-
-    if not body.steps:
-        raise HTTPException(status_code=400, detail="No steps specified.")
 
     # Build PipelineParams from the request body
     params = PipelineParams()
@@ -393,6 +403,7 @@ async def run_assessment_pipeline(
         for key, value in body.params.items():
             if hasattr(params, key):
                 setattr(params, key, value)
+    control = RunControl()
 
     def _run(adaptor):
         # Write processing output to the derived layer, never the original
@@ -403,12 +414,13 @@ async def run_assessment_pipeline(
             steps=body.steps,
             params=params,
             output_path=output_path,
+            control=control,
         )[1]
 
     try:
         # In a worker thread with the dataset to itself; the cached copy is
         # dropped afterwards, so what is served is what is on disk.
-        result = await run_exclusive(dm, dataset_id, _run)
+        result = await run_exclusive(dm, dataset_id, _run, control)
         return result.to_dict()
 
     except HTTPException:
@@ -430,18 +442,17 @@ async def run_assessment_pipeline_stream(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Run preprocessing steps with Server-Sent Events progress streaming."""
+    _check_steps(body.steps)  # before loading: a wrong name costs nothing
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-
-    if not body.steps:
-        raise HTTPException(status_code=400, detail="No steps specified.")
 
     params = PipelineParams()
     if body.params:
         for key, value in body.params.items():
             if hasattr(params, key):
                 setattr(params, key, value)
+    control = RunControl()
 
     def _events(adaptor):
         # Write processing output to the derived layer, never the original
@@ -451,6 +462,7 @@ async def run_assessment_pipeline_stream(
             steps=body.steps,
             params=params,
             output_path=str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path)),
+            control=control,
         )
 
     async def event_generator():
@@ -461,7 +473,7 @@ async def run_assessment_pipeline_stream(
         try:
             # aclosing: stopping this generator must stop the run at once, not
             # whenever the inner generator is garbage-collected.
-            async with aclosing(iterate_exclusive(dm, dataset_id, _events)) as events:
+            async with aclosing(iterate_exclusive(dm, dataset_id, _events, control)) as events:
                 async for event_type, event_data in events:
                     yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
         except Exception as e:
@@ -560,6 +572,8 @@ async def rerun_step(
 ):
     """Re-run an in-place-rerunnable step (and its downstream) with new params,
     reusing existing upstream artifacts (PCA / neighbour graph)."""
+    if unknown_steps([body.edited_step]):  # before loading: a wrong name costs nothing
+        raise HTTPException(status_code=422, detail=unknown_steps_message([body.edited_step]))
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
@@ -576,15 +590,18 @@ async def rerun_step(
             if hasattr(params, key):
                 setattr(params, key, value)
 
+    control = RunControl()
+
     def _run(adaptor):
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
         return run_pipeline(
-            adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path
+            adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path,
+            control=control,
         )[1]
 
     try:
         # As /assessment/run: a worker thread, then serve what is on disk.
-        result = await run_exclusive(dm, dataset_id, _run)
+        result = await run_exclusive(dm, dataset_id, _run, control)
         return {"plan": plan.model_dump(), "result": result.to_dict()}
     except HTTPException:
         raise
@@ -793,3 +810,23 @@ async def save_qc_state_label(
         else:
             dm.saved_in_place(dataset_id, adaptor, output_path)
         return saved
+
+
+# ---------------------------------------------------------------------------
+# POST /datasets/{dataset_id}/assessment/cancel
+# ---------------------------------------------------------------------------
+
+
+@router.post("/datasets/{dataset_id}/assessment/cancel")
+async def cancel_pipeline_run(dataset_id: str):
+    """Cancel the pipeline run working on this dataset (run, run-stream, rerun).
+
+    The run stops before its next step (a Leiden clustering child process is
+    ended at once; other steps finish first) and saves nothing: the dataset
+    reopens as it was before the run. The run's own response or stream ends
+    with ``status: "cancelled"``. 404 when no run is working on the dataset.
+    """
+    control = cancel_run(dataset_id)
+    if control is None:
+        raise HTTPException(status_code=404, detail="No pipeline run is working on this dataset.")
+    return {"cancelling": True, "step": control.current_step}
