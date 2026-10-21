@@ -7,7 +7,8 @@ vi.mock("@/api/client", () => ({ apiFetch: api.apiFetch }));
 
 import type { DatasetInfo } from "@/api/types";
 import type { CellFilter } from "@/lib/cellFilter";
-import { encodeSelection, parseSession, sessionJson, SessionError, SESSION_FORMAT, SESSION_VERSION } from "@/lib/session";
+import { bitsetFromIndices, bitsetToSelection } from "@/lib/gates";
+import { parseSession, sessionJson, SessionError, SESSION_FORMAT, SESSION_VERSION } from "@/lib/session";
 import { captureSession, restoreSession } from "@/lib/sessionRestore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { loadGatesFromStorage, useGatesStore } from "@/stores/gatesStore";
@@ -26,6 +27,7 @@ const kang = (extra: Partial<DatasetInfo> = {}): DatasetInfo => ({
   created_at: "",
   ...extra,
 });
+const cellsSel = (cells: number[], n: number) => bitsetToSelection(bitsetFromIndices(cells, n));
 const range = (a: number, b: number) => Array.from({ length: b - a }, (_, k) => a + k);
 const filter: CellFilter = { op: "and", layer: "", items: [{ kind: "gene", gene: "ISG15", op: ">", value: 2 }] };
 
@@ -36,7 +38,7 @@ function buildGates() {
   const mono = store.addGate(kang(), {
     name: "Monocytes",
     parentId: null,
-    def: { kind: "cells", selection: encodeSelection(range(0, 40), 100) },
+    def: { kind: "cells", selection: cellsSel(range(0, 40), 100) },
   })!;
   const isg = store.addGate(kang(), { name: "ISG-high", parentId: mono, def: { kind: "filter", filter } })!;
   store.addGate(kang(), { name: "Monocytes not ISG-high", parentId: mono, def: { kind: "combine", op: "not", operands: [mono, isg] } });

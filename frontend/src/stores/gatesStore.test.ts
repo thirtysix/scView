@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { DatasetInfo } from "@/api/types";
 import type { CellFilter } from "@/lib/cellFilter";
-import { bitsetFromIndices, evaluateGates, type Gate } from "@/lib/gates";
-import { encodeSelection } from "@/lib/session";
+import { bitsetFromIndices, bitsetToSelection, evaluateGates, type Gate } from "@/lib/gates";
 import { useDatasetStore } from "@/stores/datasetStore";
 import {
   GATES_STORAGE_KEY,
@@ -30,8 +29,9 @@ const ds = (extra: Partial<DatasetInfo> = {}): DatasetInfo => ({
   created_at: "",
   ...extra,
 });
+const cellsSel = (cells: number[], n: number) => bitsetToSelection(bitsetFromIndices(cells, n));
 const range = (a: number, b: number) => Array.from({ length: b - a }, (_, k) => a + k);
-const cellsDef = (cells: number[], n = 100) => ({ kind: "cells" as const, selection: encodeSelection(cells, n) });
+const cellsDef = (cells: number[], n = 100) => ({ kind: "cells" as const, selection: cellsSel(cells, n) });
 const filter: CellFilter = { op: "and", layer: "", items: [{ kind: "gene", gene: "ISG15", op: ">", value: 2 }] };
 
 function reset() {

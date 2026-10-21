@@ -44,7 +44,7 @@ const cellsGate = (id: string, name: string, cells: number[], parentId: string |
   id,
   name,
   parentId,
-  def: { kind: "cells", selection: encodeSelection(cells, n) },
+  def: { kind: "cells", selection: bitsetToSelection(bitsetFromIndices(cells, n)) },
   createdAt: "2026-10-21T00:00:00.000Z",
 });
 const filterDef: CellFilter = { op: "and", layer: "", items: [{ kind: "gene", gene: "ISG15", op: ">", value: 2 }] };
@@ -110,7 +110,7 @@ describe("bitsets", () => {
 
   it("decode a saved selection, counting positions past the dataset's cells", () => {
     expect(bitsetFromSelection({ n_cells: 200, indices: [1, 150] }, N).ignored).toBe(1);
-    const fromMask = bitsetFromSelection(encodeSelection([5, 120, 180], 200), N);
+    const fromMask = bitsetFromSelection({ n_cells: 200, bitmask: encodeMask([5, 120, 180], 200) }, N);
     expect(indicesOf(fromMask.cells)).toEqual([5]);
     expect(fromMask.ignored).toBe(2);
   });
