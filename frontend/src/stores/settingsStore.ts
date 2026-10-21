@@ -4,6 +4,8 @@ import { DEFAULT_CLIP, type ClipSetting, type SignedColormapMode } from "@/lib/c
 
 interface SettingsState {
   embedding: string;
+  /** Which two columns of a PCA embedding the scatter shows (0-based); [0, 1] = PC1 vs PC2. */
+  pcaDims: [number, number];
   colorBy: string;
   /** colorBy was set by the user (or on their behalf), not picked as a dataset's
    *  default: opening another dataset keeps it when that dataset has the column. */
@@ -22,6 +24,7 @@ interface SettingsState {
   maxRenderedCells: number;
   pipelineRunning: boolean;
   setEmbedding: (embedding: string) => void;
+  setPcaDims: (dims: [number, number]) => void;
   setColorBy: (colorBy: string) => void;
   /** Colour a newly opened dataset by its default grouping (lib/obsColumns.ts) */
   setDefaultColorBy: (colorBy: string) => void;
@@ -40,6 +43,7 @@ interface SettingsState {
 
 export const useSettingsStore = create<SettingsState>((set) => ({
   embedding: "X_umap",
+  pcaDims: [0, 1],
   colorBy: "",
   colorByChosen: false,
   expressionLayer: "",
@@ -54,6 +58,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   maxRenderedCells: 100_000,
   pipelineRunning: false,
   setEmbedding: (embedding) => set({ embedding }),
+  setPcaDims: (pcaDims) => set({ pcaDims }),
   setColorBy: (colorBy) => set({ colorBy, colorByChosen: true }),
   setDefaultColorBy: (colorBy) => set({ colorBy, colorByChosen: false }),
   setExpressionLayer: (layer) => set({ expressionLayer: layer }),

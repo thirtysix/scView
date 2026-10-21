@@ -15,6 +15,7 @@ import { CellFilterControl } from "@/components/unified/CellFilter";
 import { describeFilter } from "@/lib/cellFilter";
 import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 import { HvgSensitivityControl } from "@/components/unified/HvgSensitivity";
+import { PcPairChooser } from "@/components/unified/PcPairChooser";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -100,6 +101,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             );
           })}
         </select>
+        <PcPairChooser />
       </div>
 
       <div className="h-4 w-px bg-slate-200" />

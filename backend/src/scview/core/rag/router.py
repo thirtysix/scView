@@ -96,6 +96,7 @@ _FACET_HINTS = {
         "stand out", "stands out", "artifact", "artefact",
         "haemoglobin", "hemoglobin", "ambient", "contaminat", "cell cycle", "cell-cycle",
         "cycling", "proliferat", "sequencing depth", "technical",
+        "pca", "principal component", "elbow", "loadings", "variance explained",
     ),
 }
 

@@ -588,6 +588,7 @@ _FAMILY_PREFIX = {
     "composition": "result:composition", "milo": "result:milo", "qc": "result:qc:",
     "enrichment": "result:enrichment", "communication": "result:communication",
     "merge_check": "result:merge_check",
+    "pca": "result:pca",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -625,7 +626,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
             if any_col:
                 return any_col
         if fam_refs and (fam in ("dataset", "provenance", "preprocessing", "markers",
-                                  "composition", "milo", "enrichment", "qc", "communication")
+                                  "composition", "milo", "enrichment", "qc", "communication", "pca")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]
