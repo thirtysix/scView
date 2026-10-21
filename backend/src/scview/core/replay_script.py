@@ -1084,6 +1084,20 @@ def _merge_clusters(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+def _qc_state_label(p: dict, ctx: _Ctx) -> Snippet:
+    out = str(p.get("output") or "")
+    return Snippet(NOT_REPLAYABLE, [
+        "# scView's QC state check (1 vs 2 Gaussian components per group on the RP share",
+        "# of non-mito counts and % mito) is not replayed. To carry its label over, join",
+        "# it from scView's cell metadata export by barcode, e.g.:",
+        "#   meta = pd.read_csv('cell_metadata.csv', index_col=0)",
+        f"#   adata.obs[{comment_text(repr(out), 80)}] = meta.loc[adata.obs_names, "
+        f"{comment_text(repr(out), 80)}].astype('category')",
+        "# Recorded:",
+        *_param_comment(p),
+    ], "scView's own QC state check")
+
+
 def _doublet_threshold(p: dict, ctx: _Ctx) -> Snippet:
     t = p.get("threshold")
     if t == "scrublet":
@@ -1137,6 +1151,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "doublet_threshold": _doublet_threshold,
     "annotation_crosscheck": _annotation_crosscheck,
     "merge_clusters": _merge_clusters,
+    "qc_state_label": _qc_state_label,
 }
 
 

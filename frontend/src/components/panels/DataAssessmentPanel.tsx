@@ -17,6 +17,7 @@ import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCros
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
+import { QcStates } from "@/components/qc/QcStates";
 import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
   ClipboardCheck,
@@ -1440,6 +1441,7 @@ export function DataAssessmentPanel() {
             />
           )}
           {datasetId && <MitoByType datasetId={datasetId} refreshKey={qcRefreshKey} />}
+          {datasetId && <QcStates datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <MeanVariancePlot datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <PcaDiagnostics datasetId={datasetId} refreshKey={qcRefreshKey} />}
         </div>

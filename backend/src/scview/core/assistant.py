@@ -40,6 +40,7 @@ from scview.core import (
     ccc, cluster_qc, composition, merge_check, milo, pca_diagnostics, provenance, qc_filter,
 )
 from scview.core import mito_by_type
+from scview.core import qc_states
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -157,6 +158,19 @@ def _celltype_cluster_map(adata, acol: str) -> dict[str, str]:
         return {str(idx): str(ct.loc[idx].idxmax()) for idx in ct.index}
     except Exception:  # pragma: no cover
         return {}
+
+
+def _add_qc_states(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The low-RP / high-mito QC state per group (core/qc_states.py), when fitted."""
+    try:
+        st_lines, st_detail = qc_states.grounding_for(adaptor)
+    except Exception as exc:  # no RP genes, a backed file, ...: just no fact
+        logger.debug("assistant: QC states failed: %s", exc)
+        return
+    if st_lines:
+        lines.extend(st_lines)
+        sources.append(ChatSource(kind="result", ref=qc_states.TAG, detail=st_detail,
+                                  evidence="\n".join(st_lines[1:])))
 
 
 def build_grounding_context(
@@ -389,6 +403,7 @@ def build_grounding_context(
                                           evidence="\n".join(mito_lines)))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: mito-by-type grounding failed: %s", exc)
+        _add_qc_states(adaptor, lines, sources)
         # The stored PCA: variance per component, elbow, PC1's top loadings.
         try:
             pca_lines, pca_detail = pca_diagnostics.grounding_lines(adata)
