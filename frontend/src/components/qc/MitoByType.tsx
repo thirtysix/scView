@@ -119,11 +119,14 @@ export function MitoByType({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<boolean | null>(null); // null = follow the flags
+  // What the last re-filter did: kept here, as the action goes once nothing is flagged.
+  const [refiltered, setRefiltered] = useState<string | null>(null);
 
   useEffect(() => {
     setColumn("");
     setCeiling("");
     setData(null);
+    setRefiltered(null);
   }, [datasetId]);
 
   useEffect(() => {
@@ -214,6 +217,12 @@ export function MitoByType({
         )}
       </div>
 
+      {refiltered && (
+        <p className="mt-1 text-[11px] text-emerald-700" data-testid="mito-refiltered">
+          {refiltered}
+        </p>
+      )}
+
       {expanded && data?.column && !data.measurable && (
         <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">{data.note}</p>
       )}
@@ -284,12 +293,17 @@ export function MitoByType({
                 : "Not filtered by scView yet."}
             {data.note ? ` ${data.note}` : ""}
           </Caption>
-          {data.n_flagged > 0 && data.already_filtered && data.column && (
+          {/* Filtered per type on this column already: a type still flagged kept the global
+              rule (too few cells, no spread), which filtering again would not change. */}
+          {data.n_flagged > 0 && data.already_filtered && data.column && !perType && (
             <MitoRefilter
               datasetId={datasetId}
               column={data.column}
               perCluster={data.reason === "clustering" || data.column.startsWith("scview_")}
-              onDone={onRefiltered}
+              onDone={(message) => {
+                setRefiltered(message);
+                onRefiltered?.();
+              }}
             />
           )}
           {data.n_flagged > 0 && !data.already_filtered && (

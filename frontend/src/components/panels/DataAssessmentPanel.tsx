@@ -504,7 +504,14 @@ export function DataAssessmentPanel() {
         setStepParams((prev) =>
           prev.filtering?.qc_threshold_mode
             ? prev
-            : { ...prev, filtering: { ...prev.filtering, qc_threshold_mode: filteredWith, ...recordedMitoParams(data) } },
+            : { ...prev, filtering: { ...prev.filtering, qc_threshold_mode: filteredWith } },
+        );
+      }
+      // And per-type % mito bounds, also when they came later (a re-filter): unless chosen.
+      const mito = recordedMitoParams(data);
+      if (mito.qc_mito_mode) {
+        setStepParams((prev) =>
+          prev.filtering?.qc_mito_mode ? prev : { ...prev, filtering: { ...prev.filtering, ...mito } },
         );
       }
       // Auto-select all missing steps

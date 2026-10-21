@@ -79,10 +79,11 @@ describe("MitoRefilter", () => {
     expect(await screen.findByText("Step 2/4: filtering")).toBeInTheDocument();
     expect(useSettingsStore.getState().pipelineRunning).toBe(true);
     release({ steps_run: ["filtering"] });
-    expect(await screen.findByText("Re-filtered: 1,150 cells kept (was 1,050).")).toBeInTheDocument();
+    const msg = "Re-filtered from the original upload: 1,150 cells kept (was 1,050; 110 brought back).";
+    expect(await screen.findByText(msg)).toBeInTheDocument();
     expect(runMitoRefilter.mock.calls[0]![0]).toBe("d1");
     expect(runMitoRefilter.mock.calls[0]![1]).toBe("scview_leiden_r0.5");
-    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(msg));
     expect(getDataset).toHaveBeenCalledWith("d1");
     expect(useDatasetStore.getState().currentDataset).toEqual({ id: "d1", n_cells: 1150 });
     expect(useSettingsStore.getState().pipelineRunning).toBe(false);

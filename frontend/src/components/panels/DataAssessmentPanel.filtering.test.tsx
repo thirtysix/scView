@@ -135,6 +135,17 @@ describe("DataAssessmentPanel filtering mode", () => {
     });
   });
 
+  it("takes up the per-type rule a re-filter recorded after the panel opened", async () => {
+    await openFiltering("fixed");
+    expect(screen.getByRole("button", { name: "One rule" })).toHaveAttribute("aria-pressed", "true");
+    const refiltered = assessment("fixed", { qc_mito_mode: "per_type", qc_mito_type_column: "scview_mito_type" });
+    apiFetch.mockImplementation(async (path: string) => (path.endsWith("/assessment") ? refiltered : DATASET));
+    fireEvent.click(screen.getByRole("button", { name: /re-run this step/i })); // any run refetches the assessment
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Per cell type" })).toHaveAttribute("aria-pressed", "true"),
+    );
+  });
+
   it("offers no per-type rule without MT- genes, and says why", async () => {
     await openFiltering(null, {}, { measurable: false, column: "Donor", types: [], n_flagged: 0 });
     await waitFor(() => expect(screen.getByRole("button", { name: "Per cell type" })).toBeDisabled());

@@ -301,7 +301,8 @@ def mito_by_type(adata, column: str | None = None, cells: dict | Callable[[], di
         includes_removed=n_back, assigned_removed=n_back if how == "assigned" else 0,
         types=rows, n_flagged=len(flagged), removed_global_total=removed_global,
         removed_bound_total=removed_bound,
-        summary=_summary(rows, flagged, cut, column if judged else None),
+        summary=_summary(rows, flagged, cut, column if judged else None,
+                         "cluster " if reason == "clustering" else ""),
         note=" ".join(notes),
     )
 
@@ -376,12 +377,13 @@ def _type_row(group: str, v: np.ndarray, cut: float, by_filter: np.ndarray | Non
 
 
 def _summary(rows: list[TypeMito], flagged: list[TypeMito], cut: float,
-             per_type_column: str | None = None) -> str:
+             per_type_column: str | None = None, kind: str = "") -> str:
+    """``kind``: "cluster " before each name when the groups are a clustering's numbers."""
     if not rows:
         return ""
     damaged = [r for r in rows if r.damaged]
     tail = "" if not damaged else " " + "; ".join(
-        f"{r.group} (median {_pct(r.median or 0.0)})" for r in damaged
+        f"{kind}{r.group} (median {_pct(r.median or 0.0)})" for r in damaged
     ) + (" looks" if len(damaged) == 1 else " look") + " damaged, not a high-baseline type."
     if per_type_column:  # filtered per type: the ceiling judged only the types without a bound
         own = sum(1 for r in rows if r.applied_rule == "own")
@@ -389,12 +391,12 @@ def _summary(rows: list[TypeMito], flagged: list[TypeMito], cut: float,
         head = (f"Filtered with per-type bounds on '{per_type_column}': {own} of {len(rows)} types "
                 f"used their own bound, the rest the global rule.")
         if flagged:
-            return f"{head} {_flag_summary(rest, flagged, cut)}{tail}"
+            return f"{head} {_flag_summary(rest, flagged, cut, kind)}{tail}"
         return f"{head} No type that kept the global rule is flagged.{tail}"
-    return _flag_summary([r for r in rows if not r.damaged], flagged, cut) + tail
+    return _flag_summary([r for r in rows if not r.damaged], flagged, cut, kind) + tail
 
 
-def _flag_summary(rows: list[TypeMito], flagged: list[TypeMito], cut: float) -> str:
+def _flag_summary(rows: list[TypeMito], flagged: list[TypeMito], cut: float, kind: str = "") -> str:
     if not rows:
         return ""
     if flagged:
@@ -404,13 +406,13 @@ def _flag_summary(rows: list[TypeMito], flagged: list[TypeMito], cut: float) -> 
         more = f" {len(flagged) - 1} more type(s) flagged." if len(flagged) > 1 else ""
         if (worst.removed_filter_frac or 0.0) > worst.removed_global_frac:
             return (f"The filtering step's % mito rule removed {worst.removed_filter_frac:.0%} of "
-                    f"{worst.group} (median {_pct(worst.median or 0.0)}){own}.{more}")
-        return (f"A {_pct(cut)} ceiling removes {worst.removed_global_frac:.0%} of {worst.group} "
+                    f"{kind}{worst.group} (median {_pct(worst.median or 0.0)}){own}.{more}")
+        return (f"A {_pct(cut)} ceiling removes {worst.removed_global_frac:.0%} of {kind}{worst.group} "
                 f"(median {_pct(worst.median or 0.0)}){own}.{more}")
     sized = [r for r in rows if r.n_cells >= MIN_TYPE_CELLS] or rows  # a 9-cell group says little
     top = max(sized, key=lambda r: r.removed_global_frac)
     return (f"A {_pct(cut)} ceiling removes at most {top.removed_global_frac:.0%} of any type "
-            f"({top.group}, median {_pct(top.median or 0.0)}): no type is flagged.")
+            f"({kind}{top.group}, median {_pct(top.median or 0.0)}): no type is flagged.")
 
 
 def for_adaptor(adaptor, column: str | None = None, ceiling: float | None = None,

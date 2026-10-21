@@ -138,8 +138,10 @@ export function MitoRefilter({
   column: string;
   /** The column is a clustering (the label says "per-cluster"). */
   perCluster: boolean;
-  /** After the new dataset was saved and the library entry refreshed (views reload). */
-  onDone?: () => void;
+  /** After the new dataset was saved and the library entry refreshed (views reload),
+   *  with the sentence to show: the card stops offering the action once nothing is
+   *  flagged, so it keeps the sentence itself. */
+  onDone?: (message: string) => void;
 }) {
   const setPipelineRunning = useSettingsStore((s) => s.setPipelineRunning);
   const [preview, setPreview] = useState<RefilterPreview | null>(null);
@@ -175,14 +177,17 @@ export function MitoRefilter({
           setProgress(`Step ${Number(data.index) + 1}/${total}: ${STEP_LABELS[step] ?? step}`);
         } else if (event === "substep") setProgress(String(data.message ?? ""));
       });
-      setDone(`Re-filtered: ${preview.n_after.toLocaleString()} cells kept (was ${preview.n_current.toLocaleString()}).`);
+      const message =
+        `Re-filtered from the original upload: ${preview.n_after.toLocaleString()} cells kept ` +
+        `(was ${preview.n_current.toLocaleString()}; ${preview.brought_back.toLocaleString()} brought back).`;
+      setDone(message);
       setPreview(null);
       try {
         useDatasetStore.getState().setCurrentDataset(await getDataset(datasetId));
       } catch {
         /* best-effort: the library refreshes on its own */
       }
-      onDone?.();
+      onDone?.(message);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

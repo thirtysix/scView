@@ -176,6 +176,7 @@ async def test_the_card_adds_back_the_removed_cells_placed_by_expression(client,
     z = [t for t in body["types"] if maj.get(t["group"]) == "Z"]
     assert z and all(t["flagged"] for t in z)
     assert "expression is closest to" in body["note"]
+    assert " of cluster " in body["summary"]  # a clustering's numbers are named as clusters
     again = (await client.get(f"{API}/datasets/tp1/qc/mito-by-type")).json()  # served from the cache
     assert again["types"] == body["types"]
 

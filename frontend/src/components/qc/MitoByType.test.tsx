@@ -3,8 +3,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MitoByType as Report, TypeMito } from "@/api/mitoByType";
 import type { DatasetInfo } from "@/api/types";
 
-const { getMitoByType } = vi.hoisted(() => ({ getMitoByType: vi.fn() }));
+const { getMitoByType, getMitoRefilter, runMitoRefilter } = vi.hoisted(() => ({
+  getMitoByType: vi.fn(),
+  getMitoRefilter: vi.fn(),
+  runMitoRefilter: vi.fn(),
+}));
 vi.mock("@/api/mitoByType", () => ({ getMitoByType }));
+vi.mock("@/api/mitoFilter", () => ({ getMitoRefilter, runMitoRefilter }));
+vi.mock("@/api/datasets", () => ({ getDataset: vi.fn().mockResolvedValue({ id: "d1" }) }));
 
 import { MitoByType } from "./MitoByType";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -135,6 +141,29 @@ describe("MitoByType", () => {
     expect(screen.getByText(/Filtered with one global rule/)).toBeInTheDocument();
   });
 
+  it("keeps saying what the re-filter did after the card stops offering it", async () => {
+    getMitoByType.mockResolvedValue(report({ column: "scview_leiden_r0.5", reason: "clustering" }));
+    getMitoRefilter.mockResolvedValue({
+      column: "scview_leiden_r0.5", type_column: "scview_mito_type", n_original: 1222, n_current: 553, n_after: 1062,
+      removed_before: 669, removed_after: 160, brought_back: 509, newly_removed: 0, removed_other: 1,
+      typed: { kept: 553, column: 0, expression: 667, none: 2 }, assignment: null, types: [], rule: null,
+      steps: ["filtering"], skipped_steps: [], can: "Brings back 509 of the 669 cells.", cannot: "160 stay removed.",
+      notes: [], warnings: [], source_file: "pbmc.h5ad", mito_mode: "per_type", reset_to_counts: false,
+    });
+    runMitoRefilter.mockResolvedValue({ steps_run: ["filtering"] });
+    const onRefiltered = vi.fn();
+    render(<MitoByType datasetId="d1" onRefiltered={onRefiltered} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Re-filter with per-cluster bounds/ }));
+    // after the run the panel refetches: nothing flagged, so the action is gone
+    getMitoByType.mockResolvedValue(report({ column: "scview_leiden_r0.5", reason: "clustering", n_flagged: 0,
+      types: [type("0")], filter_mito_mode: "per_type" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Re-filter (1,062 cells)" }));
+    await waitFor(() => expect(onRefiltered).toHaveBeenCalled());
+    expect(screen.getByTestId("mito-refiltered")).toHaveTextContent(
+      "Re-filtered from the original upload: 1,062 cells kept (was 553; 509 brought back).",
+    );
+  });
+
   it("reads a dataset filtered with per-type bounds: the bound each type had, no re-filter", async () => {
     getMitoByType.mockResolvedValue(report({
       filter_mito_mode: "per_type", filter_type_column: "cell_type", n_flagged: 0,
@@ -151,6 +180,20 @@ describe("MitoByType", () => {
     expect(screen.getByText("Filtered at")).toBeInTheDocument();
     expect(screen.getByTestId("mito-row-LNCaP").textContent).toContain("15.1%");
     expect(screen.getByText(/Filtered with per-type bounds on 'cell_type'\./)).toBeInTheDocument();
+    expect(screen.queryByTestId("mito-refilter")).not.toBeInTheDocument();
+  });
+
+  it("does not offer to re-filter a per-type filtering whose flagged type kept the global rule", async () => {
+    getMitoByType.mockResolvedValue(report({
+      filter_mito_mode: "per_type", filter_type_column: "cell_type", n_flagged: 1,
+      types: [
+        type("rare", { n_cells: 40, median: 14, bound: null, applied_rule: "global", removed_global: 20,
+          removed_global_frac: 0.5, flagged: true, reasons: ["The 10.0% ceiling sits below its median (14.0%)."] }),
+        type("CAF", { applied_rule: "own", applied_bound: 5.1 }),
+      ],
+    }));
+    render(<MitoByType datasetId="d1" />);
+    expect(await screen.findByText(/1 cut hard by the global rule/)).toBeInTheDocument();
     expect(screen.queryByTestId("mito-refilter")).not.toBeInTheDocument();
   });
 
