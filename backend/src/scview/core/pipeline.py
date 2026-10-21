@@ -150,6 +150,8 @@ class PipelineResult:
     notes: dict[str, str] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
     output_path: str | None = None
+    # Requested names that are not steps (the run endpoints refuse these with 422).
+    unknown_steps: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1522,6 +1524,13 @@ def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list
         logger.warning("Could not finalise provenance state: %s", e)
 
 
+def _unknown_requested(steps: list[str]) -> list[str]:
+    unknown = list(dict.fromkeys(s for s in steps if s not in ALL_STEPS))
+    if unknown:
+        logger.warning("Unknown steps ignored: %s", unknown)
+    return unknown
+
+
 def run_pipeline(
     adata: ad.AnnData,
     steps: list[str],
@@ -1564,9 +1573,7 @@ def run_pipeline(
 
     # Ensure steps are in canonical order
     ordered_steps = [s for s in ALL_STEPS if s in steps]
-    skipped_requested = [s for s in steps if s not in ALL_STEPS]
-    if skipped_requested:
-        logger.warning("Unknown steps ignored: %s", skipped_requested)
+    result.unknown_steps = _unknown_requested(steps)
 
     for step_name in ordered_steps:
         runner = _STEP_RUNNERS.get(step_name)
@@ -1627,6 +1634,7 @@ def run_pipeline_streamed(
 
     ordered_steps = [s for s in ALL_STEPS if s in steps]
     total = len(ordered_steps)
+    result.unknown_steps = _unknown_requested(steps)
 
     # Runners that accept a substep progress callback (3rd arg)
     _SUBSTEP_RUNNERS = {"marker_genes", "enrichment"}

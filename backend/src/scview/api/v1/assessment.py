@@ -24,6 +24,7 @@ from scview.core import qc_states
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
+from scview.core.step_names import unknown_steps, unknown_steps_message
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
 from scview.core import provenance
 from scview.core.rerun import plan_rerun
@@ -373,6 +374,16 @@ async def apply_doublet_threshold(
 # ---------------------------------------------------------------------------
 
 
+def _check_steps(steps: list[str]) -> None:
+    """400 for no steps, 422 for names that are not steps (with the likely one meant)."""
+    if not steps:
+        raise HTTPException(status_code=400, detail="No steps specified.")
+    unknown = unknown_steps(steps)
+    if unknown:
+        raise HTTPException(status_code=422, detail=unknown_steps_message(unknown))
+
+
+
 @router.post("/datasets/{dataset_id}/assessment/run")
 async def run_assessment_pipeline(
     dataset_id: str,
@@ -380,12 +391,10 @@ async def run_assessment_pipeline(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Run specified preprocessing steps on the dataset and save the result."""
+    _check_steps(body.steps)  # before loading: a wrong name costs nothing
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-
-    if not body.steps:
-        raise HTTPException(status_code=400, detail="No steps specified.")
 
     # Build PipelineParams from the request body
     params = PipelineParams()
@@ -430,12 +439,10 @@ async def run_assessment_pipeline_stream(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Run preprocessing steps with Server-Sent Events progress streaming."""
+    _check_steps(body.steps)  # before loading: a wrong name costs nothing
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-
-    if not body.steps:
-        raise HTTPException(status_code=400, detail="No steps specified.")
 
     params = PipelineParams()
     if body.params:
@@ -564,6 +571,8 @@ async def rerun_step(
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
 
+    if unknown_steps([body.edited_step]):
+        raise HTTPException(status_code=422, detail=unknown_steps_message([body.edited_step]))
     plan = plan_rerun(_history_steps(adaptor), body.edited_step)
     if not plan.rerun_steps:
         raise HTTPException(status_code=400, detail=plan.message or "Nothing to re-run.")
