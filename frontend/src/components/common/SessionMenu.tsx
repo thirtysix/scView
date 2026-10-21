@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, FolderOpen, Loader2, Save, X } from "lucide-react";
+import { ChevronDown, FolderOpen, Loader2, Save } from "lucide-react";
 import { readSessionFile, sessionFilename, sessionJson } from "@/lib/session";
-import { captureSession, restoreSession, type RestoreReport } from "@/lib/sessionRestore";
+import { captureSession, restoreSession } from "@/lib/sessionRestore";
 import { useDatasetStore } from "@/stores/datasetStore";
-
-type Outcome = RestoreReport | { headline: string; notes: string[]; level: "error" };
+import { RestoreOutcomeCard, type RestoreOutcome } from "./RestoreOutcomeCard";
 
 /**
  * Header "Session" menu: "Save session" downloads the workspace as a small
@@ -15,7 +14,7 @@ export function SessionMenu() {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [outcome, setOutcome] = useState<RestoreOutcome | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -107,41 +106,12 @@ export function SessionMenu() {
       )}
 
       {outcome && (
-        <div
-          role={outcome.level === "error" ? "alert" : "status"}
-          aria-label="Session restore"
-          className={`absolute right-0 z-50 mt-1 w-96 rounded-lg border p-3 text-xs shadow-lg ${
-            outcome.level === "ok"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-              : outcome.level === "warning"
-                ? "border-amber-200 bg-amber-50 text-amber-900"
-                : "border-red-200 bg-red-50 text-red-800"
-          }`}
-        >
-          <div className="flex items-start gap-2">
-            {outcome.level === "ok" ? (
-              <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />
-            ) : (
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            )}
-            <div className="min-w-0 flex-1 space-y-1">
-              <p className="font-medium">{outcome.headline}</p>
-              {outcome.notes.length > 0 && (
-                <>
-                  <p>Not restored:</p>
-                  <ul className="list-disc space-y-0.5 pl-4">
-                    {outcome.notes.map((n) => (
-                      <li key={n}>{n}</li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-            <button onClick={() => setOutcome(null)} aria-label="Dismiss" className="rounded p-0.5 hover:bg-black/5">
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
+        <RestoreOutcomeCard
+          outcome={outcome}
+          label="Session restore"
+          onDismiss={() => setOutcome(null)}
+          className="absolute right-0 z-50 mt-1 w-96"
+        />
       )}
     </div>
   );
