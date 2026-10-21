@@ -204,7 +204,8 @@ async def get_qc_distributions(
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
     try:
-        return adaptor.qc_distributions()
+        # May need a pass over the counts (and the MALAT1 % extra): off the loop.
+        return await asyncio.to_thread(adaptor.qc_distributions)
     except Exception as e:  # noqa: BLE001 — surface a clean 500 rather than a stack trace
         raise HTTPException(status_code=500, detail=f"Could not compute QC metrics: {e}")
 
