@@ -90,7 +90,9 @@ export function summaryMatches(ref: ReliabilityRef, s: ReliabilitySummary): bool
 /** Put a fetched result on the main scatter as a score overlay. */
 export function applyReliability(datasetId: string, res: ReliabilityResponse, dims?: [number, number]): void {
   const store = useUnifiedViewStore.getState();
-  const name = reliabilityName(res.embedding, res.n_dims, dims);
+  // A PCA's pair is named even when it is the default first two.
+  const named = dims ?? (/pca/i.test(res.embedding) ? ([res.dims[0], res.dims[1]] as [number, number]) : undefined);
+  const name = reliabilityName(res.embedding, res.n_dims, named);
   store.setOverlayValues(toOverlayValues(res.scores));
   store.setOverlayLabel(name);
   store.setScatterOverlay({ type: "score", name, reliability: refOf(res, dims) });
@@ -109,13 +111,10 @@ export async function showReliability(
   return res;
 }
 
-/** The legend's line under the colour bar: the scale is fixed, and what chance is. */
+/** The legend's line under the scale's caption (which says the range is fixed): what 1 and chance are. */
 export function reliabilityLegendNote(ref: ReliabilityRef): string {
   const random = ref.random != null ? `; random placement about ${fmtScore(ref.random)}` : "";
-  return (
-    `Fixed 0 to 1 scale, not clipped: 1 = all ${ref.k} graph neighbours are beside the cell on the plot. ` +
-    `Chance ${fmtScore(ref.chance)}${random}.`
-  );
+  return `1 = all ${ref.k} graph neighbours kept around the cell. Chance ${fmtScore(ref.chance)}${random}.`;
 }
 
 /** What the numbers mean, in one paragraph, with the n. */

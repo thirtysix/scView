@@ -115,9 +115,17 @@ describe("plot reliability helpers", () => {
     expect(u.overlayDatasetId).toBe("kang");
     expect(Array.from(u.overlayValues!).map((v) => (Number.isNaN(v) ? "nan" : v))).toEqual([1, "nan", 0.25]);
     expect(reliabilityLegendNote({ embedding: "X_umap", k: 15, chance: 15 / 13835, random: 0.00107 })).toBe(
-      "Fixed 0 to 1 scale, not clipped: 1 = all 15 graph neighbours are beside the cell on the plot. Chance 0.0011; random placement about 0.0011.",
+      "1 = all 15 graph neighbours kept around the cell. Chance 0.0011; random placement about 0.0011.",
     );
     expect(Object.keys(summaryOf(res))).not.toContain("scores");
+    // A PCA's default pair is named, but not saved as a pair.
+    applyReliability("kang", { ...res, embedding: "X_pca", dims: [0, 1] });
+    expect(useUnifiedViewStore.getState().scatterOverlay).toMatchObject({
+      name: "Neighbour preservation (PCA, PC1 vs PC2)",
+      reliability: { embedding: "X_pca" },
+    });
+    const saved = useUnifiedViewStore.getState().scatterOverlay;
+    expect(saved?.type === "score" && saved.reliability?.dims).toBeUndefined();
   });
 
   it("matches a summary and a view to the overlay's plot", () => {

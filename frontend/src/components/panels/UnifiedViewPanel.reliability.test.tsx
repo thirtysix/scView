@@ -121,7 +121,7 @@ describe("Unified View plot reliability overlay", () => {
     expect(scatterProps.current!.colorScale).toEqual({ colormap: "viridis", min: 0, max: 1 });
     expect(screen.getByTestId("colour-scale-caption")).toHaveTextContent("Colour range 0 to 1, fixed (not clipped to the data).");
     expect(screen.getByTestId("colour-scale-note")).toHaveTextContent(
-      "Fixed 0 to 1 scale, not clipped: 1 = all 15 graph neighbours are beside the cell on the plot. Chance 0.0011; random placement about 0.0011.",
+      "1 = all 15 graph neighbours kept around the cell. Chance 0.0011; random placement about 0.0011.",
     );
     expect(screen.queryByLabelText("Colour range clipping")).toBeNull();
     expect(scatterProps.current!.exportLegend).toMatchObject({ type: "continuous", min: 0, max: 1 });
