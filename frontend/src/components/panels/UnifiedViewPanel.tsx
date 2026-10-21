@@ -1142,7 +1142,7 @@ export function UnifiedViewPanel() {
             </div>
           )}
           {/* Tab bar */}
-          <div className="flex flex-shrink-0 border-b border-slate-200">
+          <div className="flex flex-shrink-0 overflow-x-auto border-b border-slate-200">
             {SUBTABS.filter((tab) => tab.id !== "protein" || dataset?.protein).map((tab) => (
               <button
                 key={tab.id}

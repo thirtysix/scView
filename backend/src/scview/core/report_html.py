@@ -237,7 +237,7 @@ def _markers(d: dict) -> str:
         line = (f"<p><b>{e(part['verdict_text'])}</b>"
                 + (f" for {e(part['db_type'])}" if part.get("db_type") else "")
                 + (f" (p {fp(part['p'])}; overlap {e(', '.join(part['overlap']))})" if part.get("overlap") else "")
-                + (f"; name matched {e(part['match'])}" if part.get("match") else "") + ".</p>")
+                + (f"; name match: {e(part['match'])}" if part.get("match") else "") + ".</p>")
         sugg = table([("Best database types", "From the group's top marker genes", False),
                       ("p", "Hypergeometric p", True), ("Shared genes", "Markers in the type's list", False)],
                      ([e(s["cell_type"]), fp(s["p"]), f'<span class="genes">{e(", ".join(s["overlap"]))}</span>']
@@ -261,10 +261,15 @@ def _enrichment(d: dict) -> str:
                    f'<span class="genes">{e(", ".join(t["genes"]))}</span>'] for t in d["terms"]))
 
 
+def _digits(metric: dict) -> int:
+    """Percentages to 2 places, gene and UMI counts as whole numbers."""
+    return 2 if str(metric.get("metric", "")).startswith("pct") else 0
+
+
 def _qc(d: dict) -> str:
     out = table([("Metric", "Per-cell QC value", False), ("Cluster", "Median over this cluster's cells", True),
                  ("Rest", "Median over the other cells", True), ("", "", False)],
-                ([e(m["label"]), fnum(m["cluster"]), fnum(m["rest"]), e(m.get("note") or "")]
+                ([e(m["label"]), fnum(m["cluster"], _digits(m)), fnum(m["rest"], _digits(m)), e(m.get("note") or "")]
                  for m in d.get("medians") or []))
 
     def flags(part: dict) -> str:

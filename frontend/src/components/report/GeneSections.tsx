@@ -108,7 +108,7 @@ function DatabasesBody({ d }: { d: Databases }) {
       <ReportTable
         label="Database cell types"
         rows={d.types ?? []}
-        rowKey={(r) => r.cell_type}
+        rowKey={(r, i) => `${r.cell_type}|${i}`}
         columns={[
           { label: "Cell type", title: "Database cell type listing the gene", cell: (r) => r.cell_type },
           { label: "Rank", title: "The gene's place in the type's marker list (1 = best evidenced)", numeric: true, cell: (r) => count(r.rank) },

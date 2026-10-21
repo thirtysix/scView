@@ -194,16 +194,21 @@ _DB_LOCK = threading.Lock()
 
 
 def _db_index(sdb) -> dict[str, list[tuple[str, int]]]:
-    """Upper-case gene -> [(database type, the gene's rank in its list)], once per
-    merged species database."""
+    """Upper-case gene -> [(database type, the gene's best rank in its list)], once per
+    merged species database. A list can spell one gene two ways (Gata1, GATA1): the
+    type is listed once."""
     with _DB_LOCK:
         hit = _DB_INDEX.get(sdb)
         if hit is not None:
             return hit
         index: dict[str, list[tuple[str, int]]] = defaultdict(list)
         for t in sdb.names:
+            seen: set[str] = set()
             for i, g in enumerate(sdb.types[t]["genes"]):
-                index[str(g).upper()].append((t, i + 1))
+                key = str(g).upper()
+                if key not in seen:
+                    seen.add(key)
+                    index[key].append((t, i + 1))
         _DB_INDEX[sdb] = dict(index)
         return _DB_INDEX[sdb]
 

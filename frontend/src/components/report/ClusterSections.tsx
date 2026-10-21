@@ -209,7 +209,7 @@ function MarkersBody({ d, onGene }: { d: Markers; onGene: (gene: string) => void
               {db.overlap && db.overlap.length > 0 && (
                 <> (p {pval(db.p)}; shared: {db.overlap.join(", ")})</>
               )}
-              {db.match && <span className="text-slate-500"> · name matched {db.match}</span>}
+              {db.match && <span className="text-slate-500"> · name match: {db.match}</span>}
             </p>
             <ReportTable
               label="Best database types"

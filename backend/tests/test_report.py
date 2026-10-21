@@ -107,7 +107,7 @@ def _marker_db(tmp: Path) -> Path:
     with gzip.open(dest / "panglao.tsv.gz", "wt", newline="") as f:
         w = csv.writer(f, delimiter="\t")
         w.writerow(["species", "cell_type", "cl_id", "gene", "weight"])
-        for t, genes in (("A cells", [f"G{i}" for i in range(10)]),
+        for t, genes in (("A cells", [f"G{i}" for i in range(10)] + ["g3"]),  # G3 spelt twice
                          ("B cells", [f"G{i}" for i in range(10, 20)]),
                          ("Monocytes", ["CD14"] + [f"G{i}" for i in range(40, 45)])):
             for i, gname in enumerate(genes):
@@ -298,7 +298,7 @@ def test_gene_report_sections_with_donors(tmp_path):
     assert [g["group"] for g in mk["data"]["groups"]] == ["A"] and mk["data"]["groups"][0]["padj"] < 0.05
     db = _sec(rep, "databases")
     assert db["status"] == "ok" and [t["cell_type"] for t in db["data"]["types"]] == ["A cells"]
-    assert db["data"]["types"][0]["rank"] == 4
+    assert db["data"]["types"][0]["rank"] == 4 and db["data"]["n_types"] == 1  # once, at its best rank
     donor = _sec(rep, "per_donor")
     assert donor["status"] == "ok" and donor["data"]["design"]["paired"]
     assert {p["sample"] for p in donor["data"]["points"]} == {"D0", "D1", "D2", "D3"}
