@@ -22,6 +22,7 @@ import {
 import type { ClipSetting, SignedColormapMode } from "@/lib/colorScale";
 import { PANEL_IDS, UNIFIED_SUBTABS, type PanelId, type UnifiedSubtab } from "@/lib/constants";
 import { exportFilename } from "@/lib/exportFilename";
+import { parseGateList, type SessionGate } from "@/lib/gates";
 import type { DEMode, DETest } from "@/stores/deSettingsStore";
 import type { CellMethod } from "@/lib/deMethods";
 
@@ -151,6 +152,8 @@ export interface SessionFile {
   colors?: SessionColors;
   gene_lists?: SessionGeneList[];
   communication?: SessionCommunication;
+  /** The dataset's cell gates (lib/gates.ts); gates saved by cell position need the same cells */
+  gates?: SessionGate[];
 }
 
 /** A session file that can't be used, with the reason in plain words. */
@@ -469,6 +472,14 @@ export function parseSession(x: unknown): SessionFile {
         ...fields<Pick<SessionGeneList, "source">>(o, at, { source: (v2, w) => text(v2, w, { max: 300 }) }),
       };
     });
+  }
+
+  if (x.gates !== undefined) {
+    try {
+      session.gates = parseGateList(x.gates, "gates");
+    } catch (e) {
+      throw new SessionError(`${e instanceof Error ? e.message : String(e)}.`);
+    }
   }
   return session;
 }
