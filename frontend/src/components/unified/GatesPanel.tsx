@@ -19,7 +19,9 @@ import {
   formatGatePct,
   gateCountsTable,
   gateNameError,
+  labelSlots,
   MAX_GATES,
+  planLabelColumn,
   subtree,
   type DeleteMode,
   type Gate,
@@ -54,6 +56,7 @@ export function GatesPanel({ dataset, onClose }: { dataset: DatasetInfo; onClose
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
+  const slots = useMemo(() => labelSlots(tree, planLabelColumn(gates, evals, nCells)), [tree, gates, evals, nCells]);
   const shownId = shown && shown.cells === selected ? shown.gateId : null;
   const hasSelection = !!selected && selected.size > 0;
   const activeGate = gates.find((g) => g.id === activeId) ?? null;
@@ -148,15 +151,21 @@ export function GatesPanel({ dataset, onClose }: { dataset: DatasetInfo; onClose
         </button>
         <CountsExport dataset={dataset} gates={gates} evals={evals} />
         <div className="flex-1" />
-        {activeGate && (
-          <span className="text-[11px] text-slate-500" data-testid="gates-active">
-            New gates go inside <span className="font-medium text-orange-700">{activeGate.name}</span>
-          </span>
-        )}
-        <button onClick={onClose} aria-label="Close gates" className="rounded p-0.5 text-slate-400 hover:bg-slate-100">
+        <button
+          onClick={onClose}
+          aria-label="Close gates"
+          title="Close the gates list (the gates are kept)"
+          className="rounded p-0.5 text-slate-400 hover:bg-slate-100"
+        >
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+      {activeGate && (
+        <p className="text-[11px] text-slate-500" data-testid="gates-active">
+          New gates go inside <span className="font-medium text-orange-700">{activeGate.name}</span> (the gate clicked
+          last); the save form can put them elsewhere.
+        </p>
+      )}
 
       {stale && record && (
         <div role="alert" className="flex flex-wrap items-center gap-2 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
@@ -254,9 +263,10 @@ export function GatesPanel({ dataset, onClose }: { dataset: DatasetInfo; onClose
                 </tr>
               </thead>
               <tbody>
-                {tree.map(({ gate, depth }, k) => {
+                {tree.map(({ gate, depth, hasChildren }) => {
                   const ev = evals.get(gate.id);
-                  const [r, g, b] = palette[k % palette.length] ?? [148, 163, 184];
+                  const slot = slots.get(gate.id);
+                  const rgb = slot !== undefined ? palette[slot % palette.length] : undefined;
                   const isActive = gate.id === activeId;
                   const isShown = gate.id === shownId;
                   const canSelect = ev?.status === "ok" && ev.n > 0;
@@ -266,7 +276,14 @@ export function GatesPanel({ dataset, onClose }: { dataset: DatasetInfo; onClose
                       gate={gate}
                       depth={depth}
                       ev={ev}
-                      swatch={`rgb(${r}, ${g}, ${b})`}
+                      swatch={rgb ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : null}
+                      swatchTitle={
+                        rgb
+                          ? "The colour this gate takes in a label column made with “Label column…” (Unassigned takes the first)"
+                          : hasChildren
+                            ? "Has gates inside it: a label column names its cells by those gates"
+                            : "No cells of its own left (a deeper or later gate takes them), so no label"
+                      }
                       active={isActive}
                       shown={isShown}
                       canSelect={canSelect}
@@ -313,7 +330,9 @@ interface GateRowsProps {
   gate: Gate;
   depth: number;
   ev: GateEval | undefined;
-  swatch: string;
+  /** Its label-column colour, or null (hollow) when it gets no label */
+  swatch: string | null;
+  swatchTitle: string;
   active: boolean;
   shown: boolean;
   canSelect: boolean;
@@ -339,9 +358,10 @@ function GateRows(p: GateRowsProps) {
         <td className="py-0.5">
           <div className="flex min-w-0 items-center gap-1" style={{ paddingLeft: p.depth * 14 }}>
             <span
-              className="h-2.5 w-2.5 flex-shrink-0 rounded-sm"
-              style={{ background: p.swatch }}
-              title="The gate's colour in this list"
+              className={`h-2.5 w-2.5 flex-shrink-0 rounded-sm ${p.swatch ? "" : "border border-slate-400"}`}
+              style={p.swatch ? { background: p.swatch } : undefined}
+              title={p.swatchTitle}
+              data-testid="gate-swatch"
             />
             {p.renaming !== null ? (
               <span className="flex min-w-0 items-center gap-1">
@@ -556,7 +576,7 @@ function CountsExport({ dataset, gates, evals }: { dataset: DatasetInfo; gates: 
           title="Adds n and % of the parent gate's cells per value of this column (a donor or sample)"
           className="max-w-[130px] rounded border border-slate-300 bg-white px-1 py-0.5 text-[10px] text-slate-700 focus:border-blue-400 focus:outline-none"
         >
-          <option value="">no per-sample columns</option>
+          <option value="">per sample: none</option>
           {options.map((c) => (
             <option key={c.name} value={c.name}>
               per {prettyObsLabel(c.name)}

@@ -24,6 +24,7 @@ import {
   gateCountsTable,
   gateNameError,
   gateTree,
+  labelSlots,
   nextGateName,
   parseGateList,
   planLabelColumn,
@@ -377,6 +378,20 @@ describe("planLabelColumn", () => {
     expect(byLabel["Z"]).toBeUndefined();
     expect(plan.empty).toEqual(["Z"]);
     expect(plan.overlap).toBe(15); // 20..34 are in two or three leaves
+  });
+
+  it("gives each labelled leaf the palette slot it takes in the column (Unassigned first)", () => {
+    const gates = [
+      cellsGate("p", "P", range(0, 50)),
+      cellsGate("a", "A", range(0, 10), "p"),
+      cellsGate("z", "Z", range(0, 10), "p"), // takes A's cells: A gets no label
+      cellsGate("b", "B", range(60, 70)),
+    ];
+    const tree = gateTree(gates);
+    const slots = labelSlots(tree, planLabelColumn(gates, evaluateGates(gates, N, noFilters), N));
+    expect(Object.fromEntries(slots)).toEqual({ z: 1, b: 2 });
+    // Still counting: leaves in list order.
+    expect(Object.fromEntries(labelSlots(tree, null))).toEqual({ a: 1, z: 2, b: 3 });
   });
 
   it("needs every leaf counted", () => {

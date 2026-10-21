@@ -131,6 +131,14 @@ describe("GatesPanel", () => {
     expect(selected()).toEqual(range(30, 40));
   });
 
+  it("colours a leaf gate as its label-column colour; a gate with gates inside is hollow", async () => {
+    await buildTree();
+    const swatch = (name: string) => within(row(name)).getByTestId("gate-swatch");
+    expect(swatch("Monocytes")).toHaveClass("border");
+    expect(swatch("Monocytes")).toHaveAttribute("title", expect.stringMatching(/Has gates inside it/));
+    expect(swatch("ISG-high").getAttribute("style")).toMatch(/background: rgb/);
+  });
+
   it("can save at the top level instead of inside the active gate", async () => {
     await buildTree();
     select(range(90, 100));

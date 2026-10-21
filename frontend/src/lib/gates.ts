@@ -669,6 +669,20 @@ export function planLabelColumn(gates: readonly Gate[], evals: ReadonlyMap<strin
   return { groups, overlap, unassigned, inParentOnly, empty };
 }
 
+/**
+ * The palette slot each gate takes in a label column made from the gates: the
+ * column starts with Unassigned (slot 0) and adds the leaf gates' labels in
+ * list order, so the colours match what "Label column…" will draw. Gates with
+ * gates inside them, and leaves left with no cells of their own, get none.
+ * Without a plan (cells still being counted) leaves are numbered in order.
+ */
+export function labelSlots(tree: readonly TreeRow[], plan: LabelPlan | null): Map<string, number> {
+  const slots = new Map<string, number>();
+  if (plan) plan.groups.forEach((g, k) => slots.set(g.gateId, k + 1));
+  else tree.filter((r) => !r.hasChildren).forEach((r, k) => slots.set(r.gate.id, k + 1));
+  return slots;
+}
+
 /** A free name for the gates' label column: gates, gates_2, ... */
 export function suggestGateColumn(existing: readonly string[]): string {
   const taken = new Set(existing.map((c) => c.toLowerCase()));
