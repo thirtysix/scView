@@ -1175,11 +1175,16 @@ def _gb(b: float) -> str:
     return f"{g:.0f}" if g >= 10 else f"{g:.1f}"
 
 
+def _about(b: float) -> str:
+    """'about 1.2 GB', or 'under 0.1 GB' for what would read 0.0."""
+    return "under 0.1 GB" if b < 0.05 * GiB else f"about {_gb(b)} GB"
+
+
 def _dur(s: float) -> str:
-    if s < 60:
+    if round(s) < 60:
         return f"{max(1, round(s))} s"
-    if s < 3600:
-        return f"{max(1, round(s / 60))} min"
+    if round(s / 60) < 60:
+        return f"{round(s / 60)} min"
     return f"{s / 3600:.1f} h"
 
 
@@ -1265,7 +1270,7 @@ def make_verdict(*, need: int, peak: int, stage: str, seconds: tuple[float, floa
     sentence = f"{lead}, {time_text(seconds)}. {_budget_text(avail)}"
     if cached.count:
         sentence += (f" {cached.count} other open dataset{'s' if cached.count > 1 else ''} "
-                     f"hold{'s' if cached.count == 1 else ''} about {_gb(cached.bytes)} GB.")
+                     f"hold{'s' if cached.count == 1 else ''} {_about(cached.bytes)}.")
     frees = (avail.available_bytes is not None and need > avail.available_bytes * FITS_BELOW
              and need <= (avail.available_bytes + 0.9 * cached.bytes) * FITS_BELOW)
     suggestions: list[str] = []
@@ -1276,11 +1281,11 @@ def make_verdict(*, need: int, peak: int, stage: str, seconds: tuple[float, floa
         if cached.count:
             suggestions.append(
                 f"Close the {cached.count} other open dataset{'s' if cached.count > 1 else ''} "
-                f"(about {_gb(cached.bytes)} GB): restart scView and open only this one"
+                f"({_about(cached.bytes)}): restart scView and open only this one"
                 + ("; that would free enough." if frees else "."))
         for text, alt_need in alternatives:
             if alt_need < need * 0.95:
-                suggestions.append(f"{text} (about {_gb(max(0, alt_need))} GB more at its peak).")
+                suggestions.append(f"{text} ({_about(max(0, alt_need))} more at its peak).")
     return {
         "level": level, "sentence": sentence, "need_bytes": int(max(0, need)),
         "peak_bytes": int(peak), "peak_stage": stage,
@@ -1318,10 +1323,9 @@ def _load_lead(h: Header, est: LoadEstimate) -> str:
              + (" (estimated)" if h.estimated else "") if h.n_cells and h.n_genes else "")
     head = f"{shape}: " if shape else ""
     if h.guess:
-        return (f"{head}Loading takes about {_gb(est.peak_bytes)} GB (a guess from the file "
-                "size)")
-    return (f"{head}Loading takes about {_gb(est.peak_bytes)} GB at its peak ({est.peak_stage}) "
-            f"and {_gb(est.resident_bytes)} GB once open")
+        return f"{head}Loading takes {_about(est.peak_bytes)} (a guess from the file size)"
+    return (f"{head}Loading takes {_about(est.peak_bytes)} at its peak ({est.peak_stage}) "
+            f"and {_about(est.resident_bytes)} once open")
 
 
 def _half_cells(h: Header) -> Header:
@@ -1374,8 +1378,8 @@ def session_preflight(mgr, sid: str, dm) -> dict:
         merge = make_verdict(
             need=peak, peak=peak, stage="merging the samples", seconds=(secs[0] * 1.5, secs[1] * 1.5),
             avail=avail, cached=cached,
-            lead=(f"Merging the {len(units)} samples takes about {_gb(peak)} GB at its peak "
-                  f"and {_gb(sum(residents))} GB once open"),
+            lead=(f"Merging the {len(units)} samples takes {_about(peak)} at its peak "
+                  f"and {_about(sum(residents))} once open"),
             breakdown=[("The samples, loaded", sum(residents)), ("The merged copy", sum(residents))],
             notes=["Merging holds every sample and the merged copy at once."],
             alternatives=[])
@@ -1437,7 +1441,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
 
     stage = STEP_LABELS.get(est.peak_step, est.peak_step)
     if need > 0:
-        lead = f"About {_gb(need)} GB more than now at its peak ({stage})"
+        about = _about(need)
+        lead = f"{about[0].upper()}{about[1:]} more than now at its peak ({stage})"
     else:
         lead = f"No more memory than this dataset holds now at its peak ({stage})"
     breakdown = [("This dataset now" if in_memory else "This dataset once loaded", est.start_bytes),
@@ -1449,8 +1454,9 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         notes.append("Not measured, estimated from what the step allocates: "
                      + ", ".join(unmeasured) + ".")
     if "filtering" in steps:
-        notes.append("Assumes filtering keeps 90% of the cells"
-                     + ("" if h.obsm or h.matrix("raw/X") else " and 80% of the genes") + ".")
+        notes.append("Assumes filtering keeps every cell, as the data were processed before."
+                     if _State.from_header(h).processed else
+                     "Assumes filtering keeps 90% of the cells and 80% of the genes.")
     if not warm:
         notes.append("Includes about 0.5 GB the first run in a fresh scView keeps for the "
                      "libraries it loads.")

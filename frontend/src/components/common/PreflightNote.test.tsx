@@ -50,7 +50,9 @@ describe("PreflightNote", () => {
     render(<PreflightNote verdict={verdict("tight", { suggestions: ["Raise SCVIEW_MEMORY_GB"] })} />);
     expect(document.querySelector("[data-level=tight]")?.className).toContain("text-amber-700");
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByText("Raise SCVIEW_MEMORY_GB")).toBeNull();
+    expect(screen.queryByText(/Raise SCVIEW_MEMORY_GB/)).toBeNull();
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "How this estimate is made" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("If it does not fit: Raise SCVIEW_MEMORY_GB");
   });
 
   it("won't fit: an amber alert with the suggestions in order", () => {

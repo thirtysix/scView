@@ -44,19 +44,26 @@ function Breakdown({ verdict }: { verdict: PreflightVerdict }) {
         </span>
       )}
       <span className="block">
-        Memory is estimated from the file's header (cells, genes, stored values) with coefficients
-        measured on test datasets, where it came within {Math.round(v.error_band * 100)}% of the
-        measured peak.
+        Memory is estimated from the data's shape and storage (cells, genes, stored values, read
+        from the file's header) with coefficients measured on test datasets, where it came within{" "}
+        {Math.round(v.error_band * 100)}% of the measured peak.
       </span>
       <span className="block">
-        Time is rough: measured with 2 CPUs. In a virtual machine (Docker Desktop or Podman on
-        Windows) steps can take much longer: a Windows test VM ran about 10 times slower than its host.
+        Time is rough: measured with 2 CPUs and scaled to the CPUs scView has. In a virtual machine
+        (Docker Desktop or Podman on Windows) steps can take much longer: a Windows test VM ran about
+        10 times slower than its host.
       </span>
       {v.notes.map((n) => (
         <span key={n} className="block">
           {n}
         </span>
       ))}
+      {v.level === "tight" &&
+        v.suggestions.map((s) => (
+          <span key={s} className="block">
+            If it does not fit: {s}
+          </span>
+        ))}
     </span>
   );
 }

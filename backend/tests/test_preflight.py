@@ -217,7 +217,13 @@ def test_closing_others_frees_enough():
     assert v["suggestions"][1].endswith("that would free enough.")
 
 
+def test_tiny_amounts_do_not_read_as_zero():
+    v = _verdict(1.0, cached=pf.Cached(1, 10 << 20))
+    assert v["sentence"].endswith("1 other open dataset holds under 0.1 GB.")
+
+
 @pytest.mark.parametrize("secs, text", [((2, 8), "a few seconds"), ((20, 80), "roughly 20 s to 1 min"),
+                                        ((59.7, 240), "roughly 1 to 4 min"),
                                         ((120, 360), "roughly 2 to 6 min"),
                                         ((1800, 7200), "roughly 30 min to 2.0 h")])
 def test_time_text(secs, text):
@@ -330,10 +336,11 @@ async def test_ingest_preflight_per_unit_and_merge(ingest_client):
     body = (await client.get(f"{API}/ingest/session/{sid}/preflight")).json()
     assert [u["label"] for u in body["units"]] == ["one"] and body["merge"] is None
     v = body["units"][0]["verdict"]
-    assert v["sentence"].startswith("40 cells x 30 genes: Loading takes about")
+    assert v["sentence"].startswith("40 cells x 30 genes: Loading takes under 0.1 GB at its peak")
     assert body["units"][0]["header"]["matrices"][0]["nnz"] > 0
     _adata(20, 30).write_h5ad(mgr.files_dir(sid) / "two.h5ad")
     body = (await client.get(f"{API}/ingest/session/{sid}/preflight")).json()
     assert len(body["units"]) == 2
-    assert body["merge"]["sentence"].startswith("Merging the 2 samples takes about")
+    assert body["merge"]["sentence"].startswith("Merging the 2 samples takes ")
+    assert "GB at its peak and" in body["merge"]["sentence"]
 
