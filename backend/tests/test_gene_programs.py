@@ -370,3 +370,18 @@ def test_write_derived_drops_an_index_name_that_clashes_with_a_column(tmp_path):
     write_derived(a, path)
     b = ad.read_h5ad(path)
     assert list(b.obs_names) == list(a.obs_names) and b.obs["cell_id"].iloc[0] == "other0"
+
+
+def test_a_backed_dataset_is_read_in_row_chunks(tmp_path):
+    """Files over 2 GB open backed: the matrix is read from disk in row chunks and
+    gives the same input as in memory."""
+    a, _, _ = _planted(layout="x")
+    path = tmp_path / "b.h5ad"
+    a.write_h5ad(path)
+    b = ad.read_h5ad(path, backed="r")
+    try:
+        assert gp.runnable(b)["ok"] is True
+        got, mem = gp.prepare_input(b), gp.prepare_input(a)
+        assert got.genes == mem.genes and np.allclose(got.X.toarray(), mem.X.toarray())
+    finally:
+        b.file.close()

@@ -125,6 +125,8 @@ class ProgramInput:
 def _looks_like_counts(M) -> bool:
     from scview.core.pipeline import looks_like_counts
 
+    if not sp.issparse(M) and not isinstance(M, np.ndarray):
+        M = M[: min(5000, M.shape[0])]  # an on-disk matrix: its first rows
     return looks_like_counts(M)
 
 
@@ -133,7 +135,8 @@ def _sample_min(M) -> float | None:
     if sp.issparse(M):
         sample = np.asarray(M.data[:200_000])
     else:
-        sample = np.asarray(M[: min(1000, M.shape[0])])
+        rows = M[: min(1000, M.shape[0])]  # an on-disk sparse matrix reads as sparse
+        sample = np.asarray(rows.data) if sp.issparse(rows) else np.asarray(rows)
     return float(np.min(sample)) if sample.size else None
 
 
