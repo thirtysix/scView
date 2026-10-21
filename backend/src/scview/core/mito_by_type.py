@@ -92,6 +92,7 @@ class MitoByType(BaseModel):
     ceiling_source: str | None = None  # "requested" | "recorded" | "default"
     filter_mode: str | None = None  # the recorded filtering mode ("mad" | "fixed"), if any
     already_filtered: bool = False
+    includes_removed: int = 0  # cells the filtering step removed, added back from its record
     mad_k: float = MAD_K
     loss_flag: float = LOSS_FLAG
     min_cells: int = MIN_TYPE_CELLS
@@ -179,15 +180,34 @@ def mito_by_type(adata, column: str | None = None, cells: dict | Callable[[], di
 
     cut, source, recorded = _ceiling(adata, ceiling)
     mt = np.asarray(cells["pct_mt"], dtype=np.float64)
+    # After filtering, the cells the ceiling took are gone from the dataset; the
+    # step's record keeps their % mito and labels, so the table shows the cells
+    # as they were before it (a type the ceiling emptied comes back as a row).
+    gone = qc_filter.recorded_removed_mito(adata, column)
+    extra: dict[str, np.ndarray] = {}
+    if gone is not None:
+        g_labels, g_mt, g_when = gone
+        lab = np.asarray(g_labels, dtype=object)
+        for name in dict.fromkeys(x for x in g_labels if x):
+            extra[name] = g_mt[lab == name]
     rows: list[TypeMito] = []
     for g, idx in zip(order, qc_groups.members(codes, len(order))):
-        rows.append(_type_row(g, mt[idx], cut))
+        v = mt[idx]
+        rows.append(_type_row(g, np.concatenate([v, extra.pop(g)]) if g in extra else v, cut))
+    for g, v in extra.items():  # types with no cell left
+        rows.append(_type_row(g, v, cut))
 
     flagged = [r for r in rows if r.flagged]
     removed_global = int(sum(r.removed_global for r in rows))
     removed_bound = int(sum(r.removed_bound or 0 for r in rows))
     notes = []
-    if recorded:
+    n_back = 0 if gone is None else int(sum(1 for x in gone[0] if x))
+    if gone is not None:
+        when = gone[2][:10]
+        notes.append(f"Includes the {n_back:,} labelled cells the filtering step removed"
+                     f"{' on ' + when if when else ''} (from its record): the table shows the cells as "
+                     "they were before that filter.")
+    elif recorded:
         notes.append(f"This dataset was filtered by scView ({recorded.get('qc_threshold_mode')} mode): "
                      "cells it removed are gone, so the counts are what filtering again would remove.")
         if recorded.get("qc_threshold_mode") == "mad":
@@ -198,6 +218,7 @@ def mito_by_type(adata, column: str | None = None, cells: dict | Callable[[], di
     return MitoByType(
         **base, ceiling=cut, ceiling_source=source,
         filter_mode=(recorded or {}).get("qc_threshold_mode"), already_filtered=bool(recorded),
+        includes_removed=n_back,
         types=rows, n_flagged=len(flagged), removed_global_total=removed_global,
         removed_bound_total=removed_bound, summary=_summary(rows, flagged, cut),
         note=" ".join(notes),

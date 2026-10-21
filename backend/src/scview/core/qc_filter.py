@@ -972,6 +972,29 @@ def recorded_audit(adata, label_column: str | None = None, condition_column: str
         return None
 
 
+def recorded_removed_mito(adata, column: str) -> tuple[list[str], np.ndarray, str] | None:
+    """The cells the last filtering step removed, from its record: each one's
+    ``column`` label ("" when it had none) and % mito, and the record's timestamp.
+    None unless the record still adds up (not stale or truncated), measured % mito
+    and recorded ``column``."""
+    rec = adata.uns.get(RECORD_KEY)
+    if not isinstance(rec, dict) or not bool(rec.get("has_mt", False)):
+        return None
+    try:
+        if int(rec["n_kept"]) != int(adata.n_obs) or bool(rec.get("truncated", False)):
+            return None
+        for entry in (rec.get("columns") or {}).values():
+            if str(entry["name"]) != column:
+                continue
+            cats = _strs(entry["categories"])
+            codes = np.asarray(entry["codes"], dtype=np.int64)
+            labels = [cats[c] if 0 <= c < len(cats) else "" for c in codes]
+            return labels, np.asarray(rec["pct_mt"], dtype=np.float64), str(rec.get("timestamp") or "")
+    except Exception as e:  # a malformed record only loses the addition
+        logger.warning("QC removal record unreadable: %s", e)
+    return None
+
+
 def _recorded_audit(adata, rec: dict, label_column: str | None, condition_column: str | None) -> dict:
     head = {"timestamp": str(rec.get("timestamp") or ""), "mode": str(rec.get("mode") or ""),
             "n_before": int(rec["n_before"]), "n_removed": int(rec["n_removed"]),

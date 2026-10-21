@@ -193,3 +193,34 @@ def test_the_unflagged_summary_names_a_type_large_enough_to_judge():
     r = mbt.mito_by_type(a, cells=cells, ceiling=14.0)  # the 10-cell type at 15 % loses all
     assert _rows(r)["rare"].removed_global_frac == 1.0 and not _rows(r)["rare"].flagged
     assert "rare" not in r.summary and "no type is flagged" in r.summary
+
+
+def test_after_filtering_the_record_adds_the_removed_cells_back():
+    """The ceiling already ran: the removed cells come back from the step's record,
+    so LNCaP is still flagged (and a type it emptied is still a row)."""
+    from scview.core import qc_filter
+
+    a, cells = _synthetic()
+    a.obs["cell_type"] = a.obs["cell_type"].cat.add_categories(["gone"])
+    a.obs.iloc[700:710, a.obs.columns.get_loc("cell_type")] = "gone"  # the 15 % "rare" cells
+    drop = cells["pct_mt"] > 10.0
+    t = qc_filter.Thresholds.from_params(PipelineParams(qc_threshold_mode="fixed", min_genes=0,
+                                                        max_pct_mt=10.0))
+    rec = qc_filter.removal_record(a, cells, {"max_pct_mt": drop}, drop, t, None)
+    kept = a[~drop].copy()
+    kept.uns[qc_filter.RECORD_KEY] = rec
+    kc = {k: (v[~drop] if isinstance(v, np.ndarray) else v) for k, v in cells.items()}
+
+    r = mbt.mito_by_type(kept, cells=kc, ceiling=10.0)
+    rows = _rows(r)
+    assert r.includes_removed == int(drop[:710].sum())  # the labelled removed cells
+    assert rows["LNCaP"].n_cells == 400 and rows["LNCaP"].flagged
+    assert rows["gone"].n_cells == 10 and rows["gone"].removed_global == 10
+    assert "before that filter" in r.note
+
+    without = mbt.mito_by_type(a[~drop].copy(), cells=kc, ceiling=10.0)  # no record
+    assert without.includes_removed == 0 and not _rows(without)["LNCaP"].flagged
+
+    stale = kept[:-1].copy()  # a cell removed since: the record no longer adds up
+    sc = {k: (v[:-1] if isinstance(v, np.ndarray) else v) for k, v in kc.items()}
+    assert mbt.mito_by_type(stale, cells=sc, ceiling=10.0).includes_removed == 0

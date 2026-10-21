@@ -34,6 +34,7 @@ export interface MitoByType {
   ceiling_source: "requested" | "recorded" | "default" | null;
   filter_mode: string | null;
   already_filtered: boolean;
+  includes_removed?: number; // cells the filtering step removed, added back from its record
   mad_k: number;
   loss_flag: number;
   min_cells: number;
