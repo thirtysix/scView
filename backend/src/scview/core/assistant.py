@@ -158,6 +158,23 @@ def _celltype_cluster_map(adata, acol: str) -> dict[str, str]:
         return {}
 
 
+def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Who the cell QC removed (the filtering step's record) or would remove at the
+    pipeline's defaults, per cell type x condition, with the audit's flags."""
+    from scview.core.pipeline import PipelineParams  # the step's defaults
+
+    try:
+        fact, detail = qc_filter.grounding_lines(
+            adaptor.adata, adaptor.qc_per_cell(), qc_filter.Thresholds.from_params(PipelineParams()))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: QC removal audit failed: %s", exc)
+        return
+    if fact:
+        lines.extend(fact)
+        sources.append(ChatSource(kind="result", ref=qc_filter.GROUNDING_TAG, detail=detail,
+                                  evidence="\n".join(fact[1:])))
+
+
 def build_grounding_context(
     adaptor, facets: set[str] | None = None
 ) -> tuple[str, list[ChatSource]]:
@@ -379,6 +396,7 @@ def build_grounding_context(
                 sources.append(ChatSource(kind="result", ref=t, detail=d, evidence="\n".join(ev)))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: cluster QC failed: %s", exc)
+        _qc_removal_fact(adaptor, lines, sources)
         # The stored PCA: variance per component, elbow, PC1's top loadings.
         try:
             pca_lines, pca_detail = pca_diagnostics.grounding_lines(adata)

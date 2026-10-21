@@ -330,3 +330,43 @@ async def test_endpoint_audits_the_preview_and_the_record(client, dataset_manage
     assert body["recorded"]["n_removed"] == a.n_obs - kept.n_obs
     assert body["recorded"]["label"]["column"] == "cell_type"
     json.dumps(body)  # all plain JSON
+
+
+# --- the co-pilot's fact ----------------------------------------------------------
+
+
+def test_the_copilot_fact_states_the_flags_or_says_nothing_was_flagged():
+    a, cells = _coculture()
+    lines, detail = qc_filter.grounding_lines(a, cells, MITO)
+    assert lines[1].startswith("- The default thresholds (fixed cut-offs) would remove 680 of 2,000 cells "
+                               "(not applied yet), per 'cell_type' group x 'treatment': In LNCaP, Max % mito")
+    assert "Removes 65% of LNCaP (650 of 1,000 cells)" in lines[1]
+    assert lines[1].endswith(f"[{qc_filter.GROUNDING_TAG}]") and "3 flag(s)" in detail
+    lines, _ = qc_filter.grounding_lines(a, cells, Thresholds())
+    assert "No 'cell_type' group loses more than 30%, and no group's removal rate differs" in lines[1]
+    b, cells_b = _coculture(condition=False, donors=False)
+    lines, _ = qc_filter.grounding_lines(b, cells_b, Thresholds())
+    assert "(no condition or sample column to test the removal against)" in lines[1]
+    for col in ("cell_type", "leiden"):
+        del b.obs[col]
+    assert qc_filter.grounding_lines(b, cells_b, MITO) == ([], "")
+
+
+def test_the_copilot_cites_what_the_filtering_step_removed(tmp_path):
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+    from scview.core.assistant import build_grounding_context
+    from scview.core.claims import resolve_tag
+
+    a = _counts_dataset()
+    kept, _ = _run_filtering(a.copy(), _fixed(min_genes=0, max_pct_mt=20))
+    p = tmp_path / "f.h5ad"
+    kept.write_h5ad(p)
+    context, sources = build_grounding_context(AnnDataAdaptor(str(p)), {"qc"})
+    fact = next(s for s in sources if s.ref == qc_filter.GROUNDING_TAG)
+    removed = a.n_obs - kept.n_obs
+    assert f"removed {removed:,} of {a.n_obs:,} cells" in fact.detail
+    assert re.search(r"- The filtering step on \d{4}-\d\d-\d\d removed \d+ of 800 cells, "
+                     r"per 'cell_type' group x 'stim': ", fact.evidence)
+    assert "In B, Max % mito removes 100% of drug cells" in fact.evidence
+    assert f"[{qc_filter.GROUNDING_TAG}]" in context
+    assert resolve_tag("qc:removal", [s.ref for s in sources]) == [qc_filter.GROUNDING_TAG]

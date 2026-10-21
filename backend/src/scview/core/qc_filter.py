@@ -1032,3 +1032,46 @@ def _recorded_audit(adata, rec: dict, label_column: str | None, condition_column
             row["removed_median"] = {k: _median(v[sel]) for k, v in vals.items()
                                      if k != "pct_mt" or head["has_mt"]} if sel.any() else None
     return {**head, "stale": False, "columns": list(cols), **out}
+
+
+# --- the co-pilot's fact --------------------------------------------------------
+
+GROUNDING_TAG = "result:qc:removal"
+GROUNDING_FLAGS = 4  # flag sentences in the fact; the rest are counted
+
+
+def grounding_lines(adata, cells: dict, t: Thresholds) -> tuple[list[str], str]:
+    """The co-pilot's fact about who the QC removes, so "did the QC remove a cell
+    type?" is answered from the numbers: what the last filtering step removed
+    (its record), else what ``t`` (the pipeline's defaults) would remove, with the
+    audit's flags. ``(lines, detail)``; no lines without a label column."""
+    rec = recorded_audit(adata)
+    if rec is not None and not rec["stale"]:
+        au = rec
+        when = rec["timestamp"][:10]
+        what = (f"the filtering step{f' on {when}' if when else ''} removed {rec['n_removed']:,} "
+                f"of {rec['n_before']:,} cells")
+    else:
+        au = preview(adata, cells, t)["audit"]
+        what = (f"the default thresholds ({'per-sample MAD' if t.mode == 'mad' else 'fixed cut-offs'}) "
+                f"would remove {au['overall']['n_removed']:,} of {au['overall']['n_cells']:,} cells "
+                "(not applied yet)")
+    label = au["label"]["column"]
+    if not label:
+        return [], ""
+    cond = au["condition"]["column"] if au.get("condition") else None
+    split = f"per '{label}' group" + (f" x '{cond}'" if cond else "")
+    flags = au["flags"]
+    if flags:
+        found = " ".join(f["message"] for f in flags[:GROUNDING_FLAGS])
+        if len(flags) > GROUNDING_FLAGS:
+            found += f" ({len(flags) - GROUNDING_FLAGS} more flags.)"
+    else:
+        found = (f"No '{label}' group loses more than {AUDIT_LOSS:.0%}"
+                 + (f", and no group's removal rate differs between '{cond}' groups by "
+                    f"{AUDIT_DIFF_PP:g}+ points with p < {AUDIT_P:g} (chi-square)." if cond
+                    else " (no condition or sample column to test the removal against)."))
+    lines = ["\n## QC removal audit (deterministic: who the cell QC removes)",
+             f"- {what[0].upper()}{what[1:]}, {split}: {found} [{GROUNDING_TAG}]"]
+    detail = f"{what}; {len(flags)} flag(s) {split}"
+    return lines, detail
