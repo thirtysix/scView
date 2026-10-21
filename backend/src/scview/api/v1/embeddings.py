@@ -132,10 +132,13 @@ async def get_embedding_reliability(
     per cell, null for a cell left out of a sample), with the summary the
     ``/summary`` route returns: overall and per-group stats, the chance and
     random-placement baselines, and how it was computed. Cached per dataset."""
+    from fastapi.responses import JSONResponse
+
     scores, summary = await _reliability(dataset_id, name, k, group_by, dims, dm)
     rounded = np.round(scores.astype(np.float64), 4)
     values = [None if v != v else v for v in rounded.tolist()]  # NaN -> null
-    return {"scores": values, **summary}
+    # Straight to json.dumps: FastAPI's encoder walks every one of up to 250k values.
+    return JSONResponse({"scores": values, **summary})
 
 
 @router.get("/datasets/{dataset_id}/embeddings/{name}/reliability/summary")

@@ -482,13 +482,14 @@ def grounding_lines(adaptor) -> tuple[list[str], str]:
         f"{g['group']} median {_f(g['median'])}, {g['share_low']:.0%} of its {g['n']:,} cells low"
         for g in d["groups"][:3])
     groups = (f" Worst groups of '{d['group_by']}': {worst}." if worst else "")
-    detail = (f"{plot}: median {_f(o['median'])} of {d['k']} graph neighbours kept per cell; "
+    detail = (f"{plot}: median share kept {_f(o['median'])} of {d['k']} graph neighbours per cell; "
               f"chance {_f(d['chance'])}")
     line = (f"- Plot reliability (neighbour preservation) on {plot}: per cell, the share of its "
             f"{d['k']} graph neighbours (the kNN graph the clustering used) that are also among its "
             f"{d['k']} nearest cells on the plot. Median {_f(o['median'])} over {o['n']:,} cells"
             f"{sample} (IQR {_f(o['q1'])} to {_f(o['q3'])}); {o['share_low']:.0%} of cells are low "
             f"({LOW_REASON}). Chance {_f(d['chance'])}; random placement median "
-            f"{_f(d['shuffled']['median'])}, mean {_f(d['shuffled']['mean'])}.{groups} A low cell's "
-            f"position on the plot should not be read closely [{TAG}]")
+            f"{_f(d['shuffled']['median'])}, mean {_f(d['shuffled']['mean'])}.{groups} Small groups "
+            f"score higher by chance alone (fewer cells to land among). A low cell's position on the "
+            f"plot should not be read closely [{TAG}]")
     return [line], detail

@@ -352,7 +352,8 @@ def test_copilot_fact_only_once_computed(tmp_path: Path):
     assert f"[{er.TAG}]" in context
     assert "Median 1.00" in fact.evidence and "Chance 0.047" in fact.evidence
     assert "Worst groups of 'group'" in fact.evidence
-    assert fact.detail.startswith("X_umap: median 1.00 of 14 graph neighbours kept per cell")
+    assert fact.detail.startswith("X_umap: median share kept 1.00 of 14 graph neighbours per cell")
+    assert "Small groups score higher by chance alone" in fact.evidence
 
 
 def test_claims_resolve_the_tag():
