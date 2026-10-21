@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { OrbitView } from "@deck.gl/core";
+import { OrbitView, type OrbitViewState } from "@deck.gl/core";
 
 interface LassoSelectorProps {
   active: boolean;
@@ -67,13 +67,18 @@ export function cellsInPolygon3D(
   width: number,
   height: number,
 ): Set<number> {
-  const viewport = new OrbitView({ orbitAxis: "Y" }).makeViewport({ width, height, viewState });
+  const viewport = new OrbitView({ orbitAxis: "Y" }).makeViewport({
+    width,
+    height,
+    viewState: viewState as unknown as OrbitViewState,
+  });
+  const selected = new Set<number>();
+  if (!viewport) return selected;
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const [x, y] of polygon) {
     minX = Math.min(minX, x); maxX = Math.max(maxX, x);
     minY = Math.min(minY, y); maxY = Math.max(maxY, y);
   }
-  const selected = new Set<number>();
   const n = Math.floor(positions.length / 3);
   for (let i = 0; i < n; i++) {
     const [sx, sy] = viewport.project([positions[i * 3]!, positions[i * 3 + 1]!, positions[i * 3 + 2]!]);
