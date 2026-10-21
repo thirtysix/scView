@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { donorBoxFigure, donorCaption, donorsPerCondition, fewDonorsCaution, type DonorPoint } from "./donorPlot";
+import {
+  donorBoxFigure,
+  donorCaption,
+  donorPairing,
+  donorSlopeFigure,
+  donorsPerCondition,
+  fewDonorsCaution,
+  formatChange,
+  pairedCaption,
+  type DonorPoint,
+} from "./donorPlot";
 
 const pt = (group: string, condition: string, sample: string, value: number): DonorPoint => ({
   group, condition, sample, n_cells: 50, value,
@@ -65,5 +75,48 @@ describe("donorBoxFigure", () => {
       ["pDC", "x2 domain"],
     ]);
     expect(height).toBe(210);
+  });
+});
+
+describe("paired designs", () => {
+  const paired: DonorPoint[] = [
+    pt("B", "CTRL", "d1", 1), pt("B", "CTRL", "d2", 2), pt("B", "CTRL", "d3", 3),
+    pt("B", "STIM", "d1", 4), pt("B", "STIM", "d2", 5),
+  ];
+
+  it("counts the donors in every condition and captions them", () => {
+    expect(donorPairing(paired, ["CTRL", "STIM"])).toEqual({ donors: 3, inAll: 2 });
+    expect(pairedCaption(paired, ["CTRL", "STIM"])).toBe("n = 3 donors: 2 in both CTRL and STIM, 1 in fewer");
+    expect(pairedCaption(paired.slice(0, 2).concat(paired.slice(3)), ["CTRL", "STIM"])).toBe("n = 2 donors, each in CTRL and STIM");
+    expect(pairedCaption([pt("B", "T0", "d1", 1), pt("B", "T1", "d1", 2), pt("B", "T2", "d1", 3)], ["T0", "T1", "T2"]))
+      .toBe("n = 1 donor, each in T0, T1 and T2");
+  });
+
+  it("formats a change with its sign and unit", () => {
+    const f = (v: number) => v.toFixed(2);
+    expect(formatChange(1.234, f, "log2 CPM")).toBe("+1.23 log2 CPM");
+    expect(formatChange(-0.5, f, "percentage points")).toBe("-0.50 percentage points");
+    expect(formatChange(0, f, "")).toBe("+0.00");
+    expect(formatChange(null, f, "x")).toBe("–");
+  });
+
+  it("builds one line per donor in condition order, the mean per condition, and p in the title", () => {
+    const { data, layout, height } = donorSlopeFigure(paired, {
+      ...opts, groups: ["B"], tests: { B: { n_pairs: 2, mean_diff: 3, wilcoxon_p: 0.5, ttest_p: 0.1, caution: "2 pairs" } },
+    });
+    expect(data.map((t) => t.name)).toEqual(["d1", "d2", "d3", "mean"]);
+    expect(data[0]!.x).toEqual(["CTRL", "STIM"]);
+    expect(data[0]!.y).toEqual([1, 4]);
+    expect((data[0]!.text as string[])).toEqual(["d1: CTRL 1.0, STIM 4.0 (50 cells here)", "d1: CTRL 1.0, STIM 4.0 (50 cells here)"]);
+    expect(data[2]!.x).toEqual(["CTRL"]); // d3 has no STIM value: a lone point
+    expect(data[3]!.y).toEqual([2, 4.5]);
+    expect((data[3]!.marker as { color: string[] }).color).toEqual(["condition:CTRL", "condition:STIM"]);
+    expect((layout.annotations as { text: string }[])[0]!.text).toBe("B · p = 0.50 (n = 2)");
+    expect(layout.xaxis).toMatchObject({ categoryarray: ["CTRL", "STIM"] });
+    expect(height).toBe(230);
+    // Without a test the title is the group alone; a group without points gets no panel.
+    const bare = donorSlopeFigure(paired, { ...opts, groups: ["B", "pDC"] });
+    expect((bare.layout.annotations as { text: string }[]).map((a) => a.text)).toEqual(["B"]);
+    expect(bare.layout.grid).toMatchObject({ rows: 1, columns: 1 });
   });
 });
