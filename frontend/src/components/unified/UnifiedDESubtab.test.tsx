@@ -370,3 +370,28 @@ describe("UnifiedDESubtab gene lists", () => {
     ]);
   });
 });
+
+describe("UnifiedDESubtab table cap", () => {
+  it("names the ordering and the total when the table is cut at 200 rows", async () => {
+    const genes = Array.from({ length: 250 }, (_, i) => ({
+      gene: `G${i}`, logfoldchange: 2 + (i % 5), pval: 1e-9, pval_adj: 1e-8 * (i + 1), stat: 5,
+    }));
+    computeDECompare.mockReset().mockResolvedValue({ ...RESULT, label: "STIM", genes });
+    useDESettingsStore.getState().update({ mode: "groups", splitBy: "stim", groupA: "STIM", groupB: "CTRL" });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    expect((await screen.findByTestId("cap-note")).textContent).toBe(
+      "Top 200 of 250 by adjusted p, then |log2FC|; the CSV has all.",
+    );
+    expect(screen.getAllByRole("row")).toHaveLength(201); // header + 200
+  });
+
+  it("shows no cap line when every significant gene fits", async () => {
+    computeDECompare.mockReset().mockResolvedValue({ ...RESULT, label: "STIM" });
+    useDESettingsStore.getState().update({ mode: "groups", splitBy: "stim", groupA: "STIM", groupB: "CTRL" });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await screen.findByText("CD14");
+    expect(screen.queryByTestId("cap-note")).toBeNull();
+  });
+});

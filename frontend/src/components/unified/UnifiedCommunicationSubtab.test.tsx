@@ -103,3 +103,32 @@ describe("UnifiedCommunicationSubtab", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/right species/));
   });
 });
+
+describe("UnifiedCommunicationSubtab table cap", () => {
+  it("names the sort column and the total when more than 200 rows match", async () => {
+    const n = 230;
+    const col = <T,>(v: T) => Array.from({ length: n }, () => v);
+    const seq = (f: (i: number) => number) => Array.from({ length: n }, (_, i) => f(i));
+    runCommunication.mockReset().mockResolvedValue(
+      fakeResult({
+        n_rows: n, n_interactions: n, rows_shown: n,
+        columns: {
+          source: col("Mono"), target: col("NK"),
+          ligand_complex: seq((i) => i).map((i) => `L${i}`), receptor_complex: seq((i) => i).map((i) => `R${i}`),
+          ligand: seq((i) => i).map((i) => `L${i}`), receptor: seq((i) => i).map((i) => `R${i}`),
+          magnitude_rank: seq((i) => (i + 1) / n), specificity_rank: seq((i) => (i + 1) / n),
+          lr_means: seq((i) => n - i), cellphone_pvals: col(0.01), expr_prod: col(1), scaled_weight: col(1),
+          lr_logfc: col(1), spec_weight: col(0.1), lrscore: col(0.5), ligand_props: col(0.5), receptor_props: col(0.5),
+        },
+      }),
+    );
+    render(<UnifiedCommunicationSubtab groupByColumn="cell" />);
+    await waitFor(() => screen.getByText(/about 2 s with 1000 permutations/));
+    fireEvent.click(screen.getByRole("button", { name: /Run/ }));
+    await screen.findByText("L0");
+    expect(screen.getByText("Top 200 of 230 rows by Magn.")).toBeTruthy();
+    expect(screen.queryByText("L229")).toBeNull();
+    fireEvent.click(screen.getByText("LR mean"));
+    expect(screen.getByText("Top 200 of 230 rows by LR mean")).toBeTruthy();
+  });
+});

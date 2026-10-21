@@ -106,3 +106,15 @@ describe("UnifiedMarkersSubtab specificity", () => {
     expect(screen.queryByText("Specificity vs fold change")).toBeNull();
   });
 });
+
+describe("UnifiedMarkersSubtab caption", () => {
+  it("says the table is the group's top markers by Wilcoxon score, and how many the filters keep", async () => {
+    renderTab();
+    await screen.findByText("TSPAN13");
+    expect(screen.getByTestId("markers-caption").textContent).toMatch(
+      /^3 of the group's top 3 markers by Wilcoxon score \(every gene is tested; only the highest-ranked 100 per group are kept\)\. Click/,
+    );
+    fireEvent.change(screen.getByPlaceholderText(/filter/i), { target: { value: "IGJ" } });
+    expect(screen.getByTestId("markers-caption").textContent).toMatch(/^1 of the group's top 3 markers .* after the filters\./);
+  });
+});

@@ -10,6 +10,7 @@ import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
 import type { MarkersResponse } from "@/api/markers";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
+import { MARKERS_PER_GROUP } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
@@ -465,9 +466,12 @@ export function UnifiedMarkersSubtab({
         </table>
       </div>
 
-      <p className="text-[10px] text-slate-400">
-        Click a gene to view its expression on the scatter plot. Use p-values to rank markers, not as
-        evidence: the clusters were found from these same cells, so markers always test as significant.
+      <p className="text-[10px] text-slate-400" data-testid="markers-caption">
+        {sortedMarkers.length.toLocaleString()} of the group&apos;s top {currentMarkers.length.toLocaleString()} markers by
+        Wilcoxon score (every gene is tested; only the highest-ranked {MARKERS_PER_GROUP} per group are kept)
+        {currentMarkers.length > sortedMarkers.length ? " after the filters" : ""}. Click a gene to view its
+        expression on the scatter plot. Use p-values to rank markers, not as evidence: the clusters were found
+        from these same cells, so markers always test as significant.
       </p>
     </div>
   );

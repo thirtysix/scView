@@ -20,6 +20,7 @@ import { DEActivity } from "@/components/unified/DEActivity";
 import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
 import { DEMethodsAgreement } from "@/components/unified/DEMethodsAgreement";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
+import { CapNote } from "@/components/common/Caption";
 import { downloadCsv } from "@/lib/csv";
 import { describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
 import { describeSize } from "@/lib/transcriptomeSize";
@@ -45,6 +46,9 @@ import type { ObsColumnInfo } from "@/api/types";
 
 type Mode = DEMode;
 type Test = DETest;
+
+/** Rows of the significant-genes table; the CSV export has every gene. */
+const DE_TABLE_ROWS = 200;
 
 /** Categorical columns with listed values, usable as a group picker. */
 function groupColumns(cols: ObsColumnInfo[] | undefined, maxLevels: number): ObsColumnInfo[] {
@@ -749,6 +753,12 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
           </div>
 
           {/* Top significant genes */}
+          <CapNote
+            shown={DE_TABLE_ROWS}
+            total={sigGenes.length}
+            by={withP ? "adjusted p, then |log2FC|" : "|coefficient|"}
+            rest="the CSV has all"
+          />
           <div className="max-h-72 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-10">
@@ -761,7 +771,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {sigGenes.slice(0, 200).map((g) => (
+                {sigGenes.slice(0, DE_TABLE_ROWS).map((g) => (
                   <tr
                     key={g.gene}
                     onClick={() => onGeneClick(g.gene)}

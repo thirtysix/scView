@@ -14,7 +14,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
-import type { MarkersResponse } from "@/api/markers";
+import { MARKERS_PER_GROUP, type MarkersResponse } from "@/api/markers";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -439,8 +439,11 @@ export function MarkerGenesPanel() {
         </button>
 
         {/* Count info */}
-        <span className="text-xs text-slate-500">
-          {sortedMarkers.length} of {currentMarkers.length} genes
+        <span
+          className="text-xs text-slate-500"
+          title={`The backend keeps each group's top ${MARKERS_PER_GROUP} markers by Wilcoxon score; every gene is tested, the rest are cut`}
+        >
+          {sortedMarkers.length} of the group&apos;s top {currentMarkers.length} markers by Wilcoxon score
         </span>
         </>)}
       </div>
