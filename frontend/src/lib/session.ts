@@ -11,7 +11,15 @@
  */
 import { parseCellFilter, decodeMask, type CellFilter } from "@/lib/cellFilter";
 import type { LabelChoice } from "@/lib/centroidLabels";
-import { CATEGORICAL_PALETTES, COLORMAP_STOPS, type CategoricalPaletteName, type ColormapName } from "@/lib/colors";
+import {
+  CATEGORICAL_PALETTES,
+  COLORMAP_STOPS,
+  DIVERGING_COLORMAP_STOPS,
+  type CategoricalPaletteName,
+  type ColormapName,
+  type DivergingColormapName,
+} from "@/lib/colors";
+import type { ClipSetting, SignedColormapMode } from "@/lib/colorScale";
 import { PANEL_IDS, UNIFIED_SUBTABS, type PanelId, type UnifiedSubtab } from "@/lib/constants";
 import { exportFilename } from "@/lib/exportFilename";
 import type { DEMode, DETest } from "@/stores/deSettingsStore";
@@ -85,6 +93,8 @@ export interface SessionView {
   camera?: Camera | null;
   highlight?: { column: string; value: string } | null;
   overlay?: SessionOverlay | null;
+  /** This view's colour-range clipping over the default (lib/colorScale.ts) */
+  color_clip?: ClipSetting | null;
 }
 
 export interface SessionDE {
@@ -105,6 +115,10 @@ export interface SessionDE {
 export interface SessionColors {
   categorical_palette?: CategoricalPaletteName;
   continuous_colormap?: ColormapName;
+  diverging_colormap?: DivergingColormapName;
+  signed_colormap_mode?: SignedColormapMode;
+  /** The default clipping of the colour range */
+  clip?: ClipSetting;
   point_size?: number;
   opacity?: number;
   background?: "white" | "dark";
@@ -291,6 +305,19 @@ function parseOverlay(x: unknown, where: string): SessionOverlay {
   fail(`${where}.type`, 'must be "expression", "score" or "activity"');
 }
 
+const CLIP_PRESETS = ["none", "p1", "p2", "p5", "manual"] as const;
+
+function parseClip(x: unknown, where: string): ClipSetting {
+  const o = object(x, where);
+  const preset = oneOf(o.preset, CLIP_PRESETS, `${where}.preset`);
+  const out: ClipSetting = { preset };
+  if (preset === "manual") {
+    if (o.min !== undefined && o.min !== null) out.min = number(o.min, `${where}.min`, -1e12, 1e12);
+    if (o.max !== undefined && o.max !== null) out.max = number(o.max, `${where}.max`, -1e12, 1e12);
+  }
+  return out;
+}
+
 function parseSelection(x: unknown, where: string): SessionSelection {
   const o = object(x, where);
   if (own(o, "filter")) {
@@ -382,6 +409,7 @@ export function parseSession(x: unknown): SessionFile {
         };
       }),
       overlay: nullable(parseOverlay),
+      color_clip: nullable(parseClip),
     });
   }
 
@@ -408,6 +436,9 @@ export function parseSession(x: unknown): SessionFile {
       categorical_palette: (v, at) =>
         oneOf(v, Object.keys(CATEGORICAL_PALETTES) as CategoricalPaletteName[], at),
       continuous_colormap: (v, at) => oneOf(v, Object.keys(COLORMAP_STOPS) as ColormapName[], at),
+      diverging_colormap: (v, at) => oneOf(v, Object.keys(DIVERGING_COLORMAP_STOPS) as DivergingColormapName[], at),
+      signed_colormap_mode: (v, at) => oneOf(v, ["auto", "sequential", "diverging"] as const, at),
+      clip: parseClip,
       point_size: (v, at) => number(v, at, 0.5, 20),
       opacity: (v, at) => number(v, at, 0.05, 1),
       background: (v, at) => oneOf(v, ["white", "dark"] as const, at),

@@ -65,6 +65,9 @@ function resetStores() {
     plotBackground: "white",
     categoricalPalette: "cvd",
     continuousColormap: "viridis",
+    divergingColormap: "RdBu",
+    signedColormapMode: "auto",
+    colorClip: { preset: "none" },
     maxRenderedCells: 100_000,
   });
   useSplitViewStore.setState({ splitBy: null, compareColumns: null, showContext: true });
@@ -78,6 +81,7 @@ function resetStores() {
     pendingOverlay: null,
     scatterOverlay: null,
     overlayDatasetId: null,
+    colorClip: null,
   });
   useDESettingsStore.setState({ ...DE_DEFAULTS, scopedHighlight: null });
 }
@@ -92,6 +96,9 @@ function buildWorkspace(selection: "filter" | "lasso") {
   s.setExpressionLayer("X");
   s.setCategoricalPalette("tableau20");
   s.setContinuousColormap("magma");
+  s.setDivergingColormap("BrBG");
+  s.setSignedColormapMode("sequential");
+  s.setColorClip({ preset: "p2" });
   s.setPointSize(4);
   s.setOpacity(0.5);
   s.setPlotBackground("dark");
@@ -102,6 +109,7 @@ function buildWorkspace(selection: "filter" | "lasso") {
   u.setCamera({ datasetId: "kang", embedding: "X_pca", camera: { target: [3, 4, 0], zoom: 2.5 } });
   u.setScatterOverlay({ type: "expression", gene: "CD14" });
   u.setOverlayDatasetId("kang");
+  u.setColorClip({ preset: "manual", min: 0, max: 3 });
   useSplitViewStore.getState().setCompareColumns(["cell_type", "stim"]);
   useSelectionStore.getState().setHighlight({ column: "cell_type", value: "CD14 Mono" });
   if (selection === "filter") useSelectionStore.getState().setSelection(new Set([1, 3, 9]), filter);
@@ -186,8 +194,10 @@ describe("save then open on the same dataset", () => {
     expect([s.categoricalPalette, s.continuousColormap, s.pointSize, s.opacity, s.plotBackground]).toEqual([
       "tableau20", "magma", 4, 0.5, "dark",
     ]);
+    expect([s.divergingColormap, s.signedColormapMode, s.colorClip]).toEqual(["BrBG", "sequential", { preset: "p2" }]);
     const u = useUnifiedViewStore.getState();
     expect([u.activeSubtab, u.groupByColumn]).toEqual(["de", "cell_type"]);
+    expect(u.colorClip).toEqual({ preset: "manual", min: 0, max: 3 });
     expect(u.centroidLabels).toEqual({ key: "stim", show: false });
     expect(u.pendingCamera).toEqual({ datasetId: "kang", embedding: "X_pca", camera: { target: [3, 4, 0], zoom: 2.5 } });
     expect(u.pendingOverlay).toEqual({ datasetId: "kang", overlay: { type: "expression", gene: "CD14" } });

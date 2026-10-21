@@ -63,6 +63,7 @@ export function captureSession(now: Date = new Date()): SessionFile {
     camera: null,
     highlight: selection.highlightedGroup,
     overlay: null,
+    color_clip: unified.colorClip,
   };
   const cam = unified.camera;
   if (dataset && cam && cam.datasetId === dataset.id && cam.embedding === settings.embedding) {
@@ -120,6 +121,9 @@ export function captureSession(now: Date = new Date()): SessionFile {
     colors: {
       categorical_palette: settings.categoricalPalette,
       continuous_colormap: settings.continuousColormap,
+      diverging_colormap: settings.divergingColormap,
+      signed_colormap_mode: settings.signedColormapMode,
+      clip: settings.colorClip,
       point_size: settings.pointSize,
       opacity: settings.opacity,
       background: settings.plotBackground,
@@ -301,6 +305,9 @@ function applyColors(session: SessionFile) {
   const s = useSettingsStore.getState();
   if (c.categorical_palette) s.setCategoricalPalette(c.categorical_palette);
   if (c.continuous_colormap) s.setContinuousColormap(c.continuous_colormap);
+  if (c.diverging_colormap) s.setDivergingColormap(c.diverging_colormap);
+  if (c.signed_colormap_mode) s.setSignedColormapMode(c.signed_colormap_mode);
+  if (c.clip) s.setColorClip(c.clip);
   if (c.point_size != null) s.setPointSize(Math.min(10, Math.max(1, c.point_size)));
   if (c.opacity != null) s.setOpacity(Math.min(1, Math.max(0.1, c.opacity)));
   if (c.background) s.setPlotBackground(c.background);
@@ -364,6 +371,7 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
   }
   if (v.labels !== undefined) unified.setCentroidLabels(v.labels);
   if (v.subtab) unified.setActiveSubtab(v.subtab);
+  if (v.color_clip !== undefined) unified.setColorClip(v.color_clip);
 
   if (v.highlight) {
     const col = columns.get(v.highlight.column);
