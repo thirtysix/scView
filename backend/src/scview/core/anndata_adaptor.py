@@ -83,13 +83,24 @@ _QC_OBS_NAMES = {
     "pct_mt": ("pct_counts_mt", "percent.mt", "pct_counts_mito", "percent_mito"),
     "pct_ribo": ("pct_counts_ribo", "percent.ribo", "percent.rb", "pct_counts_rb"),
     "pct_hb": ("pct_counts_hb", "percent.hb", "percent.HB", "pct_counts_hemo"),
+    "pct_malat1": ("pct_counts_malat1", "percent.malat1", "percent.MALAT1", "pct_malat1"),
 }
+
+# MALAT1 is retained in the nucleus: a cell with little of it may be cytoplasm
+# without its nucleus (core/cluster_qc.py ``low_malat1``).
+MALAT1_NAMES = ("MALAT1",)  # matched case-insensitively (mouse Malat1)
+
+
+def malat1_mask(var_names: pd.Index) -> np.ndarray:
+    """The MALAT1 / Malat1 column(s) of a gene index."""
+    return np.asarray(pd.Index(var_names).str.upper().isin(MALAT1_NAMES))
 
 
 def per_cell_qc(adata, ribo: bool = False) -> dict:
     """Per-cell QC arrays: ``total_counts``, ``n_genes``, ``pct_mt`` and, when they
-    can be had cheaply, ``pct_ribo`` and ``pct_hb`` (haemoglobin genes for the
-    dataset's species, ``core/haemoglobin.py``; else None).
+    can be had cheaply, ``pct_ribo``, ``pct_hb`` (haemoglobin genes for the
+    dataset's species, ``core/haemoglobin.py``) and ``pct_malat1`` (share of
+    counts from MALAT1); each None when not worked out or the genes are absent.
 
     Read from ``obs`` when present, otherwise computed from the counts matrix in
     one chunked pass (no mutation of the AnnData, no disk write). ``computed`` is
@@ -109,25 +120,28 @@ def per_cell_qc(adata, ribo: bool = False) -> dict:
 
     out = {k: _first(names) for k, names in _QC_OBS_NAMES.items()}
     need = [k for k in ("total_counts", "n_genes", "pct_mt") if out[k] is None]
-    # Ribosomal and haemoglobin % are a bonus: worked out in the pass the core
-    # metrics need, or, when ``ribo`` asks for them, in a pass of their own if the
+    # Ribosomal, haemoglobin and MALAT1 % are a bonus: worked out in the pass the
+    # core metrics need, or, when ``ribo`` asks for them, in a pass of their own if the
     # matrix is in memory (one sparse pass is cheap; a backed file would be read
     # again from disk).
     extra_ok = bool(need) or (ribo and not adata.isbacked)
     want_ribo = out["pct_ribo"] is None and extra_ok
     want_hb = out["pct_hb"] is None and extra_ok
+    want_malat1 = out["pct_malat1"] is None and extra_ok
     has_mt = True
-    if need or want_ribo or want_hb:
+    if need or want_ribo or want_hb or want_malat1:
         M, var_names = _counts_matrix(adata)
         mt_mask = np.asarray(var_names.str.startswith("MT-") | var_names.str.startswith("mt-"))
         none = np.zeros(len(var_names), dtype=bool)
         ribo_mask = np.asarray(var_names.str.startswith(("RPS", "RPL", "Rps", "Rpl"))) \
             if want_ribo else none
         hb_mask = haemoglobin.hb_mask(var_names, detect_species(adata).species) if want_hb else none
-        if (want_ribo or want_hb) and not _looks_like_counts(M):
-            ribo_mask = hb_mask = none  # log or scaled X: no meaningful %
-        if need or ribo_mask.any() or hb_mask.any():
-            tc, ng, (mt_counts, ribo_counts, hb_counts) = _row_sums(M, [mt_mask, ribo_mask, hb_mask])
+        mal_mask = malat1_mask(var_names) if want_malat1 else none
+        if (want_ribo or want_hb or want_malat1) and not _looks_like_counts(M):
+            ribo_mask = hb_mask = mal_mask = none  # log or scaled X: no meaningful %
+        if need or ribo_mask.any() or hb_mask.any() or mal_mask.any():
+            tc, ng, (mt_counts, ribo_counts, hb_counts, mal_counts) = _row_sums(
+                M, [mt_mask, ribo_mask, hb_mask, mal_mask])
             with np.errstate(divide="ignore", invalid="ignore"):
                 pct = lambda part: np.where(tc > 0, part / tc * 100.0, 0.0)  # noqa: E731
                 if out["pct_mt"] is None:
@@ -137,6 +151,8 @@ def per_cell_qc(adata, ribo: bool = False) -> dict:
                     out["pct_ribo"] = pct(ribo_counts)
                 if hb_mask.any():
                     out["pct_hb"] = pct(hb_counts)
+                if mal_mask.any():
+                    out["pct_malat1"] = pct(mal_counts)
             if out["total_counts"] is None:
                 out["total_counts"] = tc
             if out["n_genes"] is None:
@@ -346,8 +362,9 @@ class AnnDataAdaptor:
             return None
 
         # Counts, not whatever X holds: summing a scaled X gave negative
-        # "counts per cell" (see _counts_matrix).
-        cells = self.qc_per_cell()
+        # "counts per cell" (see _counts_matrix). ``ribo``: the extras too (MALAT1 %),
+        # in the pass cluster QC needs anyway (cached).
+        cells = self.qc_per_cell(ribo=True)
         total_counts, n_genes, pct_mt = cells["total_counts"], cells["n_genes"], cells["pct_mt"]
         computed = cells["computed"]
 
@@ -366,6 +383,8 @@ class AnnDataAdaptor:
             col = _col(name)
             if col is not None:
                 metrics[name] = self._qc_summary(col, n_bins)
+        if cells.get("pct_malat1") is not None:  # None: no MALAT1 gene, or not counts
+            metrics["pct_malat1"] = self._qc_summary(cells["pct_malat1"], n_bins)
 
         n = int(len(total_counts))
         idx = np.linspace(0, n - 1, n_scatter).astype(int) if n > n_scatter else np.arange(n)

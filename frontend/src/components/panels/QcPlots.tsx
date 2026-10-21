@@ -57,6 +57,15 @@ const METRIC_LABELS: Record<string, string> = {
   dissociation_stress_score: "Dissociation stress score",
   pct_counts_ribo: "% Ribosomal",
   pct_counts_hb: "% Hemoglobin",
+  pct_malat1: "% MALAT1",
+};
+
+/** What a histogram measures, on hover of its title (only where the label needs it). */
+export const METRIC_HELP: Record<string, string> = {
+  pct_malat1:
+    "Share of each cell's counts from MALAT1, an RNA kept in the nucleus. Cells with very little may be fragments " +
+    "or cytoplasm that lost its nucleus; in single-nucleus data, cytoplasmic debris (Montserrat-Ayuso & " +
+    "Esteve-Codina 2024, doi:10.1186/s12864-024-11015-5). Cells without a nucleus (red cells, platelets) have little by nature.",
 };
 
 const FILL_STYLE = { width: "100%", height: "100%" } as const;
@@ -143,6 +152,7 @@ function ThresholdInput({
 
 function HistCard({
   label,
+  help,
   metric,
   thresholds,
   onDrag,
@@ -150,6 +160,8 @@ function HistCard({
   logY = false,
 }: {
   label: string;
+  /** Hover text on the title: what the metric is and how it is computed. */
+  help?: string;
   metric: QcMetric;
   /** The filtering thresholds this histogram sets, with their current values. */
   thresholds?: { param: ThresholdParam; label: string; value: number }[];
@@ -166,7 +178,7 @@ function HistCard({
     .filter((t) => thresholdOn(t.param, t.value))
     .map((t) => ({ id: t.param, value: t.value, label: `${t.label.toLowerCase()} ${fmt(t.value)}` }));
   return (
-    <Panel title={label}>
+    <Panel title={help ? <span title={help}>{label}</span> : label}>
       <div className="flex h-full flex-col">
         <div className="min-h-0 flex-1">
           <ThresholdHistogram
@@ -498,6 +510,7 @@ export function QcPlots({
           <HistCard
             key={k}
             label={METRIC_LABELS[k] ?? k}
+            help={METRIC_HELP[k]}
             metric={data.metrics[k]!}
             thresholds={histThresholds(k, thresholds)}
             onDrag={thresholds ? dragThreshold : undefined}
