@@ -18,11 +18,17 @@ export interface TypeMito {
   flagged: boolean;
   /** Median at or above 50 %: likely damaged cells, not a high-baseline type. */
   damaged: boolean;
+  /** Filtered per type on this column: judged by its own bound ("own") or the global rule. */
+  applied_rule?: "own" | "global" | null;
+  applied_bound?: number | null;
+  /** Cells the filtering step's % mito rule actually removed (its record); null: not filtered. */
+  removed_filter?: number | null;
+  removed_filter_frac?: number | null;
   reasons: string[];
   note: string;
 }
 
-/** Per-type % mito bounds vs the global ceiling (advisory: filtering is unchanged). */
+/** Per-type % mito bounds vs the global ceiling, and the rule filtering used. */
 export interface MitoByType {
   column: string | null;
   reason: string | null;
@@ -33,8 +39,13 @@ export interface MitoByType {
   ceiling: number | null;
   ceiling_source: "requested" | "recorded" | "default" | null;
   filter_mode: string | null;
+  /** The recorded % mito rule ("global" | "per_type"), and the column per-type filtering used. */
+  filter_mito_mode?: "global" | "per_type" | null;
+  filter_type_column?: string | null;
   already_filtered: boolean;
   includes_removed?: number; // cells the filtering step removed, added back from its record
+  /** Of those, cells given a group by expression (a clustering made after filtering). */
+  assigned_removed?: number;
   mad_k: number;
   loss_flag: number;
   min_cells: number;

@@ -2,6 +2,7 @@ import { apiFetch } from "./client";
 import { API_BASE } from "@/lib/constants";
 import { thresholdMode } from "@/lib/qcThresholds";
 import type { ChatSource } from "./assistant";
+import type { MitoMode, MitoTypesTable } from "./mitoFilter";
 
 /** One cluster's QC numbers + the flags it earned against the other clusters. */
 export interface ClusterQc {
@@ -232,6 +233,10 @@ export interface FilterThresholds {
   qc_mad_upper?: boolean;
   /** The samples for MAD mode; "" = the one the backend detects. */
   qc_sample_column?: string;
+  /** "per_type": each cell type's own % mito bound instead of the global rule. */
+  qc_mito_mode?: MitoMode;
+  /** The cell types for per-type bounds; "" = the backend's choice. */
+  qc_mito_type_column?: string;
 }
 
 export type FilterCriterion =
@@ -412,6 +417,8 @@ export interface FilterPreview {
     mad_k?: number;
     mad_k_mt?: number;
     mad_upper?: boolean;
+    mito_mode?: MitoMode;
+    mito_type_column?: string;
   };
   has_mt: boolean;
   /** The dataset has doublet calls, so "drop predicted doublets" has something to drop. */
@@ -438,6 +445,8 @@ export interface FilterPreview {
   audit?: RemovalAudit;
   /** What the last filtering step removed; null for a dataset without the record. */
   recorded?: RecordedRemovalAudit | null;
+  /** Per-type % mito bounds (per-type mode only): each type's rule and loss. */
+  mito_types?: MitoTypesTable | null;
 }
 
 export async function getFilterPreview(
@@ -457,6 +466,10 @@ export async function getFilterPreview(
   if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
   if (t.qc_mad_upper !== undefined) q.set("mad_upper", String(t.qc_mad_upper));
   if (t.qc_sample_column) q.set("sample_column", t.qc_sample_column);
+  if (t.qc_mito_mode === "per_type") {
+    q.set("mito_mode", "per_type");
+    if (t.qc_mito_type_column) q.set("mito_type_column", t.qc_mito_type_column);
+  }
   if (columns.label_column) q.set("label_column", columns.label_column);
   if (columns.condition_column) q.set("condition_column", columns.condition_column);
   try {

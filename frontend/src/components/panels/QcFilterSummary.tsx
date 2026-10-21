@@ -14,6 +14,7 @@ import { bound, pct, thresholdMode } from "@/lib/qcThresholds";
 import { SampleQcTable } from "@/components/panels/SampleQcTable";
 import { useSexCheck } from "@/components/panels/SampleSexCheck";
 import { RemovalAudit } from "@/components/qc/RemovalAudit";
+import { MitoModeControl } from "@/components/qc/MitoModeControl";
 
 const DEBOUNCE_MS = 150;
 const ROWS = 6; // per table, more behind "show all"
@@ -276,6 +277,10 @@ export function QcFilterSummary({
         <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
           Cell-loss summary unavailable: {error}
         </p>
+        {/* A refused per-type rule (no cell types) must stay switchable back from here. */}
+        {thresholds.qc_mito_mode === "per_type" && (
+          <MitoModeControl datasetId={datasetId} values={thresholds} onChange={onChange} />
+        )}
       </div>
     ) : null;
   }
@@ -289,6 +294,13 @@ export function QcFilterSummary({
       <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="qc-loss-summary">
         {header}
         {mode === "mad" && <MadControls thresholds={thresholds} preview={preview} onChange={onChange} />}
+        <MitoModeControl
+          datasetId={datasetId}
+          values={thresholds}
+          onChange={onChange}
+          hasMt={preview.has_mt}
+          table={preview.mito_types ?? null}
+        />
         {error && (
           <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
             {error}

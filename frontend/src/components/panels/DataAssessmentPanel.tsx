@@ -16,6 +16,7 @@ import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfiden
 import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCrosscheckCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
+import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { QcStates } from "@/components/qc/QcStates";
@@ -85,6 +86,9 @@ interface AssessmentResponse extends PreprocessingState {
   normalization_method?: string | null;
   /** How scView last filtered it ("fixed" for runs before MAD mode); null if never. */
   qc_threshold_mode?: QcThresholdMode | null;
+  /** Its % mito rule ("global" | "per_type") and per-type column; null if never filtered. */
+  qc_mito_mode?: string | null;
+  qc_mito_type_column?: string | null;
 }
 
 interface PipelineResult extends RunOutcomeFields {
@@ -267,6 +271,8 @@ export function filterThresholds(set: Record<string, unknown> | undefined): Filt
     qc_mad_k_mt: Number(value("qc_mad_k_mt")),
     qc_mad_upper: Boolean(value("qc_mad_upper")),
     qc_sample_column: String(value("qc_sample_column") ?? ""),
+    qc_mito_mode: set?.qc_mito_mode === "per_type" ? "per_type" : "global",
+    qc_mito_type_column: String(set?.qc_mito_type_column ?? ""),
   };
 }
 
@@ -508,6 +514,13 @@ export function DataAssessmentPanel() {
           prev.filtering?.qc_threshold_mode
             ? prev
             : { ...prev, filtering: { ...prev.filtering, qc_threshold_mode: filteredWith } },
+        );
+      }
+      // And per-type % mito bounds, also when they came later (a re-filter): unless chosen.
+      const mito = recordedMitoParams(data);
+      if (mito.qc_mito_mode) {
+        setStepParams((prev) =>
+          prev.filtering?.qc_mito_mode ? prev : { ...prev, filtering: { ...prev.filtering, ...mito } },
         );
       }
       // Auto-select all missing steps
@@ -1441,6 +1454,9 @@ export function DataAssessmentPanel() {
                                 );
                               })}
                             </div>
+                            {step.key === "filtering" && (
+                              <MitoModeControl datasetId={datasetId} values={filterValues} onChange={running ? undefined : setFilter} />
+                            )}
                           </div>
                         )}
                         {/* AI suggestion for this step */}
@@ -1510,7 +1526,17 @@ export function DataAssessmentPanel() {
               filter={qcFilter}
             />
           )}
-          {datasetId && <MitoByType datasetId={datasetId} refreshKey={qcRefreshKey} />}
+          {datasetId && (
+            <MitoByType
+              datasetId={datasetId}
+              refreshKey={qcRefreshKey}
+              onRefiltered={() => {
+                void fetchAssessment();
+                setQcRefreshKey((k) => k + 1);
+                queryClient.invalidateQueries({ queryKey: ["embedding", datasetId] });
+              }}
+            />
+          )}
           {datasetId && <QcStates datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <MeanVariancePlot datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <PcaDiagnostics datasetId={datasetId} refreshKey={qcRefreshKey} />}
