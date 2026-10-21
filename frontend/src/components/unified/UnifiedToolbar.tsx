@@ -18,6 +18,7 @@ import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 import { HvgSensitivityControl } from "@/components/unified/HvgSensitivity";
 import { PcPairChooser } from "@/components/unified/PcPairChooser";
 import { EmbeddingReliabilityControl } from "@/components/unified/EmbeddingReliability";
+import { LayoutStabilityControl } from "@/components/unified/LayoutStability";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -360,6 +361,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
       <ResolutionSweepControl />
       <HvgSensitivityControl />
       <EmbeddingReliabilityControl />
+      <LayoutStabilityControl />
 
       {/* Spacer */}
       <div className="flex-1" />
