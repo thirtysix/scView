@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-21
+
 ### Added
 - **Cell-cell communication (Unified View → Communication).** Ligand-receptor interactions between
   groups, scored with LIANA's consensus rank aggregate (CellPhoneDB, Connectome, log2FC, NATMI,
