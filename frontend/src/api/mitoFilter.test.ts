@@ -18,7 +18,7 @@ const T: FilterThresholds = { min_genes: 200, max_genes: 0, min_counts: 0, max_p
 
 describe("mito filter API", () => {
   it("asks the filter preview for per-type bounds only when they are chosen", async () => {
-    const fetchSpy = vi.fn(async (_url: string) => new Response("{}", { status: 200 }));
+    const fetchSpy = vi.fn<(url: string) => Promise<Response>>(async () => new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
     await getFilterPreview("d1", T);
     expect(String(fetchSpy.mock.calls[0]![0])).not.toContain("mito_mode");
@@ -31,7 +31,7 @@ describe("mito filter API", () => {
   });
 
   it("previews with the column and gives the backend's own reason on a refusal", async () => {
-    const fetchSpy = vi.fn(async (_url: string) =>
+    const fetchSpy = vi.fn<(url: string) => Promise<Response>>(async () =>
       new Response(JSON.stringify({ detail: "No original upload is stored for this dataset." }), { status: 409 }),
     );
     vi.stubGlobal("fetch", fetchSpy);
