@@ -54,7 +54,7 @@ WHERE = {
 
 # Clusterings, cell types and QC calls look like conditions to the condition regex
 # ("louvain_group", "doublet_status"): never a condition here, as in the QC report.
-_NOT_CONDITION = re.compile(r"cell_?type|celltypeanno|leiden|louvain|cluster|phase|doublet", re.I)
+_NOT_CONDITION = re.compile(r"cell[ ._-]?type|celltypeanno|leiden|louvain|cluster|phase|doublet", re.I)
 
 
 class ReportError(ValueError):

@@ -56,7 +56,7 @@ QUANTILES = (0.05, 0.25, 0.75, 0.95)
 
 # Columns that hold an author's cell types: a cell-type-like name, or a cluster
 # column whose labels are mostly names ("CD14 Mono"), not numbers.
-_TYPE_RE = re.compile(r"cell_?type|celltype|annotation|^labels?$|cell_?ontology", re.I)
+_TYPE_RE = re.compile(r"cell[ ._-]?type|celltype|annotation|^labels?$|cell[ ._-]?ontology", re.I)
 _CLUSTER_RE = re.compile(r"cluster", re.I)
 
 NOT_MEASURABLE = ("No mitochondrial (MT-) genes in this dataset, so % mito can't be measured "

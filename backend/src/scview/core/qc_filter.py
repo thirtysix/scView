@@ -866,7 +866,7 @@ AUDIT_RULE = (f"Flagged when a filter removes more than {AUDIT_LOSS:.0%} of a gr
 # Author labels: a cell-type / annotation column, or the author's clusters
 # (paul15_clusters, seurat_clusters), never one scView made (it is remade after
 # filtering, so it cannot label the removed cells).
-_LABEL_RE = re.compile(r"cell_?type|celltype|annotation|^labels?$|clusters?$", re.I)
+_LABEL_RE = re.compile(r"cell[ ._-]?type|celltype|annotation|^labels?$|clusters?$", re.I)
 _MADE_HERE_RE = re.compile(r"^scview_|leiden|louvain|^phase$|doublet", re.I)
 MAX_LABEL_VALUES = MAX_AUDIT_GROUPS
 

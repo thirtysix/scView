@@ -639,7 +639,7 @@ _MT_COL_RE = re.compile(r"pct_counts_mt|percent[._]?mt|pct_counts_mito|percent[.
 
 
 def _looks_like_celltype_col(name: str) -> bool:
-    n = name.lower()
+    n = name.lower().replace(" ", "_").replace(".", "_").replace("-", "_")  # "Cell type", R's cell.type
     return "celltype" in n or "cell_type" in n or name.endswith(_ANNO_SUFFIX)
 
 

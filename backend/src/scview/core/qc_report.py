@@ -44,7 +44,7 @@ _MAX_ITEMS = 6
 
 _CONDITION_RE = CONDITION_RE
 _BATCH_RE = BATCH_RE
-_SKIP_RE = re.compile(r"cell_?type|celltypeanno|leiden|louvain|cluster|phase|doublet", re.I)
+_SKIP_RE = re.compile(r"cell[ ._-]?type|celltypeanno|leiden|louvain|cluster|phase|doublet", re.I)
 # Cluster flags that mean damaged cells or doublets: tightening the filters helps.
 _DAMAGE_FLAGS = {"low_quality", "high_mito", "low_genes", "doublet_rich"}
 _FLAG_WORDS = {"hb_ambient": "haemoglobin without erythroid markers"}

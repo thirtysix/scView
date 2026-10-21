@@ -311,3 +311,18 @@ def test_removed_cells_given_a_cluster_by_expression_are_added_back():
     one = _rows(r)["1"]
     assert one.n_cells == 100 and one.flagged and one.removed_filter_frac > 0.8
     assert "given the group its expression is closest to" in r.note
+
+
+def test_an_author_column_named_with_a_space_is_the_cell_type_column():
+    # ovary.h5ad: obs "cluster" (numbers) before "Cell type"; the space used to miss.
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+
+    from scview.core import mito_by_type
+
+    obs = pd.DataFrame({"cluster": pd.Categorical(["0", "1"] * 30),
+                        "Cell type": pd.Categorical(["stromal", "granulosa"] * 30),
+                        "cell.type": pd.Categorical(["a", "b"] * 30)})
+    a = ad.AnnData(np.ones((60, 2), dtype="float32"), obs=obs)
+    assert mito_by_type.default_column(a)[0] == "Cell type"

@@ -488,7 +488,7 @@ def _ilisi(idx: np.ndarray, codes: np.ndarray, n_sets: int) -> np.ndarray:
 
 # Cell-type-like columns that, shared by every dataset, show whether correction
 # kept cell types apart (bio-conservation); most specific first.
-_CONSERVATION_RE = re.compile(r"cell_?type|celltype|annotation|^labels?$|^cluster$", re.I)
+_CONSERVATION_RE = re.compile(r"cell[ ._-]?type|celltype|annotation|^labels?$|^cluster$", re.I)
 OVERCORRECTION_DROP = 0.10  # neighbour label agreement lost to correction that warrants a warning
 
 
