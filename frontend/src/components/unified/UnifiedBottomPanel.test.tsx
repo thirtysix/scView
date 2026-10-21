@@ -96,6 +96,8 @@ describe("UnifiedBottomPanel", () => {
     // A score is per cell: no gene, and a reason.
     act(() => useUnifiedViewStore.setState({ scatterOverlay: { type: "score", name: "IFN" } }));
     expect(screen.getByTestId("per-donor")).toHaveTextContent("a score is per cell");
+    act(() => useUnifiedViewStore.setState({ scatterOverlay: { type: "program", index: 3, name: "P3" } }));
+    expect(screen.getByTestId("per-donor")).toHaveTextContent("a program's usage is per cell");
     fireEvent.click(screen.getByRole("button", { name: "Cells" }));
     expect(screen.getByTestId("violin")).toBeInTheDocument();
   });

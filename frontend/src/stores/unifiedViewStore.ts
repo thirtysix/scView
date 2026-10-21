@@ -19,6 +19,8 @@ type ScatterOverlay =
       activity?: { network: "collectri" | "progeny"; source: string };
       reliability?: ReliabilityRef;
     }
+  // One gene program's per-cell usage share (Programs subtab; 1-based index, P1..Pk)
+  | { type: "program"; index: number; name: string }
   | null;
 
 type Subtab = UnifiedSubtab;
