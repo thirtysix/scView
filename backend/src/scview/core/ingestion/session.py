@@ -286,7 +286,14 @@ class IngestSessionManager:
         ing = self.data_dir / "ingested" / dataset_id
         ing.mkdir(parents=True, exist_ok=True)
         h5_path = ing / f"{_safe_name(name)}.h5ad"
-        adata.write_h5ad(h5_path, compression="gzip")
+        _clear_index_name_clashes(adata)
+        try:
+            adata.write_h5ad(h5_path, compression="gzip")
+        except Exception as e:
+            # Leave no half-made dataset behind (an uploads dir without metadata).
+            shutil.rmtree(up, ignore_errors=True)
+            shutil.rmtree(ing, ignore_errors=True)
+            raise IngestCommitError(f"The dataset could not be saved: {e}") from e
         _make_readonly(h5_path)
 
         # metadata sidecar (uploads/) — what list_datasets reads.
@@ -337,6 +344,15 @@ class IngestSessionManager:
 def _safe_name(name: str) -> str:
     cleaned = _SAFE_NAME_RE.sub("_", name).strip("_")
     return cleaned or "dataset"
+
+
+def _clear_index_name_clashes(adata) -> None:
+    """Drop an obs/var index name that is also a column name (e.g. "cell_id" with
+    different values): anndata refuses to write it. The column keeps its values."""
+    for frame in (adata.obs, adata.var):
+        if frame.index.name is not None and frame.index.name in frame.columns:
+            logger.info("Index name %r is also a column; dropping the index name", frame.index.name)
+            frame.index.name = None
 
 
 def _make_readonly(path: Path) -> None:

@@ -846,7 +846,13 @@ class AnnDataAdaptor:
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        if self._adata is not None:
-            if hasattr(self._adata, "file") and self._adata.file is not None:
+        """Called when the dataset manager drops this adaptor. A backed file is closed
+        (reading it again is cheap). An in-memory dataset is kept for the requests
+        that took this adaptor before the drop: dropping it made their next ``adata``
+        read the whole file again outside the manager's cache and its memory check
+        (after a stopped run on ovary, 3.2 GB beside the copy being reopened: the
+        backend was killed). It is freed when the last of them lets go."""
+        if self._adata is not None and getattr(self._adata, "isbacked", False):
+            if self._adata.file is not None:
                 self._adata.file.close()
             self._adata = None

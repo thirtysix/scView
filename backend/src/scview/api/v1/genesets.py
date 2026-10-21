@@ -6,6 +6,7 @@ and per-cell scoring via scanpy.tl.score_genes().
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import numpy as np
@@ -189,7 +190,8 @@ async def score_genesets(
             ),
         )
 
-    try:
+    def _score() -> GeneSetScoreResponse:
+        nonlocal genes_found, genes_missing
         import scanpy as sc
 
         score_key = body.score_name
@@ -257,6 +259,9 @@ async def score_genesets(
             genes_missing=genes_missing,
         )
 
+    try:
+        # Seconds on a large dataset: in a worker thread, so the server keeps answering.
+        return await asyncio.to_thread(_score)
     except HTTPException:
         raise
     except ImportError:

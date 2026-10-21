@@ -87,3 +87,70 @@ async def get_embedding(
 
     ipc_bytes = embedding_to_arrow_ipc(coords, color_values, color_name=color_by or "color")
     return Response(content=ipc_bytes, media_type=ARROW_CONTENT_TYPE)
+
+
+# ---------------------------------------------------------------------------
+# Plot reliability: per-cell neighbour preservation (core/embedding_reliability.py)
+# ---------------------------------------------------------------------------
+
+
+async def _reliability(dataset_id: str, name: str, k: int | None, group_by: str, dims: str,
+                       dm: DatasetManager) -> tuple[np.ndarray, dict]:
+    import asyncio
+
+    from scview.core import embedding_reliability as er
+
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    obsm = adaptor.adata.obsm
+    if name not in obsm:
+        raise HTTPException(status_code=404, detail=f"Embedding '{name}' not found.")
+    idx = parse_dims(dims, obsm[name].shape[1]) if dims else None
+    try:
+        # Two exact kNN searches over every cell (and a graph lookup): off the loop.
+        return await asyncio.to_thread(er.for_adaptor, adaptor, name, k=k,
+                                       group_by=group_by or None, dims=idx)
+    except er.ReliabilityError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e).strip("'\""))
+
+
+@router.get("/datasets/{dataset_id}/embeddings/{name}/reliability")
+async def get_embedding_reliability(
+    dataset_id: str,
+    name: str,
+    k: int | None = Query(default=None, ge=1, le=100,
+                          description="Neighbours per cell; default the graph's own (at most it)"),
+    group_by: str = Query(default="", description="Obs column for the per-group summary; default the clustering"),
+    dims: str = Query(default="", description="Two 0-based columns as plotted (a PCA pair), e.g. '0,1'"),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Per cell, the share of its graph neighbours (the kNN graph the clustering
+    used) that are also among its k nearest cells on this plot (``scores``, one
+    per cell, null for a cell left out of a sample), with the summary the
+    ``/summary`` route returns: overall and per-group stats, the chance and
+    random-placement baselines, and how it was computed. Cached per dataset."""
+    from fastapi.responses import JSONResponse
+
+    scores, summary = await _reliability(dataset_id, name, k, group_by, dims, dm)
+    rounded = np.round(scores.astype(np.float64), 4)
+    values = [None if v != v else v for v in rounded.tolist()]  # NaN -> null
+    # Straight to json.dumps: FastAPI's encoder walks every one of up to 250k values.
+    return JSONResponse({"scores": values, **summary})
+
+
+@router.get("/datasets/{dataset_id}/embeddings/{name}/reliability/summary")
+async def get_embedding_reliability_summary(
+    dataset_id: str,
+    name: str,
+    k: int | None = Query(default=None, ge=1, le=100),
+    group_by: str = Query(default=""),
+    dims: str = Query(default=""),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The reliability summary without the per-cell values (another grouping of a
+    cached result costs one pass over the cells)."""
+    _, summary = await _reliability(dataset_id, name, k, group_by, dims, dm)
+    return summary

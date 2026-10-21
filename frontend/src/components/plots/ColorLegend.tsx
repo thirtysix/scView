@@ -44,6 +44,8 @@ interface ColorLegendProps {
   onAskAbout?: (category: string) => void;
   /** When provided (continuous mode), an "ask about this" button sits by the label */
   onAsk?: () => void;
+  /** Continuous: a line under the scale's caption (what a fixed scale means, its baseline) */
+  note?: string;
   /** When provided, each category gets a "split into sub-clusters" button */
   onSubcluster?: (category: string) => void;
   /** The category being split right now (its button shows a spinner) */
@@ -84,6 +86,7 @@ export function ColorLegend({
   onRenameCategory,
   onAskAbout,
   onAsk,
+  note,
   onSubcluster,
   splittingCategory,
   onCategoryToggle,
@@ -364,7 +367,12 @@ export function ColorLegend({
             {colorScaleCaption(scale)}
           </p>
         )}
-        {scale && clip && onClipChange && (
+        {note && (
+          <p className="text-[10px] leading-snug text-slate-500" data-testid="colour-scale-note">
+            {note}
+          </p>
+        )}
+        {scale && !scale.fixed && clip && onClipChange && (
           <ClipControl
             clip={clip}
             dataMin={scale.dataMin}

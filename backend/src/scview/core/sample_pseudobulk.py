@@ -58,7 +58,7 @@ MAX_LEVELS = 50  # a categorical covariate with more values is an id, not a cova
 SHARE_CONSTANT = 0.9  # a profile's cells must agree this much on a column's value
 N_LOADINGS = 6  # top genes each way for PC1 / PC2
 
-_CELLTYPE_RE = re.compile(r"cell_?type|celltype|annotation|^labels?$|^cluster$", re.I)
+_CELLTYPE_RE = re.compile(r"cell[ ._-]?type|celltype|annotation|^labels?$|^cluster$", re.I)
 _SEP = " | "
 
 

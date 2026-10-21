@@ -22,7 +22,25 @@ def test_cgroup_v2_limit(tmp_path):
     (cg / "memory.current").write_text(f"{GB}\n")
     b = read_budget(cg, _meminfo(tmp_path)).to_dict()
     assert b == {"limit_bytes": 4 * GB, "used_bytes": GB, "limited": True,
-                 "source": "container limit", "available_bytes": 3 * GB}
+                 "source": "container limit", "cache_bytes": 0, "available_bytes": 3 * GB}
+
+
+def test_reclaimable_file_cache_is_not_counted_as_used(tmp_path):
+    # After reading a big file its pages sit in memory.current; the kernel drops
+    # them before it kills anything (docker stats leaves them out too).
+    cg = tmp_path / "cg"
+    cg.mkdir()
+    (cg / "memory.max").write_text(f"{6 * GB}\n")
+    (cg / "memory.current").write_text(f"{3 * GB}\n")
+    (cg / "memory.stat").write_text(f"anon {2 * GB}\nfile {GB}\ninactive_file {GB}\n")
+    b = read_budget(cg, _meminfo(tmp_path))
+    assert (b.used_bytes, b.cache_bytes, b.to_dict()["available_bytes"]) == (2 * GB, GB, 4 * GB)
+    v1 = tmp_path / "v1"
+    (v1 / "memory").mkdir(parents=True)
+    (v1 / "memory" / "memory.limit_in_bytes").write_text(f"{6 * GB}\n")
+    (v1 / "memory" / "memory.usage_in_bytes").write_text(f"{3 * GB}\n")
+    (v1 / "memory" / "memory.stat").write_text(f"cache {GB}\ntotal_inactive_file {GB // 2}\n")
+    assert read_budget(v1, _meminfo(tmp_path)).used_bytes == 3 * GB - GB // 2
 
 
 def test_no_limit_falls_back_to_the_machine(tmp_path):
@@ -52,7 +70,8 @@ def test_nothing_readable(tmp_path):
 
 async def test_endpoint(client):
     body = (await client.get("/api/v1/system/memory")).json()
-    assert set(body) == {"limit_bytes", "used_bytes", "limited", "source", "available_bytes", "unclean_restart"}
+    assert set(body) == {"limit_bytes", "used_bytes", "limited", "source", "cache_bytes", "available_bytes",
+                         "unclean_restart"}
 
 
 def test_run_marker_recognises_a_killed_backend(tmp_path):

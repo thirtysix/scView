@@ -16,8 +16,13 @@ export interface CoexpressionResponse {
   method: CoexpressionMethod;
   /** "all cells", "selection" or "<column> = <value>" */
   scope: string;
+  /** Cells correlated over: the chosen ones, or a fixed random sample of them when capped. */
   n_cells: number;
   n_cells_total: number;
+  /** The cells asked for (all, the selection or the group); missing from an older backend. */
+  n_cells_chosen?: number;
+  /** More cells were chosen than one correlation uses (backend MAX_CELLS): a sample was used. */
+  capped?: boolean;
   query_n_expressing: number;
   /** Expressing cells a gene needs to be correlated; null for scaled values. */
   min_expressing: number | null;

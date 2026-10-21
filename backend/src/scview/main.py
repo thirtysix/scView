@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from scview.config import get_settings
-from scview.core.dataset_manager import DatasetBusyError
+from scview.core.dataset_manager import DatasetBusyError, DatasetMemoryError
 from scview.core.guards import require_access
 from scview.api.router import api_router
 
@@ -118,6 +118,12 @@ async def dataset_busy_handler(_request: Request, exc: DatasetBusyError):
         content={"detail": "This dataset is being processed. Try again when the run has finished."},
         headers={"Retry-After": "30"},
     )
+
+
+@app.exception_handler(DatasetMemoryError)
+async def dataset_memory_handler(_request: Request, exc: DatasetMemoryError):
+    # 507: the request may work once memory is raised; not a proxy's 502/503/504.
+    return JSONResponse(status_code=507, content={"detail": str(exc)})
 
 
 # ---------------------------------------------------------------------------

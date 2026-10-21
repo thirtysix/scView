@@ -8,7 +8,8 @@ import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useViewStore } from "@/stores/viewStore";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { ColorLegend } from "@/components/plots/ColorLegend";
-import { overlayStats, resolveColorScale, scatterScale, type OverlayKind } from "@/lib/colorScale";
+import { fixedColorScale, overlayStats, resolveColorScale, scatterScale, type OverlayKind } from "@/lib/colorScale";
+import { reliabilityLegendNote, showReliability } from "@/lib/embeddingReliability";
 import { LassoSelector } from "@/components/plots/LassoSelector";
 import { UnifiedToolbar } from "@/components/unified/UnifiedToolbar";
 import { UnifiedBottomPanel } from "@/components/unified/UnifiedBottomPanel";
@@ -320,15 +321,20 @@ export function UnifiedViewPanel() {
     () => overlayStats(effectiveColorType === "continuous" ? effectiveColorValues : null),
     [effectiveColorType, effectiveColorValues],
   );
+  // Plot reliability is a share (0-1): a fixed range, never clipped to the data.
+  const reliability = scatterOverlay?.type === "score" ? scatterOverlay.reliability : undefined;
+  const fixedShare = !!reliability;
   const colorScale = useMemo(
     () =>
-      resolveColorScale(overlayKind, colorStats, {
-        sequential: sequentialColormap,
-        diverging: divergingColormap,
-        signedMode: signedColormapMode,
-        clip,
-      }),
-    [overlayKind, colorStats, sequentialColormap, divergingColormap, signedColormapMode, clip],
+      fixedShare
+        ? fixedColorScale(colorStats, sequentialColormap, 0, 1)
+        : resolveColorScale(overlayKind, colorStats, {
+            sequential: sequentialColormap,
+            diverging: divergingColormap,
+            signedMode: signedColormapMode,
+            clip,
+          }),
+    [overlayKind, colorStats, sequentialColormap, divergingColormap, signedColormapMode, clip, fixedShare],
   );
   const scatterColorScale = useMemo(() => scatterScale(colorScale), [colorScale]);
 
@@ -482,6 +488,11 @@ export function UnifiedViewPanel() {
     if (o.type === "expression") {
       if (o.layer) handleProteinClick(o.gene);
       else handleGeneClick(o.gene);
+      return;
+    }
+    if (o.type === "reliability") {
+      showReliability(datasetId, o.embedding, o.dims)
+        .catch((err) => console.error("Failed to restore the plot reliability overlay:", err));
       return;
     }
     if (o.type === "activity") {
@@ -982,6 +993,7 @@ export function UnifiedViewPanel() {
                   onClipChange={setViewClip}
                   clipOverridden={viewClip !== null}
                   label={overlayLabel || colorColumnName || colorBy}
+                  note={reliability ? reliabilityLegendNote(reliability) : undefined}
                   onAsk={
                     scatterOverlay?.type === "expression" && overlayLabel
                       ? handleAskAboutOverlay
@@ -1147,13 +1159,13 @@ export function UnifiedViewPanel() {
               </div>
             </div>
           )}
-          {/* Tab bar */}
-          <div className="flex flex-shrink-0 overflow-x-auto border-b border-slate-200">
+          {/* Tab bar: wraps onto a second row rather than scrolling, so no tab is cut off */}
+          <div className="flex flex-shrink-0 flex-wrap border-b border-slate-200">
             {SUBTABS.filter((tab) => tab.id !== "protein" || dataset?.protein).map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveSubtab(tab.id)}
-                className={`flex-1 px-2 py-2 text-xs font-medium transition-colors ${
+                className={`flex-1 whitespace-nowrap px-2 py-2 text-xs font-medium transition-colors ${
                   activeSubtab === tab.id
                     ? "border-b-2 border-primary text-primary"
                     : "text-slate-500 hover:text-slate-700"

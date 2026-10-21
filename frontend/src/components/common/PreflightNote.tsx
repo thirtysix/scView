@@ -1,0 +1,174 @@
+import { useEffect, useState } from "react";
+import { AlertTriangle, Gauge } from "lucide-react";
+
+import {
+  getIngestPreflight,
+  getRunPreflight,
+  type IngestPreflight,
+  type PreflightVerdict,
+} from "@/api/preflight";
+import { InfoTip } from "./InfoTip";
+
+const GB = 1024 ** 3;
+const gb = (bytes: number) => (bytes / GB >= 10 ? (bytes / GB).toFixed(0) : (bytes / GB).toFixed(1));
+
+const LEVEL_STYLE: Record<PreflightVerdict["level"], string> = {
+  fits: "text-slate-500",
+  tight: "text-amber-700",
+  wont_fit: "rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-amber-800",
+  unknown: "text-slate-400",
+};
+
+/** The tooltip: what the estimate adds up, against what scView has, and how far to trust it. */
+function Breakdown({ verdict }: { verdict: PreflightVerdict }) {
+  const v = verdict;
+  return (
+    <span className="block space-y-1">
+      {v.breakdown.map((b) => (
+        <span key={b.label} className="flex justify-between gap-2">
+          <span>{b.label}</span>
+          <span className="tabular-nums">{gb(b.bytes)} GB</span>
+        </span>
+      ))}
+      {v.available_bytes != null && v.limit_bytes != null && (
+        <span className="block">
+          Free now: {gb(v.available_bytes)} GB of {gb(v.limit_bytes)} GB
+          {v.limited ? " (the SCVIEW_MEMORY_GB limit)" : " (no limit is set: the memory this machine gives scView)"};
+          file cache the system can drop is counted as free.
+        </span>
+      )}
+      {v.cached.count > 0 && (
+        <span className="block">
+          Other datasets held in memory: {v.cached.count}, about {gb(v.cached.bytes)} GB
+          {v.cached.frees_enough ? "; closing them would free enough." : "."}
+        </span>
+      )}
+      <span className="block">
+        Memory is estimated from the data's shape and storage (cells, genes, stored values, read
+        from the file's header) with coefficients measured on test datasets, where it came within{" "}
+        {Math.round(v.error_band * 100)}% of the measured peak.
+      </span>
+      <span className="block">
+        Time is rough: measured with 2 CPUs and scaled to the CPUs scView has. In a virtual machine
+        (Docker Desktop or Podman on Windows) steps can take much longer: a Windows test VM ran about
+        10 times slower than its host.
+      </span>
+      {v.notes.map((n) => (
+        <span key={n} className="block">
+          {n}
+        </span>
+      ))}
+      {v.level === "tight" &&
+        v.suggestions.map((s) => (
+          <span key={s} className="block">
+            If it does not fit: {s}
+          </span>
+        ))}
+    </span>
+  );
+}
+
+/** One sentence on whether a load or run fits in memory, with the breakdown in a tooltip.
+ *  It warns, never blocks: a won't-fit verdict lists what to change. */
+export function PreflightNote({ verdict, label }: { verdict: PreflightVerdict; label?: string }) {
+  const Icon = verdict.level === "fits" || verdict.level === "unknown" ? Gauge : AlertTriangle;
+  return (
+    <div
+      className={`text-[11px] leading-snug ${LEVEL_STYLE[verdict.level]}`}
+      data-level={verdict.level}
+      role={verdict.level === "wont_fit" ? "alert" : undefined}
+    >
+      <p className="flex items-start gap-1.5">
+        <Icon className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span>
+          {label && <span className="font-medium">{label}: </span>}
+          {verdict.sentence}{" "}
+          <InfoTip width={320} align="right" label="How this estimate is made">
+            <Breakdown verdict={verdict} />
+          </InfoTip>
+        </span>
+      </p>
+      {verdict.level === "wont_fit" && verdict.suggestions.length > 0 && (
+        <ul className="mt-1 list-disc space-y-0.5 pl-8">
+          {verdict.suggestions.map((s) => (
+            <li key={s}>{s}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** The run estimate for the selected steps, next to the pipeline Run button. Refetched
+ *  (debounced) when the steps, the parameters it depends on, or `refreshKey` change. */
+export function PreflightRunNote({
+  datasetId,
+  steps,
+  params,
+  refreshKey = 0,
+}: {
+  datasetId: string;
+  steps: string[];
+  params: Record<string, unknown> | null;
+  refreshKey?: number;
+}) {
+  const [verdict, setVerdict] = useState<PreflightVerdict | null>(null);
+  const key = steps.join(",");
+  const paramKey = JSON.stringify(params ?? {});
+
+  useEffect(() => {
+    if (!key) {
+      setVerdict(null);
+      return;
+    }
+    const ctl = new AbortController();
+    const timer = setTimeout(() => {
+      getRunPreflight(datasetId, key.split(","), JSON.parse(paramKey), ctl.signal)
+        .then((r) => setVerdict(r.verdict))
+        .catch(() => {
+          /* advisory only: an older backend or a restart leaves no note */
+          if (!ctl.signal.aborted) setVerdict(null);
+        });
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      ctl.abort();
+    };
+  }, [datasetId, key, paramKey, refreshKey]);
+
+  if (!verdict) return null;
+  return <PreflightNote verdict={verdict} />;
+}
+
+/** One note per staged sample (and one for the merge) before an ingest commit. */
+export function PreflightIngestNotes({
+  sessionId,
+  refreshKey = 0,
+}: {
+  sessionId: string;
+  /** A change refetches (the staged files changed) */
+  refreshKey?: number | string;
+}) {
+  const [data, setData] = useState<IngestPreflight | null>(null);
+
+  useEffect(() => {
+    const ctl = new AbortController();
+    getIngestPreflight(sessionId, ctl.signal)
+      .then(setData)
+      .catch(() => {
+        if (!ctl.signal.aborted) setData(null);
+      });
+    return () => ctl.abort();
+  }, [sessionId, refreshKey]);
+
+  if (!data || data.units.length === 0) return null;
+  const many = data.units.length > 1;
+  return (
+    <div className="space-y-1.5" aria-label="Memory estimate">
+      {data.units.map((u) => (
+        <PreflightNote key={u.label} verdict={u.verdict} label={many ? u.label : undefined} />
+      ))}
+      {data.merge && <PreflightNote verdict={data.merge} label="Merging them" />}
+    </div>
+  );
+}

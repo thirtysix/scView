@@ -5,6 +5,7 @@ import type { DatasetInfo } from "@/api/types";
 
 const { getFilterPreview } = vi.hoisted(() => ({ getFilterPreview: vi.fn() }));
 vi.mock("@/api/qc", () => ({ getFilterPreview }));
+vi.mock("@/api/mitoByType", () => ({ getMitoByType: vi.fn().mockResolvedValue({ measurable: true, column: null }) }));
 
 import { QcFilterSummary } from "./QcFilterSummary";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -48,6 +49,28 @@ function preview(nRemoved: number): FilterPreview {
     ],
   };
 }
+
+describe("QcFilterSummary with per-type % mito bounds", () => {
+  it("shows the per-type table, and keeps the choice switchable when the backend refuses it", async () => {
+    const onChange = vi.fn();
+    const table = {
+      column: "cell_type", reason: "cell type", k: 3, cap: 50, min_cells: 30, damaged_median: 50, ceiling_pct_mt: 20,
+      types: [{ name: "B", n_cells: 100, median: 12, mad: 2, bound: 18, rule: "own" as const, why: null, capped: false,
+        note: "", warning: null, removed_global: 100, removed: 4 }],
+      n_own: 1, n_global: 0, n_unlabelled: 0, reused_from: null, warnings: [], applied: "per_type" as const,
+    };
+    getFilterPreview.mockReset().mockResolvedValue({ ...preview(150), mito_types: table });
+    const per = { ...T, qc_mito_mode: "per_type" as const };
+    const { unmount } = render(<QcFilterSummary datasetId="d1" thresholds={per} onChange={onChange} />);
+    expect(await screen.findByTestId("mito-type-B")).toBeInTheDocument();
+    unmount();
+    getFilterPreview.mockReset().mockRejectedValue(new Error("Per-type % mito bounds need cell types"));
+    render(<QcFilterSummary datasetId="d1" thresholds={per} onChange={onChange} />);
+    expect(await screen.findByText(/Cell-loss summary unavailable: Per-type % mito bounds need cell types/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "One rule" }));
+    expect(onChange).toHaveBeenCalledWith({ qc_mito_mode: "global" });
+  });
+});
 
 describe("QcFilterSummary", () => {
   beforeEach(() => {

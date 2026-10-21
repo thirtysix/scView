@@ -29,6 +29,7 @@ import { getDataset, listDatasets, uploadDataset } from "@/api/datasets";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { DatasetLibrary } from "@/components/panels/DatasetLibrary";
+import { PreflightIngestNotes } from "@/components/common/PreflightNote";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
   tenx_mex: "10x MEX (matrix + barcodes + features)",
@@ -330,6 +331,14 @@ export function DataPanel() {
               />
               Genes are in rows (transpose the table to cells × genes)
             </label>
+          )}
+
+          {/* Memory and time each sample needs to load, against what scView has free */}
+          {sessionId && (
+            <PreflightIngestNotes
+              sessionId={sessionId}
+              refreshKey={bundle.units.map((u) => `${u.label}:${u.files.length}`).join("|")}
+            />
           )}
 
           <div className="flex items-center gap-3 pt-1">

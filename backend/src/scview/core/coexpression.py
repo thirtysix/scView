@@ -45,6 +45,16 @@ MIN_FRACTION = 0.01
 TOP_N = 25
 MAX_TOP_N = 200
 GENE_CHUNK = 2000  # genes per block of a dense or on-disk matrix
+# Cells one correlation uses: more chosen cells are sampled to this many (fixed
+# seed, so a request gives the same answer each time; ``capped`` says so). The
+# work copies the chosen rows of the whole matrix several times (float64, the
+# squares, the log-normalised counts), so memory grows with the cells: ovary
+# (37,104 cells, raw counts, 2 cores) took +1.49 GB and 10.9 s over all cells,
+# +1.03 GB and 8.0 s over 20,000 (top r within 0.003), and a 100k-cell dataset
+# would take ~4 GB. r's standard error at 20,000 cells is under 0.01. Kang
+# (13,836 cells) is below the cap.
+MAX_CELLS = 20_000
+SAMPLE_SEED = 0
 
 
 class CoexpressionError(ValueError):
@@ -168,6 +178,11 @@ def coexpression(
         rows = rows[(rows >= 0) & (rows < n_total)]
         if rows.size == n_total:
             rows = None
+    n_chosen = n_total if rows is None else int(rows.size)
+    capped = n_chosen > MAX_CELLS
+    if capped:
+        pool = np.arange(n_total) if rows is None else rows
+        rows = np.sort(np.random.default_rng(SAMPLE_SEED).choice(pool, MAX_CELLS, replace=False))
     n = n_total if rows is None else int(rows.size)
     min_expressing = max(MIN_CELLS, math.ceil(MIN_FRACTION * n))
     if n < max(MIN_CELLS, 3):
@@ -247,6 +262,9 @@ def coexpression(
         "method": method,
         "n_cells": n,
         "n_cells_total": n_total,
+        # The cells asked for; more than MAX_CELLS are sampled (capped).
+        "n_cells_chosen": n_chosen,
+        "capped": capped,
         "query_n_expressing": q_expr,
         "min_expressing": None if scaled else min_expressing,
         "n_genes_tested": int(keep.sum()),

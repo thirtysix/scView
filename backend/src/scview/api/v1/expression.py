@@ -77,7 +77,8 @@ async def get_expression_violin(
 
     layer_key = layer if layer else None
     try:
-        result = adaptor.get_expression_for_violin(gene, groupby, layer=layer_key)
+        # Reads a whole gene column (densified per group): off the event loop.
+        result = await asyncio.to_thread(adaptor.get_expression_for_violin, gene, groupby, layer=layer_key)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

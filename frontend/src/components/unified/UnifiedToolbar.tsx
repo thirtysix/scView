@@ -17,6 +17,7 @@ import { describeFilter } from "@/lib/cellFilter";
 import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 import { HvgSensitivityControl } from "@/components/unified/HvgSensitivity";
 import { PcPairChooser } from "@/components/unified/PcPairChooser";
+import { EmbeddingReliabilityControl } from "@/components/unified/EmbeddingReliability";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -358,6 +359,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
       <LabelSelectionControls />
       <ResolutionSweepControl />
       <HvgSensitivityControl />
+      <EmbeddingReliabilityControl />
 
       {/* Spacer */}
       <div className="flex-1" />

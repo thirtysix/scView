@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -62,11 +60,24 @@ def test_runs_outside_this_process(monkeypatch):
     assert len(leiden.labels(_adata().obsp["connectivities"], 1.0).categories) > 1
 
 
-def test_child_failure_is_reported(monkeypatch):
-    def failed(*_a, **_k):
-        return subprocess.CompletedProcess([], 1, b"", b"Traceback ...\n  ...\nMemoryError: out of memory\n")
+class _FailedChild:
+    """A child process that exits 1 with a traceback on stderr."""
 
-    monkeypatch.setattr(leiden.subprocess, "run", failed)
+    returncode = None
+
+    def __init__(self, *_a, **_k):
+        pass
+
+    def communicate(self, _input=None):
+        self.returncode = 1
+        return b"", b"Traceback ...\n  ...\nMemoryError: out of memory\n"
+
+    def terminate(self):
+        pass
+
+
+def test_child_failure_is_reported(monkeypatch):
+    monkeypatch.setattr(leiden.subprocess, "Popen", _FailedChild)
     with pytest.raises(leiden.LeidenError, match="exit 1.*MemoryError: out of memory"):
         leiden.labels(_adata().obsp["connectivities"], 1.0)
 

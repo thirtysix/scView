@@ -198,6 +198,31 @@ async def test_unreadable_file_is_a_commit_error(mgr, dm):
     assert mgr.merge_plan(sid) is None
 
 
+def test_persist_drops_an_index_name_that_is_also_a_column(mgr, data_dir):
+    # ovary.h5ad: obs index named "cell_id" plus a "cell_id" column with other
+    # values; anndata refuses to write that, which was a 500 at commit.
+    a = ad.AnnData(X=np.ones((3, 2), dtype="float32"))
+    a.obs_names = ["c0", "c1", "c2"]
+    a.obs["cell_id"] = ["x", "y", "z"]
+    a.obs.index.name = "cell_id"
+    mgr._persist_dataset("ds1", "clash", a, [])
+    back = ad.read_h5ad(data_dir / "ingested" / "ds1" / "clash.h5ad")
+    assert list(back.obs_names) == ["c0", "c1", "c2"]
+    assert list(back.obs["cell_id"]) == ["x", "y", "z"]
+
+
+def test_persist_failure_is_a_commit_error_and_leaves_nothing(mgr, data_dir, monkeypatch):
+    def boom(self, *args, **kwargs):
+        raise ValueError("disk full")
+
+    monkeypatch.setattr(ad.AnnData, "write_h5ad", boom)
+    a = ad.AnnData(X=np.ones((2, 2), dtype="float32"))
+    with pytest.raises(IngestCommitError, match="could not be saved: disk full"):
+        mgr._persist_dataset("ds2", "broken", a, [])
+    assert not (data_dir / "uploads" / "ds2").exists()
+    assert not (data_dir / "ingested" / "ds2").exists()
+
+
 # ---------------------------------------------------------------------------
 # TTL sweep
 # ---------------------------------------------------------------------------

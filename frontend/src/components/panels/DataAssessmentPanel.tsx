@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
-import { apiFetch, BACKEND_DOWN_MESSAGE, readError } from "@/api/client";
+import { apiFetch, BACKEND_DOWN_MESSAGE } from "@/api/client";
 import { getDataset } from "@/api/datasets";
 import { getDoublets, type DoubletRateSuggestion, type FilterThresholds, type QcThresholdMode } from "@/api/qc";
 import { pct } from "@/lib/qcThresholds";
@@ -16,8 +16,12 @@ import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfiden
 import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCrosscheckCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
+import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
+import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { QcStates } from "@/components/qc/QcStates";
+import { CancelRunButton, RunOutcome, RunPeakMemory, RunWatchNotes } from "@/components/panels/RunWatch";
+import { cancelPipelineRun, runErrorMessage, type RunOutcomeFields, type WatchdogEvent } from "@/api/pipelineRun";
 import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
   ClipboardCheck,
@@ -82,9 +86,12 @@ interface AssessmentResponse extends PreprocessingState {
   normalization_method?: string | null;
   /** How scView last filtered it ("fixed" for runs before MAD mode); null if never. */
   qc_threshold_mode?: QcThresholdMode | null;
+  /** Its % mito rule ("global" | "per_type") and per-type column; null if never filtered. */
+  qc_mito_mode?: string | null;
+  qc_mito_type_column?: string | null;
 }
 
-interface PipelineResult {
+interface PipelineResult extends RunOutcomeFields {
   steps_run: string[];
   steps_skipped: string[];
   errors: Record<string, string>;
@@ -93,6 +100,8 @@ interface PipelineResult {
   elapsed_seconds: number;
   output_path: string | null;
 }
+
+const stepLabel = (step: string) => STEP_ORDER.find((s) => s.key === step)?.label ?? step;
 
 interface LLMSuggestion {
   step: string;
@@ -262,6 +271,8 @@ export function filterThresholds(set: Record<string, unknown> | undefined): Filt
     qc_mad_k_mt: Number(value("qc_mad_k_mt")),
     qc_mad_upper: Boolean(value("qc_mad_upper")),
     qc_sample_column: String(value("qc_sample_column") ?? ""),
+    qc_mito_mode: set?.qc_mito_mode === "per_type" ? "per_type" : "global",
+    qc_mito_type_column: String(set?.qc_mito_type_column ?? ""),
   };
 }
 
@@ -410,6 +421,10 @@ export function DataAssessmentPanel() {
   const [runProgress, setRunProgress] = useState<{ current: number; total: number } | null>(null);
   const [completedRunSteps, setCompletedRunSteps] = useState<Set<string>>(new Set());
   const [substep, setSubstep] = useState<{ message: string; current: number; total: number } | null>(null);
+  // The run watchdog's latest warnings (backend core/run_watchdog.py), and a requested cancel.
+  const [memoryNote, setMemoryNote] = useState<WatchdogEvent | null>(null);
+  const [slowNote, setSlowNote] = useState<WatchdogEvent | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState<AdvisorResponse | null>(null);
@@ -499,6 +514,13 @@ export function DataAssessmentPanel() {
           prev.filtering?.qc_threshold_mode
             ? prev
             : { ...prev, filtering: { ...prev.filtering, qc_threshold_mode: filteredWith } },
+        );
+      }
+      // And per-type % mito bounds, also when they came later (a re-filter): unless chosen.
+      const mito = recordedMitoParams(data);
+      if (mito.qc_mito_mode) {
+        setStepParams((prev) =>
+          prev.filtering?.qc_mito_mode ? prev : { ...prev, filtering: { ...prev.filtering, ...mito } },
         );
       }
       // Auto-select all missing steps
@@ -640,6 +662,9 @@ export function DataAssessmentPanel() {
     setRunProgress(null);
     setCompletedRunSteps(new Set());
     setSubstep(null);
+    setMemoryNote(null);
+    setSlowNote(null);
+    setCancelling(false);
     setError(null);
 
     try {
@@ -652,16 +677,16 @@ export function DataAssessmentPanel() {
         }
       );
 
-      if (!res.ok) {
-        const errText = await readError(res);
-        throw new Error(`API error ${res.status}: ${errText}`);
-      }
+      if (!res.ok) throw new Error(await runErrorMessage(res));
 
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No response stream");
 
       const decoder = new TextDecoder();
       let buffer = "";
+      // Outside the read loop: an event's "event:" and "data:" lines can arrive in two chunks.
+      let currentEvent = "";
+      let final: PipelineResult | null = null;
 
       while (true) {
         // A stream cut mid-run is a backend that stopped, often out of memory.
@@ -675,7 +700,6 @@ export function DataAssessmentPanel() {
         // Keep the last partial line in the buffer
         buffer = lines.pop() ?? "";
 
-        let currentEvent = "";
         for (const line of lines) {
           if (line.startsWith("event: ")) {
             currentEvent = line.slice(7).trim();
@@ -685,6 +709,11 @@ export function DataAssessmentPanel() {
               setRunningStep(data.step);
               setRunProgress({ current: data.index, total: data.total });
               setSubstep(null);
+              setSlowNote(null);
+            } else if (currentEvent === "watchdog") {
+              const w = data as WatchdogEvent;
+              if (w.kind === "memory") setMemoryNote(w);
+              else setSlowNote(w);
             } else if (currentEvent === "step_done") {
               setCompletedRunSteps((prev) => new Set(prev).add(data.step));
               setRunProgress({ current: data.index + 1, total: data.total });
@@ -695,7 +724,8 @@ export function DataAssessmentPanel() {
               setCompletedRunSteps((prev) => new Set(prev).add(data.step));
               setSubstep(null);
             } else if (currentEvent === "complete") {
-              setRunResult(data as PipelineResult);
+              final = data as PipelineResult;
+              setRunResult(final);
               setSubstep(null);
             } else if (currentEvent === "error") {
               throw new Error(data.error);
@@ -708,6 +738,8 @@ export function DataAssessmentPanel() {
       setRunningStep(null);
       // Keep runProgress alive so the completed bar stays visible
       await fetchAssessment();
+      // fetchAssessment clears the result (for a newly opened dataset); keep this run's.
+      if (final) setRunResult(final);
       setQcRefreshKey((k) => k + 1); // refresh QC plots (new metrics, post-filter counts)
       // Refresh dataset metadata
       try {
@@ -727,8 +759,22 @@ export function DataAssessmentPanel() {
       setPipelineRunning(false);
       setRunning(false);
       setRunningStep(null);
+      setCancelling(false);
       // Note: runProgress is intentionally kept so the completed bar remains
       // visible until the next run starts (cleared in runSteps initialisation).
+    }
+  };
+
+  /* ---- Cancel the run in progress (it stops before its next step, saving nothing) ---- */
+  const cancelRun = async () => {
+    if (!datasetId) return;
+    setCancelling(true);
+    try {
+      await cancelPipelineRun(datasetId);
+    } catch (e: unknown) {
+      setCancelling(false);
+      const msg = e instanceof Error ? e.message : "Cancel failed";
+      if (!msg.includes("404")) setError(msg); // 404: the run had already ended
     }
   };
 
@@ -747,6 +793,10 @@ export function DataAssessmentPanel() {
     const target = (params.annotation_target as string) || "cell_type";
     useSettingsStore.getState().setColorBy(target);
   };
+
+  /* ---- Derived: how the last run ended (cancelled / stopped = halted) ---- */
+  const finished = !!runResult && !running;
+  const halted = finished && (runResult.status ?? "complete") !== "complete";
 
   /* ---- Derived: re-run count ---- */
   const rerunCount = state
@@ -911,6 +961,16 @@ export function DataAssessmentPanel() {
                 {suggesting ? "Thinking..." : "Get AI Suggestions"}
               </button>
             </div>
+            {/* Memory and time the selected steps need, against what scView has free */}
+            {!running && (
+              <div className="mt-2">
+                <PreflightRunNote
+                  datasetId={datasetId}
+                  steps={STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key)}
+                  params={flattenStepParams(STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key), stepParams)}
+                />
+              </div>
+            )}
             {/* Select/Deselect links */}
             {missingCount > 0 && (
               <div className="mt-2 flex gap-3 text-xs">
@@ -945,33 +1005,41 @@ export function DataAssessmentPanel() {
 
           {/* Pipeline progress bar — visible while running or just completed */}
           {(running || runResult) && runProgress && (
-            <div className={`rounded-xl border p-4 ${runResult && !running ? "border-emerald-200 bg-emerald-50" : "border-blue-200 bg-blue-50"}`}>
-              {/* Header row: step counter + percentage */}
-              <div className="mb-2 flex items-center justify-between text-sm">
-                <span className={`font-medium ${runResult && !running ? "text-emerald-800" : "text-blue-800"}`}>
-                  {runResult && !running ? (
+            <div className={`rounded-xl border p-4 ${finished ? (halted ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50") : "border-blue-200 bg-blue-50"}`}>
+              {/* Header row: step counter + percentage (+ Cancel while running) */}
+              <div className="mb-2 flex items-center justify-between gap-2 text-sm">
+                <span className={`font-medium ${finished ? (halted ? "text-amber-800" : "text-emerald-800") : "text-blue-800"}`}>
+                  {finished && halted ? (
+                    <>
+                      {runResult!.status === "cancelled" ? "Cancelled" : "Stopped"}: {runResult!.steps_run.length} of{" "}
+                      {runProgress.total} step{runProgress.total !== 1 ? "s" : ""} finished
+                    </>
+                  ) : finished ? (
                     <>All {runProgress.total} step{runProgress.total !== 1 ? "s" : ""} complete</>
                   ) : runningStep ? (
                     <>
                       Step {runProgress.current + 1}/{runProgress.total}
                       {": "}
-                      {STEP_ORDER.find((s) => s.key === runningStep)?.label ?? runningStep}
+                      {stepLabel(runningStep)}
                     </>
                   ) : (
                     <>Step {runProgress.current}/{runProgress.total}</>
                   )}
                 </span>
-                <span className={`text-xs font-medium ${runResult && !running ? "text-emerald-600" : "text-blue-600"}`}>
-                  {runResult && !running
-                    ? "100%"
-                    : `${Math.round((runProgress.current / runProgress.total) * 100)}%`}
+                <span className="flex items-center gap-2">
+                  {running && <CancelRunButton onCancel={cancelRun} cancelling={cancelling} />}
+                  <span className={`text-xs font-medium ${finished ? (halted ? "text-amber-600" : "text-emerald-600") : "text-blue-600"}`}>
+                    {finished && !halted
+                      ? "100%"
+                      : `${Math.round((runProgress.current / runProgress.total) * 100)}%`}
+                  </span>
                 </span>
               </div>
 
               {/* Segmented progress bar */}
               <div className="flex gap-1">
                 {Array.from({ length: runProgress.total }, (_, i) => {
-                  const isDone = i < runProgress.current || (runResult && !running);
+                  const isDone = i < runProgress.current || (finished && !halted);
                   const isActive = i === runProgress.current && !!runningStep && running;
                   return (
                     <div
@@ -1012,6 +1080,17 @@ export function DataAssessmentPanel() {
                 </div>
               )}
 
+              {/* The watchdog's warnings, and what a requested cancel waits for */}
+              {running && (
+                <RunWatchNotes
+                  memory={memoryNote}
+                  slow={slowNote}
+                  cancelling={cancelling}
+                  runningStep={runningStep}
+                  label={stepLabel}
+                />
+              )}
+
               {/* Step labels (only when ≤ 13 steps so they fit) */}
               {runProgress.total <= 13 && (
                 <div className="mt-2 flex gap-1">
@@ -1019,7 +1098,7 @@ export function DataAssessmentPanel() {
                     .filter((s) => selectedSteps.has(s.key) || completedRunSteps.has(s.key))
                     .slice(0, runProgress.total)
                     .map((s) => {
-                      const isDone = completedRunSteps.has(s.key) || (!running && !!runResult);
+                      const isDone = completedRunSteps.has(s.key) || (finished && !halted);
                       const isActive = s.key === runningStep && running;
                       return (
                         <div key={s.key} className="min-w-0 flex-1 text-center">
@@ -1043,12 +1122,16 @@ export function DataAssessmentPanel() {
             </div>
           )}
 
+          {/* A run cancelled, or stopped before a step: why, and what finished */}
+          {runResult && halted && <RunOutcome result={runResult} label={stepLabel} />}
+
           {/* Pipeline run result */}
-          {runResult && (
+          {runResult && !halted && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
               <p className="font-medium">
                 Pipeline completed in {runResult.elapsed_seconds}s
               </p>
+              <RunPeakMemory result={runResult} />
               {runResult.steps_run.length > 0 && (
                 <p className="mt-1">
                   Steps run: {runResult.steps_run.join(", ")}
@@ -1371,6 +1454,9 @@ export function DataAssessmentPanel() {
                                 );
                               })}
                             </div>
+                            {step.key === "filtering" && (
+                              <MitoModeControl datasetId={datasetId} values={filterValues} onChange={running ? undefined : setFilter} />
+                            )}
                           </div>
                         )}
                         {/* AI suggestion for this step */}
@@ -1440,7 +1526,17 @@ export function DataAssessmentPanel() {
               filter={qcFilter}
             />
           )}
-          {datasetId && <MitoByType datasetId={datasetId} refreshKey={qcRefreshKey} />}
+          {datasetId && (
+            <MitoByType
+              datasetId={datasetId}
+              refreshKey={qcRefreshKey}
+              onRefiltered={() => {
+                void fetchAssessment();
+                setQcRefreshKey((k) => k + 1);
+                queryClient.invalidateQueries({ queryKey: ["embedding", datasetId] });
+              }}
+            />
+          )}
           {datasetId && <QcStates datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <MeanVariancePlot datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <PcaDiagnostics datasetId={datasetId} refreshKey={qcRefreshKey} />}

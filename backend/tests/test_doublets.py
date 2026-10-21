@@ -297,3 +297,24 @@ async def test_post_without_scores_is_refused(client, dataset_manager):
     did = _register(dataset_manager, _sized({"a": 20, "b": 20}))
     r = await client.post(f"{API}/datasets/{did}/qc/doublets/threshold", json={"threshold": 0.2})
     assert r.status_code == 400 and "doublet detection" in r.json()["detail"]
+
+
+def test_on_a_processed_dataset_scrublet_scores_the_counts_layer():
+    # Run alone on a processed dataset, Scrublet used to get the scaled X
+    # (negative, non-integer): it filled the backend's memory and failed on NaNs.
+    a = _counts()
+    counts = a.X.copy()
+    a.layers["counts"] = counts.copy()
+    a.X = (a.X - a.X.mean(axis=0)) / (a.X.std(axis=0) + 1)  # a scaled X
+    scaled = a.X.copy()
+    found = pl._run_doublet_detection(a, pl.PipelineParams())
+    assert found["input"] == "layers['counts']"
+    assert np.isfinite(a.obs["doublet_score"]).all() and "predicted_doublet" in a.obs
+    assert np.array_equal(a.X, scaled) and np.array_equal(a.layers["counts"], counts)
+
+
+def test_without_counts_anywhere_the_step_is_skipped_with_the_reason():
+    a = _counts()
+    a.X = a.X / 3.7 - 1.0
+    with pytest.raises(pl.StepSkipped, match="needs raw counts"):
+        pl._run_doublet_detection(a, pl.PipelineParams())

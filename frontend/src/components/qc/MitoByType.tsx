@@ -3,6 +3,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, Loader2 } from "lucide-react"
 import { getMitoByType, type MitoByType as Report, type TypeMito } from "@/api/mitoByType";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { MitoRefilter } from "@/components/qc/MitoRefilter";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 const MAX_GROUPS = 200;
@@ -50,7 +51,7 @@ function CeilingInput({ value, onCommit }: { value: string; onCommit: (v: string
   );
 }
 
-function Row({ t }: { t: TypeMito }) {
+function Row({ t, applied, filtered }: { t: TypeMito; applied: boolean; filtered: boolean }) {
   const tone = t.damaged ? "bg-red-50/50" : t.flagged ? "bg-amber-50/60" : "";
   return (
     <tr className={`border-t border-slate-100 ${tone}`} data-testid={`mito-row-${t.group}`}>
@@ -80,14 +81,37 @@ function Row({ t }: { t: TypeMito }) {
         {removed(t.removed_global, t.removed_global_frac)}
       </td>
       <td className="px-2 py-1 text-right tabular-nums">{removed(t.removed_bound, t.removed_bound_frac)}</td>
+      {filtered && (
+        <td
+          className={`px-2 py-1 text-right tabular-nums ${t.flagged && (t.removed_filter_frac ?? 0) > t.removed_global_frac ? "font-medium text-amber-800" : ""}`}
+        >
+          {removed(t.removed_filter ?? null, t.removed_filter_frac ?? null)}
+        </td>
+      )}
+      {applied && (
+        <td className="px-2 py-1 text-right tabular-nums">
+          {t.applied_rule === "own" ? pctText(t.applied_bound) : t.applied_rule ? <span className="text-slate-400">global</span> : "—"}
+        </td>
+      )}
     </tr>
   );
 }
 
-/** % mito per cell type against one global ceiling: which types the ceiling cuts hard,
- *  and what each type's own bound (median + 3 MADs) would remove instead. Advisory:
- *  the filtering step is unchanged. Collapsed to one line when no type is flagged. */
-export function MitoByType({ datasetId, refreshKey = 0 }: { datasetId: string; refreshKey?: number }) {
+/** % mito per cell type against one global ceiling: which types the ceiling (or, after
+ *  filtering, the rule it used) cuts hard, and what each type's own bound (median + 3
+ *  MADs) would remove instead. A dataset filtered per type is shown with the bound each
+ *  type had. When filtering cut a type hard, "Re-filter" applies the bounds from the
+ *  original upload. Collapsed to one line when no type is flagged. */
+export function MitoByType({
+  datasetId,
+  refreshKey = 0,
+  onRefiltered,
+}: {
+  datasetId: string;
+  refreshKey?: number;
+  /** After a re-filter saved a new dataset (the panel reloads its views). */
+  onRefiltered?: () => void;
+}) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const [column, setColumn] = useState("");
   const [ceiling, setCeiling] = useState("");
@@ -95,11 +119,14 @@ export function MitoByType({ datasetId, refreshKey = 0 }: { datasetId: string; r
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<boolean | null>(null); // null = follow the flags
+  // What the last re-filter did: kept here, as the action goes once nothing is flagged.
+  const [refiltered, setRefiltered] = useState<string | null>(null);
 
   useEffect(() => {
     setColumn("");
     setCeiling("");
     setData(null);
+    setRefiltered(null);
   }, [datasetId]);
 
   useEffect(() => {
@@ -133,15 +160,20 @@ export function MitoByType({ datasetId, refreshKey = 0 }: { datasetId: string; r
   const types = data?.types ?? [];
   const damaged = types.filter((t) => t.damaged);
   const expanded = open ?? ((data?.n_flagged ?? 0) > 0 || damaged.length > 0);
+  const perType = data?.filter_mito_mode === "per_type" && types.some((t) => t.applied_rule);
+  const filtered = types.some((t) => t.removed_filter !== null && t.removed_filter !== undefined);
   const headline = !data
     ? null
     : !data.column
       ? data.note
       : !data.measurable
         ? "% mito not measurable"
-        : data.n_flagged
-          ? `${data.n_flagged} of ${types.length} types cut hard by the ${pctText(data.ceiling)} ceiling`
-          : `The ${pctText(data.ceiling)} ceiling suits every type (${types.length} types)`;
+        : perType && data.ceiling_source !== "requested"
+          ? `Filtered with per-type bounds (${types.filter((t) => t.applied_rule === "own").length} of ${types.length} types)` +
+            (data.n_flagged ? `; ${data.n_flagged} cut hard by the global rule` : "")
+          : data.n_flagged
+            ? `${data.n_flagged} of ${types.length} types cut hard by ${filtered ? "filtering" : `the ${pctText(data.ceiling)} ceiling`}`
+            : `The ${pctText(data.ceiling)} ceiling suits every type (${types.length} types)`;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3" data-testid="mito-by-type">
@@ -158,8 +190,8 @@ export function MitoByType({ datasetId, refreshKey = 0 }: { datasetId: string; r
         <InfoTip label="About per-type mito bounds" width={300}>
           Cell types differ in their normal mitochondrial share, so one % mito ceiling can remove most
           cells of a type with a high baseline and few of another. Each type&apos;s own bound here is its
-          median + 3 MADs. Advisory: the filtering step still uses one ceiling.{" "}
-          {data?.citations ?? ""}
+          median + 3 MADs. The filtering step applies them when &quot;% mito: Per cell type&quot; is chosen; on a
+          dataset already filtered, Re-filter applies them from the original upload. {data?.citations ?? ""}
         </InfoTip>
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />
@@ -185,6 +217,12 @@ export function MitoByType({ datasetId, refreshKey = 0 }: { datasetId: string; r
         )}
       </div>
 
+      {refiltered && (
+        <p className="mt-1 text-[11px] text-emerald-700" data-testid="mito-refiltered">
+          {refiltered}
+        </p>
+      )}
+
       {expanded && data?.column && !data.measurable && (
         <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">{data.note}</p>
       )}
@@ -203,11 +241,24 @@ export function MitoByType({ datasetId, refreshKey = 0 }: { datasetId: string; r
                   <th className="px-2 py-1 text-right font-medium" title={`The type's own bound: median + ${data.mad_k} MADs. None for fewer than ${data.min_cells} cells, no spread, or a type that looks damaged`}>Own bound</th>
                   <th className="px-2 py-1 text-right font-medium" title={`Cells above the global ${pctText(data.ceiling)} ceiling (${SOURCE_TEXT[data.ceiling_source ?? "default"]})`}>Removed at {pctText(data.ceiling)}</th>
                   <th className="px-2 py-1 text-right font-medium" title="Cells above the type's own bound (median + 3 MADs)">Removed by own bound</th>
+                  {filtered && (
+                    <th
+                      className="px-2 py-1 text-right font-medium"
+                      title="Cells the filtering step's % mito rule actually removed, from its record. In MAD mode each sample's bound (median + 3 MADs) can sit well below the ceiling, so this can exceed the ceiling's count"
+                    >
+                      Removed by filtering
+                    </th>
+                  )}
+                  {perType && (
+                    <th className="px-2 py-1 text-right font-medium" title="The % mito bound the per-type filtering judged the type by; 'global' when it kept the global rule">
+                      Filtered at
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {types.map((t) => (
-                  <Row key={t.group} t={t} />
+                  <Row key={t.group} t={t} applied={perType} filtered={filtered} />
                 ))}
               </tbody>
             </table>
@@ -234,9 +285,33 @@ export function MitoByType({ datasetId, refreshKey = 0 }: { datasetId: string; r
           >
             % mito per {data.reason === "cell type" ? "author cell type" : "group"}, against the{" "}
             {pctText(data.ceiling)} ceiling from {SOURCE_TEXT[data.ceiling_source ?? "default"]}. {data.rule} A type&apos;s
-            own bound can be stricter than the ceiling; it assumes the type&apos;s typical cell is healthy.
-            Advisory: filtering is unchanged.{data.note ? ` ${data.note}` : ""}
+            own bound can be stricter than the ceiling; it assumes the type&apos;s typical cell is healthy.{" "}
+            {perType
+              ? `Filtered with per-type bounds on '${data.filter_type_column ?? data.column}'.`
+              : data.already_filtered
+                ? "Filtered with one global rule."
+                : "Not filtered by scView yet."}
+            {data.note ? ` ${data.note}` : ""}
           </Caption>
+          {/* Filtered per type on this column already: a type still flagged kept the global
+              rule (too few cells, no spread), which filtering again would not change. */}
+          {data.n_flagged > 0 && data.already_filtered && data.column && !perType && (
+            <MitoRefilter
+              datasetId={datasetId}
+              column={data.column}
+              perCluster={data.reason === "clustering" || data.column.startsWith("scview_")}
+              onDone={(message) => {
+                setRefiltered(message);
+                onRefiltered?.();
+              }}
+            />
+          )}
+          {data.n_flagged > 0 && !data.already_filtered && (
+            <p className="text-[11px] text-slate-600" data-testid="mito-per-type-hint">
+              Not filtered yet: choose &quot;% mito: Per cell type&quot; in the Cell/Gene Filtering step to apply
+              these bounds when it runs.
+            </p>
+          )}
         </div>
       )}
     </div>

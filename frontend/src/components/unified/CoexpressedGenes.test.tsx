@@ -72,6 +72,17 @@ describe("CoexpressedGenes", () => {
     expect(rowsOf("negative co-expressed genes")[0]).toContain("-0.453");
   });
 
+  it("says when the cells were sampled down to the cap", async () => {
+    fetchCoexpression.mockResolvedValue({
+      ...RESULT, n_cells: 20000, n_cells_total: 37104, n_cells_chosen: 37104, capped: true,
+    });
+    renderIt();
+    fireEvent.click(screen.getByRole("button", { name: /Find genes/ }));
+    const note = await screen.findByText("a random sample of 20,000 of the 37,104 cells");
+    expect(note.getAttribute("title")).toMatch(/at most this many cells/);
+    expect(screen.queryByText(/over 20,000 cells/)).toBeNull();
+  });
+
   it("overlays a clicked gene", async () => {
     renderIt();
     fireEvent.click(screen.getByRole("button", { name: /Find genes/ }));

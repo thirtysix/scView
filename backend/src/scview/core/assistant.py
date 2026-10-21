@@ -41,6 +41,7 @@ from scview.core import (
 )
 from scview.core import mito_by_type
 from scview.core import qc_states
+from scview.core import embedding_reliability
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -171,6 +172,20 @@ def _add_qc_states(adaptor, lines: list[str], sources: list[ChatSource]) -> None
         lines.extend(st_lines)
         sources.append(ChatSource(kind="result", ref=qc_states.TAG, detail=st_detail,
                                   evidence="\n".join(st_lines[1:])))
+
+
+def _add_embedding_reliability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Per-cell neighbour preservation of a plot (core/embedding_reliability.py),
+    only once it has been computed for this dataset."""
+    try:
+        er_lines, er_detail = embedding_reliability.grounding_lines(adaptor)
+    except Exception as exc:  # a relabelled column with too many groups, ...: no fact
+        logger.debug("assistant: embedding reliability failed: %s", exc)
+        return
+    if er_lines:
+        lines.extend(er_lines)
+        sources.append(ChatSource(kind="result", ref=embedding_reliability.TAG, detail=er_detail,
+                                  evidence="\n".join(er_lines)))
 
 
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -431,6 +446,8 @@ def build_grounding_context(
                                           evidence="\n".join(pca_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: PCA grounding failed: %s", exc)
+    if want("qc") or want("groups"):
+        _add_embedding_reliability(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []
@@ -622,7 +639,7 @@ _MT_COL_RE = re.compile(r"pct_counts_mt|percent[._]?mt|pct_counts_mito|percent[.
 
 
 def _looks_like_celltype_col(name: str) -> bool:
-    n = name.lower()
+    n = name.lower().replace(" ", "_").replace(".", "_").replace("-", "_")  # "Cell type", R's cell.type
     return "celltype" in n or "cell_type" in n or name.endswith(_ANNO_SUFFIX)
 
 

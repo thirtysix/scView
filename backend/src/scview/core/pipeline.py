@@ -7,8 +7,10 @@ then saves the result to disk.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -31,6 +33,7 @@ from scview.core import (
     qc_filter,
     stress,
 )
+from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.cell_cycle import near_zero_phase_calls
 from scview.core.llm import chat_extra
@@ -78,6 +81,10 @@ class PipelineParams:
     min_cells: int = 3
     # Used only when % mito can be measured (MT- genes); a ceiling in MAD mode.
     max_pct_mt: float = 20.0
+    # "global": the rule above for every cell; "per_type": each cell type's own bound
+    # (median + qc_mad_k_mt MADs) instead, for types that can have one (core/qc_filter.py).
+    qc_mito_mode: str = "global"
+    qc_mito_type_column: str = ""  # per_type: the cell types (empty = mito_by_type's choice)
     drop_doublets: bool = False  # drop cells flagged by doublet detection (opt-in)
 
     # Doublet detection
@@ -150,6 +157,15 @@ class PipelineResult:
     notes: dict[str, str] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
     output_path: str | None = None
+    # "complete" (ran to the end, errors or not) | "stopped" (the pre-step check
+    # stopped it before a step) | "cancelled"; neither of the last two saves
+    # anything. See core/run_watchdog.py.
+    status: str = "complete"
+    stop_reason: str | None = None
+    # Requested names that are not steps (the run endpoints refuse these with 422).
+    unknown_steps: list[str] = field(default_factory=list)
+    # What the run used (RunWatchdog.summary + write_s), when it was watched.
+    resources: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -231,8 +247,9 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
     for key in multi_keys:
         del adata.uns[key]
 
-    # Remove scview-generated obs columns
-    scview_cols = [c for c in adata.obs.columns if c.startswith("scview_")]
+    # Remove scview-generated obs columns, except the cell types a per-type % mito
+    # filter judges by (core/mito_refilter.py): an input to filtering, not a result.
+    scview_cols = [c for c in adata.obs.columns if c.startswith("scview_") and c != "scview_mito_type"]
     if scview_cols:
         adata.obs.drop(columns=scview_cols, inplace=True, errors="ignore")
 
@@ -249,6 +266,24 @@ def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> None:
         int(adata.obs["n_genes_by_counts"].median()),
         int(adata.obs["total_counts"].median()),
     )
+
+
+def _holds_processed_values(M) -> bool:
+    """Values that are not counts (negative or fractional); an empty matrix is not."""
+    if sp.issparse(M):
+        has = M.nnz > 0
+    else:
+        has = bool(np.any(np.asarray(M).ravel()[:_COUNTS_SAMPLE * 4]))
+    return has and not looks_like_counts(M)
+
+
+def _doublet_counts(adata: ad.AnnData):
+    """(matrix, gene names, where from) of the counts beside a processed X, or None."""
+    if "counts" in adata.layers and looks_like_counts(adata.layers["counts"]):
+        return adata.layers["counts"], adata.var_names, "layers['counts']"
+    if adata.raw is not None and looks_like_counts(adata.raw.X):
+        return adata.raw.X, adata.raw.var_names, ".raw"
+    return None
 
 
 def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
@@ -275,8 +310,24 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
                  "expected_rate_from": suggestion["column"] or "all cells (no sample column)"}
     exact = adata.n_obs <= doublets.EXACT_KNN_MAX_CELLS
     found["neighbors"] = "exact" if exact else "approximate"
-    sc.pp.scrublet(adata, expected_doublet_rate=found["expected_doublet_rate"],
+    target = adata
+    if _holds_processed_values(adata.X):
+        # Run alone on a processed dataset, X is scaled: Scrublet then filled a 6 GB
+        # backend and failed ("Bin edges must be unique: nan"). Score the counts.
+        counts = _doublet_counts(adata)
+        if counts is None:
+            raise StepSkipped("Doublet detection needs raw counts: X holds processed values and "
+                              "there is no counts layer or counts in .raw.")
+        M, names, found["input"] = counts
+        # Scrublet copies its input, so sharing the dataset's counts here is safe.
+        target = ad.AnnData(X=M, obs=pd.DataFrame(index=adata.obs_names),
+                            var=pd.DataFrame(index=names))
+    sc.pp.scrublet(target, expected_doublet_rate=found["expected_doublet_rate"],
                    use_approx_neighbors=not exact)
+    if target is not adata:
+        for col in ("doublet_score", "predicted_doublet"):
+            adata.obs[col] = target.obs[col].to_numpy()
+        adata.uns["scrublet"] = target.uns["scrublet"]
     doublets.clear_threshold(adata)  # set on the previous run's scores
     n_dbl = (
         int(adata.obs["predicted_doublet"].sum())
@@ -305,14 +356,17 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     The cells removed are recorded in ``uns[qc_filter.RECORD_KEY]`` (their QC
     values and labels), so the Data Assessment audit can show who was removed
     after they are gone.
+
+    With ``qc_mito_mode`` "per_type" each cell type's own % mito bound replaces
+    the global rule for its cells (``qc_mito_types``: every type's rule and loss).
     """
     n_before = adata.n_obs
     t = qc_filter.Thresholds.from_params(params)
     samples = qc_filter.samples_of(adata, params.qc_sample_column or None)
     cells = per_cell_qc(adata)
-    removed, bounds = qc_filter.judge(adata, cells, t, samples)
+    removed, bounds, types = qc_filter.judge_types(adata, cells, t, samples)
     keep = qc_filter.keep_mask(removed, n_before)
-    record = qc_filter.removal_record(adata, cells, removed, ~keep, t, samples.column)
+    record = qc_filter.removal_record(adata, cells, removed, ~keep, t, samples.column, types=types)
     for name, mask in removed.items():
         logger.info("Filtering: %s removes %d cells on its own", name, int(mask.sum()))
     # Only the params this mode used, so the record says what was applied.
@@ -321,6 +375,13 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     found: dict[str, Any] = {k: getattr(params, k) for k in used}
     if bounds is not None:
         found["qc_thresholds"] = bounds.to_dict(~keep)
+    if t.mito_mode == "per_type":  # a global run records what it always did
+        found.update(qc_mito_mode="per_type", qc_mad_k_mt=params.qc_mad_k_mt)
+        if types is not None:
+            found.update(qc_mito_type_column=types.column, qc_mito_types=types.to_dict())
+        else:
+            found.update(qc_mito_type_column=params.qc_mito_type_column,
+                         qc_mito_note="% mito can't be measured (no MT- genes): no per-type bounds.")
     if not keep.all():
         adata = adata[keep, :].copy()
     adata.uns[qc_filter.RECORD_KEY] = record
@@ -1449,12 +1510,15 @@ _PEARSON_TOOLS = {
 
 
 def _record_pipeline_step(
-    adata: ad.AnnData, step_name: str, params: PipelineParams, ret: Any = None
+    adata: ad.AnnData, step_name: str, params: PipelineParams, ret: Any = None,
+    resources: dict[str, Any] | None = None,
 ) -> None:
     """Append a provenance entry for a completed step. Never raises.
 
     A runner that returns a dict adds it to the recorded params: what the step
-    found rather than was told (the species, how many signature genes it had)."""
+    found rather than was told (the species, how many signature genes it had).
+    ``resources`` (the step's seconds and sampled peak memory, from a watched
+    run) is kept beside the params, not in them, so replay ignores it."""
     tool, keys = _STEP_PROVENANCE.get(step_name, (f"scview.{step_name}", ()))
     if params.normalization_method == "pearson_residuals":
         tool = _PEARSON_TOOLS.get(step_name, tool)
@@ -1462,7 +1526,8 @@ def _record_pipeline_step(
         recorded = {k: getattr(params, k) for k in keys}
         if isinstance(ret, dict):
             recorded.update(ret)
-        provenance.record_step(adata, step=step_name, tool=tool, params=recorded)
+        provenance.record_step(adata, step=step_name, tool=tool, params=recorded,
+                               resources=resources)
     except Exception as e:  # provenance must never break the pipeline
         logger.warning("Could not record provenance for step '%s': %s", step_name, e)
 
@@ -1522,11 +1587,77 @@ def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list
         logger.warning("Could not finalise provenance state: %s", e)
 
 
+def _step_scope(control: RunControl | None, step: str):
+    """Times and watches the step when the run is watched (``RunControl.step``)."""
+    return control.step(step) if control is not None else contextlib.nullcontext()
+
+
+def _step_resources(control: RunControl | None, step: str) -> dict[str, Any] | None:
+    return control.watchdog.steps.get(step) if control is not None else None
+
+
+def _unknown_requested(steps: list[str]) -> list[str]:
+    unknown = list(dict.fromkeys(s for s in steps if s not in ALL_STEPS))
+    if unknown:
+        logger.warning("Unknown steps ignored: %s", unknown)
+    return unknown
+
+
+def _halted(result: PipelineResult, halt: tuple[str, str]) -> None:
+    result.status, result.stop_reason = halt
+    logger.info("Run %s: %s", result.status, result.stop_reason)
+
+
+def _cancelled_during(result: PipelineResult, step: str) -> None:
+    _halted(result, ("cancelled", cancelled_reason("during", step)))
+
+
+def _finish_run(
+    adata: ad.AnnData,
+    params: PipelineParams,
+    result: PipelineResult,
+    t0: float,
+    output_path: str | None,
+    control: RunControl | None,
+) -> None:
+    """Finalise and save a run that reached its end. A cancelled run, or one the
+    pre-step check stopped, saves nothing: a reprocess or re-filter stopped halfway
+    would otherwise replace the dataset with a half-processed one (reset to counts,
+    not yet normalised). The dataset reopens as it was before the run.
+
+    The file is written beside the derived file and then swapped in, so a backend
+    killed mid-write (out of memory) leaves the previous file whole."""
+    if result.status == "complete" and control is not None and control.cancelled:
+        # Cancelled after the last step ended but before the save.
+        _halted(result, ("cancelled", cancelled_reason("before", "saving")))
+    save = result.status == "complete"
+    if save:
+        _finalize_current(adata, params, result.steps_run)
+    result.elapsed_seconds = round(time.time() - t0, 2)
+    write_s = None
+    if output_path and save:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        tw = time.time()
+        partial = output_path + ".partial"
+        try:
+            adata.write_h5ad(partial, compression="gzip")
+            os.replace(partial, output_path)
+        except BaseException:
+            Path(partial).unlink(missing_ok=True)
+            raise
+        write_s = round(time.time() - tw, 2)
+        result.output_path = output_path
+        logger.info("Saved processed dataset to %s", output_path)
+    if control is not None:
+        result.resources = {**control.watchdog.summary(), "write_s": write_s}
+
+
 def run_pipeline(
     adata: ad.AnnData,
     steps: list[str],
     params: PipelineParams | None = None,
     output_path: str | None = None,
+    control: RunControl | None = None,
 ) -> tuple[ad.AnnData, PipelineResult]:
     """Run a subset of preprocessing steps on the AnnData object.
 
@@ -1540,6 +1671,9 @@ def run_pipeline(
         Pipeline parameters. Defaults are used if None.
     output_path
         If provided, save the processed AnnData to this path.
+    control
+        Checked before each step (cancel, the pre-step hook) and times and
+        watches each step (``core/run_watchdog.py``). None: neither.
 
     Returns
     -------
@@ -1564,42 +1698,41 @@ def run_pipeline(
 
     # Ensure steps are in canonical order
     ordered_steps = [s for s in ALL_STEPS if s in steps]
-    skipped_requested = [s for s in steps if s not in ALL_STEPS]
-    if skipped_requested:
-        logger.warning("Unknown steps ignored: %s", skipped_requested)
+    result.unknown_steps = _unknown_requested(steps)
 
     for step_name in ordered_steps:
         runner = _STEP_RUNNERS.get(step_name)
         if runner is None:
             result.steps_skipped.append(step_name)
             continue
+        halt = control.halt_before(step_name, adata, params) if control is not None else None
+        if halt is not None:
+            _halted(result, halt)
+            break
 
         try:
             logger.info("Running step: %s", step_name)
-            ret = runner(adata, params)
+            with _step_scope(control, step_name):
+                ret = runner(adata, params)
             # Some steps return a new AnnData object
             new, ret = _new_adata(step_name, ret)
             if new is not None:
                 provenance.carry(adata, new)  # keep history across the new object
                 adata = new
             result.steps_run.append(step_name)
-            _record_pipeline_step(adata, step_name, params, ret)
+            _record_pipeline_step(adata, step_name, params, ret,
+                                  _step_resources(control, step_name))
         except StepSkipped as e:
             logger.info("Step '%s' skipped: %s", step_name, e)
             result.notes[step_name] = str(e)
         except Exception as e:
+            if control is not None and control.cancelled:  # e.g. its Leiden child was ended
+                _cancelled_during(result, step_name)
+                break
             logger.error("Step '%s' failed: %s", step_name, e)
             result.errors[step_name] = str(e)
 
-    _finalize_current(adata, params, result.steps_run)
-    result.elapsed_seconds = round(time.time() - t0, 2)
-
-    if output_path:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        adata.write_h5ad(output_path, compression="gzip")
-        result.output_path = output_path
-        logger.info("Saved processed dataset to %s", output_path)
-
+    _finish_run(adata, params, result, t0, output_path, control)
     return adata, result
 
 
@@ -1608,13 +1741,18 @@ def run_pipeline_streamed(
     steps: list[str],
     params: PipelineParams | None = None,
     output_path: str | None = None,
+    control: RunControl | None = None,
 ) -> Generator[tuple[str, dict[str, Any]], None, tuple[ad.AnnData, PipelineResult]]:
     """Run preprocessing steps, yielding progress events after each step.
+
+    ``control`` as in ``run_pipeline``; a streamed run also stops between the
+    substeps of marker genes and enrichment when cancelled.
 
     Yields
     ------
     Tuples of (event_type, event_data) where event_type is one of:
-      "step_start", "step_done", "step_error", "substep", "complete".
+      "step_start", "step_done", "step_error", "substep", "complete". The
+    "complete" data is the result, with ``status`` complete | stopped | cancelled.
     """
     if params is None:
         params = PipelineParams()
@@ -1627,6 +1765,7 @@ def run_pipeline_streamed(
 
     ordered_steps = [s for s in ALL_STEPS if s in steps]
     total = len(ordered_steps)
+    result.unknown_steps = _unknown_requested(steps)
 
     # Runners that accept a substep progress callback (3rd arg)
     _SUBSTEP_RUNNERS = {"marker_genes", "enrichment"}
@@ -1637,54 +1776,62 @@ def run_pipeline_streamed(
         if runner is None:
             result.steps_skipped.append(step_name)
             continue
+        halt = control.halt_before(step_name, adata, params) if control is not None else None
+        if halt is not None:
+            _halted(result, halt)
+            break
 
         yield ("step_start", {"step": step_name, "index": idx, "total": total})
         step_t0 = time.time()
 
         try:
-            if step_name in _SUBSTEP_RUNNERS:
-                # Run in a thread so substep events can stream in real-time
-                q: queue.Queue = queue.Queue()
-                exc_holder: list[Exception] = []
-                ret_holder: list[Any] = [None]
+            with _step_scope(control, step_name):
+                if step_name in _SUBSTEP_RUNNERS:
+                    # Run in a thread so substep events can stream in real-time
+                    q: queue.Queue = queue.Queue()
+                    exc_holder: list[Exception] = []
+                    ret_holder: list[Any] = [None]
 
-                def _substep_cb(msg: str, current: int, sub_total: int) -> None:
-                    q.put({"message": msg, "current": current, "total": sub_total})
+                    def _substep_cb(msg: str, current: int, sub_total: int) -> None:
+                        if control is not None and control.cancelled:
+                            raise RunCancelled()  # ends the step between substeps
+                        q.put({"message": msg, "current": current, "total": sub_total})
 
-                def _run_in_thread(r=runner, a=adata, p=params, cb=_substep_cb):
+                    def _run_in_thread(r=runner, a=adata, p=params, cb=_substep_cb):
+                        try:
+                            ret_holder[0] = r(a, p, cb)
+                        except Exception as e:
+                            exc_holder.append(e)
+                        finally:
+                            q.put(_SENTINEL)
+
+                    t = threading.Thread(target=_run_in_thread, daemon=True)
+                    t.start()
+
+                    # Drain substep events from the queue while thread runs. If the
+                    # consumer stops at a substep, still wait for the step's thread:
+                    # whoever runs this generator owns the dataset until it returns.
                     try:
-                        ret_holder[0] = r(a, p, cb)
-                    except Exception as e:
-                        exc_holder.append(e)
+                        while True:
+                            item = q.get()
+                            if item is _SENTINEL:
+                                break
+                            yield ("substep", {"step": step_name, **item})
                     finally:
-                        q.put(_SENTINEL)
-
-                t = threading.Thread(target=_run_in_thread, daemon=True)
-                t.start()
-
-                # Drain substep events from the queue while thread runs. If the
-                # consumer stops at a substep, still wait for the step's thread:
-                # whoever runs this generator owns the dataset until it returns.
-                try:
-                    while True:
-                        item = q.get()
-                        if item is _SENTINEL:
-                            break
-                        yield ("substep", {"step": step_name, **item})
-                finally:
-                    t.join()
-                if exc_holder:
-                    raise exc_holder[0]
-                ret = ret_holder[0]
-            else:
-                ret = runner(adata, params)
+                        t.join()
+                    if exc_holder:
+                        raise exc_holder[0]
+                    ret = ret_holder[0]
+                else:
+                    ret = runner(adata, params)
 
             new, ret = _new_adata(step_name, ret)
             if new is not None:
                 provenance.carry(adata, new)  # keep history across the new object
                 adata = new
             result.steps_run.append(step_name)
-            _record_pipeline_step(adata, step_name, params, ret)
+            _record_pipeline_step(adata, step_name, params, ret,
+                                  _step_resources(control, step_name))
             elapsed = round(time.time() - step_t0, 2)
             yield ("step_done", {"step": step_name, "index": idx, "elapsed": elapsed})
         except StepSkipped as e:
@@ -1693,18 +1840,14 @@ def run_pipeline_streamed(
             yield ("step_done", {"step": step_name, "index": idx, "skipped": True,
                                  "note": str(e), "elapsed": round(time.time() - step_t0, 2)})
         except Exception as e:
+            if control is not None and control.cancelled:  # its Leiden child ended, or a substep
+                _cancelled_during(result, step_name)
+                break
             logger.error("Step '%s' failed: %s", step_name, e)
             result.errors[step_name] = str(e)
             yield ("step_error", {"step": step_name, "index": idx, "error": str(e)})
 
-    _finalize_current(adata, params, result.steps_run)
-    result.elapsed_seconds = round(time.time() - t0, 2)
-
-    if output_path:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        adata.write_h5ad(output_path, compression="gzip")
-        result.output_path = output_path
-
+    _finish_run(adata, params, result, t0, output_path, control)
     yield ("complete", result.to_dict())
 
     return adata, result

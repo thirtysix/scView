@@ -224,3 +224,105 @@ def test_after_filtering_the_record_adds_the_removed_cells_back():
     stale = kept[:-1].copy()  # a cell removed since: the record no longer adds up
     sc = {k: (v[:-1] if isinstance(v, np.ndarray) else v) for k, v in kc.items()}
     assert mbt.mito_by_type(stale, cells=sc, ceiling=10.0).includes_removed == 0
+
+
+# --- reading the filtering the dataset had ----------------------------------------
+
+
+def _obs_cells(seed: int = 3) -> ad.AnnData:
+    """QC values in obs: CAF-like (300 cells, ~3 % mito), T-like (100, ~4 %) and
+    LNCaP-like (100, ~12 %); counts and genes alike, so only % mito removes anything."""
+    rng = np.random.default_rng(seed)
+    pct = np.concatenate([rng.normal(3.0, 1.0, 300), rng.normal(4.0, 1.0, 100),
+                          rng.normal(12.0, 1.5, 100)]).clip(0.1)
+    n = pct.size
+    obs = pd.DataFrame({"total_counts": 2000.0, "n_genes_by_counts": 800.0, "pct_counts_mt": pct},
+                       index=[f"c{i}" for i in range(n)])
+    obs["cell_type"] = pd.Categorical(["CAF"] * 300 + ["T"] * 100 + ["LNCaP"] * 100)
+    a = ad.AnnData(np.zeros((n, 2), dtype="float32"), obs=obs)
+    a.var_names = ["MT-CO1", "G1"]
+    return a
+
+
+def test_a_dataset_filtered_per_type_is_not_flagged_against_the_ceiling():
+    from scview.core.anndata_adaptor import per_cell_qc
+    from scview.core.pipeline import run_pipeline
+
+    a = _obs_cells()
+    p = PipelineParams(qc_threshold_mode="fixed", min_genes=0, max_pct_mt=10.0, min_cells=0,
+                       qc_mito_mode="per_type")
+    kept, res = run_pipeline(a, ["filtering"], p)
+    assert res.errors == {}
+    r = mbt.mito_by_type(kept, cells=per_cell_qc(kept))
+    assert (r.column, r.reason) == ("cell_type", "filtering")
+    assert r.filter_mito_mode == "per_type" and r.filter_type_column == "cell_type"
+    lncap = _rows(r)["LNCaP"]
+    assert lncap.applied_rule == "own" and lncap.applied_bound is not None
+    assert lncap.removed_global_frac > 0.8  # a 10 % ceiling would take most of it ...
+    assert not lncap.flagged and lncap.reasons == []  # ... but filtering never used it here
+    assert lncap.note.startswith("Filtered with its own bound")
+    assert r.n_flagged == 0
+    assert r.summary.startswith("Filtered with per-type bounds on 'cell_type': 3 of 3 types used their own bound")
+    # a typed ceiling is a what-if: flagged as before, and said so
+    typed = mbt.mito_by_type(kept, cells=per_cell_qc(kept), ceiling=10.0)
+    assert _rows(typed)["LNCaP"].flagged and "what-if" in typed.note
+    lines, _ = mbt.grounding_lines(type("A", (), {"adata": kept, "qc_per_cell": lambda self: per_cell_qc(kept)})())
+    assert "filtering used per-type bounds on 'cell_type'" in lines[0]
+
+
+def test_the_loss_mad_mode_caused_is_read_from_the_record():
+    """MAD mode's pooled bound (median + 3 MADs, ~6 %) sits far below the 20 % ceiling:
+    the ceiling 'removes' none of LNCaP, the filter removed all of it."""
+    from scview.core.anndata_adaptor import per_cell_qc
+    from scview.core.pipeline import run_pipeline
+
+    a = _obs_cells()
+    kept, _ = run_pipeline(a, ["filtering"], PipelineParams(min_cells=0))
+    r = mbt.mito_by_type(kept, cells=per_cell_qc(kept))
+    lncap = _rows(r)["LNCaP"]
+    assert lncap.n_cells == 100 and lncap.removed_global == 0  # nothing at 20 % or more
+    assert lncap.removed_filter == 100 and lncap.removed_filter_frac == 1.0
+    assert lncap.flagged and lncap.reasons[0].startswith("The filtering step's % mito rule removed 100%")
+    assert _rows(r)["CAF"].removed_filter < 30 and not _rows(r)["CAF"].flagged
+    assert r.summary.startswith("The filtering step's % mito rule removed 100% of LNCaP")
+    assert r.filter_mito_mode == "global"
+    unfiltered = mbt.mito_by_type(a, cells=per_cell_qc(a))  # no record: no such column
+    assert _rows(unfiltered)["LNCaP"].removed_filter is None
+
+
+def test_removed_cells_given_a_cluster_by_expression_are_added_back():
+    """A clustering made after filtering has no labels in the record: ``assigned``
+    gives them, and the type the filter emptied is flagged."""
+    from scview.core import qc_filter
+    from scview.core.anndata_adaptor import per_cell_qc
+    from scview.core.pipeline import run_pipeline
+
+    a = _obs_cells()
+    kept, _ = run_pipeline(a, ["filtering"], PipelineParams(qc_threshold_mode="fixed", min_genes=0,
+                                                            max_pct_mt=10.0, min_cells=0))
+    kept.obs["leiden"] = pd.Categorical(np.where(kept.obs["cell_type"] == "LNCaP", "1", "0"))
+    names = qc_filter.recorded_names(kept)
+    labels = ["1" if a.obs.loc[c, "cell_type"] == "LNCaP" else "0" for c in names]
+    pct = qc_filter.recorded_removed_mito(kept, None)[1]
+    alone = mbt.mito_by_type(kept, "leiden", cells=per_cell_qc(kept))
+    assert alone.includes_removed == 0
+    r = mbt.mito_by_type(kept, "leiden", cells=per_cell_qc(kept), assigned=(labels, pct))
+    assert r.includes_removed == r.assigned_removed == len(names)
+    one = _rows(r)["1"]
+    assert one.n_cells == 100 and one.flagged and one.removed_filter_frac > 0.8
+    assert "given the group its expression is closest to" in r.note
+
+
+def test_an_author_column_named_with_a_space_is_the_cell_type_column():
+    # ovary.h5ad: obs "cluster" (numbers) before "Cell type"; the space used to miss.
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+
+    from scview.core import mito_by_type
+
+    obs = pd.DataFrame({"cluster": pd.Categorical(["0", "1"] * 30),
+                        "Cell type": pd.Categorical(["stromal", "granulosa"] * 30),
+                        "cell.type": pd.Categorical(["a", "b"] * 30)})
+    a = ad.AnnData(np.ones((60, 2), dtype="float32"), obs=obs)
+    assert mito_by_type.default_column(a)[0] == "Cell type"
