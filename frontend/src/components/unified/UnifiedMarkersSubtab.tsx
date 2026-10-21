@@ -12,6 +12,7 @@ import type { MarkersResponse } from "@/api/markers";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
 import { MARKERS_PER_GROUP } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
+import { GeneReportButton } from "@/components/report/ReportButtons";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -418,16 +419,19 @@ export function UnifiedMarkersSubtab({
                 <td className="px-2 py-1.5">
                   <div className="flex items-center justify-between gap-1">
                     <span className="font-mono font-medium text-slate-800">{marker.gene}</span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        askAboutGene(marker.gene);
-                      }}
-                      title="Ask the co-pilot about this gene"
-                      className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
-                    >
-                      <Sparkles className="h-3 w-3" />
-                    </button>
+                    <span className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          askAboutGene(marker.gene);
+                        }}
+                        title="Ask the co-pilot about this gene"
+                        className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                      >
+                        <Sparkles className="h-3 w-3" />
+                      </button>
+                      <GeneReportButton gene={marker.gene} groupby={groupByColumn} />
+                    </span>
                   </div>
                 </td>
                 <td className="px-2 py-1.5 text-right tabular-nums">

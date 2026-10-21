@@ -29,6 +29,7 @@ from scview.api.v1 import (
     normalization,
     pca,
     system,
+    report,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -59,3 +60,4 @@ api_router.include_router(communication.router, tags=["communication"])
 api_router.include_router(milo.router, tags=["composition"])
 api_router.include_router(pca.router, tags=["assessment"])
 api_router.include_router(system.router, tags=["system"])
+api_router.include_router(report.router, tags=["report"])
