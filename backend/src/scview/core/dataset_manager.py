@@ -76,6 +76,15 @@ class DatasetMemoryError(Exception):
 
 # Room to leave beside a dataset's estimated load peak before opening it.
 LOAD_MARGIN = 1.1
+# Memory kept free beyond a load or run's own need, for the requests that follow it:
+# opening Kang beside a cached ovary (3.2 GB) left 0.4 GB of a 6 GB limit, and the
+# page's first requests (QC, cluster QC, the co-pilot insight) got the backend killed.
+RESERVE_SHARE = 0.25
+RESERVE_MIN = 1024**3
+
+
+def working_reserve(limit_bytes: int) -> int:
+    return max(RESERVE_MIN, int(RESERVE_SHARE * limit_bytes))
 
 
 class DatasetManager:
@@ -174,22 +183,23 @@ class DatasetManager:
 
     async def free_memory_for(self, need: int, keep: str) -> int | None:
         """Drop cached datasets other than ``keep``, least recently used first, freeing
-        each for real, until ``need`` bytes (with ``LOAD_MARGIN``) fit in the memory
-        left under the container limit. Returns the bytes free after, or None when
-        there is no container limit (nothing is dropped then)."""
+        each for real, until ``need`` bytes (with ``LOAD_MARGIN``) and the working
+        reserve fit in the memory left under the container limit. Returns the bytes
+        free after, or None when there is no container limit (nothing is dropped)."""
         budget = memory_budget.read_budget()
         if not budget.limited or budget.limit_bytes is None or budget.used_bytes is None:
             return None
+        target = max(0, need) * LOAD_MARGIN + working_reserve(budget.limit_bytes)
 
         def free() -> int:
             return budget.limit_bytes - budget.used_bytes
 
-        if need <= 0 or free() >= need * LOAD_MARGIN:
+        if free() >= target:
             return free()
         await asyncio.to_thread(memory_budget.release_memory)  # earlier drops may await collection
         budget = memory_budget.read_budget()
         for victim in self._evictable(keep):
-            if free() >= need * LOAD_MARGIN:
+            if free() >= target:
                 break
             self._drop(victim)
             await asyncio.to_thread(memory_budget.release_memory)
