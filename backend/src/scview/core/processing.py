@@ -104,6 +104,14 @@ def active_run(dataset_id: str) -> RunControl | None:
     return _runs.get(dataset_id)
 
 
+def cancel_run(dataset_id: str) -> RunControl | None:
+    """Ask the run working on ``dataset_id`` to stop; None when none is."""
+    control = _runs.get(dataset_id)
+    if control is not None:
+        control.cancel()
+    return control
+
+
 def _watch(dataset_id: str, control: RunControl | None, emit=None) -> Callable[[], None]:
     """Register ``control`` for cancel and start its watchdog; returns the undo
     (run on the loop once the worker thread has ended, errors included)."""
@@ -172,8 +180,9 @@ async def iterate_exclusive(
     item it is working on and then closes the generator, so a pipeline run ends
     after its current step without saving. A run that reaches its end leaves the
     dataset reloaded from disk. With ``control`` (the pipeline run's), the run is
-    registered for cancel and its watchdog's warnings are yielded among the items
-    as ``("watchdog", event)``, the pipeline's event shape.
+    registered for cancel, a consumer that stops early also cancels it, and its
+    watchdog's warnings are yielded among the items as ``("watchdog", event)``,
+    the pipeline's event shape.
     """
     adaptor, claimed = await _claim(dm, dataset_id)
     loop = asyncio.get_running_loop()
@@ -232,6 +241,8 @@ async def iterate_exclusive(
     finally:
         if not finished:
             stop.set()
+            if control is not None:
+                control.cancel()  # also ends a Leiden child the step is waiting on
             dm.evict(dataset_id)  # nothing may serve the half-run copy
     # The thread has posted its last item; wait for it to return (and release).
     await asyncio.shield(task)

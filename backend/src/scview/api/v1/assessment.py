@@ -23,7 +23,7 @@ from scview.core import (
 from scview.core import qc_states
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
-from scview.core.processing import iterate_exclusive, run_exclusive
+from scview.core.processing import cancel_run, iterate_exclusive, run_exclusive
 from scview.core.run_watchdog import RunControl
 from scview.core.step_names import unknown_steps, unknown_steps_message
 from scview.core.llm_advisor import get_llm_suggestions, get_rule_based_suggestions
@@ -810,3 +810,23 @@ async def save_qc_state_label(
         else:
             dm.saved_in_place(dataset_id, adaptor, output_path)
         return saved
+
+
+# ---------------------------------------------------------------------------
+# POST /datasets/{dataset_id}/assessment/cancel
+# ---------------------------------------------------------------------------
+
+
+@router.post("/datasets/{dataset_id}/assessment/cancel")
+async def cancel_pipeline_run(dataset_id: str):
+    """Cancel the pipeline run working on this dataset (run, run-stream, rerun).
+
+    The run stops before its next step (a Leiden clustering child process is
+    ended at once; other steps finish first) and saves nothing: the dataset
+    reopens as it was before the run. The run's own response or stream ends
+    with ``status: "cancelled"``. 404 when no run is working on the dataset.
+    """
+    control = cancel_run(dataset_id)
+    if control is None:
+        raise HTTPException(status_code=404, detail="No pipeline run is working on this dataset.")
+    return {"cancelling": True, "step": control.current_step}

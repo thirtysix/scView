@@ -15,6 +15,7 @@ child: graph in on stdin, membership out on stdout, both as .npz/.npy bytes.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import subprocess
 import sys
@@ -42,14 +43,23 @@ def membership(adjacency, resolution: float, random_state: int = RANDOM_STATE,
     payload = io.BytesIO()
     np.savez(payload, n=adjacency.shape[0], sources=sources, targets=targets, weights=weights,
              resolution=float(resolution), seed=int(random_state), n_iterations=int(n_iterations))
-    proc = subprocess.run(
+    # A pipeline run's cancel ends the child (core/run_watchdog.py). Imported here:
+    # the child imports this module too and should not import more than it needs.
+    from scview.core.run_watchdog import current
+
+    control = current()
+    proc = subprocess.Popen(
         [sys.executable, "-m", "scview.core.leiden"],
-        input=payload.getvalue(), capture_output=True, check=False,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
+    with control.child(proc) if control is not None else contextlib.nullcontext():
+        stdout, stderr = proc.communicate(payload.getvalue())
     if proc.returncode != 0:
-        tail = " ".join(proc.stderr.decode(errors="replace").strip().splitlines()[-3:])
+        if control is not None and control.cancelled:
+            raise LeidenError("Leiden clustering was stopped: the run was cancelled.")
+        tail = " ".join(stderr.decode(errors="replace").strip().splitlines()[-3:])
         raise LeidenError(f"Leiden clustering failed (exit {proc.returncode}): {tail}")
-    return np.load(io.BytesIO(proc.stdout))
+    return np.load(io.BytesIO(stdout))
 
 
 def labels(adjacency, resolution: float, random_state: int = RANDOM_STATE) -> pd.Categorical:
