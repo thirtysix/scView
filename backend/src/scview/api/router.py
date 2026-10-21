@@ -29,6 +29,7 @@ from scview.api.v1 import (
     normalization,
     pca,
     preflight,
+    programs,
     system,
     report,
 )
@@ -63,3 +64,4 @@ api_router.include_router(pca.router, tags=["assessment"])
 api_router.include_router(system.router, tags=["system"])
 api_router.include_router(preflight.router, tags=["system"])
 api_router.include_router(report.router, tags=["report"])
+api_router.include_router(programs.router, tags=["programs"])

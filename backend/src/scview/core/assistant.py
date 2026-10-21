@@ -188,6 +188,22 @@ def _add_embedding_reliability(adaptor, lines: list[str], sources: list[ChatSour
                                   evidence="\n".join(er_lines)))
 
 
+def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved gene programs (core/gene_programs.py): k, the stable ones with their
+    top genes and best enriched term, only once a run has been saved."""
+    from scview.core import gene_programs
+
+    try:
+        gp_lines, gp_detail = gene_programs.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: gene programs failed: %s", exc)
+        return
+    if gp_lines:
+        lines.extend(gp_lines)
+        sources.append(ChatSource(kind="result", ref=gene_programs.TAG, detail=gp_detail,
+                                  evidence="\n".join(gp_lines[1:])))
+
+
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Who the cell QC removed (the filtering step's record) or would remove at the
     pipeline's defaults, per cell type x condition, with the audit's flags."""
@@ -448,6 +464,8 @@ def build_grounding_context(
             logger.debug("assistant: PCA grounding failed: %s", exc)
     if want("qc") or want("groups"):
         _add_embedding_reliability(adaptor, lines, sources)
+    if want("markers") or want("groups"):
+        _add_programs(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []
