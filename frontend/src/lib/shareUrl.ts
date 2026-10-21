@@ -165,6 +165,13 @@ export async function readShareHash(hash: string): Promise<SessionFile | null> {
   } catch {
     throw new ShareLinkError("The link is damaged: its view is not readable JSON.");
   }
+  // Drop what a link never carries BEFORE validating, so a hand-made link's
+  // gates or gene lists are ignored rather than judged.
+  if (json && typeof json === "object" && !Array.isArray(json)) {
+    const rest: Record<string, unknown> = { ...(json as Record<string, unknown>) };
+    for (const k of ["gene_lists", "gates", "saved_at"]) delete rest[k];
+    json = rest;
+  }
   try {
     return shareableSession(parseSession(json));
   } catch (e) {

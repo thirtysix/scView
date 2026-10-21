@@ -138,7 +138,7 @@ describe("what a link carries", () => {
       ...session(),
       gene_lists: [{ name: "IFN", genes: ["ISG15", "IFI6"] }],
       gates: [{ name: "T cells", filter: {} }],
-    } as SessionFile;
+    } as unknown as SessionFile;
     const { url } = await buildShareUrl(s, here);
     const json = JSON.stringify(await readShareHash(hashOf(url)));
     expect(json).not.toContain("gene_lists");
