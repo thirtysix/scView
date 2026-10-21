@@ -383,7 +383,11 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
   if (v.highlight) {
     const col = columns.get(v.highlight.column);
     if (col && (col.values ?? []).includes(v.highlight.value)) {
-      useSelectionStore.getState().setHighlight(v.highlight);
+      // Set before anything awaits, so the DE subtab (highlight -> "within" scope)
+      // and the main plot (highlight -> selection) do not act on it: the session
+      // restores its own DE scope and selection.
+      useDESettingsStore.getState().update({ scopedHighlight: v.highlight });
+      useSelectionStore.getState().setHighlight(v.highlight, { select: false });
     } else {
       notes.push(`Highlighted group ${quote(v.highlight.value)} of ${quote(prettyObsLabel(v.highlight.column))}: not in this dataset.`);
     }

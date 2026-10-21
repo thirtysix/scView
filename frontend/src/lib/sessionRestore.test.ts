@@ -214,6 +214,26 @@ describe("save then open on the same dataset", () => {
     expect(de.scopedHighlight).toEqual({ column: "cell_type", value: "CD14 Mono" });
   });
 
+  it("marks the restored highlight as scoped and non-selecting the moment it is set", async () => {
+    // The DE subtab and the main plot react to a new highlight while the restore
+    // is still awaiting (gene lookups, filters): by then it must already be the
+    // DE scope and must not select its cells over the session's own selection.
+    buildWorkspace("lasso");
+    const session = saveAndReset();
+    let atHighlight: { scoped: unknown; selects: boolean } | null = null;
+    const unsub = useSelectionStore.subscribe((st, prev) => {
+      if (st.highlightedGroup && !prev.highlightedGroup && !atHighlight) {
+        atHighlight = { scoped: useDESettingsStore.getState().scopedHighlight, selects: st.highlightSelects };
+      }
+    });
+    await restoreSession(session);
+    unsub();
+    expect(atHighlight).toEqual({ scoped: { column: "cell_type", value: "CD14 Mono" }, selects: false });
+    // a legend click afterwards selects as before
+    useSelectionStore.getState().setHighlight({ column: "cell_type", value: "NK" });
+    expect(useSelectionStore.getState().highlightSelects).toBe(true);
+  });
+
   it("saves a filter's selection as the filter and evaluates it again", async () => {
     buildWorkspace("filter");
     const session = saveAndReset();

@@ -685,6 +685,11 @@ export function UnifiedViewPanel() {
   useEffect(() => {
     const hl = highlightedGroup;
     if (!hl || hl === appliedHighlight.current) return;
+    // A restored highlight comes with its own (restored) selection.
+    if (!useSelectionStore.getState().highlightSelects) {
+      appliedHighlight.current = hl;
+      return;
+    }
     if (hl.column !== colorBy || colorColumnName !== colorBy || !colors || !categories) return;
     const catIndex = categories.indexOf(hl.value);
     if (catIndex < 0) return;
