@@ -55,8 +55,17 @@ _MIN_SPLIT = MIN_CELLS
 
 
 def default_column(adata) -> str | None:
-    """The active clustering, as the app shows it (``AnnDataAdaptor.active_clustering_column``)."""
+    """An author cell-type column when there is one (as the per-cell-type QC
+    picks it), else the active clustering (``AnnDataAdaptor.active_clustering_column``).
+    A clustering can split one cell type by the condition itself (Kang: CD14
+    monocytes in two Leiden clusters, one per stimulation), which reads as a
+    composition shift that is really the effect being tested."""
+    from scview.core.sample_pseudobulk import default_celltype_column
+
     obs = adata.obs
+    typed = default_celltype_column(obs)
+    if typed is not None:
+        return typed
     active = adata.uns.get("scview_active_clustering")
     if isinstance(active, str) and active in obs.columns:
         return active

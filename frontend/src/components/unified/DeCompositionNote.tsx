@@ -14,7 +14,7 @@ interface Props {
   params: DECompositionParams;
   /** Label columns the check can use (the subtab's "Within" columns). */
   columns: string[];
-  /** Picked label column; "" = the active clustering. */
+  /** Picked label column; "" = Auto (a cell-type column, else the active clustering). */
   column: string;
   onColumnChange: (column: string) => void;
   /** Restricts the DE to one group (sets Within); absent when the column can't be a scope. */
@@ -77,7 +77,7 @@ export function DeCompositionNote({
   const b = data?.label_b ?? group_b;
   const picker = (
     <label className="flex items-center gap-1">
-      <span title="The label column whose groups' shares are compared between the two sides. Auto: the active clustering; within one of its groups, a finer column (a subclustering or QC state).">
+      <span title="The label column whose groups' shares are compared between the two sides. Auto: an author cell-type column if the dataset has one, else the active clustering; within one of its groups, a finer column (a subclustering or QC state).">
         by
       </span>
       <select
@@ -86,7 +86,7 @@ export function DeCompositionNote({
         onChange={(e) => onColumnChange(e.target.value)}
         className="min-w-0 max-w-[10rem] rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700"
       >
-        <option value="">Auto{data?.auto && data.column ? ` (${prettyObsLabel(data.column)})` : " (active clustering)"}</option>
+        <option value="">Auto{data?.auto && data.column ? ` (${prettyObsLabel(data.column)})` : " (cell type or clustering)"}</option>
         {columns
           .filter((c) => c !== split_by)
           .map((c) => (

@@ -170,6 +170,14 @@ def test_default_column_is_the_active_clustering():
     assert dc.default_column(a) == "cluster"
 
 
+def test_default_column_prefers_an_author_cell_type_column():
+    obs = pd.DataFrame({"leiden": ["0", "1", "0", "1"], "cell_type": ["T", "B", "T", "B"]},
+                       index=[f"c{i}" for i in range(4)])
+    a = ad.AnnData(obs=obs)
+    a.uns["scview_active_clustering"] = "leiden"
+    assert dc.default_column(a) == "cell_type"
+
+
 # --------------------------------------------------------------------------- endpoints
 
 
