@@ -81,7 +81,7 @@ PART = 0.1  # a new cluster holding this share of a cluster's cells is one of it
 # setting once warm, 65 s for the five defaults; Harmony adds 0.3 s.
 SECONDS_PER_1K_CELLS = 1.0
 HARMONY_SECONDS_PER_1K_CELLS = 0.05
-GRAPH_SECONDS_PER_1K_CELLS = 0.5  # a setting sharing another's PCs: the graph and the clustering only
+GRAPH_SECONDS_PER_1K_CELLS = 0.9  # a setting sharing another's PCs: the graph and Leiden (Kang: 13-19 s)
 FIRST_RUN_SECONDS = 30.0  # numba compiling the neighbour search after a server start
 
 _DEFAULT_GENES = 2000
