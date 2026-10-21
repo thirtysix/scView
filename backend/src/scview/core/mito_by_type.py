@@ -201,7 +201,8 @@ def _applied(recorded: dict | None, column: str) -> dict[str, float | None] | No
 
 def mito_by_type(adata, column: str | None = None, cells: dict | Callable[[], dict] | None = None,
                  ceiling: float | None = None,
-                 assigned: tuple[list[str], np.ndarray] | None = None) -> MitoByType:
+                 assigned: tuple[list[str], np.ndarray] | Callable[[str], tuple | None] | None = None
+                 ) -> MitoByType:
     """Per-type % mito distribution, bound and the global ceiling's loss.
 
     ``cells`` are the per-cell QC arrays (``AnnDataAdaptor.qc_per_cell``) or a
@@ -240,9 +241,11 @@ def mito_by_type(adata, column: str | None = None, cells: dict | Callable[[], di
     # column made after filtering has no recorded labels: ``assigned`` gives them.
     gone = qc_filter.recorded_removed_mito(adata, column)
     how = "record"
-    if gone is None and assigned is not None and qc_filter.recorded_removed_mito(adata, None) is not None:
-        when = qc_filter.recorded_removed_mito(adata, None)[2]
-        gone, how = (list(assigned[0]), np.asarray(assigned[1], dtype=np.float64), when), "assigned"
+    unlabelled = qc_filter.recorded_removed_mito(adata, None) if gone is None and assigned is not None else None
+    if unlabelled is not None:
+        got = assigned(column) if callable(assigned) else assigned
+        if got is not None and len(got[0]) == len(unlabelled[1]):
+            gone, how = (list(got[0]), np.asarray(got[1], dtype=np.float64), unlabelled[2]), "assigned"
     by_filter = qc_filter.recorded_mito_bits(adata) if gone is not None else None
     extra: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     if gone is not None:
@@ -410,10 +413,13 @@ def _flag_summary(rows: list[TypeMito], flagged: list[TypeMito], cut: float) -> 
             f"({top.group}, median {_pct(top.median or 0.0)}): no type is flagged.")
 
 
-def for_adaptor(adaptor, column: str | None = None, ceiling: float | None = None) -> MitoByType:
-    """``mito_by_type`` on a loaded dataset, reusing its cached per-cell QC arrays."""
+def for_adaptor(adaptor, column: str | None = None, ceiling: float | None = None,
+                assign: Callable[[str], tuple[list[str], np.ndarray] | None] | None = None) -> MitoByType:
+    """``mito_by_type`` on a loaded dataset, reusing its cached per-cell QC arrays.
+    ``assign(column)``: the removed cells' labels and % mito when the record has no
+    labels in that column (``mito_refilter.assigned_removed``), asked only then."""
     fn = getattr(adaptor, "qc_per_cell", None)
-    return mito_by_type(adaptor.adata, column, fn if callable(fn) else None, ceiling)
+    return mito_by_type(adaptor.adata, column, fn if callable(fn) else None, ceiling, assign)
 
 
 TAG = "result:mito_by_type"

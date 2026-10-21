@@ -699,18 +699,26 @@ async def get_mito_by_type(
     """% mito per cell type (median, MAD, quantiles, n), each type's own bound
     (median + 3 MADs) and the cells the global ceiling (``ceiling``, else the
     recorded or default ``max_pct_mt``) would remove from each type vs its own
-    bound; flags types the ceiling cuts hard. Advisory: filtering is unchanged.
-    ``column`` defaults to the author's cell types, else the clustering."""
-    from scview.core import mito_by_type
+    bound; flags types the ceiling cuts hard. A dataset filtered with per-type
+    bounds is read with them. ``column`` defaults to the column that filtering
+    used, else the author's cell types, else the clustering. After filtering, the
+    removed cells are added back from its record (a clustering made after it: each
+    placed by expression, ``core/mito_refilter.py``)."""
+    from scview.core import mito_by_type, mito_refilter
 
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     if column and column not in adaptor.adata.obs.columns:
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
+
+    def _assign(col: str):
+        return mito_refilter.assigned_removed(dm, dataset_id, adaptor, col)
+
     try:
-        # Obs + cached per-cell QC (a few ms), but the arrays may need a pass first.
-        report = await asyncio.to_thread(mito_by_type.for_adaptor, adaptor, column or None, ceiling)
+        # Obs + cached per-cell QC (a few ms), but the arrays may need a pass first,
+        # and placing removed cells reads them from the original upload once.
+        report = await asyncio.to_thread(mito_by_type.for_adaptor, adaptor, column or None, ceiling, _assign)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -798,3 +806,84 @@ async def save_qc_state_label(
         else:
             dm.saved_in_place(dataset_id, adaptor, output_path)
         return saved
+
+
+# ---------------------------------------------------------------------------
+# Re-filter with per-type % mito bounds, from the original upload (core/mito_refilter.py)
+# ---------------------------------------------------------------------------
+
+
+class MitoRefilterRequest(BaseModel):
+    column: str = ""  # the cell types (default: as GET /qc/mito-by-type picks it)
+    mito_mode: str = "per_type"  # "global" re-filters with one rule, as before
+
+
+@router.get("/datasets/{dataset_id}/qc/mito-refilter")
+async def preview_mito_refilter(
+    dataset_id: str,
+    column: str = "",
+    mito_mode: str = "per_type",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """What re-filtering from the original upload with per-type % mito bounds on
+    ``column`` would do: per type its cells, median, rule and bound, cells removed
+    now vs after, brought back and newly removed; how the cells filtering removed
+    were typed (the original's column, else the nearest cluster by expression),
+    and what it can and cannot bring back. Reads the original upload (seconds)."""
+    from scview.core import mito_refilter
+
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:
+        return await asyncio.to_thread(mito_refilter.preview, dm, dataset_id, adaptor, column or None,
+                                       mito_mode)
+    except mito_refilter.RefilterError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Mito re-filter preview failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Re-filter preview failed: {e}")
+
+
+@router.post("/datasets/{dataset_id}/qc/mito-refilter-stream")
+async def run_mito_refilter(
+    dataset_id: str,
+    body: MitoRefilterRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Re-filter from the original upload with per-type % mito bounds and re-run
+    the steps the dataset ran (Server-Sent Events: ``refilter`` stages, then the
+    pipeline's events). Saved, and recorded in provenance as ``mito_refilter``
+    followed by the steps, only when the run reaches its end."""
+    from scview.core import mito_refilter
+
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:  # refuse before streaming what can be refused cheaply
+        await asyncio.to_thread(mito_refilter.check_runnable, dm, dataset_id, adaptor, body.column or None,
+                                body.mito_mode)
+    except mito_refilter.RefilterError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
+    def _events(adaptor):
+        output = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        return mito_refilter.run_events(dm, dataset_id, adaptor, body.column or None, output, body.mito_mode)
+
+    async def event_generator():
+        try:
+            async with aclosing(iterate_exclusive(dm, dataset_id, _events)) as events:
+                async for event_type, event_data in events:
+                    yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+        except Exception as e:
+            logger.error("Mito re-filter failed for %s: %s", dataset_id, e, exc_info=True)
+            detail = e.detail if isinstance(e, HTTPException) else str(e)
+            yield f"event: error\ndata: {json.dumps({'error': detail})}\n\n"
+
+    return StreamingResponse(
+        keepalive(event_generator()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

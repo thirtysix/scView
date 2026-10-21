@@ -360,6 +360,79 @@ def type_mito_drop(adata, qc, rule, global_mito):
         mine = np.isfinite(pct) & ((pct > hi) | (pct >= rule["cap"]))
     return np.where(~np.isnan(hi), mine, global_mito)
 ''',
+    "refilter_types": '''
+def refilter_types(full, pass1, column, target_sum=1e4, n_genes=2000, min_genes=50):
+    """Each cell's type for scView's per-type % mito filter, as scView gives it: a
+    cell pass 1 kept takes its label by barcode; one it removed, the group whose
+    centroid (mean log-normalised expression of the group's cells over the variable
+    genes, MT- genes left out) its own expression is most correlated with."""
+    def lognorm(C):
+        C = sp.csr_matrix(C).astype(np.float64)
+        total = np.asarray(C.sum(axis=1), dtype=np.float64).ravel()
+        scale = np.divide(target_sum, total, out=np.zeros_like(total), where=total > 0)
+        L = sp.csr_matrix(sp.diags(scale) @ C)
+        L.data = np.log1p(L.data)
+        return L
+
+    if pass1.raw is not None and not looks_like_counts(pass1.raw.X):
+        L, names = pass1.raw.X, pass1.raw.var_names
+    elif not looks_like_counts(pass1.X) and float(pass1.X.min()) >= 0:
+        L, names = pass1.X, pass1.var_names
+    else:
+        L, names = lognorm(pass1.layers["counts"] if "counts" in pass1.layers else pass1.X), pass1.var_names
+    if "counts" in full.layers and looks_like_counts(full.layers["counts"]):
+        counts = full.layers["counts"]
+    elif looks_like_counts(full.X):
+        counts = full.X
+    else:
+        counts = full.raw[:, full.var_names].X
+    no_mt = ~names.str.startswith(("MT-", "mt-"))
+    var = pass1.var
+    if "highly_variable" in var.columns and var["highly_variable"].astype(bool).any():
+        hv = set(var.index[var["highly_variable"].astype(bool).to_numpy()])
+        genes = [g for g, ok in zip(names, no_mt) if ok and g in hv]
+    else:
+        M = sp.csr_matrix(L)
+        mean = np.asarray(M.mean(axis=0)).ravel()
+        sq = np.asarray(M.multiply(M).mean(axis=0)).ravel()
+        genes = [names[i] for i in np.argsort(-(sq - mean**2), kind="stable") if no_mt[i]][:n_genes]
+    have = set(full.var_names)
+    genes = [g for g in genes if g in have]
+    col = pass1.obs[column]
+    if col.dtype.name == "category":
+        used = set(col.dropna().astype(str))
+        groups = [str(c) for c in col.cat.categories if str(c) in used]
+    else:
+        present = set(col.dropna().astype(str))
+        groups = sorted(present, key=lambda s: (0, int(s), "") if s.isdigit() else (1, 0, s))
+    labels = pd.Series("", index=full.obs_names, dtype=object)
+    labels.loc[pass1.obs_names] = col.astype(str).where(col.notna(), "").to_numpy()
+    gone = np.flatnonzero(~full.obs_names.isin(pass1.obs_names))
+    if gone.size and len(genes) >= min_genes:
+        codes = pd.Categorical(col.astype(str).where(col.notna()), categories=groups).codes
+        gi = names.get_indexer(genes)
+        Lg = L[:, gi]
+        lab = codes >= 0
+        ind = sp.csr_matrix((np.ones(int(lab.sum())), (codes[lab], np.flatnonzero(lab))),
+                            shape=(len(groups), pass1.n_obs))
+        sizes = np.asarray(ind.sum(axis=1)).ravel()
+        sums = ind @ Lg
+        cent = (sums.toarray() if sp.issparse(sums) else np.asarray(sums)) / np.maximum(sizes, 1)[:, None]
+        R = lognorm(sp.csr_matrix(counts)[gone])[:, full.var_names.get_indexer(genes)].toarray()
+
+        def unit(M):
+            M = M - M.mean(axis=1, keepdims=True)
+            norm = np.linalg.norm(M, axis=1, keepdims=True)
+            return np.divide(M, norm, out=np.zeros_like(M), where=norm > 0)
+
+        r = unit(R) @ unit(cent).T
+        r[:, sizes == 0] = -np.inf
+        best = r.argmax(axis=1)
+        ok = np.isfinite(r[np.arange(gone.size), best]) & (np.abs(R).sum(axis=1) > 0)
+        labels.iloc[gone] = np.where(ok, np.asarray(groups, dtype=object)[best], "")
+    values = labels.to_numpy()
+    return pd.Categorical(np.where(values == "", None, values), categories=groups)
+''',
     "markers_key": '''
 def markers_key(column):
     """Where scView stores a column's markers in uns."""
@@ -499,8 +572,8 @@ def subcluster(adata, column, group, resolution, batch_key=None, n_top_genes=200
 # The order helpers are written in (later ones call earlier ones).
 _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_from_hvg_frame",
                  "counts_hvg", "pearson_residuals", "per_cell_qc", "doublet_calls",
-                 "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "markers_key",
-                 "louvain",
+                 "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
+                 "markers_key", "louvain",
                  "harmony", "lognorm_scoring", "subcluster")
 
 # Helpers another helper calls.
@@ -511,6 +584,7 @@ _HELPER_NEEDS = {
     "per_cell_qc": ("looks_like_counts",),
     "lognorm_scoring": ("looks_like_counts",),
     "subcluster": ("looks_like_counts", "harmony"),
+    "refilter_types": ("looks_like_counts",),
 }
 
 
@@ -552,7 +626,8 @@ if "counts" in adata.layers or adata.raw is not None:
         adata.uns.pop(k, None)
     for k in [k for k in list(adata.uns) if k.startswith(("rank_genes_groups__", "enrichment__"))]:
         del adata.uns[k]
-    adata.obs.drop(columns=[c for c in adata.obs.columns if c.startswith("scview_")],
+    adata.obs.drop(columns=[c for c in adata.obs.columns
+                            if c.startswith("scview_") and c != "scview_mito_type"],
                    inplace=True, errors="ignore")
 '''))
 
@@ -646,6 +721,28 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
         f"sc.pp.filter_genes(adata, min_cells={_lit(min_cells)})",
     ]
     return Snippet(status, code, note)
+
+
+def _mito_refilter(p: dict, ctx: _Ctx) -> Snippet:
+    """scView's two-pass % mito filter (core/mito_refilter.py): the steps above are
+    pass 1; this starts again from the input with every cell typed."""
+    column, type_col = p.get("column"), p.get("type_column")
+    if not isinstance(column, str) or not isinstance(type_col, str):
+        return Snippet(NOT_REPLAYABLE, ["# Re-filter record without its columns. Recorded:",
+                                        *_param_comment(p)], "columns not recorded")
+    code = ["# Pass 2 of scView's per-type % mito filter: start again from the input (the steps",
+            "# above were pass 1), every cell typed for the per-type filter that follows.",
+            "pass1 = adata",
+            "adata = read_input(INPUT)"]
+    if p.get("reset_to_counts"):
+        code += _reset_to_counts({}, ctx).code
+    if type_col != column:
+        _need(ctx, "refilter_types")
+        target = (p.get("assignment") or {}).get("target_sum", 1e4)
+        code.append(f"adata.obs[{_lit(type_col)}] = refilter_types(adata, pass1, {_lit(column)}, "
+                    f"target_sum={_lit(target)})")
+    code.append("del pass1")
+    return Snippet(EXACT, code)
 
 
 def _normalization(p: dict, ctx: _Ctx) -> Snippet:
@@ -1197,6 +1294,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "annotation_crosscheck": _annotation_crosscheck,
     "merge_clusters": _merge_clusters,
     "qc_state_label": _qc_state_label,
+    "mito_refilter": _mito_refilter,
 }
 
 

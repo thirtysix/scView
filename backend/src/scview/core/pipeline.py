@@ -235,8 +235,9 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
     for key in multi_keys:
         del adata.uns[key]
 
-    # Remove scview-generated obs columns
-    scview_cols = [c for c in adata.obs.columns if c.startswith("scview_")]
+    # Remove scview-generated obs columns, except the cell types a per-type % mito
+    # filter judges by (core/mito_refilter.py): an input to filtering, not a result.
+    scview_cols = [c for c in adata.obs.columns if c.startswith("scview_") and c != "scview_mito_type"]
     if scview_cols:
         adata.obs.drop(columns=scview_cols, inplace=True, errors="ignore")
 

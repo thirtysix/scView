@@ -1296,15 +1296,21 @@ def recorded_mito_bits(adata) -> np.ndarray | None:
     """Per cell of the removal record, in its order: removed by the % mito rule
     (its ``max_pct_mt`` criterion bit). None without a usable record; all False when
     % mito was not a criterion."""
+    return recorded_bits(adata, "max_pct_mt")
+
+
+def recorded_bits(adata, criterion: str) -> np.ndarray | None:
+    """Per cell of the removal record, in its order: removed by ``criterion`` (one
+    of ``CRITERIA``). None without a record; all False when it was not a criterion."""
     rec = adata.uns.get(RECORD_KEY)
     if not isinstance(rec, dict):
         return None
     try:
         bits = np.asarray(rec.get("criterion_bits"), dtype=np.uint8)
         crit = _strs(rec.get("criteria"))
-        if "max_pct_mt" not in crit:
+        if criterion not in crit:
             return np.zeros(bits.size, dtype=bool)
-        return (bits >> crit.index("max_pct_mt")) & 1 > 0
+        return (bits >> crit.index(criterion)) & 1 > 0
     except Exception as e:
         logger.warning("QC removal record unreadable: %s", e)
         return None
