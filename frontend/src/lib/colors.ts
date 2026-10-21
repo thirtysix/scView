@@ -29,6 +29,10 @@ const CVD_PALETTE: readonly (readonly [number, number, number])[] = [
 
 export type CategoricalPaletteName = "cvd" | "classic" | "tableau20";
 export type ColormapName = "viridis" | "cividis" | "magma" | "plasma";
+/** Diverging maps (lib/colorScale.ts picks one for signed values); kept apart
+ *  from ColormapName so the sequential pickers never list them. */
+export type DivergingColormapName = "RdBu" | "PuOr" | "BrBG";
+export type AnyColormapName = ColormapName | DivergingColormapName;
 type RGB = readonly [number, number, number];
 
 export const CATEGORICAL_PALETTE_OPTIONS: { value: CategoricalPaletteName; label: string }[] = [
@@ -41,6 +45,11 @@ export const COLORMAP_OPTIONS: { value: ColormapName; label: string }[] = [
   { value: "cividis", label: "Cividis (colour-blind optimised)" },
   { value: "magma", label: "Magma" },
   { value: "plasma", label: "Plasma" },
+];
+export const DIVERGING_COLORMAP_OPTIONS: { value: DivergingColormapName; label: string }[] = [
+  { value: "RdBu", label: "Blue-white-red" },
+  { value: "PuOr", label: "Purple-white-orange" },
+  { value: "BrBG", label: "Brown-white-teal" },
 ];
 
 // The pre-CVD palette (commit dd72971), restored verbatim.
@@ -203,9 +212,70 @@ export const COLORMAP_STOPS: Record<ColormapName, readonly RGB[]> = {
   ],
 };
 
+// 11-class ColorBrewer diverging schemes (Brewer, colorbrewer2.org; all three
+// are marked colour-blind safe there), typed in as RGB. RdBu and PuOr are
+// reversed from Brewer's order so the warm end is high, as in scanpy's
+// RdBu_r for z-scores; BrBG keeps Brewer's order (brown low, teal high).
+// The middle stop is the near-white neutral that sits on the centre value.
+export const DIVERGING_COLORMAP_STOPS: Record<DivergingColormapName, readonly RGB[]> = {
+  RdBu: [
+    [5,48,97],
+    [33,102,172],
+    [67,147,195],
+    [146,197,222],
+    [209,229,240],
+    [247,247,247],
+    [253,219,199],
+    [244,165,130],
+    [214,96,77],
+    [178,24,43],
+    [103,0,31],
+  ],
+  PuOr: [
+    [45,0,75],
+    [84,39,136],
+    [128,115,172],
+    [178,171,210],
+    [216,218,235],
+    [247,247,247],
+    [254,224,182],
+    [253,184,99],
+    [224,130,20],
+    [179,88,6],
+    [127,59,8],
+  ],
+  BrBG: [
+    [84,48,5],
+    [140,81,10],
+    [191,129,45],
+    [223,194,125],
+    [246,232,195],
+    [245,245,245],
+    [199,234,229],
+    [128,205,193],
+    [53,151,143],
+    [1,102,94],
+    [0,60,48],
+  ],
+};
+
+export function isDivergingColormap(name: string | undefined): name is DivergingColormapName {
+  return name !== undefined && name in DIVERGING_COLORMAP_STOPS;
+}
+
+/** The stops of a sequential or diverging map (viridis for an unknown name). */
+function stopsOf(name: AnyColormapName | undefined): readonly RGB[] {
+  if (name === undefined) return COLORMAP_STOPS.viridis;
+  return (
+    (COLORMAP_STOPS as Record<string, readonly RGB[] | undefined>)[name] ??
+    (DIVERGING_COLORMAP_STOPS as Record<string, readonly RGB[] | undefined>)[name] ??
+    COLORMAP_STOPS.viridis
+  );
+}
+
 /** Maps t in [0, 1] (clamped) to [R, G, B] in [0, 255] on the named colormap. */
-export function colormapColor(name: ColormapName | undefined, t: number): [number, number, number] {
-  const stops = COLORMAP_STOPS[name ?? "viridis"] ?? COLORMAP_STOPS.viridis;
+export function colormapColor(name: AnyColormapName | undefined, t: number): [number, number, number] {
+  const stops = stopsOf(name);
   const s = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0)) * (stops.length - 1);
   const i = Math.min(Math.floor(s), stops.length - 2);
   const f = s - i;
@@ -223,8 +293,8 @@ export function viridisColor(t: number): [number, number, number] {
 }
 
 /** Plotly colorscale array ([[pos, "rgb(...)"], ...]) built from the same stops. */
-export function plotlyColorscale(name: ColormapName | undefined): [number, string][] {
-  const stops = COLORMAP_STOPS[name ?? "viridis"] ?? COLORMAP_STOPS.viridis;
+export function plotlyColorscale(name: AnyColormapName | undefined): [number, string][] {
+  const stops = stopsOf(name);
   return stops.map((c, i) => [i / (stops.length - 1), `rgb(${c[0]},${c[1]},${c[2]})`]);
 }
 
@@ -251,7 +321,7 @@ export function mapValueToColor(
   value: number,
   min: number,
   max: number,
-  colormap?: ColormapName,
+  colormap?: AnyColormapName,
 ): [number, number, number, number] {
   // A missing value (e.g. pseudotime for a cell the trajectory never reached).
   if (!Number.isFinite(value)) return [200, 200, 200, 255];
