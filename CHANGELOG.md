@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-21
+
 ### Added
 - **A memory limit for scView, and a gauge for it.** The start scripts ask how much memory scView
   may use on the first start, suggesting free memory minus 3 GB to the nearest GB (at most what
