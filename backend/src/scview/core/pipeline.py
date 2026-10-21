@@ -78,6 +78,10 @@ class PipelineParams:
     min_cells: int = 3
     # Used only when % mito can be measured (MT- genes); a ceiling in MAD mode.
     max_pct_mt: float = 20.0
+    # "global": the rule above for every cell; "per_type": each cell type's own bound
+    # (median + qc_mad_k_mt MADs) instead, for types that can have one (core/qc_filter.py).
+    qc_mito_mode: str = "global"
+    qc_mito_type_column: str = ""  # per_type: the cell types (empty = mito_by_type's choice)
     drop_doublets: bool = False  # drop cells flagged by doublet detection (opt-in)
 
     # Doublet detection
@@ -305,14 +309,17 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     The cells removed are recorded in ``uns[qc_filter.RECORD_KEY]`` (their QC
     values and labels), so the Data Assessment audit can show who was removed
     after they are gone.
+
+    With ``qc_mito_mode`` "per_type" each cell type's own % mito bound replaces
+    the global rule for its cells (``qc_mito_types``: every type's rule and loss).
     """
     n_before = adata.n_obs
     t = qc_filter.Thresholds.from_params(params)
     samples = qc_filter.samples_of(adata, params.qc_sample_column or None)
     cells = per_cell_qc(adata)
-    removed, bounds = qc_filter.judge(adata, cells, t, samples)
+    removed, bounds, types = qc_filter.judge_types(adata, cells, t, samples)
     keep = qc_filter.keep_mask(removed, n_before)
-    record = qc_filter.removal_record(adata, cells, removed, ~keep, t, samples.column)
+    record = qc_filter.removal_record(adata, cells, removed, ~keep, t, samples.column, types=types)
     for name, mask in removed.items():
         logger.info("Filtering: %s removes %d cells on its own", name, int(mask.sum()))
     # Only the params this mode used, so the record says what was applied.
@@ -321,6 +328,13 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     found: dict[str, Any] = {k: getattr(params, k) for k in used}
     if bounds is not None:
         found["qc_thresholds"] = bounds.to_dict(~keep)
+    if t.mito_mode == "per_type":  # a global run records what it always did
+        found.update(qc_mito_mode="per_type", qc_mad_k_mt=params.qc_mad_k_mt)
+        if types is not None:
+            found.update(qc_mito_type_column=types.column, qc_mito_types=types.to_dict())
+        else:
+            found.update(qc_mito_type_column=params.qc_mito_type_column,
+                         qc_mito_note="% mito can't be measured (no MT- genes): no per-type bounds.")
     if not keep.all():
         adata = adata[keep, :].copy()
     adata.uns[qc_filter.RECORD_KEY] = record

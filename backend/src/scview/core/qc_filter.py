@@ -42,6 +42,35 @@ from the counts, as the QC plots show them), so the preview is what the step
 does. A cell without a value for a metric is not removed by it. % mito is used
 only when it can be measured (the dataset has MT- genes).
 
+% mito per cell type (``mito_mode`` "per_type"; the default "global" is the
+rule above, unchanged). Cell types differ in their healthy mitochondrial share,
+so one ceiling can remove most of a type with a high baseline (a 10 % ceiling
+took 65 % of LNCaP cells, median ~12 %). Per type, each type with
+``TYPE_MIN_CELLS`` cells or more and some spread gets its own bound, median +
+``mad_k_mt`` raw MADs of % mito over all its cells, used INSTEAD of the global
+rule (fixed: the ceiling; MAD: the sample's bound and the ceiling) for its cells.
+A type that is too small, has no spread, or whose median is
+``TYPE_DAMAGED_MEDIAN`` % or more (damaged cells, not a high baseline) keeps the
+global rule, as do cells without a type. The counts and genes rules are not
+changed. The bound works both ways: a type with a low baseline gets a bound
+below the global one (ovary oocytes, median 0.8 %: 23 of 80 cells removed vs 5),
+so the preview's per-type table shows each type's loss under both rules.
+
+Choices, with the reasons:
+- Per type pooled over the samples, not per sample x type. The baseline is a
+  property of the type, and the MAD of a small group is unreliable (relative SE
+  ~1.7 / sqrt(n): 31 % at 30 cells); splitting 13 types over 8 donors leaves
+  most sample x type groups well under the 100 cells a sample needs for MAD
+  bounds of its own. A sample whose cells of one type are damaged would also raise
+  that group's own median and so its own bound, keeping the damaged cells;
+  pooled, the healthy samples set the type's baseline. A sample with damaged
+  cells is still visible in the per-sample table.
+- A hard cap, ``TYPE_BOUND_CAP`` (50 %): no type's bound goes above it, so a cell
+  with half or more of its reads mitochondrial is removed whatever its type (the
+  same line that calls a whole type damaged). A bound above ``TYPE_HIGH_BOUND``
+  (30 %) and above the global ceiling is kept but warned about, with the number:
+  it keeps cells a third of whose reads are mitochondrial.
+
 Who gets removed (``audit``): the loss per cell type (an author label column,
 else the clustering) and per condition (a condition-like column, else the
 samples), with a chi-square test per cell type of removed ~ condition. A fixed
@@ -78,6 +107,13 @@ MAD_K_MT = 3.0  # % mito: above median + this many MADs
 MIN_SAMPLE_CELLS = 100  # fewer cells: the pooled median and MAD (module docstring)
 MAX_SAMPLES = cluster_qc.MAX_GROUPS  # per-sample thresholds for at most this many samples
 
+MITO_MODES = ("global", "per_type")
+TYPE_MIN_CELLS = 30  # fewer cells: the type keeps the global % mito rule
+TYPE_DAMAGED_MEDIAN = 50.0  # median % mito at or above this: damaged cells, the global rule
+TYPE_BOUND_CAP = 50.0  # no type's own bound above this (module docstring)
+TYPE_HIGH_BOUND = 30.0  # a type's own bound above this (and the ceiling) is warned about
+MAX_TYPES = cluster_qc.MAX_GROUPS
+
 # criterion -> what the user calls it (the threshold's label on the plots)
 CRITERIA = {
     "min_genes": "Min genes",
@@ -111,6 +147,10 @@ class Thresholds:
     mad_k: float = MAD_K
     mad_k_mt: float = MAD_K_MT
     mad_upper: bool = False  # MAD mode: also cut counts / genes above median + k MADs
+    # "per_type": each cell type's own % mito bound (median + mad_k_mt MADs) instead
+    # of the global rule (module docstring); "global": the rule above for every cell.
+    mito_mode: str = "global"
+    mito_type_column: str = ""  # per_type: the cell types ("" = mito_by_type.default_column)
 
     @classmethod
     def from_params(cls, params) -> Thresholds:
@@ -126,16 +166,22 @@ class Thresholds:
             mad_k=float(getattr(params, "qc_mad_k", MAD_K)),
             mad_k_mt=float(getattr(params, "qc_mad_k_mt", MAD_K_MT)),
             mad_upper=bool(getattr(params, "qc_mad_upper", False)),
+            mito_mode=str(getattr(params, "qc_mito_mode", "global") or "global"),
+            mito_type_column=str(getattr(params, "qc_mito_type_column", "") or ""),
         )
 
     def check(self) -> None:
         """Raise ValueError for an unknown mode or a MAD multiplier that is not positive."""
         if self.mode not in MODES:
             raise ValueError(f"Unknown QC threshold mode '{self.mode}': use 'mad' or 'fixed'.")
-        if self.mode == "mad":
-            for name, k in (("MAD multiplier", self.mad_k), ("% mito MAD multiplier", self.mad_k_mt)):
-                if not (math.isfinite(k) and k > 0):
-                    raise ValueError(f"The {name} must be a positive number, not {k}.")
+        if self.mito_mode not in MITO_MODES:
+            raise ValueError(f"Unknown % mito mode '{self.mito_mode}': use 'global' or 'per_type'.")
+        checks = [("MAD multiplier", self.mad_k)] if self.mode == "mad" else []
+        if self.mode == "mad" or self.mito_mode == "per_type":
+            checks.append(("% mito MAD multiplier", self.mad_k_mt))
+        for name, k in checks:
+            if not (math.isfinite(k) and k > 0):
+                raise ValueError(f"The {name} must be a positive number, not {k}.")
 
 
 @dataclass
@@ -335,18 +381,192 @@ def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,
                      reused_from=recorded.get("timestamp") if reuse is not None else None)
 
 
+@dataclass
+class TypeBounds:
+    """Per-type % mito bounds (``mito_mode`` "per_type") and, per cell, the rule it
+    is judged by: ``own`` cells by their type's bound ``hi`` (inf elsewhere), the
+    rest by the global rule. ``rows`` are the types in ``column``'s order: cells,
+    median, MAD, ``bound`` (None: the global rule, ``why`` says why). ``judge_types``
+    fills ``removed_global`` / ``removed`` (the global rule's % mito mask and the one
+    applied) for the per-type loss table."""
+
+    column: str
+    reason: str | None
+    k: float
+    codes: np.ndarray
+    rows: list[dict]
+    own: np.ndarray
+    hi: np.ndarray
+    ceiling: float | None = None
+    reused_from: str | None = None
+    removed_global: np.ndarray | None = None
+    removed: np.ndarray | None = None
+
+    def to_dict(self) -> dict:
+        """The rule per type for the preview, the record and provenance, with each
+        type's loss under the global rule and under the one applied."""
+        rows = [dict(r) for r in self.rows]
+        k = len(rows)
+        labelled = self.codes >= 0
+        for key, mask in (("removed_global", self.removed_global), ("removed", self.removed)):
+            if mask is None:
+                continue
+            lost = np.bincount(self.codes[labelled & mask], minlength=k)
+            for r, v in zip(rows, lost):
+                r[key] = int(v)
+        own = [r for r in rows if r["bound"] is not None]
+        return {
+            "column": self.column,
+            "reason": self.reason,
+            "k": self.k,
+            "cap": TYPE_BOUND_CAP,
+            "min_cells": TYPE_MIN_CELLS,
+            "damaged_median": TYPE_DAMAGED_MEDIAN,
+            "ceiling_pct_mt": self.ceiling,
+            "types": rows,
+            "n_own": len(own),
+            "n_global": k - len(own),
+            "n_unlabelled": int((~labelled).sum()),
+            "reused_from": self.reused_from,
+            "warnings": [r["warning"] for r in rows if r.get("warning")],
+        }
+
+
+def _type_rule(name: str, v: np.ndarray, k: float, ceiling: float | None) -> dict:
+    """One type's % mito rule from its cells' values (module docstring)."""
+    v = v[np.isfinite(v)]
+    row: dict = {"name": name, "n_cells": int(v.size), "median": None, "mad": None, "bound": None,
+                 "rule": "global", "why": None, "capped": False, "note": "", "warning": None}
+    if not v.size:
+        row.update(why="no_values", note="No cells with a % mito value: the global rule applies.")
+        return row
+    med, mad = _median_mad(v)
+    row.update(median=round(med, 3), mad=round(mad, 3))
+    if med >= TYPE_DAMAGED_MEDIAN:
+        row.update(why="damaged", note=(f"Median {med:.1f}% mito: most of its reads are mitochondrial, "
+                                        "likely damaged cells rather than a high baseline, so it keeps "
+                                        "the global rule."))
+    elif v.size < TYPE_MIN_CELLS:
+        row.update(why="too_few", note=f"Only {v.size} cells: too few for a bound of its own, so it "
+                                       "keeps the global rule.")
+    elif not (mad > 0):
+        row.update(why="no_spread", note="No spread in % mito (MAD 0): no bound of its own, so it "
+                                         "keeps the global rule.")
+    else:
+        bound = med + k * mad
+        row.update(rule="own", bound=round(min(bound, TYPE_BOUND_CAP), 4))
+        if bound > TYPE_BOUND_CAP:
+            row.update(capped=True, note=(f"Median + {k:g} MADs is {bound:.1f}%: capped at "
+                                          f"{TYPE_BOUND_CAP:g}%, so cells with half or more of their "
+                                          "reads mitochondrial still go."))
+        if row["bound"] > TYPE_HIGH_BOUND and (ceiling is None or row["bound"] > ceiling):
+            row["warning"] = (f"{name}: its own bound, {row['bound']:.1f}%, keeps cells with up to that "
+                              f"share of mitochondrial reads (median {med:.1f}%). Check the type is not "
+                              "damaged cells (few genes, no clear markers) before keeping them.")
+    return row
+
+
+def _type_column(adata, requested: str, recorded: dict | None) -> tuple[str, str | None]:
+    if requested:
+        if requested not in adata.obs.columns:
+            raise ValueError(f"Column '{requested}' not found.")
+        return requested, "requested"
+    rec_col = (recorded or {}).get("qc_mito_type_column")
+    if (recorded or {}).get("qc_mito_mode") == "per_type" and rec_col in adata.obs.columns:
+        return str(rec_col), "filtering"  # the column the last per-type filtering used
+    from scview.core.mito_by_type import default_column  # it imports this module
+
+    column, reason = default_column(adata)
+    if not column:
+        raise ValueError("Per-type % mito bounds need cell types (an author annotation or a "
+                         "clustering) and this dataset has none: pick a column, or use the "
+                         "global rule.")
+    return column, reason
+
+
+def _reusable_types(recorded: dict | None, t: Thresholds, column: str) -> dict[str, dict] | None:
+    """The per-type rows the last filtering recorded, by type, when it ran per type
+    with this column and multiplier: the cells left kept within them, so bounds
+    worked out again from those cells, whose spread is narrower, would trim them
+    again on every re-run (as ``_reusable`` for the samples' bounds)."""
+    if not recorded or recorded.get("qc_mito_mode") != "per_type":
+        return None
+    rec = recorded.get("qc_mito_types")
+    if not isinstance(rec, dict) or rec.get("column") != column or rec.get("k") != t.mad_k_mt:
+        return None
+    rows = rec.get("types")
+    if not isinstance(rows, list) or not all(
+            isinstance(r, dict) and isinstance(r.get("name"), str)
+            and (r.get("bound") is None or isinstance(r.get("bound"), (int, float))) for r in rows):
+        return None
+    return {r["name"]: r for r in rows}
+
+
+def type_bounds(adata, cells: dict, t: Thresholds, recorded: dict | None = None) -> TypeBounds:
+    """Each type's % mito rule (``t.mito_type_column``; empty: the column the last
+    per-type filtering used, else ``mito_by_type.default_column``) and the per-cell
+    arrays the masks compare. ``recorded`` is ``recorded_filtering``'s output: a
+    per-type run with the same column and multiplier is reused. Raises ValueError
+    for a missing column, none at all, or one with too many groups."""
+    column, reason = _type_column(adata, t.mito_type_column, recorded)
+    names, codes = qc_groups.group_codes(adata.obs[column])
+    k = len(names)
+    if k > MAX_TYPES:
+        raise ValueError(f"'{column}' has {k} groups; per-type % mito bounds take at most {MAX_TYPES}.")
+    pct = _values(cells, "pct_mt")
+    ceiling = t.max_pct_mt
+    reuse = _reusable_types(recorded, t, column)
+    rows = []
+    for name, m in zip(names, qc_groups.members(codes, k)):
+        rec = (reuse or {}).get(name)
+        if rec is not None:
+            n_cells = int(np.isfinite(pct[m]).sum())
+            rows.append({**_type_rule(name, np.array([]), t.mad_k_mt, ceiling),
+                         **{key: rec.get(key) for key in ("median", "mad", "bound", "rule", "why",
+                                                          "capped", "note", "warning")},
+                         "n_cells": n_cells})
+        else:
+            rows.append(_type_rule(name, pct[m], t.mad_k_mt, ceiling))
+    bound_of = np.array([np.inf if r["bound"] is None else float(r["bound"]) for r in rows] + [np.inf])
+    own_of = np.array([r["bound"] is not None for r in rows] + [False])
+    row_of = np.where(codes >= 0, codes, k)
+    return TypeBounds(column, reason, t.mad_k_mt, np.asarray(codes), rows, own_of[row_of],
+                      bound_of[row_of], ceiling,
+                      reused_from=recorded.get("timestamp") if reuse is not None else None)
+
+
+def _per_type_mito(cells: dict, types: TypeBounds, global_mask: np.ndarray | None) -> np.ndarray:
+    """% mito per type: a type with its own bound removes its cells above it (or at
+    the cap); the other cells keep ``global_mask``, the global rule's."""
+    pct = _values(cells, "pct_mt")
+    with np.errstate(invalid="ignore"):
+        mine = np.isfinite(pct) & ((pct > types.hi) | (pct >= TYPE_BOUND_CAP))
+    base = global_mask if global_mask is not None else np.zeros(pct.size, dtype=bool)
+    return np.where(types.own, mine, base)
+
+
 def removed_by(cells: dict, t: Thresholds, doublets: np.ndarray | None = None,
-               bounds: MadBounds | None = None) -> dict[str, np.ndarray]:
+               bounds: MadBounds | None = None, types: TypeBounds | None = None
+               ) -> dict[str, np.ndarray]:
     """For each threshold that is on, the cells it removes on its own (boolean masks).
 
     ``cells`` is ``per_cell_qc``'s output; ``doublets`` the per-cell doublet calls
     (``cluster_qc.doublet_calls``), used when ``t.drop_doublets``. In MAD mode
-    ``bounds`` are the samples' (``mad_bounds``); without them all cells pool."""
+    ``bounds`` are the samples' (``mad_bounds``); without them all cells pool.
+    ``types`` (``type_bounds``) replaces the % mito rule for the cells of a type
+    with a bound of its own (``mito_mode`` "per_type")."""
     if t.mode == "mad":
         out = _removed_by_mad(cells, t, bounds if bounds is not None else mad_bounds(cells, t))
-        if t.drop_doublets and doublets is not None:
-            out["doublets"] = np.asarray(doublets, dtype=bool)
-        return out
+    else:
+        out = _removed_by_fixed(cells, t)
+    if types is not None and _mito_measurable(cells):
+        out["max_pct_mt"] = _per_type_mito(cells, types, out.get("max_pct_mt"))
+    if t.drop_doublets and doublets is not None:
+        out["doublets"] = np.asarray(doublets, dtype=bool)
+    return out
+
+
+def _removed_by_fixed(cells: dict, t: Thresholds) -> dict[str, np.ndarray]:
     genes = _values(cells, "n_genes")
     counts = _values(cells, "total_counts")
     out: dict[str, np.ndarray] = {}
@@ -361,8 +581,6 @@ def removed_by(cells: dict, t: Thresholds, doublets: np.ndarray | None = None,
             pct = _values(cells, "pct_mt")
             # Kept below the threshold (strictly), as the filtering step always has.
             out["max_pct_mt"] = np.isfinite(pct) & (pct >= t.max_pct_mt)
-    if t.drop_doublets and doublets is not None:
-        out["doublets"] = np.asarray(doublets, dtype=bool)
     return out
 
 
@@ -388,18 +606,39 @@ def _removed_by_mad(cells: dict, t: Thresholds, bounds: MadBounds) -> dict[str, 
 def judge(adata, cells: dict, t: Thresholds, samples: Samples | None = None
           ) -> tuple[dict[str, np.ndarray], MadBounds | None]:
     """What ``t`` removes from ``adata`` (``cells`` = its ``per_cell_qc``): the
-    masks per criterion and, in MAD mode, the samples' bounds. The preview and the
-    filtering step both call this, so the preview is what the step does.
+    masks per criterion and, in MAD mode, the samples' bounds (``judge_types``
+    without the per-type rows).
 
     ``samples`` defaults to ``samples_of(adata)``. Raises ValueError for a bad
     mode or multiplier, or too many samples."""
+    removed, bounds, _ = judge_types(adata, cells, t, samples)
+    return removed, bounds
+
+
+def judge_types(adata, cells: dict, t: Thresholds, samples: Samples | None = None
+                ) -> tuple[dict[str, np.ndarray], MadBounds | None, TypeBounds | None]:
+    """``judge`` plus, with ``mito_mode`` "per_type" and % mito measurable, each
+    type's rule (``type_bounds``, with the global and applied % mito masks filled
+    in). The preview and the filtering step both call this, so the preview is what
+    the step does. Raises ValueError as ``judge`` does, and for a per-type column
+    that is missing or has too many groups."""
     t.check()
     calls = cluster_qc.doublet_calls(adata.obs)
-    if t.mode != "mad":
-        return removed_by(cells, t, calls), None
-    bounds = mad_bounds(cells, t, samples if samples is not None else samples_of(adata),
-                        recorded_filtering(adata))
-    return removed_by(cells, t, calls, bounds), bounds
+    per_type = t.mito_mode == "per_type" and _mito_measurable(cells)
+    if t.mode != "mad" and not per_type:
+        return removed_by(cells, t, calls), None, None
+    recorded = recorded_filtering(adata)
+    bounds = None
+    if t.mode == "mad":
+        bounds = mad_bounds(cells, t, samples if samples is not None else samples_of(adata), recorded)
+    if not per_type:
+        return removed_by(cells, t, calls, bounds), bounds, None
+    types = type_bounds(adata, cells, t, recorded)
+    removed = removed_by(cells, t, calls, bounds, types)
+    glob = removed_by(cells, t, None, bounds).get("max_pct_mt")
+    types.removed_global = glob if glob is not None else np.zeros(int(adata.n_obs), dtype=bool)
+    types.removed = removed["max_pct_mt"]
+    return removed, bounds, types
 
 
 def applied_summary(applied: dict) -> str:
@@ -540,11 +779,15 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
     the warnings already cover is not flagged again). ``recorded``: the same for
     the cells the last filtering step actually removed (``recorded_audit``).
 
+    ``mito_types`` (per-type mode, % mito measurable): per cell type
+    (``type_bounds``) its cells, median, the rule and bound used, and the cells
+    removed for % mito under the global rule vs the rule applied.
+
     ``cells`` is ``AnnDataAdaptor.qc_per_cell()``. Raises ValueError for a named
     column that does not exist, or for thresholds ``judge`` refuses."""
     n = int(adata.n_obs)
     samp = samples_of(adata, sample_column)
-    removed, bounds = judge(adata, cells, t, samp)
+    removed, bounds, types = judge_types(adata, cells, t, samp)
     drop = ~keep_mask(removed, n)
     n_removed = int(drop.sum())
 
@@ -582,8 +825,11 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
             "mad_k": t.mad_k,
             "mad_k_mt": t.mad_k_mt,
             "mad_upper": t.mad_upper,
+            "mito_mode": t.mito_mode,
+            "mito_type_column": t.mito_type_column,
         },
         "has_mt": has_mt,
+        "mito_types": _types_table(types),
         "doublet_calls": cluster_qc.doublet_calls(adata.obs) is not None,  # "drop doublets" can act
         "by_criterion": {c: {"label": CRITERIA[c], "n_removed": int(m.sum())} for c, m in removed.items()},
         "mad": bounds.to_dict(drop) if bounds is not None else None,
@@ -595,6 +841,13 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
         "audit": who,
         "recorded": recorded_audit(adata, label_column, condition_column),
     }
+
+
+def _types_table(types: TypeBounds | None) -> dict | None:
+    """The preview's per-type % mito table (per-type mode only: the MitoByType card
+    previews the bounds before the mode is chosen, and a global preview stays as
+    small as it was on every threshold drag)."""
+    return None if types is None else {**types.to_dict(), "applied": "per_type"}
 
 
 # --- who gets removed: per cell type x condition ------------------------------------
@@ -876,12 +1129,13 @@ RECORD_MAX_CELLS = 200_000  # removed cells kept in the record (the counts say h
 RECORD_MAX_COLUMNS = 8
 
 
-def record_columns(adata, sample_column: str | None) -> list[str]:
+def record_columns(adata, sample_column: str | None, type_column: str | None = None) -> list[str]:
     """The obs columns the record keeps for each removed cell: the samples, the
     condition-like columns, author label columns, then other categorical author
-    columns, each with 2..100 values; never one scView remakes after filtering."""
+    columns, each with 2..100 values; never one scView remakes after filtering,
+    except ``type_column``, the cell types a per-type % mito filter judged by."""
     obs = adata.obs
-    out: list[str] = []
+    out: list[str] = [type_column] if type_column and type_column in obs.columns else []
 
     def add(c, any_dtype: bool = True) -> None:
         name = str(c)
@@ -904,19 +1158,22 @@ def record_columns(adata, sample_column: str | None) -> list[str]:
 
 
 def removal_record(adata, cells: dict, removed: dict[str, np.ndarray], drop: np.ndarray, t: Thresholds,
-                   sample_column: str | None, when: str | None = None) -> dict:
+                   sample_column: str | None, when: str | None = None,
+                   types: TypeBounds | None = None) -> dict:
     """What the filtering step removes, for ``uns[RECORD_KEY]``: per removed cell
     (at most ``RECORD_MAX_CELLS``) its name, the criteria that removed it (bits in
     the order of ``criteria``), its QC values and its labels in ``record_columns``
     (codes into each column's categories). Arrays and strings only, so the h5ad
-    stays writable (no None: "" and NaN stand for none)."""
+    stays writable (no None: "" and NaN stand for none). With per-type % mito
+    bounds (``types``) also the type column and each type's bound (NaN: the global
+    rule); a global run's record is as it always was."""
     idx = np.flatnonzero(drop)
     crit = list(removed)
     keep_idx = idx[:RECORD_MAX_CELLS]
     bits = np.zeros(keep_idx.size, dtype=np.uint8)
     for b, c in enumerate(crit):
         bits |= np.asarray(removed[c])[keep_idx].astype(np.uint8) << b
-    cols = record_columns(adata, sample_column)
+    cols = record_columns(adata, sample_column, types.column if types is not None else None)
     columns = {}
     for j, c in enumerate(cols):
         names, codes = qc_groups.group_codes(adata.obs[c])
@@ -925,7 +1182,16 @@ def removal_record(adata, cells: dict, removed: dict[str, np.ndarray], drop: np.
     has_mt = _mito_measurable(cells)
     conds = set(confounding.condition_columns(adata.obs))
     pct = _values(cells, "pct_mt")[keep_idx] if has_mt else np.full(keep_idx.size, np.nan)
+    extra = {} if types is None else {
+        "mito_mode": "per_type",
+        "mito_type_column": types.column,
+        "mito_type_names": np.array([r["name"] for r in types.rows], dtype=object),
+        "mito_type_bounds": np.array([np.nan if r["bound"] is None else r["bound"] for r in types.rows],
+                                     dtype=np.float64),
+        "mito_type_k": float(types.k),
+    }
     return {
+        **extra,
         "version": RECORD_VERSION,
         "timestamp": when or datetime.now(timezone.utc).isoformat(),
         "mode": t.mode,
@@ -972,17 +1238,33 @@ def recorded_audit(adata, label_column: str | None = None, condition_column: str
         return None
 
 
-def recorded_removed_mito(adata, column: str) -> tuple[list[str], np.ndarray, str] | None:
+def recorded_mito_rule(rec: dict) -> dict:
+    """How a removal record's run judged % mito: ``mito_mode`` "global", or
+    "per_type" with the type column and each type's bound (None: the global rule)."""
+    if str(rec.get("mito_mode") or "global") != "per_type":
+        return {"mito_mode": "global"}
+    names = _strs(rec.get("mito_type_names"))
+    bounds = np.atleast_1d(np.asarray(rec.get("mito_type_bounds", []), dtype=np.float64))
+    return {"mito_mode": "per_type", "mito_type_column": str(rec.get("mito_type_column") or ""),
+            "mito_type_bounds": {n: (None if not np.isfinite(b) else round(float(b), 4))
+                                 for n, b in zip(names, bounds)}}
+
+
+def recorded_removed_mito(adata, column: str | None) -> tuple[list[str], np.ndarray, str] | None:
     """The cells the last filtering step removed, from its record: each one's
     ``column`` label ("" when it had none) and % mito, and the record's timestamp.
     None unless the record still adds up (not stale or truncated), measured % mito
-    and recorded ``column``."""
+    and recorded ``column``. ``column`` None: no labels (all ""), only whether the
+    record is usable and its cells' % mito."""
     rec = adata.uns.get(RECORD_KEY)
     if not isinstance(rec, dict) or not bool(rec.get("has_mt", False)):
         return None
     try:
         if int(rec["n_kept"]) != int(adata.n_obs) or bool(rec.get("truncated", False)):
             return None
+        if column is None:
+            pct = np.asarray(rec["pct_mt"], dtype=np.float64)
+            return [""] * pct.size, pct, str(rec.get("timestamp") or "")
         for entry in (rec.get("columns") or {}).values():
             if str(entry["name"]) != column:
                 continue
@@ -995,10 +1277,44 @@ def recorded_removed_mito(adata, column: str) -> tuple[list[str], np.ndarray, st
     return None
 
 
+def recorded_names(adata) -> list[str] | None:
+    """The names of the cells the last filtering step removed, from its record, in
+    its order; None unless the record still adds up (as ``recorded_removed_mito``)."""
+    rec = adata.uns.get(RECORD_KEY)
+    if not isinstance(rec, dict):
+        return None
+    try:
+        if int(rec["n_kept"]) != int(adata.n_obs) or bool(rec.get("truncated", False)):
+            return None
+        return _strs(rec.get("obs_names"))
+    except Exception as e:  # a malformed record only loses the addition
+        logger.warning("QC removal record unreadable: %s", e)
+        return None
+
+
+def recorded_mito_bits(adata) -> np.ndarray | None:
+    """Per cell of the removal record, in its order: removed by the % mito rule
+    (its ``max_pct_mt`` criterion bit). None without a usable record; all False when
+    % mito was not a criterion."""
+    rec = adata.uns.get(RECORD_KEY)
+    if not isinstance(rec, dict):
+        return None
+    try:
+        bits = np.asarray(rec.get("criterion_bits"), dtype=np.uint8)
+        crit = _strs(rec.get("criteria"))
+        if "max_pct_mt" not in crit:
+            return np.zeros(bits.size, dtype=bool)
+        return (bits >> crit.index("max_pct_mt")) & 1 > 0
+    except Exception as e:
+        logger.warning("QC removal record unreadable: %s", e)
+        return None
+
+
 def _recorded_audit(adata, rec: dict, label_column: str | None, condition_column: str | None) -> dict:
     head = {"timestamp": str(rec.get("timestamp") or ""), "mode": str(rec.get("mode") or ""),
             "n_before": int(rec["n_before"]), "n_removed": int(rec["n_removed"]),
-            "truncated": bool(rec.get("truncated", False)), "has_mt": bool(rec.get("has_mt", False))}
+            "truncated": bool(rec.get("truncated", False)), "has_mt": bool(rec.get("has_mt", False)),
+            **recorded_mito_rule(rec)}
     n_kept, rec_kept = int(adata.n_obs), int(rec["n_kept"])
     if n_kept != rec_kept:
         return {**head, "stale": True, "columns": [],

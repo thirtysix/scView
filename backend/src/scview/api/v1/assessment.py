@@ -249,6 +249,8 @@ async def get_filter_preview(
     mad_k: float | None = None,
     mad_k_mt: float | None = None,
     mad_upper: bool | None = None,
+    mito_mode: str | None = None,
+    mito_type_column: str = "",
     sample_column: str = "",
     cluster_column: str = "",
     label_column: str = "",
@@ -265,6 +267,8 @@ async def get_filter_preview(
     cell-type column, else the clustering) x ``condition_column`` group (default:
     a condition-like column, else the samples), with a chi-square per group and
     flags; ``recorded`` the same for what the last filtering step removed.
+    ``mito_mode`` "per_type" judges % mito by each type of ``mito_type_column``
+    (default: as the step picks it) with ``mito_types`` the per-type table.
     Small and fast at any cell count (one pass over cached per-cell values), so
     the QC plots ask again on every threshold change."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
@@ -275,7 +279,8 @@ async def get_filter_preview(
                        ("min_counts", min_counts), ("max_pct_mt", max_pct_mt),
                        ("drop_doublets", drop_doublets), ("qc_threshold_mode", mode),
                        ("qc_mad_k", mad_k), ("qc_mad_k_mt", mad_k_mt),
-                       ("qc_mad_upper", mad_upper)):
+                       ("qc_mad_upper", mad_upper), ("qc_mito_mode", mito_mode),
+                       ("qc_mito_type_column", mito_type_column or None)):
         if value is not None:
             setattr(params, key, value)
     thresholds = qc_filter.Thresholds.from_params(params)
