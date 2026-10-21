@@ -79,9 +79,10 @@ ONE_CONDITION_WARN = 0.5  # share of neighbourhoods that are one condition befor
 # DESeq2 fits one model per neighbourhood: one process keeps it in this worker
 # thread, as pseudobulk does.
 N_CPUS = 1
-# Seconds per (neighbourhood x sample) for the DESeq2 fit, measured on Kang
-# (779 neighbourhoods x 16 samples: 3.2 s on one laptop core); the rest is small.
-SECONDS_PER_CELL_OF_TABLE = 0.0003
+# Seconds per (sampled index cell x sample), measured on Kang: 1,384 and 2,767
+# sampled cells (780 and 1,193 neighbourhoods after refinement) x 16 samples ran
+# in 2.3 and 2.6 s on one laptop core, nearly all of it the DESeq2 fit.
+SECONDS_PER_CELL_OF_TABLE = 0.0001
 SECONDS_BASE = 1.0
 
 
