@@ -36,16 +36,17 @@ const KANG: CompositionResult = {
   n_significant_cell_level: 4,
   groups: [
     { group: "B", props: { CTRL: 0.0641, STIM: 0.0724 }, n_cells: { CTRL: 420, STIM: 530 },
-      fold_change: 1.128, stat: 1.868, pval: 0.0944, fdr: 0.336, df_prior: 2.061 },
+      fold_change: 1.128, stat: 1.868, pval: 0.0944, fdr: 0.336, df_prior: 2.061, paired_test: null },
     { group: "CD14 Mono", props: { CTRL: 0.3496, STIM: 0.3003 }, n_cells: { CTRL: 2300, STIM: 1925 },
-      fold_change: 0.859, stat: -3.817, pval: 0.00406, fdr: 0.0427, df_prior: 2.061 },
+      fold_change: 0.859, stat: -3.817, pval: 0.00406, fdr: 0.0427, df_prior: 2.061, paired_test: null },
     { group: "Eryth", props: { CTRL: 0.0042, STIM: 0.004 }, n_cells: { CTRL: 30, STIM: 30 },
-      fold_change: null, stat: null, pval: null, fdr: null, df_prior: null },
+      fold_change: null, stat: null, pval: null, fdr: null, df_prior: null, paired_test: null },
   ],
   samples: [],
   warnings: [],
   notes: [],
   dropped_samples: [],
+  pairing: { paired: true, n_pairs: 8, conditions: ["CTRL", "STIM"] },
 };
 
 describe("condition columns", () => {

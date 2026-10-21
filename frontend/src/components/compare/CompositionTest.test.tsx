@@ -55,11 +55,14 @@ const RESULT: CompositionResult = {
   n_significant_cell_level: 3,
   groups: [
     { group: "B", props: { CTRL: 0.064, STIM: 0.072 }, n_cells: { CTRL: 420, STIM: 530 },
-      fold_change: 1.13, stat: 1.87, pval: 0.094, fdr: 0.14, df_prior: 2.06 },
+      fold_change: 1.13, stat: 1.87, pval: 0.094, fdr: 0.14, df_prior: 2.06,
+      paired_test: { n_pairs: 8, mean_diff: 0.82, wilcoxon_p: 0.0390625, ttest_p: 0.0651, caution: null } },
     { group: "CD14 Mono", props: { CTRL: 0.35, STIM: 0.3 }, n_cells: { CTRL: 2300, STIM: 1925 },
-      fold_change: 0.86, stat: -3.82, pval: 0.004, fdr: 0.012, df_prior: 2.06 },
+      fold_change: 0.86, stat: -3.82, pval: 0.004, fdr: 0.012, df_prior: 2.06,
+      paired_test: { n_pairs: 8, mean_diff: -4.9, wilcoxon_p: 0.0078125, ttest_p: 0.004, caution: null } },
     { group: "pDC", props: { CTRL: 0.0057, STIM: 0.0108 }, n_cells: { CTRL: 38, STIM: 78 },
-      fold_change: 1.91, stat: 1.14, pval: 0.28, fdr: 0.28, df_prior: 2.06 },
+      fold_change: 1.91, stat: 1.14, pval: 0.28, fdr: 0.28, df_prior: 2.06,
+      paired_test: { n_pairs: 8, mean_diff: 0.5, wilcoxon_p: 0.25, ttest_p: 0.3, caution: null } },
   ],
   samples: [
     { sample: "SNG-101", condition: "CTRL", n_cells: 498, props: [0.06, 0.35, 0.005] },
@@ -68,6 +71,7 @@ const RESULT: CompositionResult = {
   warnings: [],
   notes: [],
   dropped_samples: [],
+  pairing: { paired: true, n_pairs: 8, conditions: ["CTRL", "STIM"] },
 };
 
 describe("CompositionTest", () => {
@@ -191,11 +195,41 @@ describe("CompositionTest", () => {
     expect(await screen.findByText("'stim' has fewer than two groups")).toBeInTheDocument();
   });
   it("plots one point per donor with the donors counted per condition", async () => {
+    testComposition.mockResolvedValue({
+      ...RESULT, pairing: { paired: false, n_pairs: 0, conditions: ["CTRL", "STIM"] },
+    });
     render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
     const caption = await screen.findByTestId("donor-caption");
     // RESULT has one donor (SNG-101) in each condition.
     expect(caption.textContent).toContain("One point per Donor (n = 1: CTRL 1, STIM 1)");
     expect(screen.getByRole("button", { name: "Panel per group" })).toBeInTheDocument();
+  });
+
+  it("draws paired donors as slope lines, says the moderated test blocked on the donor, and offers boxes", async () => {
+    render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
+    const caption = await screen.findByTestId("donor-caption");
+    expect(caption.textContent).toContain("One line per Donor (n = 1 donor, each in CTRL and STIM)");
+    expect(caption.textContent).toContain("The moderated t-test above blocked on Donor (paired");
+    const table = screen.getByTestId("paired-tests");
+    expect(table.textContent).toContain("Wilcoxon signed-rank p");
+    expect(table.textContent).toContain("-4.9 percentage points");
+    expect(table.textContent).toContain("0.0078");
+    fireEvent.click(screen.getByRole("button", { name: "Boxes" }));
+    expect(screen.getByTestId("donor-caption").textContent).toContain("One point per Donor (n = 1: CTRL 1, STIM 1)");
+    expect(screen.queryByTestId("paired-tests")).toBeNull();
+  });
+
+  it("keeps the boxes and the unpaired note when the donors do not recur", async () => {
+    testComposition.mockResolvedValue({
+      ...RESULT, design: "unpaired",
+      pairing: { paired: false, n_pairs: 0, conditions: ["CTRL", "STIM"] },
+      groups: RESULT.groups.map((g) => ({ ...g, paired_test: null })),
+    });
+    render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
+    const caption = await screen.findByTestId("donor-caption");
+    expect(caption.textContent).toContain("One point per Donor");
+    expect(caption.textContent).toContain("differ by more than the samples within a condition do");
+    expect(screen.queryByRole("button", { name: "Boxes" })).toBeNull();
   });
 
   it("says a sample column is needed instead of plotting conditions as samples", async () => {
