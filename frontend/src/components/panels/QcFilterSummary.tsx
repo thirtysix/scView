@@ -38,9 +38,9 @@ function LossTable({ title, grouping }: { title: string; grouping: FilterGroupin
         <thead>
           <tr className="text-left text-slate-400">
             <th className="font-medium">{grouping.column}</th>
-            <th className="text-right font-medium">Cells</th>
-            <th className="text-right font-medium">Removed</th>
-            <th className="text-right font-medium">Share</th>
+            <th className="text-right font-medium" title="Cells in the group before filtering">Cells</th>
+            <th className="text-right font-medium" title="Cells the current thresholds remove from the group">Removed</th>
+            <th className="text-right font-medium" title="Removed as a share of the group's cells">Share</th>
           </tr>
         </thead>
         <tbody className="text-slate-600">

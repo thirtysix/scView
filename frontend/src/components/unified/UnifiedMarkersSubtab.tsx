@@ -361,12 +361,14 @@ export function UnifiedMarkersSubtab({
             <tr className="border-b border-slate-200 bg-slate-50">
               <th
                 onClick={() => handleSort("gene")}
+                title="Gene symbol; click a row to colour the scatter by its expression"
                 className="cursor-pointer px-2 py-1.5 text-left font-medium text-slate-600 hover:text-slate-800"
               >
                 <span className="flex items-center gap-1">Gene {sortIcon("gene")}</span>
               </th>
               <th
                 onClick={() => handleSort("logfoldchange")}
+                title="log2 fold change of this group's mean expression over all other cells (scanpy rank_genes_groups: expm1 of the mean log-normalised values on each side)"
                 className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
               >
                 <span className="flex items-center justify-end gap-1">LogFC {sortIcon("logfoldchange")}</span>

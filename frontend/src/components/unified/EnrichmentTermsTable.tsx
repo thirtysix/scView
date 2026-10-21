@@ -49,18 +49,21 @@ export function EnrichmentTermsTable({
           <tr className="border-b border-slate-200 bg-slate-50">
             <th
               onClick={() => onSort("term")}
+              title="Gene set (term) and its collection; click a row to score the set's genes on the scatter"
               className="cursor-pointer px-2 py-1.5 text-left font-medium text-slate-600 hover:text-slate-800"
             >
               <span className="flex items-center gap-1">Term {sortIcon("term")}</span>
             </th>
             <th
               onClick={() => onSort("adj_pval")}
+              title="Hypergeometric p of the overlap between the query genes and the set, with the tested genes as background; Benjamini-Hochberg adjusted over the sets tested"
               className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
             >
               <span className="flex items-center justify-end gap-1">Adj.P {sortIcon("adj_pval")}</span>
             </th>
             <th
               onClick={() => onSort("overlap")}
+              title="Query genes in the set / genes in the set"
               className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
             >
               <span className="flex items-center justify-end gap-1">Overlap {sortIcon("overlap")}</span>

@@ -524,13 +524,13 @@ export function ObservationsPanel() {
                     <th className="px-4 py-2.5 text-left font-medium text-slate-600">
                       {primaryCol}
                     </th>
-                    <th className="px-4 py-2.5 text-right font-medium text-slate-600">
+                    <th className="px-4 py-2.5 text-right font-medium text-slate-600" title={`Cells with this ${primaryCol} value`}>
                       Cell Count
                     </th>
-                    <th className="px-4 py-2.5 text-right font-medium text-slate-600">
+                    <th className="px-4 py-2.5 text-right font-medium text-slate-600" title="Share of all cells in the dataset">
                       Percentage
                     </th>
-                    <th className="px-4 py-2.5 text-left font-medium text-slate-600">
+                    <th className="px-4 py-2.5 text-left font-medium text-slate-600" title="The same share as a bar">
                       Distribution
                     </th>
                   </tr>

@@ -200,7 +200,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
               <thead className="sticky top-0 bg-slate-50 text-left text-[11px] text-slate-500">
                 <tr>
                   <th className="px-2 py-1 font-medium">Cluster</th>
-                  <th className="px-2 py-1 text-right font-medium">Cells</th>
+                  <th className="px-2 py-1 text-right font-medium" title="Cells in the cluster">Cells</th>
                   <th className="px-2 py-1 text-right font-medium" title="Median genes per cell">Genes</th>
                   <th className="px-2 py-1 text-right font-medium" title="Median counts per cell">Counts</th>
                   {has("pct_mt") && <th className="px-2 py-1 text-right font-medium" title="Median % mitochondrial">Mito</th>}
@@ -210,7 +210,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                   {has("stress_score") && <th className="px-2 py-1 text-right font-medium" title="Median dissociation-stress score (immediate-early and heat-shock genes)">Stress</th>}
                   {has("pct_hb") && <th className="px-2 py-1 text-right font-medium" title="Mean % haemoglobin reads per cell (the mean: most cells have none); the typical value is a non-erythroid cluster's">Hb</th>}
                   {has("cycling_fraction") && <th className="px-2 py-1 text-right font-medium" title="Share of cells with a clear S or G2M cell-cycle score (above the noise band around 0)">Cycling</th>}
-                  <th className="px-2 py-1 font-medium">Flags</th>
+                  <th className="px-2 py-1 font-medium" title="Metrics on which the cluster sits far from the typical cluster (hover a flag for the numbers)">Flags</th>
                 </tr>
               </thead>
               <tbody>

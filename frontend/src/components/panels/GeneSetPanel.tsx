@@ -1363,6 +1363,7 @@ export function GeneSetPanel() {
                           </th>
                           <th
                             onClick={() => handleSort("pvalue")}
+                            title="Hypergeometric p of the overlap between the query genes and the set, with the tested genes as background"
                             className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                           >
                             <span className="flex items-center justify-end gap-1">
@@ -1371,6 +1372,7 @@ export function GeneSetPanel() {
                           </th>
                           <th
                             onClick={() => handleSort("adjusted_pvalue")}
+                            title="The same p, Benjamini-Hochberg adjusted over the sets tested"
                             className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                           >
                             <span className="flex items-center justify-end gap-1">
@@ -1379,6 +1381,7 @@ export function GeneSetPanel() {
                           </th>
                           <th
                             onClick={() => handleSort("overlap_count")}
+                            title="Query genes in the set / genes in the set"
                             className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                           >
                             <span className="flex items-center justify-end gap-1">

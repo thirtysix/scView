@@ -395,3 +395,21 @@ describe("UnifiedDESubtab table cap", () => {
     expect(screen.queryByTestId("cap-note")).toBeNull();
   });
 });
+
+describe("UnifiedDESubtab table headers", () => {
+  it("say what log2FC and the adjusted p are and how they were computed", async () => {
+    computeDECompare.mockReset().mockResolvedValue({ ...RESULT, label: "STIM", method: "wilcoxon" });
+    useDESettingsStore.getState().update({ mode: "groups", splitBy: "stim", groupA: "STIM", groupB: "CTRL" });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await screen.findByText("CD14");
+    expect(screen.getByRole("columnheader", { name: "log2FC" })).toHaveAttribute(
+      "title",
+      "log2 of the mean expression in STIM over CTRL (expm1 of the mean log-normalised values on each side, as scanpy's rank_genes_groups takes it)",
+    );
+    expect(screen.getByRole("columnheader", { name: "Adj.P" })).toHaveAttribute(
+      "title",
+      "Wilcoxon rank-sum p-value, Benjamini-Hochberg adjusted over the 1 tested genes",
+    );
+  });
+});

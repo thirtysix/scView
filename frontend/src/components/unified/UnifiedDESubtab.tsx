@@ -763,9 +763,27 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-10">
                 <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="px-2 py-1.5 text-left font-medium text-slate-600">Gene</th>
-                  <th className="px-2 py-1.5 text-right font-medium text-slate-600">log2FC</th>
-                  <th className="px-2 py-1.5 text-right font-medium text-slate-600">
+                  <th className="px-2 py-1.5 text-left font-medium text-slate-600" title="Gene symbol; click a row to colour the scatter by its expression">
+                    Gene
+                  </th>
+                  <th
+                    className="px-2 py-1.5 text-right font-medium text-slate-600"
+                    title={
+                      result.method === "pseudobulk"
+                        ? `DESeq2 log2 fold change of the per-donor summed counts, ${result.label} over ${refLabel}`
+                        : `log2 of the mean expression in ${result.label} over ${refLabel} (expm1 of the mean log-normalised values on each side, as scanpy's rank_genes_groups takes it)`
+                    }
+                  >
+                    log2FC
+                  </th>
+                  <th
+                    className="px-2 py-1.5 text-right font-medium text-slate-600"
+                    title={
+                      withP
+                        ? `${methodLabel(result.method)} p-value, Benjamini-Hochberg adjusted over the ${result.genes.length.toLocaleString()} tested genes`
+                        : `Logistic regression coefficient (penalised, fitted jointly over the tested genes): positive when the gene is higher in ${result.label}; no p-value`
+                    }
+                  >
                     {withP ? "Adj.P" : "Coef."}
                   </th>
                 </tr>
