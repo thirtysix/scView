@@ -6,6 +6,79 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-22
+
+### Added
+- **Memory and time before a load or a run.** Before a file is loaded (Data → the ingest step) and
+  next to Run in Data Assessment, scView says how much memory it will need at its peak and roughly
+  how long it will take, against the memory it has free: "About 3.1 GB at peak (doublet detection);
+  scView has 5.2 GB free of its 8 GB limit." Estimates come from the file header (h5ad, 10x .h5,
+  MEX, loom, zarr, CSV; RDS is a guess and says so) and were within 20% of the measured peak on six
+  datasets from 1,222 to 37,104 cells. When it will not fit, it says what to change: raise
+  `SCVIEW_MEMORY_GB`, close other datasets, skip doublet detection, or subsample. It warns; Run
+  stays enabled. `GET /ingest/session/{sid}/preflight`, `GET /datasets/{id}/preflight?steps=`.
+- **A run stops before a step that cannot fit,** with the reason, instead of the backend being
+  killed: "Stopped before doublet detection: it needs about 9.3 GB more at its peak, and scView has
+  2.4 GB free of its 6.0 GB limit". Nothing is saved, so the dataset stays as it was. Only under a
+  container limit, and only when even the low end of the estimate does not fit.
+- **Cancel a run** (Data Assessment, and the mito re-filter): it stops before the next step (a
+  clustering stops at once) and saves nothing. `POST /datasets/{id}/assessment/cancel`.
+- **Run watch.** While a run works, scView warns when memory passes 80% and 90% of its limit and
+  when one step has run for a minute or more. Each step's time and sampled peak memory are recorded
+  with the run, and a finished run shows its peak memory.
+- **Per-cell-type % mito bounds in filtering.** The filtering step can judge % mito per cell type:
+  each type with at least 30 cells gets its own bound (its median + 3 MADs, at most 50%) instead of
+  one ceiling; small, flat or damaged types keep the one rule. The cell-loss preview shows each
+  type's loss under both rules. On the ovary atlas (37,104 cells) one 20% ceiling removed 19% of
+  the granulosa cells, a fixed 10% removed 31%, per type 5%. A bound works both ways: a type with a
+  low baseline is cut lower than the one rule would (said in the table).
+- **Re-filter with per-cluster bounds** (Mito by cell type card), for a dataset that was filtered
+  before it had cell types: starts again from the original upload, kept cells take their cluster,
+  removed cells the nearest cluster by expression, then filters per type and re-runs the recorded
+  steps. A preview shows per type what comes back first (pbmc_1k at a fixed 10%: 553 cells kept,
+  1,062 after, 509 brought back); recorded in provenance and the replay script.
+- **Plot reliability (Unified View toolbar).** Colours each cell by the share of its graph
+  neighbours (the kNN graph the clustering used) that lie among its nearest 5% of cells on the 2D
+  or 3D plot, and lists groups worst first; click a group to select it. Strays in another island
+  and bridges between islands come out dark; on Kang's UMAP the median is 0.93 and 9% of cells
+  are below 0.5. The strict measure is given as context: a cell keeps a median of 1 of its 15
+  exact neighbours, so positions inside an island carry little. The co-pilot knows the result
+  (`[result:embedding_reliability]`). `GET /datasets/{id}/embeddings/{name}/reliability`.
+
+### Changed
+- **Opening a dataset makes room in memory first.** scView kept up to three datasets open whatever
+  their size; it now closes the least recently used ones (and frees them for real) until the new
+  one fits with a working reserve, and refuses with the reason (HTTP 507) only when it cannot fit
+  even alone. A run does the same for its estimated peak before it starts.
+- **Cell-level DE no longer copies the whole dataset** (+2.15 GB → +0.44 GB per request on Kang,
+  and faster).
+- An unknown pipeline step name (e.g. "umap") is refused with the valid names and the one probably
+  meant ("embeddings"), instead of a run that did nothing.
+- Co-expression over more than 20,000 cells uses a fixed random sample of 20,000 and says so;
+  Excel exports are limited to 2 million cells (CSV has no limit).
+- The sidebar memory gauge, the estimates and the run watch all leave out the file cache the
+  system can drop, so they agree.
+- The Unified View tab bar wraps onto a second row instead of scrolling (at 1600 px "Markers"
+  showed as "rs").
+
+### Fixed
+- **Opening a large dataset could get the backend killed.** The data assessment, the co-pilot's
+  first note and the QC report each densified a 2,000-cell sample with three copies (1 GB on a
+  20k-gene dataset) at the same moment; it is now read without densifying (+0.13 GB). A request
+  that was reading a dataset when a run replaced it re-read the whole file outside the cache; it
+  now keeps the copy it had.
+- **Doublet detection on a processed dataset** scores the counts (it got the scaled matrix, filled
+  the memory and failed with "Bin edges must be unique").
+- **Ingesting a file whose cell index is named like a column with other values** (the ovary atlas:
+  `cell_id`) failed with an error 500; it now loads, and a failed save is reported as such.
+- Gene-set scoring and the violin endpoint no longer block other requests while they work.
+- Cell-type columns named with a space or a dot ("Cell type", R's `cell.type`) are recognised as
+  cell types.
+- The run result card stayed empty after a run (the assessment refresh cleared it); a streamed
+  event split across two network chunks lost its data.
+- A run stopped mid-save no longer leaves a broken dataset file (it is written beside it and then
+  swapped in).
+
 ## [0.29.0] - 2026-10-21
 
 ### Added
