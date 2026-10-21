@@ -3,6 +3,7 @@ import { Header } from "./Header";
 import { PanelContainer } from "./PanelContainer";
 import { CoPilotDrawer } from "@/components/assistant/CoPilotDrawer";
 import { InsightBanner } from "@/components/assistant/InsightBanner";
+import { ShareLinkBanner } from "@/components/common/ShareLinkBanner";
 import { useViewStore } from "@/stores/viewStore";
 import { useSessionRestore } from "@/hooks/useSessionRestore";
 
@@ -20,6 +21,7 @@ export function AppLayout() {
       >
         <Header />
         <main className="flex-1 overflow-auto bg-slate-50 p-6">
+          <ShareLinkBanner />
           <InsightBanner />
           <PanelContainer />
         </main>
