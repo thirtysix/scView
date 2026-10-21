@@ -27,7 +27,9 @@ export async function showGeneOnScatter(datasetId: string, gene: string): Promis
   const store = useUnifiedViewStore.getState();
   store.setOverlayValues(f32);
   store.setOverlayLabel(gene);
-  store.setScatterOverlay(layer ? { type: "expression", gene, layer } : { type: "expression", gene });
+  // No `layer` on the overlay: that field marks a protein (CITE-seq) overlay,
+  // not the expression layer the values were fetched from.
+  store.setScatterOverlay({ type: "expression", gene });
   store.setOverlayDatasetId(datasetId);
   useViewStore.getState().setPanel("unified");
 }

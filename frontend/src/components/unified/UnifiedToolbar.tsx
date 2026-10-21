@@ -208,7 +208,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
       </div>
 
       {/* Colour schemes */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         <label className="text-[11px] font-medium text-slate-500">Colours</label>
         <label htmlFor="palette-categorical" className="text-[10px] text-slate-500">
           Categories
@@ -275,6 +275,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             </option>
           ))}
         </select>
+        <span className="flex items-center gap-1.5">
         <label
           htmlFor="colour-clip-default"
           className="text-[10px] text-slate-500"
@@ -295,6 +296,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             </option>
           ))}
         </select>
+        </span>
       </div>
 
       {/* Max rendered cells */}
