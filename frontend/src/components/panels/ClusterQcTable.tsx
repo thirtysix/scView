@@ -14,6 +14,7 @@ export const FLAG_LABELS: Record<ClusterFlag, string> = {
   stress_driven: "Stress-driven",
   hb_ambient: "Ambient Hb",
   cycling: "Cycling",
+  low_malat1: "Low MALAT1",
   small: "Very small",
 };
 
@@ -25,8 +26,14 @@ const FLAG_STYLES: Record<ClusterFlag, string> = {
   stress_driven: "border-orange-200 bg-orange-50 text-orange-800",
   hb_ambient: "border-rose-200 bg-rose-50 text-rose-700",
   cycling: "border-sky-200 bg-sky-50 text-sky-700",
+  low_malat1: "border-teal-200 bg-teal-50 text-teal-800",
   small: "border-slate-200 bg-slate-50 text-slate-600",
 };
+
+const MALAT1_TITLE =
+  "Median % of a cell's counts from MALAT1, a nuclear-retained RNA: a cluster far below the median cell may be " +
+  "fragments or cytoplasm without its nucleus (Montserrat-Ayuso & Esteve-Codina 2024, doi:10.1186/s12864-024-11015-5). " +
+  "Flagged below a third of the median cell's share; off when MALAT1 is barely captured (under 0.5%).";
 
 const ERYTHROID_TITLE = "Red-cell lineage by its own markers: its haemoglobin is real expression, not ambient RNA.";
 
@@ -210,6 +217,15 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                   {has("stress_score") && <th className="px-2 py-1 text-right font-medium" title="Median dissociation-stress score (immediate-early and heat-shock genes)">Stress</th>}
                   {has("pct_hb") && <th className="px-2 py-1 text-right font-medium" title="Mean % haemoglobin reads per cell (the mean: most cells have none); the typical value is a non-erythroid cluster's">Hb</th>}
                   {has("cycling_fraction") && <th className="px-2 py-1 text-right font-medium" title="Share of cells with a clear S or G2M cell-cycle score (above the noise band around 0)">Cycling</th>}
+                  {has("pct_malat1") && <th className="px-2 py-1 text-right font-medium" title={MALAT1_TITLE}>MALAT1</th>}
+                  {has("pct_intronic") && (
+                    <th
+                      className="px-2 py-1 text-right font-medium"
+                      title={`Median intronic / unspliced share of a cell's reads, from the author's '${data.intronic_column}' column (shown as given, not computed by scView); nuclei and pre-mRNA-rich cells run higher`}
+                    >
+                      Intronic
+                    </th>
+                  )}
                   <th className="px-2 py-1 font-medium" title="Metrics on which the cluster sits far from the typical cluster (hover a flag for the numbers)">Flags</th>
                 </tr>
               </thead>
@@ -226,6 +242,12 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                   {has("stress_score") && <td className="px-2 py-1 text-right">{data.typical.median_stress_score?.toFixed(2) ?? "—"}</td>}
                   {has("pct_hb") && <td className="px-2 py-1 text-right">{fmt(data.typical.mean_pct_hb, "hb")}</td>}
                   {has("cycling_fraction") && <td className="px-2 py-1 text-right">{fmt(data.typical.cycling_fraction, "frac")}</td>}
+                  {has("pct_malat1") && (
+                    <td className="px-2 py-1 text-right" title="The median cell's MALAT1 share (the low-MALAT1 flag compares with this)">
+                      {fmt(data.dataset_median_pct_malat1, "hb")}
+                    </td>
+                  )}
+                  {has("pct_intronic") && <td className="px-2 py-1 text-right">{fmt(data.typical.median_pct_intronic, "pct")}</td>}
                   <td className="px-2 py-1" />
                 </tr>
                 {data.clusters.map((c) => (
@@ -267,6 +289,8 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                       </td>
                     )}
                     {has("cycling_fraction") && <td className="px-2 py-1 text-right tabular-nums">{fmt(c.cycling_fraction, "frac")}</td>}
+                    {has("pct_malat1") && <td className="px-2 py-1 text-right tabular-nums">{fmt(c.median_pct_malat1, "hb")}</td>}
+                    {has("pct_intronic") && <td className="px-2 py-1 text-right tabular-nums">{fmt(c.median_pct_intronic, "pct")}</td>}
                     <td className="px-2 py-1">
                       <div className="flex flex-wrap items-center gap-1">
                         {c.erythroid && (

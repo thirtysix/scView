@@ -26,6 +26,10 @@ export interface ClusterQc {
   erythroid_markers?: string[];
   /** Share of its cells with a clear S or G2M score (outside the near-zero noise band). */
   cycling_fraction?: number | null;
+  /** Median % of a cell's counts from MALAT1 (nuclear-retained); null when the gene is absent. */
+  median_pct_malat1?: number | null;
+  /** Median of the author's intronic / unspliced share column, in % (never computed here). */
+  median_pct_intronic?: number | null;
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
   /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
@@ -40,6 +44,7 @@ export type ClusterFlag =
   | "stress_driven"
   | "hb_ambient"
   | "cycling"
+  | "low_malat1"
   | "small";
 
 /** A technical score that tracks one of the clustering's leading PCs (backend core/qc_drivers.py). */
@@ -74,6 +79,10 @@ export interface ClusterQcReport {
   drivers_checked?: string[];
   drivers_space?: string | null;
   drivers_n_pcs?: number;
+  /** The median cell's MALAT1 share (%): low_malat1 compares a cluster's median with it. */
+  dataset_median_pct_malat1?: number | null;
+  /** The obs column the intronic / unspliced share came from, when obs has one. */
+  intronic_column?: string | null;
 }
 
 export async function getClusterQc(datasetId: string, groupby?: string): Promise<ClusterQcReport> {
