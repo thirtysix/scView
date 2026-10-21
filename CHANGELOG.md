@@ -6,6 +6,33 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Cell-cell communication (Unified View → Communication).** Ligand-receptor interactions between
+  groups, scored with LIANA's consensus rank aggregate (CellPhoneDB, Connectome, log2FC, NATMI,
+  SingleCellSignalR) on all cells or on one condition. Table with CSV download, dot plot, circle
+  plot or heatmap of interactions between groups, and sender/receiver roles. The human or mouse
+  LIANA resource (2 MB) downloads on first use. Method scores, CellPhoneDB p-values and the
+  specificity rank match liana-py 1.10 exactly on Kang and paul15. The magnitude rank counts the
+  product shared by Connectome and NATMI once; liana-py 1.10 ranks it twice, which inverts it.
+  No new dependency; Kang takes about 2 s.
+- **Milo neighbourhood differential abundance (Compare → Composition → Neighbourhoods).** A
+  cluster-free test of abundance shifts between two conditions with donors as replicates
+  (paired when every donor is in both): neighbourhoods on the dataset's own graph, a negative
+  binomial test per neighbourhood (DESeq2), spatial FDR, a beeswarm by cell type, the
+  neighbourhood graph on any embedding, CSV, and selecting a neighbourhood's cells on the scatter.
+  Matches pertpy's Milo (pydeseq2 solver) on Kang, agrees with edgeR (logFC r = 0.989), and finds
+  nothing on shuffled labels. Warns when the graph was batch-corrected for the condition itself.
+- **Clustering tree across the resolution sweep.** Cluster sizes at each resolution, cells moving
+  between them, SC3 stability, and clusters that draw on two parents (clustree-style).
+- **"Should any clusters merge?"** Neighbouring clusters are tested on held-out counts (negative
+  binomial count splitting), so the test does not reuse the data that made the clusters. Pairs
+  with fewer than 10 distinguishing genes (adjustable) are merge candidates; the result saves as
+  `<column>_merged` and the replay script reproduces it. One split with a fixed seed: a guide, not
+  a verdict. Needs raw counts; Kang takes about 1.5 min.
+- **The clustering sensitivity check also varies the number of neighbours and the algorithm**
+  (Leiden or Louvain), next to the variable-gene settings.
+- The co-pilot knows the last communication, Milo and merge-check results and cites them.
+
 ## [0.25.0] - 2026-10-21
 
 ### Added
