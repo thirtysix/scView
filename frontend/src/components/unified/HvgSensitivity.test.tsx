@@ -217,6 +217,33 @@ describe("HvgSensitivityPanel", () => {
     expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
   });
 
+  it("adds a setting with other neighbours and algorithm and sends only what changes", async () => {
+    api.getHvgSensitivityInfo.mockResolvedValue({ ...info, seconds_per_graph_setting: 5 });
+    api.runHvgSensitivity.mockResolvedValue(undefined);
+    renderPanel();
+    await screen.findByText(/About 35 s for 3 settings/);
+    fireEvent.change(screen.getByLabelText("Genes to add"), { target: { value: "2000" } });
+    fireEvent.change(screen.getByLabelText("Neighbours to add"), { target: { value: "30" } });
+    fireEvent.change(screen.getByLabelText("Algorithm to add"), { target: { value: "louvain" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.getByLabelText("Seurat, 2,000 genes, 30 neighbours, Louvain")).toBeChecked();
+    // Same genes as the control: only the graph and the clustering re-run.
+    expect(screen.getByText(/About 40 s for 4 settings/)).toBeInTheDocument();
+    // The recorded k is the control itself, not a new setting.
+    fireEvent.change(screen.getByLabelText("Neighbours to add"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Algorithm to add"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.getAllByRole("checkbox")).toHaveLength(4);
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await waitFor(() => expect(api.runHvgSensitivity).toHaveBeenCalled());
+    expect(api.runHvgSensitivity.mock.calls[0]![1].settings[3]).toEqual({
+      flavor: "seurat",
+      n_top_genes: 2000,
+      n_neighbors: 30,
+      method: "louvain",
+    });
+  });
+
   it("warns when the control does not reproduce the stored clusters", async () => {
     api.getHvgSensitivityInfo.mockResolvedValue(info);
     api.runHvgSensitivity.mockImplementation(async (_id, _body, h) => {

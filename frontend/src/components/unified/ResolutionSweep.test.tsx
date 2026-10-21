@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const api = vi.hoisted(() => ({
@@ -12,10 +12,22 @@ vi.mock("@/api/clustering", () => ({
   getSweepInfo: api.getSweepInfo,
   runSweep: api.runSweep,
   keepResolution: api.keepResolution,
+  getMergeCheckInfo: () => Promise.resolve({ available: false, reason: "not in this test" }),
+  runMergeCheck: vi.fn(),
+  saveMergedClustering: vi.fn(),
 }));
 vi.mock("@/api/datasets", () => ({ getDataset: api.getDataset }));
+// Plotly needs a real browser; the test checks what is asked for.
+const plotProps = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/plotConfig", () => ({ plotConfig: () => ({}) }));
+vi.mock("@/components/plots/Plot", () => ({
+  default: (p: unknown) => {
+    plotProps(p);
+    return <div data-testid="plot" />;
+  },
+}));
 
-import type { SweepInfo, SweepRow } from "@/api/clustering";
+import type { ClusterTree, SweepInfo, SweepRow } from "@/api/clustering";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { ResolutionSweepPanel } from "./ResolutionSweep";
@@ -93,6 +105,50 @@ describe("ResolutionSweepPanel", () => {
     expect(api.keepResolution).toHaveBeenCalledWith("ds", 0.4, "leiden");
     expect(api.getDataset).toHaveBeenCalledWith("ds");
     expect(screen.getAllByRole("button", { name: "Show" })).toHaveLength(2);
+  });
+
+  it("draws the clustering tree and picks a resolution from a row or a node", async () => {
+    const tree: ClusterTree = {
+      prop_filter: 0.1,
+      mixed_prop: 0.2,
+      nodes: [
+        { resolution: 0.2, cluster: "0", size: 400, sc3_stability: 0.9, n_parents: 0, mixed: false },
+        { resolution: 0.4, cluster: "0", size: 250, sc3_stability: 0.6, n_parents: 1, mixed: false },
+        { resolution: 0.4, cluster: "1", size: 150, sc3_stability: 0.4, n_parents: 2, mixed: true },
+      ],
+      edges: [
+        { from_resolution: 0.2, from: "0", to_resolution: 0.4, to: "0", count: 250, in_prop: 1 },
+        { from_resolution: 0.2, from: "0", to_resolution: 0.4, to: "1", count: 150, in_prop: 1 },
+      ],
+      n_mixed: 1,
+    };
+    api.getSweepInfo.mockResolvedValue(info);
+    api.runSweep.mockImplementation(async (_id, _body, h) => {
+      h.onStart({ method: "leiden", n_cells: 400, resolutions: [0.2, 0.4], representation: "X_pca", silhouette_cells: 400 });
+      h.onResult(row(0.2));
+      h.onResult(row(0.4));
+      h.onTree(tree);
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    expect(await screen.findByTestId("plot")).toBeInTheDocument();
+    expect(screen.getByText(/1 cluster draws at least 20% of its cells from each of two or more parents/)).toBeInTheDocument();
+
+    const last = () => plotProps.mock.calls[plotProps.mock.calls.length - 1]![0] as {
+      layout: { shapes: { y0: number }[] };
+      onClick: (e: unknown) => void;
+    };
+    expect(last().layout.shapes).toHaveLength(0);
+    fireEvent.click(screen.getByText("0.4"));
+    await waitFor(() => expect(last().layout.shapes).toHaveLength(1));
+    expect(last().layout.shapes[0]!.y0).toBeCloseTo(0.55);
+    expect(screen.getAllByRole("row")[2]).toHaveAttribute("aria-selected", "true");
+
+    // A node click picks its resolution in the table.
+    act(() => last().onClick({ points: [{ customdata: 0.2 }] }));
+    expect(screen.getAllByRole("row")[1]).toHaveAttribute("aria-selected", "true");
+    // The merge check follows the picked resolution.
+    expect(await screen.findByText("not in this test")).toBeInTheDocument();
   });
 
   it("refuses resolutions it can't run", async () => {

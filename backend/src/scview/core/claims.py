@@ -587,6 +587,7 @@ _FAMILY_PREFIX = {
     "celltypes": "result:celltypes:", "annotation": "result:celltypes:",
     "composition": "result:composition", "milo": "result:milo", "qc": "result:qc:",
     "enrichment": "result:enrichment", "communication": "result:communication",
+    "merge_check": "result:merge_check",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 

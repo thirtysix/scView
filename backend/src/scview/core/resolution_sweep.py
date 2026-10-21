@@ -8,7 +8,9 @@ pipeline's name for them (``scview_leiden_r0.5``).
 For each resolution the sweep reports the number of clusters and their sizes,
 a silhouette score in the representation the graph was built from (on a fixed,
 seeded subsample of cells, so the scores are comparable), and the adjusted Rand
-index to the previous resolution: how much the partition changed.
+index to the previous resolution: how much the partition changed. Once every
+resolution is done it adds the clustering tree across them
+(``core/cluster_tree.py``).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from scview.core import leiden, provenance
+from scview.core import cluster_tree, leiden, provenance
 from scview.core.obs_writes import forget_column_results
 
 logger = logging.getLogger(__name__)
@@ -141,7 +143,8 @@ def iter_sweep(adata, resolutions: list[float], method: str) -> Iterator[dict[st
     """Cluster at each resolution and score it, one resolution at a time.
 
     Yields a header (method, cells, the silhouette's representation and
-    subsample size), then one result per resolution. ``adata`` is not changed.
+    subsample size), one result per resolution, then ``{"tree": ...}``, the
+    clustering tree across them. ``adata`` is not changed.
     """
     from sklearn.metrics import adjusted_rand_score, silhouette_score
 
@@ -161,15 +164,20 @@ def iter_sweep(adata, resolutions: list[float], method: str) -> Iterator[dict[st
     }
 
     prev: np.ndarray | None = None
+    levels: list[tuple[float, np.ndarray, list[str]]] = []
     for r in resolutions:
         existing = existing_column(adata, method, r)
         # A resolution the dataset already has a column for is shown as that
         # column, which "Keep this one" returns: re-clustering may not reproduce it
         # (files processed before the UMAP graph fix carry an altered graph).
-        labels = (pd.Categorical(adata.obs[existing].astype(str)) if existing is not None
-                  else cluster(adata, method, r))
+        labels = (pd.Categorical(adata.obs[existing].astype(str).where(adata.obs[existing].notna()))
+                  if existing is not None else cluster(adata, method, r))
         codes = np.asarray(labels.codes)
-        codes = np.where(codes < 0, codes.max() + 1, codes)  # missing labels: one group
+        names = [str(c) for c in labels.categories]
+        if (codes < 0).any():  # missing labels: one group
+            codes = np.where(codes < 0, len(names), codes)
+            names.append("(no label)")
+        levels.append((r, codes, names))
         sizes = np.sort(np.bincount(codes))[::-1]
         silhouette = None
         if sub is not None and 2 <= np.unique(codes[sub]).size < sub.size:
@@ -184,13 +192,15 @@ def iter_sweep(adata, resolutions: list[float], method: str) -> Iterator[dict[st
             "exists": existing is not None,
         }
         prev = codes
+    yield {"tree": cluster_tree.build(levels)}
 
 
 def sweep(adata, resolutions: list[float], method: str) -> dict[str, Any]:
-    """:func:`iter_sweep` collected: the header with ``results`` added."""
+    """:func:`iter_sweep` collected: the header with ``results`` and ``tree`` added."""
     rows = iter_sweep(adata, resolutions, method)
     head = next(rows)
-    return {**head, "results": list(rows)}
+    *results, tree = rows
+    return {**head, "results": results, **tree}
 
 
 def keep(adata, method: str, resolution: float) -> dict[str, Any]:

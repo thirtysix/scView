@@ -25,10 +25,16 @@ Each setting runs the same scanpy calls as the pipeline's steps
 (``_run_hvg`` / ``_pearson_hvg``, ``_run_scaling``, ``_run_pca``,
 ``_run_neighbors``, ``_run_clustering``), on the counts when the dataset keeps
 them, so the control reproduces the dataset's own variable genes.
+
+A setting can also change the neighbour graph's k (10 and 30 by default,
+around scanpy's 15) or the clustering algorithm (Leiden or Louvain), the other
+two choices that move a partition at a fixed resolution; settings with the same
+variable genes share their PCs and re-run only the graph and the clustering.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import importlib.util
 import logging
@@ -58,8 +64,11 @@ FLAVOR_LABELS = {
     "seurat_v3": "Seurat v3 (counts)",
     "pearson_residuals": "Pearson residuals",
 }
-MAX_SETTINGS = 8
+METHOD_LABELS = {"leiden": "Leiden", "louvain": "Louvain"}
+MAX_SETTINGS = 10
 MIN_GENES, MAX_GENES = 200, 10_000
+MIN_NEIGHBORS, MAX_NEIGHBORS = 5, 100
+NEIGHBOR_CHOICES = (10, 30)  # tried by default besides the recorded k (scanpy's default 15)
 MIN_CELLS = 50
 # Each setting re-runs PCA, the neighbour graph and the clustering on every cell:
 # about 1 s per 1,000 cells on 2 cores (Kang, 13,836 cells: 10-15 s a setting).
@@ -72,6 +81,7 @@ PART = 0.1  # a new cluster holding this share of a cluster's cells is one of it
 # setting once warm, 65 s for the five defaults; Harmony adds 0.3 s.
 SECONDS_PER_1K_CELLS = 1.0
 HARMONY_SECONDS_PER_1K_CELLS = 0.05
+GRAPH_SECONDS_PER_1K_CELLS = 0.9  # a setting sharing another's PCs: the graph and Leiden (Kang: 13-19 s)
 FIRST_RUN_SECONDS = 30.0  # numba compiling the neighbour search after a server start
 
 _DEFAULT_GENES = 2000
@@ -90,18 +100,37 @@ class Cancelled(Exception):
 class Setting:
     flavor: str
     n_top_genes: int
+    # The neighbour graph's k and the clustering algorithm; None: as recorded.
+    n_neighbors: int | None = None
+    method: str | None = None
 
     @property
     def key(self) -> str:
-        return f"{self.flavor}_{self.n_top_genes}"
+        k = f"{self.flavor}_{self.n_top_genes}"
+        if self.n_neighbors is not None:
+            k += f"_k{self.n_neighbors}"
+        return k + (f"_{self.method}" if self.method else "")
 
     @property
     def label(self) -> str:
-        return f"{FLAVOR_LABELS.get(self.flavor, self.flavor)}, {self.n_top_genes:,} genes"
+        out = f"{FLAVOR_LABELS.get(self.flavor, self.flavor)}, {self.n_top_genes:,} genes"
+        if self.n_neighbors is not None:
+            out += f", {self.n_neighbors} neighbours"
+        return out + (f", {METHOD_LABELS.get(self.method, self.method)}" if self.method else "")
+
+    @property
+    def embedding(self) -> tuple[str, int]:
+        """What the PCs depend on: settings differing only in graph or algorithm share them."""
+        return self.flavor, self.n_top_genes
 
     def to_dict(self) -> dict[str, Any]:
-        return {"flavor": self.flavor, "n_top_genes": self.n_top_genes, "key": self.key,
-                "label": self.label}
+        return {"flavor": self.flavor, "n_top_genes": self.n_top_genes, "n_neighbors": self.n_neighbors,
+                "method": self.method, "key": self.key, "label": self.label}
+
+    def effective(self, rec: Recorded) -> Recorded:
+        """``rec`` with this setting's graph and algorithm."""
+        return dataclasses.replace(rec, n_neighbors=self.n_neighbors or rec.n_neighbors,
+                                   method=self.method or rec.method)
 
 
 @dataclass
@@ -330,8 +359,9 @@ def _round_genes(n: float) -> int:
 
 
 def default_settings(adata, rec: Recorded) -> list[Setting]:
-    """The current setting (the control), half and 1.5x as many genes, then each
-    other flavour that can run here at the current count."""
+    """The current setting (the control), half and 1.5x as many genes, each other
+    flavour that can run here at the current count, then the current genes with
+    10 and 30 neighbours and with the other clustering algorithm."""
     available = flavors_available(adata)
     n = min(rec.n_top_genes, adata.n_vars)
     out: list[Setting] = []
@@ -343,7 +373,11 @@ def default_settings(adata, rec: Recorded) -> list[Setting]:
     for f in ("seurat", "cell_ranger", "pearson_residuals", "seurat_v3"):
         if f != rec.flavor and available[f] is None:
             out.append(Setting(f, n))
-    return list(dict.fromkeys(out))
+    for k in NEIGHBOR_CHOICES:
+        if k != rec.n_neighbors:
+            out.append(Setting(base, n, n_neighbors=k))
+    out.append(Setting(base, n, method=next(m for m in rs.METHODS if m != rec.method)))
+    return list(dict.fromkeys(out))[:MAX_SETTINGS]
 
 
 def clean_settings(adata, rec: Recorded, values: list[dict[str, Any]] | None) -> list[Setting]:
@@ -366,21 +400,43 @@ def clean_settings(adata, rec: Recorded, values: list[dict[str, Any]] | None) ->
             raise SensitivityError(f"Variable genes must be between {MIN_GENES:,} and {MAX_GENES:,} (got {n}).")
         if n > adata.n_vars:
             raise SensitivityError(f"This dataset has {adata.n_vars:,} genes; {n:,} variable genes is too many.")
-        out.append(Setting(flavor, n))
+        k = v.get("n_neighbors")
+        if k is not None:
+            try:
+                k = int(k)
+            except (TypeError, ValueError):
+                raise SensitivityError("n_neighbors must be a whole number.") from None
+            if not MIN_NEIGHBORS <= k <= MAX_NEIGHBORS:
+                raise SensitivityError(f"Neighbours must be between {MIN_NEIGHBORS} and {MAX_NEIGHBORS} (got {k}).")
+            if k >= adata.n_obs:
+                raise SensitivityError(f"This dataset has {adata.n_obs:,} cells; {k} neighbours is too many.")
+        method = v.get("method") or None
+        if method is not None and method not in rs.METHODS:
+            raise SensitivityError(f"Unknown clustering method '{method}'; choose from {', '.join(rs.METHODS)}.")
+        # The recorded value is the current setting's own, not a change.
+        out.append(Setting(flavor, n, None if k == rec.n_neighbors else k,
+                           None if method == rec.method else method))
     out = list(dict.fromkeys(out))
     if len(out) > MAX_SETTINGS:
         raise SensitivityError(f"Try at most {MAX_SETTINGS} settings at a time.")
     return out
 
 
-def estimate_seconds(n_cells: int, n_settings: int, rec: Recorded) -> float:
+def estimate_seconds(n_cells: int, n_settings: int, rec: Recorded, n_embeddings: int | None = None) -> float:
+    """Seconds for ``n_settings``, of which ``n_embeddings`` (default all) need
+    their own PCs; the others re-run only the graph and the clustering."""
     per = SECONDS_PER_1K_CELLS + (HARMONY_SECONDS_PER_1K_CELLS if rec.batch_key else 0.0)
-    return round(n_settings * per * n_cells / 1000 + 2, 1)
+    n_emb = n_settings if n_embeddings is None else n_embeddings
+    graph_only = (n_settings - n_emb) * GRAPH_SECONDS_PER_1K_CELLS
+    return round((n_emb * per + graph_only) * n_cells / 1000 + 2, 1)
 
 
 def column_name(rec: Recorded, setting: Setting) -> str:
     """The column "keep" saves a setting's clusters as."""
-    return f"{rs.column_name(rec.method, rec.resolution)}_hvg_{setting.flavor}_{setting.n_top_genes}"
+    out = f"{rs.column_name(rec.method, rec.resolution)}_hvg_{setting.flavor}_{setting.n_top_genes}"
+    if setting.n_neighbors is not None:
+        out += f"_k{setting.n_neighbors}"
+    return out + (f"_{setting.method}" if setting.method else "")
 
 
 @dataclass
@@ -396,34 +452,43 @@ def _inputs(adata, rec: Recorded) -> _Inputs:
     """What every setting reads, built once: the log-normalised matrix is made from
     the counts as the pipeline makes it (normalize_total + log1p), so the control
     picks the dataset's own variable genes; without counts, the stored log values."""
-    import scanpy as sc
-
     from scview.core.pipeline import looks_like_counts
 
     counts, _ = _counts(adata)
     if counts is not None:
-        # In the counts' own dtype, as the pipeline normalises them: float32 instead
-        # of Kang's float64 moved the PCA by 1e-5 and lost a 24-cell cluster.
-        tmp = ad.AnnData(X=counts.copy())
-        sc.pp.normalize_total(tmp, target_sum=rec.target_sum)
-        sc.pp.log1p(tmp)
-        log = tmp.X
-    else:
-        log = None
-        raw = adata.raw
-        sources = []
-        if raw is not None and not len(adata.var_names.difference(raw.var_names)):
-            sources.append(raw[:, adata.var_names].X)
-        sources.append(adata.X)
-        for X in sources:
-            if not looks_like_counts(X) and float(X.min()) >= 0:  # scaled data has negatives
-                log = X
-                break
-        if log is None:
-            raise SensitivityError(
-                "The check needs counts or log-normalised expression; this dataset only has "
-                "scaled values. Re-run the pipeline from the counts."
-            )
+        return inputs_from_counts(adata, rec, counts)
+    log = None
+    raw = adata.raw
+    sources = []
+    if raw is not None and not len(adata.var_names.difference(raw.var_names)):
+        sources.append(raw[:, adata.var_names].X)
+    sources.append(adata.X)
+    for X in sources:
+        if not looks_like_counts(X) and float(X.min()) >= 0:  # scaled data has negatives
+            log = X
+            break
+    if log is None:
+        raise SensitivityError(
+            "The check needs counts or log-normalised expression; this dataset only has "
+            "scaled values. Re-run the pipeline from the counts."
+        )
+    return _with_obs(adata, rec, None, log)
+
+
+def inputs_from_counts(adata, rec: Recorded, counts) -> _Inputs:
+    """The inputs for ``counts`` (cells x the dataset's genes): ``adata``'s own, or
+    a thinned copy of them (core/merge_check.py)."""
+    import scanpy as sc
+
+    # In the counts' own dtype, as the pipeline normalises them: float32 instead
+    # of Kang's float64 moved the PCA by 1e-5 and lost a 24-cell cluster.
+    tmp = ad.AnnData(X=counts.copy())
+    sc.pp.normalize_total(tmp, target_sum=rec.target_sum)
+    sc.pp.log1p(tmp)
+    return _with_obs(adata, rec, counts, tmp.X)
+
+
+def _with_obs(adata, rec: Recorded, counts, log) -> _Inputs:
     keys = [k for k in (rec.hvg_batch_key, rec.batch_key) if k]
     obs = adata.obs[list(dict.fromkeys(keys))].copy() if keys else pd.DataFrame(index=adata.obs_names)
     hv = adata.var.get("highly_variable")
@@ -496,20 +561,20 @@ def _harmony(X: np.ndarray, inp: _Inputs, rec: Recorded) -> np.ndarray:
     return np.asarray(tmp.obsm["X_pca_harmony"])
 
 
-def _cluster(X: np.ndarray, rec: Recorded) -> pd.Categorical:
-    """The neighbour graph and the clustering, as the pipeline builds them."""
+def _cluster(X: np.ndarray, rec: Recorded) -> tuple[pd.Categorical, sp.csr_matrix]:
+    """The neighbour graph and the clustering, as the pipeline builds them:
+    (labels, the graph's connectivities)."""
     import scanpy as sc
 
     tmp = ad.AnnData(obs=pd.DataFrame(index=[str(i) for i in range(X.shape[0])]))
     tmp.obsm["X_rep"] = X
     sc.pp.neighbors(tmp, n_neighbors=min(rec.n_neighbors, tmp.n_obs - 1), use_rep="X_rep")
-    return rs.cluster(tmp, rec.method, rec.resolution)
+    return rs.cluster(tmp, rec.method, rec.resolution), tmp.obsp["connectivities"]
 
 
-def run_setting(inp: _Inputs, s: Setting, rec: Recorded,
-                stop: Callable[[], bool] | None = None) -> tuple[np.ndarray, pd.Categorical]:
-    """(variable-gene mask, cluster labels) for one setting; checks ``stop``
-    between sub-steps."""
+def _embed(inp: _Inputs, s: Setting, rec: Recorded, stop: Callable[[], bool] | None = None,
+           ) -> tuple[np.ndarray, np.ndarray]:
+    """(variable-gene mask, the PCs the graph is built on) for one setting."""
     mask = _select(inp, s, rec)
     _check_stop(stop)
     X = _pcs(inp, mask, s, rec)
@@ -517,7 +582,26 @@ def run_setting(inp: _Inputs, s: Setting, rec: Recorded,
     if rec.batch_key:
         X = _harmony(X, inp, rec)
         _check_stop(stop)
-    return mask, _cluster(X, rec)
+    return mask, X
+
+
+def run_setting_graph(inp: _Inputs, s: Setting, rec: Recorded, stop: Callable[[], bool] | None = None,
+                      embedded: tuple[np.ndarray, np.ndarray] | None = None,
+                      ) -> tuple[np.ndarray, pd.Categorical, sp.csr_matrix]:
+    """(variable-gene mask, cluster labels, neighbour graph) for one setting;
+    checks ``stop`` between sub-steps. ``embedded``: its ``_embed``, when a setting
+    with the same genes made it already."""
+    mask, X = embedded if embedded is not None else _embed(inp, s, rec, stop)
+    labels, graph = _cluster(X, s.effective(rec))
+    return mask, labels, graph
+
+
+def run_setting(inp: _Inputs, s: Setting, rec: Recorded,
+                stop: Callable[[], bool] | None = None) -> tuple[np.ndarray, pd.Categorical]:
+    """(variable-gene mask, cluster labels) for one setting; checks ``stop``
+    between sub-steps."""
+    mask, labels, _ = run_setting_graph(inp, s, rec, stop)
+    return mask, labels
 
 
 # ---------------------------------------------------------------------------
@@ -645,13 +729,19 @@ def iter_sensitivity(
         "current": rec.current.to_dict(),
         "settings": [s.to_dict() for s in settings],
         "n_current_hvgs": None if inp.current_hvgs is None else int(inp.current_hvgs.sum()),
-        "estimate_seconds": estimate_seconds(adata.n_obs, len(settings), rec),
+        "estimate_seconds": estimate_seconds(adata.n_obs, len(settings), rec,
+                                             len({s.embedding for s in settings})),
         "prepare_seconds": round(time.perf_counter() - t0, 2),
     }
+    embedded: dict[tuple[str, int], tuple[np.ndarray, np.ndarray]] = {}
     for s in settings:
         _check_stop(stop)
         t = time.perf_counter()
-        mask, labels = run_setting(inp, s, rec, stop)
+        # Settings with the same genes share their PCs (a few MB): only the graph or
+        # the algorithm changes.
+        if s.embedding not in embedded:
+            embedded[s.embedding] = _embed(inp, s, rec, stop)
+        mask, labels, _ = run_setting_graph(inp, s, rec, stop, embedded=embedded[s.embedding])
         _remember(fp, s, labels)
         shared = None if inp.current_hvgs is None else int((mask & inp.current_hvgs).sum())
         column = column_name(rec, s)
@@ -681,12 +771,13 @@ def keep(adata, setting: Setting, rec: Recorded) -> dict[str, Any]:
     adata.obs[column] = pd.Categorical(np.asarray(labels), categories=labels.categories)
     forget_column_results(adata, column)  # left by an earlier column of that name
     try:
+        eff = setting.effective(rec)
         provenance.record_step(
             adata, step="keep_hvg_setting",
             tool="scanpy HVG + PCA + neighbors + leiden/louvain (variable-gene check)",
             params={"hvg_flavor": setting.flavor, "n_top_genes": setting.n_top_genes,
-                    "clustering_method": rec.method, "clustering_resolution": rec.resolution,
-                    "n_comps": rec.n_comps, "n_neighbors": rec.n_neighbors,
+                    "clustering_method": eff.method, "clustering_resolution": rec.resolution,
+                    "n_comps": rec.n_comps, "n_neighbors": eff.n_neighbors,
                     "batch_key": rec.batch_key, "column": column,
                     "from": "variable-gene sensitivity check"},
         )

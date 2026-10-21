@@ -2,12 +2,14 @@
 variable-gene sensitivity check (``core/hvg_sensitivity.py``).
 
 ``GET /clustering/sweep`` says whether a sweep can run and with what defaults;
-``POST /clustering/sweep`` streams one SSE ``result`` per resolution without
-changing the dataset; ``POST /clustering/keep`` saves one resolution's labels.
+``POST /clustering/sweep`` streams one SSE ``result`` per resolution, then the
+clustering tree across them, without changing the dataset;``POST /clustering/keep`` saves one resolution's labels.
 ``/clustering/hvg-sensitivity`` (GET, POST, POST ``/keep``) does the same for
 re-clustering under other variable-gene settings. ``GET /clustering/distances``
 gives the distances between a column's groups in the graph's PC space
-(``core/cluster_distances.py``).
+(``core/cluster_distances.py``). ``/clustering/merge-check`` (GET, POST, POST
+``/save``) tests neighbouring clusters on held-out counts (``core/merge_check.py``)
+and saves a merged clustering.
 """
 
 from __future__ import annotations
@@ -20,11 +22,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scview.core.sse import keepalive
 from scview.core import cluster_distances as cd
 from scview.core import hvg_sensitivity as hs
+from scview.core import merge_check as mc
 from scview.core import resolution_sweep as rs
 from scview.core import subcluster as sc_sub
 from scview.core.confounding import recorded_batch_key
@@ -63,6 +66,8 @@ class SubclusterRequest(BaseModel):
 class HvgSetting(BaseModel):
     flavor: str
     n_top_genes: int
+    n_neighbors: int | None = None  # default: the recorded graph's
+    method: str | None = None  # default: the recorded algorithm
 
 
 class HvgSensitivityRequest(BaseModel):
@@ -70,9 +75,7 @@ class HvgSensitivityRequest(BaseModel):
     reference: str | None = None  # default: the active clustering
 
 
-class HvgKeepRequest(BaseModel):
-    flavor: str
-    n_top_genes: int
+class HvgKeepRequest(HvgSetting):
     reference: str | None = None
 
 
@@ -125,7 +128,8 @@ async def run_sweep(
     """Cluster at each resolution and stream the scores, leaving the dataset as it is.
 
     Events: ``start`` (method, cells, the silhouette's representation and
-    subsample), one ``result`` per resolution, then ``complete``, or ``error``.
+    subsample), one ``result`` per resolution, ``tree`` (the clustering tree
+    across them), then ``complete``, or ``error``.
     """
     adata = (await _adata(dm, dataset_id)).adata
     method = _method(adata, body.method)
@@ -150,7 +154,7 @@ async def run_sweep(
                 item = await asyncio.to_thread(next, gen, _DONE)
                 if item is _DONE:
                     break
-                yield _sse(event, item)
+                yield _sse("tree" if "tree" in item else event, item)
                 event = "result"
             yield _sse("complete", {})
         except Exception as e:  # noqa: BLE001 — surface to the client, keep the server up
@@ -298,8 +302,14 @@ async def hvg_sensitivity_info(
             "default_settings": [s.to_dict() for s in settings],
             "flavors": [{"flavor": f, "label": hs.FLAVOR_LABELS[f], "unavailable": why}
                         for f, why in hs.flavors_available(adata).items()],
-            "estimate_seconds": hs.estimate_seconds(adata.n_obs, len(settings), rec),
+            "estimate_seconds": hs.estimate_seconds(adata.n_obs, len(settings), rec,
+                                                    len({s.embedding for s in settings})),
             "seconds_per_setting": hs.estimate_seconds(adata.n_obs, 1, rec),
+            # A setting sharing another's genes re-runs only the graph and the clustering.
+            "seconds_per_graph_setting": round(hs.estimate_seconds(adata.n_obs, 2, rec, 1)
+                                               - hs.estimate_seconds(adata.n_obs, 1, rec), 1),
+            "neighbor_choices": {"min": hs.MIN_NEIGHBORS, "max": hs.MAX_NEIGHBORS},
+            "methods": [{"method": m, "label": hs.METHOD_LABELS[m]} for m in rs.METHODS],
         }
 
     # Finding the counts can copy a matrix (counts held in .raw): off the loop.
@@ -387,11 +397,12 @@ async def keep_hvg_setting(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Save one setting's clusters as ``scview_<method>_r<res>_hvg_<flavor>_<n>``
-    (unchanged when it exists): the labels the check showed, while still cached."""
+    (plus ``_k<n_neighbors>`` / ``_<method>`` when those differ; unchanged when it
+    exists): the labels the check showed, while still cached."""
     async with dataset_edit(dataset_id) as held:
         adaptor = await _adata(dm, dataset_id)
         adata = adaptor.adata
-        setting_in = [{"flavor": body.flavor, "n_top_genes": body.n_top_genes}]
+        setting_in = [HvgSetting(**body.model_dump(exclude={"reference"})).model_dump()]
 
         def _plan():
             hs.check(adata)
@@ -443,3 +454,171 @@ async def group_distances(
         return await asyncio.to_thread(cd.group_distances, adata, column)
     except cd.DistanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Merge check: neighbouring clusters tested on held-out counts (core/merge_check.py)
+# ---------------------------------------------------------------------------
+
+_merge_running: set[str] = set()  # datasets with a merge check running: one at a time each
+
+
+class MergeCheckRequest(BaseModel):
+    reference: str | None = None  # a column (default: the active clustering)
+    resolution: float | None = None  # or a sweep resolution of the dataset's graph
+    method: str | None = None
+    match_count: bool = True
+    # Fewer distinguishing genes than this makes a merge candidate; another value
+    # re-reads the last run's tests.
+    max_genes: int = Field(mc.MERGE_MAX_GENES, ge=1, le=1000)
+
+
+class MergeSaveRequest(MergeCheckRequest):
+    pairs: list[list[str]]
+
+
+def _merge_limits() -> dict[str, Any]:
+    return {
+        "merge_max_genes": mc.MERGE_MAX_GENES,
+        "padj": mc.DE_PADJ,
+        "log2fc": mc.DE_LOG2FC,
+        "max_cells_per_side": mc.MAX_CELLS_PER_SIDE,
+        "first_run_seconds": mc.FIRST_RUN_SECONDS,
+    }
+
+
+@router.get("/datasets/{dataset_id}/clustering/merge-check")
+async def merge_check_info(
+    dataset_id: str,
+    reference: str | None = Query(None),
+    resolution: float | None = Query(None),
+    method: str | None = Query(None),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Whether the merge check can run on this clustering (and if not, why), and
+    its time estimate."""
+    adata = (await _adata(dm, dataset_id)).adata
+
+    def _info() -> dict[str, Any]:
+        base = {"n_cells": int(adata.n_obs), **_merge_limits()}
+        try:
+            p = mc.plan(adata, reference, resolution, method)
+        except mc.MergeCheckError as exc:
+            return {"available": False, "reason": str(exc), **base}
+        return {"available": True, "reason": None, **base, "reference": p.reference,
+                "reference_exists": p.exists, "n_clusters": len(p.names), "recorded": p.rec.to_dict(),
+                "estimate_seconds": mc.estimate_seconds(adata.n_obs, p.rec, len(p.names))}
+
+    # A sweep resolution is clustered to plan it: off the loop.
+    return await asyncio.to_thread(_info)
+
+
+@router.post("/datasets/{dataset_id}/clustering/merge-check")
+async def run_merge_check(
+    dataset_id: str,
+    body: MergeCheckRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Split the counts, re-cluster the training half and test neighbouring pairs
+    on the held-out half, streaming progress; the dataset is not changed.
+
+    Events: ``start`` (the plan, the time estimate), ``progress`` per step,
+    ``result``, then ``complete``, or ``error``. A client that goes away stops
+    the run before its next step.
+    """
+    adaptor = await _adata(dm, dataset_id)
+    adata = adaptor.adata
+    try:
+        p = await asyncio.to_thread(mc.plan, adata, body.reference, body.resolution, body.method,
+                                    body.match_count)
+    except mc.MergeCheckError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if dataset_id in _merge_running:
+        raise HTTPException(status_code=409, detail="A merge check is already running on this dataset.")
+
+    async def events():
+        if dataset_id in _merge_running:  # another request started between the check and here
+            yield _sse("error", {"error": "A merge check is already running on this dataset."})
+            return
+        _merge_running.add(dataset_id)
+        stop = threading.Event()
+        gen = mc.iter_merge_check(adata, p, stop=stop.is_set, max_genes=body.max_genes)
+        pending: asyncio.Future | None = None
+
+        def finish(fut: asyncio.Future | None = None) -> None:
+            if fut is not None and not fut.cancelled():
+                fut.exception()  # retrieved: a cancelled run is not an error
+            gen.close()
+            _merge_running.discard(dataset_id)
+
+        try:
+            first = True
+            while True:
+                # Each step runs in a worker thread, shielded as in the variable-gene check.
+                pending = asyncio.ensure_future(asyncio.to_thread(next, gen, _DONE))
+                item = await asyncio.shield(pending)
+                pending = None
+                if item is _DONE:
+                    break
+                if first:
+                    yield _sse("start", item)
+                    first = False
+                elif "step" in item:
+                    yield _sse("progress", item)
+                else:
+                    mc.remember(adaptor, item)
+                    yield _sse("result", item)
+            yield _sse("complete", {})
+        except Exception as e:  # noqa: BLE001 — surface to the client, keep the server up
+            logger.error("Merge check failed for %s: %s", dataset_id, e, exc_info=True)
+            yield _sse("error", {"error": str(e)})
+        finally:
+            stop.set()  # a thread mid-step stops at its next check
+            if pending is not None and not pending.done():
+                pending.add_done_callback(finish)
+            else:
+                finish()
+
+    return StreamingResponse(
+        keepalive(events()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/datasets/{dataset_id}/clustering/merge-check/save")
+async def save_merged(
+    dataset_id: str,
+    body: MergeSaveRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Save the clustering with the chosen pairs merged as ``<column>_merged``
+    (a sweep resolution is kept as its column first), then reload the dataset."""
+    async with dataset_edit(dataset_id) as held:
+        adaptor = await _adata(dm, dataset_id)
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = getattr(adaptor.adata, "isbacked", False)
+
+        def _run():
+            work = adaptor.adata.to_memory() if backed else adaptor.adata
+            p = mc.plan(work, body.reference, body.resolution, body.method)
+            mc.clean_merges(p.names, body.pairs)  # a bad request fails before any change
+            before = uns_snapshot(work)
+            result = mc.save(work, p, body.pairs)
+            write_derived(work, output_path, adaptor.h5ad_path, before)
+            return result
+
+        try:
+            result = await held.run(_run)
+        except mc.MergeCheckError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            dm.evict(dataset_id)  # the cached copy may hold a column that was never saved
+            logger.error("Saving merged clusters failed for %s: %s", dataset_id, exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Could not save the merged clustering: {exc!s}")
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
+        return result

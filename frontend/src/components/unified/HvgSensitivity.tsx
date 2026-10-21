@@ -19,11 +19,13 @@ import {
   clusterStability,
   controlMismatchReason,
   describeMatch,
+  estimateFor,
   formatDuration,
   jaccardTone,
   otherSettings,
   perCellValues,
   secondsLeft,
+  settingRequest,
   shortSettingLabel,
   verdictLabel,
   type ClusterStability,
@@ -35,8 +37,9 @@ import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 
 /**
  * "Variable genes" in the Unified View toolbar: a floating panel that re-clusters
- * the dataset under other variable-gene settings without changing it, compares
- * each with the current clustering, and keeps a chosen one as a column.
+ * the dataset under other variable-gene settings, neighbour counts or clustering
+ * algorithms without changing it, compares each with the current clustering,
+ * and keeps a chosen one as a column.
  */
 export function HvgSensitivityControl() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
@@ -47,7 +50,7 @@ export function HvgSensitivityControl() {
       <button
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        title="Would the clusters survive a different choice of variable genes?"
+        title="Would the clusters survive other variable genes, neighbours or clustering algorithm?"
         className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
           open ? "bg-blue-50 text-blue-700 ring-1 ring-blue-300" : "text-slate-600 hover:bg-slate-100"
         }`}
@@ -71,9 +74,28 @@ interface Choice {
   checked: boolean;
 }
 
-function settingOf(flavor: HvgFlavor, n: number, label: string): HvgSetting {
-  return { flavor, n_top_genes: n, key: `${flavor}_${n}`, label: `${label}, ${n.toLocaleString("en-US")} genes` };
+/** A setting as the server names it (core/hvg_sensitivity.py Setting.key / .label). */
+function settingOf(
+  flavor: HvgFlavor,
+  n: number,
+  label: string,
+  k: number | null = null,
+  method: "leiden" | "louvain" | null = null,
+): HvgSetting {
+  return {
+    flavor,
+    n_top_genes: n,
+    n_neighbors: k,
+    method,
+    key: `${flavor}_${n}${k != null ? `_k${k}` : ""}${method ? `_${method}` : ""}`,
+    label:
+      `${label}, ${n.toLocaleString("en-US")} genes` +
+      (k != null ? `, ${k} neighbours` : "") +
+      (method ? `, ${METHOD_LABEL[method]}` : ""),
+  };
 }
+
+const NEIGHBOUR_OPTIONS = [5, 10, 15, 20, 30, 50];
 
 export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string; onClose: () => void }) {
   const refresh = useDatasetRefresh();
@@ -82,6 +104,8 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
   const [choices, setChoices] = useState<Choice[]>([]);
   const [addFlavor, setAddFlavor] = useState<HvgFlavor>("seurat");
   const [addGenes, setAddGenes] = useState("5000");
+  const [addK, setAddK] = useState(""); // "": the recorded k
+  const [addMethod, setAddMethod] = useState<"" | "leiden" | "louvain">("");
   const [addError, setAddError] = useState<string | null>(null);
   const [start, setStart] = useState<HvgStart | null>(null);
   const [rows, setRows] = useState<HvgRow[]>([]);
@@ -121,7 +145,11 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
         `Variable genes must be a whole number between ${info.min_genes.toLocaleString()} and ${Math.min(info.max_genes, info.n_genes).toLocaleString()}.`,
       );
     }
-    const setting = settingOf(addFlavor, n, flavor.label);
+    const recorded = info.recorded;
+    // The recorded k or algorithm is the current setting's own: not a change.
+    const k = addK === "" || Number(addK) === recorded?.n_neighbors ? null : Number(addK);
+    const method = addMethod === "" || addMethod === recorded?.method ? null : addMethod;
+    const setting = settingOf(addFlavor, n, flavor.label, k, method);
     setAddError(null);
     setChoices((prev) =>
       prev.some((c) => c.setting.key === setting.key)
@@ -141,7 +169,7 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
     try {
       await runHvgSensitivity(
         datasetId,
-        { settings: selected.map((s) => ({ flavor: s.flavor, n_top_genes: s.n_top_genes })) },
+        { settings: selected.map(settingRequest) },
         { onStart: setStart, onResult: (r) => setRows((prev) => [...prev, r]), signal: ctrl.signal },
       );
     } catch (e) {
@@ -217,7 +245,10 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
     ? secondsLeft(rows.map((r) => r.seconds), total, info?.seconds_per_setting ?? null)
     : null;
   const rec = start?.recorded ?? info?.recorded;
-  const estimate = info?.seconds_per_setting != null ? info.seconds_per_setting * selected.length : null;
+  const estimate =
+    info?.seconds_per_setting != null
+      ? estimateFor(selected, info.seconds_per_setting, info.seconds_per_graph_setting)
+      : null;
 
   return (
     <div
@@ -227,9 +258,12 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="text-sm font-semibold text-slate-800">Would the clusters survive other variable genes?</div>
+          <div className="text-sm font-semibold text-slate-800">
+            Would the clusters survive other variable genes, neighbours or algorithm?
+          </div>
           <p className="mt-0.5 text-[11px] text-slate-500">
-            Each setting picks its own variable genes, then re-runs PCA, the neighbour graph and the clustering
+            Each setting picks its own variable genes, then re-runs PCA, the neighbour graph and the clustering; a
+            setting with other neighbours or another algorithm changes only those
             {rec
               ? ` (${METHOD_LABEL[rec.method]} at ${rec.resolution}, ${rec.n_comps} PCs, ${rec.n_neighbors} neighbours${rec.batch_key ? `, Harmony on ${rec.batch_key}` : ""})`
               : ""}
@@ -299,7 +333,35 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
               onChange={(e) => setAddGenes(e.target.value)}
               className="w-20 rounded border border-slate-300 px-1.5 py-0.5 text-xs text-slate-700"
             />
-            <span className="text-slate-500">genes</span>
+            <span className="text-slate-500">genes,</span>
+            <select
+              aria-label="Neighbours to add"
+              value={addK}
+              onChange={(e) => setAddK(e.target.value)}
+              className="rounded border border-slate-300 px-1 py-0.5 text-xs text-slate-700"
+            >
+              <option value="">{rec ? `${rec.n_neighbors} (current)` : "current"} neighbours</option>
+              {NEIGHBOUR_OPTIONS.filter((k) => k !== rec?.n_neighbors && k < (info.n_cells ?? Infinity)).map((k) => (
+                <option key={k} value={String(k)}>
+                  {k} neighbours
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Algorithm to add"
+              value={addMethod}
+              onChange={(e) => setAddMethod(e.target.value as "" | "leiden" | "louvain")}
+              className="rounded border border-slate-300 px-1 py-0.5 text-xs text-slate-700"
+            >
+              <option value="">{rec ? `${METHOD_LABEL[rec.method]} (current)` : "current algorithm"}</option>
+              {(["leiden", "louvain"] as const)
+                .filter((m) => m !== rec?.method)
+                .map((m) => (
+                  <option key={m} value={m}>
+                    {METHOD_LABEL[m]}
+                  </option>
+                ))}
+            </select>
             <button
               type="button"
               onClick={addSetting}
