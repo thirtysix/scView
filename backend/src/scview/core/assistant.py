@@ -36,7 +36,7 @@ import re
 from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
-from scview.core import cluster_qc, composition, provenance, qc_filter
+from scview.core import ccc, cluster_qc, composition, provenance, qc_filter
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -313,6 +313,15 @@ def build_grounding_context(
                                           evidence="\n".join(comp_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: composition grounding failed: %s", exc)
+        # Cell-cell communication: the last ligand-receptor run (Communication tab).
+        try:
+            ccc_lines, ccc_detail = ccc.grounding_lines(adaptor, adata.obs)
+            lines.extend(ccc_lines)
+            if ccc_detail:
+                sources.append(ChatSource(kind="result", ref="result:communication",
+                                          detail=ccc_detail, evidence="\n".join(ccc_lines[1:])))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: communication grounding failed: %s", exc)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).
@@ -420,7 +429,10 @@ _FEATURE_GUIDE = (
     "QC → normalize → HVG → PCA → batch correction → clustering → UMAP → markers → "
     "enrichment), Unified View (linked scatter + markers/expression/gene-sets/enrichment + "
     "violin; its DE subtab compares a lasso/cluster selection vs the rest, or two groups of "
-    "a column such as dataset or condition, optionally within one cell type), Observations, "
+    "a column such as dataset or condition, optionally within one cell type; its Communication "
+    "subtab scores ligand-receptor interactions between the groups of a column with LIANA's "
+    "consensus rank aggregate, on all cells or one condition's cells, as a table, dot plot, "
+    "circle plot, heatmap and sender/receiver roles), Observations, "
     "Gene Expression, Gene Sets & Enrichment, Marker Genes (a sortable marker table per "
     "cluster or group, plus a dot plot and a heatmap of the top 3, 5 or 10 up-regulated "
     "markers of every group of the 'Compute for' column; the table's filter and group picker "
@@ -959,6 +971,7 @@ _SUBTABS = {
     "markers": "Markers", "expression": "Expression",
     "genesets": "Gene Sets", "enrichment": "Enrichment", "de": "DE",
     "protein": "Protein", "activity": "Activity", "genelists": "Gene lists",
+    "communication": "Communication",
 }
 # "Can you show ..." / "can I see ..." / "please open ...": a request phrased as a question.
 _POLITE = r"(?:(?:can|could|would|will) you\s+|(?:can|could|may) i\s+|please\s+)(?:please\s+)?"
@@ -1175,7 +1188,7 @@ async def extract_actions(
         "- show_marker_plot {type, plot}: show the existing marker genes as a heatmap or dot "
         "plot (plot: heatmap|dotplot).\n"
         "- set_embedding {type, embedding}: switch the embedding (obsm key, e.g. 3D -> X_umap_3d).\n"
-        "- set_subtab {type, subtab}: open a Unified View tab (markers|expression|genesets|enrichment|de|protein|activity|genelists).\n"
+        "- set_subtab {type, subtab}: open a Unified View tab (markers|expression|genesets|enrichment|de|protein|activity|genelists|communication).\n"
         "- open_panel {type, panel}: navigate to a panel.\n"
         "- clear_highlight {type} / clear_overlay {type}: clear the current highlight / gene overlay.\n"
         "- annotate_cell_types {type, method?, groupby?, tissue?}: label clusters with cell types "

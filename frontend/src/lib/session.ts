@@ -111,6 +111,14 @@ export interface SessionColors {
   max_rendered_cells?: number;
 }
 
+/** The Communication tab's run settings (stores/communicationStore.ts); the result is run again. */
+export interface SessionCommunication {
+  groupby?: string;
+  subset_column?: string;
+  subset_value?: string;
+  expr_prop?: number;
+}
+
 /** One of the user's gene lists (stores/geneListsStore.ts); lists are not tied to the dataset. */
 export interface SessionGeneList {
   name: string;
@@ -128,6 +136,7 @@ export interface SessionFile {
   de?: SessionDE;
   colors?: SessionColors;
   gene_lists?: SessionGeneList[];
+  communication?: SessionCommunication;
 }
 
 /** A session file that can't be used, with the reason in plain words. */
@@ -403,6 +412,15 @@ export function parseSession(x: unknown): SessionFile {
       opacity: (v, at) => number(v, at, 0.05, 1),
       background: (v, at) => oneOf(v, ["white", "dark"] as const, at),
       max_rendered_cells: (v, at) => number(v, at, 1000, MAX_CELLS, true),
+    });
+  }
+
+  if (x.communication !== undefined) {
+    session.communication = fields<SessionCommunication>(object(x.communication, "communication"), "communication", {
+      groupby: (v, at) => text(v, at),
+      subset_column: (v, at) => text(v, at),
+      subset_value: (v, at) => text(v, at, { max: 1024 }),
+      expr_prop: (v, at) => number(v, at, 0, 1),
     });
   }
 

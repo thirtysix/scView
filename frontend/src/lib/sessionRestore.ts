@@ -21,6 +21,7 @@ import {
 } from "@/lib/session";
 import { COMPARE_MIN_COLUMNS, compareColumnOptions, splitColumnOptions } from "@/lib/splitView";
 import { resetViewForDataset, useDatasetStore } from "@/stores/datasetStore";
+import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
 import { useGeneListsStore } from "@/stores/geneListsStore";
 import {
@@ -45,6 +46,7 @@ export function captureSession(now: Date = new Date()): SessionFile {
   const split = useSplitViewStore.getState();
   const selection = useSelectionStore.getState();
   const de = useDESettingsStore.getState();
+  const comm = useCommunicationStore.getState();
 
   const view: SessionView = {
     panel: useViewStore.getState().activePanel,
@@ -122,6 +124,12 @@ export function captureSession(now: Date = new Date()): SessionFile {
       opacity: settings.opacity,
       background: settings.plotBackground,
       max_rendered_cells: settings.maxRenderedCells,
+    },
+    communication: {
+      groupby: comm.groupby,
+      subset_column: comm.subsetColumn,
+      subset_value: comm.subsetValue,
+      expr_prop: comm.exprProp,
     },
     gene_lists: useGeneListsStore
       .getState()
@@ -239,6 +247,7 @@ export async function restoreSession(session: SessionFile): Promise<RestoreRepor
 
   await applyView(session, target, sameCells, notes);
   applyDE(session, target, notes);
+  applyCommunication(session, target, notes);
   await applySelection(session, target, sameCells, notes);
   if (session.view?.panel) useViewStore.getState().setPanel(session.view.panel);
   if (notes.length > 0) level = "warning";
@@ -418,6 +427,33 @@ function applyDE(session: SessionFile, d: DatasetInfo, notes: string[]) {
   if (de.replicate_key && has(de.replicate_key)) store.update({ replicateKey: de.replicate_key });
   // The restored highlight is already the scope it should be.
   store.update({ scopedHighlight: useSelectionStore.getState().highlightedGroup });
+}
+
+/** The Communication tab's settings, where the dataset has the columns; never the result. */
+function applyCommunication(session: SessionFile, d: DatasetInfo, notes: string[]) {
+  const c = session.communication;
+  if (!c) return;
+  const store = useCommunicationStore.getState();
+  const columns = new Map((d.obs_columns ?? []).map((col) => [col.name, col]));
+  store.update({
+    groupby: "",
+    subsetColumn: "",
+    subsetValue: "",
+    ...(c.expr_prop != null ? { exprProp: c.expr_prop } : {}),
+  });
+  if (c.groupby) {
+    if (columns.has(c.groupby)) store.update({ groupby: c.groupby });
+    else notes.push(`Communication: ${quote(prettyObsLabel(c.groupby))} is not in this dataset.`);
+  }
+  if (c.subset_column) {
+    if ((columns.get(c.subset_column)?.values ?? []).includes(c.subset_value ?? "")) {
+      store.update({ subsetColumn: c.subset_column, subsetValue: c.subset_value });
+    } else {
+      notes.push(
+        `Communication cells ${quote(`${prettyObsLabel(c.subset_column)} = ${c.subset_value ?? ""}`)}: not in this dataset.`,
+      );
+    }
+  }
 }
 
 async function applySelection(session: SessionFile, d: DatasetInfo, sameCells: boolean, notes: string[]) {
