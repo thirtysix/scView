@@ -388,21 +388,27 @@ def fit_composition(pilot: CompositionPilot, *, transform: str = "logit", seed: 
         df=df, df_unpaired=dfu, cal_reps=cal_reps)
 
 
-def spread_interval(model: CompositionModel, design: str) -> np.ndarray:
-    """Per type, the upper end of the 95% interval of the spread ``design`` sees
-    (the within-donor SD for a paired design, the total for an unpaired one)."""
-    out = np.zeros(len(model.groups))
+def spread_interval(model: CompositionModel, design: str,
+                    transform: str = "logit") -> tuple[np.ndarray, np.ndarray]:
+    """Per type, the 95% interval (low, high) of the spread ``design`` sees: the
+    within-donor SD for a paired design, the total for an unpaired one."""
     if model.source != "pilot":
-        return np.array([s.sd_total for s in model.spreads])
+        sd = np.array([s.sd_total for s in model.spreads])
+        return sd, sd
     pilot = model.pilot
     if design == "paired" or pilot.design != "paired":
-        return np.array([s.sd_high for s in model.spreads])
-    # Unpaired from a paired pilot: the total spread, from the condition-only fit.
-    _, s2, _, _, s2u, dfu = _cal_targets(pilot, "logit")
-    hi_q = stats.chi2.ppf(0.025, dfu)
+        return (np.array([s.sd_low for s in model.spreads]),
+                np.array([s.sd_high for s in model.spreads]))
+    # Unpaired from a paired pilot: the total spread, from the condition-only fit
+    # (its df treat the paired samples as independent: approximate).
+    _, _, _, _, s2u, dfu = _cal_targets(pilot, transform)
+    lo_q, hi_q = stats.chi2.ppf([0.975, 0.025], dfu)
+    lo = np.zeros(len(model.groups))
+    hi = np.zeros(len(model.groups))
     for j, s in enumerate(model.spreads):
-        out[j] = math.sqrt(max(dfu * s2u[j] / hi_q - s.noise_var, s.sd_total ** 2))
-    return out
+        lo[j] = math.sqrt(min(max(dfu * s2u[j] / lo_q - s.noise_var, 0.0), s.sd_total ** 2))
+        hi[j] = math.sqrt(max(dfu * s2u[j] / hi_q - s.noise_var, s.sd_total ** 2))
+    return lo, hi
 
 
 def assumed_composition(pilot: CompositionPilot, sd: float) -> CompositionModel:
@@ -527,7 +533,7 @@ def power_point(model: CompositionModel, grid: CompositionGrid, target: int, fc:
     name = model.groups[target]
     shares1 = shifted_shares(model.share, target, fc)
     if shares1 is None:
-        return PowerPoint(name, fc, n, m, None, None)
+        return PowerPoint(name, fc, n, m, None, None, pessimistic=sd_scale is not None)
     design = grid.design if (grid.design == "unpaired" or model.can_pair) else "unpaired"
     if design == "paired":
         sw, sdn = model.sd_within.copy(), model.sd_donor.copy()
@@ -579,7 +585,7 @@ def iter_composition_power(model: CompositionModel, grid: CompositionGrid,
     if not grid.pessimistic or model.source != "pilot":
         return
     design = grid.design if model.can_pair else "unpaired"
-    upper = spread_interval(model, design)
+    upper = spread_interval(model, design, grid.transform)[1]
     for t in grid.targets:
         for fc in grid.fold_changes:
             for n in grid.donors:
@@ -599,7 +605,8 @@ def donors_needed(points: Sequence[PowerPoint], target: float = TARGET_POWER) ->
             if prev is None or prev.power >= target:
                 return float(p.donors)
             frac = (target - prev.power) / max(p.power - prev.power, 1e-9)
-            return float(math.ceil(prev.donors + frac * (p.donors - prev.donors) - 1e-9))
+            # Rounded first: 8 + 0.5 * 4 can come out as 10.000000000000007.
+            return float(math.ceil(round(prev.donors + frac * (p.donors - prev.donors), 6)))
         prev = p
     return None
 
@@ -1317,10 +1324,11 @@ def _composition_assumptions(model: CompositionModel, grid: CompositionGrid,
     if model.source == "pilot":
         out.append(_pilot_line(pilot, "cells"))
         used = "within-donor" if grid.design == "paired" else "total (donor + within-donor)"
-        eg = [s for i, s in enumerate(model.spreads) if i in grid.targets][:3]
+        lo, hi = spread_interval(model, grid.design, grid.transform)
         examples = "; ".join(
-            f"{s.group} {(s.sd_within if grid.design == 'paired' else s.sd_total):.2f} "
-            f"(95% interval of the within-donor SD {s.sd_low:.2f} to {s.sd_high:.2f})" for s in eg)
+            f"{model.spreads[t].group} "
+            f"{(model.spreads[t].sd_within if grid.design == 'paired' else model.spreads[t].sd_total):.2f}"
+            f" (95% interval {lo[t]:.2f} to {hi[t]:.2f})" for t in grid.targets[:3])
         out.append(
             "Spread: each cell type's donor-to-donor SD of its log-odds share, from the pilot's "
             "residual variance in the app's own model (logit shares"
@@ -1367,7 +1375,8 @@ def _composition_assumptions(model: CompositionModel, grid: CompositionGrid,
 def composition_payload(model: CompositionModel, grid: CompositionGrid,
                         points: list[PowerPoint], target_power: float, elapsed: float) -> dict:
     pilot = model.pilot
-    upper = spread_interval(model, grid.design) if model.source == "pilot" else None
+    lower, upper = (spread_interval(model, grid.design, grid.transform)
+                    if model.source == "pilot" else (None, None))
     types = []
     for j, s in enumerate(model.spreads):
         used = s.sd_within if grid.design == "paired" else s.sd_total
@@ -1375,6 +1384,7 @@ def composition_payload(model: CompositionModel, grid: CompositionGrid,
             "group": s.group, "share": s.share, "share_tested": s.share_tested,
             "n_cells": s.n_cells, "sd_within": s.sd_within, "sd_donor": s.sd_donor,
             "sd_total": s.sd_total, "sd_used": used, "sd_low": s.sd_low, "sd_high": s.sd_high,
+            "sd_low_used": float(lower[j]) if lower is not None else None,
             "sd_upper_used": float(upper[j]) if upper is not None else None,
             "targeted": j in grid.targets})
     needed = []

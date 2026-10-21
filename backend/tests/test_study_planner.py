@@ -138,7 +138,9 @@ def test_an_impossible_fold_change_is_left_out():
     grid = planner.CompositionGrid(targets=[0], fold_changes=[3.0], donors=[4], cells=[500],
                                    design="unpaired", reps=20)
     p = planner.power_point(m, grid, 0, 3.0, 4, 500)
-    assert p.power is None
+    assert p.power is None and not p.pessimistic
+    p = planner.power_point(m, grid, 0, 3.0, 4, 500, sd_scale=np.full(5, 0.5))
+    assert p.power is None and p.pessimistic  # the dashed curve keeps its own points
     shifted = planner.shifted_shares(np.array([0.4, 0.3, 0.3]), 1, 2.0)
     assert shifted.sum() == pytest.approx(1.0)
     assert shifted[1] == pytest.approx(0.6) and shifted[0] == pytest.approx(0.4 * 0.4 / 0.7)
@@ -183,6 +185,8 @@ def test_donors_needed_interpolates_between_grid_values():
     assert planner.donors_needed(pts, 0.4) == 3
     assert planner.donors_needed(pts, 0.99) is None
     assert planner.donors_needed([P("a", 2, 3, 500, None, None)]) is None
+    # 0.78 at 8, 0.82 at 12: exactly 10, though the float sum is 10.000000000000007
+    assert planner.donors_needed([P("a", 2, 8, 500, 0.78, 0), P("a", 2, 12, 500, 0.82, 0)]) == 10
 
 
 def test_no_donors_says_so_and_offers_an_entered_spread():
