@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scview.core.memory_budget import read_budget
+from scview.core.memory_budget import mark_running, mark_stopped, read_budget, unclean_restart
 
 GB = 1 << 30
 
@@ -52,4 +52,17 @@ def test_nothing_readable(tmp_path):
 
 async def test_endpoint(client):
     body = (await client.get("/api/v1/system/memory")).json()
-    assert set(body) == {"limit_bytes", "used_bytes", "limited", "source", "available_bytes"}
+    assert set(body) == {"limit_bytes", "used_bytes", "limited", "source", "available_bytes", "unclean_restart"}
+
+
+def test_run_marker_recognises_a_killed_backend(tmp_path):
+    marker, boot = tmp_path / "running", tmp_path / "boot_id"
+    boot.write_text("boot-a\n")
+    assert mark_running(marker, boot) is None  # first start
+    assert mark_running(marker, boot) is not None  # killed: no mark_stopped in between
+    assert unclean_restart()["previous_start"]
+    mark_stopped(marker)
+    assert not marker.exists()
+    assert mark_running(marker, boot) is None  # clean shutdown before
+    boot.write_text("boot-b\n")
+    assert mark_running(marker, boot) is None  # the computer restarted, not the backend

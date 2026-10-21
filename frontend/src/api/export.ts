@@ -1,5 +1,5 @@
 import { API_BASE } from "@/lib/constants";
-import { apiFetch } from "./client";
+import { apiFetch, readError } from "./client";
 
 /** What GET /datasets/{id}/export/h5ad would send. */
 export interface H5adInfo {
@@ -64,7 +64,7 @@ export async function downloadTable(
     body: JSON.stringify({ format, data_type: dataType, params }),
   });
   if (!res.ok) {
-    let detail = await res.text();
+    let detail = await readError(res);
     try {
       detail = String(JSON.parse(detail).detail ?? detail);
     } catch {
@@ -91,7 +91,7 @@ export type RecipeFile = "script" | "manifest";
 export async function downloadRecipeFile(id: string, file: RecipeFile): Promise<void> {
   const res = await fetch(`${API_BASE}/datasets/${id}/recipe/${file}`);
   if (!res.ok) {
-    let detail = await res.text();
+    let detail = await readError(res);
     try {
       detail = String(JSON.parse(detail).detail ?? detail);
     } catch {

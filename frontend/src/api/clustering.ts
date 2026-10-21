@@ -1,5 +1,5 @@
 import { API_BASE } from "@/lib/constants";
-import { apiFetch } from "./client";
+import { apiFetch, readError } from "./client";
 
 /** Whether a resolution sweep can run on a dataset, and its limits. */
 export interface SweepInfo {
@@ -84,7 +84,7 @@ async function streamEvents(
     signal,
   });
   if (!res.ok) {
-    let detail = await res.text();
+    let detail = await readError(res);
     try {
       detail = JSON.parse(detail).detail ?? detail;
     } catch {

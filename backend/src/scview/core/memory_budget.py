@@ -7,16 +7,26 @@ container the limit is the cgroup's: ``memory.max`` (cgroup v2) or
 ``memory.limit_in_bytes`` (v1). Without one ("max", or v1's huge sentinel) the
 budget is the memory of the machine the container sees, which under Docker
 Desktop or Podman on Windows and macOS is their virtual machine.
+
+A backend that outgrows the limit is killed and restarted (``restart:
+on-failure``), and its cgroup counters start again from zero, so the restart is
+recognised by a run marker instead: written at startup and removed at a clean
+shutdown, in the container's own /tmp, which survives a restart but not a
+recreate. A marker from the same kernel boot means the previous run was killed.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 CGROUP = Path("/sys/fs/cgroup")
 MEMINFO = Path("/proc/meminfo")
+RUN_MARKER = Path("/tmp/scview-running")
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 # cgroup v1 reports "no limit" as a page-rounded 2^63 - 1.
 _V1_UNLIMITED = 1 << 60
 
@@ -86,3 +96,48 @@ def read_budget(cgroup: Path = CGROUP, meminfo: Path = MEMINFO) -> MemoryBudget:
     if total_kb is not None:
         return MemoryBudget(total_kb * 1024, used, False, "machine")
     return MemoryBudget(None, used, False, "unknown")
+
+
+_unclean_restart: dict | None = None
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def mark_running(marker: Path = RUN_MARKER, boot_id: Path = BOOT_ID) -> dict | None:
+    """Write the run marker; return (and keep for ``unclean_restart``) when the
+    previous run in this container ended without a clean shutdown, else None.
+    A marker from another boot is a restarted computer, not a killed backend."""
+    global _unclean_restart
+    try:
+        prev = json.loads(marker.read_text())
+    except (OSError, ValueError):
+        prev = None
+    boot = _read_text(boot_id)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _unclean_restart = (
+        {"restarted_at": now, "previous_start": prev.get("started_at")}
+        if isinstance(prev, dict) and prev.get("boot_id") == boot else None
+    )
+    try:
+        marker.write_text(json.dumps({"started_at": now, "boot_id": boot}))
+    except OSError:
+        pass
+    return _unclean_restart
+
+
+def mark_stopped(marker: Path = RUN_MARKER) -> None:
+    """Clean shutdown: remove the run marker."""
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def unclean_restart() -> dict | None:
+    """Set when this backend started after the previous one was killed (see ``mark_running``)."""
+    return _unclean_restart

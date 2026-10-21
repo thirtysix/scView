@@ -1,5 +1,5 @@
 import { API_BASE } from "@/lib/constants";
-import { apiFetch } from "./client";
+import { apiFetch, readError } from "./client";
 
 /** A user-uploaded gene-set collection (backend core/custom_genesets.py). */
 export interface CustomCollection {
@@ -88,7 +88,7 @@ function parseError(status: number, body: string): GeneSetUploadError {
 
 async function send<T>(path: string, init: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, init);
-  if (!res.ok) throw parseError(res.status, await res.text());
+  if (!res.ok) throw parseError(res.status, await readError(res));
   if (res.status === 204) return undefined as T;
   return res.json();
 }
