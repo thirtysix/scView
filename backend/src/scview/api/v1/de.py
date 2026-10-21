@@ -8,7 +8,9 @@ gene. Unlike the marker endpoint (which groups by an obs column), the
 group here is an ad-hoc list of cell indices. Between-groups comparisons can
 instead run donor-aware pseudobulk DESeq2 (``core/pseudobulk.py``). The
 ``/methods`` endpoints run one comparison under every cell-level test and say
-how far they agree.
+how far they agree. A between-groups comparison also reports the two sides'
+composition (``core/de_composition.py``), before (``GET /de/composition``)
+and with the result.
 """
 
 from __future__ import annotations
@@ -18,11 +20,11 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.dependencies import get_dataset_manager
-from scview.core import de_methods, de_prefilter, de_results, transcriptome_size
+from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
@@ -77,6 +79,9 @@ class DECompareRequest(_CompareScope):
     method: Literal["wilcoxon", "t-test", "logreg", "pseudobulk"] = "wilcoxon"
     # The cell-level test only: pseudobulk filters genes on their summed counts.
     min_pct: float = _MinPct
+    # The label column the composition check uses (core/de_composition.py);
+    # None: the active clustering. Never changes the test.
+    composition_by: str | None = None
 
 
 class DECompareMethodsRequest(_CompareScope):
@@ -115,6 +120,39 @@ class TranscriptomeSize(BaseModel):
     values_b: list[float]
 
 
+class DECompositionGroup(BaseModel):
+    group: str
+    n_a: int
+    n_b: int
+    share_a: float  # of side A's labelled compared cells
+    share_b: float
+    diff_points: float  # (share_a - share_b) x 100
+    flagged: bool  # past threshold_points with min_cells on a side
+    one_sided: bool  # nearly absent from one side: maybe a state the comparison creates
+
+
+class DEComposition(BaseModel):
+    """Each side's share of every group of ``column`` among the compared cells
+    (core/de_composition.py): ``warn`` when a group's shares differ by more than
+    ``threshold_points``, since the DE then partly measures composition."""
+
+    column: str | None  # None: not checked (``note`` says why)
+    label_a: str
+    label_b: str
+    auto: bool  # the column was chosen automatically (active clustering)
+    n_a: int
+    n_b: int
+    groups: list[DECompositionGroup]  # largest difference first, at most MAX_GROUPS
+    n_groups: int
+    warn: bool
+    message: str | None
+    note: str | None
+    threshold_points: float
+    min_cells: int
+    n_missing: int = 0
+    nested: bool = False  # the sides are different groups of ``column``
+
+
 class DEResponse(BaseModel):
     n_selected: int
     n_rest: int
@@ -138,6 +176,8 @@ class DEResponse(BaseModel):
     dropped_samples: list[str] = []
     # /de/compare: the two sides are also different batches (core/confounding.py).
     confounding: dict | None = None
+    # /de/compare: the two sides' cluster/state composition (core/de_composition.py).
+    composition: DEComposition | None = None
     # Names this result for a follow-up such as GSEA (core/de_results.py), which
     # could not take every gene back within the request size cap.
     result_id: str | None = None
@@ -438,13 +478,13 @@ async def differential_expression_methods(
                              label=body.label, **out)
 
 
-def _compare_masks(adata, body: _CompareScope):
+def _scope_masks(adata, body: _CompareScope, *extra: str | None):
     """Group A's and group B's cells (within the scope); 404 for an unknown
-    column, 400 when the groups are the same or too small."""
+    column (``extra`` ones too), 400 when the groups are the same."""
     import numpy as np
 
     obs = adata.obs
-    for col in (body.split_by, body.within_column, body.replicate_key):
+    for col in (body.split_by, body.within_column, body.replicate_key, *extra):
         if col and col not in obs.columns:
             raise HTTPException(status_code=404, detail=f"Column '{col}' not found.")
     if body.group_a == body.group_b:
@@ -454,8 +494,12 @@ def _compare_masks(adata, body: _CompareScope):
     within = np.ones(adata.n_obs, dtype=bool)
     if body.within_column and body.within_value is not None:
         within = obs[body.within_column].astype(str).to_numpy() == body.within_value
-    mask_a = within & (split == body.group_a)
-    mask_b = within & (split == body.group_b)
+    return within & (split == body.group_a), within & (split == body.group_b)
+
+
+def _compare_masks(adata, body: _CompareScope, *extra: str | None):
+    """``_scope_masks``, and 400 when a group is too small."""
+    mask_a, mask_b = _scope_masks(adata, body, *extra)
     n_a, n_b = int(mask_a.sum()), int(mask_b.sum())
     if min(n_a, n_b) < _MIN_GROUP:
         scope = f" within {body.within_value}" if body.within_column else ""
@@ -469,6 +513,40 @@ def _compare_masks(adata, body: _CompareScope):
 
 def _compare_label(body: _CompareScope) -> str:
     return body.group_a + (f" ({body.within_value})" if body.within_column else "")
+
+
+def _composition(adata, body: _CompareScope, mask_a, mask_b, column: str | None) -> DEComposition:
+    """The two sides' composition by ``column`` (the active clustering when None)."""
+    res = de_composition.for_comparison(
+        adata.obs, mask_a, mask_b, body.group_a, body.group_b, split_by=body.split_by,
+        column=column, default=de_composition.default_column(adata),
+        within_column=body.within_column if body.within_value is not None else None,
+        within_value=body.within_value,
+    )
+    return DEComposition(**res)
+
+
+@router.get("/datasets/{dataset_id}/de/composition", response_model=DEComposition)
+async def differential_expression_composition(
+    dataset_id: str,
+    split_by: str,
+    group_a: str,
+    group_b: str,
+    within_column: str | None = None,
+    within_value: str | None = None,
+    column: str | None = Query(default=None, description="Label column; default the active clustering"),
+    dm: DatasetManager = Depends(get_dataset_manager),
+) -> DEComposition:
+    """Each side's share of every cluster/state among the cells a ``/de/compare``
+    of these groups would test, before it is run. Obs only (milliseconds), so
+    on the event loop; a group with no cells gets a note, not a 400."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    scope = _CompareScope(split_by=split_by, group_a=group_a, group_b=group_b,
+                          within_column=within_column or None, within_value=within_value)
+    mask_a, mask_b = _scope_masks(adaptor.adata, scope, column)
+    return _composition(adaptor.adata, scope, mask_a, mask_b, column or None)
 
 
 @router.post("/datasets/{dataset_id}/de/compare", response_model=DEResponse)
@@ -487,7 +565,7 @@ async def differential_expression_compare(
 
     adata = adaptor.adata
     obs = adata.obs
-    mask_a, mask_b = _compare_masks(adata, body)
+    mask_a, mask_b = _compare_masks(adata, body, body.composition_by)
     n_a, n_b = int(mask_a.sum()), int(mask_b.sum())
 
     # The two sides being different batches (datasets, libraries, runs): the
@@ -498,10 +576,13 @@ async def differential_expression_compare(
     extra = [batch_key] if batch_key and batch_key != body.split_by else []
     hit = for_comparison(obs, body.split_by, mask_a | mask_b, extra)
     confounding = hit.to_dict() if hit else None
+    # The two sides' cluster mix: a shift makes the DE partly a composition test.
+    composition = _composition(adata, body, mask_a, mask_b, body.composition_by)
 
     if body.method == "pseudobulk":
         resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id)
         resp.confounding = confounding
+        resp.composition = composition
         return resp
 
     # Subset before copying: only the compared cells are materialised.
@@ -521,7 +602,7 @@ async def differential_expression_compare(
     guard = _replicate_guard(obs, mask_a, mask_b, key)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=_compare_label(body), genes=res.genes,
                       result_id=_remember(dataset_id, res), transcriptome_size=size,
-                      confounding=confounding, **guard, **res.fields())
+                      confounding=confounding, composition=composition, **guard, **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/compare/methods", response_model=DEMethodsResponse)
