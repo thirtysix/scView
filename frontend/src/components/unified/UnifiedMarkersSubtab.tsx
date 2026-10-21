@@ -346,7 +346,8 @@ export function UnifiedMarkersSubtab({
                 height={220}
               />
               <p className="px-1 text-[10px] leading-snug text-slate-400">
-                Top right: strong and found in this group only. A strong marker low on the plot is
+                One point per marker ({currentMarkers.length.toLocaleString()} of {selectedGroup}&apos;s; the 6 strongest
+                labelled). Top right: strong and found in this group only. A strong marker low on the plot is
                 shared with other groups. Click a point to view the gene.
               </p>
             </div>

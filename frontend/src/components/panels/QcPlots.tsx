@@ -181,8 +181,9 @@ function HistCard({
           />
         </div>
         <div className="flex flex-shrink-0 flex-wrap items-center gap-x-2 px-1 pt-1 text-[10px] text-slate-400">
-          <span>
-            median {fmt(metric.median)} · IQR {fmt(metric.q1)}–{fmt(metric.q3)} · max {fmt(metric.max)}
+          <span title="Per-cell values of every cell in the dataset: the median, the interquartile range (25th to 75th percentile) and the maximum">
+            n = {metric.hist.counts.reduce((s, c) => s + c, 0).toLocaleString()} cells · median {fmt(metric.median)} · IQR{" "}
+            {fmt(metric.q1)}–{fmt(metric.q3)} · max {fmt(metric.max)}
           </span>
           {thresholds && onCommit && (
             <span className="ml-auto flex items-center gap-2 text-slate-500">

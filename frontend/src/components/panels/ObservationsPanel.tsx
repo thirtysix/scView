@@ -632,8 +632,14 @@ export function ObservationsPanel() {
                 </button>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-2xl font-bold tabular-nums text-slate-800">
+                <span
+                  className="text-2xl font-bold tabular-nums text-slate-800"
+                  title={`Shannon entropy of each ${primaryCol} group's ${colorByCol} composition, divided by log(number of ${colorByCol} groups) so 1 is even, then averaged over the ${primaryCol} groups weighted by cell count`}
+                >
                   {mixing.overall.toFixed(2)}
+                </span>
+                <span className="text-xs font-medium text-slate-600" data-testid="mixing-word">
+                  {mixing.overall >= 0.66 ? "well mixed" : mixing.overall >= 0.33 ? "partly mixed" : "separated"}
                 </span>
                 <div className="flex-1">
                   <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">

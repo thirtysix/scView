@@ -520,8 +520,8 @@ export function MarkerGenesPanel() {
               Specificity vs fold change: {selectedGroup}
             </h3>
             <span className="text-xs text-slate-400">
-              Top right: strong and found in this group only. A strong marker low on the plot is
-              shared with other groups.
+              One point per marker ({currentMarkers.length.toLocaleString()}; the 10 strongest labelled). Top right:
+              strong and found in this group only. A strong marker low on the plot is shared with other groups.
             </span>
           </div>
           <MarkerSpecificityPlot
