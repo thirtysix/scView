@@ -31,6 +31,7 @@ from scview.api.v1 import (
     preflight,
     system,
     report,
+    layouts,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -63,3 +64,4 @@ api_router.include_router(pca.router, tags=["assessment"])
 api_router.include_router(system.router, tags=["system"])
 api_router.include_router(preflight.router, tags=["system"])
 api_router.include_router(report.router, tags=["report"])
+api_router.include_router(layouts.router, tags=["embeddings"])

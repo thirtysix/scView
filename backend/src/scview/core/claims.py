@@ -591,6 +591,7 @@ _FAMILY_PREFIX = {
     "pca": "result:pca", "qcstates": "result:qcstates",
     "mito": "result:mito_by_type",
     "embedding": "result:embedding_reliability", "reliability": "result:embedding_reliability",
+    "layouts": "result:layouts", "layout": "result:layouts",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 

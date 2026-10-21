@@ -42,6 +42,7 @@ from scview.core import (
 from scview.core import mito_by_type
 from scview.core import qc_states
 from scview.core import embedding_reliability
+from scview.core import layout_stability
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -187,6 +188,20 @@ def _add_embedding_reliability(adaptor, lines: list[str], sources: list[ChatSour
         sources.append(ChatSource(kind="result", ref=embedding_reliability.TAG, detail=er_detail,
                                   evidence="\n".join(er_lines)))
 
+
+
+def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Which group relations in the plot hold across other seeds and neighbour counts
+    (core/layout_stability.py), only once a layout check has run for this dataset."""
+    try:
+        ls_lines, ls_detail = layout_stability.grounding_lines(adaptor)
+    except Exception as exc:  # a relabelled or removed column, ...: no fact
+        logger.debug("assistant: layout stability failed: %s", exc)
+        return
+    if ls_lines:
+        lines.extend(ls_lines)
+        sources.append(ChatSource(kind="result", ref=layout_stability.TAG, detail=ls_detail,
+                                  evidence="\n".join(ls_lines)))
 
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Who the cell QC removed (the filtering step's record) or would remove at the
@@ -448,6 +463,7 @@ def build_grounding_context(
             logger.debug("assistant: PCA grounding failed: %s", exc)
     if want("qc") or want("groups"):
         _add_embedding_reliability(adaptor, lines, sources)
+        _add_layout_stability(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []
