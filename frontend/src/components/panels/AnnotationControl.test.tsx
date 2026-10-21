@@ -119,7 +119,7 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(onAnnotate.mock.calls[0]![0]).toMatchObject({
       annotation_method: "marker_score", annotation_marker_sets: "databases",
     });
-    fireEvent.change(screen.getByLabelText("Marker sets"), { target: { value: "builtin" } });
+    fireEvent.change(await screen.findByLabelText("Marker sets"), { target: { value: "builtin" } });
     fireEvent.click(screen.getByText("Annotate cell types"));
     await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(2));
     expect(onAnnotate.mock.calls[1]![0]).toMatchObject({ annotation_marker_sets: "builtin" });
@@ -130,7 +130,8 @@ describe("AnnotationControl (CellTypist)", () => {
     const onAnnotate = vi.fn().mockResolvedValue(undefined);
     render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
     await screen.findByText("AI (needs an API key)");
-    expect(screen.getByLabelText("Marker sets")).toBeTruthy();
+    // The switch to marker scores is an effect after the status resolves: wait for it.
+    expect(await screen.findByLabelText("Marker sets")).toBeTruthy();
     fireEvent.click(screen.getByText("Annotate cell types"));
     await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(1));
     expect(onAnnotate.mock.calls[0]![0]).toMatchObject({ annotation_method: "marker_score" });
