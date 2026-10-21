@@ -54,8 +54,19 @@ _KEEP_RANKINGS = 2  # max_rank values kept per dataset
 # ---------------------------------------------------------------------------
 
 
+def _block(M, start: int, stop: int):
+    """Rows start:stop as CSR or a dense array; also for a backed (on-disk) matrix,
+    which is read a block at a time and never whole."""
+    B = M[start:stop]
+    return sp.csr_matrix(B) if sp.issparse(B) else np.asarray(B)
+
+
 def _non_negative(M) -> bool:
-    sample = M.data[:200_000] if sp.issparse(M) else np.asarray(M[:1000])
+    if sp.issparse(M):
+        sample = M.data[:200_000]
+    else:
+        B = _block(M, 0, min(1000, M.shape[0]))
+        sample = B.data if sp.issparse(B) else B
     return sample.size == 0 or float(np.min(sample)) >= 0
 
 
@@ -68,8 +79,8 @@ def rank_matrix(adata):
     from scview.core.normalization import find_counts
     from scview.core.pipeline import looks_like_counts
 
-    def kind(M) -> str:
-        return "counts" if looks_like_counts(M) else "log-normalised"
+    def kind(M) -> str:  # from the first rows: a backed matrix is never read whole
+        return "counts" if looks_like_counts(_block(M, 0, min(1000, M.shape[0]))) else "log-normalised"
 
     if adata.raw is not None and _non_negative(adata.raw.X):
         return adata.raw.X, adata.raw.var_names, f"{kind(adata.raw.X)} .raw"
@@ -86,14 +97,17 @@ def rank_matrix(adata):
 
 
 def detected_genes(M) -> np.ndarray:
-    """Genes with a non-zero value in at least one cell (dense: in row blocks)."""
+    """Genes with a non-zero value in at least one cell (dense or backed: in row blocks)."""
     if sp.issparse(M):
         M = sp.csr_matrix(M)
         return np.bincount(M.indices[M.data != 0], minlength=M.shape[1]) > 0
-    M = np.asarray(M)
     seen = np.zeros(M.shape[1], dtype=bool)
     for i in range(0, M.shape[0], _MEASURE_ROWS):
-        seen |= np.any(M[i:i + _MEASURE_ROWS] != 0, axis=0)
+        B = _block(M, i, i + _MEASURE_ROWS)
+        if sp.issparse(B):
+            seen[B.indices[B.data != 0]] = True
+        else:
+            seen |= np.any(B != 0, axis=0)
     return seen
 
 
@@ -152,25 +166,25 @@ class Rankings:
         return float(np.mean(self.n_detected < self.max_rank)) if self.n_cells else 0.0
 
 
-def _row_entries(M, r: int):
-    """(values, gene indices) of row r's non-zero entries."""
-    if sp.issparse(M):
-        a, b = M.indptr[r], M.indptr[r + 1]
-        v, g = M.data[a:b], M.indices[a:b]
+def _row_entries(B, r: int):
+    """(values, gene indices) of row r's non-zero entries in a CSR or dense block."""
+    if sp.issparse(B):
+        a, b = B.indptr[r], B.indptr[r + 1]
+        v, g = B.data[a:b], B.indices[a:b]
         keep = v != 0
         return v[keep], g[keep]
-    row = np.asarray(M[r]).ravel()
+    row = B[r]
     g = np.flatnonzero(row)
     return row[g], g
 
 
 def build(M, genes, source: str = "", max_rank: int | None = None,
           detected: np.ndarray | None = None) -> Rankings:
-    """Rank every cell of ``M`` (cells x genes, non-negative; CSR or dense): its top
-    ``max_rank - 1`` genes by value, highest first, ties in ``tie_order``."""
+    """Rank every cell of ``M`` (cells x genes, non-negative; sparse, dense or backed):
+    its top ``max_rank - 1`` genes by value, highest first, ties in ``tie_order``."""
     if sp.issparse(M):
         M = sp.csr_matrix(M)
-    else:
+    elif isinstance(M, (list, tuple)):
         M = np.asarray(M)
     genes = pd.Index(np.asarray(genes, dtype=str))
     n_cells, n_genes = M.shape
@@ -188,18 +202,21 @@ def build(M, genes, source: str = "", max_rank: int | None = None,
     top = np.zeros((n_cells, keep), dtype=dtype)
     n_det = np.zeros(n_cells, dtype=np.int64)
     expressed = np.zeros(n_genes, dtype=bool)
-    for r in range(n_cells):
-        v, g = _row_entries(M, r)
-        n_det[r] = g.size
-        o = np.lexsort((pos[g], -v))  # value, highest first; ties by the shuffled position
-        m = min(o.size, keep)
-        top[r, :m] = g[o[:m]]
-        if m < keep:
-            # The first undetected genes in tie order: among the first ``keep`` of that
-            # order at most ``m`` are this cell's detected genes, so they are enough.
-            expressed[g] = True
-            top[r, m:] = fill[~expressed[fill]][: keep - m]
-            expressed[g] = False
+    for start in range(0, n_cells, _MEASURE_ROWS):
+        B = M[start:start + _MEASURE_ROWS] if sp.issparse(M) else _block(M, start, start + _MEASURE_ROWS)
+        for i in range(B.shape[0]):
+            r = start + i
+            v, g = _row_entries(B, i)
+            n_det[r] = g.size
+            o = np.lexsort((pos[g], -v))  # value, highest first; ties by the shuffled position
+            m = min(o.size, keep)
+            top[r, :m] = g[o[:m]]
+            if m < keep:
+                # The first undetected genes in tie order: among the first ``keep`` of
+                # that order at most ``m`` are this cell's detected genes, so enough.
+                expressed[g] = True
+                top[r, m:] = fill[~expressed[fill]][: keep - m]
+                expressed[g] = False
     return Rankings(top=top, max_rank=n_up, genes=genes, detected=detected,
                     n_detected=n_det, source=source)
 

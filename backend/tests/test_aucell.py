@@ -217,6 +217,29 @@ def test_rank_matrix_never_ranks_scaled_values():
         aucell.rank_matrix(_adata(scaled))
 
 
+def test_backed_dataset_ranks_in_blocks(tmp_path, monkeypatch):
+    """A file over 2 GB opens backed (on disk): ranked a block of rows at a time."""
+    X = _counts()
+    path = tmp_path / "b.h5ad"
+    _adata(sp.csr_matrix(X)).write_h5ad(path)
+    backed = ad.read_h5ad(path, backed="r")
+    monkeypatch.setattr(aucell, "_MEASURE_ROWS", 16)  # 60 cells: 4 blocks
+    rk = aucell.rankings(backed)
+    ref = aucell.build(X, [f"G{i}" for i in range(120)])
+    assert rk.source == "counts X"
+    np.testing.assert_array_equal(rk.top, ref.top)
+    np.testing.assert_array_equal(rk.n_detected, ref.n_detected)
+    backed.file.close()
+
+
+def test_dense_blocks_match_one_block(monkeypatch):
+    X = _counts()
+    whole = aucell.build(X, [f"G{i}" for i in range(120)])
+    monkeypatch.setattr(aucell, "_MEASURE_ROWS", 7)
+    np.testing.assert_array_equal(aucell.build(X, [f"G{i}" for i in range(120)]).top, whole.top)
+    np.testing.assert_array_equal(aucell.detected_genes(X), whole.detected)
+
+
 def test_rankings_are_cached_per_dataset_and_max_rank():
     a = _adata(sp.csr_matrix(_counts()))
     r1 = aucell.rankings(a)
