@@ -14,7 +14,8 @@ import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
 import { GseaResults } from "@/components/unified/GseaResults";
 import { useEnrichmentSort } from "@/hooks/useEnrichmentSort";
-import { useGeneSetScoring } from "@/hooks/useGeneSetScoring";
+import { useGeneSetScoring, type OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
+import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
 import {
   fetchEnrichmentNetwork,
   type EnrichmentNetworkResponse,
@@ -32,7 +33,7 @@ interface EnrichmentResponse {
 
 interface UnifiedEnrichmentSubtabProps {
   onTermClick: (gene: string) => void;
-  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
+  onScoreGeneSet: OnScoreGeneSet;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
 }
@@ -485,6 +486,8 @@ export function UnifiedEnrichmentSubtab({
           side panel regardless of how wide the window is, so `2xl:` would split
           that panel into two unreadable ~300px columns. Side by side only once the
           panel itself is wide enough, e.g. when expanded to full page. */}
+      {(sortedResults.length > 0 || gsea) && <ScoringMethodChoice label="Click a term to score its genes with" />}
+
       {sortedResults.length > 0 && (
         <div className="@container">
         <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-2">

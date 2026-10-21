@@ -4,6 +4,11 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useCustomGeneSetsStore } from "@/stores/customGeneSetsStore";
 import { apiFetch } from "@/api/client";
 import type { CollectionChoice } from "@/api/genesets";
+import { scoreGeneSet, type ScoreMethod } from "@/api/genesetScore";
+import type { OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
+import { useScoringMethodStore } from "@/stores/scoringMethodStore";
+import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
+import { ScoreDepthCheck } from "@/components/unified/ScoreDepthCheck";
 import {
   CollectionOptions,
   CustomCollectionsGroup,
@@ -28,18 +33,18 @@ interface GeneSetSearchResult {
   genes: string[];
 }
 
-interface ScoreResponse {
-  score_name: string;
-  n_cells: number;
-  scores: number[];
-  min_score: number;
-  max_score: number;
-  genes_found: string[];
-  genes_missing: string[];
+/** What the subtab says about the last score: counts, and AUCell's ranking depth. */
+interface ScoreSummary {
+  method: ScoreMethod;
+  found: number;
+  missing: number;
+  undetected: number;
+  maxRank: number | null;
+  shareBelow: number | null;
 }
 
 interface UnifiedGeneSetsSubtabProps {
-  onScoreComplete: (scores: Float32Array, name: string, genes?: string[]) => void;
+  onScoreComplete: OnScoreGeneSet;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
 }
@@ -66,7 +71,8 @@ export function UnifiedGeneSetsSubtab({
 
   // Scoring state
   const [isScoring, setIsScoring] = useState(false);
-  const [scoreResult, setScoreResult] = useState<{ found: number; missing: number } | null>(null);
+  const [scoreResult, setScoreResult] = useState<ScoreSummary | null>(null);
+  const method = useScoringMethodStore((s) => s.method);
 
   const categoricalColumns = useMemo(() => {
     if (!dataset) return [];
@@ -124,26 +130,26 @@ export function UnifiedGeneSetsSubtab({
   // Cache of already-computed scores, so re-selecting a previously-scored gene
   // set restores its overlay instantly instead of forcing a re-score. Keyed by
   // dataset id + gene-set name (scores are per-dataset).
-  const scoreCache = useRef<Map<string, { scores: Float32Array; found: number; missing: number }>>(
-    new Map(),
-  );
-  // The collection is part of the key: a custom set may share an MSigDB set's name.
-  const cacheKey = (gs: GeneSetSearchResult) => `${datasetId}::${gs.collection}::${gs.name}`;
+  const scoreCache = useRef<Map<string, ScoreSummary & { scores: Float32Array }>>(new Map());
+  // The collection is part of the key: a custom set may share an MSigDB set's name;
+  // and the method: each set can be on the plot either way.
+  const cacheKey = (gs: GeneSetSearchResult, m: ScoreMethod) => `${datasetId}::${m}::${gs.collection}::${gs.name}`;
 
   // Select a gene set from the list — re-apply a cached score if we have one.
   const handleSelectGeneSet = useCallback(
     (gs: GeneSetSearchResult) => {
       setSelectedGeneSet(gs);
-      const cached = scoreCache.current.get(cacheKey(gs));
+      const cached = scoreCache.current.get(cacheKey(gs, method));
       if (cached) {
-        setScoreResult({ found: cached.found, missing: cached.missing });
-        onScoreComplete(cached.scores, gs.name, gs.genes);
+        const { scores, ...summary } = cached;
+        setScoreResult(summary);
+        onScoreComplete(scores, gs.name, gs.genes, undefined, cached.method);
       } else {
         setScoreResult(null);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [datasetId, onScoreComplete],
+    [datasetId, onScoreComplete, method],
   );
 
   // Score gene set using correct API fields
@@ -152,33 +158,26 @@ export function UnifiedGeneSetsSubtab({
     setIsScoring(true);
     setScoreResult(null);
     try {
-      const response = await apiFetch<ScoreResponse>(
-        `/datasets/${datasetId}/genesets/score`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            gene_set: selectedGeneSet.genes,
-            score_name: selectedGeneSet.name,
-          }),
-        },
-      );
-
+      const response = await scoreGeneSet(datasetId, selectedGeneSet.genes, selectedGeneSet.name, method);
       const scores = new Float32Array(response.scores);
-      const entry = {
-        scores,
+      const summary: ScoreSummary = {
+        method: response.method,
         found: response.genes_found.length,
         missing: response.genes_missing.length,
+        undetected: response.genes_undetected?.length ?? 0,
+        maxRank: response.max_rank,
+        shareBelow: response.share_below_max_rank,
       };
-      scoreCache.current.set(cacheKey(selectedGeneSet), entry);
-      setScoreResult({ found: entry.found, missing: entry.missing });
-      onScoreComplete(scores, selectedGeneSet.name, selectedGeneSet.genes);
+      scoreCache.current.set(cacheKey(selectedGeneSet, method), { ...summary, scores });
+      setScoreResult(summary);
+      onScoreComplete(scores, selectedGeneSet.name, selectedGeneSet.genes, undefined, response.method);
     } catch (err) {
       console.error("Scoring failed:", err);
     } finally {
       setIsScoring(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datasetId, selectedGeneSet, onScoreComplete]);
+  }, [datasetId, selectedGeneSet, onScoreComplete, method]);
 
   if (!dataset || !datasetId) {
     return <div className="text-xs text-slate-400">No dataset loaded.</div>;
@@ -296,15 +295,30 @@ export function UnifiedGeneSetsSubtab({
               )}
               Score
             </button>
+            <ScoringMethodChoice label="with" />
             {scoreResult && (
               <span className="flex items-center gap-2 text-[11px]">
                 <span className="text-emerald-600">{scoreResult.found} found</span>
                 {scoreResult.missing > 0 && (
                   <span className="text-amber-600">{scoreResult.missing} missing</span>
                 )}
+                {scoreResult.undetected > 0 && (
+                  <span className="text-slate-500" title="In the dataset but expressed in no cell: AUCell leaves them out of the set">
+                    {scoreResult.undetected} never detected
+                  </span>
+                )}
               </span>
             )}
           </div>
+          {scoreResult?.method === "aucell" && scoreResult.maxRank != null && (
+            <p className="mt-1 text-[10px] leading-snug text-slate-500" data-testid="aucell-note">
+              AUCell over each cell&apos;s top {scoreResult.maxRank.toLocaleString()} genes (5% of those detected)
+              {scoreResult.shareBelow
+                ? `; ${Math.round(scoreResult.shareBelow * 100)}% of cells detect fewer, so their lowest counted ranks are ties among undetected genes.`
+                : "."}
+            </p>
+          )}
+          <ScoreDepthCheck key={`${datasetId}::${selectedGeneSet.collection}::${selectedGeneSet.name}`} datasetId={datasetId} genes={selectedGeneSet.genes} />
         </div>
       )}
 

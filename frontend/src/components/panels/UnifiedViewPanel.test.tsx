@@ -306,11 +306,32 @@ describe("Unified View and a restored session", () => {
     await vi.waitFor(() => expect(useUnifiedViewStore.getState().scatterOverlay).not.toBeNull());
     const [path, init] = apiFetch.mock.calls.find(([p]) => String(p).endsWith("/genesets/score"))!;
     expect(path).toBe("/datasets/kang/genesets/score");
-    expect(JSON.parse(init.body)).toEqual({ gene_set: ["ISG15", "MX1"], score_name: "IFN" });
+    // A session from before the method choice: scored with score_genes, as then.
+    expect(JSON.parse(init.body)).toEqual({ gene_set: ["ISG15", "MX1"], score_name: "IFN", method: "score_genes" });
     const u = useUnifiedViewStore.getState();
     expect(u.scatterOverlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15", "MX1"] });
+    expect(u.overlayLabel).toBe("IFN");
     expect(Array.from(u.overlayValues!)).toEqual([0.5, 1, 1.5]);
     expect(u.pendingOverlay).toBeNull();
+  });
+
+  it("scores a session's AUCell overlay with AUCell again, and says so in the label", async () => {
+    apiFetch.mockImplementation(async (path: string) =>
+      path.endsWith("/genesets/score") ? { scores: [0.1, 0.2, 0.3] } : {},
+    );
+    useUnifiedViewStore.setState({
+      pendingOverlay: {
+        datasetId: "kang",
+        overlay: { type: "score", name: "IFN", genes: ["ISG15", "MX1"], method: "aucell" },
+      },
+    });
+    renderPanel();
+    await vi.waitFor(() => expect(useUnifiedViewStore.getState().scatterOverlay).not.toBeNull());
+    const [, init] = apiFetch.mock.calls.find(([p]) => String(p).endsWith("/genesets/score"))!;
+    expect(JSON.parse(init.body).method).toBe("aucell");
+    const u = useUnifiedViewStore.getState();
+    expect(u.scatterOverlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15", "MX1"], method: "aucell" });
+    expect(u.overlayLabel).toBe("IFN (AUCell)");
   });
 });
 

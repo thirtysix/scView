@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 
 const client = vi.hoisted(() => ({ apiFetch: vi.fn() }));
 vi.mock("@/api/client", () => client);
@@ -36,6 +37,7 @@ function respond(nSets: number, listed: number) {
 beforeEach(() => {
   client.apiFetch.mockReset();
   useDatasetStore.setState({ currentDataset: dataset, currentDatasetId: "ds1" });
+  useScoringMethodStore.setState({ method: "score_genes" });
 });
 
 describe("UnifiedGeneSetsSubtab list cap", () => {
@@ -53,5 +55,54 @@ describe("UnifiedGeneSetsSubtab list cap", () => {
     render(<UnifiedGeneSetsSubtab onScoreComplete={vi.fn()} groupByColumn="" setGroupByColumn={vi.fn()} />);
     await screen.findByText("SET_0");
     await waitFor(() => expect(screen.queryByTestId("genesets-cap")).toBeNull());
+  });
+});
+
+describe("UnifiedGeneSetsSubtab scoring method", () => {
+  const scored = (method: string) => ({
+    score_name: "SET_0", n_cells: 3, scores: method === "aucell" ? [0.1, 0.2, 0.3] : [1, 2, 3],
+    min_score: 0, max_score: 1, genes_found: ["A"], genes_missing: [], method,
+    max_rank: method === "aucell" ? 703 : null, source: "log-normalised .raw", genes_undetected: [],
+    share_below_max_rank: method === "aucell" ? 0.64 : null,
+  });
+  function respondScoring() {
+    client.apiFetch.mockImplementation((url: string, init?: { body?: string }) => {
+      if (url.includes("/genesets/collections")) {
+        return Promise.resolve({ dataset_id: "ds1", collections: [{ id: "c2", name: "C2", category: "MSigDB", n_sets: 1, available: true }] });
+      }
+      if (url.includes("/genesets/search")) return Promise.resolve({ results: sets(1) });
+      if (url.endsWith("/genesets/score")) return Promise.resolve(scored(JSON.parse(init!.body!).method));
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+  }
+  const scoreCalls = () => client.apiFetch.mock.calls.filter(([u]) => String(u).endsWith("/genesets/score"));
+
+  it("scores with the chosen method, labels it, and keeps each method's score apart", async () => {
+    respondScoring();
+    const onScore = vi.fn();
+    render(<UnifiedGeneSetsSubtab onScoreComplete={onScore} groupByColumn="" setGroupByColumn={vi.fn()} />);
+    fireEvent.click(await screen.findByText("SET_0"));
+    fireEvent.change(screen.getByRole("combobox", { name: "Gene-set scoring method" }), { target: { value: "aucell" } });
+    fireEvent.click(screen.getByRole("button", { name: "Score" }));
+    await waitFor(() => expect(onScore).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(scoreCalls()[0]![1].body)).toEqual({ gene_set: ["A"], score_name: "SET_0", method: "aucell" });
+    expect(onScore.mock.calls[0]!.slice(1)).toEqual(["SET_0", ["A"], undefined, "aucell"]);
+    expect(screen.getByTestId("aucell-note")).toHaveTextContent(
+      "AUCell over each cell's top 703 genes (5% of those detected); 64% of cells detect fewer",
+    );
+
+    // score_genes for the same set: computed, not the AUCell score from the cache
+    fireEvent.change(screen.getByRole("combobox", { name: "Gene-set scoring method" }), { target: { value: "score_genes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Score" }));
+    await waitFor(() => expect(onScore).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(scoreCalls()[1]![1].body).method).toBe("score_genes");
+    expect(Array.from(onScore.mock.calls[1]![0] as Float32Array)).toEqual([1, 2, 3]);
+    expect(screen.queryByTestId("aucell-note")).toBeNull();
+
+    // Re-selecting the set shows the cached score for the current method, without a request.
+    fireEvent.click(screen.getAllByText("SET_0")[0]!); // the list row, not the heading
+    expect(onScore).toHaveBeenCalledTimes(3);
+    expect(onScore.mock.calls[2]![4]).toBe("score_genes");
+    expect(scoreCalls()).toHaveLength(2);
   });
 });

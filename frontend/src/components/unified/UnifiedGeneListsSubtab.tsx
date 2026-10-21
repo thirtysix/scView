@@ -21,7 +21,8 @@ import { DEFAULT_MSIGDB_COLLECTIONS, MSigDBCollectionTree } from "@/components/p
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
 import { useDatasetGenes, type DatasetGenes } from "@/hooks/useDatasetGenes";
 import { useEnrichmentSort } from "@/hooks/useEnrichmentSort";
-import { useGeneSetScoring } from "@/hooks/useGeneSetScoring";
+import { useGeneSetScoring, type OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
+import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
 import { MAX_GRID_GENES, MIN_GRID_GENES } from "@/lib/geneCoexpression";
 import { MAX_PLOT_GENES, parseGeneList } from "@/lib/geneList";
 import { downloadText, exportGeneLists, genePresence, type GeneListExportFormat } from "@/lib/geneLists";
@@ -37,7 +38,7 @@ interface Props {
   /** A gene chip click: the gene's overlay + violin (UnifiedViewPanel.handleGeneClick) */
   onGeneClick: (gene: string) => void;
   /** A list or term scored as a gene set: the score overlay (handleScoreComplete) */
-  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
+  onScoreGeneSet: OnScoreGeneSet;
   /** The gene on the scatter now, if any (its chip is marked) */
   activeGene?: string | null;
 }
@@ -213,7 +214,7 @@ function ListDetail({
   datasetId: string | null;
   dsGenes: DatasetGenes | null;
   onGeneClick: (gene: string) => void;
-  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
+  onScoreGeneSet: OnScoreGeneSet;
   activeGene: string | null;
 }) {
   const rename = useGeneListsStore((s) => s.rename);
@@ -396,11 +397,12 @@ function ListDetail({
               className={btn}
               disabled={!ready || present.length === 0 || !!scoringName}
               onClick={() => scoreGenes(present, list.name)}
-              title="Score each cell for these genes together (scanpy score_genes) and colour the plot by it"
+              title="Score each cell for these genes together (score_genes or AUCell, as chosen) and colour the plot by it"
             >
               {scoringName ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
               Score
             </button>
+            <ScoringMethodChoice label="with" />
             <button
               type="button"
               className={`${btn} ${panel === "enrich" ? "border-blue-300 bg-blue-50 text-blue-700" : ""}`}
@@ -470,7 +472,7 @@ function GeneListEnrichment({
   list: GeneList;
   genes: string[];
   background: string[];
-  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
+  onScoreGeneSet: OnScoreGeneSet;
   onGeneClick: (gene: string) => void;
 }) {
   const askCopilot = useViewStore((s) => s.askCopilot);
