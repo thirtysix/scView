@@ -146,6 +146,10 @@ class DatasetManager:
     def get_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
         return self._datasets.get(dataset_id)
 
+    def cached_ids(self) -> list[str]:
+        """The datasets held in memory, least recently used first."""
+        return list(self._load_order)
+
     async def get_or_load_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
         """Get from cache or load from disk.
 

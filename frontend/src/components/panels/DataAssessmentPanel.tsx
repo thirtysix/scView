@@ -17,6 +17,7 @@ import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCros
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
+import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { QcStates } from "@/components/qc/QcStates";
 import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
@@ -911,6 +912,16 @@ export function DataAssessmentPanel() {
                 {suggesting ? "Thinking..." : "Get AI Suggestions"}
               </button>
             </div>
+            {/* Memory and time the selected steps need, against what scView has free */}
+            {!running && (
+              <div className="mt-2">
+                <PreflightRunNote
+                  datasetId={datasetId}
+                  steps={STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key)}
+                  params={flattenStepParams(STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key), stepParams)}
+                />
+              </div>
+            )}
             {/* Select/Deselect links */}
             {missingCount > 0 && (
               <div className="mt-2 flex gap-3 text-xs">
