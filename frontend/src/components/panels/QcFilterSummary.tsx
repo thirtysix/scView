@@ -277,6 +277,10 @@ export function QcFilterSummary({
         <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
           Cell-loss summary unavailable: {error}
         </p>
+        {/* A refused per-type rule (no cell types) must stay switchable back from here. */}
+        {thresholds.qc_mito_mode === "per_type" && (
+          <MitoModeControl datasetId={datasetId} values={thresholds} onChange={onChange} />
+        )}
       </div>
     ) : null;
   }
