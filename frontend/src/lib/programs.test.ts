@@ -6,6 +6,7 @@ import {
   parseSweep,
   prettyTerm,
   programLabel,
+  stabilityBadge,
   stabilityText,
   sweepTraces,
   topGroup,
@@ -46,7 +47,7 @@ describe("programs helpers", () => {
     expect(programLabel(prog(2))).toBe("P2 (A2, B2, C2)");
     expect(programLabel(prog(2), 2)).toBe("P2 (A2, B2)");
     expect(programLabel(prog(1, { top_genes: [] }))).toBe("P1");
-    expect(usageLabel("P3", ["ISG15", "IFI6", "MX1", "RSAD2"])).toBe("P3 usage (ISG15, IFI6, MX1)");
+    expect(usageLabel("P3", ["ISG15", "IFI6", "MX1", "RSAD2"])).toBe("P3 usage share (ISG15, IFI6, MX1)");
   });
 
   it("builds the program x group heatmap and finds each program's top group", () => {
@@ -66,6 +67,10 @@ describe("programs helpers", () => {
     expect(stabilityText(prog(1, { stable: false, runs_found: 3 }), 5, 0.9)).toMatch(/missing from 2 of the 5 runs/);
     expect(stabilityText(prog(1, { stable: false, correlation: 0.8 }), 5, 0.9)).toMatch(/correlate below 0\.9/);
     expect(stabilityText(prog(1), 1, 0.9)).toMatch(/needs at least 2 seeds/);
+    expect(stabilityBadge(prog(1), 5)).toBe("stable");
+    expect(stabilityBadge(prog(1, { stable: false, runs_found: 3 }), 5)).toBe("3/5 runs");
+    expect(stabilityBadge(prog(1, { stable: false, correlation: 0.881 }), 5)).toBe("r = 0.88");
+    expect(stabilityBadge(prog(1), 1)).toBe("1 run");
   });
 
   it("reads a sweep from text", () => {

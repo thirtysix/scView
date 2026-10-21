@@ -9,7 +9,7 @@ export function programLabel(p: Pick<GeneProgram, "name" | "top_genes">, nGenes 
 /** The overlay's legend label for a program's usage. */
 export function usageLabel(name: string, topGenes: string[]): string {
   const genes = topGenes.slice(0, 3).join(", ");
-  return genes ? `${name} usage (${genes})` : `${name} usage`;
+  return genes ? `${name} usage share (${genes})` : `${name} usage share`;
 }
 
 /** How stable a program is, in words (the row's tooltip). */
@@ -26,6 +26,15 @@ export function stabilityText(p: GeneProgram, nSeeds: number, threshold: number)
     `Found in ${p.runs_found} of ${nSeeds} runs (${p.n_members} spectra grouped into it); ` +
     `mean correlation between them ${r}; silhouette ${sil}: ${verdict}.`
   );
+}
+
+/** The badge under a program's name: "stable", the runs it was found in, or its
+ *  runs' correlation when every run found it but they disagree. */
+export function stabilityBadge(p: GeneProgram, nSeeds: number): string {
+  if (nSeeds < 2) return "1 run";
+  if (p.stable) return "stable";
+  if (p.runs_found < nSeeds) return `${p.runs_found}/${nSeeds} runs`;
+  return p.correlation === null ? "unstable" : `r = ${p.correlation.toFixed(2)}`;
 }
 
 export interface ProgramHeatmap {
@@ -118,9 +127,5 @@ export function errorText(e: unknown): string {
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-/** "Replicate 7 of 20 (k = 15, run 2 of 5)". */
-export function progressText(p: { k: number; run: number; runs: number; done: number; total: number }): string {
-  return `Replicate ${p.done} of ${p.total} (k = ${p.k}, run ${p.run} of ${p.runs})`;
-}
 
 export { pct as pctText };

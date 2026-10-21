@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -121,11 +121,13 @@ describe("Unified View gene program overlay", () => {
     expect(apiFetch.mock.calls.map(([p]) => p)).toContain("/datasets/kang/programs/3/usage?groupby=cell_type");
     const u = useUnifiedViewStore.getState();
     expect(u.scatterOverlay).toEqual({ type: "program", index: 3, name: "P3" });
-    expect(u.overlayLabel).toBe("P3 usage (ISG15, IFI6, MX1)");
+    expect(u.overlayLabel).toBe("P3 usage share (ISG15, IFI6, MX1)");
     expect(Array.from(u.overlayValues!)).toEqual([Float32Array.from([0.1])[0], 0.5, Float32Array.from([0.9])[0]]);
     expect(u.violinData).toEqual({ B: [0.1], NK: [0.5, 0.9] });
     expect(u.violinTitle).toBe("P3 usage share");
     expect(u.pendingOverlay).toBeNull();
+    // The chip names the overlay a program, not a score.
+    expect(await screen.findByText("program")).toBeTruthy();
     // A usage share is drawn as a continuous overlay, sequential (never negative).
     await vi.waitFor(() => expect(scatterProps.current!.colorType).toBe("continuous"));
     const scale = scatterProps.current!.colorScale as { colormap: string; min: number; max: number };

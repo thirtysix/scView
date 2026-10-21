@@ -15,7 +15,16 @@ import {
 } from "@/api/programs";
 import { ProgramsEnrichment } from "@/components/unified/ProgramsEnrichment";
 import { ProgramsRunForm } from "@/components/unified/ProgramsRunForm";
-import { errorText, heatmapData, pctText, prettyTerm, stabilityText, sweepTraces, topGroup } from "@/lib/programs";
+import {
+  errorText,
+  heatmapData,
+  pctText,
+  prettyTerm,
+  stabilityBadge,
+  stabilityText,
+  sweepTraces,
+  topGroup,
+} from "@/lib/programs";
 import { plotConfig } from "@/lib/plotConfig";
 import { prettyObsLabel } from "@/lib/formatting";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -255,7 +264,7 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
                           }`}
                           title={stabilityText(p, nSeeds, summary.defaults.stable_correlation)}
                         >
-                          {nSeeds < 2 ? "1 run" : p.stable ? "stable" : `${p.runs_found}/${nSeeds} runs`}
+                          {stabilityBadge(p, nSeeds)}
                         </div>
                       </td>
                       <td className="px-2 py-1.5">

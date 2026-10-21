@@ -647,7 +647,7 @@ export function UnifiedViewPanel() {
   const hoverColorLine = (index: number, metadata: Record<string, unknown> | null): HoverLine | null => {
     if (scatterOverlay && overlayValues) {
       return colorByLine({
-        label: `${overlayLabel} ${scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}`,
+        label: `${overlayLabel} ${scatterOverlay.type === "program" ? "program" : scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}`,
         values: overlayValues,
         index,
         type: "continuous",
@@ -1002,7 +1002,7 @@ export function UnifiedViewPanel() {
               <div className="pointer-events-auto flex flex-shrink-0 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50/90 px-2 py-1 text-xs text-blue-700">
                 <span className="font-medium">{overlayLabel}</span>
                 <span className="text-blue-500">
-                  {scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}
+                  {scatterOverlay.type === "program" ? "program" : scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}
                 </span>
                 <button
                   onClick={handleClearOverlay}
