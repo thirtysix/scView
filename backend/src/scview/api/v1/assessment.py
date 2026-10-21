@@ -20,6 +20,7 @@ from scview.core.assessor import assess_preprocessing, recorded_normalization_me
 from scview.core import (
     cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
+from scview.core import qc_states
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
@@ -669,3 +670,84 @@ async def stream_qc_report(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# QC states: low-RP / high-mito second state per cell type (core/qc_states.py)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/states")
+async def get_qc_states(
+    dataset_id: str,
+    column: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Per group of ``column`` (default: a cell-type column, else the clustering)
+    with 100+ cells: 1 vs 2 Gaussian components on the ribosomal-protein share of
+    non-mito counts and % mito (RP share alone without MT- genes), the components,
+    delta BIC, separation, the flagged state's share overall and per condition (or
+    sample), and a seeded scatter sample (<= 2,000 cells per group)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    if column and column not in adaptor.adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
+    try:
+        result, _states = await asyncio.to_thread(qc_states.for_adaptor, adaptor, column or None)
+        return result
+    except qc_states.QcStatesError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    except Exception as e:
+        logger.error("QC states failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"QC states failed: {e}")
+
+
+class QcStateLabelRequest(BaseModel):
+    column: str = ""  # the grouping; default as GET /qc/states picks it
+    name: str = qc_states.DEFAULT_NAME
+
+
+@router.post("/datasets/{dataset_id}/qc/states/label")
+async def save_qc_state_label(
+    dataset_id: str,
+    body: QcStateLabelRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Save every cell's QC state as categorical obs column ``name``: the flagged
+    state of a two-state group (``low-RP high-mito``, ``low-RP`` without mito, or
+    ``second state``), ``main`` for every other cell."""
+    async with dataset_edit(dataset_id) as held:
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+        if body.column and body.column not in adaptor.adata.obs.columns:
+            raise HTTPException(status_code=404, detail=f"Column '{body.column}' not found.")
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = getattr(adaptor.adata, "isbacked", False)
+
+        def _run():
+            result, states = qc_states.for_adaptor(adaptor, body.column or None)
+            if result.get("column") is None or states is None:
+                raise qc_states.QcStatesError(result.get("note") or "No column to label by.")
+            work = adaptor.adata.to_memory() if backed else adaptor.adata
+            name = qc_states.check_name(work, result["column"], body.name)
+            before = uns_snapshot(work)
+            saved = qc_states.label(work, result, states, name)
+            write_derived(work, output_path, adaptor.h5ad_path, before)
+            return saved
+
+        try:
+            saved = await held.run(_run)
+        except qc_states.QcStatesError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))  # raised before any change
+        except Exception as e:
+            dm.evict(dataset_id)  # the cached copy may hold a column that was never saved
+            logger.error("QC state label failed for %s: %s", dataset_id, e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Could not save the QC state label: {e!s}")
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
+        return saved
