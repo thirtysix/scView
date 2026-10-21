@@ -161,3 +161,29 @@ def test_claims_resolve_pca_tag():
     refs = ["dataset:summary", "result:pca", "result:qc:1"]
     assert resolve_tag("result:pca", refs) == ["result:pca"]
     assert resolve_tag("pca", refs) == ["result:pca"]
+
+
+async def test_embedding_dims_pick_the_pc_pair(client, dataset_manager):
+    import pyarrow as pa
+
+    a = _adata(False)
+    did = _register(dataset_manager, a)
+    url = f"{API}/datasets/{did}/embeddings/X_pca"
+
+    async def cols(params):
+        r = await client.get(url, params=params)
+        assert r.status_code == 200, r.text
+        t = pa.ipc.open_stream(r.content).read_all()
+        return t.column_names, t
+
+    names, t = await cols({})
+    assert names == ["x", "y"]
+    assert np.allclose(t["x"].to_numpy(), a.obsm["X_pca"][:, 0])
+    names, t = await cols({"dims": "2,3", "color_by": "group"})
+    assert names == ["x", "y", "group"]
+    assert np.allclose(t["x"].to_numpy(), a.obsm["X_pca"][:, 2])
+    assert np.allclose(t["y"].to_numpy(), a.obsm["X_pca"][:, 3])
+    for bad in ("1", "0,0", "0,10", "a,b", "-1,2"):
+        assert (await client.get(url, params={"dims": bad})).status_code == 400, bad
+
+
