@@ -298,6 +298,7 @@ def test_grounding_names_stable_programs_with_genes_and_terms():
     assert f"P1 ({top5};" in lines[1] and "HALLMARK_X" in lines[1] and "[result:programs]" in lines[1]
     assert "3 of 3 are stable" in detail
     assert gp.grounding_lines(_planted()[0]) == ([], "")
+    assert (gp._pct(0.004), gp._pct(0.01), gp._pct(0.38), gp._pct(0.0)) == ("under 1%", "1%", "38%", "0%")
 
 
 def test_replay_script_reproduces_the_saved_usage():

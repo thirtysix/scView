@@ -832,6 +832,10 @@ def background_genes(adata) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _pct(v: float) -> str:
+    return "under 1%" if 0 < v < 0.01 else f"{v:.0%}"
+
+
 def grounding_lines(adata) -> tuple[list[str], str]:
     """The saved programs as a fact: k, the stable ones with their top five genes
     and best enriched term when one was computed. Nothing without a run."""
@@ -846,8 +850,8 @@ def grounding_lines(adata) -> tuple[list[str], str]:
     def one(p: dict) -> str:
         genes = ", ".join(g["gene"] for g in p["top_genes"][:5])
         corr = f"r = {p['correlation']:.2f}" if p.get("correlation") is not None else "r n/a"
-        text = (f"{p['name']} ({genes}; {corr}; top program in {p['pct_top']:.0%} of cells, mean share "
-                f"{p['mean_usage']:.0%})")
+        text = (f"{p['name']} ({genes}; {corr}; top program in {_pct(p['pct_top'])} of cells, mean share "
+                f"{_pct(p['mean_usage'])})")
         hit = enr.get(str(p["index"]))
         if hit and hit.get("top"):
             t = hit["top"][0]
