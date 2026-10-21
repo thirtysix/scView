@@ -12,6 +12,7 @@ import { Lasso, RotateCcw, X } from "lucide-react";
 import { formatNumber, prettyObsLabel, prettyEmbeddingLabel, isRedundantClusterCol } from "@/lib/formatting";
 import { LabelSelectionControls } from "@/components/unified/LabelSelection";
 import { CellFilterControl } from "@/components/unified/CellFilter";
+import { GatesControl } from "@/components/unified/GatesControl";
 import { describeFilter } from "@/lib/cellFilter";
 import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 import { HvgSensitivityControl } from "@/components/unified/HvgSensitivity";
@@ -334,6 +335,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
         Lasso
       </button>
       <CellFilterControl />
+      <GatesControl />
 
       {/* Selection info; a filter's selection says which filter */}
       {selectedIndices && selectedIndices.size > 0 && (
