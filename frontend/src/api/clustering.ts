@@ -1,4 +1,5 @@
 import { API_BASE } from "@/lib/constants";
+import { settingRequest } from "@/lib/hvgSensitivity";
 import { apiFetch, readError } from "./client";
 
 /** Whether a resolution sweep can run on a dataset, and its limits. */
@@ -235,10 +236,22 @@ export type HvgFlavor = "seurat" | "cell_ranger" | "seurat_v3" | "pearson_residu
 export interface HvgSetting {
   flavor: HvgFlavor;
   n_top_genes: number;
-  /** `${flavor}_${n_top_genes}` */
+  /** The neighbour graph's k; null/absent: as recorded */
+  n_neighbors?: number | null;
+  /** The clustering algorithm; null/absent: as recorded */
+  method?: "leiden" | "louvain" | null;
+  /** `${flavor}_${n_top_genes}`, then `_k${n_neighbors}` and `_${method}` when set */
   key: string;
-  /** "Seurat, 2,000 genes" */
+  /** "Seurat, 2,000 genes", then ", 30 neighbours" and ", Louvain" when set */
   label: string;
+}
+
+/** What the server needs to run or keep a setting: the fields that are set (lib/hvgSensitivity settingRequest). */
+export interface HvgSettingRequest {
+  flavor: HvgFlavor;
+  n_top_genes: number;
+  n_neighbors?: number;
+  method?: "leiden" | "louvain";
 }
 
 /** How the dataset's clustering was made, as provenance recorded it. */
@@ -285,6 +298,10 @@ export interface HvgSensitivityInfo {
   flavors?: { flavor: HvgFlavor; label: string; unavailable: string | null }[];
   estimate_seconds?: number;
   seconds_per_setting?: number;
+  /** A setting sharing another's genes: only the graph and the clustering re-run */
+  seconds_per_graph_setting?: number;
+  neighbor_choices?: { min: number; max: number };
+  methods?: { method: "leiden" | "louvain"; label: string }[];
 }
 
 export interface HvgStart {
@@ -344,7 +361,7 @@ export function getHvgSensitivityInfo(datasetId: string): Promise<HvgSensitivity
  */
 export async function runHvgSensitivity(
   datasetId: string,
-  body: { settings: { flavor: HvgFlavor; n_top_genes: number }[] },
+  body: { settings: HvgSettingRequest[] },
   handlers: { onStart?: (s: HvgStart) => void; onResult: (r: HvgRow) => void; signal?: AbortSignal },
 ): Promise<void> {
   await streamEvents(
@@ -362,11 +379,11 @@ export async function runHvgSensitivity(
 /** Save one setting's clusters as a column (once). */
 export function keepHvgSetting(
   datasetId: string,
-  setting: { flavor: HvgFlavor; n_top_genes: number },
+  setting: Pick<HvgSetting, "flavor" | "n_top_genes" | "n_neighbors" | "method">,
 ): Promise<{ column: string; created: boolean; n_clusters: number }> {
   return apiFetch(`/datasets/${datasetId}/clustering/hvg-sensitivity/keep`, {
     method: "POST",
-    body: JSON.stringify({ flavor: setting.flavor, n_top_genes: setting.n_top_genes }),
+    body: JSON.stringify(settingRequest(setting)),
   });
 }
 

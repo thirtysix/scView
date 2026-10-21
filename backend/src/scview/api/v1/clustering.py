@@ -66,6 +66,8 @@ class SubclusterRequest(BaseModel):
 class HvgSetting(BaseModel):
     flavor: str
     n_top_genes: int
+    n_neighbors: int | None = None  # default: the recorded graph's
+    method: str | None = None  # default: the recorded algorithm
 
 
 class HvgSensitivityRequest(BaseModel):
@@ -73,9 +75,7 @@ class HvgSensitivityRequest(BaseModel):
     reference: str | None = None  # default: the active clustering
 
 
-class HvgKeepRequest(BaseModel):
-    flavor: str
-    n_top_genes: int
+class HvgKeepRequest(HvgSetting):
     reference: str | None = None
 
 
@@ -302,8 +302,14 @@ async def hvg_sensitivity_info(
             "default_settings": [s.to_dict() for s in settings],
             "flavors": [{"flavor": f, "label": hs.FLAVOR_LABELS[f], "unavailable": why}
                         for f, why in hs.flavors_available(adata).items()],
-            "estimate_seconds": hs.estimate_seconds(adata.n_obs, len(settings), rec),
+            "estimate_seconds": hs.estimate_seconds(adata.n_obs, len(settings), rec,
+                                                    len({s.embedding for s in settings})),
             "seconds_per_setting": hs.estimate_seconds(adata.n_obs, 1, rec),
+            # A setting sharing another's genes re-runs only the graph and the clustering.
+            "seconds_per_graph_setting": round(hs.estimate_seconds(adata.n_obs, 2, rec, 1)
+                                               - hs.estimate_seconds(adata.n_obs, 1, rec), 1),
+            "neighbor_choices": {"min": hs.MIN_NEIGHBORS, "max": hs.MAX_NEIGHBORS},
+            "methods": [{"method": m, "label": hs.METHOD_LABELS[m]} for m in rs.METHODS],
         }
 
     # Finding the counts can copy a matrix (counts held in .raw): off the loop.
@@ -391,11 +397,12 @@ async def keep_hvg_setting(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Save one setting's clusters as ``scview_<method>_r<res>_hvg_<flavor>_<n>``
-    (unchanged when it exists): the labels the check showed, while still cached."""
+    (plus ``_k<n_neighbors>`` / ``_<method>`` when those differ; unchanged when it
+    exists): the labels the check showed, while still cached."""
     async with dataset_edit(dataset_id) as held:
         adaptor = await _adata(dm, dataset_id)
         adata = adaptor.adata
-        setting_in = [{"flavor": body.flavor, "n_top_genes": body.n_top_genes}]
+        setting_in = [HvgSetting(**body.model_dump(exclude={"reference"})).model_dump()]
 
         def _plan():
             hs.check(adata)

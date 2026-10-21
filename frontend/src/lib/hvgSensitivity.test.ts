@@ -4,11 +4,13 @@ import {
   clusterStability,
   controlMismatchReason,
   describeMatch,
+  estimateFor,
   formatDuration,
   jaccardTone,
   otherSettings,
   perCellValues,
   secondsLeft,
+  settingRequest,
   shortSettingLabel,
   verdictLabel,
 } from "./hvgSensitivity";
@@ -107,6 +109,28 @@ describe("formatting", () => {
     expect(shortSettingLabel({ flavor: "seurat", n_top_genes: 1000 })).toBe("Seurat 1k");
     expect(shortSettingLabel({ flavor: "cell_ranger", n_top_genes: 1500 })).toBe("CR 1.5k");
     expect(shortSettingLabel({ flavor: "pearson_residuals", n_top_genes: 800 })).toBe("Pearson 800");
+    expect(shortSettingLabel({ flavor: "seurat", n_top_genes: 2000, n_neighbors: 30 })).toBe("Seurat 2k k30");
+    expect(shortSettingLabel({ flavor: "seurat", n_top_genes: 2000, method: "louvain" })).toBe("Seurat 2k Louv");
+  });
+
+  it("sends only the set fields and prices settings that share their genes as a graph re-run", () => {
+    expect(settingRequest({ flavor: "seurat", n_top_genes: 2000, n_neighbors: null, method: null })).toEqual({
+      flavor: "seurat",
+      n_top_genes: 2000,
+    });
+    expect(settingRequest({ flavor: "seurat", n_top_genes: 2000, n_neighbors: 10, method: "leiden" })).toEqual({
+      flavor: "seurat",
+      n_top_genes: 2000,
+      n_neighbors: 10,
+      method: "leiden",
+    });
+    const s = [
+      { flavor: "seurat", n_top_genes: 2000 },
+      { flavor: "seurat", n_top_genes: 2000 },
+      { flavor: "cell_ranger", n_top_genes: 2000 },
+    ];
+    expect(estimateFor(s, 12, 5)).toBe(29);
+    expect(estimateFor(s, 12, undefined)).toBe(36);
   });
 
   it("tones Jaccard values and says what became of a cluster", () => {
