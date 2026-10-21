@@ -114,6 +114,7 @@ async def test_a_dataset_that_cannot_fit_even_alone_is_refused(dm, monkeypatch):
     _fake_memory(monkeypatch, dm, need_gb=99, limited=False)
     await dm.load_dataset("a")
     _fake_memory(monkeypatch, dm, need_gb=7.0)  # 5 GB free with nothing cached; 7 x 0.8 > 5
+    monkeypatch.setattr("scview.core.dataset_manager.REFUSAL_WAIT_SECONDS", 0)
     with pytest.raises(DatasetMemoryError, match="needs about 7.0 GB .* 5.0 GB free of its 6.0 GB"):
         await dm.load_dataset("c")
     assert dm.cached_ids() == []
@@ -133,6 +134,28 @@ async def test_a_load_keeps_a_working_reserve_free(dm, monkeypatch):
     _fake_memory(monkeypatch, dm, need_gb=0.5)
     await dm.load_dataset("c")
     assert dm.cached_ids() == ["b", "c"]
+
+
+async def test_a_load_waits_for_memory_a_finished_run_is_still_freeing(dm, monkeypatch):
+    from scview.core import memory_budget
+
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=4.0)
+    held = {"gb": 4.5}  # a finished run's copy, gone after the second look
+
+    def budget(*_a, **_k):
+        used = int((1 + held["gb"]) * GB)
+        held["gb"] = max(0.0, held["gb"] - 2.5)
+        return memory_budget.MemoryBudget(6 * GB, used, True, "container limit")
+
+    monkeypatch.setattr(memory_budget, "read_budget", budget)
+    monkeypatch.setattr("asyncio.sleep", _no_sleep)
+    await dm.load_dataset("a")
+    assert dm.cached_ids() == ["a"]
+
+
+async def _no_sleep(_s):
+    return None
 
 
 async def test_without_a_container_limit_nothing_is_dropped_for_memory(dm, monkeypatch):

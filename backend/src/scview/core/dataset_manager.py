@@ -81,6 +81,8 @@ LOAD_MARGIN = 1.1
 # page's first requests (QC, cluster QC, the co-pilot insight) got the backend killed.
 RESERVE_SHARE = 0.25
 RESERVE_MIN = 1024**3
+# How long a load that does not fit waits for memory a finished run is still freeing.
+REFUSAL_WAIT_SECONDS = 10
 
 
 def working_reserve(limit_bytes: int) -> int:
@@ -224,8 +226,19 @@ class DatasetManager:
             logger.warning("No load estimate for %s: %s", path, e)
             return
         need = int(est.peak_bytes)
+
+        def refused(free: int | None) -> bool:
+            return free is not None and need * (1 - preflight.ERROR_BAND) > free
+
         free = await self.free_memory_for(need, keep=dataset_id)
-        if free is not None and need * (1 - preflight.ERROR_BAND) > free:
+        # A run that just ended may still hold its copy for a moment (the request that
+        # follows a stopped ovary run got a 507): give it a few seconds to let go.
+        for _ in range(REFUSAL_WAIT_SECONDS):
+            if not refused(free):
+                return
+            await asyncio.sleep(1)
+            free = await self.free_memory_for(need, keep=dataset_id)
+        if refused(free):
             raise DatasetMemoryError(dataset_id, need, max(0, free), memory_budget.read_budget().limit_bytes)
 
     def get_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
