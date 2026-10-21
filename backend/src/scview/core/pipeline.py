@@ -263,6 +263,24 @@ def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> None:
     )
 
 
+def _holds_processed_values(M) -> bool:
+    """Values that are not counts (negative or fractional); an empty matrix is not."""
+    if sp.issparse(M):
+        has = M.nnz > 0
+    else:
+        has = bool(np.any(np.asarray(M).ravel()[:_COUNTS_SAMPLE * 4]))
+    return has and not looks_like_counts(M)
+
+
+def _doublet_counts(adata: ad.AnnData):
+    """(matrix, gene names, where from) of the counts beside a processed X, or None."""
+    if "counts" in adata.layers and looks_like_counts(adata.layers["counts"]):
+        return adata.layers["counts"], adata.var_names, "layers['counts']"
+    if adata.raw is not None and looks_like_counts(adata.raw.X):
+        return adata.raw.X, adata.raw.var_names, ".raw"
+    return None
+
+
 def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
     """Detect doublets with Scrublet; annotate ``.obs`` only (removal is opt-in).
 
@@ -287,8 +305,24 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
                  "expected_rate_from": suggestion["column"] or "all cells (no sample column)"}
     exact = adata.n_obs <= doublets.EXACT_KNN_MAX_CELLS
     found["neighbors"] = "exact" if exact else "approximate"
-    sc.pp.scrublet(adata, expected_doublet_rate=found["expected_doublet_rate"],
+    target = adata
+    if _holds_processed_values(adata.X):
+        # Run alone on a processed dataset, X is scaled: Scrublet then filled a 6 GB
+        # backend and failed ("Bin edges must be unique: nan"). Score the counts.
+        counts = _doublet_counts(adata)
+        if counts is None:
+            raise StepSkipped("Doublet detection needs raw counts: X holds processed values and "
+                              "there is no counts layer or counts in .raw.")
+        M, names, found["input"] = counts
+        # Scrublet copies its input, so sharing the dataset's counts here is safe.
+        target = ad.AnnData(X=M, obs=pd.DataFrame(index=adata.obs_names),
+                            var=pd.DataFrame(index=names))
+    sc.pp.scrublet(target, expected_doublet_rate=found["expected_doublet_rate"],
                    use_approx_neighbors=not exact)
+    if target is not adata:
+        for col in ("doublet_score", "predicted_doublet"):
+            adata.obs[col] = target.obs[col].to_numpy()
+        adata.uns["scrublet"] = target.uns["scrublet"]
     doublets.clear_threshold(adata)  # set on the previous run's scores
     n_dbl = (
         int(adata.obs["predicted_doublet"].sum())
