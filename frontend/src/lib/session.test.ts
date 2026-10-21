@@ -70,6 +70,7 @@ const full: SessionFile = {
     { name: "IFN response", genes: ["ISG15", "IFI6"], source: "DE: higher in STIM" },
     { name: "Empty", genes: [] },
   ],
+  communication: { groupby: "cell_type", subset_column: "stim", subset_value: "STIM", expr_prop: 0.2 },
 };
 
 const json = (x: unknown) => JSON.parse(JSON.stringify(x));
@@ -121,6 +122,8 @@ describe("parseSession", () => {
     ["a gene list without a name", { gene_lists: [{ name: "", genes: ["A"] }] }, /gene_lists\[0\].name/],
     ["a gene that is not text", { gene_lists: [{ name: "x", genes: ["A", 3] }] }, /gene_lists\[0\].genes\[1\]/],
     ["a list of too many genes", { gene_lists: [{ name: "x", genes: Array(5001).fill("A") }] }, /gene_lists\[0\].genes must list 0 to 5000/],
+    ["a communication detection share over 1", { communication: { expr_prop: 5 } }, /communication.expr_prop/],
+    ["a communication column that is not text", { communication: { groupby: 3 } }, /communication.groupby must be/],
   ])("rejects %s", (_name, patch, message) => {
     expect(() => parseSession({ format: "scview-session", version: 1, ...patch })).toThrow(message);
   });

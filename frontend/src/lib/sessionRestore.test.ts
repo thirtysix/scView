@@ -9,6 +9,7 @@ import type { DatasetInfo } from "@/api/types";
 import type { CellFilter } from "@/lib/cellFilter";
 import { parseSession, sessionJson, type SessionFile } from "@/lib/session";
 import { captureSession, restoreSession } from "@/lib/sessionRestore";
+import { useCommunicationStore } from "@/stores/communicationStore";
 import { DE_DEFAULTS, useDESettingsStore } from "@/stores/deSettingsStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useGeneListsStore } from "@/stores/geneListsStore";
@@ -407,5 +408,36 @@ describe("gene lists", () => {
       }),
     );
     expect(listsNow()).toEqual([["Kept", ["CD14"]]]);
+  });
+});
+
+describe("communication settings", () => {
+  beforeEach(() => useCommunicationStore.getState().reset());
+
+  it("saves the run settings and restores them where the columns exist", async () => {
+    buildWorkspace("lasso");
+    useCommunicationStore.getState().update({ groupby: "cell_type", subsetColumn: "stim", subsetValue: "STIM", exprProp: 0.2 });
+    const session = saveAndReset();
+    useCommunicationStore.getState().reset();
+    expect(session.communication).toEqual({ groupby: "cell_type", subset_column: "stim", subset_value: "STIM", expr_prop: 0.2 });
+    await restoreSession(session);
+    const c = useCommunicationStore.getState();
+    expect([c.groupby, c.subsetColumn, c.subsetValue, c.exprProp]).toEqual(["cell_type", "stim", "STIM", 0.2]);
+  });
+
+  it("says which communication column the dataset lacks; an older session leaves the settings alone", async () => {
+    buildWorkspace("lasso");
+    useCommunicationStore.getState().update({ groupby: "celltype_fine", subsetColumn: "stim", subsetValue: "IFN" });
+    const session = saveAndReset();
+    const report = await restoreSession(session);
+    expect(report.notes).toContain("Communication: “celltype_fine” is not in this dataset.");
+    expect(report.notes).toContain("Communication cells “stim = IFN”: not in this dataset.");
+    expect(useCommunicationStore.getState().groupby).toBe("");
+
+    useCommunicationStore.getState().update({ groupby: "cell_type" });
+    const older = { ...session };
+    delete older.communication;
+    await restoreSession(older);
+    expect(useCommunicationStore.getState().groupby).toBe("cell_type");
   });
 });

@@ -70,7 +70,7 @@ export async function runSweep(
  * as it arrives. Rejects with the server's reason, on an `error` event, or when
  * the stream ends before `complete`; aborting `signal` stops reading.
  */
-async function streamEvents(
+export async function streamEvents(
   path: string,
   body: unknown,
   onEvent: (event: string, data: unknown) => void,
