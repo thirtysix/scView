@@ -16,6 +16,7 @@ import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfiden
 import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCrosscheckCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
+import { QcStates } from "@/components/qc/QcStates";
 import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
   ClipboardCheck,
@@ -1438,6 +1439,7 @@ export function DataAssessmentPanel() {
               filter={qcFilter}
             />
           )}
+          {datasetId && <QcStates datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <MeanVariancePlot datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <PcaDiagnostics datasetId={datasetId} refreshKey={qcRefreshKey} />}
         </div>
