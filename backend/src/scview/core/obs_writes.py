@@ -125,6 +125,11 @@ def write_derived(
     ``obsm_keys``: obsm entries the edit set or removed, rewritten the same way.
     """
     partial = output_path + ".partial"
+    # anndata refuses to write an index named like a column with other values (an
+    # uploaded h5ad's obs "cell_id"); the pipeline's save and the ingest drop the name too.
+    for frame in (adata.obs, adata.var):
+        if frame.index.name is not None and frame.index.name in frame.columns:
+            frame.index.name = None
     if (
         uns_before is not None
         and source_path

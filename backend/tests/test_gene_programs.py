@@ -356,3 +356,17 @@ def test_write_derived_fast_path_rewrites_the_named_obsm_entries(tmp_path):
     del c.obsm[gp.OBSM_RAW_KEY]
     write_derived(c, path, path, uns_snapshot(c), obsm_keys=(gp.OBSM_RAW_KEY,))
     assert gp.OBSM_RAW_KEY not in ad.read_h5ad(path).obsm
+
+
+def test_write_derived_drops_an_index_name_that_clashes_with_a_column(tmp_path):
+    """An uploaded h5ad (ovary) names its obs index "cell_id" and has a different
+    "cell_id" column: anndata refuses to write that, so the first edit failed."""
+    from scview.core.obs_writes import write_derived
+
+    a, _, _ = _planted(layout="x")
+    a.obs["cell_id"] = [f"other{i}" for i in range(a.n_obs)]
+    a.obs.index.name = "cell_id"
+    path = str(tmp_path / "e.h5ad")
+    write_derived(a, path)
+    b = ad.read_h5ad(path)
+    assert list(b.obs_names) == list(a.obs_names) and b.obs["cell_id"].iloc[0] == "other0"
