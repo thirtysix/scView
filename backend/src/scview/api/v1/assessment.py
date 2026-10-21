@@ -669,3 +669,38 @@ async def stream_qc_report(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/qc/mito-by-type
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/mito-by-type")
+async def get_mito_by_type(
+    dataset_id: str,
+    column: str = "",
+    ceiling: float | None = None,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """% mito per cell type (median, MAD, quantiles, n), each type's own bound
+    (median + 3 MADs) and the cells the global ceiling (``ceiling``, else the
+    recorded or default ``max_pct_mt``) would remove from each type vs its own
+    bound; flags types the ceiling cuts hard. Advisory: filtering is unchanged.
+    ``column`` defaults to the author's cell types, else the clustering."""
+    from scview.core import mito_by_type
+
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    if column and column not in adaptor.adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
+    try:
+        # Obs + cached per-cell QC (a few ms), but the arrays may need a pass first.
+        report = await asyncio.to_thread(mito_by_type.for_adaptor, adaptor, column or None, ceiling)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Mito by type failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Mito by type failed: {e}")
+    return report.model_dump()

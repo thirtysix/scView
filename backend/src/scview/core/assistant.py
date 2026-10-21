@@ -39,6 +39,7 @@ from scview.core.assessor import assess_preprocessing
 from scview.core import (
     ccc, cluster_qc, composition, merge_check, milo, pca_diagnostics, provenance, qc_filter,
 )
+from scview.core import mito_by_type
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -379,6 +380,15 @@ def build_grounding_context(
                 sources.append(ChatSource(kind="result", ref=t, detail=d, evidence="\n".join(ev)))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: cluster QC failed: %s", exc)
+        # % mito by cell type: does the global ceiling cut one type hard (advisory).
+        try:
+            mito_lines, mito_detail = mito_by_type.grounding_lines(adaptor)
+            lines.extend(mito_lines)
+            if mito_detail:
+                sources.append(ChatSource(kind="result", ref=mito_by_type.TAG, detail=mito_detail,
+                                          evidence="\n".join(mito_lines)))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: mito-by-type grounding failed: %s", exc)
         # The stored PCA: variance per component, elbow, PC1's top loadings.
         try:
             pca_lines, pca_detail = pca_diagnostics.grounding_lines(adata)
