@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-21
+
 ### Added
 - **Cluster and gene reports (Unified View → Report).** One page per cluster: its size per donor and
   condition, what other label columns call it, marker genes with the marker-database verdict,
