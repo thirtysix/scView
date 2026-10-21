@@ -4,6 +4,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { SESSION_FORMAT, SESSION_VERSION, sessionFromStorage, type SessionFile } from "@/lib/session";
 import { restoreSession } from "@/lib/sessionRestore";
+import { hasShareHash } from "@/lib/shareUrl";
 
 const KEY = "scview.session.v1";
 
@@ -21,6 +22,11 @@ export function useSessionRestore() {
   // Restore once, on mount; persist only after that, so the defaults the app
   // starts with don't overwrite the snapshot while it is being restored.
   useEffect(() => {
+    // A share link opens its own view (useShareLinkRestore), not the last one.
+    if (hasShareHash(window.location.hash)) {
+      restored.current = true;
+      return;
+    }
     let session: SessionFile | null = null;
     try {
       const raw = localStorage.getItem(KEY);

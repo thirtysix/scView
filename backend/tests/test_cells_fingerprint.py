@@ -60,3 +60,38 @@ async def test_dataset_info_carries_it(client, dataset_manager):
     info = (await client.get(f"{API}/datasets/fp")).json()
     assert info["cells_fingerprint"] == _fp(a)
     assert info["n_cells"] == 3
+
+
+def test_known_fingerprint_never_reads_or_hashes():
+    adaptor = AnnDataAdaptor("missing.h5ad")
+    assert adaptor.known_cells_fingerprint() is None  # not loaded: no file read
+    adaptor._adata = _adata(["c0", "c1", "c2"])
+    assert adaptor.known_cells_fingerprint() is None  # loaded, never hashed
+    fp = adaptor.cells_fingerprint()
+    assert adaptor.known_cells_fingerprint() == fp
+    adaptor._adata = adaptor._adata[[0, 1]].copy()  # cells changed since
+    assert adaptor.known_cells_fingerprint() is None
+
+
+async def test_dataset_list_carries_it_once_hashed(client, dataset_manager):
+    """A share link from another scView finds its dataset by these cells; the
+    list adds the fingerprint only when GET /datasets/{id} already hashed it."""
+    a = _adata(["c0", "c1", "c2"])
+    for did in ("fp", "other"):
+        d = Path(dataset_manager.data_dir) / "uploads" / did
+        d.mkdir(parents=True)
+        (d / "metadata.json").write_text(json.dumps({"id": did, "name": did, "status": "ready"}))
+        a.write_h5ad(d / "data.h5ad")
+
+    listed = {m["id"]: m for m in (await client.get(f"{API}/datasets")).json()}
+    assert "cells_fingerprint" not in listed["fp"]
+    assert dataset_manager.get_dataset("fp") is None  # listing loaded nothing
+
+    await client.get(f"{API}/datasets/fp")
+    listed = {m["id"]: m for m in (await client.get(f"{API}/datasets")).json()}
+    assert listed["fp"]["cells_fingerprint"] == _fp(a)
+    assert "cells_fingerprint" not in listed["other"]
+    # Not written into the sidecar: it would go stale when cells are filtered.
+    assert "cells_fingerprint" not in json.loads(
+        (Path(dataset_manager.data_dir) / "uploads" / "fp" / "metadata.json").read_text()
+    )

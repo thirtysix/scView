@@ -141,7 +141,15 @@ async def upload_dataset(
 async def list_datasets(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
-    return dm.list_datasets()
+    datasets = dm.list_datasets()
+    for meta in datasets:
+        # Which cells (a share link finds its dataset by them): only when GET
+        # /datasets/{id} has hashed them already; the list never loads or hashes.
+        adaptor = dm.get_dataset(str(meta.get("id") or ""))
+        fingerprint = adaptor.known_cells_fingerprint() if adaptor is not None else None
+        if fingerprint:
+            meta["cells_fingerprint"] = fingerprint
+    return datasets
 
 
 @router.post("/datasets/prune")
