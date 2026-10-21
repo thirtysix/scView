@@ -221,6 +221,20 @@ def test_pair_summary_and_roles_count_specific_interactions():
         assert roles.loc[g, "outgoing"] == (spec["source"] == g).sum()
         assert roles.loc[g, "incoming"] == (spec["target"] == g).sum()
 
+    class Adaptor:
+        pass
+
+    a = Adaptor()
+    obs = pd.DataFrame({"g": labels})
+    ccc.remember(a, r)
+    lines, detail = ccc.grounding_lines(a, obs)
+    assert detail and "between 3 'g' groups, all cells" in detail
+    pairs = [x for x in lines if " -> " in x and "(magnitude rank" in x]
+    assert pairs and len(pairs) == len({x.split(": ", 1)[1].split(" (")[0] for x in pairs})  # one line per LR pair
+    # Re-clustered since: the result no longer describes these groups.
+    lines, detail = ccc.grounding_lines(a, pd.DataFrame({"g": ["x"] * len(labels)}))
+    assert detail is None and lines == []
+
 
 # --- resource -----------------------------------------------------------------------
 

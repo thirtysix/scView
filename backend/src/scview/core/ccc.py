@@ -504,9 +504,12 @@ def grounding_lines(adaptor, obs: pd.DataFrame) -> tuple[list[str], str | None]:
               f"{len(tab):,} source-target-pair rows scored, {n_spec:,} with specificity rank <= {SPECIFIC}")
     lines = ["\n## Cell-cell communication (last run; ligand-receptor, LIANA consensus)",
              f"- {detail} [result:communication]."]
-    top = tab[tab["specificity_rank"] <= SPECIFIC].head(8)
+    # The strongest row of each ligand-receptor pair: broadly expressed pairs
+    # (TIMP1 -> CD63) would otherwise fill every line with one pair.
+    top = tab[tab["specificity_rank"] <= SPECIFIC]
     if top.empty:
-        top = tab.head(5)
+        top = tab
+    top = top.drop_duplicates(["ligand_complex", "receptor_complex"]).head(8)
     for row in top.itertuples():
         lines.append(f"- {_pair(row)} (magnitude rank {row.magnitude_rank:.2g}, "
                      f"specificity rank {row.specificity_rank:.2g})")
