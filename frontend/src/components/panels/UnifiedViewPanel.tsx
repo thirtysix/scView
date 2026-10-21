@@ -1147,13 +1147,13 @@ export function UnifiedViewPanel() {
               </div>
             </div>
           )}
-          {/* Tab bar */}
-          <div className="flex flex-shrink-0 overflow-x-auto border-b border-slate-200">
+          {/* Tab bar: wraps onto a second row rather than scrolling, so no tab is cut off */}
+          <div className="flex flex-shrink-0 flex-wrap border-b border-slate-200">
             {SUBTABS.filter((tab) => tab.id !== "protein" || dataset?.protein).map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveSubtab(tab.id)}
-                className={`flex-1 px-2 py-2 text-xs font-medium transition-colors ${
+                className={`flex-1 whitespace-nowrap px-2 py-2 text-xs font-medium transition-colors ${
                   activeSubtab === tab.id
                     ? "border-b-2 border-primary text-primary"
                     : "text-slate-500 hover:text-slate-700"
