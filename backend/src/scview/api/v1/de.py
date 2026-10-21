@@ -10,7 +10,9 @@ instead run donor-aware pseudobulk DESeq2 (``core/pseudobulk.py``). The
 ``/methods`` endpoints run one comparison under every cell-level test and say
 how far they agree. A between-groups comparison also reports the two sides'
 composition (``core/de_composition.py``), before (``GET /de/composition``)
-and with the result.
+and with the result. ``GET /de/results`` lists the results the backend still
+keeps, and ``POST /de/overlap`` compares their significant genes in an UpSet
+plot (``core/de_overlap.py``).
 """
 
 from __future__ import annotations
@@ -401,9 +403,19 @@ def _methods(work, mask_a, mask_b, dataset_id: str, min_pct: float, top_n: int) 
     }
 
 
-def _remember(dataset_id: str, res: _CellTest) -> str:
+def _remember(dataset_id: str, res: _CellTest, comparison: dict) -> str:
     return de_results.remember(dataset_id, res.genes, method=res.method,
-                               min_pct=res.prefilter.min_pct, n_skipped=res.prefilter.n_skipped)
+                               min_pct=res.prefilter.min_pct, n_skipped=res.prefilter.n_skipped,
+                               comparison={**comparison, "min_pct": res.prefilter.min_pct})
+
+
+def _compared(body: _CompareScope, n_a: int, n_b: int, replicate_key: str | None) -> dict:
+    """What a between-groups result compared, for its label (core/de_results.py)."""
+    scoped = bool(body.within_column) and body.within_value is not None
+    return {"mode": "groups", "column": body.split_by, "group_a": body.group_a,
+            "group_b": body.group_b, "within_column": body.within_column if scoped else None,
+            "within_value": body.within_value if scoped else None,
+            "replicate_key": replicate_key, "n_a": n_a, "n_b": n_b}
 
 
 def _selection_mask(adata, indices: list[int]):
@@ -451,8 +463,10 @@ async def differential_expression(
 
     # Seconds on a large dataset: in a worker thread, so the server keeps answering.
     res, size = await asyncio.to_thread(_run)
+    compared = {"mode": "selection", "label": body.label, "n_a": n_sel,
+                "n_b": int(adata.n_obs) - n_sel}
     return DEResponse(n_selected=n_sel, n_rest=int(adata.n_obs) - n_sel, label=body.label,
-                      genes=res.genes, result_id=_remember(dataset_id, res),
+                      genes=res.genes, result_id=_remember(dataset_id, res, compared),
                       transcriptome_size=size, **res.fields())
 
 
@@ -602,8 +616,9 @@ async def differential_expression_compare(
         obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
+    result_id = _remember(dataset_id, res, _compared(body, n_a, n_b, key))
     return DEResponse(n_selected=n_a, n_rest=n_b, label=_compare_label(body), genes=res.genes,
-                      result_id=_remember(dataset_id, res), transcriptome_size=size,
+                      result_id=result_id, transcriptome_size=size,
                       confounding=confounding, composition=composition, **guard, **res.fields())
 
 
@@ -678,7 +693,10 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         n_rest=res.n_cells_b,
         label=label,
         genes=genes,
-        result_id=de_results.remember(dataset_id, genes, method="pseudobulk"),
+        result_id=de_results.remember(
+            dataset_id, genes, method="pseudobulk",
+            comparison=_compared(body, res.n_cells_a, res.n_cells_b, key),
+        ),
         replicate_key=key,
         n_donors_a=res.n_samples_a,
         n_donors_b=res.n_samples_b,
@@ -691,3 +709,179 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         dropped_samples=res.dropped_samples,
         transcriptome_size=size,
     )
+
+
+# --- Overlap of several kept DE results (an UpSet plot; core/de_overlap.py) ---
+
+_GONE = (f"That DE result is no longer kept; the backend keeps the last {de_results.KEEP} "
+         "since it started. Run the DE again.")
+_MAX_OVERLAP = de_results.KEEP
+
+
+class DEResultSummary(BaseModel):
+    result_id: str
+    label: str  # "CD14 Mono: STIM vs CTRL (Wilcoxon)"
+    method: str
+    created_at: str  # ISO 8601, UTC
+    n_tested: int  # genes with a result (after the detection prefilter)
+    has_pvalues: bool  # False: logistic regression (n_sig_* follow the top-N rule)
+    rule: str  # padj | padj_bh_here | top_n (core/de_overlap.py)
+    n_sig_up: int  # at the listing's padj_max / lfc_min
+    n_sig_down: int
+    min_pct: float | None = None
+    comparison: dict = {}
+
+
+class DEResultsList(BaseModel):
+    results: list[DEResultSummary]  # this dataset's, newest first
+    keep: int  # results kept over all datasets
+    padj_max: float
+    lfc_min: float
+    logreg_top_n: int
+
+
+class DEOverlapExtraSet(BaseModel):
+    """A gene list compared beside the DE results (no direction)."""
+
+    name: str = Field(default="Gene list", max_length=200)
+    genes: list[str] = Field(default=[], max_length=5000)
+
+
+class DEOverlapRequest(BaseModel):
+    result_ids: list[str]  # 2 to KEEP, from GET /de/results
+    direction: Literal["up", "down", "both"] = "both"
+    padj_max: float = Field(default=0.05, gt=0.0, le=1.0)
+    lfc_min: float = Field(default=0.25, ge=0.0, le=20.0)
+    restrict_to_common_tested: bool = False
+    extra_sets: list[DEOverlapExtraSet] = Field(default=[], max_length=4)
+
+
+class DEOverlapSet(BaseModel):
+    index: int
+    name: str
+    kind: Literal["de", "extra"]
+    result_id: str | None
+    method: str | None
+    rule: str | None  # DE sets: padj | padj_bh_here | top_n
+    n: int
+    n_up: int
+    n_down: int
+    n_tested: int | None  # DE sets: genes the result tested
+    n_not_tested: int | None  # extra sets: genes no result tested
+
+
+class DEOverlapGene(BaseModel):
+    gene: str
+    lfc: list[float | None]  # log2FC in each DE result (request order); None: not tested
+    sets: list[int] | None = None  # discordant genes: the sets the gene is in
+
+
+class DEOverlapIntersection(BaseModel):
+    """Genes in exactly these sets (indices into ``sets``) and no other."""
+
+    sets: list[int]
+    degree: int
+    n: int
+    n_up: int  # higher in A in every DE result of the combination
+    n_down: int
+    genes: list[DEOverlapGene]  # largest mean |log2FC| first, at most max_listed
+
+
+class DEOverlapCombination(BaseModel):
+    sets: list[int]
+    n: int
+
+
+class DEOverlapDiscordant(BaseModel):
+    """"both": genes significant in several results with opposite signs."""
+
+    n: int
+    combinations: list[DEOverlapCombination]
+    genes: list[DEOverlapGene]
+
+
+class DEOverlapPair(BaseModel):
+    a: int
+    b: int
+    shared: int  # same sign when both are DE sets
+    discordant: int
+    union: int
+    jaccard: float | None
+
+
+class DEOverlapResponse(BaseModel):
+    direction: str
+    padj_max: float
+    lfc_min: float
+    restrict_to_common_tested: bool
+    logreg_top_n: int
+    max_listed: int
+    sets: list[DEOverlapSet]
+    result_ids: list[str]
+    n_common_tested: int
+    n_union: int  # = sum of the intersections' n (all, hidden too) + discordant n
+    intersections: list[DEOverlapIntersection]  # largest first
+    n_intersections: int
+    hidden_intersections: int
+    hidden_genes: int
+    discordant: DEOverlapDiscordant
+    pairs: list[DEOverlapPair]
+    notes: list[str]
+
+
+@router.get("/datasets/{dataset_id}/de/results", response_model=DEResultsList)
+async def differential_expression_results(
+    dataset_id: str,
+    padj_max: float = Query(default=0.05, gt=0.0, le=1.0),
+    lfc_min: float = Query(default=0.25, ge=0.0, le=20.0),
+) -> DEResultsList:
+    """The DE results the backend still keeps for this dataset (process memory,
+    core/de_results.py), newest first, each with its significant genes up and
+    down at ``padj_max`` / ``lfc_min``. Milliseconds, so on the event loop."""
+    from datetime import datetime, timezone
+
+    from scview.core import de_overlap
+
+    out = []
+    for rid, r in de_results.list_results(dataset_id):
+        signs, rule = de_overlap.significant(r, direction="both", padj_max=padj_max, lfc_min=lfc_min)
+        up = sum(1 for v in signs.values() if v > 0)
+        out.append(DEResultSummary(
+            result_id=rid, label=r.label, method=r.method,
+            created_at=datetime.fromtimestamp(r.created_at, tz=timezone.utc).isoformat(),
+            n_tested=len(r.genes), has_pvalues=rule != "top_n", rule=rule,
+            n_sig_up=up, n_sig_down=len(signs) - up, min_pct=r.min_pct, comparison=r.comparison,
+        ))
+    return DEResultsList(results=out, keep=de_results.KEEP, padj_max=padj_max, lfc_min=lfc_min,
+                         logreg_top_n=de_overlap.LOGREG_TOP_N)
+
+
+@router.post("/datasets/{dataset_id}/de/overlap", response_model=DEOverlapResponse)
+async def differential_expression_overlap(dataset_id: str, body: DEOverlapRequest) -> DEOverlapResponse:
+    """The overlap of 2 to KEEP kept DE results' significant genes (and any
+    gene lists): set sizes, exclusive intersections, discordant genes and
+    pairwise Jaccard (core/de_overlap.py). 404 when a result is no longer kept."""
+    from scview.core import de_overlap
+
+    ids = list(dict.fromkeys(body.result_ids))
+    if len(ids) != len(body.result_ids):
+        raise HTTPException(status_code=400, detail="Each DE result can be picked once.")
+    if not 2 <= len(ids) <= _MAX_OVERLAP:
+        raise HTTPException(status_code=400,
+                            detail=f"Pick 2 to {_MAX_OVERLAP} DE results to compare (got {len(ids)}).")
+    picked = []
+    for rid in ids:
+        stored = de_results.recall(dataset_id, rid)
+        if stored is None:
+            raise HTTPException(status_code=404, detail=_GONE)
+        picked.append((rid, stored))
+
+    def _run() -> dict:
+        return de_overlap.overlap(
+            picked, direction=body.direction, padj_max=body.padj_max, lfc_min=body.lfc_min,
+            restrict_to_common_tested=body.restrict_to_common_tested,
+            extra_sets=[e.model_dump() for e in body.extra_sets],
+        )
+
+    # Up to 8 x 14k genes into sets: tens of ms, so off the event loop.
+    return DEOverlapResponse(**(await asyncio.to_thread(_run)))

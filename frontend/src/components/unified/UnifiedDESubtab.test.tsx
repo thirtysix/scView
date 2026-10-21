@@ -19,6 +19,13 @@ vi.mock("@/api/de", () => ({ computeDE, computeDECompare, computeDEMethods, comp
 // The follow-up cards fetch on their own; not what is under test here.
 vi.mock("@/components/unified/DEEnrichment", () => ({ DEEnrichment: () => null }));
 vi.mock("@/components/unified/DEActivity", () => ({ DEActivity: () => null }));
+const overlapProps = vi.hoisted(() => ({ last: null as null | { latestResultId?: string | null; fcThreshold: number } }));
+vi.mock("@/components/unified/DeOverlap", () => ({
+  DeOverlap: (props: { latestResultId?: string | null; fcThreshold: number }) => {
+    overlapProps.last = props;
+    return null;
+  },
+}));
 type PlotProps = {
   data: { x: number[]; y: number[]; marker?: { color?: string[] } }[];
   layout: { shapes?: { x0: number; line: { dash: string } }[]; xaxis?: { ticktext?: string[] } };
@@ -470,5 +477,20 @@ describe("UnifiedDESubtab composition between groups", () => {
     fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
     await screen.findByText("CD14");
     expect(screen.queryByTestId("de-composition-caution")).toBeNull();
+  });
+});
+
+describe("UnifiedDESubtab DE overlap", () => {
+  beforeEach(() => {
+    computeDE.mockReset().mockResolvedValue({ ...RESULT, result_id: "r-new" });
+  });
+
+  it("is mounted without a result, and hears of each new result and the table's cut-off", async () => {
+    useDESettingsStore.getState().update({ fcThreshold: 0.5 });
+    renderDE();
+    expect(overlapProps.last).toMatchObject({ latestResultId: undefined, fcThreshold: 0.5 });
+    act(() => useSelectionStore.getState().setSelection(new Set([1, 2, 3, 4])));
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await waitFor(() => expect(overlapProps.last?.latestResultId).toBe("r-new"));
   });
 });
