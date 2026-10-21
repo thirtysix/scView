@@ -9,6 +9,9 @@ import {
   CustomCollectionsGroup,
 } from "@/components/panels/CustomCollectionsGroup";
 
+/** Sets fetched per collection (the search endpoint's cap); the list says so when the collection has more. */
+const SETS_LISTED = 200;
+
 interface CollectionMeta extends CollectionChoice {
   category: string;
   subcategory?: string;
@@ -102,7 +105,7 @@ export function UnifiedGeneSetsSubtab({
     setSelectedGeneSet(null);
     setScoreResult(null);
     apiFetch<{ results: GeneSetSearchResult[] }>(
-      `/datasets/${datasetId}/genesets/search?q=&collection=${encodeURIComponent(selectedCollection)}&limit=200`,
+      `/datasets/${datasetId}/genesets/search?q=&collection=${encodeURIComponent(selectedCollection)}&limit=${SETS_LISTED}`,
     )
       .then((data) => {
         setGeneSets(data.results ?? []);
@@ -261,6 +264,16 @@ export function UnifiedGeneSetsSubtab({
           ))
         )}
       </div>
+
+      {(() => {
+        const total = collections.find((c) => c.id === selectedCollection)?.n_sets ?? 0;
+        return geneSets.length >= SETS_LISTED && total > geneSets.length ? (
+          <p className="text-[10px] leading-snug text-slate-400" data-testid="genesets-cap">
+            The first {SETS_LISTED} of the collection&apos;s {total.toLocaleString()} sets, in file order; the filter above
+            searches only these. Score any other set from the Enrichment tab or a gene list.
+          </p>
+        ) : null;
+      })()}
 
       {/* Selected gene set info + Score button */}
       {selectedGeneSet && (
