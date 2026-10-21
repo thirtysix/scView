@@ -170,7 +170,18 @@ export function CoexpressedGenes({ datasetId, activeGene, onGeneSelect }: Props)
         <>
           <p className="text-[10px] leading-snug text-slate-500">
             {data.method === "pearson" ? "Pearson" : "Spearman"} r with{" "}
-            <span className="font-semibold text-slate-700">{data.gene}</span> over {fmt(data.n_cells)} cells (
+            <span className="font-semibold text-slate-700">{data.gene}</span> over{" "}
+            {data.capped && data.n_cells_chosen != null ? (
+              <span
+                className="cursor-help underline decoration-dotted"
+                title="One correlation uses at most this many cells, so memory stays bounded on large datasets. The sample is fixed, so the same request gives the same answer; at this many cells r's standard error is under 0.01."
+              >
+                a random sample of {fmt(data.n_cells)} of the {fmt(data.n_cells_chosen)} cells
+              </span>
+            ) : (
+              <>{fmt(data.n_cells)} cells</>
+            )}{" "}
+            (
             {data.scope}; {fmt(data.query_n_expressing)} express {data.gene}). {fmt(data.n_genes_tested)} genes
             correlated
             {data.min_expressing != null

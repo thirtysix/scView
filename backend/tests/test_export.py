@@ -150,3 +150,23 @@ async def test_markers_unknown_column_is_404(client, dataset_manager):
     _register(dataset_manager)
     r = await _export(client, format="csv", data_type="markers", params={"column": "nope"})
     assert r.status_code == 404
+
+
+async def test_an_excel_export_over_the_cell_cap_is_413(client, dataset_manager, monkeypatch):
+    from scview.api.v1 import export
+
+    _register(dataset_manager)
+    # 60 cells x (5 genes + the cell-name column) = 360 cells
+    monkeypatch.setattr(export, "XLSX_MAX_CELLS", 359)
+    body = {"genes": [f"G{i}" for i in range(5)]}
+    r = await _export(client, format="xlsx", data_type="expression", params=body)
+    assert r.status_code == 413
+    assert r.json()["detail"] == (
+        "This table has 360 cells; an Excel export holds at most 359. Export it as CSV instead."
+    )
+    # CSV has no cap, and a table at the cap is still written.
+    assert (await _export(client, format="csv", data_type="expression", params=body)).status_code == 200
+    monkeypatch.setattr(export, "XLSX_MAX_CELLS", 360)
+    r = await _export(client, format="xlsx", data_type="expression", params=body)
+    assert r.status_code == 200
+    assert pd.read_excel(io.BytesIO(r.content), index_col=0).shape == (60, 5)

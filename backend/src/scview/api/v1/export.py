@@ -46,6 +46,10 @@ class ExportRequest(BaseModel):
 
 # Excel's hard row limit (1,048,576) minus the header row.
 _XLSX_MAX_ROWS = 1_048_575
+# Cells (rows x columns) one Excel export may hold. openpyxl writes ~100k cells a
+# second (50 genes x Kang's 13,836 cells: 7 s, +0.27 GB), so 2M is ~20 s; a
+# 500-gene expression table of Kang (7M) was over a minute. CSV has no cap.
+XLSX_MAX_CELLS = 2_000_000
 
 
 def file_stem(text: str | None, fallback: str = "dataset") -> str:
@@ -291,6 +295,13 @@ async def export_dataset(
                 raise HTTPException(
                     status_code=400,
                     detail="Too many rows for an Excel sheet; export as CSV instead.",
+                )
+            n_cells = sum(len(p) * (p.shape[1] + int(keep_index)) for p in (sheets or {"": df}).values())
+            if n_cells > XLSX_MAX_CELLS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(f"This table has {n_cells:,} cells; an Excel export holds at most "
+                            f"{XLSX_MAX_CELLS:,}. Export it as CSV instead."),
                 )
             if sheets:
                 with pd.ExcelWriter(buf, engine="openpyxl") as writer:

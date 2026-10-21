@@ -186,3 +186,29 @@ async def test_endpoint_runs_in_a_worker_thread(client, dataset_manager, monkeyp
     r = await client.post(f"{API}/datasets/{did}/expression/coexpression", json={"gene": "G0"})
     assert r.status_code == 200
     assert len(threads) == 1 and threads[0] is not threading.main_thread()
+
+
+@pytest.mark.parametrize("scope", ["all", "selection"])
+def test_more_cells_than_the_cap_are_sampled_and_say_so(scope, monkeypatch):
+    monkeypatch.setattr(cx, "MAX_CELLS", 120)
+    a = _data(n=300)
+    chosen = None if scope == "all" else np.arange(10, 250)
+    out = cx.coexpression(a, "G0", rows=chosen, top_n=50)
+    assert out["capped"] is True
+    assert out["n_cells"] == 120
+    assert out["n_cells_chosen"] == (300 if chosen is None else 240)
+    # Exactly a seeded sample of the chosen cells, computed independently.
+    pool = np.arange(300) if chosen is None else chosen
+    rows = np.sort(np.random.default_rng(cx.SAMPLE_SEED).choice(pool, 120, replace=False))
+    X = _dense(a)[rows].astype(np.float64)
+    for row in out["positive"][:5]:
+        j = int(row["gene"][1:])
+        assert row["r"] == pytest.approx(stats.pearsonr(X[:, 0], X[:, j]).statistic, abs=1e-4)
+    # The same request gives the same answer.
+    assert cx.coexpression(a, "G0", rows=chosen, top_n=50) == out
+
+
+def test_within_the_cap_nothing_is_sampled():
+    out = cx.coexpression(_data(n=300), "G0")
+    assert out["capped"] is False
+    assert out["n_cells"] == out["n_cells_chosen"] == 300
