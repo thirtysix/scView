@@ -26,7 +26,7 @@ const kang = (extra: Partial<DatasetInfo> = {}): DatasetInfo => ({
   ...extra,
 });
 
-const ref = { embedding: "X_pca", dims: [2, 3] as [number, number], k: 15, chance: 0.15, random: 0.14 };
+const ref = { embedding: "X_pca", dims: [2, 3] as [number, number], k: 15, window: 5, chance: 0.05, random: 0.05 };
 
 function saveAndReset() {
   const file = sessionJson(captureSession(new Date("2026-10-21T20:00:00Z")));
@@ -43,7 +43,7 @@ beforeEach(() => {
   useSettingsStore.setState({ embedding: "X_pca" });
   const u = useUnifiedViewStore.getState();
   u.clearOverlayState();
-  u.setScatterOverlay({ type: "score", name: "Neighbour preservation (PCA, PC3 vs PC4)", reliability: ref });
+  u.setScatterOverlay({ type: "score", name: "Neighbour placement (PCA, PC3 vs PC4)", reliability: ref });
   u.setOverlayDatasetId("kang");
 });
 
@@ -62,8 +62,8 @@ describe("plot reliability in a saved session", () => {
   it("saves a 2D UMAP without dims, and skips an embedding the dataset lacks", async () => {
     useUnifiedViewStore.getState().setScatterOverlay({
       type: "score",
-      name: "Neighbour preservation (UMAP)",
-      reliability: { embedding: "X_umap", k: 15, chance: 0.15, random: 0.14 },
+      name: "Neighbour placement (UMAP)",
+      reliability: { embedding: "X_umap", k: 15, window: 5, chance: 0.05, random: 0.05 },
     });
     const session = saveAndReset();
     expect(session.view?.overlay).toEqual({ type: "reliability", embedding: "X_umap" });

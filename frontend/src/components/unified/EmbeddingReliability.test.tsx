@@ -44,24 +44,27 @@ const summary = (over: Partial<ReliabilitySummary> = {}): ReliabilitySummary => 
   dims: [0, 1],
   n_dims: 2,
   k: 15,
+  window: { share: 0.05, cells: 692, radius: "exact", ref_cells: null },
   graph: { source: "stored", key: "neighbors", k: 15, use_rep: "X_pca_harmony", n_pcs: null, metric: "euclidean" },
   n_cells: 5,
   n_scored: 5,
   sampled: false,
   seed: 0,
-  chance: 0.0011,
-  low_threshold: 0.2,
-  low_reason: "below 0.2: fewer than 1 in 5 of the cell's graph neighbours are among its nearest cells on the plot",
+  chance: 0.05,
+  exact_chance: 0.0011,
+  low_threshold: 0.5,
+  low_reason: "below 0.5: fewer than half of the cell's graph neighbours lie near it on the plot",
   notes: ["A note from the server."],
   method: "Per cell: the share ...",
   seconds: 0.1,
   overall: { n: 5, median: 0.25, q1: 0, q3: 0.5, mean: 0.3, share_low: 0.4 },
+  exact: { median: 0.0667, q1: 0, q3: 0.133, mean: 0.09, chance: 0.0011 },
   shuffled: { median: 0, mean: 0.001, seed: 1 },
   group_by: "cluster",
   group_reason: "the active clustering",
   // Worst first, as the server sends them.
   groups: [
-    { group: "CD4 T", n: 2, median: 0, q1: 0, q3: 0, mean: 0, share_low: 1 },
+    { group: "CD4 T", n: 2, median: 0, q1: 0, q3: 0, mean: 0, share_low: 1, exact_median: 0 },
     { group: "B", n: 2, median: 0.25, q1: 0.25, q3: 0.25, mean: 0.25, share_low: 0 },
     { group: "pDC", n: 1, median: 1, q1: 1, q3: 1, mean: 1, share_low: 0 },
   ],
@@ -107,8 +110,8 @@ describe("Plot reliability toggle", () => {
     const u = useUnifiedViewStore.getState();
     expect(u.scatterOverlay).toEqual({
       type: "score",
-      name: "Neighbour preservation (UMAP)",
-      reliability: { embedding: "X_umap", k: 15, chance: 0.0011, random: 0.001 },
+      name: "Neighbour placement (UMAP)",
+      reliability: { embedding: "X_umap", k: 15, window: 692, chance: 0.05, random: 0.001 },
     });
     expect(Array.from(u.overlayValues!)).toEqual([0.25, 0, 0, 0.25, 1]);
     expect(button()).toHaveAttribute("aria-pressed", "true");
@@ -116,7 +119,15 @@ describe("Plot reliability toggle", () => {
       "Each cell: the share of its 15 graph neighbours (the kNN graph the clustering used)",
     );
     expect(screen.getByText("A note from the server.")).toBeTruthy();
+    expect(screen.getByTestId("reliability-exact")).toHaveTextContent(
+      "Exact neighbours kept: median 1 of 15 (chance 0.0011). UMAP keeps few exact neighbours anywhere, so read positions within an island loosely.",
+    );
+    const cd4Median = screen.getByText("CD4 T").closest("tr")!.querySelectorAll("td")[2]!;
+    expect(cd4Median.getAttribute("title")).toBe("IQR 0 to 0; mean 0; exact neighbours kept: median 0 of 15");
     expect(rowNames()).toEqual(["CD4 T", "B", "pDC"]);
+    expect(screen.getByText(/Worst first \(lowest median\)/)).toHaveTextContent(
+      "A group smaller than the window (692 cells) scores near 1 whenever it forms its own island",
+    );
     expect(screen.getByText(/Worst first \(lowest median\)/)).toHaveTextContent("n = 3 groups.");
     // Every column says what it is.
     for (const name of ["Group", "Cells", "Median", "Low"]) {
@@ -166,7 +177,7 @@ describe("Plot reliability toggle", () => {
       expect(api.getEmbeddingReliability).toHaveBeenLastCalledWith("kang", "X_pca", { dims: [2, 3], groupBy: undefined }),
     );
     await waitFor(() =>
-      expect(useUnifiedViewStore.getState().overlayLabel).toBe("Neighbour preservation (PCA, PC3 vs PC4)"),
+      expect(useUnifiedViewStore.getState().overlayLabel).toBe("Neighbour placement (PCA, PC3 vs PC4)"),
     );
     expect(useUnifiedViewStore.getState().scatterOverlay).toMatchObject({ reliability: { embedding: "X_pca", dims: [2, 3] } });
     await waitFor(() => expect(screen.getByText("Plot reliability: PCA, PC3 vs PC4")).toBeTruthy());
@@ -223,8 +234,8 @@ describe("Plot reliability toggle", () => {
     useUnifiedViewStore.setState({
       scatterOverlay: {
         type: "score",
-        name: "Neighbour preservation (UMAP)",
-        reliability: { embedding: "X_umap", k: 15, chance: 0.0011, random: 0.001 },
+        name: "Neighbour placement (UMAP)",
+        reliability: { embedding: "X_umap", k: 15, window: 692, chance: 0.05, random: 0.001 },
       },
       overlayValues: Float32Array.from([0.25, 0, 0, 0.25, 1]),
       overlayDatasetId: "kang",
