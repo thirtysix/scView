@@ -69,11 +69,19 @@ export function SampleThresholds({ mad }: { mad: MadThresholds }) {
         <thead className="sticky top-0 bg-white">
           <tr className="text-left text-slate-400">
             <th className="font-medium">{mad.column}</th>
-            <th className="text-right font-medium">Cells</th>
-            <th className="text-right font-medium">Counts kept</th>
-            <th className="text-right font-medium">Genes kept</th>
-            {hasMt && <th className="text-right font-medium">Max % mito</th>}
-            <th className="text-right font-medium">Removed</th>
+            <th className="text-right font-medium" title="Cells in the sample before filtering">Cells</th>
+            <th className="text-right font-medium" title="Counts per cell the sample keeps: its own median of log1p(counts) minus 5 MADs (the upper bound only when enabled)">
+              Counts kept
+            </th>
+            <th className="text-right font-medium" title="Genes per cell the sample keeps: its own median of log1p(genes) minus 5 MADs (the upper bound only when enabled)">
+              Genes kept
+            </th>
+            {hasMt && (
+              <th className="text-right font-medium" title="% mitochondrial counts the sample keeps: its own median plus 3 MADs, capped by the fixed max % mito">
+                Max % mito
+              </th>
+            )}
+            <th className="text-right font-medium" title="Cells these bounds remove from the sample (and their share of it)">Removed</th>
           </tr>
         </thead>
         <tbody className="text-slate-600">
@@ -154,7 +162,7 @@ function SampleMedians({
       <thead className="sticky top-0 bg-white">
         <tr className="text-left text-slate-400">
           <th className="font-medium">{grouping.column}</th>
-          <th className="px-1 text-right font-medium">Cells</th>
+          <th className="px-1 text-right font-medium" title="Cells in the sample">Cells</th>
           <th className="px-1 text-right font-medium" title="Median genes detected per cell">
             Genes
           </th>
@@ -174,7 +182,12 @@ function SampleMedians({
               Sex
             </th>
           )}
-          <th className="pl-1 font-medium">Flags</th>
+          <th
+            className="pl-1 font-medium"
+            title="A sample whose median is more than 3 MADs from the median of all sample medians (3 or more samples), or with few cells (under the minimum, or a tenth of the median sample size)"
+          >
+            Flags
+          </th>
         </tr>
       </thead>
       <tbody className="text-slate-700">

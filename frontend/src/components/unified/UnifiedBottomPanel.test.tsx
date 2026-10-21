@@ -100,3 +100,13 @@ describe("UnifiedBottomPanel", () => {
     expect(screen.getByTestId("violin")).toBeInTheDocument();
   });
 });
+
+describe("UnifiedBottomPanel violin caption", () => {
+  it("states what the violins show and the n of cells and groups", () => {
+    renderPanel({ violinData: { B: [1, 2, 3], NK: [4, 5] }, violinGroupLabel: "Cell type" });
+    fireEvent.click(screen.getByRole("button", { name: /Distribution/ }));
+    expect(screen.getByTestId("violin-caption")).toHaveTextContent(
+      "CD79A expression per Cell type: one violin per group. n = 5 cells; 2 groups.",
+    );
+  });
+});

@@ -14,7 +14,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
-import type { MarkersResponse } from "@/api/markers";
+import { MARKERS_PER_GROUP, type MarkersResponse } from "@/api/markers";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -439,8 +439,11 @@ export function MarkerGenesPanel() {
         </button>
 
         {/* Count info */}
-        <span className="text-xs text-slate-500">
-          {sortedMarkers.length} of {currentMarkers.length} genes
+        <span
+          className="text-xs text-slate-500"
+          title={`The backend keeps each group's top ${MARKERS_PER_GROUP} markers by Wilcoxon score; every gene is tested, the rest are cut`}
+        >
+          {sortedMarkers.length} of the group&apos;s top {currentMarkers.length} markers by Wilcoxon score
         </span>
         </>)}
       </div>
@@ -517,8 +520,8 @@ export function MarkerGenesPanel() {
               Specificity vs fold change: {selectedGroup}
             </h3>
             <span className="text-xs text-slate-400">
-              Top right: strong and found in this group only. A strong marker low on the plot is
-              shared with other groups.
+              One point per marker ({currentMarkers.length.toLocaleString()}; the 10 strongest labelled). Top right:
+              strong and found in this group only. A strong marker low on the plot is shared with other groups.
             </span>
           </div>
           <MarkerSpecificityPlot
@@ -546,6 +549,7 @@ export function MarkerGenesPanel() {
                 </th>
                 <th
                   onClick={() => handleSort("logfoldchange")}
+                  title="log2 fold change of this group's mean expression over all other cells (scanpy rank_genes_groups: expm1 of the mean log-normalised values on each side)"
                   className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                 >
                   <span className="flex items-center justify-end gap-1">
@@ -554,6 +558,7 @@ export function MarkerGenesPanel() {
                 </th>
                 <th
                   onClick={() => handleSort("pval")}
+                  title="Wilcoxon rank-sum p, this group vs all other cells, unadjusted"
                   className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                 >
                   <span className="flex items-center justify-end gap-1">
@@ -571,6 +576,7 @@ export function MarkerGenesPanel() {
                 </th>
                 <th
                   onClick={() => handleSort("pct_in")}
+                  title="Share of the group's cells with any count of the gene"
                   className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                 >
                   <span className="flex items-center justify-end gap-1">
@@ -606,6 +612,7 @@ export function MarkerGenesPanel() {
                 {currentMarkers.some((m) => m.score != null) && (
                   <th
                     onClick={() => handleSort("score")}
+                    title="scanpy rank_genes_groups score: the Wilcoxon rank-sum z-score of this group vs all other cells (the ranking the top-100 cut uses)"
                     className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                   >
                     <span className="flex items-center justify-end gap-1">

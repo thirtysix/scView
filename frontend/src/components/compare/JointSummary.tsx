@@ -228,10 +228,16 @@ function MixingScore({ mixing }: { mixing: BatchMixing }) {
           <thead>
             <tr className="text-left text-slate-400">
               <th className="py-1 font-medium">Dataset</th>
-              <th className="py-1 text-right font-medium">Cells</th>
-              <th className="py-1 text-right font-medium">Before</th>
-              {mixing.corrected != null && <th className="py-1 text-right font-medium">After</th>}
-              <th className="py-1 text-right font-medium">Ideal</th>
+              <th className="py-1 text-right font-medium" title="Cells from this dataset in the joint embedding">Cells</th>
+              <th className="py-1 text-right font-medium" title={`Share of this dataset's cells' ${mixing.k} nearest neighbours from another dataset, on the uncorrected PCA`}>
+                Before
+              </th>
+              {mixing.corrected != null && (
+                <th className="py-1 text-right font-medium" title="The same share after batch correction">After</th>
+              )}
+              <th className="py-1 text-right font-medium" title="The share perfect mixing would give this dataset: the other datasets' fraction of all cells">
+                Ideal
+              </th>
             </tr>
           </thead>
           <tbody className="font-mono text-slate-700">

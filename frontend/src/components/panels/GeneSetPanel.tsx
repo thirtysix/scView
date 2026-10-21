@@ -94,6 +94,13 @@ interface EnrichmentResponse {
 
 type SortField = "term" | "pvalue" | "adjusted_pvalue" | "overlap_count";
 type SortDir = "asc" | "desc";
+/** How the bar chart's "top N" names its ordering (the table's sort). */
+const SORT_LABELS: Record<SortField, string> = {
+  term: "name",
+  pvalue: "p-value",
+  adjusted_pvalue: "adjusted p",
+  overlap_count: "overlap",
+};
 
 /* ------------------------------------------------------------------ */
 /* Main component                                                      */
@@ -1230,7 +1237,9 @@ export function GeneSetPanel() {
                 <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="mb-2 flex items-center justify-between">
                     <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
-                      Top {Math.min(topN, topResults.length)} Enriched Terms
+                      Top {Math.min(topN, topResults.length)}
+                      {sortedResults.length > topN ? ` of ${sortedResults.length.toLocaleString()}` : ""} enriched terms by{" "}
+                      {SORT_LABELS[sortField]}
                       <InfoTip width={300}>
                         The most significant gene sets, ranked. Gene-set collections are highly
                         redundant, so this list tends to repeat itself: the biggest, vaguest parent
@@ -1363,6 +1372,7 @@ export function GeneSetPanel() {
                           </th>
                           <th
                             onClick={() => handleSort("pvalue")}
+                            title="Hypergeometric p of the overlap between the query genes and the set, with the tested genes as background"
                             className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                           >
                             <span className="flex items-center justify-end gap-1">
@@ -1371,6 +1381,7 @@ export function GeneSetPanel() {
                           </th>
                           <th
                             onClick={() => handleSort("adjusted_pvalue")}
+                            title="The same p, Benjamini-Hochberg adjusted over the sets tested"
                             className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                           >
                             <span className="flex items-center justify-end gap-1">
@@ -1379,6 +1390,7 @@ export function GeneSetPanel() {
                           </th>
                           <th
                             onClick={() => handleSort("overlap_count")}
+                            title="Query genes in the set / genes in the set"
                             className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
                           >
                             <span className="flex items-center justify-end gap-1">

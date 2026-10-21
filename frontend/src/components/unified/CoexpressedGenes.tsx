@@ -225,12 +225,12 @@ export function CoexpressedGenes({ datasetId, activeGene, onGeneSelect }: Props)
                   <tr>
                     {(
                       [
-                        ["gene", "Gene", "text-left"],
-                        ["r", "r", "text-right"],
-                        ["n", "Expressing", "text-right"],
+                        ["gene", "Gene", "text-left", "Gene symbol; click a row to colour the scatter by it"],
+                        ["r", "r", "text-right", `${data.method === "spearman" ? "Spearman" : "Pearson"} correlation with ${data.gene} over the log-normalised expression of the ${data.n_cells.toLocaleString()} cells scored`],
+                        ["n", "Expressing", "text-right", "Cells with any count of the gene among those scored"],
                       ] as const
-                    ).map(([field, label, align]) => (
-                      <th key={field} className={`px-1.5 py-1 font-medium ${align}`}>
+                    ).map(([field, label, align, title]) => (
+                      <th key={field} title={title} className={`px-1.5 py-1 font-medium ${align}`}>
                         <button
                           onClick={() => onSort(field)}
                           className={`inline-flex items-center gap-0.5 hover:text-slate-700 ${align === "text-right" ? "flex-row-reverse" : ""}`}

@@ -413,11 +413,19 @@ export function MiloTest({ datasetId, info }: Props) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-100 bg-slate-50 text-left text-slate-600">
-                    <th className="px-3 py-2 font-medium">{prettyObsLabel(result.label_key)}</th>
-                    <th className="px-3 py-2 text-right font-medium">Neighbourhoods</th>
-                    <th className="px-3 py-2 text-right font-medium">Up in {result.conditions[1]}</th>
-                    <th className="px-3 py-2 text-right font-medium">Down</th>
-                    <th className="px-3 py-2 text-right font-medium">Median log2FC</th>
+                    <th className="px-3 py-2 font-medium" title="Each neighbourhood's commonest label among its cells (Mixed when under 70 % of them)">
+                      {prettyObsLabel(result.label_key)}
+                    </th>
+                    <th className="px-3 py-2 text-right font-medium" title="Neighbourhoods with this label">Neighbourhoods</th>
+                    <th className="px-3 py-2 text-right font-medium" title={`Of those, significant (spatial FDR < ${result.alpha}) with log2FC > 0: more abundant in ${result.conditions[1]}`}>
+                      Up in {result.conditions[1]}
+                    </th>
+                    <th className="px-3 py-2 text-right font-medium" title={`Of those, significant (spatial FDR < ${result.alpha}) with log2FC < 0: less abundant in ${result.conditions[1]}`}>
+                      Down
+                    </th>
+                    <th className="px-3 py-2 text-right font-medium" title={`Median DESeq2 log2 fold change (${result.conditions[1]} vs ${result.conditions[0]}) over all of the label's neighbourhoods, significant or not`}>
+                      Median log2FC
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

@@ -256,7 +256,9 @@ function StackedViolinSection({ datasetId, genes, groupByColumn }: { datasetId: 
         />
         <p className="px-1 text-[10px] text-slate-400">
           Each gene on its own scale.
-          {cells ? ` ${cells.length.toLocaleString()} of ${codes.length.toLocaleString()} cells, sampled evenly.` : ""}
+          {cells
+            ? ` ${cells.length.toLocaleString()} of ${codes.length.toLocaleString()} cells, sampled evenly.`
+            : ` All ${codes.length.toLocaleString()} cells.`}
           {missing.length > 0 ? ` Not in this layer: ${missing.join(", ")}.` : ""}
         </p>
       </>
