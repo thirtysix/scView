@@ -56,6 +56,9 @@ _SMALL_FRACTION = 0.0025
 # low_malat1: a cluster whose median MALAT1 share is below this fraction of the
 # median cell's (Montserrat-Ayuso & Esteve-Codina 2024).
 LOW_MALAT1_FRACTION = 1 / 3
+# ... and only when MALAT1 is captured at all: below this share in the median cell
+# (paul15, MARS-seq: 0.02 %) a third of it is noise, and most clusters sit at 0.
+MALAT1_MIN_MEDIAN_PCT = 0.5
 
 FLAG_HELP = {
     "low_quality": (
@@ -386,6 +389,8 @@ def cluster_qc(
             else f"Only {len(order)} groups: too few to say which stands out; only size is flagged.",
             "" if cells.get("has_mt", True)
             else NO_MT_NOTE,
+            "" if malat1_median is None or malat1_median >= MALAT1_MIN_MEDIAN_PCT
+            else _malat1_floor_note(malat1_median),
             "" if not unchecked
             else (("Clusters " + ", ".join(unchecked) + " have" if len(unchecked) > 1
                    else f"Cluster {unchecked[0]} has")
@@ -584,7 +589,8 @@ def _flag_malat1(row: ClusterQC, dataset_median: float | None, compare: bool) ->
     """``low_malat1``: the cluster's median MALAT1 share below ``LOW_MALAT1_FRACTION``
     of the median cell's. Not for erythroid clusters (red cells have no nucleus)."""
     m = row.median_pct_malat1
-    if not compare or row.erythroid or m is None or not dataset_median or dataset_median <= 0:
+    if not compare or row.erythroid or m is None or dataset_median is None \
+            or dataset_median < MALAT1_MIN_MEDIAN_PCT:
         return
     cut = LOW_MALAT1_FRACTION * dataset_median
     if m < cut:
@@ -596,12 +602,20 @@ def _flag_malat1(row: ClusterQC, dataset_median: float | None, compare: bool) ->
         )
 
 
+def _malat1_floor_note(median: float) -> str:
+    return (f"MALAT1 is barely captured here ({_pct(median)} of the median cell's reads, under "
+            f"{MALAT1_MIN_MEDIAN_PCT:g}%): too little to judge nuclear loss, so no cluster is "
+            "flagged for low MALAT1.")
+
+
 def malat1_line(report: ClusterQCReport, tag: str) -> str:
     """One co-pilot fact line on MALAT1: the median cell's share and the
     low-MALAT1 clusters (or none), with the rule. Empty when not measured."""
     d = report.dataset_median_pct_malat1
     if "pct_malat1" not in report.metrics or d is None or report.n_groups < MIN_GROUPS:
         return ""
+    if d < MALAT1_MIN_MEDIAN_PCT:
+        return f"- MALAT1: {_malat1_floor_note(d)} [{tag}]"
     low = [c for c in report.clusters if "low_malat1" in c.flags]
     which = ", ".join(f"{c.group} ({_pct(c.median_pct_malat1 or 0.0)})" for c in low) or "none"
     return (f"- MALAT1 (nuclear-retained RNA; low share = fragments or lost nuclei): "

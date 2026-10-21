@@ -131,3 +131,18 @@ def test_qc_histogram_has_malat1_when_the_gene_exists(tmp_path):
     p2 = tmp_path / "n.h5ad"
     _data(sparse=True, gene=None).write_h5ad(p2)
     assert "pct_malat1" not in AnnDataAdaptor(str(p2)).qc_distributions()["metrics"]
+
+
+def test_barely_captured_malat1_flags_nothing_and_says_why():
+    """paul15 (MARS-seq): Malat1 in 0.02 % of the median cell's reads, most clusters at 0."""
+    a = _data(sparse=True, gene="Malat1")
+    X = a.X.toarray()
+    X[:, -1] = 0
+    X[::40, -1] = 1  # a read in one cell in 40
+    a.X = sp.csr_matrix(X)
+    report = cluster_qc(a)
+    assert report.dataset_median_pct_malat1 is not None and report.dataset_median_pct_malat1 < 0.5
+    assert all("low_malat1" not in c.flags for c in report.clusters)
+    assert "barely captured" in report.note
+    line = [ln for ln in grounding_block(report)[0] if ln.startswith("- MALAT1")][0]
+    assert "barely captured" in line and "no cluster is flagged" in line
