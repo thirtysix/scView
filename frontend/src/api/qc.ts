@@ -26,6 +26,10 @@ export interface ClusterQc {
   erythroid_markers?: string[];
   /** Share of its cells with a clear S or G2M score (outside the near-zero noise band). */
   cycling_fraction?: number | null;
+  /** Median % of a cell's counts from MALAT1 (nuclear-retained); null when the gene is absent. */
+  median_pct_malat1?: number | null;
+  /** Median of the author's intronic / unspliced share column, in % (never computed here). */
+  median_pct_intronic?: number | null;
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
   /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
@@ -40,6 +44,7 @@ export type ClusterFlag =
   | "stress_driven"
   | "hb_ambient"
   | "cycling"
+  | "low_malat1"
   | "small";
 
 /** A technical score that tracks one of the clustering's leading PCs (backend core/qc_drivers.py). */
@@ -74,6 +79,10 @@ export interface ClusterQcReport {
   drivers_checked?: string[];
   drivers_space?: string | null;
   drivers_n_pcs?: number;
+  /** The median cell's MALAT1 share (%): low_malat1 compares a cluster's median with it. */
+  dataset_median_pct_malat1?: number | null;
+  /** The obs column the intronic / unspliced share came from, when obs has one. */
+  intronic_column?: string | null;
 }
 
 export async function getClusterQc(datasetId: string, groupby?: string): Promise<ClusterQcReport> {
@@ -300,6 +309,94 @@ export interface MadThresholds {
   reused_from?: string | null;
 }
 
+/** Removed ~ condition in one group (backend qc_filter.rate_test): over the
+ *  conditions with 10+ cells there, chi-square on the 2 x k table. */
+export interface RemovalTest {
+  compared: string[];
+  high: string;
+  high_rate: number;
+  low: string;
+  low_rate: number;
+  /** Highest minus lowest removal rate, in percentage points. */
+  max_diff_pp: number;
+  /** null when nothing or everything was removed. */
+  p: number | null;
+  statistic: number | null;
+  dof: number | null;
+  /** Some expected count is under 5: the chi-square p is approximate. */
+  low_expected: boolean;
+}
+
+/** One label group (or all cells) in the removal audit. */
+export interface RemovalRow {
+  /** null: the all-cells row. */
+  name: string | null;
+  n_cells: number;
+  n_removed: number;
+  fraction: number;
+  by_criterion: Partial<Record<FilterCriterion, number>>;
+  /** Per condition, in `condition.names` order (absent without a condition column). */
+  conditions?: {
+    n_cells: number[];
+    n_removed: number[];
+    by_criterion: Partial<Record<FilterCriterion, number[]>>;
+  };
+  /** null: fewer than two conditions with 10+ cells. */
+  test?: RemovalTest | null;
+  /** Recorded audit only: the removed cells' own medians. */
+  removed_median?: { total_counts: number | null; n_genes: number | null; pct_mt?: number | null } | null;
+}
+
+/** A flag in the removal audit, shaped as the preview's warnings. */
+export interface RemovalFlag {
+  kind: "loss" | "condition";
+  column: string | null;
+  /** null: over all cells. */
+  group: string | null;
+  n_cells: number;
+  n_removed: number;
+  fraction: number;
+  whole: boolean;
+  criterion: FilterCriterion | null;
+  message: string;
+  condition?: string;
+  p?: number;
+  max_diff_pp?: number;
+}
+
+/** Who the thresholds remove, per label group x condition (backend qc_filter.audit). */
+export interface RemovalAudit {
+  label: { column: string | null; reason: string | null; n_groups: number };
+  condition: { column: string; reason: string; names: string[] } | null;
+  by_type: RemovalRow[];
+  overall: RemovalRow;
+  n_unlabelled: number;
+  note: string | null;
+  rule: string;
+  flags: RemovalFlag[];
+}
+
+/** The same for what the last filtering step removed (backend qc_filter.recorded_audit). */
+export interface RecordedRemovalAudit extends Partial<RemovalAudit> {
+  timestamp: string;
+  mode: string;
+  n_before: number;
+  n_removed: number;
+  truncated: boolean;
+  has_mt: boolean;
+  /** Cells were added or removed since: only `note` is meaningful. */
+  stale: boolean;
+  /** The recorded columns still in the dataset (the selectors' choices). */
+  columns: string[];
+  note?: string | null;
+}
+
+/** Which columns the removal audit splits by ("" or absent: detected). */
+export interface RemovalAuditColumns {
+  label_column?: string;
+  condition_column?: string;
+}
+
 /** What the thresholds would remove (backend core/qc_filter.py). */
 export interface FilterPreview {
   n_cells: number;
@@ -337,9 +434,17 @@ export interface FilterPreview {
   }[];
   /** How scView last filtered this dataset, if it did. */
   previous?: { mode: QcThresholdMode; timestamp: string | null } | null;
+  /** Who the thresholds remove per label group x condition (older backends omit it). */
+  audit?: RemovalAudit;
+  /** What the last filtering step removed; null for a dataset without the record. */
+  recorded?: RecordedRemovalAudit | null;
 }
 
-export async function getFilterPreview(datasetId: string, t: FilterThresholds): Promise<FilterPreview> {
+export async function getFilterPreview(
+  datasetId: string,
+  t: FilterThresholds,
+  columns: RemovalAuditColumns = {},
+): Promise<FilterPreview> {
   const q = new URLSearchParams({
     min_genes: String(t.min_genes),
     max_genes: String(t.max_genes),
@@ -352,6 +457,8 @@ export async function getFilterPreview(datasetId: string, t: FilterThresholds): 
   if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
   if (t.qc_mad_upper !== undefined) q.set("mad_upper", String(t.qc_mad_upper));
   if (t.qc_sample_column) q.set("sample_column", t.qc_sample_column);
+  if (columns.label_column) q.set("label_column", columns.label_column);
+  if (columns.condition_column) q.set("condition_column", columns.condition_column);
   try {
     return await apiFetch<FilterPreview>(`/datasets/${datasetId}/qc/filter-preview?${q.toString()}`);
   } catch (e) {

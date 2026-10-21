@@ -6,6 +6,41 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-21
+
+### Added
+- **Who gets removed (Data Assessment → QC thresholds).** Under the filter preview, each threshold's
+  loss per cell type × condition (or sample), with a chi-square test per cell type of whether the
+  loss depends on the condition. A type is flagged when a filter removes more than 30% of it, or when
+  its removal rate differs between conditions by 10+ points with p < 0.01. The filtering step now
+  records the cells it removed (their QC values and labels, in the h5ad), so after filtering the card
+  shows what was actually removed. On pbmc_1k_v3 a 10% mito ceiling removes 89% of NK cells.
+- **Mito by cell type (Data Assessment).** Each cell type's % mito (median, MAD, percentiles), its own
+  bound (median + 3 MADs) and what one global ceiling removes from it compared with that bound. Types
+  the ceiling cuts hard are flagged, and a type with a median of 50% or more is called damaged.
+  After filtering, the cells the ceiling removed are added back from the record. Advisory only:
+  filtering is unchanged. `GET /qc/mito-by-type`.
+- **QC states (Data Assessment).** Per cell type, the ribosomal-protein share of non-mito counts
+  against % mito, with one or two Gaussian states per group (BIC, plus a separation rule so a
+  skewed distribution stays one state) and the second state's share per condition. "Save as label"
+  writes it as an obs column (`qc_state`) instead of a mito threshold. Without MT- genes it fits on
+  the ribosomal share alone and says so. On Kang, CD14 monocytes split into two states: 12% of CTRL
+  cells vs 65% of STIM cells are in the low-RP one. `GET /qc/states`, `POST /qc/states/label`.
+- **Composition check before a DE between groups (Unified View → DE → Between groups).** Before
+  the run, each side's share of every cell type (or cluster) is shown. A group is flagged when its
+  shares differ by more than 10 points and Fisher's exact test gives p < 0.05. Each flagged group
+  has a "Compare within" chip and a column picker. The result carries the caution beside the batch
+  caution, and the co-pilot reads it. `GET /de/composition`; `/de/compare` returns `composition`.
+- **MALAT1 share per cell.** A "% MALAT1" QC histogram and a "Low MALAT1" cluster flag: a median
+  below a third of the median cell's share suggests cytoplasmic fragments or lost nuclei. The flag is
+  off when MALAT1 is barely captured. An author intronic or unspliced share column is shown per cluster.
+- **Co-pilot facts** for the removal audit, mito by cell type and QC states, each checked by the
+  claims ledger.
+
+### Changed
+- Colour scale "Auto": signed cell columns such as S_score and G2M_score now use the diverging map
+  centred on 0.
+
 ## [0.27.0] - 2026-10-21
 
 ### Added

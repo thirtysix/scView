@@ -39,6 +39,8 @@ export interface DEResponse {
   dropped_samples?: string[];
   /** /de/compare: the two sides are also different batches (datasets, runs). */
   confounding?: DEConfounding | null;
+  /** /de/compare: each side's share of every cluster/state (absent from older servers). */
+  composition?: DEComposition | null;
   /** Names this result for GSEA, which could not send every gene back. */
   result_id?: string | null;
   /** Wilcoxon: the detection cut-off applied (null: none, as for pseudobulk or
@@ -66,6 +68,47 @@ export interface TranscriptomeSize {
   /** A sample of each side's per-cell totals, for a violin. */
   values_a: number[];
   values_b: number[];
+}
+
+/** One group of a composition check: each side's share of it among the compared cells. */
+export interface DECompositionGroup {
+  group: string;
+  n_a: number;
+  n_b: number;
+  /** Of side A's labelled compared cells (0-1). */
+  share_a: number;
+  share_b: number;
+  /** (share_a - share_b) x 100. */
+  diff_points: number;
+  p?: number | null; // Fisher's exact test, computed for the candidates only
+  /** Past `threshold_points`, with `min_cells` cells on a side. */
+  flagged: boolean;
+  /** Nearly absent from one side: maybe a state the comparison itself creates. */
+  one_sided: boolean;
+}
+
+/** The two sides' composition by a label column (backend core/de_composition.py). */
+export interface DEComposition {
+  /** null: not checked; `note` says why. */
+  column: string | null;
+  label_a: string;
+  label_b: string;
+  /** The column was the active clustering (none asked for). */
+  auto: boolean;
+  n_a: number;
+  n_b: number;
+  /** Largest difference first; at most 50 (`n_groups` counts all). */
+  groups: DECompositionGroup[];
+  n_groups: number;
+  warn: boolean;
+  message: string | null;
+  note: string | null;
+  threshold_points: number;
+  min_cells: number;
+  max_p?: number; // Fisher's exact p a flagged group must be under
+  n_missing?: number;
+  /** The sides are different groups of `column`: composition is the comparison. */
+  nested?: boolean;
 }
 
 export interface DEConfounding {
@@ -109,6 +152,8 @@ export interface DECompareRequest {
   method?: DEMethod;
   /** Cell-level: test only genes detected in this fraction of either group's cells. */
   min_pct?: number;
+  /** The label column the composition check uses (the active clustering when absent). */
+  composition_by?: string;
 }
 
 /**
@@ -193,4 +238,29 @@ export async function computeDECompareMethods(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+/** What a composition check is asked about: the /de/compare scope, and the label column. */
+export interface DECompositionParams {
+  split_by: string;
+  group_a: string;
+  group_b: string;
+  within_column?: string;
+  within_value?: string;
+  /** The label column; the active clustering when absent. */
+  column?: string;
+}
+
+/**
+ * Each side's share of every cluster/state among the cells a /de/compare of
+ * these groups would test, before it is run (obs only, fast).
+ */
+export async function fetchDEComposition(
+  datasetId: string,
+  params: DECompositionParams,
+  signal?: AbortSignal,
+): Promise<DEComposition> {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
+  return apiFetch<DEComposition>(`/datasets/${datasetId}/de/composition?${q}`, { signal });
 }

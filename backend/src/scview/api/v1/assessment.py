@@ -20,6 +20,7 @@ from scview.core.assessor import assess_preprocessing, recorded_normalization_me
 from scview.core import (
     cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
+from scview.core import qc_states
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import iterate_exclusive, run_exclusive
@@ -250,6 +251,8 @@ async def get_filter_preview(
     mad_upper: bool | None = None,
     sample_column: str = "",
     cluster_column: str = "",
+    label_column: str = "",
+    condition_column: str = "",
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The cells the filtering step's thresholds would remove (core/qc_filter.py):
@@ -258,6 +261,10 @@ async def get_filter_preview(
     flags, and in MAD mode (``mode``, the default) each sample's thresholds.
     ``sample_column`` names the samples (default: detected), as the step's
     ``qc_sample_column`` does. Thresholds left out take the pipeline's defaults.
+    ``audit`` is who they remove per ``label_column`` group (default: an author
+    cell-type column, else the clustering) x ``condition_column`` group (default:
+    a condition-like column, else the samples), with a chi-square per group and
+    flags; ``recorded`` the same for what the last filtering step removed.
     Small and fast at any cell count (one pass over cached per-cell values), so
     the QC plots ask again on every threshold change."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
@@ -275,7 +282,8 @@ async def get_filter_preview(
 
     def _run() -> dict:
         return qc_filter.preview(adaptor.adata, adaptor.qc_per_cell(), thresholds,
-                                 sample_column or None, cluster_column or None)
+                                 sample_column or None, cluster_column or None,
+                                 label_column or None, condition_column or None)
 
     try:
         # Per-cell metrics may need a pass over the counts the first time: off the loop.
@@ -669,3 +677,119 @@ async def stream_qc_report(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/qc/mito-by-type
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/mito-by-type")
+async def get_mito_by_type(
+    dataset_id: str,
+    column: str = "",
+    ceiling: float | None = None,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """% mito per cell type (median, MAD, quantiles, n), each type's own bound
+    (median + 3 MADs) and the cells the global ceiling (``ceiling``, else the
+    recorded or default ``max_pct_mt``) would remove from each type vs its own
+    bound; flags types the ceiling cuts hard. Advisory: filtering is unchanged.
+    ``column`` defaults to the author's cell types, else the clustering."""
+    from scview.core import mito_by_type
+
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    if column and column not in adaptor.adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
+    try:
+        # Obs + cached per-cell QC (a few ms), but the arrays may need a pass first.
+        report = await asyncio.to_thread(mito_by_type.for_adaptor, adaptor, column or None, ceiling)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Mito by type failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Mito by type failed: {e}")
+    return report.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# QC states: low-RP / high-mito second state per cell type (core/qc_states.py)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/states")
+async def get_qc_states(
+    dataset_id: str,
+    column: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Per group of ``column`` (default: a cell-type column, else the clustering)
+    with 100+ cells: 1 vs 2 Gaussian components on the ribosomal-protein share of
+    non-mito counts and % mito (RP share alone without MT- genes), the components,
+    delta BIC, separation, the flagged state's share overall and per condition (or
+    sample), and a seeded scatter sample (<= 2,000 cells per group)."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    if column and column not in adaptor.adata.obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
+    try:
+        result, _states = await asyncio.to_thread(qc_states.for_adaptor, adaptor, column or None)
+        return result
+    except qc_states.QcStatesError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    except Exception as e:
+        logger.error("QC states failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"QC states failed: {e}")
+
+
+class QcStateLabelRequest(BaseModel):
+    column: str = ""  # the grouping; default as GET /qc/states picks it
+    name: str = qc_states.DEFAULT_NAME
+
+
+@router.post("/datasets/{dataset_id}/qc/states/label")
+async def save_qc_state_label(
+    dataset_id: str,
+    body: QcStateLabelRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Save every cell's QC state as categorical obs column ``name``: the flagged
+    state of a two-state group (``low-RP high-mito``, ``low-RP`` without mito, or
+    ``second state``), ``main`` for every other cell."""
+    async with dataset_edit(dataset_id) as held:
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+        if body.column and body.column not in adaptor.adata.obs.columns:
+            raise HTTPException(status_code=404, detail=f"Column '{body.column}' not found.")
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = getattr(adaptor.adata, "isbacked", False)
+
+        def _run():
+            result, states = qc_states.for_adaptor(adaptor, body.column or None)
+            if result.get("column") is None or states is None:
+                raise qc_states.QcStatesError(result.get("note") or "No column to label by.")
+            work = adaptor.adata.to_memory() if backed else adaptor.adata
+            name = qc_states.check_name(work, result["column"], body.name)
+            before = uns_snapshot(work)
+            saved = qc_states.label(work, result, states, name)
+            write_derived(work, output_path, adaptor.h5ad_path, before)
+            return saved
+
+        try:
+            saved = await held.run(_run)
+        except qc_states.QcStatesError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))  # raised before any change
+        except Exception as e:
+            dm.evict(dataset_id)  # the cached copy may hold a column that was never saved
+            logger.error("QC state label failed for %s: %s", dataset_id, e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Could not save the QC state label: {e!s}")
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
+        return saved

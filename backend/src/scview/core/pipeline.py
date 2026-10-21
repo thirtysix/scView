@@ -301,12 +301,18 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     (X scaled, every gene "detected") still counts genes in the counts. % mito is
     used only when measurable; predicted doublets are dropped when
     ``drop_doublets`` is set.
+
+    The cells removed are recorded in ``uns[qc_filter.RECORD_KEY]`` (their QC
+    values and labels), so the Data Assessment audit can show who was removed
+    after they are gone.
     """
     n_before = adata.n_obs
     t = qc_filter.Thresholds.from_params(params)
     samples = qc_filter.samples_of(adata, params.qc_sample_column or None)
-    removed, bounds = qc_filter.judge(adata, per_cell_qc(adata), t, samples)
+    cells = per_cell_qc(adata)
+    removed, bounds = qc_filter.judge(adata, cells, t, samples)
     keep = qc_filter.keep_mask(removed, n_before)
+    record = qc_filter.removal_record(adata, cells, removed, ~keep, t, samples.column)
     for name, mask in removed.items():
         logger.info("Filtering: %s removes %d cells on its own", name, int(mask.sum()))
     # Only the params this mode used, so the record says what was applied.
@@ -317,6 +323,7 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
         found["qc_thresholds"] = bounds.to_dict(~keep)
     if not keep.all():
         adata = adata[keep, :].copy()
+    adata.uns[qc_filter.RECORD_KEY] = record
     sc.pp.filter_genes(adata, min_cells=params.min_cells)
     logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, adata.n_obs)
     return adata, found

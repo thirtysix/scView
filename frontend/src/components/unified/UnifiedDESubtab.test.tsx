@@ -7,13 +7,15 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useGeneListsStore } from "@/stores/geneListsStore";
 
-const { computeDE, computeDECompare, computeDEMethods, computeDECompareMethods } = vi.hoisted(() => ({
+const { computeDE, computeDECompare, computeDEMethods, computeDECompareMethods, fetchDEComposition } = vi.hoisted(() => ({
   computeDE: vi.fn(),
   computeDECompare: vi.fn(),
   computeDEMethods: vi.fn(),
   computeDECompareMethods: vi.fn(),
+  // Between groups, the composition note fetches as soon as two groups are picked.
+  fetchDEComposition: vi.fn<(id: string, params: object) => Promise<unknown>>(() => new Promise(() => {})),
 }));
-vi.mock("@/api/de", () => ({ computeDE, computeDECompare, computeDEMethods, computeDECompareMethods }));
+vi.mock("@/api/de", () => ({ computeDE, computeDECompare, computeDEMethods, computeDECompareMethods, fetchDEComposition }));
 // The follow-up cards fetch on their own; not what is under test here.
 vi.mock("@/components/unified/DEEnrichment", () => ({ DEEnrichment: () => null }));
 vi.mock("@/components/unified/DEActivity", () => ({ DEActivity: () => null }));
@@ -411,5 +413,62 @@ describe("UnifiedDESubtab table headers", () => {
       "title",
       "Wilcoxon rank-sum p-value, Benjamini-Hochberg adjusted over the 1 tested genes",
     );
+  });
+});
+
+describe("UnifiedDESubtab composition between groups", () => {
+  const COMPOSITION = {
+    column: "cell_type", label_a: "STIM", label_b: "CTRL", auto: true, n_a: 60, n_b: 40,
+    groups: [
+      { group: "NK", n_a: 30, n_b: 8, share_a: 0.5, share_b: 0.2, diff_points: 30, flagged: true, one_sided: false },
+      { group: "T", n_a: 30, n_b: 32, share_a: 0.5, share_b: 0.8, diff_points: -30, flagged: true, one_sided: false },
+    ],
+    n_groups: 2, warn: true, note: null, threshold_points: 10, min_cells: 10,
+    message: "NK is 50% of STIM cells but 20% of CTRL cells (+30 points): genes specific to NK will look like STIM vs CTRL differences.",
+  };
+
+  beforeEach(() => {
+    fetchDEComposition.mockReset().mockResolvedValue(COMPOSITION);
+    computeDECompare.mockReset().mockResolvedValue({ ...RESULT, label: "STIM", composition: COMPOSITION });
+    useDESettingsStore.getState().update({ mode: "groups", splitBy: "stim", groupA: "STIM", groupB: "CTRL" });
+  });
+
+  it("shows each side's shares before the DE, and a chip scopes the DE to a group", async () => {
+    renderDE();
+    expect(await screen.findByText("Composition differs between the sides")).toBeInTheDocument();
+    expect(fetchDEComposition.mock.calls.at(-1)![1]).toMatchObject({ split_by: "stim", group_a: "STIM", group_b: "CTRL" });
+    fireEvent.click(screen.getByRole("button", { name: "Compare within NK" }));
+    expect(useDESettingsStore.getState()).toMatchObject({ withinCol: "cell_type", withinVal: "NK" });
+    await waitFor(() =>
+      expect(fetchDEComposition.mock.calls.at(-1)![1]).toMatchObject({ within_column: "cell_type", within_value: "NK" }),
+    );
+    expect(computeDECompare).not.toHaveBeenCalled();
+  });
+
+  it("sends the picked composition column with the DE, and none on Auto", async () => {
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await waitFor(() => expect(computeDECompare).toHaveBeenCalledTimes(1));
+    expect(computeDECompare.mock.calls[0]![1]).not.toHaveProperty("composition_by");
+    fireEvent.change(screen.getByRole("combobox", { name: "Composition by" }), { target: { value: "ind" } });
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await waitFor(() => expect(computeDECompare).toHaveBeenCalledTimes(2));
+    expect(computeDECompare.mock.calls[1]![1]).toMatchObject({ composition_by: "ind" });
+  });
+
+  it("puts the result's composition caution beside the batch caution", async () => {
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    const caution = await screen.findByTestId("de-composition-caution");
+    expect(caution).toHaveTextContent("Composition differs (by cell_type): NK is 50% of STIM cells but 20% of CTRL cells");
+    expect(caution).toHaveAttribute("title", expect.stringContaining("more than 10 percentage points"));
+  });
+
+  it("shows no caution for an older result without a composition check", async () => {
+    computeDECompare.mockResolvedValue({ ...RESULT, label: "STIM" });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await screen.findByText("CD14");
+    expect(screen.queryByTestId("de-composition-caution")).toBeNull();
   });
 });

@@ -150,6 +150,36 @@ describe("describeComparison with confounding", () => {
   });
 });
 
+describe("describeComparison with a composition shift", () => {
+  const base: DEResponse = { n_selected: 1000, n_rest: 1000, label: "STIM", genes: [], method: "wilcoxon" };
+  const c = { a: "STIM", b: "CTRL", betweenGroups: true, column: "stim" };
+  it("passes the composition caution to the co-pilot", () => {
+    const r: DEResponse = {
+      ...base,
+      composition: {
+        column: "cell_type", label_a: "STIM", label_b: "CTRL", auto: true, n_a: 1000, n_b: 1000,
+        groups: [], n_groups: 3, warn: true, note: null, threshold_points: 10, min_cells: 10,
+        message: "Monocytes is 42% of STIM cells but 18% of CTRL cells (+24 points): genes specific to Monocytes will look like STIM vs CTRL differences.",
+      },
+    };
+    expect(describeComparison(c, r)).toContain(
+      ". Caution (composition by cell_type): Monocytes is 42% of STIM cells but 18% of CTRL cells (+24 points)",
+    );
+  });
+
+  it("says nothing for a balanced check, or an older result without one", () => {
+    const calm: DEResponse = {
+      ...base,
+      composition: {
+        column: "cell_type", label_a: "STIM", label_b: "CTRL", auto: true, n_a: 1000, n_b: 1000,
+        groups: [], n_groups: 3, warn: false, message: null, note: null, threshold_points: 10, min_cells: 10,
+      },
+    };
+    expect(describeComparison(c, calm)).not.toContain("composition");
+    expect(describeComparison(c, base)).not.toContain("Caution");
+  });
+});
+
 describe("deEnrichmentQuery", () => {
   const res: DEResponse = {
     n_selected: 50,
