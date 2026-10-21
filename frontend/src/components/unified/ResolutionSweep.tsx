@@ -11,6 +11,7 @@ import {
   type SweepStart,
 } from "@/api/clustering";
 import { ClusterTreePlot } from "@/components/unified/ClusterTreePlot";
+import { MergeCheck } from "@/components/unified/MergeCheck";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { prettyEmbeddingLabel } from "@/lib/formatting";
 import { bestSilhouette, formatResolutions, parseResolutions } from "@/lib/resolutionSweep";
@@ -306,6 +307,10 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
           ARI ↑ compares each row with the one above. &ldquo;Keep this one&rdquo; adds a clustering column; the
           dataset&rsquo;s active clustering stays as it is.
         </p>
+      )}
+
+      {info?.available && (
+        <MergeCheck datasetId={datasetId} rows={running ? [] : rows} method={start?.method ?? info.method} selected={selected} />
       )}
     </div>
   );

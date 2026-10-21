@@ -396,34 +396,43 @@ def _inputs(adata, rec: Recorded) -> _Inputs:
     """What every setting reads, built once: the log-normalised matrix is made from
     the counts as the pipeline makes it (normalize_total + log1p), so the control
     picks the dataset's own variable genes; without counts, the stored log values."""
-    import scanpy as sc
-
     from scview.core.pipeline import looks_like_counts
 
     counts, _ = _counts(adata)
     if counts is not None:
-        # In the counts' own dtype, as the pipeline normalises them: float32 instead
-        # of Kang's float64 moved the PCA by 1e-5 and lost a 24-cell cluster.
-        tmp = ad.AnnData(X=counts.copy())
-        sc.pp.normalize_total(tmp, target_sum=rec.target_sum)
-        sc.pp.log1p(tmp)
-        log = tmp.X
-    else:
-        log = None
-        raw = adata.raw
-        sources = []
-        if raw is not None and not len(adata.var_names.difference(raw.var_names)):
-            sources.append(raw[:, adata.var_names].X)
-        sources.append(adata.X)
-        for X in sources:
-            if not looks_like_counts(X) and float(X.min()) >= 0:  # scaled data has negatives
-                log = X
-                break
-        if log is None:
-            raise SensitivityError(
-                "The check needs counts or log-normalised expression; this dataset only has "
-                "scaled values. Re-run the pipeline from the counts."
-            )
+        return inputs_from_counts(adata, rec, counts)
+    log = None
+    raw = adata.raw
+    sources = []
+    if raw is not None and not len(adata.var_names.difference(raw.var_names)):
+        sources.append(raw[:, adata.var_names].X)
+    sources.append(adata.X)
+    for X in sources:
+        if not looks_like_counts(X) and float(X.min()) >= 0:  # scaled data has negatives
+            log = X
+            break
+    if log is None:
+        raise SensitivityError(
+            "The check needs counts or log-normalised expression; this dataset only has "
+            "scaled values. Re-run the pipeline from the counts."
+        )
+    return _with_obs(adata, rec, None, log)
+
+
+def inputs_from_counts(adata, rec: Recorded, counts) -> _Inputs:
+    """The inputs for ``counts`` (cells x the dataset's genes): ``adata``'s own, or
+    a thinned copy of them (core/merge_check.py)."""
+    import scanpy as sc
+
+    # In the counts' own dtype, as the pipeline normalises them: float32 instead
+    # of Kang's float64 moved the PCA by 1e-5 and lost a 24-cell cluster.
+    tmp = ad.AnnData(X=counts.copy())
+    sc.pp.normalize_total(tmp, target_sum=rec.target_sum)
+    sc.pp.log1p(tmp)
+    return _with_obs(adata, rec, counts, tmp.X)
+
+
+def _with_obs(adata, rec: Recorded, counts, log) -> _Inputs:
     keys = [k for k in (rec.hvg_batch_key, rec.batch_key) if k]
     obs = adata.obs[list(dict.fromkeys(keys))].copy() if keys else pd.DataFrame(index=adata.obs_names)
     hv = adata.var.get("highly_variable")
@@ -496,20 +505,21 @@ def _harmony(X: np.ndarray, inp: _Inputs, rec: Recorded) -> np.ndarray:
     return np.asarray(tmp.obsm["X_pca_harmony"])
 
 
-def _cluster(X: np.ndarray, rec: Recorded) -> pd.Categorical:
-    """The neighbour graph and the clustering, as the pipeline builds them."""
+def _cluster(X: np.ndarray, rec: Recorded) -> tuple[pd.Categorical, sp.csr_matrix]:
+    """The neighbour graph and the clustering, as the pipeline builds them:
+    (labels, the graph's connectivities)."""
     import scanpy as sc
 
     tmp = ad.AnnData(obs=pd.DataFrame(index=[str(i) for i in range(X.shape[0])]))
     tmp.obsm["X_rep"] = X
     sc.pp.neighbors(tmp, n_neighbors=min(rec.n_neighbors, tmp.n_obs - 1), use_rep="X_rep")
-    return rs.cluster(tmp, rec.method, rec.resolution)
+    return rs.cluster(tmp, rec.method, rec.resolution), tmp.obsp["connectivities"]
 
 
-def run_setting(inp: _Inputs, s: Setting, rec: Recorded,
-                stop: Callable[[], bool] | None = None) -> tuple[np.ndarray, pd.Categorical]:
-    """(variable-gene mask, cluster labels) for one setting; checks ``stop``
-    between sub-steps."""
+def run_setting_graph(inp: _Inputs, s: Setting, rec: Recorded, stop: Callable[[], bool] | None = None,
+                      ) -> tuple[np.ndarray, pd.Categorical, sp.csr_matrix]:
+    """(variable-gene mask, cluster labels, neighbour graph) for one setting;
+    checks ``stop`` between sub-steps."""
     mask = _select(inp, s, rec)
     _check_stop(stop)
     X = _pcs(inp, mask, s, rec)
@@ -517,7 +527,16 @@ def run_setting(inp: _Inputs, s: Setting, rec: Recorded,
     if rec.batch_key:
         X = _harmony(X, inp, rec)
         _check_stop(stop)
-    return mask, _cluster(X, rec)
+    labels, graph = _cluster(X, rec)
+    return mask, labels, graph
+
+
+def run_setting(inp: _Inputs, s: Setting, rec: Recorded,
+                stop: Callable[[], bool] | None = None) -> tuple[np.ndarray, pd.Categorical]:
+    """(variable-gene mask, cluster labels) for one setting; checks ``stop``
+    between sub-steps."""
+    mask, labels, _ = run_setting_graph(inp, s, rec, stop)
+    return mask, labels
 
 
 # ---------------------------------------------------------------------------

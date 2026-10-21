@@ -151,6 +151,8 @@ _STEPS = [
     ("doublet_threshold", {"threshold": "scrublet"}),
     ("annotation_crosscheck", {"columns": ["ct", "cluster"], "reference": "ct",
                                "outputs": ["xc_consensus", "xc_agreement"]}),
+    ("merge_clusters", {"column": "cluster", "target": "cluster_merged", "merges": [["1", "2"]],
+                        "mapping": {"0": "0", "1": "1+2", "2": "1+2"}, "categories": ["0", "1+2"]}),
 ]
 
 
@@ -165,6 +167,7 @@ def test_every_step_type_writes_code_that_compiles():
     by_step = dict(zip([s for s, _ in _STEPS], statuses))
     assert by_step["label_cells"] == "not_replayable"
     assert by_step["annotation_crosscheck"] == "not_replayable"
+    assert by_step["merge_clusters"] == "exact"
     assert by_step["enrichment"] == "approximate"
     assert by_step["ingest"] == "approximate"  # the antibodies are not moved to obsm
     # helpers are defined once each, before they are used
@@ -190,6 +193,7 @@ def test_recorded_values_cannot_inject_code():
         ("marker_genes", {"marker_columns": [evil, "a'b\"c"]}),
         ("label_cells", {"column": evil, "label": evil}),
         ("annotation_crosscheck", {"columns": [evil], "reference": evil, "outputs": [evil]}),
+        ("merge_clusters", {"column": evil, "target": evil, "mapping": {evil: evil}, "categories": [evil]}),
     ])
     provenance.init_source(a, origin=evil, original_filename=evil, fmt=evil)
     script = replay_script.build_script(a, dataset_id=evil, dataset_name=evil)

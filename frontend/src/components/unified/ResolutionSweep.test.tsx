@@ -12,6 +12,9 @@ vi.mock("@/api/clustering", () => ({
   getSweepInfo: api.getSweepInfo,
   runSweep: api.runSweep,
   keepResolution: api.keepResolution,
+  getMergeCheckInfo: () => Promise.resolve({ available: false, reason: "not in this test" }),
+  runMergeCheck: vi.fn(),
+  saveMergedClustering: vi.fn(),
 }));
 vi.mock("@/api/datasets", () => ({ getDataset: api.getDataset }));
 // Plotly needs a real browser; the test checks what is asked for.
@@ -144,6 +147,8 @@ describe("ResolutionSweepPanel", () => {
     // A node click picks its resolution in the table.
     act(() => last().onClick({ points: [{ customdata: 0.2 }] }));
     expect(screen.getAllByRole("row")[1]).toHaveAttribute("aria-selected", "true");
+    // The merge check follows the picked resolution.
+    expect(await screen.findByText("not in this test")).toBeInTheDocument();
   });
 
   it("refuses resolutions it can't run", async () => {

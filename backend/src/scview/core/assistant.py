@@ -36,7 +36,7 @@ import re
 from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
-from scview.core import cluster_qc, composition, provenance, qc_filter
+from scview.core import cluster_qc, composition, merge_check, provenance, qc_filter
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -313,6 +313,15 @@ def build_grounding_context(
                                           evidence="\n".join(comp_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: composition grounding failed: %s", exc)
+        # The last merge check: which neighbouring clusters held-out counts can't tell apart.
+        try:
+            merge_lines, merge_detail = merge_check.grounding_lines(adaptor, adata.obs)
+            lines.extend(merge_lines)
+            if merge_detail:
+                sources.append(ChatSource(kind="result", ref="result:merge_check", detail=merge_detail,
+                                          evidence="\n".join(merge_lines[1:])))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: merge-check grounding failed: %s", exc)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).

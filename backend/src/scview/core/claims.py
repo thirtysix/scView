@@ -586,6 +586,7 @@ _FAMILY_PREFIX = {
     "markers": "result:markers:", "groups": "result:groups:", "obs": "result:groups:",
     "celltypes": "result:celltypes:", "annotation": "result:celltypes:",
     "composition": "result:composition", "qc": "result:qc:", "enrichment": "result:enrichment",
+    "merge_check": "result:merge_check",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
