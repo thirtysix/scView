@@ -3,14 +3,22 @@ import type { LabelChoice } from "@/lib/centroidLabels";
 import type { UnifiedSubtab } from "@/lib/constants";
 import type { ClipSetting } from "@/lib/colorScale";
 import type { Camera, SessionOverlay } from "@/lib/session";
+import type { ReliabilityRef } from "@/lib/embeddingReliability";
 
 type ScatterOverlay =
   | { type: "obs"; column: string }
   // layer: set for a protein (CITE-seq), whose values come from its own layer
   | { type: "expression"; gene: string; layer?: string }
   // genes: the set scored, so a saved session can score it again; activity: the
-  // TF / pathway whose per-cell activity this is, for the same reason
-  | { type: "score"; name: string; genes?: string[]; activity?: { network: "collectri" | "progeny"; source: string } }
+  // TF / pathway whose per-cell activity this is, for the same reason; reliability:
+  // the plot whose neighbour preservation this is (a fixed 0-1 scale)
+  | {
+      type: "score";
+      name: string;
+      genes?: string[];
+      activity?: { network: "collectri" | "progeny"; source: string };
+      reliability?: ReliabilityRef;
+    }
   | null;
 
 type Subtab = UnifiedSubtab;

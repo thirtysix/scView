@@ -62,7 +62,10 @@ export type SessionOverlay =
   | { type: "expression"; gene: string; layer?: string }
   | { type: "score"; name: string; genes: string[] }
   // A TF or pathway's per-cell activity (Activity subtab), computed again on open.
-  | { type: "activity"; network: "collectri" | "progeny"; source: string };
+  | { type: "activity"; network: "collectri" | "progeny"; source: string }
+  // Plot reliability (neighbour preservation) of an embedding, computed again on open;
+  // dims: the PCA pair plotted, when not the first two.
+  | { type: "reliability"; embedding: string; dims?: [number, number] };
 
 /** A selection: the filter it came from, else its cells (whichever is shorter). */
 export type SessionSelection =
@@ -305,7 +308,18 @@ function parseOverlay(x: unknown, where: string): SessionOverlay {
       source: text(o.source, `${where}.source`, { empty: false, max: 256 }),
     };
   }
-  fail(`${where}.type`, 'must be "expression", "score" or "activity"');
+  if (o.type === "reliability") {
+    const embedding = text(o.embedding, `${where}.embedding`, { empty: false });
+    if (o.dims === undefined) return { type: "reliability", embedding };
+    const d = o.dims;
+    if (!Array.isArray(d) || d.length !== 2) fail(`${where}.dims`, "must list 2 column numbers");
+    const dims: [number, number] = [
+      number(d[0], `${where}.dims[0]`, 0, 10_000, true),
+      number(d[1], `${where}.dims[1]`, 0, 10_000, true),
+    ];
+    return { type: "reliability", embedding, dims };
+  }
+  fail(`${where}.type`, 'must be "expression", "score", "activity" or "reliability"');
 }
 
 const CLIP_PRESETS = ["none", "p1", "p2", "p5", "manual"] as const;

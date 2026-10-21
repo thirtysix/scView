@@ -142,6 +142,8 @@ export interface ResolvedColorScale {
   } | null;
   /** Finite values the range was taken over */
   n: number;
+  /** A range fixed by what the values are (a 0-1 share), not taken from the data: never clipped */
+  fixed?: boolean;
 }
 
 /** Index of the first sorted value >= x (so values below x count `lowerBound`). */
@@ -224,6 +226,19 @@ export function resolveColorScale(
   return { colormap, diverging, min, max, centre: diverging ? 0 : null, dataMin: stats.min, dataMax: stats.max, clip, n: stats.n };
 }
 
+/**
+ * A sequential scale over a range fixed in advance (a share, 0 to 1), whatever
+ * the values: two plots of it compare by colour, and no clipping applies.
+ */
+export function fixedColorScale(
+  stats: OverlayStats,
+  colormap: ColormapName,
+  min: number,
+  max: number,
+): ResolvedColorScale {
+  return { colormap, diverging: false, min, max, centre: null, dataMin: stats.min, dataMax: stats.max, clip: null, n: stats.n, fixed: true };
+}
+
 /** "1.2%" or "<0.1%"; "0%" only when truly none. */
 function pct(frac: number): string {
   if (!(frac > 0)) return "0%";
@@ -246,6 +261,7 @@ const ORDINAL: Record<"p1" | "p2" | "p5", string> = {
 export function colorScaleCaption(scale: ResolvedColorScale, noun = "cells"): string {
   if (scale.n === 0) return "No values to colour by.";
   const range = `Colour range ${fmtValue(scale.min)} to ${fmtValue(scale.max)}`;
+  if (scale.fixed) return `${range}, fixed (not clipped to the data).`;
   const centred = scale.diverging ? ", centred on 0" : "";
   if (!scale.clip) {
     const data = scale.diverging && (scale.dataMin !== scale.min || scale.dataMax !== scale.max)
