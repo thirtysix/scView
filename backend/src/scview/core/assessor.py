@@ -226,6 +226,45 @@ def _counts_recoverable(adata: Any) -> str:
     return "No raw counts found in layers['counts'] or .raw"
 
 
+_SCALE_CHUNK = 250
+
+
+def _sample_totals(X: Any, n_rows: int) -> tuple[bool, np.ndarray] | None:
+    """(logged, per-cell totals of expm1(X) if logged else X) over the first
+    ``n_rows`` cells, or None for scaled or unreadable values. Read in chunks of
+    rows: the whole sample dense, with its copies, took 1 GB on a 20k-gene dataset,
+    and three requests compute it at once when a dataset opens."""
+    if sparse.issparse(X):  # the stored values alone: zeros add nothing to either total
+        sub = sparse.csr_matrix(X[:n_rows], dtype=np.float64, copy=True)
+        d = sub.data
+        ok = np.isfinite(d)
+        d[~ok] = 0.0
+        lo = min(0.0, float(d[ok].min())) if ok.any() else 0.0
+        hi = max(0.0, float(d[ok].max())) if ok.any() else 0.0
+        if lo < 0:
+            return None
+        logged = hi <= 20
+        if logged:
+            np.expm1(d, out=d)
+        return logged, np.asarray(sub.sum(axis=1)).ravel()
+    lo, hi, any_finite = np.inf, -np.inf, False
+    raw_sums, log_sums = [], []
+    for start in range(0, n_rows, _SCALE_CHUNK):
+        block = _dense_sample(X[start:min(n_rows, start + _SCALE_CHUNK)], _SCALE_CHUNK)
+        ok = np.isfinite(block)
+        if ok.any():
+            any_finite = True
+            lo, hi = min(lo, float(block[ok].min())), max(hi, float(block[ok].max()))
+        block[~ok] = 0.0
+        raw_sums.append(block.sum(axis=1))
+        with np.errstate(over="ignore"):
+            log_sums.append(np.expm1(block, out=block).sum(axis=1))
+    if not any_finite or lo < 0:
+        return None
+    logged = hi <= 20
+    return logged, np.concatenate(log_sums if logged else raw_sums)
+
+
 def _scale_note(adata: Any) -> str:
     """Median per-cell total on a cell sample, classified into scale bands.
 
@@ -235,12 +274,10 @@ def _scale_note(adata: Any) -> str:
     """
     if _is_raw_counts(adata):
         return ""
-    sample = _dense_sample(adata.X, min(_SCALE_SAMPLE_CELLS, adata.n_obs))
-    finite = sample[np.isfinite(sample)]
-    if finite.size == 0 or finite.min() < 0:
+    found = _sample_totals(adata.X, min(_SCALE_SAMPLE_CELLS, adata.n_obs))
+    if found is None:
         return ""  # scaled data: totals are meaningless
-    logged = float(finite.max()) <= 20
-    totals = np.expm1(sample).sum(axis=1) if logged else sample.sum(axis=1)
+    logged, totals = found
     median = float(np.median(totals))
     if median <= 0:
         return ""

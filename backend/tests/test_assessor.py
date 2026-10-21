@@ -86,3 +86,21 @@ def test_hvg_subset_softens_message():
 def test_raw_counts_have_no_scale_note():
     d = assess_preprocessing(_counts()).normalization.details
     assert "Median per-cell total" not in d
+
+
+def test_sample_totals_in_chunks_equal_the_whole_sample():
+    # _scale_note reads its 2,000-cell sample in chunks of rows (the whole sample
+    # dense, with its copies, took 1 GB on ovary's 20k genes).
+    import scipy.sparse as sp
+
+    from scview.core import assessor
+
+    rng = np.random.default_rng(0)
+    counts = rng.poisson(1.0, (600, 50)).astype(np.float64)
+    logx = np.log1p(counts / counts.sum(axis=1, keepdims=True) * 1e4)
+    for X in (logx, sp.csr_matrix(logx)):
+        logged, totals = assessor._sample_totals(X, 600)  # 3 chunks, the last one partial
+        assert logged and np.allclose(totals, np.expm1(logx).sum(axis=1))
+    logged, totals = assessor._sample_totals(counts * 50, 600)
+    assert not logged and np.allclose(totals, (counts * 50).sum(axis=1))
+    assert assessor._sample_totals(logx - 1.0, 600) is None  # scaled: negative values
