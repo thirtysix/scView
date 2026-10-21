@@ -260,9 +260,9 @@ def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     called in the run's worker thread with the step about to run, the AnnData as
     it is now (earlier steps applied) and the run's ``PipelineParams``. Return a
     plain sentence to stop the run before ``step`` (status "stopped", that
-    sentence as ``stop_reason``; the steps already done are kept and saved, as
-    after a step that fails), or None to let it run. It must be quick (well under
-    a second: read shapes and ``nnz``, never densify), must not change ``adata``.
+    sentence as ``stop_reason``; nothing is saved, as for a cancel), or None to
+    let it run. It must be quick (well under a second: read shapes and ``nnz``,
+    never densify), must not change ``adata``.
     An exception is logged and the step runs.
     """
     from scview.core import preflight
@@ -276,7 +276,8 @@ def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     label = step.replace("_", " ")
     return (f"Stopped before {label}: it needs about {need / GB:.1f} GB more at its peak, and scView "
             f"has {avail.available_bytes / GB:.1f} GB free of its {avail.limit_bytes / GB:.1f} GB limit, "
-            f"so the system would have stopped the backend. The steps before it are saved. Raise "
+            f"so the system would have stopped the backend. Nothing was saved: the dataset is as it "
+            f"was before the run. Raise "
             f"SCVIEW_MEMORY_GB in .env (then restart scView), or leave this step out.")
 
 

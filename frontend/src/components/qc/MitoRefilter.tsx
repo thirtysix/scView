@@ -2,6 +2,8 @@ import { useState } from "react";
 import { AlertTriangle, Loader2, RotateCcw } from "lucide-react";
 import { getDataset } from "@/api/datasets";
 import { getMitoRefilter, runMitoRefilter, type RefilterPreview, type RefilterType } from "@/api/mitoFilter";
+import { cancelPipelineRun, type RunOutcomeFields, type WatchdogEvent } from "@/api/pipelineRun";
+import { CancelRunButton, RunOutcome, RunWatchNotes } from "@/components/panels/RunWatch";
 import { Caption } from "@/components/common/Caption";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -150,7 +152,19 @@ export function MitoRefilter({
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // The run watchdog's latest warnings, a requested cancel, and a run that did not reach its end.
+  const [memory, setMemory] = useState<WatchdogEvent | null>(null);
+  const [slow, setSlow] = useState<WatchdogEvent | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [runningStep, setRunningStep] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<RunOutcomeFields | null>(null);
   const label = `Re-filter with per-${perCluster ? "cluster" : "type"} bounds`;
+  const stepLabel = (step: string) => STEP_LABELS[step] ?? step;
+
+  const cancel = () => {
+    setCancelling(true);
+    cancelPipelineRun(datasetId).catch(() => setCancelling(false));
+  };
 
   const ask = () => {
     setLoading(true);
@@ -167,16 +181,33 @@ export function MitoRefilter({
     setRunning(true);
     setPipelineRunning(true);
     setError(null);
+    setOutcome(null);
+    setMemory(null);
+    setSlow(null);
+    setCancelling(false);
     let total = preview.steps.length;
     try {
-      await runMitoRefilter(datasetId, column, ({ event, data }) => {
+      const result = await runMitoRefilter(datasetId, column, ({ event, data }) => {
         if (event === "refilter") setProgress(String(data.message ?? ""));
         else if (event === "step_start") {
           total = Number(data.total ?? total);
           const step = String(data.step);
-          setProgress(`Step ${Number(data.index) + 1}/${total}: ${STEP_LABELS[step] ?? step}`);
+          setRunningStep(step);
+          setSlow(null);
+          setProgress(`Step ${Number(data.index) + 1}/${total}: ${stepLabel(step)}`);
         } else if (event === "substep") setProgress(String(data.message ?? ""));
+        else if (event === "watchdog") {
+          const w = data as unknown as WatchdogEvent;
+          if (w.kind === "memory") setMemory(w);
+          else setSlow(w);
+        }
       });
+      const fields = result as unknown as RunOutcomeFields;
+      if ((fields.status ?? "complete") !== "complete") {
+        // Cancelled (nothing saved) or stopped before a step that could not fit.
+        setOutcome({ ...fields, steps_run: fields.steps_run ?? [] });
+        return;
+      }
       const message =
         `Re-filtered from the original upload: ${preview.n_after.toLocaleString()} cells kept ` +
         `(was ${preview.n_current.toLocaleString()}; ${preview.brought_back.toLocaleString()} brought back).`;
@@ -194,6 +225,8 @@ export function MitoRefilter({
       setRunning(false);
       setPipelineRunning(false);
       setProgress(null);
+      setRunningStep(null);
+      setCancelling(false);
     }
   };
 
@@ -234,10 +267,16 @@ export function MitoRefilter({
                 Cancel
               </button>
             )}
+            {running && <CancelRunButton onCancel={cancel} cancelling={cancelling} />}
             {progress && <span className="text-[11px] text-blue-700">{progress}</span>}
           </div>
+          {running && (
+            <RunWatchNotes memory={memory} slow={slow} cancelling={cancelling} runningStep={runningStep}
+                           label={stepLabel} />
+          )}
         </>
       )}
+      {outcome && <RunOutcome result={outcome} label={stepLabel} />}
       {done && <p className="text-[11px] text-emerald-700">{done}</p>}
       {error && (
         <p role="alert" className="rounded bg-red-50 px-2 py-1 text-[11px] text-red-700">

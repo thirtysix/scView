@@ -124,7 +124,7 @@ describe("DataAssessmentPanel run progress: watchdog, Cancel, outcome", () => {
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 
-  it("says a run stopped before a step, with the steps it saved", async () => {
+  it("says a run stopped before a step, and that the steps done were not saved", async () => {
     await startRun();
     stream.send("step_start", { step: "qc_metrics", index: 0, total: 2 });
     stream.send("step_done", { step: "qc_metrics", index: 0, elapsed: 1 });
@@ -135,7 +135,7 @@ describe("DataAssessmentPanel run progress: watchdog, Cancel, outcome", () => {
     stream.close();
     expect(await screen.findByText("Run stopped")).toBeTruthy();
     expect(screen.getByText("Doublet detection needs about 5 GB and 2 GB is free.")).toBeTruthy();
-    expect(screen.getByText("Completed and saved: QC Metrics.")).toBeTruthy();
+    expect(screen.getByText("Finished before the stop, not saved: QC Metrics.")).toBeTruthy();
   });
 
   it("keeps a completed run's result after the assessment refreshes, with its peak memory", async () => {

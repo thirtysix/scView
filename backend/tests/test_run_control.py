@@ -75,7 +75,7 @@ def test_before_step_is_called_with_step_adata_and_params_in_order():
     assert result.status == "complete" and result.stop_reason is None
 
 
-def test_a_message_stops_the_run_before_that_step_and_keeps_the_steps_done(tmp_path):
+def test_a_message_stops_the_run_before_that_step_and_saves_nothing(tmp_path):
     msg = "PCA needs about 9.0 GB and 2.1 GB is free."
     out = tmp_path / "out.h5ad"
 
@@ -87,9 +87,8 @@ def test_a_message_stops_the_run_before_that_step_and_keeps_the_steps_done(tmp_p
     assert result.status == "stopped"
     assert result.stop_reason == msg
     assert result.steps_run == ["qc_metrics", "normalization", "log_transform"]
-    saved = ad.read_h5ad(out)
-    assert "X_pca" not in saved.obsm
-    assert [h["step"] for h in provenance.read_provenance(saved)["history"]] == result.steps_run
+    # A reprocess stopped halfway must not replace the dataset with a half-made one.
+    assert not out.exists()
 
 
 def test_the_streamed_run_stops_without_starting_the_step(tmp_path):

@@ -62,7 +62,7 @@ describe("runOutcome", () => {
 
   it("says a stopped run kept the steps it completed", () => {
     const o = runOutcome({ steps_run: ["qc_metrics"], status: "stopped", stop_reason: "PCA needs 9 GB." }, label);
-    expect(o).toMatchObject({ title: "Run stopped", reason: "PCA needs 9 GB.", steps: "Completed and saved: QC Metrics." });
+    expect(o).toMatchObject({ title: "Run stopped", reason: "PCA needs 9 GB.", steps: "Finished before the stop, not saved: QC Metrics." });
     expect(runOutcome({ steps_run: [], status: "stopped", stop_reason: "No." }, label)!.steps).toBe(
       "No step had run, so nothing changed.",
     );

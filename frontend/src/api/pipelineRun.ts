@@ -91,7 +91,7 @@ export function runOutcome(
   return {
     title: "Run stopped",
     reason: r.stop_reason ?? "Stopped before a step.",
-    steps: done ? `Completed and saved: ${done}.` : "No step had run, so nothing changed.",
+    steps: done ? `Finished before the stop, not saved: ${done}.` : "No step had run, so nothing changed.",
   };
 }
 

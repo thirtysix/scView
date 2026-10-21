@@ -158,8 +158,8 @@ class PipelineResult:
     elapsed_seconds: float = 0.0
     output_path: str | None = None
     # "complete" (ran to the end, errors or not) | "stopped" (the pre-step check
-    # stopped it before a step: the steps done are saved) | "cancelled" (nothing
-    # saved). See core/run_watchdog.py.
+    # stopped it before a step) | "cancelled"; neither of the last two saves
+    # anything. See core/run_watchdog.py.
     status: str = "complete"
     stop_reason: str | None = None
     # Requested names that are not steps (the run endpoints refuse these with 422).
@@ -1620,15 +1620,17 @@ def _finish_run(
     output_path: str | None,
     control: RunControl | None,
 ) -> None:
-    """Finalise and save a run, unless it was cancelled (nothing saved) or stopped
-    before any step ran (nothing to save).
+    """Finalise and save a run that reached its end. A cancelled run, or one the
+    pre-step check stopped, saves nothing: a reprocess or re-filter stopped halfway
+    would otherwise replace the dataset with a half-processed one (reset to counts,
+    not yet normalised). The dataset reopens as it was before the run.
 
     The file is written beside the derived file and then swapped in, so a backend
     killed mid-write (out of memory) leaves the previous file whole."""
     if result.status == "complete" and control is not None and control.cancelled:
         # Cancelled after the last step ended but before the save.
         _halted(result, ("cancelled", cancelled_reason("before", "saving")))
-    save = result.status == "complete" or (result.status == "stopped" and result.steps_run)
+    save = result.status == "complete"
     if save:
         _finalize_current(adata, params, result.steps_run)
     result.elapsed_seconds = round(time.time() - t0, 2)

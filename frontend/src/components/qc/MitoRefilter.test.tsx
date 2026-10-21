@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { RefilterPreview } from "@/api/mitoFilter";
+import * as pipelineRun from "@/api/pipelineRun";
 
 const { getMitoRefilter, runMitoRefilter, getDataset } = vi.hoisted(() => ({
   getMitoRefilter: vi.fn(),
@@ -87,6 +88,31 @@ describe("MitoRefilter", () => {
     expect(getDataset).toHaveBeenCalledWith("d1");
     expect(useDatasetStore.getState().currentDataset).toEqual({ id: "d1", n_cells: 1150 });
     expect(useSettingsStore.getState().pipelineRunning).toBe(false);
+  });
+
+  it("watches the run: memory warning, Cancel, and a cancelled or stopped run is not reported as done", async () => {
+    vi.spyOn(pipelineRun, "cancelPipelineRun").mockResolvedValue({ cancelling: true, step: "filtering" });
+    getMitoRefilter.mockResolvedValue(preview());
+    let release: (v: Record<string, unknown>) => void = () => {};
+    runMitoRefilter.mockImplementation((_id: string, _col: string, onEvent: (e: unknown) => void) => {
+      onEvent({ event: "step_start", data: { step: "filtering", index: 1, total: 4 } });
+      onEvent({ event: "watchdog", data: { type: "watchdog", kind: "memory", threshold_pct: 90, used_gb: 5.5,
+                                           limit_gb: 6, pct: 92, limited: true, step: "filtering" } });
+      return new Promise((r) => (release = r));
+    });
+    const onDone = vi.fn();
+    render(<MitoRefilter datasetId="d1" column="scview_leiden_r0.5" perCluster onDone={onDone} />);
+    fireEvent.click(screen.getByRole("button", { name: /Re-filter with per-cluster bounds/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Re-filter (1,150 cells)" }));
+    expect(await screen.findByText(/Memory at 92% of the 6\.0 GB limit/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(pipelineRun.cancelPipelineRun).toHaveBeenCalledWith("d1");
+    release({ steps_run: ["qc_metrics"], status: "cancelled", stop_reason: "Cancelled before normalization." });
+    expect(await screen.findByText("Run cancelled")).toBeInTheDocument();
+    expect(screen.getByText("Cancelled before normalization.")).toBeInTheDocument();
+    expect(screen.queryByText(/Re-filtered from the original upload/)).toBeNull();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(getDataset).not.toHaveBeenCalled();
   });
 
   it("shows a refusal or a failed run without losing the panel", async () => {
