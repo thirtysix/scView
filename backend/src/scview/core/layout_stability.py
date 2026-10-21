@@ -753,12 +753,15 @@ def run_all(adata, plan: Plan, **kw) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def thumbnail(adata, run: Run, index: str | int, max_points: int = THUMB_CELLS) -> dict:
+def thumbnail(adata, run: Run, index: str | int, max_points: int = THUMB_CELLS,
+              embedding: str | None = None) -> dict:
     """One layout's coordinates for a thumbnail: the run's thumbnail cells (the same
-    in every layout), ``index`` a layout number or ``"current"``."""
+    in every layout), ``index`` a layout number or ``"current"`` (the plot the run
+    compared with, or ``embedding`` when given)."""
     plan = run.plan
     if str(index) == "current":
-        lay = current_layout(adata, run, plan.current)
+        name = current_embedding(adata, embedding)[0] if embedding else plan.current
+        lay = current_layout(adata, run, name)
         if lay is None:
             raise LayoutError("There is no 2D plot of yours to show.")
     else:
@@ -766,6 +769,7 @@ def thumbnail(adata, run: Run, index: str | int, max_points: int = THUMB_CELLS) 
             i = int(index)
         except (TypeError, ValueError):
             raise LayoutError(f"Layout '{index}' is not a number or 'current'.") from None
+        name = None
         with run.lock:
             done = list(run.layouts)
         if i < 0 or i >= len(plan.layouts):
@@ -779,6 +783,7 @@ def thumbnail(adata, run: Run, index: str | int, max_points: int = THUMB_CELLS) 
     xy = lay.coords[pos].astype(np.float64)
     return {
         "index": lay.index if lay.seed is not None else "current",
+        "embedding": name if lay.seed is None else None,
         "seed": lay.seed, "n_neighbors": lay.n_neighbors, "key": lay.key, "label": lay.label,
         "cells": plan.rows[pos].astype(int).tolist(),
         "x": np.round(xy[:, 0], 3).tolist(), "y": np.round(xy[:, 1], 3).tolist(),

@@ -171,6 +171,7 @@ async def layout_coordinates(
     dataset_id: str,
     index: str,
     max_points: int = Query(ls.THUMB_CELLS, ge=100, le=ls.MAX_THUMB_CELLS),
+    embedding: str | None = Query(None, description="For 'current': the plot; default the run's"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Layout ``index`` (or ``current``, the user's plot) on the run's thumbnail
@@ -183,7 +184,7 @@ async def layout_coordinates(
         raise HTTPException(status_code=404, detail=NOT_HELD)
     try:
         # The user's plot is scored once on first use (KD-tree, placement): off the loop.
-        return await asyncio.to_thread(ls.thumbnail, adata, run, index, max_points)
+        return await asyncio.to_thread(ls.thumbnail, adata, run, index, max_points, embedding)
     except ls.LayoutError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except KeyError as exc:

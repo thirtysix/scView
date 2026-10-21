@@ -464,6 +464,15 @@ async def test_endpoints_run_show_and_keep(client, dataset_manager, planted):
     assert {"X_umap_s2_k10", "X_umap_s2_k15", "X_umap", "X_pca"} <= set(derived.obsm.keys())
     assert [h["step"] for h in provenance.read_provenance(derived)["history"]][-2:] == ["keep_layout"] * 2
     assert (await client.post(f"{API}/datasets/{did}/layouts/40/keep")).status_code == 404
+    # The user's plot is now a kept layout: the thumbnail follows the plot asked for.
+    cur = (await client.get(f"{API}/datasets/{did}/layouts/current",
+                            params={"max_points": 100, "embedding": "X_umap_s2_k15"})).json()
+    t5 = (await client.get(f"{API}/datasets/{did}/layouts/5", params={"max_points": 100})).json()
+    assert cur["embedding"] == "X_umap_s2_k15" and cur["x"] == t5["x"]
+    info = (await client.get(f"{API}/datasets/{did}/layouts", params={"embedding": "X_umap_s2_k15"})).json()
+    assert info["result"]["current"] == "X_umap_s2_k15"
+    # The planted layouts differ only at 30 neighbours: seed 2 at 10 and 15 are the same.
+    assert [d["index"] for d in info["result"]["done"] if d["same_as_current"]] == [2, 5]
 
 
 async def test_endpoints_explain_what_cannot_run(client, dataset_manager):
