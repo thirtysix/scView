@@ -1,5 +1,5 @@
 import { API_BASE } from "@/lib/constants";
-import { apiFetch } from "./client";
+import { apiFetch, readError } from "./client";
 
 // --- Types (mirror backend scview.core.ingestion models) ------------------
 
@@ -114,7 +114,7 @@ export async function uploadIngestFiles(sid: string, files: File[]): Promise<Ing
     method: "POST",
     body: form,
   });
-  if (!res.ok) throw new Error(`Upload error ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error(`Upload error ${res.status}: ${await readError(res)}`);
   return res.json();
 }
 

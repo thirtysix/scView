@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiFetch, readError } from "./client";
 import { API_BASE } from "@/lib/constants";
 
 export interface IntegrationDatasetCheck {
@@ -120,7 +120,7 @@ export async function runIntegration(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    let detail = await res.text();
+    let detail = await readError(res);
     try {
       detail = JSON.parse(detail).detail ?? detail;
     } catch {

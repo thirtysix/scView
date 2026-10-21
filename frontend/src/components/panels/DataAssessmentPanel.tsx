@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
-import { apiFetch } from "@/api/client";
+import { apiFetch, BACKEND_DOWN_MESSAGE, readError } from "@/api/client";
 import { getDataset } from "@/api/datasets";
 import { getDoublets, type DoubletRateSuggestion, type FilterThresholds, type QcThresholdMode } from "@/api/qc";
 import { pct } from "@/lib/qcThresholds";
@@ -650,7 +650,7 @@ export function DataAssessmentPanel() {
       );
 
       if (!res.ok) {
-        const errText = await res.text();
+        const errText = await readError(res);
         throw new Error(`API error ${res.status}: ${errText}`);
       }
 
@@ -661,7 +661,10 @@ export function DataAssessmentPanel() {
       let buffer = "";
 
       while (true) {
-        const { done, value } = await reader.read();
+        // A stream cut mid-run is a backend that stopped, often out of memory.
+        const { done, value } = await reader.read().catch(() => {
+          throw new Error(BACKEND_DOWN_MESSAGE);
+        });
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });

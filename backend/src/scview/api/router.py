@@ -25,6 +25,7 @@ from scview.api.v1 import (
     cells,
     composition,
     normalization,
+    system,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -51,3 +52,4 @@ api_router.include_router(normalization.router, tags=["assessment"])
 api_router.include_router(activity.router, tags=["activity"])
 api_router.include_router(cells.router, tags=["cells"])
 api_router.include_router(composition.router, tags=["composition"])
+api_router.include_router(system.router, tags=["system"])

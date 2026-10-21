@@ -217,6 +217,9 @@ scView runs entirely in Docker, so there is no Python, Node, or R to install. **
   PC leaves about 4 GB, enough for ~10,000 cells. **16 GB is recommended**, and more for large
   datasets (100k+ cells), the Seurat `.rds` converter, or Harmony. On Windows you can give it
   more: see *A large dataset fails* under [Windows troubleshooting](#windows-troubleshooting).
+  The start scripts also set a memory limit for scView (`SCVIEW_MEMORY_GB` in `.env`), so a
+  dataset too big for the computer stops scView rather than freezing the machine; on Linux
+  nothing else does. The sidebar shows the use against that limit.
 - **Disk:** about 4 GB for the images; have **10 GB free** for the first start.
 - **Internet on the first start**, to download the images and the MSigDB gene sets.
 - A modern browser.
@@ -265,6 +268,10 @@ an hour the first time, most of it waiting for downloads.
      [Optional: enable the AI features](#optional-enable-the-ai-features).
 
      <img src="docs/images/windows/4-key-prompt.png" width="720" alt="start-windows.bat asking for an optional DeepInfra API key">
+   - asks how much memory scView may use, suggesting your free memory minus 3 GB. Press Enter
+     to accept. A dataset that needs more then stops scView instead of slowing the whole
+     computer; the sidebar shows how much of it is in use. Change it later in the `.env` file
+     (`SCVIEW_MEMORY_GB`) and start scView again.
    - downloads and starts scView. **The first run downloads about 1 GB**, a few minutes on a
      typical connection; later starts take about a minute. Near the end the progress can sit
      still for several minutes while Docker unpacks the download: leave the window open. If a
@@ -344,7 +351,8 @@ Then run `wsl --shutdown` in PowerShell and reopen Docker Desktop (or Podman Des
    ./start.sh --stop    # stop all services (datasets are kept)
    ./start.sh --clean   # remove containers, images AND all uploaded datasets (asks first)
    ```
-   `start.sh` checks prerequisites, creates `.env` (asking for an optional API key), downloads
+   `start.sh` checks prerequisites, creates `.env` (asking for an optional API key and how much
+   memory scView may use: free memory minus 3 GB is suggested, stored as `SCVIEW_MEMORY_GB`), downloads
    the prebuilt images (or builds them: the development stack and `--build` always do, and the
    first build can take tens of minutes), waits for health checks, and opens the app.
 

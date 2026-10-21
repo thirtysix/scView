@@ -58,7 +58,13 @@ async def lifespan(app: FastAPI):
     logger.info("scView deployment mode: %s", settings.DEPLOYMENT_MODE)
     for warn in settings.deployment_warnings():
         logger.warning("DEPLOYMENT (public): %s", warn)
+
+    from scview.core.memory_budget import mark_running, mark_stopped
+
+    if mark_running():
+        logger.warning("The previous backend stopped without shutting down (killed, most often for memory).")
     yield
+    mark_stopped()
 
 
 class BodySizeLimitMiddleware(BaseHTTPMiddleware):

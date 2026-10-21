@@ -6,6 +6,30 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-21
+
+### Added
+- **A memory limit for scView, and a gauge for it.** The start scripts ask how much memory scView
+  may use on the first start, suggesting free memory minus 3 GB to the nearest GB (at most what
+  Docker or Podman has, at least 4 GB), and store it as `SCVIEW_MEMORY_GB` in `.env`; the backend
+  and converter get it as a container limit with no extra swap. A dataset that needs more stops
+  scView instead of the computer: on Linux nothing else caps Docker or Podman, and a big run could
+  make the whole machine unresponsive. Without the setting there is no limit, as before. The
+  sidebar shows the backend's memory use against its limit (`GET /system/memory`), amber from 75%
+  and red from 90%.
+- **scView says when it ran out of memory.** When the backend was killed and restarted, a notice at
+  the top of the page says so, with its memory limit and where to raise it, and that unsaved work
+  such as a run in progress was lost. While the backend is down, error boxes say it is restarting
+  or may have run out of memory, instead of showing nginx's "502 Bad Gateway" page; a run cut off
+  midway says the same. `GET /system/memory` reports it as `unclean_restart`.
+
+### Fixed
+- **Windows + Podman: scView starts after Windows was shut down with Podman running.** That
+  leaves a socket file behind, and the next Podman start then has no connection for Compose
+  (`failed to connect to the docker API at npipe:////./pipe/podman-machine-default`), although
+  Podman itself works. `start-windows.bat` now removes the stale file before starting the Podman
+  machine, and restarts the machine once if the connection is still missing.
+
 ## [0.24.1] - 2026-10-19
 
 ### Fixed
