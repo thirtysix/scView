@@ -104,6 +104,7 @@ async def test_rerun_refuses_an_unknown_step_with_422(client, dataset_manager):
     r = await client.post(f"{API}/datasets/{did}/rerun", json={"edited_step": "leiden"})
     assert r.status_code == 422
     assert "did you mean 'clustering'?" in r.json()["detail"]
+    assert dataset_manager.get_dataset(did) is None  # refused before loading
     # A real step that cannot be re-run in place keeps its own answer.
     r = await client.post(f"{API}/datasets/{did}/rerun", json={"edited_step": "pca"})
     assert r.status_code in (400, 409)

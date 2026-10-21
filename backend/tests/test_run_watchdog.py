@@ -74,7 +74,7 @@ def test_a_threshold_fires_again_only_after_dropping_back_below():
     mem = FakeMemory(6.5)  # 81%
     wd, events = _watchdog(mem)
     wd.sample()
-    mem.used_gb = 6.3  # 78.75%: below 80 but within the re-arm margin (2 points)
+    mem.used_gb = 6.3  # 78.75%: below 80 but within the re-arm margin (5 points)
     wd.sample()
     mem.used_gb = 6.5
     wd.sample()
@@ -92,7 +92,7 @@ def test_a_jump_past_both_thresholds_sends_one_warning():
     wd.sample()
     mem.used_gb = 7.6  # 95%
     wd.sample()
-    mem.used_gb = 7.1  # 88.75%: 90 not re-armed (needs < 88%), 80 still disarmed
+    mem.used_gb = 7.1  # 88.75%: 90 not re-armed (needs < 85%), 80 still disarmed
     wd.sample()
     mem.used_gb = 7.4  # 92.5%
     wd.sample()

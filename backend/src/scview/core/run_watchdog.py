@@ -47,7 +47,7 @@ SAMPLE_SECONDS = 2.0
 MEMORY_THRESHOLDS = (0.8, 0.9)
 # A threshold fires again only after use has fallen this far (of the limit) below it,
 # so a reading that wobbles around 80% does not repeat the warning every sample.
-REARM_MARGIN = 0.02
+REARM_MARGIN = 0.05
 SLOW_STEP_SECONDS = 60.0
 GB = 1024**3
 

@@ -572,12 +572,12 @@ async def rerun_step(
 ):
     """Re-run an in-place-rerunnable step (and its downstream) with new params,
     reusing existing upstream artifacts (PCA / neighbour graph)."""
+    if unknown_steps([body.edited_step]):  # before loading: a wrong name costs nothing
+        raise HTTPException(status_code=422, detail=unknown_steps_message([body.edited_step]))
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
 
-    if unknown_steps([body.edited_step]):
-        raise HTTPException(status_code=422, detail=unknown_steps_message([body.edited_step]))
     plan = plan_rerun(_history_steps(adaptor), body.edited_step)
     if not plan.rerun_steps:
         raise HTTPException(status_code=400, detail=plan.message or "Nothing to re-run.")
