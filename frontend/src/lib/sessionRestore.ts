@@ -80,6 +80,11 @@ export function captureSession(now: Date = new Date()): SessionFile {
     }
     else if (overlay.type === "score" && overlay.activity) {
       view.overlay = { type: "activity", ...overlay.activity };
+    } else if (overlay.type === "score" && overlay.reliability) {
+      const r = overlay.reliability;
+      view.overlay = r.dims
+        ? { type: "reliability", embedding: r.embedding, dims: r.dims }
+        : { type: "reliability", embedding: r.embedding };
     } else if (overlay.type === "score" && overlay.genes?.length) {
       view.overlay = { type: "score", name: overlay.name, genes: overlay.genes };
     }
@@ -399,6 +404,8 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
       notes.push(`Protein overlay ${o.gene}: the protein is not in this dataset.`);
     } else if (o.type === "expression" && !o.layer && !(await geneInDataset(d.id, o.gene))) {
       notes.push(`Gene overlay ${o.gene}: the gene is not in this dataset.`);
+    } else if (o.type === "reliability" && !d.available_embeddings.includes(o.embedding)) {
+      notes.push(`Plot reliability of ${o.embedding}: the embedding is not in this dataset.`);
     } else {
       unified.setPendingOverlay({ datasetId: d.id, overlay: o });
     }
