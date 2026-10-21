@@ -28,6 +28,11 @@ instead, which is what this module does:
    for the rest. With fewer than ten groups limma's robust fit is the plain one;
 4. Benjamini-Hochberg across the groups.
 
+When the donors pair up across two conditions each group also carries a
+``paired_test`` on its raw per-sample shares (Wilcoxon signed-rank and paired
+t, core/paired_design.py), for the per-donor slope chart; ``pairing`` says
+whether any donor occurs in more than one condition and how many are in all.
+
 With fewer than two samples in a condition there is no replicate variance to
 test against, so only the proportions are returned.
 """
@@ -44,6 +49,7 @@ import numpy as np
 import pandas as pd
 from scipy import optimize, special, stats
 
+from scview.core import paired_design
 from scview.core.confounding import check, condition_columns, for_comparison
 
 Transform = Literal["logit", "asin"]
@@ -70,6 +76,9 @@ class GroupResult:
     pval: float | None = None
     fdr: float | None = None
     df_prior: float | None = None  # this group's prior df (robust: smaller for an outlier)
+    # Wilcoxon signed-rank + paired t on the raw shares (%) of the donors in both
+    # conditions (two conditions, paired donors only).
+    paired_test: dict | None = None
 
 
 @dataclass
@@ -105,6 +114,8 @@ class CompositionResult:
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     dropped_samples: list[str] = field(default_factory=list)
+    # {"paired", "n_pairs", "conditions"}: whether the donors recur across conditions.
+    pairing: dict = field(default_factory=lambda: {"paired": False, "n_pairs": 0, "conditions": []})
 
     def to_dict(self) -> dict:
         return {
@@ -120,7 +131,7 @@ class CompositionResult:
             "groups": [g.__dict__ for g in self.groups],
             "samples": [s.__dict__ for s in self.samples],
             "warnings": self.warnings, "notes": self.notes,
-            "dropped_samples": self.dropped_samples,
+            "dropped_samples": self.dropped_samples, "pairing": self.pairing,
         }
 
 
@@ -503,6 +514,16 @@ def composition_test(
         result.groups.append(GroupResult(
             group=name, props=means, fold_change=fc,
             n_cells={k: int(cell_counts[i, gi]) for i, k in enumerate(chosen)}))
+    if sample is not None:
+        result.pairing = paired_design.detect_design(zip(s_donor, s_cond), chosen)
+        if result.pairing["paired"] and len(chosen) == 2:
+            # On the shares as served (rounded), so the numbers match the plot.
+            points = [{"group": g, "condition": row.condition, "sample": row.sample,
+                       "value": row.props[gi] * 100}
+                      for row in result.samples for gi, g in enumerate(groups)]
+            tests = paired_design.group_paired_tests(points, chosen, groups)
+            for gr in result.groups:
+                gr.paired_test = tests[gr.group]
     warnings, notes = design_warnings(obs, condition_key, group_key, keep.to_numpy(), batch_key)
     result.warnings += warnings
     result.notes += notes
