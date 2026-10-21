@@ -61,7 +61,13 @@ describe("useSessionRestore", () => {
       version: 1,
       dataset: { id: "ds1" },
       view: { panel: "markers", color_by: "cell_type", color_by_chosen: false, embedding: "X_umap" },
-      colors: { categorical_palette: "cvd", continuous_colormap: "viridis" },
+      colors: {
+        categorical_palette: "cvd",
+        continuous_colormap: "viridis",
+        diverging_colormap: "RdBu",
+        signed_colormap_mode: "auto",
+        clip: { preset: "none" },
+      },
     });
 
     // a reload

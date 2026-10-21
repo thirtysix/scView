@@ -1,3 +1,7 @@
+/** Markers the backend keeps per group (`GET /markers` default `n_genes`): the
+ *  highest by scanpy's rank_genes_groups Wilcoxon score. Every gene is tested. */
+export const MARKERS_PER_GROUP = 100;
+
 /** One marker gene of one group (backend GET /datasets/{id}/markers?format=json). */
 export interface MarkerGene {
   gene: string;

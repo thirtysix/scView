@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { DeckGL, type DeckGLRef } from "@deck.gl/react";
 import { OrthographicView, OrbitView, type Layer } from "@deck.gl/core";
 import { ScatterplotLayer, PointCloudLayer } from "@deck.gl/layers";
-import { mapCategoryToColor, mapValueToColor } from "@/lib/colors";
+import { mapCategoryToColor, mapValueToColor, type AnyColormapName } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { RotateCcw, AlertTriangle, ImageDown } from "lucide-react";
 import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
@@ -26,6 +26,9 @@ interface EmbeddingScatterProps {
   positions: Float32Array | null;
   colorValues: Float32Array | Int32Array | null;
   colorType: "categorical" | "continuous";
+  /** Continuous: the resolved colour scale (lib/colorScale.ts: colormap, clipped
+   *  range); without it the values' own range on the settings' sequential map. */
+  colorScale?: { colormap: AnyColormapName; min: number; max: number } | null;
   /** Palette slot per category code (the column's `color_slots`); default: the code. */
   categorySlots?: readonly number[];
   pointSize?: number;
@@ -132,6 +135,7 @@ export function EmbeddingScatter({
   positions,
   colorValues,
   colorType,
+  colorScale = null,
   categorySlots,
   pointSize = 2,
   opacity = 0.8,
@@ -323,17 +327,23 @@ export function EmbeddingScatter({
         }
       }
     } else {
-      // Continuous — find min/max
+      // Continuous: the resolved scale, else the values' own min/max
       let min = Infinity;
       let max = -Infinity;
-      for (let i = 0; i < colorValues.length; i++) {
-        const v = colorValues[i]!;
-        if (v < min) min = v;
-        if (v > max) max = v;
+      if (colorScale) {
+        min = colorScale.min;
+        max = colorScale.max;
+      } else {
+        for (let i = 0; i < colorValues.length; i++) {
+          const v = colorValues[i]!;
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
       }
+      const colormap = colorScale?.colormap ?? continuousColormap;
       for (let i = 0; i < count; i++) {
         const v = colorValues[i] ?? 0;
-        const [r, g, b] = mapValueToColor(v, min, max, continuousColormap);
+        const [r, g, b] = mapValueToColor(v, min, max, colormap);
         const dimmed =
           selectedIndices && selectedIndices.size > 0 && !selectedIndices.has(i);
         rgba[i * 4] = r;
@@ -346,7 +356,7 @@ export function EmbeddingScatter({
     }
 
     return rgba;
-  }, [colorValues, colorType, categorySlots, opacity, selectedIndices, totalCells, dimToGray, categoricalPalette, continuousColormap]);
+  }, [colorValues, colorType, colorScale, categorySlots, opacity, selectedIndices, totalCells, dimToGray, categoricalPalette, continuousColormap]);
 
   // The cells drawn: all of them, or a seeded sample (sorted) over maxRenderedCells...
   const sample = useMemo(() => sampleCellIndices(totalCells, maxRenderedCells), [totalCells, maxRenderedCells]);

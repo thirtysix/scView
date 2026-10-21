@@ -10,6 +10,7 @@ import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
 import type { MarkersResponse } from "@/api/markers";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
+import { MARKERS_PER_GROUP } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
@@ -345,7 +346,8 @@ export function UnifiedMarkersSubtab({
                 height={220}
               />
               <p className="px-1 text-[10px] leading-snug text-slate-400">
-                Top right: strong and found in this group only. A strong marker low on the plot is
+                One point per marker ({currentMarkers.length.toLocaleString()} of {selectedGroup}&apos;s; the 6 strongest
+                labelled). Top right: strong and found in this group only. A strong marker low on the plot is
                 shared with other groups. Click a point to view the gene.
               </p>
             </div>
@@ -360,12 +362,14 @@ export function UnifiedMarkersSubtab({
             <tr className="border-b border-slate-200 bg-slate-50">
               <th
                 onClick={() => handleSort("gene")}
+                title="Gene symbol; click a row to colour the scatter by its expression"
                 className="cursor-pointer px-2 py-1.5 text-left font-medium text-slate-600 hover:text-slate-800"
               >
                 <span className="flex items-center gap-1">Gene {sortIcon("gene")}</span>
               </th>
               <th
                 onClick={() => handleSort("logfoldchange")}
+                title="log2 fold change of this group's mean expression over all other cells (scanpy rank_genes_groups: expm1 of the mean log-normalised values on each side)"
                 className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
               >
                 <span className="flex items-center justify-end gap-1">LogFC {sortIcon("logfoldchange")}</span>
@@ -465,9 +469,12 @@ export function UnifiedMarkersSubtab({
         </table>
       </div>
 
-      <p className="text-[10px] text-slate-400">
-        Click a gene to view its expression on the scatter plot. Use p-values to rank markers, not as
-        evidence: the clusters were found from these same cells, so markers always test as significant.
+      <p className="text-[10px] text-slate-400" data-testid="markers-caption">
+        {sortedMarkers.length.toLocaleString()} of the group&apos;s top {currentMarkers.length.toLocaleString()} markers by
+        Wilcoxon score (every gene is tested; only the highest-ranked {MARKERS_PER_GROUP} per group are kept)
+        {currentMarkers.length > sortedMarkers.length ? " after the filters" : ""}. Click a gene to view its
+        expression on the scatter plot. Use p-values to rank markers, not as evidence: the clusters were found
+        from these same cells, so markers always test as significant.
       </p>
     </div>
   );

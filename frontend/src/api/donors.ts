@@ -1,5 +1,5 @@
 import { apiFetch } from "./client";
-import type { DonorPoint } from "@/lib/donorPlot";
+import type { DonorPoint, PairedDesign, PairedTest } from "@/lib/donorPlot";
 
 /** mean: mean log-normalised expression over the donor's cells; cpm: log2(CPM + 1) of their summed counts. */
 export type DonorMethod = "mean" | "cpm";
@@ -25,6 +25,10 @@ export interface PerDonorExpression {
   n_dropped: number;
   warnings: string[];
   message: string | null;
+  /** Whether the donors recur across the conditions (the same people before and after). */
+  design: PairedDesign;
+  /** Group -> Wilcoxon signed-rank + paired t over its pairs; only paired with two conditions. */
+  paired_tests: Record<string, PairedTest>;
 }
 
 /** One gene's pseudobulk value per donor (x condition) in each group (core/donor_expression.py). */

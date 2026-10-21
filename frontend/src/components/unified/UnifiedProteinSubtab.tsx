@@ -9,6 +9,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { ColorLegend } from "@/components/plots/ColorLegend";
+import type { ResolvedColorScale } from "@/lib/colorScale";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
 import Plot from "@/components/plots/Plot";
 
@@ -19,7 +20,8 @@ interface UnifiedProteinSubtabProps {
   activeProtein: string | null;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
-  proteinMinMax: { min: number; max: number } | null;
+  /** The active protein's resolved colour scale (diverging when its CLR has both signs) */
+  proteinScale: ResolvedColorScale | null;
 }
 
 /** Points drawn in the protein-vs-RNA scatter (the correlation uses every cell). */
@@ -42,7 +44,7 @@ export function UnifiedProteinSubtab({
   activeProtein,
   groupByColumn,
   setGroupByColumn,
-  proteinMinMax,
+  proteinScale,
 }: UnifiedProteinSubtabProps) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const expressionLayer = useSettingsStore((s) => s.expressionLayer);
@@ -100,12 +102,11 @@ export function UnifiedProteinSubtab({
         </div>
       )}
 
-      {activeProtein && proteinMinMax && (
+      {activeProtein && proteinScale && (
         <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-2.5">
           <ColorLegend
             type="continuous"
-            min={proteinMinMax.min}
-            max={proteinMinMax.max}
+            scale={proteinScale}
             label={`${activeProtein} protein (CLR)`}
           />
         </div>

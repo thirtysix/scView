@@ -37,6 +37,9 @@ type WorkerMessage = WorkerSuccessMessage | WorkerErrorMessage;
 export function useEmbedding() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const embedding = useSettingsStore((s) => s.embedding);
+  const pcaDims = useSettingsStore((s) => s.pcaDims);
+  const nDims = useDatasetStore((s) => s.currentDataset?.embedding_dimensions?.[embedding]);
+  const dims = embeddingDims(embedding, pcaDims, nDims);
   const colorBy = useSettingsStore((s) => s.colorBy);
   const pipelineRunning = useSettingsStore((s) => s.pipelineRunning);
   const ready = useEmbeddingReady(datasetId, embedding);
@@ -68,8 +71,8 @@ export function useEmbedding() {
     isLoading: isFetching,
     error: fetchError,
   } = useQuery({
-    queryKey: ["embedding", datasetId, embedding, colorBy],
-    queryFn: () => fetchEmbeddingBinary(datasetId!, embedding, colorBy || undefined),
+    queryKey: ["embedding", datasetId, embedding, colorBy, dims],
+    queryFn: () => fetchEmbeddingBinary(datasetId!, embedding, colorBy || undefined, dims),
     enabled: ready && !pipelineRunning,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 60 * 1000, // 1 minute — large binary buffers shouldn't linger
@@ -178,6 +181,24 @@ export function useEmbedding() {
     isLoading: isFetching || isDecoding,
     error: fetchError ? String(fetchError) : decodeError,
   };
+}
+
+/** A PCA (or a batch-corrected one: X_pca_harmony) whose column pair can be chosen. */
+export function isPcaEmbedding(name: string): boolean {
+  return /pca/i.test(name);
+}
+
+/** The column pair to ask for: only for a PCA, only when it is not the default
+ *  first two, and only when both columns exist (a dataset with fewer PCs than
+ *  the chosen pair falls back to PC1 vs PC2 instead of a 400). */
+export function embeddingDims(
+  embedding: string,
+  pcaDims: [number, number],
+  nDims: number | undefined,
+): [number, number] | undefined {
+  if (!isPcaEmbedding(embedding) || (pcaDims[0] === 0 && pcaDims[1] === 1)) return undefined;
+  if (nDims === undefined || Math.max(...pcaDims) >= nDims || pcaDims[0] === pcaDims[1]) return undefined;
+  return pcaDims;
 }
 
 /** Same length and the same values (NaN equal to NaN). */

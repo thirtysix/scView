@@ -47,7 +47,7 @@ export function GseaTermsTable({
       <table className="w-full text-xs">
         <thead className="sticky top-0 z-10">
           <tr className="border-b border-slate-200 bg-slate-50">
-            <th onClick={() => onSort("term")} className={`${th} text-left`}>
+            <th onClick={() => onSort("term")} title="Gene set (term) and its collection; click a row to score the set's genes on the scatter" className={`${th} text-left`}>
               <span className="flex items-center gap-1">Term {sortIcon("term")}</span>
             </th>
             <th

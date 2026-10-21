@@ -16,10 +16,10 @@ export function Header() {
             </h1>
             <div className="flex gap-3 text-xs text-slate-500">
               {currentDataset.n_cells != null && (
-                <span>{formatNumber(currentDataset.n_cells)} cells</span>
+                <span title="Cells (rows of obs) in the dataset as stored">{formatNumber(currentDataset.n_cells)} cells</span>
               )}
               {currentDataset.n_genes != null && (
-                <span>{formatNumber(currentDataset.n_genes)} genes</span>
+                <span title="Genes (rows of var) in the dataset's expression matrix">{formatNumber(currentDataset.n_genes)} genes</span>
               )}
               <span
                 className={`rounded-full px-2 py-0.5 text-xs font-medium ${

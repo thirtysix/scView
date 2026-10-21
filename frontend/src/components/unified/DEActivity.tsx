@@ -154,10 +154,21 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
             <table className="w-full">
               <thead className="sticky top-0 z-10 bg-slate-50">
                 <tr className="border-b border-slate-200 text-slate-600">
-                  <th className="px-2 py-1.5 text-left font-medium">{shown.kind === "tf" ? "TF" : "Pathway"}</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Activity</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Adj.P</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Targets</th>
+                  <th className="px-2 py-1.5 text-left font-medium" title={shown.kind === "tf" ? "Transcription factor (CollecTRI)" : "Pathway (PROGENy)"}>
+                    {shown.kind === "tf" ? "TF" : "Pathway"}
+                  </th>
+                  <th
+                    className="px-2 py-1.5 text-right font-medium"
+                    title="ULM activity on the DE statistics: the t-value of the slope of each gene's DE statistic on its weight in the source's network (decoupler's ulm); positive when the activated targets are up"
+                  >
+                    Activity
+                  </th>
+                  <th className="px-2 py-1.5 text-right font-medium" title="Two-sided p of the ULM slope, Benjamini-Hochberg adjusted over the sources scored">
+                    Adj.P
+                  </th>
+                  <th className="px-2 py-1.5 text-right font-medium" title="Targets among the tested genes (at least 5 to be scored)">
+                    Targets
+                  </th>
                 </tr>
               </thead>
               <tbody>

@@ -36,7 +36,9 @@ import re
 from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
-from scview.core import ccc, cluster_qc, composition, merge_check, milo, provenance, qc_filter
+from scview.core import (
+    ccc, cluster_qc, composition, merge_check, milo, pca_diagnostics, provenance, qc_filter,
+)
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -377,6 +379,15 @@ def build_grounding_context(
                 sources.append(ChatSource(kind="result", ref=t, detail=d, evidence="\n".join(ev)))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: cluster QC failed: %s", exc)
+        # The stored PCA: variance per component, elbow, PC1's top loadings.
+        try:
+            pca_lines, pca_detail = pca_diagnostics.grounding_lines(adata)
+            lines.extend(pca_lines)
+            if pca_detail:
+                sources.append(ChatSource(kind="result", ref="result:pca", detail=pca_detail,
+                                          evidence="\n".join(pca_lines[1:])))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: PCA grounding failed: %s", exc)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []

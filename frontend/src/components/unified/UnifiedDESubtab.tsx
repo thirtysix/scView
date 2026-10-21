@@ -20,6 +20,7 @@ import { DEActivity } from "@/components/unified/DEActivity";
 import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
 import { DEMethodsAgreement } from "@/components/unified/DEMethodsAgreement";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
+import { CapNote } from "@/components/common/Caption";
 import { downloadCsv } from "@/lib/csv";
 import { describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
 import { describeSize } from "@/lib/transcriptomeSize";
@@ -45,6 +46,9 @@ import type { ObsColumnInfo } from "@/api/types";
 
 type Mode = DEMode;
 type Test = DETest;
+
+/** Rows of the significant-genes table; the CSV export has every gene. */
+const DE_TABLE_ROWS = 200;
 
 /** Categorical columns with listed values, usable as a group picker. */
 function groupColumns(cols: ObsColumnInfo[] | undefined, maxLevels: number): ObsColumnInfo[] {
@@ -749,19 +753,43 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
           </div>
 
           {/* Top significant genes */}
+          <CapNote
+            shown={DE_TABLE_ROWS}
+            total={sigGenes.length}
+            by={withP ? "adjusted p, then |log2FC|" : "|coefficient|"}
+            rest="the CSV has all"
+          />
           <div className="max-h-72 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-10">
                 <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="px-2 py-1.5 text-left font-medium text-slate-600">Gene</th>
-                  <th className="px-2 py-1.5 text-right font-medium text-slate-600">log2FC</th>
-                  <th className="px-2 py-1.5 text-right font-medium text-slate-600">
+                  <th className="px-2 py-1.5 text-left font-medium text-slate-600" title="Gene symbol; click a row to colour the scatter by its expression">
+                    Gene
+                  </th>
+                  <th
+                    className="px-2 py-1.5 text-right font-medium text-slate-600"
+                    title={
+                      result.method === "pseudobulk"
+                        ? `DESeq2 log2 fold change of the per-donor summed counts, ${result.label} over ${refLabel}`
+                        : `log2 of the mean expression in ${result.label} over ${refLabel} (expm1 of the mean log-normalised values on each side, as scanpy's rank_genes_groups takes it)`
+                    }
+                  >
+                    log2FC
+                  </th>
+                  <th
+                    className="px-2 py-1.5 text-right font-medium text-slate-600"
+                    title={
+                      withP
+                        ? `${methodLabel(result.method)} p-value, Benjamini-Hochberg adjusted over the ${result.genes.length.toLocaleString()} tested genes`
+                        : `Logistic regression coefficient (penalised, fitted jointly over the tested genes): positive when the gene is higher in ${result.label}; no p-value`
+                    }
+                  >
                     {withP ? "Adj.P" : "Coef."}
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {sigGenes.slice(0, 200).map((g) => (
+                {sigGenes.slice(0, DE_TABLE_ROWS).map((g) => (
                   <tr
                     key={g.gene}
                     onClick={() => onGeneClick(g.gene)}

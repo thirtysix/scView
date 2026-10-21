@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useUnifiedViewStore, type BottomView } from "@/stores/unifiedViewStore";
 import { ViolinPlot } from "@/components/plots/ViolinPlot";
+import { Caption } from "@/components/common/Caption";
 import { ClusterDistanceHeatmap } from "@/components/unified/ClusterDistanceHeatmap";
 import { PerDonorExpression } from "@/components/unified/PerDonorExpression";
 import { SelectionHistogram } from "@/components/unified/SelectionHistogram";
@@ -145,14 +146,26 @@ export function UnifiedBottomPanel({
               groupColumn={violinGroupColumn}
             />
           ) : hasData ? (
-            <ViolinPlot
-              data={violinData}
-              groupColumn={violinGroupColumn}
-              title={violinTitle}
-              xLabel={violinGroupLabel}
-              yLabel="Value"
-              height={220}
-            />
+            <>
+              <ViolinPlot
+                data={violinData}
+                groupColumn={violinGroupColumn}
+                title={violinTitle}
+                xLabel={violinGroupLabel}
+                yLabel="Value"
+                height={220}
+              />
+              <Caption
+                testId="violin-caption"
+                className="px-1"
+                n={[
+                  { value: Object.values(violinData).reduce((s, v) => s + v.length, 0), unit: "cells" },
+                  { value: Object.keys(violinData).length, unit: "groups" },
+                ]}
+              >
+                {violinTitle ?? "Values"} per {violinGroupLabel ?? violinGroupColumn}: one violin per group.
+              </Caption>
+            </>
           ) : (
             <div className="flex items-center justify-center py-8 text-xs text-slate-400">
               {isLoading

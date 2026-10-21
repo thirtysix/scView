@@ -124,6 +124,14 @@ describe("cellHeatmapFigure", () => {
     expect(v).toMatchObject({ zmin: 0, zmax: 5, colorscale: SEQ });
     expect(v.zmid).toBeUndefined();
   });
+
+  it("draws z-scores with the diverging map it is given (the settings' choice), still centred at 0", () => {
+    const PUOR: [number, string][] = [[0, "#2d004b"], [0.5, "#f7f7f7"], [1, "#7f3b08"]];
+    const z = (cellHeatmapFigure(data, [], SEQ, PUOR) as unknown as Fig).data[0]!;
+    expect(z).toMatchObject({ zmid: 0, colorscale: PUOR });
+    const none = { ...data, meta: { ...data.meta, scale: "none" as const, value_range: [0, 5] as [number, number] } };
+    expect((cellHeatmapFigure(none, [], SEQ, PUOR) as unknown as Fig).data[0]!.colorscale).toEqual(SEQ);
+  });
 });
 
 describe("cellHeatmapCaption", () => {

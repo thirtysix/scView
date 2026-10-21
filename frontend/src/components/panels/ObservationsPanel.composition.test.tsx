@@ -128,3 +128,14 @@ describe("ObservationsPanel composition bars", () => {
     expect(screen.getByRole("img").getAttribute("aria-label")).toBe("cluster B by Donor: d1 25%, d2 25%, d10 50%");
   });
 });
+
+describe("ObservationsPanel batch-mixing score", () => {
+  it("pairs the score with a word and says how it was computed", async () => {
+    render(<ObservationsPanel />);
+    await waitFor(() => expect(traces()).toHaveLength(3));
+    // B: 10/20/10 and CD14 Mono: 30/10/20 across three donors, entropy / log(3), weighted by cells.
+    const score = screen.getByText("0.93");
+    expect(score.getAttribute("title")).toMatch(/^Shannon entropy of each cluster group's Donor composition, divided by log\(number of Donor groups\)/);
+    expect(screen.getByTestId("mixing-word")).toHaveTextContent("well mixed");
+  });
+});

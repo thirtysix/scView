@@ -384,9 +384,9 @@ function CompositionCompare() {
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-left text-slate-600">
                   <th className="px-4 py-2 font-medium">{prettyObsLabel(column)}</th>
-                  <th className="px-4 py-2 text-right font-medium">A %</th>
-                  <th className="px-4 py-2 text-right font-medium">B %</th>
-                  <th className="px-4 py-2 text-right font-medium">Δ (B − A)</th>
+                  <th className="px-4 py-2 text-right font-medium" title="Share of dataset A's cells with this value">A %</th>
+                  <th className="px-4 py-2 text-right font-medium" title="Share of dataset B's cells with this value">B %</th>
+                  <th className="px-4 py-2 text-right font-medium" title="Difference in percentage points, B minus A">Δ (B − A)</th>
                 </tr>
               </thead>
               <tbody>

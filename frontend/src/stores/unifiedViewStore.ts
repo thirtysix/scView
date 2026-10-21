@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { LabelChoice } from "@/lib/centroidLabels";
 import type { UnifiedSubtab } from "@/lib/constants";
+import type { ClipSetting } from "@/lib/colorScale";
 import type { Camera, SessionOverlay } from "@/lib/session";
 
 type ScatterOverlay =
@@ -40,6 +41,10 @@ interface UnifiedViewState {
   setOverlayLabel: (label: string) => void;
   overlayDatasetId: string | null;
   setOverlayDatasetId: (id: string | null) => void;
+  // This view's colour-range clipping, over the settings default (null = the
+  // default); saved with the session, dropped with the overlay on a dataset switch.
+  colorClip: ClipSetting | null;
+  setColorClip: (clip: ClipSetting | null) => void;
 
   // Violin payload (set alongside the overlay) — persisted for the same reason
   violinData: Record<string, number[]>;
@@ -105,6 +110,8 @@ export const useUnifiedViewStore = create<UnifiedViewState>((set) => ({
   setOverlayLabel: (label) => set({ overlayLabel: label }),
   overlayDatasetId: null,
   setOverlayDatasetId: (id) => set({ overlayDatasetId: id }),
+  colorClip: null,
+  setColorClip: (clip) => set({ colorClip: clip }),
 
   violinData: {},
   setViolinData: (data) => set({ violinData: data }),
@@ -117,6 +124,7 @@ export const useUnifiedViewStore = create<UnifiedViewState>((set) => ({
       overlayValues: null,
       overlayLabel: "",
       overlayDatasetId: null,
+      colorClip: null,
       violinData: {},
       violinTitle: "",
     }),

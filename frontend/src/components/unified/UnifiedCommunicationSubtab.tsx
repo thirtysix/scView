@@ -373,7 +373,9 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
           <div>
             <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
               <span>
-                {filtered.length.toLocaleString()} rows
+                {filtered.length > TABLE_LIMIT
+                  ? `Top ${TABLE_LIMIT} of ${filtered.length.toLocaleString()} rows by ${COLUMNS.find((c) => c.key === sort.key)?.label ?? sort.key}`
+                  : `${filtered.length.toLocaleString()} rows`}
                 {result.rows_shown < result.n_rows &&
                   ` (from the ${result.rows_shown.toLocaleString()} strongest of ${result.n_rows.toLocaleString()}; the CSV has all)`}
               </span>

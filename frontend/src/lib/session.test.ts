@@ -34,6 +34,7 @@ const full: SessionFile = {
     camera: { target: [1.5, -2, 0], zoom: 3.25 },
     highlight: { column: "cell_type", value: "CD14 Mono" },
     overlay: { type: "score", name: "HALLMARK_INTERFERON_ALPHA_RESPONSE", genes: ["ISG15", "IFI6"] },
+    color_clip: { preset: "manual", min: 0, max: 2.5 },
   },
   selection: {
     filter: {
@@ -61,6 +62,9 @@ const full: SessionFile = {
   colors: {
     categorical_palette: "tableau20",
     continuous_colormap: "magma",
+    diverging_colormap: "PuOr",
+    signed_colormap_mode: "diverging",
+    clip: { preset: "p1" },
     point_size: 3,
     opacity: 0.6,
     background: "dark",
@@ -78,6 +82,27 @@ const json = (x: unknown) => JSON.parse(JSON.stringify(x));
 describe("parseSession", () => {
   it("reads back every field of a saved session", () => {
     expect(parseSession(json(full))).toEqual(full);
+  });
+
+  it("checks the colour-range clipping, dropping a manual pair's ends off a preset", () => {
+    const bad = json(full);
+    bad.view.color_clip = { preset: "p3" };
+    expect(() => parseSession(bad)).toThrow(/view\.color_clip\.preset/);
+    bad.view.color_clip = { preset: "manual", min: "0" };
+    expect(() => parseSession(bad)).toThrow(/view\.color_clip\.min/);
+    bad.view.color_clip = { preset: "p5", min: 0, max: 1 };
+    expect(parseSession(bad).view!.color_clip).toEqual({ preset: "p5" });
+    bad.colors.diverging_colormap = "viridis";
+    expect(() => parseSession(bad)).toThrow(/colors\.diverging_colormap/);
+    // a session saved before clipping and diverging maps still loads
+    const old = json(full);
+    delete old.view.color_clip;
+    delete old.colors.diverging_colormap;
+    delete old.colors.signed_colormap_mode;
+    delete old.colors.clip;
+    const parsed = parseSession(old);
+    expect(parsed.view!.color_clip).toBeUndefined();
+    expect(parsed.colors!.clip).toBeUndefined();
   });
 
   it("ignores fields it does not know and accepts a partial session", () => {

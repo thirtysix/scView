@@ -7,7 +7,7 @@
  * rendering keeps preserveDrawingBuffer off. Layout is split from drawing so it
  * can be tested without a 2D canvas (jsdom has none).
  */
-import { colormapColor, type ColormapName } from "@/lib/colors";
+import { colormapColor, type AnyColormapName } from "@/lib/colors";
 
 export type ScatterLegend =
   | {
@@ -16,7 +16,9 @@ export type ScatterLegend =
       categories: string[];
       colors: [number, number, number][];
     }
-  | { type: "continuous"; title?: string; min: number; max: number };
+  // colormap: the one this legend was drawn with (a diverging map for signed
+  // scores), over the sequential default; centre: its labelled midpoint (0).
+  | { type: "continuous"; title?: string; min: number; max: number; colormap?: AnyColormapName; centre?: number | null };
 
 /** Render the capture at this multiple of the on-screen size... */
 export const SCATTER_PNG_SCALE = 3;
@@ -57,8 +59,17 @@ export interface LegendLayout {
   /** Categorical: one entry per drawn row, labels truncated. A null colour is
    *  the "+N more" line for categories left out. */
   entries: { label: string; color: [number, number, number] | null; x: number; y: number }[];
-  /** Continuous: the colour bar's box and its end labels */
-  bar: { x: number; y: number; h: number; maxLabel: string; minLabel: string } | null;
+  /** Continuous: the colour bar's box, its end labels, a midpoint label (a
+   *  diverging scale's 0) and the map it is drawn with (null: the default) */
+  bar: {
+    x: number;
+    y: number;
+    h: number;
+    maxLabel: string;
+    minLabel: string;
+    midLabel: string | null;
+    colormap: AnyColormapName | null;
+  } | null;
 }
 
 function truncate(label: string): string {
@@ -83,13 +94,14 @@ export function legendLayout(legend: ScatterLegend, plotHeight: number, measure:
     const h = Math.max(60, Math.min(BAR_MAX_H, plotHeight - top - PAD));
     const maxLabel = fmtValue(legend.max);
     const minLabel = fmtValue(legend.min);
-    const labelW = Math.max(measure(maxLabel, LEGEND_FONT), measure(minLabel, LEGEND_FONT));
+    const midLabel = legend.centre != null ? fmtValue(legend.centre) : null;
+    const labelW = Math.max(measure(maxLabel, LEGEND_FONT), measure(minLabel, LEGEND_FONT), midLabel ? measure(midLabel, LEGEND_FONT) : 0);
     return {
       width: PAD * 2 + Math.max(titleW, BAR_W + GAP + labelW),
       height: top + h + PAD,
       title,
       entries: [],
-      bar: { x: PAD, y: top, h, maxLabel, minLabel },
+      bar: { x: PAD, y: top, h, maxLabel, minLabel, midLabel, colormap: legend.colormap ?? null },
     };
   }
 
@@ -149,7 +161,7 @@ export function composeScatterPng(
   source: HTMLCanvasElement,
   legend: ScatterLegends,
   scale: number,
-  colormap: ColormapName,
+  colormap: AnyColormapName,
   note?: string,
 ): HTMLCanvasElement {
   const out = document.createElement("canvas");
@@ -185,7 +197,7 @@ export function composeScatterPng(
   return out;
 }
 
-function drawLegend(ctx: CanvasRenderingContext2D, layout: LegendLayout, colormap: ColormapName): void {
+function drawLegend(ctx: CanvasRenderingContext2D, layout: LegendLayout, colormap: AnyColormapName): void {
   if (layout.title) {
     ctx.font = LEGEND_TITLE_FONT;
     ctx.fillStyle = "#334155";
@@ -203,16 +215,18 @@ function drawLegend(ctx: CanvasRenderingContext2D, layout: LegendLayout, colorma
     ctx.fillText(e.label, e.x + SWATCH + GAP, e.y + ROW_H / 2);
   }
   if (layout.bar) {
-    const { x, y, h, maxLabel, minLabel } = layout.bar;
+    const { x, y, h, maxLabel, minLabel, midLabel } = layout.bar;
+    const map = layout.bar.colormap ?? colormap;
     const grad = ctx.createLinearGradient(0, y + h, 0, y);
     for (let i = 0; i <= 32; i++) {
-      const [r, g, b] = colormapColor(colormap, i / 32);
+      const [r, g, b] = colormapColor(map, i / 32);
       grad.addColorStop(i / 32, `rgb(${r},${g},${b})`);
     }
     ctx.fillStyle = grad;
     ctx.fillRect(x, y, BAR_W, h);
     ctx.fillStyle = "#334155";
     ctx.fillText(maxLabel, x + BAR_W + GAP, y + 6);
+    if (midLabel !== null) ctx.fillText(midLabel, x + BAR_W + GAP, y + h / 2);
     ctx.fillText(minLabel, x + BAR_W + GAP, y + h - 6);
   }
 }
@@ -236,7 +250,7 @@ export function downloadDeckPng(
   deck: CapturableDeck,
   opts: {
     legend: ScatterLegends;
-    colormap: ColormapName;
+    colormap: AnyColormapName;
     filename: string;
     note?: string;
     wantedScale?: number;

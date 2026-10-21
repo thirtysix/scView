@@ -21,7 +21,7 @@ const renderTab = (activeGene: string | null) =>
       activeGene={activeGene}
       groupByColumn=""
       setGroupByColumn={vi.fn()}
-      expressionMinMax={null}
+      expressionScale={null}
     />,
   );
 

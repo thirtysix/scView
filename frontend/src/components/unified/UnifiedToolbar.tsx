@@ -1,6 +1,7 @@
 import { useSettingsStore } from "@/stores/settingsStore";
-import { CATEGORICAL_PALETTE_OPTIONS, COLORMAP_OPTIONS } from "@/lib/colors";
-import type { CategoricalPaletteName, ColormapName } from "@/lib/colors";
+import { CATEGORICAL_PALETTE_OPTIONS, COLORMAP_OPTIONS, DIVERGING_COLORMAP_OPTIONS } from "@/lib/colors";
+import type { CategoricalPaletteName, ColormapName, DivergingColormapName } from "@/lib/colors";
+import { CLIP_PRESET_OPTIONS, SIGNED_MODE_OPTIONS, type ClipPreset, type SignedColormapMode } from "@/lib/colorScale";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { isGridActive, useSplitViewStore } from "@/stores/splitViewStore";
@@ -14,6 +15,7 @@ import { CellFilterControl } from "@/components/unified/CellFilter";
 import { describeFilter } from "@/lib/cellFilter";
 import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 import { HvgSensitivityControl } from "@/components/unified/HvgSensitivity";
+import { PcPairChooser } from "@/components/unified/PcPairChooser";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -39,6 +41,12 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
   const setCategoricalPalette = useSettingsStore((s) => s.setCategoricalPalette);
   const continuousColormap = useSettingsStore((s) => s.continuousColormap);
   const setContinuousColormap = useSettingsStore((s) => s.setContinuousColormap);
+  const divergingColormap = useSettingsStore((s) => s.divergingColormap);
+  const setDivergingColormap = useSettingsStore((s) => s.setDivergingColormap);
+  const signedColormapMode = useSettingsStore((s) => s.signedColormapMode);
+  const setSignedColormapMode = useSettingsStore((s) => s.setSignedColormapMode);
+  const colorClip = useSettingsStore((s) => s.colorClip);
+  const setColorClip = useSettingsStore((s) => s.setColorClip);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const setMaxRenderedCells = useSettingsStore((s) => s.setMaxRenderedCells);
 
@@ -93,6 +101,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             );
           })}
         </select>
+        <PcPairChooser />
       </div>
 
       <div className="h-4 w-px bg-slate-200" />
@@ -199,7 +208,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
       </div>
 
       {/* Colour schemes */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         <label className="text-[11px] font-medium text-slate-500">Colours</label>
         <label htmlFor="palette-categorical" className="text-[10px] text-slate-500">
           Categories
@@ -233,6 +242,61 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             </option>
           ))}
         </select>
+        <label
+          htmlFor="palette-diverging"
+          className="text-[10px] text-slate-500"
+          title="Map for signed values (gene-set, activity, cell-cycle and stress scores, protein CLR): white at 0, one hue each side, the range symmetric about 0"
+        >
+          Signed
+        </label>
+        <select
+          id="palette-diverging"
+          aria-label="Diverging colour map"
+          value={divergingColormap}
+          onChange={(e) => setDivergingColormap(e.target.value as DivergingColormapName)}
+          className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700 focus:border-blue-400 focus:outline-none"
+        >
+          {DIVERGING_COLORMAP_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="When to use the diverging map"
+          value={signedColormapMode}
+          onChange={(e) => setSignedColormapMode(e.target.value as SignedColormapMode)}
+          title={SIGNED_MODE_OPTIONS.find((o) => o.value === signedColormapMode)?.title}
+          className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700 focus:border-blue-400 focus:outline-none"
+        >
+          {SIGNED_MODE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value} title={o.title}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <span className="flex items-center gap-1.5">
+        <label
+          htmlFor="colour-clip-default"
+          className="text-[10px] text-slate-500"
+          title="Default clipping of the colour range: cells beyond these percentiles take the end colours, so a few extreme cells do not wash out the rest. The legend can override it for one view."
+        >
+          Clip
+        </label>
+        <select
+          id="colour-clip-default"
+          aria-label="Default colour range clipping"
+          value={colorClip.preset === "manual" ? "none" : colorClip.preset}
+          onChange={(e) => setColorClip({ preset: e.target.value as ClipPreset })}
+          className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700 focus:border-blue-400 focus:outline-none"
+        >
+          {CLIP_PRESET_OPTIONS.filter((o) => o.value !== "manual").map((o) => (
+            <option key={o.value} value={o.value} title={o.title}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        </span>
       </div>
 
       {/* Max rendered cells */}

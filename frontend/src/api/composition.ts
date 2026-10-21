@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import type { PairedDesign, PairedTest } from "@/lib/donorPlot";
 
 export interface CompositionRequest {
   condition_key: string;
@@ -29,6 +30,8 @@ export interface CompositionGroup {
   fdr: number | null;
   /** This group's prior df; smaller for an outlying variance (robust). null: infinite. */
   df_prior: number | null;
+  /** Wilcoxon signed-rank + paired t on the raw shares (%) of the donors in both conditions; null unless paired with two. */
+  paired_test: PairedTest | null;
 }
 
 export interface CompositionSample {
@@ -68,6 +71,8 @@ export interface CompositionResult {
   warnings: string[];
   notes: string[];
   dropped_samples: string[];
+  /** Whether any donor occurs in more than one condition, and how many are in all. */
+  pairing: PairedDesign;
 }
 
 /**

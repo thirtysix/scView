@@ -14,6 +14,19 @@ router = APIRouter()
 ARROW_CONTENT_TYPE = "application/vnd.apache.arrow.stream"
 
 
+def parse_dims(dims: str, n_cols: int) -> list[int]:
+    """Two distinct 0-based column indices from ``"i,j"``, each under ``n_cols``."""
+    try:
+        idx = [int(p) for p in dims.split(",")]
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"dims must be two integers like '0,1', not '{dims}'.")
+    if len(idx) != 2 or idx[0] == idx[1] or any(i < 0 or i >= n_cols for i in idx):
+        raise HTTPException(
+            status_code=400,
+            detail=f"dims must name two different columns between 0 and {n_cols - 1}, not '{dims}'.")
+    return idx
+
+
 @router.get("/datasets/{dataset_id}/embeddings")
 async def list_embeddings(
     dataset_id: str,
@@ -30,11 +43,13 @@ async def get_embedding(
     dataset_id: str,
     name: str,
     color_by: str = Query(default="", description="Obs column to use for coloring"),
+    dims: str = Query(default="", description="Two 0-based columns to serve as x,y (e.g. '2,3'); default the first two"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Return embedding coordinates as Arrow IPC binary.
 
-    Optionally includes a color column from obs metadata.
+    Optionally includes a color column from obs metadata. ``dims`` picks which two
+    columns of a many-column embedding (a PCA) become x and y.
     """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
@@ -44,6 +59,8 @@ async def get_embedding(
         coords = adaptor.get_embedding(name)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    if dims:
+        coords = coords[:, parse_dims(dims, coords.shape[1])]
 
     color_values = None
     if color_by:

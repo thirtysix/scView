@@ -49,6 +49,9 @@ export function useSessionRestore() {
   const embedding = useSettingsStore((s) => s.embedding);
   const categoricalPalette = useSettingsStore((s) => s.categoricalPalette);
   const continuousColormap = useSettingsStore((s) => s.continuousColormap);
+  const divergingColormap = useSettingsStore((s) => s.divergingColormap);
+  const signedColormapMode = useSettingsStore((s) => s.signedColormapMode);
+  const colorClip = useSettingsStore((s) => s.colorClip);
   useEffect(() => {
     if (!restored.current) return;
     const snap: SessionFile = {
@@ -56,12 +59,18 @@ export function useSessionRestore() {
       version: SESSION_VERSION,
       ...(datasetId ? { dataset: { id: datasetId } } : {}),
       view: { panel: activePanel, color_by: colorBy, color_by_chosen: colorByChosen, embedding },
-      colors: { categorical_palette: categoricalPalette, continuous_colormap: continuousColormap },
+      colors: {
+        categorical_palette: categoricalPalette,
+        continuous_colormap: continuousColormap,
+        diverging_colormap: divergingColormap,
+        signed_colormap_mode: signedColormapMode,
+        clip: colorClip,
+      },
     };
     try {
       localStorage.setItem(KEY, JSON.stringify(snap));
     } catch {
       /* storage unavailable — non-fatal */
     }
-  }, [datasetId, activePanel, colorBy, colorByChosen, embedding, categoricalPalette, continuousColormap]);
+  }, [datasetId, activePanel, colorBy, colorByChosen, embedding, categoricalPalette, continuousColormap, divergingColormap, signedColormapMode, colorClip]);
 }

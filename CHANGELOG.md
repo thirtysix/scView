@@ -6,6 +6,37 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-21
+
+### Added
+- **PCA diagnostics (Data Assessment → PCA).** Each component's share of the variance with the
+  cumulative curve, an elbow (Kneedle: the PC farthest below the chord of the scree curve), the
+  number of PCs reaching 90% of the retained variance, the number of PCs the neighbour graph used,
+  and the top loading genes of any PC; click a gene to colour the scatter by it. The scatter can
+  show any pair of principal components (x/y chooser next to the embedding selector;
+  `GET /embeddings/{name}?dims=i,j`). The co-pilot cites the result as `[result:pca]`.
+- **Paired designs in per-donor plots.** When the same donors appear in several conditions, the
+  violin's "Per donor" mode and the composition test's per-sample plot draw a slope chart: a line
+  per donor, the mean per condition, and with two conditions a Wilcoxon signed-rank and a paired
+  t-test per group (descriptive under 5 pairs). More conditions draw each donor's trajectory. The
+  composition caption says whether the moderated test blocked on the donor. Boxes stay a toggle
+  away. `GET /expression/per-donor` returns `design` and `paired_tests`; `POST /composition/test`
+  returns `pairing` and `groups[].paired_test`.
+- **Diverging colour maps for signed overlays.** Gene-set, TF/pathway activity, cell-cycle and
+  stress scores and protein CLR values draw on a map centred on 0 (blue-white-red by default;
+  purple-orange and brown-teal available), the legend marks 0, and the per-cell heatmap's
+  z-scores follow the same map. "Auto / Sequential / Diverging" in the toolbar overrides the rule.
+- **Colour-range clipping.** None, 1-99%, 2-98%, 5-95% or a manual min and max, as a toolbar
+  default or per view from the legend. The legend states the range, the clipping and the share of
+  cells beyond it. Saved with sessions.
+- **Honest tables and captions.** Every table column header has a tooltip saying what the number
+  is and how it was computed (markers, DE, enrichment, GSEA, activity, communication, Milo,
+  sample / cluster / pseudobulk QC, joint summary, co-expression, doublets). Capped tables say so
+  ("Top 200 of 2,311 by adjusted p; the CSV has all"), the Markers tab says it shows each group's
+  top 100 by Wilcoxon score, and QC histograms, violins, the specificity plot and the stacked
+  violin state their n. The batch-mixing score explains its formula and pairs its colour with a
+  word.
+
 ## [0.26.0] - 2026-10-21
 
 ### Added

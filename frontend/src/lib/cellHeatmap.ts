@@ -120,12 +120,14 @@ const MARGIN = { l: 90, r: 20, t: 30, b: 90 };
  * (columns), a strip of group colours on its own y axis above, a white line
  * at each group boundary and the group names centred under their cells.
  * `groupColors` is in meta.groups order; `sequential` is the colourscale for
- * scale "none" (z-scores use the diverging one, centred at 0).
+ * scale "none", `diverging` the one for z-scores (centred at 0; the settings'
+ * diverging map, else blue-white-red).
  */
 export function cellHeatmapFigure(
   data: HeatmapCells,
   groupColors: readonly string[],
   sequential: [number, string][],
+  diverging: [number, string][] = DIVERGING_COLORSCALE,
 ): { data: object[]; layout: Record<string, unknown> } {
   const { meta, codes, values } = data;
   const nCells = codes.length;
@@ -160,7 +162,7 @@ export function cellHeatmapFigure(
     zmin: lo,
     zmax: hi > lo ? hi : lo + 1,
     ...(zscore ? { zmid: 0 } : {}),
-    colorscale: zscore ? DIVERGING_COLORSCALE : sequential,
+    colorscale: zscore ? diverging : sequential,
     colorbar: {
       title: { text: zscore ? `z-score<br>(clipped ±${ZSCORE_CLIP})` : "Expression" },
       thickness: 12,

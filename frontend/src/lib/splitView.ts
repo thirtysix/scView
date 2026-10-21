@@ -12,8 +12,8 @@ import { rankGroupingColumns } from "@/lib/obsColumns";
 import {
   mapCategoryToColor,
   mapValueToColor,
+  type AnyColormapName,
   type CategoricalPaletteName,
-  type ColormapName,
 } from "@/lib/colors";
 import {
   LEGEND_FONT,
@@ -255,7 +255,7 @@ export interface PanelColorOptions {
   palette?: CategoricalPaletteName;
   /** Palette slot per category code (the column's `color_slots`). */
   slots?: readonly number[];
-  colormap?: ColormapName;
+  colormap?: AnyColormapName;
 }
 
 /**
@@ -475,7 +475,7 @@ export function downloadSplitPng(
     /** Each panel's title; a number count is shown as "N cells" */
     panels: { label: string; count: number | string }[];
     legend: ScatterLegends;
-    colormap: ColormapName;
+    colormap: AnyColormapName;
     filename: string;
     note?: string;
   },

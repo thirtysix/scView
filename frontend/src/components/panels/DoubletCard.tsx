@@ -238,9 +238,9 @@ export function DoubletCard({
             <thead>
               <tr className="text-left text-slate-400">
                 <th className="font-medium">{summary.suggestion.column}</th>
-                <th className="text-right font-medium">Cells</th>
-                <th className="text-right font-medium">Called</th>
-                <th className="text-right font-medium">Share</th>
+                <th className="text-right font-medium" title="Cells in the sample">Cells</th>
+                <th className="text-right font-medium" title="Cells called doublets: Scrublet score above the threshold">Called</th>
+                <th className="text-right font-medium" title="Called doublets as a share of the sample's cells">Share</th>
                 <th className="text-right font-medium" title="Rule of thumb: ~0.8 % per 1,000 cells">
                   Expected
                 </th>

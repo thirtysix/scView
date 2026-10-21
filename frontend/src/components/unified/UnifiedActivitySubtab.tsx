@@ -3,6 +3,7 @@ import { Loader2, Search } from "lucide-react";
 import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import { InfoTip } from "@/components/common/InfoTip";
+import { CapNote } from "@/components/common/Caption";
 import { useDatasetStore } from "@/stores/datasetStore";
 import {
   getActivityCells,
@@ -104,7 +105,8 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
   );
 
   const rows = useMemo(() => (summary ? sourceRows(summary) : []), [summary]);
-  const listed = useMemo(() => filterRows(rows, query).slice(0, LIST_LIMIT), [rows, query]);
+  const matching = useMemo(() => filterRows(rows, query), [rows, query]);
+  const listed = useMemo(() => matching.slice(0, LIST_LIMIT), [matching]);
   const heat = useMemo(
     () => (summary ? heatmapData(summary, network === "progeny" ? summary.sources.length : topN) : null),
     [summary, network, topN],
@@ -232,15 +234,34 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
                 className="w-full rounded border border-slate-300 py-1.5 pl-7 pr-2 text-xs"
               />
             </div>
+            <CapNote
+              shown={LIST_LIMIT}
+              total={matching.length}
+              by={summary.mean ? "spread of the group means" : "name"}
+              rest="search to find the others"
+              className="mb-1"
+            />
             <div className="max-h-72 overflow-auto rounded-lg border border-slate-200">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-slate-50">
                   <tr className="border-b border-slate-200 text-slate-600">
-                    <th className="px-2 py-1.5 text-left font-medium">{network === "collectri" ? "TF" : "Pathway"}</th>
-                    <th className="px-2 py-1.5 text-right font-medium" title="Targets among the measured genes">
+                    <th
+                      className="px-2 py-1.5 text-left font-medium"
+                      title={`${network === "collectri" ? "Transcription factor (CollecTRI)" : "Pathway (PROGENy)"}; click a row to colour the cells by its ULM activity`}
+                    >
+                      {network === "collectri" ? "TF" : "Pathway"}
+                    </th>
+                    <th className="px-2 py-1.5 text-right font-medium" title="Targets among the measured genes (at least 5 to be scored)">
                       Targets
                     </th>
-                    {summary.mean && <th className="px-2 py-1.5 text-left font-medium">Highest in</th>}
+                    {summary.mean && (
+                      <th
+                        className="px-2 py-1.5 text-left font-medium"
+                        title="The group with the highest mean activity (ULM t-value averaged over its cells), and that mean"
+                      >
+                        Highest in
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>

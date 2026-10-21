@@ -18,9 +18,18 @@ export function AssociationTable({ data }: { data: Result }) {
     <table className="w-full text-[11px]" aria-label="PC-covariate association">
       <thead>
         <tr className="text-left text-slate-400">
-          <th className="font-medium">Covariate ({data.profiles.length} profiles)</th>
+          <th
+            className="font-medium"
+            title="Sample-level covariates: obs columns constant within each pseudobulk profile, the profile's cells and library size, and the sex inferred from expression"
+          >
+            Covariate ({data.profiles.length} profiles)
+          </th>
           {Array.from({ length: nPcs }, (_, i) => (
-            <th key={i} className="px-1 text-right font-medium">
+            <th
+              key={i}
+              className="px-1 text-right font-medium"
+              title={`PC${i + 1} of the log2(CPM + 1) pseudobulk profiles (its share of the variance in brackets). Cells: R² of the covariate against the PC scores, one-way ANOVA eta² for a categorical one, Spearman rho² for a numeric one; * = p < 0.05`}
+            >
               {pcLabel(i + 1, data.explained_variance)}
             </th>
           ))}
