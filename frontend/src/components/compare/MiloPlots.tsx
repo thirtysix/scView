@@ -3,7 +3,7 @@ import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import type { MiloResult } from "@/api/milo";
 import { DIVERGING_COLORSCALE } from "@/lib/cellHeatmap";
-import { formatPValue } from "@/lib/formatting";
+import { formatPValue, prettyObsLabel } from "@/lib/formatting";
 import {
   beeswarmOffsets,
   edgeSegments,
@@ -90,7 +90,7 @@ export function MiloBeeswarm({ result, rows, datasetName, onPick }: PlotProps) {
         height,
         margin: { t: 34, r: 16, b: 48, l: 150 },
         title: {
-          text: `Neighbourhoods by ${result.label_key ?? "label"}: ${result.conditions[1]} vs ${result.conditions[0]}`,
+          text: `Neighbourhoods by ${result.label_key ? prettyObsLabel(result.label_key) : "label"}: ${result.conditions[1]} vs ${result.conditions[0]}`,
           font: { size: 13, color: "#334155" },
         },
         xaxis: {
@@ -100,6 +100,7 @@ export function MiloBeeswarm({ result, rows, datasetName, onPick }: PlotProps) {
         yaxis: {
           tickmode: "array", tickvals: labels.map((_, i) => i), ticktext: labels,
           range: [-0.6, labels.length - 0.4], gridcolor: "#f1f5f9", automargin: true,
+          zeroline: false,
         },
         showlegend: false,
         hovermode: "closest",
