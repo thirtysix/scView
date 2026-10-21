@@ -299,8 +299,12 @@ class RunControl:
     """What a pipeline run checks between steps: cancel and ``before_step``."""
 
     def __init__(self, watchdog: RunWatchdog | None = None,
-                 before_step: BeforeStep | None | object = _DEFAULT) -> None:
+                 before_step: BeforeStep | None | object = _DEFAULT,
+                 plan: tuple[list[str], Any] | None = None) -> None:
         self.watchdog = watchdog if watchdog is not None else RunWatchdog()
+        # (steps, PipelineParams) the run will make: before it starts, core/processing.py
+        # closes other open datasets whose memory its estimated peak needs.
+        self.plan = plan
         # Looked up now, so a check plugged into default_before_step applies.
         self.before_step = default_before_step if before_step is _DEFAULT else before_step
         self._cancel = threading.Event()

@@ -172,10 +172,33 @@ class DatasetManager:
             dropped += 1
         return dropped
 
+    async def free_memory_for(self, need: int, keep: str) -> int | None:
+        """Drop cached datasets other than ``keep``, least recently used first, freeing
+        each for real, until ``need`` bytes (with ``LOAD_MARGIN``) fit in the memory
+        left under the container limit. Returns the bytes free after, or None when
+        there is no container limit (nothing is dropped then)."""
+        budget = memory_budget.read_budget()
+        if not budget.limited or budget.limit_bytes is None or budget.used_bytes is None:
+            return None
+
+        def free() -> int:
+            return budget.limit_bytes - budget.used_bytes
+
+        if need <= 0 or free() >= need * LOAD_MARGIN:
+            return free()
+        await asyncio.to_thread(memory_budget.release_memory)  # earlier drops may await collection
+        budget = memory_budget.read_budget()
+        for victim in self._evictable(keep):
+            if free() >= need * LOAD_MARGIN:
+                break
+            self._drop(victim)
+            await asyncio.to_thread(memory_budget.release_memory)
+            budget = memory_budget.read_budget()
+        return free()
+
     async def _make_memory_room(self, dataset_id: str, path: str) -> None:
-        """Before opening ``path``: drop cached datasets, least recently used first,
-        until its estimated load peak (``preflight``, from the file header) fits in
-        the memory left under the container limit, freeing each one for real.
+        """Before opening ``path``: make room for its estimated load peak
+        (``preflight``, from the file header) with ``free_memory_for``.
 
         Three cached datasets fit on a big machine and not under a small limit: on
         a 6 GB backend holding ovary (3.2 GB, dense counts) and pbmc, opening Kang
@@ -191,24 +214,9 @@ class DatasetManager:
             logger.warning("No load estimate for %s: %s", path, e)
             return
         need = int(est.peak_bytes)
-        budget = memory_budget.read_budget()
-        if not budget.limited or budget.limit_bytes is None or budget.used_bytes is None or need <= 0:
-            return
-
-        def free() -> int:
-            return budget.limit_bytes - budget.used_bytes
-
-        if free() < need * LOAD_MARGIN:  # earlier evictions may still await collection
-            await asyncio.to_thread(memory_budget.release_memory)
-            budget = memory_budget.read_budget()
-        for victim in self._evictable(dataset_id):
-            if free() >= need * LOAD_MARGIN:
-                break
-            self._drop(victim)
-            await asyncio.to_thread(memory_budget.release_memory)
-            budget = memory_budget.read_budget()
-        if need * (1 - preflight.ERROR_BAND) > free():
-            raise DatasetMemoryError(dataset_id, need, max(0, free()), budget.limit_bytes)
+        free = await self.free_memory_for(need, keep=dataset_id)
+        if free is not None and need * (1 - preflight.ERROR_BAND) > free:
+            raise DatasetMemoryError(dataset_id, need, max(0, free), memory_budget.read_budget().limit_bytes)
 
     def get_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
         return self._datasets.get(dataset_id)

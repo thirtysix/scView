@@ -22,7 +22,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from scview.core import leiden, pipeline, provenance, run_watchdog
+from scview.core import leiden, pipeline, run_watchdog
 from scview.core.dataset_manager import DatasetManager
 from scview.core.processing import active_run, cancel_run, iterate_exclusive, run_exclusive
 from scview.core.run_watchdog import Memory, RunControl, RunWatchdog
@@ -426,3 +426,20 @@ async def test_a_client_that_goes_away_cancels_the_run(tmp_path, monkeypatch):
     await it.aclose()  # the client went away: the Leiden child is ended, not waited for
     assert control.cancelled
     assert _BlockingChild.instances[0].returncode == -15
+
+
+async def test_a_run_with_a_plan_makes_room_first(tmp_path, monkeypatch):
+    from scview.core import preflight, processing
+
+    asked = []
+
+    class FakeDM:
+        async def free_memory_for(self, need, keep):
+            asked.append((need, keep))
+
+    monkeypatch.setattr(preflight, "run_need", lambda adata, steps, params: 12345)
+    a = _counts()
+    await processing._make_run_room(FakeDM(), "d1", type("A", (), {"adata": a})(),
+                                    RunControl(_quiet(), plan=(STEPS, pipeline.PipelineParams())))
+    await processing._make_run_room(FakeDM(), "d1", type("A", (), {"adata": a})(), RunControl(_quiet()))
+    assert asked == [(12345, "d1")]  # the run without a plan asked nothing

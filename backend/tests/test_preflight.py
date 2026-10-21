@@ -344,3 +344,26 @@ async def test_ingest_preflight_per_unit_and_merge(ingest_client):
     assert body["merge"]["sentence"].startswith("Merging the 2 samples takes ")
     assert "GB at its peak and" in body["merge"]["sentence"]
 
+
+
+def test_doublets_on_a_processed_dataset_are_estimated_on_the_counts_alone():
+    # pipeline._run_doublet_detection hands Scrublet a dataset of the counts when X
+    # is processed (scaled, dense): the dense X and .raw are not copied. Measured on
+    # Kang: +2.66 GiB, estimated +2.48 (the whole-object model said +6.0).
+    import anndata as ad
+    import scipy.sparse as sp
+
+    rng = np.random.default_rng(0)
+    counts = sp.random(3000, 2000, density=0.1, format="csr", random_state=0, dtype=np.float32)
+    counts.data = np.ceil(counts.data * 5)
+    proc = ad.AnnData(X=rng.normal(size=(3000, 2000)))  # scaled, dense float64
+    proc.layers["counts"] = counts
+    proc.obsm["X_pca"] = rng.normal(size=(3000, 20))
+    raw = ad.AnnData(X=counts.copy())
+    lean = pf.step_peak_for(proc, "doublet_detection")
+    whole = pf.step_peak_for(raw, "doublet_detection")
+    assert lean < whole + 2 * counts.data.nbytes  # no copy of the 48 MB dense X
+    dense_x = 3000 * 2000 * 8
+    proc_no_counts = ad.AnnData(X=rng.normal(size=(3000, 2000)))
+    proc_no_counts.obsm["X_pca"] = proc.obsm["X_pca"]
+    assert pf.step_peak_for(proc_no_counts, "doublet_detection") > lean + dense_x

@@ -815,9 +815,15 @@ def _step_qc(s: _State, params) -> tuple[int, _State, float]:
 
 def _step_doublet(s: _State, params) -> tuple[int, _State, float]:
     xb, lb = s.xb(), s.others()
+    m = s.m
+    counts = s.layers.get("counts") or s.raw
+    if s.processed and s.x is not None and not s.x.sparse and counts is not None:
+        # A processed (scaled, dense) X: Scrublet gets a dataset of the counts alone
+        # (pipeline._run_doublet_detection), so only they are copied.
+        xb, lb, m = counts.nbytes, 0, counts.n_genes
     copies = int(DBL_X_COPIES * xb) + lb
     knn = min(DBL_KNN, int(DBL_KNN_SMALL * (3 * s.n) ** 2 * 8))
-    dense = int(DBL_DENSE_PER_VALUE * s.n * s.m) + knn + 2 * xb + lb
+    dense = int(DBL_DENSE_PER_VALUE * s.n * m) + knn + 2 * xb + lb
     s.other += s.n * 16
     nnz = s.x.nnz if s.x is not None else 0
     sparse = s.x is not None and s.x.sparse
@@ -1377,6 +1383,12 @@ def _params_with(params, **changes):
     for k, v in changes.items():
         setattr(p, k, v)
     return p
+
+
+def run_need(adata, steps: list[str], params=None) -> int:
+    """Memory a run of ``steps`` needs beyond what the (in-memory) dataset holds now."""
+    est = estimate_run(header_from_adata(adata), steps=steps, params=params, warm=process_warm())
+    return max(0, int(est.peak_bytes - est.start_bytes))
 
 
 def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | None = None) -> dict:

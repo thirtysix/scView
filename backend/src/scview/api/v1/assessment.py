@@ -412,7 +412,7 @@ async def run_assessment_pipeline(
         for key, value in body.params.items():
             if hasattr(params, key):
                 setattr(params, key, value)
-    control = RunControl()
+    control = RunControl(plan=(body.steps, params))
 
     def _run(adaptor):
         # Write processing output to the derived layer, never the original
@@ -461,7 +461,7 @@ async def run_assessment_pipeline_stream(
         for key, value in body.params.items():
             if hasattr(params, key):
                 setattr(params, key, value)
-    control = RunControl()
+    control = RunControl(plan=(body.steps, params))
 
     def _events(adaptor):
         # Write processing output to the derived layer, never the original
@@ -599,7 +599,7 @@ async def rerun_step(
             if hasattr(params, key):
                 setattr(params, key, value)
 
-    control = RunControl()
+    control = RunControl(plan=(plan.rerun_steps, params))
 
     def _run(adaptor):
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))

@@ -82,6 +82,23 @@ async def _claim(dm: DatasetManager, dataset_id: str) -> tuple[AnnDataAdaptor, C
     return adaptor, release
 
 
+async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAdaptor,
+                         control: RunControl | None) -> None:
+    """Before a run with a plan: close other open datasets whose memory its estimated
+    peak needs (the pre-step check, in the worker thread, can only stop the run)."""
+    if control is None or control.plan is None:
+        return
+    from scview.core import preflight
+
+    steps, params = control.plan
+    try:
+        need = await asyncio.to_thread(preflight.run_need, adaptor.adata, steps, params)
+    except Exception as e:  # never block a run on the estimate itself
+        logger.warning("No run estimate for %s: %s", dataset_id, e)
+        return
+    await dm.free_memory_for(need, keep=dataset_id)
+
+
 # The pipeline run working on each dataset now (one at most: it holds the lock).
 _runs: dict[str, RunControl] = {}
 
@@ -131,6 +148,7 @@ async def run_exclusive(
     with it, registered for cancel and watched (no events: nothing streams)."""
     adaptor, claimed = await _claim(dm, dataset_id)
     try:
+        await _make_run_room(dm, dataset_id, adaptor, control)
         unwatch = _watch(dataset_id, control)
     except BaseException:
         claimed()
@@ -183,6 +201,7 @@ async def iterate_exclusive(
             pass
 
     try:
+        await _make_run_room(dm, dataset_id, adaptor, control)
         unwatch = _watch(dataset_id, control, lambda event: post("item", ("watchdog", event)))
     except BaseException:
         claimed()

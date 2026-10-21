@@ -128,3 +128,17 @@ async def test_without_a_container_limit_nothing_is_dropped_for_memory(dm, monke
     for did in ("a", "b", "c"):
         await dm.load_dataset(did)
     assert dm.cached_ids() == ["a", "b", "c"]
+
+
+async def test_free_memory_for_a_run_drops_other_datasets_only_as_needed(dm, monkeypatch):
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=0.1, limited=False)
+    for did in ("a", "b", "c"):
+        await dm.load_dataset(did)
+    _fake_memory(monkeypatch, dm, need_gb=0.1)  # 1 + 3 x 2 = 7 GB "used" of 6: over, as after a load
+    free = await dm.free_memory_for(int(1.5 * GB), keep="c")
+    assert dm.cached_ids() == ["c"] and free == 3 * GB  # a and b went (LRU order); c, the run's, stays
+    assert await dm.free_memory_for(int(0.5 * GB), keep="c") == 3 * GB  # already fits: nothing dropped
+    _fake_memory(monkeypatch, dm, need_gb=0.1, limited=False)
+    assert await dm.free_memory_for(int(99 * GB), keep="c") is None
+    assert dm.cached_ids() == ["c"]
