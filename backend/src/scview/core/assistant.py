@@ -42,6 +42,7 @@ from scview.core import (
 from scview.core import mito_by_type
 from scview.core import qc_states
 from scview.core import embedding_reliability
+from scview.core import study_planner
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -186,6 +187,19 @@ def _add_embedding_reliability(adaptor, lines: list[str], sources: list[ChatSour
         lines.extend(er_lines)
         sources.append(ChatSource(kind="result", ref=embedding_reliability.TAG, detail=er_detail,
                                   evidence="\n".join(er_lines)))
+
+
+def _add_study_planner(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last study plans (core/study_planner.py): donors per group needed, once run."""
+    try:
+        sp_lines, sp_detail = study_planner.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: study planner grounding failed: %s", exc)
+        return
+    if sp_lines:
+        lines.extend(sp_lines)
+        sources.append(ChatSource(kind="result", ref=study_planner.TAG, detail=sp_detail,
+                                  evidence="\n".join(sp_lines[1:])))
 
 
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -388,6 +402,7 @@ def build_grounding_context(
                                           evidence="\n".join(merge_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: merge-check grounding failed: %s", exc)
+        _add_study_planner(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).
