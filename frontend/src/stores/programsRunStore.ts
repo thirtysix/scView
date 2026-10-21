@@ -58,8 +58,11 @@ export const useProgramsRunStore = create<ProgramsRunState>((set, get) => ({
         onStart: (start) => set({ start }),
         onProgress: (progress) => set({ progress }),
         onK: (k) => set((s) => ({ kResults: [...s.kResults, k] })),
-        onWatchdog: (w: WatchdogEvent) =>
-          set((s) => ({ warnings: [...s.warnings, watchdogMessage(w, () => "Gene programs")] })),
+        // Memory warnings only: the progress line already shows the time so far.
+        onWatchdog: (w: WatchdogEvent) => {
+          if (w.kind === "memory")
+            set((s) => ({ warnings: [...s.warnings, watchdogMessage(w, () => "Gene programs")] }));
+        },
       });
       set((s) => ({ result, running: false, version: s.version + 1 }));
     } catch (e) {
