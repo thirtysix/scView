@@ -14,16 +14,17 @@ import { fmtValue, quantile } from "@/lib/overlayHistogram";
 
 /**
  * What the values are. Scores (gene-set, TF / pathway activity, cell cycle,
- * stress) and protein CLR are signed with a meaningful 0; expression and obs
- * columns (QC metrics) are not, even when a value dips below 0.
+ * stress) and protein CLR are signed with a meaningful 0; expression is not,
+ * even when a value dips below 0 (scaled data). An obs column is signed when
+ * its values have both signs (S_score, G2M_score); QC metrics never do.
  */
 export type OverlayKind = "expression" | "protein" | "score" | "obs";
 
-/** How signed values are drawn: "auto" = diverging for score-like kinds with values of both signs. */
+/** How signed values are drawn: "auto" = diverging for values of both signs, except expression. */
 export type SignedColormapMode = "auto" | "sequential" | "diverging";
 
 export const SIGNED_MODE_OPTIONS: { value: SignedColormapMode; label: string; title: string }[] = [
-  { value: "auto", label: "Auto", title: "Scores, activities and protein CLR with values of both signs use the diverging map, centred on 0; expression and QC columns stay sequential" },
+  { value: "auto", label: "Auto", title: "Scores, activities, protein CLR and cell columns (such as S_score) with values of both signs use the diverging map, centred on 0; expression and QC columns (never negative) stay sequential" },
   { value: "sequential", label: "Sequential", title: "Always the sequential map, lowest to highest value" },
   { value: "diverging", label: "Diverging", title: "Any overlay with values of both signs uses the diverging map, centred on 0" },
 ];
@@ -172,7 +173,7 @@ export function wantsDiverging(kind: OverlayKind, stats: OverlayStats, mode: Sig
   if (mode === "sequential") return false;
   const signed = stats.hasNegative && stats.hasPositive;
   if (mode === "diverging") return signed;
-  return signed && (kind === "score" || kind === "protein");
+  return signed && kind !== "expression";
 }
 
 /**
