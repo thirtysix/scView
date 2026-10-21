@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-21
+
 ### Added
 - **Who gets removed (Data Assessment → QC thresholds).** Under the filter preview, each threshold's
   loss per cell type × condition (or sample), with a chi-square test per cell type of whether the
