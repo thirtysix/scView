@@ -269,7 +269,8 @@ def _flag_summary(rows: list[TypeMito], flagged: list[TypeMito], cut: float) -> 
         more = f" {len(flagged) - 1} more type(s) flagged." if len(flagged) > 1 else ""
         return (f"A {_pct(cut)} ceiling removes {worst.removed_global_frac:.0%} of {worst.group} "
                 f"(median {_pct(worst.median or 0.0)}){own}.{more}")
-    top = max(rows, key=lambda r: r.removed_global_frac)
+    sized = [r for r in rows if r.n_cells >= MIN_TYPE_CELLS] or rows  # a 9-cell group says little
+    top = max(sized, key=lambda r: r.removed_global_frac)
     return (f"A {_pct(cut)} ceiling removes at most {top.removed_global_frac:.0%} of any type "
             f"({top.group}, median {_pct(top.median or 0.0)}): no type is flagged.")
 

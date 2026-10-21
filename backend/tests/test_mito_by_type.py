@@ -186,3 +186,10 @@ def test_a_type_of_dying_cells_is_called_damaged_not_given_a_bound():
     assert t.removed_global == 400 and "damaged" in t.note
     assert r.n_flagged == 0 and r.summary.endswith("LNCaP (median 96.0%) looks damaged, not a high-baseline type.")
     assert "no type is flagged" in r.summary
+
+
+def test_the_unflagged_summary_names_a_type_large_enough_to_judge():
+    a, cells = _synthetic(unlabelled=0)
+    r = mbt.mito_by_type(a, cells=cells, ceiling=14.0)  # the 10-cell type at 15 % loses all
+    assert _rows(r)["rare"].removed_global_frac == 1.0 and not _rows(r)["rare"].flagged
+    assert "rare" not in r.summary and "no type is flagged" in r.summary
