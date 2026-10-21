@@ -267,7 +267,7 @@ export function DeOverlap({ datasetId, latestResultId, pThreshold, fcThreshold, 
           {list && nResults < 2 ? (
             <p className="text-slate-500" data-testid="de-overlap-empty">
               {nResults === 0
-                ? "No DE results kept yet. Run a comparison above (Compute DE) at least twice, for example STIM vs CTRL within two cell types, then compare their significant genes here."
+                ? "No DE results kept yet. Run a comparison above (Compute DE) at least twice, for example the same two conditions within two cell types, then compare their significant genes here."
                 : "One DE result kept so far. Run another comparison above (Compute DE), then compare their significant genes here."}
             </p>
           ) : (
