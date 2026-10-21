@@ -127,6 +127,7 @@ class DECompositionGroup(BaseModel):
     share_a: float  # of side A's labelled compared cells
     share_b: float
     diff_points: float  # (share_a - share_b) x 100
+    p: float | None = None  # Fisher's exact test; computed only past the points rule
     flagged: bool  # past threshold_points with min_cells on a side
     one_sided: bool  # nearly absent from one side: maybe a state the comparison creates
 
@@ -149,6 +150,7 @@ class DEComposition(BaseModel):
     note: str | None
     threshold_points: float
     min_cells: int
+    max_p: float = 0.05
     n_missing: int = 0
     nested: bool = False  # the sides are different groups of ``column``
 
