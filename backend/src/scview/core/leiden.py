@@ -30,15 +30,18 @@ class LeidenError(RuntimeError):
     """The child process failed."""
 
 
-def membership(adjacency, resolution: float, random_state: int = RANDOM_STATE) -> np.ndarray:
-    """Community of each cell, numbered by size (largest is 0)."""
+def membership(adjacency, resolution: float, random_state: int = RANDOM_STATE,
+               n_iterations: int = N_ITERATIONS) -> np.ndarray:
+    """Community of each cell, numbered by size (largest is 0). ``n_iterations``
+    other than scanpy's -1 is for a quick look (a cluster count), not for labels
+    anyone keeps."""
     # As scanpy's get_igraph_from_adjacency: every stored non-zero, in storage
     # order. The seeded result depends on edge order, so do not canonicalise.
     sources, targets = adjacency.nonzero()
     weights = np.asarray(adjacency[sources, targets]).ravel().astype(np.float64)
     payload = io.BytesIO()
     np.savez(payload, n=adjacency.shape[0], sources=sources, targets=targets, weights=weights,
-             resolution=float(resolution), seed=int(random_state))
+             resolution=float(resolution), seed=int(random_state), n_iterations=int(n_iterations))
     proc = subprocess.run(
         [sys.executable, "-m", "scview.core.leiden"],
         input=payload.getvalue(), capture_output=True, check=False,
@@ -78,7 +81,8 @@ def _child() -> None:
         graph = ig.Graph(n=int(d["n"]), edges=edges, directed=True)
         part = leidenalg.find_partition(
             graph, leidenalg.RBConfigurationVertexPartition,
-            weights=d["weights"], n_iterations=N_ITERATIONS, seed=int(d["seed"]),
+            weights=d["weights"], seed=int(d["seed"]),
+            n_iterations=int(d["n_iterations"]) if "n_iterations" in d.files else N_ITERATIONS,
             resolution_parameter=float(d["resolution"]),
         )
     out = io.BytesIO()

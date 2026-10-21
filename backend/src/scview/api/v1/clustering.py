@@ -483,7 +483,7 @@ def _merge_limits() -> dict[str, Any]:
         "padj": mc.DE_PADJ,
         "log2fc": mc.DE_LOG2FC,
         "max_cells_per_side": mc.MAX_CELLS_PER_SIDE,
-        "first_run_seconds": hs.FIRST_RUN_SECONDS,
+        "first_run_seconds": mc.FIRST_RUN_SECONDS,
     }
 
 

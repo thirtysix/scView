@@ -148,6 +148,18 @@ def test_summarise_reads_pairs_of_the_checked_clustering():
     assert r["n_candidates"] == 0 and r["thresholds"]["merge_max_genes"] == 2
 
 
+def test_summarise_reads_the_test_between_the_pairs_own_parts():
+    # One group of three training clusters; a, b, c each in its own. a + b reads the
+    # test of training 0 vs 1 (2 genes), not the group's most distinct (8).
+    codes = [0] * 10 + [1] * 10 + [2] * 10
+    A = np.array([[0, .3, .1], [.3, 0, .2], [.1, .2, 0]])
+    s = _stage(codes, [_row(0, 1, 2), _row(1, 2, 8)], A)
+    by = {tuple(sorted((x["a"], x["b"]))): x for x in mc.summarise(_plan(["a", "b", "c"], codes), s, 10)["pairs"]}
+    assert by[("a", "b")]["n_genes"] == 2 and by[("a", "b")]["train_pairs"] == ["0+1"]
+    assert by[("b", "c")]["n_genes"] == 8
+    assert by[("a", "c")]["candidate"] and by[("a", "c")]["n_genes"] == 8  # no direct test: the group's
+
+
 def test_resolution_for_count_reaches_the_reference_count():
     a = _processed(resolution=1.0)
     graph = a.obsp["connectivities"]

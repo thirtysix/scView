@@ -23,13 +23,16 @@ Biostatistics, PMID 35166794) to keep the test honest:
    cells a side so pairs of big and small clusters are judged alike. A gene is
    distinguishing at adjusted p < 0.05 and a two-fold change, detected in 10% of
    either cluster.
-4. Each training cluster stands for the checked cluster holding most of its
-   cells (``HOST_SHARE``). A pair of checked clusters is judged by the training
-   pairs standing for it (the most distinct of them): a merge candidate with
-   fewer than ``MERGE_MAX_GENES`` distinguishing genes. A pair no tested training
-   pair stands for is not tested: "together" when one training cluster holds half
-   of each (not a merge candidate: at half depth close types fall together too,
-   Kang's CD8 T and NK), else "untested".
+4. Training clusters the held-out half cannot tell apart (fewer than
+   ``MERGE_MAX_GENES`` distinguishing genes) are joined into groups, fewest genes
+   first, never joining a pair tested as distinct (``supported_groups``). Each
+   checked cluster belongs to the group holding most of its cells
+   (``HOST_SHARE``). Two neighbouring checked clusters in one group are a merge
+   candidate, reported with the most distinct tested pair between their parts;
+   in different groups they are kept apart. Two whose cells sit mostly in the
+   same training cluster were never split on the training half, so nothing tested
+   them: "together", not a candidate (at half depth close types fall together
+   too: Kang's CD8 T and NK).
 
 Negative binomial, not Poisson, splitting: scRNA-seq counts are overdispersed,
 and Poisson splitting of overdispersed counts leaves the two halves positively
@@ -71,7 +74,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from scview.core import hvg_sensitivity as hs
-from scview.core import provenance
+from scview.core import leiden, provenance
 from scview.core import resolution_sweep as rs
 from scview.core.obs_writes import forget_column_results
 
@@ -93,16 +96,20 @@ DE_PADJ = 0.05
 DE_LOG2FC = 1.0
 DE_MIN_PCT = 0.1
 MERGE_MAX_GENES = 10
-HOST_SHARE = 0.5  # a training cluster stands for the reference cluster holding this share of it
+HOST_SHARE = 0.5  # a checked cluster belongs to the training group holding more than this share of it
+PART_SHARE = 0.2  # a training cluster holding this share of a checked cluster is one of its parts
 MAX_PAIRS = 200
 MAX_GROUPS = 100
-RESOLUTION_TRIES = 8  # clusterings of the training graph tried to match the cluster count
+RESOLUTION_TRIES = 6  # quick counts of the training graph's clusters to match the cluster count
+PROBE_ITERATIONS = 2  # Leiden passes for a quick count
 
-# Time: a training run costs about one variable-gene setting; the fit, the split,
-# the test half's normalisation and the pairs add about 0.5 s per 1,000 cells on
-# 2 cores (Kang copy, measured 2026-10-21).
-EXTRA_SECONDS_PER_1K_CELLS = 0.5
+# Time (Kang copy, 13,836 cells, 2 cores, measured 2026-10-21, server warm): the
+# fit and the split 7-8 s, the training run 18-45 s (Leiden is slower at high
+# resolution), matching the cluster count 20-45 s, the pairs 0.15 s each: 83 s at
+# resolution 1.0, 100 s at 2.5. The first run after a server start adds ~70 s.
+EXTRA_SECONDS_PER_1K_CELLS = 4.5  # on top of one variable-gene setting's estimate
 SECONDS_PER_PAIR = 0.15
+FIRST_RUN_SECONDS = 70.0  # numba compiling the neighbour search and more, after a server start
 
 
 class MergeCheckError(ValueError):
@@ -383,29 +390,39 @@ def _cluster_graph(graph, method: str, resolution: float) -> pd.Categorical:
     return rs.cluster(tmp, method, resolution)
 
 
+def _count(graph, method: str, resolution: float) -> int:
+    """Clusters at ``resolution``: Leiden with PROBE_ITERATIONS passes (its full
+    run, until no pass improves, took 6-20 s a time on Kang), Louvain in full."""
+    if method == "leiden":
+        return int(np.unique(leiden.membership(graph, resolution, n_iterations=PROBE_ITERATIONS)).size)
+    return len(_cluster_graph(graph, method, resolution).categories)
+
+
 def resolution_for_count(graph, method: str, resolution: float, labels: pd.Categorical, target: int,
                          stop: Callable[[], bool] | None = None) -> tuple[float, pd.Categorical]:
     """The resolution (and its labels) whose clustering of ``graph`` has the
     number of clusters closest to ``target``, starting from ``labels`` (the
     clustering at ``resolution``): a bisection on log resolution up to four
-    times, or down to a quarter of, ``resolution``, at most RESOLUTION_TRIES more
-    runs; of equally close ones, the nearest to ``resolution``."""
+    times, or down to a quarter of, ``resolution``, with at most RESOLUTION_TRIES
+    quick counts; of equally close ones, the nearest to ``resolution``. The
+    chosen resolution is then clustered in full, as the pipeline does."""
     k = len(labels.categories)
-    best: tuple[int, float, float, pd.Categorical] = (abs(k - target), 0.0, resolution, labels)
+    best: tuple[int, float, float] = (abs(k - target), 0.0, resolution)
     lo, hi = (np.log(resolution), np.log(resolution * 4)) if k < target else (np.log(resolution / 4),
                                                                                np.log(resolution))
     for _ in range(RESOLUTION_TRIES):
-        if best[0] == 0:
+        if best[0] <= 1:  # a cluster either way is close enough to compare
             break
         hs._check_stop(stop)
         r = round(float(np.exp((lo + hi) / 2)), 3)
-        labels = _cluster_graph(graph, method, r)
-        k = len(labels.categories)
+        k = _count(graph, method, r)
         key = (abs(k - target), abs(float(np.log(r / resolution))))
         if key < best[:2]:
-            best = (*key, r, labels)
+            best = (*key, r)
         lo, hi = (np.log(r), hi) if k < target else (lo, np.log(r))
-    return best[2], best[3]
+    r = best[2]
+    hs._check_stop(stop)
+    return r, labels if r == resolution else _cluster_graph(graph, method, r)
 
 
 def _side(rows: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -481,11 +498,18 @@ def summarise(p: Plan, s: _Stage, max_genes: int = MERGE_MAX_GENES) -> dict[str,
     g_of = np.where(by_group.max(axis=0) > HOST_SHARE * ref_size, by_group.argmax(axis=0), -1)
     main = common.argmax(axis=0)  # each checked cluster's main training cluster
 
-    def between(ga: int, gb: int) -> list[dict[str, Any]]:
-        return [r for r in s.tested if r["tested"] and {gix[r["i"]], gix[r["j"]]} == {ga, gb}]
+    # The training clusters holding a real part (PART_SHARE) of each checked cluster.
+    parts = common >= PART_SHARE * ref_size[None, :]
 
-    def within(g: int) -> list[dict[str, Any]]:
-        return [r for r in s.tested if r["tested"] and gix[r["i"]] == g and gix[r["j"]] == g]
+    def evidence(a: int, b: int, ga: int, gb: int) -> list[dict[str, Any]]:
+        """The tested training pairs read for checked clusters a and b: those
+        joining a part of a to a part of b, else any between (or within) their
+        groups."""
+        in_groups = [r for r in s.tested if r["tested"] and {gix[r["i"]], gix[r["j"]]} <= {ga, gb}
+                     and (ga == gb or gix[r["i"]] != gix[r["j"]])]
+        direct = [r for r in in_groups if (parts[r["i"], a] and parts[r["j"], b])
+                  or (parts[r["i"], b] and parts[r["j"], a])]
+        return direct or in_groups
 
     pairs = []
     for a, b in neighbour_pairs(s.A_ref):
@@ -499,7 +523,7 @@ def summarise(p: Plan, s: _Stage, max_genes: int = MERGE_MAX_GENES) -> dict[str,
         elif ga == gb and main[a] == main[b]:
             out["evidence"] = "together"
         else:
-            rows = within(ga) if ga == gb else between(ga, gb)
+            rows = evidence(a, b, ga, gb)
             out["evidence"] = "held_out" if rows else "untested"
             out["candidate"] = ga == gb and bool(rows)
         if rows:
