@@ -1124,19 +1124,6 @@ def _cpu_factor(cpus: float | None) -> float:
     return float(np.clip((CALIBRATION_CPUS / max(c, 0.1)) ** 0.5, 0.5, 4.0))
 
 
-def _reclaimable(cgroup: Path = Path("/sys/fs/cgroup")) -> int:
-    """File cache the kernel drops before it would kill anything (cgroup inactive_file)."""
-    for name, key in (("memory.stat", "inactive_file"), ("memory/memory.stat", "total_inactive_file")):
-        try:
-            for line in (cgroup / name).read_text().splitlines():
-                k, v = line.split()
-                if k == key:
-                    return int(v)
-        except (OSError, ValueError):
-            continue
-    return 0
-
-
 @dataclass
 class Available:
     limit_bytes: int | None
@@ -1147,15 +1134,12 @@ class Available:
 
 
 def available_memory(cgroup: Path | None = None, meminfo: Path | None = None) -> Available:
-    """``read_budget()``, with file cache the kernel can drop not counted as used
-    (as ``docker stats`` does): after reading a large file the cgroup's
-    ``memory.current`` includes its pages, which are not memory a run competes for."""
+    """``read_budget()`` (which leaves out file cache the kernel can drop, as
+    ``docker stats`` does, so this agrees with the sidebar gauge)."""
     from scview.core.memory_budget import CGROUP, MEMINFO, read_budget
 
     b = read_budget(cgroup or CGROUP, meminfo or MEMINFO)
     used = b.used_bytes
-    if used is not None and b.source != "unknown":
-        used = max(0, used - _reclaimable(cgroup or CGROUP))
     avail = (max(0, b.limit_bytes - used) if b.limit_bytes is not None and used is not None
              else None)
     return Available(b.limit_bytes, used, avail, b.limited, b.source)

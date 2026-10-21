@@ -8,6 +8,12 @@ container the limit is the cgroup's: ``memory.max`` (cgroup v2) or
 budget is the memory of the machine the container sees, which under Docker
 Desktop or Podman on Windows and macOS is their virtual machine.
 
+"Used" leaves out the cgroup's inactive file cache, as ``docker stats`` does:
+right after a large file is read its pages count in ``memory.current`` (1.3 GB of
+3.3 GB after uploading Kang), but the kernel drops them before it would kill
+anything. The sidebar gauge, the preflight note and the run watchdog all read
+this one number, so they agree.
+
 A backend that outgrows the limit is killed and restarted (``restart:
 on-failure``), and its cgroup counters start again from zero, so the restart is
 recognised by a run marker instead: written at startup and removed at a clean
@@ -34,9 +40,10 @@ _V1_UNLIMITED = 1 << 60
 @dataclass
 class MemoryBudget:
     limit_bytes: int | None  # what scView may use; None when unknown
-    used_bytes: int | None
+    used_bytes: int | None  # without the reclaimable file cache
     limited: bool  # a container limit (SCVIEW_MEMORY_GB), not the machine's memory
     source: str  # "container limit" | "machine" | "unknown"
+    cache_bytes: int = 0  # inactive file cache left out of used_bytes
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -78,24 +85,42 @@ def _process_rss() -> int | None:
         return None
 
 
+def _inactive_file(stat: Path, field: str) -> int:
+    """A cgroup's inactive file cache (bytes), which the kernel reclaims first; 0 if unreadable."""
+    try:
+        for line in stat.read_text().splitlines():
+            key, _, value = line.partition(" ")
+            if key == field:
+                return int(value)
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
 def read_budget(cgroup: Path = CGROUP, meminfo: Path = MEMINFO) -> MemoryBudget:
     """The backend's memory budget and current use (see the module docstring)."""
     if (cgroup / "memory.max").exists():  # cgroup v2
         limit = _read_int(cgroup / "memory.max")
         used = _read_int(cgroup / "memory.current")
+        stat = (cgroup / "memory.stat", "inactive_file")
     else:  # cgroup v1, or none
         limit = _read_int(cgroup / "memory" / "memory.limit_in_bytes")
         used = _read_int(cgroup / "memory" / "memory.usage_in_bytes")
+        stat = (cgroup / "memory" / "memory.stat", "total_inactive_file")
         if limit is not None and limit >= _V1_UNLIMITED:
             limit = None
+    cache = 0
     if used is None:
         used = _process_rss()
+    else:
+        cache = min(used, _inactive_file(*stat))
+        used -= cache
     if limit is not None:
-        return MemoryBudget(limit, used, True, "container limit")
+        return MemoryBudget(limit, used, True, "container limit", cache)
     total_kb = _meminfo_kb("MemTotal", meminfo)
     if total_kb is not None:
-        return MemoryBudget(total_kb * 1024, used, False, "machine")
-    return MemoryBudget(None, used, False, "unknown")
+        return MemoryBudget(total_kb * 1024, used, False, "machine", cache)
+    return MemoryBudget(None, used, False, "unknown", cache)
 
 
 _unclean_restart: dict | None = None

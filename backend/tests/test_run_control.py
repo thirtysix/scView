@@ -124,8 +124,39 @@ def test_a_failing_check_is_logged_and_the_step_runs(caplog):
     assert "pre-step check failed" in caplog.text
 
 
-def test_the_default_check_is_where_preflight_plugs_in(monkeypatch):
+def _free(monkeypatch, *, limited=True, free_gb=1.0, limit_gb=4.0):
+    from scview.core import preflight
+    monkeypatch.setattr(preflight, "available_memory", lambda *a, **k: preflight.Available(
+        int(limit_gb * run_watchdog.GB), int((limit_gb - free_gb) * run_watchdog.GB),
+        int(free_gb * run_watchdog.GB), limited, "container limit" if limited else "machine"))
+
+
+def test_the_default_check_stops_before_a_step_that_cannot_fit(monkeypatch):
+    from scview.core import preflight
+    _free(monkeypatch, free_gb=1.0)
+    need = {"doublet_detection": 2.0, "pca": 1.1}
+    monkeypatch.setattr(preflight, "step_peak_for",
+                        lambda adata, step, params=None: int(need.get(step, 0) * run_watchdog.GB))
+    msg = run_watchdog.default_before_step("doublet_detection", None, None)
+    assert msg.startswith("Stopped before doublet detection: it needs about 2.0 GB")
+    assert "1.0 GB free of its 4.0 GB limit" in msg and "SCVIEW_MEMORY_GB" in msg
+    # 1.1 GB against 1.0 free is inside the estimate's error band: let it run.
     assert run_watchdog.default_before_step("pca", None, None) is None
+    # Without a container limit the "limit" is the whole machine: no stop.
+    _free(monkeypatch, limited=False, free_gb=1.0)
+    assert run_watchdog.default_before_step("doublet_detection", None, None) is None
+
+
+def test_the_default_check_stops_a_real_run(monkeypatch):
+    _free(monkeypatch, free_gb=0.0)  # a tiny test dataset needs well under 1 MB per step
+    _, result = pipeline.run_pipeline(_counts(), STEPS, control=RunControl(_quiet()))
+    assert result.status == "stopped" and result.stop_reason.startswith("Stopped before ")
+    _free(monkeypatch, free_gb=64.0, limit_gb=128.0)
+    _, result = pipeline.run_pipeline(_counts(), STEPS, control=RunControl(_quiet()))
+    assert result.status == "complete"
+
+
+def test_the_default_check_is_where_preflight_plugs_in(monkeypatch):
     monkeypatch.setattr(run_watchdog, "default_before_step",
                         lambda step, *_: "stop" if step == "normalization" else None)
     _, result = pipeline.run_pipeline(_counts(), STEPS, control=RunControl(_quiet()))

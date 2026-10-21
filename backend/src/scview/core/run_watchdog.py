@@ -62,36 +62,11 @@ MemoryReader = Callable[[], Memory]
 Emit = Callable[[dict[str, Any]], None]
 
 
-def _inactive_file(cgroup: Path) -> int | None:
-    """The cgroup's inactive file cache (bytes), which the kernel reclaims first."""
-    for path, field in ((cgroup / "memory.stat", "inactive_file"),
-                        (cgroup / "memory" / "memory.stat", "total_inactive_file")):
-        try:
-            text = path.read_text()
-        except OSError:
-            continue
-        for line in text.splitlines():
-            key, _, value = line.partition(" ")
-            if key == field:
-                try:
-                    return int(value)
-                except ValueError:
-                    return None
-    return None
-
-
 def read_memory(cgroup: Path = memory_budget.CGROUP) -> Memory:
-    """The backend's memory use and limit (``memory_budget.read_budget``), with the
-    inactive file cache taken off a cgroup reading."""
+    """The backend's memory use and limit (``memory_budget.read_budget``, which
+    already leaves out the reclaimable file cache)."""
     budget = memory_budget.read_budget(cgroup)
-    used = budget.used_bytes
-    from_cgroup = (cgroup / "memory.current").exists() or (
-        cgroup / "memory" / "memory.usage_in_bytes").exists()
-    if used is not None and from_cgroup:
-        cache = _inactive_file(cgroup)
-        if cache:
-            used = max(0, used - cache)
-    return Memory(used, budget.limit_bytes, budget.limited)
+    return Memory(budget.used_bytes, budget.limit_bytes, budget.limited)
 
 
 def _gb(n: int | None) -> float | None:
@@ -270,7 +245,16 @@ BeforeStep = Callable[[str, Any, Any], "str | None"]
 
 
 def default_before_step(step: str, adata: Any, params: Any) -> str | None:
-    """The check every pipeline run makes before each step. No check yet.
+    """The check every pipeline run makes before each step: stop before a step the
+    preflight estimate says cannot fit in the memory left.
+
+    A step that outgrows the container limit gets the backend killed, which loses
+    the whole run; the watchdog's 2 s sampler cannot warn in time (Scrublet on Kang
+    grows 2.3 GB inside 2 s). So the run stops before such a step instead, keeping
+    the steps already done. It stops only when even the low end of the estimate's
+    error band (``preflight.ERROR_BAND``) is more than the memory free, and only
+    under a container limit: without one the "limit" is the machine's memory,
+    which the backend shares with everything else, so the check would be a guess.
 
     Contract for a check plugged in here (or passed as ``RunControl(before_step=)``):
     called in the run's worker thread with the step about to run, the AnnData as
@@ -278,16 +262,22 @@ def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     plain sentence to stop the run before ``step`` (status "stopped", that
     sentence as ``stop_reason``; the steps already done are kept and saved, as
     after a step that fails), or None to let it run. It must be quick (well under
-    a second: read shapes and ``nnz``, never densify), must not change ``adata``,
-    and may call ``memory_budget.read_budget()``. An exception is logged and the
-    step runs. The preflight estimate plugs in as, for example::
-
-        def default_before_step(step, adata, params):
-            need = preflight.estimate_step_peak(step, adata.shape, nnz, dense, params)
-            free = budget.limit_bytes - budget.used_bytes
-            return f"... needs about {need / GB:.1f} GB ..." if need > free else None
+    a second: read shapes and ``nnz``, never densify), must not change ``adata``.
+    An exception is logged and the step runs.
     """
-    return None
+    from scview.core import preflight
+
+    avail = preflight.available_memory()
+    if not avail.limited or avail.available_bytes is None or avail.limit_bytes is None:
+        return None
+    need = preflight.step_peak_for(adata, step, params)
+    if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes:
+        return None
+    label = step.replace("_", " ")
+    return (f"Stopped before {label}: it needs about {need / GB:.1f} GB more at its peak, and scView "
+            f"has {avail.available_bytes / GB:.1f} GB free of its {avail.limit_bytes / GB:.1f} GB limit, "
+            f"so the system would have stopped the backend. The steps before it are saved. Raise "
+            f"SCVIEW_MEMORY_GB in .env (then restart scView), or leave this step out.")
 
 
 _DEFAULT = object()
