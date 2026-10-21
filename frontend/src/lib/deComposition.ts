@@ -29,8 +29,9 @@ export function compositionRule(c: Pick<DEComposition, "threshold_points" | "min
   return (
     `Each side's share of every group, among the cells the DE compares (a group's cells over that ` +
     `side's cells, so unequal side sizes do not count). A group is flagged when its two shares differ ` +
-    `by more than ${c.threshold_points} percentage points and it has at least ${c.min_cells} cells on ` +
-    `one side: genes specific to it then look like a difference between the sides, cell-level or ` +
+    `by more than ${c.threshold_points} percentage points, it has at least ${c.min_cells} cells on ` +
+    `one side, and Fisher's exact test (its cells vs the rest, one side vs the other) gives p < 0.05, ` +
+    `so a few cells on a small side do not count: genes specific to it then look like a difference between the sides, cell-level or ` +
     `pseudobulk. "Nearly absent from one side" (80% or more of its share on one side) can also be a ` +
     `state the comparison itself creates.`
   );

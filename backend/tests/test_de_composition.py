@@ -269,3 +269,15 @@ def test_an_old_de_response_without_composition_still_loads():
     res = DEResponse.model_validate(old)
     assert res.composition is None
     assert "composition" in res.model_dump()
+
+
+def test_a_shift_a_few_cells_make_is_not_flagged():
+    """7 cells on one side: 3 monocytes are 43% vs 30% of 546 (+13 points), which
+    Fisher's exact test cannot tell from chance (pbmc_1k doublets vs singlets)."""
+    obs = _obs({"Mono": 3, "T": 4}, {"Mono": 164, "T": 382})
+    res = _check(obs)
+    mono = next(g for g in res["groups"] if g["group"] == "Mono")
+    assert abs(mono["diff_points"]) > dc.WARN_POINTS and mono["p"] > dc.MAX_P
+    assert not mono["flagged"] and not res["warn"]
+    big = _check(_obs({"Mono": 300, "T": 400}, {"Mono": 164, "T": 382}))  # same shift, 700 cells
+    assert big["warn"] and next(g for g in big["groups"] if g["group"] == "Mono")["p"] < dc.MAX_P

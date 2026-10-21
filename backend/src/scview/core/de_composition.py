@@ -10,7 +10,9 @@ test does not protect against it either: each donor's sum carries the same mix.
 Shares are column-normalised within each side (a group's cells over that
 side's cells), so unequal side sizes do not show as a shift. A group is
 flagged when the two shares differ by more than ``WARN_POINTS`` percentage
-points and it holds at least ``MIN_CELLS`` cells on one side.
+points, it holds at least ``MIN_CELLS`` cells on one side, and the difference
+is unlikely to be chance (Fisher's exact test of the group's cells on each side,
+p < ``MAX_P``): with 7 cells on one side, one cell is 14 points.
 
 The composition column is the active clustering unless one is asked for. A
 comparison already restricted to one group of that column is checked by the
@@ -30,6 +32,7 @@ import re
 
 import numpy as np
 import pandas as pd
+from scipy.stats import fisher_exact
 
 from scview.core.anndata_adaptor import CLUSTERING_CANDIDATES
 
@@ -39,6 +42,9 @@ WARN_POINTS = 10.0
 # ... and only with this many cells on at least one side: a handful of cells
 # swing a share by 10 points in a small comparison.
 MIN_CELLS = 10
+# ... and only when Fisher's exact test (group vs other cells, side A vs B) gives
+# p below this: large comparisons pass easily, tiny sides do not.
+MAX_P = 0.05
 # Groups returned, largest difference first (the check itself uses every group).
 MAX_GROUPS = 50
 # A flagged group this one-sided (A's share over the sum of both shares, or B's)
@@ -120,7 +126,7 @@ def _result(column: str | None, label_a: str, label_b: str, *, auto: bool,
     out = {"column": column, "label_a": label_a, "label_b": label_b, "auto": auto,
            "n_a": 0, "n_b": 0, "groups": [], "n_groups": 0, "warn": False,
            "message": None, "note": note, "threshold_points": WARN_POINTS,
-           "min_cells": MIN_CELLS, "n_missing": 0, "nested": False}
+           "min_cells": MIN_CELLS, "max_p": MAX_P, "n_missing": 0, "nested": False}
     out.update(rest)
     return out
 
@@ -199,6 +205,11 @@ def for_comparison(obs: pd.DataFrame, mask_a: np.ndarray, mask_b: np.ndarray,
     total = share_a + share_b
     dominance = np.where(total > 0, np.maximum(share_a, share_b) / np.where(total > 0, total, 1), 0)
     flagged = (np.abs(diff) > WARN_POINTS) & (np.maximum(count_a, count_b) >= MIN_CELLS)
+    pvals = np.full(len(diff), np.nan)
+    for i in np.flatnonzero(flagged):  # only the candidates: one 2x2 table each
+        a, b = int(count_a[i]), int(count_b[i])
+        pvals[i] = fisher_exact([[a, n_a - a], [b, n_b - b]])[1]
+    flagged &= np.nan_to_num(pvals, nan=1.0) < MAX_P
     present = (count_a + count_b) > 0
     nested = bool(present.any() and (dominance[present] >= NESTED).all())
 
@@ -209,6 +220,7 @@ def for_comparison(obs: pd.DataFrame, mask_a: np.ndarray, mask_b: np.ndarray,
         "n_a": int(count_a[i]), "n_b": int(count_b[i]),
         "share_a": round(float(share_a[i]), 4), "share_b": round(float(share_b[i]), 4),
         "diff_points": round(float(diff[i]), 1),
+        "p": None if np.isnan(pvals[i]) else float(f"{pvals[i]:.3g}"),
         "flagged": bool(flagged[i]) and not nested,
         "one_sided": bool(dominance[i] >= ONE_SIDED),
     } for i in order]

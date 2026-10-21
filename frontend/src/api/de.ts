@@ -80,6 +80,7 @@ export interface DECompositionGroup {
   share_b: number;
   /** (share_a - share_b) x 100. */
   diff_points: number;
+  p?: number | null; // Fisher's exact test, computed for the candidates only
   /** Past `threshold_points`, with `min_cells` cells on a side. */
   flagged: boolean;
   /** Nearly absent from one side: maybe a state the comparison itself creates. */
@@ -104,6 +105,7 @@ export interface DEComposition {
   note: string | null;
   threshold_points: number;
   min_cells: number;
+  max_p?: number; // Fisher's exact p a flagged group must be under
   n_missing?: number;
   /** The sides are different groups of `column`: composition is the comparison. */
   nested?: boolean;
