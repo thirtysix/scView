@@ -6,6 +6,44 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-21
+
+### Added
+- **Cluster and gene reports (Unified View → Report).** One page per cluster: its size per donor and
+  condition, what other label columns call it, marker genes with the marker-database verdict,
+  HALLMARK enrichment, QC against the other cells (with the cells filtering removed), composition
+  per donor and the recorded methods. One page per gene: expression per group, marker status, the
+  database cell types listing it, per-donor values with paired tests, co-expressed genes, HVG status
+  and MSigDB sets. Every section states its n and how it was computed, and says where to compute
+  anything missing; nothing is downloaded on its behalf. "Download HTML" gives a self-contained file
+  (no scripts, nothing fetched) that prints cleanly. Opened from a Markers row, the cluster map or
+  the co-pilot. `GET /datasets/{id}/report/cluster`, `/report/gene` and their `.html` versions.
+- **Copy link (header).** A link that reopens the current view: dataset, tab, embedding, colouring,
+  gene overlay, highlighted group, zoom, DE settings, colours and selection. The view lives in the
+  URL fragment, so it never reaches a server log. Opened in another scView, the link finds the
+  dataset by its cells and says plainly when it is not loaded. Gene lists and gates are not shared.
+  `GET /datasets` now includes `cells_fingerprint` for datasets already opened.
+- **Compare DE results (Unified View → DE).** The significant genes of 2 to 8 DE comparisons side by
+  side as an UpSet plot; click a bar for its genes with each comparison's log2FC, copy them or save
+  them as a gene list. The sign is kept: a gene up in one comparison and down in another is listed
+  as discordant, not shared. Logistic regression counts its top 50 genes per direction; "only genes
+  tested in all" ignores genes the detection prefilter left out. Your gene lists can join as extra
+  sets. On Kang, STIM vs CTRL within CD14 Mono, CD4 Naive T and B share 190 genes (ISG15, IFIT3,
+  CXCL10...). `GET /datasets/{id}/de/results`, `POST /datasets/{id}/de/overlap`.
+- **Gates (Unified View toolbar).** Save a lasso, legend pick or filter as a named gate. Gates nest
+  (a gate drawn inside another keeps only its parent's cells), show n, % of parent and % of total,
+  and combine with AND / OR / NOT. Click a gate to make it the selection for DE, labelling and the
+  histogram. Gates survive reloads and go into session files; when a dataset's cells change they are
+  marked stale and not applied. Write the leaf gates into one label column (undo in one step), or
+  export the counts as CSV, per donor or sample.
+
+### Fixed
+- **Lasso on 3D embeddings.** The lasso did nothing on a 3D UMAP and a drag rotated the plot. It now
+  selects every cell under the outline, at any depth.
+- **Opening a session or link into an open DE tab** no longer sets the DE "Within" scope and the
+  selection from the restored highlight; the session's own scope and selection are kept.
+- A flaky Annotation test (waited for the marker-sets control).
+
 ## [0.28.0] - 2026-10-21
 
 ### Added

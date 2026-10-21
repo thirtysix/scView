@@ -20,6 +20,7 @@ import { DEActivity } from "@/components/unified/DEActivity";
 import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
 import { DEMethodsAgreement } from "@/components/unified/DEMethodsAgreement";
 import { DeCompositionNote } from "@/components/unified/DeCompositionNote";
+import { DeOverlap } from "@/components/unified/DeOverlap";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { CapNote } from "@/components/common/Caption";
 import { downloadCsv } from "@/lib/csv";
@@ -887,6 +888,15 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
           />
         </>
       )}
+
+      {/* The significant genes of several kept DE results, compared (UpSet) */}
+      <DeOverlap
+        datasetId={datasetId}
+        latestResultId={result?.result_id}
+        pThreshold={pThreshold}
+        fcThreshold={fcThreshold}
+        onGeneClick={onGeneClick}
+      />
     </div>
   );
 }

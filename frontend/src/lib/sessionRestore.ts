@@ -9,6 +9,7 @@ import { cellsMatching } from "@/api/cells";
 import { getDataset } from "@/api/datasets";
 import type { DatasetInfo } from "@/api/types";
 import { describeFilter } from "@/lib/cellFilter";
+import { fromSessionGate, gateDependencies, toSessionGate, validateGates, type Gate } from "@/lib/gates";
 import { formatNumber, prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import {
   decodeSelection,
@@ -24,6 +25,7 @@ import { resetViewForDataset, useDatasetStore } from "@/stores/datasetStore";
 import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
 import { useGeneListsStore } from "@/stores/geneListsStore";
+import { staleReason, useGatesStore } from "@/stores/gatesStore";
 import {
   cleanListName,
   dedupeGenes,
@@ -85,6 +87,9 @@ export function captureSession(now: Date = new Date()): SessionFile {
 
   const cells = selection.selectedCellIndices;
   const nCells = dataset?.n_cells ?? 0;
+  // The dataset's gates, unless they are stale (drawn on other cells).
+  const gateRecord = dataset ? useGatesStore.getState().records[dataset.id] : undefined;
+  const gates = dataset && gateRecord && !staleReason(gateRecord, dataset) ? gateRecord.gates : [];
   return {
     format: SESSION_FORMAT,
     version: SESSION_VERSION,
@@ -138,6 +143,7 @@ export function captureSession(now: Date = new Date()): SessionFile {
     gene_lists: useGeneListsStore
       .getState()
       .lists.map((l) => (l.source ? { name: l.name, genes: l.genes, source: l.source } : { name: l.name, genes: l.genes })),
+    ...(gates.length > 0 ? { gates: gates.map(toSessionGate) } : {}),
   };
 }
 
@@ -253,6 +259,7 @@ export async function restoreSession(session: SessionFile): Promise<RestoreRepor
   applyDE(session, target, notes);
   applyCommunication(session, target, notes);
   await applySelection(session, target, sameCells, notes);
+  applyGates(session, target, sameCells, notes);
   if (session.view?.panel) useViewStore.getState().setPanel(session.view.panel);
   if (notes.length > 0) level = "warning";
   return { headline, notes, level };
@@ -376,7 +383,11 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
   if (v.highlight) {
     const col = columns.get(v.highlight.column);
     if (col && (col.values ?? []).includes(v.highlight.value)) {
-      useSelectionStore.getState().setHighlight(v.highlight);
+      // Set before anything awaits, so the DE subtab (highlight -> "within" scope)
+      // and the main plot (highlight -> selection) do not act on it: the session
+      // restores its own DE scope and selection.
+      useDESettingsStore.getState().update({ scopedHighlight: v.highlight });
+      useSelectionStore.getState().setHighlight(v.highlight, { select: false });
     } else {
       notes.push(`Highlighted group ${quote(v.highlight.value)} of ${quote(prettyObsLabel(v.highlight.column))}: not in this dataset.`);
     }
@@ -489,4 +500,47 @@ async function applySelection(session: SessionFile, d: DatasetInfo, sameCells: b
   const { cells, ignored } = decodeSelection(sel, d.n_cells ?? 0);
   if (ignored > 0) notes.push(`Selection: ${formatNumber(ignored)} cell positions beyond the dataset's cells were ignored.`);
   if (cells.size > 0) store.setSelection(cells);
+}
+
+const gateNames = (gates: { name: string }[]) => gates.map((g) => quote(g.name)).join(", ");
+
+/**
+ * The session's gates merged into the dataset's (a gate already here with the
+ * same id takes the session's version; others stay). Gates saved by cell
+ * position, and gates inside or built from them, need the same cells; on
+ * other cells only filter and combined gates come back.
+ */
+export function applyGates(session: SessionFile, d: DatasetInfo, sameCells: boolean, notes: string[]) {
+  const saved = session.gates;
+  if (!saved || saved.length === 0) return;
+  const { gates: valid, dropped } = validateGates(saved.map(fromSessionGate));
+  let gates: Gate[] = valid;
+  if (!sameCells) {
+    const kept = new Set<string>();
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const g of gates) {
+        if (kept.has(g.id) || g.def.kind === "cells" || !gateDependencies(g).every((id) => kept.has(id))) continue;
+        kept.add(g.id);
+        changed = true;
+      }
+    }
+    const lost = gates.filter((g) => !kept.has(g.id));
+    gates = gates.filter((g) => kept.has(g.id));
+    if (lost.length > 0) {
+      notes.push(
+        `Gates ${gateNames(lost)}: not restored, the cells differ and ${lost.length === 1 ? "it was" : "they were"} saved by cell position (or inside or built from such a gate).`,
+      );
+    }
+  }
+  if (gates.length > 0) {
+    const result = useGatesStore.getState().mergeGates(d, gates);
+    dropped.push(...result.dropped);
+    if (result.replacedStale > 0) {
+      notes.push(`Gates: ${result.replacedStale} gate${result.replacedStale === 1 ? "" : "s"} saved here on other cells replaced by the session's.`);
+    }
+  }
+  if (dropped.length > 0) {
+    notes.push(`Gates not restored: ${dropped.map((x) => `${quote(x.name)} (${x.reason})`).join(", ")}.`);
+  }
 }

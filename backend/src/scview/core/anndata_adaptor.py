@@ -234,6 +234,14 @@ class AnnDataAdaptor:
         self._fingerprint = (names, fingerprint)
         return fingerprint
 
+    def known_cells_fingerprint(self) -> str | None:
+        """The fingerprint when it is already hashed for the current cells, else
+        None: never reads the file or hashes (the dataset list asks for it)."""
+        if self._adata is None or self._fingerprint is None:
+            return None
+        names, fingerprint = self._fingerprint
+        return fingerprint if names is self._adata.obs_names else None
+
     def n_genes(self) -> int:
         return self.adata.n_vars
 

@@ -12,6 +12,7 @@ import { Lasso, RotateCcw, X } from "lucide-react";
 import { formatNumber, prettyObsLabel, prettyEmbeddingLabel, isRedundantClusterCol } from "@/lib/formatting";
 import { LabelSelectionControls } from "@/components/unified/LabelSelection";
 import { CellFilterControl } from "@/components/unified/CellFilter";
+import { GatesControl } from "@/components/unified/GatesControl";
 import { describeFilter } from "@/lib/cellFilter";
 import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 import { HvgSensitivityControl } from "@/components/unified/HvgSensitivity";
@@ -323,7 +324,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
       <button
         onClick={() => setSelectionMode(selectionMode === "lasso" ? "none" : "lasso")}
         disabled={gridActive}
-        title={gridActive ? "Lasso is off while the plot is split or compared" : "Lasso selection (L)"}
+        title={gridActive ? "Lasso is off while the plot is split or compared" : "Lasso selection (L). On a 3D embedding it selects every cell under the outline, at any depth; turn the lasso off to rotate"}
         className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
           selectionMode === "lasso" && !gridActive
             ? "bg-orange-50 text-orange-700 ring-1 ring-orange-300"
@@ -334,6 +335,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
         Lasso
       </button>
       <CellFilterControl />
+      <GatesControl />
 
       {/* Selection info; a filter's selection says which filter */}
       {selectedIndices && selectedIndices.size > 0 && (

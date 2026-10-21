@@ -21,6 +21,7 @@ import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { UnifiedActivitySubtab } from "@/components/unified/UnifiedActivitySubtab";
 import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSubtab";
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
+import { ReportSubtab } from "@/components/report/ReportSubtab";
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
 import { CompareColoringsGrid } from "@/components/unified/CompareColoringsGrid";
@@ -56,6 +57,7 @@ const SUBTABS = [
   { id: "activity" as const, label: "Activity" },
   { id: "genelists" as const, label: "Gene lists" },
   { id: "communication" as const, label: "Communication" },
+  { id: "report" as const, label: "Report" },
 ] as const;
 
 interface ViolinResponse {
@@ -685,6 +687,11 @@ export function UnifiedViewPanel() {
   useEffect(() => {
     const hl = highlightedGroup;
     if (!hl || hl === appliedHighlight.current) return;
+    // A restored highlight comes with its own (restored) selection.
+    if (!useSelectionStore.getState().highlightSelects) {
+      appliedHighlight.current = hl;
+      return;
+    }
     if (hl.column !== colorBy || colorColumnName !== colorBy || !colors || !categories) return;
     const catIndex = categories.indexOf(hl.value);
     if (catIndex < 0) return;
@@ -882,10 +889,11 @@ export function UnifiedViewPanel() {
                 embedding={embedding}
               />
             )}
-            {dimensions === 2 && !gridActive && (
+            {!gridActive && (
               <LassoSelector
                 active={selectionMode === "lasso"}
                 positions={positions}
+                dimensions={dimensions === 3 ? 3 : 2}
                 getViewState={getShownCamera}
                 onSelectionComplete={handleSelectionComplete}
               />
@@ -1140,7 +1148,7 @@ export function UnifiedViewPanel() {
             </div>
           )}
           {/* Tab bar */}
-          <div className="flex flex-shrink-0 border-b border-slate-200">
+          <div className="flex flex-shrink-0 overflow-x-auto border-b border-slate-200">
             {SUBTABS.filter((tab) => tab.id !== "protein" || dataset?.protein).map((tab) => (
               <button
                 key={tab.id}
@@ -1218,6 +1226,7 @@ export function UnifiedViewPanel() {
               />
             )}
             {activeSubtab === "communication" && <UnifiedCommunicationSubtab groupByColumn={groupByColumn} />}
+            {activeSubtab === "report" && <ReportSubtab groupByColumn={groupByColumn} />}
           </div>
         </div>
       </div>

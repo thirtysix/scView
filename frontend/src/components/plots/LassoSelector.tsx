@@ -1,8 +1,11 @@
 import { useCallback, useRef, useState } from "react";
+import { OrbitView, type OrbitViewState } from "@deck.gl/core";
 
 interface LassoSelectorProps {
   active: boolean;
   positions: Float32Array | null;
+  /** 3 = `positions` holds x, y, z per cell under the scatter's OrbitView */
+  dimensions?: 2 | 3;
   /** The scatter's camera as shown when the lasso closes (the fit, a reset or
    *  the user's own), read then rather than passed on every camera move */
   getViewState: () => Record<string, unknown> | null;
@@ -52,9 +55,43 @@ export function screenToData(
   return [dataX, dataY];
 }
 
+/**
+ * The cells of a 3D embedding whose projection under the scatter's orbit
+ * camera falls inside a screen-space polygon: every cell under the outline,
+ * at any depth (the same OrbitView, orbitAxis "Y", as EmbeddingScatter).
+ */
+export function cellsInPolygon3D(
+  positions: Float32Array,
+  polygon: [number, number][],
+  viewState: Record<string, unknown>,
+  width: number,
+  height: number,
+): Set<number> {
+  const viewport = new OrbitView({ orbitAxis: "Y" }).makeViewport({
+    width,
+    height,
+    viewState: viewState as unknown as OrbitViewState,
+  });
+  const selected = new Set<number>();
+  if (!viewport) return selected;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of polygon) {
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  }
+  const n = Math.floor(positions.length / 3);
+  for (let i = 0; i < n; i++) {
+    const [sx, sy] = viewport.project([positions[i * 3]!, positions[i * 3 + 1]!, positions[i * 3 + 2]!]);
+    if (sx! < minX || sx! > maxX || sy! < minY || sy! > maxY) continue;
+    if (pointInPolygon(sx!, sy!, polygon)) selected.add(i);
+  }
+  return selected;
+}
+
 export function LassoSelector({
   active,
   positions,
+  dimensions = 2,
   getViewState,
   onSelectionComplete,
 }: LassoSelectorProps) {
@@ -103,8 +140,14 @@ export function LassoSelector({
       return;
     }
 
-    // Convert screen-space polygon to data-space
     const rect = svgRef.current.getBoundingClientRect();
+    if (dimensions === 3) {
+      onSelectionComplete(cellsInPolygon3D(positions, points, viewState, rect.width, rect.height));
+      setPoints([]);
+      return;
+    }
+
+    // Convert screen-space polygon to data-space
     const dataPolygon: [number, number][] = points.map(([sx, sy]) =>
       screenToData(sx, sy, viewState, rect.width, rect.height),
     );
@@ -122,7 +165,7 @@ export function LassoSelector({
 
     onSelectionComplete(selected);
     setPoints([]);
-  }, [isDrawing, active, points, positions, getViewState, onSelectionComplete]);
+  }, [isDrawing, active, points, positions, dimensions, getViewState, onSelectionComplete]);
 
   if (!active) return null;
 

@@ -2,6 +2,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { formatNumber } from "@/lib/formatting";
 import { DatasetDownloadMenu } from "@/components/common/DatasetDownloadMenu";
 import { SessionMenu } from "@/components/common/SessionMenu";
+import { ShareLinkButton } from "@/components/common/ShareLinkButton";
 
 export function Header() {
   const currentDataset = useDatasetStore((s) => s.currentDataset);
@@ -42,6 +43,7 @@ export function Header() {
       </div>
       <div className="flex items-center gap-2">
         <SessionMenu />
+        <ShareLinkButton />
         {currentDataset?.status === "ready" && <DatasetDownloadMenu datasetId={currentDataset.id} />}
       </div>
     </header>

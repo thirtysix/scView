@@ -89,6 +89,21 @@ describe("useSessionRestore", () => {
     await waitFor(() => expect(useViewStore.getState().activePanel).toBe("unified"));
   });
 
+  it("stands aside for a share link: the link's view opens, not the last workspace", async () => {
+    localStorage.setItem(KEY, JSON.stringify({ format: "scview-session", version: 1, dataset: { id: "ds1" }, view: { panel: "unified" } }));
+    window.history.replaceState(null, "", "/#view=v1.z.abc");
+    try {
+      renderHook(() => useSessionRestore());
+      expect(api.getDataset).not.toHaveBeenCalled();
+      expect(useViewStore.getState().activePanel).toBe("load");
+      // ...and keeps the slice up to date from then on.
+      await act(async () => useViewStore.getState().setPanel("markers"));
+      expect(JSON.parse(localStorage.getItem(KEY)!).view.panel).toBe("markers");
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("ignores a broken snapshot", () => {
     localStorage.setItem(KEY, "{not json");
     renderHook(() => useSessionRestore());

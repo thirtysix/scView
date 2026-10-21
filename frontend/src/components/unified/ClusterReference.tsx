@@ -9,6 +9,7 @@ import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 import { useObsRevision } from "@/stores/obsRevisionStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { ClusterReportButton } from "@/components/report/ReportButtons";
 
 /**
  * A compact reference scatter showing the cells coloured by the active grouping
@@ -116,6 +117,7 @@ export function ClusterReference({
         {highlight != null && categories[highlight] && (
           <span className="ml-1 font-normal text-slate-400">
             (highlighting {categories[highlight]})
+            <ClusterReportButton column={column} value={categories[highlight]} />
           </span>
         )}
       </div>
