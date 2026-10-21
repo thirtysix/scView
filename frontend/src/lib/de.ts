@@ -3,6 +3,7 @@ import type { ObsColumnInfo } from "@/api/types";
 import { formatPct } from "@/lib/deDetection";
 import { formatPValue } from "@/lib/formatting";
 import { sizeCautionForCopilot } from "@/lib/transcriptomeSize";
+import { compositionCautionForCopilot } from "@/lib/deComposition";
 import { hasPValues } from "@/lib/deMethods";
 
 /** Most-specific first: a donor column beats a per-sample one, which may also
@@ -104,6 +105,9 @@ export function describeComparison(c: DEComparison, r: DEResponse): string {
   let text = describeTest(c, r);
   // The co-pilot must not read a batch difference as biology...
   if (r.confounding) text += `. Caution: ${r.confounding.message}`;
+  // ... nor a shift in which cells each side holds as a change within cells.
+  const mix = compositionCautionForCopilot(r.composition);
+  if (mix) text += `. Caution (composition by ${r.composition!.column}): ${mix.replace(/\.$/, "")}`;
   // ... nor a difference in RNA content as down-regulation.
   const size = r.transcriptome_size;
   if (size?.caution) text += `. Caution: ${sizeCautionForCopilot(size, c.a, c.b)}`;

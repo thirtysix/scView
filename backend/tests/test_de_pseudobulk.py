@@ -192,3 +192,16 @@ async def test_pseudobulk_genes_are_ranked_like_wilcoxon():
     res = await differential_expression_compare("x", _req(), _DM(a))
     assert res.genes[0].gene == "G0"
     assert res.genes[-1].gene == "G1"
+
+
+@pytest.mark.asyncio
+async def test_pseudobulk_carries_the_composition_check():
+    a = _donor_counts(DONORS, DONORS)
+    res = await differential_expression_compare(
+        "x", _req(replicate_key="donor", composition_by="ct"), _DM(a))
+    comp = res.composition
+    assert comp is not None and comp.column == "ct" and comp.warn is False
+    assert (comp.n_a, comp.n_b) == (150, 150)
+    # No clustering column and none asked for: a note, not an error.
+    res = await differential_expression_compare("x", _req(replicate_key="donor"), _DM(a))
+    assert res.composition.column is None and "No clustering" in res.composition.note

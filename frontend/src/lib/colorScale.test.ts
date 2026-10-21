@@ -45,11 +45,13 @@ describe("wantsDiverging (the auto rule)", () => {
   const signed = overlayStats([-1, 0, 2]);
   const positive = overlayStats([0, 1, 2]);
   const negative = overlayStats([-2, -1]);
-  it("auto: a score or protein with values of both signs, never expression or a QC column", () => {
+  it("auto: a score, protein or obs column with values of both signs, never expression", () => {
     expect(wantsDiverging("score", signed, "auto")).toBe(true);
     expect(wantsDiverging("protein", signed, "auto")).toBe(true);
     expect(wantsDiverging("expression", signed, "auto")).toBe(false);
-    expect(wantsDiverging("obs", signed, "auto")).toBe(false);
+    // A signed obs column (S_score, G2M_score) is centred on 0; a QC metric (never negative) is not.
+    expect(wantsDiverging("obs", signed, "auto")).toBe(true);
+    expect(wantsDiverging("obs", positive, "auto")).toBe(false);
     expect(wantsDiverging("score", positive, "auto")).toBe(false);
     expect(wantsDiverging("score", negative, "auto")).toBe(false);
   });

@@ -19,11 +19,13 @@ import { DEEnrichment } from "@/components/unified/DEEnrichment";
 import { DEActivity } from "@/components/unified/DEActivity";
 import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
 import { DEMethodsAgreement } from "@/components/unified/DEMethodsAgreement";
+import { DeCompositionNote } from "@/components/unified/DeCompositionNote";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { CapNote } from "@/components/common/Caption";
 import { downloadCsv } from "@/lib/csv";
 import { describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
 import { describeSize } from "@/lib/transcriptomeSize";
+import { compositionRule } from "@/lib/deComposition";
 import {
   CELL_METHODS,
   MAST_NOTE,
@@ -97,6 +99,8 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const [methods, setMethods] = useState<{ res: DEMethodsResponse; a: string; b: string } | null>(null);
   const [methodsLoading, setMethodsLoading] = useState(false);
   const [methodsError, setMethodsError] = useState<string | null>(null);
+  // The composition check's label column ("" = the active clustering); not a DE setting.
+  const [compositionBy, setCompositionBy] = useState("");
 
   // The settings live in a store (they survive a tab switch; a session restores them).
   const mode = useDESettingsStore((s) => s.mode);
@@ -141,6 +145,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   useEffect(() => {
     setResult(null);
     setMethods(null);
+    setCompositionBy("");
   }, [datasetId]);
 
   // Pickers this dataset can't use fall back to the defaults (the joint
@@ -205,6 +210,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
         ...(test === "pseudobulk"
           ? { method: "pseudobulk", replicate_key: replicateKey }
           : { min_pct: minPct, ...(cellMethod !== "wilcoxon" ? { method: cellMethod } : {}) }),
+        ...(compositionBy ? { composition_by: compositionBy } : {}),
       });
       setResult(res);
       setRefLabel(groupB);
@@ -220,7 +226,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey, minPct, cellMethod]);
+  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey, minPct, cellMethod, compositionBy]);
 
   // The current comparison under every cell-level test, and their agreement.
   const runMethods = useCallback(async () => {
@@ -559,6 +565,24 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
       </div>
       )}
 
+      {/* Each side's cluster/state mix, before the DE is run */}
+      {mode === "groups" && splitCols.length > 0 && (
+        <DeCompositionNote
+          datasetId={datasetId}
+          params={{
+            split_by: splitBy,
+            group_a: groupA,
+            group_b: groupB,
+            ...(withinCol && withinVal ? { within_column: withinCol, within_value: withinVal } : {}),
+          }}
+          columns={withinCols.map((c) => c.name)}
+          column={compositionBy}
+          onColumnChange={setCompositionBy}
+          scopeColumns={withinCols.map((c) => c.name)}
+          onCompareWithin={(col, group) => update({ withinCol: col, withinVal: group })}
+        />
+      )}
+
       {error && (
         <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">{error}</div>
       )}
@@ -700,6 +724,16 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 &ldquo;{result.label.split(" (")[0]} vs {refLabel}, batch included&rdquo;, not as a
                 pure {result.confounding.condition === result.confounding.batch
                   ? "biological" : `'${result.confounding.condition}'`} effect.
+              </span>
+            )}
+            {result.composition?.warn && (
+              <span
+                role="alert"
+                data-testid="de-composition-caution"
+                className="mt-1 block rounded border border-red-200 bg-red-50 px-1.5 py-1 text-red-800"
+                title={compositionRule(result.composition)}
+              >
+                Composition differs (by <code>{result.composition.column}</code>): {result.composition.message}
               </span>
             )}
           </div>
