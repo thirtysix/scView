@@ -172,6 +172,14 @@ describe("ClonotypeSubtab", () => {
     await waitFor(() => expect(api.getOverlap).toHaveBeenCalledWith("d1", "donor", "jaccard"));
   });
 
+  it("shows no Recompute prompt once the filtering step has recomputed the sizes", async () => {
+    api.getVdj.mockResolvedValue(FULL); // stale: false, as after a filtering that recomputes them
+    renderTab();
+    await screen.findByRole("button", { name: "Remove contigs" });
+    expect(screen.queryByRole("button", { name: "Recompute" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/count cells that are gone/)).not.toBeInTheDocument();
+  });
+
   it("recomputes stale clone sizes and removes the contigs after a confirmation", async () => {
     api.getVdj.mockResolvedValue({ ...FULL, stale: true, stale_note: "Cells were removed after the contigs were attached." });
     api.redefineClonotypes.mockResolvedValue({ summary: FULL });
