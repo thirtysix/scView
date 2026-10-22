@@ -111,6 +111,7 @@ async def compute_paga_graph(
         graph_source(adaptor.adata)
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    del adaptor  # no hold on the cached copy through run_exclusive's reload
 
     def _run(adaptor):
         work = adaptor.adata.to_memory() if getattr(adaptor.adata, "isbacked", False) else adaptor.adata
@@ -163,6 +164,7 @@ async def compute_pseudotime(
         graph_source(adata)
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    del adaptor, adata, col  # no hold on the cached copy through run_exclusive's reload
 
     def _run(adaptor):
         work = adaptor.adata.to_memory() if getattr(adaptor.adata, "isbacked", False) else adaptor.adata

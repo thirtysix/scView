@@ -15,6 +15,7 @@ import { SampleQcTable } from "@/components/panels/SampleQcTable";
 import { useSexCheck } from "@/components/panels/SampleSexCheck";
 import { RemovalAudit } from "@/components/qc/RemovalAudit";
 import { MitoModeControl } from "@/components/qc/MitoModeControl";
+import { DoubletFilterControl } from "@/components/qc/DoubletFilterControl";
 
 const DEBOUNCE_MS = 150;
 const ROWS = 6; // per table, more behind "show all"
@@ -340,17 +341,7 @@ export function QcFilterSummary({
         )}
         {/* Per sample: the card below, with each sample's QC and loss. */}
         {preview.clusters && <LossTable title="Per cluster" grouping={preview.clusters} />}
-        {preview.doublet_calls && onChange && (
-          <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
-            <input
-              type="checkbox"
-              checked={thresholds.drop_doublets}
-              onChange={(e) => onChange({ drop_doublets: e.target.checked })}
-              className="h-3 w-3"
-            />
-            Also drop predicted doublets
-          </label>
-        )}
+        {onChange && <DoubletFilterControl preview={preview} thresholds={thresholds} onChange={onChange} />}
         <p className="text-[11px] text-slate-400">
           {preview.has_mt ? "" : "% mito can't be measured here, so no mito threshold applies. "}
           {mode === "mad" ? "The fixed genes and counts cut-offs are not used in MAD mode. " : ""}

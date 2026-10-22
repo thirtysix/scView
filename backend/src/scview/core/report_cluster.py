@@ -370,7 +370,7 @@ def _median(values, m: np.ndarray) -> float | None:
 
 
 def _qc(ctx: dict) -> dict:
-    from scview.core import cluster_qc
+    from scview.core import cluster_qc, doublet_source
     from scview.core.anndata_adaptor import per_cell_qc
 
     adaptor, adata, mask, column, value = (ctx["adaptor"], ctx["adata"], ctx["mask"],
@@ -407,7 +407,8 @@ def _qc(ctx: dict) -> dict:
     except ValueError as exc:
         flags = {"status": R.NOT_APPLICABLE, "flags": [], "notes": [], "note": str(exc)}
 
-    calls = cluster_qc.doublet_calls(obs)
+    used = doublet_source.resolve(obs)  # cell hashing when run, else Scrublet
+    calls = None if used is None else used.calls
     score = (pd.to_numeric(obs["doublet_score"], errors="coerce").to_numpy(dtype=float)
              if "doublet_score" in obs.columns else None)
     if calls is None and score is None:
@@ -418,7 +419,8 @@ def _qc(ctx: dict) -> dict:
                     "n_doublets": int(calls[mask].sum()) if calls is not None else None,
                     "fraction": R.num(calls[mask].mean()) if calls is not None else None,
                     "fraction_rest": R.num(calls[rest].mean()) if calls is not None and rest.any() else None,
-                    "median_score": _median(score, mask), "median_score_rest": _median(score, rest)}
+                    "median_score": _median(score, mask), "median_score_rest": _median(score, rest),
+                    "source": None if used is None else used.label}
 
     states = _qc_states(adata, mask)
     removed = _removed(adata, column, value, int(mask.sum()))

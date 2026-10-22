@@ -289,3 +289,28 @@ def test_an_upload_with_log_values_in_x_is_reset_as_pass_1_was(tmp_path, dataset
                           timeout=600)
     assert proc.returncode == 0, proc.stderr[-3000:]
     assert list(ad.read_h5ad(dst).obs_names) == list(new.obs_names)
+
+
+async def test_the_floor_never_removes_a_cell_pass_1_kept(client, pass1, dataset_manager):
+    """With ``floor`` the re-filter is never stricter than the global rule, which here
+    is pass 1's own (fixed 10 %): X and Y (~3 %, own bounds below 10 %) lose no cell
+    pass 1 kept, and Z (~12 %) still comes back. Without it they lose their tails."""
+    dm, orig, cur = pass1
+    url = f"{API}/datasets/tp1/qc/mito-refilter"
+    off = (await client.get(url)).json()
+    on = (await client.get(url, params={"floor": "true"})).json()
+    assert off["mito_type_floor"] is False and on["mito_type_floor"] is True
+    assert off["newly_removed"] > 0 and on["newly_removed"] == 0
+    assert all(t["newly_removed"] == 0 for t in on["types"])
+    assert on["brought_back"] == off["brought_back"] > 120  # Z's own bounds are above 10 %
+    assert "whichever is higher" in on["can"]
+    r = await client.post(f"{API}/datasets/tp1/qc/mito-refilter-stream", json={"floor": True})
+    assert "event: complete" in r.text and "event: error" not in r.text
+    N = (await dataset_manager.get_or_load_dataset("tp1")).adata
+    assert N.n_obs == on["n_after"] and cur.obs_names.isin(N.obs_names).all()
+    hist = provenance.read_provenance(N)["history"]
+    assert hist[len(PASS1)]["params"]["mito_type_floor"] is True
+    filt = hist[len(PASS1) + 2]["params"]
+    assert filt["qc_mito_type_floor"] is True and filt["qc_mito_types"]["floor"] is True
+    card = (await client.get(f"{API}/datasets/tp1/qc/mito-by-type")).json()
+    assert card["filter_type_floor"] is True and "never stricter" in card["summary"]

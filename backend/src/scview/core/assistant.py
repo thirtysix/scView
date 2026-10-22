@@ -734,6 +734,9 @@ _CONDITION_HINT_RE = re.compile(
     r"sample|orig\.?ident|group|timepoint|sex|tissue",
     re.I,
 )
+# Columns scView writes itself (V(D)J chain status, hashing calls, QC states,
+# doublet calls): never a batch or condition, even when the name says "status".
+_APP_COLUMN_RE = re.compile(r"^(vdj_|hash_|qc_|scview_|clone|clonotype|predicted_doublet|doublet)", re.I)
 
 _MT_COL_RE = re.compile(r"pct_counts_mt|percent[._]?mt|pct_counts_mito|percent[._]?mito", re.I)
 
@@ -769,21 +772,23 @@ def build_insight(adaptor) -> DatasetInsight:
             severity="suggestion",
         )
 
-    # 2. Heavy doublet load.
-    if "predicted_doublet" in obs.columns:
-        try:
-            frac = float(obs["predicted_doublet"].astype(bool).mean())
-            if frac >= 0.08:
-                return DatasetInsight(
-                    insight=(
-                        f"About {frac:.0%} of cells are flagged as predicted doublets "
-                        "— consider filtering them before clustering."
-                    ),
-                    question="Should I filter doublets?",
-                    severity="suggestion",
-                )
-        except Exception:  # pragma: no cover
-            pass
+    # 2. Heavy doublet load, by the doublet views' source (cell hashing when run, else Scrublet).
+    try:
+        from scview.core import doublet_source
+
+        used = doublet_source.resolve(obs)
+        frac = float(used.calls.mean()) if used is not None and n else 0.0
+        if frac >= 0.08:
+            return DatasetInsight(
+                insight=(
+                    f"About {frac:.0%} of cells are doublets by {used.label} "
+                    "— consider filtering them before clustering."
+                ),
+                question="Should I filter doublets?",
+                severity="suggestion",
+            )
+    except Exception:  # pragma: no cover
+        pass
 
     # 2b. QC anomaly: high mitochondrial content (stressed / dying cells).
     for col in obs.columns:
@@ -839,7 +844,8 @@ def build_insight(adaptor) -> DatasetInsight:
     # 3. Strong split by a condition/batch-like column, not yet integrated.
     if not state.batch_correction.done:
         for col in obs.columns:
-            if _looks_like_celltype_col(col) or not _CONDITION_HINT_RE.search(col):
+            if (_looks_like_celltype_col(col) or not _CONDITION_HINT_RE.search(col)
+                    or _APP_COLUMN_RE.match(str(col))):
                 continue
             try:
                 vc = obs[col].astype("category").value_counts()

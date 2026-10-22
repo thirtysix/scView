@@ -276,7 +276,8 @@ async def test_endpoint_defaults_to_the_pipelines_thresholds(client, dataset_man
     assert body["thresholds"] == {"mode": "mad", "min_genes": p.min_genes, "max_genes": 0,
                                   "min_counts": 0, "max_pct_mt": p.max_pct_mt,
                                   "drop_doublets": False, "mad_k": 5.0, "mad_k_mt": 3.0,
-                                  "mad_upper": False, "mito_mode": "global", "mito_type_column": ""}
+                                  "mad_upper": False, "mito_mode": "global", "mito_type_column": "",
+                                  "mito_type_floor": False}
     assert body["mad"]["column"] == "Donor" and len(body["mad"]["samples"]) == 4
     r = await client.get(f"{API}/datasets/{did}/qc/filter-preview", params={"sample_column": "nope"})
     assert r.status_code == 400

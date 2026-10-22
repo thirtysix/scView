@@ -228,19 +228,47 @@ def per_cell_qc(adata):
     return out
 ''',
     "doublet_calls": '''
-def doublet_calls(obs):
-    """Per-cell doublet calls as booleans (Scrublet's column, or a text one)."""
+def doublet_calls(obs, source="legacy"):
+    """Per-cell doublet calls as booleans from the source scView's filtering used
+    (core/doublet_source.py): "hashing" (hash_class), "scrublet" (predicted_doublet),
+    "either" (both), "auto" (hashing, else Scrublet, else a text column), a text
+    column's name, or "legacy" (a filtering recorded before the choice existed:
+    Scrublet's column first, then the text ones)."""
+    def text_in(col, values):
+        return col.astype(str).str.lower().isin(values).to_numpy()
+
+    hashing = text_in(obs["hash_class"], ("doublet",)) if "hash_class" in obs.columns else None
+    scrublet = None
     if "predicted_doublet" in obs.columns:
         col = obs["predicted_doublet"]
-        if pd.api.types.is_bool_dtype(col):
-            return col.to_numpy(dtype=bool)
-        return col.astype(str).str.lower().isin(("true", "1", "doublet")).to_numpy()
-    names = [c for c in ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class",
-                         "hash_class") if c in obs.columns]
-    names += [c for c in obs.columns if str(c).startswith("DF.classification")]
-    for name in names:
-        return obs[name].astype(str).str.lower().eq("doublet").to_numpy()
-    return None
+        scrublet = (col.to_numpy(dtype=bool) if pd.api.types.is_bool_dtype(col)
+                    else text_in(col, ("true", "1", "1.0", "doublet")))
+    named = [c for c in ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class")
+             if c in obs.columns]
+    finder = [c for c in obs.columns if str(c).startswith("DF.classification")]
+    if source == "hashing" or (source == "auto" and hashing is not None):
+        return hashing
+    if source == "either":
+        if hashing is not None and scrublet is not None:
+            return hashing | scrublet
+        return hashing if hashing is not None else scrublet
+    if source in ("scrublet", "auto", "legacy") and scrublet is not None:
+        return scrublet
+    if source == "scrublet":
+        return None
+    if source == "legacy" and hashing is not None and not named:
+        return hashing  # hash_class came after the named text columns, before DoubletFinder's
+    if source not in ("auto", "legacy"):  # a text column another tool left
+        return text_in(obs[source], ("doublet",)) if source in obs.columns else None
+    texts = named + finder
+    return text_in(obs[texts[0]], ("doublet",)) if texts else None
+
+
+def hash_negatives(obs):
+    """Cells cell hashing calls Negative (no tag above background), or None."""
+    if "hash_class" not in obs.columns:
+        return None
+    return obs["hash_class"].astype(str).str.lower().eq("negative").to_numpy()
 ''',
     "mad_thresholds": '''
 def mad_thresholds(adata, qc, column, k, k_mt, upper, ceiling, min_cells=100):
@@ -725,6 +753,24 @@ _HELPER_NEEDS = {
 }
 
 
+def _scrublet_helper() -> str:
+    """core/scrublet_lean.py's code (Scrublet on the counts alone, the scores
+    sc.pp.scrublet gives without its copies of the dataset), copied into the script so
+    the replay scores what scView scored, in the same memory, without importing scView."""
+    import inspect
+
+    from scview.core import scrublet_lean
+
+    lines = [f"{name} = {_lit(getattr(scrublet_lean, name))}" for name in scrublet_lean.REPLAY_CONSTANTS]
+    for obj in scrublet_lean.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["scrublet_counts"] = _scrublet_helper()
+_HELPER_ORDER += ("scrublet_counts",)
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -776,20 +822,31 @@ sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False,
 '''))
 
 
+# Where the doublet step took the counts from (its recorded ``input``; none: X).
+_DOUBLET_INPUT = {"layers['counts']": 'adata.layers["counts"]', ".raw": "adata.raw.X"}
+
+
 def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
+    _need(ctx, "scrublet_counts")
     rate = p.get("expected_doublet_rate")
-    if isinstance(rate, (int, float)) and rate > 0:
-        exact = ", use_approx_neighbors=False" if p.get("neighbors") == "exact" else ""
-        code = [f"sc.pp.scrublet(adata, expected_doublet_rate={_lit(float(rate))}{exact})"]
-        note = ""
+    recorded = isinstance(rate, (int, float)) and rate > 0
+    counts = _DOUBLET_INPUT.get(p.get("input"), "adata.X")
+    approx = {"exact": "False", "approximate": "True"}.get(p.get("neighbors"), "None")
+    code = ["# Scrublet on the counts alone (scrublet_counts above): sc.pp.scrublet's scores, "
+            "without its copies of the dataset.",
+            f"score, call, uns = scrublet_counts({counts}, "
+            f"expected_doublet_rate={_lit(float(rate) if recorded else 0.05)}, "
+            f"use_approx_neighbors={approx})",
+            'adata.obs["doublet_score"] = score',
+            'adata.obs["predicted_doublet"] = call',
+            'adata.uns["scrublet"] = uns']
+    if recorded:
         if p.get("expected_rate_from"):
             code.insert(0, "# The rate scView suggested from the cells per sample "
                            f"({comment_text(p['expected_rate_from'], 80)}), as it ran.")
-        return Snippet(EXACT, code, note)
-    return Snippet(APPROXIMATE, [
-        "# NOTE: the expected doublet rate was not recorded; scanpy's default (0.05) is used.",
-        "sc.pp.scrublet(adata)",
-    ], "doublet rate not recorded: scanpy's default")
+        return Snippet(EXACT, code, "")
+    code.insert(0, "# NOTE: the expected doublet rate was not recorded; scanpy's default (0.05) is used.")
+    return Snippet(APPROXIMATE, code, "doublet rate not recorded: scanpy's default")
 
 
 def _mito_rule(p: dict) -> dict | None:
@@ -802,6 +859,15 @@ def _mito_rule(p: dict) -> dict | None:
                        "bound": r.get("bound")} for r in rule["types"] if isinstance(r, dict)]}
 
 
+def _floor_lines(global_mito: str) -> list[str]:
+    """The per-type % mito filter with scView's floor (``qc_mito_type_floor``): a
+    cell goes only when its type's bound and the global rule both remove it."""
+    return ["# Never stricter than the global rule: each cell's bound is the higher of its type's",
+            "# own and the global rule's for that cell, so it goes only when both remove it.",
+            f"GLOBAL_MITO = {global_mito}",
+            "drop |= type_mito_drop(adata, qc, MITO_TYPES, GLOBAL_MITO) & GLOBAL_MITO"]
+
+
 def _filtering(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "per_cell_qc")
     mode = p.get("qc_threshold_mode") or "fixed"
@@ -809,6 +875,7 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
     code = ["qc = per_cell_qc(adata)"]
     status, note = EXACT, ""
     rule = _mito_rule(p)
+    floor = rule is not None and bool(p.get("qc_mito_type_floor"))  # absent (older records): off
     if rule is not None:
         _need(ctx, "type_mito_drop")
         code += ["# % mito per cell type (scView's per-type filter): each type's recorded bound,",
@@ -833,6 +900,9 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
             ]
         if rule is None:
             code.append("drop = mad_drop(adata, qc, THRESHOLDS)")
+        elif floor:
+            code += ['drop = mad_drop(adata, {**qc, "pct_mt": None}, THRESHOLDS)',
+                     *_floor_lines("mad_drop(adata, mito_only(qc), THRESHOLDS)")]
         else:
             code += ['drop = mad_drop(adata, {**qc, "pct_mt": None}, THRESHOLDS)',
                      "drop |= type_mito_drop(adata, qc, MITO_TYPES, mad_drop(adata, mito_only(qc), THRESHOLDS))"]
@@ -842,6 +912,9 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
                f"min_counts={_lit(p.get('min_counts', 0))}")
         if rule is None:
             code.append(f"drop = fixed_drop(qc, {cut}, max_pct_mt={_lit(p.get('max_pct_mt'))})")
+        elif floor:
+            code += [f"drop = fixed_drop(qc, {cut}, max_pct_mt=None)",
+                     *_floor_lines(f"fixed_drop(mito_only(qc), 0, 0, 0, {_lit(p.get('max_pct_mt'))})")]
         else:
             code += [f"drop = fixed_drop(qc, {cut}, max_pct_mt=None)",
                      "drop |= type_mito_drop(adata, qc, MITO_TYPES, fixed_drop(mito_only(qc), 0, 0, 0, "
@@ -851,13 +924,33 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
             code.insert(0, "# NOTE: this record has no cut-offs (an older scView): none applied.")
     if p.get("drop_doublets"):
         _need(ctx, "doublet_calls")
-        code += ["calls = doublet_calls(adata.obs)", "if calls is not None:", "    drop |= calls"]
+        code += [*_doublet_source_code(p), "if calls is not None:", "    drop |= calls"]
+    if p.get("drop_hash_negatives"):
+        _need(ctx, "doublet_calls")  # defines hash_negatives too
+        code += ["negatives = hash_negatives(adata.obs)  # cell hashing's Negative cells",
+                 "if negatives is not None:", "    drop |= negatives"]
     code += [
         "if drop.any():",
         "    adata = adata[~drop, :].copy()",
-        f"sc.pp.filter_genes(adata, min_cells={_lit(min_cells)})",
     ]
+    clones = p.get("vdj_clonotypes")
+    if isinstance(clones, dict):
+        _need(ctx, "vdj")
+        code += ["# V(D)J clone sizes recomputed on the cells kept, as scView's filtering step does.",
+                 "if CHAINS_KEY in adata.obsm:",
+                 f"    redefine(adata, same_v_gene={_lit(bool(clones.get('same_v_gene')))})"]
+    code.append(f"sc.pp.filter_genes(adata, min_cells={_lit(min_cells)})")
     return Snippet(status, code, note)
+
+
+def _doublet_source_code(p: dict) -> list[str]:
+    """The doublet calls a filtering dropped: the source it recorded (the one its
+    choice stood for), or Scrublet first for a record from before the choice."""
+    if "qc_doublet_source" not in p:
+        return ["calls = doublet_calls(adata.obs)"]
+    used = p.get("qc_doublet_source_used") or p.get("qc_doublet_source") or "auto"
+    return [f"# Doublets by {comment_text(used, 60)} (scView's choice: {comment_text(p['qc_doublet_source'], 20)}).",
+            f"calls = doublet_calls(adata.obs, {_lit(str(used))})"]
 
 
 def _mito_refilter(p: dict, ctx: _Ctx) -> Snippet:
@@ -1211,6 +1304,14 @@ def _uns_mapping(adata, key: str) -> dict[str, str] | None:
 
 def _ingest(p: dict, ctx: _Ctx) -> Snippet:
     lines = ["# The import itself is read_input() at the top of this script."]
+    if isinstance(p.get("feature_split"), dict):  # an .h5ad upload with antibody / tag features in X
+        lines += [
+            "# scView kept only the 'Gene Expression' features in X; the antibody (CITE-seq) and",
+            "# CellPlex tag features went to obsm['protein_counts'] / obsm['hto_counts'].",
+            "if \"feature_types\" in adata.var.columns:",
+            "    adata = adata[:, adata.var[\"feature_types\"].astype(str).eq(\"Gene Expression\").to_numpy()].copy()",
+        ]
+        return Snippet(APPROXIMATE, lines, "antibody and tag features dropped from X, not moved to obsm")
     if any(k.startswith("protein") or k.startswith("n_protein") for k in p):
         lines.append("# NOTE: scView moved the antibody (CITE-seq) features out of X into "
                      "obsm['protein_counts']; read_input keeps only the gene features.")

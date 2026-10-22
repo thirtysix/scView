@@ -10,7 +10,7 @@ import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
 import type { MarkersResponse } from "@/api/markers";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
-import { MARKERS_PER_GROUP } from "@/api/markers";
+import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { GeneReportButton } from "@/components/report/ReportButtons";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
@@ -78,7 +78,8 @@ export function UnifiedMarkersSubtab({
   const [markersData, setMarkersData] = useState<MarkersResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [noMarkers, setNoMarkers] = useState(false);
+  // Why there are no markers (an unprocessed dataset: 200 with no groups), or null.
+  const [noMarkers, setNoMarkers] = useState<string | null>(null);
   // Still loading after 1.5 s: the backend is computing this column's markers.
   const computingMarkers = useDelayedFlag(isLoading, 1500);
 
@@ -107,7 +108,7 @@ export function UnifiedMarkersSubtab({
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-    setNoMarkers(false);
+    setNoMarkers(null);
 
     // Always the grouping column's own markers: the backend serves stored ones
     // when it has them and computes them otherwise. Asking for the default
@@ -119,6 +120,13 @@ export function UnifiedMarkersSubtab({
     apiFetch<MarkersResponse>(url)
       .then((data) => {
         if (cancelled) return;
+        const none = noMarkersReason(data);
+        if (none) {
+          setMarkersData(null);
+          setNoMarkers(none);
+          setIsLoading(false);
+          return;
+        }
         setMarkersData(data);
         const hl = useSelectionStore.getState().highlightedGroup;
         setSelectedGroup(highlightedMarkerGroup(data.groups, groupByColumn, hl) ?? data.groups[0] ?? "");
@@ -127,7 +135,7 @@ export function UnifiedMarkersSubtab({
       .catch((err) => {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("404")) setNoMarkers(true);
+        if (msg.includes("404")) setNoMarkers(NO_MARKERS_REASON);
         else setError(msg);
         setIsLoading(false);
       });
@@ -234,8 +242,8 @@ export function UnifiedMarkersSubtab({
 
   if (noMarkers) {
     return (
-      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-center text-xs text-amber-700">
-        No marker genes available. Run the preprocessing pipeline to compute markers.
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-center text-xs text-amber-700" data-testid="no-markers">
+        {noMarkers}
       </div>
     );
   }

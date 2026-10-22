@@ -20,7 +20,9 @@ removes more than ``LOSS_FLAG`` of it or sits below its median.
 
 The filtering step applies these bounds when asked (``qc_mito_mode``
 "per_type", ``core/qc_filter.py``: the same rule, with the cap at
-``qc_filter.TYPE_BOUND_CAP``); the table here previews it. A dataset filtered that
+``qc_filter.TYPE_BOUND_CAP``); the table here previews it, also with the floor
+(``qc_mito_type_floor``: a type's bound is never below the ceiling, so it only
+relaxes the rule for a high-baseline type: ``removed_floor``). A dataset filtered that
 way is read with the rule it used: a type that had its own bound is not flagged
 against a ceiling it was never judged by. A type made mostly of damaged cells has
 a high median and would get a high bound too, so a per-type bound assumes each
@@ -87,6 +89,11 @@ class TypeMito(BaseModel):
     removed_global_frac: float = 0.0
     removed_bound: int | None = None  # cells above the type's own bound
     removed_bound_frac: float | None = None
+    # The floor: its own bound, never below the ceiling (max of the two), and the cells
+    # above that; None without a bound of its own (the ceiling alone judges it).
+    floor_bound: float | None = None
+    removed_floor: int | None = None
+    removed_floor_frac: float | None = None
     # Cells the filtering step's % mito rule actually removed (from its record; None
     # when the dataset was not filtered or has no record). In MAD mode each sample's
     # bound can sit below the ceiling, so this can be far above removed_global.
@@ -98,6 +105,8 @@ class TypeMito(BaseModel):
     # then; None when it was not filtered per type on this column.
     applied_rule: str | None = None
     applied_bound: float | None = None
+    # Filtered per type with the floor: which bound it used ("type" | "global" | "mixed").
+    applied_floor: str | None = None
     reasons: list[str] = []
     note: str = ""
 
@@ -114,6 +123,7 @@ class MitoByType(BaseModel):
     # The recorded % mito rule ("global" | "per_type") and, per type, its column.
     filter_mito_mode: str | None = None
     filter_type_column: str | None = None
+    filter_type_floor: bool = False  # the per-type filtering was never stricter than the global rule
     already_filtered: bool = False
     includes_removed: int = 0  # cells the filtering step removed, added back from its record
     assigned_removed: int = 0  # of those, cells given a cluster by expression (``assigned``)
@@ -124,6 +134,7 @@ class MitoByType(BaseModel):
     n_flagged: int = 0
     removed_global_total: int = 0
     removed_bound_total: int = 0  # by the per-type bounds, where a type has one
+    removed_floor_total: int = 0  # by the per-type bounds with the floor, where a type has one
     summary: str = ""
     note: str = ""
     rule: str = RULE
@@ -183,19 +194,23 @@ def _column(adata, recorded: dict | None) -> tuple[str | None, str | None]:
     return default_column(adata)
 
 
-def _applied(recorded: dict | None, column: str) -> dict[str, float | None] | None:
+def _applied(recorded: dict | None, column: str) -> dict[str, tuple[float | None, str | None]] | None:
     """Per type, the bound the last per-type filtering judged it by (None: the
-    global rule), when it filtered per type on ``column``; else None."""
+    global rule) and, with the floor, which bound that run used ("type", "global"
+    or "mixed"; None without the floor), when it filtered per type on ``column``;
+    else None."""
     if (recorded or {}).get("qc_mito_mode") != "per_type":
         return None
     rule = recorded.get("qc_mito_types")
     if not isinstance(rule, dict) or rule.get("column") != column:
         return None
-    out: dict[str, float | None] = {}
+    floor = bool(recorded.get("qc_mito_type_floor"))
+    out: dict[str, tuple[float | None, str | None]] = {}
     for r in rule.get("types") or []:
         if isinstance(r, dict) and isinstance(r.get("name"), str):
             b = r.get("bound")
-            out[r["name"]] = float(b) if isinstance(b, (int, float)) else None
+            uses = r.get("floor_uses") if floor and r.get("floor_uses") in ("type", "global", "mixed") else None
+            out[r["name"]] = (float(b) if isinstance(b, (int, float)) else None, uses)
     return out
 
 
@@ -272,6 +287,7 @@ def mito_by_type(adata, column: str | None = None, cells: dict | Callable[[], di
     flagged = [r for r in rows if r.flagged]
     removed_global = int(sum(r.removed_global for r in rows))
     removed_bound = int(sum(r.removed_bound or 0 for r in rows))
+    removed_floor = int(sum(r.removed_floor or 0 for r in rows))
     notes = []
     n_back = 0 if gone is None else int(sum(1 for x in gone[0] if x))
     if gone is not None:
@@ -297,27 +313,38 @@ def mito_by_type(adata, column: str | None = None, cells: dict | Callable[[], di
         filter_mode=(recorded or {}).get("qc_threshold_mode"),
         filter_mito_mode=mito_mode,
         filter_type_column=(recorded or {}).get("qc_mito_type_column") if mito_mode == "per_type" else None,
+        filter_type_floor=bool(mito_mode == "per_type" and (recorded or {}).get("qc_mito_type_floor")),
         already_filtered=bool(recorded),
         includes_removed=n_back, assigned_removed=n_back if how == "assigned" else 0,
         types=rows, n_flagged=len(flagged), removed_global_total=removed_global,
-        removed_bound_total=removed_bound,
+        removed_bound_total=removed_bound, removed_floor_total=removed_floor,
         summary=_summary(rows, flagged, cut, column if judged else None,
-                         "cluster " if reason == "clustering" else ""),
+                         "cluster " if reason == "clustering" else "",
+                         floor=bool((recorded or {}).get("qc_mito_type_floor"))),
         note=" ".join(notes),
     )
 
 
-def _recorded_rule(row: TypeMito, applied: dict[str, float | None], judged: bool) -> None:
+def _recorded_rule(row: TypeMito, applied: dict[str, tuple[float | None, str | None]], judged: bool) -> None:
     """How the per-type filtering judged the type; one judged by its own bound is not
-    flagged against a ceiling it never met (unless a ceiling was typed: a what-if)."""
+    flagged against a ceiling it never met (unless a ceiling was typed: a what-if).
+    With the floor its bound never sat below the global rule's, so it is not flagged
+    either: where the global bound was the higher, the global rule judged it."""
     if row.group not in applied:
         return
-    b = applied[row.group]
+    b, uses = applied[row.group]
     row.applied_rule, row.applied_bound = ("own", round(b, 3)) if b is not None else ("global", None)
+    row.applied_floor = uses if b is not None else None
     if row.applied_rule == "own" and judged:
         row.flagged = False
         row.reasons = []
-        row.note = " ".join(x for x in (f"Filtered with its own bound, {_pct(b)}.", row.note) if x)
+        said = {None: f"Filtered with its own bound, {_pct(b)}.",
+                "type": f"Filtered with its own bound, {_pct(b)} (above the global rule's).",
+                "global": f"Filtered by the global rule: its own bound, {_pct(b)}, was below it and the "
+                          "filter was never stricter than the global rule.",
+                "mixed": f"Filtered with its own bound, {_pct(b)}, or the global rule's where that was "
+                         "higher (the samples' bounds differ)."}[uses]
+        row.note = " ".join(x for x in (said, row.note) if x)
 
 
 def _per_cell(adata) -> dict:
@@ -358,6 +385,10 @@ def _type_row(group: str, v: np.ndarray, cut: float, by_filter: np.ndarray | Non
         row.bound = round(bound, 3)
         row.removed_bound = int(((v > bound) | (v >= BOUND_CAP)).sum())
         row.removed_bound_frac = round(row.removed_bound / k, 4)
+        # The floor: removed only when above the ceiling too (its bound = max(own, ceiling)).
+        row.floor_bound = round(max(bound, cut), 3)
+        row.removed_floor = int(((v > cut) & ((v > bound) | (v >= BOUND_CAP))).sum())
+        row.removed_floor_frac = round(row.removed_floor / k, 4)
     own = (f"; its own bound, {_pct(row.bound)}, would remove {row.removed_bound_frac:.0%}"
            if row.bound is not None else "")
     if k >= MIN_TYPE_CELLS and cut < med:
@@ -377,8 +408,9 @@ def _type_row(group: str, v: np.ndarray, cut: float, by_filter: np.ndarray | Non
 
 
 def _summary(rows: list[TypeMito], flagged: list[TypeMito], cut: float,
-             per_type_column: str | None = None, kind: str = "") -> str:
-    """``kind``: "cluster " before each name when the groups are a clustering's numbers."""
+             per_type_column: str | None = None, kind: str = "", floor: bool = False) -> str:
+    """``kind``: "cluster " before each name when the groups are a clustering's numbers;
+    ``floor``: the per-type filtering was never stricter than the global rule."""
     if not rows:
         return ""
     damaged = [r for r in rows if r.damaged]
@@ -386,10 +418,11 @@ def _summary(rows: list[TypeMito], flagged: list[TypeMito], cut: float,
         f"{kind}{r.group} (median {_pct(r.median or 0.0)})" for r in damaged
     ) + (" looks" if len(damaged) == 1 else " look") + " damaged, not a high-baseline type."
     if per_type_column:  # filtered per type: the ceiling judged only the types without a bound
-        own = sum(1 for r in rows if r.applied_rule == "own")
+        own = sum(1 for r in rows if r.applied_rule == "own" and r.applied_floor != "global")
         rest = [r for r in rows if r.applied_rule != "own" and not r.damaged]
-        head = (f"Filtered with per-type bounds on '{per_type_column}': {own} of {len(rows)} types "
-                f"used their own bound, the rest the global rule.")
+        head = (f"Filtered with per-type bounds on '{per_type_column}'"
+                + (", never stricter than the global rule" if floor else "")
+                + f": {own} of {len(rows)} types used their own bound, the rest the global rule.")
         if flagged:
             return f"{head} {_flag_summary(rest, flagged, cut, kind)}{tail}"
         return f"{head} No type that kept the global rule is flagged.{tail}"
@@ -432,7 +465,8 @@ def filtering_rule(r: MitoByType) -> str:
     if not r.already_filtered:
         return "not filtered by scView yet"
     if r.filter_mito_mode == "per_type":
-        return f"filtering used per-type bounds on '{r.filter_type_column}'"
+        return (f"filtering used per-type bounds on '{r.filter_type_column}'"
+                + (", never stricter than the global rule" if r.filter_type_floor else ""))
     return f"filtering used one global rule ({r.filter_mode} mode)"
 
 

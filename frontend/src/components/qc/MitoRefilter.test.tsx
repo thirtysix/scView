@@ -51,7 +51,7 @@ describe("MitoRefilter", () => {
     render(<MitoRefilter datasetId="d1" column="scview_leiden_r0.5" perCluster />);
     fireEvent.click(screen.getByRole("button", { name: /Re-filter with per-cluster bounds/ }));
     await screen.findByTestId("refilter-preview");
-    expect(getMitoRefilter).toHaveBeenCalledWith("d1", "scview_leiden_r0.5");
+    expect(getMitoRefilter).toHaveBeenCalledWith("d1", "scview_leiden_r0.5", false);
     expect(screen.getByText(/1,150 of 1,222 cells kept/)).toBeInTheDocument();
     const three = screen.getByTestId("refilter-row-3");
     expect(three.textContent).toContain("11.8%");

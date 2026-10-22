@@ -30,6 +30,26 @@ describe("mito filter API", () => {
     expect(new URL(String(fetchSpy.mock.calls[2]![0]), "http://x").searchParams.has("mito_type_column")).toBe(false);
   });
 
+  it("sends the floor only when it is on (preview, re-filter preview and run)", async () => {
+    const fetchSpy = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
+      new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    await getFilterPreview("d1", { ...T, qc_mito_mode: "per_type" });
+    expect(new URL(String(fetchSpy.mock.calls[0]![0]), "http://x").searchParams.has("mito_type_floor")).toBe(false);
+    await getFilterPreview("d1", { ...T, qc_mito_mode: "per_type", qc_mito_type_floor: true });
+    expect(new URL(String(fetchSpy.mock.calls[1]![0]), "http://x").searchParams.get("mito_type_floor")).toBe("true");
+    await getFilterPreview("d1", { ...T, qc_mito_mode: "global", qc_mito_type_floor: true }); // one rule: no floor
+    expect(new URL(String(fetchSpy.mock.calls[2]![0]), "http://x").searchParams.has("mito_type_floor")).toBe(false);
+    await getMitoRefilter("d1", "cell_type", true);
+    expect(String(fetchSpy.mock.calls[3]![0])).toContain("/qc/mito-refilter?column=cell_type&floor=true");
+    await getMitoRefilter("d1");
+    expect(String(fetchSpy.mock.calls[4]![0])).toMatch(/\/qc\/mito-refilter$/);
+    fetchSpy.mockImplementation(async () => sse('event: complete\ndata: {"steps_run": []}\n\n'));
+    await runMitoRefilter("d1", "cell_type", () => {}, true);
+    expect(JSON.parse(String(fetchSpy.mock.calls[5]![1]!.body))).toEqual({ column: "cell_type", floor: true });
+  });
+
   it("previews with the column and gives the backend's own reason on a refusal", async () => {
     const fetchSpy = vi.fn<(url: string) => Promise<Response>>(async () =>
       new Response(JSON.stringify({ detail: "No original upload is stored for this dataset." }), { status: 409 }),

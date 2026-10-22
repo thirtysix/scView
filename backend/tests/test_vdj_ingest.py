@@ -11,11 +11,11 @@ import pandas as pd
 import pytest
 
 from scview.core import vdj
-from scview.core.ingestion import IngestOptions, IngestSessionManager
-from scview.core.ingestion.bundling import FileRole, UnitFormat, build_bundle
+from scview.core.ingestion import IngestCommitError, IngestOptions, IngestSessionManager
+from scview.core.ingestion.bundling import FileRole, SideKind, UnitFormat, build_bundle
 from scview.core.ingestion.detection import FileKind, detect_file
 from tests.test_ingestion_session import _barcode, _stage_h5ad, _stage_mex
-from tests.test_vdj import COLS, _airr, _row, t_rows, write_csv
+from tests.test_vdj import COLS, _airr, _row, b_rows, t_rows, write_csv
 
 
 def _contigs_for(path: Path, cells: list[int], cdr3: str) -> Path:
@@ -62,9 +62,36 @@ def test_contigs_bundle_with_the_sample_of_the_same_prefix(tmp_path):
     bundle = build_bundle(files + [t1, b2])
     assert bundle.complete and not bundle.issues
     by = {u.label: u for u in bundle.units}
-    assert [f.name for f in by["gsm1"].files if f.role == FileRole.vdj_contigs] == [t1.name]
-    assert [f.name for f in by["gsm2"].files if f.role == FileRole.vdj_contigs] == [b2.name]
+    # Side files of their sample (never one of the files loaded as its cells).
+    assert [f.name for f in by["gsm1"].side_files] == [t1.name]
+    assert [f.name for f in by["gsm2"].side_files] == [b2.name]
+    assert all(f.role == FileRole.side and f.side_kind == SideKind.vdj
+               for u in bundle.units for f in u.side_files)
+    assert all(f.kind != FileKind.vdj_contigs for u in bundle.units for f in u.files)
     assert all(u.complete and u.format == UnitFormat.tenx_mex for u in bundle.units)
+
+
+def test_t_and_b_tables_are_told_apart_by_their_chains(tmp_path):
+    # The names say nothing; the chain column does (TR* = T-cell, IG* = B-cell receptor).
+    d1, d2 = tmp_path / "one", tmp_path / "two"
+    d1.mkdir(), d2.mkdir()
+    t = write_csv(d1 / "filtered_contig_annotations.csv", t_rows())
+    b = write_csv(d2 / "filtered_contig_annotations.csv", b_rows())
+    both = write_csv(tmp_path / "x_filtered_contig_annotations.csv", t_rows()[:2] + b_rows()[:1])
+    assert detect_file(t).details["receptor"] == "T"
+    assert detect_file(b).details["receptor"] == "B"
+    assert detect_file(both).details["receptor"] == "T+B"
+    airr_b = tmp_path / "airr_rearrangement.tsv"
+    _airr(b_rows()).to_csv(airr_b, sep="\t", index=False)
+    assert detect_file(airr_b).details["receptor"] == "B"
+    h5 = tmp_path / "pbmc.h5ad"
+    ad.AnnData(pd.DataFrame([[1.0]], index=["c"], columns=["g"])).write_h5ad(h5)
+    unit = build_bundle([h5, t, b]).units[0]
+    assert sorted((f.path, f.receptor) for f in unit.side_files) == [(str(t), "T"), (str(b), "B")]
+    # Without a readable chain, the name's arm token: sample_t_ / _vdj_b_.
+    empty = tmp_path / "s1_vdj_b_filtered_contig_annotations.csv"
+    empty.write_text(",".join(COLS) + "\n")
+    assert build_bundle([h5, empty]).units[0].side_files[0].receptor == "B"
 
 
 def test_unprefixed_contigs_go_to_the_only_sample_and_not_to_a_guess(tmp_path):
@@ -72,10 +99,11 @@ def test_unprefixed_contigs_go_to_the_only_sample_and_not_to_a_guess(tmp_path):
     ad.AnnData(pd.DataFrame([[1.0]], index=["c"], columns=["g"])).write_h5ad(h5)
     bare = write_csv(tmp_path / "filtered_contig_annotations.csv", t_rows())
     one = build_bundle([h5, bare])
-    assert one.units[0].files[0].name == h5.name and one.units[0].files[1].role == FileRole.vdj_contigs
+    assert [f.name for f in one.units[0].files] == [h5.name]
+    assert [f.side_kind for f in one.units[0].side_files] == [SideKind.vdj]
     two = build_bundle(_mex(tmp_path, "GSM1_") + _mex(tmp_path, "GSM2_") + [bare])
     assert any("which sample" in i for i in two.issues)
-    assert not [f for u in two.units for f in u.files if f.role == FileRole.vdj_contigs]
+    assert not [f for u in two.units for f in u.side_files]
     alone = build_bundle([bare])
     assert not alone.complete and any("expression matrix" in i for i in alone.issues)
 
@@ -128,3 +156,21 @@ async def test_commit_single_h5ad_with_contigs(mgr, tmp_path):
     out = dm.get_dataset(did).adata
     assert out.obs[vdj.STATUS_COL].astype(str).tolist() == ["no contig", "no contig", "paired", "paired"]
     assert out.obs[vdj.SIZE_COL].tolist()[2:] == [2, 2]
+    # A contig table is not a sequencing-QC side file: no empty Sequencing QC record.
+    from scview.core import seq_metrics
+
+    assert seq_metrics.read(out) is None
+
+
+async def test_a_cut_off_contig_table_is_a_commit_error(mgr, tmp_path):
+    # Cut after the part detection reads: found as contigs, unreadable at commit.
+    from scview.core.dataset_manager import DatasetManager
+
+    dm = DatasetManager(data_dir=str(tmp_path))
+    sid = mgr.create_session()
+    _stage_h5ad(mgr, sid, fname="pbmc.h5ad", n_obs=4)
+    gz = write_csv(mgr.files_dir(sid) / "pbmc_t_filtered_contig_annotations.csv.gz", t_rows() * 400, gz=True)
+    gz.write_bytes(gz.read_bytes()[: gz.stat().st_size // 2])
+    assert mgr.get_state(sid)["bundle"]["units"][0]["side_files"][0]["side_kind"] == "vdj"
+    with pytest.raises(IngestCommitError, match="could not be attached"):
+        await mgr.commit(sid, dm)

@@ -56,6 +56,17 @@ changed. The bound works both ways: a type with a low baseline gets a bound
 below the global one (ovary oocytes, median 0.8 %: 23 of 80 cells removed vs 5),
 so the preview's per-type table shows each type's loss under both rules.
 
+The floor (``mito_type_floor``, off by default): a type's bound is the higher of
+its own and the global rule's, so per-type mode can only relax the global rule
+for a type with a high baseline, never tighten it for one with a low baseline. A
+cell is then removed for % mito only when both rules remove it, and no type ever
+loses more cells than under the global rule. The global bound is the one the
+global rule applies to that cell: the ceiling in fixed mode, and in MAD mode its
+sample's bound (median + ``mad_k_mt`` MADs of its sample, under the ceiling), so
+in MAD mode a type can keep its own bound in one sample and take the global one
+in another. Without a global % mito rule (fixed mode, no ceiling) the floor
+leaves nothing for % mito to remove.
+
 Choices, with the reasons:
 - Per type pooled over the samples, not per sample x type. The baseline is a
   property of the type, and the MAD of a small group is unreliable (relative SE
@@ -94,7 +105,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import chi2_contingency
 
-from scview.core import cluster_qc, confounding, provenance, qc_groups
+from scview.core import cluster_qc, confounding, doublet_source, provenance, qc_groups
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +133,7 @@ CRITERIA = {
     "max_counts": "Max counts",
     "max_pct_mt": "Max % mito",
     "doublets": "Predicted doublets",
+    "hash_negatives": "Hashing negatives",
 }
 
 # MAD mode: (per-cell metric, criterion below the bound, criterion above it)
@@ -151,6 +163,12 @@ class Thresholds:
     # of the global rule (module docstring); "global": the rule above for every cell.
     mito_mode: str = "global"
     mito_type_column: str = ""  # per_type: the cell types ("" = mito_by_type.default_column)
+    # per_type: never stricter than the global rule (a type's bound = max(own, global))
+    mito_type_floor: bool = False
+    # Whose doublet calls drop_doublets drops (doublet_source.SOURCES): "auto" = cell
+    # hashing when it was run, else Scrublet; and hashing negatives, a separate opt-in.
+    doublet_source: str = "auto"
+    drop_hash_negatives: bool = False
 
     @classmethod
     def from_params(cls, params) -> Thresholds:
@@ -168,6 +186,9 @@ class Thresholds:
             mad_upper=bool(getattr(params, "qc_mad_upper", False)),
             mito_mode=str(getattr(params, "qc_mito_mode", "global") or "global"),
             mito_type_column=str(getattr(params, "qc_mito_type_column", "") or ""),
+            mito_type_floor=bool(getattr(params, "qc_mito_type_floor", False)),
+            doublet_source=str(getattr(params, "qc_doublet_source", "auto") or "auto"),
+            drop_hash_negatives=bool(getattr(params, "drop_hash_negatives", False)),
         )
 
     def check(self) -> None:
@@ -176,6 +197,9 @@ class Thresholds:
             raise ValueError(f"Unknown QC threshold mode '{self.mode}': use 'mad' or 'fixed'.")
         if self.mito_mode not in MITO_MODES:
             raise ValueError(f"Unknown % mito mode '{self.mito_mode}': use 'global' or 'per_type'.")
+        if self.doublet_source not in doublet_source.SOURCES:
+            raise ValueError(f"Unknown doublet source '{self.doublet_source}': use "
+                             f"{', '.join(doublet_source.SOURCES)}.")
         checks = [("MAD multiplier", self.mad_k)] if self.mode == "mad" else []
         if self.mode == "mad" or self.mito_mode == "per_type":
             checks.append(("% mito MAD multiplier", self.mad_k_mt))
@@ -388,7 +412,9 @@ class TypeBounds:
     rest by the global rule. ``rows`` are the types in ``column``'s order: cells,
     median, MAD, ``bound`` (None: the global rule, ``why`` says why). ``judge_types``
     fills ``removed_global`` / ``removed`` (the global rule's % mito mask and the one
-    applied) for the per-type loss table."""
+    applied) for the per-type loss table, and ``floor_info`` the floor's columns:
+    ``removed_type`` / ``removed_floor`` (the per-type mask with the floor off and
+    on) and ``global_hi`` (per cell, the bound the global rule applies to it)."""
 
     column: str
     reason: str | None
@@ -401,19 +427,27 @@ class TypeBounds:
     reused_from: str | None = None
     removed_global: np.ndarray | None = None
     removed: np.ndarray | None = None
+    floor: bool = False
+    removed_type: np.ndarray | None = None
+    removed_floor: np.ndarray | None = None
+    global_hi: np.ndarray | None = None
 
     def to_dict(self) -> dict:
         """The rule per type for the preview, the record and provenance, with each
-        type's loss under the global rule and under the one applied."""
+        type's loss under the global rule and under the one applied (and, once
+        ``floor_info`` ran, with the floor off and on, and which bound the floor
+        picks: ``floor_rows``)."""
         rows = [dict(r) for r in self.rows]
         k = len(rows)
         labelled = self.codes >= 0
-        for key, mask in (("removed_global", self.removed_global), ("removed", self.removed)):
+        for key, mask in (("removed_global", self.removed_global), ("removed", self.removed),
+                          ("removed_type", self.removed_type), ("removed_floor", self.removed_floor)):
             if mask is None:
                 continue
             lost = np.bincount(self.codes[labelled & mask], minlength=k)
             for r, v in zip(rows, lost):
                 r[key] = int(v)
+        floor_rows(self, rows)
         own = [r for r in rows if r["bound"] is not None]
         return {
             "column": self.column,
@@ -429,6 +463,7 @@ class TypeBounds:
             "n_unlabelled": int((~labelled).sum()),
             "reused_from": self.reused_from,
             "warnings": [r["warning"] for r in rows if r.get("warning")],
+            "floor": self.floor,
         }
 
 
@@ -545,24 +580,90 @@ def _per_type_mito(cells: dict, types: TypeBounds, global_mask: np.ndarray | Non
     return np.where(types.own, mine, base)
 
 
+# --- the floor: per type never stricter than the global rule (module docstring) ---------
+
+
+def _floored_mito(per_type: np.ndarray, global_mask: np.ndarray | None) -> np.ndarray:
+    """``mito_type_floor``: each cell's bound is the higher of its type's own and the
+    global rule's for that cell, so it goes only when both rules remove it (a cell
+    without a bound of its own already follows the global rule alone)."""
+    if global_mask is None:  # no global % mito rule: its bound is infinite
+        return np.zeros(per_type.size, dtype=bool)
+    return per_type & global_mask
+
+
+def global_mito_bound(cells: dict, t: Thresholds, bounds: MadBounds | None) -> np.ndarray:
+    """Per cell, the % mito bound the global rule applies to it: in MAD mode its
+    sample's bound (already under the ceiling), in fixed mode the ceiling; inf
+    where there is none."""
+    if t.mode == "mad" and bounds is not None and "pct_mt" in bounds.hi:
+        return np.asarray(bounds.hi["pct_mt"], dtype=np.float64)
+    n = len(_values(cells, "n_genes"))
+    return np.full(n, np.inf if t.max_pct_mt is None else float(t.max_pct_mt))
+
+
+def floor_info(types: TypeBounds, cells: dict, t: Thresholds, bounds: MadBounds | None,
+               global_mask: np.ndarray | None) -> None:
+    """Fill in the floor's columns on ``types`` (the per-type % mito mask with the
+    floor off and on, each cell's global bound), whichever is applied, so the
+    preview shows both."""
+    own = _per_type_mito(cells, types, global_mask)
+    types.floor = t.mito_type_floor
+    types.removed_type = own
+    types.removed_floor = _floored_mito(own, global_mask)
+    types.global_hi = global_mito_bound(cells, t, bounds)
+
+
+def floor_rows(types: TypeBounds, rows: list[dict]) -> None:
+    """Per type with a bound of its own, which bound the floor uses for its cells:
+    ``floor_uses`` "type" (its own is the higher for every cell), "global" (the
+    global rule's for every cell) or "mixed" (MAD mode: the samples' bounds differ),
+    ``n_floored`` (its cells whose global bound is the higher) and ``global_bound``
+    ([lowest, highest] global bound over its cells; None when there is none). A
+    type without a bound of its own follows the global rule (``floor_uses`` None)."""
+    if types.global_hi is None:
+        return
+    k = len(rows)
+    labelled = types.codes >= 0
+    g = types.global_hi
+    lifted = labelled & types.own & (g > types.hi)
+    n_lifted = np.bincount(types.codes[lifted], minlength=k)
+    n_own = np.bincount(types.codes[labelled & types.own], minlength=k)
+    fin = labelled & np.isfinite(g)
+    lo, hi = np.full(k, np.inf), np.full(k, -np.inf)
+    np.minimum.at(lo, types.codes[fin], g[fin])
+    np.maximum.at(hi, types.codes[fin], g[fin])
+    for i, r in enumerate(rows):
+        r["global_bound"] = [round(float(lo[i]), 3), round(float(hi[i]), 3)] if lo[i] <= hi[i] else None
+        if r["bound"] is None:
+            r.update(floor_uses=None, n_floored=0)
+            continue
+        n, m = int(n_lifted[i]), int(n_own[i])
+        r.update(floor_uses="type" if n == 0 else "global" if n == m else "mixed", n_floored=n)
+
+
 def removed_by(cells: dict, t: Thresholds, doublets: np.ndarray | None = None,
                bounds: MadBounds | None = None, types: TypeBounds | None = None
                ) -> dict[str, np.ndarray]:
     """For each threshold that is on, the cells it removes on its own (boolean masks).
 
     ``cells`` is ``per_cell_qc``'s output; ``doublets`` the per-cell doublet calls
-    (``cluster_qc.doublet_calls``), used when ``t.drop_doublets``. In MAD mode
+    (an array, used when ``t.drop_doublets``) or ``cell_calls``' ``CellCalls`` (the
+    source's doublets, and hashing negatives for ``t.drop_hash_negatives``). In MAD mode
     ``bounds`` are the samples' (``mad_bounds``); without them all cells pool.
     ``types`` (``type_bounds``) replaces the % mito rule for the cells of a type
-    with a bound of its own (``mito_mode`` "per_type")."""
+    with a bound of its own (``mito_mode`` "per_type"); with ``t.mito_type_floor``
+    never stricter than the global rule."""
     if t.mode == "mad":
         out = _removed_by_mad(cells, t, bounds if bounds is not None else mad_bounds(cells, t))
     else:
         out = _removed_by_fixed(cells, t)
     if types is not None and _mito_measurable(cells):
-        out["max_pct_mt"] = _per_type_mito(cells, types, out.get("max_pct_mt"))
-    if t.drop_doublets and doublets is not None:
-        out["doublets"] = np.asarray(doublets, dtype=bool)
+        glob = out.get("max_pct_mt")
+        out["max_pct_mt"] = _per_type_mito(cells, types, glob)
+        if t.mito_type_floor:
+            out["max_pct_mt"] = _floored_mito(out["max_pct_mt"], glob)
+    out.update(_call_masks(t, doublets))
     return out
 
 
@@ -619,11 +720,11 @@ def judge_types(adata, cells: dict, t: Thresholds, samples: Samples | None = Non
                 ) -> tuple[dict[str, np.ndarray], MadBounds | None, TypeBounds | None]:
     """``judge`` plus, with ``mito_mode`` "per_type" and % mito measurable, each
     type's rule (``type_bounds``, with the global and applied % mito masks filled
-    in). The preview and the filtering step both call this, so the preview is what
-    the step does. Raises ValueError as ``judge`` does, and for a per-type column
+    in, and the floor's columns: ``floor_info``). The preview and the filtering
+    step both call this, so the preview is what the step does. Raises ValueError as ``judge`` does, and for a per-type column
     that is missing or has too many groups."""
     t.check()
-    calls = cluster_qc.doublet_calls(adata.obs)
+    calls = cell_calls(adata.obs, t)
     per_type = t.mito_mode == "per_type" and _mito_measurable(cells)
     if t.mode != "mad" and not per_type:
         return removed_by(cells, t, calls), None, None
@@ -638,6 +739,7 @@ def judge_types(adata, cells: dict, t: Thresholds, samples: Samples | None = Non
     glob = removed_by(cells, t, None, bounds).get("max_pct_mt")
     types.removed_global = glob if glob is not None else np.zeros(int(adata.n_obs), dtype=bool)
     types.removed = removed["max_pct_mt"]
+    floor_info(types, cells, t, bounds, glob)
     return removed, bounds, types
 
 
@@ -781,7 +883,8 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
 
     ``mito_types`` (per-type mode, % mito measurable): per cell type
     (``type_bounds``) its cells, median, the rule and bound used, and the cells
-    removed for % mito under the global rule vs the rule applied.
+    removed for % mito under the global rule vs the rule applied, and per type
+    with the floor off vs on (``removed_type`` / ``removed_floor``, ``floor_uses``).
 
     ``cells`` is ``AnnDataAdaptor.qc_per_cell()``. Raises ValueError for a named
     column that does not exist, or for thresholds ``judge`` refuses."""
@@ -827,10 +930,12 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
             "mad_upper": t.mad_upper,
             "mito_mode": t.mito_mode,
             "mito_type_column": t.mito_type_column,
+            "mito_type_floor": t.mito_type_floor,
         },
         "has_mt": has_mt,
         "mito_types": _types_table(types),
         "doublet_calls": cluster_qc.doublet_calls(adata.obs) is not None,  # "drop doublets" can act
+        "doublets": doublet_choices(adata.obs, t),  # whose calls, and hashing negatives
         "by_criterion": {c: {"label": CRITERIA[c], "n_removed": int(m.sum())} for c, m in removed.items()},
         "mad": bounds.to_dict(drop) if bounds is not None else None,
         "samples": samples,
@@ -1166,7 +1271,8 @@ def removal_record(adata, cells: dict, removed: dict[str, np.ndarray], drop: np.
     (codes into each column's categories). Arrays and strings only, so the h5ad
     stays writable (no None: "" and NaN stand for none). With per-type % mito
     bounds (``types``) also the type column and each type's bound (NaN: the global
-    rule); a global run's record is as it always was."""
+    rule), and ``mito_type_floor`` when the floor was on; a global run's record is
+    as it always was."""
     idx = np.flatnonzero(drop)
     crit = list(removed)
     keep_idx = idx[:RECORD_MAX_CELLS]
@@ -1189,6 +1295,7 @@ def removal_record(adata, cells: dict, removed: dict[str, np.ndarray], drop: np.
         "mito_type_bounds": np.array([np.nan if r["bound"] is None else r["bound"] for r in types.rows],
                                      dtype=np.float64),
         "mito_type_k": float(types.k),
+        **({"mito_type_floor": True} if t.mito_type_floor else {}),  # absent: off, as before
     }
     return {
         **extra,
@@ -1242,14 +1349,16 @@ def recorded_audit(adata, label_column: str | None = None, condition_column: str
 
 def recorded_mito_rule(rec: dict) -> dict:
     """How a removal record's run judged % mito: ``mito_mode`` "global", or
-    "per_type" with the type column and each type's bound (None: the global rule)."""
+    "per_type" with the type column and each type's bound (None: the global rule),
+    and ``mito_type_floor`` True when it was never stricter than the global rule."""
     if str(rec.get("mito_mode") or "global") != "per_type":
         return {"mito_mode": "global"}
     names = _strs(rec.get("mito_type_names"))
     bounds = np.atleast_1d(np.asarray(rec.get("mito_type_bounds", []), dtype=np.float64))
     return {"mito_mode": "per_type", "mito_type_column": str(rec.get("mito_type_column") or ""),
             "mito_type_bounds": {n: (None if not np.isfinite(b) else round(float(b), 4))
-                                 for n, b in zip(names, bounds)}}
+                                 for n, b in zip(names, bounds)},
+            **({"mito_type_floor": True} if bool(rec.get("mito_type_floor", False)) else {})}
 
 
 def recorded_removed_mito(adata, column: str | None) -> tuple[list[str], np.ndarray, str] | None:
@@ -1379,6 +1488,93 @@ def _recorded_audit(adata, rec: dict, label_column: str | None, condition_column
             row["removed_median"] = {k: _median(v[sel]) for k, v in vals.items()
                                      if k != "pct_mt" or head["has_mt"]} if sel.any() else None
     return {**head, "stale": False, "columns": list(cols), **out}
+
+
+# --- doublet calls: whose, and the hashing negatives (core/doublet_source.py) ----------
+
+
+@dataclass(frozen=True)
+class CellCalls:
+    """Per-cell calls the filtering step can drop beside the thresholds: the
+    doublets of the chosen source, and cell hashing's negatives."""
+
+    doublets: np.ndarray | None
+    negatives: np.ndarray | None = None
+    source: str | None = None  # the source the doublets came from (doublet_source.Calls)
+
+
+def cell_calls(obs: pd.DataFrame, t: Thresholds) -> CellCalls:
+    """The doublets ``t.doublet_source`` stands for ("auto": cell hashing when it was
+    run, else Scrublet, else a text column) and the hashing negatives."""
+    used = doublet_source.resolve(obs, t.doublet_source)
+    return CellCalls(None if used is None else used.calls, doublet_source.hash_negatives(obs),
+                     None if used is None else used.source)
+
+
+def _call_masks(t: Thresholds, calls) -> dict[str, np.ndarray]:
+    """``removed_by``'s doublet / negative criteria from an array of doublet calls
+    (as before the source choice) or a ``CellCalls``."""
+    if calls is None:
+        return {}
+    if not isinstance(calls, CellCalls):
+        calls = CellCalls(np.asarray(calls, dtype=bool))
+    out: dict[str, np.ndarray] = {}
+    if t.drop_doublets and calls.doublets is not None:
+        out["doublets"] = np.asarray(calls.doublets, dtype=bool)
+    if t.drop_hash_negatives and calls.negatives is not None:
+        out["hash_negatives"] = np.asarray(calls.negatives, dtype=bool)
+    return out
+
+
+def doublet_choices(obs: pd.DataFrame, t: Thresholds) -> dict | None:
+    """For the preview's doublet control: the sources that mean something here, the
+    one ``t.doublet_source`` stands for and what auto picks, each source's count,
+    how many cells hashing and Scrublet both call, and the hashing negatives.
+    None without any doublet calls."""
+    auto = doublet_source.describe(obs)
+    if auto is None:
+        return None
+    used = doublet_source.resolve(obs, t.doublet_source)
+    n_by: dict[str, int | None] = {}
+    for s in auto["options"]:
+        c = doublet_source.resolve(obs, s)
+        n_by[s] = None if c is None else c.n
+    neg = doublet_source.hash_negatives(obs)
+    return {
+        "source": t.doublet_source,
+        "used": None if used is None else {"source": used.source, "label": used.label, "n": used.n},
+        "auto": {"source": auto["source"], "label": auto["label"]},
+        "options": auto["options"],
+        "n_by_source": n_by,
+        "both": auto["both"]["n"] if auto.get("both") else None,
+        "n_cells": auto["n_cells"],
+        "hash_negatives": None if neg is None else int(neg.sum()),
+        "drop_hash_negatives": t.drop_hash_negatives,
+        "negative_note": doublet_source.NEGATIVE_NOTE,
+    }
+
+
+def after_filter(adata, t: Thresholds, n_removed: int) -> dict:
+    """The filtering step's own record beside its params, once the cells are gone
+    (``adata`` = the cells kept): whose doublets ``drop_doublets`` dropped (the
+    choice, and the source it stood for, which the replay uses), the hashing
+    negatives choice, and the V(D)J clone sizes recomputed on the cells kept
+    (``vdj.recompute_after_filter``) when cells were removed. A record without
+    ``qc_doublet_source`` is from before the choice: its replay keeps Scrublet first."""
+    from scview.core import vdj
+
+    out: dict = {}
+    if t.drop_doublets:
+        used = doublet_source.resolve(adata.obs, t.doublet_source)
+        out.update(qc_doublet_source=t.doublet_source,
+                   qc_doublet_source_used=None if used is None else used.source)
+    if t.drop_hash_negatives:
+        out["drop_hash_negatives"] = True
+    if n_removed:
+        clones = vdj.recompute_after_filter(adata)
+        if clones is not None:
+            out["vdj_clonotypes"] = clones
+    return out
 
 
 # --- the co-pilot's fact --------------------------------------------------------

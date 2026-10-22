@@ -85,7 +85,9 @@ async def get_assessment(
                 # Likewise the % mito rule (per-type bounds keep their type column).
                 "qc_mito_mode": (filtered.get("qc_mito_mode") or "global") if filtered else None,
                 "qc_mito_type_column": (filtered.get("qc_mito_type_column")
-                                        if filtered and filtered.get("qc_mito_mode") == "per_type" else None)}
+                                        if filtered and filtered.get("qc_mito_mode") == "per_type" else None),
+                "qc_mito_type_floor": bool(filtered and filtered.get("qc_mito_mode") == "per_type"
+                                           and filtered.get("qc_mito_type_floor"))}
 
     try:
         # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop.
@@ -257,10 +259,13 @@ async def get_filter_preview(
     mad_upper: bool | None = None,
     mito_mode: str | None = None,
     mito_type_column: str = "",
+    mito_type_floor: bool | None = None,
     sample_column: str = "",
     cluster_column: str = "",
     label_column: str = "",
     condition_column: str = "",
+    doublet_source: str | None = None,
+    drop_hash_negatives: bool | None = None,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The cells the filtering step's thresholds would remove (core/qc_filter.py):
@@ -274,7 +279,11 @@ async def get_filter_preview(
     a condition-like column, else the samples), with a chi-square per group and
     flags; ``recorded`` the same for what the last filtering step removed.
     ``mito_mode`` "per_type" judges % mito by each type of ``mito_type_column``
-    (default: as the step picks it) with ``mito_types`` the per-type table.
+    (default: as the step picks it) with ``mito_types`` the per-type table;
+    ``mito_type_floor`` makes it never stricter than the global rule.
+    ``doublet_source`` (auto | hashing | scrublet | either) is whose doublets
+    ``drop_doublets`` drops, ``drop_hash_negatives`` drops cell hashing's
+    negatives; ``doublets`` describes the choice (core/doublet_source.py).
     Small and fast at any cell count (one pass over cached per-cell values), so
     the QC plots ask again on every threshold change."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
@@ -286,7 +295,9 @@ async def get_filter_preview(
                        ("drop_doublets", drop_doublets), ("qc_threshold_mode", mode),
                        ("qc_mad_k", mad_k), ("qc_mad_k_mt", mad_k_mt),
                        ("qc_mad_upper", mad_upper), ("qc_mito_mode", mito_mode),
-                       ("qc_mito_type_column", mito_type_column or None)):
+                       ("qc_mito_type_column", mito_type_column or None),
+                       ("qc_mito_type_floor", mito_type_floor),
+                       ("qc_doublet_source", doublet_source), ("drop_hash_negatives", drop_hash_negatives)):
         if value is not None:
             setattr(params, key, value)
     thresholds = qc_filter.Thresholds.from_params(params)
@@ -413,6 +424,11 @@ async def run_assessment_pipeline(
             if hasattr(params, key):
                 setattr(params, key, value)
     control = RunControl(plan=(body.steps, params))
+    # Drop this request's hold on the cached copy before the run: run_exclusive
+    # reloads the dataset from disk afterwards, and a reference kept here would
+    # hold the old AnnData through that reload (two copies: ovary at 6 GB was
+    # OOM-killed reloading after a run the pre-step check had stopped).
+    del adaptor
 
     def _run(adaptor):
         # Write processing output to the derived layer, never the original
@@ -600,6 +616,7 @@ async def rerun_step(
                 setattr(params, key, value)
 
     control = RunControl(plan=(plan.rerun_steps, params))
+    del adaptor  # as /assessment/run: no hold on the copy the run replaces
 
     def _run(adaptor):
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
@@ -857,6 +874,7 @@ async def cancel_pipeline_run(dataset_id: str):
 class MitoRefilterRequest(BaseModel):
     column: str = ""  # the cell types (default: as GET /qc/mito-by-type picks it)
     mito_mode: str = "per_type"  # "global" re-filters with one rule, as before
+    floor: bool = False  # per type never stricter than the global rule (qc_mito_type_floor)
 
 
 @router.get("/datasets/{dataset_id}/qc/mito-refilter")
@@ -864,13 +882,15 @@ async def preview_mito_refilter(
     dataset_id: str,
     column: str = "",
     mito_mode: str = "per_type",
+    floor: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """What re-filtering from the original upload with per-type % mito bounds on
     ``column`` would do: per type its cells, median, rule and bound, cells removed
     now vs after, brought back and newly removed; how the cells filtering removed
     were typed (the original's column, else the nearest cluster by expression),
-    and what it can and cannot bring back. Reads the original upload (seconds)."""
+    and what it can and cannot bring back. ``floor``: never stricter than the
+    global rule. Reads the original upload (seconds)."""
     from scview.core import mito_refilter
 
     adaptor = await dm.get_or_load_dataset(dataset_id)
@@ -878,7 +898,7 @@ async def preview_mito_refilter(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
         return await asyncio.to_thread(mito_refilter.preview, dm, dataset_id, adaptor, column or None,
-                                       mito_mode)
+                                       mito_mode, floor)
     except mito_refilter.RefilterError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
     except ValueError as e:
@@ -914,7 +934,7 @@ async def run_mito_refilter(
     def _events(adaptor):
         output = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
         return mito_refilter.run_events(dm, dataset_id, adaptor, body.column or None, output, body.mito_mode,
-                                        control=control)
+                                        control=control, floor=body.floor)
 
     async def event_generator():
         try:

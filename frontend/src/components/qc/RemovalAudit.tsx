@@ -27,6 +27,7 @@ export const CRITERION_LABELS: Record<FilterCriterion, string> = {
   max_counts: "Max counts",
   max_pct_mt: "Max % mito",
   doublets: "Predicted doublets",
+  hash_negatives: "Hashing negatives",
 };
 
 /** A chi-square p for a table cell: "2e-21", "0.034"; "–" when there is none. */

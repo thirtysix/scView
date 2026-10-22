@@ -346,8 +346,11 @@ def test_the_sample_column_names_singlets_and_leaves_doublets_empty():
 def test_hashing_doublets_feed_the_doublet_views():
     obs = pd.DataFrame({hashing.CLASS: pd.Categorical(["Singlet", "Doublet", "Negative"])})
     assert cluster_qc.doublet_calls(obs).tolist() == [False, True, False]
-    obs["predicted_doublet"] = [True, False, False]  # Scrublet's call is read first
-    assert cluster_qc.doublet_calls(obs).tolist() == [True, False, False]
+    # Hashing is the primary call once it exists; Scrublet's stays the second opinion
+    # (it was read first before batch 16: this assertion fails on v0.32.0).
+    obs["predicted_doublet"] = [True, False, False]
+    assert cluster_qc.doublet_calls(obs).tolist() == [False, True, False]
+    assert hashing._doublet_source(obs) == hashing.CLASS
 
 
 def test_summary_counts_the_current_cells_and_compares_with_scrublet():
@@ -358,7 +361,7 @@ def test_summary_counts_the_current_cells_and_compares_with_scrublet():
     s = hashing.summary(sub)
     assert s["call"]["counts"]["Negative"] == 0 and s["call"]["n_cells_at_call"] == a.n_obs
     assert s["scrublet"]["Doublet"]["scrublet_singlet"] == 0
-    assert s["doublet_source"] == "predicted_doublet"
+    assert s["doublet_source"] == hashing.CLASS  # hashing first once it exists (Scrublet before batch 16)
     assert sum(s["call"]["per_call"].values()) == sub.n_obs
 
 

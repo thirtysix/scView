@@ -357,3 +357,25 @@ async def test_manifest_download(client, dataset_manager):
 async def test_unknown_dataset_is_404(client, dataset_manager, path):
     r = await client.get(f"{API}/datasets/missing/{path}")
     assert r.status_code == 404
+
+
+@pytest.mark.parametrize("processed", [False, True])
+def test_doublet_detection_replays_the_apps_scores(tmp_path, processed):
+    # The app scores the counts alone (core/scrublet_lean.py); the script copies that code
+    # and scores the input the step recorded. A processed X with its counts in a layer was
+    # scored on X by the script before (Scrublet on log-normalised values).
+    inp = _counts(n_per=100, n_genes=400)  # Scrublet needs over 30 variable genes
+    if processed:
+        counts = inp.X.copy()
+        inp.layers["counts"] = counts
+        inp.X = np.log1p(counts / counts.sum(1, keepdims=True).clip(1) * 1e4)
+    out, res = run_pipeline(inp.copy(), ["doublet_detection"], PipelineParams())
+    assert res.errors == {}
+    step = provenance.recipe(out)[-1]["params"]
+    assert step.get("input") == ("layers['counts']" if processed else None)
+    assert replay_script.describe(out)[-1]["status"] == "exact"
+    rep = _replay(tmp_path, inp, out)
+    assert np.array_equal(rep.obs["doublet_score"].to_numpy(), out.obs["doublet_score"].to_numpy(),
+                          equal_nan=True)
+    assert (rep.obs["predicted_doublet"].astype(str) == out.obs["predicted_doublet"].astype(str)).all()
+    assert rep.uns["scrublet"]["threshold"] == out.uns["scrublet"]["threshold"]

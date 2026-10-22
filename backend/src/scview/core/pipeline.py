@@ -31,6 +31,7 @@ from scview.core import (
     normalization,
     provenance,
     qc_filter,
+    scrublet_lean,
     stress,
 )
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
@@ -85,7 +86,13 @@ class PipelineParams:
     # (median + qc_mad_k_mt MADs) instead, for types that can have one (core/qc_filter.py).
     qc_mito_mode: str = "global"
     qc_mito_type_column: str = ""  # per_type: the cell types (empty = mito_by_type's choice)
+    # per_type: never stricter than the global rule (a type's bound = max(own, global)); opt-in
+    qc_mito_type_floor: bool = False
     drop_doublets: bool = False  # drop cells flagged by doublet detection (opt-in)
+    # Whose doublets: "auto" (cell hashing when run, else Scrublet) | "hashing" |
+    # "scrublet" | "either" (core/doublet_source.py); hashing negatives are a separate opt-in.
+    qc_doublet_source: str = "auto"
+    drop_hash_negatives: bool = False
 
     # Doublet detection
     doublet_method: str = "scrublet"
@@ -286,6 +293,20 @@ def _doublet_counts(adata: ad.AnnData):
     return None
 
 
+def _doublet_matrix(adata: ad.AnnData):
+    """(counts, where from) for Scrublet: X, or the counts beside a processed X (where:
+    "layers['counts']" / ".raw"; None for X)."""
+    if not _holds_processed_values(adata.X):
+        return adata.X, None
+    # Run alone on a processed dataset, X is scaled: Scrublet then filled a 6 GB
+    # backend and failed ("Bin edges must be unique: nan"). Score the counts.
+    counts = _doublet_counts(adata)
+    if counts is None:
+        raise StepSkipped("Doublet detection needs raw counts: X holds processed values and "
+                          "there is no counts layer or counts in .raw.")
+    return counts[0], counts[2]
+
+
 def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
     """Detect doublets with Scrublet; annotate ``.obs`` only (removal is opt-in).
 
@@ -296,7 +317,10 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     Without an ``expected_doublet_rate`` the rate is suggested from the cells per
     sample (``doublets.suggest_rate``); the rate used is recorded in provenance.
     Neighbours are exact up to ``doublets.EXACT_KNN_MAX_CELLS`` cells (recorded as
-    ``neighbors``).
+    ``neighbors``). Scrublet scores a sparse matrix of the counts alone
+    (``scrublet_lean.scrublet_counts``: the same scores, without copying the whole
+    dataset); they come from ``layers['counts']`` or ``.raw`` when X holds processed
+    values (recorded as ``input``).
     """
     method = (params.doublet_method or "scrublet").lower()
     if method != "scrublet":
@@ -310,24 +334,14 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
                  "expected_rate_from": suggestion["column"] or "all cells (no sample column)"}
     exact = adata.n_obs <= doublets.EXACT_KNN_MAX_CELLS
     found["neighbors"] = "exact" if exact else "approximate"
-    target = adata
-    if _holds_processed_values(adata.X):
-        # Run alone on a processed dataset, X is scaled: Scrublet then filled a 6 GB
-        # backend and failed ("Bin edges must be unique: nan"). Score the counts.
-        counts = _doublet_counts(adata)
-        if counts is None:
-            raise StepSkipped("Doublet detection needs raw counts: X holds processed values and "
-                              "there is no counts layer or counts in .raw.")
-        M, names, found["input"] = counts
-        # Scrublet copies its input, so sharing the dataset's counts here is safe.
-        target = ad.AnnData(X=M, obs=pd.DataFrame(index=adata.obs_names),
-                            var=pd.DataFrame(index=names))
-    sc.pp.scrublet(target, expected_doublet_rate=found["expected_doublet_rate"],
-                   use_approx_neighbors=not exact)
-    if target is not adata:
-        for col in ("doublet_score", "predicted_doublet"):
-            adata.obs[col] = target.obs[col].to_numpy()
-        adata.uns["scrublet"] = target.uns["scrublet"]
+    counts, where = _doublet_matrix(adata)
+    if where is not None:
+        found["input"] = where
+    score, call, uns = scrublet_lean.scrublet_counts(
+        counts, expected_doublet_rate=found["expected_doublet_rate"], use_approx_neighbors=not exact)
+    adata.obs["doublet_score"] = score
+    adata.obs["predicted_doublet"] = call
+    adata.uns["scrublet"] = uns
     doublets.clear_threshold(adata)  # set on the previous run's scores
     n_dbl = (
         int(adata.obs["predicted_doublet"].sum())
@@ -351,14 +365,17 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     preview is, so its loss is what this removes, and a re-run on processed data
     (X scaled, every gene "detected") still counts genes in the counts. % mito is
     used only when measurable; predicted doublets are dropped when
-    ``drop_doublets`` is set.
+    ``drop_doublets`` is set (``qc_doublet_source``: cell hashing when it was run,
+    else Scrublet, by default), hashing negatives when ``drop_hash_negatives`` is.
+    V(D)J clone sizes are recomputed on the cells kept (``qc_filter.after_filter``).
 
     The cells removed are recorded in ``uns[qc_filter.RECORD_KEY]`` (their QC
     values and labels), so the Data Assessment audit can show who was removed
     after they are gone.
 
     With ``qc_mito_mode`` "per_type" each cell type's own % mito bound replaces
-    the global rule for its cells (``qc_mito_types``: every type's rule and loss).
+    the global rule for its cells (``qc_mito_types``: every type's rule and loss);
+    with ``qc_mito_type_floor`` never stricter than the global rule.
     """
     n_before = adata.n_obs
     t = qc_filter.Thresholds.from_params(params)
@@ -376,18 +393,96 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     if bounds is not None:
         found["qc_thresholds"] = bounds.to_dict(~keep)
     if t.mito_mode == "per_type":  # a global run records what it always did
-        found.update(qc_mito_mode="per_type", qc_mad_k_mt=params.qc_mad_k_mt)
+        found.update(qc_mito_mode="per_type", qc_mad_k_mt=params.qc_mad_k_mt,
+                     qc_mito_type_floor=bool(params.qc_mito_type_floor))  # absent in old records: off
         if types is not None:
             found.update(qc_mito_type_column=types.column, qc_mito_types=types.to_dict())
         else:
             found.update(qc_mito_type_column=params.qc_mito_type_column,
                          qc_mito_note="% mito can't be measured (no MT- genes): no per-type bounds.")
     if not keep.all():
-        adata = adata[keep, :].copy()
+        adata = subset_lean(adata, obs=keep)
     adata.uns[qc_filter.RECORD_KEY] = record
-    sc.pp.filter_genes(adata, min_cells=params.min_cells)
+    # Whose doublets were dropped; V(D)J clone sizes recomputed on the cells kept.
+    found.update(qc_filter.after_filter(adata, t, int((~keep).sum())))
+    adata = _filter_genes_lean(adata, params.min_cells)
     logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, adata.n_obs)
     return adata, found
+
+
+def _plain_matrix(M) -> bool:
+    return M is None or isinstance(M, np.ndarray) or sp.issparse(M)
+
+
+def subset_lean(adata: ad.AnnData, obs=None, var=None) -> ad.AnnData:
+    """``adata[obs, var].copy()`` (boolean masks, one axis at a time), taking one copy of
+    each matrix instead of two, and none of a matrix whose genes all stay.
+
+    anndata subsets X, every layer and .raw into a view and then copies that: two new
+    arrays per matrix while ``adata`` still holds its own. On the hashing PBMC (a dense
+    scaled X of every gene, 1.7 GiB) that filled a 6 GB backend. Here X, the layers and
+    .raw are taken off ``adata`` first, anndata subsets the rest as it always does (obs
+    with its unused categories and their colours in uns, var, uns, obsm, obsp, varm,
+    varp), and each matrix is cut once, the old one let go as soon as its cut exists.
+
+    ``adata`` gives its matrices up: it is the copy of the dataset the run replaces
+    (core/processing.py evicts it and reloads the dataset from disk when the run ends,
+    saved, stopped or cancelled). If anndata's part fails, ``adata`` gets them back
+    untouched. A backed or view object, or a matrix that is not numpy or scipy, takes
+    anndata's own way."""
+    raw = adata.raw
+    # (no list of the matrices kept: it would hold each old one until the end)
+    plain = all(_plain_matrix(M) for M in (adata.X, *adata.layers.values(),
+                                            raw.X if raw is not None else None))
+    if adata.isbacked or adata.is_view or not plain:
+        return adata[slice(None) if obs is None else obs,
+                     slice(None) if var is None else var].copy()
+    rows = None if obs is None else np.flatnonzero(obs)
+    cols = None if var is None or np.all(var) else np.flatnonzero(var)
+    X, layers = adata.X, dict(adata.layers)
+    adata.X = None
+    for k in layers:
+        del adata.layers[k]
+    adata.raw = None
+    try:
+        new = adata[slice(None) if rows is None else rows,
+                    slice(None) if var is None else np.asarray(var, dtype=bool)].copy()
+    except BaseException:
+        adata.X = X
+        for k, M in layers.items():
+            adata.layers[k] = M
+        if raw is not None:
+            adata.raw = ad.AnnData(X=raw.X, var=raw.var, varm=dict(raw.varm))
+        raise
+
+    def cut(M, x: bool = False):
+        if rows is not None:
+            return np.ascontiguousarray(M[rows]) if x and isinstance(M, np.ndarray) else M[rows]
+        if cols is None:
+            return M  # every gene stays: the same matrix (anndata would re-lay it out)
+        # As anndata's copy lays them out: a dense X row-major (np.take: in one copy;
+        # M[:, cols] is column-major), a dense layer as numpy's indexing leaves it.
+        if x and isinstance(M, np.ndarray):
+            return np.take(M, cols, axis=1)
+        return M[:, cols]
+
+    if X is not None:
+        new.X = cut(X, x=True)
+        del X
+    for k in list(layers):
+        new.layers[k] = cut(layers.pop(k))
+    if raw is not None:  # rows only: subsetting genes leaves .raw as it is
+        new.raw = ad.AnnData(X=raw.X[rows] if rows is not None else raw.X, var=raw.var.copy(),
+                             varm={k: v.copy() for k, v in raw.varm.items()})
+    return new
+
+
+def _filter_genes_lean(adata: ad.AnnData, min_cells: int) -> ad.AnnData:
+    """``sc.pp.filter_genes(adata, min_cells=...)`` (``var["n_cells"]``, then the genes kept)
+    through ``subset_lean``: scanpy subsets every matrix even when every gene stays."""
+    gene_subset, number = sc.pp.filter_genes(adata, min_cells=min_cells, inplace=False)
+    adata.var["n_cells"] = number
+    return subset_lean(adata, var=np.asarray(gene_subset, dtype=bool))
 
 
 # Non-zero values sampled when deciding whether a matrix holds raw counts.

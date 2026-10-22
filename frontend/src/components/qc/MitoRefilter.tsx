@@ -5,6 +5,8 @@ import { getMitoRefilter, runMitoRefilter, type RefilterPreview, type RefilterTy
 import { cancelPipelineRun, type RunOutcomeFields, type WatchdogEvent } from "@/api/pipelineRun";
 import { CancelRunButton, RunOutcome, RunWatchNotes } from "@/components/panels/RunWatch";
 import { Caption } from "@/components/common/Caption";
+import { InfoTip } from "@/components/common/InfoTip";
+import { floorText } from "@/components/qc/MitoModeControl";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -51,7 +53,24 @@ export function typedText(p: RefilterPreview): string {
   return parts.length ? `${head}${parts.join("; ")}.${none}` : `Nothing was removed before.${none}`;
 }
 
-function Row({ t }: { t: RefilterType }) {
+/** The type's bound as the re-filter applies it: its own, or with the floor the global
+ *  rule's where that is higher ("global"; "own / global" where samples differ). */
+function boundCell(t: RefilterType, floor: boolean) {
+  if (t.bound === null || t.bound === undefined) return { text: "global", muted: true, title: t.note || undefined };
+  const own = pct(t.bound);
+  if (floor && t.floor_uses === "global")
+    return { text: "global", muted: true, title: `Its own bound, ${own}, is below the global rule's, so the global rule applies` };
+  if (floor && t.floor_uses === "mixed")
+    return {
+      text: `${own} / global`,
+      muted: false,
+      title: `Its own bound, ${own}, or the global rule's where that is higher (${(t.n_floored ?? 0).toLocaleString()} cells, in samples with a higher bound)`,
+    };
+  return { text: own, muted: false, title: t.note || undefined };
+}
+
+function Row({ t, floor }: { t: RefilterType; floor: boolean }) {
+  const b = boundCell(t, floor);
   return (
     <tr className="border-t border-slate-100" data-testid={`refilter-row-${t.name}`}>
       <td className="max-w-[9rem] truncate px-1.5 py-0.5" title={[t.note, t.warning].filter(Boolean).join(" ") || t.name}>
@@ -59,8 +78,8 @@ function Row({ t }: { t: RefilterType }) {
       </td>
       <td className="px-1.5 py-0.5 text-right tabular-nums">{t.n_all.toLocaleString()}</td>
       <td className="px-1.5 py-0.5 text-right tabular-nums">{pct(t.median)}</td>
-      <td className="px-1.5 py-0.5 text-right tabular-nums" title={t.note || undefined}>
-        {t.bound !== null && t.bound !== undefined ? pct(t.bound) : <span className="text-slate-400">global</span>}
+      <td className="px-1.5 py-0.5 text-right tabular-nums" title={b.title}>
+        {b.muted ? <span className="text-slate-400">{b.text}</span> : b.text}
       </td>
       <td className="px-1.5 py-0.5 text-right tabular-nums">{t.removed_before.toLocaleString()}</td>
       <td className="px-1.5 py-0.5 text-right tabular-nums">{t.removed_after.toLocaleString()}</td>
@@ -93,7 +112,12 @@ export function RefilterPreviewView({ p }: { p: RefilterPreview }) {
               <th className="px-1.5 py-0.5 font-medium" title={`Groups of '${p.column}'`}>Type</th>
               <th className="px-1.5 py-0.5 text-right font-medium" title="Cells of the type in the original upload">Cells</th>
               <th className="px-1.5 py-0.5 text-right font-medium" title="Median % mito over all the type's cells, before any filtering">Median</th>
-              <th className="px-1.5 py-0.5 text-right font-medium" title="Its own bound (median + 3 MADs, at most 50%), or the global rule when it has none">Bound</th>
+              <th
+                className="px-1.5 py-0.5 text-right font-medium"
+                title={`Its own bound (median + 3 MADs, at most 50%), or the global rule when it has none${p.mito_type_floor ? "; never stricter than the global rule: 'global' where the global rule's bound is higher" : ""}`}
+              >
+                Bound
+              </th>
               <th className="px-1.5 py-0.5 text-right font-medium" title="Cells of the type the last filtering removed (any rule)">Removed now</th>
               <th className="px-1.5 py-0.5 text-right font-medium" title="Cells of the type the re-filter removes (any rule)">After</th>
               <th className="px-1.5 py-0.5 text-right font-medium" title="Removed now, kept after">Back</th>
@@ -102,7 +126,7 @@ export function RefilterPreviewView({ p }: { p: RefilterPreview }) {
           </thead>
           <tbody>
             {p.types.map((t) => (
-              <Row key={t.name} t={t} />
+              <Row key={t.name} t={t} floor={Boolean(p.mito_type_floor)} />
             ))}
           </tbody>
         </table>
@@ -118,10 +142,32 @@ export function RefilterPreviewView({ p }: { p: RefilterPreview }) {
       <Caption n={[{ value: p.n_original, unit: "cells" }, { value: p.types.length, unit: `types of '${p.column}'` }]}>
         Starts again from the original upload ({p.source_file}) and re-runs {p.steps.length} step
         {p.steps.length === 1 ? "" : "s"}: {p.steps.map((s) => STEP_LABELS[s] ?? s).join(", ")}, with the settings the
-        dataset was processed with and % mito judged per type.
+        dataset was processed with and % mito judged per type
+        {p.mito_type_floor ? ", never stricter than the global rule (that same processing's)" : ""}.
         {p.notes.length ? ` ${p.notes.join(" ")}` : ""}
       </Caption>
     </div>
+  );
+}
+
+/** The re-filter's floor option: per type never stricter than the global rule. */
+function FloorCheckbox({ checked, disabled, onChange }: { checked: boolean; disabled: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <label className="inline-flex items-center gap-1 text-[11px] text-slate-600">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+          className="h-3 w-3 rounded border-slate-300"
+        />
+        Never stricter than the global rule
+      </label>
+      <InfoTip label="About never stricter than the global rule" width={300}>
+        {floorText(true)} The global rule is the one the dataset was filtered with, so no cell it kept is removed.
+      </InfoTip>
+    </span>
   );
 }
 
@@ -158,6 +204,7 @@ export function MitoRefilter({
   const [cancelling, setCancelling] = useState(false);
   const [runningStep, setRunningStep] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<RunOutcomeFields | null>(null);
+  const [floor, setFloor] = useState(false); // never stricter than the global rule (off by default)
   const label = `Re-filter with per-${perCluster ? "cluster" : "type"} bounds`;
   const stepLabel = (step: string) => STEP_LABELS[step] ?? step;
 
@@ -166,14 +213,20 @@ export function MitoRefilter({
     cancelPipelineRun(datasetId).catch(() => setCancelling(false));
   };
 
-  const ask = () => {
+  const ask = (withFloor = floor) => {
     setLoading(true);
     setError(null);
     setDone(null);
-    getMitoRefilter(datasetId, column)
+    getMitoRefilter(datasetId, column, withFloor)
       .then(setPreview)
       .catch((e) => setError(String(e?.message ?? e)))
       .finally(() => setLoading(false));
+  };
+
+  // Changing the floor with a preview shown asks again: the preview is what the run does.
+  const changeFloor = (v: boolean) => {
+    setFloor(v);
+    if (preview) ask(v);
   };
 
   const run = async () => {
@@ -201,7 +254,7 @@ export function MitoRefilter({
           if (w.kind === "memory") setMemory(w);
           else setSlow(w);
         }
-      });
+      }, Boolean(preview.mito_type_floor));
       const fields = result as unknown as RunOutcomeFields;
       if ((fields.status ?? "complete") !== "complete") {
         // Cancelled (nothing saved) or stopped before a step that could not fit.
@@ -236,7 +289,7 @@ export function MitoRefilter({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={ask}
+            onClick={() => ask()}
             disabled={loading || running}
             className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-200 disabled:opacity-50"
             title="Preview first: starts again from the original upload, with each type's own % mito bound"
@@ -247,6 +300,7 @@ export function MitoRefilter({
           <span className="text-[11px] text-slate-500">
             {loading ? "Reading the original upload…" : "Shows what it would change before anything runs."}
           </span>
+          <FloorCheckbox checked={floor} disabled={loading || running} onChange={changeFloor} />
         </div>
       )}
       {preview && (
@@ -256,7 +310,7 @@ export function MitoRefilter({
             <button
               type="button"
               onClick={run}
-              disabled={running}
+              disabled={running || loading}
               className="inline-flex items-center gap-1 rounded bg-amber-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-amber-700 disabled:opacity-50"
             >
               {running ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
@@ -268,6 +322,8 @@ export function MitoRefilter({
               </button>
             )}
             {running && <CancelRunButton onCancel={cancel} cancelling={cancelling} />}
+            {!running && <FloorCheckbox checked={floor} disabled={loading} onChange={changeFloor} />}
+            {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
             {progress && <span className="text-[11px] text-blue-700">{progress}</span>}
           </div>
           {running && (

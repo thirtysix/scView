@@ -75,12 +75,15 @@ def test_doublet_detection_annotates_obs():
 
 
 def test_doublet_neighbours_exact_up_to_the_cap(monkeypatch):
-    import scanpy as sc
-
-    from scview.core import doublets
+    from scview.core import doublets, scrublet_lean
 
     calls = []
-    monkeypatch.setattr(sc.pp, "scrublet", lambda adata, **kw: calls.append(kw))
+
+    def fake(counts, **kw):
+        calls.append(kw)
+        return np.zeros(counts.shape[0]), np.zeros(counts.shape[0], dtype=bool), {}
+
+    monkeypatch.setattr(scrublet_lean, "scrublet_counts", fake)
     a = _synthetic(n_cells=20)
     assert _run_doublet_detection(a, PipelineParams())["neighbors"] == "exact"
     monkeypatch.setattr(doublets, "EXACT_KNN_MAX_CELLS", 10)

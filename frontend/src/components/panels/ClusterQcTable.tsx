@@ -212,7 +212,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                   <th className="px-2 py-1 text-right font-medium" title="Median counts per cell">Counts</th>
                   {has("pct_mt") && <th className="px-2 py-1 text-right font-medium" title="Median % mitochondrial">Mito</th>}
                   {has("pct_ribo") && <th className="px-2 py-1 text-right font-medium" title="Median % ribosomal">Ribo</th>}
-                  {has("doublet_fraction") && <th className="px-2 py-1 text-right font-medium" title="Share of predicted doublets">Doublets</th>}
+                  {has("doublet_fraction") && <th className="px-2 py-1 text-right font-medium" title={`Share of the cluster's cells called doublets${data.doublet_source ? ` by ${data.doublet_source}` : ""} (cell hashing when it was run, else Scrublet)`}>Doublets</th>}
                   {!has("doublet_fraction") && has("doublet_score") && <th className="px-2 py-1 text-right font-medium" title="Median doublet score">Dbl score</th>}
                   {has("stress_score") && <th className="px-2 py-1 text-right font-medium" title="Median dissociation-stress score (immediate-early and heat-shock genes)">Stress</th>}
                   {has("pct_hb") && <th className="px-2 py-1 text-right font-medium" title="Mean % haemoglobin reads per cell (the mean: most cells have none); the typical value is a non-erythroid cluster's">Hb</th>}
