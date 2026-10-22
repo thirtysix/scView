@@ -83,6 +83,10 @@ DEPTH_URL = (
     "https://www.10xgenomics.com/support/single-cell-gene-expression/documentation/"
     "steps/sequencing/sequencing-requirements-for-single-cell-3"
 )
+FLEX_DEPTH_URL = (
+    "https://www.10xgenomics.com/support/flex-gene-expression/documentation/steps/sequencing/"
+    "sequencing-requirements-for-single-cell-gene-expression-flex"
+)
 DROPLETUTILS_URL = "https://github.com/MarioniLab/DropletUtils/blob/devel/R/barcodeRanks.R"
 _ALERT_SOURCE = "Cell Ranger 10.1 web summary alert"
 
@@ -242,6 +246,16 @@ ALERTS: tuple[Alert, ...] = (
           "10x recommends at least 20,000 read pairs per cell for 3' and 5' Gene Expression "
           "(10,000 for Flex); check the sequencing saturation before sequencing more.",
           source="10x sequencing requirements", url=DEPTH_URL, level="info"),
+)
+
+# Flex (probe-based; its metrics carry "Reads confidently mapped to probe set"): 10x's
+# minimum is 10,000 read pairs per cell.
+_FLEX_DEPTH = Alert(
+    "mean_reads_per_cell", "below", 10_000, None, "Below 10x's recommended depth",
+    "Minimum 10,000 read pairs per cell (Flex)",
+    "10x recommends at least 10,000 read pairs per cell for Flex Gene Expression; check the "
+    "sequencing saturation before sequencing more.",
+    source="10x sequencing requirements", url=FLEX_DEPTH_URL, level="info",
 )
 
 # cellranger multi, per-sample "Cells": at least 10 cells must be assigned to a sample
@@ -413,6 +427,8 @@ def flags_for(metrics: dict | None) -> list[dict]:
         if alert.key == "estimated_cells" and scope.get(alert.key) == "cells" \
                 and metrics.get("format") == "multi":
             a = _MULTI_SAMPLE_CELLS
+        elif alert.key == "mean_reads_per_cell" and values.get("conf_probe_set") is not None:
+            a = _FLEX_DEPTH
         below = a.direction == "below"
 
         def crosses(t: float) -> bool:

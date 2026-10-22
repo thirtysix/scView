@@ -217,9 +217,12 @@ def test_flex_multi_per_library_layout():
     assert vals["sequencing_saturation"] == pytest.approx(0.594)
     assert vals["conf_probe_set"] == pytest.approx(0.805)
     flags = {f["metric"]: f for f in sm.flags_for(rec)}
-    assert set(flags) == {"valid_barcodes", "mean_reads_per_cell"}
+    # 14,468 reads per cell is under 3' GEX's 20,000 but over Flex's own 10,000: no depth note.
+    assert set(flags) == {"valid_barcodes"}
     assert flags["valid_barcodes"]["level"] == "warn" and flags["valid_barcodes"]["threshold"] == 0.75
-    assert flags["mean_reads_per_cell"]["level"] == "info"
+    low = {**rec, "values": {**vals, "mean_reads_per_cell": 9000}}
+    depth = [f for f in sm.flags_for(low) if f["metric"] == "mean_reads_per_cell"]
+    assert depth[0]["level"] == "info" and depth[0]["threshold"] == 10_000
     assert "70.3%" in flags["valid_barcodes"]["message"] and "75.0%" in flags["valid_barcodes"]["message"]
 
 
@@ -571,7 +574,7 @@ async def test_attach_endpoint(client, dataset_manager, tmp_path):
     (s,) = r.json()["samples"]
     assert s["sample"] == "my data" and s["cells_source"] == "dataset"
     assert s["knee"]["n_cells"] == 150 and s["knee"]["n_cells_matched"] == 150
-    assert {f["metric"] for f in s["flags"]} == {"valid_barcodes", "mean_reads_per_cell"}
+    assert {f["metric"] for f in s["flags"]} == {"valid_barcodes"}
     derived = Path(dataset_manager.data_dir) / "derived" / did / "data.h5ad"
     on_disk = ad.read_h5ad(derived)
     assert json.loads(on_disk.uns[sm.UNS_KEY])["samples"]["my data"]["files"]["metrics"] == "metrics_summary.csv"

@@ -91,7 +91,7 @@ const FLEX: SeqSample = {
   column: "sample",
   cells_source: "dataset",
   attached_at: "2026-10-22T05:00:00+00:00",
-  metrics: { ...PBMC.metrics!, values: { estimated_cells: 2616, valid_barcodes: 0.7031 } },
+  metrics: { ...PBMC.metrics!, values: { estimated_cells: 2616, valid_barcodes: 0.7031, conf_probe_set: 0.805 } },
   knee: null,
   flags: [FLAG],
   summary: "1 of 4 checked metrics cross a Cell Ranger alert: valid barcodes.",
@@ -146,6 +146,8 @@ describe("SequencingQc", () => {
       "Low fraction valid barcodes: 70.3% (warning below 75.0%, error below 50.0%; Ideal > 75%). Source: Cell Ranger 10.1 web summary alert.",
     );
     expect(flexRow.textContent).toContain("1 alert");
+    // Flex: the mapping column shows the probe-set rate, marked.
+    expect(within(flexRow).getByText("80.5%*").getAttribute("title")).toBe("Flex: reads mapped confidently to the probe set.");
     fireEvent.click(flexRow);
     const badge = await screen.findByTestId("seqqc-flag-badge");
     expect(screen.getByTestId("seqqc-summary").textContent).toMatch(/^OR00001_1 \(sample\): 1 of 4 checked metrics/);

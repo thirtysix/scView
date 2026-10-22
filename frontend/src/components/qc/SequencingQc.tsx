@@ -218,10 +218,16 @@ function SampleTable({ data, focus, onFocus }: { data: SeqMetricsResponse; focus
                   {s.sample}
                 </td>
                 {TABLE_METRICS.map((m) => {
-                  const f = flagFor(s.flags, m.key);
+                  // Flex counts probes, not transcripts: its mapping rate is to the probe set.
+                  const key = m.key === "conf_transcriptome" && vals.conf_transcriptome == null && vals.conf_probe_set != null
+                    ? "conf_probe_set"
+                    : m.key;
+                  const f = flagFor(s.flags, key);
+                  const note = key !== m.key ? "Flex: reads mapped confidently to the probe set." : undefined;
                   return (
-                    <td key={m.key} className={`${NUM} ${f ? CELL_TONE[f.level] : ""}`} title={f ? flagTip(f) : undefined}>
-                      {formatMetric(m.key, vals[m.key])}
+                    <td key={m.key} className={`${NUM} ${f ? CELL_TONE[f.level] : ""}`} title={f ? flagTip(f) : note}>
+                      {formatMetric(key, vals[key])}
+                      {note ? "*" : ""}
                     </td>
                   );
                 })}
