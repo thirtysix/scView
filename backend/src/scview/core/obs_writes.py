@@ -112,7 +112,7 @@ def write_derived(
     output_path: str,
     source_path: str | None = None,
     uns_before: dict[str, int] | None = None,
-    obsm_keys: tuple[str, ...] = (),
+    obsm_keys: tuple[str, ...] | list[str] | None = (),
 ) -> None:
     """Write ``adata`` to its derived file: beside it first, then swapped in, so a
     failed write leaves the old file and a backed dataset reading it intact.
@@ -157,7 +157,7 @@ def write_derived(
                         write_elem(group, key, value)
                 if obsm_keys and "obsm" not in f:
                     write_elem(f, "obsm", {})
-                for key in obsm_keys:
+                for key in obsm_keys or ():
                     if key in f["obsm"]:
                         del f["obsm"][key]
                     if key in adata.obsm:

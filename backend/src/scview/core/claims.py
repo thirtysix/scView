@@ -593,6 +593,7 @@ _FAMILY_PREFIX = {
     "programs": "result:programs",
     "embedding": "result:embedding_reliability", "reliability": "result:embedding_reliability",
     "planner": "result:planner",
+    "layouts": "result:layouts", "layout": "result:layouts",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 

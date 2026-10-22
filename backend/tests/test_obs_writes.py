@@ -72,3 +72,24 @@ def test_failed_partial_write_leaves_the_file(tmp_path, monkeypatch):
         write_derived(a, path, path, before)
     assert ad.read_h5ad(path).uns["prov"] == "old"
     assert not (tmp_path / "derived.h5ad.partial").exists()
+
+
+def test_an_added_obsm_entry_is_written_with_the_partial_write(tmp_path, monkeypatch):
+    path = _saved(tmp_path)
+    a = ad.read_h5ad(path)
+    before = uns_snapshot(a)
+    a.obsm["X_umap_s1_k10"] = np.arange(8, dtype=np.float32).reshape(4, 2)
+    a.uns["prov"] = "new"
+
+    def _no_full_write(*_a, **_k):
+        raise AssertionError("full write used")
+
+    monkeypatch.setattr(ad.AnnData, "write_h5ad", _no_full_write)
+    write_derived(a, path, path, before, obsm_keys=["X_umap_s1_k10"])
+    b = ad.read_h5ad(path)
+    np.testing.assert_array_equal(b.obsm["X_umap_s1_k10"], a.obsm["X_umap_s1_k10"])
+    assert b.uns["prov"] == "new"
+    # Replaced in place on a second save.
+    a.obsm["X_umap_s1_k10"] = a.obsm["X_umap_s1_k10"] * 2
+    write_derived(a, path, path, uns_snapshot(a), obsm_keys=["X_umap_s1_k10"])
+    np.testing.assert_array_equal(ad.read_h5ad(path).obsm["X_umap_s1_k10"][3], [12, 14])

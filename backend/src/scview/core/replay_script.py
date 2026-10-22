@@ -1356,6 +1356,28 @@ def _gene_programs(p: dict, ctx: _Ctx) -> Snippet:
         'adata.obsm["X_nmf_usage_raw"] = usage.astype(np.float32)',
     ])
 
+def _keep_layout(p: dict, ctx: _Ctx) -> Snippet:
+    key, seed, k = p.get("key"), p.get("seed"), p.get("n_neighbors")
+    if not key or seed is None or k is None:
+        return Snippet(NOT_REPLAYABLE, ["# A kept layout: its seed or neighbours are not recorded. "
+                                        "Recorded:", *_param_comment(p)], "layout not recorded")
+    if p.get("min_dist") is None and p.get("a") is not None and p.get("b") is not None:
+        curve = f"a={_lit(p['a'])}, b={_lit(p['b'])}"
+    else:
+        curve = f"min_dist={_lit(p.get('min_dist', 0.5))}"
+    n_pcs = f", n_pcs={_lit(p['n_pcs'])}" if p.get("n_pcs") is not None else ""
+    return Snippet(EXACT, [
+        "# A layout kept from scView's layout stability check: the graph rebuilt from the",
+        "# same representation with this neighbour count, laid out with this seed.",
+        f"sc.pp.neighbors(adata, n_neighbors={_lit(k)}, use_rep={_lit(p.get('use_rep') or 'X_pca')}"
+        f"{n_pcs}, metric={_lit(p.get('metric') or 'euclidean')}, key_added=\"layout_check\")",
+        f"sc.tl.umap(adata, {curve}, random_state={_lit(seed)}, neighbors_key=\"layout_check\", "
+        f"key_added={_lit(str(key))})",
+        'for k in ("layout_check_connectivities", "layout_check_distances"):',
+        "    adata.obsp.pop(k, None)",
+        'adata.uns.pop("layout_check", None)',
+        f"adata.uns.pop({_lit(str(key))}, None)",
+    ])
 
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
@@ -1394,6 +1416,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "qc_state_label": _qc_state_label,
     "mito_refilter": _mito_refilter,
     "gene_programs": _gene_programs,
+    "keep_layout": _keep_layout,
 }
 
 
