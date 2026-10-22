@@ -76,7 +76,7 @@ def _sheet_name(name: str, taken: set[str]) -> str:
 _H5AD_SOURCES = {
     "derived": "processed",
     "ingested": "imported",
-    "converted": "converted from Seurat",
+    "converted": "converted from R (.rds)",
     "uploads": "as uploaded",
 }
 
