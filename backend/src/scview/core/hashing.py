@@ -18,7 +18,7 @@ two samples' tags is a doublet. The counts live in ``obsm["hto_counts"]``
 Two calls, the user's choice (both deterministic, so the replay is exact):
 
 ``htodemux`` (default): Seurat's HTODemux (Stoeckius et al. 2018, Genome Biol
-19:224; ported from Seurat 5.1.0's ``HTODemux`` source). Each tag's counts are
+19:224, PMID 30567574; ported from Seurat 5.1.0's ``HTODemux`` source). Each tag's counts are
 CLR-normalised across cells, as ``NormalizeData(method = "CLR", margin = 1)``:
 ``log1p(x / exp(sum(log1p(x)) / n))`` per tag. The cells are clustered on those
 values into (tags + 1) groups by CLARA k-medoids (``cluster::clara``, 100
@@ -32,9 +32,11 @@ none: negative. Seurat's fit uses ``fitdistrplus`` (Nelder-Mead); the exact
 maximum is used here, which moves the fitted mean by ~0.01% and leaves the
 integer cutoffs unchanged on the data checked.
 
-``hashedDrops``: DropletUtils' ``hashedDrops`` (Lun; ported from DropletUtils
-1.24 ``hashedDrops.R`` + ``hashed_deltas.cpp``), on log-fold changes of the top
-two tags. The ambient profile is each tag's mean count over its lower mode (a
+``hashedDrops``: DropletUtils' ``hashedDrops`` (A. Lun; DropletUtils, Lun et al.
+2019, Genome Biol 20:63, PMID 30902100; the cell hashing chapter of OSCA,
+Amezquita et al. 2020, Nat Methods 17:137, PMID 31792435; ported from
+DropletUtils 1.24 ``hashedDrops.R`` + ``hashed_deltas.cpp``), on log-fold changes
+of the top two tags. The ambient profile is each tag's mean count over its lower mode (a
 two-centre k-means on ``log1p`` counts started from the 5% and 95% quantiles,
 ``ambientProfileBimodal``; R uses Hartigan-Wong, Lloyd's iterations here). Per
 cell, the ambient is scaled to the cell (median count/ambient ratio over tags;
@@ -44,6 +46,10 @@ doublet has ``LogFC2`` more than 3 MADs above the median (and above 2); a
 confident singlet, among the rest, ``LogFC`` not more than 3 MADs below the
 median (and above 2). hashedDrops calls no negatives: a cell that is neither
 is stored as "Negative" here (not assigned).
+
+Checked against R on GSE108313 (8-HTO PBMC, 20,238 cells; 12-HTO cell lines,
+8,410 cells): the same class and tag for every cell as Seurat 5.1.0 and
+DropletUtils 1.24 (tests/fixtures/hashing has a 1,000-cell reference).
 
 Outputs (obs): ``hash_call`` (tag / "Doublet" / "Negative"), ``hash_class``
 (Singlet / Doublet / Negative), ``hash_max`` and ``hash_second`` (top and
