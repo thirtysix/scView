@@ -167,8 +167,11 @@ def build_bundle(
 
     ``root``: the staging folder, so each file keeps its path inside an uploaded
     folder (``BundleFile.rel_path``), whose subfolders then group the files; without
-    it every file counts by its name alone. ``skipped``: files left out at upload,
-    listed in the bundle's one sentence about what was skipped."""
+    it every file counts by its name alone (unless ``paths`` is the session's
+    ``staged_paths``, which carries its folder). ``skipped``: files left out at
+    upload, listed in the bundle's one sentence about what was skipped."""
+    if root is None:
+        root = getattr(paths, "root", None)
     paths = [Path(p) for p in paths]
     rels = {p: _rel(p, root) for p in paths}
     skipped = list(skipped or [])
@@ -400,15 +403,16 @@ def _single_label(bf: BundleFile) -> str:
     name (``filtered_feature_bc_matrix.h5``) gives its sample prefix, else the sample
     folder, else "sample"."""
     stem = Path(bf.name).stem
-    if not _dirs(bf.rel_path) or not _strip_tenx(stem.lower())[1]:
+    if not _dirs(bf.rel_path) or not _strip_tenx(stem.lower().removesuffix("_h5"))[1]:
         return _clean_unit_label(stem)
     return sample_key(bf.name) or _dir_label(bf.rel_path) or "sample"
 
 
 def _drop_mex_copies(units: list[IngestUnit], side_files: list[BundleFile],
                      skipped: list[dict]) -> list[IngestUnit]:
-    """Cell Ranger writes each matrix twice, as ``X.h5`` and as the folder ``X/``:
-    keep the .h5 (one file, read faster) and skip the folder's three files."""
+    """Cell Ranger writes each matrix twice, as ``X.h5`` and as the folder ``X/``
+    (Cell Ranger 2: ``X_h5.h5`` and ``X/<genome>/``): keep the .h5 (one file, read
+    faster) and skip the folder's three files."""
     h5s = {(_dirs(f.rel_path), Path(f.name).stem.lower()): f.name
            for u in units if u.format == UnitFormat.tenx_h5 for f in u.files}
     h5s.update({(_dirs(f.rel_path), Path(f.name).stem.lower()): f.name
@@ -418,8 +422,10 @@ def _drop_mex_copies(units: list[IngestUnit], side_files: list[BundleFile],
         d = _dirs(u.files[0].rel_path) if u.format == UnitFormat.tenx_mex and u.files else ()
         twin = None
         if d:
-            name = d[-1].lower()
-            twin = h5s.get((d[:-1], name)) or h5s.get((d[:-1], name + "_h5"))
+            base, name = d[:-1], d[-1].lower()
+            if len(d) > 1 and d[-2].lower() in _GENOME_PARENTS:  # Cell Ranger 2: <dir>/GRCh38/
+                base, name = d[:-2], d[-2].lower()
+            twin = h5s.get((base, name)) or h5s.get((base, name + "_h5"))
         if twin is None:
             out.append(u)
             continue
@@ -562,6 +568,7 @@ def sample_key(name: str) -> str:
             if s.endswith(ext):
                 s = s[: -len(ext)]
                 changed = True
+    s = s.removesuffix("_h5")  # Cell Ranger 2: filtered_gene_bc_matrices_h5.h5
     s, hit = _strip_tenx(s)
     if not hit:  # a MEX part: "<sample>_raw_feature_bc_matrix_barcodes"
         for tok in _ROLE_TOKENS:

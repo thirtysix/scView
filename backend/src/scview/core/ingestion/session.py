@@ -86,6 +86,15 @@ def _protein_params(adata) -> dict:
     }}
 
 
+class StagedPaths(list):
+    """A session's staged files, with the staging folder they sit in (``root``), so
+    ``build_bundle`` keeps their folder paths for any caller that passes the list."""
+
+    def __init__(self, items, root: Path) -> None:
+        super().__init__(items)
+        self.root = root
+
+
 class IngestSessionManager:
     """Manage ingest staging sessions and commit them into datasets."""
 
@@ -124,7 +133,7 @@ class IngestSessionManager:
         Zarr store is one entry, never walked into."""
         fd = self.files_dir(sid)
         if not fd.is_dir():
-            return []
+            return StagedPaths([], fd)
         out: list[Path] = []
 
         def walk(d: Path) -> None:
@@ -140,7 +149,7 @@ class IngestSessionManager:
                     out.append(p)
 
         walk(fd)
-        return out
+        return StagedPaths(out, fd)
 
     def partial_path(self, sid: str) -> Path:
         """Where one upload is written before ``stage`` moves it into place."""

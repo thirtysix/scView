@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from scview.core import seq_metrics, vdj
+from scview.core.dataset_manager import DatasetManager
 from scview.core.ingestion import IngestSessionManager
 from scview.core.ingestion.bundling import SideKind, UnitFormat, build_bundle
 from scview.core.ingestion.paths import UploadPathError, flat_name, junk_reason, safe_relative_path
@@ -58,6 +59,16 @@ def test_safe_paths(raw, want):
 def test_unsafe_paths_are_refused(raw, why):
     with pytest.raises(UploadPathError, match=why):
         safe_relative_path(raw)
+
+
+@pytest.mark.parametrize("name, key", [
+    ("filtered_gene_bc_matrices_h5.h5", ""), ("raw_gene_bc_matrices_h5.h5", ""),
+    ("pbmc4k_raw_gene_bc_matrices_h5.h5", "pbmc4k"), ("pbmc4k_filtered_gene_bc_matrices_h5.h5", "pbmc4k"),
+])
+def test_sample_key_of_cellranger2_h5(name, key):
+    from scview.core.ingestion.bundling import sample_key
+
+    assert sample_key(name) == key
 
 
 def test_flat_name_and_junk():
@@ -257,6 +268,14 @@ def test_cellranger2_genome_folders(tmp_path):
     (unit,) = build_bundle(_files(root), root=root).units
     assert unit.label == "pbmc4k" and unit.format == UnitFormat.tenx_mex and unit.complete
     assert all("/raw_gene_bc_matrices/GRCh38/" in p for p in _side(unit)["raw"])
+    # With Cell Ranger 2's .h5 files beside them, the .h5 files are read and the folders skipped.
+    _write_h5(outs / "filtered_gene_bc_matrices_h5.h5", dense[:, :200], bcs[:200])
+    _write_h5(outs / "raw_gene_bc_matrices_h5.h5", dense, bcs)
+    bundle = build_bundle(_files(root), root=root)
+    (unit,) = bundle.units
+    assert unit.format == UnitFormat.tenx_h5 and unit.label == "pbmc4k"
+    assert _side(unit)["raw"] == ["pbmc4k/outs/raw_gene_bc_matrices_h5.h5"]
+    assert len(bundle.skipped) == 6
 
 
 def test_folder_labels_never_collide_and_plain_files_keep_their_names(tmp_path):
@@ -403,3 +422,16 @@ async def test_commit_outs_folder_sequencing_qc_and_both_contig_tables(ingest, t
     assert (up / "filtered_feature_bc_matrix.h5").exists() and (up / "raw_feature_bc_matrix.h5").exists()
     assert (up / "vdj_b" / "filtered_contig_annotations.csv").exists()
     assert not (up / "analysis").exists() and not (up / "web_summary.html").exists()
+
+
+def test_preflight_sees_the_folder_units(tmp_data_dir):
+    # core/preflight.py builds its own bundle from staged_paths: same units as the state.
+    from scview.core.preflight import session_preflight
+
+    mgr = IngestSessionManager(str(tmp_data_dir))
+    sid = mgr.create_session()
+    count_outs(mgr.files_dir(sid) / "pbmc" / "outs")  # .h5 and MEX copies of both matrices
+    state_units = [u["label"] for u in mgr.get_state(sid)["bundle"]["units"]]
+    body = session_preflight(mgr, sid, DatasetManager(str(tmp_data_dir)))
+    assert state_units == ["pbmc"] and [u["label"] for u in body["units"]] == ["pbmc"]
+    assert body["merge"] is None
