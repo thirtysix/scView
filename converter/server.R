@@ -3,13 +3,16 @@
 ## Minimal HTTP server for the scView converter service.
 ## Listens on port 8001 and exposes two routes:
 ##   GET  /health  -> health-check endpoint
-##   POST /convert -> accepts JSON {input_path, output_path}, runs conversion
+##   POST /convert -> accepts JSON {input_path, output_path[, progress_path]},
+##                    runs conversion (Seurat, SingleCellExperiment,
+##                    SummarizedExperiment) and returns what was kept / skipped
 ##
 
 library(httpuv)
 library(jsonlite)
 
 source("convert.R")
+source("convert_sce.R")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -79,8 +82,9 @@ app <- list(
         ))
       }
 
-      input_path  <- params$input_path
-      output_path <- params$output_path
+      input_path    <- params$input_path
+      output_path   <- params$output_path
+      progress_path <- params$progress_path
 
       if (is.null(input_path) || is.null(output_path)) {
         return(json_response(
@@ -95,7 +99,7 @@ app <- list(
       # Run conversion
       result <- tryCatch(
         {
-          convert_seurat_to_h5ad(input_path, output_path)
+          convert_rds_to_h5ad(input_path, output_path, progress_path)
         },
         error = function(e) {
           list(success = FALSE, error = conditionMessage(e))
@@ -105,7 +109,8 @@ app <- list(
       if (isTRUE(result$success)) {
         return(json_response(list(
           status  = "ok",
-          message = result$message
+          message = result$message,
+          report  = result$report
         )))
       } else {
         return(json_response(

@@ -38,6 +38,7 @@ RUN Rscript /app/install_bioc.R
 # Copy remaining R source files
 COPY server.R /app/server.R
 COPY convert.R /app/convert.R
+COPY convert_sce.R /app/convert_sce.R
 
 EXPOSE 8001
 
