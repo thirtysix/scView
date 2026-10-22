@@ -185,3 +185,20 @@ describe("ClonotypeSubtab", () => {
     expect(await screen.findByTestId("vdj-empty")).toBeInTheDocument();
   });
 });
+
+describe("ClonotypeRepertoire without a grouping column", () => {
+  it("says why instead of asking the backend (an unprocessed import has no groups)", async () => {
+    const { ClonotypeRepertoire } = await import("@/components/unified/ClonotypeRepertoire");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { render, screen } = await import("@testing-library/react");
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ClonotypeRepertoire datasetId="d1" groupColumns={[]} groupByColumn="" />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText(/no grouping column yet/)).toBeTruthy();
+    expect(fetchSpy.mock.calls.filter((c) => String(c[0]).includes("/vdj/diversity"))).toHaveLength(0);
+    fetchSpy.mockRestore();
+  });
+});

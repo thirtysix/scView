@@ -42,6 +42,8 @@ export function ClonotypeRepertoire({
     queryKey: ["vdj-view", datasetId, "diversity-default", groupBy],
     queryFn: () => getDiversity(datasetId, groupBy, false),
     retry: false,
+    // Nothing to group by yet (an unprocessed import): asking would only be refused.
+    enabled: options.length > 0,
   });
   const column = groupBy || diversity.data?.group_by || "";
 
@@ -64,6 +66,12 @@ export function ClonotypeRepertoire({
           ))}
         </select>
       </div>
+      {options.length === 0 && (
+        <p className="rounded-md bg-slate-50 px-2 py-1.5 text-slate-600">
+          Diversity, overlap and gene usage are per group, and this dataset has no grouping column yet
+          (samples, cell types or clusters). Run clustering on Data Assessment, or add a sample column.
+        </p>
+      )}
       {diversity.error && !column && (
         <p role="alert" className="rounded-md bg-amber-50 px-2 py-1.5 text-amber-800">
           {errorText(diversity.error)}
