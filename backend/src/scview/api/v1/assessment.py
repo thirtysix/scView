@@ -261,6 +261,8 @@ async def get_filter_preview(
     cluster_column: str = "",
     label_column: str = "",
     condition_column: str = "",
+    doublet_source: str | None = None,
+    drop_hash_negatives: bool | None = None,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The cells the filtering step's thresholds would remove (core/qc_filter.py):
@@ -275,6 +277,9 @@ async def get_filter_preview(
     flags; ``recorded`` the same for what the last filtering step removed.
     ``mito_mode`` "per_type" judges % mito by each type of ``mito_type_column``
     (default: as the step picks it) with ``mito_types`` the per-type table.
+    ``doublet_source`` (auto | hashing | scrublet | either) is whose doublets
+    ``drop_doublets`` drops, ``drop_hash_negatives`` drops cell hashing's
+    negatives; ``doublets`` describes the choice (core/doublet_source.py).
     Small and fast at any cell count (one pass over cached per-cell values), so
     the QC plots ask again on every threshold change."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
@@ -286,7 +291,8 @@ async def get_filter_preview(
                        ("drop_doublets", drop_doublets), ("qc_threshold_mode", mode),
                        ("qc_mad_k", mad_k), ("qc_mad_k_mt", mad_k_mt),
                        ("qc_mad_upper", mad_upper), ("qc_mito_mode", mito_mode),
-                       ("qc_mito_type_column", mito_type_column or None)):
+                       ("qc_mito_type_column", mito_type_column or None),
+                       ("qc_doublet_source", doublet_source), ("drop_hash_negatives", drop_hash_negatives)):
         if value is not None:
             setattr(params, key, value)
     thresholds = qc_filter.Thresholds.from_params(params)

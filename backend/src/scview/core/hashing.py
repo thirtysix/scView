@@ -56,7 +56,8 @@ Outputs (obs): ``hash_call`` (tag / "Doublet" / "Negative"), ``hash_class``
 second tag), ``hash_margin`` (the top tag's lead: CLR difference, or LogFC for
 hashedDrops). ``sample_column`` writes a sample column from a tag -> sample
 mapping: singlets get their sample's name, doublets and negatives are left
-empty. ``hash_class`` feeds the doublet views (``cluster_qc.doublet_calls``).
+empty. ``hash_class`` is the doublet views' primary call once it exists, with
+Scrublet as the second opinion (``core/doublet_source.py``).
 """
 
 from __future__ import annotations
@@ -874,13 +875,12 @@ def sample_column(adata, mapping: dict, column: str = DEFAULT_SAMPLE_COLUMN) -> 
 
 
 def _doublet_source(obs: pd.DataFrame) -> str | None:
-    from scview.core import cluster_qc
+    """The obs column the doublet views read (``doublet_source.resolve``, auto):
+    ``hash_class`` once demultiplexed, else Scrublet's, else a text column."""
+    from scview.core import doublet_source
 
-    if "predicted_doublet" in obs.columns:
-        return "predicted_doublet"
-    names = [c for c in cluster_qc._DOUBLET_CLASS_COLS if c in obs.columns]
-    names += [c for c in obs.columns if str(c).startswith(cluster_qc._DOUBLET_CLASS_PREFIX)]
-    return str(names[0]) if names else None
+    used = doublet_source.resolve(obs)
+    return None if used is None else used.columns[0]
 
 
 def summary(adata) -> dict:
@@ -915,9 +915,9 @@ def summary(adata) -> dict:
             "n_uncalled": int(cls.isna().sum()),
         }
         if "predicted_doublet" in obs.columns:
-            from scview.core import cluster_qc
+            from scview.core import doublet_source
 
-            scr = cluster_qc.doublet_calls(obs[["predicted_doublet"]])
+            scr = doublet_source.scrublet_calls(obs)
             if scr is not None:
                 out["scrublet"] = {c: {"scrublet_doublet": int(((cls == c).to_numpy() & scr).sum()),
                                        "scrublet_singlet": int(((cls == c).to_numpy() & ~scr).sum())}
@@ -1046,8 +1046,13 @@ def grounding_lines(adata) -> tuple[list[str], str]:
         rule = (f"doublet when LogFC2 > {th.get('doublet_lfc2')}, confident singlet when LogFC > "
                 f"{th.get('confident_lfc')}; 'Negative' = not confidently assigned")
     used = s.get("doublet_source")
-    views = ("the doublet views use these hashing calls" if used == CLASS
-             else f"the doublet views use '{used}'" if used else "")
+    views = ("the doublet views use these hashing calls (so does the filtering step's 'drop doublets', "
+             "source auto)" if used == CLASS else f"the doublet views use '{used}'" if used else "")
+    scr = s.get("scrublet")
+    if used == CLASS and scr:
+        views += (f"; Scrublet, the second opinion, also calls {scr[DOUBLET]['scrublet_doublet']:,} of the "
+                  f"hashing doublets and {scr[SINGLET]['scrublet_doublet']:,} hashing singlets "
+                  "(same-sample doublets hashing cannot see, or false calls)")
     line = (f"- Cell hashing ({call.get('label')}, {len(tags)} tags): of {n:,} cells, {c[SINGLET]:,} singlets "
             f"({pct(SINGLET)}), {c[DOUBLET]:,} doublets ({pct(DOUBLET)}), {c[NEGATIVE]:,} negatives "
             f"({pct(NEGATIVE)}); {per_text}; {rule}" + (f"; {views}" if views else "") + f" [{TAG}]")

@@ -28,7 +28,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 from scview.core.replicates import donor_candidates, pick_donor
-from scview.core import cluster_qc, seq_metrics, sex_check
+from scview.core import cluster_qc, doublet_source, seq_metrics, sex_check
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
 from scview.core.assistant import DEEPINFRA_BASE_URL, DEFAULT_MODEL, ChatSource
@@ -213,15 +213,15 @@ def build_facts(adaptor) -> QCFacts:
         concern(seq_metrics.REPORT_TAG, text)
 
     # --- Doublets ---
-    calls = cluster_qc.doublet_calls(adata.obs)
+    dbl = doublet_source.describe(adata.obs)  # cell hashing when run, else Scrublet
     score = adata.obs["doublet_score"] if "doublet_score" in adata.obs.columns else None
-    if calls is not None or score is not None:
+    if dbl is not None or score is not None:
         bits = []
-        if calls is not None:
-            frac = float(np.mean(calls))
-            bits.append(f"{_n(int(calls.sum()))} cells ({frac:.1%}) are called doublets")
+        if dbl is not None:
+            frac = float(dbl["fraction"])
+            bits.append(doublet_source.text(dbl))
             if frac >= 0.08:
-                concern("qc:doublets", f"{frac:.1%} of cells are predicted doublets.")
+                concern("qc:doublets", f"{frac:.1%} of cells are doublets by {dbl['label']}.")
                 step("qc:doublets", "Drop predicted doublets (Filtering step, drop doublets).")
         if score is not None:
             s = _dist(pd.to_numeric(score, errors="coerce").to_numpy(dtype=np.float64))

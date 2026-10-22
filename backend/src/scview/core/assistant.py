@@ -769,21 +769,23 @@ def build_insight(adaptor) -> DatasetInsight:
             severity="suggestion",
         )
 
-    # 2. Heavy doublet load.
-    if "predicted_doublet" in obs.columns:
-        try:
-            frac = float(obs["predicted_doublet"].astype(bool).mean())
-            if frac >= 0.08:
-                return DatasetInsight(
-                    insight=(
-                        f"About {frac:.0%} of cells are flagged as predicted doublets "
-                        "— consider filtering them before clustering."
-                    ),
-                    question="Should I filter doublets?",
-                    severity="suggestion",
-                )
-        except Exception:  # pragma: no cover
-            pass
+    # 2. Heavy doublet load, by the doublet views' source (cell hashing when run, else Scrublet).
+    try:
+        from scview.core import doublet_source
+
+        used = doublet_source.resolve(obs)
+        frac = float(used.calls.mean()) if used is not None and n else 0.0
+        if frac >= 0.08:
+            return DatasetInsight(
+                insight=(
+                    f"About {frac:.0%} of cells are doublets by {used.label} "
+                    "— consider filtering them before clustering."
+                ),
+                question="Should I filter doublets?",
+                severity="suggestion",
+            )
+    except Exception:  # pragma: no cover
+        pass
 
     # 2b. QC anomaly: high mitochondrial content (stressed / dying cells).
     for col in obs.columns:

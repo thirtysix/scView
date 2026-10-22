@@ -228,19 +228,47 @@ def per_cell_qc(adata):
     return out
 ''',
     "doublet_calls": '''
-def doublet_calls(obs):
-    """Per-cell doublet calls as booleans (Scrublet's column, or a text one)."""
+def doublet_calls(obs, source="legacy"):
+    """Per-cell doublet calls as booleans from the source scView's filtering used
+    (core/doublet_source.py): "hashing" (hash_class), "scrublet" (predicted_doublet),
+    "either" (both), "auto" (hashing, else Scrublet, else a text column), a text
+    column's name, or "legacy" (a filtering recorded before the choice existed:
+    Scrublet's column first, then the text ones)."""
+    def text_in(col, values):
+        return col.astype(str).str.lower().isin(values).to_numpy()
+
+    hashing = text_in(obs["hash_class"], ("doublet",)) if "hash_class" in obs.columns else None
+    scrublet = None
     if "predicted_doublet" in obs.columns:
         col = obs["predicted_doublet"]
-        if pd.api.types.is_bool_dtype(col):
-            return col.to_numpy(dtype=bool)
-        return col.astype(str).str.lower().isin(("true", "1", "doublet")).to_numpy()
-    names = [c for c in ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class",
-                         "hash_class") if c in obs.columns]
-    names += [c for c in obs.columns if str(c).startswith("DF.classification")]
-    for name in names:
-        return obs[name].astype(str).str.lower().eq("doublet").to_numpy()
-    return None
+        scrublet = (col.to_numpy(dtype=bool) if pd.api.types.is_bool_dtype(col)
+                    else text_in(col, ("true", "1", "1.0", "doublet")))
+    named = [c for c in ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class")
+             if c in obs.columns]
+    finder = [c for c in obs.columns if str(c).startswith("DF.classification")]
+    if source == "hashing" or (source == "auto" and hashing is not None):
+        return hashing
+    if source == "either":
+        if hashing is not None and scrublet is not None:
+            return hashing | scrublet
+        return hashing if hashing is not None else scrublet
+    if source in ("scrublet", "auto", "legacy") and scrublet is not None:
+        return scrublet
+    if source == "scrublet":
+        return None
+    if source == "legacy" and hashing is not None and not named:
+        return hashing  # hash_class came after the named text columns, before DoubletFinder's
+    if source not in ("auto", "legacy"):  # a text column another tool left
+        return text_in(obs[source], ("doublet",)) if source in obs.columns else None
+    texts = named + finder
+    return text_in(obs[texts[0]], ("doublet",)) if texts else None
+
+
+def hash_negatives(obs):
+    """Cells cell hashing calls Negative (no tag above background), or None."""
+    if "hash_class" not in obs.columns:
+        return None
+    return obs["hash_class"].astype(str).str.lower().eq("negative").to_numpy()
 ''',
     "mad_thresholds": '''
 def mad_thresholds(adata, qc, column, k, k_mt, upper, ceiling, min_cells=100):
@@ -851,13 +879,27 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
             code.insert(0, "# NOTE: this record has no cut-offs (an older scView): none applied.")
     if p.get("drop_doublets"):
         _need(ctx, "doublet_calls")
-        code += ["calls = doublet_calls(adata.obs)", "if calls is not None:", "    drop |= calls"]
+        code += [*_doublet_source_code(p), "if calls is not None:", "    drop |= calls"]
+    if p.get("drop_hash_negatives"):
+        _need(ctx, "doublet_calls")  # defines hash_negatives too
+        code += ["negatives = hash_negatives(adata.obs)  # cell hashing's Negative cells",
+                 "if negatives is not None:", "    drop |= negatives"]
     code += [
         "if drop.any():",
         "    adata = adata[~drop, :].copy()",
-        f"sc.pp.filter_genes(adata, min_cells={_lit(min_cells)})",
     ]
+    code.append(f"sc.pp.filter_genes(adata, min_cells={_lit(min_cells)})")
     return Snippet(status, code, note)
+
+
+def _doublet_source_code(p: dict) -> list[str]:
+    """The doublet calls a filtering dropped: the source it recorded (the one its
+    choice stood for), or Scrublet first for a record from before the choice."""
+    if "qc_doublet_source" not in p:
+        return ["calls = doublet_calls(adata.obs)"]
+    used = p.get("qc_doublet_source_used") or p.get("qc_doublet_source") or "auto"
+    return [f"# Doublets by {comment_text(used, 60)} (scView's choice: {comment_text(p['qc_doublet_source'], 20)}).",
+            f"calls = doublet_calls(adata.obs, {_lit(str(used))})"]
 
 
 def _mito_refilter(p: dict, ctx: _Ctx) -> Snippet:
