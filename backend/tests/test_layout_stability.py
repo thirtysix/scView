@@ -269,6 +269,10 @@ def test_a_sample_is_seeded_and_the_same_every_time():
     p2 = ls.make_plan(a, max_cells=300)
     assert p1.sampled and p1.rows.size == 300 and np.array_equal(p1.rows, p2.rows)
     assert any("seeded sample of 300" in n for n in p1.notes)
+    assert not any("laid out with all" in n for n in p1.notes)  # no plot to compare with
+    a.obsm["X_umap"] = a.obsm["X_pca"][:, :2].copy()
+    assert any("laid out with all 600 cells" in n for n in ls.make_plan(a, max_cells=300).notes)
+    del a.obsm["X_umap"]
     s = ls.run_all(a, p1, layout_fn=lambda h, seed, rec: h.obsm["X_rep"][:, :2].astype(np.float32))
     assert s["n_laid_out"] == 300 and s["sampled"] is True
     assert sum(g["n_cells"] for g in s["groups"]) == 300

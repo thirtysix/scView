@@ -332,6 +332,10 @@ def make_plan(adata, embedding: str | None = None, group_by: str | None = None,
     if sampled:
         notes.append(f"{n:,} cells: a seeded sample of {rows.size:,} was laid out; your plot is "
                      "compared on the same cells.")
+        if current:
+            notes.append(f"Your plot was laid out with all {n:,} cells and these layouts with the "
+                         "sample, which can change a layout by itself: read a contact in your plot "
+                         "that no layout repeats with that in mind.")
     return Plan(rec=rec, seeds=seeds, ks=ks, rows=rows, n_cells=n, sampled=sampled,
                 group_by=check_group_column(adata, group_by), current=current, notes=notes)
 
