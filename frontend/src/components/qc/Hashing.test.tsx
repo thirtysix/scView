@@ -138,7 +138,7 @@ describe("Hashing", () => {
     expect(within(screen.getByTestId("hashing-table")).getByText("> 121")).toBeTruthy();
     await waitFor(() => expect(getHashingPlotData).toHaveBeenCalledWith("d1"));
     const plots = await screen.findAllByTestId("plot");
-    expect(plots[0]?.textContent).toBe("this tag's singlets|doublets|other cells|this tag's singlets|doublets|other cells");
+    expect(plots[0]?.textContent).toBe("other cells|doublets|this tag's singlets|other cells|doublets|this tag's singlets");
     expect(plots[1]?.textContent).toBe("heatmap");
   });
 

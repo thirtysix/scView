@@ -111,13 +111,14 @@ const hist = (tag: string, cutoffClr: number | null): HashingTagHist => ({
 });
 
 describe("hashing figures", () => {
-  it("stacks each tag's histogram by call, one subplot per tag, with the cutoff line", () => {
+  it("draws each tag's histogram per group of the call, one subplot per tag, with the cutoff line", () => {
     const fig = tagHistFigure([hist("A", 1.5), hist("B", null), hist("C", 2.2)], () => "rgb(1,2,3)");
     expect(fig.data).toHaveLength(9);
-    const first = fig.data[0] as { x: number[]; width: number; marker: { color: string }; xaxis: string };
-    expect(first.x).toEqual([0.5, 1.5, 2.5]);
-    expect(first.width).toBe(1);
-    expect(first.marker.color).toBe("rgb(1,2,3)"); // the tag's own colour
+    const top = fig.data[2] as { x: number[]; width: number; marker: { color: string }; name: string };
+    expect(top.x).toEqual([0.5, 1.5, 2.5]);
+    expect(top.width).toBe(1);
+    expect(top.name).toBe("this tag's singlets"); // drawn last, on top
+    expect(top.marker.color).toBe("rgb(1,2,3)"); // the tag's own colour
     expect((fig.data[1] as { marker: { color: string } }).marker.color).toBe(DOUBLET_COLOR);
     expect(fig.data.filter((t) => (t as { showlegend: boolean }).showlegend)).toHaveLength(3);
     expect(fig.data.map((t) => (t as { xaxis: string }).xaxis)).toEqual(["x", "x", "x", "x2", "x2", "x2", "x3", "x3", "x3"]);
@@ -131,6 +132,9 @@ describe("hashing figures", () => {
     expect(dom("yaxis2")).toEqual(dom("yaxis"));
     expect(dom("yaxis3")[1]).toBeLessThan(dom("yaxis")[0]);
     expect(dom("xaxis3")[0]).toBe(0);
+    // Overlaid groups on a log count axis: the small positive mode shows beside the background.
+    expect(fig.layout.barmode).toBe("overlay");
+    expect((fig.layout as Record<string, { type?: string }>).yaxis3?.type).toBe("log");
   });
 
   it("before a call, draws one histogram per tag; a large panel is cut", () => {

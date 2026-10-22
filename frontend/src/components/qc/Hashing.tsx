@@ -466,8 +466,9 @@ export function Hashing({
                     n={{ value: plot.n_cells, unit: "cells" }}
                     testId="hashing-hist-caption"
                   >
-                    Each tag&apos;s counts across cells, CLR-normalised per tag, stacked by the call: the tag&apos;s
-                    own singlets, all doublets, the other cells.
+                    Each tag&apos;s counts across cells, CLR-normalised per tag (x), as cells per bin on a log scale
+                    (y), one histogram per group of the call: the tag&apos;s own singlets (its colour), all doublets
+                    (dark grey), the other cells (light grey).
                     {call.method === "htodemux"
                       ? " Dashed red: the tag's count cutoff in CLR units (the CLR is monotone in a tag's counts)."
                       : " hashedDrops has no per-tag cutoff: its thresholds are on the fold changes below."}
@@ -478,37 +479,43 @@ export function Hashing({
               )}
               {heat && plot?.heatmap && (
                 <>
-                  <Panel title="Tag x call heatmap" className="h-[280px]">
-                    <Plot
-                      data={[heat]}
-                      layout={{
-                        autosize: true,
-                        margin: { l: 70, r: 10, t: 10, b: 80 },
-                        xaxis: { tickfont: { size: 9 }, tickangle: -35 },
-                        yaxis: { tickfont: { size: 9 }, autorange: "reversed" },
-                      }}
-                      config={plotConfig("hashing_heatmap")}
-                      style={FILL_STYLE}
-                      useResizeHandler
-                    />
-                  </Panel>
+                  {/* Panel is h-full: the height is set on a wrapper (a className height loses to it). */}
+                  <div style={{ height: Math.max(240, 110 + plot.heatmap.tags.length * 26) }}>
+                    <Panel title="Tag x call heatmap">
+                      <Plot
+                        data={[heat]}
+                        layout={{
+                          autosize: true,
+                          margin: { l: 70, r: 10, t: 10, b: 80 },
+                          xaxis: { tickfont: { size: 9 }, tickangle: -35 },
+                          yaxis: { tickfont: { size: 9 }, autorange: "reversed" },
+                        }}
+                        config={plotConfig("hashing_heatmap")}
+                        style={FILL_STYLE}
+                        useResizeHandler
+                      />
+                    </Panel>
+                  </div>
                   <Caption n={{ value: plot.n_cells, unit: "cells" }}>
                     Mean CLR of each tag (rows) in the cells of each call (columns, with their n). A clean call has
-                    one bright cell per tag column; doublets are bright for two tags, negatives for none.
+                    one bright cell per tag column; the Doublet column is mid-bright for every tag (each doublet is
+                    bright for two), the Negative column dark.
                   </Caption>
                 </>
               )}
               {lfc && (
                 <>
-                  <Panel title="hashedDrops fold changes" className="h-[220px]">
-                    <Plot
-                      data={lfc.data}
-                      layout={{ ...lfc.layout, autosize: true }}
-                      config={plotConfig("hashing_lfc")}
-                      style={FILL_STYLE}
-                      useResizeHandler
-                    />
-                  </Panel>
+                  <div className="h-[240px]">
+                    <Panel title="hashedDrops fold changes">
+                      <Plot
+                        data={lfc.data}
+                        layout={{ ...lfc.layout, autosize: true }}
+                        config={plotConfig("hashing_lfc")}
+                        style={FILL_STYLE}
+                        useResizeHandler
+                      />
+                    </Panel>
+                  </div>
                   <Caption n={{ value: plot?.n_cells ?? 0, unit: "cells" }}>
                     Per cell, after removing the ambient level: the top tag over the second (a confident singlet is
                     above the left line) and the second over the ambient level (a doublet is above the right line).

@@ -7,8 +7,9 @@ import type {
   HashingTagHist,
 } from "@/api/hashing";
 
-export const DOUBLET_COLOR = "#d97706";
-export const OTHER_COLOR = "#94a3b8";
+// Doublets and the rest in greys: the tags' own colours come from the categorical palette.
+export const DOUBLET_COLOR = "#334155";
+export const OTHER_COLOR = "#cbd5e1";
 export const CUTOFF_COLOR = "#dc2626";
 /** The call's own obs columns: a sample column cannot take these names. */
 export const HASH_COLUMNS = ["hash_call", "hash_class", "hash_max", "hash_second", "hash_margin"];
@@ -101,8 +102,10 @@ function centers(edges: number[]): { x: number[]; width: number } {
   return { x, width: edges.length > 1 ? (edges[1] ?? 1) - (edges[0] ?? 0) : 1 };
 }
 
-/** One small histogram per tag (CLR across cells), stacked by the call: this tag's
- *  singlets, all doublets, the other cells; a red line at the tag's cutoff. */
+/** One small histogram per tag (CLR across cells), one overlaid histogram per group of
+ *  the call (this tag's singlets, all doublets, the other cells: each cell is in one),
+ *  on a log count axis so the small positive mode shows beside the background; a red
+ *  line at the tag's cutoff. */
 export function tagHistFigure(
   hists: HashingTagHist[],
   colorOf: (tag: string) => string,
@@ -111,16 +114,18 @@ export function tagHistFigure(
   const cols = shown.length > 1 ? 2 : 1;
   const rows = Math.max(1, Math.ceil(shown.length / cols));
   const rowH = 120;
-  const height = rows * rowH + 70;
+  const top = 56;
+  const height = rows * rowH + top + 34;
   const gapX = 0.1;
   const gapY = rows > 1 ? 0.5 / rows : 0;
   const data: Record<string, unknown>[] = [];
   const layout: Record<string, unknown> = {
-    barmode: "stack",
+    barmode: "overlay",
     bargap: 0,
-    margin: { l: 44, r: 10, t: 30, b: 34 },
+    margin: { l: 44, r: 10, t: top, b: 34 },
     showlegend: true,
-    legend: { orientation: "h", y: 1 + 24 / height, x: 0, font: { size: 9 } },
+    // Above the first row's titles: paper units are the plot area (height - margins).
+    legend: { orientation: "h", x: 0, y: 1 + 30 / (height - top - 34), yanchor: "bottom", font: { size: 9 } },
     annotations: [] as unknown[],
     shapes: [] as unknown[],
   };
@@ -133,17 +138,18 @@ export function tagHistFigure(
     const x0 = c * (w + gapX);
     const y1 = 1 - r * (hgt + gapY);
     const xa: Axis = { domain: [x0, x0 + w], anchor: `y${n}`, tickfont: { size: 8 }, zeroline: false };
-    const ya: Axis = { domain: [Math.max(0, y1 - hgt), y1], anchor: `x${n}`, tickfont: { size: 8 }, rangemode: "tozero" };
+    const ya: Axis = { domain: [Math.max(0, y1 - hgt), y1], anchor: `x${n}`, tickfont: { size: 8 }, type: "log",
+      dtick: 1, exponentformat: "power" };
     if (r === rows - 1 || i + cols >= shown.length) xa.title = { text: "CLR", font: { size: 9 }, standoff: 2 };
     layout[`xaxis${n}`] = xa;
     layout[`yaxis${n}`] = ya;
     const { x, width } = centers(h.bin_edges);
     const groups: [string, string, string][] = h.counts.all
       ? [["all", "cells", OTHER_COLOR]]
-      : [
-          ["tag", "this tag's singlets", "__tag__"],
-          ["doublet", "doublets", DOUBLET_COLOR],
+      : [ // drawn in this order: the tag's own singlets on top
           ["other", "other cells", OTHER_COLOR],
+          ["doublet", "doublets", DOUBLET_COLOR],
+          ["tag", "this tag's singlets", "__tag__"],
         ];
     for (const [key, name, color] of groups) {
       const y = h.counts[key];
@@ -157,13 +163,14 @@ export function tagHistFigure(
         legendgroup: key,
         showlegend: i === 0,
         marker: { color: color === "__tag__" ? colorOf(h.tag) : color, line: { width: 0 } },
+        opacity: key === "other" || key === "all" ? 1 : 0.85,
         xaxis: `x${n}`,
         yaxis: `y${n}`,
         hovertemplate: `${h.tag}, ${name}<br>CLR %{x:.2f}: %{y} cells<extra></extra>`,
       });
     }
     (layout.annotations as unknown[]).push({
-      text: `<b>${h.tag}</b>${h.cutoff != null ? `  cutoff > ${h.cutoff} counts (${(h.n_above ?? 0).toLocaleString()} cells)` : ""}`,
+      text: `<b>${h.tag}</b>${h.cutoff != null ? `  cutoff ${h.cutoff} counts, ${(h.n_above ?? 0).toLocaleString()} cells above` : ""}`,
       xref: `x${n} domain`,
       yref: `y${n} domain`,
       x: 0,
