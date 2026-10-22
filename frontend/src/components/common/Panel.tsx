@@ -45,9 +45,12 @@ export function Panel({
 
   const hasHeader = title != null || actions != null || expandable;
 
+  // A caller's own height ("h-[300px]") must win: with both, the built CSS lists .h-full after
+  // .h-[Npx], so h-full won and every sized Panel rendered at Plotly's default (~450 px).
+  const sized = /(^|\s)h-(?!full\b)/.test(className ?? "");
   const card = (
     <div
-      className={`flex h-full min-h-0 flex-col overflow-hidden border border-slate-200 bg-white shadow-sm ${
+      className={`flex ${sized ? "" : "h-full"} min-h-0 flex-col overflow-hidden border border-slate-200 bg-white shadow-sm ${
         full ? "fixed inset-0 z-[1050] rounded-none" : "rounded-xl"
       } ${className ?? ""}`}
     >
