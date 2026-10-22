@@ -443,3 +443,39 @@ async def test_a_run_with_a_plan_makes_room_first(tmp_path, monkeypatch):
                                     RunControl(_quiet(), plan=(STEPS, pipeline.PipelineParams())))
     await processing._make_run_room(FakeDM(), "d1", type("A", (), {"adata": a})(), RunControl(_quiet()))
     assert asked == [(12345, "d1")]  # the run without a plan asked nothing
+
+
+@pytest.mark.parametrize("path, body", [
+    ("assessment/run", {"steps": ["qc_metrics", "normalization"]}),
+    ("rerun", None),
+])
+async def test_a_run_endpoint_holds_no_copy_through_the_reload(client, dataset_manager, monkeypatch, path, body):
+    # The endpoint used to keep its own `adaptor` across run_exclusive, so the reload
+    # read the file while the old AnnData was still alive: two copies at once (ovary
+    # at 6 GB was OOM-killed reloading after a run the pre-step check had stopped).
+    import gc
+    import weakref
+
+    did = _register(Path(dataset_manager.data_dir))
+    old = weakref.ref((await dataset_manager.get_or_load_dataset(did)).adata)
+    if body is None:  # rerun needs a recorded history: run the steps once first
+        r = await client.post(f"{API}/datasets/{did}/assessment/run",
+                              json={"steps": ["qc_metrics", "normalization", "log_transform", "pca", "neighbors",
+                                              "embeddings"]})
+        assert r.status_code == 200
+        old = weakref.ref((await dataset_manager.get_or_load_dataset(did)).adata)
+        body = {"edited_step": "embeddings", "params": {}}
+    alive_at_reload = []
+    load = dataset_manager.load_dataset
+
+    async def watched(dataset_id, *a, **k):
+        gc.collect()
+        alive_at_reload.append(old() is not None)
+        return await load(dataset_id, *a, **k)
+
+    monkeypatch.setattr(dataset_manager, "load_dataset", watched)
+    monkeypatch.setattr(run_watchdog, "default_before_step",
+                        lambda step, *_: "No room." if step in ("normalization", "embeddings") else None)
+    r = await client.post(f"{API}/datasets/{did}/{path}", json=body)
+    assert r.status_code == 200, r.text
+    assert alive_at_reload and alive_at_reload[-1] is False

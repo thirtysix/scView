@@ -424,6 +424,11 @@ async def run_assessment_pipeline(
             if hasattr(params, key):
                 setattr(params, key, value)
     control = RunControl(plan=(body.steps, params))
+    # Drop this request's hold on the cached copy before the run: run_exclusive
+    # reloads the dataset from disk afterwards, and a reference kept here would
+    # hold the old AnnData through that reload (two copies: ovary at 6 GB was
+    # OOM-killed reloading after a run the pre-step check had stopped).
+    del adaptor
 
     def _run(adaptor):
         # Write processing output to the derived layer, never the original
@@ -611,6 +616,7 @@ async def rerun_step(
                 setattr(params, key, value)
 
     control = RunControl(plan=(plan.rerun_steps, params))
+    del adaptor  # as /assessment/run: no hold on the copy the run replaces
 
     def _run(adaptor):
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
