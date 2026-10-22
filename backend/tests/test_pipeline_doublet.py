@@ -100,3 +100,22 @@ def test_pipeline_runs_doublet_step_end_to_end():
     # assessor recognises the recorded step
     state = assess_preprocessing(out)
     assert state.doublet_detection.done is True
+
+
+def test_looks_like_counts_reads_a_backed_matrix_by_its_first_rows(tmp_path):
+    # Files over 2 GB open backed; np.asarray of an on-disk sparse matrix failed, so
+    # every caller (activity, normalization, programs) broke on them.
+    import anndata as ad
+    import numpy as np
+    import scipy.sparse as sp
+
+    from scview.core import pipeline
+
+    rng = np.random.default_rng(0)
+    counts = sp.csr_matrix(rng.poisson(1.0, (300, 40)).astype(np.float32))
+    for X, want in ((counts, True), (counts.log1p(), False), (counts.toarray(), True)):
+        p = tmp_path / f"m{int(want)}{sp.issparse(X)}.h5ad"
+        ad.AnnData(X=X).write_h5ad(p)
+        backed = ad.read_h5ad(p, backed="r")
+        assert pipeline.looks_like_counts(backed.X) is want
+        backed.file.close()
