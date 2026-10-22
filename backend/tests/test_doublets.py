@@ -201,12 +201,11 @@ def test_the_applied_threshold_survives_a_save(tmp_path):
 def test_the_step_takes_the_suggestion_unless_a_rate_is_given(monkeypatch):
     seen: list[float] = []
 
-    def fake_scrublet(adata, expected_doublet_rate, use_approx_neighbors=None):
+    def fake_scrublet(counts, expected_doublet_rate, use_approx_neighbors=None):
         seen.append(expected_doublet_rate)
-        adata.obs["doublet_score"] = 0.0
-        adata.obs["predicted_doublet"] = False
+        return np.zeros(counts.shape[0]), np.zeros(counts.shape[0], dtype=bool), {}
 
-    monkeypatch.setattr(pl.sc.pp, "scrublet", fake_scrublet)
+    monkeypatch.setattr(pl.scrublet_lean, "scrublet_counts", fake_scrublet)
     a = _sized({"small": 2000, "big": 6000})
     assert pl.PipelineParams().expected_doublet_rate is None
     found = pl._run_doublet_detection(a, pl.PipelineParams())
