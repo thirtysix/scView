@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { applyDoubletThreshold, getDoublets, type DoubletSummary } from "@/api/qc";
+import { Caption } from "@/components/common/Caption";
 import { Panel } from "@/components/common/Panel";
+import { DoubletAgreement } from "@/components/qc/DoubletAgreement";
 import { ThresholdHistogram, type RefLine } from "@/components/plots/ThresholdHistogram";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
+import { sourceText } from "@/lib/doubletSource";
 import { pct, roundTo } from "@/lib/qcThresholds";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -148,6 +151,7 @@ export function DoubletCard({
   };
 
   const applied = summary.applied ?? null;
+  const hashingFirst = summary.source?.source === "hashing"; // auto picks hashing once it was run
   const unchanged = applied !== null && threshold !== null && Math.abs(applied.threshold - threshold) < 1e-9;
   const samples = summary.samples ?? [];
   const shown = allSamples ? samples : samples.slice(0, SAMPLE_ROWS);
@@ -266,6 +270,16 @@ export function DoubletCard({
             {allSamples ? "Show fewer" : `Show all ${samples.length}`}
           </button>
         )}
+        {summary.agreement && (
+          <DoubletAgreement
+            agreement={summary.agreement}
+            scrubletAt={
+              summary.agreement.threshold != null
+                ? `Scrublet at ${fmtScore(summary.agreement.threshold)}`
+                : "Scrublet's saved call"
+            }
+          />
+        )}
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
           <button
             type="button"
@@ -300,8 +314,16 @@ export function DoubletCard({
             : `predicted_doublet holds Scrublet's call${
                 summary.n_called_now != null ? ` (${summary.n_called_now.toLocaleString()} cells)` : ""
               }.`}{" "}
-          Cell/Gene Filtering drops them when &quot;Drop predicted doublets&quot; is on.
+          {hashingFirst
+            ? "Cell hashing is the primary call here: cluster QC, the QC report and Cell/Gene Filtering's " +
+              "\"Drop predicted doublets\" (source auto) use its doublets; pick Scrublet or Either there to drop these."
+            : "Cell/Gene Filtering drops them when \"Drop predicted doublets\" is on."}
         </p>
+        {summary.source && (
+          <Caption testId="doublet-source">
+            Doublet views use: {sourceText(summary.source)}
+          </Caption>
+        )}
         {error && (
           <p role="alert" className="rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
             {error}

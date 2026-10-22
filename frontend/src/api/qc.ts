@@ -3,6 +3,7 @@ import { API_BASE } from "@/lib/constants";
 import { thresholdMode } from "@/lib/qcThresholds";
 import type { ChatSource } from "./assistant";
 import type { MitoMode, MitoTypesTable } from "./mitoFilter";
+import type { DoubletAgreement, DoubletChoices, DoubletSource, DoubletSourceInfo } from "./doubletSource";
 
 /** One cluster's QC numbers + the flags it earned against the other clusters. */
 export interface ClusterQc {
@@ -84,6 +85,8 @@ export interface ClusterQcReport {
   dataset_median_pct_malat1?: number | null;
   /** The obs column the intronic / unspliced share came from, when obs has one. */
   intronic_column?: string | null;
+  /** Whose doublet calls `doublet_fraction` counts: "cell hashing", "Scrublet", ... */
+  doublet_source?: string | null;
 }
 
 export async function getClusterQc(datasetId: string, groupby?: string): Promise<ClusterQcReport> {
@@ -188,6 +191,10 @@ export interface DoubletSummary {
   n_called?: number | null;
   fraction_called?: number | null;
   samples?: DoubletSampleCalls[];
+  /** What the doublet views use (cell hashing when run, else Scrublet). */
+  source?: DoubletSourceInfo | null;
+  /** Cell hashing x Scrublet at this threshold, when the dataset has both. */
+  agreement?: DoubletAgreement | null;
 }
 
 export async function getDoublets(datasetId: string, threshold?: number | null): Promise<DoubletSummary> {
@@ -239,6 +246,10 @@ export interface FilterThresholds {
   qc_mito_type_column?: string;
   /** Per type: never stricter than the global rule (a type's bound = max(own, global)). */
   qc_mito_type_floor?: boolean;
+  /** Whose doublets "drop doublets" drops; "auto" = cell hashing when run, else Scrublet. */
+  qc_doublet_source?: DoubletSource;
+  /** Also drop cell hashing's negatives (no tag above background). */
+  drop_hash_negatives?: boolean;
 }
 
 export type FilterCriterion =
@@ -247,7 +258,8 @@ export type FilterCriterion =
   | "min_counts"
   | "max_counts"
   | "max_pct_mt"
-  | "doublets";
+  | "doublets"
+  | "hash_negatives";
 
 /** A sample's QC medians set it apart from the other samples (backend qc_groups.sample_summary). */
 export type SampleFlag = "few_cells" | "low_genes" | "high_genes" | "low_counts" | "high_counts" | "high_mito";
@@ -450,6 +462,8 @@ export interface FilterPreview {
   recorded?: RecordedRemovalAudit | null;
   /** Per-type % mito bounds (per-type mode only): each type's rule and loss. */
   mito_types?: MitoTypesTable | null;
+  /** Whose doublets, and hashing negatives (null without doublet calls; older backends omit it). */
+  doublets?: DoubletChoices | null;
 }
 
 export async function getFilterPreview(
@@ -474,6 +488,8 @@ export async function getFilterPreview(
     if (t.qc_mito_type_column) q.set("mito_type_column", t.qc_mito_type_column);
     if (t.qc_mito_type_floor) q.set("mito_type_floor", "true");
   }
+  if (t.qc_doublet_source && t.qc_doublet_source !== "auto") q.set("doublet_source", t.qc_doublet_source);
+  if (t.drop_hash_negatives) q.set("drop_hash_negatives", "true");
   if (columns.label_column) q.set("label_column", columns.label_column);
   if (columns.condition_column) q.set("condition_column", columns.condition_column);
   try {

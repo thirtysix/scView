@@ -128,6 +128,24 @@ describe("QcFilterSummary", () => {
     expect(onChange).toHaveBeenCalledWith({ drop_doublets: true });
   });
 
+  it("lets the doublet source and hashing negatives be chosen when hashing exists", async () => {
+    const onChange = vi.fn();
+    getFilterPreview.mockResolvedValue({
+      ...preview(250),
+      doublets: {
+        source: "auto", used: { source: "hashing", label: "cell hashing", n: 120 },
+        auto: { source: "hashing", label: "cell hashing" }, options: ["auto", "hashing", "scrublet", "either"],
+        n_by_source: { auto: 120, hashing: 120, scrublet: 70, either: 150 }, both: 40, n_cells: 1000,
+        hash_negatives: 30, drop_hash_negatives: false, negative_note: "Not doublets.",
+      },
+    });
+    render(<QcFilterSummary datasetId="d1" thresholds={{ ...T, drop_doublets: true }} onChange={onChange} />);
+    fireEvent.change(await screen.findByLabelText("Doublet source"), { target: { value: "scrublet" } });
+    expect(onChange).toHaveBeenCalledWith({ qc_doublet_source: "scrublet" });
+    fireEvent.click(screen.getByLabelText("Also drop hashing negatives (30 cells)"));
+    expect(onChange).toHaveBeenCalledWith({ drop_hash_negatives: true });
+  });
+
   it("shows the server's reason when the preview fails", async () => {
     getFilterPreview.mockRejectedValue(new Error("Column 'x' not found."));
     render(<QcFilterSummary datasetId="d1" thresholds={T} />);

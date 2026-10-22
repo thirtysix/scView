@@ -449,6 +449,33 @@ def _judged(prep: Prepared) -> tuple[ad.AnnData, dict, np.ndarray, qc_filter.Typ
     return A, removed, ~qc_filter.keep_mask(removed, A.n_obs), types
 
 
+def _doublets_as_the_dataset_has_them(prep: Prepared, cur: ad.AnnData) -> str:
+    """For the preview: the doublets the dataset's filtering drops (its recorded
+    source, ``doublet_source``) for its cells, the removal record's for the cells it
+    removed, written into the prepared cells as the calls the preview judges by.
+    Returns a note when those are cell hashing calls the original upload lacks (the
+    run cannot drop them; nothing here carries hashing over), else ""."""
+    from scview.core import doublet_source
+
+    if not prep.params.drop_doublets:
+        return ""
+    used = doublet_source.resolve(cur.obs, prep.params.qc_doublet_source)
+    if used is None:
+        return ""
+    calls = pd.Series(False, index=prep.adata.obs_names)
+    calls.loc[cur.obs_names] = used.calls
+    names, bits = qc_filter.recorded_names(cur), qc_filter.recorded_bits(cur, "doublets")
+    if names is not None and bits is not None and len(names) == bits.size:
+        calls.loc[[n for n in names if n in calls.index]] = bits[[n in calls.index for n in names]]
+    prep.adata.obs[doublet_source.SCRUBLET_CALL] = calls.to_numpy()
+    prep.params.qc_doublet_source = doublet_source.SCRUBLET  # the calls just written, whatever their source
+    if doublet_source.HASH_CLASS in used.columns and doublet_source.HASH_CLASS not in prep.adata.obs.columns:
+        return ("The dataset's doublets are cell hashing calls, which the original upload does not have: "
+                "the run drops Scrublet's calls instead (or none, with the source set to hashing). "
+                "Demultiplex the new dataset and filter again to drop hashing doublets.")
+    return ""
+
+
 def preview(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "per_type",
             floor: bool = False) -> dict:
     """What re-filtering would do, per type: cells, median, the rule and bound,
@@ -459,14 +486,7 @@ def preview(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "
     RefilterError when it can't run."""
     prep = prepare(dm, dataset_id, adaptor, column, mito_mode, floor)
     cur = adaptor.adata
-    if prep.params.drop_doublets and "predicted_doublet" in cur.obs.columns:
-        # The dataset's own calls for its cells, the record's for those it removed.
-        calls = pd.Series(False, index=prep.adata.obs_names)
-        calls.loc[cur.obs_names] = cur.obs["predicted_doublet"].astype(bool).to_numpy()
-        names, bits = qc_filter.recorded_names(cur), qc_filter.recorded_bits(cur, "doublets")
-        if names is not None and bits is not None and len(names) == bits.size:
-            calls.loc[[n for n in names if n in calls.index]] = bits[[n in calls.index for n in names]]
-        prep.adata.obs["predicted_doublet"] = calls.to_numpy()
+    hashing_note = _doublets_as_the_dataset_has_them(prep, cur)
     A, removed, drop, types = _judged(prep)
     kept = prep.kept_before
     rows = []
@@ -507,7 +527,7 @@ def preview(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "
                    "dataset starts from the original upload's columns."),
         "notes": prep.notes + ([] if not prep.params.drop_doublets else
                                ["Doublet calls as the dataset has them; the run calls them again on the "
-                                "same cells."]),
+                                "same cells."]) + ([hashing_note] if hashing_note else []),
         "warnings": types.to_dict()["warnings"] if types is not None else [],
     }
     return out

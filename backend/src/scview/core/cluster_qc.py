@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from scview.core import cell_cycle, haemoglobin, qc_drivers, stress
+from scview.core import cell_cycle, doublet_source, haemoglobin, qc_drivers, stress
 from scview.core.anndata_adaptor import per_cell_qc
 
 logger = logging.getLogger(__name__)
@@ -93,11 +93,6 @@ FLAG_HELP = {
     ),
 }
 
-# Doublet calls stored as text by other tools (scDblFinder, demuxlet, DoubletFinder).
-_DOUBLET_CLASS_COLS = ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class",
-                       "hash_class")  # hash_class: core/hashing.py (Singlet / Doublet / Negative)
-_DOUBLET_CLASS_PREFIX = "DF.classification"
-
 
 class ClusterQC(BaseModel):
     group: str
@@ -143,6 +138,7 @@ class ClusterQCReport(BaseModel):
     drivers_n_pcs: int = 0  # leading PCs looked at
     dataset_median_pct_malat1: float | None = None  # the median cell's, for low_malat1
     intronic_column: str | None = None  # obs column of an intronic/unspliced share, if any
+    doublet_source: str | None = None  # whose doublet calls doublet_fraction counts (doublet_source)
 
     @property
     def flagged(self) -> list[ClusterQC]:
@@ -150,19 +146,11 @@ class ClusterQCReport(BaseModel):
 
 
 def doublet_calls(obs: pd.DataFrame) -> np.ndarray | None:
-    """Per-cell doublet calls as booleans, from Scrublet's bool column or a text one."""
-    if "predicted_doublet" in obs.columns:
-        col = obs["predicted_doublet"]
-        if pd.api.types.is_bool_dtype(col):
-            return col.to_numpy(dtype=bool)
-        # Categorical/text "True"/"False" after a round trip: astype(bool) would make
-        # every non-empty string True.
-        return col.astype(str).str.lower().isin(("true", "1", "doublet")).to_numpy()
-    names = [c for c in _DOUBLET_CLASS_COLS if c in obs.columns]
-    names += [c for c in obs.columns if str(c).startswith(_DOUBLET_CLASS_PREFIX)]
-    for name in names:
-        return obs[name].astype(str).str.lower().eq("doublet").to_numpy()
-    return None
+    """Per-cell doublet calls as booleans from the source the doublet views use:
+    cell hashing when it was run, else Scrublet, else a text class column
+    (``doublet_source.resolve``, source "auto")."""
+    used = doublet_source.resolve(obs)
+    return None if used is None else used.calls
 
 
 # An author's per-cell intronic / unspliced read share (Cell Ranger, velocyto,
@@ -247,9 +235,9 @@ def cluster_qc(
     if cells.get("pct_ribo") is not None:
         frame["pct_ribo"] = cells["pct_ribo"]
         metrics.append("pct_ribo")
-    calls = doublet_calls(adata.obs)
-    if calls is not None:
-        frame["doublet"] = calls.astype(np.float64)
+    used = doublet_source.resolve(adata.obs)
+    if used is not None:
+        frame["doublet"] = used.calls.astype(np.float64)
         metrics.append("doublet_fraction")
     if "doublet_score" in adata.obs.columns:
         frame["doublet_score"] = pd.to_numeric(adata.obs["doublet_score"], errors="coerce").to_numpy()
@@ -411,6 +399,7 @@ def cluster_qc(
         drivers_space=drivers.representation,
         drivers_n_pcs=drivers.n_pcs,
         dataset_median_pct_malat1=malat1_median,
+        doublet_source=None if used is None else used.label,
         intronic_column=intronic[0] if intronic is not None else None,
     )
 

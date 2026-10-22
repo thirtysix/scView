@@ -746,6 +746,23 @@ def set_definition(adata, same_v_gene: bool) -> dict:
     return {"same_v_gene": bool(same_v_gene), "n_clonotypes": n}
 
 
+def recompute_after_filter(adata) -> dict | None:
+    """After the filtering step removed cells: clonotypes, clone sizes and expansion
+    again from the chains of the cells kept, with the stored definition
+    (``redefine``), so sizes never count cells that are gone. The filtering step
+    keeps the returned dict in its own provenance entry and the replay repeats it
+    there. None when no contigs were attached by scView."""
+    info = stored_info(adata)
+    if info is None or CHAINS_KEY not in adata.obsm:
+        return None
+    same_v = bool(info.get("same_v_gene", False))
+    redefine(adata, same_v)
+    _forget(adata)
+    clon = adata.obs[CLONOTYPE_COL]
+    return {"same_v_gene": same_v, "n_clonotypes": int(clon.nunique()),
+            "n_cells_in_clonotypes": int(clon.notna().sum())}
+
+
 def remove(adata) -> dict:
     if stored_info(adata) is None and CHAINS_KEY not in adata.obsm:
         raise VdjError("No V(D)J contigs are attached to this dataset.", status=404)
@@ -865,6 +882,8 @@ def summary(adata) -> dict:
         "same_v_gene": bool(info.get("same_v_gene", False)),
         "definition": DEFINITION,
         "stale": stale,
+        # The filtering step recomputes them itself (recompute_after_filter): stale means
+        # the cells were removed by a filtering from before that, or outside scView.
         "stale_note": ("Cells were removed after the contigs were attached, so the stored clone sizes "
                        "count cells that are gone. Recompute the clonotypes to update them.") if stale else None,
         "columns": [c for c in our_columns(adata) if c in obs.columns],

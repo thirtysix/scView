@@ -14,8 +14,13 @@ that are made visible and adjustable here:
   mean of the per-sample rates: the share of all cells expected to be doublets.
 - A **threshold** on ``doublet_score``, set on the score histogram. Applying it
   rewrites ``predicted_doublet`` (what the filtering step drops with
-  ``drop_doublets``) and keeps Scrublet's own call in
-  ``predicted_doublet_scrublet``, so the original can be put back.
+  ``drop_doublets``, unless cell hashing is the doublet source) and keeps
+  Scrublet's own call in ``predicted_doublet_scrublet``, so the original can be
+  put back.
+
+With cell hashing run as well, hashing is the doublet views' primary call and
+Scrublet the second opinion (``core/doublet_source.py``); ``summary`` then says how
+the two agree at the threshold shown, overall and per sample.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from scview.core import cluster_qc, provenance, qc_groups
+from scview.core import doublet_source, provenance, qc_groups
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +174,7 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
 
     top = max(1.0, float(finite.max())) if finite.size else 1.0
     counts, edges = np.histogram(finite, bins=n_bins, range=(0.0, top))
-    now = cluster_qc.doublet_calls(adata.obs)
+    now = doublet_source.scrublet_calls(adata.obs)
     out = {
         "available": True,
         "n_cells": n,
@@ -186,10 +191,14 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
         "fraction_called": None,
         "suggestion": suggestion,
         "samples": [],
+        "source": doublet_source.describe(adata.obs),  # what the doublet views use
+        "agreement": None,
     }
     if threshold is None:
+        out["agreement"] = _agreement(adata, now, None, suggestion["column"])
         return out
     called = _calls_at(scores, threshold)
+    out["agreement"] = _agreement(adata, called, threshold, suggestion["column"])
     out["n_called"] = int(called.sum())
     out["fraction_called"] = round(float(called.mean()), 4) if n else 0.0
     order, codes = _samples(adata, suggestion["column"])
@@ -203,6 +212,19 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
             for g, s, h in zip(order, sizes, hits)
         ]
     return out
+
+
+def _agreement(adata, scrublet: np.ndarray | None, threshold: float | None,
+               column: str | None) -> dict | None:
+    """Cell hashing x Scrublet's calls at ``threshold`` (None: its saved call), overall
+    and per sample, when the dataset has both (``doublet_source.agreement``)."""
+    hashing = doublet_source.hashing_calls(adata.obs)
+    if hashing is None or scrublet is None:
+        return None
+    order, codes = _samples(adata, column)
+    out = doublet_source.agreement(hashing, scrublet, doublet_source.hash_negatives(adata.obs),
+                                   order, codes)
+    return {**out, "threshold": threshold, "column": column if order else None}
 
 
 def clear_threshold(adata) -> None:
@@ -238,7 +260,7 @@ def apply_threshold(adata, threshold: float | None, column: str | None = None) -
         t = threshold
         created = previous.get("created_call", False) if previous else CALL not in obs.columns
         if SCRUBLET_CALL not in obs.columns and CALL in obs.columns and previous is None:
-            obs[SCRUBLET_CALL] = cluster_qc.doublet_calls(obs)
+            obs[SCRUBLET_CALL] = doublet_source.scrublet_calls(obs)
         called = _calls_at(scores, t)
         obs[CALL] = called
         # A new dict, not an edit of the old one: write_derived saves replaced entries.

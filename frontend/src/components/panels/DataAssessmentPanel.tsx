@@ -17,6 +17,7 @@ import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCros
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
 import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
+import { asDoubletSource } from "@/lib/doubletSource";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
@@ -279,6 +280,9 @@ export function filterThresholds(set: Record<string, unknown> | undefined): Filt
     qc_mito_mode: set?.qc_mito_mode === "per_type" ? "per_type" : "global",
     qc_mito_type_column: String(set?.qc_mito_type_column ?? ""),
     qc_mito_type_floor: Boolean(set?.qc_mito_type_floor ?? false),
+    // Set from the cell-loss summary's doublet control, not the step's form.
+    qc_doublet_source: asDoubletSource(set?.qc_doublet_source),
+    drop_hash_negatives: Boolean(set?.drop_hash_negatives),
   };
 }
 

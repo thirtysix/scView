@@ -105,7 +105,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import chi2_contingency
 
-from scview.core import cluster_qc, confounding, provenance, qc_groups
+from scview.core import cluster_qc, confounding, doublet_source, provenance, qc_groups
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +133,7 @@ CRITERIA = {
     "max_counts": "Max counts",
     "max_pct_mt": "Max % mito",
     "doublets": "Predicted doublets",
+    "hash_negatives": "Hashing negatives",
 }
 
 # MAD mode: (per-cell metric, criterion below the bound, criterion above it)
@@ -164,6 +165,10 @@ class Thresholds:
     mito_type_column: str = ""  # per_type: the cell types ("" = mito_by_type.default_column)
     # per_type: never stricter than the global rule (a type's bound = max(own, global))
     mito_type_floor: bool = False
+    # Whose doublet calls drop_doublets drops (doublet_source.SOURCES): "auto" = cell
+    # hashing when it was run, else Scrublet; and hashing negatives, a separate opt-in.
+    doublet_source: str = "auto"
+    drop_hash_negatives: bool = False
 
     @classmethod
     def from_params(cls, params) -> Thresholds:
@@ -182,6 +187,8 @@ class Thresholds:
             mito_mode=str(getattr(params, "qc_mito_mode", "global") or "global"),
             mito_type_column=str(getattr(params, "qc_mito_type_column", "") or ""),
             mito_type_floor=bool(getattr(params, "qc_mito_type_floor", False)),
+            doublet_source=str(getattr(params, "qc_doublet_source", "auto") or "auto"),
+            drop_hash_negatives=bool(getattr(params, "drop_hash_negatives", False)),
         )
 
     def check(self) -> None:
@@ -190,6 +197,9 @@ class Thresholds:
             raise ValueError(f"Unknown QC threshold mode '{self.mode}': use 'mad' or 'fixed'.")
         if self.mito_mode not in MITO_MODES:
             raise ValueError(f"Unknown % mito mode '{self.mito_mode}': use 'global' or 'per_type'.")
+        if self.doublet_source not in doublet_source.SOURCES:
+            raise ValueError(f"Unknown doublet source '{self.doublet_source}': use "
+                             f"{', '.join(doublet_source.SOURCES)}.")
         checks = [("MAD multiplier", self.mad_k)] if self.mode == "mad" else []
         if self.mode == "mad" or self.mito_mode == "per_type":
             checks.append(("% mito MAD multiplier", self.mad_k_mt))
@@ -638,7 +648,8 @@ def removed_by(cells: dict, t: Thresholds, doublets: np.ndarray | None = None,
     """For each threshold that is on, the cells it removes on its own (boolean masks).
 
     ``cells`` is ``per_cell_qc``'s output; ``doublets`` the per-cell doublet calls
-    (``cluster_qc.doublet_calls``), used when ``t.drop_doublets``. In MAD mode
+    (an array, used when ``t.drop_doublets``) or ``cell_calls``' ``CellCalls`` (the
+    source's doublets, and hashing negatives for ``t.drop_hash_negatives``). In MAD mode
     ``bounds`` are the samples' (``mad_bounds``); without them all cells pool.
     ``types`` (``type_bounds``) replaces the % mito rule for the cells of a type
     with a bound of its own (``mito_mode`` "per_type"); with ``t.mito_type_floor``
@@ -652,8 +663,7 @@ def removed_by(cells: dict, t: Thresholds, doublets: np.ndarray | None = None,
         out["max_pct_mt"] = _per_type_mito(cells, types, glob)
         if t.mito_type_floor:
             out["max_pct_mt"] = _floored_mito(out["max_pct_mt"], glob)
-    if t.drop_doublets and doublets is not None:
-        out["doublets"] = np.asarray(doublets, dtype=bool)
+    out.update(_call_masks(t, doublets))
     return out
 
 
@@ -714,7 +724,7 @@ def judge_types(adata, cells: dict, t: Thresholds, samples: Samples | None = Non
     step both call this, so the preview is what the step does. Raises ValueError as ``judge`` does, and for a per-type column
     that is missing or has too many groups."""
     t.check()
-    calls = cluster_qc.doublet_calls(adata.obs)
+    calls = cell_calls(adata.obs, t)
     per_type = t.mito_mode == "per_type" and _mito_measurable(cells)
     if t.mode != "mad" and not per_type:
         return removed_by(cells, t, calls), None, None
@@ -925,6 +935,7 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
         "has_mt": has_mt,
         "mito_types": _types_table(types),
         "doublet_calls": cluster_qc.doublet_calls(adata.obs) is not None,  # "drop doublets" can act
+        "doublets": doublet_choices(adata.obs, t),  # whose calls, and hashing negatives
         "by_criterion": {c: {"label": CRITERIA[c], "n_removed": int(m.sum())} for c, m in removed.items()},
         "mad": bounds.to_dict(drop) if bounds is not None else None,
         "samples": samples,
@@ -1477,6 +1488,93 @@ def _recorded_audit(adata, rec: dict, label_column: str | None, condition_column
             row["removed_median"] = {k: _median(v[sel]) for k, v in vals.items()
                                      if k != "pct_mt" or head["has_mt"]} if sel.any() else None
     return {**head, "stale": False, "columns": list(cols), **out}
+
+
+# --- doublet calls: whose, and the hashing negatives (core/doublet_source.py) ----------
+
+
+@dataclass(frozen=True)
+class CellCalls:
+    """Per-cell calls the filtering step can drop beside the thresholds: the
+    doublets of the chosen source, and cell hashing's negatives."""
+
+    doublets: np.ndarray | None
+    negatives: np.ndarray | None = None
+    source: str | None = None  # the source the doublets came from (doublet_source.Calls)
+
+
+def cell_calls(obs: pd.DataFrame, t: Thresholds) -> CellCalls:
+    """The doublets ``t.doublet_source`` stands for ("auto": cell hashing when it was
+    run, else Scrublet, else a text column) and the hashing negatives."""
+    used = doublet_source.resolve(obs, t.doublet_source)
+    return CellCalls(None if used is None else used.calls, doublet_source.hash_negatives(obs),
+                     None if used is None else used.source)
+
+
+def _call_masks(t: Thresholds, calls) -> dict[str, np.ndarray]:
+    """``removed_by``'s doublet / negative criteria from an array of doublet calls
+    (as before the source choice) or a ``CellCalls``."""
+    if calls is None:
+        return {}
+    if not isinstance(calls, CellCalls):
+        calls = CellCalls(np.asarray(calls, dtype=bool))
+    out: dict[str, np.ndarray] = {}
+    if t.drop_doublets and calls.doublets is not None:
+        out["doublets"] = np.asarray(calls.doublets, dtype=bool)
+    if t.drop_hash_negatives and calls.negatives is not None:
+        out["hash_negatives"] = np.asarray(calls.negatives, dtype=bool)
+    return out
+
+
+def doublet_choices(obs: pd.DataFrame, t: Thresholds) -> dict | None:
+    """For the preview's doublet control: the sources that mean something here, the
+    one ``t.doublet_source`` stands for and what auto picks, each source's count,
+    how many cells hashing and Scrublet both call, and the hashing negatives.
+    None without any doublet calls."""
+    auto = doublet_source.describe(obs)
+    if auto is None:
+        return None
+    used = doublet_source.resolve(obs, t.doublet_source)
+    n_by: dict[str, int | None] = {}
+    for s in auto["options"]:
+        c = doublet_source.resolve(obs, s)
+        n_by[s] = None if c is None else c.n
+    neg = doublet_source.hash_negatives(obs)
+    return {
+        "source": t.doublet_source,
+        "used": None if used is None else {"source": used.source, "label": used.label, "n": used.n},
+        "auto": {"source": auto["source"], "label": auto["label"]},
+        "options": auto["options"],
+        "n_by_source": n_by,
+        "both": auto["both"]["n"] if auto.get("both") else None,
+        "n_cells": auto["n_cells"],
+        "hash_negatives": None if neg is None else int(neg.sum()),
+        "drop_hash_negatives": t.drop_hash_negatives,
+        "negative_note": doublet_source.NEGATIVE_NOTE,
+    }
+
+
+def after_filter(adata, t: Thresholds, n_removed: int) -> dict:
+    """The filtering step's own record beside its params, once the cells are gone
+    (``adata`` = the cells kept): whose doublets ``drop_doublets`` dropped (the
+    choice, and the source it stood for, which the replay uses), the hashing
+    negatives choice, and the V(D)J clone sizes recomputed on the cells kept
+    (``vdj.recompute_after_filter``) when cells were removed. A record without
+    ``qc_doublet_source`` is from before the choice: its replay keeps Scrublet first."""
+    from scview.core import vdj
+
+    out: dict = {}
+    if t.drop_doublets:
+        used = doublet_source.resolve(adata.obs, t.doublet_source)
+        out.update(qc_doublet_source=t.doublet_source,
+                   qc_doublet_source_used=None if used is None else used.source)
+    if t.drop_hash_negatives:
+        out["drop_hash_negatives"] = True
+    if n_removed:
+        clones = vdj.recompute_after_filter(adata)
+        if clones is not None:
+            out["vdj_clonotypes"] = clones
+    return out
 
 
 # --- the co-pilot's fact --------------------------------------------------------
