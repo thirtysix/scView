@@ -173,19 +173,27 @@ def attach_counts(adata, counts, features: list[str], source: str) -> list[str]:
     return names
 
 
-def tag_counts_frame(adata) -> pd.DataFrame | None:
-    """The tag counts scView keeps (``obsm[HTO_KEY]``), else a hashtag table
-    another tool left in obsm under a known name (counts only)."""
-    m = adata.obsm.get(HTO_KEY) if hasattr(adata, "obsm") else None
+def _tag_key(adata) -> str | None:
+    """The obsm key holding tag counts: scView's, else a hashtag table another
+    tool left under a known name (a DataFrame of counts)."""
+    if not hasattr(adata, "obsm"):
+        return None
+    m = adata.obsm.get(HTO_KEY)
     if isinstance(m, pd.DataFrame) and m.shape[1] > 0:
-        return m
+        return HTO_KEY
     for key in FOREIGN_KEYS:
         m = adata.obsm.get(key)
         if isinstance(m, pd.DataFrame) and 0 < m.shape[1] <= MAX_TAGS:
             v = m.to_numpy(dtype=np.float64)
             if np.isfinite(v).all() and v.min() >= 0 and np.allclose(v, np.round(v)):
-                return m
+                return key
     return None
+
+
+def tag_counts_frame(adata) -> pd.DataFrame | None:
+    """The tag counts (cells x tags), wherever ``_tag_key`` finds them."""
+    key = _tag_key(adata)
+    return None if key is None else adata.obsm[key]
 
 
 def candidates(adata) -> dict[str, Any]:
@@ -193,15 +201,15 @@ def candidates(adata) -> dict[str, Any]:
     that look like hashtags, and every protein feature (one can be marked)."""
     from scview.core import protein
 
-    frame = tag_counts_frame(adata)
+    key = _tag_key(adata)
+    frame = None if key is None else adata.obsm[key]
     state = read_state(adata)
     tags = [str(c) for c in frame.columns] if frame is not None else []
     proteins = protein.protein_names(adata)
     sources = state.get("sources", {})
-    foreign = frame is not None and HTO_KEY not in adata.obsm
     return {
         "tags": tags,
-        "tag_sources": {t: ("obsm" if foreign else sources.get(t, "obsm")) for t in tags},
+        "tag_sources": {t: (f"obsm {key}" if key != HTO_KEY else sources.get(t, "obsm")) for t in tags},
         "proteins": proteins,
         "suggested": suggest_tags(proteins),
         "moved_from_protein": [t for t in state.get("moved_from_protein", []) if t in tags],
@@ -728,11 +736,9 @@ def demux(adata, tags: list[str], method: str = HTODEMUX, quantile: float = POSI
     counts, where = gather(adata, tags)
     call = run(counts, tags, method, quantile)  # raises before any change
 
-    state = read_state(adata)
-    foreign = HTO_KEY not in adata.obsm and tag_counts_frame(adata) is not None
-    if foreign:  # another tool's table: copied under scView's key
-        frame = tag_counts_frame(adata)
-        key = next(k for k in FOREIGN_KEYS if adata.obsm.get(k) is frame)
+    key = _tag_key(adata)
+    if key not in (None, HTO_KEY):  # another tool's table: copied under scView's key
+        frame = adata.obsm[key]
         adata.obsm[HTO_KEY] = frame.astype(np.float32)
         state = read_state(adata)
         state.setdefault("sources", {}).update({str(c): f"obsm {key}" for c in frame.columns})

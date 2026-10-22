@@ -289,6 +289,20 @@ def test_a_panel_of_hashtags_only_leaves_no_protein_modality():
     assert a.uns[protein.UNS_KEY]["n_proteins"] == 0
 
 
+def test_a_hashtag_table_another_tool_left_in_obsm_is_used_and_adopted():
+    x, tags, kind, _ = _simulate(np.random.default_rng(7), n=300, n_tags=3)
+    a = ad.AnnData(np.ones((300, 2), dtype=np.float32))
+    a.obsm["HTO"] = pd.DataFrame(x, index=a.obs_names, columns=["h1", "h2", "h3"])
+    a.obsm["hto"] = pd.DataFrame(x / 2.5, index=a.obs_names, columns=["n1", "n2", "n3"])  # not counts
+    cand = hashing.candidates(a)
+    assert cand["tags"] == ["h1", "h2", "h3"] and cand["tag_sources"]["h1"] == "obsm HTO"
+    out = hashing.demux(a, ["h1", "h2", "h3"])
+    assert np.array_equal(a.obsm[hashing.HTO_KEY].to_numpy(), x.astype(np.float32))
+    assert out["tag_sources"] == {"h1": "obsm HTO", "h2": "obsm HTO", "h3": "obsm HTO"}
+    step = provenance.read_provenance(a)["history"][-1]
+    assert step["params"]["sources"]["h1"] == "obsm HTO"
+
+
 def test_a_failed_call_changes_nothing():
     a, _ = protein.split_features(_cite_hashed())
     obsm, obs = set(a.obsm.keys()), list(a.obs.columns)
