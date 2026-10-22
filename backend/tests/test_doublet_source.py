@@ -134,6 +134,8 @@ def test_describe_and_text_by_hand():
     assert doublet_source.text(scr) == "4 cells (20.0%) are doublets by Scrublet"
     assert scr["options"] == ["auto", "scrublet"]
     assert doublet_source.describe(pd.DataFrame(index=range(3))) is None
+    one = pd.DataFrame({"predicted_doublet": [True] + [False] * 19})
+    assert doublet_source.text(doublet_source.describe(one)) == "1 cell (5.0%) is a doublet by Scrublet"
 
 
 def test_agreement_two_by_two_and_per_sample_by_hand():

@@ -184,7 +184,8 @@ def text(info: dict | None) -> str:
     Scrublet flags 7.0%, 4.0% by both" (``describe``'s output). "" without calls."""
     if not info:
         return ""
-    head = f"{info['n_doublets']:,} cells ({_pct(info['fraction'])}) are doublets by {info['label']}"
+    n = info["n_doublets"]
+    head = f"{n:,} cell{'' if n == 1 else 's'} ({_pct(info['fraction'])}) {'is a doublet' if n == 1 else 'are doublets'} by {info['label']}"
     if info.get("both") is not None:
         s, b = info["scrublet"], info["both"]
         if info["source"] == HASHING:
