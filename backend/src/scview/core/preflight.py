@@ -15,7 +15,7 @@ can be wrong, and the user decides.
 - ``estimate_run(shape | header, nnz, dense, steps, params)``: each step's memory over
   what the dataset holds when it starts, and seconds; the run's peak is the largest
   held + transient as the dataset's state changes through the steps (reset to counts
-  replaces X, filtering leaves the opened copy held by the adaptor until the run ends,
+  replaces X, filtering cuts each matrix once and the opened copy gives its matrices up,
   scaling makes X dense float32 and keeps the old X as .raw).
 - ``estimate_step_peak(step, shape, nnz, dense, params, *, other_bytes=0,
   dtype="float32", nonzero=None) -> int``: one step, pure, for a hook before each step;
@@ -29,37 +29,42 @@ Calibration
 
 The coefficients come from measured runs, not guesses: one fresh container per
 dataset, 2 CPUs (scview-backend image, 2026-10-21; re-measured 2026-10-22 once doublet
-detection scored the counts alone), memory = the cgroup's anon memory (which counts the
-Leiden child process) sampled every 0.1 s, or the process's peak RSS where that is
-higher (short reads), minus the process before loading (scanpy imported, 0.17 GiB).
-Runs are the "Reprocess from scratch" steps with the UI's marker columns.
+detection scored the counts alone and filtering cut each matrix once), memory = the
+cgroup's anon memory (which counts the Leiden child process) sampled every 0.1 s, or the
+process's peak RSS where that is higher (short reads), minus the process before loading
+(scanpy imported, 0.17 GiB). Runs are the "Reprocess from scratch" steps with the UI's
+marker columns.
 GiB; err = estimate / measured - 1.
 
     dataset            cells   genes   X stored values      load meas/est  err   run peak meas/est  err  at
-    pbmc 1k 10x .h5     1,222  33,538  2.5M sparse         0.04 / 0.04   -1%   0.63 / 0.72   +15%  (late steps)
-    paul15             2,730   3,451  dense (+2 dense)    0.13 / 0.14   +5%   0.65 / 0.73   +12%  (late steps)
-    Kang              13,836  14,053  dense f64 (+2 sp.)  1.76 / 1.74   -1%   2.67 / 2.72    +2%  doublets
-    ovary 10k sub.    10,000  20,082  12.1M sp. + dense   0.91 / 0.88   -3%   4.89 / 4.89    +0%  markers
-    ovary 20k sub.    20,000  20,082  24.1M sp. + dense   1.75 / 1.72   -2%   9.26 / 9.63    +4%  filtering
-    ovary_raw         37,104  20,082  44.7M sp. + dense   3.22 / 3.17   -2%  13.90 / 14.61   +5%  doublets *
+    pbmc 1k 10x .h5     1,222  33,538  2.5M sparse         0.04 / 0.04   -1%   0.63 / 0.70   +11%  (late steps)
+    paul15             2,730   3,451  dense (+2 dense)    0.13 / 0.14   +5%   0.63 / 0.71   +13%  (late steps)
+    Kang              13,836  14,053  dense f64 (+2 sp.)  1.76 / 1.74   -1%   2.65 / 2.72    +3%  doublets
+    ovary 10k sub.    10,000  20,082  12.1M sp. + dense   0.91 / 0.88   -3%   4.36 / 4.06    -7%  doublets
+    ovary 20k sub.    20,000  20,082  24.1M sp. + dense   1.75 / 1.72   -2%   8.07 / 7.95    -2%  doublets
+    ovary_raw         37,104  20,082  44.7M sp. + dense   3.22 / 3.17   -2%  13.90 / 14.61   +5%  doublets
+    hashing PBMC *    20,238  22,628  dense (+2 sp.)      2.05 / 2.03   -1%   3.36 / 3.57    +6%  filtering
 
-* through doublet detection: the whole run was killed at the 16 GiB these runs may use,
-in filtering, which copies its dense matrices (estimated 17.7 GiB; main measured that
-step at +11.15 GiB, which over the 5.82 the dataset holds after doublet detection is
-17.0). Doublet detection used to score a copy of the whole dataset: ovary_raw's dense
-3 GB counts layer beside the dense X a reset makes took it to 20.86 GiB (killed at an
-18 GiB limit), Kang's to 3.00, the subsamples' to 6.17 and 11.73. The small datasets
-are over by fixed costs (library imports, caches). Ingest (read, save as gzip h5ad,
-reopen), peak: pbmc 10x .h5 0.056 / 0.060 (+7%), the same as MEX 0.144 / 0.148 (+3%),
-a 1,222 x 5,000 CSV 0.189 / 0.203 (+7%), paul15 0.140 / 0.147 (+5%), Kang 1.79 / 1.91
-(+7%). Not measured: loom and zarr reads (8 and 0 bytes per value, reasoned), RDS (a guess), batch
-correction, the uncorrected UMAP and cell-type annotation (reasoned from what they
-allocate; the estimate says so). Header reads take 3-35 ms (Kang's 1.9 GB h5ad: 17 ms).
+* filtered again after scaling (doublets by either source, per-type % mito with the
+floor; 23% of the cells go): filtering alone. Filtering's own peak is within 2% on the
+ovary runs (2.38 / 2.34, 4.53 / 4.51, 8.28 / 8.23) and 0% on Kang (0.50).
+Doublet detection used to score a copy of the whole dataset: ovary_raw's dense 3 GB counts
+layer beside the dense X a reset makes took it to 20.86 GiB (killed at an 18 GiB limit),
+Kang's to 3.00, the subsamples' to 6.17 and 11.73. Filtering used to copy every matrix
+twice and keep the dataset's own: +11.15 GiB on ovary_raw (killed at 16 GiB), +4.28 on
+the hashing PBMC (killed at 6 GB, with an estimate of +0.34 that took data filtered before
+to keep every cell). The small datasets are over by fixed costs (library imports,
+caches). Ingest (read, save as gzip h5ad, reopen), peak: pbmc 10x .h5 0.056 / 0.060
+(+7%), the same as MEX 0.144 / 0.148 (+3%), a 1,222 x 5,000 CSV 0.189 / 0.203 (+7%),
+paul15 0.140 / 0.147 (+5%), Kang 1.79 / 1.91 (+7%). Not measured: loom and zarr reads
+(8 and 0 bytes per value, reasoned), RDS (a guess), batch correction, the uncorrected
+UMAP and cell-type annotation (reasoned from what they allocate; the estimate says so).
+Header reads take 3-35 ms (Kang's 1.9 GB h5ad: 17 ms).
 
 Time: the same runs' seconds per step, as a function of cells, stored values and
 groups, measured at 2 CPUs and scaled by the square root of the CPU quota; shown as
-half to twice the point estimate, which held every measured run (Kang 121-152 s within
-76-304 s, ovary 20k 555 s within 234-935 s).
+half to twice the point estimate, which held every measured run (Kang 124 s within
+73-290 s, ovary 20k 369 s within 225-898 s, ovary_raw 915 s within 394-1574 s).
 """
 
 from __future__ import annotations
@@ -759,9 +764,14 @@ MEASURED_STEPS = {
 }
 
 # Filtering in MAD mode removed 11% of the cells on the ovary subsample; genes seen in
-# fewer than 3 cells go too (22% there, none on processed data).
+# fewer than 3 cells go too (22% there, a few on processed data: 3% of the hashing PBMC's
+# when its doublets and per-type mito outliers went). Data filtered before can lose cells
+# again (a new doublet source, hashing, the mito floor): taken to lose as many.
 FILTER_CELLS_KEPT = 0.9
 FILTER_GENES_KEPT_RAW = 0.8
+# Cutting the matrices once each: seconds per byte they hold (hashing PBMC 4 s for 2.0 GiB,
+# ovary 10k / 20k / 37k 3.8, 8.2, 31 s for 1.5, 3.0, 5.5 GiB).
+FILTER_SECONDS_PER_BYTE = 3e-9
 
 # Scrublet (core/scrublet_lean.py: sc.pp.scrublet's steps on a sparse matrix of the counts
 # alone, never a copy of the dataset). While it picks its variable genes it holds about six
@@ -901,23 +911,41 @@ def _step_doublet(s: _State, params) -> tuple[int, _State, float]:
     return max(copies, dense), s, 3.0 + DBL_SECONDS_PER_VALUE * s.n * counts.n_genes
 
 
+def _cut_peak(old: list[Matrix], new: list[Matrix]) -> tuple[int, int]:
+    """(most memory over the start, memory freed at the end) while matrices are cut one at
+    a time, each old one let go once its cut exists (``pipeline.subset_lean``)."""
+    peak = freed = 0
+    for o, nw in zip(old, new):
+        peak = max(peak, nw.nbytes - freed)
+        freed += o.nbytes - nw.nbytes
+    return peak, freed
+
+
 def _step_filter(s: _State, params) -> tuple[int, _State, float]:
-    nnz = s.x.nnz if s.x is not None else 0
-    if s.processed:  # filtered before: every cell passes, genes are subset in place
-        return int(0.2 * s.xb()), s, 0.2 + 1e-8 * nnz
     n2 = int(s.n * FILTER_CELLS_KEPT)
-    m2 = int(s.m * FILTER_GENES_KEPT_RAW)
-    mats = sum(mm.nbytes for mm in s.matrices())
-    # The cells kept are a new object; the adaptor keeps the one it opened until the run ends.
-    new = _State(n2, m2, _like(s.x, "X", n2, m2) if s.x else None,
-                 {k: _like(v, k, n2, m2) for k, v in s.layers.items()},
-                 _like(s.raw, "raw/X", n2, s.raw.n_genes) if s.raw else None,
-                 s.other, s.held + mats if s.held == 0 else s.held, s.processed)
-    new_mats = sum(mm.nbytes for mm in new.matrices())
-    # Copying the view of the kept cells, then filter_genes, each rebuild the arrays once.
-    transient = (new.resident() - s.resident()) + 2 * new_mats
-    sparse = s.x is not None and s.x.sparse
-    return max(0, transient), new, 0.2 + nnz * (1e-7 if sparse else 7e-8)
+    # Genes seen in too few cells: a fifth of raw data's; on data filtered before, a few, so
+    # the genes still take one cut each (taken at every gene).
+    m2 = s.m if s.processed else int(s.m * FILTER_GENES_KEPT_RAW)
+    def resize(mm: Matrix | None, n: int, m: int | None = None) -> Matrix | None:
+        return None if mm is None else _like(mm, mm.where, n, mm.n_genes if m is None else m)
+
+    # The cells kept: X, each layer, then .raw cut once each (pipeline.subset_lean); the
+    # dataset's own object gives its matrices up as it goes.
+    x1, raw1 = resize(s.x, n2), resize(s.raw, n2)
+    layers1 = {k: resize(v, n2) for k, v in s.layers.items()}
+    old = [mm for mm in [s.x, *s.layers.values(), s.raw] if mm is not None]
+    cells_peak, cells_freed = _cut_peak(old, [mm for mm in [x1, *layers1.values(), raw1]
+                                               if mm is not None])
+    # Then the genes: scanpy compares a dense X with 0 (a bool per value), then X and the
+    # layers are cut once each (.raw keeps every gene).
+    x2 = resize(x1, n2, m2)
+    layers2 = {k: resize(v, n2, m2) for k, v in layers1.items()}
+    genes_peak, _ = _cut_peak([mm for mm in [x1, *layers1.values()] if mm is not None],
+                              [mm for mm in [x2, *layers2.values()] if mm is not None])
+    mask = 0 if x1 is None else (x1.nnz if x1.sparse else n2 * s.m)
+    transient = max(cells_peak, max(genes_peak, mask) - cells_freed)
+    new = _State(n2, m2, x2, layers2, raw1, s.other, s.held, s.processed)
+    return max(0, transient), new, 0.2 + FILTER_SECONDS_PER_BYTE * sum(mm.nbytes for mm in old)
 
 
 def _step_normalization(s: _State, params) -> tuple[int, _State, float]:
@@ -1098,8 +1126,8 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
     value), or a full ``Header`` (layers and .raw count too: pass one when you have
     it). The run's peak is the largest (held at the step's start + the step's
     transient) over the steps, as the dataset's state changes through them (reset
-    to counts replaces X, filtering leaves the opened copy held by the adaptor,
-    scaling makes X dense), then saving and reopening the result. ``warm``: the
+    to counts replaces X, filtering cuts each matrix once and the opened copy gives
+    its matrices up, scaling makes X dense), then saving and reopening the result. ``warm``: the
     process already paid its one-time imports (default: looked up)."""
     from scview.core.pipeline import ALL_STEPS
 
@@ -1149,8 +1177,8 @@ def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
     (None: the defaults); ``other_bytes`` the bytes of the layers and .raw, which
     filtering copies (0 underestimates it); ``dtype`` of X's values; ``nonzero`` the
     non-zero values of a dense X (None: every value, which overestimates doublet
-    detection on dense counts). Filtering is taken to remove cells (a copy), as it
-    does on data not filtered before. Unknown steps give 0. From a live AnnData use
+    detection on dense counts). Filtering is taken to remove cells (one cut of each
+    matrix), also on data filtered before. Unknown steps give 0. From a live AnnData use
     ``step_peak_for(adata, step, params)``, which reads all of this from it.
     """
     model = _STEP_MODELS.get(step)
@@ -1524,8 +1552,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         notes.append("Not measured, estimated from what the step allocates: "
                      + ", ".join(unmeasured) + ".")
     if "filtering" in steps:
-        notes.append("Assumes filtering keeps every cell, as the data were processed before."
-                     if _State.from_header(h).processed else
+        notes.append("Assumes filtering keeps 90% of the cells and every gene, as the data were "
+                     "processed before." if _State.from_header(h).processed else
                      "Assumes filtering keeps 90% of the cells and 80% of the genes.")
     if not warm:
         notes.append("Includes about 0.5 GB the first run in a fresh scView keeps for the "
