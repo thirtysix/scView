@@ -271,6 +271,7 @@ def test_the_card_reads_a_dataset_filtered_with_the_floor():
     assert "never stricter than the global rule" in r.summary
     assert "1 of 3 types used their own bound" in r.summary  # H; L took the global rule
     assert "Filtered by the global rule" in rows["L"].note
+    assert "per-type bounds on 'cell_type', never stricter than the global rule" in mito_by_type.filtering_rule(r)
 
 
 # --- endpoints --------------------------------------------------------------------------

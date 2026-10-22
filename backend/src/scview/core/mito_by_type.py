@@ -465,7 +465,8 @@ def filtering_rule(r: MitoByType) -> str:
     if not r.already_filtered:
         return "not filtered by scView yet"
     if r.filter_mito_mode == "per_type":
-        return f"filtering used per-type bounds on '{r.filter_type_column}'"
+        return (f"filtering used per-type bounds on '{r.filter_type_column}'"
+                + (", never stricter than the global rule" if r.filter_type_floor else ""))
     return f"filtering used one global rule ({r.filter_mode} mode)"
 
 
