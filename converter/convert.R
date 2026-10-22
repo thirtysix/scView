@@ -1,7 +1,10 @@
 ##
 ## convert.R
-## Core conversion logic: Seurat (RDS / RData) -> AnnData h5ad
-## Uses SeuratObject + reticulate + Python anndata (no sceasy dependency).
+## Core conversion logic: R objects (RDS / RData) -> AnnData h5ad.
+## Seurat objects: SeuratObject + reticulate + Python anndata (no sceasy
+## dependency). SingleCellExperiment and SummarizedExperiment objects (and
+## classes built on them): convert_sce.R. Anything else is refused, naming its
+## class.
 ##
 
 library(Matrix)
@@ -10,89 +13,214 @@ library(Matrix)
 # Main entry point
 # ---------------------------------------------------------------------------
 
-#' Convert a Seurat object stored as RDS (or RData) to an h5ad file.
+#' Convert the R object stored in an RDS (or RData) file to an h5ad file.
 #'
-#' @param input_path  Path to the .rds or .RData file.
-#' @param output_path Path where the .h5ad file should be written.
-#' @return A list with \code{success} (logical) and either
-#'         \code{message} or \code{error}.
-convert_seurat_to_h5ad <- function(input_path, output_path) {
+#' @param input_path    Path to the .rds or .RData file.
+#' @param output_path   Path where the .h5ad file should be written.
+#' @param progress_path Optional JSON file each stage is written to, so the
+#'                      backend can say what is being converted meanwhile.
+#' @return A list with \code{success} (logical), \code{message} or
+#'         \code{error}, and \code{report} (the class, what was kept and what
+#'         was left out).
+convert_rds_to_h5ad <- function(input_path, output_path, progress_path = NULL) {
+
+  progress <- progress_writer(progress_path)
 
   if (!file.exists(input_path)) {
-    return(list(success = FALSE, error = paste0("Input file not found: ", input_path)))
+    return(finish(progress, list(success = FALSE, error = paste0("Input file not found: ", input_path))))
   }
 
   # ------------------------------------------------------------------
-  # 1. Load the object
+  # 1. Load the object and decide what it is
   # ------------------------------------------------------------------
-  obj <- load_seurat_object(input_path)
+  progress("reading", "Reading the R file")
+  loaded <- load_r_object(input_path)
+  if (!is.null(loaded$error)) {
+    return(finish(progress, list(success = FALSE, error = loaded$error)))
+  }
+  obj  <- loaded$obj
+  kind <- object_kind(obj)
 
-  if (is.null(obj)) {
-    return(list(success = FALSE, error = "Could not load a Seurat object from the input file"))
+  # ------------------------------------------------------------------
+  # 2. Seurat: the original path, unchanged
+  # ------------------------------------------------------------------
+  if (kind == "Seurat") {
+    progress("converting", "Converting a Seurat object", source_class = "Seurat")
+    version_info <- detect_seurat_version(obj)
+    cat(sprintf("[convert] Detected Seurat version: %s\n", version_info))
+
+    result <- tryCatch(
+      manual_convert(obj, output_path, version_info),
+      error = function(e) {
+        list(success = FALSE, error = paste0("Conversion failed: ", conditionMessage(e)))
+      }
+    )
+    result$report <- list(
+      source_class = "Seurat", detail = paste("Seurat", version_info),
+      object_name = loaded$name %||% "", kept = list(), skipped = list()
+    )
+    return(finish(progress, result))
   }
 
-  if (!inherits(obj, "Seurat")) {
-    return(list(success = FALSE, error = paste0(
-      "Loaded object is not a Seurat object (class: ",
-      paste(class(obj), collapse = ", "), ")"
-    )))
+  # ------------------------------------------------------------------
+  # 3. SingleCellExperiment / SummarizedExperiment
+  # ------------------------------------------------------------------
+  if (kind %in% c("SingleCellExperiment", "SummarizedExperiment")) {
+    result <- tryCatch(
+      convert_se_to_h5ad(obj, output_path, kind, progress, object_name = loaded$name),
+      error = function(e) {
+        list(success = FALSE, error = paste0("Conversion failed: ", conditionMessage(e)))
+      }
+    )
+    return(finish(progress, result))
   }
 
-  version_info <- detect_seurat_version(obj)
-  cat(sprintf("[convert] Detected Seurat version: %s\n", version_info))
+  finish(progress, list(success = FALSE, error = unsupported_message(obj)))
+}
 
-  # ------------------------------------------------------------------
-  # 2. Extract data via reticulate + anndata
-  # ------------------------------------------------------------------
-  result <- tryCatch(
-    manual_convert(obj, output_path, version_info),
-    error = function(e) {
-      list(success = FALSE, error = paste0("Conversion failed: ", conditionMessage(e)))
-    }
-  )
+#' The previous entry point (Seurat only), kept for callers that still use it.
+convert_seurat_to_h5ad <- function(input_path, output_path) {
+  convert_rds_to_h5ad(input_path, output_path)
+}
 
-  return(result)
+# ---------------------------------------------------------------------------
+# Progress file (read by the backend while the conversion runs)
+# ---------------------------------------------------------------------------
+
+#' A function that records a stage: progress(stage, message, key = value...).
+#' Keys given once (the class, the size) stay in every later write. Written
+#' to a temporary file and renamed, so a reader never sees half a file.
+progress_writer <- function(path) {
+  state <- new.env()
+  state$info <- list()
+  function(stage, message, ...) {
+    extra <- list(...)
+    for (k in names(extra)) state$info[[k]] <- extra[[k]]
+    cat(sprintf("[convert] %s\n", message))
+    if (is.null(path) || !nzchar(path)) return(invisible(NULL))
+    body <- c(list(stage = stage, message = message,
+                   updated_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")),
+              state$info)
+    tmp <- paste0(path, ".tmp")
+    tryCatch({
+      writeLines(jsonlite::toJSON(body, auto_unbox = TRUE), tmp)
+      file.rename(tmp, path)
+    }, error = function(e) NULL)
+    invisible(NULL)
+  }
+}
+
+#' Record the outcome in the progress file and return the result unchanged.
+finish <- function(progress, result) {
+  if (isTRUE(result$success)) {
+    progress("done", result$message %||% "Converted")
+  } else {
+    progress("failed", result$error %||% "Conversion failed")
+  }
+  result
 }
 
 # ---------------------------------------------------------------------------
 # Load helpers
 # ---------------------------------------------------------------------------
 
-#' Load a Seurat object from an RDS or RData file.
-#' For RData files the function searches the loaded environment for an
-#' object that inherits from "Seurat".
-load_seurat_object <- function(path) {
+#' Load the R object from an RDS or RData file: list(obj, name) or
+#' list(error). From an RData file: the first Seurat object, as before; else
+#' the first SingleCellExperiment, then SummarizedExperiment.
+load_r_object <- function(path) {
 
   ext <- tolower(tools::file_ext(path))
 
   if (ext == "rds") {
     cat("[convert] Loading RDS file ...\n")
-    obj <- tryCatch(readRDS(path), error = function(e) NULL)
-    return(obj)
+    # In a list: inherits() on an S4 object whose package is not installed fails
+    read <- tryCatch(list(obj = readRDS(path)), error = function(e) list(error = conditionMessage(e)))
+    if (!is.null(read$error)) {
+      return(list(error = paste0("Could not read the .rds file: ", read$error)))
+    }
+    return(list(obj = read$obj, name = NULL))
   }
 
   if (ext %in% c("rdata", "rda")) {
     cat("[convert] Loading RData file ...\n")
     tmp_env <- new.env(parent = emptyenv())
-    loaded  <- tryCatch(load(path, envir = tmp_env), error = function(e) NULL)
+    loaded  <- tryCatch(load(path, envir = tmp_env), error = function(e) e)
+    if (!is.character(loaded)) {
+      return(list(error = paste0("Could not read the .RData file: ", conditionMessage(loaded))))
+    }
+    if (length(loaded) == 0) {
+      return(list(error = "The .RData file holds no objects."))
+    }
 
-    if (is.null(loaded)) return(NULL)
-
-    # Search for a Seurat object among loaded names
-    for (nm in loaded) {
-      candidate <- get(nm, envir = tmp_env)
-      if (inherits(candidate, "Seurat")) {
-        cat(sprintf("[convert] Found Seurat object '%s' in RData file.\n", nm))
-        return(candidate)
+    kinds <- vapply(loaded, function(nm) object_kind(get(nm, envir = tmp_env)), character(1))
+    for (want in c("Seurat", "SingleCellExperiment", "SummarizedExperiment")) {
+      hit <- loaded[kinds == want]
+      if (length(hit) > 0) {
+        cat(sprintf("[convert] Found %s object '%s' in RData file.\n", want, hit[1]))
+        return(list(obj = get(hit[1], envir = tmp_env), name = hit[1]))
       }
     }
 
-    cat("[convert] No Seurat object found in RData file.\n")
-    return(NULL)
+    found <- vapply(loaded, function(nm) class(get(nm, envir = tmp_env))[1], character(1))
+    return(list(error = paste0(
+      "The .RData file holds no object scView can convert (",
+      paste(sprintf("%s: %s", loaded, found), collapse = ", "),
+      "). It converts Seurat, SingleCellExperiment and SummarizedExperiment objects."
+    )))
   }
 
-  cat(sprintf("[convert] Unsupported file extension: %s\n", ext))
-  return(NULL)
+  list(error = sprintf("Unsupported file extension: .%s", ext))
+}
+
+# Slots (attributes) every SummarizedExperiment / SingleCellExperiment has.
+SE_SLOTS  <- c("colData", "assays", "NAMES", "elementMetadata", "metadata")
+SCE_SLOTS <- c(SE_SLOTS, "int_elementMetadata", "int_colData", "int_metadata")
+
+#' "Seurat", "SingleCellExperiment", "SummarizedExperiment" or "other".
+#' Bioconductor is loaded only for S4 objects that are not Seurat, so a Seurat
+#' conversion never touches it.
+object_kind <- function(obj) {
+  # inherits() looks the class up, and fails when its package is not installed
+  if (isTRUE(tryCatch(inherits(obj, "Seurat"), error = function(e) FALSE))) return("Seurat")
+  if (!isS4(obj)) return("other")
+
+  # The class's own package, when installed here, tells methods::is() what it
+  # extends (a subclass of SingleCellExperiment from another package).
+  pkg <- attr(class(obj), "package")
+  if (!is.null(pkg)) suppressMessages(suppressWarnings(requireNamespace(pkg, quietly = TRUE)))
+  if (suppressMessages(requireNamespace("SingleCellExperiment", quietly = TRUE))) {
+    is_a <- function(cls) isTRUE(tryCatch(methods::is(obj, cls), error = function(e) FALSE))
+    if (is_a("SingleCellExperiment")) return("SingleCellExperiment")
+    if (is_a("SummarizedExperiment")) return("SummarizedExperiment")
+  }
+
+  # A class from a package that is not installed here (SpatialExperiment,
+  # ...): its slots say what it is built on.
+  slots <- names(attributes(obj))
+  if (all(SCE_SLOTS %in% slots)) return("SingleCellExperiment")
+  if (all(SE_SLOTS %in% slots)) return("SummarizedExperiment")
+  "other"
+}
+
+#' The error for an object scView cannot convert, naming its class.
+unsupported_message <- function(obj) {
+  cls  <- class(obj)
+  pkg  <- attr(cls, "package")
+  what <- paste(cls, collapse = ", ")
+  if (!is.null(pkg)) what <- sprintf("%s (from the %s package)", what, pkg)
+
+  hint <- paste("scView converts Seurat, SingleCellExperiment and SummarizedExperiment",
+                "objects, and classes built on them.")
+  if (identical(cls[1], "seurat")) {
+    hint <- paste("This is a Seurat v2 object: update it in R with",
+                  "Seurat::UpdateSeuratObject() and save it again.")
+  } else if (is.matrix(obj) || is.data.frame(obj) ||
+             isTRUE(tryCatch(inherits(obj, "Matrix"), error = function(e) FALSE))) {
+    hint <- paste("A bare matrix has no cell or gene metadata: wrap it in R with",
+                  "SingleCellExperiment(assays = list(counts = m)) and save that,",
+                  "or export it as a 10x matrix.")
+  }
+  sprintf("This file holds a %s object, which scView cannot convert. %s", what, hint)
 }
 
 # ---------------------------------------------------------------------------

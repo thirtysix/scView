@@ -32,6 +32,7 @@ import { DatasetLibrary } from "@/components/panels/DatasetLibrary";
 import { PreflightIngestNotes } from "@/components/common/PreflightNote";
 import { SequencingQcSideFiles } from "@/components/qc/SequencingQcSideFiles";
 import { ClonotypeUnitFiles } from "@/components/unified/ClonotypeUnitFiles";
+import { conversionNote, isRFile } from "@/lib/conversion";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
   tenx_mex: "10x MEX (matrix + barcodes + features)",
@@ -40,7 +41,7 @@ const FORMAT_LABELS: Record<UnitFormat, string> = {
   loom: "Loom (.loom)",
   zarr: "Zarr store",
   dense_table: "Expression table (CSV/TSV)",
-  seurat: "Seurat (.rds)",
+  seurat: "R object (.rds: Seurat, SingleCellExperiment)",
   unknown: "Unrecognised",
 };
 
@@ -50,6 +51,9 @@ const ROLE_LABELS: Record<string, string> = {
   features: "features (genes)",
   data: "data",
 };
+
+// How long the panel follows one R conversion; it carries on in the background after.
+const CONVERT_WAIT_MS = 2 * 60 * 60 * 1000;
 
 const DEFAULT_OPTIONS: IngestOptions = {
   name: null,
@@ -78,30 +82,36 @@ export function DataPanel() {
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
 
-  // Seurat .rds/.RData go through the R converter (not the ingest wizard).
-  const handleSeurat = useCallback(
+  // R objects (.rds / .RData: Seurat, SingleCellExperiment, any
+  // SummarizedExperiment) go through the R converter, not the ingest wizard.
+  // The upload returns at once; the converter's progress names the class it
+  // found and what it is writing, and the report of what it kept shows on
+  // Data Assessment after.
+  const handleRObject = useCallback(
     async (file: File) => {
       setBusy(true);
       setError(null);
-      setBusyNote("Converting Seurat object… this can take a minute.");
+      setBusyNote(`Uploading ${file.name}…`);
       try {
         const result = await uploadDataset(file);
         let dataset = await getDataset(result.id);
-        let attempts = 0;
-        while (dataset.status === "converting" && attempts < 90) {
+        const started = Date.now();
+        while (dataset.status === "converting" && Date.now() - started < CONVERT_WAIT_MS) {
+          setBusyNote(conversionNote(dataset.conversion_progress));
           await new Promise((r) => setTimeout(r, 2000));
           dataset = await getDataset(result.id);
-          attempts++;
         }
         setAvailableDatasets(await listDatasets());
         if (dataset.status === "error") {
-          setError(dataset.error_message || "Seurat conversion failed.");
+          setError(dataset.error_message || "The R object could not be converted.");
+        } else if (dataset.status === "converting") {
+          setError("Still converting after 2 hours. It carries on: open it from the library below when it is ready.");
         } else {
           setCurrentDataset(dataset);
           if (dataset.status === "ready") setPanel("assessment");
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Seurat upload failed.");
+        setError(e instanceof Error ? e.message : "The R file could not be uploaded.");
       } finally {
         setBusy(false);
         setBusyNote(null);
@@ -113,12 +123,11 @@ export function DataPanel() {
   const addFiles = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return;
-      // A single Seurat file → the converter path.
+      // A single R file → the converter path.
       if (files.length === 1) {
         const first = files[0];
-        const ext = first?.name.split(".").pop()?.toLowerCase();
-        if (first && (ext === "rds" || ext === "rdata")) {
-          await handleSeurat(first);
+        if (first && isRFile(first.name)) {
+          await handleRObject(first);
           return;
         }
       }
@@ -145,7 +154,7 @@ export function DataPanel() {
         setBusy(false);
       }
     },
-    [sessionId, handleSeurat]
+    [sessionId, handleRObject]
   );
 
   const handleDrop = useCallback(
@@ -208,8 +217,8 @@ export function DataPanel() {
           Import single-cell data in almost any form — a 10x matrix (the three
           <code className="mx-1 rounded bg-slate-100 px-1">matrix / barcodes / features</code>
           files), a CellRanger <code className="rounded bg-slate-100 px-1">.h5</code>, an
-          AnnData <code className="rounded bg-slate-100 px-1">.h5ad</code>, a Seurat{" "}
-          <code className="rounded bg-slate-100 px-1">.rds</code>, an expression table, or
+          AnnData <code className="rounded bg-slate-100 px-1">.h5ad</code>, a Seurat or
+          SingleCellExperiment <code className="rounded bg-slate-100 px-1">.rds</code>, an expression table, or
           several samples to merge — or reopen one of your datasets below.
         </p>
       </div>
@@ -245,7 +254,7 @@ export function DataPanel() {
           </button>
         </div>
         <p className="mt-2 text-xs text-slate-400">
-          .h5ad · Seurat .rds · 10x (matrix/barcodes/features or .h5) · loom · CSV/TSV ·
+          .h5ad · Seurat / SingleCellExperiment .rds · 10x (matrix/barcodes/features or .h5) · loom · CSV/TSV ·
           multiple samples to merge
         </p>
         <input

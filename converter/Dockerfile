@@ -30,9 +30,15 @@ WORKDIR /app
 COPY install_packages.R /app/install_packages.R
 RUN Rscript /app/install_packages.R
 
+# Bioconductor (SingleCellExperiment, SummarizedExperiment) in a layer of its
+# own, so the CRAN layer above, and with it the Seurat path, stays cached.
+COPY install_bioc.R /app/install_bioc.R
+RUN Rscript /app/install_bioc.R
+
 # Copy remaining R source files
 COPY server.R /app/server.R
 COPY convert.R /app/convert.R
+COPY convert_sce.R /app/convert_sce.R
 
 EXPOSE 8001
 
