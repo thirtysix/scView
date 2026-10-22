@@ -194,6 +194,7 @@ convert_se_to_h5ad <- function(obj, output_path, kind, progress, object_name = N
   rows <- if (n_genes == nrow(obj)) NULL else gene_rows
   progress("writing", sprintf("Writing X (the %s assay)", assays$name[x_i]))
   write_assay(f, "X", assays$get(x_i), rows, n_cells, py)
+  invisible(gc(verbose = FALSE))
   layers <- require_dict_group(f, "layers")
   for (i in layer_is) {
     progress("writing", sprintf("Writing the %s assay", assays$name[i]))
@@ -366,19 +367,36 @@ write_assay <- function(group, key, m, rows, n_cells, py) {
   }
 }
 
+#' Free a written chunk now. Its NumPy copy is held by a small R wrapper, and
+#' R's collector does not count the Python memory behind it, so without this
+#' every chunk stays until the end (measured on 37k cells: +1.2 GB of RSS).
+release_chunk <- function() invisible(gc(full = FALSE, verbose = FALSE))
+
 #' A genes x cells dgCMatrix is, array for array, the CSR form of the cells x
 #' genes matrix: column pointers = row pointers, row indices = column indices.
-#' No transpose, no copy in R.
+#' So no transpose, and the arrays go straight into the h5ad's csr_matrix group
+#' (as anndata writes it) in chunks: never a whole copy in R or in Python.
 write_csr <- function(group, key, m, n_cells, py) {
-  csr <- py$sp$csr_matrix(
-    reticulate::tuple(
-      py$np$asarray(np_array(m@x), dtype = "float32"),
-      np_array(m@i),
-      np_array(m@p)
-    ),
-    shape = reticulate::tuple(as.integer(n_cells), as.integer(nrow(m)))
-  )
-  py$write_elem(group, key, csr)
+  g <- group$create_group(key)
+  reticulate::py_set_item(g$attrs, "encoding-type", "csr_matrix")
+  reticulate::py_set_item(g$attrs, "encoding-version", "0.1.0")
+  reticulate::py_set_item(g$attrs, "shape",
+                          py$np$array(c(n_cells, nrow(m)), dtype = "int64"))
+  nnz <- length(m@x)
+  shape <- reticulate::tuple(as.integer(nnz))
+  data <- g$create_dataset("data", shape = shape, dtype = "float32", chunks = TRUE)
+  indices <- g$create_dataset("indices", shape = shape, dtype = "int32", chunks = TRUE)
+  step <- max(1, block_values() / 4)
+  for (start in seq_len(ceiling(nnz / step))) {
+    from <- (start - 1) * step + 1
+    to <- min(start * step, nnz)
+    at <- py$builtins$slice(as.integer(from - 1), as.integer(to))
+    reticulate::py_set_item(data, at, py$np$asarray(np_array(m@x[from:to]), dtype = "float32"))
+    reticulate::py_set_item(indices, at, np_array(m@i[from:to]))
+    release_chunk()
+  }
+  g$create_dataset("indptr", data = np_array(m@p))
+  invisible(NULL)
 }
 
 #' A dense assay, block of cells by block: only one block is ever realised
@@ -400,6 +418,8 @@ write_dense <- function(group, key, m, rows, n_cells, py) {
     arr <- py$np$ascontiguousarray(reticulate::r_to_py(unname(blk), convert = FALSE)$T,
                                    dtype = "float32")
     reticulate::py_set_item(ds, py$builtins$slice(as.integer(start - 1L), as.integer(end)), arr)
+    rm(blk, arr)
+    release_chunk()
   }
   invisible(NULL)
 }

@@ -105,6 +105,9 @@ app <- list(
           list(success = FALSE, error = conditionMessage(e))
         }
       )
+      # The object is gone with the call: give its memory back now, not at
+      # the next allocation (the container idles between conversions).
+      invisible(gc(verbose = FALSE))
 
       if (isTRUE(result$success)) {
         return(json_response(list(

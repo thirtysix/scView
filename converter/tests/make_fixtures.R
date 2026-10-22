@@ -238,6 +238,14 @@ expected$se_unnamed <- list(
   obs_names_head = c("cell_1", "cell_2"), var_names_head = c("gene_1", "gene_2")
 )
 
+# ---- 8b. an all-zero sparse assay (empty CSR arrays) ----------------------
+mz <- Matrix::Matrix(0, 5, 4, sparse = TRUE, dimnames = list(paste0("g", 1:5), paste0("c", 1:4)))
+rds(SingleCellExperiment(assays = list(counts = mz)), "sce_all_zero")
+expected$sce_all_zero <- list(
+  n_obs = 4, n_vars = 5, x = "counts", x_sum = 0, x_format = "csr_matrix",
+  layers = structure(list(), names = character(0))
+)
+
 # ---- 9. an RData file with a table and an SCE -----------------------------
 sce_small <- SingleCellExperiment(assays = list(counts = m7))
 some_table <- data.frame(a = 1:3)
