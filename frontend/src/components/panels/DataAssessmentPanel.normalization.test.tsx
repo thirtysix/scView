@@ -12,6 +12,7 @@ vi.mock("@/components/panels/QcReportCard", () => ({ QcReportCard: () => null })
 vi.mock("@/components/panels/AnnotationControl", () => ({ AnnotationControl: () => null }));
 vi.mock("@/components/panels/AnnotationConfidenceCard", () => ({ AnnotationConfidenceCard: () => null }));
 vi.mock("@/components/panels/MeanVariancePlot", () => ({ MeanVariancePlot: () => null }));
+vi.mock("@/components/qc/SequencingQc", () => ({ SequencingQc: () => null }));
 
 import { DataAssessmentPanel } from "./DataAssessmentPanel";
 import { useDatasetStore } from "@/stores/datasetStore";

@@ -187,6 +187,10 @@ class IngestSessionManager:
         except IngestLoadError as e:
             raise IngestCommitError(str(e)) from e
         self._record_ingest_provenance(adata, loadable, opts)
+        # Cell Ranger metrics / raw matrices that came with a sample (never raises).
+        from scview.core import seq_metrics
+
+        seq_metrics.attach_from_units(adata, loadable, opts.sample_label)
 
         dataset_id = uuid.uuid4().hex
         name = opts.name or (loadable[0].label if len(loadable) == 1 else "merged_dataset")

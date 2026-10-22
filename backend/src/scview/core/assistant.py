@@ -44,6 +44,7 @@ from scview.core import qc_states
 from scview.core import embedding_reliability
 from scview.core import study_planner
 from scview.core import layout_stability
+from scview.core import seq_metrics
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -231,6 +232,20 @@ def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) 
         lines.extend(ls_lines)
         sources.append(ChatSource(kind="result", ref=layout_stability.TAG, detail=ls_detail,
                                   evidence="\n".join(ls_lines)))
+
+
+def _add_seqqc(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Per-sample Cell Ranger metrics, the 10x alerts they cross and the raw matrix's
+    knee (core/seq_metrics.py), only when such files were attached to the dataset."""
+    try:
+        sq_lines, sq_detail = seq_metrics.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: sequencing QC failed: %s", exc)
+        return
+    if sq_lines:
+        lines.extend(sq_lines)
+        sources.append(ChatSource(kind="result", ref=seq_metrics.TAG, detail=sq_detail,
+                                  evidence="\n".join(sq_lines[1:])))
 
 
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -483,6 +498,7 @@ def build_grounding_context(
             logger.debug("assistant: mito-by-type grounding failed: %s", exc)
         _add_qc_states(adaptor, lines, sources)
         _qc_removal_fact(adaptor, lines, sources)
+        _add_seqqc(adaptor, lines, sources)
         # The stored PCA: variance per component, elbow, PC1's top loadings.
         try:
             pca_lines, pca_detail = pca_diagnostics.grounding_lines(adata)
