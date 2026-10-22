@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from scview.core import provenance
+from scview.core import provenance, vdj
 
 EXACT = "exact"
 APPROXIMATE = "approximate"
@@ -625,12 +625,25 @@ def gene_programs(adata, genes, k, seeds, source="raw", solver="cd", init="rando
 """,
 }
 
+# The V(D)J attach: core/vdj.py's own functions with their source written in (they use
+# only numpy, pandas and the standard library), so the script repeats it exactly.
+_HELPERS["vdj"] = "\nimport gzip\nimport os\nimport re\n\n\n" + vdj.replay_source() + '''
+
+def vdj_file(name):
+    """A contig table by name: in the working directory, else beside the input file."""
+    for folder in (".", os.path.dirname(os.path.abspath(INPUT))):
+        path = os.path.join(folder, name)
+        if os.path.exists(path):
+            return path
+    sys.exit(f"Contig table {name} not found: put it beside this script or the input file.")
+'''
+
 # The order helpers are written in (later ones call earlier ones).
 _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_from_hvg_frame",
                  "counts_hvg", "pearson_residuals", "per_cell_qc", "doublet_calls",
                  "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
                  "markers_key", "louvain",
-                 "harmony", "lognorm_scoring", "subcluster", "gene_programs")
+                 "harmony", "lognorm_scoring", "subcluster", "gene_programs", "vdj")
 
 # Helpers another helper calls.
 _HELPER_NEEDS = {
@@ -1379,6 +1392,43 @@ def _keep_layout(p: dict, ctx: _Ctx) -> Snippet:
         f"adata.uns.pop({_lit(str(key))}, None)",
     ])
 
+def _vdj_start(ctx: _Ctx) -> list[str]:
+    """Start from no V(D)J columns at the first V(D)J step, as scView did (an input
+    saved after the attach already has them)."""
+    first = "vdj" not in ctx.helpers
+    _need(ctx, "vdj")
+    return ["clear(adata)  # start from no V(D)J columns"] if first else []
+
+
+def _vdj_attach(p: dict, ctx: _Ctx) -> Snippet:
+    name = str(p.get("file") or "")
+    if not name:
+        return Snippet(NOT_REPLAYABLE, ["# TCR/BCR contigs attached; the file is not recorded. Recorded:",
+                                        *_param_comment(p)], "contig file not recorded")
+    start = _vdj_start(ctx)
+    return Snippet(EXACT, [
+        "# TCR/BCR contigs joined to the cells by barcode, chains called and clonotypes defined",
+        "# (identical CDR3 amino acids of the primary VJ and VDJ chains) as core/vdj.py does.",
+        f"# Contig table: {comment_text(name, 160)} (sha256 {comment_text(p.get('sha256'), 64)});",
+        "# scView keeps a copy in its uploads/<dataset id>/vdj/ folder.",
+        *start,
+        f"attach_file(adata, vdj_file({_lit(name)}), sample_column={_lit(p.get('sample_column'))}, "
+        f"sample={_lit(p.get('sample'))}, replace={_lit(bool(p.get('replace')))}, "
+        f"same_v_gene={_lit(bool(p.get('same_v_gene')))})",
+    ])
+
+
+def _vdj_clonotypes(p: dict, ctx: _Ctx) -> Snippet:
+    _need(ctx, "vdj")
+    return Snippet(EXACT, ["# Clonotypes recomputed from the stored chains.",
+                           f"redefine(adata, same_v_gene={_lit(bool(p.get('same_v_gene')))})"])
+
+
+def _vdj_remove(p: dict, ctx: _Ctx) -> Snippet:
+    _need(ctx, "vdj")
+    return Snippet(EXACT, ["clear(adata)  # every V(D)J column removed"])
+
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -1417,6 +1467,9 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "mito_refilter": _mito_refilter,
     "gene_programs": _gene_programs,
     "keep_layout": _keep_layout,
+    "vdj_attach": _vdj_attach,
+    "vdj_clonotypes": _vdj_clonotypes,
+    "vdj_remove": _vdj_remove,
 }
 
 
