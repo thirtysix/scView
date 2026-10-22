@@ -411,7 +411,7 @@ class DatasetManager:
             self._load_order.remove(dataset_id)
 
         found = False
-        for subdir in ("uploads", "converted", "cache", "derived"):
+        for subdir in ("uploads", "ingested", "converted", "cache", "derived"):
             d = self.data_dir / subdir / dataset_id
             if d.exists():
                 shutil.rmtree(d)

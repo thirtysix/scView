@@ -1211,6 +1211,14 @@ def _uns_mapping(adata, key: str) -> dict[str, str] | None:
 
 def _ingest(p: dict, ctx: _Ctx) -> Snippet:
     lines = ["# The import itself is read_input() at the top of this script."]
+    if isinstance(p.get("feature_split"), dict):  # an .h5ad upload with antibody / tag features in X
+        lines += [
+            "# scView kept only the 'Gene Expression' features in X; the antibody (CITE-seq) and",
+            "# CellPlex tag features went to obsm['protein_counts'] / obsm['hto_counts'].",
+            "if \"feature_types\" in adata.var.columns:",
+            "    adata = adata[:, adata.var[\"feature_types\"].astype(str).eq(\"Gene Expression\").to_numpy()].copy()",
+        ]
+        return Snippet(APPROXIMATE, lines, "antibody and tag features dropped from X, not moved to obsm")
     if any(k.startswith("protein") or k.startswith("n_protein") for k in p):
         lines.append("# NOTE: scView moved the antibody (CITE-seq) features out of X into "
                      "obsm['protein_counts']; read_input keeps only the gene features.")
