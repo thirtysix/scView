@@ -225,13 +225,25 @@ def _remap(mask: np.ndarray) -> np.ndarray:
     return out
 
 
+def _index_dtype(src) -> np.dtype:
+    """One dtype for the new indices and indptr: anndata assigns them to the scipy
+    matrix as stored, and scipy's kernels (``eliminate_zeros``, used by scanpy's
+    rank_genes_groups) refuse an int64 indptr beside int32 indices. The source's
+    indices dtype, unless its value count needs int64."""
+    dtype = np.dtype(src["indices"].dtype)
+    if src["data"].shape[0] > np.iinfo(np.int32).max or dtype.itemsize > 4:
+        return np.dtype(np.int64)
+    return np.dtype(np.int32)
+
+
 def _sparse_out(parent: h5py.Group, name: str, enc: str, shape: tuple[int, int], src) -> h5py.Group:
     g = parent.create_group(name)
     g.attrs["encoding-type"] = enc
     g.attrs["encoding-version"] = "0.1.0"
     g.attrs["shape"] = np.asarray(shape, dtype=np.int64)
-    for key in ("data", "indices"):
-        g.create_dataset(key, shape=(0,), maxshape=(None,), dtype=src[key].dtype,
+    dtypes = {"data": src["data"].dtype, "indices": _index_dtype(src)}
+    for key, dtype in dtypes.items():
+        g.create_dataset(key, shape=(0,), maxshape=(None,), dtype=dtype,
                          chunks=(min(1 << 16, max(1, int(src[key].shape[0]))),), **_GZIP)
     return g
 
@@ -273,7 +285,7 @@ def _subset_csr(src, parent, name, keep, extract):
         for m, rm, table in side:
             sel = m[idx]
             np.add.at(table, (start + rows[sel], rm[idx[sel]]), data[sel])
-    out.create_dataset("indptr", data=new_indptr)
+    out.create_dataset("indptr", data=new_indptr.astype(out["indices"].dtype))
     return [t for _, _, t in side]
 
 
@@ -289,13 +301,13 @@ def _subset_csc(src, parent, name, keep, extract):
         cols = np.repeat(np.arange(start, end), np.diff(indptr[start:end + 1]))
         k = keep[cols]
         _append(out["data"], data[k])
-        _append(out["indices"], idx[k])
+        _append(out["indices"], idx[k].astype(out["indices"].dtype))
         lengths.append(np.diff(indptr[start:end + 1])[keep[start:end]])
         for m, rm, table in side:
             sel = m[cols]
             np.add.at(table, (idx[sel].astype(np.int64), rm[cols[sel]]), data[sel])
     out.create_dataset("indptr", data=np.concatenate([[0], np.cumsum(np.concatenate(lengths or [[]]))])
-                       .astype(np.int64))
+                       .astype(out["indices"].dtype))
     return [t for _, _, t in side]
 
 

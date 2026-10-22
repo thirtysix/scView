@@ -82,6 +82,17 @@ def test_split_matches_the_matrix_and_the_wizard(tmp_path, fmt):
     got = b.X.toarray() if sp.issparse(b.X) else np.asarray(b.X)
     np.testing.assert_array_equal(got, dense[:, gene_cols])
     assert type(b.X) is type(a.X) or (fmt == "dense" and isinstance(b.X, np.ndarray))
+    if sp.issparse(b.X):
+        # anndata hands scipy the arrays as stored: one index dtype, or scipy's kernels
+        # refuse them (found live: rank_genes_groups -> eliminate_zeros -> ValueError).
+        assert b.X.indptr.dtype == b.X.indices.dtype
+        b.X.copy().eliminate_zeros()
+        import scanpy as sc
+
+        c = b.copy()
+        c.obs["g"] = pd.Categorical(["a", "b"] * (c.n_obs // 2))
+        sc.pp.log1p(c)
+        sc.tl.rank_genes_groups(c, "g", method="wilcoxon")
     np.testing.assert_array_equal(np.asarray(b.layers["counts"].todense() if sp.issparse(b.layers["counts"])
                                              else b.layers["counts"]), dense[:, gene_cols])
     np.testing.assert_array_equal(b.varm["PCs"], a.varm["PCs"][gene_cols])
