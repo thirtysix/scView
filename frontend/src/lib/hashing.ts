@@ -62,9 +62,12 @@ export function negativeMeaning(call: HashingCall): string {
 
 /** The doublet views read one source: say which. */
 export function doubletSourceText(source: string | null): string {
-  if (source === "hash_class") return "Cluster QC and the filtering step's 'drop doublets' use these hashing doublets.";
-  if (source === "predicted_doublet")
-    return "Cluster QC and 'drop doublets' use Scrublet's calls (predicted_doublet), which are read first; hashing doublets are compared below.";
+  if (source === "hash_class")
+    return (
+      "Hashing is the primary doublet call: cluster QC, the QC report and the filtering step's 'drop doublets' " +
+      "(source auto) use these hashing doublets; Scrublet stays as the second opinion (Doublet score card)."
+    );
+  if (source === "predicted_doublet") return "Cluster QC and 'drop doublets' use Scrublet's calls (predicted_doublet).";
   if (source) return `Cluster QC and 'drop doublets' use the column '${source}'.`;
   return "";
 }

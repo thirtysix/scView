@@ -129,6 +129,39 @@ describe("DoubletCard", () => {
     expect(useViewStore.getState().activePanel).toBe("unified");
   });
 
+  it("says the doublet views use Scrublet when there is no hashing", async () => {
+    getDoublets.mockResolvedValue({
+      ...summary(0.3),
+      source: { source: "scrublet", label: "Scrublet", columns: ["predicted_doublet"], n_cells: 1000, n_doublets: 40,
+        fraction: 0.04, hashing: null, scrublet: { n_doublets: 40, fraction: 0.04 }, both: null, options: ["auto", "scrublet"] },
+      agreement: null,
+    });
+    render(<DoubletCard datasetId="d1" />);
+    expect(await screen.findByTestId("doublet-source")).toHaveTextContent("Doublet views use: 4.0% doublets by Scrublet.");
+    expect(screen.queryByTestId("doublet-agreement")).not.toBeInTheDocument();
+    expect(screen.getByText(/Cell\/Gene Filtering drops them when/)).toBeInTheDocument();
+  });
+
+  it("puts cell hashing first and shows how Scrublet agrees with it", async () => {
+    getDoublets.mockResolvedValue({
+      ...summary(0.3),
+      source: { source: "hashing", label: "cell hashing", columns: ["hash_class"], n_cells: 1000, n_doublets: 120,
+        fraction: 0.12, hashing: { n_doublets: 120, fraction: 0.12, n_negatives: 30 },
+        scrublet: { n_doublets: 70, fraction: 0.07 }, both: { n: 40, fraction: 0.04 },
+        options: ["auto", "hashing", "scrublet", "either"] },
+      agreement: { n_cells: 1000, hashing: 120, scrublet: 70, both: 40, hashing_only: 80, scrublet_only: 30, neither: 850,
+        negatives: 30, negatives_scrublet: 5, samples: [], unassigned: null, threshold: 0.3, column: null },
+    });
+    render(<DoubletCard datasetId="d1" />);
+    expect(await screen.findByTestId("doublet-source")).toHaveTextContent(
+      "Doublet views use: 12.0% doublets by cell hashing; Scrublet flags 7.0%, 4.0% by both.",
+    );
+    expect(screen.getByTestId("doublet-agreement-text")).toHaveTextContent(
+      "Of 120 hashing doublets, Scrublet at 0.3 also calls 40 (33.3%).",
+    );
+    expect(screen.getByText(/Cell hashing is the primary call here/)).toBeInTheDocument();
+  });
+
   it("renders nothing before doublet detection has run", async () => {
     getDoublets.mockResolvedValue({ available: false, n_cells: 10, suggestion: summary(0.3).suggestion });
     const { container } = render(<DoubletCard datasetId="d1" />);

@@ -61,6 +61,8 @@ interface Qc {
   medians: { metric: string; label: string; cluster: number | null; rest: number | null; note: string | null }[];
   flags: ReportPart & { flags?: { flag: string; reason: string; help: string }[]; notes?: string[] };
   doublets: ReportPart & { n_doublets?: number | null; fraction?: number | null; fraction_rest?: number | null;
+    /** Whose calls: "cell hashing" when it was run, else "Scrublet" (backend core/doublet_source.py). */
+    source?: string | null;
     median_score?: number | null; median_score_rest?: number | null };
   states: ReportPart & { column?: string; states?: { state: string; n_cells: number; fraction: number }[] };
   removed: ReportPart & { n_removed?: number; fraction_lost?: number | null; by_criterion?: Record<string, number>;
@@ -290,8 +292,9 @@ function QcBody({ d }: { d: Qc }) {
       <Part title="Doublets" part={d.doublets}>
         <p className="text-[11px] text-slate-700">
           {d.doublets?.fraction != null && (
-            <span title="Predicted doublets among the cluster's cells">
-              {count(d.doublets.n_doublets ?? null)} predicted doublets ({pct(d.doublets.fraction)}; rest {pct(d.doublets.fraction_rest)}).{" "}
+            <span title="Doublets among the cluster's cells, by cell hashing when it was run, else by Scrublet">
+              {count(d.doublets.n_doublets ?? null)} predicted doublets{d.doublets.source ? ` by ${d.doublets.source}` : ""} (
+              {pct(d.doublets.fraction)}; rest {pct(d.doublets.fraction_rest)}).{" "}
             </span>
           )}
           {d.doublets?.median_score != null && (
