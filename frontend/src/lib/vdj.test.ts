@@ -8,6 +8,7 @@ import {
   matchSentences,
   metricValue,
   needsSample,
+  overlapCells,
   overlapHover,
   usageHover,
   valueLabel,
@@ -42,7 +43,7 @@ describe("vdj wording", () => {
     const s = matchSentences(SUMMARY);
     expect(s[0]).toBe("6,189 of 10,548 cells have a usable TCR or BCR chain.");
     expect(s[1]).toBe("4,359 profiled cells had no contig.");
-    expect(s[2]).toContain("26 contig barcodes match no cell");
+    expect(s[2]).toContain("When the tables were attached, 26 contig barcodes matched no cell");
     expect(matchSentences({ ...SUMMARY, match: { ...SUMMARY.match!, cells_not_profiled: 4 } })[1]).toContain(
       "4 cells are in samples with no contig table attached",
     );
@@ -104,10 +105,22 @@ describe("heatmap hovers", () => {
     });
     expect(h[0]![1]).toContain("Morisita-Horn 0.690");
     expect(h[0]![1]).toContain("1 shared clonotypes");
+    expect(h[0]![0]).toBe("<b>A</b>: 31 clonotypes, 40 cells");
     const u = usageHover({
       group_by: "g", chain: "TRB", gene: "v", count: "clonotypes", chains_present: { TRB: 60 }, genes: ["TRBV6-5"],
       n_genes_total: 1, groups: ["A"], n: [31], counts: [[16]], share: [[16 / 31]], n_groups_total: 1, n_groups_shown: 1,
     });
     expect(u[0]![0]).toBe("<b>A</b>, TRBV6-5<br>51.6% of 31 clonotypes (16)");
+  });
+});
+
+describe("overlap cells", () => {
+  it("blanks the diagonal and scales to the largest overlap between groups", () => {
+    const base = { group_by: "g", metric: "jaccard" as const, groups: ["A", "B", "C"], n_cells: [1, 1, 1], n_clonotypes: [1, 1, 1],
+      shared: [], n_groups_total: 3, n_groups_shown: 3 };
+    const c = overlapCells({ ...base, matrix: [[1, 0.02, 0], [0.02, 1, 0.05], [0, 0.05, 1]] });
+    expect(c.z).toEqual([[null, 0.02, 0], [0.02, null, 0.05], [0, 0.05, null]]);
+    expect(c.zmax).toBe(0.05);
+    expect(overlapCells({ ...base, matrix: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] }).zmax).toBe(1);
   });
 });

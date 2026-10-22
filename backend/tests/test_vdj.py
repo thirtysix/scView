@@ -302,6 +302,22 @@ def test_several_libraries_need_a_sample(tb):
     assert clon[10] == clon[0] and a.obs[vdj.SIZE_COL].iloc[0] == 6
 
 
+def test_names_without_barcodes_match_by_name_and_are_not_libraries(tmp_path):
+    a = cells_adata([str(i) for i in range(1, 5)])
+    rows = [{**_row(0, 1, "TRB", "CASSA", 3), "barcode": "2", "contig_id": "2_1"}]
+    stats = vdj.attach_file(a, write_csv(tmp_path / "n.csv", rows))
+    assert stats["matched_exact"] == 1 and vdj.SUFFIX_COLUMN not in [c["name"] for c in vdj.sample_choices(a)]
+
+
+def test_kang_style_names_are_two_libraries(tb):
+    names = [f"CTRL_{b}.1" for b in BC[:5]] + [f"STIM_{b}.1" for b in BC[:5]]
+    a = cells_adata(names, {"stim": ["CTRL"] * 5 + ["STIM"] * 5})
+    choices = {c["name"]: c["values"] for c in vdj.sample_choices(a)}
+    assert choices[vdj.SUFFIX_COLUMN] == ["CTRL_*.1", "STIM_*.1"]
+    with pytest.raises(vdj.VdjError, match="2 libraries"):
+        vdj.attach_file(a, tb[2])
+
+
 def test_seurat_style_prefix_is_matched(tb):
     names = [f"donorA_{b}-1" for b in BC[:10]]
     a = cells_adata(names)
@@ -368,6 +384,7 @@ def test_diversity_formulas_by_hand_and_scipy():
     assert vdj.simpson(c) == pytest.approx(1 - (0.75 ** 2 + 0.25 ** 2))
     assert vdj.clonality(c) == pytest.approx(1 - entropy(c / 4) / np.log(2))
     assert vdj.clonality([5]) is None
+    assert vdj.clonality([1] * 7) == 0.0 and vdj.gini([1] * 7) == 0.0  # not a rounding -1e-16
     assert vdj.gini([1, 9]) == pytest.approx(0.4)  # sum|xi-xj| / (2 n^2 mean) = 16 / 40
     assert vdj.gini([4, 4, 4]) == pytest.approx(0.0)
     assert vdj.gini([0, 0, 0, 1]) == pytest.approx(0.0)  # zeros are not clonotypes
@@ -417,6 +434,9 @@ def test_diversity_per_group_and_rarefaction(tmp_path):
     assert r1["groups"][1]["rarefied"]["richness"] == 16 and r1["groups"][1]["rarefied"]["richness_sd"] == 0
     assert r1["groups"][0]["rarefied"]["richness"] < 31
     assert "Rarefied" in r1["caption"] and "Not rarefied" in d["caption"]
+    big = vdj.diversity(a, "group", rarefy=True, min_cells=25)
+    assert big["groups"][1]["richness"] is None and big["depth"] == 40 and big["min_cells"] == 25
+    assert big["groups"][0]["rarefied"]["richness"] == 31  # A at its own size: every cell, every draw
 
 
 def test_overlap_and_usage_per_group(tmp_path):

@@ -16,7 +16,7 @@ API = "/api/v1"
 
 async def _attach(client, did, path: Path, **form):
     with open(path, "rb") as fh:
-        return await client.post(f"{API}/datasets/{did}/vdj", files={"file": (path.name, fh, "text/csv")},
+        return await client.post(f"{API}/datasets/{did}/vdj/upload", files={"file": (path.name, fh, "text/csv")},
                                  data={k: str(v) for k, v in form.items()})
 
 
@@ -99,3 +99,15 @@ async def test_repertoire_views(client, dataset_manager, tmp_path):
     assert t["rows"][0]["n_in_group"] == 5
     assert (await client.get(f"{API}/datasets/{did}/vdj/overlap?group_by=nope")).status_code == 404
     assert (await client.get(f"{API}/datasets/{did}/vdj/usage?group_by=group&chain=XYZ")).status_code == 400
+
+
+async def test_a_contig_table_over_the_json_body_limit_is_accepted(client, dataset_manager, tmp_path):
+    from scview.config import Settings
+
+    did = _register(dataset_manager, cells_adata(), "vb")
+    rows = t_rows() * 2000  # repeated lines: dropped as duplicates, but a real-sized body
+    path = write_csv(tmp_path / "big.csv", rows)
+    assert path.stat().st_size > Settings().MAX_JSON_BODY_KB * 1024
+    r = await _attach(client, did, path)
+    assert r.status_code == 200, r.text
+    assert r.json()["attached"]["dropped"]["duplicate"] == len(rows) - len(t_rows()) + 1

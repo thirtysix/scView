@@ -9,10 +9,11 @@ import { plotlyColorscale } from "@/lib/colors";
 import { prettyObsLabel } from "@/lib/formatting";
 import { plotConfig } from "@/lib/plotConfig";
 import { errorText } from "@/lib/programs";
-import { diversityBars, METRICS, overlapHover, usageHover } from "@/lib/vdj";
+import { diversityBars, METRICS, overlapCells, overlapHover, usageHover } from "@/lib/vdj";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const LABELLED = 12;
+const MIN_CELLS = [10, 20, 50, 100];
 
 function heatHeight(rows: number): number {
   return Math.min(460, Math.max(200, rows * 16 + 110));
@@ -82,14 +83,15 @@ export function ClonotypeRepertoire({
 function DiversityChart({ datasetId, column }: { datasetId: string; column: string }) {
   const [metric, setMetric] = useState<DiversityMetric>("shannon");
   const [rarefy, setRarefy] = useState(false);
+  const [minCells, setMinCells] = useState(MIN_CELLS[0]!);
   const { data, error, isFetching } = useQuery({
-    queryKey: ["vdj-view", datasetId, "diversity", column, rarefy],
-    queryFn: () => getDiversity(datasetId, column, rarefy),
+    queryKey: ["vdj-view", datasetId, "diversity", column, rarefy, minCells],
+    queryFn: () => getDiversity(datasetId, column, rarefy, { minCells }),
     retry: false,
   });
   const bars = useMemo(() => (data ? diversityBars(data, metric) : null), [data, metric]);
   const info = METRICS.find((m) => m.id === metric);
-  const withCells = data?.groups.filter((g) => g.n_with_clonotype > 0) ?? [];
+  const shown = data?.groups.filter((g) => bars?.x.includes(g.name)) ?? [];
 
   return (
     <div className="space-y-1" data-testid="vdj-diversity">
@@ -110,10 +112,26 @@ function DiversityChart({ datasetId, column }: { datasetId: string; column: stri
         {info && <InfoTip label={`About ${info.label}`}>{info.info}</InfoTip>}
         <label
           className="flex items-center gap-1"
-          title={`Subsample every group to the smallest group's cells (groups with ${data?.min_cells ?? 10}+ cells), 20 seeded draws, and show the mean and SD`}
+          title={`Subsample every group to the smallest group's cells (groups with ${minCells}+ cells), 20 seeded draws, and show the mean and SD`}
         >
           <input type="checkbox" checked={rarefy} onChange={(e) => setRarefy(e.target.checked)} />
           rarefy
+        </label>
+        <label className="flex items-center gap-1" title="Groups with fewer cells with a clonotype get no value (and do not set the rarefaction depth)">
+          min
+          <select
+            aria-label="Minimum cells per group"
+            value={minCells}
+            onChange={(e) => setMinCells(Number(e.target.value))}
+            className="rounded border border-slate-300 px-1 py-0.5 text-xs"
+          >
+            {MIN_CELLS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          cells
         </label>
         {isFetching && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </div>
@@ -151,12 +169,12 @@ function DiversityChart({ datasetId, column }: { datasetId: string; column: stri
       )}
       {data && (
         <Caption
-          n={withCells.map((g) => ({ value: g.n_with_clonotype, unit: `cells in ${g.name}` })).slice(0, 6)}
+          n={shown.map((g) => ({ value: g.n_with_clonotype, unit: `cells in ${g.name}` })).slice(0, 6)}
           testId="vdj-diversity-caption"
         >
           {data.caption}
           {bars && bars.left_out.length > 0 && ` Not shown (under ${data.min_cells} cells with a clonotype): ${bars.left_out.join(", ")}.`}
-          {withCells.length > 6 && ` ${withCells.length} groups; the first six are counted here.`}
+          {shown.length > 6 && ` ${shown.length} groups shown; the first six are counted here.`}
         </Caption>
       )}
     </div>
@@ -172,6 +190,7 @@ function OverlapHeatmap({ datasetId, column }: { datasetId: string; column: stri
     retry: false,
   });
   const hover = useMemo(() => (data ? overlapHover(data) : []), [data]);
+  const cells = useMemo(() => (data ? overlapCells(data) : null), [data]);
   const height = heatHeight(data?.groups.length ?? 0);
 
   return (
@@ -210,9 +229,9 @@ function OverlapHeatmap({ datasetId, column }: { datasetId: string; column: stri
               type: "heatmap",
               x: data.groups,
               y: data.groups,
-              z: data.matrix,
+              z: cells!.z,
               zmin: 0,
-              zmax: 1,
+              zmax: cells!.zmax,
               text: hover as unknown as string[],
               hoverinfo: "text",
               colorscale: plotlyColorscale(colormap),
@@ -238,7 +257,7 @@ function OverlapHeatmap({ datasetId, column }: { datasetId: string; column: stri
       {data && (
         <Caption n={{ value: data.n_groups_shown, unit: "groups", of: data.n_groups_total }}>
           {metric === "morisita_horn" ? "Morisita-Horn" : "Jaccard"} overlap of the clonotypes between groups of{" "}
-          {prettyObsLabel(column)}; hover for shared clonotypes.
+          {prettyObsLabel(column)} (the diagonal, a group with itself, is left blank); hover for shared clonotypes.
           {data.n_groups_shown < data.n_groups_total && " The largest groups by cells are shown."}
           {data.groups.length < 2 && " Overlap needs two groups with clonotypes."}
         </Caption>

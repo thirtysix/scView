@@ -1,6 +1,6 @@
 """TCR / BCR contigs (``core/vdj.py``): attach a contig table, and the repertoire views.
 
-``POST /vdj`` stores the uploaded table beside the dataset's originals
+``POST /vdj/upload`` stores the uploaded table beside the dataset's originals
 (``uploads/{id}/vdj/``, read-only), joins it to the cells and saves the dataset;
 ``POST /vdj/clonotypes`` recomputes the clonotypes from the stored chains (after
 cells were removed, or with V genes in the definition); ``DELETE /vdj`` removes
@@ -119,7 +119,9 @@ async def _store_upload(dm: DatasetManager, dataset_id: str, file: UploadFile) -
     return dest, name, sha, True
 
 
-@router.post("/datasets/{dataset_id}/vdj")
+# "upload" in the path: main.py's body-size limit (512 KB for JSON) skips upload routes,
+# and a 10k-cell contig table is a few MB.
+@router.post("/datasets/{dataset_id}/vdj/upload")
 async def attach_vdj(
     dataset_id: str,
     file: UploadFile = File(...),
@@ -192,11 +194,12 @@ async def get_clonotypes(dataset_id: str, group_by: str = "", group: str | None 
 
 @router.get("/datasets/{dataset_id}/vdj/diversity")
 async def get_diversity(dataset_id: str, group_by: str = "", rarefy: bool = False, seed: int = 0,
-                        dm: DatasetManager = Depends(get_dataset_manager)):
-    """Richness, Shannon, Gini-Simpson, clonality and Gini per group; ``rarefy``
-    subsamples every group to the smallest (seeded). Default ``group_by``: samples."""
+                        min_cells: int = vdj.MIN_CELLS, dm: DatasetManager = Depends(get_dataset_manager)):
+    """Richness, Shannon, Gini-Simpson, clonality and Gini per group with ``min_cells``
+    or more cells with a clonotype; ``rarefy`` subsamples every group to the smallest
+    of those (seeded). Default ``group_by``: samples."""
     return await _read(dm, dataset_id, lambda a: vdj.diversity(
-        a, _group(a, group_by, "sample"), rarefy=rarefy, seed=seed))
+        a, _group(a, group_by, "sample"), rarefy=rarefy, seed=seed, min_cells=min_cells))
 
 
 @router.get("/datasets/{dataset_id}/vdj/overlap")

@@ -67,6 +67,7 @@ export function needsSample(summary: VdjSummary): boolean {
 }
 
 const n = (v: number) => v.toLocaleString();
+const plural = (v: number, word: string) => `${n(v)} ${word}${v === 1 ? "" : "s"}`;
 
 /** The join both ways, in plain sentences. */
 export function matchSentences(s: VdjSummary): string[] {
@@ -79,11 +80,11 @@ export function matchSentences(s: VdjSummary): string[] {
   ];
   if (m.barcodes_without_cells > 0)
     out.push(
-      `${n(m.barcodes_without_cells)} contig barcodes match no cell of the dataset ` +
-        `(${n(m.barcodes_without_cells_usable)} of them with a usable chain): cells the expression data did not keep.`,
+      `When the tables were attached, ${plural(m.barcodes_without_cells, "contig barcode")} matched no cell of the ` +
+        `dataset (${n(m.barcodes_without_cells_usable)} with a usable chain): cells the expression data did not keep.`,
     );
   if (m.ambiguous_barcodes > 0)
-    out.push(`${n(m.ambiguous_barcodes)} barcodes matched more than one cell and were left out.`);
+    out.push(`${plural(m.ambiguous_barcodes, "barcode")} matched more than one cell and ${m.ambiguous_barcodes === 1 ? "was" : "were"} left out.`);
   return out;
 }
 
@@ -163,13 +164,23 @@ function fmt(v: number): string {
   return Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(3);
 }
 
+/** The overlap matrix with its diagonal (always 1) blanked, so the colour scale
+ *  spans the values between groups, and that scale's top (1 when all are 0). */
+export function overlapCells(o: Overlap): { z: (number | null)[][]; zmax: number } {
+  const z = o.matrix.map((row, r) => row.map((v, c) => (r === c ? null : v)));
+  const off = z.flat().filter((v): v is number => v !== null);
+  const top = off.length ? Math.max(...off) : 0;
+  return { z, zmax: top > 0 ? top : 1 };
+}
+
 /** Hover text per overlap cell: the measure, shared clonotypes and the two n. */
 export function overlapHover(o: Overlap): string[][] {
   const label = o.metric === "morisita_horn" ? "Morisita-Horn" : "Jaccard";
   return o.matrix.map((row, r) =>
-    row.map(
-      (v, c) =>
-        `<b>${o.groups[r]}</b> and <b>${o.groups[c]}</b><br>${label} ${v === null ? "n/a" : v.toFixed(3)}` +
+    row.map((v, c) =>
+      r === c
+        ? `<b>${o.groups[r]}</b>: ${n(o.n_clonotypes[r]!)} clonotypes, ${n(o.n_cells[r]!)} cells`
+        : `<b>${o.groups[r]}</b> and <b>${o.groups[c]}</b><br>${label} ${v === null ? "n/a" : v.toFixed(3)}` +
         `<br>${n(o.shared[r]![c]!)} shared clonotypes<br>` +
         `${n(o.n_clonotypes[r]!)} and ${n(o.n_clonotypes[c]!)} clonotypes; ${n(o.n_cells[r]!)} and ${n(o.n_cells[c]!)} cells`,
     ),

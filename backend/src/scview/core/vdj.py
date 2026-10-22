@@ -244,12 +244,12 @@ def barcode_core(name) -> tuple[str | None, str | None]:
 
 def library_tags(names) -> np.ndarray:
     """Each cell name with its barcode replaced by "*" ("*-1:sampleA", "*-2"): cells
-    from one 10x library share a tag."""
+    from one 10x library share a tag. "" for a name without a barcode."""
     out = []
     for name in names:
         s = str(name)
         seq, _ = barcode_core(s)
-        out.append(s.replace(seq, "*", 1) if seq else s)
+        out.append(s.replace(seq, "*", 1) if seq else "")
     return np.asarray(out, dtype=object)
 
 
@@ -570,8 +570,8 @@ def attach_file(adata, path, sample_column: str | None = None, sample: str | Non
     mask = candidate_cells(adata, sample_column, sample)
     barcodes = pd.unique(contigs["barcode"])
     cells, exact = match_barcodes(barcodes, adata.obs_names, mask)
-    if mask is None and ((cells >= 0) & ~exact).any():
-        tags = pd.unique(library_tags(adata.obs_names))
+    if mask is None and ((cells != -1) & ~exact).any():  # matched or ambiguous by barcode core
+        tags = [t for t in pd.unique(library_tags(adata.obs_names)) if t]
         if len(tags) > 1:
             raise VdjError(
                 f"This dataset holds cells from {len(tags)} libraries (barcode suffixes such as "
@@ -797,7 +797,8 @@ def sample_choices(adata) -> list[dict]:
             names.append(name)
     out = [{"name": n, "values": [str(v) for v in pd.unique(obs[n].dropna().astype(str))][:100]}
            for n in names if 2 <= obs[n].nunique(dropna=True) <= 100]
-    tags = pd.Series(library_tags(adata.obs_names)).value_counts()
+    tags = pd.Series(library_tags(adata.obs_names))
+    tags = tags[tags != ""].value_counts()
     if len(tags) > 1:
         out.append({"name": SUFFIX_COLUMN, "label": "barcode suffix",
                     "values": [str(t) for t in tags.index[:100]]})
@@ -936,7 +937,7 @@ def clonality(counts) -> float | None:
     s = int((c > 0).sum())
     if s < 2:
         return None
-    return float(1.0 - shannon(c) / np.log(s))
+    return _tidy(1.0 - shannon(c) / np.log(s))
 
 
 def gini(counts) -> float:
@@ -947,7 +948,12 @@ def gini(counts) -> float:
     if n == 0:
         return float("nan")
     ranks = np.arange(1, n + 1)
-    return float(2.0 * (ranks * x).sum() / (n * x.sum()) - (n + 1) / n)
+    return _tidy(2.0 * (ranks * x).sum() / (n * x.sum()) - (n + 1) / n)
+
+
+def _tidy(v: float) -> float:
+    """0 for a rounding residue (all singletons give +-1e-16), never below 0."""
+    return 0.0 if abs(v) < 1e-12 else max(0.0, float(v))
 
 
 METRICS = ("richness", "shannon", "simpson", "clonality", "gini")
@@ -975,13 +981,14 @@ def _rarefied(codes: np.ndarray, depth: int, rng: np.random.Generator, n_draws: 
 
 
 def diversity(adata, group_by: str, *, rarefy: bool = False, seed: int = 0,
-              n_draws: int = N_DRAWS) -> dict:
+              n_draws: int = N_DRAWS, min_cells: int = MIN_CELLS) -> dict:
     """Richness, Shannon, Gini-Simpson, clonality and Gini per group, over the
-    group's cells with a clonotype. All of them grow or shrink with the number of
-    cells sampled; ``rarefy`` subsamples every group to the smallest group's cells
-    (groups with MIN_CELLS or more), ``n_draws`` times from ``seed``, and reports
-    the mean and SD."""
+    group's cells with a clonotype (groups with fewer than ``min_cells`` get none).
+    All of them grow or shrink with the number of cells sampled; ``rarefy``
+    subsamples every group to the smallest group's cells, ``n_draws`` times from
+    ``seed``, and reports the mean and SD."""
     _require(adata)
+    min_cells = max(2, int(min_cells))
     labels, codes = _groups(adata, group_by)
     _, clon = clonotype_codes(adata)
     rows = []
@@ -991,14 +998,14 @@ def diversity(adata, group_by: str, *, rarefy: bool = False, seed: int = 0,
         c = clon[in_g & (clon >= 0)]
         member[g] = c
         row: dict[str, Any] = {"name": name, "n_cells": int(in_g.sum()), "n_with_clonotype": int(len(c))}
-        if len(c) < MIN_CELLS:
+        if len(c) < min_cells:
             row.update({m: None for m in METRICS})
-            row["note"] = f"fewer than {MIN_CELLS} cells with a clonotype"
+            row["note"] = f"fewer than {min_cells} cells with a clonotype"
         else:
             row.update(metrics(np.bincount(c)))
             row["note"] = None
         rows.append(row)
-    usable = [g for g in member if len(member[g]) >= MIN_CELLS]
+    usable = [g for g in member if len(member[g]) >= min_cells]
     depth = min((len(member[g]) for g in usable), default=None)
     if rarefy and depth:
         rng = np.random.default_rng(seed)
@@ -1007,7 +1014,7 @@ def diversity(adata, group_by: str, *, rarefy: bool = False, seed: int = 0,
     sizes = [len(member[g]) for g in usable]
     caption = (f"Over the cells with a clonotype in each group of '{group_by}' "
                f"({min(sizes):,} to {max(sizes):,} cells)." if sizes else
-               f"No group of '{group_by}' has {MIN_CELLS} or more cells with a clonotype.")
+               f"No group of '{group_by}' has {min_cells} or more cells with a clonotype.")
     if rarefy and depth:
         caption += (f" Rarefied: each group subsampled to {depth:,} cells (the smallest group), "
                     f"{n_draws} draws from seed {seed}; mean shown.")
@@ -1015,7 +1022,7 @@ def diversity(adata, group_by: str, *, rarefy: bool = False, seed: int = 0,
         caption += (" Not rarefied: richness and Shannon grow with the number of cells sampled, so "
                     "compare groups of similar size or rarefy.")
     return {"group_by": group_by, "rarefy": bool(rarefy and depth), "depth": depth if rarefy else None,
-            "seed": seed, "n_draws": n_draws, "min_cells": MIN_CELLS, "groups": rows,
+            "seed": seed, "n_draws": n_draws, "min_cells": min_cells, "groups": rows,
             "caption": caption}
 
 
@@ -1191,11 +1198,12 @@ def grounding_lines(adaptor) -> tuple[list[str], str]:
     m = s["match"]
     line = (f"- TCR/BCR contigs: {m['cells_with_chain']:,} of {s['n_cells']:,} cells have a usable chain "
             f"({m['cells_not_profiled']:,} cells not profiled; {m['barcodes_without_cells_usable']:,} contig "
-            f"barcodes match no cell). {s['n_clonotypes']:,} clonotypes over {s['n_cells_in_clonotypes']:,} "
+            f"barcodes matched no cell when attached). {s['n_clonotypes']:,} clonotypes over {s['n_cells_in_clonotypes']:,} "
             f"cells; {s['n_expanded']:,} expanded (2+ cells) holding {s['n_cells_expanded']:,} cells. "
             + ("Largest expanded: " + "; ".join(one(r) for r in expanded) + ". " if expanded else
                "No clonotype has more than one cell. ")
             + "Clonotype = identical CDR3 amino acids of the primary VJ and VDJ chains (scirpy's "
-            f"definition); clone sizes count the cells in this dataset [{TAG}]")
+            "definition); multichain and TCR+BCR cells (likely doublets) have none; clone sizes count the "
+            f"cells in this dataset [{TAG}]")
     detail = f"{s['n_clonotypes']:,} clonotypes, {s['n_expanded']:,} expanded"
     return [line], detail
