@@ -219,6 +219,21 @@ def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(gp_lines[1:])))
 
 
+def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """TCR/BCR contigs (core/vdj.py): cells with chains, the clonotypes, and the largest
+    expanded ones with the cell types they sit in, only once contigs are attached."""
+    from scview.core import vdj
+
+    try:
+        v_lines, v_detail = vdj.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: V(D)J fact failed: %s", exc)
+        return
+    if v_lines:
+        lines.extend(v_lines)
+        sources.append(ChatSource(kind="result", ref=vdj.TAG, detail=v_detail, evidence="\n".join(v_lines)))
+
+
 def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Which group relations in the plot hold across other seeds and neighbour counts
     (core/layout_stability.py), only once a layout check has run for this dataset."""
@@ -434,6 +449,7 @@ def build_grounding_context(
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: merge-check grounding failed: %s", exc)
         _add_study_planner(adaptor, lines, sources)
+        _add_vdj(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).

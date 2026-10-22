@@ -479,3 +479,31 @@ def test_replay_script_repeats_the_attach_exactly(tmp_path, tb):
     for col in vdj.our_columns(out):
         assert rep.obs[col].astype(str).tolist() == out.obs[col].astype(str).tolist(), col
     pd.testing.assert_frame_equal(vdj.read_table(rep), vdj.read_table(out))
+
+
+# ---------------------------------------------------------------------------
+# Co-pilot fact
+# ---------------------------------------------------------------------------
+
+
+def test_copilot_fact_names_the_expanded_clonotypes_and_their_cell_type(tmp_path):
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+    from scview.core.assistant import build_grounding_context
+    from scview.core.claims import resolve_tag
+
+    a, rows = _repertoire()
+    a.obs["cell_type"] = pd.Categorical(["CD8 T"] * 50 + ["CD4 T"] * 10)
+    vdj.attach_file(a, write_csv(tmp_path / "r.csv", rows))
+    p = tmp_path / "x.h5ad"
+    a.write_h5ad(p)
+    context, sources = build_grounding_context(AnnDataAdaptor(str(p)))
+    line = next(ln for ln in context.splitlines() if "[result:vdj]" in ln)
+    # X: 10 cells in A (all CD8 T) + 5 in B (cells 40-44: CD8 T) -> 15 of 15 CD8 T.
+    assert "TCR1 (15 cells; TRA CAVX/TRB CASSX, 100% in cell_type 'CD8 T')" in line
+    assert "46 clonotypes over 60 cells; 1 expanded (2+ cells) holding 15 cells" in line
+    refs = [s.ref for s in sources]
+    assert "result:vdj" in refs and resolve_tag("vdj", refs) == ["result:vdj"]
+    assert resolve_tag("result:vdj:TCR1", refs) == ["result:vdj"]
+    plain = tmp_path / "plain.h5ad"
+    cells_adata().write_h5ad(plain)
+    assert "[result:vdj]" not in build_grounding_context(AnnDataAdaptor(str(plain)))[0]
