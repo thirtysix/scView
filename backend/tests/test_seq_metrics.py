@@ -582,8 +582,10 @@ async def test_attach_endpoint(client, dataset_manager, tmp_path):
     r = await client.post(f"{API}/datasets/{did}/seq-metrics",
                           files=[("files", ("genes.csv", b"gene,a,b\nX,1,2\nY,3,4\n", "text/csv"))])
     assert r.status_code == 400 and "genes.csv" in r.json()["detail"]
+    # A raw matrix is megabytes: the route is exempt from the 512 KB JSON body cap.
+    big = PBMC_COUNT.encode() + b"\n" * 600_000
     r = await client.post(f"{API}/datasets/ghost/seq-metrics",
-                          files=[("files", ("metrics_summary.csv", PBMC_COUNT.encode(), "text/csv"))])
+                          files=[("files", ("metrics_summary.csv", big, "text/csv"))])
     assert r.status_code == 404
 
 
