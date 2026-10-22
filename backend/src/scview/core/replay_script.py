@@ -802,6 +802,15 @@ def _mito_rule(p: dict) -> dict | None:
                        "bound": r.get("bound")} for r in rule["types"] if isinstance(r, dict)]}
 
 
+def _floor_lines(global_mito: str) -> list[str]:
+    """The per-type % mito filter with scView's floor (``qc_mito_type_floor``): a
+    cell goes only when its type's bound and the global rule both remove it."""
+    return ["# Never stricter than the global rule: each cell's bound is the higher of its type's",
+            "# own and the global rule's for that cell, so it goes only when both remove it.",
+            f"GLOBAL_MITO = {global_mito}",
+            "drop |= type_mito_drop(adata, qc, MITO_TYPES, GLOBAL_MITO) & GLOBAL_MITO"]
+
+
 def _filtering(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "per_cell_qc")
     mode = p.get("qc_threshold_mode") or "fixed"
@@ -809,6 +818,7 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
     code = ["qc = per_cell_qc(adata)"]
     status, note = EXACT, ""
     rule = _mito_rule(p)
+    floor = rule is not None and bool(p.get("qc_mito_type_floor"))  # absent (older records): off
     if rule is not None:
         _need(ctx, "type_mito_drop")
         code += ["# % mito per cell type (scView's per-type filter): each type's recorded bound,",
@@ -833,6 +843,9 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
             ]
         if rule is None:
             code.append("drop = mad_drop(adata, qc, THRESHOLDS)")
+        elif floor:
+            code += ['drop = mad_drop(adata, {**qc, "pct_mt": None}, THRESHOLDS)',
+                     *_floor_lines("mad_drop(adata, mito_only(qc), THRESHOLDS)")]
         else:
             code += ['drop = mad_drop(adata, {**qc, "pct_mt": None}, THRESHOLDS)',
                      "drop |= type_mito_drop(adata, qc, MITO_TYPES, mad_drop(adata, mito_only(qc), THRESHOLDS))"]
@@ -842,6 +855,9 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
                f"min_counts={_lit(p.get('min_counts', 0))}")
         if rule is None:
             code.append(f"drop = fixed_drop(qc, {cut}, max_pct_mt={_lit(p.get('max_pct_mt'))})")
+        elif floor:
+            code += [f"drop = fixed_drop(qc, {cut}, max_pct_mt=None)",
+                     *_floor_lines(f"fixed_drop(mito_only(qc), 0, 0, 0, {_lit(p.get('max_pct_mt'))})")]
         else:
             code += [f"drop = fixed_drop(qc, {cut}, max_pct_mt=None)",
                      "drop |= type_mito_drop(adata, qc, MITO_TYPES, fixed_drop(mito_only(qc), 0, 0, 0, "

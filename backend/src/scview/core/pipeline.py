@@ -85,6 +85,8 @@ class PipelineParams:
     # (median + qc_mad_k_mt MADs) instead, for types that can have one (core/qc_filter.py).
     qc_mito_mode: str = "global"
     qc_mito_type_column: str = ""  # per_type: the cell types (empty = mito_by_type's choice)
+    # per_type: never stricter than the global rule (a type's bound = max(own, global)); opt-in
+    qc_mito_type_floor: bool = False
     drop_doublets: bool = False  # drop cells flagged by doublet detection (opt-in)
 
     # Doublet detection
@@ -358,7 +360,8 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     after they are gone.
 
     With ``qc_mito_mode`` "per_type" each cell type's own % mito bound replaces
-    the global rule for its cells (``qc_mito_types``: every type's rule and loss).
+    the global rule for its cells (``qc_mito_types``: every type's rule and loss);
+    with ``qc_mito_type_floor`` never stricter than the global rule.
     """
     n_before = adata.n_obs
     t = qc_filter.Thresholds.from_params(params)
@@ -376,7 +379,8 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     if bounds is not None:
         found["qc_thresholds"] = bounds.to_dict(~keep)
     if t.mito_mode == "per_type":  # a global run records what it always did
-        found.update(qc_mito_mode="per_type", qc_mad_k_mt=params.qc_mad_k_mt)
+        found.update(qc_mito_mode="per_type", qc_mad_k_mt=params.qc_mad_k_mt,
+                     qc_mito_type_floor=bool(params.qc_mito_type_floor))  # absent in old records: off
         if types is not None:
             found.update(qc_mito_type_column=types.column, qc_mito_types=types.to_dict())
         else:

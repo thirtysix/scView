@@ -14,7 +14,8 @@ upload (``uploads/`` / ``ingested/``, never written to) with every cell typed:
   expression over the dataset's variable genes, MT- genes left out, so a cell is
   placed by what it is rather than by how damaged it is);
 
-then the filtering step runs with ``qc_mito_mode`` "per_type" on that column, and
+then the filtering step runs with ``qc_mito_mode`` "per_type" on that column
+(with ``floor``, never stricter than the global rule: ``qc_mito_type_floor``), and
 the steps the dataset ran before (from its provenance, with their recorded
 params) run again on the cells kept. The type column is kept as
 ``TYPE_COLUMN`` (with an author column, that column itself).
@@ -360,9 +361,11 @@ def check_runnable(dm, dataset_id: str, adaptor, column: str | None, mito_mode: 
     return col
 
 
-def prepare(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "per_type") -> Prepared:
-    """Read the original upload and type every cell (module docstring). Raises
-    RefilterError when it can't run."""
+def prepare(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "per_type",
+            floor: bool = False) -> Prepared:
+    """Read the original upload and type every cell (module docstring). ``floor``:
+    per type never stricter than the global rule. Raises RefilterError when it
+    can't run."""
     from scview.core.pipeline import _run_reset_to_counts
 
     column = check_runnable(dm, dataset_id, adaptor, column, mito_mode)
@@ -407,8 +410,10 @@ def prepare(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "
     orig.uns.pop(qc_filter.RECORD_KEY, None)
     params.qc_mito_mode = mito_mode
     params.qc_mito_type_column = type_col if mito_mode == "per_type" else ""
+    params.qc_mito_type_floor = bool(floor) and mito_mode == "per_type"
     provenance.record_step(orig, step="mito_refilter", tool="scview.mito_refilter", params={
         "column": column, "type_column": type_col, "mito_mode": mito_mode,
+        "mito_type_floor": params.qc_mito_type_floor,
         "source_file": Path(src).name, "reset_to_counts": reset,
         "n_original": int(orig.n_obs), "n_kept_before": int(kept.sum()), "typed": typed,
         "assignment": assignment, "steps": steps, "skipped": skipped,
@@ -444,12 +449,15 @@ def _judged(prep: Prepared) -> tuple[ad.AnnData, dict, np.ndarray, qc_filter.Typ
     return A, removed, ~qc_filter.keep_mask(removed, A.n_obs), types
 
 
-def preview(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "per_type") -> dict:
+def preview(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "per_type",
+            floor: bool = False) -> dict:
     """What re-filtering would do, per type: cells, median, the rule and bound,
     removed now (by the dataset's last filtering), removed by the re-filter, brought
     back and newly removed; plus how the removed cells were typed and what it can
-    and cannot bring back. Raises RefilterError when it can't run."""
-    prep = prepare(dm, dataset_id, adaptor, column, mito_mode)
+    and cannot bring back. ``floor``: per type never stricter than the global rule
+    (each row also carries the floor's columns, ``qc_filter.floor_rows``). Raises
+    RefilterError when it can't run."""
+    prep = prepare(dm, dataset_id, adaptor, column, mito_mode, floor)
     cur = adaptor.adata
     if prep.params.drop_doublets and "predicted_doublet" in cur.obs.columns:
         # The dataset's own calls for its cells, the record's for those it removed.
@@ -478,6 +486,7 @@ def preview(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "
     stays_global = int((~kept & mito & ~(types.own if types is not None else np.zeros(A.n_obs, bool))).sum())
     out = {
         "column": prep.column, "type_column": prep.type_column, "mito_mode": mito_mode,
+        "mito_type_floor": bool(prep.params.qc_mito_type_floor),
         "source_file": prep.source, "reset_to_counts": prep.reset,
         "n_original": prep.n_original, "n_current": int(cur.n_obs), "n_after": int((~drop).sum()),
         "removed_before": int((~kept).sum()), "removed_after": int(drop.sum()),
@@ -487,7 +496,9 @@ def preview(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "
         "types": rows, "rule": types.to_dict() if types is not None else None,
         "steps": prep.steps, "skipped_steps": prep.skipped,
         "can": (f"Brings back {back:,} of the {int((~kept).sum()):,} cells the last filtering removed: "
-                "those within their type's own % mito bound."),
+                + ("those within their type's own % mito bound or the global rule's, whichever is "
+                   "higher." if prep.params.qc_mito_type_floor else
+                   "those within their type's own % mito bound.")),
         "cannot": (f"{stays:,} stay removed: {stays_other:,} by the counts, genes or doublet rules "
                    f"(applied again unchanged) and {stays - stays_other:,} for % mito"
                    + (f", {stays_global:,} of them in a type that keeps the global rule (too few cells, "
@@ -503,7 +514,8 @@ def preview(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "
 
 
 def run_events(dm, dataset_id: str, adaptor, column: str | None, output_path: str,
-               mito_mode: str = "per_type", control=None) -> Generator[tuple[str, dict], None, None]:
+               mito_mode: str = "per_type", control=None,
+               floor: bool = False) -> Generator[tuple[str, dict], None, None]:
     """The re-filter as pipeline events (``run_pipeline_streamed``'s, after two of
     its own: ``refilter`` with ``stage`` "load" and "types"); saves to ``output_path``
     when the run reaches its end. ``control`` (a ``RunControl``) gives the steps the
@@ -512,7 +524,7 @@ def run_events(dm, dataset_id: str, adaptor, column: str | None, output_path: st
 
     t0 = time.time()
     yield ("refilter", {"stage": "load", "message": "Reading the original upload"})
-    prep = prepare(dm, dataset_id, adaptor, column, mito_mode)
+    prep = prepare(dm, dataset_id, adaptor, column, mito_mode, floor)
     yield ("refilter", {"stage": "types", "message": "Typed every cell", "typed": prep.typed,
                         "assignment": prep.assignment, "steps": prep.steps,
                         "elapsed": round(time.time() - t0, 2)})
