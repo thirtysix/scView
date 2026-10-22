@@ -401,13 +401,88 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
             found.update(qc_mito_type_column=params.qc_mito_type_column,
                          qc_mito_note="% mito can't be measured (no MT- genes): no per-type bounds.")
     if not keep.all():
-        adata = adata[keep, :].copy()
+        adata = subset_lean(adata, obs=keep)
     adata.uns[qc_filter.RECORD_KEY] = record
     # Whose doublets were dropped; V(D)J clone sizes recomputed on the cells kept.
     found.update(qc_filter.after_filter(adata, t, int((~keep).sum())))
-    sc.pp.filter_genes(adata, min_cells=params.min_cells)
+    adata = _filter_genes_lean(adata, params.min_cells)
     logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, adata.n_obs)
     return adata, found
+
+
+def _plain_matrix(M) -> bool:
+    return M is None or isinstance(M, np.ndarray) or sp.issparse(M)
+
+
+def subset_lean(adata: ad.AnnData, obs=None, var=None) -> ad.AnnData:
+    """``adata[obs, var].copy()`` (boolean masks, one axis at a time), taking one copy of
+    each matrix instead of two, and none of a matrix whose genes all stay.
+
+    anndata subsets X, every layer and .raw into a view and then copies that: two new
+    arrays per matrix while ``adata`` still holds its own. On the hashing PBMC (a dense
+    scaled X of every gene, 1.7 GiB) that filled a 6 GB backend. Here X, the layers and
+    .raw are taken off ``adata`` first, anndata subsets the rest as it always does (obs
+    with its unused categories and their colours in uns, var, uns, obsm, obsp, varm,
+    varp), and each matrix is cut once, the old one let go as soon as its cut exists.
+
+    ``adata`` gives its matrices up: it is the copy of the dataset the run replaces
+    (core/processing.py evicts it and reloads the dataset from disk when the run ends,
+    saved, stopped or cancelled). If anndata's part fails, ``adata`` gets them back
+    untouched. A backed or view object, or a matrix that is not numpy or scipy, takes
+    anndata's own way."""
+    raw = adata.raw
+    # (no list of the matrices kept: it would hold each old one until the end)
+    plain = all(_plain_matrix(M) for M in (adata.X, *adata.layers.values(),
+                                            raw.X if raw is not None else None))
+    if adata.isbacked or adata.is_view or not plain:
+        return adata[slice(None) if obs is None else obs,
+                     slice(None) if var is None else var].copy()
+    rows = None if obs is None else np.flatnonzero(obs)
+    cols = None if var is None or np.all(var) else np.flatnonzero(var)
+    X, layers = adata.X, dict(adata.layers)
+    adata.X = None
+    for k in layers:
+        del adata.layers[k]
+    adata.raw = None
+    try:
+        new = adata[slice(None) if rows is None else rows,
+                    slice(None) if var is None else np.asarray(var, dtype=bool)].copy()
+    except BaseException:
+        adata.X = X
+        for k, M in layers.items():
+            adata.layers[k] = M
+        if raw is not None:
+            adata.raw = ad.AnnData(X=raw.X, var=raw.var, varm=dict(raw.varm))
+        raise
+
+    def cut(M, x: bool = False):
+        if rows is not None:
+            return np.ascontiguousarray(M[rows]) if x and isinstance(M, np.ndarray) else M[rows]
+        if cols is None:
+            return M  # every gene stays: the same matrix (anndata would re-lay it out)
+        # As anndata's copy lays them out: a dense X row-major (np.take: in one copy;
+        # M[:, cols] is column-major), a dense layer as numpy's indexing leaves it.
+        if x and isinstance(M, np.ndarray):
+            return np.take(M, cols, axis=1)
+        return M[:, cols]
+
+    if X is not None:
+        new.X = cut(X, x=True)
+        del X
+    for k in list(layers):
+        new.layers[k] = cut(layers.pop(k))
+    if raw is not None:  # rows only: subsetting genes leaves .raw as it is
+        new.raw = ad.AnnData(X=raw.X[rows] if rows is not None else raw.X, var=raw.var.copy(),
+                             varm={k: v.copy() for k, v in raw.varm.items()})
+    return new
+
+
+def _filter_genes_lean(adata: ad.AnnData, min_cells: int) -> ad.AnnData:
+    """``sc.pp.filter_genes(adata, min_cells=...)`` (``var["n_cells"]``, then the genes kept)
+    through ``subset_lean``: scanpy subsets every matrix even when every gene stays."""
+    gene_subset, number = sc.pp.filter_genes(adata, min_cells=min_cells, inplace=False)
+    adata.var["n_cells"] = number
+    return subset_lean(adata, var=np.asarray(gene_subset, dtype=bool))
 
 
 # Non-zero values sampled when deciding whether a matrix holds raw counts.
