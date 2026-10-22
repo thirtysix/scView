@@ -15,6 +15,7 @@ import {
   commitIngestSession,
   createIngestSession,
   discardIngestSession,
+  filePath,
   getMergePlan,
   seqQcSideFiles,
   setIngestOptions,
@@ -34,6 +35,7 @@ import { PreflightIngestNotes } from "@/components/common/PreflightNote";
 import { SequencingQcSideFiles } from "@/components/qc/SequencingQcSideFiles";
 import { ClonotypeUnitFiles } from "@/components/unified/ClonotypeUnitFiles";
 import { conversionNote, isRFile } from "@/lib/conversion";
+import { itemsFromDrop, itemsFromFiles, skippedNote, splitJunk, type UploadItem } from "@/lib/ingestUpload";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
   tenx_mex: "10x MEX (matrix + barcodes + features)",
@@ -79,6 +81,8 @@ export function DataPanel() {
   const [committing, setCommitting] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Files of a picked/dropped folder that were not sent (BAM, Loupe, report), in one sentence.
+  const [notSent, setNotSent] = useState<string | null>(null);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -122,16 +126,19 @@ export function DataPanel() {
   );
 
   const addFiles = useCallback(
-    async (files: File[]) => {
-      if (files.length === 0) return;
+    async (picked: UploadItem[]) => {
+      if (picked.length === 0) return;
       // A single R file → the converter path.
-      if (files.length === 1) {
-        const first = files[0];
-        if (first && isRFile(first.name)) {
+      if (picked.length === 1) {
+        const first = picked[0]!.file;
+        if (isRFile(first.name)) {
           await handleRObject(first);
           return;
         }
       }
+      const { keep, skipped } = splitJunk(picked);
+      setNotSent(skippedNote(skipped));
+      if (keep.length === 0) return;
       setBusy(true);
       setError(null);
       try {
@@ -140,7 +147,7 @@ export function DataPanel() {
           sid = (await createIngestSession()).session_id;
           setSessionId(sid);
         }
-        const next = await uploadIngestFiles(sid, files);
+        const next = await uploadIngestFiles(sid, keep);
         setState(next);
         if (next.bundle.is_merge) {
           const plan = await getMergePlan(sid);
@@ -162,7 +169,10 @@ export function DataPanel() {
     (e: React.DragEvent) => {
       e.preventDefault();
       setDragActive(false);
-      void addFiles(Array.from(e.dataTransfer.files));
+      // Folders keep their layout: read the entries now, while the drop event lasts.
+      void itemsFromDrop(e.dataTransfer)
+        .then(addFiles)
+        .catch(() => setError("The dropped folder could not be read; choose it with Choose folder instead."));
     },
     [addFiles]
   );
@@ -180,6 +190,7 @@ export function DataPanel() {
     setMergePlan(null);
     setOptions(DEFAULT_OPTIONS);
     setError(null);
+    setNotSent(null);
   }, [sessionId]);
 
   const commit = useCallback(async () => {
@@ -264,7 +275,7 @@ export function DataPanel() {
           multiple
           className="hidden"
           onChange={(e) => {
-            void addFiles(Array.from(e.target.files ?? []));
+            void addFiles(itemsFromFiles(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -274,9 +285,11 @@ export function DataPanel() {
           multiple
           // @ts-expect-error non-standard but widely supported directory upload
           webkitdirectory=""
+          data-testid="folder-input"
           className="hidden"
           onChange={(e) => {
-            void addFiles(Array.from(e.target.files ?? []));
+            // Each file keeps its path inside the folder (webkitRelativePath).
+            void addFiles(itemsFromFiles(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -290,6 +303,12 @@ export function DataPanel() {
       )}
 
       {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+
+      {notSent && (
+        <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500" data-testid="not-sent">
+          {notSent}
+        </div>
+      )}
 
       {/* Detected samples (units) */}
       {bundle && bundle.units.length > 0 && (
@@ -404,6 +423,11 @@ function UnitCard({ unit }: { unit: IngestUnit }) {
           {FORMAT_LABELS[unit.format]}
         </span>
       </div>
+      {unit.format !== "tenx_mex" && unit.files[0]?.rel_path?.includes("/") && (
+        <p className="mt-1 break-all pl-6 text-xs text-slate-600" data-testid="unit-path">
+          {unit.files[0].rel_path}
+        </p>
+      )}
       {unit.format === "tenx_mex" && (
         <ul className="mt-2 space-y-1 pl-6 text-xs">
           {(["matrix", "barcodes", "features"] as const).map((role) => {
@@ -415,8 +439,8 @@ function UnitCard({ unit }: { unit: IngestUnit }) {
                 ) : (
                   <CircleDashed className="h-3 w-3 text-amber-500" />
                 )}
-                <span className={file ? "text-slate-600" : "text-amber-600"}>
-                  {file ? file.name : `${ROLE_LABELS[role]} — still needed`}
+                <span className={file ? "break-all text-slate-600" : "text-amber-600"}>
+                  {file ? filePath(file) : `${ROLE_LABELS[role]} — still needed`}
                 </span>
               </li>
             );

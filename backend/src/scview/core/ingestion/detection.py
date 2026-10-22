@@ -133,15 +133,19 @@ def detect_file(path: Path) -> DetectionResult:
 # ---------------------------------------------------------------------------
 
 
-def _detect_dir(path: Path) -> DetectionResult:
-    """Directories are only recognised as Zarr stores; MEX dirs are the bundler's job."""
-    is_zarr = (
+def is_store_dir(path: Path) -> bool:
+    """A Zarr store: one dataset, never a folder of separate files."""
+    return (
         path.suffix.lower() == ".zarr"
         or (path / ".zgroup").exists()
         or (path / ".zattrs").exists()
         or (path / "zarr.json").exists()  # zarr v3
     )
-    if is_zarr:
+
+
+def _detect_dir(path: Path) -> DetectionResult:
+    """Directories are only recognised as Zarr stores; MEX dirs are the bundler's job."""
+    if is_store_dir(path):
         return DetectionResult(
             kind=FileKind.zarr_dir,
             confidence=0.9,

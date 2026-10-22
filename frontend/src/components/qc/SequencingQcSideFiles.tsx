@@ -1,5 +1,5 @@
 import { FileText } from "lucide-react";
-import type { BundleFile } from "@/api/ingest";
+import { filePath, type BundleFile } from "@/api/ingest";
 
 /** What a side file is, from its detected kind. */
 export function sideFileRole(f: Pick<BundleFile, "kind">): string {
@@ -18,12 +18,12 @@ export function SequencingQcSideFiles({ files }: { files?: BundleFile[] }) {
     <ul className="mt-2 space-y-1 pl-6 text-xs" data-testid="seqqc-side-files">
       {files.map((f) => (
         <li
-          key={f.name}
+          key={f.path}
           className="flex items-center gap-1.5 text-slate-500"
           title="Read for the Sequencing QC card on Data Assessment (metrics, flags and the barcode-rank plot); not loaded as cells."
         >
           <FileText className="h-3 w-3 text-sky-600" />
-          <span className="text-slate-600">{f.name}</span>
+          <span className="break-all text-slate-600">{filePath(f)}</span>
           <span>({sideFileRole(f)}): will be attached</span>
         </li>
       ))}

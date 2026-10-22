@@ -23,7 +23,7 @@ import shutil
 import uuid
 import zlib
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from scview.core import protein, provenance
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion.bundling import IngestUnit, SideKind, UnitFormat, build_bundle
+from scview.core.ingestion.detection import is_store_dir
 from scview.core.ingestion.loading import IngestLoadError, load_unit
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.validation import IssueSeverity, validate_bundle
@@ -45,6 +46,14 @@ _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 class IngestCommitError(RuntimeError):
     """Raised when a session cannot be committed into a dataset."""
+
+
+class StagingConflict(RuntimeError):
+    """An upload would put a file where another one is staged; nothing was staged."""
+
+
+# Uploads land under this name first and move into place once the whole request is in.
+PARTIAL_PREFIX = ".scview-partial-"
 
 
 class IngestOptions(BaseModel):
@@ -111,10 +120,91 @@ class IngestSessionManager:
         return self._session_dir(sid) / "files"
 
     def staged_paths(self, sid: str) -> list[Path]:
+        """Every staged file, in subfolders too (a folder upload keeps its layout); a
+        Zarr store is one entry, never walked into."""
         fd = self.files_dir(sid)
         if not fd.is_dir():
             return []
-        return sorted(p for p in fd.iterdir() if p.is_file() or p.is_dir())
+        out: list[Path] = []
+
+        def walk(d: Path) -> None:
+            for p in sorted(d.iterdir()):
+                if p.name.startswith(PARTIAL_PREFIX) or p.is_symlink():
+                    continue
+                if p.is_dir():
+                    if is_store_dir(p):
+                        out.append(p)
+                    else:
+                        walk(p)
+                elif p.is_file():
+                    out.append(p)
+
+        walk(fd)
+        return out
+
+    def partial_path(self, sid: str) -> Path:
+        """Where one upload is written before ``stage`` moves it into place."""
+        return self.files_dir(sid) / f"{PARTIAL_PREFIX}{uuid.uuid4().hex}"
+
+    def stage(self, sid: str, items: list[tuple[str, Path, str]]) -> list[str]:
+        """Move uploaded files (``(relative path, partial file, sha256)``) to their
+        paths under the session, all or none. The same file sent again (same path,
+        same content) is kept once; a different file at a path that is taken, a file
+        where a staged folder is (or the reverse), raises StagingConflict and stages
+        nothing. Returns the paths newly staged."""
+        root = self.files_dir(sid)
+        rels = {rel for rel, _, _ in items}
+        if len(rels) < len(items):
+            seen: set[str] = set()
+            dup = next(rel for rel, _, _ in items if rel in seen or seen.add(rel))
+            raise StagingConflict(f"Two files of this upload have the same path, {dup}.")
+        moves: list[tuple[Path, Path | None]] = []
+        for rel, partial, sha in items:
+            dest = root / rel
+            if not dest.resolve().is_relative_to(root.resolve()):  # safe_relative_path already refused it
+                raise StagingConflict(f"{rel} would land outside the upload folder.")
+            for parent in PurePosixPath(rel).parents:
+                if str(parent) == ".":
+                    break
+                if (root / parent).is_file() or str(parent) in rels:
+                    raise StagingConflict(f"{parent} is a file, so {rel} cannot be put in a folder of "
+                                          "that name.")
+            if dest.is_dir():
+                raise StagingConflict(f"{rel} is already a folder of this upload.")
+            if dest.is_file():
+                from scview.core.run_manifest import file_sha256
+
+                if file_sha256(dest) != sha:
+                    raise StagingConflict(
+                        f"A different file is already staged as {rel}. Start over to replace it, "
+                        "or upload the second one from a folder with another name.")
+                moves.append((partial, None))  # the same file again
+                continue
+            moves.append((partial, dest))
+        staged = []
+        for partial, dest in moves:
+            if dest is None:
+                partial.unlink(missing_ok=True)
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            partial.replace(dest)
+            staged.append(dest.relative_to(root).as_posix())
+        return staged
+
+    def record_skipped(self, sid: str, skipped: list[dict]) -> None:
+        """Remember files an upload left out (``{"path", "reason", "bytes"}``) for the
+        state's sentence about what was skipped."""
+        if not skipped:
+            return
+        data = self._read_session(sid)
+        known = {s.get("path"): s for s in data.get("skipped", [])}
+        known.update({s["path"]: s for s in skipped})
+        data["skipped"] = list(known.values())
+        self._write_session(sid, data)
+
+    def _bundle(self, sid: str):
+        return build_bundle(self.staged_paths(sid), root=self.files_dir(sid),
+                            skipped=self._read_session(sid).get("skipped", []))
 
     # -- options ----------------------------------------------------------
 
@@ -131,7 +221,7 @@ class IngestSessionManager:
 
     def get_state(self, sid: str) -> dict[str, Any]:
         """Cheap state: detection + bundle + validation (no full data read)."""
-        bundle = build_bundle(self.staged_paths(sid))
+        bundle = self._bundle(sid)
         report = validate_bundle(bundle)
         return {
             "session_id": sid,
@@ -142,7 +232,7 @@ class IngestSessionManager:
 
     def merge_plan(self, sid: str) -> MergePlan | None:
         """Load the units and analyse a multi-sample merge (heavier — reads data)."""
-        bundle = build_bundle(self.staged_paths(sid))
+        bundle = self._bundle(sid)
         loadable = [
             u for u in bundle.units
             if u.format not in (UnitFormat.unknown, UnitFormat.seurat) and u.complete
@@ -171,15 +261,15 @@ class IngestSessionManager:
 
         # Reading, merging and writing the files takes seconds to minutes: in a
         # worker thread, so the server keeps answering meanwhile.
-        dataset_id = await asyncio.to_thread(self._build_dataset, sid, files)
+        dataset_id = await asyncio.to_thread(self._build_dataset, sid)
         await dm.load_dataset(dataset_id)  # populates n_cells / embeddings / obs_columns
 
         self.discard(sid)
         return dataset_id
 
-    def _build_dataset(self, sid: str, files: list[Path]) -> str:
+    def _build_dataset(self, sid: str) -> str:
         """Validate, load, merge and save the staged files as a new dataset."""
-        bundle = build_bundle(files)
+        bundle = self._bundle(sid)
         report = validate_bundle(bundle)
         if not report.ok:
             errs = [i.message for i in report.issues if i.severity == IssueSeverity.error]
@@ -204,7 +294,11 @@ class IngestSessionManager:
 
         dataset_id = uuid.uuid4().hex
         name = opts.name or (loadable[0].label if len(loadable) == 1 else "merged_dataset")
-        self._persist_dataset(dataset_id, name, adata, files)
+        # The originals, in their folders; not the files the bundle skipped.
+        skip = {s.path for s in bundle.skipped}
+        root = self.files_dir(sid)
+        originals = [p for p in self.staged_paths(sid) if _rel_to(p, root) not in skip]
+        self._persist_dataset(dataset_id, name, adata, originals, root)
         logger.info("Committed ingest session %s as dataset %s (%s)", sid, dataset_id, name)
         return dataset_id
 
@@ -281,7 +375,7 @@ class IngestSessionManager:
                 try:
                     vdj.attach(adata, f.path, file_name=f.name, sha256=file_sha256(f.path),
                                sample_column=opts.sample_label if merged else None,
-                               sample=u.label if merged else None, stored_as=f.name)
+                               sample=u.label if merged else None, stored_as=f.rel_path or f.name)
                 except (vdj.VdjError, OSError, EOFError, zlib.error, ValueError) as e:
                     # A gzip cut off past the part detection read surfaces only here.
                     raise IngestCommitError(f"The contig table {f.name} could not be attached: {e}") from e
@@ -300,15 +394,18 @@ class IngestSessionManager:
         protein.renormalise(merged)
         return merged
 
-    def _persist_dataset(self, dataset_id: str, name: str, adata, originals: list[Path]) -> None:
-        # Originals → uploads/{id}/ (read-only), the untouched source.
+    def _persist_dataset(self, dataset_id: str, name: str, adata, originals: list[Path],
+                         root: Path | None = None) -> None:
+        # Originals → uploads/{id}/ (read-only), the untouched source, in the folders
+        # they were uploaded in (``root``: the staging folder).
         up = self.data_dir / "uploads" / dataset_id
         up.mkdir(parents=True, exist_ok=True)
         total = 0
         for src in originals:
             if src.is_dir():
                 continue  # store directories (e.g. zarr) is a later refinement
-            dest = up / src.name
+            dest = up / (_rel_to(src, root) if root is not None else src.name)
+            dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dest)
             total += dest.stat().st_size
             _make_readonly(dest)
@@ -370,6 +467,13 @@ class IngestSessionManager:
             return datetime.fromisoformat(raw) if raw else None
         except (TypeError, ValueError):
             return None
+
+
+def _rel_to(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.name
 
 
 def _safe_name(name: str) -> str:

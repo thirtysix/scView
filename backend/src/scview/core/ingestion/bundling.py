@@ -19,11 +19,12 @@ from __future__ import annotations
 import logging
 import re
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field
 
 from scview.core.ingestion.detection import DetectionResult, FileKind, detect_file
+from scview.core.ingestion.paths import junk_reason, skipped_sentence
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,17 @@ class BundleFile(BaseModel):
     confidence: float = 0.0
     side_kind: SideKind | None = None  # a side file's kind (role == side)
     receptor: str | None = None  # contig tables: "T", "B" or "T+B" (their chains, else the name)
+    # The path inside the uploaded folder (``outs/raw_feature_bc_matrix/barcodes.tsv.gz``);
+    # the name alone for a plain upload.
+    rel_path: str = ""
+
+
+class SkippedFile(BaseModel):
+    """A staged or sent file scView does not read, and why."""
+
+    path: str
+    reason: str
+    bytes: int | None = None
 
 
 class IngestUnit(BaseModel):
@@ -123,6 +135,7 @@ class Bundle(BaseModel):
     is_merge: bool = False  # more than one loadable unit
     complete: bool = False  # every (non-unknown) unit is complete
     issues: list[str] = Field(default_factory=list)
+    skipped: list[SkippedFile] = Field(default_factory=list)  # also one sentence in issues
 
 
 # nf-core/scrnaseq's mtx_conversions/ emits "<sample>_{raw,filtered,cellbender_filter}_matrix.h5ad"
@@ -147,14 +160,51 @@ def _clean_unit_label(stem: str) -> str:
     return stem
 
 
-def build_bundle(paths: list[Path]) -> Bundle:
-    """Detect, role-assign and group a set of staged paths into a Bundle."""
-    detected = [(Path(p), detect_file(Path(p))) for p in paths]
-    return bundle_from_detections(detected)
+def build_bundle(
+    paths: list[Path], root: Path | None = None, skipped: list[dict] | None = None
+) -> Bundle:
+    """Detect, role-assign and group a set of staged paths into a Bundle.
+
+    ``root``: the staging folder, so each file keeps its path inside an uploaded
+    folder (``BundleFile.rel_path``), whose subfolders then group the files; without
+    it every file counts by its name alone. ``skipped``: files left out at upload,
+    listed in the bundle's one sentence about what was skipped."""
+    paths = [Path(p) for p in paths]
+    rels = {p: _rel(p, root) for p in paths}
+    skipped = list(skipped or [])
+    detected = []
+    for p in paths:
+        reason = junk_reason(rels[p])
+        if reason:
+            skipped.append({"path": rels[p], "reason": reason})
+            continue
+        detected.append((p, detect_file(p)))
+    return bundle_from_detections(detected, rels, skipped)
 
 
-def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bundle:
-    """Group already-detected files (split out for testing / reuse)."""
+def _rel(path: Path, root: Path | None) -> str:
+    if root is not None:
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            pass
+    return path.name
+
+
+def bundle_from_detections(
+    detected: list[tuple[Path, DetectionResult]],
+    rels: dict[Path, str] | None = None,
+    skipped: list[dict] | None = None,
+) -> Bundle:
+    """Group already-detected files (split out for testing / reuse). ``rels``: each
+    path's place in an uploaded folder (default: its name)."""
+    rels = rels or {}
+    skipped = list(skipped or [])
+
+    def rel(p: Path) -> str:
+        return rels.get(p) or p.name
+
+    detected = _drop_tree_extras(detected, rel, skipped)
     single_files: list[BundleFile] = []
     mex_parts: list[tuple[Path, BundleFile]] = []
     unknown_files: list[BundleFile] = []
@@ -167,11 +217,12 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
             kind = SideKind.metrics if det.kind == FileKind.tenx_metrics else SideKind.raw
             side_files.append(BundleFile(path=str(path), name=path.name, kind=det.kind,
                                          role=FileRole.side, confidence=det.confidence,
-                                         side_kind=kind))
+                                         side_kind=kind, rel_path=rel(path)))
             continue
         fmt, role = _KIND_MAP.get(det.kind, (None, FileRole.unknown))
         bf = BundleFile(
-            path=str(path), name=path.name, kind=det.kind, role=role, confidence=det.confidence
+            path=str(path), name=path.name, kind=det.kind, role=role, confidence=det.confidence,
+            rel_path=rel(path),
         )
         if role == FileRole.data and fmt is not None:
             single_files.append(bf)
@@ -180,7 +231,7 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
         elif det.kind == FileKind.vdj_contigs:
             vdj_files.append(bf.model_copy(update={
                 "side_kind": SideKind.vdj,
-                "receptor": det.details.get("receptor") or _vdj_arm(path.name)}))
+                "receptor": det.details.get("receptor") or _vdj_dir_arm(bf) or _vdj_arm(path.name)}))
         else:
             unknown_files.append(bf)
 
@@ -189,7 +240,7 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
         fmt, _ = _KIND_MAP[bf.kind]
         units.append(
             IngestUnit(
-                label=_clean_unit_label(Path(bf.name).stem),
+                label=_single_label(bf),
                 format=fmt,  # type: ignore[arg-type]
                 files=[bf],
                 complete=True,
@@ -197,16 +248,20 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
         )
 
     units.extend(_group_mex_units(mex_parts))
+    units = _drop_mex_copies(units, side_files, skipped)
     units, raw_mex = _split_raw_mex(units)
 
     bundle_issues: list[str] = _attach_side_files(units, side_files, raw_mex)
     if unknown_files:
-        names = ", ".join(f.name for f in unknown_files)
+        names = ", ".join(f.rel_path or f.name for f in unknown_files)
         bundle_issues.append(
             f"{len(unknown_files)} file(s) could not be recognised and were ignored: {names}"
         )
 
     bundle_issues.extend(_attach_vdj_files(units, vdj_files))
+    _unique_labels(units)
+    if skipped:
+        bundle_issues.insert(0, skipped_sentence(skipped))
 
     loadable = [u for u in units if u.format != UnitFormat.unknown]
     return Bundle(
@@ -214,7 +269,173 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
         is_merge=len(loadable) > 1,
         complete=bool(loadable) and all(u.complete for u in loadable),
         issues=bundle_issues,
+        skipped=[SkippedFile(**s) for s in skipped],
     )
+
+
+# ---------------------------------------------------------------------------
+# Folders: what a subfolder says about its files (folder uploads only; a flat
+# upload has no folders, so none of this applies to it)
+# ---------------------------------------------------------------------------
+
+# Cell Ranger's own folder names: they say what a file is, never which sample.
+_GENERIC_DIRS = {
+    "outs", "count", "counts", "multi", "per_sample_outs", "matrix", "gex", "gene_expression",
+    "filtered_feature_bc_matrix", "raw_feature_bc_matrix", "sample_filtered_feature_bc_matrix",
+    "sample_raw_feature_bc_matrix", "filtered_gene_bc_matrices", "raw_gene_bc_matrices",
+    "vdj_t", "vdj_b", "vdj_t_gd", "vdj",
+}
+# Folders that hold one sample's matrix / contigs, below that sample's own folder.
+_CONTAINER_DIRS = {
+    "count", "filtered_feature_bc_matrix", "raw_feature_bc_matrix",
+    "sample_filtered_feature_bc_matrix", "sample_raw_feature_bc_matrix",
+    "filtered_gene_bc_matrices", "raw_gene_bc_matrices", "vdj_t", "vdj_b", "vdj_t_gd",
+}
+_GENOME_PARENTS = {"filtered_gene_bc_matrices", "raw_gene_bc_matrices"}  # Cell Ranger 2: <dir>/GRCh38/
+_VDJ_DIRS = {"vdj_t": "T", "vdj_t_gd": "T", "vdj_b": "B"}
+# Cell Ranger's secondary analysis and reference folders: recomputed by scView, and their
+# CSVs (PCA, t-SNE, DE, tag calls) would read as expression tables, i.e. fake samples.
+_ANALYSIS_DIRS = {"multiplexing_analysis", "antibody_analysis", "crispr_analysis", "vdj_reference"}
+_CR_CONTIGS = ("filtered_contig_annotations", "airr_rearrangement", "all_contig_annotations")
+
+ANALYSIS = "Cell Ranger's own analysis (clustering, PCA, t-SNE/UMAP, DE): scView computes these itself"
+VDJ_EXTRA = "Cell Ranger V(D)J outputs other than the contig table"
+
+
+def _dirs(rel: str) -> tuple[str, ...]:
+    return PurePosixPath(rel).parent.parts
+
+
+def _is_analysis(dirs: tuple[str, ...]) -> bool:
+    low = [d.lower() for d in dirs]
+    return any(d in _ANALYSIS_DIRS or (d == "analysis" and i > 0 and low[i - 1] in ("outs", "count"))
+               for i, d in enumerate(low))
+
+
+def _drop_tree_extras(detected, rel, skipped: list[dict]):
+    """Leave out what a Cell Ranger output folder holds beside its matrices and contigs:
+    its own analysis (``outs/analysis/``), and in a V(D)J folder (``vdj_t``, ``vdj_b``,
+    or a cellranger vdj ``outs`` with no matrix) everything but one contig table: the
+    filtered one, else the AIRR one, else all contigs. A Cell Ranger multi run's
+    library-level ``multi/vdj_*`` tables give way to its per-sample ones. Each is
+    recorded in ``skipped``."""
+    rels = {p: rel(p) for p, _ in detected}
+    has_per_sample = any("per_sample_outs" in _dirs(r) for r in rels.values())
+    matrix_kinds = {FileKind.tenx_h5, FileKind.anndata_h5ad, FileKind.loom, FileKind.mtx_matrix,
+                    FileKind.dense_table}
+    matrix_dirs = {_dirs(rels[p]) for p, det in detected if det.kind in matrix_kinds}
+    vdj_dirs = set()
+    for p, det in detected:
+        d = _dirs(rels[p])
+        if not d:
+            continue
+        cr_contig = det.kind == FileKind.vdj_contigs and Path(p).name.lower().startswith(_CR_CONTIGS)
+        if d[-1].lower() in _VDJ_DIRS or (cr_contig and d not in matrix_dirs):
+            vdj_dirs.add(d)
+
+    keep, contigs = [], {}
+    for p, det in detected:
+        d = _dirs(rels[p])
+        if not d:
+            keep.append((p, det))
+        elif _is_analysis(d):
+            skipped.append({"path": rels[p], "reason": ANALYSIS})
+        elif any(d[:k] in vdj_dirs for k in range(1, len(d) + 1)):
+            if det.kind != FileKind.vdj_contigs or d not in vdj_dirs:
+                skipped.append({"path": rels[p], "reason": VDJ_EXTRA})
+            elif has_per_sample and "multi" in (x.lower() for x in d):
+                skipped.append({"path": rels[p], "reason": "a Cell Ranger multi run's library-level "
+                                "table: the per-sample filtered table is used"})
+            else:
+                contigs.setdefault(d, []).append((p, det))
+        else:
+            keep.append((p, det))
+    for items in contigs.values():
+        items.sort(key=lambda it: _contig_rank(Path(it[0]).name))
+        keep.append(items[0])
+        for p, _ in items[1:]:
+            skipped.append({"path": rels[p], "reason": "another contig table of the same folder is "
+                            f"used ({Path(items[0][0]).name})"})
+    return keep
+
+
+def _contig_rank(name: str) -> int:
+    low = name.lower()
+    return next((i for i, tok in enumerate(_CR_CONTIGS) if tok in low), len(_CR_CONTIGS))
+
+
+def _dir_label(rel: str) -> str | None:
+    """The sample a folder upload names for a file: the nearest folder above it that is
+    not one of Cell Ranger's own (``pbmc/outs/filtered_feature_bc_matrix/x`` -> ``pbmc``,
+    ``per_sample_outs/s1/count/...`` -> ``s1``), or None."""
+    dirs = _dirs(rel)
+    for i in range(len(dirs) - 1, -1, -1):
+        name = dirs[i]
+        if name.lower() in _GENERIC_DIRS:
+            continue
+        if i > 0 and dirs[i - 1].lower() in _GENOME_PARENTS:  # the genome folder of Cell Ranger 2
+            continue
+        return name
+    return None
+
+
+def _sample_root(rel: str) -> str:
+    """The folder of the sample a file belongs to: its folder without Cell Ranger's
+    containers below it (``pbmc/outs/raw_feature_bc_matrix/x`` -> ``pbmc/outs``,
+    ``per_sample_outs/s1/count/x.h5`` and ``per_sample_outs/s1/vdj_t/x.csv`` ->
+    ``per_sample_outs/s1``); "" for a file at the top (every file of a flat upload)."""
+    dirs = list(_dirs(rel))
+    while dirs:
+        last = dirs[-1].lower()
+        genome = len(dirs) > 1 and dirs[-2].lower() in _GENOME_PARENTS
+        if last in _CONTAINER_DIRS or genome:
+            dirs.pop()
+            continue
+        break
+    return "/".join(dirs)
+
+
+def _single_label(bf: BundleFile) -> str:
+    """A single-file unit's label: from its name, as always; in a folder, a Cell Ranger
+    name (``filtered_feature_bc_matrix.h5``) gives its sample prefix, else the sample
+    folder, else "sample"."""
+    stem = Path(bf.name).stem
+    if not _dirs(bf.rel_path) or not _strip_tenx(stem.lower())[1]:
+        return _clean_unit_label(stem)
+    return sample_key(bf.name) or _dir_label(bf.rel_path) or "sample"
+
+
+def _drop_mex_copies(units: list[IngestUnit], side_files: list[BundleFile],
+                     skipped: list[dict]) -> list[IngestUnit]:
+    """Cell Ranger writes each matrix twice, as ``X.h5`` and as the folder ``X/``:
+    keep the .h5 (one file, read faster) and skip the folder's three files."""
+    h5s = {(_dirs(f.rel_path), Path(f.name).stem.lower()): f.name
+           for u in units if u.format == UnitFormat.tenx_h5 for f in u.files}
+    h5s.update({(_dirs(f.rel_path), Path(f.name).stem.lower()): f.name
+                for f in side_files if f.kind == FileKind.tenx_h5})
+    out = []
+    for u in units:
+        d = _dirs(u.files[0].rel_path) if u.format == UnitFormat.tenx_mex and u.files else ()
+        twin = None
+        if d:
+            name = d[-1].lower()
+            twin = h5s.get((d[:-1], name)) or h5s.get((d[:-1], name + "_h5"))
+        if twin is None:
+            out.append(u)
+            continue
+        for f in u.files:
+            skipped.append({"path": f.rel_path, "reason": f"the same matrix as {twin}, which is read"})
+    return out
+
+
+def _unique_labels(units: list[IngestUnit]) -> None:
+    """Two samples never share a label (a merge keys samples by it): later ones get _2, _3."""
+    seen: dict[str, int] = {}
+    for u in sorted(units, key=lambda x: (x.label, x.files[0].rel_path if x.files else "")):
+        n = seen.get(u.label.lower(), 0)
+        seen[u.label.lower()] = n + 1
+        if n:
+            u.label = f"{u.label}_{n + 1}"
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +454,11 @@ def _group_mex_units(mex_parts: list[tuple[Path, BundleFile]]) -> list[IngestUni
         prefix = _mex_prefix(path.name)
         key = f"{path.parent}|{prefix}"
         groups.setdefault(key, []).append(bf)
-        labels.setdefault(key, _mex_label(prefix, path.parent.name))
+        if _dirs(bf.rel_path):  # a folder upload: the folders name the sample
+            labels.setdefault(key, (sample_key(prefix) if prefix else "")
+                              or _dir_label(bf.rel_path) or "sample")
+        else:
+            labels.setdefault(key, _mex_label(prefix, path.parent.name))
 
     units: list[IngestUnit] = []
     for key, files in groups.items():
@@ -358,7 +583,9 @@ def _is_raw_mex(unit: IngestUnit) -> bool:
     prefix = _mex_prefix(unit.files[0].name)
     parent = Path(unit.files[0].path).parent.name.lower()
     named_raw = bool(_RAW_TOKEN_RE.search(prefix)) and "filtered" not in prefix
-    return named_raw or any(d in parent for d in _RAW_MEX_DIRS)
+    # Any folder of a folder upload (Cell Ranger 2: raw_gene_bc_matrices/GRCh38/).
+    folders = [parent] + [d.lower() for d in _dirs(unit.files[0].rel_path)]
+    return named_raw or any(r in d for d in folders for r in _RAW_MEX_DIRS)
 
 
 def _split_raw_mex(units: list[IngestUnit]) -> tuple[list[IngestUnit], list[IngestUnit]]:
@@ -373,11 +600,20 @@ def _unit_key(unit: IngestUnit) -> str:
         return unit.label.lower()
     first = unit.files[0]
     name = _mex_prefix(first.name) if unit.format == UnitFormat.tenx_mex else first.name
-    return f"{Path(first.path).parent}|{sample_key(name)}"
+    return f"{_sample_root(first.rel_path)}|{sample_key(name)}"
 
 
 def _side_key(bf: BundleFile) -> str:
-    return f"{Path(bf.path).parent}|{sample_key(bf.name)}"
+    return f"{_sample_root(bf.rel_path)}|{sample_key(bf.name)}"
+
+
+def _only_in_root(units: list[IngestUnit], key: str) -> IngestUnit | None:
+    """The one unit in the sample folder of ``key`` (a folder upload), else None."""
+    root = key.split("|", 1)[0]
+    if not root:
+        return None
+    hits = [u for u in units if u.files and _sample_root(u.files[0].rel_path) == root]
+    return hits[0] if len(hits) == 1 else None
 
 
 def _attach_side_files(
@@ -399,7 +635,7 @@ def _attach_side_files(
             continue
         parts = [f.model_copy(update={"role": FileRole.side, "side_kind": SideKind.raw})
                  for f in u.files]
-        key = f"{Path(u.files[0].path).parent}|{sample_key(_mex_prefix(u.files[0].name))}"
+        key = f"{_sample_root(u.files[0].rel_path)}|{sample_key(_mex_prefix(u.files[0].name))}"
         items.append((key, "raw", parts))
 
     loadable = [u for u in units if u.format != UnitFormat.unknown]
@@ -409,7 +645,8 @@ def _attach_side_files(
     for key, what, files in items:
         names = ", ".join(f.name for f in files)
         noun = "metrics summary" if what == "metrics" else "raw (unfiltered) matrix"
-        unit = by_key.get(key) or (loadable[0] if len(loadable) == 1 else None)
+        unit = (by_key.get(key) or _only_in_root(loadable, key)
+                or (loadable[0] if len(loadable) == 1 else None))
         if unit is None:
             if not loadable:
                 issues.append(
@@ -476,6 +713,12 @@ def _unit_prefix(unit: IngestUnit) -> str:
     return _stem(unit.files[0].name, _MATRIX_TOKENS) if unit.files else ""
 
 
+def _vdj_dir_arm(bf: BundleFile) -> str | None:
+    """"T" / "B" from the V(D)J folder a contig table is in (``vdj_t``, ``vdj_b``)."""
+    return next((_VDJ_DIRS[d.lower()] for d in reversed(_dirs(bf.rel_path))
+                 if d.lower() in _VDJ_DIRS), None)
+
+
 def _vdj_arm(name: str) -> str | None:
     """"T" / "B" from a contig table's name (``sample_t_filtered_contig_annotations.csv``),
     or None; the chains in the file decide when detection could read them."""
@@ -500,7 +743,8 @@ def _attach_vdj_files(units: list[IngestUnit], vdj_files: list[BundleFile]) -> l
     for bf in vdj_files:
         prefix = _vdj_prefix(bf.name)
         hits = [u for u in loadable if prefix and _unit_prefix(u) == prefix]
-        unit = hits[0] if len(hits) == 1 else (loadable[0] if len(loadable) == 1 else None)
+        unit = (hits[0] if len(hits) == 1 else _only_in_root(loadable, _sample_root(bf.rel_path))
+                or (loadable[0] if len(loadable) == 1 else None))
         if unit is None:
             issues.append(f"Could not tell which sample the contig table {bf.name} belongs to; give it "
                           "the sample's filename prefix, or attach it after import in Unified View > "
