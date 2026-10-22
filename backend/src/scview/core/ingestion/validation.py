@@ -71,8 +71,8 @@ def _validate_unit(unit: IngestUnit) -> list[IngestIssue]:
                 severity=IssueSeverity.error,
                 code="seurat_needs_converter",
                 message=(
-                    "Seurat .rds files are converted separately, so they can't be "
-                    "combined with other files in one upload."
+                    "R .rds files (Seurat, SingleCellExperiment) are converted separately, "
+                    "so they can't be combined with other files in one upload."
                 ),
                 suggestion=(
                     "Remove the .rds file here, then add it on its own: it is converted "

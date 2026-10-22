@@ -25,6 +25,42 @@ export interface DatasetInfo {
   cells_fingerprint?: string;
   created_at: string;
   error_message?: string;
+  /** What the R converter kept and left out (an .rds / .RData upload) */
+  conversion?: ConversionReport | null;
+  /** The converter's latest stage, while status is "converting" */
+  conversion_progress?: ConversionProgress | null;
+}
+
+/** The R converter's report (backend core/conversion.py; also uns scview_conversion). */
+export interface ConversionReport {
+  /** "SingleCellExperiment", "Seurat", "SpatialExperiment", ... */
+  source_class: string;
+  source_package?: string;
+  /** The class it was converted as, when that differs (a subclass from a package not installed) */
+  read_as?: string;
+  /** "Seurat v5" */
+  detail?: string;
+  /** The object's name inside an .RData file */
+  object_name?: string;
+  n_cells?: number;
+  n_genes?: number;
+  /** The assay that became X */
+  x?: string;
+  layers?: string[];
+  obsm?: string[];
+  /** Sentences: what went where */
+  kept: string[];
+  /** Sentences: what was left out, and why */
+  skipped: string[];
+}
+
+export interface ConversionProgress {
+  stage: "reading" | "converting" | "writing" | "done" | "failed";
+  message: string;
+  source_class?: string;
+  n_cells?: number;
+  n_genes?: number;
+  updated_at?: string;
 }
 
 export interface ObsColumnInfo {

@@ -6,6 +6,47 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-22
+
+### Added
+- **Sequencing QC from Cell Ranger.** Upload `metrics_summary.csv` and the raw (unfiltered) matrix with
+  the filtered one, or attach them later on Data Assessment. Each sample's metrics (reads per cell,
+  saturation, valid barcodes, mapping, reads in cells) are flagged against Cell Ranger 10's own alert
+  lines, with the source. A barcode-rank plot marks the knee and inflection (computed as DropletUtils
+  `barcodeRanks`, matching it to 10 decimals) and the dataset's cells. On pbmc_1k_v3 every value equals
+  the web summary and the 1,222 cells' median UMIs equal Cell Ranger's. The QC report and the
+  co-pilot cite the metrics.
+- **Cell hashing (Data Assessment).** Demultiplex hashtag (TotalSeq) or CellPlex tags with HTODemux or
+  hashedDrops, ported from Seurat 5.1.0 and DropletUtils 1.24: on GSE108313 (20,238 PBMCs, 8 tags)
+  both give the same call as R for every cell. Calls are saved as `hash_call` / `hash_class`
+  columns that the doublet views use, singlets can be named into a sample column, and the call is
+  replayed exactly. CellPlex "Multiplexing Capture" features are now kept at load (they were
+  dropped); hashtag antibodies are suggested and moved out of the protein modality when confirmed.
+- **TCR/BCR repertoire (Unified View → Clonotypes).** Import Cell Ranger contig annotations or AIRR
+  TSVs beside the matrix, or attach them later. Cells get chain status, clonotype (scirpy's CDR3
+  amino-acid definition; matches scirpy 0.22 one-to-one on a 10k-cell 10x PBMC run), clone size and
+  expansion. The tab shows the largest clonotypes (a click selects their cells), diversity per group
+  (optionally rarefied), Morisita-Horn or Jaccard overlap, and V/J gene usage. The co-pilot knows the
+  expanded clonotypes and the cell types they sit in.
+- **SingleCellExperiment and SummarizedExperiment `.rds`** convert through the R converter, not only
+  Seurat: assays, cell and gene tables, reduced dimensions, ADT and HTO altExps (to the protein and
+  hashtag modalities) and simple metadata. Data Assessment lists what was kept and what was left out,
+  with the reason. Seurat conversions are byte-identical to before. The converter image gains a
+  Bioconductor 3.19 layer (+63 MB).
+
+### Changed
+- R files convert in the background: the upload returns at once and the Data panel names the object
+  and its size while it converts, so a large object no longer fails at the web proxy's 5-minute
+  limit; conversion peaks about a third lower in memory. A file scView cannot read is refused with
+  its class named instead of a server error. (API: `POST /datasets/upload` of an `.rds` now returns
+  `converting`; poll `GET /datasets/{id}`.)
+
+### Fixed
+- Plot cards with a set height (QC plots, PCA, mean-variance, barcode ranks) rendered at about 450 px
+  regardless; they now keep their height.
+- The Clonotypes tab no longer asks for per-group views on a dataset with no grouping column yet; it
+  says what to do instead.
+
 ## [0.31.0] - 2026-10-22
 
 ### Added

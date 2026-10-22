@@ -14,10 +14,9 @@ from pydantic import BaseModel
 from scview.api.v1.export import file_stem
 from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
-from scview.core import provenance, replay_script, run_manifest
+from scview.core import conversion, provenance, replay_script, run_manifest
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import is_locked
-from scview.core.conversion import trigger_conversion
 from scview.models.enums import DatasetStatus
 from scview.models.schemas import DatasetUploadResponse
 
@@ -112,23 +111,13 @@ async def upload_dataset(
         converted_dir = Path(settings.DATA_DIR) / "converted" / dataset_id
         converted_dir.mkdir(parents=True, exist_ok=True)
         output_path = converted_dir / f"{Path(file.filename).stem}.h5ad"
-        try:
-            await trigger_conversion(
-                rds_path=str(dest_path),
-                output_path=str(output_path),
-                converter_url=settings.CONVERTER_URL,
-            )
-            meta["status"] = DatasetStatus.ready.value
-            with open(meta_path, "w") as fh:
-                json.dump(meta, fh, indent=2)
-            # Conversion output is also a regenerate-able source — keep it
-            # immutable; processing writes to the derived/ layer instead.
-            _make_readonly(output_path)
-        except Exception as e:
-            meta["status"] = DatasetStatus.error.value
-            meta["error_message"] = str(e)
-            with open(meta_path, "w") as fh:
-                json.dump(meta, fh, indent=2)
+        # In the background: a large R object takes longer than a proxy waits
+        # for this response. GET /datasets/{id} reports the converter's stages
+        # meanwhile; the conversion output, a source like the upload, is made
+        # read-only (processing writes to the derived/ layer instead).
+        conversion.start(dataset_id, conversion.convert_upload(
+            dataset_id, dest_path, output_path, settings.CONVERTER_URL, dm, _make_readonly,
+        ))
 
     # Auto-load the dataset to populate metadata (cell/gene counts, embeddings)
     if meta["status"] == DatasetStatus.ready.value:
@@ -169,6 +158,18 @@ async def get_dataset_info(
     info = dm.get_dataset_info(dataset_id)
     if info is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+
+    if info.get("status") == DatasetStatus.converting.value:
+        if not conversion.is_running(dataset_id):
+            # scView restarted during the conversion: nothing will finish it.
+            dm.update_dataset_metadata(dataset_id, {
+                "status": DatasetStatus.error.value, "error_message": conversion.INTERRUPTED,
+            })
+            return dm.get_dataset_info(dataset_id) or info
+        info["conversion_progress"] = conversion.read_progress(
+            dm.data_dir / "converted" / dataset_id / conversion.PROGRESS_FILE
+        )
+        return info
 
     if dm.is_busy(dataset_id):
         # A pipeline run is changing it: the sidecar still describes the dataset

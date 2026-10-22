@@ -18,8 +18,11 @@ import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
 import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
+import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { QcStates } from "@/components/qc/QcStates";
+import { SequencingQc } from "@/components/qc/SequencingQc";
+import { Hashing } from "@/components/qc/Hashing";
 import { CancelRunButton, RunOutcome, RunPeakMemory, RunWatchNotes } from "@/components/panels/RunWatch";
 import { cancelPipelineRun, runErrorMessage, type RunOutcomeFields, type WatchdogEvent } from "@/api/pipelineRun";
 import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
@@ -882,6 +885,7 @@ export function DataAssessmentPanel() {
       <p className="text-sm text-slate-500">
         Automatically assess preprocessing state and run missing analysis steps.
       </p>
+      {dataset?.conversion && <ConversionReport report={dataset.conversion} />}
 
       {/* Two columns: controls + steps on the left, QC plots on the right */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
@@ -1517,6 +1521,10 @@ export function DataAssessmentPanel() {
         </div>
         {/* Right: QC distributions */}
         <div className="w-full flex-shrink-0 space-y-4 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
+          {datasetId && <SequencingQc datasetId={datasetId} />}
+          {datasetId && (
+            <Hashing datasetId={datasetId} refreshKey={qcRefreshKey} onSaved={() => setCallsRevision((r) => r + 1)} />
+          )}
           {datasetId && <ClusterQcTable datasetId={datasetId} refreshKey={qcRefreshKey + callsRevision} />}
           {datasetId && (
             <QcPlots

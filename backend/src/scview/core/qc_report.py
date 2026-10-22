@@ -28,7 +28,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 from scview.core.replicates import donor_candidates, pick_donor
-from scview.core import cluster_qc, sex_check
+from scview.core import cluster_qc, seq_metrics, sex_check
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
 from scview.core.assistant import DEEPINFRA_BASE_URL, DEFAULT_MODEL, ChatSource
@@ -204,6 +204,13 @@ def build_facts(adaptor) -> QCFacts:
             f"Ribosomal reads per cell: median {ribo['median']:.1f}% (middle half "
             f"{ribo['q1']:.1f}-{ribo['q3']:.1f}%)."
         )))
+
+    # --- Sequencing (Cell Ranger metrics_summary.csv, raw matrix), per sample ---
+    seq_facts, seq_concerns = seq_metrics.report_facts(adata)
+    for text in seq_facts:
+        f.quality.append(_fact(seq_metrics.REPORT_TAG, text))
+    for text in seq_concerns:
+        concern(seq_metrics.REPORT_TAG, text)
 
     # --- Doublets ---
     calls = cluster_qc.doublet_calls(adata.obs)

@@ -44,6 +44,7 @@ from scview.core import qc_states
 from scview.core import embedding_reliability
 from scview.core import study_planner
 from scview.core import layout_stability
+from scview.core import seq_metrics
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -219,6 +220,21 @@ def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(gp_lines[1:])))
 
 
+def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """TCR/BCR contigs (core/vdj.py): cells with chains, the clonotypes, and the largest
+    expanded ones with the cell types they sit in, only once contigs are attached."""
+    from scview.core import vdj
+
+    try:
+        v_lines, v_detail = vdj.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: V(D)J fact failed: %s", exc)
+        return
+    if v_lines:
+        lines.extend(v_lines)
+        sources.append(ChatSource(kind="result", ref=vdj.TAG, detail=v_detail, evidence="\n".join(v_lines)))
+
+
 def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Which group relations in the plot hold across other seeds and neighbour counts
     (core/layout_stability.py), only once a layout check has run for this dataset."""
@@ -231,6 +247,36 @@ def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) 
         lines.extend(ls_lines)
         sources.append(ChatSource(kind="result", ref=layout_stability.TAG, detail=ls_detail,
                                   evidence="\n".join(ls_lines)))
+
+
+def _add_seqqc(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Per-sample Cell Ranger metrics, the 10x alerts they cross and the raw matrix's
+    knee (core/seq_metrics.py), only when such files were attached to the dataset."""
+    try:
+        sq_lines, sq_detail = seq_metrics.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: sequencing QC failed: %s", exc)
+        return
+    if sq_lines:
+        lines.extend(sq_lines)
+        sources.append(ChatSource(kind="result", ref=seq_metrics.TAG, detail=sq_detail,
+                                  evidence="\n".join(sq_lines[1:])))
+
+
+def _add_hashing(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The cell hashing call (core/hashing.py): singlets / doublets / negatives and
+    the samples, once demultiplexed (or the tags found, before)."""
+    from scview.core import hashing
+
+    try:
+        h_lines, h_detail = hashing.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: hashing failed: %s", exc)
+        return
+    if h_lines:
+        lines.extend(h_lines)
+        sources.append(ChatSource(kind="result", ref=hashing.TAG, detail=h_detail,
+                                  evidence="\n".join(h_lines)))
 
 
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -434,6 +480,7 @@ def build_grounding_context(
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: merge-check grounding failed: %s", exc)
         _add_study_planner(adaptor, lines, sources)
+        _add_vdj(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).
@@ -482,7 +529,9 @@ def build_grounding_context(
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: mito-by-type grounding failed: %s", exc)
         _add_qc_states(adaptor, lines, sources)
+        _add_hashing(adaptor, lines, sources)
         _qc_removal_fact(adaptor, lines, sources)
+        _add_seqqc(adaptor, lines, sources)
         # The stored PCA: variance per component, elbow, PC1's top loadings.
         try:
             pca_lines, pca_detail = pca_diagnostics.grounding_lines(adata)
@@ -558,13 +607,15 @@ _FEATURE_GUIDE = (
     "Import is by uploading local files only — there is no URL/remote import. "
     "Supported formats: AnnData .h5ad; 10x Genomics MTX (matrix.mtx + barcodes.tsv + "
     "features/genes.tsv, optionally .gz) and 10x HDF5 (.h5); .loom; .zarr; dense CSV/TSV "
-    "(optionally .gz); Seurat .rds (converted to .h5ad by the R converter service); and "
+    "(optionally .gz); Seurat, SingleCellExperiment or SummarizedExperiment .rds "
+    "(converted to .h5ad by the R converter service); and "
     "nf-core/scrnaseq mtx_conversions outputs (*.h5ad). A guided flow bundles multi-file "
     "inputs (e.g. the three 10x MTX files) and can merge several samples into one dataset. "
     "Each imported dataset then appears in the Data-tab library to open or manage. "
     "TABS: Data (import/manage datasets), Data Assessment (QC plots + AI-guided pipeline: "
     "QC → normalize → HVG → PCA → batch correction → clustering → UMAP → markers → "
-    "enrichment), Unified View (linked scatter + markers/expression/gene-sets/enrichment + "
+    "enrichment; a Cell hashing card demultiplexes hashtag / CellPlex tags with HTODemux or "
+    "hashedDrops into singlets, doublets and negatives and a sample column), Unified View (linked scatter + markers/expression/gene-sets/enrichment + "
     "violin; its DE subtab compares a lasso/cluster selection vs the rest, or two groups of "
     "a column such as dataset or condition, optionally within one cell type; its Communication "
     "subtab scores ligand-receptor interactions between the groups of a column with LIANA's "

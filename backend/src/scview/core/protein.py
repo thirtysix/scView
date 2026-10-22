@@ -119,15 +119,22 @@ def split_features(adata: ad.AnnData) -> tuple[ad.AnnData, ProteinSplit | None]:
     if (types == GENE_TYPE).all():
         return adata, adopt_obsm(adata)
 
+    from scview.core import hashing
+
     split = ProteinSplit()
     is_ab = (types == ANTIBODY_TYPE).to_numpy()
-    other = types[(types != GENE_TYPE) & (types != ANTIBODY_TYPE)]
+    # CellPlex multiplexing tags are kept as tag counts (core/hashing.py), not dropped.
+    is_cmo = (types == hashing.CMO_TYPE).to_numpy()
+    other = types[(types != GENE_TYPE) & (types != ANTIBODY_TYPE) & ~is_cmo]
     split.other_features = {str(k): int(v) for k, v in other.value_counts().items()}
     genes = adata[:, (types == GENE_TYPE).to_numpy()].copy()
     if 0 < is_ab.sum() <= MAX_PROTEINS:
         attach(genes, adata.X[:, is_ab], [str(v) for v in adata.var_names[is_ab]], split)
     elif split.other_features or is_ab.any():
         genes.uns[UNS_KEY] = split.to_dict()
+    if 0 < is_cmo.sum() <= hashing.MAX_TAGS:
+        hashing.attach_counts(genes, adata.X[:, is_cmo], [str(v) for v in adata.var_names[is_cmo]],
+                              hashing.CMO_TYPE)
     return genes, (split if split.n_proteins or split.other_features else None)
 
 

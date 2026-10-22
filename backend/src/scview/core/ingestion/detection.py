@@ -23,6 +23,8 @@ from pathlib import Path
 import h5py
 from pydantic import BaseModel, Field
 
+from scview.core.vdj import sniff_contigs
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -60,6 +62,8 @@ class FileKind(str, Enum):
     tenx_features = "tenx_features"
     dense_table = "dense_table"
     seurat_rds = "seurat_rds"
+    tenx_metrics = "tenx_metrics"  # Cell Ranger metrics_summary.csv: a side file, never loaded
+    vdj_contigs = "vdj_contigs"  # TCR/BCR contig table: a side file of a unit (core/vdj.py)
     unknown = "unknown"
 
 
@@ -184,11 +188,17 @@ def _classify_hdf5(path: Path) -> DetectionResult:
             if "matrix" in keys and isinstance(f["matrix"], h5py.Group):
                 mkeys = set(f["matrix"].keys())
                 if {"data", "indptr"} <= mkeys:
+                    raw = _raw_tenx_h5(path, f["matrix"])
+                    if raw:
+                        details["raw_matrix"] = raw
                     return DetectionResult(
                         kind=FileKind.tenx_h5,
                         confidence=0.95,
                         format_family="10x",
-                        reason="10x CellRanger HDF5 (/matrix group with sparse arrays)",
+                        reason=(
+                            f"10x CellRanger raw (unfiltered) HDF5: {raw}" if raw
+                            else "10x CellRanger HDF5 (/matrix group with sparse arrays)"
+                        ),
                         details=details,
                     )
 
@@ -246,6 +256,27 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
             kind=FileKind.unknown,
             confidence=0.0,
             reason="Empty or whitespace-only file",
+            details=details,
+        )
+
+    if looks_like_metrics(lines[0]):
+        return DetectionResult(
+            kind=FileKind.tenx_metrics,
+            confidence=0.95,
+            format_family="10x",
+            reason="Cell Ranger metrics summary (metrics_summary.csv)",
+            details=details,
+        )
+    # TCR/BCR contigs (Cell Ranger contig annotations CSV, AIRR rearrangement TSV).
+    vdj_format = sniff_contigs(lines[0])
+    if vdj_format:
+        details["vdj_format"] = vdj_format
+        return DetectionResult(
+            kind=FileKind.vdj_contigs,
+            confidence=0.95,
+            format_family="vdj",
+            reason=("TCR/BCR contig table (" + ("Cell Ranger contig annotations"
+                    if vdj_format == "10x" else "AIRR rearrangement") + ")"),
             details=details,
         )
 
@@ -358,3 +389,49 @@ def _apply_name_hint(result: DetectionResult, name: str) -> DetectionResult:
     else:
         result.details["name_hint"] = f"conflicts ({hint.value})"
     return result
+
+
+# ---------------------------------------------------------------------------
+# Cell Ranger side files: metrics_summary.csv and the raw (unfiltered) matrix
+# ---------------------------------------------------------------------------
+
+_RAW_NAME_RE = re.compile(r"(^|[_.\-])raw([_.\-]|$)")
+# A raw matrix holds the barcode whitelist (737k-6.8M barcodes), nearly all of them
+# empty droplets; a filtered one rarely passes 100k cells with hundreds of genes each.
+_RAW_MIN_BARCODES = 100_000
+_RAW_MAX_MEDIAN_GENES = 20
+
+
+def looks_like_metrics(header: str) -> bool:
+    """Header of a Cell Ranger metrics_summary.csv (count: metric names as columns;
+    multi: Metric Name / Metric Value rows)."""
+    h = header.lower()
+    if "metric name" in h and "metric value" in h:
+        return True
+    return "estimated number of cells" in h and (
+        "mean reads per cell" in h or "median genes per cell" in h or "number of reads" in h
+    )
+
+
+def _raw_tenx_h5(path: Path, matrix: h5py.Group) -> str:
+    """Why this 10x HDF5 is a raw (unfiltered) matrix, or "" when it is not: a "raw"
+    token in the name (never "filtered"), or whitelist-sized with a median of under
+    20 genes per barcode."""
+    stem = path.name.lower()
+    if "filtered" in stem:
+        return ""
+    if _RAW_NAME_RE.search(stem.rsplit(".", 1)[0]):
+        return "the file name says raw"
+    try:
+        n_bc = int(matrix["shape"][1])
+        if n_bc < _RAW_MIN_BARCODES:
+            return ""
+        import numpy as np
+
+        genes = np.diff(matrix["indptr"][:])
+        median = float(np.median(genes)) if genes.size else 0.0
+    except (KeyError, IndexError, OSError, ValueError):
+        return ""
+    if median < _RAW_MAX_MEDIAN_GENES:
+        return f"{n_bc:,} barcodes with a median of {median:g} genes each"
+    return ""
