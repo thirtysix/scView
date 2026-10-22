@@ -20,6 +20,7 @@ import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeCon
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { QcStates } from "@/components/qc/QcStates";
+import { Hashing } from "@/components/qc/Hashing";
 import { CancelRunButton, RunOutcome, RunPeakMemory, RunWatchNotes } from "@/components/panels/RunWatch";
 import { cancelPipelineRun, runErrorMessage, type RunOutcomeFields, type WatchdogEvent } from "@/api/pipelineRun";
 import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
@@ -1517,6 +1518,9 @@ export function DataAssessmentPanel() {
         </div>
         {/* Right: QC distributions */}
         <div className="w-full flex-shrink-0 space-y-4 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
+          {datasetId && (
+            <Hashing datasetId={datasetId} refreshKey={qcRefreshKey} onSaved={() => setCallsRevision((r) => r + 1)} />
+          )}
           {datasetId && <ClusterQcTable datasetId={datasetId} refreshKey={qcRefreshKey + callsRevision} />}
           {datasetId && (
             <QcPlots
