@@ -31,6 +31,7 @@ from scview.core import (
     normalization,
     provenance,
     qc_filter,
+    scrublet_lean,
     stress,
 )
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
@@ -292,6 +293,20 @@ def _doublet_counts(adata: ad.AnnData):
     return None
 
 
+def _doublet_matrix(adata: ad.AnnData):
+    """(counts, where from) for Scrublet: X, or the counts beside a processed X (where:
+    "layers['counts']" / ".raw"; None for X)."""
+    if not _holds_processed_values(adata.X):
+        return adata.X, None
+    # Run alone on a processed dataset, X is scaled: Scrublet then filled a 6 GB
+    # backend and failed ("Bin edges must be unique: nan"). Score the counts.
+    counts = _doublet_counts(adata)
+    if counts is None:
+        raise StepSkipped("Doublet detection needs raw counts: X holds processed values and "
+                          "there is no counts layer or counts in .raw.")
+    return counts[0], counts[2]
+
+
 def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
     """Detect doublets with Scrublet; annotate ``.obs`` only (removal is opt-in).
 
@@ -302,7 +317,10 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     Without an ``expected_doublet_rate`` the rate is suggested from the cells per
     sample (``doublets.suggest_rate``); the rate used is recorded in provenance.
     Neighbours are exact up to ``doublets.EXACT_KNN_MAX_CELLS`` cells (recorded as
-    ``neighbors``).
+    ``neighbors``). Scrublet scores a sparse matrix of the counts alone
+    (``scrublet_lean.scrublet_counts``: the same scores, without copying the whole
+    dataset); they come from ``layers['counts']`` or ``.raw`` when X holds processed
+    values (recorded as ``input``).
     """
     method = (params.doublet_method or "scrublet").lower()
     if method != "scrublet":
@@ -316,24 +334,14 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
                  "expected_rate_from": suggestion["column"] or "all cells (no sample column)"}
     exact = adata.n_obs <= doublets.EXACT_KNN_MAX_CELLS
     found["neighbors"] = "exact" if exact else "approximate"
-    target = adata
-    if _holds_processed_values(adata.X):
-        # Run alone on a processed dataset, X is scaled: Scrublet then filled a 6 GB
-        # backend and failed ("Bin edges must be unique: nan"). Score the counts.
-        counts = _doublet_counts(adata)
-        if counts is None:
-            raise StepSkipped("Doublet detection needs raw counts: X holds processed values and "
-                              "there is no counts layer or counts in .raw.")
-        M, names, found["input"] = counts
-        # Scrublet copies its input, so sharing the dataset's counts here is safe.
-        target = ad.AnnData(X=M, obs=pd.DataFrame(index=adata.obs_names),
-                            var=pd.DataFrame(index=names))
-    sc.pp.scrublet(target, expected_doublet_rate=found["expected_doublet_rate"],
-                   use_approx_neighbors=not exact)
-    if target is not adata:
-        for col in ("doublet_score", "predicted_doublet"):
-            adata.obs[col] = target.obs[col].to_numpy()
-        adata.uns["scrublet"] = target.uns["scrublet"]
+    counts, where = _doublet_matrix(adata)
+    if where is not None:
+        found["input"] = where
+    score, call, uns = scrublet_lean.scrublet_counts(
+        counts, expected_doublet_rate=found["expected_doublet_rate"], use_approx_neighbors=not exact)
+    adata.obs["doublet_score"] = score
+    adata.obs["predicted_doublet"] = call
+    adata.uns["scrublet"] = uns
     doublets.clear_threshold(adata)  # set on the previous run's scores
     n_dbl = (
         int(adata.obs["predicted_doublet"].sum())
