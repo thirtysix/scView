@@ -51,6 +51,11 @@ def _counts_matrix(adata):
     return adata.X, adata.var_names
 
 
+# obsm entries named like embeddings that are not coordinates: gene-program usages
+# (core/gene_programs.py), one column per program.
+NOT_EMBEDDINGS = ("X_nmf_usage", "X_nmf_usage_raw")
+
+
 def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
     """Per-cell totals, detected genes and one sum per gene mask, read in row
     chunks so a backed (on-disk) matrix, which has no .sum, works too."""
@@ -253,7 +258,7 @@ class AnnDataAdaptor:
         """Return list of embedding info dicts (name + dimensions)."""
         results = []
         for key in self.adata.obsm_keys():
-            if key.startswith("X_"):
+            if key.startswith("X_") and key not in NOT_EMBEDDINGS:
                 arr = self.adata.obsm[key]
                 results.append({"name": key, "dimensions": arr.shape[1] if arr.ndim > 1 else 1})
         return results

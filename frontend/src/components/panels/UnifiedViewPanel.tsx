@@ -23,6 +23,9 @@ import { UnifiedActivitySubtab } from "@/components/unified/UnifiedActivitySubta
 import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSubtab";
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
 import { ReportSubtab } from "@/components/report/ReportSubtab";
+import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
+import { getProgramUsage, type ProgramUsage } from "@/api/programs";
+import { usageLabel } from "@/lib/programs";
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
 import { CompareColoringsGrid } from "@/components/unified/CompareColoringsGrid";
@@ -60,6 +63,7 @@ const SUBTABS = [
   { id: "genelists" as const, label: "Gene lists" },
   { id: "communication" as const, label: "Communication" },
   { id: "report" as const, label: "Report" },
+  { id: "programs" as const, label: "Programs" },
 ] as const;
 
 interface ViolinResponse {
@@ -266,7 +270,7 @@ export function UnifiedViewPanel() {
 
   // --- Color type from obs column ---
   const colorType = useMemo<"categorical" | "continuous">(() => {
-    if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score")
+    if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program")
       return "continuous";
     if (!colorBy || !dataset) return "categorical";
     const col = dataset.obs_columns.find((c) => c.name === colorBy);
@@ -283,7 +287,8 @@ export function UnifiedViewPanel() {
   }, [colorBy, dataset]);
 
   const categories = useMemo(() => {
-    if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score") return undefined;
+    if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program")
+      return undefined;
     if (colorType !== "categorical" || !obsColumn?.values) return undefined;
     return obsColumn.values;
   }, [colorType, obsColumn, scatterOverlay]);
@@ -303,7 +308,8 @@ export function UnifiedViewPanel() {
   // --- The continuous colour scale (lib/colorScale.ts): map, clipped range,
   // centre; the scatter, split grid, legend and PNG export all draw from it ---
   const overlayKind: OverlayKind =
-    scatterOverlay?.type === "score"
+    // A program's usage share is never negative: the sequential map, as for a score.
+    scatterOverlay?.type === "score" || scatterOverlay?.type === "program"
       ? "score"
       : scatterOverlay?.type === "expression"
         ? scatterOverlay.layer
@@ -481,6 +487,23 @@ export function UnifiedViewPanel() {
      setViolinData, setViolinTitle, groupByColumn, dataset, datasetId, openBottomPanel],
   );
 
+  // --- A gene program's usage share (Programs subtab); its violin comes split by group ---
+  const handleProgramUsage = useCallback(
+    (u: ProgramUsage) => {
+      setOverlayValues(new Float32Array(u.values));
+      setOverlayLabel(usageLabel(u.name, u.top_genes));
+      setScatterOverlay({ type: "program", index: u.index, name: u.name });
+      if (datasetId) setOverlayDatasetId(datasetId);
+      if (u.violin) {
+        setViolinData(u.violin);
+        setViolinTitle(`${u.name} usage share`);
+        openBottomPanel();
+      }
+    },
+    [datasetId, setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId,
+     setViolinData, setViolinTitle, openBottomPanel],
+  );
+
   // --- An overlay from "Open session", drawn once this dataset is on screen ---
   const pendingOverlay = useUnifiedViewStore((s) => s.pendingOverlay);
   const setPendingOverlay = useUnifiedViewStore((s) => s.setPendingOverlay);
@@ -498,6 +521,12 @@ export function UnifiedViewPanel() {
         .catch((err) => console.error("Failed to restore the plot reliability overlay:", err));
       return;
     }
+    if (o.type === "program") {
+      getProgramUsage(datasetId, o.index, groupByColumn || undefined)
+        .then(handleProgramUsage)
+        .catch((err) => console.error("Failed to restore the gene program overlay:", err));
+      return;
+    }
     if (o.type === "activity") {
       const ref = { network: o.network, source: o.source };
       getActivityCells(datasetId, o.network, o.source)
@@ -510,7 +539,8 @@ export function UnifiedViewPanel() {
     scoreGeneSet(datasetId, o.genes, o.name, method)
       .then((res) => handleScoreComplete(new Float32Array(res.scores), o.name, o.genes, undefined, method))
       .catch((err) => console.error("Failed to restore the gene-set overlay:", err));
-  }, [pendingOverlay, datasetId, handleGeneClick, handleProteinClick, handleScoreComplete, setPendingOverlay]);
+  }, [pendingOverlay, datasetId, handleGeneClick, handleProteinClick, handleScoreComplete, setPendingOverlay,
+      handleProgramUsage, groupByColumn]);
 
   // --- Clear overlay (revert to obs coloring) ---
   const handleClearOverlay = useCallback(() => {
@@ -619,7 +649,7 @@ export function UnifiedViewPanel() {
   const hoverColorLine = (index: number, metadata: Record<string, unknown> | null): HoverLine | null => {
     if (scatterOverlay && overlayValues) {
       return colorByLine({
-        label: `${overlayLabel} ${scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}`,
+        label: `${overlayLabel} ${scatterOverlay.type === "program" ? "program" : scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}`,
         values: overlayValues,
         index,
         type: "continuous",
@@ -974,7 +1004,7 @@ export function UnifiedViewPanel() {
               <div className="pointer-events-auto flex flex-shrink-0 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50/90 px-2 py-1 text-xs text-blue-700">
                 <span className="font-medium">{overlayLabel}</span>
                 <span className="text-blue-500">
-                  {scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}
+                  {scatterOverlay.type === "program" ? "program" : scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}
                 </span>
                 <button
                   onClick={handleClearOverlay}
@@ -1241,6 +1271,14 @@ export function UnifiedViewPanel() {
             )}
             {activeSubtab === "communication" && <UnifiedCommunicationSubtab groupByColumn={groupByColumn} />}
             {activeSubtab === "report" && <ReportSubtab groupByColumn={groupByColumn} />}
+            {activeSubtab === "programs" && (
+              <ProgramsSubtab
+                onUsage={handleProgramUsage}
+                activeIndex={scatterOverlay?.type === "program" ? scatterOverlay.index : null}
+                groupByColumn={groupByColumn}
+                setGroupByColumn={setGroupByColumn}
+              />
+            )}
           </div>
         </div>
       </div>

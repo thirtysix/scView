@@ -30,6 +30,7 @@ from scview.api.v1 import (
     pca,
     planner,
     preflight,
+    programs,
     system,
     report,
 )
@@ -65,3 +66,4 @@ api_router.include_router(system.router, tags=["system"])
 api_router.include_router(preflight.router, tags=["system"])
 api_router.include_router(report.router, tags=["report"])
 api_router.include_router(planner.router, tags=["planner"])
+api_router.include_router(programs.router, tags=["programs"])

@@ -590,6 +590,7 @@ _FAMILY_PREFIX = {
     "merge_check": "result:merge_check",
     "pca": "result:pca", "qcstates": "result:qcstates",
     "mito": "result:mito_by_type",
+    "programs": "result:programs",
     "embedding": "result:embedding_reliability", "reliability": "result:embedding_reliability",
     "planner": "result:planner",
     "lit": "lit:", "doc": "doc:", "app": "app:",
