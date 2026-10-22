@@ -888,6 +888,12 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
         "if drop.any():",
         "    adata = adata[~drop, :].copy()",
     ]
+    clones = p.get("vdj_clonotypes")
+    if isinstance(clones, dict):
+        _need(ctx, "vdj")
+        code += ["# V(D)J clone sizes recomputed on the cells kept, as scView's filtering step does.",
+                 "if CHAINS_KEY in adata.obsm:",
+                 f"    redefine(adata, same_v_gene={_lit(bool(clones.get('same_v_gene')))})"]
     code.append(f"sc.pp.filter_genes(adata, min_cells={_lit(min_cells)})")
     return Snippet(status, code, note)
 

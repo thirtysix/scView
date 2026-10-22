@@ -1459,9 +1459,12 @@ def doublet_choices(obs: pd.DataFrame, t: Thresholds) -> dict | None:
 def after_filter(adata, t: Thresholds, n_removed: int) -> dict:
     """The filtering step's own record beside its params, once the cells are gone
     (``adata`` = the cells kept): whose doublets ``drop_doublets`` dropped (the
-    choice, and the source it stood for, which the replay uses) and the hashing
-    negatives choice. A record without ``qc_doublet_source`` is from before the
-    choice: its replay keeps Scrublet first."""
+    choice, and the source it stood for, which the replay uses), the hashing
+    negatives choice, and the V(D)J clone sizes recomputed on the cells kept
+    (``vdj.recompute_after_filter``) when cells were removed. A record without
+    ``qc_doublet_source`` is from before the choice: its replay keeps Scrublet first."""
+    from scview.core import vdj
+
     out: dict = {}
     if t.drop_doublets:
         used = doublet_source.resolve(adata.obs, t.doublet_source)
@@ -1469,6 +1472,10 @@ def after_filter(adata, t: Thresholds, n_removed: int) -> dict:
                    qc_doublet_source_used=None if used is None else used.source)
     if t.drop_hash_negatives:
         out["drop_hash_negatives"] = True
+    if n_removed:
+        clones = vdj.recompute_after_filter(adata)
+        if clones is not None:
+            out["vdj_clonotypes"] = clones
     return out
 
 

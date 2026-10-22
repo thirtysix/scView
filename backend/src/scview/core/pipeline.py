@@ -357,6 +357,7 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     used only when measurable; predicted doublets are dropped when
     ``drop_doublets`` is set (``qc_doublet_source``: cell hashing when it was run,
     else Scrublet, by default), hashing negatives when ``drop_hash_negatives`` is.
+    V(D)J clone sizes are recomputed on the cells kept (``qc_filter.after_filter``).
 
     The cells removed are recorded in ``uns[qc_filter.RECORD_KEY]`` (their QC
     values and labels), so the Data Assessment audit can show who was removed
@@ -390,7 +391,7 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     if not keep.all():
         adata = adata[keep, :].copy()
     adata.uns[qc_filter.RECORD_KEY] = record
-    # Whose doublets were dropped (qc_filter.after_filter).
+    # Whose doublets were dropped; V(D)J clone sizes recomputed on the cells kept.
     found.update(qc_filter.after_filter(adata, t, int((~keep).sum())))
     sc.pp.filter_genes(adata, min_cells=params.min_cells)
     logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, adata.n_obs)
