@@ -187,6 +187,7 @@ class IngestSessionManager:
         except IngestLoadError as e:
             raise IngestCommitError(str(e)) from e
         self._record_ingest_provenance(adata, loadable, opts)
+        self._attach_vdj(adata, loadable, opts)
 
         dataset_id = uuid.uuid4().hex
         name = opts.name or (loadable[0].label if len(loadable) == 1 else "merged_dataset")
@@ -254,6 +255,23 @@ class IngestSessionManager:
             )
         except Exception as e:  # provenance must never block ingest
             logger.warning("Could not record ingest provenance: %s", e)
+
+    def _attach_vdj(self, adata, loadable, opts: IngestOptions) -> None:
+        """TCR/BCR contig tables uploaded beside a unit's matrix (``core/vdj.py``),
+        each matched to its own sample's cells in a merge."""
+        from scview.core import vdj
+        from scview.core.ingestion.bundling import FileRole
+        from scview.core.run_manifest import file_sha256
+
+        merged = len(loadable) > 1
+        for u in loadable:
+            for f in [f for f in u.files if f.role == FileRole.vdj_contigs]:
+                try:
+                    vdj.attach(adata, f.path, file_name=f.name, sha256=file_sha256(f.path),
+                               sample_column=opts.sample_label if merged else None,
+                               sample=u.label if merged else None, stored_as=f.name)
+                except vdj.VdjError as e:
+                    raise IngestCommitError(f"The contig table {f.name} could not be attached: {e}") from e
 
     def _load_and_merge(self, loadable, opts: IngestOptions):
         load_opts = {"genes_in_rows": opts.genes_in_rows}

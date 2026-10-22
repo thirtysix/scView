@@ -1410,7 +1410,7 @@ def _vdj_attach(p: dict, ctx: _Ctx) -> Snippet:
         "# TCR/BCR contigs joined to the cells by barcode, chains called and clonotypes defined",
         "# (identical CDR3 amino acids of the primary VJ and VDJ chains) as core/vdj.py does.",
         f"# Contig table: {comment_text(name, 160)} (sha256 {comment_text(p.get('sha256'), 64)});",
-        "# scView keeps a copy in its uploads/<dataset id>/vdj/ folder.",
+        "# scView keeps a copy beside the dataset's uploaded files (uploads/<dataset id>/).",
         *start,
         f"attach_file(adata, vdj_file({_lit(name)}), sample_column={_lit(p.get('sample_column'))}, "
         f"sample={_lit(p.get('sample'))}, replace={_lit(bool(p.get('replace')))}, "

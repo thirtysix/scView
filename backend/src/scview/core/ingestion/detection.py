@@ -23,6 +23,8 @@ from pathlib import Path
 import h5py
 from pydantic import BaseModel, Field
 
+from scview.core.vdj import sniff_contigs
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -60,6 +62,7 @@ class FileKind(str, Enum):
     tenx_features = "tenx_features"
     dense_table = "dense_table"
     seurat_rds = "seurat_rds"
+    vdj_contigs = "vdj_contigs"  # TCR/BCR contig table: a side file of a unit (core/vdj.py)
     unknown = "unknown"
 
 
@@ -246,6 +249,19 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
             kind=FileKind.unknown,
             confidence=0.0,
             reason="Empty or whitespace-only file",
+            details=details,
+        )
+
+    # TCR/BCR contigs (Cell Ranger contig annotations CSV, AIRR rearrangement TSV).
+    vdj_format = sniff_contigs(lines[0])
+    if vdj_format:
+        details["vdj_format"] = vdj_format
+        return DetectionResult(
+            kind=FileKind.vdj_contigs,
+            confidence=0.95,
+            format_family="vdj",
+            reason=("TCR/BCR contig table (" + ("Cell Ranger contig annotations"
+                    if vdj_format == "10x" else "AIRR rearrangement") + ")"),
             details=details,
         )
 
