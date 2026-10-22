@@ -28,25 +28,28 @@ can be wrong, and the user decides.
 Calibration
 
 The coefficients come from measured runs, not guesses: one fresh container per
-dataset, 2 CPUs (scview-backend image, 2026-10-21), memory = the cgroup's anon memory
-(which counts the Leiden child process) sampled every 0.1 s, or the process's peak RSS
-where that is higher (short reads), minus the process before loading (scanpy imported,
-0.17 GiB). Runs are the "Reprocess from scratch" steps with the UI's marker columns.
+dataset, 2 CPUs (scview-backend image, 2026-10-21; re-measured 2026-10-22 once doublet
+detection scored the counts alone), memory = the cgroup's anon memory (which counts the
+Leiden child process) sampled every 0.1 s, or the process's peak RSS where that is
+higher (short reads), minus the process before loading (scanpy imported, 0.17 GiB).
+Runs are the "Reprocess from scratch" steps with the UI's marker columns.
 GiB; err = estimate / measured - 1.
 
     dataset            cells   genes   X stored values      load meas/est  err   run peak meas/est  err  at
     pbmc 1k 10x .h5     1,222  33,538  2.5M sparse         0.04 / 0.04   -1%   0.63 / 0.72   +15%  (late steps)
-    paul15             2,730   3,451  dense (+2 dense)    0.13 / 0.14   +5%   0.62 / 0.73   +17%  (late steps)
-    Kang              13,836  14,053  dense f64 (+2 sp.)  1.76 / 1.74   -1%   3.00 / 2.99    -0%  doublets
-    ovary 10k sub.    10,000  20,082  12.1M sp. + dense   0.91 / 0.88   -3%   6.17 / 6.22    +1%  doublets
-    ovary 20k sub.    20,000  20,082  24.1M sp. + dense   1.75 / 1.72   -2%  11.73 / 11.27   -4%  doublets
-    ovary_raw         37,104  20,082  44.7M sp. + dense   3.22 / 3.17   -2%  20.86 / 19.91   -5%  doublets
+    paul15             2,730   3,451  dense (+2 dense)    0.13 / 0.14   +5%   0.65 / 0.73   +12%  (late steps)
+    Kang              13,836  14,053  dense f64 (+2 sp.)  1.76 / 1.74   -1%   2.67 / 2.72    +2%  doublets
+    ovary 10k sub.    10,000  20,082  12.1M sp. + dense   0.91 / 0.88   -3%   4.89 / 4.89    +0%  markers
+    ovary 20k sub.    20,000  20,082  24.1M sp. + dense   1.75 / 1.72   -2%   9.26 / 9.63    +4%  filtering
+    ovary_raw         37,104  20,082  44.7M sp. + dense   3.22 / 3.17   -2%  13.90 / 14.61   +5%  doublets *
 
-ovary_raw was killed at an 18 GiB limit (in doublet detection) and measured at 26 GiB
-through PCA; its later steps are estimated at 16.5 GiB at most. Its counts layer is
-dense (3 GB), and Scrublet copies the whole dataset, so doublet detection holds several
-copies of it: 15 GiB over the 5.7 the dataset held. The small datasets are over by fixed
-costs (library imports, caches). Ingest (read, save as gzip h5ad, reopen), peak:
+* through doublet detection: the whole run was killed at the 16 GiB these runs may use,
+in filtering, which copies its dense matrices (estimated 17.7 GiB; main measured that
+step at +11.15 GiB, which over the 5.82 the dataset holds after doublet detection is
+17.0). Doublet detection used to score a copy of the whole dataset: ovary_raw's dense
+3 GB counts layer beside the dense X a reset makes took it to 20.86 GiB (killed at an
+18 GiB limit), Kang's to 3.00, the subsamples' to 6.17 and 11.73. The small datasets
+are over by fixed costs (library imports, caches). Ingest (read, save as gzip h5ad, reopen), peak:
 pbmc 10x .h5 0.056 / 0.060 (+7%), the same as MEX 0.144 / 0.148 (+3%), a 1,222 x 5,000
 CSV 0.189 / 0.203 (+7%), paul15 0.140 / 0.147 (+5%), Kang 1.79 / 1.91 (+7%). Not
 measured: loom and zarr reads (8 and 0 bytes per value, reasoned), RDS (a guess), batch
@@ -55,8 +58,8 @@ allocate; the estimate says so). Header reads take 3-35 ms (Kang's 1.9 GB h5ad: 
 
 Time: the same runs' seconds per step, as a function of cells, stored values and
 groups, measured at 2 CPUs and scaled by the square root of the CPU quota; shown as
-half to twice the point estimate, which held every measured run (Kang 116 s within
-70-279 s, ovary 20k 580 s within 264-1054 s).
+half to twice the point estimate, which held every measured run (Kang 121-152 s within
+76-304 s, ovary 20k 555 s within 234-935 s).
 """
 
 from __future__ import annotations
@@ -98,6 +101,9 @@ class Matrix:
     dtype: str = "float32"  # of the values, in memory
     index_dtype: str = "int32"  # sparse only
     nnz_estimated: bool = False  # sampled, not read (loom)
+    # Dense only: its non-zero values, counted on a sample of rows (a live AnnData), or
+    # taken from the sparse matrices beside it (``_State``); None: not known.
+    nonzero: int | None = None
 
     @property
     def nbytes(self) -> int:
@@ -174,6 +180,20 @@ def _h5_matrix(node, where: str, n_cells: int | None = None) -> Matrix | None:
                   data.dtype.name, indices.dtype.name)
 
 
+# Rows of an on-disk dense matrix whose non-zeros are counted (the first ones: one read).
+NONZERO_HEAD_ROWS = 64
+
+
+def _h5_head_nonzero(node, n_cells: int) -> int | None:
+    """Non-zero values of a dense h5 dataset, counted on its first rows and scaled."""
+    rows = min(n_cells, NONZERO_HEAD_ROWS)
+    try:
+        block = np.asarray(node[:rows])
+    except Exception:  # noqa: BLE001 - unreadable: not known
+        return None
+    return int(round(np.count_nonzero(block) * n_cells / rows)) if rows else None
+
+
 def _h5_bytes(node) -> int:
     """Bytes the datasets under an h5 node take once read (strings at _STR_BYTES each)."""
     import h5py
@@ -228,6 +248,11 @@ def _read_h5ad(path: Path) -> Header:
             m = _h5_matrix(f["raw"]["X"], "raw/X")
             if m is not None:
                 h.matrices.append(m)
+        if h.matrices and not any(mm.sparse for mm in h.matrices):
+            # No sparse matrix to take the share of non-zeros from (``_State``): count it
+            # on the first rows of each dense one (paul15: 2 ms).
+            for mm in h.matrices:
+                mm.nonzero = _h5_head_nonzero(f[mm.where], mm.n_cells)
         for key in f.get("obsm", {}):
             node = f["obsm"][key]
             if isinstance(node, h5py.Dataset):
@@ -566,7 +591,8 @@ def header_from_adata(adata) -> Header:
                           m.indices.dtype.name)
         if hasattr(m, "dtype") and hasattr(m, "shape"):
             r, c = m.shape
-            return Matrix(where, int(r), int(c), False, int(r) * int(c), np.dtype(m.dtype).name)
+            return Matrix(where, int(r), int(c), False, int(r) * int(c), np.dtype(m.dtype).name,
+                          nonzero=_dense_nonzero(m))
         return None
 
     h = Header("h5ad", adata.n_obs, adata.n_vars)
@@ -591,6 +617,19 @@ def header_from_adata(adata) -> Header:
     h.obs_columns = adata.obs.shape[1]
     h.var_columns = adata.var.shape[1]
     return h
+
+
+# Rows of a dense matrix whose non-zeros are counted (evenly spaced; a strided view, no copy).
+NONZERO_SAMPLE_ROWS = 512
+
+
+def _dense_nonzero(m) -> int | None:
+    """Non-zero values of a dense in-memory matrix, counted on ``NONZERO_SAMPLE_ROWS``
+    evenly spaced rows and scaled to all of them (ovary's 3 GB counts: ~10 ms)."""
+    if not isinstance(m, np.ndarray) or m.ndim != 2 or not m.size:
+        return None
+    sample = m[::max(1, m.shape[0] // NONZERO_SAMPLE_ROWS)]
+    return int(round(np.count_nonzero(sample) * m.shape[0] / sample.shape[0]))
 
 
 def _array_bytes(v) -> int:
@@ -723,13 +762,16 @@ MEASURED_STEPS = {
 FILTER_CELLS_KEPT = 0.9
 FILTER_GENES_KEPT_RAW = 0.8
 
-# Scrublet (sc.pp.scrublet): it copies the dataset, keeps raw and log1p copies of X
-# while it picks its variable genes, then z-scores observed + 2x simulated doublets
-# (dense) and finds exact neighbours (sklearn, chunked at 1 GiB of distances).
-DBL_X_COPIES = 4.0  # copies of X alive at once during its gene selection
-DBL_DENSE_PER_VALUE = 7.0  # bytes per cell x gene for the z-scored observed + simulated cells
-DBL_KNN = 1.0 * GiB
-DBL_KNN_SMALL = 0.4  # of the full (3n)^2 distance matrix, while it is under a chunk
+# Scrublet (core/scrublet_lean.py: sc.pp.scrublet's steps on a sparse matrix of the counts
+# alone, never a copy of the dataset). While it picks its variable genes it holds about six
+# copies of that matrix (filtered, raw, normalised, log, expm1). Then it z-scores the
+# observed and 2x simulated cells' variable genes densely in float64, and scipy makes a CSC
+# of each fully dense result: 108 bytes per cell x variable gene over the ~20 it holds by
+# then (Kang and ovary alike). Its variable-gene cut-offs keep ~10% of the genes (Kang 11%,
+# ovary 9.5%, paul15 19%), so per cell x gene of the counts, 12.8 bytes.
+DBL_SPARSE_COPIES = 6.0
+DBL_DENSE_PER_VALUE = 12.8
+DBL_SECONDS_PER_VALUE = 1e-7  # per cell x gene (z-scoring and neighbours, not stored values)
 # Steps that import or JIT-compile libraries the first time they run in a process
 # (numba, umap, pynndescent, the MSigDB cache): held afterwards.
 WARMUP = {"doublet_detection": 150 * MiB, "neighbors": 100 * MiB, "marker_genes": 100 * MiB,
@@ -753,8 +795,11 @@ class _State:
 
     @classmethod
     def from_header(cls, h: Header) -> "_State":
-        layers = {mm.where.split("/", 1)[1]: mm for mm in h.matrices if mm.where.startswith("layers/")}
-        return cls(h.n_cells or 0, h.n_genes or 0, h.x, layers, h.matrix("raw/X"),
+        mats = _with_nonzero(h.matrices)
+        x = next((mm for mm in mats if mm.where == "X"), None)
+        raw = next((mm for mm in mats if mm.where == "raw/X"), None)
+        layers = {mm.where.split("/", 1)[1]: mm for mm in mats if mm.where.startswith("layers/")}
+        return cls(h.n_cells or 0, h.n_genes or 0, x, layers, raw,
                    h.obsm_bytes + h.obsp_bytes + h.varm_bytes + h.uns_bytes + _frames_bytes(h)
                    + (h.n_cells or 0) * LOAD_PER_CELL + LOAD_FIXED,
                    processed=bool(h.obsm) or h.matrix("raw/X") is not None)
@@ -777,10 +822,35 @@ class _State:
         return self.raw or self.x
 
 
+def _with_nonzero(mats: list[Matrix]) -> list[Matrix]:
+    """The matrices, a dense one whose non-zeros are not known given the share of the
+    sparse ones beside it (a normalised X keeps its counts' zeros); none: every value."""
+    from dataclasses import replace
+
+    shares = [mm.nnz / (mm.n_cells * mm.n_genes) for mm in mats
+              if mm.sparse and mm.n_cells and mm.n_genes]
+    if not shares:
+        return list(mats)
+    share = max(shares)
+    return [replace(mm, nonzero=int(mm.nnz * share)) if not mm.sparse and mm.nonzero is None
+            else mm for mm in mats]
+
+
 def _like(mm: Matrix, where: str, n: int, m: int) -> Matrix:
     """``mm`` resized to n x m, its stored values scaled with it."""
-    nnz = int(mm.nnz * (n * m) / max(1, mm.n_cells * mm.n_genes)) if mm.sparse else n * m
-    return Matrix(where, n, m, mm.sparse, nnz, mm.dtype, mm.index_dtype)
+    share = (n * m) / max(1, mm.n_cells * mm.n_genes)
+    nnz = int(mm.nnz * share) if mm.sparse else n * m
+    nonzero = None if mm.nonzero is None else int(mm.nonzero * share)
+    return Matrix(where, n, m, mm.sparse, nnz, mm.dtype, mm.index_dtype, nonzero=nonzero)
+
+
+def _csr_bytes(mm: Matrix) -> int:
+    """Bytes of ``mm`` as CSR in its own dtype (int32 indices); a dense one by its non-zeros
+    (every value when they are not known)."""
+    if mm.sparse:
+        return mm.nbytes
+    nz = mm.nnz if mm.nonzero is None else mm.nonzero
+    return nz * (np.dtype(mm.dtype).itemsize + 4) + (mm.n_cells + 1) * 4
 
 
 def _dense_f32(s: _State) -> int:
@@ -814,20 +884,20 @@ def _step_qc(s: _State, params) -> tuple[int, _State, float]:
 
 
 def _step_doublet(s: _State, params) -> tuple[int, _State, float]:
-    xb, lb = s.xb(), s.others()
-    m = s.m
-    counts = s.layers.get("counts") or s.raw
-    if s.processed and s.x is not None and not s.x.sparse and counts is not None:
-        # A processed (scaled, dense) X: Scrublet gets a dataset of the counts alone
-        # (pipeline._run_doublet_detection), so only they are copied.
-        xb, lb, m = counts.nbytes, 0, counts.n_genes
-    copies = int(DBL_X_COPIES * xb) + lb
-    knn = min(DBL_KNN, int(DBL_KNN_SMALL * (3 * s.n) ** 2 * 8))
-    dense = int(DBL_DENSE_PER_VALUE * s.n * m) + knn + 2 * xb + lb
+    counts = s.x
+    beside = s.layers.get("counts") or s.raw
+    if s.processed and s.x is not None and not s.x.sparse and beside is not None:
+        # A processed (scaled, dense) X: the counts beside it are scored
+        # (pipeline._run_doublet_detection).
+        counts = beside
+    if counts is None:
+        return 0, s, 0.1
+    # Only the counts, as CSR (a dense matrix made so by blocks): the layers, .raw and a
+    # dense X are not copied.
+    copies = int(DBL_SPARSE_COPIES * _csr_bytes(counts))
+    dense = int(DBL_DENSE_PER_VALUE * s.n * counts.n_genes)
     s.other += s.n * 16
-    nnz = s.x.nnz if s.x is not None else 0
-    sparse = s.x is not None and s.x.sparse
-    return max(copies, dense), s, 2.0 + nnz * (8e-7 if sparse else 2.5e-7)
+    return max(copies, dense), s, 3.0 + DBL_SECONDS_PER_VALUE * s.n * counts.n_genes
 
 
 def _step_filter(s: _State, params) -> tuple[int, _State, float]:
@@ -1068,23 +1138,26 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
 
 
 def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
-                       params=None, *, other_bytes: int = 0, dtype: str = "float32") -> int:
+                       params=None, *, other_bytes: int = 0, dtype: str = "float32",
+                       nonzero: int | None = None) -> int:
     """Memory (bytes) ``step`` needs at its peak over what the dataset holds when it
     starts. Pure: no I/O, no process state (one-time imports not counted).
 
     ``shape`` = (cells, genes) of X; ``nnz`` its stored values (ignored for a dense
     X); ``dense`` whether X is a dense array; ``params`` the run's ``PipelineParams``
     (None: the defaults); ``other_bytes`` the bytes of the layers and .raw, which
-    doublet detection and filtering copy (0 underestimates those two); ``dtype`` of
-    X's values. Filtering is taken to remove cells (a copy), as it does on data not
-    filtered before. Unknown steps give 0. From a live AnnData use
+    filtering copies (0 underestimates it); ``dtype`` of X's values; ``nonzero`` the
+    non-zero values of a dense X (None: every value, which overestimates doublet
+    detection on dense counts). Filtering is taken to remove cells (a copy), as it
+    does on data not filtered before. Unknown steps give 0. From a live AnnData use
     ``step_peak_for(adata, step, params)``, which reads all of this from it.
     """
     model = _STEP_MODELS.get(step)
     if model is None:
         return 0
     n, m = shape
-    x = Matrix("X", n, m, not dense, n * m if dense else nnz, dtype)
+    x = Matrix("X", n, m, not dense, n * m if dense else nnz, dtype,
+               nonzero=nonzero if dense else None)
     layers = {}
     if other_bytes and n:  # an opaque block of the layers' and .raw's bytes, per cell
         layers["other"] = Matrix("layers/other", n, max(1, other_bytes // n), False, 0, "uint8")

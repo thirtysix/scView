@@ -25,63 +25,83 @@ REPROCESS = ["reset_to_counts", "qc_metrics", "doublet_detection", "filtering", 
 # --- calibration: the measured peaks the coefficients were fitted to -----------------------
 # Headers as read from the test files; measured = cgroup anon at the peak minus the process
 # before loading (scanpy imported), "Reprocess from scratch" steps, 2 CPUs, a fresh process.
+# Re-measured 2026-10-22 since doublet detection scores the counts alone (core/scrublet_lean.py).
 def _h(fmt, n, m, mats, obsm=0, obsp=0, varm=0, uns=0, obs_cols=0, var_cols=0, emb=False):
-    h = pf.Header(fmt, n, m, [pf.Matrix(w, n, m, sparse, nnz, dt, "int32")
-                              for w, sparse, nnz, dt in mats],
+    # mats: (where, sparse, nnz, dtype[, non-zeros of a dense one])
+    h = pf.Header(fmt, n, m, [pf.Matrix(mat[0], n, m, mat[1], mat[2], mat[3], "int32",
+                                        nonzero=mat[4] if len(mat) > 4 else None) for mat in mats],
                   obsm={"X_pca": [n, 50]} if emb else {}, obsm_bytes=obsm, obsp_bytes=obsp,
                   varm_bytes=varm, uns_bytes=uns, obs_columns=obs_cols, var_columns=var_cols)
     return h
 
 
 CALIBRATION = {
-    # name: (header, measured resident after load, measured run peak, marker columns)
+    # name: (header, measured resident after load, measured run peak, marker columns[, steps])
     "pbmc 10x h5": (_h("10x_h5", 1222, 33538, [("X", True, 2498225, "float32")]),
                     0.04, 0.63, []),
-    "paul15 (dense)": (_h("h5ad", 2730, 3451, [("X", False, 9421230, "float32"),
-                                               ("layers/counts", False, 9421230, "float32"),
-                                               ("raw/X", False, 9421230, "float32")],
+    # all dense: the first 64 rows say 27% of the counts are non-zero (read_header)
+    "paul15 (dense)": (_h("h5ad", 2730, 3451, [("X", False, 9421230, "float32", 9421230),
+                                               ("layers/counts", False, 9421230, "float32", 2578058),
+                                               ("raw/X", False, 9421230, "float32", 2578058)],
                           546000, 990600, 1380400, 7497385, 10, 11, emb=True),
-                       0.13, 0.62, ["paul15_clusters", "scview_leiden_r0.5"]),
+                       0.13, 0.65, ["paul15_clusters", "scview_leiden_r0.5"]),
     "Kang (sparse)": (_h("h5ad", 13836, 14053, [("X", False, 194437308, "float64"),
                                                 ("layers/counts", True, 9655137, "float64"),
                                                 ("raw/X", True, 9655137, "float64")],
                          8301600, 4574264, 5621200, 31893321, 15, 11, emb=True),
-                      1.76, 3.00, ["cluster", "scview_leiden_r0.5"]),
+                      1.76, 2.67, ["cluster", "scview_leiden_r0.5"]),
     "ovary 10k": (_h("h5ad", 10000, 20082, [("X", True, 12109310, "float32"),
                                             ("layers/counts", False, 200820000, "float32")],
                      uns=10924929, obs_cols=7, var_cols=5),
-                  0.91, 6.17, ["cluster", "Cluster"]),
+                  0.91, 4.89, ["cluster", "Cluster"]),
     "ovary 20k": (_h("h5ad", 20000, 20082, [("X", True, 24099492, "float32"),
                                             ("layers/counts", False, 401640000, "float32")],
                      uns=10924929, obs_cols=7, var_cols=5),
-                  1.75, 11.73, ["cluster", "Cluster"]),
-    # measured through PCA (the steps after it are estimated at 16.5 GiB at most); killed at
-    # 18 GiB in doublet detection, measured at 26 GiB
+                  1.75, 9.26, ["cluster", "Cluster"]),
+    # measured through doublet detection (13.90 GiB, was 20.86): the full run was killed at
+    # the 16 GiB the runs may use, in filtering (main measured it at +11.15 GiB)
     "ovary 37k": (_h("h5ad", 37104, 20082, [("X", True, 44738263, "float32"),
                                             ("layers/counts", False, 745122528, "float32")],
                      uns=10924929, obs_cols=7, var_cols=5),
-                  3.22, 20.86, ["cluster", "Cluster"]),
+                  3.22, 13.90, ["cluster", "Cluster"], REPROCESS[:3]),
 }
 
 
 @pytest.mark.parametrize("name", list(CALIBRATION))
 def test_estimates_are_within_the_stated_band_of_the_measured_peaks(name):
-    h, load_m, peak_m, cols = CALIBRATION[name]
+    h, load_m, peak_m, cols, *steps = CALIBRATION[name]
     load = pf.resident_bytes(h) / GiB
-    run = pf.estimate_run(h, steps=REPROCESS, params=PipelineParams(marker_columns=cols), warm=False)
+    run = pf.estimate_run(h, steps=steps[0] if steps else REPROCESS,
+                          params=PipelineParams(marker_columns=cols), warm=False)
     assert abs(run.peak_bytes / GiB / peak_m - 1) <= pf.ERROR_BAND
     assert abs(load - load_m) <= max(pf.ERROR_BAND * load_m, 0.03)
 
 
-def test_the_dense_counts_layer_puts_the_peak_in_doublet_detection():
+def test_doublet_detection_no_longer_copies_the_dense_counts_layer():
+    # Scrublet scored a copy of the whole dataset: ovary's dense X (after the reset) and its
+    # dense counts layer, 1.5 GiB each at 20k cells, made the step need more than 5 of them.
+    # It scores the counts alone as CSR now (core/scrublet_lean.py): its z-scoring sets the
+    # need, not the layers.
     h = CALIBRATION["ovary 20k"][0]
-    run = pf.estimate_run(h, steps=REPROCESS, warm=False)
-    assert run.peak_step == "doublet_detection"
-    # Scrublet copies the dataset: its two dense 20,000 x 20,082 float32 matrices (X after the
-    # reset, and the counts layer) are 1.5 GiB each, so the step needs more than 4 of them.
+    run = pf.estimate_run(h, steps=REPROCESS, warm=True)
     dense = 20000 * 20082 * 4
     dbl = next(e for e in run.steps if e.step == "doublet_detection")
-    assert dbl.transient_bytes > 4 * dense
+    assert dbl.transient_bytes == int(pf.DBL_DENSE_PER_VALUE * 20000 * 20082)
+    assert dbl.transient_bytes < 3.5 * dense
+    # the dense counts are sized by their non-zeros: those of the sparse X beside them
+    no_x = pf.Header("h5ad", 20000, 20082, [m for m in h.matrices if m.where != "X"])
+    assert pf._State.from_header(no_x).layers["counts"].nonzero is None
+    assert abs(pf._State.from_header(h).layers["counts"].nonzero - h.matrices[0].nnz) <= 1
+
+
+def test_ovary_runs_peak_in_filtering_now():
+    # Without Scrublet's copies of the dense matrices, filtering's are the largest. Not
+    # measured whole (killed at 16 GiB): filtering's +11.15 GiB measured on main over the
+    # 5.82 GiB the dataset holds after doublet detection now is 16.97 GiB.
+    h, _, _, cols, _ = CALIBRATION["ovary 37k"]
+    run = pf.estimate_run(h, steps=REPROCESS, params=PipelineParams(marker_columns=cols), warm=False)
+    assert run.peak_step == "filtering"
+    assert abs(run.peak_bytes / GiB / 16.97 - 1) <= pf.ERROR_BAND
 
 
 def test_reset_to_counts_frees_the_dense_x_before_the_later_steps():
@@ -130,12 +150,16 @@ def test_step_peak_scaling_holds_two_dense_float32_copies():
     assert t >= 2 * n * m * 4  # the dense X and sc.pp.scale's working copy
 
 
-def test_step_peak_doublets_counts_the_layers_it_copies():
+def test_step_peak_doublets_ignores_the_layers_and_reads_the_non_zeros():
     n, m = 4000, 10000
-    base = pf.estimate_step_peak("doublet_detection", (n, m), 0, True)
-    assert base >= 4 * n * m * 4  # four float32 copies of a dense X while it picks genes
-    more = pf.estimate_step_peak("doublet_detection", (n, m), 0, True, other_bytes=n * 1000)
-    assert more - base == n * 1000
+    base = pf.estimate_step_peak("doublet_detection", (n, m), 0, True, nonzero=n * m // 10)
+    assert base == int(pf.DBL_DENSE_PER_VALUE * n * m)  # Scrublet's dense z-scoring
+    # the layers and .raw are not copied any more (they were: +other_bytes)
+    assert pf.estimate_step_peak("doublet_detection", (n, m), 0, True, nonzero=n * m // 10,
+                                 other_bytes=n * 1000) == base
+    # a dense X of unknown non-zeros is taken as full: six float32 CSR copies of every value
+    assert pf.estimate_step_peak("doublet_detection", (n, m), 0, True) == \
+        int(pf.DBL_SPARSE_COPIES * (n * m * 8 + (n + 1) * 4))
 
 
 def test_step_peak_unknown_step_and_params():
@@ -150,10 +174,22 @@ def test_step_peak_unknown_step_and_params():
 def test_step_peak_for_reads_the_live_anndata():
     rng = np.random.default_rng(0)
     a = ad.AnnData(sp.random(300, 200, density=0.1, format="csr", dtype=np.float32, random_state=rng))
-    without = pf.step_peak_for(a, "doublet_detection")
+    without = pf.step_peak_for(a, "filtering"), pf.step_peak_for(a, "doublet_detection")
     a.layers["counts"] = a.X.copy()
-    assert pf.step_peak_for(a, "doublet_detection") > without
+    assert pf.step_peak_for(a, "filtering") > without[0]  # filtering copies the layers
+    assert pf.step_peak_for(a, "doublet_detection") == without[1]  # Scrublet gets X alone
     assert pf.step_peak_for(a, "no_such_step") == 0
+
+
+def test_live_dense_counts_are_sized_by_their_sampled_non_zeros():
+    # A reset puts ovary's dense counts in X: as every value, six CSR copies made 20 GiB of
+    # a step that needs 8.6; their non-zeros (6%) are counted on a sample of rows.
+    rng = np.random.default_rng(0)
+    X = (rng.random((3000, 4000)) < 0.06).astype(np.float32) * rng.integers(1, 9, (3000, 4000))
+    h = pf.header_from_adata(ad.AnnData(X=X))
+    assert abs(h.x.nonzero / np.count_nonzero(X) - 1) < 0.05
+    sparse = pf.step_peak_for(ad.AnnData(X=sp.csr_matrix(X)), "doublet_detection")
+    assert pf.step_peak_for(ad.AnnData(X=X), "doublet_detection") == pytest.approx(sparse, rel=0.05)
 
 
 # --- verdict ------------------------------------------------------------------------------
