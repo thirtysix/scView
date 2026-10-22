@@ -10,6 +10,7 @@ import {
   lostGenesNote,
   parseNumbers,
   shareText,
+  plannerGroupOrder,
 } from "./studyPlanner";
 
 const DONORS = [3, 4, 6, 8, 12, 16];
@@ -158,5 +159,17 @@ describe("helpers", () => {
     expect(parseNumbers("2.5", { integer: true })).toBeNull();
     expect(parseNumbers("1", { min: 2 })).toBeNull();
     expect(parseNumbers("")).toBeNull();
+  });
+});
+
+describe("plannerGroupOrder", () => {
+  it("puts a cluster column of named cell types before numbered clusterings, else keeps the order", () => {
+    const cols = [
+      { name: "scview_leiden_r0.5", dtype: "category", n_unique: 3, values: ["0", "1", "2"] },
+      { name: "cluster", dtype: "category", n_unique: 3, values: ["CD14 Mono", "B", "NK"] },
+      { name: "stim", dtype: "category", n_unique: 2, values: ["CTRL", "STIM"] },
+    ];
+    expect(plannerGroupOrder(["scview_leiden_r0.5", "cluster"], cols)).toEqual(["cluster", "scview_leiden_r0.5"]);
+    expect(plannerGroupOrder(["scview_leiden_r0.5"], cols)).toEqual(["scview_leiden_r0.5"]);
   });
 });

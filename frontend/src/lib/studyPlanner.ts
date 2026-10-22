@@ -1,6 +1,18 @@
 /** Helpers for the study planner (Compare > Plan a study): power curves and the
  *  sentence answers, from a plan the backend simulated. */
 import type { CompositionPlan, CompositionPoint, DEPlan, DEPoint } from "@/api/planner";
+import type { ObsColumnInfo } from "@/api/types";
+
+/** A planner plans per cell type: put columns whose labels are mostly names ("CD14 Mono") before
+ *  numbered clusterings, keeping the ranking's order otherwise. Kang's author cell types sit in a
+ *  column called "cluster", which the shared ranking files under clusterings, after Leiden. */
+export function plannerGroupOrder(ranked: readonly string[], cols: readonly ObsColumnInfo[]): string[] {
+  const named = (name: string) => {
+    const values = cols.find((c) => c.name === name)?.values ?? [];
+    return values.length > 0 && values.filter((v) => !/^\d+$/.test(String(v).trim())).length > values.length / 2;
+  };
+  return [...ranked.filter(named), ...ranked.filter((n) => !named(n))];
+}
 
 export const DEFAULT_DONORS = [3, 4, 6, 8, 12, 16];
 export const DEFAULT_CELLS = [500, 2000, 5000];

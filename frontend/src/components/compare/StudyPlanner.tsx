@@ -37,6 +37,7 @@ import {
   lostGenesNote,
   parseNumbers,
   pctText,
+  plannerGroupOrder,
   plannerQuestion,
   shareText,
 } from "@/lib/studyPlanner";
@@ -107,11 +108,14 @@ export function StudyPlanner({ datasetId, info }: Props) {
   const cols = useMemo(() => dataset?.obs_columns ?? [], [dataset]);
   const groupOptions = useMemo(
     () =>
-      rankGroupingColumns(cols, {
-        nCells: dataset?.n_cells,
-        activeClustering: dataset?.active_clustering,
-        userColumns: dataset?.user_annotation_columns,
-      }).map((g) => g.name),
+      plannerGroupOrder(
+        rankGroupingColumns(cols, {
+          nCells: dataset?.n_cells,
+          activeClustering: dataset?.active_clustering,
+          userColumns: dataset?.user_annotation_columns,
+        }).map((g) => g.name),
+        cols,
+      ),
     [cols, dataset],
   );
   const conditionOptions = useMemo(() => conditionColumns(cols, [groupKey]), [cols, groupKey]);
