@@ -27,4 +27,16 @@ export interface MarkerGene {
 export interface MarkersResponse {
   groups: string[];
   markers: Record<string, MarkerGene[]>;
+  /** Set when there are none (200, no groups): why, in a sentence the UI shows
+   *  (an unprocessed dataset: "No marker genes yet: run the pipeline or pick a column."). */
+  reason?: string;
+}
+
+/** Shown when an empty marker response carries no reason of its own (older backends 404'd). */
+export const NO_MARKERS_REASON = "No marker genes yet: run the pipeline or pick a column.";
+
+/** The reason a marker response has no markers, or null when it has some. */
+export function noMarkersReason(data: MarkersResponse | null | undefined): string | null {
+  if (!data || !Array.isArray(data.groups)) return NO_MARKERS_REASON;
+  return data.groups.length === 0 ? (data.reason ?? NO_MARKERS_REASON) : null;
 }
