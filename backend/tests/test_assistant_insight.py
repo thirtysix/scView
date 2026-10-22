@@ -91,3 +91,22 @@ async def test_polish_is_noop_without_key_or_on_info():
     # "info" severity is never polished even with a key.
     info = DatasetInsight(insight="All done.", severity="info")
     assert (await polish_insight(info, "fake-key", "m")).polished is False
+
+
+def _processed_with(col: str) -> ad.AnnData:
+    a = _raw()
+    a.X = np.log1p(a.X).astype("float32")
+    a.obs["leiden"] = pd.Categorical(["0", "1"] * 20)
+    a.obs["n_genes_by_counts"] = (a.X > 0).sum(1)
+    a.uns["scview_active_clustering"] = "leiden"
+    a.uns["scview_provenance"] = {
+        s: {"done": True} for s in ("normalize", "log1p", "pca", "neighbors", "clustering", "umap")
+    }
+    a.obs[col] = pd.Categorical(["paired"] * 20 + ["no contig"] * 20)
+    return a
+
+
+def test_batch_hint_skips_columns_scview_writes():
+    # vdj_status matched "status": the hint asked to integrate across V(D)J chain status.
+    assert "vdj_status" not in build_insight(_adaptor(_processed_with("vdj_status"))).insight
+    assert "split by stim" in build_insight(_adaptor(_processed_with("stim"))).insight
