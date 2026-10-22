@@ -18,7 +18,7 @@ can be wrong, and the user decides.
   replaces X, filtering leaves the opened copy held by the adaptor until the run ends,
   scaling makes X dense float32 and keeps the old X as .raw).
 - ``estimate_step_peak(step, shape, nnz, dense, params, *, other_bytes=0,
-  dtype="float32") -> int``: one step, pure, for a hook before each step;
+  dtype="float32", nonzero=None) -> int``: one step, pure, for a hook before each step;
   ``step_peak_for(adata, step, params)`` reads the same from a live AnnData.
 - ``make_verdict``: fits (under 70% of the memory free), tight (70-100%), won't fit,
   with suggestions in this order: raise SCVIEW_MEMORY_GB, close the other datasets
@@ -49,10 +49,10 @@ step at +11.15 GiB, which over the 5.82 the dataset holds after doublet detectio
 17.0). Doublet detection used to score a copy of the whole dataset: ovary_raw's dense
 3 GB counts layer beside the dense X a reset makes took it to 20.86 GiB (killed at an
 18 GiB limit), Kang's to 3.00, the subsamples' to 6.17 and 11.73. The small datasets
-are over by fixed costs (library imports, caches). Ingest (read, save as gzip h5ad, reopen), peak:
-pbmc 10x .h5 0.056 / 0.060 (+7%), the same as MEX 0.144 / 0.148 (+3%), a 1,222 x 5,000
-CSV 0.189 / 0.203 (+7%), paul15 0.140 / 0.147 (+5%), Kang 1.79 / 1.91 (+7%). Not
-measured: loom and zarr reads (8 and 0 bytes per value, reasoned), RDS (a guess), batch
+are over by fixed costs (library imports, caches). Ingest (read, save as gzip h5ad,
+reopen), peak: pbmc 10x .h5 0.056 / 0.060 (+7%), the same as MEX 0.144 / 0.148 (+3%),
+a 1,222 x 5,000 CSV 0.189 / 0.203 (+7%), paul15 0.140 / 0.147 (+5%), Kang 1.79 / 1.91
+(+7%). Not measured: loom and zarr reads (8 and 0 bytes per value, reasoned), RDS (a guess), batch
 correction, the uncorrected UMAP and cell-type annotation (reasoned from what they
 allocate; the estimate says so). Header reads take 3-35 ms (Kang's 1.9 GB h5ad: 17 ms).
 
@@ -101,8 +101,9 @@ class Matrix:
     dtype: str = "float32"  # of the values, in memory
     index_dtype: str = "int32"  # sparse only
     nnz_estimated: bool = False  # sampled, not read (loom)
-    # Dense only: its non-zero values, counted on a sample of rows (a live AnnData), or
-    # taken from the sparse matrices beside it (``_State``); None: not known.
+    # Dense only: its non-zero values, counted on a sample of rows (a live AnnData, or the
+    # first rows of a file with no sparse matrix), or taken from the sparse matrices beside
+    # it (``_State``); None: not known. Doublet detection sizes dense counts by it.
     nonzero: int | None = None
 
     @property
