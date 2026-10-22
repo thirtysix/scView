@@ -94,7 +94,8 @@ FLAG_HELP = {
 }
 
 # Doublet calls stored as text by other tools (scDblFinder, demuxlet, DoubletFinder).
-_DOUBLET_CLASS_COLS = ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class")
+_DOUBLET_CLASS_COLS = ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class",
+                       "hash_class")  # hash_class: core/hashing.py (Singlet / Doublet / Negative)
 _DOUBLET_CLASS_PREFIX = "DF.classification"
 
 

@@ -13,6 +13,7 @@ vi.mock("@/components/panels/AnnotationControl", () => ({ AnnotationControl: () 
 vi.mock("@/components/panels/AnnotationConfidenceCard", () => ({ AnnotationConfidenceCard: () => null }));
 vi.mock("@/components/panels/MeanVariancePlot", () => ({ MeanVariancePlot: () => null }));
 vi.mock("@/components/qc/SequencingQc", () => ({ SequencingQc: () => null }));
+vi.mock("@/components/qc/Hashing", () => ({ Hashing: () => null }));
 
 import { DataAssessmentPanel } from "./DataAssessmentPanel";
 import { useDatasetStore } from "@/stores/datasetStore";

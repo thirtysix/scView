@@ -235,6 +235,11 @@ def doublet_calls(obs):
         if pd.api.types.is_bool_dtype(col):
             return col.to_numpy(dtype=bool)
         return col.astype(str).str.lower().isin(("true", "1", "doublet")).to_numpy()
+    names = [c for c in ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class",
+                         "hash_class") if c in obs.columns]
+    names += [c for c in obs.columns if str(c).startswith("DF.classification")]
+    for name in names:
+        return obs[name].astype(str).str.lower().eq("doublet").to_numpy()
     return None
 ''',
     "mad_thresholds": '''
@@ -625,12 +630,73 @@ def gene_programs(adata, genes, k, seeds, source="raw", solver="cd", init="rando
 """,
 }
 
+_HELPERS["read_hashtags"] = '''
+def read_hashtags(path, cells, features, sources):
+    """The tag counts scView demultiplexed, read again from the input file (cells x
+    tags, in the call's order): an .h5ad's tag table in obsm or its features in X,
+    a 10x .h5 or matrix folder's features of any type (read_input keeps genes only)."""
+    p = str(path)
+    tags = list(features)
+    if p.endswith(".h5ad"):
+        full = ad.read_h5ad(p, backed="r")
+        out = {}
+        for t in tags:
+            src = str(sources.get(t) or "")
+            keys = ([src[5:]] if src.startswith("obsm ") else []) + [
+                "hto_counts", "protein_counts", "protein_expression", "protein", "adt", "ADT"]
+            for key in keys:
+                table = full.obsm[key] if key in full.obsm else None
+                name = next((n for n in (t, features[t]) if isinstance(table, pd.DataFrame)
+                             and n in table.columns), None)
+                if name is not None:
+                    out[t] = table[name].to_numpy(dtype=np.float64)
+                    break
+            else:  # a feature in X (10x feature types read into an .h5ad)
+                col = full.X[:, [full.var_names.get_loc(features[t])]]
+                out[t] = (col.toarray() if sp.issparse(col) else np.asarray(col)).ravel().astype(np.float64)
+        names = pd.Index(full.obs_names)
+    else:
+        if p.endswith(".h5"):
+            full = sc.read_10x_h5(p, gex_only=False)
+        else:
+            full = sc.read_10x_mtx(p, var_names="gene_symbols", gex_only=False)
+        full.var_names_make_unique()
+        out = {}
+        for t in tags:
+            col = full[:, features[t]].X
+            out[t] = (col.toarray() if sp.issparse(col) else np.asarray(col)).ravel().astype(np.float64)
+        names = pd.Index(full.obs_names)
+    if not names.is_unique:
+        names = pd.Index(ad.utils.make_index_unique(names))
+    frame = pd.DataFrame(out, index=names)
+    return frame.loc[list(cells), tags].to_numpy(dtype=np.float64)
+'''
+
+
+def _hashing_helper() -> str:
+    """scView's own demultiplexing code (core/hashing.py: the HTODemux and
+    hashedDrops ports), copied into the script so the replay computes exactly
+    what scView did, without importing scView."""
+    import inspect
+
+    from scview.core import hashing
+
+    lines = ["import math", "from dataclasses import dataclass, field", "from typing import Any", ""]
+    lines += [f"{name} = {_lit(getattr(hashing, name))}" for name in hashing.REPLAY_CONSTANTS]
+    for obj in hashing.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["hashing"] = _hashing_helper()
+
 # The order helpers are written in (later ones call earlier ones).
 _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_from_hvg_frame",
                  "counts_hvg", "pearson_residuals", "per_cell_qc", "doublet_calls",
                  "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
                  "markers_key", "louvain",
-                 "harmony", "lognorm_scoring", "subcluster", "gene_programs")
+                 "harmony", "lognorm_scoring", "subcluster", "gene_programs",
+                 "read_hashtags", "hashing")
 
 # Helpers another helper calls.
 _HELPER_NEEDS = {
@@ -1379,6 +1445,62 @@ def _keep_layout(p: dict, ctx: _Ctx) -> Snippet:
         f"adata.uns.pop({_lit(str(key))}, None)",
     ])
 
+def _sample_code(column: object, mapping: object) -> list[str] | None:
+    if not isinstance(column, str) or not column or not isinstance(mapping, dict) \
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
+        return None
+    order = list(dict.fromkeys(mapping.values()))
+    return [
+        f"mapping = {_lit(mapping)}  # tag -> sample; doublets and negatives get none",
+        f"adata.obs[{_lit(column)}] = pd.Categorical(adata.obs[\"hash_call\"].astype(object).map(mapping), "
+        f"categories={_lit(order)})",
+    ]
+
+
+def _hashing_demux(p: dict, ctx: _Ctx) -> Snippet:
+    from scview.core import hashing
+
+    tags, method = p.get("tags"), p.get("method")
+    features, sources = p.get("features") or {}, p.get("sources") or {}
+    ok = (isinstance(tags, list) and tags and all(isinstance(t, str) for t in tags)
+          and method in hashing.METHODS and isinstance(features, dict) and isinstance(sources, dict)
+          and all(isinstance(features.get(t), str) for t in tags))
+    if not ok:
+        return Snippet(NOT_REPLAYABLE, ["# Cell hashing call: the tags or method are not recorded. Recorded:",
+                                        *_param_comment(p)], "hashing call not recorded")
+    _need(ctx, "hashing", "read_hashtags")
+    feats = {t: features[t] for t in tags}
+    srcs = {t: str(sources.get(t) or "") for t in tags}
+    if method == hashing.HTODEMUX:
+        q = p.get("positive_quantile", hashing.POSITIVE_QUANTILE)
+        run = [f"call = htodemux(counts, tags, {_lit(float(q))})  # = Seurat 5.1.0 HTODemux"]
+    else:
+        run = ["call = hashed_drops(counts, tags)  # = DropletUtils 1.24 hashedDrops, defaults"]
+    code = [
+        "# Cell hashing: each cell's tag from its hashtag counts (scView's port, copied above).",
+        f"tags = {_lit(list(tags))}",
+        f"counts = read_hashtags(INPUT, adata.obs_names, {_lit(feats)}, {_lit(srcs)})",
+        *run,
+        "for col, values in call_columns(call).items():",
+        "    adata.obs[col] = values",
+        "adata.obsm[\"hto_counts\"] = pd.DataFrame(counts.astype(np.float32), index=adata.obs_names, columns=tags)",
+    ]
+    redo = p.get("sample_column")
+    if isinstance(redo, dict):
+        sample = _sample_code(redo.get("column"), redo.get("mapping"))
+        if sample:
+            code += ["# The sample column follows the new call.", *sample]
+    return Snippet(EXACT, code)
+
+
+def _hashing_samples(p: dict, ctx: _Ctx) -> Snippet:
+    code = _sample_code(p.get("column"), p.get("mapping"))
+    if code is None:
+        return Snippet(NOT_REPLAYABLE, ["# Sample column from the hashing call: not recorded. Recorded:",
+                                        *_param_comment(p)], "mapping not recorded")
+    return Snippet(EXACT, ["# The sample column from the hashing call (tag -> sample name).", *code])
+
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -1417,6 +1539,8 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "mito_refilter": _mito_refilter,
     "gene_programs": _gene_programs,
     "keep_layout": _keep_layout,
+    "hashing_demux": _hashing_demux,
+    "hashing_samples": _hashing_samples,
 }
 
 
