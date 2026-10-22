@@ -7,6 +7,7 @@ import { Caption } from "@/components/common/Caption";
 import {
   attachSeqMetrics,
   getSeqMetrics,
+  removeSeqMetrics,
   type SeqFlag,
   type SeqMetricsResponse,
   type SeqSample,
@@ -315,6 +316,20 @@ export function SequencingQc({ datasetId }: { datasetId: string }) {
   }, [datasetId]);
 
   const sample = data?.samples[Math.min(focus, (data?.samples.length ?? 1) - 1)];
+  const [removing, setRemoving] = useState(false);
+
+  const remove = async (name: string) => {
+    setRemoving(true);
+    setError(null);
+    try {
+      setData(await removeSeqMetrics(datasetId, name));
+      setFocus(0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRemoving(false);
+    }
+  };
   const notes = sample ? [...(sample.metrics?.notes ?? []), ...sample.notes] : [];
 
   return (
@@ -381,7 +396,16 @@ export function SequencingQc({ datasetId }: { datasetId: string }) {
             Ranger alert line (hover for the line and its source).
           </Caption>
           <p className="text-[11px] text-slate-600" data-testid="seqqc-summary">
-            <span className="font-medium text-slate-700">{sample.sample}:</span> {sample.summary}
+            <span className="font-medium text-slate-700">{sample.sample}:</span> {sample.summary}{" "}
+            <button
+              type="button"
+              onClick={() => void remove(sample.sample)}
+              disabled={removing}
+              className="text-slate-400 underline hover:text-slate-600 disabled:opacity-50"
+              title={`Remove ${sample.sample}'s metrics and barcode ranks from the dataset (to attach the right files instead).`}
+            >
+              Remove
+            </button>
           </p>
           {sample.flags.length > 0 && (
             <ul className="space-y-1" data-testid="seqqc-flags">

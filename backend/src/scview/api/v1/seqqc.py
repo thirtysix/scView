@@ -5,7 +5,8 @@ Cell Ranger alerts it crosses, and the raw matrix's knee / inflection summary wi
 downsampled rank curve (``core/seq_metrics.py``); 404 when none is attached.
 ``POST /datasets/{id}/seq-metrics``: attach those files to a dataset uploaded without
 them (multipart ``files``; optional ``sample`` + ``column`` for one sample of a merged
-dataset). The record goes into ``uns`` and is saved like every other dataset edit.
+dataset); ``DELETE ...?sample=`` removes one sample's record. Only that ``uns`` entry
+is written (the file is copied and the entry rewritten; the matrix is never read).
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ async def get_seq_metrics(dataset_id: str, dm: DatasetManager = Depends(get_data
     return body
 
 
-def _save_uns_entry(source: str, output: str, value: str) -> None:
+def _save_uns_entry(source: str, output: str, value: str | None) -> None:
     """Save only the sequencing entry: copy the dataset's file and rewrite that one uns
     key, so the matrix is never read, written or recompressed (a full write of a
     freshly uploaded 2 GB file takes minutes and its memory)."""
@@ -58,7 +59,8 @@ def _save_uns_entry(source: str, output: str, value: str) -> None:
                 write_elem(f, "uns", {})
             if seq_metrics.UNS_KEY in f["uns"]:
                 del f["uns"][seq_metrics.UNS_KEY]
-            write_elem(f["uns"], seq_metrics.UNS_KEY, value)
+            if value is not None:  # None: the entry is removed
+                write_elem(f["uns"], seq_metrics.UNS_KEY, value)
     except Exception:
         os.remove(partial)
         raise
@@ -105,20 +107,42 @@ async def attach_seq_metrics(
         shutil.rmtree(stage, ignore_errors=True)
 
 
+@router.delete("/datasets/{dataset_id}/seq-metrics")
+async def remove_seq_metrics(
+    dataset_id: str, sample: str, dm: DatasetManager = Depends(get_dataset_manager)
+):
+    """Remove one sample's attached metrics (a wrong file, say); 404 when it has none.
+    Answers with what is left (``samples`` empty when nothing is)."""
+
+    def edit(work) -> None:
+        if not seq_metrics.remove(work, sample):
+            raise seq_metrics.SeqQcError(f"No sequencing metrics are attached for '{sample}'.", 404)
+
+    body = await _edit(dataset_id, dm, edit)
+    return body or {"samples": [], "n_samples": 0, "metrics_info": []}
+
+
 async def _attach(dataset_id: str, paths: list[Path], sample: str, column: str,
                   dm: DatasetManager) -> dict:
+    name = sample or (dm.get_dataset_info(dataset_id) or {}).get("name") or "sample"
+    return await _edit(
+        dataset_id, dm, lambda work: seq_metrics.attach_files(work, paths, name, column or None))
+
+
+async def _edit(dataset_id: str, dm: DatasetManager, edit) -> dict | None:
+    """Run ``edit(adata)`` in a worker thread under the dataset's edit lock, save the
+    sequencing entry alone, and answer with the new payload."""
     async with dataset_edit(dataset_id) as held:
         adaptor = await dm.get_or_load_dataset(dataset_id)
         if adaptor is None:
             raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
         backed = getattr(adaptor.adata, "isbacked", False)
-        label = sample or (dm.get_dataset_info(dataset_id) or {}).get("name") or "sample"
 
         def _run():
             work = adaptor.adata
-            seq_metrics.attach_files(work, paths, label, column or None)
-            _save_uns_entry(adaptor.h5ad_path, output_path, work.uns[seq_metrics.UNS_KEY])
+            edit(work)
+            _save_uns_entry(adaptor.h5ad_path, output_path, work.uns.get(seq_metrics.UNS_KEY))
             return seq_metrics.payload(work)
 
         try:
@@ -127,10 +151,10 @@ async def _attach(dataset_id: str, paths: list[Path], sample: str, column: str,
             raise HTTPException(status_code=e.status, detail=str(e))  # raised before any change
         except Exception as e:
             dm.evict(dataset_id)  # the cached copy may hold an entry that was never saved
-            logger.error("Attaching sequencing metrics failed for %s: %s", dataset_id, e,
+            logger.error("Saving sequencing metrics failed for %s: %s", dataset_id, e,
                          exc_info=True)
             raise HTTPException(status_code=500,
-                                detail=f"Could not attach the sequencing metrics: {e!s}")
+                                detail=f"Could not save the sequencing metrics: {e!s}")
         if backed:
             dm.evict(dataset_id)
             await dm.load_dataset(dataset_id)

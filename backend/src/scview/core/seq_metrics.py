@@ -961,8 +961,26 @@ def attach_files(adata, paths: list[Path], sample: str, column: str | None) -> d
     rec = build_record(sample, files, cells, column=column or None, cells_source="dataset")
     if rec["metrics"] is None and rec["knee"] is None:
         raise SeqQcError(" ".join(rec["notes"]) or "None of the files could be read.")
+    k = rec["knee"]
+    if k is not None and k["n_cells"] and not k["n_cells_matched"]:
+        raise SeqQcError(
+            f"None of the {k['n_cells']:,} cells is in this raw matrix: it is from another sample, "
+            "or the dataset's cell names are not 10x barcodes. Nothing was attached.")
     store(adata, [rec])
     return rec
+
+
+def remove(adata, sample: str) -> bool:
+    """Drop one sample's record (the key goes when none is left). False: no such sample."""
+    data = read(adata)
+    if not data or sample not in data["samples"]:
+        return False
+    samples = {k: v for k, v in data["samples"].items() if k != sample}
+    if samples:
+        adata.uns[UNS_KEY] = json.dumps({"version": VERSION, "samples": samples})
+    else:
+        del adata.uns[UNS_KEY]
+    return True
 
 
 # ---------------------------------------------------------------------------

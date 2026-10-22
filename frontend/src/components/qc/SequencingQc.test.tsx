@@ -3,11 +3,12 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import type { SeqFlag, SeqMetricsResponse, SeqSample } from "@/api/seqqc";
 import { useDatasetStore } from "@/stores/datasetStore";
 
-const { getSeqMetrics, attachSeqMetrics } = vi.hoisted(() => ({
+const { getSeqMetrics, attachSeqMetrics, removeSeqMetrics } = vi.hoisted(() => ({
   getSeqMetrics: vi.fn(),
   attachSeqMetrics: vi.fn(),
+  removeSeqMetrics: vi.fn(),
 }));
-vi.mock("@/api/seqqc", () => ({ getSeqMetrics, attachSeqMetrics }));
+vi.mock("@/api/seqqc", () => ({ getSeqMetrics, attachSeqMetrics, removeSeqMetrics }));
 // Plotly needs a real canvas; the traces and shapes it is handed are what matter here.
 vi.mock("@/components/plots/Plot", () => ({
   default: ({ data, layout }: { data: { name: string; x: number[] }[]; layout: { shapes: unknown[] } }) => (
@@ -107,6 +108,7 @@ describe("SequencingQc", () => {
   beforeEach(() => {
     getSeqMetrics.mockReset();
     attachSeqMetrics.mockReset();
+    removeSeqMetrics.mockReset();
     useDatasetStore.setState({ currentDataset: null, currentDatasetId: null });
   });
 
@@ -194,6 +196,16 @@ describe("SequencingQc", () => {
     fireEvent.click(attach);
     expect((await screen.findByRole("alert")).textContent).toBe("No cells have 'sample' = 's2'.");
     expect(attachSeqMetrics).toHaveBeenCalledWith("d1", [file], { column: "sample", sample: "s2" });
+  });
+
+  it("removes a sample's metrics and falls back to the attach prompt when none is left", async () => {
+    getSeqMetrics.mockResolvedValue(resp([PBMC]));
+    removeSeqMetrics.mockResolvedValue(null);
+    render(<SequencingQc datasetId="d1" />);
+    await screen.findByTestId("seqqc-table");
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(removeSeqMetrics).toHaveBeenCalledWith("d1", "pbmc_1k_v3"));
+    expect(await screen.findByTestId("seqqc-none")).toBeTruthy();
   });
 
   it("shows a load error instead of the attach prompt", async () => {

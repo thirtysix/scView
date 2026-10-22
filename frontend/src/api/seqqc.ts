@@ -152,3 +152,13 @@ export async function attachSeqMetrics(
   if (!res.ok) throw await failure(res);
   return res.json();
 }
+
+/** DELETE /seq-metrics?sample=: remove one sample's record; null when none is left. */
+export async function removeSeqMetrics(datasetId: string, sample: string): Promise<SeqMetricsResponse | null> {
+  const res = await fetch(`${API_BASE}/datasets/${datasetId}/seq-metrics?sample=${encodeURIComponent(sample)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw await failure(res);
+  const body = (await res.json()) as SeqMetricsResponse;
+  return body.samples.length ? body : null;
+}

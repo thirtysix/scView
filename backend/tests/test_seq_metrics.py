@@ -603,6 +603,30 @@ async def test_attach_to_one_sample_of_a_merged_dataset(client, dataset_manager)
     assert r.status_code == 404
     r = await client.post(f"{API}/datasets/{did}/seq-metrics", files=up, data={"column": "nope"})
     assert r.status_code == 404
+    r = await client.post(f"{API}/datasets/{did}/seq-metrics", files=up,
+                          data={"column": "sample", "sample": "s1"})
+    assert [s["sample"] for s in r.json()["samples"]] == ["s2", "s1"]
+    # Remove one, then the other: the entry goes with the last.
+    r = await client.delete(f"{API}/datasets/{did}/seq-metrics", params={"sample": "s2"})
+    assert r.status_code == 200 and [s["sample"] for s in r.json()["samples"]] == ["s1"]
+    r = await client.delete(f"{API}/datasets/{did}/seq-metrics", params={"sample": "s2"})
+    assert r.status_code == 404
+    r = await client.delete(f"{API}/datasets/{did}/seq-metrics", params={"sample": "s1"})
+    assert r.status_code == 200 and r.json()["samples"] == []
+    assert (await client.get(f"{API}/datasets/{did}/seq-metrics")).status_code == 404
+    derived = Path(dataset_manager.data_dir) / "derived" / did / "data.h5ad"
+    assert sm.UNS_KEY not in ad.read_h5ad(derived).uns
+
+
+async def test_attach_refuses_a_raw_matrix_of_another_sample(client, dataset_manager, tmp_path):
+    dense = _raw_counts()
+    bcs = [_bc(i) for i in range(dense.shape[1])]
+    did = _register(dataset_manager, _cells_adata([f"cell{i}" for i in range(40)]), "other")
+    raw = _write_h5(tmp_path / "raw_feature_bc_matrix.h5", dense, bcs)
+    r = await client.post(f"{API}/datasets/{did}/seq-metrics",
+                          files=[("files", ("raw_feature_bc_matrix.h5", raw.read_bytes(), "application/x-hdf5"))])
+    assert r.status_code == 400 and "None of the 40 cells is in this raw matrix" in r.json()["detail"]
+    assert (await client.get(f"{API}/datasets/{did}/seq-metrics")).status_code == 404
 
 
 # ---------------------------------------------------------------------------
