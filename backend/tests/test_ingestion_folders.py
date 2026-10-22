@@ -412,8 +412,9 @@ async def test_commit_outs_folder_sequencing_qc_and_both_contig_tables(ingest, t
     assert rec["files"] == {"metrics": "metrics_summary.csv", "raw": ["raw_feature_bc_matrix.h5"]}
     assert rec["knee"]["n_cells_matched"] == 200
     info = vdj.summary(a)
-    assert sorted(f["stored_as"] for f in info["files"]) == [
-        "pbmc/outs/vdj_b/filtered_contig_annotations.csv", "pbmc/outs/vdj_t/filtered_contig_annotations.csv"]
+    want = ["pbmc/outs/vdj_b/filtered_contig_annotations.csv", "pbmc/outs/vdj_t/filtered_contig_annotations.csv"]
+    assert sorted(f["stored_as"] for f in info["files"]) == want
+    assert sorted(f["name"] for f in info["files"]) == want  # what the Clonotypes tab lists
     receptor = a.obs[vdj.RECEPTOR_COL].astype(str)
     assert (receptor.iloc[:40] == "TCR alpha-beta").all() and (receptor.iloc[100:130] == "BCR").all()
     assert (receptor.iloc[40:100] == "none").all()  # all_contig_annotations.csv was not read too

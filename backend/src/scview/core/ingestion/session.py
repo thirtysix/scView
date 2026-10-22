@@ -382,7 +382,8 @@ class IngestSessionManager:
         for u in loadable:
             for f in [f for f in u.side_files if f.side_kind == SideKind.vdj]:
                 try:
-                    vdj.attach(adata, f.path, file_name=f.name, sha256=file_sha256(f.path),
+                    # Named by its folder path: a T and a B table share Cell Ranger's file name.
+                    vdj.attach(adata, f.path, file_name=f.rel_path or f.name, sha256=file_sha256(f.path),
                                sample_column=opts.sample_label if merged else None,
                                sample=u.label if merged else None, stored_as=f.rel_path or f.name)
                 except (vdj.VdjError, OSError, EOFError, zlib.error, ValueError) as e:
