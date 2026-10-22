@@ -37,6 +37,9 @@ FEATURE_TYPE_COLUMNS <- c("Type", "type", "feature_type", "feature_types", "Feat
 SYMBOL_COLUMNS <- c("Symbol", "symbol", "SYMBOL", "gene_name", "gene_names", "gene_symbol",
                     "gene_symbols", "GeneSymbol", "feature_name")
 ENSEMBL_RE <- "^ENS[A-Z]*G[0-9]+(\\.[0-9]+)?$"
+# BioLegend TotalSeq / BD AbSeq suffixes, stripped as the backend's protein.py
+# display_name does for a 10x import ("CD3_TotalSeqB" -> "CD3").
+ANTIBODY_SUFFIX_RE <- "[_.-](TotalSeq[-_]?[ABCD]|TotalA|TotalB|TotalC|AbSeq|ADT)$"
 
 fmt_n <- function(x) format(x, big.mark = ",", scientific = FALSE, trim = TRUE)
 plural <- function(n, word) sprintf("%s %s%s", fmt_n(n), word, if (n == 1) "" else "s")
@@ -569,20 +572,36 @@ split_feature_types <- function(row_df, n_rows, assays, alt, rpt) {
   obsm <- function(obj, cells, py) {
     out <- list()
     counts <- assays$get(counts_i)
-    names_all <- rownames(obj)
     if (length(ab)) {
-      out$protein_counts <- counts_frame(counts[ab, , drop = FALSE], names_all[ab], cells, py)
+      out$protein_counts <- counts_frame(counts[ab, , drop = FALSE],
+                                         antibody_names(row_df[ab, , drop = FALSE], rownames(obj)[ab]),
+                                         cells, py)
       note(rpt, "kept", "%d Antibody Capture rows (rowData %s) as the protein modality (obsm protein_counts)",
            length(ab), ft_col)
     }
     if (length(hto)) {
-      out$hto_counts <- counts_frame(counts[hto, , drop = FALSE], names_all[hto], cells, py)
+      out$hto_counts <- counts_frame(counts[hto, , drop = FALSE],
+                                     antibody_names(row_df[hto, , drop = FALSE], rownames(obj)[hto]),
+                                     cells, py)
       note(rpt, "kept", "%d Multiplexing Capture rows (rowData %s) as hashtag counts (obsm hto_counts)",
            length(hto), ft_col)
     }
     out
   }
   list(gene_rows = gene_rows, obsm = obsm)
+}
+
+#' Antibody / hashtag names as a direct 10x import shows them: the feature
+#' name (rowData Symbol, as read10xCounts stores it; the row names hold the
+#' 10x IDs) without the TotalSeq suffix, so "IgG1_control_TotalSeqB" reads
+#' "IgG1_control" and is recognised as an isotype control.
+antibody_names <- function(row_df, rn) {
+  sym_col <- base::intersect(SYMBOL_COLUMNS, colnames(row_df))[1]
+  nms <- if (!is.na(sym_col)) as.character(row_df[[sym_col]]) else NULL
+  if (is.null(nms) || any(is.na(nms) | !nzchar(nms))) nms <- if (is.null(rn)) NULL else as.character(rn)
+  if (is.null(nms)) return(NULL)
+  short <- sub(ANTIBODY_SUFFIX_RE, "", nms, ignore.case = TRUE)
+  ifelse(nzchar(short), short, nms)
 }
 
 #' A small features x cells count matrix as a cells x features DataFrame.
@@ -716,7 +735,8 @@ convert_alt_exps <- function(obj, alt, cells, rpt, py) {
       note(rpt, "skipped", "altExp %s: no counts assay, so not %s (it needs raw counts)", a$name, what)
       next
     }
-    out[[key]] <- counts_frame(counts, rownames(ae), cells, py)
+    out[[key]] <- counts_frame(counts, antibody_names(SummarizedExperiment::rowData(ae), rownames(ae)),
+                               cells, py)
     note(rpt, "kept", "altExp %s (%s features) as %s (obsm %s)", a$name, fmt_n(nf), what, key)
   }
   out

@@ -76,10 +76,14 @@ reducedDim(sce, "UMAP") <- matrix(rnorm(n_c * 2), n_c, 2)
 reducedDim(sce, "UMAP.HARMONY") <- matrix(rnorm(n_c * 2), n_c, 2)
 reducedDim(sce, "DF_EMB") <- data.frame(a = rnorm(n_c), b = rnorm(n_c), row.names = cells)
 
-adt <- sparse_counts(5, n_c, 20); dimnames(adt) <- list(paste0("CD", c(3, 4, 8, 14, 19)), cells)
+adt <- sparse_counts(5, n_c, 20); dimnames(adt) <- list(c("CD3", "CD4", "CD8", "CD14", "IgG1"), cells)
 hto <- sparse_counts(3, n_c, 30); dimnames(hto) <- list(paste0("Hashtag", 1:3), cells)
 ercc <- sparse_counts(4, n_c, 2); dimnames(ercc) <- list(paste0("ERCC-0000", 1:4), cells)
-altExp(sce, "ADT") <- SingleCellExperiment(assays = list(counts = adt))
+# as read10xCounts: the row names are the 10x IDs, Symbol the feature names
+altExp(sce, "ADT") <- SingleCellExperiment(
+  assays = list(counts = adt),
+  rowData = S4Vectors::DataFrame(Symbol = paste0(c("CD3", "CD4", "CD8", "CD14", "IgG1_control"), "_TotalSeqB"))
+)
 altExp(sce, "HTO") <- SingleCellExperiment(assays = list(counts = hto))
 altExp(sce, "ERCC") <- SingleCellExperiment(assays = list(counts = ercc))
 colPair(sce, "SNN") <- S4Vectors::SelfHits(from = 1:(n_c - 1), to = 2:n_c, nnode = n_c)
@@ -100,7 +104,7 @@ expected$sce_full <- list(
   var_names_head = c("Gene01", "Gene01-1", "Gene03"),
   obsm = list(X_pca = c(n_c, 5), X_umap = c(n_c, 2), X_umap_harmony = c(n_c, 2), X_df_emb = c(n_c, 2)),
   obsm_sums = list(X_pca = sum(pca), X_umap = sum(reducedDim(sce, "UMAP"))),
-  protein = list(columns = rownames(adt), sum = sum(adt)),
+  protein = list(columns = c("CD3", "CD4", "CD8", "CD14", "IgG1_control"), sum = sum(adt)),
   hto = list(columns = rownames(hto), sum = sum(hto)),
   pca_variance_ratio = c(20, 10, 5, 3, 2) / 100,
   pca_variance = c(8, 4, 2, 1.2, 0.8),
