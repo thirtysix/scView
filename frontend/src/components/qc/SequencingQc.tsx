@@ -195,7 +195,7 @@ function SampleTable({ data, focus, onFocus }: { data: SeqMetricsResponse; focus
       <table className="w-full text-[11px] text-slate-600" data-testid="seqqc-table">
         <thead className="border-b border-slate-200 text-slate-500">
           <tr>
-            <Th tip="The sample these metrics belong to (the dataset's sample column for a merged dataset).">Sample</Th>
+            <Th tip="The sample these metrics belong to: a value of the dataset's sample column for a merged dataset, else the dataset.">Sample</Th>
             {TABLE_METRICS.map((m) => (
               <Th key={m.key} right tip={`${metricLabel(info, m.key)}: ${metricTip(info, m.key)}`}>
                 {m.short}
@@ -252,8 +252,9 @@ function RankPlot({ sample }: { sample: SeqSample }) {
           layout={{
             autosize: true,
             margin: { l: 56, r: 10, t: 10, b: 40 },
-            xaxis: { type: "log", title: { text: "Barcode rank", font: { size: 10 } }, tickfont: { size: 9 } },
-            yaxis: { type: "log", title: { text: "UMI count", font: { size: 10 } }, tickfont: { size: 9 } },
+            // dtick 1: a label per power of ten only (no 2 / 5 minor labels).
+            xaxis: { type: "log", dtick: 1, title: { text: "Barcode rank", font: { size: 10 } }, tickfont: { size: 9 } },
+            yaxis: { type: "log", dtick: 1, title: { text: "UMI count", font: { size: 10 } }, tickfont: { size: 9 } },
             shapes,
             annotations,
             showlegend: true,
@@ -396,7 +397,11 @@ export function SequencingQc({ datasetId }: { datasetId: string }) {
             Ranger alert line (hover for the line and its source).
           </Caption>
           <p className="text-[11px] text-slate-600" data-testid="seqqc-summary">
-            <span className="font-medium text-slate-700">{sample.sample}:</span> {sample.summary}{" "}
+            <span className="font-medium text-slate-700">
+              {sample.sample}
+              {sample.column ? ` (${sample.column})` : ""}:
+            </span>{" "}
+            {sample.summary}{" "}
             <button
               type="button"
               onClick={() => void remove(sample.sample)}

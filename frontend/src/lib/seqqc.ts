@@ -6,11 +6,11 @@ import { CATEGORICAL_COLORS } from "@/lib/colors";
 export const TABLE_METRICS: { key: SeqMetricKey; short: string }[] = [
   { key: "estimated_cells", short: "Cells" },
   { key: "mean_reads_per_cell", short: "Reads/cell" },
-  { key: "median_genes_per_cell", short: "Genes/cell" },
-  { key: "median_umi_per_cell", short: "UMIs/cell" },
+  { key: "median_genes_per_cell", short: "Genes" },
+  { key: "median_umi_per_cell", short: "UMIs" },
   { key: "sequencing_saturation", short: "Saturation" },
   { key: "valid_barcodes", short: "Valid BC" },
-  { key: "conf_transcriptome", short: "Transcriptome" },
+  { key: "conf_transcriptome", short: "Mapped" },
   { key: "q30_rna_read", short: "Q30 RNA" },
   { key: "frac_reads_in_cells", short: "In cells" },
 ];

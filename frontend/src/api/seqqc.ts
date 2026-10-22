@@ -130,12 +130,14 @@ async function failure(res: Response): Promise<Error> {
   return new Error(detail || `Request failed (${res.status}).`);
 }
 
-/** GET /seq-metrics: the attached Cell Ranger metrics per sample, or null when none (404). */
+/** GET /seq-metrics: the attached Cell Ranger metrics per sample, or null when none
+ *  (asked with allow_empty, so a dataset without them is no 404 in the console). */
 export async function getSeqMetrics(datasetId: string): Promise<SeqMetricsResponse | null> {
-  const res = await fetch(`${API_BASE}/datasets/${datasetId}/seq-metrics`);
+  const res = await fetch(`${API_BASE}/datasets/${datasetId}/seq-metrics?allow_empty=true`);
   if (res.status === 404) return null;
   if (!res.ok) throw await failure(res);
-  return res.json();
+  const body = (await res.json()) as SeqMetricsResponse;
+  return body.samples.length ? body : null;
 }
 
 /** POST /seq-metrics: attach metrics_summary.csv and/or a raw matrix (to one sample of `column`). */

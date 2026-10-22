@@ -559,6 +559,8 @@ async def test_attach_endpoint(client, dataset_manager, tmp_path):
     original.chmod(0o444)  # uploads are read-only
     r = await client.get(f"{API}/datasets/{did}/seq-metrics")
     assert r.status_code == 404
+    r = await client.get(f"{API}/datasets/{did}/seq-metrics", params={"allow_empty": "true"})
+    assert r.status_code == 200 and r.json()["samples"] == []
     raw = _write_h5(tmp_path / "raw_feature_bc_matrix.h5", dense, bcs)
     with open(raw, "rb") as fr:
         r = await client.post(

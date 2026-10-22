@@ -33,15 +33,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _MAX_FILES = 6
+_EMPTY = {"samples": [], "n_samples": 0, "metrics_info": []}
 
 
 @router.get("/datasets/{dataset_id}/seq-metrics")
-async def get_seq_metrics(dataset_id: str, dm: DatasetManager = Depends(get_dataset_manager)):
+async def get_seq_metrics(
+    dataset_id: str, allow_empty: bool = False, dm: DatasetManager = Depends(get_dataset_manager)
+):
+    """404 when none is attached; with ``allow_empty`` an empty answer instead (the card
+    asks on every dataset, and a 404 is a console error in the browser)."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     body = await asyncio.to_thread(seq_metrics.payload, adaptor.adata)
     if body is None:
+        if allow_empty:
+            return _EMPTY
         raise HTTPException(status_code=404, detail="No sequencing metrics are attached to this "
                                                     "dataset.")
     return body
@@ -118,8 +125,7 @@ async def remove_seq_metrics(
         if not seq_metrics.remove(work, sample):
             raise seq_metrics.SeqQcError(f"No sequencing metrics are attached for '{sample}'.", 404)
 
-    body = await _edit(dataset_id, dm, edit)
-    return body or {"samples": [], "n_samples": 0, "metrics_info": []}
+    return await _edit(dataset_id, dm, edit) or _EMPTY
 
 
 async def _attach(dataset_id: str, paths: list[Path], sample: str, column: str,

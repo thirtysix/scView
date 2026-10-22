@@ -119,6 +119,9 @@ describe("SequencingQc", () => {
     expect(getSeqMetrics).toHaveBeenCalledWith("d1");
     const rows = within(table).getAllByRole("row");
     expect(rows[1]!.textContent).toBe("pbmc_1k_v31,22254,5021,9196,62870.8%97.4%53.7%90.2%94.9%none");
+    expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual([
+      "Sample", "Cells", "Reads/cell", "Genes", "UMIs", "Saturation", "Valid BC", "Mapped", "Q30 RNA", "In cells", "Flags",
+    ]);
     for (const th of within(table).getAllByRole("columnheader")) expect(th.getAttribute("title")).toBeTruthy();
     expect(screen.getByTestId("seqqc-summary").textContent).toContain("No Cell Ranger alert fires");
     expect(screen.queryByTestId("seqqc-flags")).toBeNull();
@@ -145,6 +148,7 @@ describe("SequencingQc", () => {
     expect(flexRow.textContent).toContain("1 alert");
     fireEvent.click(flexRow);
     const badge = await screen.findByTestId("seqqc-flag-badge");
+    expect(screen.getByTestId("seqqc-summary").textContent).toMatch(/^OR00001_1 \(sample\): 1 of 4 checked metrics/);
     expect(badge.textContent).toBe("Warning: Low fraction valid barcodes");
     expect(screen.getByText(/below Cell Ranger's warn line of 75.0%/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "Cell Ranger 10.1 web summary alert" }).getAttribute("href")).toContain("cellranger");
