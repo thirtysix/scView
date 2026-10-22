@@ -3,6 +3,7 @@ import { GitCompare, Loader2, AlertCircle, Sparkles } from "lucide-react";
 import { CompositionTest } from "@/components/compare/CompositionTest";
 import { JointEmbedding } from "@/components/compare/JointEmbedding";
 import { MiloTest } from "@/components/compare/MiloTest";
+import { StudyPlanner } from "@/components/compare/StudyPlanner";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -43,11 +44,12 @@ async function fetchProportions(datasetId: string, column: string): Promise<Reco
   return props;
 }
 
-type CompareTab = "joint" | "composition";
+type CompareTab = "joint" | "composition" | "planner";
 
 const TABS: { id: CompareTab; label: string }[] = [
   { id: "joint", label: "Joint embedding" },
   { id: "composition", label: "Composition" },
+  { id: "planner", label: "Plan a study" },
 ];
 
 /** Multi-dataset analysis: a joint embedding across datasets, or a side-by-side
@@ -72,7 +74,31 @@ export function ComparePanel() {
           </button>
         ))}
       </div>
-      {tab === "joint" ? <JointEmbedding /> : <CompositionTab />}
+      {tab === "joint" ? <JointEmbedding /> : tab === "planner" ? <PlannerTab /> : <CompositionTab />}
+    </div>
+  );
+}
+
+/** How many donors would a follow-up need, from the open dataset's own variability. */
+function PlannerTab() {
+  const dataset = useDatasetStore((s) => s.currentDataset);
+  if (!dataset) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-400">
+        Load a dataset with replicate donors first: the planner simulates follow-up studies from its
+        donor-to-donor variability.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-slate-500">
+        How many donors per group would a follow-up to <span className="font-medium">{dataset.name}</span>{" "}
+        need? Power is estimated by simulating studies from this dataset&apos;s own donor-to-donor
+        variability and running the app&apos;s own tests on them. More donors, not more cells, is what
+        usually buys power.
+      </p>
+      <StudyPlanner key={dataset.id} datasetId={dataset.id} info={dataset} />
     </div>
   );
 }
