@@ -56,9 +56,11 @@ export function UnifiedBottomPanel({
   const noGeneReason =
     overlay?.type === "score"
       ? "Per-donor values are for one gene; a score is per cell. Pick a gene."
-      : overlay?.type === "expression"
-        ? "Per-donor values are for genes; proteins are not supported yet."
-        : undefined;
+      : overlay?.type === "program"
+        ? "Per-donor values are for one gene; a program's usage is per cell. Pick a gene."
+        : overlay?.type === "expression"
+          ? "Per-donor values are for genes; proteins are not supported yet."
+          : undefined;
 
   const hasData = Object.keys(violinData).length > 0;
   const canDistances = !!datasetId && !!distanceColumn;

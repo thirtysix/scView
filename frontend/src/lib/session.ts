@@ -60,12 +60,15 @@ export function cameraFromViewState(vs: Record<string, unknown>): Camera | null 
 export type SessionOverlay =
   // layer: a protein (CITE-seq) is read from the protein layer
   | { type: "expression"; gene: string; layer?: string }
-  | { type: "score"; name: string; genes: string[] }
+  // method: how the set was scored; absent (and in older sessions) = score_genes
+  | { type: "score"; name: string; genes: string[]; method?: "score_genes" | "aucell" }
   // A TF or pathway's per-cell activity (Activity subtab), computed again on open.
   | { type: "activity"; network: "collectri" | "progeny"; source: string }
   // Plot reliability (neighbour preservation) of an embedding, computed again on open;
   // dims: the PCA pair plotted, when not the first two.
-  | { type: "reliability"; embedding: string; dims?: [number, number] };
+  | { type: "reliability"; embedding: string; dims?: [number, number] }
+  // A gene program's usage share (Programs subtab), read again from the saved run on open.
+  | { type: "program"; index: number };
 
 /** A selection: the filter it came from, else its cells (whichever is shorter). */
 export type SessionSelection =
@@ -295,11 +298,13 @@ function parseOverlay(x: unknown, where: string): SessionOverlay {
       : { type: "expression", gene, layer: text(o.layer, `${where}.layer`, { empty: false }) };
   }
   if (o.type === "score") {
-    return {
+    const out: Extract<SessionOverlay, { type: "score" }> = {
       type: "score",
       name: text(o.name, `${where}.name`, { empty: false, max: 1024 }),
       genes: texts(o.genes, `${where}.genes`, 1, MAX_GENES),
     };
+    if (o.method !== undefined) out.method = oneOf(o.method, ["score_genes", "aucell"] as const, `${where}.method`);
+    return out;
   }
   if (o.type === "activity") {
     return {
@@ -319,7 +324,10 @@ function parseOverlay(x: unknown, where: string): SessionOverlay {
     ];
     return { type: "reliability", embedding, dims };
   }
-  fail(`${where}.type`, 'must be "expression", "score", "activity" or "reliability"');
+  if (o.type === "program") {
+    return { type: "program", index: number(o.index, `${where}.index`, 1, 1000, true) };
+  }
+  fail(`${where}.type`, 'must be "expression", "score", "activity", "reliability" or "program"');
 }
 
 const CLIP_PRESETS = ["none", "p1", "p2", "p5", "manual"] as const;

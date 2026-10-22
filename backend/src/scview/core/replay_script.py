@@ -567,6 +567,62 @@ def subcluster(adata, column, group, resolution, batch_key=None, n_top_genes=200
     order += [c for c in new if c not in order]
     adata.obs[target] = pd.Categorical(values, categories=order)
 ''',
+    "gene_programs": """
+def gene_programs(adata, genes, k, seeds, source="raw", solver="cd", init="random",
+                  beta_loss="frobenius", tol=1e-4, max_iter=1000, kmeans_seed=1, kmeans_starts=10,
+                  target_sum=1e4):
+    \"\"\"Consensus NMF as scView ran it: the log-normalised variable genes, each divided
+    by its standard deviation; one NMF per seed; k-means of the unit-length spectra and
+    each group's median, scaled to sum 1; usages refitted with those spectra fixed and
+    scaled to sum 1 per cell; programs ordered by mean usage share. Returns
+    (usage shares, usages, spectra), cells x k, cells x k, k x genes.\"\"\"
+    from sklearn.cluster import KMeans
+    from sklearn.decomposition import NMF, non_negative_factorization
+
+    if source == "raw":
+        L = adata.raw[:, genes].X
+    elif source == "X":
+        L = adata[:, genes].X
+    else:  # the shifted log of the counts
+        C = find_counts(adata)
+        totals = np.asarray(C.sum(axis=1), dtype=np.float64).ravel()
+        scale = np.divide(target_sum, totals, out=np.zeros_like(totals), where=totals > 0)
+        cols = adata.var_names.get_indexer(genes)
+        L = sp.csr_matrix(sp.diags(scale.astype(np.float32)) @ sp.csr_matrix(C[:, cols], dtype=np.float32))
+        L.data = np.log1p(L.data)
+    X = sp.csr_matrix(L, dtype=np.float32)
+    n = X.shape[0]
+    mean = np.asarray(X.mean(axis=0), dtype=np.float64).ravel()
+    sq = np.asarray(X.multiply(X).mean(axis=0), dtype=np.float64).ravel()
+    sd = np.sqrt(np.maximum(sq - mean * mean, 0.0) * (n / max(n - 1, 1)))
+    X = sp.csr_matrix(X @ sp.diags((1.0 / sd).astype(np.float32)), dtype=np.float32)
+    X.eliminate_zeros()
+    spectra = []
+    for seed in seeds:
+        model = NMF(n_components=k, init=init, solver=solver, beta_loss=beta_loss, tol=tol,
+                    max_iter=max_iter, random_state=seed)
+        model.fit_transform(X)
+        spectra.append(np.asarray(model.components_, dtype=np.float64))
+    S = np.vstack(spectra)
+    norms = np.linalg.norm(S, axis=1, keepdims=True)
+    U = np.divide(S, norms, out=np.zeros_like(S), where=norms > 0)
+    labels = (KMeans(n_clusters=k, n_init=kmeans_starts, random_state=kmeans_seed).fit_predict(U)
+              if len(seeds) > 1 else np.arange(k))
+    H = np.zeros((k, S.shape[1]))
+    for c in range(k):
+        if (labels == c).any():
+            H[c] = np.median(U[labels == c], axis=0)
+    tot = H.sum(axis=1, keepdims=True)
+    H = np.divide(H, tot, out=np.zeros_like(H), where=tot > 0)
+    W, _, _ = non_negative_factorization(X, H=H.astype(X.dtype), n_components=k, init=None,
+                                         update_H=False, solver=solver, beta_loss=beta_loss, tol=tol,
+                                         max_iter=max_iter)
+    W = np.asarray(W, dtype=np.float64)
+    tot = W.sum(axis=1, keepdims=True)
+    share = np.divide(W, tot, out=np.zeros_like(W), where=tot > 0)
+    order = np.argsort(-share.mean(axis=0), kind="stable")
+    return share[:, order], W[:, order], H[order]
+""",
 }
 
 # The order helpers are written in (later ones call earlier ones).
@@ -574,7 +630,7 @@ _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_fro
                  "counts_hvg", "pearson_residuals", "per_cell_qc", "doublet_calls",
                  "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
                  "markers_key", "louvain",
-                 "harmony", "lognorm_scoring", "subcluster")
+                 "harmony", "lognorm_scoring", "subcluster", "gene_programs")
 
 # Helpers another helper calls.
 _HELPER_NEEDS = {
@@ -585,6 +641,7 @@ _HELPER_NEEDS = {
     "lognorm_scoring": ("looks_like_counts",),
     "subcluster": ("looks_like_counts", "harmony"),
     "refilter_types": ("looks_like_counts",),
+    "gene_programs": ("find_counts",),
 }
 
 
@@ -1259,6 +1316,69 @@ adata.obs["predicted_doublet"] = np.isfinite(scores) & (scores > {_lit(float(t))
                                     *_param_comment(p)], "threshold not recorded")
 
 
+def _packed(items: list[str], width: int = 92) -> list[str]:
+    """Literal list items, several to a line (a 2,000-gene list one per line is 2,000 lines)."""
+    lines, cur = [], ""
+    for item in items:
+        if cur and len(cur) + len(item) + 2 > width:
+            lines.append("    " + cur.rstrip())
+            cur = ""
+        cur += item + ", "
+    if cur:
+        lines.append("    " + cur.rstrip())
+    return lines
+
+
+def _gene_programs(p: dict, ctx: _Ctx) -> Snippet:
+    genes, k, seeds = p.get("genes"), p.get("k"), p.get("seeds")
+    if not isinstance(genes, list) or not genes or not isinstance(k, int) or not isinstance(seeds, list):
+        return Snippet(NOT_REPLAYABLE, ["# Gene programs: genes, k or seeds not recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items() if x != "genes"})],
+                       "genes, k or seeds not recorded")
+    _need(ctx, "gene_programs")
+    src = str(p.get("source") or "")
+    source = "raw" if src.startswith("log-normalised .raw") else "X" if src.startswith("log-normalised X") \
+        else "counts"
+    return Snippet(EXACT, [
+        "# NOTE: the same seeds and settings as scView's run; another scikit-learn version, BLAS",
+        "# or thread count can still change the result in the last digits or, rarely, which",
+        "# replicate spectra k-means groups together, so exact reproduction is not guaranteed.",
+        "PROGRAM_GENES = [",
+        *_packed([repr(str(g)) for g in genes]),
+        "]",
+        f"share, usage, spectra = gene_programs(adata, PROGRAM_GENES, {_lit(int(k))}, "
+        f"{_lit([int(x) for x in seeds])}, source={_lit(source)}, solver={_lit(p.get('solver', 'cd'))}, "
+        f"init={_lit(p.get('init', 'random'))}, beta_loss={_lit(p.get('beta_loss', 'frobenius'))}, "
+        f"tol={_lit(p.get('tol', 1e-4))}, max_iter={_lit(p.get('max_iter', 1000))}, "
+        f"kmeans_seed={_lit(p.get('kmeans_seed', 1))}, kmeans_starts={_lit(p.get('kmeans_starts', 10))}, "
+        f"target_sum={_lit(p.get('target_sum', 1e4))})",
+        'adata.obsm["X_nmf_usage"] = share.astype(np.float32)',
+        'adata.obsm["X_nmf_usage_raw"] = usage.astype(np.float32)',
+    ])
+
+def _keep_layout(p: dict, ctx: _Ctx) -> Snippet:
+    key, seed, k = p.get("key"), p.get("seed"), p.get("n_neighbors")
+    if not key or seed is None or k is None:
+        return Snippet(NOT_REPLAYABLE, ["# A kept layout: its seed or neighbours are not recorded. "
+                                        "Recorded:", *_param_comment(p)], "layout not recorded")
+    if p.get("min_dist") is None and p.get("a") is not None and p.get("b") is not None:
+        curve = f"a={_lit(p['a'])}, b={_lit(p['b'])}"
+    else:
+        curve = f"min_dist={_lit(p.get('min_dist', 0.5))}"
+    n_pcs = f", n_pcs={_lit(p['n_pcs'])}" if p.get("n_pcs") is not None else ""
+    return Snippet(EXACT, [
+        "# A layout kept from scView's layout stability check: the graph rebuilt from the",
+        "# same representation with this neighbour count, laid out with this seed.",
+        f"sc.pp.neighbors(adata, n_neighbors={_lit(k)}, use_rep={_lit(p.get('use_rep') or 'X_pca')}"
+        f"{n_pcs}, metric={_lit(p.get('metric') or 'euclidean')}, key_added=\"layout_check\")",
+        f"sc.tl.umap(adata, {curve}, random_state={_lit(seed)}, neighbors_key=\"layout_check\", "
+        f"key_added={_lit(str(key))})",
+        'for k in ("layout_check_connectivities", "layout_check_distances"):',
+        "    adata.obsp.pop(k, None)",
+        'adata.uns.pop("layout_check", None)',
+        f"adata.uns.pop({_lit(str(key))}, None)",
+    ])
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -1295,6 +1415,8 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "merge_clusters": _merge_clusters,
     "qc_state_label": _qc_state_label,
     "mito_refilter": _mito_refilter,
+    "gene_programs": _gene_programs,
+    "keep_layout": _keep_layout,
 }
 
 

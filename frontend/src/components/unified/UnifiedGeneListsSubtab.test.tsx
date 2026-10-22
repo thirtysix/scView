@@ -8,6 +8,7 @@ import { useGeneListsStore } from "@/stores/geneListsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useCustomGeneSetsStore } from "@/stores/customGeneSetsStore";
+import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 
 const { apiFetch, enrichGeneLists, customCollectionFromLists } = vi.hoisted(() => ({
   apiFetch: vi.fn(),
@@ -50,6 +51,7 @@ beforeEach(() => {
     throw new Error(`unexpected ${path}`);
   });
   useDatasetStore.setState({ currentDatasetId: "ds1" });
+  useScoringMethodStore.setState({ method: "score_genes" });
   useGeneListsStore.setState({ lists: [], selectedId: null });
   useGeneGridStore.setState({ datasetId: null, genes: [], pair: null });
   useSplitViewStore.setState({ splitBy: null, compareColumns: null, geneGrid: null });
@@ -127,8 +129,22 @@ describe("UnifiedGeneListsSubtab", () => {
     await waitFor(() => expect(onScoreGeneSet).toHaveBeenCalled());
     const [path, init] = apiFetch.mock.calls.find((c) => String(c[0]).endsWith("/genesets/score"))!;
     expect(path).toBe("/datasets/ds1/genesets/score");
-    expect(JSON.parse(init.body)).toEqual({ gene_set: ["Lyz2", "Klf1", "Gata1"], score_name: "Mixed" });
-    expect(onScoreGeneSet).toHaveBeenCalledWith(new Float32Array([0.1, 0.2]), "Mixed", ["Lyz2", "Klf1", "Gata1"]);
+    expect(JSON.parse(init.body)).toEqual({ gene_set: ["Lyz2", "Klf1", "Gata1"], score_name: "Mixed", method: "score_genes" });
+    expect(onScoreGeneSet).toHaveBeenCalledWith(
+      new Float32Array([0.1, 0.2]), "Mixed", ["Lyz2", "Klf1", "Gata1"], undefined, "score_genes");
+  });
+
+  it("scores with the method chosen beside the Score button", async () => {
+    seed();
+    renderTab();
+    await screen.findByText("3 not in this dataset");
+    fireEvent.change(screen.getByRole("combobox", { name: "Gene-set scoring method" }), { target: { value: "aucell" } });
+    expect(useScoringMethodStore.getState().method).toBe("aucell");
+    fireEvent.click(screen.getByRole("button", { name: "Score" }));
+    await waitFor(() => expect(onScoreGeneSet).toHaveBeenCalled());
+    const [, init] = apiFetch.mock.calls.find((c) => String(c[0]).endsWith("/genesets/score"))!;
+    expect(JSON.parse(init.body).method).toBe("aucell");
+    expect(onScoreGeneSet.mock.calls[0]![4]).toBe("aucell");
   });
 
   it("enriches the present genes against every measured gene and shows the terms", async () => {

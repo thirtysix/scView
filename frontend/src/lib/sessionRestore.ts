@@ -85,8 +85,12 @@ export function captureSession(now: Date = new Date()): SessionFile {
       view.overlay = r.dims
         ? { type: "reliability", embedding: r.embedding, dims: r.dims }
         : { type: "reliability", embedding: r.embedding };
+    } else if (overlay.type === "program") {
+      view.overlay = { type: "program", index: overlay.index };
     } else if (overlay.type === "score" && overlay.genes?.length) {
-      view.overlay = { type: "score", name: overlay.name, genes: overlay.genes };
+      view.overlay = overlay.method === "aucell"
+        ? { type: "score", name: overlay.name, genes: overlay.genes, method: "aucell" }
+        : { type: "score", name: overlay.name, genes: overlay.genes };
     }
   }
 

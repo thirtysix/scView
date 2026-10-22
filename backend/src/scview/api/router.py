@@ -28,9 +28,12 @@ from scview.api.v1 import (
     milo,
     normalization,
     pca,
+    planner,
     preflight,
+    programs,
     system,
     report,
+    layouts,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -63,3 +66,6 @@ api_router.include_router(pca.router, tags=["assessment"])
 api_router.include_router(system.router, tags=["system"])
 api_router.include_router(preflight.router, tags=["system"])
 api_router.include_router(report.router, tags=["report"])
+api_router.include_router(planner.router, tags=["planner"])
+api_router.include_router(programs.router, tags=["programs"])
+api_router.include_router(layouts.router, tags=["embeddings"])

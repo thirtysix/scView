@@ -158,6 +158,22 @@ describe("save then open on the same dataset", () => {
     });
   });
 
+  it("saves an AUCell gene-set score with its method and scores it the same way on open", async () => {
+    buildWorkspace("lasso");
+    useUnifiedViewStore.getState().setScatterOverlay({ type: "score", name: "IFN", genes: ["ISG15", "MX1"], method: "aucell" });
+    const session = saveAndReset();
+    expect(session.view?.overlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15", "MX1"], method: "aucell" });
+    await restoreSession(session);
+    expect(useUnifiedViewStore.getState().pendingOverlay).toEqual({
+      datasetId: "kang",
+      overlay: { type: "score", name: "IFN", genes: ["ISG15", "MX1"], method: "aucell" },
+    });
+    // score_genes is the default: saved without a method, as before the choice existed.
+    buildWorkspace("lasso");
+    useUnifiedViewStore.getState().setScatterOverlay({ type: "score", name: "IFN", genes: ["ISG15"] });
+    expect(saveAndReset().view?.overlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15"] });
+  });
+
   it("saves a protein colouring (CITE-seq) and restores it only where the protein exists", async () => {
     const protein = { names: ["CD19"], controls: [], layer: "protein", counts_layer: "protein_counts", normalisation: "CLR" };
     api.getDataset.mockResolvedValue({ ...kang(), protein });

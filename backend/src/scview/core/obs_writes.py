@@ -112,6 +112,7 @@ def write_derived(
     output_path: str,
     source_path: str | None = None,
     uns_before: dict[str, int] | None = None,
+    obsm_keys: tuple[str, ...] | list[str] | None = (),
 ) -> None:
     """Write ``adata`` to its derived file: beside it first, then swapped in, so a
     failed write leaves the old file and a backed dataset reading it intact.
@@ -121,8 +122,14 @@ def write_derived(
     copied and just obs plus the replaced or removed uns entries are rewritten:
     a full write re-compresses the whole matrix (8 s on a 14k-cell dense file,
     against 0.1 s). Edits must replace an uns entry, not mutate it in place.
+    ``obsm_keys``: obsm entries the edit set or removed, rewritten the same way.
     """
     partial = output_path + ".partial"
+    # anndata refuses to write an index named like a column with other values (an
+    # uploaded h5ad's obs "cell_id"); the pipeline's save and the ingest drop the name too.
+    for frame in (adata.obs, adata.var):
+        if frame.index.name is not None and frame.index.name in frame.columns:
+            frame.index.name = None
     if (
         uns_before is not None
         and source_path
@@ -148,6 +155,13 @@ def write_derived(
                         if key in group:
                             del group[key]
                         write_elem(group, key, value)
+                if obsm_keys and "obsm" not in f:
+                    write_elem(f, "obsm", {})
+                for key in obsm_keys or ():
+                    if key in f["obsm"]:
+                        del f["obsm"][key]
+                    if key in adata.obsm:
+                        write_elem(f["obsm"], key, adata.obsm[key])
         except Exception:
             os.remove(partial)
             raise

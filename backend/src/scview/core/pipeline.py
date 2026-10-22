@@ -392,12 +392,20 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
 
 # Non-zero values sampled when deciding whether a matrix holds raw counts.
 _COUNTS_SAMPLE = 20_000
+_COUNTS_ROWS = 2_000  # rows read from an on-disk matrix to judge it
 
 
 def looks_like_counts(M) -> bool:
     """Non-negative integers with some signal: a raw-count matrix."""
     if M is None:
         return False
+    if not sp.issparse(M) and not isinstance(M, np.ndarray) and hasattr(M, "shape"):
+        # An on-disk (backed) matrix, e.g. a file over 2 GB: read the first rows only.
+        # np.asarray of the whole thing failed (sparse) or read every value (dense).
+        try:
+            M = M[: min(M.shape[0], _COUNTS_ROWS)]
+        except Exception:  # noqa: BLE001 - not sliceable: nothing to judge
+            return False
     if sp.issparse(M):
         vals = np.asarray(M.data[:_COUNTS_SAMPLE])
     else:

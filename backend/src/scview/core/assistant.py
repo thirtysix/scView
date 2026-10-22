@@ -42,6 +42,8 @@ from scview.core import (
 from scview.core import mito_by_type
 from scview.core import qc_states
 from scview.core import embedding_reliability
+from scview.core import study_planner
+from scview.core import layout_stability
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -186,6 +188,49 @@ def _add_embedding_reliability(adaptor, lines: list[str], sources: list[ChatSour
         lines.extend(er_lines)
         sources.append(ChatSource(kind="result", ref=embedding_reliability.TAG, detail=er_detail,
                                   evidence="\n".join(er_lines)))
+
+
+def _add_study_planner(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last study plans (core/study_planner.py): donors per group needed, once run."""
+    try:
+        sp_lines, sp_detail = study_planner.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: study planner grounding failed: %s", exc)
+        return
+    if sp_lines:
+        lines.extend(sp_lines)
+        sources.append(ChatSource(kind="result", ref=study_planner.TAG, detail=sp_detail,
+                                  evidence="\n".join(sp_lines[1:])))
+
+
+def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved gene programs (core/gene_programs.py): k, the stable ones with their
+    top genes and best enriched term, only once a run has been saved."""
+    from scview.core import gene_programs
+
+    try:
+        gp_lines, gp_detail = gene_programs.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: gene programs failed: %s", exc)
+        return
+    if gp_lines:
+        lines.extend(gp_lines)
+        sources.append(ChatSource(kind="result", ref=gene_programs.TAG, detail=gp_detail,
+                                  evidence="\n".join(gp_lines[1:])))
+
+
+def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Which group relations in the plot hold across other seeds and neighbour counts
+    (core/layout_stability.py), only once a layout check has run for this dataset."""
+    try:
+        ls_lines, ls_detail = layout_stability.grounding_lines(adaptor)
+    except Exception as exc:  # a relabelled or removed column, ...: no fact
+        logger.debug("assistant: layout stability failed: %s", exc)
+        return
+    if ls_lines:
+        lines.extend(ls_lines)
+        sources.append(ChatSource(kind="result", ref=layout_stability.TAG, detail=ls_detail,
+                                  evidence="\n".join(ls_lines)))
 
 
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -388,6 +433,7 @@ def build_grounding_context(
                                           evidence="\n".join(merge_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: merge-check grounding failed: %s", exc)
+        _add_study_planner(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).
@@ -448,6 +494,9 @@ def build_grounding_context(
             logger.debug("assistant: PCA grounding failed: %s", exc)
     if want("qc") or want("groups"):
         _add_embedding_reliability(adaptor, lines, sources)
+        _add_layout_stability(adaptor, lines, sources)
+    if want("markers") or want("groups"):
+        _add_programs(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []

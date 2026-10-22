@@ -15,7 +15,8 @@ import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/p
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
 import { GseaResults } from "@/components/unified/GseaResults";
 import { useEnrichmentSort } from "@/hooks/useEnrichmentSort";
-import { useGeneSetScoring } from "@/hooks/useGeneSetScoring";
+import { useGeneSetScoring, type OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
+import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
 import { downloadCsv } from "@/lib/csv";
 import { deEnrichmentQuery } from "@/lib/de";
 import { gseaSourceFromDE } from "@/lib/gsea";
@@ -39,7 +40,7 @@ interface Props {
   /** The DE table's significance cut-offs; the gene lists use exactly these. */
   pThreshold: number;
   fcThreshold: number;
-  onScoreGeneSet: (scores: Float32Array, name: string, genes?: string[]) => void;
+  onScoreGeneSet: OnScoreGeneSet;
   onGeneClick: (gene: string) => void;
 }
 
@@ -343,6 +344,7 @@ export function DEEnrichment({
                   {fmt(data[side].n_terms)} gene sets sharing a gene with these genes.
                 </p>
               )}
+              <ScoringMethodChoice label="Click a term to score it with" />
               <EnrichmentTermsTable
                 results={sorted}
                 sortField={sortField}
@@ -360,7 +362,10 @@ export function DEEnrichment({
 
       {gsea && (
         <div className="flex flex-col gap-1.5 border-t border-slate-100 pt-2">
-          <h4 className="text-[11px] font-semibold text-slate-700">GSEA: every tested gene, ranked</h4>
+          <div className="flex flex-wrap items-center gap-2">
+            <h4 className="text-[11px] font-semibold text-slate-700">GSEA: every tested gene, ranked</h4>
+            <ScoringMethodChoice label="Score terms with" className="ml-auto" />
+          </div>
           <GseaResults
             data={gsea}
             labels={gseaLabels}

@@ -281,6 +281,7 @@ const SUBTAB_LABELS: Partial<Record<UnifiedSubtab, string>> = {
   genelists: "Gene lists",
   communication: "Communication",
   report: "Report",
+  programs: "Programs",
 };
 
 /** What opening the link restores, one phrase each (the Copy link popover lists them). */
@@ -302,9 +303,10 @@ export function describeSharedView(session: SessionFile): string[] {
   }
   const o = v.overlay;
   if (o?.type === "expression") out.push(`the ${o.gene} ${o.layer ? "protein" : "expression"} overlay`);
-  else if (o?.type === "score") out.push(`the gene-set score overlay “${o.name}” (${count(o.genes.length)} genes)`);
+  else if (o?.type === "score") out.push(`the gene-set score overlay “${o.name}”${o.method === "aucell" ? " (AUCell)" : ""} (${count(o.genes.length)} genes)`);
   else if (o?.type === "activity") out.push(`the ${o.source} activity overlay (${o.network === "collectri" ? "CollecTRI" : "PROGENy"})`);
   else if (o?.type === "reliability") out.push(`the plot reliability overlay (${prettyEmbeddingLabel(o.embedding)})`);
+  else if (o?.type === "program") out.push(`the gene program P${o.index} usage overlay`);
   if (v.highlight) out.push(`the highlighted group ${prettyObsLabel(v.highlight.column)} = ${v.highlight.value}`);
   if (v.camera) out.push("the zoom and position");
   if (session.selection) out.push(describeSelection(session.selection));
