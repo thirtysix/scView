@@ -30,6 +30,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { DatasetLibrary } from "@/components/panels/DatasetLibrary";
 import { PreflightIngestNotes } from "@/components/common/PreflightNote";
+import { ClonotypeUnitFiles } from "@/components/unified/ClonotypeUnitFiles";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
   tenx_mex: "10x MEX (matrix + barcodes + features)",
@@ -411,6 +412,7 @@ function UnitCard({ unit }: { unit: IngestUnit }) {
           })}
         </ul>
       )}
+      <ClonotypeUnitFiles unit={unit} />
     </div>
   );
 }

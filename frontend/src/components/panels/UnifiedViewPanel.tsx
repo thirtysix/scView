@@ -24,6 +24,7 @@ import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSub
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
 import { ReportSubtab } from "@/components/report/ReportSubtab";
 import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
+import { ClonotypeSubtab } from "@/components/unified/ClonotypeSubtab";
 import { getProgramUsage, type ProgramUsage } from "@/api/programs";
 import { usageLabel } from "@/lib/programs";
 import { ClusterReference } from "@/components/unified/ClusterReference";
@@ -64,6 +65,7 @@ const SUBTABS = [
   { id: "communication" as const, label: "Communication" },
   { id: "report" as const, label: "Report" },
   { id: "programs" as const, label: "Programs" },
+  { id: "clonotypes" as const, label: "Clonotypes" },
 ] as const;
 
 interface ViolinResponse {
@@ -1279,6 +1281,7 @@ export function UnifiedViewPanel() {
                 setGroupByColumn={setGroupByColumn}
               />
             )}
+            {activeSubtab === "clonotypes" && <ClonotypeSubtab groupByColumn={groupByColumn} />}
           </div>
         </div>
       </div>
