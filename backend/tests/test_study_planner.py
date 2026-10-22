@@ -215,6 +215,17 @@ def test_no_donors_says_so_and_offers_an_entered_spread():
         planner.prepare_composition(obs, req)
 
 
+def test_a_group_found_in_one_condition_only_is_flagged():
+    obs = composition_obs([0.3, 0.2, 0.15, 0.1, 0.05], 0.3, 0.3, n_donors=4)
+    obs = obs[~((obs["cell_type"] == "t4") & (obs["stim"] == "CTRL"))]
+    req = planner.CompositionRequestModel(group_key="cell_type", condition_key="stim",
+                                          sample_key="Donor", groups=["t0"], fold_changes=[2.0],
+                                          donors=[3], cells=[500], reps=10)
+    model, grid = planner.prepare_composition(obs, req)
+    result = list(planner.iter_composition_plan(model, grid, 0.8))[-1]["result"]
+    assert any("almost only in one condition (t4)" in n for n in result["notes"])
+
+
 def test_a_paired_plan_needs_a_paired_pilot():
     obs = composition_obs([0.3, 0.2, 0.5], 0.3, 0.3, n_donors=4, paired=False)
     req = planner.CompositionRequestModel(group_key="cell_type", condition_key="stim",

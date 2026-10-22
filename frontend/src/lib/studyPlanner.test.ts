@@ -6,6 +6,7 @@ import {
   deSentence,
   donorsNeeded,
   foldText,
+  groupName,
   lostGenesNote,
   parseNumbers,
   shareText,
@@ -145,6 +146,8 @@ describe("deSentence", () => {
 
 describe("helpers", () => {
   it("formats effects and shares and parses number lists", () => {
+    expect(groupName("8")).toBe("cluster 8");
+    expect(groupName("CD14 Mono")).toBe("CD14 Mono");
     expect(foldText(2)).toBe("a 2-fold increase");
     expect(foldText(0.5)).toBe("a 2-fold decrease");
     expect(foldText(1.5)).toBe("a 1.5-fold increase");

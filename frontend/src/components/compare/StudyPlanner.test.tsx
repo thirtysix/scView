@@ -122,6 +122,8 @@ describe("StudyPlanner", () => {
     runCompositionPlan.mockResolvedValue({ ...PLAN, source: "assumed", assumed_sd: 0.35 });
     render(<StudyPlanner datasetId="kang" info={KANG} />);
     const box = await screen.findByTestId("planner-no-replicates");
+    expect(screen.getByTestId("planner-pilot")).toHaveTextContent(
+      "Pilot: no donor or sample column, so all 5,331 cells count as one sample per condition.");
     expect(box).toHaveTextContent("holds no donor-to-donor variability");
     expect(box).toHaveTextContent("an ASSUMPTION");
     expect(screen.getByLabelText("Assumed spread")).toHaveValue("0.35");

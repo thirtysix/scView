@@ -31,6 +31,7 @@ import {
   deSentence,
   donorsNeeded,
   foldText,
+  groupName,
   headlineDEPoint,
   log2fcText,
   lostGenesNote,
@@ -334,7 +335,14 @@ export function StudyPlanner({ datasetId, info }: Props) {
           </label>
         </div>
 
-        {pilot && (
+        {pilot && !pilot.sample_key && (
+          <Caption testId="planner-pilot">
+            Pilot: no donor or sample column, so all{" "}
+            {pilot.groups.reduce((a, g) => a + g.n_cells, 0).toLocaleString()} cells
+            count as one sample per condition.
+          </Caption>
+        )}
+        {pilot && pilot.sample_key && (
           <Caption testId="planner-pilot">
             Pilot: {pilot.n_donors.toLocaleString()} donor{pilot.n_donors === 1 ? "" : "s"}
             {pilot.sample_key ? ` of ${prettyObsLabel(pilot.sample_key)}` : ""},{" "}
@@ -400,7 +408,7 @@ export function StudyPlanner({ datasetId, info }: Props) {
                 <span>Spread to plan with (donor-to-donor SD of the log-odds share), an ASSUMPTION:</span>
                 <input aria-label="Assumed spread" value={assumedSd} onChange={(e) => setAssumedSd(e.target.value)}
                   className="w-20 rounded border border-amber-300 bg-white px-2 py-0.5 text-xs text-slate-700" />
-                <span className="text-amber-700">Default {pilot.assumed_sd_default}: the {pilot.assumed_sd_source}.</span>
+                <span className="text-amber-700">Default {pilot.assumed_sd_default} (source above); a solid tissue usually varies more.</span>
               </label>
             ) : (
               <p>Pseudobulk DE power needs per-gene donor variability, which only a pilot with replicate donors has.</p>
@@ -511,10 +519,10 @@ function CompositionResult({ plan, target, onAsk }: { plan: CompositionPlan; tar
               {compositionSentence(plan, t.group, fc, target)}
             </p>
             <PowerCurves curves={compositionCurves(plan, t.group, fc)} target={target}
-              title={`${t.group}: ${foldText(fc)}`} unit="cells per donor"
+              title={`${groupName(t.group)}: ${foldText(fc)}`} unit="cells per donor"
               filename={`study_plan_${t.group}_x${fc}`} />
             <Caption n={{ value: plan.reps, unit: "simulated studies per point" }}>
-              Power to detect {foldText(fc)} in {t.group}&apos;s share ({shareText(t.share)}
+              Power to detect {foldText(fc)} in {groupName(t.group)}&apos;s share ({shareText(t.share)}
               {plan.reference ? ` in ${plan.reference}` : ""}) at adjusted p &lt; {plan.alpha}; one line per cells per
               donor{plan.source === "pilot" ? `; dashed: the spread at the upper end of its 95% interval (SD ${t.sd_upper_used?.toFixed(2)} instead of ${t.sd_used.toFixed(2)})` : ""}; dotted: {pctText(target)}.
             </Caption>
@@ -540,7 +548,7 @@ function NeededTable({ plan, target }: { plan: CompositionPlan; target: number }
       <table className="w-full text-xs" data-testid="planner-needed">
         <thead>
           <tr className="border-b border-slate-100 bg-slate-50 text-left text-slate-600">
-            <th className="px-3 py-1.5 font-medium" title="The planned cell type">Cell type</th>
+            <th className="px-3 py-1.5 font-medium" title="The planned cell type or cluster">{prettyObsLabel(plan.group_key)}</th>
             <th className="px-3 py-1.5 font-medium" title="The tested group's mean share divided by the reference's">Effect</th>
             <th className="px-3 py-1.5 text-right font-medium"
               title="Donor-to-donor SD of the type's log-odds share the simulation uses (within donor for a paired design, total for unpaired), estimated from the pilot with counting noise removed">

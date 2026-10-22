@@ -33,6 +33,11 @@ export function donorsNeeded(points: readonly Pt[], target: number): number | nu
   return null;
 }
 
+/** A group as a sentence names it: a bare number is a cluster ("cluster 8"). */
+export function groupName(group: string): string {
+  return /^\d+$/.test(group) ? `cluster ${group}` : group;
+}
+
 /** "a 2-fold increase", "a 1.5-fold decrease" (0.67 = 1 / 1.5). */
 export function foldText(fc: number): string {
   if (fc === 1) return "no change";
@@ -138,12 +143,12 @@ export function compositionSentence(plan: CompositionPlan, group: string, fc: nu
   const curves = compositionCurves(plan, group, fc);
   const main = curves.filter((c) => !c.pessimistic);
   if (!main.some((c) => c.power.some((p) => p != null))) {
-    return `${capital(foldText(fc))} is not possible for ${group}: it would take its share past 98% of the cells.`;
+    return `${capital(foldText(fc))} is not possible for ${groupName(group)}: it would take its share past 98% of the cells.`;
   }
   const needs = neededByCells(curves, target);
   const reached = needs.filter((n) => n.need != null) as { cells: number; need: number }[];
   const powerPct = `${Math.round(target * 100)}%`;
-  const what = `${foldText(fc)} in ${group}'s share${where}`;
+  const what = `${foldText(fc)} in ${groupName(group)}'s share${where}`;
   if (!reached.length) {
     const maxN = Math.max(...plan.donors);
     const top = Math.max(...main.flatMap((c) => c.power.filter((p): p is number => p != null)));
@@ -183,12 +188,12 @@ export function deSentence(plan: DEPlan, L: number, target: number): string {
   const needs = neededByCells(curves, target);
   const reached = needs.filter((n) => n.need != null) as { cells: number; need: number }[];
   const share = `${Math.round(target * 100)}%`;
-  const what = `${share} of the genes changed by ${log2fcText(L)} in ${plan.group}`;
-  const unit = `${plan.group} cells per donor`;
+  const what = `${share} of the genes changed by ${log2fcText(L)} in ${groupName(plan.group)}`;
+  const unit = `${groupName(plan.group)} cells per donor`;
   if (!reached.length) {
     const maxN = Math.max(...plan.donors);
     const top = Math.max(...plan.points.filter((p) => p.log2fc === L).map((p) => p.power));
-    return `Even ${maxN} donors per group find at most ${pctText(top)} of the genes changed by ${log2fcText(L)} in ${plan.group} (FDR < ${plan.alpha}); finding ${share} needs more donors or larger effects.`;
+    return `Even ${maxN} donors per group find at most ${pctText(top)} of the genes changed by ${log2fcText(L)} in ${groupName(plan.group)} (FDR < ${plan.alpha}); finding ${share} needs more donors or larger effects.`;
   }
   const best = Math.min(...reached.map((n) => n.need));
   const at = reached.find((n) => n.need === best)!;
@@ -208,7 +213,7 @@ export function lostGenesNote(plan: DEPlan, L: number): string | null {
   const tested = Math.max(...pts.map((p) => p.tested_share));
   if (tested >= 0.9) return null;
   return (
-    `With ${fmt(m)} ${plan.group} cells per donor only ${pctText(tested)} of the changed genes have enough ` +
+    `With ${fmt(m)} ${groupName(plan.group)} cells per donor only ${pctText(tested)} of the changed genes have enough ` +
     "counts to be tested at all (10+ counts in as many samples as a group has): more cells per donor raise the counts."
   );
 }

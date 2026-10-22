@@ -86,13 +86,15 @@ CAL_REPS, CAL_ROUNDS = 300, 6
 
 # The spread assumed when the pilot has no replicates: the donor-to-donor SD of
 # a type's log-odds share, the median over the 13 PBMC types of Kang et al. 2018
-# (8 donors, PMID 29227470) as this planner estimates it (unpaired, CTRL and
-# STIM samples within condition). A solid tissue, which dissociates unevenly,
-# usually varies more; enter its own value when one is known.
+# (PBMC of 8 lupus patients, PMID 29227470) as this planner estimates it: 0.346
+# for the total spread (donor + within-donor) of the paired fit; 0.28 from the
+# 8 CTRL samples alone, 0.33 from the STIM ones (measured 2026-10-22). A solid
+# tissue, which dissociates unevenly, usually varies more; enter its own value
+# when one is known.
 ASSUMED_SD = 0.35
 ASSUMED_SD_SOURCE = (
     "median donor-to-donor SD of the log-odds share of the 13 PBMC cell types in "
-    "Kang et al. 2018 (8 donors, PMID 29227470), estimated with this planner")
+    "Kang et al. 2018 (8 lupus patients, PMID 29227470), estimated with this planner")
 
 
 class PlannerError(ValueError):
@@ -1073,10 +1075,12 @@ def fit_de(pilot: DEPilot, *, n_genes: int = DE_GENES, seed: int = 0) -> DEModel
     the cells' own overdispersion; ``n_genes`` of the tested genes drawn for
     the simulation."""
     if pilot.design == "none":
+        what = ("This dataset has no donor or sample column" if pilot.sample_key is None else
+                f"'{pilot.sample_key}' gives fewer than 2 samples of {pilot.group} per condition "
+                f"({', '.join(f'{k}: {v}' for k, v in pilot.n_samples.items())}, each with 10+ cells)")
         raise NoReplicatesError(
-            f"'{pilot.sample_key or 'no donor column'}': fewer than 2 samples of "
-            f"{pilot.group} per condition (each with 10+ cells). A DE power estimate needs a "
-            "pilot with replicate donors; this dataset has none to estimate their spread from.")
+            f"{what}. A DE power estimate needs a pilot with replicate donors, whose "
+            "donor-to-donor variability it simulates from; this dataset has none to plan from.")
     K = np.round(pilot.sums[:, pilot.tested]).astype(np.int64)
     kind = pilot.design if pilot.design != "single" else "single"
     res = nb_wald_test(K, pilot.s_cond, pilot.s_donor, kind)
@@ -1345,6 +1349,15 @@ def _composition_assumptions(model: CompositionModel, grid: CompositionGrid,
                 "(as in a split-and-stimulate design). Paired samples taken separately (before "
                 "and after a treatment) will vary more: read the unpaired design as the safer "
                 "guide for such a study.")
+        if pilot.design in ("paired", "unpaired"):
+            per_cond = np.vstack([pilot.counts[pilot.s_cond == k].sum(axis=0) for k in (0, 1)])
+            only = comp._one_condition_groups(per_cond, pilot.groups)
+            if only:
+                notes.append(
+                    f"{len(only)} of {len(pilot.groups)} groups are almost only in one condition "
+                    f"({', '.join(only[:5])}{' and more' if len(only) > 5 else ''}): groups built where "
+                    "the conditions separate mark a change of state, not of abundance, so their "
+                    "shares are no baseline to plan from. Plan with cell types instead.")
     else:
         src = f" ({ASSUMED_SD_SOURCE})" if model.assumed_sd == ASSUMED_SD else ""
         out.append(
@@ -1596,8 +1609,11 @@ def check_pilot(adata, group_key: str, condition_key: str | None, sample_key: st
     and samples, the types' shares, and whether it has replicates at all."""
     pilot = composition_pilot(adata.obs, group_key, condition_key, sample_key,
                               reference=reference, conditions=conditions)
-    counts = pilot.counts[pilot.s_cond == 0].sum(axis=0)
-    share = counts / max(counts.sum(), 1)
+    ref = pilot.counts[pilot.s_cond == 0]
+    if pilot.replicated:  # the mean of the samples' shares, as the composition test reports it
+        share = (ref / np.maximum(ref.sum(axis=1, keepdims=True), 1)).mean(axis=0)
+    else:
+        share = ref.sum(axis=0) / max(ref.sum(), 1)
     model_stub = CompositionModel(pilot=pilot, groups=pilot.groups, share=np.maximum(share, MIN_SHARE),
                                   sd_within=np.zeros(len(share)), sd_donor=np.zeros(len(share)),
                                   spreads=[], source="stub", df=None)
