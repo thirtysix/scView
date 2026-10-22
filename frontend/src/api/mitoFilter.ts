@@ -20,6 +20,15 @@ export interface MitoTypeRule {
   /** Cells the global rule's % mito threshold removes, and the rule applied. */
   removed_global?: number;
   removed?: number;
+  /** Removed per type with the floor off and on (both, whichever is applied). */
+  removed_type?: number;
+  removed_floor?: number;
+  /** Which bound the floor uses for the type's cells; null: no bound of its own (the global rule). */
+  floor_uses?: "type" | "global" | "mixed" | null;
+  /** Its cells whose global bound is above its own (the floor lifts them). */
+  n_floored?: number;
+  /** [lowest, highest] bound the global rule applies to its cells (MAD mode: per sample); null: none. */
+  global_bound?: [number, number] | null;
 }
 
 /** The per-type table in the filter preview, the removal record and provenance. */
@@ -38,6 +47,8 @@ export interface MitoTypesTable {
   reused_from: string | null;
   warnings: string[];
   applied?: MitoMode;
+  /** The floor was applied: never stricter than the global rule. */
+  floor?: boolean;
 }
 
 /** One type in the re-filter preview: its rule plus what changes. */
@@ -59,6 +70,8 @@ export interface RefilterPreview {
   /** The column the filter judges by: the label column itself (author types) or scview_mito_type. */
   type_column: string;
   mito_mode: MitoMode;
+  /** Per type never stricter than the global rule. */
+  mito_type_floor?: boolean;
   source_file: string;
   reset_to_counts: boolean;
   n_original: number;
@@ -104,8 +117,11 @@ function detailOf(e: unknown): Error {
   return e instanceof Error ? e : new Error(msg);
 }
 
-export async function getMitoRefilter(datasetId: string, column?: string): Promise<RefilterPreview> {
-  const q = column ? `?${new URLSearchParams({ column }).toString()}` : "";
+export async function getMitoRefilter(datasetId: string, column?: string, floor = false): Promise<RefilterPreview> {
+  const params = new URLSearchParams();
+  if (column) params.set("column", column);
+  if (floor) params.set("floor", "true");
+  const q = params.toString() ? `?${params.toString()}` : "";
   try {
     return await apiFetch<RefilterPreview>(`/datasets/${datasetId}/qc/mito-refilter${q}`);
   } catch (e) {
@@ -119,7 +135,8 @@ export interface RefilterEvent {
 }
 
 /**
- * Re-filter from the original upload with per-type bounds, calling `onEvent` for
+ * Re-filter from the original upload with per-type bounds (`floor`: never stricter
+ * than the global rule), calling `onEvent` for
  * each SSE event (`refilter` stages, then the pipeline's step_start / step_done /
  * substep / step_error, and `complete`). Rejects on an `error` event, a refused
  * request, or a stream that ends without `complete`.
@@ -128,11 +145,12 @@ export async function runMitoRefilter(
   datasetId: string,
   column: string | undefined,
   onEvent: (e: RefilterEvent) => void,
+  floor = false,
 ): Promise<Record<string, unknown>> {
   const res = await fetch(`${API_BASE}/datasets/${datasetId}/qc/mito-refilter-stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ column: column ?? "" }),
+    body: JSON.stringify({ column: column ?? "", floor }),
   });
   if (!res.ok) {
     let detail = await readError(res);

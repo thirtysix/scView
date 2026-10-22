@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { FilterThresholds } from "@/api/qc";
-import type { MitoMode, MitoTypesTable } from "@/api/mitoFilter";
+import type { MitoMode, MitoTypeRule, MitoTypesTable } from "@/api/mitoFilter";
 import { getMitoByType } from "@/api/mitoByType";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
@@ -24,24 +24,71 @@ const WHY: Record<string, string> = {
 };
 
 /** The % mito params a dataset was filtered with, for the step's params: per-type
- *  bounds keep their type column; the global rule is the default, so nothing. */
+ *  bounds keep their type column (and the floor, when it was on); the global rule is
+ *  the default, so nothing. */
 export function recordedMitoParams(a: {
   qc_mito_mode?: string | null;
   qc_mito_type_column?: string | null;
+  qc_mito_type_floor?: boolean | null;
 }): Partial<FilterThresholds> {
-  return a.qc_mito_mode === "per_type"
-    ? { qc_mito_mode: "per_type", qc_mito_type_column: a.qc_mito_type_column ?? "" }
-    : {};
+  if (a.qc_mito_mode !== "per_type") return {};
+  return {
+    qc_mito_mode: "per_type",
+    qc_mito_type_column: a.qc_mito_type_column ?? "",
+    ...(a.qc_mito_type_floor ? { qc_mito_type_floor: true } : {}),
+  };
+}
+
+/** What the floor does, in the words the checkbox's tooltip and the table's caption use. */
+export function floorText(mad: boolean): string {
+  return (
+    "Never stricter than the global rule: a type's bound is the higher of its own and the global rule's" +
+    (mad
+      ? " for each cell (MAD mode: the bound of the cell's own sample, under the ceiling, so a type can keep" +
+        " its own bound in one sample and take the global one in another)"
+      : " (the ceiling)") +
+    ". A type with a high baseline still gets a looser bound; one with a low baseline is cut no harder than" +
+    " the global rule would."
+  );
+}
+
+/** Which bound applied to a type with a bound of its own, under the floor. */
+function boundUsed(t: MitoTypeRule, floor: boolean): { text: string; title?: string } {
+  const own = `${pct(t.bound)}${t.capped ? " (cap)" : ""}`;
+  if (!floor || !t.floor_uses || t.floor_uses === "type") {
+    return {
+      text: own,
+      title: floor && t.floor_uses === "type" ? `Its own bound, above the global rule's (${range(t.global_bound)})` : t.note || undefined,
+    };
+  }
+  const g = range(t.global_bound);
+  if (t.floor_uses === "global")
+    return { text: "global", title: `Its own bound, ${own}, is below the global rule's (${g}), so the global rule applies` };
+  return {
+    text: `${own} / global`,
+    title: `Its own bound, ${own}, for ${(t.n_cells - (t.n_floored ?? 0)).toLocaleString()} cells; the global rule's (${g}, higher) for ${(t.n_floored ?? 0).toLocaleString()} cells in samples whose bound is above it`,
+  };
+}
+
+function range(r: [number, number] | null | undefined): string {
+  if (!r) return "no global % mito bound";
+  return r[0] === r[1] ? pct(r[0]) : `${pct(r[0])}–${pct(r[1])}`;
 }
 
 function pct(v: number | null | undefined, digits = 1): string {
   return v === null || v === undefined || !isFinite(v) ? "—" : `${v.toFixed(digits)}%`;
 }
 
-/** Each type's rule and loss under both rules (the filter preview's per-type table). */
-export function MitoTypesTableView({ table }: { table: MitoTypesTable }) {
+/** Each type's rule and loss under both rules (the filter preview's per-type table), and
+ *  with the floor off vs on when the backend gives both. `mad`: the global rule is MAD mode's. */
+export function MitoTypesTableView({ table, mad = false }: { table: MitoTypesTable; mad?: boolean }) {
   const lostGlobal = table.types.reduce((s, t) => s + (t.removed_global ?? 0), 0);
-  const lost = table.types.reduce((s, t) => s + (t.removed ?? 0), 0);
+  const lost = table.types.reduce((s, t) => s + (t.removed_type ?? t.removed ?? 0), 0);
+  const floor = Boolean(table.floor);
+  // Both per-type columns once the backend says what the floor removes (older ones don't).
+  const both = table.types.some((t) => t.removed_floor !== undefined);
+  const lostFloor = table.types.reduce((s, t) => s + (t.removed_floor ?? 0), 0);
+  const applied = (on: boolean) => (both && floor === on ? "font-semibold" : "");
   return (
     <div className="space-y-1" data-testid="mito-types-table">
       <div className="max-h-56 overflow-auto rounded border border-slate-100">
@@ -53,21 +100,37 @@ export function MitoTypesTableView({ table }: { table: MitoTypesTable }) {
               <th className="px-1.5 py-0.5 text-right font-medium" title="Median % of a cell's counts from MT- genes, over all the type's cells">Median</th>
               <th
                 className="px-1.5 py-0.5 text-right font-medium"
-                title={`The bound the type is judged by: its median + ${table.k} MADs (raw MAD, at most ${table.cap}%), or "global" when it has none (fewer than ${table.min_cells} cells, no spread, or a median of ${table.damaged_median}% or more)`}
+                title={
+                  `The bound the type is judged by: its median + ${table.k} MADs (raw MAD, at most ${table.cap}%), or "global" when it has none (fewer than ${table.min_cells} cells, no spread, or a median of ${table.damaged_median}% or more)` +
+                  (floor ? `. Never stricter than the global rule: "global" where the global rule's bound is higher, "own / global" where that differs by sample` : "")
+                }
               >
                 Bound used
               </th>
               <th className="px-1.5 py-0.5 text-right font-medium" title="Cells the global % mito rule removes from the type (MAD mode: each sample's bound and the ceiling; fixed: the ceiling)">
                 Global rule
               </th>
-              <th className="px-1.5 py-0.5 text-right font-medium" title="Cells the per-type rule removes from the type for % mito">
+              <th
+                className={`px-1.5 py-0.5 text-right font-medium ${applied(false)}`}
+                title={`Cells the per-type rule removes from the type for % mito${both ? ": its own bound, also where that is below the global rule's" : ""}`}
+              >
                 Per type
               </th>
+              {both && (
+                <th
+                  className={`px-1.5 py-0.5 text-right font-medium ${applied(true)}`}
+                  title="Cells the per-type rule removes with the floor: only those above both its own bound and the global rule's for that cell (never more than the global rule)"
+                >
+                  Never stricter
+                </th>
+              )}
             </tr>
           </thead>
           <tbody className="text-slate-600">
             {table.types.map((t) => {
-              const more = (t.removed ?? 0) > (t.removed_global ?? 0);
+              const perType = t.removed_type ?? t.removed ?? 0;
+              const more = perType > (t.removed_global ?? 0);
+              const used = boundUsed(t, floor);
               return (
                 <tr key={t.name} className="border-t border-slate-100" data-testid={`mito-type-${t.name}`}>
                   <td className="max-w-[9rem] truncate px-1.5 py-0.5" title={[t.note, t.warning].filter(Boolean).join(" ") || t.name}>
@@ -76,17 +139,22 @@ export function MitoTypesTableView({ table }: { table: MitoTypesTable }) {
                   </td>
                   <td className="px-1.5 py-0.5 text-right tabular-nums">{t.n_cells.toLocaleString()}</td>
                   <td className="px-1.5 py-0.5 text-right tabular-nums">{pct(t.median)}</td>
-                  <td className="px-1.5 py-0.5 text-right tabular-nums" title={t.note || undefined}>
+                  <td className="px-1.5 py-0.5 text-right tabular-nums" title={t.bound !== null ? used.title : t.note || undefined}>
                     {t.bound !== null ? (
-                      `${pct(t.bound)}${t.capped ? " (cap)" : ""}`
+                      used.text === "global" ? <span className="text-slate-400">global</span> : used.text
                     ) : (
                       <span className="text-slate-400">global{t.why ? ` (${WHY[t.why] ?? t.why})` : ""}</span>
                     )}
                   </td>
                   <td className="px-1.5 py-0.5 text-right tabular-nums">{(t.removed_global ?? 0).toLocaleString()}</td>
-                  <td className={`px-1.5 py-0.5 text-right tabular-nums ${more ? "font-medium text-amber-700" : ""}`}>
-                    {(t.removed ?? 0).toLocaleString()}
+                  <td className={`px-1.5 py-0.5 text-right tabular-nums ${more ? "font-medium text-amber-700" : ""} ${applied(false)}`}>
+                    {perType.toLocaleString()}
                   </td>
+                  {both && (
+                    <td className={`px-1.5 py-0.5 text-right tabular-nums ${applied(true)}`}>
+                      {(t.removed_floor ?? 0).toLocaleString()}
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -109,11 +177,14 @@ export function MitoTypesTableView({ table }: { table: MitoTypesTable }) {
           { value: table.types.length, unit: `types of '${table.column}'` },
         ]}
       >
-        Removed for % mito: {lostGlobal.toLocaleString()} by the global rule, {lost.toLocaleString()} per type.{" "}
+        Removed for % mito: {lostGlobal.toLocaleString()} by the global rule, {lost.toLocaleString()} per type
+        {both ? `, ${lostFloor.toLocaleString()} per type never stricter than the global rule (${floor ? "applied" : "not applied"})` : ""}.{" "}
         {table.n_own} type{table.n_own === 1 ? "" : "s"} have a bound of their own, {table.n_global} keep the global
         rule
-        {table.n_unlabelled ? `, as do ${table.n_unlabelled.toLocaleString()} cells without a type` : ""}. A bound
-        works both ways: a type with a low baseline is cut lower than the global rule would.
+        {table.n_unlabelled ? `, as do ${table.n_unlabelled.toLocaleString()} cells without a type` : ""}.{" "}
+        {floor
+          ? floorText(mad)
+          : "A bound works both ways: a type with a low baseline is cut lower than the global rule would."}
         {table.reused_from ? " The bounds are the last per-type filtering's, so filtering again removes no more." : ""}
       </Caption>
     </div>
@@ -167,6 +238,8 @@ export function MitoModeControl({
     [obsColumns],
   );
   const chosen = column || (mode === "per_type" ? detected : null) || "";
+  const floor = Boolean(values.qc_mito_type_floor);
+  const mad = values.qc_threshold_mode !== "fixed";
   const removedByReset = chosen.startsWith("scview_") && chosen !== TYPE_COLUMN;
 
   return (
@@ -213,6 +286,24 @@ export function MitoModeControl({
           </select>
         )}
       </div>
+      {mode === "per_type" && measurable && (
+        <div className="flex items-center gap-1.5 pl-1">
+          <label className="inline-flex items-center gap-1.5 text-slate-600">
+            <input
+              type="checkbox"
+              checked={floor}
+              disabled={!onChange}
+              onChange={(e) => onChange?.({ qc_mito_type_floor: e.target.checked })}
+              className="h-3 w-3 rounded border-slate-300"
+            />
+            Never stricter than the global rule
+          </label>
+          <InfoTip label="About never stricter than the global rule" width={300}>
+            {floorText(mad)} Off by default: per type, a type&apos;s own bound is used even where it is below the
+            global rule&apos;s.
+          </InfoTip>
+        </div>
+      )}
       {!measurable && <p className="text-slate-500">{MITO_NOT_MEASURABLE}</p>}
       {measurable && mode === "per_type" && removedByReset && (
         <p className="text-amber-700">
@@ -220,7 +311,7 @@ export function MitoModeControl({
           it, use Re-filter on the Mito by cell type card, which starts again from the original upload.
         </p>
       )}
-      {measurable && mode === "per_type" && table && <MitoTypesTableView table={table} />}
+      {measurable && mode === "per_type" && table && <MitoTypesTableView table={table} mad={mad} />}
     </div>
   );
 }
