@@ -14,6 +14,11 @@ export interface TypeMito {
   removed_global_frac: number;
   removed_bound: number | null;
   removed_bound_frac: number | null;
+  /** The floor: its own bound never below the ceiling (max of the two), and the cells above
+   *  it; null without a bound of its own. Older backends omit them. */
+  floor_bound?: number | null;
+  removed_floor?: number | null;
+  removed_floor_frac?: number | null;
   /** The global ceiling removes more than `loss_flag` of it, or sits below its median. */
   flagged: boolean;
   /** Median at or above 50 %: likely damaged cells, not a high-baseline type. */
@@ -21,6 +26,8 @@ export interface TypeMito {
   /** Filtered per type on this column: judged by its own bound ("own") or the global rule. */
   applied_rule?: "own" | "global" | null;
   applied_bound?: number | null;
+  /** Filtered per type with the floor: which bound it used. */
+  applied_floor?: "type" | "global" | "mixed" | null;
   /** Cells the filtering step's % mito rule actually removed (its record); null: not filtered. */
   removed_filter?: number | null;
   removed_filter_frac?: number | null;
@@ -42,6 +49,8 @@ export interface MitoByType {
   /** The recorded % mito rule ("global" | "per_type"), and the column per-type filtering used. */
   filter_mito_mode?: "global" | "per_type" | null;
   filter_type_column?: string | null;
+  /** The per-type filtering was never stricter than the global rule. */
+  filter_type_floor?: boolean;
   already_filtered: boolean;
   includes_removed?: number; // cells the filtering step removed, added back from its record
   /** Of those, cells given a group by expression (a clustering made after filtering). */
@@ -53,6 +62,7 @@ export interface MitoByType {
   n_flagged: number;
   removed_global_total: number;
   removed_bound_total: number;
+  removed_floor_total?: number;
   summary: string;
   note: string;
   rule: string;

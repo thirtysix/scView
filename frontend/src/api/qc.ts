@@ -237,6 +237,8 @@ export interface FilterThresholds {
   qc_mito_mode?: MitoMode;
   /** The cell types for per-type bounds; "" = the backend's choice. */
   qc_mito_type_column?: string;
+  /** Per type: never stricter than the global rule (a type's bound = max(own, global)). */
+  qc_mito_type_floor?: boolean;
 }
 
 export type FilterCriterion =
@@ -419,6 +421,7 @@ export interface FilterPreview {
     mad_upper?: boolean;
     mito_mode?: MitoMode;
     mito_type_column?: string;
+    mito_type_floor?: boolean;
   };
   has_mt: boolean;
   /** The dataset has doublet calls, so "drop predicted doublets" has something to drop. */
@@ -469,6 +472,7 @@ export async function getFilterPreview(
   if (t.qc_mito_mode === "per_type") {
     q.set("mito_mode", "per_type");
     if (t.qc_mito_type_column) q.set("mito_type_column", t.qc_mito_type_column);
+    if (t.qc_mito_type_floor) q.set("mito_type_floor", "true");
   }
   if (columns.label_column) q.set("label_column", columns.label_column);
   if (columns.condition_column) q.set("condition_column", columns.condition_column);

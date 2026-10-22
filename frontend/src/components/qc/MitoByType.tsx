@@ -51,7 +51,17 @@ function CeilingInput({ value, onCommit }: { value: string; onCommit: (v: string
   );
 }
 
-function Row({ t, applied, filtered }: { t: TypeMito; applied: boolean; filtered: boolean }) {
+/** "Filtered at": the bound the per-type filtering judged the type by. */
+function filteredAt(t: TypeMito) {
+  if (t.applied_rule !== "own") return t.applied_rule ? <span className="text-slate-400">global</span> : "—";
+  if (t.applied_floor === "global")
+    return <span className="text-slate-400" title={`Its own bound, ${pctText(t.applied_bound)}, was below the global rule's: never stricter`}>global</span>;
+  if (t.applied_floor === "mixed")
+    return <span title="Its own bound, or the global rule's in samples where that was higher">{`${pctText(t.applied_bound)} / global`}</span>;
+  return pctText(t.applied_bound);
+}
+
+function Row({ t, applied, filtered, floor }: { t: TypeMito; applied: boolean; filtered: boolean; floor: boolean }) {
   const tone = t.damaged ? "bg-red-50/50" : t.flagged ? "bg-amber-50/60" : "";
   return (
     <tr className={`border-t border-slate-100 ${tone}`} data-testid={`mito-row-${t.group}`}>
@@ -81,6 +91,14 @@ function Row({ t, applied, filtered }: { t: TypeMito; applied: boolean; filtered
         {removed(t.removed_global, t.removed_global_frac)}
       </td>
       <td className="px-2 py-1 text-right tabular-nums">{removed(t.removed_bound, t.removed_bound_frac)}</td>
+      {floor && (
+        <td
+          className="px-2 py-1 text-right tabular-nums"
+          title={t.floor_bound !== null && t.floor_bound !== undefined ? `Bound ${pctText(t.floor_bound)}: the higher of its own and the ceiling` : undefined}
+        >
+          {removed(t.removed_floor ?? null, t.removed_floor_frac ?? null)}
+        </td>
+      )}
       {filtered && (
         <td
           className={`px-2 py-1 text-right tabular-nums ${t.flagged && (t.removed_filter_frac ?? 0) > t.removed_global_frac ? "font-medium text-amber-800" : ""}`}
@@ -89,9 +107,7 @@ function Row({ t, applied, filtered }: { t: TypeMito; applied: boolean; filtered
         </td>
       )}
       {applied && (
-        <td className="px-2 py-1 text-right tabular-nums">
-          {t.applied_rule === "own" ? pctText(t.applied_bound) : t.applied_rule ? <span className="text-slate-400">global</span> : "—"}
-        </td>
+        <td className="px-2 py-1 text-right tabular-nums">{filteredAt(t)}</td>
       )}
     </tr>
   );
@@ -162,6 +178,8 @@ export function MitoByType({
   const expanded = open ?? ((data?.n_flagged ?? 0) > 0 || damaged.length > 0);
   const perType = data?.filter_mito_mode === "per_type" && types.some((t) => t.applied_rule);
   const filtered = types.some((t) => t.removed_filter !== null && t.removed_filter !== undefined);
+  // What the floor would remove (older backends do not say).
+  const floorCol = types.some((t) => t.removed_floor !== undefined);
   const headline = !data
     ? null
     : !data.column
@@ -169,7 +187,7 @@ export function MitoByType({
       : !data.measurable
         ? "% mito not measurable"
         : perType && data.ceiling_source !== "requested"
-          ? `Filtered with per-type bounds (${types.filter((t) => t.applied_rule === "own").length} of ${types.length} types)` +
+          ? `Filtered with per-type bounds (${types.filter((t) => t.applied_rule === "own" && t.applied_floor !== "global").length} of ${types.length} types)` +
             (data.n_flagged ? `; ${data.n_flagged} cut hard by the global rule` : "")
           : data.n_flagged
             ? `${data.n_flagged} of ${types.length} types cut hard by ${filtered ? "filtering" : `the ${pctText(data.ceiling)} ceiling`}`
@@ -241,6 +259,14 @@ export function MitoByType({
                   <th className="px-2 py-1 text-right font-medium" title={`The type's own bound: median + ${data.mad_k} MADs. None for fewer than ${data.min_cells} cells, no spread, or a type that looks damaged`}>Own bound</th>
                   <th className="px-2 py-1 text-right font-medium" title={`Cells above the global ${pctText(data.ceiling)} ceiling (${SOURCE_TEXT[data.ceiling_source ?? "default"]})`}>Removed at {pctText(data.ceiling)}</th>
                   <th className="px-2 py-1 text-right font-medium" title="Cells above the type's own bound (median + 3 MADs)">Removed by own bound</th>
+                  {floorCol && (
+                    <th
+                      className="px-2 py-1 text-right font-medium"
+                      title={`Cells above the type's own bound and the ${pctText(data.ceiling)} ceiling: its bound never below the ceiling ("Never stricter than the global rule" in the filtering step). Never more than the ceiling removes`}
+                    >
+                      Own, never stricter
+                    </th>
+                  )}
                   {filtered && (
                     <th
                       className="px-2 py-1 text-right font-medium"
@@ -250,7 +276,10 @@ export function MitoByType({
                     </th>
                   )}
                   {perType && (
-                    <th className="px-2 py-1 text-right font-medium" title="The % mito bound the per-type filtering judged the type by; 'global' when it kept the global rule">
+                    <th
+                      className="px-2 py-1 text-right font-medium"
+                      title={`The % mito bound the per-type filtering judged the type by; 'global' when it kept the global rule${data.filter_type_floor ? " (with the floor: also where its own bound was below the global rule's)" : ""}`}
+                    >
                       Filtered at
                     </th>
                   )}
@@ -258,7 +287,7 @@ export function MitoByType({
               </thead>
               <tbody>
                 {types.map((t) => (
-                  <Row key={t.group} t={t} applied={perType} filtered={filtered} />
+                  <Row key={t.group} t={t} applied={perType} filtered={filtered} floor={floorCol} />
                 ))}
               </tbody>
             </table>
@@ -286,8 +315,11 @@ export function MitoByType({
             % mito per {data.reason === "cell type" ? "author cell type" : "group"}, against the{" "}
             {pctText(data.ceiling)} ceiling from {SOURCE_TEXT[data.ceiling_source ?? "default"]}. {data.rule} A type&apos;s
             own bound can be stricter than the ceiling; it assumes the type&apos;s typical cell is healthy.{" "}
+            {floorCol
+              ? "With \"never stricter than the global rule\" its bound is never below the ceiling, so only a type with a high baseline is judged by its own (Own, never stricter). "
+              : ""}
             {perType
-              ? `Filtered with per-type bounds on '${data.filter_type_column ?? data.column}'.`
+              ? `Filtered with per-type bounds on '${data.filter_type_column ?? data.column}'${data.filter_type_floor ? ", never stricter than the global rule" : ""}.`
               : data.already_filtered
                 ? "Filtered with one global rule."
                 : "Not filtered by scView yet."}

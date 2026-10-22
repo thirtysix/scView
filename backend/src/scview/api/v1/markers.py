@@ -28,6 +28,23 @@ ARROW_CONTENT_TYPE = "application/vnd.apache.arrow.stream"
 # thousands of levels (barcodes, free text) would cost a lot to compute and store.
 MAX_MARKER_GROUPS = 100
 
+# No markers is an expected state (an unprocessed upload), not a client error: 200
+# with an empty table and this reason, so opening a dataset logs no failed request.
+NO_MARKERS = "No marker genes yet: run the pipeline or pick a column."
+# The base columns of a marker table (``AnnDataAdaptor.get_markers``), for an empty one.
+MARKER_COLUMNS = ("group", "gene", "logfoldchange", "pval", "pval_adj")
+
+
+def _no_markers(format: str, reason: str):
+    """An empty marker table with ``reason``: JSON as the frontend's MarkersResponse
+    (no groups) plus ``reason``; Arrow as an empty table, the reason in a header."""
+    if format == "json":
+        return {"groups": [], "markers": {}, "reason": reason}
+    empty = pd.DataFrame({c: pd.Series(dtype=object if c in ("group", "gene") else float)
+                          for c in MARKER_COLUMNS})
+    return Response(content=dataframe_to_arrow_ipc(empty), media_type=ARROW_CONTENT_TYPE,
+                    headers={"X-Scview-Reason": reason})
+
 
 def _compute_markers(adata: ad.AnnData, column: str) -> dict:
     """Wilcoxon markers for every group of ``column``, as the pipeline computes them.
@@ -150,6 +167,9 @@ async def get_markers(
 
     If groupby_column is provided, returns that column's markers, computing and
     saving them the first time. ``groupby`` limits the table to one group.
+    No markers stored and no column named (an unprocessed dataset), or an empty
+    table, is 200 with no groups and a ``reason`` (Arrow: the ``X-Scview-Reason``
+    header); 404 stays for a dataset or a ``groupby_column`` that does not exist.
     """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
@@ -177,15 +197,12 @@ async def get_markers(
         )
     else:
         if not adaptor.has_markers():
-            raise HTTPException(
-                status_code=404,
-                detail="No marker genes found. Run sc.tl.rank_genes_groups first.",
-            )
+            return _no_markers(format, NO_MARKERS)
         adaptor = await ensure_specificity(dm, dataset_id, adaptor)
         df = adaptor.get_markers(groupby=groupby if groupby else None, n_genes=n_genes)
 
     if df is None or df.empty:
-        raise HTTPException(status_code=404, detail="No marker genes found for the specified group.")
+        return _no_markers(format, f"No marker genes for group '{groupby}'." if groupby else NO_MARKERS)
 
     if format == "json":
         records = df.to_dict(orient="records")

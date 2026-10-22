@@ -92,6 +92,8 @@ interface AssessmentResponse extends PreprocessingState {
   /** Its % mito rule ("global" | "per_type") and per-type column; null if never filtered. */
   qc_mito_mode?: string | null;
   qc_mito_type_column?: string | null;
+  /** Per-type filtering was never stricter than the global rule. */
+  qc_mito_type_floor?: boolean | null;
 }
 
 interface PipelineResult extends RunOutcomeFields {
@@ -276,6 +278,7 @@ export function filterThresholds(set: Record<string, unknown> | undefined): Filt
     qc_sample_column: String(value("qc_sample_column") ?? ""),
     qc_mito_mode: set?.qc_mito_mode === "per_type" ? "per_type" : "global",
     qc_mito_type_column: String(set?.qc_mito_type_column ?? ""),
+    qc_mito_type_floor: Boolean(set?.qc_mito_type_floor ?? false),
   };
 }
 

@@ -14,7 +14,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
-import { MARKERS_PER_GROUP, type MarkersResponse } from "@/api/markers";
+import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason, type MarkersResponse } from "@/api/markers";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -46,7 +46,8 @@ export function MarkerGenesPanel() {
   const [markersData, setMarkersData] = useState<MarkersResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [noMarkers, setNoMarkers] = useState(false);
+  // Why there are no markers (an unprocessed dataset: 200 with no groups), or null.
+  const [noMarkers, setNoMarkers] = useState<string | null>(null);
   // Stored markers arrive at once; a request still running after 1.5 s is
   // computing them for this column, which takes a while on a large dataset.
   const computingMarkers = useDelayedFlag(isLoading, 1500);
@@ -105,19 +106,25 @@ export function MarkerGenesPanel() {
 
     setIsLoading(true);
     setError(null);
-    setNoMarkers(false);
+    setNoMarkers(null);
 
     const show = (data: MarkersResponse) => {
       if (cancelled) return;
+      const none = noMarkersReason(data);
+      if (none) {
+        setMarkersData(null);
+        setNoMarkers(none);
+        return;
+      }
       setMarkersData(data);
-      setNoMarkers(false);
+      setNoMarkers(null);
       setSelectedGroup(data.groups.length > 0 ? data.groups[0]! : "");
       initialFetchDone.current = true;
     };
     const fail = (err: unknown) => {
       if (cancelled) return;
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("404")) setNoMarkers(true);
+      if (msg.includes("404")) setNoMarkers(NO_MARKERS_REASON);
       else setError(msg);
     };
     const onDemand = () =>
@@ -131,7 +138,13 @@ export function MarkerGenesPanel() {
     const first = useOnDemand ? onDemand() : apiFetch<MarkersResponse>(`/datasets/${datasetId}/markers?format=json`);
 
     first
-      .then(show)
+      .then((data) => {
+        // No stored markers (200, no groups): compute the default column's on demand.
+        if (noMarkersReason(data) && !useOnDemand && groupbyColumn && !cancelled) {
+          return onDemand().then(show, fail);
+        }
+        show(data);
+      })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         // No pre-computed markers — try on-demand if we have a groupby column
@@ -265,6 +278,7 @@ export function MarkerGenesPanel() {
           <p className="mb-1 text-sm font-medium text-amber-800">
             No marker genes available
           </p>
+          {noMarkers && <p className="mb-1 text-xs text-amber-700" data-testid="no-markers-reason">{noMarkers}</p>}
           <p className="mb-4 text-xs text-amber-600">
             This dataset does not have marker genes computed yet. Run the
             preprocessing pipeline in{" "}
