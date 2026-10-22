@@ -3,7 +3,9 @@ import { apiFetch, readError } from "./client";
 
 // --- Types (mirror backend scview.core.ingestion models) ------------------
 
-export type FileRole = "matrix" | "barcodes" | "features" | "data" | "side" | "vdj_contigs" | "unknown";
+export type FileRole = "matrix" | "barcodes" | "features" | "data" | "side" | "unknown";
+/** What a side file is: Cell Ranger metrics, the raw matrix (sequencing QC) or a TCR/BCR contig table. */
+export type SideKind = "metrics" | "raw" | "vdj";
 export type UnitFormat =
   | "tenx_mex"
   | "tenx_h5"
@@ -20,6 +22,10 @@ export interface BundleFile {
   kind: string;
   role: FileRole;
   confidence: number;
+  /** Side files only (absent from older backends). */
+  side_kind?: SideKind | null;
+  /** Contig tables: "T", "B" or "T+B", from their chains (else the file name). */
+  receptor?: string | null;
 }
 
 export interface IngestUnit {
@@ -29,8 +35,18 @@ export interface IngestUnit {
   complete: boolean;
   missing_roles: FileRole[];
   issues: string[];
-  /** Cell Ranger metrics / raw matrix attached for sequencing QC, not loaded (absent from older backends). */
+  /** Never loaded as cells: Cell Ranger metrics / raw matrix (sequencing QC) and contig tables (absent from older backends). */
   side_files?: BundleFile[];
+}
+
+/** A unit's side files for sequencing QC (metrics, raw matrix), without its contig tables. */
+export function seqQcSideFiles(unit: IngestUnit): BundleFile[] {
+  return (unit.side_files ?? []).filter((f) => f.side_kind !== "vdj" && f.kind !== "vdj_contigs");
+}
+
+/** A unit's TCR/BCR contig tables. */
+export function vdjSideFiles(unit: IngestUnit): BundleFile[] {
+  return (unit.side_files ?? []).filter((f) => f.side_kind === "vdj" || f.kind === "vdj_contigs");
 }
 
 export interface Bundle {

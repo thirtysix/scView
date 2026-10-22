@@ -21,6 +21,7 @@ import logging
 import re
 import shutil
 import uuid
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -29,7 +30,7 @@ from pydantic import BaseModel
 
 from scview.core import protein, provenance
 from scview.core.dataset_manager import is_safe_id
-from scview.core.ingestion.bundling import UnitFormat, build_bundle
+from scview.core.ingestion.bundling import IngestUnit, SideKind, UnitFormat, build_bundle
 from scview.core.ingestion.loading import IngestLoadError, load_unit
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.validation import IssueSeverity, validate_bundle
@@ -54,6 +55,13 @@ class IngestOptions(BaseModel):
     sample_label: str = "sample"
     apply_reconciliation: bool = True
     genes_in_rows: bool = True
+
+
+def _seqqc_view(unit: IngestUnit) -> IngestUnit:
+    """The unit with only its sequencing-QC side files (metrics, raw matrix): its
+    contig tables are joined to the cells by ``_attach_vdj`` instead."""
+    keep = [f for f in unit.side_files if f.side_kind != SideKind.vdj]
+    return unit.model_copy(update={"side_files": keep})
 
 
 def _protein_params(adata) -> dict:
@@ -190,7 +198,7 @@ class IngestSessionManager:
         # Cell Ranger metrics / raw matrices that came with a sample (never raises).
         from scview.core import seq_metrics
 
-        seq_metrics.attach_from_units(adata, loadable, opts.sample_label)
+        seq_metrics.attach_from_units(adata, [_seqqc_view(u) for u in loadable], opts.sample_label)
 
         self._attach_vdj(adata, loadable, opts)
 
@@ -265,17 +273,17 @@ class IngestSessionManager:
         """TCR/BCR contig tables uploaded beside a unit's matrix (``core/vdj.py``),
         each matched to its own sample's cells in a merge."""
         from scview.core import vdj
-        from scview.core.ingestion.bundling import FileRole
         from scview.core.run_manifest import file_sha256
 
         merged = len(loadable) > 1
         for u in loadable:
-            for f in [f for f in u.files if f.role == FileRole.vdj_contigs]:
+            for f in [f for f in u.side_files if f.side_kind == SideKind.vdj]:
                 try:
                     vdj.attach(adata, f.path, file_name=f.name, sha256=file_sha256(f.path),
                                sample_column=opts.sample_label if merged else None,
                                sample=u.label if merged else None, stored_as=f.name)
-                except vdj.VdjError as e:
+                except (vdj.VdjError, OSError, EOFError, zlib.error, ValueError) as e:
+                    # A gzip cut off past the part detection read surfaces only here.
                     raise IngestCommitError(f"The contig table {f.name} could not be attached: {e}") from e
 
     def _load_and_merge(self, loadable, opts: IngestOptions):

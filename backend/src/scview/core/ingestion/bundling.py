@@ -48,9 +48,16 @@ class FileRole(str, Enum):
     barcodes = "barcodes"
     features = "features"
     data = "data"  # the single file of a single-file format
-    side = "side"  # Cell Ranger metrics / raw matrix attached to a unit, never loaded
-    vdj_contigs = "vdj_contigs"  # TCR/BCR contigs beside a unit's matrix (after its own files)
+    side = "side"  # attached to a unit, never loaded as its cells (``side_kind`` says what)
     unknown = "unknown"
+
+
+class SideKind(str, Enum):
+    """What a side file of a unit is."""
+
+    metrics = "metrics"  # Cell Ranger metrics_summary.csv (core/seq_metrics.py)
+    raw = "raw"  # the raw (unfiltered) matrix: a .h5 or MEX parts (core/seq_metrics.py)
+    vdj = "vdj"  # a TCR/BCR contig table, joined to the unit's cells (core/vdj.py)
 
 
 # A 10x MEX unit needs exactly one of each of these.
@@ -68,7 +75,7 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.mtx_matrix: (None, FileRole.matrix),
     FileKind.tenx_barcodes: (None, FileRole.barcodes),
     FileKind.tenx_features: (None, FileRole.features),
-    FileKind.vdj_contigs: (None, FileRole.vdj_contigs),
+    FileKind.vdj_contigs: (None, FileRole.side),
     FileKind.unknown: (None, FileRole.unknown),
 }
 
@@ -91,6 +98,8 @@ class BundleFile(BaseModel):
     kind: FileKind
     role: FileRole
     confidence: float = 0.0
+    side_kind: SideKind | None = None  # a side file's kind (role == side)
+    receptor: str | None = None  # contig tables: "T", "B" or "T+B" (their chains, else the name)
 
 
 class IngestUnit(BaseModel):
@@ -102,7 +111,8 @@ class IngestUnit(BaseModel):
     complete: bool = False
     missing_roles: list[FileRole] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
-    # metrics_summary.csv / raw matrix of this sample, read for sequencing QC (core/seq_metrics.py)
+    # Never loaded as cells: metrics_summary.csv and the raw matrix (sequencing QC,
+    # core/seq_metrics.py) and TCR/BCR contig tables (core/vdj.py); ``side_kind`` on each.
     side_files: list[BundleFile] = Field(default_factory=list)
 
 
@@ -154,8 +164,10 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
 
     for path, det in detected:
         if _is_side_file(det):
+            kind = SideKind.metrics if det.kind == FileKind.tenx_metrics else SideKind.raw
             side_files.append(BundleFile(path=str(path), name=path.name, kind=det.kind,
-                                         role=FileRole.side, confidence=det.confidence))
+                                         role=FileRole.side, confidence=det.confidence,
+                                         side_kind=kind))
             continue
         fmt, role = _KIND_MAP.get(det.kind, (None, FileRole.unknown))
         bf = BundleFile(
@@ -165,8 +177,10 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
             single_files.append(bf)
         elif role in _MEX_REQUIRED:
             mex_parts.append((path, bf))
-        elif role == FileRole.vdj_contigs:
-            vdj_files.append(bf)
+        elif det.kind == FileKind.vdj_contigs:
+            vdj_files.append(bf.model_copy(update={
+                "side_kind": SideKind.vdj,
+                "receptor": det.details.get("receptor") or _vdj_arm(path.name)}))
         else:
             unknown_files.append(bf)
 
@@ -383,7 +397,8 @@ def _attach_side_files(
             issues.append(f"The raw 10x matrix files ({names}) are missing their {missing} file "
                           "and were not attached.")
             continue
-        parts = [f.model_copy(update={"role": FileRole.side}) for f in u.files]
+        parts = [f.model_copy(update={"role": FileRole.side, "side_kind": SideKind.raw})
+                 for f in u.files]
         key = f"{Path(u.files[0].path).parent}|{sample_key(_mex_prefix(u.files[0].name))}"
         items.append((key, "raw", parts))
 
@@ -411,7 +426,8 @@ def _attach_side_files(
                     f"{loadable[0].label}_{example}."
                 )
             continue
-        is_metrics = [f.kind == FileKind.tenx_metrics for f in unit.side_files]
+        is_metrics = [f.side_kind == SideKind.metrics for f in unit.side_files
+                      if f.side_kind != SideKind.vdj]
         if (what == "metrics" and any(is_metrics)) or (what == "raw" and not all(is_metrics)):
             issues.append(f"{names}: sample {unit.label} already has a Cell Ranger {noun}; this "
                           "one was not attached.")
@@ -460,8 +476,19 @@ def _unit_prefix(unit: IngestUnit) -> str:
     return _stem(unit.files[0].name, _MATRIX_TOKENS) if unit.files else ""
 
 
+def _vdj_arm(name: str) -> str | None:
+    """"T" / "B" from a contig table's name (``sample_t_filtered_contig_annotations.csv``),
+    or None; the chains in the file decide when detection could read them."""
+    s = _stem(name, _VDJ_TOKENS)
+    for tok, arm in (("vdj_t", "T"), ("vdj_b", "B"), ("tcr", "T"), ("bcr", "B"), ("t", "T"),
+                     ("b", "B")):
+        if s == tok or s.endswith("_" + tok) or s.endswith("-" + tok):
+            return arm
+    return None
+
+
 def _attach_vdj_files(units: list[IngestUnit], vdj_files: list[BundleFile]) -> list[str]:
-    """Put each contig table after the files of the unit it belongs to: the one whose
+    """Add each contig table to the side files of the unit it belongs to: the one whose
     matrix shares its filename prefix, else the only unit. Returns bundle issues."""
     if not vdj_files:
         return []
@@ -479,5 +506,5 @@ def _attach_vdj_files(units: list[IngestUnit], vdj_files: list[BundleFile]) -> l
                           "the sample's filename prefix, or attach it after import in Unified View > "
                           "Clonotypes.")
             continue
-        unit.files.append(bf)
+        unit.side_files.append(bf)
     return issues

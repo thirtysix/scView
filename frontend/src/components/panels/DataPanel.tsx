@@ -16,6 +16,7 @@ import {
   createIngestSession,
   discardIngestSession,
   getMergePlan,
+  seqQcSideFiles,
   setIngestOptions,
   uploadIngestFiles,
   type IngestIssue,
@@ -422,7 +423,7 @@ function UnitCard({ unit }: { unit: IngestUnit }) {
           })}
         </ul>
       )}
-      <SequencingQcSideFiles files={unit.side_files} />
+      <SequencingQcSideFiles files={seqQcSideFiles(unit)} />
       <ClonotypeUnitFiles unit={unit} />
     </div>
   );
