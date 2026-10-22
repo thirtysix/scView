@@ -6,6 +6,48 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-10-22
+
+### Added
+- **AUCell gene-set scores.** Every place a gene set is scored (Gene Sets, Enrichment, DE enrichment,
+  Gene lists) can use AUCell (Aibar et al. 2017) as well as scanpy's score_genes: a per-cell score
+  from the ranks of the set's genes within each cell, so it does not move with sequencing depth. It
+  matches decoupler's `aucell` exactly (9 gene sets on Kang and paul15). One remembered choice;
+  AUCell overlays are labelled "(AUCell)" and kept in sessions and links. `POST
+  /datasets/{id}/genesets/score` takes `method`.
+- **Check depth (Gene Sets).** One sentence on which score follows sequencing depth on your data
+  (Spearman with total counts and genes detected, within clusters): on Kang a B-cell marker set
+  follows genes detected under score_genes (rho -0.43) and not under AUCell (0.06).
+  `POST /datasets/{id}/genesets/score/compare`.
+- **Gene programs (Unified View → Programs).** Consensus NMF finds programs of genes that vary
+  together across clusters (an interferon response, heat shock, a lineage) with their stability over
+  random starts, top genes, the share of cells each leads, a usage overlay, a program × group
+  heatmap and Hallmark enrichment. On Kang k=10 finds an interferon program (CXCL10, ISG15, RSAD2;
+  Hallmark IFN-γ adjusted p 4e-9) used far more in STIM than CTRL in every cell type. An optional
+  sweep over k compares stability and error. Saved with the dataset, replayed by the script, known to
+  the co-pilot.
+- **Plan a study (Compare).** How many donors per group a follow-up needs, simulated from this
+  dataset's own donor-to-donor variability, for a shift in a cell type's share (the app's own
+  composition test) or pseudobulk DE in one cell type (DESeq2-style). Power curves by donors and
+  cells per donor, a sentence answer, a pessimistic curve at the upper end of the pilot's
+  uncertainty, and every assumption listed. On Kang a 1.5-fold change in CD14 monocytes needs 3 to
+  4 donors per group (paired, 500 to 5,000 cells per donor). A dataset without replicate donors says so plainly. The co-pilot
+  knows the last plan.
+- **Layouts (Unified View toolbar).** Lays the same cells out again under three UMAP seeds and three
+  neighbour counts, shows them side by side in the plot's colours, and says which groups touch in
+  every, some or no layout; contacts in your plot that most layouts do not repeat are listed first,
+  and hovering a pair outlines it everywhere. Keep any layout as an embedding (recorded and replayed
+  exactly). The co-pilot knows which contacts are rare.
+
+### Fixed
+- Saving an edit (labels, kept resolution, merges...) to an uploaded h5ad whose cell index is named
+  like one of its columns no longer fails.
+- The raw-counts check no longer fails on files over 2 GB (opened from disk); TF activity,
+  normalisation and gene programs use it.
+- The study planner opens on the author's cell types, not the Leiden clustering, when the cell types
+  sit in a column called "cluster".
+- History shows long parameter lists (2,000 genes) as their first items and a count.
+
 ## [0.30.0] - 2026-10-22
 
 ### Added
