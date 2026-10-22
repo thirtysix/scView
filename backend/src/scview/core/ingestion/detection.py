@@ -13,6 +13,7 @@ and deciding completeness. See ``docs/INGESTION_ENGINE.md``.
 
 from __future__ import annotations
 
+import csv
 import gzip
 import logging
 import re
@@ -132,15 +133,19 @@ def detect_file(path: Path) -> DetectionResult:
 # ---------------------------------------------------------------------------
 
 
-def _detect_dir(path: Path) -> DetectionResult:
-    """Directories are only recognised as Zarr stores; MEX dirs are the bundler's job."""
-    is_zarr = (
+def is_store_dir(path: Path) -> bool:
+    """A Zarr store: one dataset, never a folder of separate files."""
+    return (
         path.suffix.lower() == ".zarr"
         or (path / ".zgroup").exists()
         or (path / ".zattrs").exists()
         or (path / "zarr.json").exists()  # zarr v3
     )
-    if is_zarr:
+
+
+def _detect_dir(path: Path) -> DetectionResult:
+    """Directories are only recognised as Zarr stores; MEX dirs are the bundler's job."""
+    if is_store_dir(path):
         return DetectionResult(
             kind=FileKind.zarr_dir,
             confidence=0.9,
@@ -271,6 +276,9 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
     vdj_format = sniff_contigs(lines[0])
     if vdj_format:
         details["vdj_format"] = vdj_format
+        receptor = contig_receptor(lines)
+        if receptor:
+            details["receptor"] = receptor
         return DetectionResult(
             kind=FileKind.vdj_contigs,
             confidence=0.95,
@@ -339,6 +347,21 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
         reason="Delimited text that did not match a known layout",
         details=details,
     )
+
+
+def contig_receptor(lines: list[str]) -> str | None:
+    """"T", "B" or "T+B" from the chains in the first lines of a contig table (10x
+    ``chain``, AIRR ``locus``, else the V gene call: TR* is a T-cell, IG* a B-cell
+    receptor), or None when the peek holds no chain."""
+    sep = "\t" if lines[0].count("\t") > lines[0].count(",") else ","
+    rows = list(csv.reader(lines, delimiter=sep))
+    header = [c.strip().lower() for c in rows[0]]
+    col = next((header.index(c) for c in ("chain", "locus", "v_call") if c in header), None)
+    if col is None:
+        return None
+    loci = {r[col].strip()[:2].upper() for r in rows[1:] if len(r) > col}
+    t, b = "TR" in loci, "IG" in loci
+    return "T+B" if t and b else "T" if t else "B" if b else None
 
 
 def _guess_delimiter(lines: list[str]) -> tuple[str | None, int]:

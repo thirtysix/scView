@@ -1,9 +1,12 @@
 import { API_BASE } from "@/lib/constants";
+import type { UploadItem } from "@/lib/ingestUpload";
 import { apiFetch, readError } from "./client";
 
 // --- Types (mirror backend scview.core.ingestion models) ------------------
 
-export type FileRole = "matrix" | "barcodes" | "features" | "data" | "side" | "vdj_contigs" | "unknown";
+export type FileRole = "matrix" | "barcodes" | "features" | "data" | "side" | "unknown";
+/** What a side file is: Cell Ranger metrics, the raw matrix (sequencing QC) or a TCR/BCR contig table. */
+export type SideKind = "metrics" | "raw" | "vdj";
 export type UnitFormat =
   | "tenx_mex"
   | "tenx_h5"
@@ -20,6 +23,18 @@ export interface BundleFile {
   kind: string;
   role: FileRole;
   confidence: number;
+  /** Side files only (absent from older backends). */
+  side_kind?: SideKind | null;
+  /** Contig tables: "T", "B" or "T+B", from their chains (else the file name). */
+  receptor?: string | null;
+  /** The path inside an uploaded folder; the name for a plain upload (absent from older backends). */
+  rel_path?: string;
+}
+
+/** What to call a file in the wizard: its path inside the uploaded folder, so the raw and
+ * filtered barcodes.tsv.gz are told apart; its name for a plain upload. */
+export function filePath(f: Pick<BundleFile, "name" | "rel_path">): string {
+  return f.rel_path || f.name;
 }
 
 export interface IngestUnit {
@@ -29,8 +44,18 @@ export interface IngestUnit {
   complete: boolean;
   missing_roles: FileRole[];
   issues: string[];
-  /** Cell Ranger metrics / raw matrix attached for sequencing QC, not loaded (absent from older backends). */
+  /** Never loaded as cells: Cell Ranger metrics / raw matrix (sequencing QC) and contig tables (absent from older backends). */
   side_files?: BundleFile[];
+}
+
+/** A unit's side files for sequencing QC (metrics, raw matrix), without its contig tables. */
+export function seqQcSideFiles(unit: IngestUnit): BundleFile[] {
+  return (unit.side_files ?? []).filter((f) => f.side_kind !== "vdj" && f.kind !== "vdj_contigs");
+}
+
+/** A unit's TCR/BCR contig tables. */
+export function vdjSideFiles(unit: IngestUnit): BundleFile[] {
+  return (unit.side_files ?? []).filter((f) => f.side_kind === "vdj" || f.kind === "vdj_contigs");
 }
 
 export interface Bundle {
@@ -38,6 +63,8 @@ export interface Bundle {
   is_merge: boolean;
   complete: boolean;
   issues: string[];
+  /** Files scView does not read, also summed up in one of the issues (absent from older backends). */
+  skipped?: { path: string; reason: string; bytes?: number | null }[];
 }
 
 export type IssueSeverity = "info" | "warn" | "error";
@@ -109,15 +136,39 @@ export async function createIngestSession(): Promise<{ session_id: string }> {
   return apiFetch<{ session_id: string }>("/ingest/session", { method: "POST" });
 }
 
-export async function uploadIngestFiles(sid: string, files: File[]): Promise<IngestState> {
-  const form = new FormData();
-  for (const f of files) form.append("files", f);
-  const res = await fetch(`${API_BASE}/ingest/session/${sid}/files`, {
-    method: "POST",
-    body: form,
-  });
-  if (!res.ok) throw new Error(`Upload error ${res.status}: ${await readError(res)}`);
-  return res.json();
+// The server's multipart parser takes at most 1000 files and 1000 fields per request.
+export const UPLOAD_BATCH = 400;
+
+/** Stage files, each with its path inside the uploaded folder (`paths`, one per file in
+ * order): same-named files in different folders stay apart. A large folder goes in
+ * batches of `UPLOAD_BATCH` files; the state after the last one is returned. */
+export async function uploadIngestFiles(sid: string, items: UploadItem[]): Promise<IngestState> {
+  let state: IngestState | null = null;
+  for (let i = 0; i < items.length; i += UPLOAD_BATCH) {
+    const form = new FormData();
+    for (const { file, path } of items.slice(i, i + UPLOAD_BATCH)) {
+      form.append("files", file);
+      form.append("paths", path);
+    }
+    const res = await fetch(`${API_BASE}/ingest/session/${sid}/files`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) throw new Error(detailOf(await readError(res)) || `Upload error ${res.status}.`);
+    state = (await res.json()) as IngestState;
+  }
+  return state ?? getIngestState(sid);
+}
+
+/** The server's sentence (FastAPI's `detail`) from an error body, else the body itself. */
+function detailOf(text: string): string {
+  try {
+    const body = JSON.parse(text) as { detail?: unknown };
+    if (typeof body.detail === "string") return body.detail;
+  } catch {
+    /* not JSON: the text as it is */
+  }
+  return text;
 }
 
 export async function getIngestState(sid: string): Promise<IngestState> {

@@ -87,6 +87,10 @@ async def upload_dataset(
     # Protect the user's original upload — never written to again.
     _make_readonly(dest_path)
 
+    # Antibody / hashtag features in X: split off as the import wizard does.
+    feature_split = await _split_feature_types(dm, dataset_id, dest_path, file.filename) \
+        if ext == ".h5ad" else None
+
     needs_conversion = ext in (".rds", ".rdata")
     status = DatasetStatus.converting if needs_conversion else DatasetStatus.ready
 
@@ -103,6 +107,8 @@ async def upload_dataset(
         "available_embeddings": [],
         "obs_columns": [],
     }
+    if feature_split:
+        meta["feature_split"] = feature_split
     meta_path = upload_dir / "metadata.json"
     with open(meta_path, "w") as fh:
         json.dump(meta, fh, indent=2)
@@ -124,6 +130,38 @@ async def upload_dataset(
         await dm.load_dataset(dataset_id)
 
     return DatasetUploadResponse(id=dataset_id, name=meta["name"], status=meta["status"])
+
+
+async def _split_feature_types(dm: DatasetManager, dataset_id: str, src: Path,
+                               filename: str) -> dict | None:
+    """An .h5ad with antibody (CITE-seq) or CellPlex features in X: write the dataset's
+    working source to ``ingested/{id}/`` with genes only in X and those features in obsm
+    (``core/ingestion/feature_split.py``). The upload itself stays as sent. Streamed a
+    block of rows at a time, in a worker thread. A layout the split cannot stream, or a
+    failure, leaves the dataset as uploaded (what every upload did before) and says so
+    in the result."""
+    from scview.core.ingestion import feature_split
+
+    if not await asyncio.to_thread(feature_split.needs_split, src):
+        return None
+    out_dir = dm.data_dir / "ingested" / dataset_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / src.name
+    partial = out_dir / f".{src.name}.partial"
+    try:
+        summary = await asyncio.to_thread(
+            feature_split.split_h5ad, src, partial, original_filename=Path(filename).name)
+        partial.replace(out)
+    except Exception as e:  # never lose the upload over the split
+        partial.unlink(missing_ok=True)
+        if not any(out_dir.iterdir()):
+            out_dir.rmdir()
+        logger.warning("Feature types of %s not split: %s", filename, e)
+        return {"error": f"The antibody / hashtag features could not be split off ({e}); they stay "
+                         "in the expression matrix."}
+    _make_readonly(out)
+    logger.info("Split feature types of %s: %s", filename, summary)
+    return summary
 
 
 @router.get("/datasets")
