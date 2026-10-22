@@ -6,6 +6,51 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Folder upload keeps each file's path.** A Cell Ranger `outs/` folder imports as one sample with its
+  raw matrix and metrics (for sequencing QC) and both its TCR and BCR contig tables, which used to
+  overwrite each other because they share file names. Multi-sample folders and `cellranger multi`
+  `per_sample_outs` give one sample per folder. Cell Ranger's own analysis, BAMs, Loupe files and the
+  HTML report are skipped with one line saying what and why; BAMs are never uploaded. A path that
+  leaves the folder is refused, and two different files on one path are refused instead of one
+  silently replacing the other.
+- **Doublets: cell hashing first.** When cell hashing has been run, its calls are the primary doublet
+  call everywhere (cluster QC, QC report, co-pilot, "Drop predicted doublets"), with Scrublet as the
+  second opinion: the Doublet score card shows a hashing x Scrublet table, overall and per sample.
+  Filtering can drop doublets by auto, cell hashing, Scrublet or either, and separately drop hashing
+  negatives. Old recipes replay exactly as before.
+- **Per-type % mito: "Never stricter than the global rule"** (off by default). A type's bound becomes
+  the higher of its own and the global rule's, so high-baseline types keep more cells and low-baseline
+  types lose no more than under the global rule (ovary oocytes: 5 removed instead of 23). The per-type
+  table shows which bound each type used and the loss with the option off and on; the option is also
+  in the re-filter, the Mito by cell type card, provenance and the replay script.
+
+### Changed
+- **The plain `.h5ad` upload splits feature types** like the import wizard: antibodies go to the
+  Protein tab and CellPlex/hashtag tags to cell hashing instead of staying in the gene matrix. The
+  uploaded file is kept as sent; the split copy is streamed (37k cells: +0.13 GB).
+- **TCR/BCR contig tables are side files** of their sample, like the other Cell Ranger files, and say
+  whether they hold TCR or BCR chains.
+- **Filtering recomputes clonotypes,** clone sizes and expansion on the cells it keeps, so the
+  Recompute prompt only shows for data filtered before this release.
+- **Doublet detection scores a sparse copy of the counts alone** instead of the whole dataset, with
+  identical results (bitwise on Kang and paul15). Peak memory of the step: Kang 3.0 to 2.7 GB, a 20k-cell
+  ovary subset 11.9 to 8.1 GB, the 37k-cell ovary 20.9 to 13.9 GB. Its memory estimate is recalibrated
+  (within 20% on every measured dataset) and the replay script runs the same counts-only scoring.
+- Opening a dataset with no marker genes no longer logs a failed request; the marker views say how to
+  get them.
+
+### Fixed
+- After a run, `/assessment/run`, `/rerun`, PAGA and pseudotime no longer hold the old copy of the
+  dataset while it is reloaded from disk (two copies at once: a large dataset at 6 GB was killed
+  reloading after a run the memory check had stopped).
+- The co-pilot's "Should I run batch integration?" hint no longer treats columns scView writes itself
+  (V(D)J chain status, hashing calls, QC states) as batches.
+- A truncated contig table gives a sentence at import instead of a server error. Deleting a dataset
+  also removes its imported copy. The assessor and co-pilot counted text "False" doublet calls as
+  doublets after a file round trip. The replay script scored the processed matrix when the doublet
+  step had used the counts layer.
+
 ## [0.32.0] - 2026-10-22
 
 ### Added
