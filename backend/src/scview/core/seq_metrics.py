@@ -64,6 +64,7 @@ MAX_CURVE_POINTS = 2000
 _CURVE_BINS = MAX_CURVE_POINTS // 2 - 2  # one cell + one other barcode per bin, + the last
 _NNZ_CHUNK = 8_000_000  # matrix entries read at a time from a raw matrix
 _BC_CHUNK = 1_000_000  # barcodes read at a time
+_MEX_ROWS = 1_000_000  # Matrix Market lines parsed at a time
 
 # barcodeRanks defaults (DropletUtils).
 BR_LOWER = 100
@@ -627,13 +628,14 @@ def raw_totals_mex(matrix: Path, barcodes: Path, features: Path) -> tuple[np.nda
     all_gex = bool(is_gex.all())
     with _open_text(matrix) as fh:
         reader = pd.read_csv(fh, sep=" ", header=None, skiprows=n_header, usecols=[0, 1, 2],
-                             dtype={0: np.int64, 1: np.int64, 2: np.float64}, chunksize=2_000_000)
+                             dtype={0: np.int32, 1: np.int32, 2: np.float64},
+                             chunksize=_MEX_ROWS)
         for chunk in reader:
-            a = chunk.to_numpy()
-            w = a[:, 2]
+            w = chunk[2].to_numpy()
             if not all_gex:
-                w = w * is_gex[a[:, feat_col].astype(np.int64) - 1]
-            totals += np.bincount(a[:, bc_col].astype(np.int64) - 1, weights=w, minlength=n_bc)
+                w = w * is_gex[chunk[feat_col].to_numpy() - 1]
+            totals += np.bincount(chunk[bc_col].to_numpy() - 1, weights=w, minlength=n_bc)
+            del chunk, w
     totals_i = np.rint(totals).astype(np.int64)
     nz = np.flatnonzero(totals_i > 0)
     keep = np.zeros(n_bc, dtype=bool)
@@ -642,7 +644,7 @@ def raw_totals_mex(matrix: Path, barcodes: Path, features: Path) -> tuple[np.nda
     pos = 0
     with _open_text(barcodes) as fh:
         for chunk in pd.read_csv(fh, sep="\t", header=None, usecols=[0], dtype=str,
-                                 na_filter=False, chunksize=_BC_CHUNK):
+                                 na_filter=False, chunksize=_MEX_ROWS // 4):
             col = chunk[0].to_numpy(dtype=str)
             if pos + len(col) > n_bc:
                 pos += len(col)
