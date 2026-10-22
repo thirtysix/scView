@@ -13,6 +13,21 @@ export function relationSentence(r: LayoutRelation): string {
   return `${pair} touch in ${of}.`;
 }
 
+function pct(n: number, of: number): string {
+  const v = of ? (100 * n) / of : 0;
+  return `${v < 10 && v > 0 ? v.toFixed(1) : Math.round(v)}%`;
+}
+
+/** The plot's contact cells as shares of each group: "8 of 3's 100 cells (8%) and 9 of 7's 80 (11%)". */
+export function contactTitle(r: LayoutRelation): string | null {
+  if (!r.current_contact) return null;
+  const [ca, cb] = r.current_contact;
+  return (
+    `Contact cells in your plot: ${ca} of ${r.a}'s ${r.n_a.toLocaleString()} cells (${pct(ca, r.n_a)}) and ` +
+    `${cb} of ${r.b}'s ${r.n_b.toLocaleString()} (${pct(cb, r.n_b)})`
+  );
+}
+
 /** Short verdict for the table's last column. */
 export function relationVerdict(r: LayoutRelation): string {
   if (r.flag === "rare_in_plot") return "in your plot, rare";

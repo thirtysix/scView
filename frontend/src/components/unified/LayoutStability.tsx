@@ -31,6 +31,7 @@ import {
   relationSentence,
   relationTone,
   relationVerdict,
+  contactTitle,
   shortLayoutLabel,
   visibleRelations,
 } from "@/lib/layoutStability";
@@ -539,7 +540,10 @@ export function LayoutStabilityPanel({ datasetId, onClose }: { datasetId: string
                       {r.n_touch}/{r.n_layouts}
                     </span>
                   </td>
-                  <td className="py-0.5 pr-2 text-right tabular-nums text-slate-500">
+                  <td
+                    className="py-0.5 pr-2 text-right tabular-nums text-slate-500"
+                    title={contactTitle(r) ?? undefined}
+                  >
                     {r.current_contact ? (r.current_contact[0] + r.current_contact[1]).toLocaleString() : "—"}
                   </td>
                   <td className={`py-0.5 ${relationTone(r)}`}>{relationVerdict(r)}</td>

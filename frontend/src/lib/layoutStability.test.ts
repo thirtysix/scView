@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LayoutRelation, LayoutSummary } from "@/api/layouts";
 import {
+  contactTitle,
   countsSentence,
   drawThumbnail,
   fitBox,
@@ -58,6 +59,13 @@ describe("relation sentences", () => {
     );
     expect(plotSentence({ ...s, counts: { every: 1 } })).toMatch(/^Every contact in your plot/);
     expect(plotSentence({ ...s, current: null })).toBeNull();
+  });
+
+  it("states the plot's contact cells as a share of each group", () => {
+    expect(contactTitle(rel({}))).toBe(
+      "Contact cells in your plot: 6 of 3's 100 cells (6.0%) and 7 of 7's 80 (8.8%)",
+    );
+    expect(contactTitle(rel({ current_contact: null }))).toBeNull();
   });
 
   it("lists the pairs that never touch only on request (unless they touch in the plot)", () => {
