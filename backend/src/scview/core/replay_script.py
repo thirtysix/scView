@@ -725,6 +725,24 @@ _HELPER_NEEDS = {
 }
 
 
+def _scrublet_helper() -> str:
+    """core/scrublet_lean.py's code (Scrublet on the counts alone, the scores
+    sc.pp.scrublet gives without its copies of the dataset), copied into the script so
+    the replay scores what scView scored, in the same memory, without importing scView."""
+    import inspect
+
+    from scview.core import scrublet_lean
+
+    lines = [f"{name} = {_lit(getattr(scrublet_lean, name))}" for name in scrublet_lean.REPLAY_CONSTANTS]
+    for obj in scrublet_lean.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["scrublet_counts"] = _scrublet_helper()
+_HELPER_ORDER += ("scrublet_counts",)
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -776,20 +794,31 @@ sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False,
 '''))
 
 
+# Where the doublet step took the counts from (its recorded ``input``; none: X).
+_DOUBLET_INPUT = {"layers['counts']": 'adata.layers["counts"]', ".raw": "adata.raw.X"}
+
+
 def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
+    _need(ctx, "scrublet_counts")
     rate = p.get("expected_doublet_rate")
-    if isinstance(rate, (int, float)) and rate > 0:
-        exact = ", use_approx_neighbors=False" if p.get("neighbors") == "exact" else ""
-        code = [f"sc.pp.scrublet(adata, expected_doublet_rate={_lit(float(rate))}{exact})"]
-        note = ""
+    recorded = isinstance(rate, (int, float)) and rate > 0
+    counts = _DOUBLET_INPUT.get(p.get("input"), "adata.X")
+    approx = {"exact": "False", "approximate": "True"}.get(p.get("neighbors"), "None")
+    code = ["# Scrublet on the counts alone (scrublet_counts above): sc.pp.scrublet's scores, "
+            "without its copies of the dataset.",
+            f"score, call, uns = scrublet_counts({counts}, "
+            f"expected_doublet_rate={_lit(float(rate) if recorded else 0.05)}, "
+            f"use_approx_neighbors={approx})",
+            'adata.obs["doublet_score"] = score',
+            'adata.obs["predicted_doublet"] = call',
+            'adata.uns["scrublet"] = uns']
+    if recorded:
         if p.get("expected_rate_from"):
             code.insert(0, "# The rate scView suggested from the cells per sample "
                            f"({comment_text(p['expected_rate_from'], 80)}), as it ran.")
-        return Snippet(EXACT, code, note)
-    return Snippet(APPROXIMATE, [
-        "# NOTE: the expected doublet rate was not recorded; scanpy's default (0.05) is used.",
-        "sc.pp.scrublet(adata)",
-    ], "doublet rate not recorded: scanpy's default")
+        return Snippet(EXACT, code, "")
+    code.insert(0, "# NOTE: the expected doublet rate was not recorded; scanpy's default (0.05) is used.")
+    return Snippet(APPROXIMATE, code, "doublet rate not recorded: scanpy's default")
 
 
 def _mito_rule(p: dict) -> dict | None:
