@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-22
+
 ### Added
 - **Folder upload keeps each file's path.** A Cell Ranger `outs/` folder imports as one sample with its
   raw matrix and metrics (for sequencing QC) and both its TCR and BCR contig tables, which used to
@@ -39,6 +41,11 @@ All notable changes to scView are documented here. The format is based on
   (within 20% on every measured dataset) and the replay script runs the same counts-only scoring.
 - Opening a dataset with no marker genes no longer logs a failed request; the marker views say how to
   get them.
+- **Filtering cuts each matrix once** instead of twice (and the gene filter copies nothing when every
+  gene stays), with identical results: a 20k-cell processed dataset re-filtered at 6 GB went from
+  +4.3 GB (killed) to +1.3 GB, the 37k-cell ovary's filtering from +11.2 to +2.5 GB, and its whole
+  reprocess now completes at 16 GB. The memory estimate now expects re-filtering processed data to
+  remove cells (it assumed every cell passed, so the pre-step check let an out-of-memory run start).
 
 ### Fixed
 - After a run, `/assessment/run`, `/rerun`, PAGA and pseudotime no longer hold the old copy of the
