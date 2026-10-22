@@ -189,7 +189,6 @@ def _add_embedding_reliability(adaptor, lines: list[str], sources: list[ChatSour
                                   evidence="\n".join(er_lines)))
 
 
-
 def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Which group relations in the plot hold across other seeds and neighbour counts
     (core/layout_stability.py), only once a layout check has run for this dataset."""
@@ -202,6 +201,7 @@ def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) 
         lines.extend(ls_lines)
         sources.append(ChatSource(kind="result", ref=layout_stability.TAG, detail=ls_detail,
                                   evidence="\n".join(ls_lines)))
+
 
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Who the cell QC removed (the filtering step's record) or would remove at the
