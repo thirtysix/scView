@@ -49,6 +49,7 @@ class FileRole(str, Enum):
     features = "features"
     data = "data"  # the single file of a single-file format
     side = "side"  # Cell Ranger metrics / raw matrix attached to a unit, never loaded
+    vdj_contigs = "vdj_contigs"  # TCR/BCR contigs beside a unit's matrix (after its own files)
     unknown = "unknown"
 
 
@@ -67,6 +68,7 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.mtx_matrix: (None, FileRole.matrix),
     FileKind.tenx_barcodes: (None, FileRole.barcodes),
     FileKind.tenx_features: (None, FileRole.features),
+    FileKind.vdj_contigs: (None, FileRole.vdj_contigs),
     FileKind.unknown: (None, FileRole.unknown),
 }
 
@@ -148,6 +150,7 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
     unknown_files: list[BundleFile] = []
 
     side_files: list[BundleFile] = []
+    vdj_files: list[BundleFile] = []
 
     for path, det in detected:
         if _is_side_file(det):
@@ -162,6 +165,8 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
             single_files.append(bf)
         elif role in _MEX_REQUIRED:
             mex_parts.append((path, bf))
+        elif role == FileRole.vdj_contigs:
+            vdj_files.append(bf)
         else:
             unknown_files.append(bf)
 
@@ -186,6 +191,8 @@ def bundle_from_detections(detected: list[tuple[Path, DetectionResult]]) -> Bund
         bundle_issues.append(
             f"{len(unknown_files)} file(s) could not be recognised and were ignored: {names}"
         )
+
+    bundle_issues.extend(_attach_vdj_files(units, vdj_files))
 
     loadable = [u for u in units if u.format != UnitFormat.unknown]
     return Bundle(
@@ -410,4 +417,67 @@ def _attach_side_files(
                           "one was not attached.")
             continue
         unit.side_files.extend(files)
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# TCR/BCR contig tables: side files of a unit
+# ---------------------------------------------------------------------------
+
+_VDJ_TOKENS = ("filtered_contig_annotations", "all_contig_annotations", "contig_annotations",
+               "airr_rearrangement", "airr")
+_VDJ_ARM_TOKENS = ("vdj_t", "vdj_b", "tcr", "bcr", "vdj", "t", "b")
+_MATRIX_TOKENS = ("filtered_feature_bc_matrix", "raw_feature_bc_matrix", "feature_bc_matrix",
+                  "filtered_gene_bc_matrices", "gene_bc_matrices", "matrix", "count", "counts", "gex")
+
+
+def _stem(name: str, tokens: tuple[str, ...]) -> str:
+    s = name.lower()
+    for ext in (".gz", ".csv", ".tsv", ".txt", ".h5ad", ".h5", ".loom", ".mtx"):
+        if s.endswith(ext):
+            s = s[: -len(ext)]
+    for tok in tokens:
+        if s.endswith(tok):
+            s = s[: -len(tok)].rstrip(" _-.")
+            break
+    return s.strip(" _-.")
+
+
+def _vdj_prefix(name: str) -> str:
+    """``sample1_t_filtered_contig_annotations.csv`` -> ``sample1``."""
+    s = _stem(name, _VDJ_TOKENS)
+    for tok in _VDJ_ARM_TOKENS:
+        if s == tok:
+            return ""
+        if s.endswith("_" + tok) or s.endswith("-" + tok):
+            return s[: -len(tok) - 1].strip(" _-.")
+    return s
+
+
+def _unit_prefix(unit: IngestUnit) -> str:
+    if unit.format == UnitFormat.tenx_mex:
+        return unit.label.lower()
+    return _stem(unit.files[0].name, _MATRIX_TOKENS) if unit.files else ""
+
+
+def _attach_vdj_files(units: list[IngestUnit], vdj_files: list[BundleFile]) -> list[str]:
+    """Put each contig table after the files of the unit it belongs to: the one whose
+    matrix shares its filename prefix, else the only unit. Returns bundle issues."""
+    if not vdj_files:
+        return []
+    loadable = [u for u in units if u.format != UnitFormat.unknown]
+    if not loadable:
+        return ["TCR/BCR contig tables need the expression matrix of the same sample: add it, or "
+                "attach the table to an existing dataset in Unified View > Clonotypes."]
+    issues: list[str] = []
+    for bf in vdj_files:
+        prefix = _vdj_prefix(bf.name)
+        hits = [u for u in loadable if prefix and _unit_prefix(u) == prefix]
+        unit = hits[0] if len(hits) == 1 else (loadable[0] if len(loadable) == 1 else None)
+        if unit is None:
+            issues.append(f"Could not tell which sample the contig table {bf.name} belongs to; give it "
+                          "the sample's filename prefix, or attach it after import in Unified View > "
+                          "Clonotypes.")
+            continue
+        unit.files.append(bf)
     return issues

@@ -3,7 +3,7 @@ import { apiFetch, readError } from "./client";
 
 // --- Types (mirror backend scview.core.ingestion models) ------------------
 
-export type FileRole = "matrix" | "barcodes" | "features" | "data" | "side" | "unknown";
+export type FileRole = "matrix" | "barcodes" | "features" | "data" | "side" | "vdj_contigs" | "unknown";
 export type UnitFormat =
   | "tenx_mex"
   | "tenx_h5"

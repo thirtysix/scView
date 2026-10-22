@@ -36,6 +36,7 @@ from scview.api.v1 import (
     layouts,
     seqqc,
     hashing,
+    vdj,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -73,3 +74,4 @@ api_router.include_router(programs.router, tags=["programs"])
 api_router.include_router(layouts.router, tags=["embeddings"])
 api_router.include_router(seqqc.router, tags=["assessment"])
 api_router.include_router(hashing.router, tags=["hashing"])
+api_router.include_router(vdj.router, tags=["vdj"])

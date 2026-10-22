@@ -596,6 +596,7 @@ _FAMILY_PREFIX = {
     "layouts": "result:layouts", "layout": "result:layouts",
     "seqqc": "result:seqqc",
     "hashing": "result:hashing",
+    "vdj": "result:vdj", "clonotypes": "result:vdj", "clonotype": "result:vdj",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -635,7 +636,8 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
         if fam_refs and (fam in ("dataset", "provenance", "preprocessing", "markers",
                                   "composition", "milo", "enrichment", "qc", "communication", "pca",
                                   "mito", "qcstates", "embedding", "reliability", "planner",
-                                  "seqqc", "hashing")
+                                  "seqqc", "hashing", "vdj",
+                                  "clonotypes", "clonotype")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]

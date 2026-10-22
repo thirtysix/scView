@@ -31,6 +31,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { DatasetLibrary } from "@/components/panels/DatasetLibrary";
 import { PreflightIngestNotes } from "@/components/common/PreflightNote";
 import { SequencingQcSideFiles } from "@/components/qc/SequencingQcSideFiles";
+import { ClonotypeUnitFiles } from "@/components/unified/ClonotypeUnitFiles";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
   tenx_mex: "10x MEX (matrix + barcodes + features)",
@@ -413,6 +414,7 @@ function UnitCard({ unit }: { unit: IngestUnit }) {
         </ul>
       )}
       <SequencingQcSideFiles files={unit.side_files} />
+      <ClonotypeUnitFiles unit={unit} />
     </div>
   );
 }
