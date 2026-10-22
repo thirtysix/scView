@@ -532,7 +532,7 @@ def raw_totals_h5(path: Path | str) -> tuple[np.ndarray, np.ndarray, dict]:
             raise SeqQcError(f"{Path(path).name} is not a Cell Ranger v3+ HDF5 matrix.")
         m = f["matrix"]
         n_features, n_bc = (int(v) for v in m["shape"][:2])
-        indptr = m["indptr"][:].astype(np.int64)
+        indptr = np.asarray(m["indptr"][:], dtype=np.int64)  # n_barcodes + 1 (54 MB for 3' v3)
         gex: np.ndarray | None = None
         feats = m.get("features")
         if feats is not None and "feature_type" in feats:
@@ -546,7 +546,8 @@ def raw_totals_h5(path: Path | str) -> tuple[np.ndarray, np.ndarray, dict]:
         while b0 < n_bc:
             s = int(indptr[b0])
             b1 = int(np.searchsorted(indptr, s + _NNZ_CHUNK, side="right")) - 1
-            b1 = min(max(b1, b0 + 1), n_bc)
+            # At most _BC_CHUNK barcodes too: the per-barcode temporaries stay small.
+            b1 = min(max(b1, b0 + 1), n_bc, b0 + _BC_CHUNK)
             e = int(indptr[b1])
             if e > s:
                 vals = data[s:e].astype(np.int64)

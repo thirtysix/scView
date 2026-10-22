@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from scview.config import Settings
 from scview.core import seq_metrics
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,25 @@ async def get_seq_metrics(dataset_id: str, dm: DatasetManager = Depends(get_data
         raise HTTPException(status_code=404, detail="No sequencing metrics are attached to this "
                                                     "dataset.")
     return body
+
+
+def _save_uns_entry(source: str, output: str, value: str) -> None:
+    """Save only the sequencing entry: copy the dataset's file and rewrite that one uns
+    key, so the matrix is never read, written or recompressed (a full write of a
+    freshly uploaded 2 GB file takes minutes and its memory)."""
+    partial = output + ".partial"
+    shutil.copyfile(source, partial)  # content only: a read-only original gives a writable copy
+    try:
+        with h5py.File(partial, "a") as f:
+            if "uns" not in f:
+                write_elem(f, "uns", {})
+            if seq_metrics.UNS_KEY in f["uns"]:
+                del f["uns"][seq_metrics.UNS_KEY]
+            write_elem(f["uns"], seq_metrics.UNS_KEY, value)
+    except Exception:
+        os.remove(partial)
+        raise
+    os.replace(partial, output)
 
 
 @router.post("/datasets/{dataset_id}/seq-metrics")
@@ -98,25 +117,8 @@ async def _attach(dataset_id: str, paths: list[Path], sample: str, column: str,
 
         def _run():
             work = adaptor.adata
-            before = uns_snapshot(work)
             seq_metrics.attach_files(work, paths, label, column or None)
-            if backed:
-                # Only uns changes: copy the file and rewrite that entry (no matrix read).
-                partial = output_path + ".partial"
-                shutil.copyfile(adaptor.h5ad_path, partial)
-                try:
-                    with h5py.File(partial, "a") as f:
-                        if "uns" not in f:
-                            write_elem(f, "uns", {})
-                        if seq_metrics.UNS_KEY in f["uns"]:
-                            del f["uns"][seq_metrics.UNS_KEY]
-                        write_elem(f["uns"], seq_metrics.UNS_KEY, work.uns[seq_metrics.UNS_KEY])
-                except Exception:
-                    os.remove(partial)
-                    raise
-                os.replace(partial, output_path)
-            else:
-                write_derived(work, output_path, adaptor.h5ad_path, before)
+            _save_uns_entry(adaptor.h5ad_path, output_path, work.uns[seq_metrics.UNS_KEY])
             return seq_metrics.payload(work)
 
         try:

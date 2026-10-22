@@ -555,6 +555,8 @@ async def test_attach_endpoint(client, dataset_manager, tmp_path):
     dense = _raw_counts()
     bcs = [_bc(i) for i in range(dense.shape[1])]
     did = _register(dataset_manager, _cells_adata(bcs[:150]))
+    original = Path(dataset_manager.data_dir) / "uploads" / did / "data.h5ad"
+    original.chmod(0o444)  # uploads are read-only
     r = await client.get(f"{API}/datasets/{did}/seq-metrics")
     assert r.status_code == 404
     raw = _write_h5(tmp_path / "raw_feature_bc_matrix.h5", dense, bcs)
@@ -571,6 +573,9 @@ async def test_attach_endpoint(client, dataset_manager, tmp_path):
     derived = Path(dataset_manager.data_dir) / "derived" / did / "data.h5ad"
     on_disk = ad.read_h5ad(derived)
     assert json.loads(on_disk.uns[sm.UNS_KEY])["samples"]["my data"]["files"]["metrics"] == "metrics_summary.csv"
+    # Only the uns entry was written: the matrix and cells are the upload's.
+    assert list(on_disk.obs_names) == bcs[:150] and on_disk.X.sum() == 150 * 3
+    assert sm.UNS_KEY not in ad.read_h5ad(original).uns  # the original is untouched
     r = await client.get(f"{API}/datasets/{did}/seq-metrics")
     assert r.status_code == 200 and r.json()["n_samples"] == 1
 
