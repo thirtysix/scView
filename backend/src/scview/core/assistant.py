@@ -233,6 +233,22 @@ def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) 
                                   evidence="\n".join(ls_lines)))
 
 
+def _add_hashing(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The cell hashing call (core/hashing.py): singlets / doublets / negatives and
+    the samples, once demultiplexed (or the tags found, before)."""
+    from scview.core import hashing
+
+    try:
+        h_lines, h_detail = hashing.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: hashing failed: %s", exc)
+        return
+    if h_lines:
+        lines.extend(h_lines)
+        sources.append(ChatSource(kind="result", ref=hashing.TAG, detail=h_detail,
+                                  evidence="\n".join(h_lines)))
+
+
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Who the cell QC removed (the filtering step's record) or would remove at the
     pipeline's defaults, per cell type x condition, with the audit's flags."""
@@ -482,6 +498,7 @@ def build_grounding_context(
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: mito-by-type grounding failed: %s", exc)
         _add_qc_states(adaptor, lines, sources)
+        _add_hashing(adaptor, lines, sources)
         _qc_removal_fact(adaptor, lines, sources)
         # The stored PCA: variance per component, elbow, PC1's top loadings.
         try:
@@ -564,7 +581,8 @@ _FEATURE_GUIDE = (
     "Each imported dataset then appears in the Data-tab library to open or manage. "
     "TABS: Data (import/manage datasets), Data Assessment (QC plots + AI-guided pipeline: "
     "QC → normalize → HVG → PCA → batch correction → clustering → UMAP → markers → "
-    "enrichment), Unified View (linked scatter + markers/expression/gene-sets/enrichment + "
+    "enrichment; a Cell hashing card demultiplexes hashtag / CellPlex tags with HTODemux or "
+    "hashedDrops into singlets, doublets and negatives and a sample column), Unified View (linked scatter + markers/expression/gene-sets/enrichment + "
     "violin; its DE subtab compares a lasso/cluster selection vs the rest, or two groups of "
     "a column such as dataset or condition, optionally within one cell type; its Communication "
     "subtab scores ligand-receptor interactions between the groups of a column with LIANA's "
