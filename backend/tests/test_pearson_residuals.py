@@ -20,7 +20,7 @@ import scanpy as sc
 import scipy.sparse as sp
 
 from scview.api.v1 import normalization as norm_api
-from scview.core import normalization, provenance
+from scview.core import normalization, provenance, scaling
 from scview.core.assessor import assess_preprocessing, recorded_normalization_method
 from scview.core.pipeline import (
     CELL_CYCLE_G2M_GENES,
@@ -110,7 +110,7 @@ def test_unknown_method_is_rejected():
 
 
 @pytest.mark.parametrize("dense", [False, True])
-def test_pearson_pipeline_puts_residuals_in_x_and_log_values_in_raw(dense):
+def test_pearson_pipeline_feeds_pca_the_residuals_and_keeps_log_values(dense):
     a = _counts(dense=dense)
     counts = _dense(a.X).copy()
     out, res = run_pipeline(a, PREP, _params("pearson_residuals"))
@@ -125,10 +125,15 @@ def test_pearson_pipeline_puts_residuals_in_x_and_log_values_in_raw(dense):
     assert list(out.var["highly_variable"]) == list(df["highly_variable"])
     assert "residual_variances" in out.var.columns and "dispersions_norm" not in out.var.columns
 
-    # X: the residuals; .raw: the shifted log; counts kept.
+    # What PCA reads: the residuals of the variable genes (core/scaling.py; an older
+    # scView put every gene's in X). X and .raw: the shifted log; counts kept.
     expected = sc.experimental.pp.normalize_pearson_residuals(ref, inplace=False)["X"]
-    np.testing.assert_allclose(_dense(out.X), expected, rtol=1e-5, atol=1e-5)
+    hvg = out.var["highly_variable"].to_numpy()
+    M, mask = scaling.pca_matrix(out)
+    assert np.array_equal(mask, hvg)
+    np.testing.assert_allclose(M, expected[:, hvg], rtol=1e-5, atol=1e-5)
     lognorm = np.log1p(counts / counts.sum(axis=1, keepdims=True) * 1e4)
+    np.testing.assert_allclose(_dense(out.X), lognorm, rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(_dense(out.raw.X), lognorm, rtol=1e-5, atol=1e-5)
     np.testing.assert_array_equal(_dense(out.layers["counts"]), counts)
     assert out.obsm["X_pca"].shape == (a.n_obs, 10)
@@ -172,8 +177,10 @@ def test_downstream_reads_the_same_values_under_both_methods(dense):
         assert res.errors == {} and not res.notes, (method, res.errors, res.notes)
         runs[method] = out
     log, pr = runs["log"], runs["pearson_residuals"]
-    assert not np.allclose(_dense(log.X), _dense(pr.X))  # PCA input does differ ...
+    # PCA input does differ ...
+    assert not np.allclose(scaling.pca_matrix(log)[0], scaling.pca_matrix(pr)[0])
     np.testing.assert_array_equal(_dense(log.raw.X), _dense(pr.raw.X))  # ... .raw does not
+    np.testing.assert_array_equal(_dense(log.X), _dense(pr.X))  # nor X (both log values)
     np.testing.assert_array_equal(_dense(log.layers["counts"]), _dense(pr.layers["counts"]))
 
     key = markers_key("group")

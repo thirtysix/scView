@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import aucell
+from scview.core import aucell, working_copy
 from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
 from scview.core.geneset_sources import custom_collections_for_dataset
@@ -203,8 +203,8 @@ def _score_genes(adata, genes_found: list[str], gene_set: list[str], score_key: 
     used, genes missing, where from). Call in a worker thread."""
     import scanpy as sc
 
-    # Materialize backed sparse datasets — scanpy score_genes cannot
-    # operate on anndata._core.sparse_dataset._CSRDataset.
+    # A light AnnData sharing the arrays, so the score column is not written into the
+    # dataset (a backed one is read in first by the endpoint, core/working_copy.py).
     work_adata = adata.to_memory() if hasattr(adata, "to_memory") else adata.copy()
 
     # Filter genes_found to those actually present in the expression matrix
@@ -334,9 +334,11 @@ async def score_genesets(
     if len(genes_found) == 0:
         raise _none_found(body.gene_set)
 
+    await working_copy.make_room(dm, dataset_id, adaptor)
+
     def _score() -> GeneSetScoreResponse:
         scores, used, missing, source = _score_genes(
-            adata, genes_found, body.gene_set, body.score_name)
+            working_copy.in_memory(adaptor), genes_found, body.gene_set, body.score_name)
         return GeneSetScoreResponse(
             score_name=body.score_name,
             n_cells=int(len(scores)),
@@ -389,7 +391,10 @@ async def compare_score_methods(
     if not genes_found:
         raise _none_found(body.gene_set)
 
+    await working_copy.make_room(dm, dataset_id, adaptor)
+
     def _check() -> dict:
+        adata = working_copy.in_memory(adaptor)
         au, m, rk = _aucell(adata, body.gene_set, body.max_rank)
         sg, _, _, _ = _score_genes(adata, genes_found, body.gene_set, "_scview_depth_check")
         depth: dict[str, np.ndarray] = {}

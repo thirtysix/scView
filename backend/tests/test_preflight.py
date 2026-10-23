@@ -172,10 +172,45 @@ def test_a_dense_matrix_takes_cells_x_genes_x_itemsize():
 # --- estimate_step_peak: the pure function for a pre-step hook ------------------------------
 
 
-def test_step_peak_scaling_holds_two_dense_float32_copies():
-    n, m = 5000, 12000
-    t = pf.estimate_step_peak("scaling", (n, m), 5_000_000, False)
-    assert t >= 2 * n * m * 4  # the dense X and sc.pp.scale's working copy
+def test_step_peak_scaling_holds_no_dense_copy_of_every_gene():
+    # It used to make X dense float32 and z-score it (2 x n x m x 4); now it only works out
+    # the variable genes' statistics (core/scaling.py): a chunk of a sparse X's values, or a
+    # block of a dense X's genes.
+    n, m = 100_000, 28_000
+    sparse = pf.estimate_step_peak("scaling", (n, m), 200_000_000, False)
+    assert sparse == pf.SPARSE_STATS_CHUNK * 33 + m * 24 and sparse < n * m * 4 / 50
+    dense = pf.estimate_step_peak("scaling", (n, m), 0, True)
+    assert dense == 3 * n * pf.STAT_BLOCK * 4
+
+
+@pytest.mark.parametrize("cells, genes, nnz, step, measured_gib", [
+    # Each step alone on the state before it, warm, 2 CPUs (2026-10-23, process RSS):
+    # Kang and the 100k-neuron subset of 10x's 1.3M (after filtering), 2,000 variable genes.
+    (13_815, 13_908, 9_643_068, "pca", 0.240),
+    (13_815, 13_908, 9_643_068, "marker_genes", 0.220),
+    (88_640, 19_824, 186_795_611, "pca", 1.431),
+    (88_640, 19_824, 186_795_611, "marker_genes", 2.851),
+])
+def test_pca_and_marker_estimates_are_within_the_error_band_of_measured_runs(
+        cells, genes, nnz, step, measured_gib):
+    mats = [pf.Matrix(w, cells, genes, True, nnz, "float32") for w in ("X", "layers/counts", "raw/X")]
+    h = pf.Header("h5ad", cells, genes, mats, n_hvg=2000)
+    t, _, _ = pf._STEP_MODELS[step](pf._State.from_header(h), PipelineParams())
+    assert abs(t / pf.GiB / measured_gib - 1) <= pf.ERROR_BAND
+
+
+def test_scaling_sets_raw_to_x_and_pca_reads_the_variable_genes_densely():
+    n, m = 50_000, 20_000
+    h = pf.Header("h5ad", n, m, [pf.Matrix("X", n, m, True, 100_000_000, "float32")])
+    run = pf.estimate_run(h, steps=["normalization", "log_transform", "highly_variable_genes",
+                                    "scaling", "pca"], params=PipelineParams(n_top_genes=2000), warm=True)
+    by = {e.step: e for e in run.steps}
+    # .raw is X itself during the run: scaling adds no matrix to what is held.
+    assert by["pca"].resident_bytes - by["scaling"].resident_bytes < 50 * pf.MiB
+    # PCA: about two copies of cells x variable genes in float32, not of every gene.
+    assert 2 * n * 2000 * 4 <= by["pca"].transient_bytes <= 3 * n * 2000 * 4
+    # Saved and reopened, .raw is its own copy of the log values.
+    assert run.end_bytes > by["pca"].resident_bytes + 0.9 * h.x.nbytes
 
 
 def test_step_peak_doublets_ignores_the_layers_and_reads_the_non_zeros():

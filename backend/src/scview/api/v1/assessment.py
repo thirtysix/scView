@@ -15,12 +15,12 @@ from pydantic import BaseModel
 from scview.core.sse import keepalive
 from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
-from scview.core.dataset_manager import DatasetManager
+from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.assessor import assess_preprocessing, recorded_normalization_method
 from scview.core import (
     cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
-from scview.core import qc_states
+from scview.core import qc_states, working_copy
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import cancel_run, iterate_exclusive, run_exclusive
@@ -450,7 +450,7 @@ async def run_assessment_pipeline(
         result = await run_exclusive(dm, dataset_id, _run, control)
         return result.to_dict()
 
-    except HTTPException:
+    except (HTTPException, DatasetMemoryError):  # a 507 from reading a backed dataset in
         raise
     except Exception as e:
         logger.error("Pipeline run failed for %s: %s", dataset_id, e, exc_info=True)
@@ -631,7 +631,7 @@ async def rerun_step(
         # As /assessment/run: a worker thread, then serve what is on disk.
         result = await run_exclusive(dm, dataset_id, _run, control)
         return {"plan": plan.model_dump(), "result": result.to_dict()}
-    except HTTPException:
+    except (HTTPException, DatasetMemoryError):  # a 507 from reading a backed dataset in
         raise
     except Exception as e:
         logger.error("Re-run failed for %s: %s", dataset_id, e, exc_info=True)
@@ -819,13 +819,13 @@ async def save_qc_state_label(
         if body.column and body.column not in adaptor.adata.obs.columns:
             raise HTTPException(status_code=404, detail=f"Column '{body.column}' not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        backed = await working_copy.make_room(dm, dataset_id, adaptor)
 
         def _run():
+            work = working_copy.in_memory(adaptor)
             result, states = qc_states.for_adaptor(adaptor, body.column or None)
             if result.get("column") is None or states is None:
                 raise qc_states.QcStatesError(result.get("note") or "No column to label by.")
-            work = adaptor.adata.to_memory() if backed else adaptor.adata
             name = qc_states.check_name(work, result["column"], body.name)
             before = uns_snapshot(work)
             saved = qc_states.label(work, result, states, name)

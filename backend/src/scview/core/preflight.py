@@ -16,7 +16,8 @@ can be wrong, and the user decides.
   what the dataset holds when it starts, and seconds; the run's peak is the largest
   held + transient as the dataset's state changes through the steps (reset to counts
   replaces X, filtering cuts each matrix once and the opened copy gives its matrices up,
-  scaling makes X dense float32 and keeps the old X as .raw).
+  scaling sets .raw to X itself and PCA makes the variable genes dense for its own length,
+  core/scaling.py).
 - ``estimate_step_peak(step, shape, nnz, dense, params, *, other_bytes=0,
   dtype="float32", nonzero=None) -> int``: one step, pure, for a hook before each step;
   ``step_peak_for(adata, step, params)`` reads the same from a live AnnData.
@@ -61,6 +62,15 @@ paul15 0.140 / 0.147 (+5%), Kang 1.79 / 1.91 (+7%). Not measured: loom and zarr 
 UMAP and cell-type annotation (reasoned from what they allocate; the estimate says so).
 Header reads take 3-35 ms (Kang's 1.9 GB h5ad: 17 ms).
 
+Scaling, PCA and markers were re-measured 2026-10-23, once scaling stopped making X dense
+(core/scaling.py): each step alone on the saved state before it, warm, 2 CPUs, process RSS
+every 20 ms, GiB over the step's start, measured / estimated. paul15: PCA 0.048 / 0.045,
+markers (dense) 0.110 / 0.113. Kang: PCA 0.240 / 0.226, markers 0.220 / 0.222. 100k
+neurons (88,640 x 19,824 after filtering, 187M stored values): PCA 1.43 / 1.45, markers
+2.85 / 2.86 (the old model said 1.54, as Roihu found: 1.8x under). Scaling: 0-0.08
+against 0.01-0.12 (it was +14.5 GiB at 100k, +38 at 250k). In a whole run the 100k
+peak is doublet detection, 15.5 GiB (scaling's 18.3 GiB before).
+
 Time: the same runs' seconds per step, as a function of cells, stored values and
 groups, measured at 2 CPUs and scaled by the square root of the CPU quota; shown as
 half to twice the point estimate, which held every measured run (Kang 124 s within
@@ -79,6 +89,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from scview.core import scaling as _scaling
 
 GiB = 1 << 30
 MiB = 1 << 20
@@ -142,6 +154,8 @@ class Header:
     var_columns: int = 0
     file_bytes: int = 0
     backed: bool = False  # opened from disk (files over 2 GB): X is not read into memory
+    # Variable genes (var["highly_variable"]), what PCA reads; None: no such column (every gene).
+    n_hvg: int | None = None
     estimated: bool = False  # cells / genes estimated from a sample (text tables)
     guess: bool = False  # nothing in the file could be read (RDS): sizes are a guess
     note: str = ""  # what the numbers rest on, when not read exactly
@@ -234,6 +248,11 @@ def _read_h5ad(path: Path) -> Header:
         obs = f.get("obs")
         h.obs_columns = _n_columns(obs)
         h.var_columns = _n_columns(f.get("var"))
+        # var is a group of columns, or in older files one compound dataset (Kang's).
+        var = f.get("var")
+        hv = var.get("highly_variable") if isinstance(var, h5py.Group) else None
+        if isinstance(hv, h5py.Dataset) and hv.ndim == 1 and hv.dtype.kind in "bui":
+            h.n_hvg = int(np.count_nonzero(hv[()]))
         if "X" in f:
             x = _h5_matrix(f["X"], "X")
             if x is not None:
@@ -570,7 +589,9 @@ def read_header(path: str | Path, fmt: str | None = None, genes_in_rows: bool = 
         h = Header("unknown", note=f"The file could not be read ({type(e).__name__}: {e}).")
     h.file_bytes = _size(path)
     # The adaptor opens files over 2 GB on disk (anndata backed mode).
-    h.backed = fmt == "h5ad" and h.file_bytes > 2 * GiB
+    from scview.core.anndata_adaptor import opens_backed
+
+    h.backed = fmt == "h5ad" and opens_backed(h.file_bytes)
     h.seconds = round(time.perf_counter() - t0, 4)
     return h
 
@@ -622,6 +643,8 @@ def header_from_adata(adata) -> Header:
         h.varm_bytes += _array_bytes(v)
     h.obs_columns = adata.obs.shape[1]
     h.var_columns = adata.var.shape[1]
+    if "highly_variable" in adata.var.columns:
+        h.n_hvg = int(np.count_nonzero(adata.var["highly_variable"].to_numpy()))
     return h
 
 
@@ -675,8 +698,23 @@ def _frames_bytes(h: Header) -> int:
     return n * (_STR_BYTES + 8 * h.obs_columns) + m * (_STR_BYTES + 8 * h.var_columns)
 
 
+# What a backed open leaves on disk (anndata reads X and .raw's X when used; the
+# layers, obsm and the rest are read into memory).
+ON_DISK_WHEN_BACKED = ("X", "raw/X")
+
+
+def _in_memory(h: Header, mm: Matrix) -> bool:
+    return not (h.backed and mm.where in ON_DISK_WHEN_BACKED)
+
+
 def _matrices_bytes(h: Header) -> int:
-    return sum(mm.nbytes for mm in h.matrices if not (h.backed and mm.where == "X"))
+    return sum(mm.nbytes for mm in h.matrices if _in_memory(h, mm))
+
+
+def backed_bytes(h: Header) -> int:
+    """Memory that reading a backed dataset's on-disk matrices into memory adds (0 for
+    one opened in memory): what ``core/working_copy.py`` makes room for."""
+    return sum(mm.nbytes for mm in h.matrices if not _in_memory(h, mm))
 
 
 def resident_bytes(h: Header) -> int:
@@ -717,10 +755,10 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
         return LoadEstimate(mid, mid, "opening the converted file",
                             _range(h.file_bytes / READ_FILE_BPS["rds"], cpus),
                             [("Guess from the file size", mid)], notes)
-    values = sum(mm.nnz for mm in h.matrices if not (h.backed and mm.where == "X"))
+    values = sum(mm.nnz for mm in h.matrices if _in_memory(h, mm))
     read = int(values * READ_BYTES_PER_VALUE.get(h.format, 8.0))
     breakdown = [(f"{mm.where} ({'sparse' if mm.sparse else 'dense'}, {mm.dtype})", mm.nbytes)
-                 for mm in h.matrices if not (h.backed and mm.where == "X")]
+                 for mm in h.matrices if _in_memory(h, mm)]
     other = res - _matrices_bytes(h)
     breakdown.append(("Cell and gene tables, embeddings, results", other))
     peak, stage = res + read, "reading the file"
@@ -735,8 +773,10 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
     if read:
         breakdown.append(("Reading (converting the values)", read))
     if h.backed:
-        notes.append("Files over 2 GB open from disk: the matrix X is read when needed, "
-                     "not held in memory.")
+        from scview.core.anndata_adaptor import BACKED_MIN_BYTES
+
+        notes.append(f"Files over {BACKED_MIN_BYTES / GiB:.3g} GB open from disk: the matrix X is "
+                     "read when needed, not held in memory (processing reads it in first).")
     return LoadEstimate(res, peak, stage, _range(secs, cpus), breakdown, notes)
 
 
@@ -808,6 +848,27 @@ WARMUP = {"doublet_detection": 150 * MiB, "neighbors": 100 * MiB, "marker_genes"
           "enrichment": 80 * MiB, "embeddings": 20 * MiB}
 WARMUP_MODULE = "umap"  # imported by the first neighbour graph: warm-up already paid
 NEIGHBORS_PER_CELL = 12_000
+# Scaling (core/scaling.py) holds one chunk of a sparse X's stored values at a time
+# (int64 column numbers, the values and their squares in float32 and float64: ~33 bytes
+# each), or a dense X's genes STAT_BLOCK at a time.
+SPARSE_STATS_CHUNK = _scaling.SPARSE_CHUNK
+STAT_BLOCK = _scaling.STAT_BLOCK
+SCALING_SECONDS_PER_VALUE = 5e-9  # per stored value of a sparse X, per cell x gene of a dense one
+# PCA: copies of the n x variable-genes float32 matrix at its peak (the matrix and
+# scikit-learn's centred copy), bytes per cell x component (ARPACK's vectors, the
+# scores), and the variable genes' share of a sparse X's stored values relative to
+# their share of the genes (they are the more expressed ones).
+PCA_DENSE_COPIES = 2.1
+PCA_BYTES_PER_COMP = 16
+PCA_CUT_SHARE = 2.0
+PCA_SECONDS_PER_VALUE = 4.5e-8
+# Markers (Wilcoxon on the log values): copies of that matrix held at the peak, and a
+# fixed part (scanpy's dense blocks of 10M values in float64, the group statistics).
+# One copy and 150 MiB were 1.9x under on 100k neurons (2.85 GiB measured).
+MARKERS_SPARSE_COPIES = 2.0
+MARKERS_DENSE_COPIES = 1.0
+MARKERS_FIXED = 80 * MiB
+MARKERS_SECONDS_PER_VALUE = 2.8e-9  # per cell x gene x group, sparse (x4 dense)
 
 
 @dataclass
@@ -822,6 +883,8 @@ class _State:
     other: int  # obsm, obsp, varm, uns, frames
     held: int = 0  # an earlier copy the dataset's adaptor keeps until the run ends
     processed: bool = False  # an embedding or .raw on arrival: genes already filtered
+    n_hvg: int | None = None  # the variable genes PCA reads; None: every gene
+    raw_is_x: bool = False  # .raw set to X by the scaling step: one matrix until saved
 
     @classmethod
     def from_header(cls, h: Header) -> "_State":
@@ -832,13 +895,18 @@ class _State:
         return cls(h.n_cells or 0, h.n_genes or 0, x, layers, raw,
                    h.obsm_bytes + h.obsp_bytes + h.varm_bytes + h.uns_bytes + _frames_bytes(h)
                    + (h.n_cells or 0) * LOAD_PER_CELL + LOAD_FIXED,
-                   processed=bool(h.obsm) or h.matrix("raw/X") is not None)
+                   processed=bool(h.obsm) or h.matrix("raw/X") is not None, n_hvg=h.n_hvg)
 
     def matrices(self) -> list[Matrix]:
         return [mm for mm in [self.x, self.raw, *self.layers.values()] if mm is not None]
 
     def resident(self) -> int:
-        return sum(mm.nbytes for mm in self.matrices()) + self.other + self.held
+        shared = self.raw.nbytes if self.raw_is_x and self.raw is not None else 0
+        return sum(mm.nbytes for mm in self.matrices()) - shared + self.other + self.held
+
+    def pca_genes(self) -> int:
+        """The genes PCA reads: the variable genes, else every gene."""
+        return self.m if self.n_hvg is None else max(1, min(self.m, self.n_hvg))
 
     def xb(self) -> int:
         return self.x.nbytes if self.x is not None else 0
@@ -881,10 +949,6 @@ def _csr_bytes(mm: Matrix) -> int:
         return mm.nbytes
     nz = mm.nnz if mm.nonzero is None else mm.nonzero
     return nz * (np.dtype(mm.dtype).itemsize + 4) + (mm.n_cells + 1) * 4
-
-
-def _dense_f32(s: _State) -> int:
-    return s.n * s.m * 4
 
 
 def _p(params, name: str, default):
@@ -1008,7 +1072,7 @@ def _step_filter(s: _State, params) -> tuple[int, _State, float]:
                               [mm for mm in [x2, *layers2.values()] if mm is not None])
     mask = 0 if x1 is None else (x1.nnz if x1.sparse else n2 * s.m)
     transient = max(cells_peak, max(genes_peak, mask) - cells_freed)
-    new = _State(n2, m2, x2, layers2, raw1, s.other, s.held, s.processed)
+    new = _State(n2, m2, x2, layers2, raw1, s.other, s.held, s.processed, n_hvg=s.n_hvg)
     return max(0, transient), new, 0.2 + FILTER_SECONDS_PER_BYTE * sum(mm.nbytes for mm in old)
 
 
@@ -1027,29 +1091,42 @@ def _step_log(s: _State, params) -> tuple[int, _State, float]:
 
 def _step_hvg(s: _State, params) -> tuple[int, _State, float]:
     sparse = s.x is not None and s.x.sparse
+    s.n_hvg = min(s.m, int(_p(params, "n_top_genes", 2000)))
     return 2 * s.xb(), s, 0.05 + (s.x.nnz if s.x else 0) * (1e-8 if sparse else 2.2e-8)
 
 
 def _step_scaling(s: _State, params) -> tuple[int, _State, float]:
+    """Plans the matrix PCA reads (core/scaling.py): X stays as it is and becomes .raw
+    too (one matrix until saved). The variable genes' statistics come from a sparse X's
+    stored values (no dense copy), or a dense X's genes a block at a time."""
     if s.x is None:
         return 0, s, 0.1
-    dense = _dense_f32(s)
-    cast = s.x.nnz * 8 if s.x.sparse else 0
-    if s.raw is None and "counts" not in s.layers:
-        s.layers["counts"] = _like(s.x, "layers/counts", s.n, s.m)  # counts kept from .raw
-    raw = Matrix("raw/X", s.n, s.m, s.x.sparse, s.x.nnz, s.x.dtype, s.x.index_dtype)
-    after = _State(s.n, s.m, Matrix("X", s.n, s.m, False, s.n * s.m, "float32"), s.layers, raw,
-                   s.other, s.held, s.processed)
-    grow = after.resident() - s.resident()
-    return max(grow, 0) + dense + cast, after, 0.2 + s.n * s.m * 1.5e-8
+    if s.raw is not None and not s.raw_is_x and "counts" not in s.layers:
+        s.layers["counts"] = _like(s.raw, "layers/counts", s.n, s.m)  # counts kept from .raw
+    k = s.pca_genes()
+    if s.x.sparse:
+        t = SPARSE_STATS_CHUNK * 33 + s.m * 24  # one chunk's column numbers, values, squares
+        secs = 0.1 + s.x.nnz * SCALING_SECONDS_PER_VALUE
+    else:
+        t = 3 * s.n * min(k, STAT_BLOCK) * 4  # a dense block, its square and its copy
+        secs = 0.1 + s.n * k * SCALING_SECONDS_PER_VALUE
+    s.raw = Matrix("raw/X", s.n, s.m, s.x.sparse, s.x.nnz, s.x.dtype, s.x.index_dtype)
+    s.raw_is_x = True
+    return t, s, secs
 
 
 def _step_pca(s: _State, params) -> tuple[int, _State, float]:
-    n_hvg = min(s.m, int(_p(params, "n_top_genes", 2000)))
+    """The matrix PCA reads (core/scaling.py: the variable genes, dense float32) and
+    scikit-learn's centred copy of it, ARPACK's vectors; a sparse X's columns are cut
+    out first. An older scaled X is read the same way (a masked copy)."""
+    k = s.pca_genes()
     n_comps = int(_p(params, "n_comps", 50))
-    t = int(2.5 * s.n * n_hvg * 4) + s.n * n_comps * 16
+    dense = s.n * k * 4
+    cut = int(s.x.nnz * min(1.0, PCA_CUT_SHARE * k / max(1, s.m))) * 8 \
+        if s.x is not None and s.x.sparse else 0
+    t = max(cut + dense, int(PCA_DENSE_COPIES * dense)) + s.n * n_comps * PCA_BYTES_PER_COMP
     s.other += s.n * n_comps * 4 + s.m * n_comps * 8
-    return t, s, 0.3 + s.n * n_hvg * 9e-8
+    return t, s, 2.0 + s.n * k * PCA_SECONDS_PER_VALUE
 
 
 def _step_neighbors(s: _State, params) -> tuple[int, _State, float]:
@@ -1099,10 +1176,11 @@ def _step_markers(s: _State, params) -> tuple[int, _State, float]:
     if ln is None:
         return 0, s, 0.1
     # Wilcoxon ranks dense chunks of 10M values; each group's cells are copied out.
-    t = (2 * ln.nbytes if not ln.sparse else ln.nbytes) + 150 * MiB
+    copies = MARKERS_SPARSE_COPIES if ln.sparse else MARKERS_DENSE_COPIES
+    t = int(copies * ln.nbytes) + MARKERS_FIXED
     groups = _groups(params)
     s.other += 56 * ln.n_genes * groups
-    return t, s, 1.0 + s.n * ln.n_genes * groups * (5e-9 if ln.sparse else 2e-8)
+    return t, s, 1.0 + s.n * ln.n_genes * groups * MARKERS_SECONDS_PER_VALUE * (1 if ln.sparse else 4)
 
 
 def _step_enrichment(s: _State, params) -> tuple[int, _State, float]:
@@ -1191,7 +1269,7 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
     it). The run's peak is the largest (held at the step's start + the step's
     transient) over the steps, as the dataset's state changes through them (reset
     to counts replaces X, filtering cuts each matrix once and the opened copy gives
-    its matrices up, scaling makes X dense), then saving and reopening the result. ``warm``: the
+    its matrices up, scaling sets .raw to X itself), then saving and reopening the result. ``warm``: the
     process already paid its one-time imports (default: looked up). ``doublets``: the
     doublet step's channels (``doublet_plan``; None: all cells as one)."""
     from scview.core.pipeline import ALL_STEPS
@@ -1258,7 +1336,9 @@ def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
     layers = {}
     if other_bytes and n:  # an opaque block of the layers' and .raw's bytes, per cell
         layers["other"] = Matrix("layers/other", n, max(1, other_bytes // n), False, 0, "uint8")
-    st = _State(n, m, x, layers, None, 0)
+    # PCA reads the variable genes a run picks (n_top_genes).
+    hvg = min(m, int(_p(params, "n_top_genes", 2000)))
+    st = _State(n, m, x, layers, None, 0, n_hvg=hvg)
     t, _, _ = _step_doublet(st, params, doublets) if model is _step_doublet else model(st, params)
     return int(t)
 
@@ -1561,10 +1641,22 @@ def _params_with(params, **changes):
     return p
 
 
+def in_memory_header(adata) -> Header:
+    """The header of a live AnnData as a run sees it: in memory as it is, or, opened
+    backed, from its file as read in (``core/working_copy.py`` reads it in before the
+    run; ``header_from_adata`` would take its on-disk X for a dense one)."""
+    if getattr(adata, "isbacked", False):
+        h = read_header(adata.filename, "h5ad")
+        h.backed = False
+        return h
+    return header_from_adata(adata)
+
+
 def run_need(adata, steps: list[str], params=None) -> int:
-    """Memory a run of ``steps`` needs beyond what the (in-memory) dataset holds now."""
+    """Memory a run of ``steps`` needs beyond what the dataset holds in memory (a backed
+    one: once read in, which the run makes room for separately)."""
     plan = doublet_plan(adata, params) if "doublet_detection" in steps else None
-    est = estimate_run(header_from_adata(adata), steps=steps, params=params, warm=process_warm(),
+    est = estimate_run(in_memory_header(adata), steps=steps, params=params, warm=process_warm(),
                        doublets=plan)
     return max(0, int(est.peak_bytes - est.start_bytes))
 
@@ -1617,7 +1709,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         plan = _file_doublet_plan(files[0], params) if dbl else None
     warm = process_warm()
     est = estimate_run(h, steps=steps, params=params, warm=warm, doublets=plan)
-    held = est.start_bytes if in_memory else 0
+    # A backed dataset holds less than the run's start (its matrices are read in first).
+    held = (resident_bytes(h) if h.backed else est.start_bytes) if in_memory else 0
     need = est.peak_bytes - held
     avail = available_memory()
     cached = cached_others(dm, dataset_id)
@@ -1642,7 +1735,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         lead = f"{about[0].upper()}{about[1:]} more than now at its peak ({stage})"
     else:
         lead = f"No more memory than this dataset holds now at its peak ({stage})"
-    breakdown = [("This dataset now" if in_memory else "This dataset once loaded", est.start_bytes),
+    breakdown = [("This dataset now" if in_memory else "This dataset once loaded",
+                  held if in_memory else est.start_bytes),
                  (f"At the peak ({stage})", est.peak_bytes),
                  ("After the run (saved and reopened)", est.end_bytes)]
     notes = []

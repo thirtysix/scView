@@ -14,6 +14,7 @@ from scview.core.dataset_manager import DatasetManager
 from scview.core import marker_specificity
 from scview.core.arrow_serializer import dataframe_to_arrow_ipc
 from scview.core.obs_writes import dataset_edit
+from scview.core import working_copy
 from scview.core.ora_background import resolve_markers_key
 from scview.core.pipeline import drop_enrichment_cache
 from scview.core.uns_keys import markers_column, markers_key
@@ -76,8 +77,9 @@ def _compute_markers(adata: ad.AnnData, column: str) -> dict:
 
 
 def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str) -> None:
-    """Compute ``column``'s markers into the dataset and save them with it."""
-    adata = adaptor.adata
+    """Compute ``column``'s markers into the dataset and save them with it (in memory:
+    a backed dataset is read in first, after ``working_copy.make_room``)."""
+    adata = working_copy.in_memory(adaptor)
     if column not in adata.obs.columns:
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found in obs.")
     n_groups = adata.obs[column].nunique()
@@ -186,6 +188,7 @@ async def get_markers(
                 if adaptor is None:
                     raise HTTPException(status_code=404, detail="Dataset not found.")
                 if not adaptor.has_markers(column=groupby_column):
+                    await working_copy.make_room(dm, dataset_id, adaptor)
                     # Seconds to tens of seconds: in a worker thread, so the server
                     # keeps answering meanwhile.
                     await held.run(_compute_and_save, dm, dataset_id, adaptor, groupby_column)

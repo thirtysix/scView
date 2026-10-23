@@ -538,7 +538,7 @@ def _pcs(inp: _Inputs, mask: np.ndarray, s: Setting, rec: Recorded) -> np.ndarra
     if s.flavor == "pearson_residuals":
         X = normalization.pearson_residuals(inp.counts, columns=idx)
     else:
-        # Dense float32 first, as pipeline._run_scaling scales it.
+        # Dense float32 first, as core/scaling.py builds the matrix the pipeline's PCA reads.
         part = inp.log[:, idx].astype(np.float32)
         sub = ad.AnnData(X=part.toarray() if sp.issparse(part) else part)
         sc.pp.scale(sub, max_value=10)

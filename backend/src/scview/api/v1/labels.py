@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core import working_copy
 from scview.core.user_labels import UNASSIGNED, LabelError, label_cells, restore, user_columns
 from scview.dependencies import get_dataset_manager
 
@@ -49,13 +50,12 @@ async def _edit_and_save(
         adaptor = await dm.get_or_load_dataset(dataset_id)
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
-        adata = adaptor.adata
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
 
-        backed = getattr(adata, "isbacked", False)
+        backed = await working_copy.make_room(dm, dataset_id, adaptor)
 
         def _run():
-            work = adata.to_memory() if backed else adata
+            work = working_copy.in_memory(adaptor)
             before = uns_snapshot(work)
             result = edit(work)
             write_derived(work, output_path, adaptor.h5ad_path, before)

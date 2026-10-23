@@ -13,7 +13,8 @@ That is all they feed. ``.raw`` keeps the log-normalised matrix and
 stress score, expression plots and pseudobulk read exactly what they read under the
 default. The pipeline steps stay the same: with Pearson residuals, the variable-gene
 step uses scanpy's ``pearson_residuals`` flavour on the counts and the scaling step
-writes residuals to X instead of z-scores.
+plans residuals instead of z-scores for the matrix PCA reads (core/scaling.py; an
+older scView wrote the residuals of every gene to X).
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ def _block(counts, j0: int, j1: int, cells, genes, total, theta, clip) -> np.nda
 
 def pearson_residuals(
     counts, theta: float = THETA, clip: float | None = None, chunk: int = _CHUNK,
-    columns=None,
+    columns=None, order: str = "C",
 ) -> np.ndarray:
     """Analytic Pearson residuals of a cells x genes count matrix, as float32.
 
@@ -107,14 +108,15 @@ def pearson_residuals(
     default), but built a block of genes at a time: scanpy holds several dense
     float64 copies of the matrix at once (~4 GB for 14k cells x 14k genes).
     ``columns`` (gene indices): only those genes' residuals, the cell totals
-    still taken over every gene, as the pipeline's PCA reads them."""
+    still taken over every gene, as the pipeline's PCA reads them (core/scaling.py,
+    ``order`` "F": laid out as PCA read them from the old residuals of every gene)."""
     n, g = counts.shape
     clip = default_clip(n) if clip is None else float(clip)
     cells, genes, total = _sums(counts)
     if columns is not None:
         columns = np.asarray(columns, dtype=np.int64)
         counts, genes, g = counts[:, columns], genes[columns], columns.size
-    out = np.empty((n, g), dtype=np.float32)
+    out = np.empty((n, g), dtype=np.float32, order=order)
     for j0 in range(0, g, chunk):
         j1 = min(g, j0 + chunk)
         out[:, j0:j1] = _block(counts, j0, j1, cells, genes, total, theta, clip)

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from scview.core import vdj
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core import working_copy
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -53,10 +54,10 @@ async def _edit(dm: DatasetManager, dataset_id: str, fn: Callable[[Any], dict]) 
     async with dataset_edit(dataset_id) as held:
         adaptor = await _adaptor(dm, dataset_id)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        backed = await working_copy.make_room(dm, dataset_id, adaptor)
 
         def work() -> dict:
-            data = adaptor.adata.to_memory() if backed else adaptor.adata
+            data = working_copy.in_memory(adaptor)
             before = uns_snapshot(data)
             result = fn(data)
             write_derived(data, output_path, adaptor.h5ad_path, before, obsm_keys=(vdj.CHAINS_KEY,))
