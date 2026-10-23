@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 import unicodedata
 from pathlib import Path
 from typing import Any
 
-from scview.core import memory_budget
+from scview.core import large_layout, large_mode, memory_budget
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from scview.core.obs_writes import is_locked
 
@@ -90,6 +91,56 @@ def working_reserve(limit_bytes: int) -> int:
     return max(RESERVE_MIN, int(RESERVE_SHARE * limit_bytes))
 
 
+# Memory a gene-store rebuild of a large dataset takes while it runs: one staged row chunk
+# and its CSC copy, then one gene block (core/gene_store.py: 0.80 GB peak RSS for the whole
+# process at 100k cells, 0.93 GB at 1.3M).
+GENE_STORE_BUILD_BYTES = 768 * 1024**2
+
+
+def load_peak_bytes(path: str) -> int:
+    """Memory opening ``path`` peaks at (``preflight.estimate_load`` from its header). A
+    large dataset opens backed at any size: its X and sidecars stay on disk, so it holds
+    its tables, embeddings, graphs and results, plus its open files (``large_mode``)."""
+    from scview.core import preflight
+
+    h = preflight.read_header(path)
+    large = h.format == "h5ad" and large_mode.file_is_large(path)
+    if large:
+        h.backed = True
+    est = preflight.estimate_load(h, ingest=False)
+    return int(est.peak_bytes) + (large_mode.held_bytes(h.n_cells or 0) if large else 0)
+
+
+def large_derived(adaptor: AnnDataAdaptor, target: str | Path) -> None:
+    """Before an in-place edit of a large dataset opened from somewhere other than its
+    derived file (an uploaded large layout): the h5ad is copied to ``target`` (once; X is
+    copied, never rewritten) and the sidecars linked beside it, and the adaptor reads the
+    copy from then on. Originals are never written."""
+    target = Path(target)
+    source = Path(adaptor.h5ad_path)
+    if source == target:
+        return
+    adata = adaptor.adata
+    sidecars = (large_layout.counts_path(source, adata.uns), large_layout.genes_path(source, adata.uns))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f".{target.name}.part")
+    shutil.copyfile(source, partial)
+    partial.chmod(0o644)
+    os.replace(partial, target)
+    for side in sidecars:
+        dest = target.with_name(side.name)
+        if side.exists() and not dest.exists():
+            try:
+                os.link(side, dest)  # the same volume: no second copy
+            except OSError:
+                shutil.copyfile(side, dest)
+    with adaptor._large.lock:
+        adata.file.close()
+        adata.file.open(str(target), "r")
+    adaptor.h5ad_path = str(target)
+    adaptor._large.opened(str(target), True)
+
+
 class DatasetManager:
     """Manages the lifecycle of dataset adaptors with LRU eviction."""
 
@@ -156,7 +207,24 @@ class DatasetManager:
         self._datasets[dataset_id] = adaptor
         self._load_order.append(dataset_id)
         self._evict_lru(keep=dataset_id)  # two loads may have finished at once
+        await self._rebuild_gene_store(dataset_id, adaptor)
         return adaptor
+
+    async def _rebuild_gene_store(self, dataset_id: str, adaptor: AnnDataAdaptor) -> None:
+        """A large dataset whose gene store is missing or stale gets it rebuilt in the
+        background (gene views read the on-disk rows meanwhile, slowly), once there is
+        room for the build (``GENE_STORE_BUILD_BYTES``); never blocks the open."""
+        try:
+            if not await asyncio.to_thread(adaptor.store_rebuild_needed):
+                return
+            free = await self.free_memory_for(GENE_STORE_BUILD_BYTES, keep=dataset_id)
+            if free is not None and free < GENE_STORE_BUILD_BYTES:
+                logger.warning("No room to rebuild the gene store of %s", dataset_id)
+                return
+            if await asyncio.to_thread(adaptor.start_store_rebuild):
+                logger.info("Rebuilding the gene store of %s in the background", dataset_id)
+        except Exception as e:  # noqa: BLE001 - the dataset still opens; its note says why
+            logger.warning("Gene store rebuild of %s not started: %s", dataset_id, e)
 
     def _evictable(self, keep: str) -> list[str]:
         """Cached datasets that may be dropped, least recently used first: never
@@ -218,15 +286,12 @@ class DatasetManager:
         got the backend killed. Refused (``DatasetMemoryError``) only when even the
         low end of the estimate's error band is more than what is free with every
         other dataset closed; without a container limit nothing is checked."""
-        from scview.core import preflight
-
         try:
-            est = await asyncio.to_thread(
-                lambda: preflight.estimate_load(preflight.read_header(path), ingest=False))
+            peak = await asyncio.to_thread(load_peak_bytes, path)
         except Exception as e:  # never block opening on the estimate itself
             logger.warning("No load estimate for %s: %s", path, e)
             return
-        await self.reserve(dataset_id, int(est.peak_bytes))
+        await self.reserve(dataset_id, peak)
 
     async def reserve(self, dataset_id: str, need: int, extra: int = 0,
                       what: str = "Opening this dataset") -> None:
@@ -354,7 +419,22 @@ class DatasetManager:
             if not self._is_openable(entry.name, meta.get("status", "")):
                 if self.remove_dataset(entry.name):
                     removed.append({"id": entry.name, "name": meta.get("name", entry.name)})
+            else:
+                self.prune_sidecars(entry.name)
         return removed
+
+    def prune_sidecars(self, dataset_id: str) -> int:
+        """Delete large-dataset sidecars in the dataset's derived folder that no h5ad there
+        names (a run that stopped before saving its h5ad, an h5ad since processed in
+        memory) and gene-store builds of a process that is gone. Never while a run or an
+        edit works on the dataset: a run writes its sidecars before its h5ad."""
+        if not is_safe_id(dataset_id) or self.is_busy(dataset_id) or is_locked(dataset_id):
+            return 0
+        d = self.data_dir / "derived" / dataset_id
+        stray = large_mode.stray_sidecars(d)
+        if stray:
+            logger.info("Removing sidecars no dataset names in %s: %s", d, [p.name for p in stray])
+        return large_mode.remove_paths(stray)
 
     def get_dataset_info(self, dataset_id: str) -> dict[str, Any] | None:
         if not is_safe_id(dataset_id):
@@ -422,6 +502,11 @@ class DatasetManager:
         if dataset_id in self._load_order:
             self._load_order.remove(dataset_id)
 
+        # A large dataset's sidecars sit beside its h5ad and go with the folder below;
+        # named here too, so sidecars beside an h5ad elsewhere cannot be left behind.
+        for h5ad in self.h5ad_candidates(dataset_id):
+            if large_mode.file_is_large(h5ad):
+                large_layout.remove_sidecars(h5ad)
         found = False
         for subdir in ("uploads", "ingested", "converted", "cache", "derived"):
             d = self.data_dir / subdir / dataset_id
@@ -493,6 +578,10 @@ class DatasetManager:
         read-only, so its entries stay in memory. Returns whether it saved.
         """
         adata = adaptor.adata
+        if adaptor.is_large:  # into its h5ad, X untouched
+            large_derived(adaptor, self.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+            adaptor.write_in_place(obs=False, uns_keys=keys)
+            return True
         if getattr(adata, "isbacked", False):
             logger.info("Dataset %s is backed; not saving %s", dataset_id, keys)
             return False
@@ -546,6 +635,8 @@ class DatasetManager:
                 "expression_layers": adaptor.available_expression_layers(),
                 "default_expression_layer": adaptor.default_expression_layer(),
                 "protein": adaptor.protein_info(),
+                # A large dataset: matrices on disk, and how its gene store and counts are.
+                "large": adaptor.large_info(),
                 "status": "ready",
             }
         except Exception as e:
