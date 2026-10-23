@@ -37,7 +37,8 @@ from pydantic import BaseModel, Field
 
 from scview.core.assessor import assess_preprocessing
 from scview.core import (
-    ccc, cluster_qc, composition, merge_check, milo, pca_diagnostics, provenance, qc_filter,
+    ccc, cluster_qc, composition, doublets, merge_check, milo, pca_diagnostics, provenance,
+    qc_filter,
 )
 from scview.core import mito_by_type
 from scview.core import qc_states
@@ -965,6 +966,10 @@ def _param_text(key: str, value) -> str:
             return f"cell thresholds: {qc_filter.applied_summary(value)}"
         except Exception:  # a malformed record never breaks the prompt
             return "cell thresholds: per sample (recorded)"
+    if key == "channels" and isinstance(value, list):  # the doublet step's, one dict each
+        return f"Scrublet per capture channel: {doublets.channels_text(value) or 'none'}"
+    if key == "channels_skipped" and isinstance(value, list):
+        return f"channel columns passed over: {len(value)}"
     return f"{key}={value}"
 
 

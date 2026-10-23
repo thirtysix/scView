@@ -66,7 +66,10 @@ export interface IngestPreflight {
 }
 
 /** Pipeline parameters the run estimate depends on; others are ignored. */
-const RUN_PARAMS = ["n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method"] as const;
+const RUN_PARAMS = [
+  "n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
+  "doublet_channel_key", // doublet detection's peak is its largest channel's
+] as const;
 
 export function getRunPreflight(
   datasetId: string,

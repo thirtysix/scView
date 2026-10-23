@@ -47,6 +47,7 @@ async def dataset_preflight(
     n_neighbors: int | None = Query(default=None, ge=1),
     normalization_method: str | None = None,
     annotation_method: str | None = None,
+    doublet_channel_key: str | None = None,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Peak memory and rough time of running ``steps`` on the dataset: per step
@@ -67,6 +68,7 @@ async def dataset_preflight(
     overrides = {k: v for k, v in {
         "n_top_genes": n_top_genes, "n_comps": n_comps, "n_neighbors": n_neighbors,
         "normalization_method": normalization_method, "annotation_method": annotation_method,
+        "doublet_channel_key": doublet_channel_key,  # its largest channel sets the peak
     }.items() if v is not None}
     try:
         result = await asyncio.to_thread(preflight.dataset_preflight, dm, dataset_id, names,

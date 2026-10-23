@@ -40,7 +40,8 @@ def test_doublet_is_descendant_of_qc_metrics():
 def test_params_have_doublet_fields():
     p = PipelineParams()
     assert p.doublet_method == "scrublet"
-    assert p.expected_doublet_rate is None  # suggested from the cells per sample
+    assert p.expected_doublet_rate is None  # each channel's, from its cells
+    assert p.doublet_channel_key == ""  # detected: a channel column, the barcodes, ...
     assert p.drop_doublets is False
 
 
@@ -84,9 +85,9 @@ def test_doublet_neighbours_exact_up_to_the_cap(monkeypatch):
         return np.zeros(counts.shape[0]), np.zeros(counts.shape[0], dtype=bool), {}
 
     monkeypatch.setattr(scrublet_lean, "scrublet_counts", fake)
-    a = _synthetic(n_cells=20)
+    a = _synthetic(n_cells=120)  # one channel of every cell, over the 100 Scrublet needs
     assert _run_doublet_detection(a, PipelineParams())["neighbors"] == "exact"
-    monkeypatch.setattr(doublets, "EXACT_KNN_MAX_CELLS", 10)
+    monkeypatch.setattr(doublets, "EXACT_KNN_MAX_CELLS", 110)
     assert _run_doublet_detection(a, PipelineParams())["neighbors"] == "approximate"
     assert [c["use_approx_neighbors"] for c in calls] == [False, True]
 

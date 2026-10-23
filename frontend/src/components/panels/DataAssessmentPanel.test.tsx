@@ -4,6 +4,7 @@ import {
   filterThresholds,
   OpenInUnifiedView,
   SkippedSteps,
+  ChannelNote,
   SpeciesNote,
   StepCaution,
   SuggestedRateNote,
@@ -31,22 +32,73 @@ describe("StepCaution", () => {
 });
 
 describe("SuggestedRateNote", () => {
-  const base = { reason: "donor", n_cells: 6000, basis: "Rule of thumb" };
+  const base = { n_cells: 6000, basis: "Rule of thumb" };
 
-  it("says the default rate comes from the cells per sample, as a rule of thumb", () => {
+  it("says each channel gets its own rate from its cells, as a rule of thumb", () => {
     render(
       <SuggestedRateNote
-        suggestion={{ ...base, rate: 0.0153, column: "Donor", samples: [{ name: "a", n_cells: 3000, rate: 0.024 }] }}
+        suggestion={{
+          ...base, rate: 0.0153, per_channel: true, column: "gem_well", reason: "channel_column", n_channels: 2,
+          channels: [
+            { name: "1", n_cells: 3000, rate: 0.024, scored: true },
+            { name: "2", n_cells: 600, rate: 0.0048, scored: true },
+          ],
+        }}
       />,
     );
-    expect(screen.getByText(/Default 1.5%, from the cells per Donor sample \(1\): a rule of thumb/)).toBeTruthy();
+    expect(
+      screen.getByText(/Default: each channel's own, 0.5-2.4%, in 2 capture channels \(1, 2\), from gem_well: a rule of thumb/),
+    ).toBeTruthy();
+    expect(screen.getByText(/A rate typed here applies to every channel/)).toBeTruthy();
   });
 
   it("says so when all cells are taken as one channel, and is empty before it loads", () => {
-    render(<SuggestedRateNote suggestion={{ ...base, rate: 0.048, column: null, reason: null, samples: [] }} />);
-    expect(screen.getByText(/all cells as one channel/)).toBeTruthy();
+    render(<SuggestedRateNote suggestion={{ ...base, rate: 0.048, column: null, reason: "none", channels: [] }} />);
+    expect(screen.getByText(/Default 4.8%, from all cells as one channel \(no capture channel found\)/)).toBeTruthy();
     const { container } = render(<SuggestedRateNote suggestion={null} />);
     expect(container.textContent).toBe("");
+  });
+});
+
+describe("ChannelNote", () => {
+  it("names the channels read from the barcodes", () => {
+    render(
+      <ChannelNote
+        suggestion={{
+          rate: 0.055, per_channel: true, column: "capture_channel", reason: "barcode_prefix", derived: true,
+          n_cells: 13836, n_channels: 2, n_unscored: 0, basis: "",
+          channels: [
+            { name: "CTRL", n_cells: 6573, rate: 0.0526, scored: true },
+            { name: "STIM", n_cells: 7263, rate: 0.0581, scored: true },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("doublet-channel-note")).toHaveTextContent(
+      "Scrublet will run in 2 capture channels (CTRL, STIM), from the prefix of the cell barcodes.",
+    );
+  });
+
+  it("warns when donors stand in for the channels, and counts the cells left unscored", () => {
+    render(
+      <ChannelNote
+        suggestion={{
+          rate: 0.01, per_channel: true, column: "Donor", reason: "donor", note: "Donors pooled in a lane: a guess.",
+          n_cells: 1200, n_channels: 3, n_unscored: 90, min_channel_cells: 100, basis: "",
+          skipped: ["'well': 1,200 groups with a median of 1 cells, under the 100 Scrublet needs"],
+          channels: [
+            { name: "d1", n_cells: 600, rate: 0.0048, scored: true },
+            { name: "d2", n_cells: 510, rate: 0.004, scored: true },
+            { name: "d3", n_cells: 90, rate: 0.004, scored: false },
+          ],
+        }}
+      />,
+    );
+    const note = screen.getByTestId("doublet-channel-note");
+    expect(note).toHaveTextContent("3 capture channels (d1, d2, d3), from the donor / sample column");
+    expect(note).toHaveTextContent("Donors pooled in a lane: a guess.");
+    expect(note).toHaveTextContent("90 cells are in channels under 100 cells (or have no channel): not scored");
+    expect(note).toHaveTextContent("Passed over 'well': 1,200 groups");
   });
 });
 

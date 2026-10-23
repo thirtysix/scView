@@ -25,6 +25,11 @@ A hashing ``Negative`` (no tag above background) is not a doublet: usually an em
 droplet or a cell whose tagging failed. ``hash_negatives`` gives them, for the
 filtering step's separate opt-in.
 
+A cell Scrublet did not score (its capture channel was too small for it, or it had
+under 3 genes: a NaN ``doublet_score``) is not called a doublet; ``scrublet_unscored``
+gives them, and ``Calls.unscored`` / ``describe`` carry how many, so a view can say so
+rather than count them as singlets silently.
+
 ``legacy`` is the order used before this module (Scrublet first, then the text
 columns with ``hash_class`` among them): the replay of a filtering recorded before
 the choice existed uses it, so an old recipe keeps its meaning.
@@ -41,6 +46,7 @@ AUTO, HASHING, SCRUBLET, EITHER, LEGACY = "auto", "hashing", "scrublet", "either
 SOURCES = (AUTO, HASHING, SCRUBLET, EITHER)
 HASH_CLASS = "hash_class"  # core/hashing.py CLASS
 SCRUBLET_CALL = "predicted_doublet"
+SCRUBLET_SCORE = "doublet_score"
 # Doublet calls stored as text by other tools (scDblFinder, demuxlet, DoubletFinder).
 TEXT_COLUMNS = ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class")
 TEXT_PREFIX = "DF.classification"
@@ -57,6 +63,8 @@ class Calls:
     source: str  # hashing | scrublet | either | a text column's name
     label: str  # for captions: "cell hashing", "Scrublet", ...
     columns: tuple[str, ...]  # the obs columns read
+    # Cells Scrublet did not score, when its calls are used (else None): not called.
+    unscored: np.ndarray | None = None
 
     @property
     def n(self) -> int:
@@ -88,6 +96,15 @@ def scrublet_calls(obs: pd.DataFrame) -> np.ndarray | None:
     # Categorical/text "True"/"False" after a round trip: astype(bool) would make
     # every non-empty string True.
     return _text_in(col, ("true", "1", "1.0", "doublet"))
+
+
+def scrublet_unscored(obs: pd.DataFrame) -> np.ndarray | None:
+    """Cells with Scrublet's call but no score (a NaN ``doublet_score``: their channel
+    was under the size Scrublet needs, or they had under 3 genes), or None without
+    Scrublet's call and score."""
+    if SCRUBLET_CALL not in obs.columns or SCRUBLET_SCORE not in obs.columns:
+        return None
+    return ~np.isfinite(pd.to_numeric(obs[SCRUBLET_SCORE], errors="coerce").to_numpy(dtype=np.float64))
 
 
 def hashing_calls(obs: pd.DataFrame) -> np.ndarray | None:
@@ -127,11 +144,12 @@ def resolve(obs: pd.DataFrame, source: str = AUTO) -> Calls | None:
     if source == HASHING:
         return None
     if source == EITHER and hashing is not None and scrublet is not None:
-        return Calls(hashing | scrublet, EITHER, LABELS[EITHER], (HASH_CLASS, SCRUBLET_CALL))
+        return Calls(hashing | scrublet, EITHER, LABELS[EITHER], (HASH_CLASS, SCRUBLET_CALL),
+                     scrublet_unscored(obs))
     if source == EITHER and hashing is not None:
         return Calls(hashing, HASHING, LABELS[HASHING], (HASH_CLASS,))
     if scrublet is not None:
-        return Calls(scrublet, SCRUBLET, LABELS[SCRUBLET], (SCRUBLET_CALL,))
+        return Calls(scrublet, SCRUBLET, LABELS[SCRUBLET], (SCRUBLET_CALL,), scrublet_unscored(obs))
     if source in (SCRUBLET, EITHER):
         return None
     if source == LEGACY and hashing is not None:  # hash_class sat among the text columns
@@ -168,7 +186,9 @@ def describe(obs: pd.DataFrame, source: str = AUTO) -> dict | None:
         out["hashing"] = {"n_doublets": int(hashing.sum()), "fraction": frac(int(hashing.sum())),
                           "n_negatives": int(neg.sum())}
     if scrublet is not None:
-        out["scrublet"] = {"n_doublets": int(scrublet.sum()), "fraction": frac(int(scrublet.sum()))}
+        unscored = scrublet_unscored(obs)
+        out["scrublet"] = {"n_doublets": int(scrublet.sum()), "fraction": frac(int(scrublet.sum())),
+                           "n_unscored": 0 if unscored is None else int(unscored.sum())}
     if hashing is not None and scrublet is not None:
         both = int((hashing & scrublet).sum())
         out["both"] = {"n": both, "fraction": frac(both)}
@@ -194,6 +214,10 @@ def text(info: dict | None) -> str:
             h = info["hashing"]
             head += (f" (hashing {h['n_doublets']:,}, Scrublet {s['n_doublets']:,}, "
                      f"{b['n']:,} by both)")
+    k = (info.get("scrublet") or {}).get("n_unscored", 0)
+    if k and info["source"] in (SCRUBLET, EITHER):
+        head += (f"; {k:,} cell{'' if k == 1 else 's'} not scored by Scrublet "
+                 "(a capture channel too small for it, or under 3 genes), so not called")
     return head
 
 

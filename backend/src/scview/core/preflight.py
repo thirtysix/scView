@@ -774,15 +774,34 @@ FILTER_GENES_KEPT_RAW = 0.8
 FILTER_SECONDS_PER_BYTE = 3e-9
 
 # Scrublet (core/scrublet_lean.py: sc.pp.scrublet's steps on a sparse matrix of the counts
-# alone, never a copy of the dataset). While it picks its variable genes it holds about six
-# copies of that matrix (filtered, raw, normalised, log, expm1). Then it z-scores the
-# observed and 2x simulated cells' variable genes densely in float64, and scipy makes a CSC
-# of each fully dense result: 108 bytes per cell x variable gene over the ~20 it holds by
-# then (Kang and ovary alike). Its variable-gene cut-offs keep ~10% of the genes (Kang 11%,
-# ovary 9.5%, paul15 19%), so per cell x gene of the counts, 12.8 bytes.
+# alone, never a copy of the dataset), run in each capture channel alone, one after another
+# (core/doublets.py): the step's peak is its largest channel's, plus the per-cell results.
+# While it picks its variable genes it holds about six copies of the channel's counts
+# (filtered, raw, normalised, log, expm1). Then it z-scores the observed and 2x simulated
+# cells' variable genes densely in float64, and scipy makes a CSC of each fully dense
+# result: 144 bytes per cell x variable gene (peak RSS over the process before, one channel
+# of 750 to 40,000 cells of the mouse brain, 2,000 to 13,836 of Kang, paul15: 132-154).
+# How many variable genes its cut-offs keep is the dataset's: about 1,450 of Kang's 14,053
+# genes, 1,300 of the mouse brain's 27,998, 1,900 of ovary's 20,082, 750 of paul15's 3,451,
+# and more in a small channel (the brain: 1,884 at 750 cells, 1,207 at 100,000). So on a
+# dataset in memory the step's own selection is run on up to DBL_HVG_SAMPLE cells of the
+# largest channel (``doublet_plan``); from a header alone they are taken as 10% of the
+# genes, 12.8 bytes per cell x gene (Kang 11%, ovary 9.5%; the brain's 4.7% is over 2x).
 DBL_SPARSE_COPIES = 6.0
-DBL_DENSE_PER_VALUE = 12.8
-DBL_SECONDS_PER_VALUE = 1e-7  # per cell x gene (z-scoring and neighbours, not stored values)
+DBL_PER_CELL_HVG = 144
+DBL_DENSE_PER_VALUE = 12.8  # per cell x gene, when the variable genes are not counted
+DBL_HVG_SAMPLE = 5000
+# Per cell, beside the largest channel: the scores, calls, channel codes and their sort,
+# and the obs columns written (core/doublets.py run_scrublet).
+DBL_OUT_PER_CELL = 48
+# Seconds per channel of c cells: 2e-5 x c^1.4 with exact neighbours (one channel of the
+# brain: 0.3 s at 750 cells, 9.7 s at 10k, 68.6 s at 40k; Kang 8.2 s at 13.8k; its 133
+# wells 43 s in all), 6.9e-5 x c^1.4 with pynndescent's over doublets.EXACT_KNN_MAX_CELLS
+# (the 100k brain as one channel: 688 s), and 0.2 s each.
+DBL_SECONDS_COEF = 2e-5
+DBL_SECONDS_COEF_APPROX = 6.9e-5
+DBL_SECONDS_POWER = 1.4
+DBL_SECONDS_PER_CHANNEL = 0.2
 # Steps that import or JIT-compile libraries the first time they run in a process
 # (numba, umap, pynndescent, the MSigDB cache): held afterwards.
 WARMUP = {"doublet_detection": 150 * MiB, "neighbors": 100 * MiB, "marker_genes": 100 * MiB,
@@ -894,7 +913,16 @@ def _step_qc(s: _State, params) -> tuple[int, _State, float]:
     return t, s, 0.1 + s.x.nnz * (1.8e-7 if s.x.sparse else 1.2e-8)
 
 
-def _step_doublet(s: _State, params) -> tuple[int, _State, float]:
+@dataclass
+class DoubletPlan:
+    """What the doublet step will run on: each capture channel's cells (core/doublets.py
+    ``channels``) and, when counted, Scrublet's variable genes in the largest channel."""
+
+    channels: list[int]
+    hvg: int | None = None
+
+
+def _step_doublet(s: _State, params, plan: DoubletPlan | None = None) -> tuple[int, _State, float]:
     counts = s.x
     beside = s.layers.get("counts") or s.raw
     if s.processed and s.x is not None and not s.x.sparse and beside is not None:
@@ -903,12 +931,48 @@ def _step_doublet(s: _State, params) -> tuple[int, _State, float]:
         counts = beside
     if counts is None:
         return 0, s, 0.1
-    # Only the counts, as CSR (a dense matrix made so by blocks): the layers, .raw and a
-    # dense X are not copied.
-    copies = int(DBL_SPARSE_COPIES * _csr_bytes(counts))
-    dense = int(DBL_DENSE_PER_VALUE * s.n * counts.n_genes)
+    from scview.core.doublets import EXACT_KNN_MAX_CELLS
+    from scview.core.scrublet_lean import MIN_CHANNEL_CELLS
+
+    # No plan: all cells as one channel (a header alone does not say which cells share one).
+    sizes = [c for c in (plan.channels if plan is not None else [s.n]) if c >= MIN_CHANNEL_CELLS]
+    largest = max(sizes, default=0)
+    # Only the channel's counts, as CSR (a dense matrix made so by blocks): the layers,
+    # .raw and a dense X are not copied.
+    copies = int(DBL_SPARSE_COPIES * _csr_bytes(counts) * largest / max(1, counts.n_cells))
+    if plan is not None and plan.hvg:
+        dense = int(DBL_PER_CELL_HVG * largest * plan.hvg)
+    else:
+        dense = int(DBL_DENSE_PER_VALUE * largest * counts.n_genes)
     s.other += s.n * 16
-    return max(copies, dense), s, 3.0 + DBL_SECONDS_PER_VALUE * s.n * counts.n_genes
+    secs = 3.0 + sum((DBL_SECONDS_COEF if c <= EXACT_KNN_MAX_CELLS else DBL_SECONDS_COEF_APPROX)
+                     * c ** DBL_SECONDS_POWER + DBL_SECONDS_PER_CHANNEL for c in sizes)
+    return max(copies, dense) + DBL_OUT_PER_CELL * s.n, s, secs
+
+
+def doublet_plan(adata, params=None) -> DoubletPlan | None:
+    """The doublet step's channels on a live AnnData (in memory), and Scrublet's variable
+    genes counted on up to ``DBL_HVG_SAMPLE`` evenly spaced cells of the largest channel
+    (its own selection, ``scrublet_lean.n_variable_genes``). None when they can't be read."""
+    from scview.core import doublets, scrublet_lean
+    from scview.core.pipeline import StepSkipped, _doublet_matrix
+
+    try:
+        ch = doublets.channels(adata, _p(params, "doublet_channel_key", "") or None)
+    except doublets.DoubletError:
+        return None
+    sizes = [int(k) for k in ch.sizes]
+    plan = DoubletPlan(sizes)
+    if not sizes or max(sizes) < scrublet_lean.MIN_CHANNEL_CELLS:
+        return plan
+    try:
+        counts, _ = _doublet_matrix(adata)
+        idx = np.flatnonzero(ch.codes == int(np.argmax(sizes)))
+        idx = idx[np.linspace(0, idx.size - 1, min(idx.size, DBL_HVG_SAMPLE)).astype(np.int64)]
+        plan.hvg = scrublet_lean.n_variable_genes(scrublet_lean.channel_rows(counts, np.unique(idx)))
+    except (StepSkipped, ValueError, TypeError, IndexError):
+        pass
+    return plan
 
 
 def _cut_peak(old: list[Matrix], new: list[Matrix]) -> tuple[int, int]:
@@ -1118,7 +1182,7 @@ def process_warm() -> bool:
 
 def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense: bool = False,
                  steps: list[str] | None = None, params=None, cpus: float | None = None,
-                 warm: bool | None = None) -> RunEstimate:
+                 warm: bool | None = None, doublets: DoubletPlan | None = None) -> RunEstimate:
     """Memory per step and at the run's peak, and rough seconds, for ``steps`` (any
     order; run in the pipeline's) on a dataset.
 
@@ -1128,7 +1192,8 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
     transient) over the steps, as the dataset's state changes through them (reset
     to counts replaces X, filtering cuts each matrix once and the opened copy gives
     its matrices up, scaling makes X dense), then saving and reopening the result. ``warm``: the
-    process already paid its one-time imports (default: looked up)."""
+    process already paid its one-time imports (default: looked up). ``doublets``: the
+    doublet step's channels (``doublet_plan``; None: all cells as one)."""
     from scview.core.pipeline import ALL_STEPS
 
     if isinstance(shape, Header):
@@ -1145,7 +1210,9 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
     warm_held = 0
     for step in [x for x in ALL_STEPS if x in set(steps or [])]:
         before = s.resident() + warm_held
-        t, s, secs = _STEP_MODELS[step](s, params)
+        model = _STEP_MODELS[step]
+        t, s, secs = (_step_doublet(s, params, doublets) if model is _step_doublet
+                      else model(s, params))
         w = _warm(step, warm)
         warm_held += w
         total += secs
@@ -1168,7 +1235,7 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
 
 def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
                        params=None, *, other_bytes: int = 0, dtype: str = "float32",
-                       nonzero: int | None = None) -> int:
+                       nonzero: int | None = None, doublets: DoubletPlan | None = None) -> int:
     """Memory (bytes) ``step`` needs at its peak over what the dataset holds when it
     starts. Pure: no I/O, no process state (one-time imports not counted).
 
@@ -1177,9 +1244,10 @@ def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
     (None: the defaults); ``other_bytes`` the bytes of the layers and .raw, which
     filtering copies (0 underestimates it); ``dtype`` of X's values; ``nonzero`` the
     non-zero values of a dense X (None: every value, which overestimates doublet
-    detection on dense counts). Filtering is taken to remove cells (one cut of each
-    matrix), also on data filtered before. Unknown steps give 0. From a live AnnData use
-    ``step_peak_for(adata, step, params)``, which reads all of this from it.
+    detection on dense counts); ``doublets`` its channels (None: all cells as one). Filtering
+    is taken to remove cells (one cut of each matrix), also on data filtered before. Unknown
+    steps give 0. From a live AnnData use ``step_peak_for(adata, step, params)``, which reads
+    all of this from it.
     """
     model = _STEP_MODELS.get(step)
     if model is None:
@@ -1190,17 +1258,23 @@ def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
     layers = {}
     if other_bytes and n:  # an opaque block of the layers' and .raw's bytes, per cell
         layers["other"] = Matrix("layers/other", n, max(1, other_bytes // n), False, 0, "uint8")
-    t, _, _ = model(_State(n, m, x, layers, None, 0), params)
+    st = _State(n, m, x, layers, None, 0)
+    t, _, _ = _step_doublet(st, params, doublets) if model is _step_doublet else model(st, params)
     return int(t)
 
 
 def step_peak_for(adata, step: str, params=None) -> int:
     """``estimate_step_peak`` for a live AnnData (in memory, not backed): its X,
-    layers and .raw as they are, e.g. from a hook before each pipeline step."""
+    layers and .raw as they are (and for doublet detection its channels,
+    ``doublet_plan``), e.g. from a hook before each pipeline step."""
     model = _STEP_MODELS.get(step)
     if model is None:
         return 0
-    t, _, _ = model(_State.from_header(header_from_adata(adata)), params)
+    st = _State.from_header(header_from_adata(adata))
+    if model is _step_doublet:
+        t, _, _ = _step_doublet(st, params, doublet_plan(adata, params))
+    else:
+        t, _, _ = model(st, params)
     return int(t)
 
 
@@ -1489,8 +1563,27 @@ def _params_with(params, **changes):
 
 def run_need(adata, steps: list[str], params=None) -> int:
     """Memory a run of ``steps`` needs beyond what the (in-memory) dataset holds now."""
-    est = estimate_run(header_from_adata(adata), steps=steps, params=params, warm=process_warm())
+    plan = doublet_plan(adata, params) if "doublet_detection" in steps else None
+    est = estimate_run(header_from_adata(adata), steps=steps, params=params, warm=process_warm(),
+                       doublets=plan)
     return max(0, int(est.peak_bytes - est.start_bytes))
+
+
+def _file_doublet_plan(path, params=None) -> DoubletPlan | None:
+    """The doublet step's channels from a file's obs alone (its matrix is not read, so
+    Scrublet's variable genes are not counted). None when obs can't be read."""
+    try:
+        import anndata as ad
+        import h5py
+
+        from scview.core import doublets
+
+        with h5py.File(path, "r") as f:
+            obs = ad.io.read_elem(f["obs"])
+        ch = doublets.channels(ad.AnnData(obs=obs), _p(params, "doublet_channel_key", "") or None)
+        return DoubletPlan([int(k) for k in ch.sizes])
+    except Exception:  # noqa: BLE001 — an estimate never fails a request: one channel then
+        return None
 
 
 def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | None = None) -> dict:
@@ -1505,12 +1598,15 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
     adaptor = dm.get_dataset(dataset_id)
     in_memory = adaptor is not None
     h = None
+    plan = None
+    dbl = "doublet_detection" in steps
     # Not while a run changes it in a worker thread: its file says what it was.
     if in_memory and not dm.is_busy(dataset_id):
         a = adaptor.adata
         if not getattr(a, "isbacked", False):
             try:
                 h = header_from_adata(a)
+                plan = doublet_plan(a, params) if dbl else None
             except (RuntimeError, ValueError):  # changed under us
                 h = None
     if h is None:
@@ -1518,23 +1614,26 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         if not files:
             raise FileNotFoundError(dataset_id)
         h = read_header(files[0], "h5ad")
+        plan = _file_doublet_plan(files[0], params) if dbl else None
     warm = process_warm()
-    est = estimate_run(h, steps=steps, params=params, warm=warm)
+    est = estimate_run(h, steps=steps, params=params, warm=warm, doublets=plan)
     held = est.start_bytes if in_memory else 0
     need = est.peak_bytes - held
     avail = available_memory()
     cached = cached_others(dm, dataset_id)
 
     alternatives: list[tuple[str, int]] = []
-    if "doublet_detection" in steps:
+    if dbl:
         alt = estimate_run(h, steps=[s for s in steps if s != "doublet_detection"],
                            params=params, warm=warm)
         alternatives.append(("Skip doublet detection", alt.peak_bytes - held))
     if set(steps) & {"highly_variable_genes", "pca"} and params.n_top_genes > 1000:
-        alt = estimate_run(h, steps=steps, params=_params_with(params, n_top_genes=1000), warm=warm)
+        alt = estimate_run(h, steps=steps, params=_params_with(params, n_top_genes=1000), warm=warm,
+                           doublets=plan)
         alternatives.append((f"Use 1,000 variable genes instead of {params.n_top_genes:,}",
                              alt.peak_bytes - held))
-    alt = estimate_run(_half_cells(h), steps=steps, params=params, warm=warm)
+    half = None if plan is None else DoubletPlan([c // 2 for c in plan.channels], plan.hvg)
+    alt = estimate_run(_half_cells(h), steps=steps, params=params, warm=warm, doublets=half)
     alternatives.append(("Subsample the cells: half of them", alt.peak_bytes - held))
 
     stage = STEP_LABELS.get(est.peak_step, est.peak_step)

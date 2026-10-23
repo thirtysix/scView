@@ -768,7 +768,24 @@ def _scrublet_helper() -> str:
 
 
 _HELPERS["scrublet_counts"] = _scrublet_helper()
-_HELPER_ORDER += ("scrublet_counts",)
+
+
+def _barcode_channels_helper() -> str:
+    """core/doublets.py's reading of the capture channels from 10x barcodes (numpy,
+    pandas and re only), copied so the script finds the channels scView found."""
+    import inspect
+
+    from scview.core import doublets
+
+    lines = ["import re", ""]
+    lines += [f"{name} = {_lit(getattr(doublets, name))}" for name in doublets.REPLAY_CONSTANTS]
+    for obj in doublets.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["barcode_channels"] = _barcode_channels_helper()
+_HELPER_ORDER += ("scrublet_counts", "barcode_channels")
 
 
 def _need(ctx: _Ctx, *names: str) -> None:
@@ -828,9 +845,12 @@ _DOUBLET_INPUT = {"layers['counts']": 'adata.layers["counts"]', ".raw": "adata.r
 
 def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "scrublet_counts")
+    counts = _DOUBLET_INPUT.get(p.get("input"), "adata.X")
+    channels = p.get("channels")
+    if isinstance(channels, list) and channels and all(isinstance(c, dict) for c in channels):
+        return _doublet_channels(p, ctx, counts, channels)
     rate = p.get("expected_doublet_rate")
     recorded = isinstance(rate, (int, float)) and rate > 0
-    counts = _DOUBLET_INPUT.get(p.get("input"), "adata.X")
     approx = {"exact": "False", "approximate": "True"}.get(p.get("neighbors"), "None")
     code = ["# Scrublet on the counts alone (scrublet_counts above): sc.pp.scrublet's scores, "
             "without its copies of the dataset.",
@@ -838,7 +858,8 @@ def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
             f"expected_doublet_rate={_lit(float(rate) if recorded else 0.05)}, "
             f"use_approx_neighbors={approx})",
             'adata.obs["doublet_score"] = score',
-            'adata.obs["predicted_doublet"] = call',
+            "# A cell Scrublet dropped (under 3 genes) has no call: not a doublet (as scView).",
+            'adata.obs["predicted_doublet"] = np.isfinite(score) & (call == True)',
             'adata.uns["scrublet"] = uns']
     if recorded:
         if p.get("expected_rate_from"):
@@ -847,6 +868,64 @@ def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(EXACT, code, "")
     code.insert(0, "# NOTE: the expected doublet rate was not recorded; scanpy's default (0.05) is used.")
     return Snippet(APPROXIMATE, code, "doublet rate not recorded: scanpy's default")
+
+
+def _doublet_channels(p: dict, ctx: _Ctx, counts: str, channels: list[dict]) -> Snippet:
+    """Scrublet in each capture channel, as scView ran it: the channels from the recorded
+    column (or the barcodes, or all cells as one), each with its recorded rate and
+    neighbours (core/doublets.py ``run_scrublet``)."""
+    column, reason = p.get("channel_column"), str(p.get("channel_reason") or "")
+    names = [str(c.get("name")) for c in channels]
+    rates = [float(c["expected_doublet_rate"]) if isinstance(c.get("expected_doublet_rate"), (int, float))
+             else 0.05 for c in channels]
+    approx = [c.get("neighbors") == "approximate" for c in channels]
+    min_cells = p.get("min_channel_cells")
+    min_cells = int(min_cells) if isinstance(min_cells, (int, float)) else 100
+    status, note = EXACT, ""
+    code = ["# Scrublet in each capture channel alone (scrublet_by_channel above), one after another,",
+            "# each with the expected rate and neighbours scView used; a channel under",
+            f"# {min_cells} cells is not scored (NaN score, no call).",
+            f"CHANNELS = {_lit(names)}",
+            f"RATES = {_lit(rates)}",
+            f"APPROX = {_lit(approx)}"]
+    if column is None:
+        code += ["# All cells as one channel.", "codes = np.zeros(adata.n_obs, dtype=np.int64)"]
+    elif reason.startswith("barcode"):
+        _need(ctx, "barcode_channels")
+        code += ["# The channels read from the cell barcodes (barcode_channels above), as scView did.",
+                 "found = barcode_channels(adata.obs_names)",
+                 "if found is None:",
+                 '    sys.exit("The cell barcodes do not carry the capture channels scView read from them.")',
+                 "labels = np.asarray(found[0], dtype=object)[found[1]]",
+                 "codes = pd.Categorical(labels, categories=CHANNELS).codes.astype(np.int64)"]
+    else:
+        col = _lit(str(column))
+        code += [f"# The channels: obs column {comment_text(column, 80)}.",
+                 f"if {col} not in adata.obs.columns:",
+                 f"    sys.exit('obs column ' + {col} + ' (the capture channels) is missing.')",
+                 f"labels = adata.obs[{col}].astype(str).where(adata.obs[{col}].notna())",
+                 "codes = pd.Categorical(labels, categories=CHANNELS).codes.astype(np.int64)"]
+    code += [f"score, call, runs = scrublet_by_channel({counts}, codes, RATES, APPROX, {_lit(min_cells)})",
+             'adata.obs["doublet_score"] = score',
+             'adata.obs["predicted_doublet"] = call']
+    if column is not None and reason.startswith("barcode"):
+        code.append('adata.obs["capture_channel"] = pd.Categorical.from_codes(codes, categories=CHANNELS)')
+    code += ["# Scrublet's own uns when one run covered every cell, and each channel's record.",
+             "one = len(runs) == 1 and runs[0]['uns'] is not None",
+             'adata.uns["scrublet"] = dict(runs[0]["uns"]) if one else {}',
+             'adata.uns["scrublet"]["scview_channels"] = {',
+             '    "name": CHANNELS, "n_cells": [r["n_cells"] for r in runs],',
+             '    "n_scored": [r["n_scored"] for r in runs], "expected_doublet_rate": RATES,',
+             '    "threshold": [np.nan if r["threshold"] is None else r["threshold"] for r in runs],',
+             '    "n_called": [r["n_called"] for r in runs],',
+             '    "neighbors": ["approximate" if x else "exact" for x in APPROX],',
+             '    "status": [r["status"] for r in runs]}',
+             f'adata.uns["scrublet"]["scview_channel_reason"] = {_lit(reason)}']
+    if column is not None:
+        code.append(f'adata.uns["scrublet"]["scview_channel_column"] = {_lit(str(column))}')
+    if reason in ("donor", "batch"):
+        code.insert(0, "# NOTE: scView took the samples as the channels (no lane or GEM well column): a guess.")
+    return Snippet(status, code, note)
 
 
 def _mito_rule(p: dict) -> dict | None:
