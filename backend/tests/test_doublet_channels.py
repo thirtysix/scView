@@ -413,6 +413,8 @@ def test_replay_scores_each_channel_as_the_app_did(tmp_path):
                           equal_nan=True)
     assert np.array_equal(rep.obs["predicted_doublet"].to_numpy(), out.obs["predicted_doublet"].to_numpy())
     assert rep.obs["capture_channel"].astype(str).tolist() == out.obs["capture_channel"].astype(str).tolist()
+    assert doublets.channel_record(rep) == doublets.channel_record(out)  # column, why, each channel
+    assert [r["status"] for r in doublets.channel_record(rep)["rows"]] == ["scored", "scored", "too_small"]
 
 
 def test_replay_of_a_channel_column_and_of_all_cells(tmp_path):

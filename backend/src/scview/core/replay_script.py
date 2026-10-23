@@ -919,7 +919,10 @@ def _doublet_channels(p: dict, ctx: _Ctx, counts: str, channels: list[dict]) -> 
              '    "threshold": [np.nan if r["threshold"] is None else r["threshold"] for r in runs],',
              '    "n_called": [r["n_called"] for r in runs],',
              '    "neighbors": ["approximate" if x else "exact" for x in APPROX],',
-             '    "status": [r["status"] for r in runs]}']
+             '    "status": [r["status"] for r in runs]}',
+             f'adata.uns["scrublet"]["scview_channel_reason"] = {_lit(reason)}']
+    if column is not None:
+        code.append(f'adata.uns["scrublet"]["scview_channel_column"] = {_lit(str(column))}')
     if reason in ("donor", "batch"):
         code.insert(0, "# NOTE: scView took the samples as the channels (no lane or GEM well column): a guess.")
     return Snippet(status, code, note)
