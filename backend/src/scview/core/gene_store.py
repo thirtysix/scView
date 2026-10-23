@@ -20,6 +20,11 @@ plus one gene block, never the matrix:
    segment is gene-major) is read and placed at its final position. The source
    is read once; each spill byte is written once and read once.
 
+At 100k cells (201M values, read backed from a gzip h5ad, 2 cores) the build took
+30 s at 0.80 GB peak RSS (the opt2 prototype: 53 s / 4.3 GB), and one gene over all
+cells reads in 1.4 ms. Besides the store (0.77 GB there) a build needs temporary
+disk beside it of 8 bytes per stored value (1.6 GB there; ~21 GB at 1.3M cells).
+
 The store is written to a hidden build directory beside ``path`` and moved into
 place (``os.replace``) only after it is complete and synced, so a cancelled or
 failed build never leaves a file at ``path`` that looks like a store, and an old
@@ -60,9 +65,16 @@ _INDEX_LIMIT = int(np.iinfo(np.int32).max)
 STAGE_ENTRIES = 16_000_000
 # Values per gene block while filling the store, and per block a reader iterates.
 BLOCK_ENTRIES = 32_000_000
-# Values per HDF5 chunk: one small gene reads one or two chunks.
+# Values per HDF5 chunk: one small gene reads one or two chunks. Measured at 100k
+# cells (201M values, 2 cores): 2^18 made a gene 4x slower to read than 2^16.
 H5_CHUNK = 1 << 16
-COMPRESSION = "lzf"
+# Same measurement, file size / build / median read of one gene over all cells:
+# lzf 1.56 GB / 29 s / 1.9 ms; lzf+shuffle 0.85 GB / 21 s / 1.8 ms; gzip-4+shuffle
+# 0.77 GB / 30 s / 1.4 ms; none 1.61 GB / 12 s / 0.6 ms. gzip also needs no plugin
+# outside h5py.
+COMPRESSION = "gzip"
+COMPRESSION_OPTS = 4
+SHUFFLE = True
 # Rows whose values are hashed into the fingerprint's cheap probe.
 PROBE_ROWS = 64
 
@@ -299,8 +311,8 @@ class GeneStoreWriter:
         var_names: Sequence[Any],
         dtype: Any = np.float32,
         compression: str | None = COMPRESSION,
-        compression_opts: Any = None,
-        shuffle: bool = False,
+        compression_opts: Any = COMPRESSION_OPTS,
+        shuffle: bool = SHUFFLE,
         source: str = "X",
         source_nnz: int | None = None,
         stage_entries: int = STAGE_ENTRIES,
@@ -510,8 +522,8 @@ def build(
     dtype: Any = np.float32,
     source: str = "X",
     compression: str | None = COMPRESSION,
-    compression_opts: Any = None,
-    shuffle: bool = False,
+    compression_opts: Any = COMPRESSION_OPTS,
+    shuffle: bool = SHUFFLE,
     stage_entries: int = STAGE_ENTRIES,
     block_entries: int = BLOCK_ENTRIES,
     progress: Progress | None = None,
