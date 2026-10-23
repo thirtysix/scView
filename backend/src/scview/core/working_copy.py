@@ -38,7 +38,10 @@ def copy_bytes(adaptor) -> int:
     (X, .raw's X) from the file header; 0 when it is in memory already."""
     if not _backed(adaptor):
         return 0
-    return preflight.backed_bytes(preflight.read_header(adaptor.h5ad_path, "h5ad"))
+    h = preflight.read_header(adaptor.h5ad_path, "h5ad")
+    if hasattr(h, "backed"):
+        h.backed = True  # open backed, whatever its size (the manager may have chosen it)
+    return preflight.backed_bytes(h)
 
 
 async def make_room(dm, dataset_id: str, adaptor, then: int = 0) -> bool:

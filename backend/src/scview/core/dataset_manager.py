@@ -8,7 +8,9 @@ import logging
 import os
 import re
 import shutil
+import dataclasses
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -97,18 +99,39 @@ def working_reserve(limit_bytes: int) -> int:
 GENE_STORE_BUILD_BYTES = 768 * 1024**2
 
 
-def load_peak_bytes(path: str) -> int:
-    """Memory opening ``path`` peaks at (``preflight.estimate_load`` from its header). A
-    large dataset opens backed at any size: its X and sidecars stay on disk, so it holds
-    its tables, embeddings, graphs and results, plus its open files (``large_mode``)."""
+@dataclass
+class LoadPlan:
+    """How a dataset opens: its load peak in memory (None when it opens backed whatever
+    happens: a large dataset, a file over ``BACKED_MIN_BYTES``) and backed."""
+
+    in_memory: int | None
+    backed: int
+
+
+def load_plan(path: str) -> LoadPlan:
+    """Memory opening ``path`` peaks at, in memory and backed (``preflight.estimate_load``
+    from its header). A large dataset opens backed at any size: its X and sidecars stay
+    on disk, so it holds its tables, embeddings, graphs and results, plus its open files
+    (``large_mode``)."""
     from scview.core import preflight
 
     h = preflight.read_header(path)
-    large = h.format == "h5ad" and large_mode.file_is_large(path)
-    if large:
-        h.backed = True
-    est = preflight.estimate_load(h, ingest=False)
-    return int(est.peak_bytes) + (large_mode.held_bytes(h.n_cells or 0) if large else 0)
+    h5ad = getattr(h, "format", None) == "h5ad"
+    large = h5ad and large_mode.file_is_large(path)
+    in_memory = None
+    if not (large or getattr(h, "backed", False)):
+        in_memory = int(preflight.estimate_load(h, ingest=False).peak_bytes)
+    if h5ad:
+        h = dataclasses.replace(h, backed=True)
+    backed = int(preflight.estimate_load(h, ingest=False).peak_bytes)
+    held = large_mode.held_bytes(getattr(h, "n_cells", 0) or 0) if large else 0
+    return LoadPlan(in_memory, backed + held)
+
+
+def load_peak_bytes(path: str) -> int:
+    """The load peak of ``path`` as it would open with memory to spare (``load_plan``)."""
+    plan = load_plan(path)
+    return plan.backed if plan.in_memory is None else plan.in_memory
 
 
 def large_derived(adaptor: AnnDataAdaptor, target: str | Path) -> None:
@@ -193,9 +216,9 @@ class DatasetManager:
         # Make room first, so the new dataset never sits beside a full cache.
         if self._evict_lru(keep=dataset_id, room_for_one=True):
             await asyncio.to_thread(memory_budget.release_memory)
-        await self._make_memory_room(dataset_id, h5ad_path)
+        backed = await self._make_memory_room(dataset_id, h5ad_path)
 
-        adaptor = AnnDataAdaptor(h5ad_path)
+        adaptor = AnnDataAdaptor(h5ad_path, backed=backed)
         updates = await asyncio.to_thread(self._metadata_updates, dataset_id, adaptor)
         if self._generation.get(dataset_id, 0) != generation:
             # Evicted while reading (its file was rewritten or removed): this copy
@@ -277,9 +300,11 @@ class DatasetManager:
             budget = memory_budget.read_budget()
         return free()
 
-    async def _make_memory_room(self, dataset_id: str, path: str) -> None:
+    async def _make_memory_room(self, dataset_id: str, path: str) -> bool:
         """Before opening ``path``: make room for its estimated load peak
-        (``preflight``, from the file header) with ``free_memory_for``.
+        (``preflight``, from the file header) with ``free_memory_for``. Returns whether
+        it must open backed although it is under the size threshold (its in-memory
+        peak does not fit).
 
         Three cached datasets fit on a big machine and not under a small limit: on
         a 6 GB backend holding ovary (3.2 GB, dense counts) and pbmc, opening Kang
@@ -287,11 +312,24 @@ class DatasetManager:
         low end of the estimate's error band is more than what is free with every
         other dataset closed; without a container limit nothing is checked."""
         try:
-            peak = await asyncio.to_thread(load_peak_bytes, path)
+            plan = await asyncio.to_thread(load_plan, path)
         except Exception as e:  # never block opening on the estimate itself
             logger.warning("No load estimate for %s: %s", path, e)
-            return
-        await self.reserve(dataset_id, peak)
+            return False
+        if plan.in_memory is not None:
+            # A file under the backed threshold can still be too big to read in (a
+            # streamed ingest of a million cells): it opens backed when its in-memory
+            # peak does not fit with the working reserve, even with the others closed.
+            free = await self.free_memory_for(plan.in_memory, keep=dataset_id)
+            budget = memory_budget.read_budget()
+            if (free is None or budget.limit_bytes is None
+                    or free >= plan.in_memory * LOAD_MARGIN + working_reserve(budget.limit_bytes)):
+                await self.reserve(dataset_id, plan.in_memory)
+                return False
+            logger.info("Opening %s backed: about %.1f GB in memory, %.1f GB free",
+                        dataset_id, plan.in_memory / 1024**3, free / 1024**3)
+        await self.reserve(dataset_id, plan.backed)
+        return plan.in_memory is not None
 
     async def reserve(self, dataset_id: str, need: int, extra: int = 0,
                       what: str = "Opening this dataset") -> None:

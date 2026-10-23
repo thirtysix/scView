@@ -223,8 +223,11 @@ class AnnDataAdaptor:
     Loads the AnnData object lazily on first access.
     """
 
-    def __init__(self, h5ad_path: str) -> None:
+    def __init__(self, h5ad_path: str, backed: bool = False) -> None:
         self.h5ad_path = h5ad_path
+        # Open backed although the file is under BACKED_MIN_BYTES: the dataset manager
+        # found its in-memory peak too big for the memory left (DatasetManager.reserve).
+        self.force_backed = bool(backed)
         self._adata: ad.AnnData | None = None
         self._memory_lock = threading.Lock()  # one read of a backed file into memory at a time
         self._qc_cache: dict | None = None
@@ -242,7 +245,7 @@ class AnnDataAdaptor:
             # size, its X behind a guard that refuses whole-matrix reads.
             large = large_mode.file_is_large(self.h5ad_path)
             # Backed mode for very large files (BACKED_MIN_BYTES, 2 GiB by default)
-            if large or opens_backed(file_size):
+            if large or self.force_backed or opens_backed(file_size):
                 adata = ad.read_h5ad(self.h5ad_path, backed="r")
                 if large:
                     large_mode.guard_backed(adata, self._large.lock)

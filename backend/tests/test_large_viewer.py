@@ -344,3 +344,38 @@ async def test_a_refusal_is_a_422_with_the_reason(client, tmp_data_dir):
     assert res.json() == {
         "detail": "Gene programs is not available for large datasets yet: it factorises every "
                   "cell's values.", "large_dataset": True}
+
+
+async def test_a_file_too_big_to_read_in_opens_backed(tmp_data_dir, counts, monkeypatch):
+    """A file under the size threshold whose in-memory peak does not fit the memory left
+    with the working reserve (a streamed ingest of a million cells) opens backed."""
+    import json
+
+    from scview.core import memory_budget, preflight
+
+    folder = tmp_data_dir / "ingested" / "ing1"
+    folder.mkdir(parents=True)
+    small_twin(counts).write_h5ad(folder / "data.h5ad")
+    up = tmp_data_dir / "uploads" / "ing1"
+    up.mkdir(parents=True)
+    (up / "metadata.json").write_text(json.dumps({"id": "ing1", "name": "ing", "status": "ready"}))
+    gb = 1024**3
+    real = preflight.estimate_load
+
+    def estimate(h, ingest=True, cpus=None):
+        est = real(h, ingest=ingest, cpus=cpus)
+        if not h.backed:  # as if its matrices took 4 GB in memory
+            est.peak_bytes += 4 * gb
+        return est
+
+    def budget(limit_gb):
+        return lambda *a, **k: memory_budget.MemoryBudget(limit_gb * gb, gb, True, "container limit")
+
+    monkeypatch.setattr(preflight, "estimate_load", estimate)
+    monkeypatch.setattr(memory_budget, "release_memory", lambda: None)
+    monkeypatch.setattr(memory_budget, "read_budget", budget(4))
+    adaptor = await DatasetManager(str(tmp_data_dir)).load_dataset("ing1")
+    assert adaptor.isbacked and not adaptor.is_large
+    # with room to spare it opens in memory, as before
+    monkeypatch.setattr(memory_budget, "read_budget", budget(64))
+    assert not (await DatasetManager(str(tmp_data_dir)).load_dataset("ing1")).isbacked
