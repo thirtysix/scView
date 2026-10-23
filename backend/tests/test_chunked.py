@@ -360,6 +360,56 @@ def test_pearson_hvg_equal_pipeline_step(processed, batch_key):
             assert got[c].equals(want[c]), c
 
 
+@pytest.mark.parametrize("dense", [False, True])
+def test_integer_counts_equal_pipeline(tmp_path, dense):
+    """int32 counts: QC sums as int64, normalisation to float32, the count-based HVG
+    flavours. The sparse file has counts above 46,340, whose square overflows int32:
+    scanpy's CSR kernel squares into int64 and so does this module (float64). Its dense
+    path squares in int32 and overflows (test_dense_int_squares_do_not_overflow), so the
+    dense file stays below that."""
+    X, obs, names = _counts(n=1500)
+    if not dense:
+        X[:40, 30] = 60_000
+    p = _write(tmp_path / "int.h5ad", X.astype(np.int32), obs, names, dense=dense,
+               compression="gzip")
+    m = chunked.open_counts(p, rows=400)
+    assert m.X.dtype == np.int32
+    a = ad.read_h5ad(p)
+    pp = PipelineParams(n_top_genes=100)
+    _run_qc_metrics(a, pp)
+    got_obs, got_var = chunked.qc_metrics(m)
+    pd.testing.assert_frame_equal(got_obs, a.obs[QC_OBS], check_exact=True)
+    pd.testing.assert_frame_equal(got_var, a.var[QC_VAR], check_exact=True)
+    _run_normalization(a, pp)
+    _run_log_transform(a, pp)
+    _assert_same_matrix(chunked.log_normalize(m.X).compute(), a.X)
+    for method, flavor in (("log", "seurat_v3"), ("pearson_residuals", "seurat")):
+        b = a.copy()
+        _run_hvg(b, PipelineParams(n_top_genes=100, hvg_flavor=flavor,
+                                   normalization_method=method))
+        if method == "log":
+            got = chunked.highly_variable_genes(m.X, m.var_names, flavor=flavor, n_top_genes=100)
+        else:
+            got = chunked.pearson_hvg(m.X, m.var_names, n_top_genes=100)
+        assert got["highly_variable"].equals(b.var["highly_variable"]), method
+        np.testing.assert_allclose(got["variances"], b.var["variances"], rtol=1e-12)
+
+
+def test_dense_int_squares_do_not_overflow(tmp_path):
+    """A dense int32 count of 60,000: the chunked variance is the exact one. (scanpy's
+    ``_get_mean_var`` squares a dense int32 matrix in int32 and returns a negative
+    variance here, so the in-memory seurat_v3 / Pearson steps are wrong on such data.)"""
+    X, obs, names = _counts(n=1500)
+    X[:40, 30] = 60_000
+    p = _write(tmp_path / "int.h5ad", X.astype(np.int32), obs, names, dense=True,
+               compression="gzip")
+    got = chunked.highly_variable_genes(chunked.open_counts(p, rows=400).X, names,
+                                        flavor="seurat_v3", n_top_genes=100)
+    exact = X.astype(np.float64)
+    np.testing.assert_allclose(got["variances"], exact.var(axis=0, ddof=1), rtol=1e-12)
+    np.testing.assert_allclose(got["means"], exact.mean(axis=0), rtol=1e-12)
+
+
 def test_hvg_rejects_unknown_flavor(processed):
     m, _, L = processed
     with pytest.raises(ValueError, match="Unsupported HVG flavor"):
@@ -459,6 +509,23 @@ def test_pca_pearson_equals_residuals_then_arpack(processed):
     _check_pca(got, ref, R, hvg, 30)
 
 
+def test_pca_scaled_float64_counts(tmp_path):
+    """float64 counts give float64 log values; the reference scales a float32 copy."""
+    X, obs, names = _counts(n=1200)
+    p = _write(tmp_path / "f64.h5ad", X.astype(np.float64), obs, names, dense=False,
+               compression="gzip")
+    a = ad.read_h5ad(p)
+    _run_normalization(a, PipelineParams())
+    _run_log_transform(a, PipelineParams())
+    assert a.X.dtype == np.float64
+    L = chunked.log_normalize(chunked.open_counts(p, rows=300).X)
+    _assert_same_matrix(L.compute(), a.X)
+    hvg = np.zeros(len(names), dtype=bool)
+    hvg[10:190] = True
+    ref = _scanpy_pca(_dense(a.X[:, hvg]), 20, scale=True)
+    _check_pca(chunked.pca_scaled(L, hvg, n_comps=20), ref, ref.X, hvg, 20)
+
+
 def test_pca_n_comps_capped(processed):
     m, a, L = processed
     hvg = np.zeros(m.shape[1], dtype=bool)
@@ -531,6 +598,41 @@ def _modern(src: Path, tmp_path: Path) -> Path:
     return out
 
 
+_MEMORY_RUN = """
+import json, resource, sys
+from scview.core import chunked
+chunked.n_workers = lambda: 2
+m = chunked.open_counts(sys.argv[1])
+obs, _ = chunked.qc_metrics(m)
+cells = m.subset(obs=((obs["n_genes_by_counts"] >= 200) & (obs["pct_counts_mt"] < 20)).to_numpy())
+f = cells.subset(var=chunked.gene_detection(cells.X) >= 3)
+L = chunked.log_normalize(f.X)
+hv = chunked.highly_variable_genes(L, f.var_names, flavor="seurat", n_top_genes=2000)
+pca = chunked.pca_scaled(L, hv["highly_variable"].to_numpy(), n_comps=50)
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024 / 2**30
+print(json.dumps({"peak_gb": peak, "cells": f.shape[0], "blocks": len(f.X.chunks[0])}))
+"""
+
+
+def test_memory_bounded_on_100k_cells():
+    """QC..PCA by blocks on 100k cells (10x 1.3M brain subset, 201M non-zeros, gzip) in a
+    child process at 2 workers. Measured 2026-10-23: peak 1.15 GB, ~51 s at 2 CPUs; the
+    same steps in memory peaked 6.3 GB with HVG-only scaling (18.5 GB on Roihu scaling
+    every gene). The bound fails a step that stops being block-bounded."""
+    import json
+    import subprocess
+    import sys
+
+    src = TESTDATA / "neurons_100000.h5ad"
+    if not src.exists():
+        pytest.skip("neurons_100000.h5ad not in SCVIEW_TESTDATA")
+    r = subprocess.run([sys.executable, "-c", _MEMORY_RUN, str(src)], capture_output=True,
+                       text=True, timeout=1200, check=True)
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+    assert got["blocks"] > 10
+    assert got["peak_gb"] < 2.0, got
+
+
 @pytest.mark.parametrize("name", ["kang2018_ifnb_pbmc.h5ad", "paul15.h5ad"])
 def test_real_data_qc_to_pca(name, tmp_path):
     src = TESTDATA / name
@@ -562,3 +664,13 @@ def test_real_data_qc_to_pca(name, tmp_path):
     got = chunked.pca_scaled(L, hvg, n_comps=50)
     ref = _scanpy_pca(_dense(a.X[:, hvg]), 50, scale=True)
     _check_pca(got, ref, ref.X, hvg, 50)
+    # Pearson residuals: variable genes, then PCA of their residuals
+    b = a.copy()
+    _run_hvg(b, PipelineParams(normalization_method="pearson_residuals"))
+    got = chunked.pearson_hvg(m.X, m.var_names, n_top_genes=min(2000, m.shape[1]))
+    assert got["highly_variable"].equals(b.var["highly_variable"])
+    hvg = got["highly_variable"].to_numpy()
+    R = normalization.pearson_residuals(b.layers["counts"], columns=np.flatnonzero(hvg),
+                                        clip=normalization.default_clip(m.shape[0]))
+    _check_pca(chunked.pca_pearson(m.X, hvg, n_comps=50), _scanpy_pca(R, 50, scale=False),
+               R, hvg, 50)

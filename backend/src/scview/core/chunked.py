@@ -550,6 +550,7 @@ def _group_stats_block(b, codes: np.ndarray, n_groups: int, expm1: bool,
     matrix's dtype, as scanpy's ``_get_mean_var`` squares, summed in float64)."""
     if cols is not None:
         b = b[:, cols] if sp.issparse(b) else np.take(b, cols, axis=1)
+    b = _float_counts(b)
     g = b.shape[1]
     if sp.issparse(b):
         b = sp.csr_matrix(b)
@@ -571,6 +572,14 @@ def _group_stats_block(b, codes: np.ndarray, n_groups: int, expm1: bool,
         s1[k] = rows.sum(axis=0, dtype=np.float64)
         s2[k] = (rows * rows).sum(axis=0, dtype=np.float64)
     return {"s0": s0, "s1": s1, "s2": s2}
+
+
+def _float_counts(b):
+    """Integer counts as float64 (exact): scanpy's numba kernels square an integer into
+    int64, numpy's int32 product would overflow."""
+    if np.issubdtype(b.dtype, np.floating):
+        return b
+    return b.astype(np.float64)
 
 
 @dataclass
@@ -828,6 +837,7 @@ def _gene_cell_sums_block(b, codes: np.ndarray, n_groups: int) -> dict:
     """Per (batch, gene) sums and sums of squares (float64), and each cell's sum over every
     gene (float64; the Pearson-residual HVG sums a batch in its own dtype, exact for
     counts)."""
+    b = _float_counts(b)
     g = b.shape[1]
     if sp.issparse(b):
         b = sp.csr_matrix(b)
@@ -952,6 +962,10 @@ def pearson_hvg(counts: da.Array, var_names, *, n_top_genes: int, batch=None,
 PCA_PARAMS = {"zero_center": True, "use_highly_variable": True, "mask_var": "highly_variable"}
 
 
+def _as_float32(b):
+    return b.astype(np.float32)
+
+
 def _dense_cols(b, cols: np.ndarray) -> np.ndarray:
     """The block's columns ``cols`` as a dense float32 array (row-major)."""
     d = b[:, cols].toarray() if sp.issparse(b) else np.take(b, cols, axis=1)
@@ -1045,6 +1059,8 @@ def pca_scaled(X: da.Array, hvg, *, n_comps: int = 50, max_value: float | None =
     ``uns['pca']['params']``), n_comps = min(n_comps, cells - 1, variable genes - 1)."""
     hvg = np.asarray(hvg, dtype=bool)
     cols = np.flatnonzero(hvg)
+    if X.dtype != np.float32:  # the copy is float32 before its mean and sd are taken
+        X = X.map_blocks(_as_float32, dtype=np.float32, meta=_meta_like(X, np.float32))
     st = _group_stats(X, cols=cols)
     mean, var = st.mean_var(0)
     std = np.sqrt(var)
