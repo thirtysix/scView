@@ -90,6 +90,25 @@ def _tenx_h5(p: Path, n_genes: int = 3, n_cells: int = 2, antibodies: int = 0) -
     return p
 
 
+def _tenx_h5_legacy(p: Path, n_genes: int = 3, n_cells: int = 2,
+                    genomes: tuple[str, ...] = ("mm10",)) -> Path:
+    """Cell Ranger 1.x/2.x layout: one group per genome, genes + gene_names (the 10x
+    1.3M mouse brain file)."""
+    dense = np.arange(1, n_genes * n_cells + 1).reshape(n_genes, n_cells)
+    m = sp.csc_matrix(dense)
+    with h5py.File(p, "w") as f:
+        for genome in genomes:
+            g = f.create_group(genome)
+            g.create_dataset("data", data=m.data.astype("int32"))
+            g.create_dataset("indices", data=m.indices.astype("int64"))
+            g.create_dataset("indptr", data=m.indptr.astype("int64"))
+            g.create_dataset("shape", data=np.array([n_genes, n_cells], dtype="int32"))
+            g.create_dataset("barcodes", data=np.array([_barcode(i).encode() for i in range(n_cells)]))
+            g.create_dataset("genes", data=np.array([f"ENSMUSG{i:011d}".encode() for i in range(n_genes)]))
+            g.create_dataset("gene_names", data=np.array([f"Gene{i}".encode() for i in range(n_genes)]))
+    return p
+
+
 def _only_unit(paths):
     bundle = build_bundle(paths)
     assert len(bundle.units) == 1
@@ -135,6 +154,25 @@ def test_load_h5ad(tmp_path):
 def test_load_tenx_h5(tmp_path):
     adata = load_unit(_only_unit([_tenx_h5(tmp_path / "f.h5", n_genes=3, n_cells=2)]))
     assert adata.shape == (2, 3)
+
+
+def test_load_tenx_h5_cell_ranger_2_layout(tmp_path):
+    # /mm10 instead of /matrix: detected as a 10x h5 (it was "unrecognised HDF5").
+    unit = _only_unit([_tenx_h5_legacy(tmp_path / "1M_neurons_filtered_gene_bc_matrices_h5.h5",
+                                       n_genes=4, n_cells=3)])
+    assert unit.format.value == "tenx_h5"
+    adata = load_unit(unit)
+    assert adata.shape == (3, 4)
+    assert list(adata.var_names) == ["Gene0", "Gene1", "Gene2", "Gene3"]
+    assert adata.var["gene_ids"].iloc[0] == "ENSMUSG00000000000"
+    # Genes x cells 1..12 row-major: cell 0 has 1, 4, 7, 10.
+    assert adata.X[0].toarray().ravel().tolist() == [1, 4, 7, 10]
+
+
+def test_tenx_h5_with_two_genomes_is_a_clear_load_error(tmp_path):
+    unit = _only_unit([_tenx_h5_legacy(tmp_path / "f.h5", genomes=("GRCh38", "mm10"))])
+    with pytest.raises(IngestLoadError, match="more than one genome"):
+        load_unit(unit)
 
 
 def test_cite_seq_antibodies_become_the_protein_modality(tmp_path):
