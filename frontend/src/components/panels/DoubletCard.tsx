@@ -12,13 +12,20 @@ import { pct, roundTo } from "@/lib/qcThresholds";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 
-const STEP = 0.005; // threshold resolution on the 0-1 score
+const STEPS = [0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01];
 const DEBOUNCE_MS = 120;
 const CHANNEL_ROWS = 8; // more behind "show all"
 const GUESS =
   "No lane or GEM well column was found, so Scrublet ran in each sample: donors pooled in one lane are not " +
   "channels, so its expected rates are a guess. Pick the capture channel in the Doublet Detection step if the " +
   "data has one.";
+
+/** Threshold resolution: about a 200th of the histogram's range (0.005 on 0-1; finer when
+ *  low per-channel rates put every score under 0.1). */
+export function thresholdStep(top: number | undefined): number {
+  const raw = (top && top > 0 ? top : 1) / 200;
+  return STEPS.find((s) => s >= raw) ?? STEPS[STEPS.length - 1]!;
+}
 
 /** A score for display: Scrublet's own threshold has 17 digits. */
 export function fmtScore(v: number): string {
@@ -115,14 +122,16 @@ export function DoubletCard({
     [fetchAt],
   );
 
+  const edges = summary?.hist?.bin_edges;
+  const step = thresholdStep(edges?.length ? edges[edges.length - 1] : undefined);
   const commit = useCallback(
     (raw: number) => {
-      const t = roundTo(raw, STEP);
+      const t = roundTo(raw, step);
       setThreshold(t);
       setText(fmtScore(t));
       ask(t);
     },
-    [ask],
+    [ask, step],
   );
 
   const scrublet = summary?.scrublet_threshold ?? null;
@@ -197,7 +206,7 @@ export function DoubletCard({
             barColor="#a78bfa"
             plotName="qc_doublet_score"
             onDrag={(_, v) => {
-              const t = roundTo(v, STEP);
+              const t = roundTo(v, step);
               setText(fmtScore(t));
               ask(t);
             }}
@@ -213,7 +222,7 @@ export function DoubletCard({
             type="number"
             min={0}
             max={1}
-            step={STEP}
+            step={step}
             value={text}
             onChange={(e) => {
               setText(e.target.value);

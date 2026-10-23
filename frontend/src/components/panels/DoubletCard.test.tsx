@@ -30,7 +30,7 @@ vi.mock("@/components/plots/Plot", () => ({
   },
 }));
 
-import { DoubletCard } from "./DoubletCard";
+import { DoubletCard, thresholdStep } from "./DoubletCard";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 
@@ -87,6 +87,15 @@ function perChannel(n: number, extra: Partial<DoubletSummary> = {}): DoubletSumm
     ...extra,
   };
 }
+
+describe("thresholdStep", () => {
+  it("is about a 200th of the histogram's range", () => {
+    expect(thresholdStep(1)).toBe(0.005);
+    expect(thresholdStep(0.084)).toBe(0.0005); // 133 GEM wells: every score under 0.1
+    expect(thresholdStep(undefined)).toBe(0.005);
+    expect(thresholdStep(3)).toBe(0.01);
+  });
+});
 
 describe("DoubletCard", () => {
   beforeEach(() => {

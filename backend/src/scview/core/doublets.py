@@ -551,7 +551,7 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
         threshold = _check_threshold(threshold)
     record = channel_record(adata)
 
-    top = max(1.0, float(finite.max())) if finite.size else 1.0
+    top = _hist_top(finite, [threshold, st] + [r["threshold"] for r in (record or {}).get("rows", [])])
     counts, edges = np.histogram(finite, bins=n_bins, range=(0.0, top))
     now = doublet_source.scrublet_calls(adata.obs)
     called = _calls_at(scores, threshold) if threshold is not None else None
@@ -566,7 +566,7 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
         "n_unscored": int(n - finite.size),  # small channels, failed ones, under 3 genes
         "n_unscored_small_channels": int(small),
         "min_channel_cells": MIN_CHANNEL_CELLS,
-        "hist": {"bin_edges": np.round(edges, 4).tolist(), "counts": counts.tolist()},
+        "hist": {"bin_edges": np.round(edges, 6).tolist(), "counts": counts.tolist()},
         "median": round(float(np.median(finite)), 4) if finite.size else None,
         "scrublet_threshold": st,  # exact: the calls at it are Scrublet's own
         "per_channel": bool(record is not None and len(record["rows"]) > 1),
@@ -588,6 +588,17 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
         "agreement": _agreement(adata, called if called is not None else now, threshold),
     }
     return out
+
+
+def _hist_top(finite: np.ndarray, thresholds: list) -> float:
+    """The histogram's right edge: just past the highest score and every threshold known
+    (1 when that is over 1, or nothing is known). Low expected rates (0.4-0.7 % per GEM
+    well) put every score under 0.1, which a 0-1 axis squeezed into a few bins."""
+    known = [float(t) for t in thresholds if t is not None and np.isfinite(float(t))]
+    top = max([float(finite.max()) if finite.size else 0.0, *known])
+    if top <= 0:
+        return 1.0
+    return top * 1.05 if top * 1.05 <= 1.0 else max(1.0, top)
 
 
 def _channel_rows(scores: np.ndarray, called: np.ndarray | None, ch: Channels | None,

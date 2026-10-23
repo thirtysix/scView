@@ -348,6 +348,19 @@ def test_summary_counts_the_unscored_cells_and_the_calls_per_channel():
     assert np.array_equal(a.obs["predicted_doublet"].to_numpy(), original)
 
 
+def test_the_histogram_spans_the_scores_and_thresholds_not_always_0_to_1():
+    a = _obs([f"c{i}" for i in range(500)], gem_well=["a"] * 250 + ["b"] * 250)
+    a.obs["doublet_score"] = np.linspace(0, 0.08, 500)  # per-well rates of ~0.5 %: low scores
+    a.obs["predicted_doublet"] = a.obs["doublet_score"].to_numpy() > 0.05
+    s = doublets.summary(a)
+    assert s["hist"]["bin_edges"][-1] == pytest.approx(0.084)
+    assert sum(s["hist"]["counts"]) == 500
+    assert doublets.summary(a, threshold=0.5)["hist"]["bin_edges"][-1] == pytest.approx(0.525)
+    a.obs["doublet_score"] = np.linspace(0, 1.3, 500)  # a score over 1 stays in
+    s = doublets.summary(a)
+    assert s["hist"]["bin_edges"][-1] == pytest.approx(1.3) and sum(s["hist"]["counts"]) == 500
+
+
 def test_doublet_source_filtering_and_the_report_keep_and_say_the_unscored():
     a = _scored_with_a_small_channel()
     k = int(np.isnan(a.obs["doublet_score"].to_numpy()).sum())
