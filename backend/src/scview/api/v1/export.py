@@ -19,7 +19,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from scview.api.v1.markers import ensure_specificity
+from scview.core import large_layout, large_mode
 from scview.core.dataset_manager import DatasetManager
+from scview.core.obs_writes import dataset_edit
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -104,31 +106,81 @@ def _h5ad_download_name(dm: DatasetManager, dataset_id: str) -> str:
 @router.get("/datasets/{dataset_id}/export/h5ad/info")
 async def h5ad_download_info(
     dataset_id: str,
+    raw: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Size and name of the .h5ad a download would send, so the UI can show the
-    size before the user starts a multi-GB transfer."""
+    size before the user starts a multi-GB transfer. A large dataset's download is
+    one file put together from its h5ad and counts (``large``; the size is close, not
+    exact)."""
     path = _active_h5ad(dm, dataset_id)
     layer = path.parent.parent.name
-    return {
+    out = {
         "filename": _h5ad_download_name(dm, dataset_id),
         "size_bytes": path.stat().st_size,
         "source": layer,
         "source_label": _H5AD_SOURCES.get(layer, layer),
     }
+    if await asyncio.to_thread(large_mode.file_is_large, path):
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        counts = _large_counts_path(adaptor)
+        out["size_bytes"] = await asyncio.to_thread(large_mode.export_bytes, path, counts, raw)
+        out["large"] = True
+        out["with_counts"] = counts is not None
+    return out
+
+
+def _large_counts_path(adaptor) -> Path | None:
+    """The counts sidecar to put in an export, or None when it cannot be used."""
+    try:
+        adaptor.counts_matrix("Exporting the counts")
+    except large_mode.LargeDatasetError:
+        return None
+    return large_layout.counts_path(adaptor.h5ad_path, adaptor.adata.uns)
+
+
+def _export_fresh(out: Path, sources: list[Path]) -> bool:
+    try:
+        built = out.stat().st_mtime_ns
+    except OSError:
+        return False
+    return all(src.stat().st_mtime_ns <= built for src in sources if src.exists())
+
+
+async def _large_export(dm: DatasetManager, dataset_id: str, raw: bool) -> Path:
+    """A large dataset's self-contained h5ad (X, layers['counts'], optionally .raw = X),
+    put together from its files chunk by chunk (``large_mode.export_h5ad``, nothing is
+    read into memory) in the dataset's cache folder, and kept until its files change."""
+    async with dataset_edit(dataset_id) as held:  # no in-place edit while it is copied
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+        counts = _large_counts_path(adaptor)
+        out = dm.data_dir / "cache" / dataset_id / ("export_raw.h5ad" if raw else "export.h5ad")
+        sources = [Path(adaptor.h5ad_path)] + ([counts] if counts is not None else [])
+        if not _export_fresh(out, sources):
+            out.parent.mkdir(parents=True, exist_ok=True)
+            await held.run(lambda: large_mode.export_h5ad(
+                adaptor.adata, adaptor.h5ad_path, counts, out, raw=raw))
+        return out
 
 
 @router.get("/datasets/{dataset_id}/export/h5ad")
 async def download_h5ad(
     dataset_id: str,
+    raw: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Stream the dataset's active .h5ad (processing results included) from disk.
 
     Every write path saves the file before it returns (pipeline steps evict the
     cache afterwards), so the file on disk is what the app shows. It is sent in
-    chunks; nothing is loaded into memory."""
+    chunks; nothing is loaded into memory. A large dataset keeps its counts in a
+    sidecar, so its download is one h5ad put together from both first
+    (``_large_export``; ``raw`` adds .raw = X)."""
     path = _active_h5ad(dm, dataset_id)
+    if await asyncio.to_thread(large_mode.file_is_large, path):
+        path = await _large_export(dm, dataset_id, raw)
     return FileResponse(
         path,
         media_type="application/x-hdf5",

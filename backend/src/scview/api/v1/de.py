@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from scview.dependencies import get_dataset_manager
 from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
+from scview.core import large_mode
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
@@ -445,6 +446,10 @@ def _selection_mask(adata, indices: list[int]):
     return mask
 
 
+# Why DE is not run on a large dataset yet (core/large_mode.py).
+_DE_WHY = "it reads the compared cells' values for every gene into memory"
+
+
 @router.post("/datasets/{dataset_id}/de", response_model=DEResponse)
 async def differential_expression(
     dataset_id: str,
@@ -457,6 +462,7 @@ async def differential_expression(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    large_mode.check(adaptor, "Differential expression", _DE_WHY)
 
     adata = adaptor.adata
     mask = _selection_mask(adata, body.indices)
@@ -487,6 +493,7 @@ async def differential_expression_methods(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    large_mode.check(adaptor, "Differential expression", _DE_WHY)
     adata = adaptor.adata
     mask = _selection_mask(adata, body.indices)
     n_sel = int(mask.sum())
@@ -584,6 +591,7 @@ async def differential_expression_compare(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    large_mode.check(adaptor, "Differential expression", _DE_WHY)
 
     adata = adaptor.adata
     obs = adata.obs
@@ -635,6 +643,7 @@ async def differential_expression_compare_methods(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    large_mode.check(adaptor, "Differential expression", _DE_WHY)
     adata = adaptor.adata
     mask_a, mask_b = _compare_masks(adata, body)
 

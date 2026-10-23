@@ -29,6 +29,7 @@ import { plotConfig } from "@/lib/plotConfig";
 import { prettyObsLabel } from "@/lib/formatting";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useProgramsRunStore } from "@/stores/programsRunStore";
+import { RequestError } from "@/components/common/RequestError";
 
 interface Props {
   /** Colour the embedding by one program's usage share (and fill the violin). */
@@ -169,11 +170,7 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
           Loading the saved programs…
         </div>
       )}
-      {error && (
-        <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          {error}
-        </p>
-      )}
+      <RequestError message={error} />
 
       {sweep.length > 1 && (
         <div data-testid="programs-sweep">

@@ -184,6 +184,11 @@ def coexpression(
         pool = np.arange(n_total) if rows is None else rows
         rows = np.sort(np.random.default_rng(SAMPLE_SEED).choice(pool, MAX_CELLS, replace=False))
     n = n_total if rows is None else int(rows.size)
+    if hasattr(src.M, "row_blocks"):
+        # A large dataset's X on disk (core/large_mode.py), which gives rows, not genes:
+        # the chosen cells (at most MAX_CELLS) are read once and correlated in memory.
+        src.M = sp.csr_matrix(src.M[np.arange(n_total) if rows is None else rows])
+        rows = None
     min_expressing = max(MIN_CELLS, math.ceil(MIN_FRACTION * n))
     if n < max(MIN_CELLS, 3):
         raise CoexpressionError(f"Pick at least {MIN_CELLS} cells (got {n}).")

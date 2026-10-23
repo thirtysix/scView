@@ -326,13 +326,21 @@ def _check_normalization_basic(adata: Any) -> StepStatus:
         X = adata.X
         is_float = False
 
-        if sparse.issparse(X):
-            is_float = np.issubdtype(X.dtype, np.floating)
-        else:
-            is_float = np.issubdtype(np.asarray(X).dtype, np.floating)
+        # A backed matrix (a large dataset's, a file over 2 GB) has a dtype but is no array.
+        dtype = getattr(X, "dtype", None)
+        if dtype is None or not (sparse.issparse(X) or hasattr(X, "shape")):
+            dtype = np.asarray(X).dtype
+        is_float = np.issubdtype(dtype, np.floating)
 
         has_raw = adata.raw is not None
         has_counts_layer = "counts" in adata.layers if hasattr(adata, "layers") else False
+        if not has_counts_layer:  # a large dataset keeps its counts in a file of their own
+            from scview.core import large_mode
+
+            try:
+                has_counts_layer = large_mode.counts_of(adata) is not None
+            except large_mode.LargeDatasetError:
+                pass
 
         evidence: list[str] = []
         if is_float:

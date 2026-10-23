@@ -45,6 +45,7 @@ import { useCustomGeneSetsStore } from "@/stores/customGeneSetsStore";
 import { scoreGeneSet, scoreLabel, type GeneSetScoreResponse } from "@/api/genesetScore";
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
+import { RequestError } from "@/components/common/RequestError";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -920,12 +921,7 @@ export function GeneSetPanel() {
             </div>
 
             {/* Score error */}
-            {scoreError && (
-              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
-                <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                {scoreError}
-              </div>
-            )}
+            <RequestError message={scoreError} />
 
             {/* Gene feedback */}
             {scoreResult && (

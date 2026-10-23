@@ -101,6 +101,45 @@ def is_locked(dataset_id: str) -> bool:
     return lock is not None and lock.locked()
 
 
+async def edit_room(dm, dataset_id: str, adaptor) -> bool:
+    """``working_copy.make_room`` before an obs / uns edit; whether the dataset is read
+    into memory for it (the caller reloads it afterwards). A large dataset is not: its
+    tables are in memory already and the edit is written into its h5ad in place."""
+    if getattr(adaptor, "is_large", False):
+        return False
+    from scview.core import working_copy
+
+    return await working_copy.make_room(dm, dataset_id, adaptor)
+
+
+def editable(adaptor):
+    """The AnnData an obs / uns edit changes (in a worker thread, after ``edit_room``):
+    the dataset in memory (``working_copy.in_memory``), or a large dataset's backed one,
+    whose X stays on disk."""
+    if getattr(adaptor, "is_large", False):
+        return adaptor.adata
+    from scview.core import working_copy
+
+    return working_copy.in_memory(adaptor)
+
+
+def save_edit(adaptor, adata, output_path: str, uns_before: dict[str, int] | None = None,
+              obsm_keys: tuple[str, ...] | list[str] | None = ()) -> None:
+    """Save an obs / uns (/ obsm) edit of ``editable(adaptor)``: ``write_derived``, or for
+    a large dataset its obs, the uns entries the edit replaced or removed and
+    ``obsm_keys`` written into its derived h5ad in place, X neither read nor copied."""
+    if getattr(adaptor, "is_large", False):
+        from scview.core import large_mode
+        from scview.core.dataset_manager import large_derived
+
+        large_derived(adaptor, output_path)
+        changed, removed = large_mode.changed_uns(adata, uns_before)
+        adaptor.write_in_place(obs=True, uns_keys=changed, uns_removed=removed,
+                               obsm_keys=list(obsm_keys or ()))
+        return
+    write_derived(adata, output_path, adaptor.h5ad_path, uns_before, obsm_keys)
+
+
 def uns_snapshot(adata) -> dict[str, int]:
     """Identity of each top-level ``uns`` entry, taken before an edit, so
     ``write_derived`` can tell which entries the edit replaced or removed."""

@@ -26,14 +26,14 @@ from pydantic import BaseModel, Field
 
 from scview.core.sse import keepalive
 from scview.core import cluster_distances as cd
+from scview.core import large_mode
 from scview.core import hvg_sensitivity as hs
 from scview.core import merge_check as mc
 from scview.core import resolution_sweep as rs
 from scview.core import subcluster as sc_sub
 from scview.core.confounding import recorded_batch_key
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
-from scview.core import working_copy
+from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -196,13 +196,13 @@ async def keep_resolution(
             raise HTTPException(status_code=400, detail=str(exc))
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
 
-        backed = await working_copy.make_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def _run():
-            work = working_copy.in_memory(adaptor)
+            work = editable(adaptor)
             before = uns_snapshot(work)
             result = rs.keep(work, method, resolution)
-            write_derived(work, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, work, output_path, before)
             return result
 
         try:
@@ -231,15 +231,17 @@ async def subcluster_group(
     ``<column>_sub`` (core/subcluster.py)."""
     async with dataset_edit(dataset_id) as held:
         adaptor = await _adata(dm, dataset_id)
+        large_mode.check(adaptor, "Sub-clustering",
+                         "it re-runs variable genes and PCA on the group's values for every gene in memory")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await working_copy.make_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def _run():
-            work = working_copy.in_memory(adaptor)
+            work = editable(adaptor)
             before = uns_snapshot(work)
             result = sc_sub.subcluster(work, body.column, body.group, body.resolution,
                                        batch_key=recorded_batch_key(work))
-            write_derived(work, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, work, output_path, before)
             return result
 
         try:
@@ -422,7 +424,7 @@ async def keep_hvg_setting(
         def _run():
             before = uns_snapshot(adata)
             result = hs.keep(adata, setting, rec)
-            write_derived(adata, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, adata, output_path, before)
             return result
 
         try:
@@ -598,15 +600,15 @@ async def save_merged(
     async with dataset_edit(dataset_id) as held:
         adaptor = await _adata(dm, dataset_id)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await working_copy.make_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def _run():
-            work = working_copy.in_memory(adaptor)
+            work = editable(adaptor)
             p = mc.plan(work, body.reference, body.resolution, body.method)
             mc.clean_merges(p.names, body.pairs)  # a bad request fails before any change
             before = uns_snapshot(work)
             result = mc.save(work, p, body.pairs)
-            write_derived(work, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, work, output_path, before)
             return result
 
         try:

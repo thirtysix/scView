@@ -9,6 +9,8 @@ export interface H5adInfo {
   source: string;
   /** Plain-language version of `source`, e.g. "processed" or "as uploaded" */
   source_label: string;
+  /** A large dataset: the download is put together from its files, so its size is close, not exact */
+  large?: boolean;
 }
 
 export async function getH5adInfo(id: string): Promise<H5adInfo> {

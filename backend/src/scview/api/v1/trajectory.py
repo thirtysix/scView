@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.core import pseudotime_genes as ptg
+from scview.core import large_mode
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.obs_writes import uns_snapshot, write_derived
 from scview.core.processing import run_exclusive
@@ -360,6 +361,8 @@ async def rank_trend_genes(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    large_mode.check(adaptor, "Genes along pseudotime",
+                     "it fits every gene's values along the cells in memory")
     if column not in adaptor.available_pseudotime_columns():
         raise HTTPException(
             status_code=404,

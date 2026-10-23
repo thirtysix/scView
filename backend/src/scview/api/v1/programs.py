@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from scview.config import Settings
 from scview.core import gene_programs as gp
+from scview.core import large_mode
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core import working_copy
@@ -77,6 +78,11 @@ def _defaults() -> dict[str, Any]:
             "min_genes": gp.MIN_GENES, "n_top": gp.N_TOP, "stable_correlation": gp.STABLE_CORR}
 
 
+# Refused on a large dataset (its matrix stays on disk, core/large_mode.py).
+_NMF_WHAT = "Gene programs (consensus NMF)"
+_NMF_WHY = "it factorises every cell's values for the variable genes in memory"
+
+
 @router.get("/datasets/{dataset_id}/programs")
 async def get_programs(
     dataset_id: str,
@@ -89,7 +95,10 @@ async def get_programs(
     adata = (await _adaptor(dm, dataset_id)).adata
 
     def work() -> dict[str, Any]:
-        return {**gp.summary(adata, groupby or None), "runnable": gp.runnable(adata),
+        runnable = (gp.runnable(adata) if not large_mode.is_large(adata) else
+                    {"ok": False, "reason": str(large_mode.LargeDatasetError(_NMF_WHAT, _NMF_WHY)),
+                     "n_flagged": None, "source": None})
+        return {**gp.summary(adata, groupby or None), "runnable": runnable,
                 "defaults": _defaults(), "n_cells_total": int(adata.n_obs)}
 
     out = await asyncio.to_thread(work)
@@ -142,6 +151,7 @@ async def run_programs(
     memory warnings, ``result`` (the saved programs), then ``complete``, or
     ``error``. Saved only when the run reaches its end."""
     adaptor = await _adaptor(dm, dataset_id)
+    large_mode.check(adaptor, _NMF_WHAT, _NMF_WHY)
     try:
         k, seeds, ks = gp.clean_request(body.k, body.seeds, body.sweep)
     except gp.ProgramsError as exc:

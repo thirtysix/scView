@@ -27,6 +27,7 @@ import {
 import { plotConfig } from "@/lib/plotConfig";
 import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { RequestError } from "@/components/common/RequestError";
 
 interface Props {
   /** The Unified View's group-by column: the default sender / receiver groups */
@@ -274,11 +275,7 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
           </div>
         </div>
       )}
-      {error && (
-        <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          {error}
-        </p>
-      )}
+      <RequestError message={error} />
 
       {result && (
         <>

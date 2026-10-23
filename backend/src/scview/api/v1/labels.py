@@ -14,8 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
-from scview.core import working_copy
+from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.user_labels import UNASSIGNED, LabelError, label_cells, restore, user_columns
 from scview.dependencies import get_dataset_manager
 
@@ -52,13 +51,13 @@ async def _edit_and_save(
             raise HTTPException(status_code=404, detail="Dataset not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
 
-        backed = await working_copy.make_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def _run():
-            work = working_copy.in_memory(adaptor)
+            work = editable(adaptor)
             before = uns_snapshot(work)
             result = edit(work)
-            write_derived(work, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, work, output_path, before)
             return result
 
         try:

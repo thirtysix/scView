@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from scview.core import layout_stability as ls
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit, save_edit, uns_snapshot
 from scview.core.sse import keepalive
 from scview.dependencies import get_dataset_manager
 
@@ -211,7 +211,7 @@ async def keep_layout(
             before = uns_snapshot(adata)
             result = ls.keep(adata, run, index)
             if result["created"]:
-                write_derived(adata, output_path, adaptor.h5ad_path, before, obsm_keys=[result["key"]])
+                save_edit(adaptor, adata, output_path, before, obsm_keys=[result["key"]])
             return result
 
         try:
