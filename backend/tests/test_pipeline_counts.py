@@ -7,6 +7,7 @@ import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
 
+from scview.core import scaling
 from scview.core.pipeline import PipelineParams, looks_like_counts, run_pipeline
 
 
@@ -71,26 +72,34 @@ def test_plain_counts_upload_unchanged():
 
 
 def test_scaling_a_dense_x_leaves_raw_log_normalised():
-    # anndata's .raw shares a dense X, and scaling works in place: .raw used to
-    # end up scaled too, so markers read z-scores (paul15: ~95% NaN fold changes).
+    # anndata's .raw shares a dense X, and scaling used to work on X in place: .raw
+    # ended up scaled too, so markers read z-scores (paul15: ~95% NaN fold changes).
+    # Now .raw is X itself (log values) and PCA z-scores a copy: neither changes.
     a = _counts()
     a.X = a.X.toarray()
-    out, res = run_pipeline(a, ["normalization", "log_transform", "scaling"], PipelineParams())
+    out, res = run_pipeline(a, ["normalization", "log_transform", "highly_variable_genes", "scaling",
+                                "pca"], PipelineParams(n_top_genes=40, n_comps=10))
     assert res.errors == {}
     raw = out.raw.X.toarray() if sp.issparse(out.raw.X) else np.asarray(out.raw.X)
     assert raw.min() >= 0
-    assert np.asarray(out.X).min() < 0
+    assert np.asarray(out.X).min() >= 0
+    assert scaling.pca_matrix(out)[0].min() < 0  # what PCA read: z-scores
 
 
-def test_scaled_x_is_dense_float32_from_sparse_or_float64_input():
-    # sc.pp.scale makes a sparse matrix dense float64; on Kang that was 1.5 GB.
+def test_the_matrix_pca_reads_is_dense_float32_of_the_variable_genes_alone():
+    # sc.pp.scale makes a sparse matrix dense float64; on Kang that was 1.5 GB. Then
+    # every gene was scaled into X as dense float32 (38 GB at 250k cells): now X keeps
+    # its own form and only the variable genes are made dense, for PCA.
     for to_dense_f64 in (False, True):
         a = _counts()
         if to_dense_f64:
             a.X = a.X.toarray().astype(np.float64)
-        out, res = run_pipeline(a, ["normalization", "log_transform", "scaling"], PipelineParams())
+        out, res = run_pipeline(a, ["normalization", "log_transform", "highly_variable_genes", "scaling"],
+                                PipelineParams(n_top_genes=40))
         assert res.errors == {}
-        assert isinstance(out.X, np.ndarray) and out.X.dtype == np.float32
-        assert np.asarray(out.X).min() < 0
+        assert sp.issparse(out.X) != to_dense_f64  # X as it came: sparse stays sparse
+        M, mask = scaling.pca_matrix(out)
+        assert M.dtype == np.float32 and M.shape == (a.n_obs, 40) and mask.sum() == 40
+        assert M.min() < 0
         raw = out.raw.X.toarray() if sp.issparse(out.raw.X) else np.asarray(out.raw.X)
         assert raw.min() >= 0  # .raw stays log-normalised

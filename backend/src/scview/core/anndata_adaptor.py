@@ -12,7 +12,9 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from scview.core import category_order, expression_range, haemoglobin, marker_specificity, protein
+from scview.core import (
+    category_order, expression_range, haemoglobin, marker_specificity, protein, scaling,
+)
 from scview.core.ora_background import resolve_markers_key
 from scview.core.species import detect_species
 from scview.core.uns_keys import markers_column, repair_slash_keys
@@ -518,12 +520,22 @@ class AnnDataAdaptor:
                 "n_genes": len(self.adata.raw.var_names),
             })
 
-        # X (main matrix — may be scaled/HVG-subset)
+        # X: the log-normalised values after scView's pipeline (scaling plans only the
+        # matrix PCA reads, core/scaling.py); z-scores or residuals of every gene in a
+        # dataset an older scView processed; or whatever an upload holds.
         n_x = self.adata.n_vars
-        if self.adata.raw is not None:
-            label = f"Scaled/HVG ({n_x} genes)" if n_x < len(self.adata.raw.var_names) else "Main matrix (X)"
+        try:
+            scaled = scaling.holds_scaled(self.adata.X, rows=200)
+        except Exception:  # noqa: BLE001 - an unreadable X: no claim about it
+            scaled = False
+        if scaled:
+            label = "Scaled (X)"
+        elif scaling.read_plan(self.adata) is not None:
+            label = "Log-normalized (X)"
         else:
             label = "Main matrix (X)"
+        if self.adata.raw is not None and n_x < len(self.adata.raw.var_names):
+            label = f"{label}, {n_x} of {len(self.adata.raw.var_names)} genes"
         layers.append({"key": "X", "label": label, "n_genes": n_x})
 
         # Named layers (counts, spliced, unspliced, etc.)

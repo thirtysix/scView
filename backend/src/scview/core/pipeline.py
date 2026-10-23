@@ -31,6 +31,7 @@ from scview.core import (
     normalization,
     provenance,
     qc_filter,
+    scaling,
     scrublet_lean,
     stress,
 )
@@ -246,7 +247,7 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
 
     # Clear uns entries (fixed keys + multi-column marker/enrichment keys)
     for key in ["neighbors", "rank_genes_groups", "scview_active_clustering",
-                "pca", "umap", "leiden", "louvain", BATCH_MIXING_KEY]:
+                "pca", "umap", "leiden", "louvain", BATCH_MIXING_KEY, scaling.PLAN_KEY]:
         if key in adata.uns:
             del adata.uns[key]
     multi_keys = [k for k in list(adata.uns.keys())
@@ -543,12 +544,14 @@ def _run_normalization(adata: ad.AnnData, params: PipelineParams) -> None:
         else:
             _keep_raw_counts(adata)
     sc.pp.normalize_total(adata, target_sum=params.target_sum)
+    scaling.drop_plan(adata)  # X changed: a scaling plan's statistics no longer hold
     logger.info("Normalized to target sum %.0f", params.target_sum)
 
 
 def _run_log_transform(adata: ad.AnnData, params: PipelineParams) -> None:
     """Log-transform expression values (log1p)."""
     sc.pp.log1p(adata)
+    scaling.drop_plan(adata)
     logger.info("Applied log1p transformation")
 
 
@@ -635,12 +638,15 @@ def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None
     return None
 
 
-def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
-    """Scale expression to unit variance and zero mean, or, with Pearson residuals
-    chosen, put the residuals of the counts in X instead. Either way .raw keeps
-    the log-normalised matrix that markers, DE and the scores read."""
+def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
+    """Plan the matrix PCA reads (core/scaling.py): z-scores of the log values of the
+    variable genes (every gene without them), or, with Pearson residuals chosen, the
+    residuals of the counts. Nothing dense is made here: X keeps the log-normalised
+    matrix of every gene, .raw is set to it (markers, DE and the scores read it), and
+    the PCA step builds the scaled matrix for its own length. The old step made X dense
+    float32 for every gene and z-scored it: 38 of a 46 GB run peak at 250k cells."""
     method = normalization.check_method(params.normalization_method)
-    # Store the full data before subsetting to HVGs
+    # Counts held only in .raw: kept in layers['counts'] before .raw is replaced.
     _keep_raw_counts(adata)
     if method == "pearson_residuals":
         counts, source = normalization.find_counts(adata)
@@ -649,34 +655,41 @@ def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | 
                 "Pearson residuals replace only the matrix PCA reads: run normalization "
                 "and log transform too, so markers, DE and plots keep log-normalised values."
             )
-        adata.raw = adata
+        _raw_from_x(adata)
         clip = normalization.default_clip(adata.n_obs)
-        # A new array: .raw, which may share a dense X, keeps the log values.
-        adata.X = normalization.pearson_residuals(counts, clip=clip)
-        logger.info("Pearson residuals in X (theta=%g, clip=%.1f; counts from %s)",
-                    normalization.THETA, clip, source)
-        return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source}
+        found = scaling.plan_residuals(adata, normalization.THETA, clip, source)
+        return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source,
+                **found}
+    _raw_from_x(adata)
+    return scaling.plan_zscores(adata, max_value=scaling.MAX_VALUE)
+
+
+def _raw_from_x(adata: ad.AnnData) -> None:
+    """``.raw = adata``: the log-normalised matrix, X itself. Over an X an older scView
+    scaled (z-scores or residuals), .raw keeps the log values it has."""
+    if adata.raw is not None and scaling.holds_scaled(adata.X):
+        logger.info("X holds scaled values (an older run): .raw kept as it is")
+        return
     adata.raw = adata
-    # Scaled X is dense (every gene), so it is kept as float32: sc.pp.scale turns
-    # a sparse matrix into dense float64, which on Kang (13,836 x 13,912) took
-    # 1.5 GB and the run's peak from 3.4 to 4.9 GB (PCs identical, Leiden ARI
-    # 0.987). The new array also keeps .raw, which may share a dense X, log-scaled.
-    X = adata.X.astype(np.float32)
-    adata.X = X.toarray() if sp.issparse(X) else X
-    sc.pp.scale(adata, max_value=10)
-    logger.info("Scaled expression (max_value=10)")
-    return None
 
 
-def _run_pca(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Run PCA."""
+def _run_pca(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
+    """PCA on the matrix the scaling step planned (``scaling.run_pca``: the variable
+    genes, scaled for this step only), else on X as it is: the log values when scaling
+    was skipped, or the z-scores an older scView wrote into X. Stored as sc.tl.pca
+    stores it either way."""
     n_comps = min(params.n_comps, adata.n_obs - 1, adata.n_vars - 1)
-    sc.tl.pca(adata, n_comps=n_comps, svd_solver="arpack")
+    found = None
+    if scaling.read_plan(adata) is not None:
+        found = scaling.run_pca(adata, n_comps)
+    else:
+        sc.tl.pca(adata, n_comps=n_comps, svd_solver="arpack")
     # A Harmony embedding of the previous PCA would otherwise still be picked up
     # by the neighbour graph; the batch-correction step rebuilds it if it runs.
     adata.obsm.pop("X_pca_harmony", None)
     adata.uns.pop(BATCH_MIXING_KEY, None)  # scored the previous PCA
     logger.info("PCA: %d components", n_comps)
+    return found
 
 
 def _run_uncorrected_embedding(adata: ad.AnnData, params: PipelineParams) -> None:

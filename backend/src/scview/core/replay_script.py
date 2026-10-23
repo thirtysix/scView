@@ -58,6 +58,9 @@ class _Ctx:
 
     adata: Any
     helpers: set[str] = field(default_factory=set)
+    # The matrix the last scaling step planned for PCA (core/scaling.py), or None: an
+    # older scView's scaling wrote it into X, so PCA reads X as it is.
+    scaling: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -165,13 +168,16 @@ def counts_hvg(adata, flavor, n_top_genes, batch_key, theta=None):
     var_from_hvg_frame(adata, df)
 ''',
     "pearson_residuals": '''
-def pearson_residuals(counts, theta, clip, chunk=1000):
+def pearson_residuals(counts, theta, clip, chunk=1000, columns=None):
     """Analytic Pearson residuals (float32), a block of genes at a time: the values
-    of sc.experimental.pp.normalize_pearson_residuals without its dense copies."""
+    of sc.experimental.pp.normalize_pearson_residuals without its dense copies.
+    ``columns``: only those genes' residuals (the totals still over every gene)."""
     n, g = counts.shape
     cells = np.asarray(counts.sum(axis=1), dtype=np.float64).ravel()
     genes = np.asarray(counts.sum(axis=0), dtype=np.float64).ravel()
     total = float(genes.sum())
+    if columns is not None:
+        counts, genes, g = counts[:, columns], genes[columns], len(columns)
     out = np.empty((n, g), dtype=np.float32)
     for j0 in range(0, g, chunk):
         j1 = min(g, j0 + chunk)
@@ -1010,7 +1016,28 @@ def _hvg(p: dict, ctx: _Ctx) -> Snippet:
 
 def _scaling(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "keep_raw_counts")
-    if p.get("normalization_method") == "pearson_residuals":
+    pearson = p.get("normalization_method") == "pearson_residuals"
+    if "scaled_genes" in p:
+        # Since the step plans the matrix PCA reads (core/scaling.py): X keeps the log
+        # values; the PCA step below scales a copy of the variable genes.
+        ctx.scaling = {"method": "pearson" if pearson else "zscore",
+                       "theta": p.get("theta", 100.0), "max_value": p.get("max_value", 10.0)}
+        raw = _block('''
+if adata.raw is None or not adata.X[:2000].min() < 0:  # z-scores an older scView left in X: kept
+    adata.raw = adata  # the log-normalised values, which X keeps too
+''')
+        if pearson:
+            _need(ctx, "find_counts", "pearson_residuals")
+            return Snippet(EXACT, ["keep_raw_counts(adata)",
+                                   "find_counts(adata)  # the residuals for PCA need the counts",
+                                   "if looks_like_counts(adata.X):",
+                                   '    raise ValueError("Run normalization and log transform before the '
+                                   'Pearson residuals.")', *raw,
+                                   "pearson_clip = np.sqrt(adata.n_obs)  # for the PCA step's residuals"])
+        return Snippet(EXACT, ["keep_raw_counts(adata)", *raw,
+                               "# The z-scores of the variable genes are made at the PCA step."])
+    ctx.scaling = None  # an older scView: the scaled values go into X
+    if pearson:
         _need(ctx, "find_counts", "pearson_residuals")
         theta = p.get("theta", 100.0)
         clip = "np.sqrt(adata.n_obs)"
@@ -1033,9 +1060,39 @@ sc.pp.scale(adata, max_value=10)
 
 def _pca(p: dict, ctx: _Ctx) -> Snippet:
     n = p.get("n_comps", 50)
+    plan = ctx.scaling if p.get("pca_input") else None
+    if plan is None:  # scaling skipped, or an older scView's scaled X
+        return Snippet(EXACT, [
+            f"sc.tl.pca(adata, n_comps=min({_lit(n)}, adata.n_obs - 1, adata.n_vars - 1), "
+            'svd_solver="arpack")',
+            'adata.obsm.pop("X_pca_harmony", None)',
+        ])
+    if plan["method"] == "pearson":
+        _need(ctx, "find_counts", "pearson_residuals")
+        make = [f"X = pearson_residuals(find_counts(adata), theta={_lit(plan['theta'])}, clip=pearson_clip,",
+                "                      columns=None if mask is None else np.flatnonzero(mask))",
+                "sub = ad.AnnData(X=X)"]
+    else:
+        make = ["X = (adata.X if mask is None else adata.X[:, mask]).astype(np.float32)",
+                "sub = ad.AnnData(X=X.toarray() if sp.issparse(X) else np.ascontiguousarray(X))",
+                f"sc.pp.scale(sub, max_value={_lit(plan['max_value'])})"]
     return Snippet(EXACT, [
-        f"sc.tl.pca(adata, n_comps=min({_lit(n)}, adata.n_obs - 1, adata.n_vars - 1), "
-        'svd_solver="arpack")',
+        "# PCA reads the scaled variable genes; scView scales a copy of them for PCA alone (X",
+        "# keeps the log-normalised values): a copy, scaled, PCA on it, the results copied back.",
+        'mask = adata.var["highly_variable"].to_numpy(dtype=bool) if "highly_variable" in adata.var.columns else None',
+        *make,
+        "if mask is not None:",
+        '    sub.var["highly_variable"] = True  # PCA reads it through the mask, as scView\'s did',
+        f"n_comps = min({_lit(n)}, adata.n_obs - 1, adata.n_vars - 1)",
+        'sc.tl.pca(sub, n_comps=n_comps, svd_solver="arpack")',
+        'adata.obsm["X_pca"] = sub.obsm["X_pca"]',
+        'adata.uns["pca"] = sub.uns["pca"]',
+        "if mask is None:",
+        '    adata.varm["PCs"] = sub.varm["PCs"]',
+        "else:",
+        '    adata.varm["PCs"] = np.zeros((adata.n_vars, n_comps))  # zero rows for the other genes',
+        '    adata.varm["PCs"][mask] = sub.varm["PCs"]',
+        "del sub, X",
         'adata.obsm.pop("X_pca_harmony", None)',
     ])
 

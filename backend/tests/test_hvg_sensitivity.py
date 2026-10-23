@@ -317,7 +317,8 @@ def test_iter_sensitivity_streams_each_setting_and_leaves_the_dataset_alone():
         assert {c["status"] for c in r["clusters"]} == {"stable"}, r["key"]
     after = (list(a.obs.columns), sorted(a.uns.keys()), a.X, a.uns[provenance.UNS_KEY])
     assert before[0] == after[0] and before[1] == after[1] and before[3] == after[3]
-    assert np.array_equal(before[2], after[2])
+    dense = lambda M: M.toarray() if sp.issparse(M) else np.asarray(M)  # noqa: E731 - X stays sparse now
+    assert np.array_equal(dense(before[2]), dense(after[2]))
 
 
 def test_neighbour_and_algorithm_settings_share_the_pcs_and_change_only_the_graph(monkeypatch):

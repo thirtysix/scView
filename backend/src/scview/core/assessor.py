@@ -873,6 +873,21 @@ _PEARSON_DETAILS = {
 }
 
 
+def _scaling_details(params: dict, method: str | None) -> str | None:
+    """What a recorded scaling step did since it plans only the matrix PCA reads
+    (core/scaling.py; ``scaled_genes`` recorded), or None for an older record (it
+    wrote z-scores or residuals of every gene into X)."""
+    genes = params.get("scaled_genes")
+    if genes is None:
+        return None
+    n = params.get("n_scaled_genes")
+    which = (f"the {n:,} variable genes" if isinstance(n, int) else "the variable genes") \
+        if genes == "highly_variable" else "every gene"
+    made = ("analytic Pearson residuals of the counts" if method == "pearson_residuals"
+            else "z-scores")
+    return f"PCA reads {made} of {which}; X keeps the log-normalised values"
+
+
 def recorded_normalization_method(adata: Any) -> str | None:
     """The normalisation method scView last processed this dataset with ("log" or
     "pearson_residuals"), or None when it never ran the HVG or scaling step."""
@@ -906,9 +921,13 @@ def _apply_recorded_provenance(adata: Any, state: PreprocessingState) -> Preproc
             details = f"Run by scView{(' on ' + when) if when else ''} (recorded)"
             # Under Pearson residuals these two steps did something else than their
             # names say: residual-variance HVGs, residuals in X instead of z-scores.
-            method = (h.get("params") or {}).get("normalization_method")
-            if field in _PEARSON_DETAILS and method == "pearson_residuals":
-                details = f"{_PEARSON_DETAILS[field]}; {details[0].lower()}{details[1:]}"
+            params = h.get("params") or {}
+            method = params.get("normalization_method")
+            what = _scaling_details(params, method) if field == "scaling" else None
+            if what is None and field in _PEARSON_DETAILS and method == "pearson_residuals":
+                what = _PEARSON_DETAILS[field]
+            if what:
+                details = f"{what}; {details[0].lower()}{details[1:]}"
             setattr(
                 state,
                 field,

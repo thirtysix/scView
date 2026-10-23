@@ -201,7 +201,8 @@ def test_plan_takes_the_active_clustering_or_a_sweep_resolution():
     no_counts = a.copy()
     del no_counts.layers["counts"]
     no_counts.raw = None
-    no_counts.X = sp.csr_matrix(np.abs(np.asarray(no_counts.X)) + 0.5)
+    X = no_counts.X.toarray() if sp.issparse(no_counts.X) else np.asarray(no_counts.X)  # X stays sparse now
+    no_counts.X = sp.csr_matrix(np.abs(X) + 0.5)
     with pytest.raises(mc.MergeCheckError, match="raw counts"):
         mc.plan(no_counts)
 
