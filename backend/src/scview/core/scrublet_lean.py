@@ -22,6 +22,15 @@ So the scores, calls, threshold and simulated scores are bitwise the ones
 them on dense, sparse and integer counts, so a scanpy upgrade that changes its steps
 fails there). The code uses numpy, pandas, scipy, anndata and scanpy only: the replay
 script copies its source (``REPLAY_CONSTANTS``, ``REPLAY_CODE``).
+
+``scrublet_by_channel`` runs it on each capture channel's rows alone, one channel after
+another (doublets form inside one channel; ``sc.pp.scrublet(batch_key=...)`` does the
+same), so memory follows the largest channel, not the dataset. A channel of every cell is
+scored on ``counts`` itself: the same scores as one run of ``scrublet_counts``. A channel
+under ``MIN_CHANNEL_CELLS`` is not scored (NaN score, no call): Scrublet's own floor is 31
+cells (its 30 principal components are found with arpack, which needs more cells than
+components, after it drops cells under 3 genes), and 100 gives about three cells per
+component and five neighbours (0.5 x sqrt(n)).
 """
 
 from __future__ import annotations
@@ -34,6 +43,8 @@ import scipy.sparse as sp
 
 # Rows of a dense counts matrix made sparse at a time (80 MB of float32 at 20,000 genes).
 CSR_ROWS = 1024
+# Smallest channel scored (see the top: Scrublet itself fails under 31 cells).
+MIN_CHANNEL_CELLS = 100
 
 
 def dense_rows_to_csr(M, rows=CSR_ROWS):
@@ -104,5 +115,74 @@ def scrublet_counts(counts, expected_doublet_rate=0.05, use_approx_neighbors=Non
     return score.to_numpy(), call.to_numpy(), a.uns["scrublet"]
 
 
-REPLAY_CONSTANTS = ("CSR_ROWS",)
-REPLAY_CODE = (dense_rows_to_csr, scrublet_counts)
+def n_variable_genes(counts) -> int:
+    """How many variable genes ``scrublet_counts`` would score on ``counts`` (its own
+    filters and selection, nothing after them): what its memory grows with, for the
+    preflight estimate (core/preflight.py ``doublet_plan``)."""
+    X = dense_rows_to_csr(counts) if not sp.issparse(counts) else counts.copy()
+    a = ad.AnnData(X=X)
+    sc.pp.filter_genes(a, min_cells=3)
+    sc.pp.filter_cells(a, min_genes=3)
+    sc.pp.normalize_total(a)
+    sc.pp.log1p(a)
+    sc.pp.highly_variable_genes(a)
+    return int(a.var["highly_variable"].sum())
+
+
+def channel_rows(M, idx):
+    """Rows ``idx`` (ascending) of a counts matrix in memory or on disk (anndata's backed
+    sparse matrix, an h5py dataset), read as one slice when they are contiguous."""
+    if idx.size and int(idx[-1]) - int(idx[0]) + 1 == idx.size:
+        return M[int(idx[0]):int(idx[-1]) + 1]
+    return M[idx]
+
+
+def scrublet_by_channel(counts, codes, rates, approx, min_cells=MIN_CHANNEL_CELLS):
+    """Scrublet on each capture channel's cells alone, one channel after another.
+
+    ``codes``: each cell's channel, an index into ``rates`` (-1: none, not scored);
+    ``rates`` and ``approx``: each channel's expected doublet rate and
+    ``use_approx_neighbors``. Returns (doublet_score, predicted_doublet, runs) in cell
+    order: NaN and False for a cell not scored (its channel is under ``min_cells`` or
+    failed, or Scrublet dropped it for under 3 genes), and per channel a dict: status
+    (scored | too_small | failed), cells, cells scored, Scrublet's threshold (None when it
+    found none: no calls), cells called and, when the channel holds every cell, Scrublet's
+    own ``uns``."""
+    codes = np.asarray(codes)
+    n = counts.shape[0]
+    score = np.full(n, np.nan)
+    call = np.zeros(n, dtype=bool)
+    order = np.argsort(codes, kind="stable")  # each channel's cells stay ascending
+    bounds = np.searchsorted(codes[order], np.arange(len(rates) + 1))
+    runs = []
+    for j, (rate, apx) in enumerate(zip(rates, approx)):
+        idx = order[bounds[j]:bounds[j + 1]]
+        run = {"status": "too_small", "n_cells": int(idx.size), "n_scored": 0, "threshold": None,
+               "n_called": 0, "uns": None}
+        runs.append(run)
+        if idx.size < min_cells:
+            continue
+        whole = idx.size == n
+        sub = counts if whole else channel_rows(counts, idx)
+        try:
+            s, c, uns = scrublet_counts(sub, expected_doublet_rate=rate, use_approx_neighbors=apx,
+                                        owned=not whole and sp.issparse(sub))
+        except ValueError as e:  # e.g. under 31 variable genes for its 30 components
+            run.update(status="failed", error=str(e)[:200])
+            continue
+        finally:
+            del sub
+        scored = np.isfinite(s)
+        called = np.zeros(idx.size, dtype=bool)
+        called[scored] = np.asarray(c[scored], dtype=bool)
+        score[idx] = s
+        call[idx] = called
+        t = uns.get("threshold")
+        run.update(status="scored", n_scored=int(scored.sum()), n_called=int(called.sum()),
+                   threshold=None if t is None else float(np.asarray(t).ravel()[0]),
+                   uns=uns if whole else None)
+    return score, call, runs
+
+
+REPLAY_CONSTANTS = ("CSR_ROWS", "MIN_CHANNEL_CELLS")
+REPLAY_CODE = (dense_rows_to_csr, scrublet_counts, channel_rows, scrublet_by_channel)

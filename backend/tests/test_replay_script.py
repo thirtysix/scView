@@ -378,4 +378,7 @@ def test_doublet_detection_replays_the_apps_scores(tmp_path, processed):
     assert np.array_equal(rep.obs["doublet_score"].to_numpy(), out.obs["doublet_score"].to_numpy(),
                           equal_nan=True)
     assert (rep.obs["predicted_doublet"].astype(str) == out.obs["predicted_doublet"].astype(str)).all()
-    assert rep.uns["scrublet"]["threshold"] == out.uns["scrublet"]["threshold"]
+    # The two samples were the channels (no lane column): each one's threshold, as the app's.
+    from scview.core import doublets
+    assert doublets.channel_record(rep)["rows"] == doublets.channel_record(out)["rows"]
+    assert len(doublets.channel_record(out)["rows"]) == 2

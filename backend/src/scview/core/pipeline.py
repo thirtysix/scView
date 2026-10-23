@@ -31,7 +31,6 @@ from scview.core import (
     normalization,
     provenance,
     qc_filter,
-    scrublet_lean,
     stress,
 )
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
@@ -94,10 +93,13 @@ class PipelineParams:
     qc_doublet_source: str = "auto"
     drop_hash_negatives: bool = False
 
-    # Doublet detection
+    # Doublet detection: Scrublet in each capture channel (core/doublets.py)
     doublet_method: str = "scrublet"
-    # None: suggested from the cells per sample (core/doublets.py, a rule of thumb)
+    # None: each channel's own, from its cells (a rule of thumb); a number: every channel's
     expected_doublet_rate: float | None = None
+    # The channels: an obs column, "__all__" (all cells as one channel), or empty: a
+    # channel column, else the barcodes' -N / PREFIX_, else donor / batch, else all cells
+    doublet_channel_key: str = ""
 
     # Normalization: "log" = shifted log, normalize_total + log1p (the default) |
     # "pearson_residuals" = analytic Pearson residuals of the counts, for HVG
@@ -308,50 +310,35 @@ def _doublet_matrix(adata: ad.AnnData):
 
 
 def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
-    """Detect doublets with Scrublet; annotate ``.obs`` only (removal is opt-in).
+    """Detect doublets with Scrublet in each capture channel; annotate ``.obs`` only
+    (removal is opt-in).
 
-    Writes ``doublet_score`` (float) and ``predicted_doublet`` (bool) to ``.obs``.
-    Ordered before normalization so Scrublet sees raw counts. The flags are
-    informational here — actual removal happens in the filtering step when
+    Writes ``doublet_score`` (float; NaN for a cell not scored) and ``predicted_doublet``
+    (bool) to ``.obs``. Ordered before normalization so Scrublet sees raw counts. The
+    flags are informational here — actual removal happens in the filtering step when
     ``params.drop_doublets`` is set, so users can inspect the QC distribution first.
-    Without an ``expected_doublet_rate`` the rate is suggested from the cells per
-    sample (``doublets.suggest_rate``); the rate used is recorded in provenance.
-    Neighbours are exact up to ``doublets.EXACT_KNN_MAX_CELLS`` cells (recorded as
-    ``neighbors``). Scrublet scores a sparse matrix of the counts alone
-    (``scrublet_lean.scrublet_counts``: the same scores, without copying the whole
-    dataset); they come from ``layers['counts']`` or ``.raw`` when X holds processed
-    values (recorded as ``input``).
+
+    Scrublet runs on each capture channel's cells alone, one after another
+    (``doublets.run_scrublet``: the channels from ``doublet_channel_key``, else a channel
+    column, the barcodes, the donors / batches, else all cells as one; channels read from
+    the barcodes are written to ``capture_channel``). Each channel gets its own expected
+    rate from its cells unless ``expected_doublet_rate`` is set, its own threshold, and
+    exact neighbours up to ``doublets.EXACT_KNN_MAX_CELLS`` cells; a channel under
+    ``doublets.MIN_CHANNEL_CELLS`` is not scored. The channels and each one's rate,
+    threshold and calls are recorded in provenance. Scrublet scores a sparse matrix of
+    the counts alone (``scrublet_lean.scrublet_counts``: the scores ``sc.pp.scrublet``
+    gives, without copying the whole dataset); they come from ``layers['counts']`` or
+    ``.raw`` when X holds processed values (recorded as ``input``).
     """
     method = (params.doublet_method or "scrublet").lower()
     if method != "scrublet":
         logger.warning("Unknown doublet method '%s'; falling back to scrublet", method)
-    rate = params.expected_doublet_rate
-    if rate is not None and rate > 0:
-        found: dict[str, Any] = {"expected_doublet_rate": float(rate)}
-    else:
-        suggestion = doublets.suggest_rate(adata)
-        found = {"expected_doublet_rate": suggestion["rate"],
-                 "expected_rate_from": suggestion["column"] or "all cells (no sample column)"}
-    exact = adata.n_obs <= doublets.EXACT_KNN_MAX_CELLS
-    found["neighbors"] = "exact" if exact else "approximate"
     counts, where = _doublet_matrix(adata)
+    # A channel column that is not there raises DoubletError: the step's error.
+    found = doublets.run_scrublet(adata, counts, params.expected_doublet_rate,
+                                  params.doublet_channel_key or None)
     if where is not None:
         found["input"] = where
-    score, call, uns = scrublet_lean.scrublet_counts(
-        counts, expected_doublet_rate=found["expected_doublet_rate"], use_approx_neighbors=not exact)
-    adata.obs["doublet_score"] = score
-    adata.obs["predicted_doublet"] = call
-    adata.uns["scrublet"] = uns
-    doublets.clear_threshold(adata)  # set on the previous run's scores
-    n_dbl = (
-        int(adata.obs["predicted_doublet"].sum())
-        if "predicted_doublet" in adata.obs.columns
-        else 0
-    )
-    logger.info(
-        "Doublet detection (scrublet, expected rate %.4f): %d / %d cells flagged as doublets",
-        found["expected_doublet_rate"], n_dbl, adata.n_obs,
-    )
     return found
 
 
@@ -1576,7 +1563,8 @@ def _new_adata(step_name: str, ret: Any) -> tuple[ad.AnnData | None, Any]:
 _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "reset_to_counts": ("scview.reset_to_counts", ()),
     "qc_metrics": ("scanpy.pp.calculate_qc_metrics", ()),
-    "doublet_detection": ("scanpy.pp.scrublet", ("doublet_method", "expected_doublet_rate")),
+    "doublet_detection": ("scanpy.pp.scrublet (per capture channel)",
+                          ("doublet_method", "expected_doublet_rate", "doublet_channel_key")),
     # The mode's own params (fixed cut-offs, or k and per-sample thresholds) come
     # back from the step itself.
     "filtering": ("scview.qc_filter + scanpy.pp.filter_genes",

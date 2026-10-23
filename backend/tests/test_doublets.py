@@ -1,9 +1,10 @@
 """Doublet calls (core/doublets.py, GET /qc/doublets, POST /qc/doublets/threshold).
 
-The expected rate suggested from the cells per sample, the score histogram and
+The expected rate suggested from the cells per channel, the score histogram and
 the counts a threshold calls, applying a threshold (Scrublet's call kept and
 recoverable, the filtering step dropping the new calls), and the doublet step
-taking the suggestion when no rate is given.
+taking each channel's suggestion when no rate is given. The channels themselves
+(columns, barcodes, the per-channel runs): tests/test_doublet_channels.py.
 """
 
 from __future__ import annotations
@@ -63,12 +64,13 @@ def test_rate_is_0_8_percent_per_1000_cells_within_bounds():
     assert doublets.rate_for_cells(1_000_000) == doublets.MAX_RATE
 
 
-def test_suggestion_is_the_cell_weighted_mean_of_the_samples():
+def test_without_a_channel_the_samples_are_the_channels_with_their_own_rates():
     s = doublets.suggest_rate(_sized({"small": 2000, "big": 6000}))
-    assert (s["column"], s["reason"]) == ("sample", "donor")
-    assert [(x["name"], x["n_cells"], x["rate"]) for x in s["samples"]] == [
+    assert (s["column"], s["reason"], s["per_channel"]) == ("sample", "donor", True)
+    assert s["note"] == doublets.GUESS_NOTE  # samples pooled in a lane are not channels
+    assert [(x["name"], x["n_cells"], x["rate"]) for x in s["channels"]] == [
         ("small", 2000, 0.016), ("big", 6000, 0.048)]
-    # (2000 x 1.6 % + 6000 x 4.8 %) / 8000 cells
+    # the share of all cells expected to be doublets: (2000 x 1.6 % + 6000 x 4.8 %) / 8000
     assert s["rate"] == pytest.approx(0.04)
     assert "rule of thumb" in s["basis"].lower()
 
@@ -76,7 +78,7 @@ def test_suggestion_is_the_cell_weighted_mean_of_the_samples():
 def test_without_a_sample_column_all_cells_are_one_channel():
     a = _sized({"x": 8000}, column="label")  # one value, not a sample column
     s = doublets.suggest_rate(a)
-    assert s["column"] is None and s["samples"] == []
+    assert s["column"] is None and s["channels"] == [] and s["reason"] == "none"
     assert s["rate"] == pytest.approx(0.064)
     assert "one channel" in s["basis"]
 
@@ -104,7 +106,7 @@ def test_summary_counts_cells_strictly_above_the_threshold_per_sample():
     assert out["threshold"] == out["scrublet_threshold"] == pytest.approx(0.3)
     assert out["n_called"] == int((scores > 0.3).sum()) == out["n_called_now"]
     assert sum(out["hist"]["counts"]) == out["n_scored"] == a.n_obs
-    by = {s["name"]: s for s in out["samples"]}
+    by = {s["name"]: s for s in out["channels"]}
     assert by["s1"]["n_called"] + by["s2"]["n_called"] == out["n_called"]
     assert by["s1"]["n_called"] >= 20  # the planted tail
     assert by["s1"]["expected_rate"] == pytest.approx(doublets.MIN_RATE)
@@ -119,7 +121,9 @@ def test_no_scrublet_threshold_means_no_count_until_one_is_given():
     a = _scored()
     del a.uns["scrublet"]
     out = doublets.summary(a)
-    assert out["threshold"] is None and out["n_called"] is None and out["samples"] == []
+    assert out["threshold"] is None and out["n_called"] is None
+    # each channel's row counts the calls there are (Scrublet's saved call)
+    assert sum(r["n_called"] for r in out["channels"]) == out["n_called_now"]
     assert doublets.summary(a, threshold=0.5)["n_called"] > 0
 
 
@@ -198,33 +202,47 @@ def test_the_applied_threshold_survives_a_save(tmp_path):
 # --- the doublet step ------------------------------------------------------------
 
 
-def test_the_step_takes_the_suggestion_unless_a_rate_is_given(monkeypatch):
-    seen: list[float] = []
+def test_the_step_takes_each_channels_suggestion_unless_a_rate_is_given(monkeypatch):
+    from scview.core import scrublet_lean
 
-    def fake_scrublet(counts, expected_doublet_rate, use_approx_neighbors=None):
-        seen.append(expected_doublet_rate)
+    seen: list[tuple[int, float]] = []
+
+    def fake_scrublet(counts, expected_doublet_rate, use_approx_neighbors=None, owned=False):
+        seen.append((counts.shape[0], expected_doublet_rate))
         return np.zeros(counts.shape[0]), np.zeros(counts.shape[0], dtype=bool), {}
 
-    monkeypatch.setattr(pl.scrublet_lean, "scrublet_counts", fake_scrublet)
+    monkeypatch.setattr(scrublet_lean, "scrublet_counts", fake_scrublet)
     a = _sized({"small": 2000, "big": 6000})
     assert pl.PipelineParams().expected_doublet_rate is None
     found = pl._run_doublet_detection(a, pl.PipelineParams())
-    assert seen[-1] == pytest.approx(0.04)
-    assert found == {"expected_doublet_rate": pytest.approx(0.04), "expected_rate_from": "sample",
-                     "neighbors": "exact"}
+    assert sorted(seen) == [(2000, pytest.approx(0.016)), (6000, pytest.approx(0.048))]
+    assert found["expected_doublet_rate"] is None  # one per channel
+    assert found["expected_rate_from"] == "sample channels (per channel)"
+    assert [(c["name"], c["expected_doublet_rate"]) for c in found["channels"]] == [
+        ("small", pytest.approx(0.016)), ("big", pytest.approx(0.048))]
+    assert (found["channel_column"], found["channel_reason"], found["neighbors"]) == ("sample", "donor", "exact")
+    seen.clear()
     found = pl._run_doublet_detection(a, pl.PipelineParams(expected_doublet_rate=0.1))
-    assert seen[-1] == 0.1 and found == {"expected_doublet_rate": 0.1, "neighbors": "exact"}
+    assert [r for _, r in seen] == [0.1, 0.1] and found["expected_doublet_rate"] == 0.1
+    assert "expected_rate_from" not in found
 
 
-def test_a_real_run_records_its_rate_and_scrublets_threshold_gives_its_calls():
+def test_a_real_run_records_each_channels_rate_and_its_threshold_gives_its_calls():
     a = _counts()
     out, res = pl.run_pipeline(a, ["qc_metrics", "doublet_detection"], pl.PipelineParams())
     assert res.errors == {}
     s = doublets.summary(out)
-    # 300 cells per sample: the 0.4 % floor of the rule of thumb.
-    assert s["expected_rate_used"] == pytest.approx(doublets.MIN_RATE)
-    assert s["scrublet_threshold"] is not None  # Scrublet's random_state is fixed
-    assert s["n_called"] == s["n_called_now"] == int(out.obs["predicted_doublet"].sum())
+    # 300 cells per sample (the channels here): the 0.4 % floor of the rule of thumb.
+    assert [r["expected_rate"] for r in s["channels"]] == [doublets.MIN_RATE] * 2
+    assert s["expected_rate_used"] is None and s["per_channel"] and s["scrublet_threshold"] is None
+    scores = out.obs["doublet_score"].to_numpy()
+    calls = out.obs["predicted_doublet"].to_numpy()
+    for row in s["channels"]:
+        idx = (out.obs["sample"] == row["name"]).to_numpy()
+        t = row["scrublet_threshold"]
+        assert t is not None  # Scrublet's random_state is fixed
+        assert np.array_equal(calls[idx], scores[idx] > t)  # its own threshold, its own calls
+    assert s["n_called_now"] == int(calls.sum()) == sum(r["n_called"] for r in s["channels"])
 
     # A threshold set on these scores is dropped by the next run.
     doublets.apply_threshold(out, 0.01)

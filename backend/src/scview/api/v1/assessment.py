@@ -325,7 +325,7 @@ async def get_filter_preview(
 class DoubletThresholdRequest(BaseModel):
     """Call doublets above ``threshold``; ``None`` puts Scrublet's own call back."""
     threshold: float | None = None
-    column: str = ""  # the sample column for the per-sample counts (default: detected)
+    column: str = ""  # the channels for the per-channel counts (default: the last run's)
 
 
 @router.get("/datasets/{dataset_id}/qc/doublets")
@@ -336,9 +336,11 @@ async def get_doublets(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The doublet-score histogram and how many cells ``threshold`` (default: the
-    applied one, else Scrublet's) calls doublets, overall and per sample, with
-    the expected doublet rate suggested from the cells per sample. Without scores
-    only the suggestion is returned (``available`` false)."""
+    applied one, else Scrublet's when it ran once over every cell) calls doublets,
+    overall and per capture channel, with each channel's expected rate. ``column``
+    names the channels (an obs column, or ``__all__``: all cells as one; default: the
+    last run's, else the doublet step's own choice). Without scores only the
+    suggestion (the channels the step would use) is returned (``available`` false)."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")

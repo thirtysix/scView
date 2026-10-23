@@ -28,7 +28,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 from scview.core.replicates import donor_candidates, pick_donor
-from scview.core import cluster_qc, doublet_source, seq_metrics, sex_check
+from scview.core import cluster_qc, doublet_source, doublets, seq_metrics, sex_check
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
 from scview.core.assistant import DEEPINFRA_BASE_URL, DEFAULT_MODEL, ChatSource
@@ -227,6 +227,13 @@ def build_facts(adaptor) -> QCFacts:
             s = _dist(pd.to_numeric(score, errors="coerce").to_numpy(dtype=np.float64))
             if s:
                 bits.append(f"median doublet score {s['median']:.2f}")
+        record = doublets.channel_record(adata)  # Scrublet ran per capture channel
+        if record is not None and record["rows"]:
+            bits.append(f"Scrublet ran in {doublets.channels_text(record['rows'], record['column'])}")
+            if record["reason"] in ("donor", "batch"):
+                concern("qc:doublets", "Scrublet's channels are the " + record["reason"] + "s, as no "
+                        "lane or GEM well column was found: donors pooled in one lane are not "
+                        "channels, so its expected rates are a guess.")
         text = "; ".join(bits)
         f.quality.append(_fact("qc:doublets", text[:1].upper() + text[1:] + "."))
     else:
