@@ -27,7 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import ccc, lr_resource
+from scview.core import ccc, large_mode, lr_resource
 from scview.core.activity import lognorm_matrix
 from scview.core.confounding import condition_columns
 from scview.core.dataset_manager import DatasetManager
@@ -216,6 +216,8 @@ async def run_communication(
     if body.resource not in ("auto", *lr_resource.RESOURCES):
         raise HTTPException(status_code=400, detail=f"Unknown resource '{body.resource}'.")
     adaptor = await _adaptor(dm, dataset_id)
+    large_mode.check(adaptor, "Ligand-receptor communication",
+                     "it reads the chosen cells' values and totals over every gene in memory")
     adata = adaptor.adata
     obs = adata.obs
     mask = _mask(obs, body.subset_column, body.subset_value)

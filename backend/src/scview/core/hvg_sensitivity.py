@@ -340,6 +340,12 @@ def flavors_available(adata) -> dict[str, str | None]:
 
 def check(adata) -> None:
     """Raise SensitivityError when the check cannot run here, saying why."""
+    from scview.core import large_layout, large_mode
+
+    if large_layout.is_large(adata):  # its matrices stay on disk
+        raise SensitivityError(str(large_mode.LargeDatasetError(
+            "This check", "it re-runs normalisation, variable genes and PCA on the whole "
+            "matrix in memory")))
     if adata.n_obs < MIN_CELLS:
         raise SensitivityError(f"The check needs at least {MIN_CELLS} cells; this dataset has {adata.n_obs}.")
     if adata.n_obs > MAX_CELLS:

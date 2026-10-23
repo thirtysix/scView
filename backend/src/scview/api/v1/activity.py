@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import activity, activity_nets, de_results
+from scview.core import activity, activity_nets, de_results, large_mode
 from scview.core.dataset_manager import DatasetManager
 from scview.core.object_cache import ObjectCache
 from scview.core.species import detect_species
@@ -89,6 +89,7 @@ def _check_species(adata) -> str:
 
 def _model(adata, network: str, dest: Path) -> tuple[activity.CellModel, str]:
     """The cached ULM model for this loaded dataset, built on first use (worker thread)."""
+    large_mode.check(adata, "TF and pathway activity", large_mode.WHOLE_MATRIX)
     cached = _MODELS.get(adata, network)
     if cached is not None:
         return cached

@@ -20,8 +20,9 @@ from scview.core.assessor import assess_preprocessing, recorded_normalization_me
 from scview.core import (
     cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
-from scview.core import qc_states, working_copy
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core import large_mode
+from scview.core import qc_states
+from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
 from scview.core.processing import cancel_run, iterate_exclusive, run_exclusive
 from scview.core.run_watchdog import RunControl
@@ -367,13 +368,14 @@ async def apply_doublet_threshold(
         if adaptor is None:
             raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        # A large dataset is edited where it is (its X stays on disk), written in place.
+        backed = getattr(adaptor.adata, "isbacked", False) and not adaptor.is_large
 
         def _run():
             work = adaptor.adata.to_memory() if backed else adaptor.adata
             before = uns_snapshot(work)
             result = doublets.apply_threshold(work, body.threshold, body.column or None)
-            write_derived(work, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, work, output_path, before)
             return result
 
         try:
@@ -819,17 +821,17 @@ async def save_qc_state_label(
         if body.column and body.column not in adaptor.adata.obs.columns:
             raise HTTPException(status_code=404, detail=f"Column '{body.column}' not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await working_copy.make_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def _run():
-            work = working_copy.in_memory(adaptor)
+            work = editable(adaptor)
             result, states = qc_states.for_adaptor(adaptor, body.column or None)
             if result.get("column") is None or states is None:
                 raise qc_states.QcStatesError(result.get("note") or "No column to label by.")
             name = qc_states.check_name(work, result["column"], body.name)
             before = uns_snapshot(work)
             saved = qc_states.label(work, result, states, name)
-            write_derived(work, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, work, output_path, before)
             return saved
 
         try:
@@ -898,6 +900,8 @@ async def preview_mito_refilter(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    large_mode.check(adaptor, "Re-filtering from the original upload",
+                     "it reads the original upload and re-processes it in memory")
     try:
         return await asyncio.to_thread(mito_refilter.preview, dm, dataset_id, adaptor, column or None,
                                        mito_mode, floor)
@@ -925,6 +929,8 @@ async def run_mito_refilter(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    large_mode.check(adaptor, "Re-filtering from the original upload",
+                     "it reads the original upload and re-processes it in memory")
     try:  # refuse before streaming what can be refused cheaply
         await asyncio.to_thread(mito_refilter.check_runnable, dm, dataset_id, adaptor, body.column or None,
                                 body.mito_mode)

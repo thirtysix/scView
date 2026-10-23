@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from scview.config import Settings
 from scview.core import seq_metrics
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_edit
+from scview.core.obs_writes import dataset_edit, save_edit, uns_snapshot
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
@@ -143,12 +143,17 @@ async def _edit(dataset_id: str, dm: DatasetManager, edit) -> dict | None:
         if adaptor is None:
             raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        large = adaptor.is_large
+        backed = getattr(adaptor.adata, "isbacked", False) and not large
 
         def _run():
             work = adaptor.adata
+            before = uns_snapshot(work)
             edit(work)
-            _save_uns_entry(adaptor.h5ad_path, output_path, work.uns.get(seq_metrics.UNS_KEY))
+            if large:  # written into its h5ad in place (core/large_mode.py)
+                save_edit(adaptor, work, output_path, before)
+            else:
+                _save_uns_entry(adaptor.h5ad_path, output_path, work.uns.get(seq_metrics.UNS_KEY))
             return seq_metrics.payload(work)
 
         try:

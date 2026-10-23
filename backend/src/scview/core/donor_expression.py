@@ -78,7 +78,11 @@ def _column(M, j: int) -> np.ndarray:
 
 
 def _non_negative(M) -> bool:
-    sample = M.data[:200_000] if sp.issparse(M) else np.asarray(M[:1000])
+    if sp.issparse(M):
+        sample = M.data[:200_000]
+    else:  # dense, or on disk (h5py, backed): the first rows
+        head = M[:1000]
+        sample = head.data if sp.issparse(head) else np.asarray(head)
     return sample.size == 0 or float(np.min(sample)) >= 0
 
 
@@ -121,6 +125,11 @@ def _counts_gene(adata, gene: str, for_lognorm: bool = False) -> tuple[np.ndarra
     names = pd.Index(names)
     if gene not in names:
         raise DonorExpressionError(f"Gene '{gene}' not found in the raw counts ({source}).")
+    if hasattr(M, "row_blocks"):  # a large dataset's counts on disk: one pass by row blocks
+        from scview.core.large_views import column_and_totals
+
+        col, totals = column_and_totals(M, names.get_loc(gene))
+        return col, totals, source
     totals = np.asarray(M.sum(axis=1), dtype=np.float64).ravel()
     return _column(M, names.get_loc(gene)), totals, source
 

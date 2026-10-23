@@ -297,9 +297,14 @@ def pseudobulk_qc(adata, sample_column: str | None = None, split_by: str | None 
         raise SampleQcError(f"{k_all} profiles is too many (at most {MAX_PROFILES}); "
                             f"'{sample_column}' looks like a per-cell column.")
     n_cells = np.bincount(codes, minlength=k_all)
-    Msub = M[rows] if rows.size < adata.n_obs else M
-    genes = _genes_per_cell(Msub)
-    P = _sum_rows(Msub, codes, k_all)
+    if hasattr(M, "row_blocks"):  # a large dataset's counts on disk: one pass by row blocks
+        from scview.core.large_views import sum_rows_by_code
+
+        genes, P = sum_rows_by_code(M, rows, codes, k_all)
+    else:
+        Msub = M[rows] if rows.size < adata.n_obs else M
+        genes = _genes_per_cell(Msub)
+        P = _sum_rows(Msub, codes, k_all)
 
     ok = n_cells >= MIN_CELLS
     for i in np.flatnonzero(~ok):

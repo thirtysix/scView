@@ -42,8 +42,12 @@ def find_counts(adata):
 
     ``layers['counts']``, then ``.raw`` (when it holds counts for every gene in X),
     then X. Raises ``ValueError`` when none of them holds counts."""
+    from scview.core.large_mode import counts_of
     from scview.core.pipeline import looks_like_counts  # pipeline imports this module
 
+    large = counts_of(adata)  # a large dataset's counts sidecar (row reads only)
+    if large is not None:
+        return large, "the counts file"
     if "counts" in adata.layers and looks_like_counts(adata.layers["counts"]):
         return adata.layers["counts"], "layers['counts']"
     raw = adata.raw
@@ -178,6 +182,8 @@ def mean_variance(
     if n > max_cells:
         rows = np.sort(np.random.default_rng(seed).choice(n, max_cells, replace=False))
         counts = counts[rows]
+    elif hasattr(counts, "row_blocks"):  # a large dataset's counts on disk: its rows, read once
+        counts = counts[:]
     if sp.issparse(counts):
         counts = sp.csr_matrix(counts)
     mean, var = _mean_var(counts)
