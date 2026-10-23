@@ -31,13 +31,14 @@ Work is scheduled in one place (``scheduler``): dask's threads, as many as the c
 CPU quota, with BLAS and numba at one thread inside each task. Block results are taken a
 batch of ``workers`` blocks at a time and combined in block order, so memory is about one
 block per worker (``block_bytes``) and the result does not depend on the worker count.
-
-The pipeline is not wired to this module yet (phase B).
+Between batches the hook set by ``on_blocks`` is called (the pipeline's large-dataset run,
+``core/large_run.py``: progress events, and a cancelled run stops there).
 """
 
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import functools
 import os
 import warnings
@@ -137,6 +138,30 @@ def rows_per_block(n_vars: int, *, nnz_per_row: float = 0.0, dense: bool = False
     return int(np.clip(chunk_bytes // max(one, 1), MIN_ROWS, MAX_ROWS))
 
 
+# (blocks done, blocks in all) -> None, called between batches of blocks; may raise to stop.
+BlockHook = Callable[[int, int], None]
+_BLOCK_HOOK: contextvars.ContextVar[BlockHook | None] = contextvars.ContextVar(
+    "scview_chunked_block_hook", default=None)
+
+
+@contextlib.contextmanager
+def on_blocks(hook: BlockHook | None) -> Iterator[None]:
+    """Call ``hook(done, total)`` before each batch of blocks of every pass made in this
+    thread (and once a pass ends): for progress, and to stop a pass between batches (an
+    exception it raises ends the pass)."""
+    token = _BLOCK_HOOK.set(hook)
+    try:
+        yield
+    finally:
+        _BLOCK_HOOK.reset(token)
+
+
+def _tick(done: int, total: int) -> None:
+    hook = _BLOCK_HOOK.get()
+    if hook is not None:
+        hook(done, total)
+
+
 def _blocks(X: da.Array) -> list:
     """One Delayed per row block (the graph optimised once)."""
     if X.numblocks[1] != 1:
@@ -155,9 +180,11 @@ def _each_block(X: da.Array, fn: Callable, *per_block_args) -> Iterator[Any]:
     task = delayed(_one_thread(fn), pure=False)
     with scheduler() as w:
         for start in range(0, len(parts), w):
+            _tick(start, len(parts))
             idx = range(start, min(len(parts), start + w))
             batch = [task(parts[i], *(a[i] for a in per_block_args)) for i in idx]
             yield from dask.compute(*batch)
+        _tick(len(parts), len(parts))
 
 
 def _row_slices(X: da.Array, values) -> list:
@@ -1046,7 +1073,19 @@ def _pca_blocks(X: da.Array, transform: Callable, args: tuple, hvg: np.ndarray,
     }
 
 
-def pca_scaled(X: da.Array, hvg, *, n_comps: int = 50, max_value: float | None = 10) -> dict:
+def scaled_stats(X: da.Array, cols) -> tuple[np.ndarray, np.ndarray]:
+    """(mean, sd) of columns ``cols`` of X as ``sc.pp.scale`` takes them on the float32 copy
+    (float64 sums of the float32 values and squares, sd with ddof 1, 0 -> 1); one pass."""
+    if X.dtype != np.float32:
+        X = X.map_blocks(_as_float32, dtype=np.float32, meta=_meta_like(X, np.float32))
+    mean, var = _group_stats(X, cols=np.asarray(cols, dtype=np.int64)).mean_var(0)
+    std = np.sqrt(var)
+    std[std == 0] = 1
+    return mean, std
+
+
+def pca_scaled(X: da.Array, hvg, *, n_comps: int = 50, max_value: float | None = 10,
+               stats: tuple[np.ndarray, np.ndarray] | None = None) -> dict:
     """PCA of the scaled variable genes, as "copy of the HVG columns (float32) ->
     ``sc.pp.scale(max_value=10)`` -> ``sc.tl.pca(svd_solver='arpack')``" (the same values
     as scaling every gene and masking: scaling is per gene).
@@ -1056,15 +1095,14 @@ def pca_scaled(X: da.Array, hvg, *, n_comps: int = 50, max_value: float | None =
     float32 values and squares, sd with ddof 1, 0 -> 1); the scaled block exists only inside
     a task. Returns X_pca (float32, cells x comps), PCs (float64, genes x comps, zero rows
     for other genes, float32 values), variance and variance_ratio (float32), params (as
-    ``uns['pca']['params']``), n_comps = min(n_comps, cells - 1, variable genes - 1)."""
+    ``uns['pca']['params']``), n_comps = min(n_comps, cells - 1, variable genes - 1).
+    ``stats``: the genes' (mean, sd) already worked out (``scaled_stats``, the scaling step's
+    plan); mean 0 and sd 1 with ``max_value=None`` is PCA of the unscaled values."""
     hvg = np.asarray(hvg, dtype=bool)
     cols = np.flatnonzero(hvg)
     if X.dtype != np.float32:  # the copy is float32 before its mean and sd are taken
         X = X.map_blocks(_as_float32, dtype=np.float32, meta=_meta_like(X, np.float32))
-    st = _group_stats(X, cols=cols)
-    mean, var = st.mean_var(0)
-    std = np.sqrt(var)
-    std[std == 0] = 1
+    mean, std = scaled_stats(X, cols) if stats is None else stats
     return _pca_blocks(X, _scaled_block, (cols, mean, std, max_value), hvg, n_comps)
 
 
@@ -1097,30 +1135,54 @@ def _as_written(b):
     return sp.csr_matrix(b) if sp.issparse(b) else np.asarray(b)
 
 
+class CsrAppender:
+    """A CSR matrix written into ``group[key]`` as anndata encodes it, rows appended a block
+    at a time (int64 indices, as anndata writes a dask CSR): the first block written, the
+    rest appended. ``finish`` writes an empty matrix of the right width when no block came."""
+
+    def __init__(self, group: h5py.Group, key: str, *, compression: str | None = "gzip"):
+        self.group, self.key = group, key
+        self.kw = {"compression": compression} if compression else {}
+        self._disk = None
+        self.n_rows = 0
+
+    def add(self, b) -> None:
+        from anndata.io import sparse_dataset, write_elem
+
+        b = sp.csr_matrix(b)
+        if self._disk is None:
+            b.indptr = b.indptr.astype(np.int64, copy=False)
+            b.indices = b.indices.astype(np.int64, copy=False)
+            write_elem(self.group, self.key, b, dataset_kwargs=self.kw)
+            self._disk = sparse_dataset(self.group[self.key])
+        elif b.shape[0]:
+            self._disk.append(b)
+        self.n_rows += b.shape[0]
+
+    def finish(self, n_vars: int, dtype) -> None:
+        from anndata.io import write_elem
+
+        if self._disk is None:
+            write_elem(self.group, self.key, sp.csr_matrix((0, n_vars), dtype=dtype),
+                       dataset_kwargs=self.kw)
+
+
 def write_matrix(group: h5py.Group, key: str, X: da.Array, *,
                  compression: str | None = "gzip") -> None:
     """Write a dask matrix into ``group[key]`` as anndata encodes it, one batch of blocks in
-    memory at a time: a CSR matrix block by block (the first written, the rest appended;
-    int64 indices, as anndata writes a dask CSR), a dense one by ``write_elem`` (dask's
-    store). ``compression``: gzip | lzf | None."""
-    from anndata.io import sparse_dataset, write_elem
+    memory at a time: a CSR matrix block by block (``CsrAppender``), a dense one by
+    ``write_elem`` (dask's store). ``compression``: gzip | lzf | None."""
+    from anndata.io import write_elem
 
-    kw = {"compression": compression} if compression else {}
     if not _is_sparse(X):
+        kw = {"compression": compression} if compression else {}
         with scheduler():
             write_elem(group, key, X, dataset_kwargs=kw)
         return
-    disk = None
+    out = CsrAppender(group, key, compression=compression)
     for b in _each_block(X, _as_written):
-        if disk is None:
-            b.indptr = b.indptr.astype(np.int64, copy=False)
-            b.indices = b.indices.astype(np.int64, copy=False)
-            write_elem(group, key, b, dataset_kwargs=kw)
-            disk = sparse_dataset(group[key])
-        elif b.shape[0]:
-            disk.append(b)
-    if disk is None:  # no blocks: an empty matrix of the right width
-        write_elem(group, key, sp.csr_matrix((0, X.shape[1]), dtype=X.dtype), dataset_kwargs=kw)
+        out.add(b)
+    out.finish(X.shape[1], X.dtype)
 
 
 def write_h5ad(path: str | Path, X: da.Array, *, obs: pd.DataFrame, var: pd.DataFrame,
