@@ -95,7 +95,8 @@ def test_doublet_detection_no_longer_copies_the_dense_counts_layer():
     run = pf.estimate_run(h, steps=REPROCESS, warm=True)
     dense = 20000 * 20082 * 4
     dbl = next(e for e in run.steps if e.step == "doublet_detection")
-    assert dbl.transient_bytes == int(pf.DBL_DENSE_PER_VALUE * 20000 * 20082)
+    # (a header alone: all cells as one channel, the variable genes as a share of the genes)
+    assert dbl.transient_bytes == int(pf.DBL_DENSE_PER_VALUE * 20000 * 20082) + pf.DBL_OUT_PER_CELL * 20000
     assert dbl.transient_bytes < 3.5 * dense
     # the dense counts are sized by their non-zeros: those of the sparse X beside them
     no_x = pf.Header("h5ad", 20000, 20082, [m for m in h.matrices if m.where != "X"])
@@ -180,13 +181,112 @@ def test_step_peak_scaling_holds_two_dense_float32_copies():
 def test_step_peak_doublets_ignores_the_layers_and_reads_the_non_zeros():
     n, m = 4000, 10000
     base = pf.estimate_step_peak("doublet_detection", (n, m), 0, True, nonzero=n * m // 10)
-    assert base == int(pf.DBL_DENSE_PER_VALUE * n * m)  # Scrublet's dense z-scoring
+    # Scrublet's dense z-scoring, and the per-cell results
+    assert base == int(pf.DBL_DENSE_PER_VALUE * n * m) + pf.DBL_OUT_PER_CELL * n
     # the layers and .raw are not copied any more (they were: +other_bytes)
     assert pf.estimate_step_peak("doublet_detection", (n, m), 0, True, nonzero=n * m // 10,
                                  other_bytes=n * 1000) == base
     # a dense X of unknown non-zeros is taken as full: six float32 CSR copies of every value
     assert pf.estimate_step_peak("doublet_detection", (n, m), 0, True) == \
-        int(pf.DBL_SPARSE_COPIES * (n * m * 8 + (n + 1) * 4))
+        int(pf.DBL_SPARSE_COPIES * (n * m * 8 + (n + 1) * 4)) + pf.DBL_OUT_PER_CELL * n
+
+
+# Doublet detection as the pipeline runs it on a dataset in memory (Scrublet per capture
+# channel, pipeline._run_doublet_detection), measured 2026-10-23: peak RSS over the process
+# before the step (VmHWM reset, after a warm-up run), 2 CPUs, a fresh container each; the
+# plan's variable genes as ``doublet_plan`` counted them on that data.
+DOUBLET_MEASURED = {
+    # name: (cells, genes, X sparse, stored values, plan channels (the largest), plan hvg, GiB)
+    "paul15, one channel": (2730, 3451, False, 2386248, [2730], 657, 0.262),
+    "Kang, 2 lanes from the barcodes": (13836, 14053, True, 9655137, [6573, 7263], 1522, 1.470),
+    "Kang, all cells as one": (13836, 14053, True, 9655137, [13836], 1506, 2.590),
+    "Kang, its 8 donors": (13836, 14053, True, 9655137, [3159], 1472, 0.672),
+    "brain 100k, 133 gem_well": (100000, 27998, True, 201003839, [914], 1744, 0.261),
+    "brain 100k, 133 from the barcodes": (100000, 27998, True, 201003839, [914], 1744, 0.238),
+    "brain 30k subset, all cells as one": (30000, 27998, True, 60189617, [30000], 1391, 5.223),
+    # main's run: one channel of every cell (the 2.5x over-estimate of the Roihu test pass)
+    "brain 100k, all cells as one": (100000, 27998, True, 201003839, [100000], 1362, 16.542),
+}
+
+
+@pytest.mark.parametrize("name", list(DOUBLET_MEASURED))
+def test_doublet_estimate_follows_the_largest_channel_within_the_band(name):
+    n, m, sparse, nnz, channels, hvg, measured = DOUBLET_MEASURED[name]
+    t = pf.estimate_step_peak("doublet_detection", (n, m), nnz, not sparse,
+                              nonzero=None if sparse else nnz,
+                              doublets=pf.DoubletPlan(channels, hvg))
+    assert abs(t / GiB / measured - 1) <= pf.ERROR_BAND
+
+
+def test_doublet_time_follows_each_channel_and_its_neighbour_search():
+    # measured: the brain's 133 wells (largest 914) 43 s; one channel of its 100k cells 688 s
+    def est(plan, n):
+        state = pf._State(n, 27998, pf.Matrix("X", n, 27998, True, n * 2000), {}, None, 0)
+        return pf._step_doublet(state, None, plan)[2]
+
+    wells = est(pf.DoubletPlan([752] * 133, 1744), 100000)
+    whole = est(pf.DoubletPlan([100000], 1362), 100000)
+    assert 43 / 2 <= wells <= 43 * 2 and 688 / 2 <= whole <= 688 * 2
+
+
+def test_doublet_estimate_leaves_out_channels_too_small_to_score():
+    plan = pf.DoubletPlan([5000, 80, 120], 1500)
+    t = pf.estimate_step_peak("doublet_detection", (5200, 20000), 10_000_000, False, doublets=plan)
+    assert t == pf.DBL_PER_CELL_HVG * 5000 * 1500 + pf.DBL_OUT_PER_CELL * 5200
+    tiny = pf.estimate_step_peak("doublet_detection", (200, 20000), 400_000, False,
+                                 doublets=pf.DoubletPlan([80, 120], None))
+    assert tiny == int(pf.DBL_DENSE_PER_VALUE * 120 * 20000) + pf.DBL_OUT_PER_CELL * 200
+    none = pf.estimate_step_peak("doublet_detection", (160, 20000), 320_000, False,
+                                 doublets=pf.DoubletPlan([80, 80], None))
+    assert none == pf.DBL_OUT_PER_CELL * 160  # nothing scored: the results alone
+
+
+def test_doublet_plan_counts_scrublets_own_variable_genes_in_the_largest_channel(monkeypatch):
+    import scanpy as sc
+
+    from scview.core import scrublet_lean
+    from tests.test_doublet_channels import _dataset
+
+    a = _dataset([150, 260, 200])  # three gem_well channels, w2 the largest
+    plan = pf.doublet_plan(a, PipelineParams())
+    assert plan.channels == [150, 260, 200]
+    seen = []
+    real = sc.pp.scrublet
+
+    def spy(adata, *args, **kw):
+        seen.append(adata.n_vars)
+        return real(adata, *args, **kw)
+
+    monkeypatch.setattr(sc.pp, "scrublet", spy)
+    labels = a.obs["gem_well"].astype(str).to_numpy()
+    scrublet_lean.scrublet_counts(a.X[labels == "w2"], 0.01, use_approx_neighbors=False)
+    assert plan.hvg == seen[0]  # the genes Scrublet scored in that channel
+    per = pf.step_peak_for(a, "doublet_detection", PipelineParams())
+    whole = pf.step_peak_for(a, "doublet_detection", PipelineParams(doublet_channel_key="__all__"))
+    assert per == pf.DBL_PER_CELL_HVG * 260 * plan.hvg + pf.DBL_OUT_PER_CELL * a.n_obs
+    assert whole > per
+
+
+def test_doublet_plan_of_a_file_reads_its_obs_alone(tmp_path):
+    from tests.test_doublet_channels import _dataset
+
+    a = _dataset([150, 260, 200])
+    p = tmp_path / "f.h5ad"
+    a.write_h5ad(p)
+    plan = pf._file_doublet_plan(p, PipelineParams())
+    assert plan.channels == [150, 260, 200] and plan.hvg is None  # the matrix is not read
+    assert pf._file_doublet_plan(p, PipelineParams(doublet_channel_key="__all__")).channels == [610]
+    assert pf._file_doublet_plan(tmp_path / "missing.h5ad", PipelineParams()) is None
+
+
+def test_doublet_estimate_without_the_data_takes_one_channel_and_a_share_of_the_genes():
+    h = pf.Header("h5ad", 20000, 20082, [pf.Matrix("X", 20000, 20082, True, 24_000_000)])
+    one = pf.estimate_run(h, steps=["doublet_detection"], warm=True).steps[0].transient_bytes
+    assert one == int(pf.DBL_DENSE_PER_VALUE * 20000 * 20082) + pf.DBL_OUT_PER_CELL * 20000
+    plan = pf.DoubletPlan([5000] * 4)  # e.g. read from the file's obs
+    four = pf.estimate_run(h, steps=["doublet_detection"], warm=True, doublets=plan).steps[0]
+    assert four.transient_bytes == int(pf.DBL_DENSE_PER_VALUE * 5000 * 20082) + \
+        pf.DBL_OUT_PER_CELL * 20000
 
 
 def test_step_peak_unknown_step_and_params():
@@ -367,6 +467,25 @@ async def test_dataset_preflight_from_the_file_header(client, dataset_manager):
     assert v["level"] in ("fits", "tight", "wont_fit", "unknown")
     assert "GB" in v["sentence"] and v["error_band"] == pf.ERROR_BAND
     assert body["header"]["n_cells"] == 40
+
+
+async def test_dataset_preflight_takes_the_doublet_channels(client, dataset_manager):
+    # Per GEM well the step needs its largest well; all cells as one, the whole dataset.
+    from tests.test_doublet_channels import _dataset
+
+    d = Path(dataset_manager.data_dir) / "uploads" / "pf2"
+    d.mkdir(parents=True)
+    (d / "metadata.json").write_text(json.dumps({"id": "pf2", "name": "pf2", "status": "ready"}))
+    _dataset([150, 260, 200]).write_h5ad(d / "data.h5ad")
+    for loaded in (False, True):  # from the file's obs, then from the open dataset
+        if loaded:
+            await dataset_manager.load_dataset("pf2")
+        per, whole = [
+            next(s for s in (await client.get(f"{API}/datasets/pf2/preflight", params={
+                "steps": "doublet_detection", **({"doublet_channel_key": k} if k else {})})).json()["steps"]
+                 if s["step"] == "doublet_detection")["transient_bytes"]
+            for k in ("", "__all__")]
+        assert per < whole, loaded
 
 
 async def test_dataset_preflight_uses_the_cached_dataset(client, dataset_manager):
