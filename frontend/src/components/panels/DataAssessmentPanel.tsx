@@ -5,8 +5,14 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch, BACKEND_DOWN_MESSAGE } from "@/api/client";
 import { getDataset } from "@/api/datasets";
-import { getDoublets, type DoubletRateSuggestion, type FilterThresholds, type QcThresholdMode } from "@/api/qc";
-import { pct } from "@/lib/qcThresholds";
+import {
+  ALL_CELLS_CHANNEL,
+  getDoublets,
+  type DoubletRateSuggestion,
+  type FilterThresholds,
+  type QcThresholdMode,
+} from "@/api/qc";
+import { channelsText, suggestionText } from "@/lib/doubletChannels";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
 import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
@@ -131,7 +137,7 @@ const STEP_ORDER: {
   description: string;
 }[] = [
   { key: "qc_metrics", label: "QC Metrics", description: "Calculate quality control metrics" },
-  { key: "doublet_detection", label: "Doublet Detection", description: "Flag likely doublets with Scrublet (doublet_score + predicted_doublet)" },
+  { key: "doublet_detection", label: "Doublet Detection", description: "Flag likely doublets with Scrublet in each capture channel (doublet_score + predicted_doublet)" },
   { key: "filtering", label: "Cell/Gene Filtering", description: "Filter low-quality cells and rare genes" },
   { key: "normalization", label: "Normalization", description: "Normalize library size" },
   { key: "log_transform", label: "Log Transform", description: "Log-transform expression values" },
@@ -175,6 +181,17 @@ const QC_MODE_OPTION_LABELS: Record<string, string> = {
 
 const STEP_PARAMS: Record<string, ParamConfig[]> = {
   doublet_detection: [
+    {
+      param: "doublet_channel_key",
+      label: "Capture channels",
+      type: "select",
+      options: [],
+      default: "",
+      help:
+        "Doublets form within one capture channel (a 10x lane or GEM well), so Scrublet runs in each channel " +
+        "alone, with its own rate and threshold. Detect: a lane / GEM well column, else the barcodes' -N suffix " +
+        "or prefix (saved as capture_channel), else the donors or batches (a guess), else all cells.",
+    },
     { param: "expected_doublet_rate", label: "Expected doublet rate", type: "number", min: 0.0, max: 0.5, step: 0.001, default: null, dynamicDefault: "suggested_doublet_rate" },
   ],
   filtering: [
@@ -379,12 +396,30 @@ export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
 /** Under the expected doublet rate: where the default comes from. */
 export function SuggestedRateNote({ suggestion }: { suggestion: DoubletRateSuggestion | null }) {
   if (!suggestion) return null;
-  const where = suggestion.column
-    ? `the cells per ${suggestion.column} sample (${suggestion.samples.length})`
-    : "all cells as one channel (no sample column found)";
   return (
     <span className="text-[10px] text-slate-400" title={suggestion.basis}>
-      Default {pct(suggestion.rate)}, from {where}: a rule of thumb, ~0.8 % per 1,000 cells captured.
+      {suggestionText(suggestion)}
+    </span>
+  );
+}
+
+/** Under the channel choice: the channels Scrublet will run in, and what to know about them. */
+export function ChannelNote({ suggestion }: { suggestion: DoubletRateSuggestion | null }) {
+  if (!suggestion) return null;
+  const unscored = suggestion.n_unscored ?? 0;
+  return (
+    <span className="flex flex-col gap-0.5 text-[10px] leading-snug text-slate-500" data-testid="doublet-channel-note">
+      <span>Scrublet will run in {channelsText(suggestion)}.</span>
+      {suggestion.note && <span className="text-amber-700">{suggestion.note}</span>}
+      {unscored > 0 && (
+        <span>
+          {unscored.toLocaleString()} cells are in channels under {suggestion.min_channel_cells ?? 100} cells (or have
+          no channel): not scored, never called doublets.
+        </span>
+      )}
+      {(suggestion.skipped ?? []).map((t) => (
+        <span key={t} className="text-slate-400">Passed over {t}.</span>
+      ))}
     </span>
   );
 }
@@ -443,13 +478,14 @@ export function DataAssessmentPanel() {
   const [selectedSteps, setSelectedSteps] = useState<Set<string>>(new Set());
   const [stepParams, setStepParams] = useState<Record<string, Record<string, unknown>>>({});
 
-  // The doublet step's default expected rate, from the cells per sample.
+  // The doublet step's channels and their default expected rates, for its channel choice.
   const [doubletRate, setDoubletRate] = useState<DoubletRateSuggestion | null>(null);
+  const doubletChannel = String(stepParams.doublet_detection?.doublet_channel_key ?? "");
   useEffect(() => {
     if (!datasetId) return;
     let cancelled = false;
     setDoubletRate(null);
-    getDoublets(datasetId)
+    getDoublets(datasetId, null, doubletChannel || undefined)
       .then((s) => {
         if (!cancelled) setDoubletRate(s.suggestion ?? null);
       })
@@ -459,7 +495,7 @@ export function DataAssessmentPanel() {
     return () => {
       cancelled = true;
     };
-  }, [datasetId, qcRefreshKey]);
+  }, [datasetId, qcRefreshKey, doubletChannel]);
 
   // The QC histograms set the filtering step's thresholds: one state, two places.
   const filterValues = useMemo(() => filterThresholds(stepParams.filtering), [stepParams.filtering]);
@@ -485,6 +521,15 @@ export function DataAssessmentPanel() {
       .map((c) => c.name);
   }, [dataset]);
   const batchColumnOptions = categoricalObsColumns;
+  // Capture channels can be many (133 GEM wells): no group cap, only not one per cell.
+  const channelColumnOptions = useMemo(() => {
+    if (!dataset) return [];
+    const nCells = dataset.n_cells ?? 0;
+    return dataset.obs_columns
+      .filter((c) => (c.dtype === "category" || c.dtype === "object") && c.n_unique >= 1 &&
+        !(nCells > 0 && c.n_unique / nCells >= 0.5))
+      .map((c) => c.name);
+  }, [dataset]);
 
   /* ---- Reprocess from scratch ---- */
   const reprocessFromScratch = () => {
@@ -1312,8 +1357,11 @@ export function DataAssessmentPanel() {
                             </p>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
                               {STEP_PARAMS[step.key]!.map((pc) => {
+                                // Per channel, no one number stands for the default: the input stays empty.
                                 const suggested =
-                                  pc.dynamicDefault === "suggested_doublet_rate" ? doubletRate?.rate : undefined;
+                                  pc.dynamicDefault === "suggested_doublet_rate" && !doubletRate?.per_channel
+                                    ? doubletRate?.rate
+                                    : undefined;
                                 const currentVal = stepParams[step.key]?.[pc.param] ?? suggested ?? pc.default;
                                 // A filtering param of the other threshold mode: shown, not used.
                                 const unused = pc.mode !== undefined && pc.mode !== filterValues.qc_threshold_mode;
@@ -1400,7 +1448,8 @@ export function DataAssessmentPanel() {
                                     ) : pc.type === "number" ? (
                                       <input
                                         type="number"
-                                        value={Number(currentVal)}
+                                        value={currentVal == null ? "" : Number(currentVal)}
+                                        placeholder={pc.dynamicDefault === "suggested_doublet_rate" ? "each channel's own" : undefined}
                                         min={pc.min}
                                         max={pc.max}
                                         step={pc.step}
@@ -1424,7 +1473,15 @@ export function DataAssessmentPanel() {
                                         }
                                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                       >
-                                        {pc.param === "batch_key" || pc.param === "hvg_batch_key" || pc.param === "qc_sample_column" ? (
+                                        {pc.param === "doublet_channel_key" ? (
+                                          <>
+                                            <option value="">Detect (lane / GEM well, barcodes, donor)</option>
+                                            <option value={ALL_CELLS_CHANNEL}>All cells as one channel</option>
+                                            {channelColumnOptions.map((opt) => (
+                                              <option key={opt} value={opt}>{opt}</option>
+                                            ))}
+                                          </>
+                                        ) : pc.param === "batch_key" || pc.param === "hvg_batch_key" || pc.param === "qc_sample_column" ? (
                                           <>
                                             <option value="">
                                               {pc.param === "hvg_batch_key"
@@ -1448,6 +1505,7 @@ export function DataAssessmentPanel() {
                                       stepParams[step.key]?.[pc.param] == null && (
                                         <SuggestedRateNote suggestion={doubletRate} />
                                       )}
+                                    {pc.param === "doublet_channel_key" && <ChannelNote suggestion={doubletRate} />}
                                     {pc.help && (
                                       <p className="text-[10px] leading-snug text-slate-400">{pc.help}</p>
                                     )}

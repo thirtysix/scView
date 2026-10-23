@@ -39,6 +39,8 @@ describe("doublet source texts", () => {
     expect(choiceText({ ...CHOICES, used: { source: "scrublet", label: "Scrublet", n: 4 }, both: null })).toBe(
       "Drops 4 doublets by Scrublet.",
     );
+    expect(choiceText({ ...CHOICES, used: { source: "scrublet", label: "Scrublet", n: 4 }, both: null, unscored: 40 }))
+      .toBe("Drops 4 doublets by Scrublet. 40 cells Scrublet did not score (channels too small for it) are kept.");
   });
 
   it("reads anything else as auto", () => {

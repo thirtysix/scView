@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { applyDoubletThreshold, getDoublets, type DoubletSummary } from "@/api/qc";
-import { Caption } from "@/components/common/Caption";
+import { applyDoubletThreshold, getDoublets, type DoubletChannelCalls, type DoubletSummary } from "@/api/qc";
+import { CapNote, Caption } from "@/components/common/Caption";
 import { Panel } from "@/components/common/Panel";
 import { DoubletAgreement } from "@/components/qc/DoubletAgreement";
 import { ThresholdHistogram, type RefLine } from "@/components/plots/ThresholdHistogram";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
+import { perChannelText, rateRange, statusText, unscoredText } from "@/lib/doubletChannels";
 import { sourceText } from "@/lib/doubletSource";
 import { pct, roundTo } from "@/lib/qcThresholds";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -13,20 +14,35 @@ import { useViewStore } from "@/stores/viewStore";
 
 const STEP = 0.005; // threshold resolution on the 0-1 score
 const DEBOUNCE_MS = 120;
-const SAMPLE_ROWS = 8; // more behind "show all"
+const CHANNEL_ROWS = 8; // more behind "show all"
+const GUESS =
+  "No lane or GEM well column was found, so Scrublet ran in each sample: donors pooled in one lane are not " +
+  "channels, so its expected rates are a guess. Pick the capture channel in the Doublet Detection step if the " +
+  "data has one.";
 
 /** A score for display: Scrublet's own threshold has 17 digits. */
 export function fmtScore(v: number): string {
   return String(Number(v.toFixed(4)));
 }
 
-/** The rule-of-thumb sentence under the histogram. */
+/** The rule-of-thumb sentence under the histogram: the rates the run used per channel,
+ *  or (one channel of every cell) the one it used. */
 export function expectedRateText(s: DoubletSummary): string {
-  const sug = s.suggestion;
-  const where = sug.column
-    ? `from the cells in each of ${sug.samples.length} ${sug.column} samples`
-    : "taking all cells as one channel (no sample column found)";
-  return `Expected about ${pct(sug.rate)} doublets ${where}: a rule of thumb from 10x Genomics, ~0.8 % per 1,000 cells captured in one channel.`;
+  const rule = "a rule of thumb from 10x Genomics, ~0.8 % per 1,000 cells captured in one channel.";
+  const rows = (s.channels ?? []).filter((r) => r.status === "scored");
+  if (s.per_channel && rows.length) {
+    return `Expected ${rateRange(rows.map((r) => r.expected_rate))} doublets per channel, from each channel's cells: ${rule}`;
+  }
+  const rate = s.expected_rate_used ?? s.suggestion.rate;
+  return `Expected about ${pct(rate)} doublets, taking all cells as one channel: ${rule}`;
+}
+
+/** The channel table's rows: by share called, the most doublet-heavy first, when there
+ *  are more than fit; in their own order otherwise. */
+export function channelRows(rows: DoubletChannelCalls[], all: boolean): DoubletChannelCalls[] {
+  if (rows.length <= CHANNEL_ROWS) return rows;
+  const sorted = [...rows].sort((a, b) => b.fraction - a.fraction);
+  return all ? sorted : sorted.slice(0, CHANNEL_ROWS);
 }
 
 /**
@@ -51,7 +67,7 @@ export function DoubletCard({
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logY, setLogY] = useState(true);
-  const [allSamples, setAllSamples] = useState(false);
+  const [allChannels, setAllChannels] = useState(false);
   const refresh = useDatasetRefresh();
   const request = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -153,8 +169,12 @@ export function DoubletCard({
   const applied = summary.applied ?? null;
   const hashingFirst = summary.source?.source === "hashing"; // auto picks hashing once it was run
   const unchanged = applied !== null && threshold !== null && Math.abs(applied.threshold - threshold) < 1e-9;
-  const samples = summary.samples ?? [];
-  const shown = allSamples ? samples : samples.slice(0, SAMPLE_ROWS);
+  const channels = summary.channels ?? [];
+  const shown = channelRows(channels, allChannels);
+  const minCells = summary.min_channel_cells ?? 100;
+  const perChannel = perChannelText(summary);
+  const unscored = unscoredText(summary.n_unscored ?? 0, summary.n_unscored_small_channels ?? 0, minCells);
+  const guess = summary.channel_reason === "donor" || summary.channel_reason === "batch";
 
   return (
     <Panel
@@ -222,6 +242,31 @@ export function DoubletCard({
           )}
           {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
         </div>
+        {perChannel && (
+          <p className="text-[11px] text-slate-600" data-testid="doublet-per-channel">
+            {perChannel}
+            {summary.threshold == null && summary.n_called_now != null && (
+              <>
+                {" "}
+                Scrublet&apos;s calls:{" "}
+                <span className="font-semibold">
+                  {summary.n_called_now.toLocaleString()} cells ({pct(summary.n_called_now / Math.max(1, summary.n_cells))})
+                </span>
+                . Type or drag a threshold to see one over every channel.
+              </>
+            )}
+          </p>
+        )}
+        {guess && (
+          <p className="rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="doublet-guess">
+            {summary.suggestion.note && summary.suggestion.reason === summary.channel_reason ? summary.suggestion.note : GUESS}
+          </p>
+        )}
+        {unscored && (
+          <p className="text-[11px] text-slate-600" data-testid="doublet-unscored">
+            {unscored}
+          </p>
+        )}
         {summary.n_called != null && summary.threshold != null && (
           <p className="text-[11px] text-slate-700" data-testid="doublet-calls">
             Above {fmtScore(summary.threshold)}:{" "}
@@ -237,38 +282,67 @@ export function DoubletCard({
             ? ` The doublet step ran with an expected rate of ${pct(summary.expected_rate_used)}.`
             : ""}
         </p>
-        {samples.length > 0 && (
-          <table className="w-full text-[11px]">
+        {channels.length > 0 && (
+          <table className="w-full text-[11px]" aria-label="Doublet calls per capture channel">
             <thead>
               <tr className="text-left text-slate-400">
-                <th className="font-medium">{summary.suggestion.column}</th>
-                <th className="text-right font-medium" title="Cells in the sample">Cells</th>
-                <th className="text-right font-medium" title="Cells called doublets: Scrublet score above the threshold">Called</th>
-                <th className="text-right font-medium" title="Called doublets as a share of the sample's cells">Share</th>
-                <th className="text-right font-medium" title="Rule of thumb: ~0.8 % per 1,000 cells">
+                <th className="font-medium" title={`Capture channel (${summary.channels_column ?? ""})`}>
+                  {summary.channels_column === "capture_channel" ? "Channel" : summary.channels_column}
+                </th>
+                <th className="text-right font-medium" title="Cells in the channel">Cells</th>
+                <th
+                  className="text-right font-medium"
+                  title={
+                    summary.threshold != null
+                      ? "Cells called doublets: score above the threshold shown"
+                      : "Cells called doublets now: Scrublet's own call in this channel"
+                  }
+                >
+                  Called
+                </th>
+                <th className="text-right font-medium" title="Called doublets as a share of the channel's cells">Share</th>
+                <th className="text-right font-medium" title="The expected rate Scrublet used here: ~0.8 % per 1,000 cells">
                   Expected
+                </th>
+                <th className="text-right font-medium" title="The threshold Scrublet picked in this channel">
+                  Scrublet&apos;s
                 </th>
               </tr>
             </thead>
             <tbody className="text-slate-600">
-              {shown.map((s) => (
-                <tr key={s.name}>
-                  <td className="truncate pr-2">{s.name}</td>
-                  <td className="text-right">{s.n_cells.toLocaleString()}</td>
-                  <td className="text-right">{s.n_called.toLocaleString()}</td>
-                  <td className={`text-right ${s.fraction > 2 * s.expected_rate ? "font-semibold text-amber-700" : ""}`}>
-                    {pct(s.fraction)}
-                  </td>
-                  <td className="text-right text-slate-400">~{pct(s.expected_rate)}</td>
-                </tr>
-              ))}
+              {shown.map((r) => {
+                const note = statusText(r, minCells);
+                return (
+                  <tr key={r.name} className={r.status === "scored" ? "" : "text-slate-400"}>
+                    <td className="truncate pr-2">{r.name}</td>
+                    <td className="text-right tabular-nums">{r.n_cells.toLocaleString()}</td>
+                    {r.status === "scored" || r.n_scored > 0 ? (
+                      <>
+                        <td className="text-right tabular-nums">{(r.n_called ?? 0).toLocaleString()}</td>
+                        <td className={`text-right tabular-nums ${r.fraction > 2 * r.expected_rate ? "font-semibold text-amber-700" : ""}`}>
+                          {pct(r.fraction)}
+                        </td>
+                      </>
+                    ) : (
+                      <td colSpan={2} className="text-right">{note ?? "not scored"}</td>
+                    )}
+                    <td className="text-right tabular-nums text-slate-400">~{pct(r.expected_rate)}</td>
+                    <td className="text-right tabular-nums text-slate-400" title={note ?? undefined}>
+                      {r.scrublet_threshold != null ? fmtScore(r.scrublet_threshold) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
-        {samples.length > SAMPLE_ROWS && (
-          <button type="button" onClick={() => setAllSamples((v) => !v)} className="text-[11px] text-primary hover:underline">
-            {allSamples ? "Show fewer" : `Show all ${samples.length}`}
-          </button>
+        {channels.length > CHANNEL_ROWS && (
+          <div className="flex flex-wrap items-baseline gap-2">
+            {!allChannels && <CapNote shown={CHANNEL_ROWS} total={channels.length} by="share called" />}
+            <button type="button" onClick={() => setAllChannels((v) => !v)} className="text-[11px] text-primary hover:underline">
+              {allChannels ? "Show fewer" : `Show all ${channels.length}`}
+            </button>
+          </div>
         )}
         {summary.agreement && (
           <DoubletAgreement
