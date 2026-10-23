@@ -430,3 +430,16 @@ def test_replay_of_a_channel_column_and_of_all_cells(tmp_path):
         assert np.array_equal(rep.obs["predicted_doublet"].to_numpy(),
                               out.obs["predicted_doublet"].to_numpy()), key
     assert rep.uns["scrublet"]["threshold"] == out.uns["scrublet"]["threshold"]  # one run: Scrublet's own
+
+
+def test_the_run_manifest_carries_each_channel_and_says_the_replay_is_exact():
+    from scview.core import run_manifest
+
+    a = _dataset([150, 200])
+    out, _ = pl.run_pipeline(a, ["doublet_detection"], pl.PipelineParams())
+    step = run_manifest.build_manifest(out, dataset_id="d", dataset_name="d")["steps"][-1]
+    assert step["step"] == "doublet_detection" and step["replay"]["status"] == "exact"
+    assert step["tool"] == "scanpy.pp.scrublet (per capture channel)"
+    assert [(c["name"], c["n_cells"], c["expected_doublet_rate"]) for c in step["params"]["channels"]] == [
+        ("w1", 150, doublets.rate_for_cells(150)), ("w2", 200, doublets.rate_for_cells(200))]
+    assert (step["params"]["channel_column"], step["params"]["channel_reason"]) == ("gem_well", "channel_column")
