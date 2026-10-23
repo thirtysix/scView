@@ -554,6 +554,15 @@ def _var_from_hvg_frame(adata: ad.AnnData, df: pd.DataFrame) -> None:
     adata.var["highly_variable"] = adata.var["highly_variable"].astype(bool)
 
 
+def _wide_ints(counts):
+    """Dense counts of a small integer type as int64. scanpy squares a dense matrix in
+    its own dtype for the gene variances, so an int32 count over 46,340 overflowed
+    into a negative variance and wrong Seurat v3 variable genes."""
+    if isinstance(counts, np.ndarray) and counts.dtype.kind in "iu" and counts.dtype.itemsize < 8:
+        return counts.astype(np.int64)
+    return counts
+
+
 def _seurat_v3_hvg(adata: ad.AnnData, params: PipelineParams, batch_key: str | None) -> dict[str, Any]:
     """Variable genes ranked by the standardised variance of the counts (Seurat v3)."""
     _keep_raw_counts(adata)
@@ -564,7 +573,7 @@ def _seurat_v3_hvg(adata: ad.AnnData, params: PipelineParams, batch_key: str | N
             "The Seurat v3 flavour ranks raw counts (layers['counts'], .raw or X), and this "
             "dataset has none: choose the Seurat or Cell Ranger flavour."
         ) from None
-    tmp = ad.AnnData(X=counts, obs=adata.obs[[batch_key]] if batch_key else None)
+    tmp = ad.AnnData(X=_wide_ints(counts), obs=adata.obs[[batch_key]] if batch_key else None)
     tmp.var_names = adata.var_names
     df = sc.pp.highly_variable_genes(
         tmp, flavor="seurat_v3", n_top_genes=min(params.n_top_genes, adata.n_vars),
