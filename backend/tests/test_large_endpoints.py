@@ -163,3 +163,11 @@ async def test_availability_checks_say_why_not(client, both):
     assert "not available for large datasets yet" in progs["runnable"]["reason"]
     hvg = (await client.get(f"{API}/{LARGE}/clustering/hvg-sensitivity")).json()
     assert "not available for large datasets yet" in json.dumps(hvg)
+
+
+async def test_assessment_sees_a_normalised_dataset(client, both):
+    # X on disk has a dtype but is no array; the counts are in their own file
+    a = (await client.get(f"{API}/{LARGE}/assessment")).json()
+    assert a["normalization"]["done"] is True and a["log_transform"]["done"] is True
+    insight = (await client.get(f"{API}/{LARGE}/assistant/insight")).json()
+    assert "raw counts" not in json.dumps(insight)

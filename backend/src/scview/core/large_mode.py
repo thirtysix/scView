@@ -229,17 +229,24 @@ class OnDiskMatrix(_CSRDataset):
         if isinstance(col, Iterable) and np.ndim(col) > 1:
             col = np.asarray(col).ravel()
         n_cells, n_genes = self.shape
-        if not _all_of(col, n_genes):
-            return self._columns(row, col, n_cells, n_genes)
+        every_gene = _all_of(col, n_genes)
         with self._guard.lock:
             self._fresh()
             values = self._row_values(row)
-            if values * 8 > MAX_READ_BYTES:
-                raise LargeDatasetError(
-                    f"Reading this many cells of {self._guard.label} at once",
-                    f"about {values * 8 / 2**30:.1f} GB would be read into memory "
-                    f"(at most {MAX_READ_BYTES / 2**30:.2g} GB per read)")
-            return super().__getitem__(index)
+            fits = values * 8 <= MAX_READ_BYTES
+            if every_gene or (fits and not _all_of(row, n_cells)):
+                if not fits:
+                    raise LargeDatasetError(
+                        f"Reading this many cells of {self._guard.label} at once",
+                        f"about {values * 8 / 2**30:.1f} GB would be read into memory "
+                        f"(at most {MAX_READ_BYTES / 2**30:.2g} GB per read)")
+                if every_gene:
+                    return super().__getitem__(index)
+                # A sample of cells (an assessment's first rows): read them, cut the
+                # genes in memory.
+                block = super().__getitem__((row, slice(None)))
+                return block[:, col]
+        return self._columns(row, col, n_cells, n_genes)
 
     def _columns(self, row: Any, col: Any, n_cells: int, n_genes: int):
         """Some genes (of some cells): from the gene store, never by reading every row

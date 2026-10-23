@@ -87,14 +87,19 @@ def _group_sums(X, codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.nda
     n_cells, n_genes = X.shape
     sums = np.zeros((n_groups, n_genes))
     detected = np.zeros((n_groups, n_genes))
-    rows = _CHUNK if sp.issparse(X) else min(_CHUNK, max(1, _DENSE_ELEMENTS // max(n_genes, 1)))
-    for start in range(0, n_cells, rows):
-        stop = min(start + rows, n_cells)
+    if hasattr(X, "row_blocks"):  # a large dataset's X on disk: blocks of a bounded size
+        blocks = X.row_blocks()
+    else:
+        rows = _CHUNK if sp.issparse(X) else min(_CHUNK, max(1, _DENSE_ELEMENTS // max(n_genes, 1)))
+        blocks = ((start, None) for start in range(0, n_cells, rows))
+    for start, block in blocks:
+        stop = min(start + (block.shape[0] if block is not None else rows), n_cells)
         c = codes[start:stop]
         keep = np.flatnonzero(c >= 0)
         if keep.size == 0:
             continue
-        block = X[start:stop]
+        if block is None:
+            block = X[start:stop]
         if hasattr(block, "to_memory"):  # a backed sparse dataset's slice
             block = block.to_memory()
         if keep.size < len(c):

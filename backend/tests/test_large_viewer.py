@@ -104,11 +104,15 @@ def test_a_few_genes_of_x_come_from_the_store(large, twin, monkeypatch):
     calls = []
     real = type(store).genes
     monkeypatch.setattr(type(store), "genes", lambda self, *a, **k: calls.append(a) or real(self, *a, **k))
-    rows = np.array([5, 7, 300])
-    for got, want in [(X[:, [7, 2]], T[:, [7, 2]]), (X[:, 3], T[:, 3]), (X[rows, 10:14], T[rows, 10:14]),
+    for got, want in [(X[:, [7, 2]], T[:, [7, 2]]), (X[:, 3], T[:, 3]),
                       (large.adata[:, ["G5", "G9"]].X, twin.adata[:, ["G5", "G9"]].X)]:
         assert np.array_equal(got.toarray(), want.toarray())
-    assert len(calls) == 4
+    assert len(calls) == 3
+    # a sample of cells is read by rows, its genes cut in memory (an assessment's sample)
+    rows = np.array([5, 7, 300])
+    assert np.array_equal(X[rows, 10:14].toarray(), T[rows, 10:14].toarray())
+    assert np.array_equal(X[:200, :250].toarray(), T[:200, :250].toarray())
+    assert len(calls) == 3
 
 
 def test_too_many_rows_at_once_are_refused(large, monkeypatch):
