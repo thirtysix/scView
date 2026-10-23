@@ -8,6 +8,7 @@ then saves the result to disk.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -155,6 +156,25 @@ class PipelineParams:
     annotation_tissue: str = ""                  # optional tissue hint for method="llm"
     annotation_marker_sets: str = "databases"    # marker_score: databases (core/marker_db.py) | builtin (14 immune sets)
 
+    # Large-dataset mode (core/large_run.py): "auto" runs the steps with the matrices on
+    # disk, in row blocks, when the run would not fit the memory budget in memory; "on"
+    # always, "off" never.
+    chunked: str = "auto"
+
+
+CHUNKED_MODES: tuple[str, ...] = ("auto", "on", "off")
+
+
+def check_chunked(value: Any) -> str:
+    """``PipelineParams.chunked`` as one of ``CHUNKED_MODES`` (true/false as on/off); a
+    ValueError naming the choices for anything else."""
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    mode = str(value if value is not None else "auto").strip().lower()
+    if mode not in CHUNKED_MODES:
+        raise ValueError(f"Unknown chunked mode '{value}'; choose from {', '.join(CHUNKED_MODES)}.")
+    return mode
+
 
 @dataclass
 class PipelineResult:
@@ -176,6 +196,10 @@ class PipelineResult:
     unknown_steps: list[str] = field(default_factory=list)
     # What the run used (RunWatchdog.summary + write_s), when it was watched.
     resources: dict[str, Any] | None = None
+    # Ran in large-dataset mode (core/large_run.py), and how the mode was chosen
+    # (``ModeChoice.to_dict``: chunked, requested, reason, need / free bytes).
+    chunked: bool = False
+    mode: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -186,6 +210,53 @@ class StepSkipped(Exception):
 
     Not an error: the run goes on, nothing is recorded in provenance, and the
     reason is returned in ``PipelineResult.notes``."""
+
+
+# The large-dataset run's stand-ins for the steps below that read the matrix
+# (core/large_run.py ``LargeBackend``): marker tests from the gene store, gene scores and
+# CellTypist by row blocks, so those steps run unchanged on a copy of the dataset without
+# X. None: in memory.
+_LARGE: contextvars.ContextVar[Any] = contextvars.ContextVar("scview_large_backend",
+                                                             default=None)
+
+
+@contextlib.contextmanager
+def large_backend(backend: Any):
+    """Run steps in this thread with ``backend`` reading the matrices (see ``_LARGE``)."""
+    token = _LARGE.set(backend)
+    try:
+        yield backend
+    finally:
+        _LARGE.reset(token)
+
+
+def _wilcoxon(adata: ad.AnnData, groupby: str, key_added: str | None = None) -> None:
+    """Wilcoxon markers with pts, as ``sc.tl.rank_genes_groups`` writes them (into
+    ``uns[key_added or "rank_genes_groups"]``); in a large-dataset run from its gene store,
+    with the specificity frame already in (``sparse_markers``)."""
+    backend = _LARGE.get()
+    if backend is not None:
+        backend.rank_genes_groups(adata, groupby, key_added=key_added)
+    else:
+        sc.tl.rank_genes_groups(adata, groupby=groupby, method="wilcoxon", pts=True,
+                                key_added=key_added)
+
+
+def _attach_specificity(adata: ad.AnnData, rgg: Any, col: str) -> None:
+    if not marker_specificity.has_specificity(rgg):  # markers from a gene store have it
+        marker_specificity.attach(adata, rgg, col)
+
+
+def _score_genes(adata: ad.AnnData, genes, *, score_name: str, use_raw=None,
+                 ctrl_size: int = 50, random_state: int = 0) -> None:
+    """``sc.tl.score_genes``; in a large-dataset run the same scores by row blocks."""
+    backend = _LARGE.get()
+    if backend is not None:
+        backend.score_genes(adata, genes, score_name=score_name, ctrl_size=ctrl_size,
+                            random_state=random_state)
+    else:
+        sc.tl.score_genes(adata, genes, score_name=score_name, use_raw=use_raw,
+                          ctrl_size=ctrl_size, random_state=random_state)
 
 
 # Ordered list of all steps
@@ -227,8 +298,15 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
     else:
         logger.warning("No counts layer or raw found; proceeding with current X")
         return adata
+    clear_processing(adata)
+    logger.info("Reset to counts (%d cells, %d genes)", adata.n_obs, adata.n_vars)
+    return adata
 
-    # Clear preprocessing artifacts
+
+def clear_processing(adata: ad.AnnData) -> None:
+    """What resetting to counts clears besides X: .raw, the variable-gene columns,
+    embeddings, graphs, the results in uns and scView's obs columns (the large-dataset
+    run clears the same on its matrix-free copy, core/large_run.py)."""
     adata.raw = None
 
     # Remove HVG annotation from var (both flavours' columns)
@@ -262,9 +340,6 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
     scview_cols = [c for c in adata.obs.columns if c.startswith("scview_") and c != "scview_mito_type"]
     if scview_cols:
         adata.obs.drop(columns=scview_cols, inplace=True, errors="ignore")
-
-    logger.info("Reset to counts (%d cells, %d genes)", adata.n_obs, adata.n_vars)
-    return adata
 
 
 def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -366,6 +441,22 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     with ``qc_mito_type_floor`` never stricter than the global rule.
     """
     n_before = adata.n_obs
+    t, keep, record, found = filter_judgement(adata, params)
+    if not keep.all():
+        adata = subset_lean(adata, obs=keep)
+    adata.uns[qc_filter.RECORD_KEY] = record
+    # Whose doublets were dropped; V(D)J clone sizes recomputed on the cells kept.
+    found.update(qc_filter.after_filter(adata, t, int((~keep).sum())))
+    adata = _filter_genes_lean(adata, params.min_cells)
+    logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, adata.n_obs)
+    return adata, found
+
+
+def filter_judgement(adata: ad.AnnData, params: PipelineParams):
+    """The cells the filtering step keeps, from obs alone: (thresholds, keep mask, removal
+    record, what to record beside the params). ``_run_filtering`` and the large-dataset
+    run (core/large_run.py) then cut the matrices each its own way."""
+    n_before = adata.n_obs
     t = qc_filter.Thresholds.from_params(params)
     samples = qc_filter.samples_of(adata, params.qc_sample_column or None)
     cells = per_cell_qc(adata)
@@ -388,14 +479,7 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
         else:
             found.update(qc_mito_type_column=params.qc_mito_type_column,
                          qc_mito_note="% mito can't be measured (no MT- genes): no per-type bounds.")
-    if not keep.all():
-        adata = subset_lean(adata, obs=keep)
-    adata.uns[qc_filter.RECORD_KEY] = record
-    # Whose doublets were dropped; V(D)J clone sizes recomputed on the cells kept.
-    found.update(qc_filter.after_filter(adata, t, int((~keep).sum())))
-    adata = _filter_genes_lean(adata, params.min_cells)
-    logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, adata.n_obs)
-    return adata, found
+    return t, keep, record, found
 
 
 def _plain_matrix(M) -> bool:
@@ -866,10 +950,10 @@ def _run_marker_genes(adata: ad.AnnData, params: PipelineParams, cb: SubstepCall
         # columns (e.g. predicted_doublet) so they don't raise a .cat accessor error.
         if adata.obs[col].dtype.name != "category":
             adata.obs[col] = adata.obs[col].astype(str).astype("category")
-        sc.tl.rank_genes_groups(adata, groupby=col, method="wilcoxon", pts=True)
+        _wilcoxon(adata, col)
         # Store under namespaced key
         adata.uns[markers_key(col)] = adata.uns["rank_genes_groups"].copy()
-        marker_specificity.attach(adata, adata.uns[markers_key(col)], col)
+        _attach_specificity(adata, adata.uns[markers_key(col)], col)
         drop_enrichment_cache(adata, col)
         computed += 1
 
@@ -1095,9 +1179,13 @@ def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]
                 "Need at least 5 of each."
             )
 
-        sc.tl.score_genes_cell_cycle(
-            adata, s_genes=s_present, g2m_genes=g2m_present, use_raw=use_raw
-        )
+        backend = _LARGE.get()
+        if backend is not None:
+            backend.score_genes_cell_cycle(adata, s_genes=s_present, g2m_genes=g2m_present)
+        else:
+            sc.tl.score_genes_cell_cycle(
+                adata, s_genes=s_present, g2m_genes=g2m_present, use_raw=use_raw
+            )
         logger.info("Cell cycle scored (%s; %d S genes, %d G2M genes)",
                     species, len(s_present), len(g2m_present))
     except Exception as e:
@@ -1121,7 +1209,7 @@ def _run_dissociation_stress(adata: ad.AnnData, params: PipelineParams) -> dict[
             "was written."
         )
     n_pool = len(names) - len(genes)
-    sc.tl.score_genes(
+    _score_genes(
         adata, genes, score_name=stress.SCORE_COLUMN, use_raw=use_raw,
         ctrl_size=max(1, min(50, n_pool)), random_state=0,
     )
@@ -1172,17 +1260,23 @@ def _annotate_celltypist(
     # CellTypist expects log1p of counts-per-10k. Build that from raw counts so the
     # result is correct regardless of the current X state (scaled/HVG-subset/etc.).
     # layers['counts'] first: after scaling, .raw holds log-normalised values.
-    if "counts" in adata.layers:
-        counts, var_names = adata.layers["counts"], list(adata.var_names)
-    elif adata.raw is not None:
-        counts, var_names = adata.raw.X, list(adata.raw.var_names)
+    backend = _LARGE.get()
+    inp = None
+    if backend is not None:  # the counts' genes; the input is built a block of cells at a time
+        input_genes = pd.Index(adata.var_names)
     else:
-        counts, var_names = adata.X, list(adata.var_names)
-    inp = ad.AnnData(X=counts.copy() if hasattr(counts, "copy") else counts)
-    inp.obs_names = adata.obs_names
-    inp.var_names = var_names
-    sc.pp.normalize_total(inp, target_sum=1e4)
-    sc.pp.log1p(inp)
+        if "counts" in adata.layers:
+            counts, var_names = adata.layers["counts"], list(adata.var_names)
+        elif adata.raw is not None:
+            counts, var_names = adata.raw.X, list(adata.raw.var_names)
+        else:
+            counts, var_names = adata.X, list(adata.var_names)
+        inp = ad.AnnData(X=counts.copy() if hasattr(counts, "copy") else counts)
+        inp.obs_names = adata.obs_names
+        inp.var_names = var_names
+        sc.pp.normalize_total(inp, target_sum=1e4)
+        sc.pp.log1p(inp)
+        input_genes = inp.var_names
 
     # How well the model suits the data (core/celltypist_fit.py): its species
     # against the dataset's, and the share of its genes the dataset has.
@@ -1197,7 +1291,7 @@ def _annotate_celltypist(
         model = models.Model.load(model=model_name)
         details = str((getattr(model, "description", None) or {}).get("details", ""))
         run["model_species"] = celltypist_fit.model_species(model_name, details)
-        run.update(celltypist_fit.gene_overlap(model.features, inp.var_names))
+        run.update(celltypist_fit.gene_overlap(model.features, input_genes))
     except Exception as e:  # no local copy: CellTypist's own load below says why
         logger.warning("CellTypist model %s not loaded for the overlap check: %s", model_name, e)
     if run.get("n_shared_genes") == 0:
@@ -1206,12 +1300,14 @@ def _annotate_celltypist(
             f"None of the {run['n_model_genes']:,} genes of {model_name} are in this dataset. "
             + (warning or "CellTypist needs gene symbols matching the model's (not Ensembl ids).")
         )
-    annotate_kwargs: dict[str, Any] = {"model": model, "majority_voting": True}
-    if groupby:
-        inp.obs[groupby] = adata.obs[groupby].values  # consensus over the user's clusters
-        annotate_kwargs["over_clustering"] = groupby
-
-    pred = celltypist.annotate(inp, **annotate_kwargs)
+    if backend is not None:  # per block of cells, then the vote over the clustering
+        pred = backend.celltypist(adata, model, groupby)
+    else:
+        annotate_kwargs: dict[str, Any] = {"model": model, "majority_voting": True}
+        if groupby:
+            inp.obs[groupby] = adata.obs[groupby].values  # consensus over the user's clusters
+            annotate_kwargs["over_clustering"] = groupby
+        pred = celltypist.annotate(inp, **annotate_kwargs)
     labels = pred.predicted_labels
     col = "majority_voting" if "majority_voting" in labels.columns else "predicted_labels"
     adata.obs[target] = labels[col].astype(str).astype("category").values
@@ -1254,9 +1350,7 @@ def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 25) -> dict
     if resolve_markers_key(adata.uns, groupby) is None:
         if adata.obs[groupby].dtype.name != "category":
             adata.obs[groupby] = adata.obs[groupby].astype(str).astype("category")
-        sc.tl.rank_genes_groups(
-            adata, groupby=groupby, method="wilcoxon", pts=True, key_added=markers_key(groupby)
-        )
+        _wilcoxon(adata, groupby, key_added=markers_key(groupby))
     return group_markers(adata, groupby, n=n)
 
 
@@ -1432,7 +1526,18 @@ def _annotate_marker_score(
     builtin = (params.annotation_marker_sets or "databases").lower() == "builtin"
     db = None if builtin else _marker_db_or_none()
     if db is not None:
-        mapping, info = marker_db.annotate(adata, groupby, db=db)
+        # In a large-dataset run the database check reads stored markers only (it would
+        # rank the matrix otherwise): the clustering's, for the check alone.
+        key = markers_key(groupby)
+        temporary = (_LARGE.get() is not None and key not in adata.uns
+                     and adata.obs[groupby].dtype.name == "category")
+        if temporary:
+            _wilcoxon(adata, groupby, key_added=key)
+        try:
+            mapping, info = marker_db.annotate(adata, groupby, db=db)
+        finally:
+            if temporary:
+                adata.uns.pop(key, None)
     else:
         mapping = _marker_set_mapping(adata, groupby)
         info = {"marker_source": "built-in", "n_types": len(_MARKER_SETS),
@@ -1456,7 +1561,7 @@ def _marker_set_mapping(adata: ad.AnnData, groupby: str) -> dict[str, str]:
             if len(present) < 2:
                 continue
             key = f"_ms__{ct}"
-            sc.tl.score_genes(adata, present, score_name=key, ctrl_size=min(50, adata.n_vars - 1))
+            _score_genes(adata, present, score_name=key, ctrl_size=min(50, adata.n_vars - 1))
             score_cols[ct] = key
         if not score_cols:
             raise ValueError("None of the marker-set genes are present in this dataset.")
@@ -1535,10 +1640,8 @@ def _markers_for_column(adata: ad.AnnData, col: str) -> None:
     try:
         if adata.obs[col].dtype.name != "category":
             adata.obs[col] = adata.obs[col].astype(str).astype("category")
-        sc.tl.rank_genes_groups(
-            adata, groupby=col, method="wilcoxon", pts=True, key_added=markers_key(col)
-        )
-        marker_specificity.attach(adata, adata.uns[markers_key(col)], col)
+        _wilcoxon(adata, col, key_added=markers_key(col))
+        _attach_specificity(adata, adata.uns[markers_key(col)], col)
         drop_enrichment_cache(adata, col)
     except Exception as exc:
         logger.warning("Markers for '%s' failed: %s", col, exc)
