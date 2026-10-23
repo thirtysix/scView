@@ -15,6 +15,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from scview.config import Settings
 from scview.core.dataset_manager import DatasetManager
 from scview.core.ingestion.paths import UploadPathError, flat_name, junk_reason, safe_relative_path
 from scview.core.ingestion.session import (
@@ -23,7 +24,7 @@ from scview.core.ingestion.session import (
     IngestSessionManager,
     StagingConflict,
 )
-from scview.dependencies import get_dataset_manager, get_ingest_session_manager
+from scview.dependencies import get_dataset_manager, get_ingest_session_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ async def add_files(
     files: list[UploadFile] = File(...),
     paths: list[str] | None = Form(None),
     mgr: IngestSessionManager = Depends(get_ingest_session_manager),
+    settings: Settings = Depends(get_settings_dep),
 ):
     """Stage files. ``paths`` (one per file, in order): each file's path inside an
     uploaded folder (the browser's ``webkitRelativePath``), kept so same-named files
@@ -72,10 +74,13 @@ async def add_files(
                 skipped.append({"path": rel, "reason": reason, "bytes": await _drain(f)})
                 continue
             partial = mgr.partial_path(sid)
-            items.append((rel, partial, await _write(f, partial)))
+            items.append((rel, partial, await _write(f, partial, settings.max_upload_bytes)))
         await asyncio.to_thread(mgr.stage, sid, items)
     except StagingConflict as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except _TooLarge as e:
+        raise HTTPException(status_code=413, detail=(
+            f"{e} exceeds the maximum upload size of {settings.MAX_UPLOAD_SIZE_MB} MB.")) from e
     finally:
         for _, partial, _ in items:  # whatever stage did not move
             partial.unlink(missing_ok=True)
@@ -83,12 +88,21 @@ async def add_files(
     return await asyncio.to_thread(mgr.get_state, sid)
 
 
-async def _write(f: UploadFile, dest: Path) -> str:
-    """Stream an upload to ``dest``; its sha256. Nothing is left behind on failure."""
+class _TooLarge(Exception):
+    """An uploaded file over the public-mode cap (``Settings.max_upload_bytes``)."""
+
+
+async def _write(f: UploadFile, dest: Path, max_bytes: int | None = None) -> str:
+    """Stream an upload to ``dest``; its sha256. Nothing is left behind on failure; a
+    file over ``max_bytes`` raises _TooLarge."""
     digest = hashlib.sha256()
+    total = 0
     try:
         with open(dest, "wb") as fh:
             while chunk := await f.read(1024 * 1024):
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise _TooLarge(f.filename or "A file")
                 digest.update(chunk)
                 fh.write(chunk)
     except BaseException:
@@ -120,7 +134,9 @@ async def get_merge_plan(
     sid: str, mgr: IngestSessionManager = Depends(get_ingest_session_manager)
 ):
     _require(mgr, sid)
-    plan = mgr.merge_plan(sid)
+    # Reads the samples' cell and gene tables (or, for formats not read in blocks, the
+    # samples): off the event loop.
+    plan = await asyncio.to_thread(mgr.merge_plan, sid)
     if plan is None:
         return {"is_merge": False}
     return plan.model_dump(mode="json")

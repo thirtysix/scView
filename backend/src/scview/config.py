@@ -4,11 +4,14 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings
 
+NO_UPLOAD_CAP = 1 << 62  # bytes: no upload is refused for its size
+
 
 class Settings(BaseSettings):
     """Settings are populated from environment variables or a .env file."""
 
     DATA_DIR: str = "/data"
+    # Per uploaded file, in public mode only (``max_upload_bytes``).
     MAX_UPLOAD_SIZE_MB: int = 2048
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
     CONVERTER_URL: str = "http://converter:8001"
@@ -96,7 +99,9 @@ class Settings(BaseSettings):
 
     @property
     def max_upload_bytes(self) -> int:
-        return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        """The upload cap: MAX_UPLOAD_SIZE_MB in public mode. Private mode (one user, their
+        own machine and disk) has none: the 10x 1.3M-cell brain is one 4.2 GB file."""
+        return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024 if self.is_public else NO_UPLOAD_CAP
 
     model_config = {
         "env_file": ".env",
