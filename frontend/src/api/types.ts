@@ -29,6 +29,21 @@ export interface DatasetInfo {
   conversion?: ConversionReport | null;
   /** The converter's latest stage, while status is "converting" */
   conversion_progress?: ConversionProgress | null;
+  /** A large dataset (backend core/large_mode.py): its matrices stay on disk; null otherwise */
+  large?: LargeDatasetInfo | null;
+}
+
+/** How a large dataset's on-disk files are (backend AnnDataAdaptor.large_info). */
+export interface LargeDatasetInfo {
+  matrices_on_disk: boolean;
+  /** "ready" | "rebuilding" (in the background) | "missing" (gene views are slow meanwhile) */
+  gene_store: "ready" | "rebuilding" | "missing";
+  gene_store_note?: string | null;
+  /** 0..1 while rebuilding */
+  gene_store_progress?: number | null;
+  /** Whether the counts sidecar can be used */
+  counts: boolean;
+  counts_note?: string | null;
 }
 
 /** The R converter's report (backend core/conversion.py; also uns scview_conversion). */

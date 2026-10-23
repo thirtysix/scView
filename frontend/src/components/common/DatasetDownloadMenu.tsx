@@ -43,7 +43,7 @@ export function DatasetDownloadMenu({ datasetId, compact = false, className }: D
   }, [datasetId]);
 
   const h5adHint = info
-    ? `${info.source_label.charAt(0).toUpperCase()}${info.source_label.slice(1)} · ${formatBytes(info.size_bytes)}`
+    ? `${info.source_label.charAt(0).toUpperCase()}${info.source_label.slice(1)} · ${info.large ? "about " : ""}${formatBytes(info.size_bytes)}`
     : infoError
       ? "No .h5ad file available yet"
       : "Checking size…";

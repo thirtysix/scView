@@ -9,6 +9,7 @@ import { InfoTip } from "@/components/common/InfoTip";
 import { floorText } from "@/components/qc/MitoModeControl";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { RequestError } from "@/components/common/RequestError";
 
 const STEP_LABELS: Record<string, string> = {
   qc_metrics: "QC metrics",
@@ -334,11 +335,7 @@ export function MitoRefilter({
       )}
       {outcome && <RunOutcome result={outcome} label={stepLabel} />}
       {done && <p className="text-[11px] text-emerald-700">{done}</p>}
-      {error && (
-        <p role="alert" className="rounded bg-red-50 px-2 py-1 text-[11px] text-red-700">
-          {error}
-        </p>
-      )}
+      <RequestError message={error} />
     </div>
   );
 }
