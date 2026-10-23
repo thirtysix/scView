@@ -17,7 +17,11 @@ mid-step, and until it stops it may still be writing the derived file.
 
 Steps need the dataset in memory: one the adaptor opened backed (a file over
 ``SCVIEW_BACKED_MIN_MB``) is read in first, within the memory budget
-(``core/working_copy.py``), in the worker thread.
+(``core/working_copy.py``), in the worker thread. Unless the run goes to large-dataset
+mode (``core/large_run.py``): with a plan, the mode is chosen first (``choose_mode``, on
+``PipelineParams.chunked``), and a run in that mode reads the file in blocks itself, so
+the cached copy is dropped instead and the work gets a fresh adaptor that has read
+nothing (``control.mode`` tells the run endpoints which way to run).
 
 A pipeline run passes its ``RunControl`` (``core/run_watchdog.py``): while the
 run works it is registered for ``cancel_run`` (``POST .../assessment/cancel``)
@@ -87,29 +91,61 @@ async def _claim(dm: DatasetManager, dataset_id: str) -> tuple[AnnDataAdaptor, C
 
 
 async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAdaptor,
-                         control: RunControl | None) -> None:
-    """Before a run: room to read a backed dataset into memory (``working_copy``, a 507
-    when that cannot fit) and, with a plan, close other open datasets whose memory its
-    estimated peak needs (the pre-step check, in the worker thread, can only stop the
-    run)."""
-    need = 0
+                         control: RunControl | None) -> AnnDataAdaptor:
+    """Before a run: with a plan, the mode (``large_run.choose_mode``, set as
+    ``control.mode``). In memory: room to read a backed dataset into memory
+    (``working_copy``, a 507 when that cannot fit) and close other open datasets whose
+    memory its estimated peak needs (the pre-step check, in the worker thread, can only
+    stop the run). In large-dataset mode: the cached copy dropped, room for that mode's
+    peak, and a fresh adaptor of the same file (it reads nothing until asked). Returns
+    the adaptor the work gets."""
+    need = None
     if control is not None and control.plan is not None:
-        from scview.core import preflight
+        from scview.core import large_run, preflight
 
         steps, params = control.plan
         try:
-            need = await asyncio.to_thread(preflight.run_need, adaptor.adata, steps, params)
+            control.mode = await asyncio.to_thread(large_run.choose_mode, dm, dataset_id, adaptor,
+                                                   steps, params)
+        except ValueError:  # a chunked value that is not a mode: the endpoints check it first
+            raise
         except Exception as e:  # never block a run on the estimate itself
-            logger.warning("No run estimate for %s: %s", dataset_id, e)
-    await working_copy.make_room(dm, dataset_id, adaptor, then=need)
+            logger.warning("No mode estimate for %s (in memory): %s", dataset_id, e)
+            control.mode = large_run.ModeChoice(False, "auto", f"No estimate ({e}): in memory.")
+        logger.info("Run on %s: %s", dataset_id, control.mode.reason)
+        if control.mode.chunked:
+            path = adaptor.h5ad_path
+            dm.evict(dataset_id)  # the run reads the file itself; nothing may serve a stale copy
+            try:
+                peak = await asyncio.to_thread(large_run.run_need, path, steps, params)
+            except Exception as e:  # never block a run on the estimate itself
+                logger.warning("No large-run estimate for %s: %s", dataset_id, e)
+                peak = 0
+            await dm.free_memory_for(peak, keep=dataset_id)
+            return AnnDataAdaptor(path)
+        need = control.mode.run_bytes
+        if need is None:
+            try:
+                need = await asyncio.to_thread(preflight.run_need, adaptor.adata, steps, params)
+            except Exception as e:  # never block a run on the estimate itself
+                logger.warning("No run estimate for %s: %s", dataset_id, e)
+    await working_copy.make_room(dm, dataset_id, adaptor, then=need or 0)
+    return adaptor
 
 
-def _in_memory(work: Callable[[AnnDataAdaptor], T]) -> Callable[[AnnDataAdaptor], T]:
+def _chunked(control: RunControl | None) -> bool:
+    return bool(getattr(getattr(control, "mode", None), "chunked", False))
+
+
+def _in_memory(work: Callable[[AnnDataAdaptor], T],
+               control: RunControl | None = None) -> Callable[[AnnDataAdaptor], T]:
     """``work``, called with the dataset in memory (``working_copy.in_memory``: a backed
-    one is read in first, in the worker thread): steps need every value at hand."""
+    one is read in first, in the worker thread): steps need every value at hand. Not for
+    a run in large-dataset mode, which reads the file in blocks itself."""
 
     def run(adaptor: AnnDataAdaptor) -> T:
-        working_copy.in_memory(adaptor)
+        if not _chunked(control):
+            working_copy.in_memory(adaptor)
         return work(adaptor)
 
     return run
@@ -164,7 +200,9 @@ async def run_exclusive(
     with it, registered for cancel and watched (no events: nothing streams)."""
     adaptor, claimed = await _claim(dm, dataset_id)
     try:
-        await _make_run_room(dm, dataset_id, adaptor, control)
+        adaptor = await _make_run_room(dm, dataset_id, adaptor, control)
+        if _chunked(control):
+            await asyncio.to_thread(_give_back_memory)  # the copy dropped for the run
         unwatch = _watch(dataset_id, control)
     except BaseException:
         claimed()
@@ -175,7 +213,7 @@ async def run_exclusive(
         claimed()
 
     try:
-        task = asyncio.ensure_future(asyncio.to_thread(_in_memory(work), adaptor))
+        task = asyncio.ensure_future(asyncio.to_thread(_in_memory(work, control), adaptor))
     except BaseException:
         release()
         raise
@@ -217,7 +255,9 @@ async def iterate_exclusive(
             pass
 
     try:
-        await _make_run_room(dm, dataset_id, adaptor, control)
+        adaptor = await _make_run_room(dm, dataset_id, adaptor, control)
+        if _chunked(control):
+            await asyncio.to_thread(_give_back_memory)  # the copy dropped for the run
         unwatch = _watch(dataset_id, control, lambda event: post("item", ("watchdog", event)))
     except BaseException:
         claimed()
@@ -229,7 +269,7 @@ async def iterate_exclusive(
 
     def drive() -> None:
         try:
-            gen = _in_memory(make_events)(adaptor)
+            gen = _in_memory(make_events, control)(adaptor)
             try:
                 for item in gen:
                     post("item", item)

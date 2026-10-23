@@ -167,7 +167,10 @@ async def test_a_copy_that_cannot_fit_is_refused_with_507_and_frees_the_dataset(
     monkeypatch.setattr(memory_budget, "release_memory", lambda: None)
     monkeypatch.setattr("scview.core.dataset_manager.REFUSAL_WAIT_SECONDS", 0)
     monkeypatch.setattr(preflight, "backed_bytes", lambda h: 100 * GB)
-    r = await client.post(f"{API}/datasets/{did}/assessment/run", json={"steps": STEPS, "params": PARAMS})
+    # In memory by choice: by default ("auto") such a run goes to large-dataset mode
+    # (tests/test_large_run.py).
+    off = {**PARAMS, "chunked": "off"}
+    r = await client.post(f"{API}/datasets/{did}/assessment/run", json={"steps": STEPS, "params": off})
     assert r.status_code == 507, r.text
     assert "Reading this dataset into memory needs about 100.0 GB" in r.json()["detail"]
     # Nothing ran, and the dataset is neither locked nor busy: the next run works.

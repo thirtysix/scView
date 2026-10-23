@@ -22,7 +22,8 @@ from scview.core import (
 )
 from scview.core import qc_states, working_copy
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
-from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
+from scview.core import large_run
+from scview.core.pipeline import PipelineParams, check_chunked
 from scview.core.processing import cancel_run, iterate_exclusive, run_exclusive
 from scview.core.run_watchdog import RunControl
 from scview.core.step_names import unknown_steps, unknown_steps_message
@@ -406,6 +407,20 @@ def _check_steps(steps: list[str]) -> None:
         raise HTTPException(status_code=422, detail=unknown_steps_message(unknown))
 
 
+def _run_params(raw: dict[str, Any] | None) -> PipelineParams:
+    """PipelineParams from a request body; 422 for a large-dataset mode that is not one
+    (before loading: a wrong value costs nothing)."""
+    params = PipelineParams()
+    for key, value in (raw or {}).items():
+        if hasattr(params, key):
+            setattr(params, key, value)
+    try:
+        params.chunked = check_chunked(params.chunked)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return params
+
+
 
 @router.post("/datasets/{dataset_id}/assessment/run")
 async def run_assessment_pipeline(
@@ -415,16 +430,10 @@ async def run_assessment_pipeline(
 ):
     """Run specified preprocessing steps on the dataset and save the result."""
     _check_steps(body.steps)  # before loading: a wrong name costs nothing
+    params = _run_params(body.params)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-
-    # Build PipelineParams from the request body
-    params = PipelineParams()
-    if body.params:
-        for key, value in body.params.items():
-            if hasattr(params, key):
-                setattr(params, key, value)
     control = RunControl(plan=(body.steps, params))
     # Drop this request's hold on the cached copy before the run: run_exclusive
     # reloads the dataset from disk afterwards, and a reference kept here would
@@ -434,15 +443,10 @@ async def run_assessment_pipeline(
 
     def _run(adaptor):
         # Write processing output to the derived layer, never the original
-        # upload or conversion — those stay immutable.
+        # upload or conversion — those stay immutable. In memory or in large-dataset
+        # mode, as core/processing.py chose (control.mode).
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        return run_pipeline(
-            adata=adaptor.adata,
-            steps=body.steps,
-            params=params,
-            output_path=output_path,
-            control=control,
-        )[1]
+        return large_run.run_for(adaptor, body.steps, params, output_path, control)
 
     try:
         # In a worker thread with the dataset to itself; the cached copy is
@@ -470,27 +474,20 @@ async def run_assessment_pipeline_stream(
 ):
     """Run preprocessing steps with Server-Sent Events progress streaming."""
     _check_steps(body.steps)  # before loading: a wrong name costs nothing
+    params = _run_params(body.params)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-
-    params = PipelineParams()
-    if body.params:
-        for key, value in body.params.items():
-            if hasattr(params, key):
-                setattr(params, key, value)
+    del adaptor  # as /assessment/run: no hold on the copy the run replaces
     control = RunControl(plan=(body.steps, params))
 
     def _events(adaptor):
         # Write processing output to the derived layer, never the original
-        # upload or conversion — those stay immutable.
-        return run_pipeline_streamed(
-            adata=adaptor.adata,
-            steps=body.steps,
-            params=params,
-            output_path=str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path)),
-            control=control,
-        )
+        # upload or conversion — those stay immutable. In memory or in large-dataset
+        # mode, as core/processing.py chose (control.mode).
+        return large_run.run_streamed_for(
+            adaptor, body.steps, params,
+            str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path)), control)
 
     async def event_generator():
         # Steps run in a worker thread with the dataset to itself. When the
@@ -611,21 +608,13 @@ async def rerun_step(
     if plan.requires_reprocess:
         raise HTTPException(status_code=409, detail=plan.message)
 
-    params = PipelineParams()
-    if body.params:
-        for key, value in body.params.items():
-            if hasattr(params, key):
-                setattr(params, key, value)
-
+    params = _run_params(body.params)
     control = RunControl(plan=(plan.rerun_steps, params))
     del adaptor  # as /assessment/run: no hold on the copy the run replaces
 
     def _run(adaptor):
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        return run_pipeline(
-            adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path,
-            control=control,
-        )[1]
+        return large_run.run_for(adaptor, plan.rerun_steps, params, output_path, control)
 
     try:
         # As /assessment/run: a worker thread, then serve what is on disk.
