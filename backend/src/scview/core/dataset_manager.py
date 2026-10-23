@@ -65,10 +65,11 @@ class DatasetMemoryError(Exception):
     """Opening a dataset would need more memory than scView has, even with every
     other dataset closed: refused, instead of the system stopping the backend."""
 
-    def __init__(self, dataset_id: str, need: int, available: int, limit: int) -> None:
+    def __init__(self, dataset_id: str, need: int, available: int, limit: int,
+                 what: str = "Opening this dataset") -> None:
         gb = 1024**3
         super().__init__(
-            f"Opening this dataset needs about {need / gb:.1f} GB at its peak; scView has "
+            f"{what} needs about {need / gb:.1f} GB at its peak; scView has "
             f"{available / gb:.1f} GB free of its {limit / gb:.1f} GB limit, even with the other "
             "datasets closed. Raise SCVIEW_MEMORY_GB in .env (then restart scView).")
         self.dataset_id = dataset_id
@@ -225,24 +226,35 @@ class DatasetManager:
         except Exception as e:  # never block opening on the estimate itself
             logger.warning("No load estimate for %s: %s", path, e)
             return
-        need = int(est.peak_bytes)
+        await self.reserve(dataset_id, int(est.peak_bytes))
+
+    async def reserve(self, dataset_id: str, need: int, extra: int = 0,
+                      what: str = "Opening this dataset") -> None:
+        """Make room for ``need`` bytes (and ``extra`` the work needs beyond them) with
+        ``free_memory_for``; ``DatasetMemoryError`` (a 507) when even the low end of
+        ``need``'s error band is more than what is free with every other dataset closed.
+        ``extra`` is room asked for, never a reason to refuse (a run's pre-step check
+        stops a step that cannot fit). Without a container limit nothing is checked."""
+        from scview.core import preflight
 
         def refused(free: int | None) -> bool:
             return free is not None and need * (1 - preflight.ERROR_BAND) > free
 
-        free = await self.free_memory_for(need, keep=dataset_id)
+        free = await self.free_memory_for(need + extra, keep=dataset_id)
         # A run that just ended may still hold its copy for a moment (the request that
         # follows a stopped ovary run got a 507): give it a few seconds to let go.
         for i in range(REFUSAL_WAIT_SECONDS):
             if not refused(free):
                 return
             if i == 0:
-                logger.info("Opening %s needs about %.1f GB; %.1f GB free: waiting up to %d s for memory",
-                            dataset_id, need / 1024**3, max(0, free or 0) / 1024**3, REFUSAL_WAIT_SECONDS)
+                logger.info("%s (%s) needs about %.1f GB; %.1f GB free: waiting up to %d s for memory",
+                            what, dataset_id, need / 1024**3, max(0, free or 0) / 1024**3,
+                            REFUSAL_WAIT_SECONDS)
             await asyncio.sleep(1)
-            free = await self.free_memory_for(need, keep=dataset_id)
+            free = await self.free_memory_for(need + extra, keep=dataset_id)
         if refused(free):
-            raise DatasetMemoryError(dataset_id, need, max(0, free), memory_budget.read_budget().limit_bytes)
+            raise DatasetMemoryError(dataset_id, need, max(0, free),
+                                     memory_budget.read_budget().limit_bytes, what)
 
     def get_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
         return self._datasets.get(dataset_id)

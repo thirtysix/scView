@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import threading
 from pathlib import Path
 
 import anndata as ad
@@ -22,6 +24,29 @@ CLUSTERING_CANDIDATES = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _backed_min_bytes() -> int:
+    """Files larger than this open backed (X read from disk when needed):
+    ``SCVIEW_BACKED_MIN_MB`` in .env, default 2048 (2 GiB)."""
+    raw = os.environ.get("SCVIEW_BACKED_MIN_MB", "").strip()
+    try:
+        mb = float(raw) if raw else 2048.0
+    except ValueError:
+        logger.warning("SCVIEW_BACKED_MIN_MB=%r is not a number; using 2048", raw)
+        mb = 2048.0
+    return int(mb * 1024**2)
+
+
+# The adaptor opens an h5ad larger than this in anndata's backed mode (preflight
+# reads the same number). Work that needs the matrix in memory reads it in first
+# (core/working_copy.py).
+BACKED_MIN_BYTES = _backed_min_bytes()
+
+
+def opens_backed(file_bytes: int) -> bool:
+    """Whether the adaptor opens an h5ad of ``file_bytes`` backed."""
+    return file_bytes > BACKED_MIN_BYTES
 
 
 def _dense_rows(block) -> np.ndarray:
@@ -191,6 +216,7 @@ class AnnDataAdaptor:
     def __init__(self, h5ad_path: str) -> None:
         self.h5ad_path = h5ad_path
         self._adata: ad.AnnData | None = None
+        self._memory_lock = threading.Lock()  # one read of a backed file into memory at a time
         self._qc_cache: dict | None = None
         self._qc_cells: dict | None = None
         self._fingerprint: tuple[pd.Index, str] | None = None  # (obs_names hashed, hash)
@@ -201,8 +227,8 @@ class AnnDataAdaptor:
         if self._adata is None:
             logger.info("Loading %s", self.h5ad_path)
             file_size = Path(self.h5ad_path).stat().st_size
-            # Use backed mode for very large files (>2GB)
-            if file_size > 2 * 1024**3:
+            # Backed mode for very large files (BACKED_MIN_BYTES, 2 GiB by default)
+            if opens_backed(file_size):
                 self._adata = ad.read_h5ad(self.h5ad_path, backed="r")
                 logger.info("Loaded in backed mode (%d bytes)", file_size)
             else:
@@ -215,6 +241,25 @@ class AnnDataAdaptor:
                 # assay, totalVI's obsm): normalised here, in memory.
                 protein.adopt_obsm(self._adata)
         return self._adata
+
+    @property
+    def isbacked(self) -> bool:
+        """Whether the dataset is open backed (its X read from disk when used)."""
+        return bool(getattr(self.adata, "isbacked", False))
+
+    def to_memory(self) -> ad.AnnData:
+        """The dataset in memory from now on: a backed one is read whole (anndata closes
+        its file) and this adaptor serves the in-memory copy, so the backed object and
+        its file handle are let go; one already in memory is returned as it is.
+        Callers make room first (``core/working_copy.py``)."""
+        with self._memory_lock:
+            adata = self.adata
+            if getattr(adata, "isbacked", False):
+                mem = adata.to_memory()  # the arrays already in memory are shared, not copied
+                protein.adopt_obsm(mem)  # as an in-memory open does
+                self._adata = mem
+                logger.info("Read %s into memory (%d x %d)", self.h5ad_path, mem.n_obs, mem.n_vars)
+            return self._adata
 
     # ------------------------------------------------------------------
     # Shape

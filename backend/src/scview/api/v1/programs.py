@@ -30,6 +30,7 @@ from scview.config import Settings
 from scview.core import gene_programs as gp
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core import working_copy
 from scview.core.run_watchdog import RunWatchdog
 from scview.core.sse import keepalive
 from scview.dependencies import get_dataset_manager, get_settings_dep
@@ -105,10 +106,10 @@ async def _save(dm: DatasetManager, dataset_id: str, fit: gp.KFit, inp: gp.Progr
             raise gp.ProgramsError("The dataset's cells changed while the programs ran (a pipeline run "
                                    "or a filter); nothing was saved. Run them again.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        backed = await working_copy.make_room(dm, dataset_id, adaptor)
 
         def work() -> dict[str, Any]:
-            data = adaptor.adata.to_memory() if backed else adaptor.adata
+            data = working_copy.in_memory(adaptor)
             before = uns_snapshot(data)
             out = gp.save(data, fit, inp, n_hvg=n_hvg, sweep=sweep, resources=resources,
                           fingerprint=fingerprint)

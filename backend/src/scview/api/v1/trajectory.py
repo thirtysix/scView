@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.core import pseudotime_genes as ptg
-from scview.core.dataset_manager import DatasetManager
+from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.obs_writes import uns_snapshot, write_derived
 from scview.core.processing import run_exclusive
 from scview.core.trajectory import (
@@ -114,7 +114,7 @@ async def compute_paga_graph(
     del adaptor  # no hold on the cached copy through run_exclusive's reload
 
     def _run(adaptor):
-        work = adaptor.adata.to_memory() if getattr(adaptor.adata, "isbacked", False) else adaptor.adata
+        work = adaptor.adata  # in memory: run_exclusive reads a backed dataset in first
         before = uns_snapshot(work)
         record = compute_paga(work, body.groupby)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
@@ -124,7 +124,7 @@ async def compute_paga_graph(
     try:
         # In a worker thread with the dataset to itself; then served from disk.
         record = await run_exclusive(dm, dataset_id, _run)
-    except HTTPException:
+    except (HTTPException, DatasetMemoryError):  # a 507 from reading a backed dataset in
         raise
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))  # raised before any change
@@ -167,7 +167,7 @@ async def compute_pseudotime(
     del adaptor, adata, col  # no hold on the cached copy through run_exclusive's reload
 
     def _run(adaptor):
-        work = adaptor.adata.to_memory() if getattr(adaptor.adata, "isbacked", False) else adaptor.adata
+        work = adaptor.adata  # in memory: run_exclusive reads a backed dataset in first
         params = compute_dpt(work, body.root_column, body.root_value)
         # Write beside, then swap in: a backed dataset may be reading this path.
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
@@ -180,7 +180,7 @@ async def compute_pseudotime(
         # In a worker thread with the dataset to itself (busy, locked until the
         # thread ends even if the client goes away); then served from disk.
         params = await run_exclusive(dm, dataset_id, _run)
-    except HTTPException:
+    except (HTTPException, DatasetMemoryError):  # a 507 from reading a backed dataset in
         raise
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

@@ -11,6 +11,7 @@ from scview.core import category_order
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import series_to_arrow_ipc
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core import working_copy
 from scview.core.uns_keys import enrichment_key, markers_key
 
 router = APIRouter()
@@ -187,10 +188,10 @@ async def set_category_order(
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        backed = await working_copy.make_room(dm, dataset_id, adaptor)
 
         def _run() -> list[str]:
-            adata = adaptor.adata.to_memory() if backed else adaptor.adata
+            adata = working_copy.in_memory(adaptor)
             before = uns_snapshot(adata)
             order = category_order.reorder(adata, column, body.order, body.sort)
             # Only obs (and a colours list in uns) changed: no matrix rewrite.
@@ -239,10 +240,10 @@ async def rename_obs_category(
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        backed = await working_copy.make_room(dm, dataset_id, adaptor)
 
         def _run() -> None:
-            adata = adaptor.adata.to_memory() if backed else adaptor.adata
+            adata = working_copy.in_memory(adaptor)
             if column not in adata.obs.columns:
                 raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
             col = adata.obs[column]

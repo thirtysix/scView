@@ -570,7 +570,9 @@ def read_header(path: str | Path, fmt: str | None = None, genes_in_rows: bool = 
         h = Header("unknown", note=f"The file could not be read ({type(e).__name__}: {e}).")
     h.file_bytes = _size(path)
     # The adaptor opens files over 2 GB on disk (anndata backed mode).
-    h.backed = fmt == "h5ad" and h.file_bytes > 2 * GiB
+    from scview.core.anndata_adaptor import opens_backed
+
+    h.backed = fmt == "h5ad" and opens_backed(h.file_bytes)
     h.seconds = round(time.perf_counter() - t0, 4)
     return h
 
@@ -675,8 +677,23 @@ def _frames_bytes(h: Header) -> int:
     return n * (_STR_BYTES + 8 * h.obs_columns) + m * (_STR_BYTES + 8 * h.var_columns)
 
 
+# What a backed open leaves on disk (anndata reads X and .raw's X when used; the
+# layers, obsm and the rest are read into memory).
+ON_DISK_WHEN_BACKED = ("X", "raw/X")
+
+
+def _in_memory(h: Header, mm: Matrix) -> bool:
+    return not (h.backed and mm.where in ON_DISK_WHEN_BACKED)
+
+
 def _matrices_bytes(h: Header) -> int:
-    return sum(mm.nbytes for mm in h.matrices if not (h.backed and mm.where == "X"))
+    return sum(mm.nbytes for mm in h.matrices if _in_memory(h, mm))
+
+
+def backed_bytes(h: Header) -> int:
+    """Memory that reading a backed dataset's on-disk matrices into memory adds (0 for
+    one opened in memory): what ``core/working_copy.py`` makes room for."""
+    return sum(mm.nbytes for mm in h.matrices if not _in_memory(h, mm))
 
 
 def resident_bytes(h: Header) -> int:
@@ -717,10 +734,10 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
         return LoadEstimate(mid, mid, "opening the converted file",
                             _range(h.file_bytes / READ_FILE_BPS["rds"], cpus),
                             [("Guess from the file size", mid)], notes)
-    values = sum(mm.nnz for mm in h.matrices if not (h.backed and mm.where == "X"))
+    values = sum(mm.nnz for mm in h.matrices if _in_memory(h, mm))
     read = int(values * READ_BYTES_PER_VALUE.get(h.format, 8.0))
     breakdown = [(f"{mm.where} ({'sparse' if mm.sparse else 'dense'}, {mm.dtype})", mm.nbytes)
-                 for mm in h.matrices if not (h.backed and mm.where == "X")]
+                 for mm in h.matrices if _in_memory(h, mm)]
     other = res - _matrices_bytes(h)
     breakdown.append(("Cell and gene tables, embeddings, results", other))
     peak, stage = res + read, "reading the file"
@@ -735,8 +752,10 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
     if read:
         breakdown.append(("Reading (converting the values)", read))
     if h.backed:
-        notes.append("Files over 2 GB open from disk: the matrix X is read when needed, "
-                     "not held in memory.")
+        from scview.core.anndata_adaptor import BACKED_MIN_BYTES
+
+        notes.append(f"Files over {BACKED_MIN_BYTES / GiB:.3g} GB open from disk: the matrix X is "
+                     "read when needed, not held in memory (processing reads it in first).")
     return LoadEstimate(res, peak, stage, _range(secs, cpus), breakdown, notes)
 
 
@@ -1487,9 +1506,21 @@ def _params_with(params, **changes):
     return p
 
 
+def in_memory_header(adata) -> Header:
+    """The header of a live AnnData as a run sees it: in memory as it is, or, opened
+    backed, from its file as read in (``core/working_copy.py`` reads it in before the
+    run; ``header_from_adata`` would take its on-disk X for a dense one)."""
+    if getattr(adata, "isbacked", False):
+        h = read_header(adata.filename, "h5ad")
+        h.backed = False
+        return h
+    return header_from_adata(adata)
+
+
 def run_need(adata, steps: list[str], params=None) -> int:
-    """Memory a run of ``steps`` needs beyond what the (in-memory) dataset holds now."""
-    est = estimate_run(header_from_adata(adata), steps=steps, params=params, warm=process_warm())
+    """Memory a run of ``steps`` needs beyond what the dataset holds in memory (a backed
+    one: once read in, which the run makes room for separately)."""
+    est = estimate_run(in_memory_header(adata), steps=steps, params=params, warm=process_warm())
     return max(0, int(est.peak_bytes - est.start_bytes))
 
 
@@ -1520,7 +1551,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         h = read_header(files[0], "h5ad")
     warm = process_warm()
     est = estimate_run(h, steps=steps, params=params, warm=warm)
-    held = est.start_bytes if in_memory else 0
+    # A backed dataset holds less than the run's start (its matrices are read in first).
+    held = (resident_bytes(h) if h.backed else est.start_bytes) if in_memory else 0
     need = est.peak_bytes - held
     avail = available_memory()
     cached = cached_others(dm, dataset_id)
@@ -1543,7 +1575,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         lead = f"{about[0].upper()}{about[1:]} more than now at its peak ({stage})"
     else:
         lead = f"No more memory than this dataset holds now at its peak ({stage})"
-    breakdown = [("This dataset now" if in_memory else "This dataset once loaded", est.start_bytes),
+    breakdown = [("This dataset now" if in_memory else "This dataset once loaded",
+                  held if in_memory else est.start_bytes),
                  (f"At the peak ({stage})", est.peak_bytes),
                  ("After the run (saved and reopened)", est.end_bytes)]
     notes = []

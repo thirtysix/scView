@@ -15,6 +15,10 @@ Both are released, and the cached copy dropped, only when the worker thread has
 stopped, even if the client went away first: the thread can't be interrupted
 mid-step, and until it stops it may still be writing the derived file.
 
+Steps need the dataset in memory: one the adaptor opened backed (a file over
+``SCVIEW_BACKED_MIN_MB``) is read in first, within the memory budget
+(``core/working_copy.py``), in the worker thread.
+
 A pipeline run passes its ``RunControl`` (``core/run_watchdog.py``): while the
 run works it is registered for ``cancel_run`` (``POST .../assessment/cancel``)
 and its watchdog samples memory, sending warnings into a streamed run's events.
@@ -34,7 +38,7 @@ from typing import Any, TypeVar
 
 from fastapi import HTTPException
 
-from scview.core import memory_budget
+from scview.core import memory_budget, working_copy
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_lock
@@ -84,19 +88,31 @@ async def _claim(dm: DatasetManager, dataset_id: str) -> tuple[AnnDataAdaptor, C
 
 async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAdaptor,
                          control: RunControl | None) -> None:
-    """Before a run with a plan: close other open datasets whose memory its estimated
-    peak needs (the pre-step check, in the worker thread, can only stop the run)."""
-    if control is None or control.plan is None:
-        return
-    from scview.core import preflight
+    """Before a run: room to read a backed dataset into memory (``working_copy``, a 507
+    when that cannot fit) and, with a plan, close other open datasets whose memory its
+    estimated peak needs (the pre-step check, in the worker thread, can only stop the
+    run)."""
+    need = 0
+    if control is not None and control.plan is not None:
+        from scview.core import preflight
 
-    steps, params = control.plan
-    try:
-        need = await asyncio.to_thread(preflight.run_need, adaptor.adata, steps, params)
-    except Exception as e:  # never block a run on the estimate itself
-        logger.warning("No run estimate for %s: %s", dataset_id, e)
-        return
-    await dm.free_memory_for(need, keep=dataset_id)
+        steps, params = control.plan
+        try:
+            need = await asyncio.to_thread(preflight.run_need, adaptor.adata, steps, params)
+        except Exception as e:  # never block a run on the estimate itself
+            logger.warning("No run estimate for %s: %s", dataset_id, e)
+    await working_copy.make_room(dm, dataset_id, adaptor, then=need)
+
+
+def _in_memory(work: Callable[[AnnDataAdaptor], T]) -> Callable[[AnnDataAdaptor], T]:
+    """``work``, called with the dataset in memory (``working_copy.in_memory``: a backed
+    one is read in first, in the worker thread): steps need every value at hand."""
+
+    def run(adaptor: AnnDataAdaptor) -> T:
+        working_copy.in_memory(adaptor)
+        return work(adaptor)
+
+    return run
 
 
 # The pipeline run working on each dataset now (one at most: it holds the lock).
@@ -159,7 +175,7 @@ async def run_exclusive(
         claimed()
 
     try:
-        task = asyncio.ensure_future(asyncio.to_thread(work, adaptor))
+        task = asyncio.ensure_future(asyncio.to_thread(_in_memory(work), adaptor))
     except BaseException:
         release()
         raise
@@ -213,7 +229,7 @@ async def iterate_exclusive(
 
     def drive() -> None:
         try:
-            gen = make_events(adaptor)
+            gen = _in_memory(make_events)(adaptor)
             try:
                 for item in gen:
                     post("item", item)
