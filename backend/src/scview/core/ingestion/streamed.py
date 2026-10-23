@@ -318,7 +318,7 @@ class StreamedUnit:
     h5ad_extra: list[str] = field(default_factory=list)  # its layers / .raw / obsp present
 
 
-def open_unit(unit: IngestUnit, workdir: Path, options: dict | None = None) -> StreamedUnit:
+def open_unit(unit: IngestUnit, workdir: Path) -> StreamedUnit:
     """The unit's skeleton and matrix (reads the cell and gene tables only)."""
     if not unit.complete:
         raise IngestLoadError(

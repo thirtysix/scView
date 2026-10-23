@@ -598,6 +598,21 @@ def test_unreadable_matrix_is_a_commit_error_and_leaves_nothing(tmp_path, data_d
     assert not list(data_dir.rglob("*.part.h5"))
 
 
+def test_a_failed_write_is_a_commit_error_and_leaves_no_part_file(tmp_path, data_dir, monkeypatch):
+    from scview.core.ingestion import feature_split
+
+    def full(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(feature_split, "_append", full)
+    names, ids, types = _features(10)
+    f = _tenx_v3(tmp_path / "f.h5", _counts(20, 10), names, ids, types)
+    with pytest.raises(IngestCommitError, match="No space left"):
+        _commit(data_dir, [f], streamed="on")
+    assert not list(data_dir.rglob("*.part.h5*"))
+    assert not (data_dir / "ingested").exists() or not any((data_dir / "ingested").iterdir())
+
+
 def test_not_enough_disk_is_said_before_writing(tmp_path, data_dir, monkeypatch):
     names, ids, types = _features(10)
     f = _tenx_v3(tmp_path / "f.h5", _counts(20, 10), names, ids, types)

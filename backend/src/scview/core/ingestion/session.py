@@ -365,6 +365,13 @@ class IngestSessionManager:
                 raise IngestCommitError(f"This upload cannot be read in blocks: {e}.") from e
             logger.warning("Read into memory instead of in blocks: %s", e)
             return self._load_and_merge(loadable, opts), None
+        except IngestLoadError:
+            part.unlink(missing_ok=True)
+            raise
+        except Exception as e:  # a write that failed (disk full, a damaged block)
+            part.unlink(missing_ok=True)
+            logger.exception("Ingest in blocks failed")
+            raise IngestCommitError(f"The dataset could not be read and saved in blocks: {e}") from e
         return meta, part
 
     # -- TTL --------------------------------------------------------------
