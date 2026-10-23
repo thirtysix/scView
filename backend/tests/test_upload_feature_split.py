@@ -222,3 +222,15 @@ async def test_a_dataset_uploaded_before_is_not_split_on_open(dataset_manager, t
                                                   "status": "ready"}))
     adaptor = await dataset_manager.load_dataset(did)
     assert adaptor.adata.n_vars == len(ORDER) and not (tmp_data_dir / "ingested" / did).exists()
+
+
+def test_split_reads_the_cell_names_alone(tmp_path):
+    import h5py
+
+    a = _cite(n_cells=30)
+    a.obs["donor"] = pd.Categorical(["d1", "d2"] * 15)
+    a.obs["score"] = np.arange(30, dtype=np.float64)
+    a.write_h5ad(tmp_path / "x.h5ad")
+    with h5py.File(tmp_path / "x.h5ad", "r") as f:
+        names = feature_split._obs_names(f["obs"])
+    assert list(names) == list(a.obs_names)
