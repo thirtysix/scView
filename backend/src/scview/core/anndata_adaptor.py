@@ -1226,6 +1226,9 @@ class _LargeFiles:
             except InterruptedError:
                 logger.info("Gene store rebuild of %s stopped", path)
             except Exception as e:  # noqa: BLE001 - reported in the dataset's note
+                if self._rebuild_stop.is_set():  # the dataset was closed or deleted meanwhile
+                    logger.info("Gene store rebuild of %s stopped (%s)", path, e)
+                    return
                 logger.exception("Gene store rebuild of %s failed", path)
                 self._store_note = f"rebuilding {path.name} failed: {e}"
             finally:

@@ -173,6 +173,20 @@ def test_a_missing_store_falls_back_then_is_rebuilt(counts, twin, tmp_path):
     assert np.array_equal(a.get_expression(["G3"]), twin.get_expression(["G3"], layer="X"))
 
 
+def test_closing_stops_a_rebuild(counts, tmp_path, monkeypatch):
+    h5ad = make_large(tmp_path / "ds", counts, gene_store_too=False)
+    _, genes_path = large_layout.sidecar_paths(h5ad)
+    a = AnnDataAdaptor(str(h5ad))
+    # many small blocks: the stop lands between two of them
+    monkeypatch.setattr(large_mode.OnDiskMatrix, "row_blocks",
+                        lambda self, max_values=None: ((i, self[i:i + 10]) for i in range(0, 600, 10)))
+    assert a.start_store_rebuild()
+    a.close()
+    a._large._rebuild.join(30)
+    assert not genes_path.exists()
+    assert not list(genes_path.parent.glob(".*build-*"))
+
+
 def test_a_stale_store_is_not_used(counts, twin, tmp_path):
     h5ad = make_large(tmp_path / "ds", counts)
     _, genes_path = large_layout.sidecar_paths(h5ad)
