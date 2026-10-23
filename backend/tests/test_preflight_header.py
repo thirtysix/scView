@@ -72,6 +72,22 @@ def test_header_from_adata_matches_the_file(tmp_path):
     assert [m.to_dict() for m in file_h.matrices] == [m.to_dict() for m in mem_h.matrices]
 
 
+def test_variable_genes_are_counted_and_an_old_style_var_dataset_is_read(tmp_path):
+    a = _adata()
+    a.var["highly_variable"] = np.arange(a.n_vars) < 7
+    p = tmp_path / "hv.h5ad"
+    a.write_h5ad(p)
+    assert read_header(p).n_hvg == 7 == header_from_adata(a).n_hvg
+    # Older h5ad files (Kang's) store var as one compound dataset, not a group of columns:
+    # reading the variable genes from it once made the whole header unreadable.
+    with h5py.File(p, "a") as f:
+        del f["var"]
+        f["var"] = np.array([(f"g{j}".encode(), 0.5) for j in range(a.n_vars)],
+                            dtype=[("index", "S8"), ("gene.mean", "f8")])
+    h = read_header(p)
+    assert h.format == "h5ad" and h.x is not None and h.x.nnz == _nnz(a) and h.n_hvg is None
+
+
 def _write_10x_h5(path: Path, counts: np.ndarray) -> None:
     """A CellRanger v3 .h5: genes x cells CSC in /matrix."""
     csc = sp.csc_matrix(counts.T.astype(np.int32))  # genes x cells

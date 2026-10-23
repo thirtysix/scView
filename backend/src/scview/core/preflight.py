@@ -248,7 +248,9 @@ def _read_h5ad(path: Path) -> Header:
         obs = f.get("obs")
         h.obs_columns = _n_columns(obs)
         h.var_columns = _n_columns(f.get("var"))
-        hv = f["var"].get("highly_variable") if "var" in f else None
+        # var is a group of columns, or in older files one compound dataset (Kang's).
+        var = f.get("var")
+        hv = var.get("highly_variable") if isinstance(var, h5py.Group) else None
         if isinstance(hv, h5py.Dataset) and hv.ndim == 1 and hv.dtype.kind in "bui":
             h.n_hvg = int(np.count_nonzero(hv[()]))
         if "X" in f:
