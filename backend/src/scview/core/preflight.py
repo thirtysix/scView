@@ -307,8 +307,10 @@ def _read_10x_h5(path: Path) -> Header:
         n_genes, n_cells = (int(x) for x in g["shape"][()][:2])
         nnz = int(g["data"].shape[0])
     h.n_cells, h.n_genes = n_cells, n_genes
-    # scanpy reads the counts as float32 (cells x genes CSR).
-    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32"))
+    # scanpy reads the counts as float32 (cells x genes CSR); scipy's indices are int64
+    # once the values outnumber int32 (the 1.3M-cell brain: 2.6e9).
+    idx = "int64" if max(nnz, n_genes) > np.iinfo(np.int32).max else "int32"
+    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32", idx))
     return h
 
 
@@ -1593,32 +1595,59 @@ def session_preflight(mgr, sid: str, dm) -> dict:
     """Per staged unit (and the merge of several): header, load estimate, verdict."""
     from scview.core.ingestion.bundling import UnitFormat, build_bundle
 
+    from scview.core.ingestion import streamed
+
     bundle = build_bundle(mgr.staged_paths(sid))
     opts = mgr.get_options(sid)
     avail = available_memory()
     cached = cached_others(dm)
+    loadable = [u for u in bundle.units if u.format != UnitFormat.unknown and u.complete]
+    # Too large to read whole: the commit reads and saves the matrices in blocks.
+    try:
+        choice = streamed.choose(loadable, opts.streamed, opts.genes_in_rows) if loadable else None
+    except streamed.StreamUnsupported:
+        choice = None
+    blocks = bool(choice and choice.streamed)
     units, residents, peaks, secs = [], [], [], [0.0, 0.0]
-    for u in bundle.units:
-        if u.format == UnitFormat.unknown or not u.complete:
-            continue
+    for u in loadable:
         h = read_unit_header(u, opts.genes_in_rows)
+        h.backed = False  # the ingest reads an .h5ad whole, whatever its size
         est = estimate_load(h)
         half = estimate_load(_half_cells(h)) if not h.guess else None
-        v = make_verdict(
-            need=est.peak_bytes, peak=est.peak_bytes, stage=est.peak_stage, seconds=est.seconds,
-            avail=avail, cached=cached, lead=_load_lead(h, est), breakdown=est.breakdown,
-            notes=est.notes,
-            alternatives=[("Subsample the cells before loading: half of them", half.peak_bytes)]
-            if half else [])
+        if blocks:
+            need = streamed.streamed_need([u], opts.genes_in_rows)
+            v = make_verdict(
+                need=need, peak=need, stage="reading and saving it in blocks", seconds=est.seconds,
+                avail=avail, cached=cached,
+                lead=(_load_lead(h, est).replace("Loading takes", "Read whole, loading would take")
+                      + f"; it is read and saved in blocks instead, {_about(need)} at its peak"),
+                breakdown=[("Cell and gene tables, one block", need)],
+                notes=est.notes + [streamed.BLOCKS_NOTE], alternatives=[])
+        else:
+            v = make_verdict(
+                need=est.peak_bytes, peak=est.peak_bytes, stage=est.peak_stage, seconds=est.seconds,
+                avail=avail, cached=cached, lead=_load_lead(h, est), breakdown=est.breakdown,
+                notes=est.notes,
+                alternatives=[("Subsample the cells before loading: half of them", half.peak_bytes)]
+                if half else [])
         units.append({"label": u.label, "format": u.format.value, "header": h.to_dict(),
                       "load": {"resident_bytes": est.resident_bytes, "peak_bytes": est.peak_bytes,
                                "peak_stage": est.peak_stage, "seconds": list(est.seconds)},
-                      "verdict": v})
+                      "streamed": blocks, "verdict": v})
         residents.append(est.resident_bytes)
         peaks.append(est.peak_bytes)
         secs = [secs[0] + est.seconds[0], secs[1] + est.seconds[1]]
     merge = None
-    if len(units) > 1:
+    if len(units) > 1 and blocks:
+        need = streamed.streamed_need(loadable, opts.genes_in_rows)
+        merge = make_verdict(
+            need=need, peak=need, stage="merging the samples in blocks", seconds=tuple(secs),
+            avail=avail, cached=cached,
+            lead=(f"Merging the {len(units)} samples in blocks takes {_about(need)} at its peak "
+                  f"(read whole, {_about(sum(residents) * 2)})"),
+            breakdown=[("Cell and gene tables, one block", need)],
+            notes=[streamed.BLOCKS_NOTE], alternatives=[])
+    elif len(units) > 1:
         # Every sample is loaded, then merged into one more copy, saved and reopened.
         peak = sum(residents) * 2
         merge = make_verdict(

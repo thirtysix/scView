@@ -18,18 +18,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 import uuid
 import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
 from scview.core import protein, provenance
 from scview.core.dataset_manager import is_safe_id
+from scview.core.ingestion import streamed
 from scview.core.ingestion.bundling import IngestUnit, SideKind, UnitFormat, build_bundle
 from scview.core.ingestion.detection import is_store_dir
 from scview.core.ingestion.loading import IngestLoadError, load_unit
@@ -64,6 +66,9 @@ class IngestOptions(BaseModel):
     sample_label: str = "sample"
     apply_reconciliation: bool = True
     genes_in_rows: bool = True
+    # Read and save the matrix a block of cells at a time (``streamed.py``): "auto" when
+    # reading it whole would not fit the memory free; "on" / "off" force it.
+    streamed: Literal["auto", "on", "off"] = "auto"
 
 
 def _seqqc_view(unit: IngestUnit) -> IngestUnit:
@@ -250,6 +255,13 @@ class IngestSessionManager:
             return None
         opts = self.get_options(sid)
         try:
+            if all(u.format in streamed.STREAMABLE for u in loadable):
+                # The cell and gene tables only: a plan never needs the matrices.
+                try:
+                    units = [streamed.open_unit(u, self._session_dir(sid)) for u in loadable]
+                    return plan_merge({su.label: su.meta for su in units}, streamed.counts_like(units))
+                except streamed.StreamUnsupported as e:
+                    logger.info("Merge plan from the samples read whole (%s)", e)
             adatas = {
                 u.label: load_unit(u, {"genes_in_rows": opts.genes_in_rows}) for u in loadable
             }
@@ -271,9 +283,14 @@ class IngestSessionManager:
         # Reading, merging and writing the files takes seconds to minutes: in a
         # worker thread, so the server keeps answering meanwhile.
         dataset_id = await asyncio.to_thread(self._build_dataset, sid)
-        await dm.load_dataset(dataset_id)  # populates n_cells / embeddings / obs_columns
+        self.discard(sid)  # saved: the staged files are no longer needed
+        from scview.core.dataset_manager import DatasetMemoryError
 
-        self.discard(sid)
+        try:
+            await dm.load_dataset(dataset_id)  # populates n_cells / embeddings / obs_columns
+        except DatasetMemoryError as e:
+            # Saved, but too large to open in the memory free now; opening it says so again.
+            logger.warning("Ingested dataset %s not opened: %s", dataset_id, e)
         return dataset_id
 
     def _build_dataset(self, sid: str) -> str:
@@ -289,9 +306,11 @@ class IngestSessionManager:
             raise IngestCommitError("No recognisable single-cell dataset was found.")
 
         opts = self.get_options(sid)
+        part = self._session_dir(sid) / ".scview-matrices.part.h5"
         try:
-            adata = self._load_and_merge(loadable, opts)
+            adata, matrices = self._load_or_stream(loadable, opts, self._session_dir(sid), part)
         except IngestLoadError as e:
+            part.unlink(missing_ok=True)
             raise IngestCommitError(str(e)) from e
         self._record_ingest_provenance(adata, loadable, opts)
         # Cell Ranger metrics / raw matrices that came with a sample (never raises).
@@ -307,9 +326,46 @@ class IngestSessionManager:
         skip = {s.path for s in bundle.skipped}
         root = self.files_dir(sid)
         originals = [p for p in self.staged_paths(sid) if _rel_to(p, root) not in skip]
-        self._persist_dataset(dataset_id, name, adata, originals, root)
-        logger.info("Committed ingest session %s as dataset %s (%s)", sid, dataset_id, name)
+        try:
+            self._persist_dataset(dataset_id, name, adata, originals, root, matrices=matrices)
+        finally:
+            part.unlink(missing_ok=True)
+        logger.info("Committed ingest session %s as dataset %s (%s)%s", sid, dataset_id, name,
+                    " in blocks" if matrices is not None else "")
         return dataset_id
+
+    def _load_or_stream(self, loadable, opts: IngestOptions, workdir: Path, part: Path):
+        """(dataset, None) read into memory, or (skeleton, ``part``) with the matrices
+        written to ``part`` a block at a time, when reading them whole would not fit the
+        memory free or the session asks for it (``streamed.choose``)."""
+        try:
+            choice = streamed.choose(loadable, opts.streamed, opts.genes_in_rows)
+        except streamed.StreamUnsupported as e:
+            raise IngestCommitError(f"This upload cannot be read in blocks: {e}.") from e
+        if not choice.streamed:
+            return self._load_and_merge(loadable, opts), None
+        logger.info("Ingesting %s in blocks: %s", ", ".join(u.label for u in loadable), choice.reason)
+        need, free = streamed.disk_need(loadable), shutil.disk_usage(self.data_dir).free
+        if need > free:
+            raise IngestCommitError(
+                f"Saving this dataset needs about {need / 1024**3:.1f} GB of disk; "
+                f"{free / 1024**3:.1f} GB is free where scView keeps its data. Free some disk "
+                "space (or delete datasets you no longer need) and try again.")
+        try:
+            units = [streamed.open_unit(u, workdir) for u in loadable]
+            recon = None
+            if len(units) > 1 and opts.apply_reconciliation:
+                recon = plan_merge({su.label: su.meta for su in units},
+                                   streamed.counts_like(units)).reconciliation
+            meta = streamed.ingest(units, part, join=opts.join, sample_label=opts.sample_label,
+                                   reconciliation=recon)
+        except streamed.StreamUnsupported as e:
+            part.unlink(missing_ok=True)
+            if opts.streamed == "on" or len(loadable) > 1:
+                raise IngestCommitError(f"This upload cannot be read in blocks: {e}.") from e
+            logger.warning("Read into memory instead of in blocks: %s", e)
+            return self._load_and_merge(loadable, opts), None
+        return meta, part
 
     # -- TTL --------------------------------------------------------------
 
@@ -405,7 +461,9 @@ class IngestSessionManager:
         return merged
 
     def _persist_dataset(self, dataset_id: str, name: str, adata, originals: list[Path],
-                         root: Path | None = None) -> None:
+                         root: Path | None = None, matrices: Path | None = None) -> None:
+        """``matrices``: the h5 a streamed ingest wrote the matrices to
+        (``streamed.ingest``); ``adata`` is then the dataset without them."""
         # Originals → uploads/{id}/ (read-only), the untouched source, in the folders
         # they were uploaded in (``root``: the staging folder).
         up = self.data_dir / "uploads" / dataset_id
@@ -416,7 +474,7 @@ class IngestSessionManager:
                 continue  # store directories (e.g. zarr) is a later refinement
             dest = up / (_rel_to(src, root) if root is not None else src.name)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dest)
+            _link_or_copy(src, dest)
             total += dest.stat().st_size
             _make_readonly(dest)
 
@@ -426,7 +484,10 @@ class IngestSessionManager:
         h5_path = ing / f"{_safe_name(name)}.h5ad"
         _clear_index_name_clashes(adata)
         try:
-            adata.write_h5ad(h5_path, compression="gzip")
+            if matrices is not None:
+                streamed.finish_h5ad(adata, matrices, h5_path)
+            else:
+                adata.write_h5ad(h5_path, compression="gzip")
         except Exception as e:
             # Leave no half-made dataset behind (an uploads dir without metadata).
             shutil.rmtree(up, ignore_errors=True)
@@ -477,6 +538,15 @@ class IngestSessionManager:
             return datetime.fromisoformat(raw) if raw else None
         except (TypeError, ValueError):
             return None
+
+
+def _link_or_copy(src: Path, dest: Path) -> None:
+    """A second name for the staged file (its session is discarded after the commit), or a
+    copy where no link can be made: a 4 GB upload is not copied a second time."""
+    try:
+        os.link(src, dest)
+    except OSError:
+        shutil.copyfile(src, dest)
 
 
 def _rel_to(path: Path, root: Path) -> str:

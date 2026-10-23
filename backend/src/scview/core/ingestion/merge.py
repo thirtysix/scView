@@ -113,8 +113,12 @@ def _find_basis_column(adata: ad.AnnData, target: VarBasis) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def plan_merge(adatas: dict[str, ad.AnnData]) -> MergePlan:
-    """Analyse a set of loaded units and produce a MergePlan for the UI."""
+def plan_merge(adatas: dict[str, ad.AnnData],
+               counts_like: dict[str, bool] | None = None) -> MergePlan:
+    """Analyse a set of loaded units and produce a MergePlan for the UI.
+
+    ``counts_like``: whether each sample holds counts, for units whose matrix was not
+    read (a large ingest's skeletons, ``streamed.py``); else judged from their X."""
     labels = list(adatas)
     var_sets = {lab: set(map(str, a.var_names)) for lab, a in adatas.items()}
     per_sample = {lab: len(s) for lab, s in var_sets.items()}
@@ -136,7 +140,9 @@ def plan_merge(adatas: dict[str, ad.AnnData]) -> MergePlan:
             f"This merge has ~{est_cells:,} cells. Large merged datasets can make selection "
             "and recoloring feel sluggish."
         )
-    if len({_counts_like(a) for a in adatas.values()}) > 1:
+    kinds = ({counts_like[lab] for lab in adatas} if counts_like is not None
+             else {_counts_like(a) for a in adatas.values()})
+    if len(kinds) > 1:
         warnings.append(
             "Some samples look like raw counts and others like normalized values — merging "
             "them mixes incompatible scales. Use samples processed the same way."
