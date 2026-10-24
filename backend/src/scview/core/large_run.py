@@ -1221,8 +1221,7 @@ def run_streamed(
                 if control is not None and control.cancelled:
                     _cancelled_during(result, step)
                     break
-                logger.error("Step '%s' failed (large-dataset mode)", step)
-                _step_failed(run.light, result, outcome, step, str(e))
+                _step_failed(run.light, result, outcome, step, str(e))  # logs it
                 yield ("step_error", {"step": step, "index": idx, "error": str(e)})
         _finish(run, params, result, t0, control, outcome)
     finally:
@@ -1296,8 +1295,8 @@ def _finish(run: LargeRun, params: PipelineParams, result: PipelineResult, t0: f
             if not result.errors:
                 raise
             failed = ", ".join(s.replace("_", " ") for s in result.errors)
-            _halted(result, ("stopped", f"Nothing was saved: {failed} failed, and {e} The "
-                                        "dataset is as it was before the run."))
+            _halted(result, ("stopped", f"Nothing was saved: {failed} failed. {e} The dataset "
+                                        "is as it was before the run."))
         else:
             write_s = round(time.time() - tw, 2)
             result.output_path = str(run.output)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { keptRerunParams, paramText } from "./provenanceParams";
+import { keptRerunParams, lastRunText, paramText } from "./provenanceParams";
 
 describe("fast Leiden in the History", () => {
   it("the chip says which Leiden optimisation ran", () => {
@@ -18,6 +18,13 @@ describe("fast Leiden in the History", () => {
 });
 
 describe("a run that finished with errors in the History", () => {
+  it("the current state says how the last run ended", () => {
+    expect(lastRunText({ status: "complete", failed: [], skipped: [] })).toBe("last run: complete");
+    expect(lastRunText({ status: "finished_with_errors", failed: ["pca"], skipped: ["neighbors", "clustering"] })).toBe(
+      "last run: finished with errors (pca failed; 2 skipped)",
+    );
+  });
+
   it("says what failed, what was skipped and what was removed, not JSON", () => {
     expect(paramText("status", "finished_with_errors")).toBe("finished with errors");
     expect(paramText("failed", { pca: "boom" })).toBe("failed: pca (boom)");

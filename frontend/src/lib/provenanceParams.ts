@@ -9,6 +9,16 @@ const KEPT_ON_RERUN: Record<string, readonly string[]> = {
   clustering: ["clustering_method", "leiden_iterations"],
 };
 
+/** The current state's `last_run` chip: "last run: complete", or "last run: finished with
+ *  errors (pca failed; 4 skipped)". */
+export function lastRunText(value: unknown): string {
+  const v = (value ?? {}) as { status?: string; failed?: string[]; skipped?: string[] };
+  if (v.status !== "finished_with_errors") return `last run: ${v.status ?? "unknown"}`;
+  const failed = (v.failed ?? []).join(", ");
+  const skipped = v.skipped?.length ? `; ${v.skipped.length} skipped` : "";
+  return `last run: finished with errors (${failed || "a step"} failed${skipped})`;
+}
+
 /** The recorded params of `step` that its re-run sends again (the edited one goes on top). */
 export function keptRerunParams(step: { step: string; params?: Record<string, unknown> | null }): Record<string, unknown> {
   const out: Record<string, unknown> = {};

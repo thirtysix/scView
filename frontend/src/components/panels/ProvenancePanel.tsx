@@ -17,7 +17,7 @@ import {
   type RerunPlan,
 } from "@/api/provenance";
 import { getDataset } from "@/api/datasets";
-import { keptRerunParams, paramText } from "@/lib/provenanceParams";
+import { keptRerunParams, lastRunText, paramText } from "@/lib/provenanceParams";
 import { RecipeViewer } from "@/components/panels/RecipeViewer";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -289,9 +289,15 @@ export function ProvenancePanel() {
                 className="rounded bg-primary/10 px-2 py-0.5 text-xs text-primary"
                 title={typeof v === "object" ? JSON.stringify(v) : undefined}
               >
-                {k}
-                {typeof v !== "boolean" &&
-                  `: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`}
+                {k === "last_run"
+                  ? lastRunText(v)
+                  : (
+                      <>
+                        {k}
+                        {typeof v !== "boolean" &&
+                          `: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`}
+                      </>
+                    )}
               </span>
             ))}
           </div>
