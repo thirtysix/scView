@@ -146,7 +146,8 @@ export function FastLeidenOffer({
             {fast ? "Use the full optimisation" : "Use fast Leiden"}
           </button>
         )}
-        <FastLeidenInfo align="right" />
+        {/* Opens rightwards: the icon sits near the card's left edge, beside the sidebar */}
+        <FastLeidenInfo />
       </p>
     </div>
   );
