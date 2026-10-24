@@ -413,3 +413,21 @@ def test_doublet_detection_replays_the_apps_scores(tmp_path, processed):
     from scview.core import doublets
     assert doublets.channel_record(rep)["rows"] == doublets.channel_record(out)["rows"]
     assert len(doublets.channel_record(out)["rows"]) == 2
+
+
+def test_umap_3d_setting_reaches_the_step_and_the_replay():
+    inp = _counts(seed=3)
+    steps = ["qc_metrics", "normalization", "log_transform", "highly_variable_genes", "scaling",
+             "pca", "neighbors", "embeddings"]
+    params = dict(n_top_genes=60, n_comps=15)
+    on, _ = run_pipeline(inp.copy(), steps, PipelineParams(**params))
+    assert on.obsm["X_umap_3d"].shape == (on.n_obs, 3)
+    assert "n_components=3" in replay_script.build_script(on, dataset_id="t", dataset_name="t")
+    # Off: no 3D UMAP, a previous run's taken away, and none in the replay script
+    off, res = run_pipeline(on, steps[-1:], PipelineParams(**params, umap_3d="off"))
+    assert res.errors == {} and "X_umap_3d" not in off.obsm and "X_umap" in off.obsm
+    rec = [h for h in provenance.read_provenance(off)["history"] if h["step"] == "embeddings"]
+    assert rec[-1]["params"]["umap_3d"] == "off"
+    script = replay_script.build_script(off, dataset_id="t", dataset_name="t")
+    assert script.count("n_components=3") == 1  # the first run's step only
+    compile(script, "replay.py", "exec")

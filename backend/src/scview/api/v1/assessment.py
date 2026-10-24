@@ -25,7 +25,7 @@ from scview.core import qc_states
 from scview.core.obs_writes import (
     dataset_edit, edit_room, editable, save_edit, uns_snapshot,
 )
-from scview.core.pipeline import PipelineParams, check_chunked
+from scview.core.pipeline import PipelineParams, check_chunked, check_umap_3d
 from scview.core.processing import cancel_run, iterate_exclusive, run_exclusive
 from scview.core.run_watchdog import RunControl
 from scview.core.step_names import unknown_steps, unknown_steps_message
@@ -420,6 +420,7 @@ def _run_params(raw: dict[str, Any] | None) -> PipelineParams:
     try:
         params.chunked = check_chunked(params.chunked)
         params.leiden_iterations = leiden.check_iterations(params.leiden_iterations)
+        params.umap_3d = check_umap_3d(params.umap_3d)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     return params

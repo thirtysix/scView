@@ -98,10 +98,12 @@ from scview.core.pipeline import (
     _unknown_requested,
     _var_from_hvg_frame,
     check_chunked,
+    check_umap_3d,
     clear_processing,
     filter_judgement,
     large_backend,
     looks_like_counts,
+    resolve_umap_3d,
     run_pipeline,
     run_pipeline_streamed,
     skipped_event,
@@ -1176,6 +1178,8 @@ def run_streamed(
     substeps also from the passes over the blocks) and result (``chunked`` true). Saved to
     ``output_path`` only when the run reaches its end."""
     params = params or PipelineParams()
+    if check_umap_3d(params.umap_3d) == "auto":  # no 3D UMAP in this mode unless asked for
+        params = replace(params, umap_3d=resolve_umap_3d("auto", large=True))
     result = PipelineResult(chunked=True)
     t0 = time.time()
     ordered = [s for s in ALL_STEPS if s in steps]

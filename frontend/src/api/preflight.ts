@@ -63,12 +63,31 @@ export interface LeidenChoice {
   iterations: number;
 }
 
+/** A run with the UMAP step: whether it makes the 3D UMAP, and the time that adds. */
+export interface Umap3dChoice {
+  /** Cells laid out (after filtering's share, when the run filters) */
+  n_cells: number;
+  /** The run's setting: auto (off in large-dataset mode), on or off */
+  setting: "auto" | "on" | "off";
+  /** Whether this run makes it */
+  on: boolean;
+  /** What auto means for this run (false in large-dataset mode) */
+  default_on: boolean;
+  extra_seconds: number;
+  /** As a range in words: "roughly 10 to 40 min" */
+  extra_text: string;
+  /** Show the note: large-dataset mode, or the 3D UMAP alone over 10 minutes */
+  offer: boolean;
+}
+
 export interface RunPreflight {
   dataset_id: string;
   steps: PreflightStep[];
   verdict: PreflightVerdict;
   /** Null when the run does not cluster with Leiden (missing from an older backend) */
   leiden?: LeidenChoice | null;
+  /** Null when the run has no UMAP step (missing from an older backend) */
+  umap_3d?: Umap3dChoice | null;
 }
 
 export interface UnitPreflight {
@@ -89,6 +108,7 @@ const RUN_PARAMS = [
   "n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
   "doublet_channel_key", // doublet detection's peak is its largest channel's
   "clustering_method", "leiden_iterations", // clustering's time, and the fast-Leiden offer
+  "umap_3d", // UMAP's time, and the 3D UMAP note
 ] as const;
 
 export function getRunPreflight(

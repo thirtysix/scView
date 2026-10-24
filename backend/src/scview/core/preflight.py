@@ -1212,11 +1212,61 @@ UMAP_MEMORY_EXPONENT = 0.18
 UMAP_TIME_EXPONENT = 0.36
 
 
+# The 3D UMAP's share of the step's time (umap-learn lays out 3D and 2D the same way:
+# spectral start, then the same epochs over the same graph)
+UMAP_3D_SHARE = 0.5
+
+
+def umap_seconds(n: int, three_d: bool = True) -> float:
+    """The UMAP step's time at 2 CPUs: the 2D UMAP, and the 3D one when ``three_d``."""
+    size = max(1.0, n / 88_640)
+    both = 5e-6 * n * _epochs(n) * size ** UMAP_TIME_EXPONENT
+    return 0.5 + (both if three_d else both * (1 - UMAP_3D_SHARE))
+
+
+def _three_d(params) -> bool:
+    """Whether the run makes the 3D UMAP; auto is on here (the large-dataset estimate gets
+    params with auto resolved, ``_large_params``)."""
+    return str(_p(params, "umap_3d", "auto")).lower() not in ("off", "false")
+
+
 def _step_embeddings(s: _State, params) -> tuple[int, _State, float]:
-    s.other += s.n * 5 * 4
+    three_d = _three_d(params)
+    s.other += s.n * (5 if three_d else 2) * 4
     size = max(1.0, s.n / 88_640)
     t = s.n * UMAP_BYTES_PER_CELL * size ** UMAP_MEMORY_EXPONENT
-    return int(t), s, 0.5 + 5e-6 * s.n * _epochs(s.n) * size ** UMAP_TIME_EXPONENT
+    return int(t), s, umap_seconds(s.n, three_d)
+
+
+def _large_params(params):
+    """``params`` as large-dataset mode runs them: no 3D UMAP unless asked for."""
+    from scview.core.pipeline import resolve_umap_3d
+
+    return _params_with(params, umap_3d=resolve_umap_3d(_p(params, "umap_3d", "auto"), True))
+
+
+def umap_3d_choice(n_cells: int | None, steps: list[str], params, chunked: bool) -> dict | None:
+    """For a run with the UMAP step: whether it makes the 3D UMAP (``on``: auto is on in
+    memory, off in large-dataset mode), the setting, and the time the 3D UMAP adds
+    (``extra_*``, a point estimate and a range). ``offer`` when the note should say so:
+    in large-dataset mode, or when the 3D UMAP alone would take over 10 minutes. None for
+    a run without the UMAP step."""
+    from scview.core.pipeline import check_umap_3d, resolve_umap_3d
+
+    if "embeddings" not in (steps or []) or not n_cells:
+        return None
+    n = int(n_cells * FILTER_CELLS_KEPT) if "filtering" in steps else int(n_cells)
+    setting = check_umap_3d(_p(params, "umap_3d", "auto"))
+    extra = umap_seconds(n, True) - umap_seconds(n, False)
+    return {
+        "n_cells": n,
+        "setting": setting,
+        "on": resolve_umap_3d(setting, chunked) == "on",
+        "default_on": not chunked,
+        "extra_seconds": round(extra, 1),
+        "extra_text": time_text(_range(extra, CALIBRATION_CPUS)),
+        "offer": bool(chunked or extra > leiden_offer_seconds()),
+    }
 
 
 def _step_uncorrected(s: _State, params) -> tuple[int, _State, float]:
@@ -2124,9 +2174,10 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
            "leiden": leiden_choice(h.n_cells, steps, params)}
     chunked, reason = _would_chunk(requested, need, avail, cached, large)
     out["mode"] = {"chunked": chunked, "requested": requested, "reason": reason}
+    out["umap_3d"] = umap_3d_choice(h.n_cells, steps, params, chunked)
     if chunked:
         out["in_memory_estimate"] = {"steps": out["steps"], "verdict": v}
-        out.update(_chunked_preflight(h, steps, params, held, avail, cached, plan,
+        out.update(_chunked_preflight(h, steps, _large_params(params), held, avail, cached, plan,
                                       large=large,
                                       disk_folder=Path(dm.data_dir)))
     return out

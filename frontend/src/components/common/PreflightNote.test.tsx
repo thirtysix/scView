@@ -4,8 +4,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 const api = vi.hoisted(() => ({ getRunPreflight: vi.fn(), getIngestPreflight: vi.fn() }));
 vi.mock("@/api/preflight", () => api);
 
-import type { LeidenChoice, PreflightVerdict } from "@/api/preflight";
-import { FastLeidenOffer, PreflightIngestNotes, PreflightNote, PreflightRunNote } from "./PreflightNote";
+import type { LeidenChoice, PreflightVerdict, Umap3dChoice } from "@/api/preflight";
+import { FastLeidenOffer, PreflightIngestNotes, PreflightNote, PreflightRunNote, Umap3dNote } from "./PreflightNote";
 
 const GB = 1024 ** 3;
 
@@ -236,5 +236,39 @@ describe("PreflightIngestNotes", () => {
     render(<PreflightIngestNotes sessionId="s1" />);
     await waitFor(() => expect(screen.getByText(/1,222 cells/)).toBeInTheDocument());
     expect(screen.queryByText("pbmc:")).toBeNull();
+  });
+});
+
+function umap3d(extra: Partial<Umap3dChoice> = {}): Umap3dChoice {
+  return {
+    n_cells: 1_160_000, setting: "auto", on: false, default_on: false,
+    extra_seconds: 1470, extra_text: "roughly 12 to 49 min", offer: true, ...extra,
+  };
+}
+
+describe("Umap3dNote", () => {
+  it("large dataset: no 3D UMAP, its time, and one click to add it", () => {
+    const onChange = vi.fn();
+    render(<Umap3dNote choice={umap3d()} onChange={onChange} />);
+    expect(screen.getByTestId("umap-3d-note")).toHaveTextContent(
+      "Large dataset: no 3D UMAP in this run (the 3D view needs one). Adding it would take roughly 12 to 49 min more.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add the 3D UMAP" }));
+    expect(onChange).toHaveBeenCalledWith("on");
+  });
+
+  it("added: what it costs, and back to automatic", () => {
+    const onChange = vi.fn();
+    render(<Umap3dNote choice={umap3d({ setting: "on", on: true })} onChange={onChange} />);
+    expect(screen.getByTestId("umap-3d-note")).toHaveTextContent(
+      "The 3D UMAP of 1,160,000 cells adds roughly 12 to 49 min to the run.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Leave it out" }));
+    expect(onChange).toHaveBeenCalledWith("auto");
+  });
+
+  it("in memory and quick: no note", () => {
+    const { container } = render(<Umap3dNote choice={umap3d({ on: true, default_on: true, offer: false })} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Gauge, Timer } from "lucide-react";
+import { AlertTriangle, Box, Gauge, Timer } from "lucide-react";
 
 import {
   getIngestPreflight,
@@ -7,8 +7,10 @@ import {
   type IngestPreflight,
   type LeidenChoice,
   type PreflightVerdict,
+  type Umap3dChoice,
 } from "@/api/preflight";
 import { FAST_LEIDEN, FULL_LEIDEN } from "@/lib/fastLeiden";
+import type { Umap3dSetting } from "@/lib/umap3d";
 import { FastLeidenInfo } from "./FastLeidenInfo";
 import { InfoTip } from "./InfoTip";
 
@@ -153,24 +155,74 @@ export function FastLeidenOffer({
   );
 }
 
+/** When the run leaves out the 3D UMAP (large-dataset mode) or it would take long: what it
+ *  costs, one click to add it (or leave it out again). */
+export function Umap3dNote({
+  choice,
+  onChange,
+}: {
+  choice: Umap3dChoice;
+  onChange?: (setting: Umap3dSetting) => void;
+}) {
+  if (!choice.offer) return null;
+  const cells = choice.n_cells.toLocaleString();
+  return (
+    <div
+      className="mt-1 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[11px] leading-snug text-sky-900"
+      data-testid="umap-3d-note"
+    >
+      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+        <Box className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {choice.on ? (
+          <span>
+            The 3D UMAP of {cells} cells adds {choice.extra_text} to the run.
+          </span>
+        ) : (
+          <span>
+            {choice.setting === "auto" ? "Large dataset: no 3D UMAP in this run" : "No 3D UMAP in this run"}{" "}
+            (the 3D view needs one). Adding it would take {choice.extra_text} more.
+          </span>
+        )}
+        {onChange && (
+          <button
+            type="button"
+            onClick={() => onChange(choice.on ? (choice.default_on ? "off" : "auto") : "on")}
+            className={
+              choice.on
+                ? "text-sky-800 underline hover:text-sky-950"
+                : "rounded border border-sky-300 bg-white px-1.5 py-0.5 font-medium text-sky-800 hover:bg-sky-100"
+            }
+          >
+            {choice.on ? "Leave it out" : "Add the 3D UMAP"}
+          </button>
+        )}
+      </p>
+    </div>
+  );
+}
+
 /** The run estimate for the selected steps, next to the pipeline Run button. Refetched
  *  (debounced) when the steps, the parameters it depends on, or `refreshKey` change.
- *  `onLeidenIterations`: the run's clustering setting, for the fast-Leiden offer's button. */
+ *  `onLeidenIterations`: the run's clustering setting, for the fast-Leiden offer's button;
+ *  `onUmap3d`: the UMAP step's 3D setting, for the 3D UMAP note's button. */
 export function PreflightRunNote({
   datasetId,
   steps,
   params,
   refreshKey = 0,
   onLeidenIterations,
+  onUmap3d,
 }: {
   datasetId: string;
   steps: string[];
   params: Record<string, unknown> | null;
   refreshKey?: number;
   onLeidenIterations?: (iterations: number) => void;
+  onUmap3d?: (setting: Umap3dSetting) => void;
 }) {
   const [verdict, setVerdict] = useState<PreflightVerdict | null>(null);
   const [leiden, setLeiden] = useState<LeidenChoice | null>(null);
+  const [umap3d, setUmap3d] = useState<Umap3dChoice | null>(null);
   const key = steps.join(",");
   const paramKey = JSON.stringify(params ?? {});
 
@@ -178,6 +230,7 @@ export function PreflightRunNote({
     if (!key) {
       setVerdict(null);
       setLeiden(null);
+      setUmap3d(null);
       return;
     }
     const ctl = new AbortController();
@@ -186,12 +239,14 @@ export function PreflightRunNote({
         .then((r) => {
           setVerdict(r.verdict);
           setLeiden(r.leiden ?? null);
+          setUmap3d(r.umap_3d ?? null);
         })
         .catch(() => {
           /* advisory only: an older backend or a restart leaves no note */
           if (!ctl.signal.aborted) {
             setVerdict(null);
             setLeiden(null);
+            setUmap3d(null);
           }
         });
     }, 300);
@@ -206,6 +261,7 @@ export function PreflightRunNote({
     <>
       <PreflightNote verdict={verdict} />
       {leiden && <FastLeidenOffer choice={leiden} onChange={onLeidenIterations} />}
+      {umap3d && <Umap3dNote choice={umap3d} onChange={onUmap3d} />}
     </>
   );
 }
