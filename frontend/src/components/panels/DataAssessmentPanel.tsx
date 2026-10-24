@@ -1255,7 +1255,9 @@ export function DataAssessmentPanel() {
           )}
 
           {/* Pipeline run result */}
-          {runResult && !halted && !withErrors && (
+          {/* finished: between the stream's last event and the reload, a halted run is not
+              yet "halted" and would flash as completed */}
+          {runResult && finished && !halted && !withErrors && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
               <p className="font-medium">
                 Pipeline completed in {runResult.elapsed_seconds}s
