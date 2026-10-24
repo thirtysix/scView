@@ -11,6 +11,7 @@ export const FLAG_LABELS: Record<ClusterFlag, string> = {
   high_mito: "High mito",
   low_genes: "Few genes",
   doublet_rich: "Doublet-rich",
+  doublet_like: "Doublet-like",
   stress_driven: "Stress-driven",
   hb_ambient: "Ambient Hb",
   cycling: "Cycling",
@@ -23,6 +24,7 @@ const FLAG_STYLES: Record<ClusterFlag, string> = {
   high_mito: "border-amber-200 bg-amber-50 text-amber-800",
   low_genes: "border-amber-200 bg-amber-50 text-amber-800",
   doublet_rich: "border-violet-200 bg-violet-50 text-violet-700",
+  doublet_like: "border-violet-200 bg-violet-50 text-violet-700",
   stress_driven: "border-orange-200 bg-orange-50 text-orange-800",
   hb_ambient: "border-rose-200 bg-rose-50 text-rose-700",
   cycling: "border-sky-200 bg-sky-50 text-sky-700",
@@ -308,6 +310,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                             className={`rounded border px-1 py-px text-[10px] font-medium ${FLAG_STYLES[f]}`}
                           >
                             {FLAG_LABELS[f]}
+                            {f === "doublet_like" && c.doublet_like_of?.length === 2 && `: ${c.doublet_like_of.join(" + ")}`}
                           </span>
                         ))}
                         {c.flags.length > 0 && (

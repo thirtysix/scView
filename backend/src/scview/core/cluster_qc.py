@@ -9,7 +9,9 @@ cluster cannot hide by inflating the spread. Absolute floors stop near-identical
 clusters from turning a tiny difference into a flag.
 
 Flags: ``low_quality`` (few genes AND high mito), ``high_mito``, ``low_genes``,
-``doublet_rich``, ``stress_driven`` (dissociation-stress score far above the
+``doublet_rich``, ``doublet_like`` (its top markers are mostly those of two other
+clusters and its cells carry more RNA than either: a cluster of their doublets,
+``doublet_like``), ``stress_driven`` (dissociation-stress score far above the
 others AND stress genes among its top markers; see ``core/stress.py``),
 ``hb_ambient`` (haemoglobin RNA in a cluster whose markers are not erythroid;
 see ``core/haemoglobin.py``), ``cycling`` (mostly cells with clear S/G2M scores;
@@ -33,7 +35,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from scview.core import cell_cycle, doublet_source, haemoglobin, qc_drivers, stress
+from scview.core import cell_cycle, doublet_source, haemoglobin, marker_selection, qc_drivers, stress
 from scview.core.anndata_adaptor import per_cell_qc
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,24 @@ LOW_MALAT1_FRACTION = 1 / 3
 # (paul15, MARS-seq: 0.02 %) a third of it is noise, and most clusters sit at 0.
 MALAT1_MIN_MEDIAN_PCT = 0.5
 
+# doublet_like: a cluster that looks like doublets of two others (C056). Its top markers
+# (marker_selection.group_markers: the ONE marker choice, DOUBLET_LIKE_MARKERS of them)
+# must be mostly theirs (DOUBLET_LIKE_SHARE of them in the two clusters' top markers
+# together, at least DOUBLET_LIKE_EACH from each one: a doublet carries both identities),
+# its cells must carry about two cells' RNA (median counts at least the larger cluster's
+# plus DOUBLET_LIKE_RNA of the smaller one's: a doublet holds a little under the sum of its
+# two cells' in practice, where a state between the two holds one cell's, about their mean;
+# on hgmm_10k_v3 the cross-species doublet cluster holds 0.95 of the sum, two subtypes of
+# the larger cluster 0.86-0.90 and are not flagged) and no fewer genes, and it must
+# be smaller than both (doublets of two populations are rarer than either). A cluster or a
+# parent with under DOUBLET_LIKE_MIN_MARKERS markers is not judged: too few to tell.
+DOUBLET_LIKE_MARKERS = 25
+DOUBLET_LIKE_MIN_MARKERS = 10
+DOUBLET_LIKE_SHARE = 0.5
+DOUBLET_LIKE_EACH = 0.3
+DOUBLET_LIKE_RNA = 0.5
+_NOT_A_PARENT = {"low_quality", "low_genes"}  # damaged cells or ambient RNA, not a cell type
+
 FLAG_HELP = {
     "low_quality": (
         "Likely low quality: far fewer genes per cell and much more mitochondrial RNA "
@@ -76,6 +96,15 @@ FLAG_HELP = {
     "doublet_rich": (
         "Many predicted doublets: the cluster may be two cells captured together "
         "rather than a real population."
+    ),
+    "doublet_like": (
+        "Looks like doublets of two other clusters: most of its top marker genes are the "
+        "top markers of those two, and its cells carry more RNA than either (a doublet holds "
+        "two cells' RNA). It may be a real state between the two (a transitional or "
+        "dual-identity cell type); check the doublet calls and both clusters' markers in it "
+        "before naming it. The two named are the best match by top markers: when one cell type "
+        "is split into several clusters, the genes they share are none of their top markers, "
+        "so one side of the doublets may be named by a related cluster."
     ),
     "stress_driven": stress.FLAG_HELP,
     "hb_ambient": haemoglobin.FLAG_HELP,
@@ -110,6 +139,7 @@ class ClusterQC(BaseModel):
     erythroid: bool = False  # red-cell lineage by its markers (or a red-cell Hb level)
     erythroid_markers: list[str] = []  # haemoglobin / erythroid genes among its top markers
     cycling_fraction: float | None = None  # share of cells with a clear S or G2M score
+    doublet_like_of: list[str] = []  # doublet_like: the two clusters it looks like a mix of
     median_pct_malat1: float | None = None  # % of a cell's counts from MALAT1
     median_pct_intronic: float | None = None  # the author's intronic/unspliced share, %
     flags: list[str] = []
@@ -139,6 +169,7 @@ class ClusterQCReport(BaseModel):
     dataset_median_pct_malat1: float | None = None  # the median cell's, for low_malat1
     intronic_column: str | None = None  # obs column of an intronic/unspliced share, if any
     doublet_source: str | None = None  # whose doublet calls doublet_fraction counts (doublet_source)
+    doublet_like_checked: bool = False  # markers were there to look for doublet-like clusters
 
     @property
     def flagged(self) -> list[ClusterQC]:
@@ -341,6 +372,7 @@ def cluster_qc(
               compare=len(order) >= MIN_GROUPS, median_pct_hb=_num(m.get("pct_hb")))
         _flag_malat1(row, malat1_median, compare=len(order) >= MIN_GROUPS)
         rows.append(row)
+    like_checked = len(order) >= MIN_GROUPS and _flag_doublet_like(adata, column, rows)
 
     names = {"genes": "median_genes", "counts": "median_counts", "pct_mt": "median_pct_mt",
              "pct_ribo": "median_pct_ribo", "doublet": "doublet_fraction",
@@ -400,8 +432,73 @@ def cluster_qc(
         drivers_n_pcs=drivers.n_pcs,
         dataset_median_pct_malat1=malat1_median,
         doublet_source=None if used is None else used.label,
+        doublet_like_checked=like_checked,
         intronic_column=intronic[0] if intronic is not None else None,
     )
+
+
+def doublet_like_pair(markers: dict[str, set[str]], rows: dict[str, "ClusterQC"],
+                      group: str) -> tuple[str, str, int, int, int] | None:
+    """The two clusters ``group`` looks like a mix of (``DOUBLET_LIKE_*``), as (a, b, its
+    markers among a's, among b's, among either's), or None. ``markers``: each cluster's
+    top markers; ``rows``: their QC rows (cells, median counts and genes, flags: a
+    low-quality or low-genes cluster is no parent, its few genes are ambient RNA). Of the
+    pairs that pass, the one whose markers cover most of the cluster's, then the more even
+    split between the two, then the RNA closer to the sum of the two, then the order of the clusters."""
+    mine, me = markers.get(group, set()), rows[group]
+    if len(mine) < DOUBLET_LIKE_MIN_MARKERS or not me.median_counts or me.median_genes is None:
+        return None
+    others = [g for g in rows if g != group and len(markers.get(g, ())) >= DOUBLET_LIKE_MIN_MARKERS
+              and rows[g].n_cells > me.n_cells and rows[g].median_counts and rows[g].median_genes is not None
+              and not set(rows[g].flags) & _NOT_A_PARENT]
+    best, key = None, None
+    for i, a in enumerate(others):
+        in_a = mine & markers[a]
+        if len(in_a) < DOUBLET_LIKE_EACH * len(mine):
+            continue
+        for b in others[i + 1:]:
+            in_b = mine & markers[b]
+            either = len(in_a | in_b)
+            if len(in_b) < DOUBLET_LIKE_EACH * len(mine) or either < DOUBLET_LIKE_SHARE * len(mine):
+                continue
+            ra, rb = rows[a], rows[b]
+            big, small = sorted((ra.median_counts, rb.median_counts), reverse=True)
+            if me.median_counts < big + DOUBLET_LIKE_RNA * small \
+                    or me.median_genes < max(ra.median_genes, rb.median_genes):
+                continue
+            k = (either, min(len(in_a), len(in_b)), me.median_counts / (big + small))
+            if key is None or k > key:
+                best, key = (a, b, len(in_a), len(in_b), either), k
+    return best
+
+
+def _flag_doublet_like(adata, column: str, rows: list["ClusterQC"]) -> bool:
+    """Flag ``doublet_like`` clusters (``doublet_like_pair``) on their stored markers;
+    False when the column has none (nothing to judge by). Never fails the table."""
+    try:
+        top = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("cluster QC: no markers for doublet-like clusters: %s", exc)
+        return False
+    if not top:
+        return False
+    markers = {g: set(v) for g, v in top.items()}
+    by = {r.group: r for r in rows}
+    for row in rows:
+        found = doublet_like_pair(markers, by, row.group)
+        if found is None:
+            continue
+        a, b, in_a, in_b, either = found
+        ra, rb = by[a], by[b]
+        k = len(markers[row.group])
+        row.flags.append("doublet_like")
+        row.doublet_like_of = [a, b]
+        row.reasons.append(
+            f"Looks like doublets of {a} + {b}: {either} of its top {k} markers are theirs "
+            f"({in_a} of {a}'s, {in_b} of {b}'s), and its cells carry more RNA, median "
+            f"{_fmt(row.median_counts)} counts vs {_fmt(ra.median_counts)} and {_fmt(rb.median_counts)}."
+        )
+    return True
 
 
 def _drivers(adata, labels: pd.Series, cells: dict, frame: pd.DataFrame,
@@ -652,11 +749,13 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
     rest = report.n_groups - len(listed)
     if not flagged:
         checked = ["genes", "counts"] + [w for m, w in (("pct_mt", "mito"), ("doublet_fraction", "doublets"),
+                                                        ("doublet_like", "doublet-like markers"),
                                                         ("stress_score", "dissociation stress"),
                                                         ("pct_hb", "haemoglobin"),
                                                         ("cycling_fraction", "cell cycle"),
                                                         ("pct_malat1", "MALAT1"))
-                                         if m in report.metrics]
+                                         if m in report.metrics
+                                         or (m == "doublet_like" and report.doublet_like_checked)]
         lines.append("- No cluster stands out: all are within the normal range on "
                      + ", ".join(checked[:-1]) + " and " + checked[-1]
                      + (" (an erythroid cluster's haemoglobin is its own)." if listed else "."))

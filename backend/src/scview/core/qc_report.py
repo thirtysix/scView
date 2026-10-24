@@ -46,8 +46,9 @@ _CONDITION_RE = CONDITION_RE
 _BATCH_RE = BATCH_RE
 _SKIP_RE = re.compile(r"cell[ ._-]?type|celltypeanno|leiden|louvain|cluster|phase|doublet", re.I)
 # Cluster flags that mean damaged cells or doublets: tightening the filters helps.
-_DAMAGE_FLAGS = {"low_quality", "high_mito", "low_genes", "doublet_rich"}
-_FLAG_WORDS = {"hb_ambient": "haemoglobin without erythroid markers"}
+_DAMAGE_FLAGS = {"low_quality", "high_mito", "low_genes", "doublet_rich", "doublet_like"}
+_FLAG_WORDS = {"hb_ambient": "haemoglobin without erythroid markers",
+               "doublet_like": "looks like doublets of two other clusters"}
 
 
 class QCFacts(BaseModel):
@@ -365,6 +366,15 @@ def build_facts(adaptor) -> QCFacts:
         if any(set(c.flags) & _DAMAGE_FLAGS for c in report.flagged):
             step(head, "Look at the flagged clusters in the Unified View; if they are damaged "
                        "cells or doublets, tighten the QC filters and re-run.")
+        like = [c for c in report.flagged if "doublet_like" in c.flags and len(c.doublet_like_of) == 2]
+        if like:
+            c = like[0]
+            step(cluster_qc.qc_tag(report.column, c.group), (
+                f"Before naming cluster {c.group} as a cell type, check it is not doublets of "
+                f"{c.doublet_like_of[0]} and {c.doublet_like_of[1]}: colour the Unified View by the "
+                "doublet calls and by a top marker of each; run the doublet step with both detectors "
+                "if only one ran."
+            ))
         stressed = [c.group for c in report.flagged if "stress_driven" in c.flags]
         if stressed:
             step(cluster_qc.qc_tag(report.column, stressed[0]), (

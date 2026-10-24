@@ -32,6 +32,8 @@ export interface ClusterQc {
   median_pct_malat1?: number | null;
   /** Median of the author's intronic / unspliced share column, in % (never computed here). */
   median_pct_intronic?: number | null;
+  /** doublet_like: the two clusters it looks like doublets of. */
+  doublet_like_of?: string[];
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
   /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
@@ -43,6 +45,7 @@ export type ClusterFlag =
   | "high_mito"
   | "low_genes"
   | "doublet_rich"
+  | "doublet_like"
   | "stress_driven"
   | "hb_ambient"
   | "cycling"
