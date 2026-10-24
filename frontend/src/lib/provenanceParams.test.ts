@@ -66,6 +66,19 @@ describe("paramText", () => {
     );
   });
 
+  it("names the doublet detectors and summarises the classifier's channels", () => {
+    expect(paramText("doublet_method", "both")).toBe("doublets: Scrublet + classifier");
+    expect(paramText("doublet_method", "scdblfinder-style")).toBe("doublets: scDblFinder-style classifier");
+    expect(paramText("doublet_method", "scrublet")).toBe("doublets: Scrublet");
+    const lanes = [
+      { name: "CTRL", n_cells: 6573, expected_doublet_rate: 0.0526, n_called: 490, status: "scored" },
+      { name: "STIM", n_cells: 7263, expected_doublet_rate: 0.0581, n_called: 410, status: "scored" },
+    ];
+    expect(paramText("classifier", { channels: lanes, n_called: 900 })).toBe(
+      "Classifier per channel: 2 channels, 6,573-7,263 cells, expected 5.3-5.8%, 900 called",
+    );
+  });
+
   it("keeps any other object short", () => {
     const text = paramText("extra", { a: "x".repeat(200) });
     expect(text.startsWith('extra={"a":"xxx')).toBe(true);

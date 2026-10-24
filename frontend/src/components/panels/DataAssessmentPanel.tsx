@@ -28,6 +28,8 @@ import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
+import { DoubletMethodInfo } from "@/components/qc/DoubletMethodInfo";
+import { DOUBLET_METHOD_LABELS, DOUBLET_METHODS } from "@/lib/doubletMethods";
 import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLeiden";
 import { UMAP_3D_LABELS } from "@/lib/umap3d";
 import { regressOptions } from "@/lib/regressOut";
@@ -167,7 +169,7 @@ const STEP_ORDER: {
   description: string;
 }[] = [
   { key: "qc_metrics", label: "QC Metrics", description: "Calculate quality control metrics" },
-  { key: "doublet_detection", label: "Doublet Detection", description: "Flag likely doublets with Scrublet in each capture channel (doublet_score + predicted_doublet)" },
+  { key: "doublet_detection", label: "Doublet Detection", description: "Flag likely doublets in each capture channel: Scrublet (doublet_score + predicted_doublet), an scDblFinder-style classifier, or both" },
   { key: "filtering", label: "Cell/Gene Filtering", description: "Filter low-quality cells and rare genes" },
   { key: "ambient_correction", label: "Ambient RNA Correction", description: "Optional: remove ambient (soup) RNA from the counts, SoupX-style; needs each sample's raw matrix" },
   { key: "normalization", label: "Normalization", description: "Normalize library size" },
@@ -217,13 +219,21 @@ const QC_MODE_OPTION_LABELS: Record<string, string> = {
 const STEP_PARAMS: Record<string, ParamConfig[]> = {
   doublet_detection: [
     {
+      param: "doublet_method",
+      label: "Detector",
+      type: "select",
+      options: [...DOUBLET_METHODS],
+      optionLabels: DOUBLET_METHOD_LABELS,
+      default: "scrublet",
+    },
+    {
       param: "doublet_channel_key",
       label: "Capture channels",
       type: "select",
       options: [],
       default: "",
       help:
-        "Doublets form within one capture channel (a 10x lane or GEM well), so Scrublet runs in each channel " +
+        "Doublets form within one capture channel (a 10x lane or GEM well), so each detector runs in each channel " +
         "alone, with its own rate and threshold. Detect: a lane / GEM well column, else the barcodes' -N suffix " +
         "or prefix (saved as capture_channel), else the donors or batches (a guess), else all cells.",
     },
@@ -1513,6 +1523,7 @@ export function DataAssessmentPanel() {
                                     <label className="flex items-center gap-1 text-[10px] font-medium text-slate-500">
                                       {pc.label}
                                       {pc.param === "leiden_iterations" && <FastLeidenInfo />}
+                                      {pc.param === "doublet_method" && <DoubletMethodInfo />}
                                     </label>
                                     {pc.type === "regress_out" ? (
                                       <RegressOutChoice

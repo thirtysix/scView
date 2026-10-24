@@ -47,6 +47,15 @@ scored, rate, Scrublet's threshold, cells called, neighbours, status) with the c
 ``scview_channel_column``. With one channel of every cell it is Scrublet's own ``uns``
 (threshold, simulated scores) beside that, as ``sc.pp.scrublet`` writes it.
 
+A second detector, an scDblFinder-style classifier (core/doublet_classifier.py), runs in
+the same channels with the same rates when the doublet step's ``doublet_method`` is
+``scdblfinder-style`` or ``both`` (``run_doublets``; ``run_classifier``). It writes
+``doublet_score_classifier`` and ``predicted_doublet_classifier`` and its per-channel
+record to ``uns[CLASSIFIER_KEY]``; the step drops the results of a detector it did not run.
+Its threshold is its own (fit to the artificial doublets and the expected rate); the
+threshold set on the histogram is Scrublet's. ``summary`` gives its calls per channel
+(``classifier``) and how they agree with Scrublet's (``methods``).
+
 With cell hashing run as well, hashing is the doublet views' primary call and
 Scrublet the second opinion (``core/doublet_source.py``); ``summary`` then says how
 the two agree at the threshold shown, overall and per hashed sample.
@@ -63,7 +72,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 import pandas as pd
 
-from scview.core import doublet_source, provenance, qc_groups, scrublet_lean
+from scview.core import doublet_classifier, doublet_source, provenance, qc_groups, scrublet_lean
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +106,16 @@ CALL = "predicted_doublet"
 SCRUBLET_CALL = "predicted_doublet_scrublet"  # Scrublet's own call, kept on apply
 THRESHOLD_KEY = "scview_doublet_threshold"
 N_BINS = 100
+
+# --- the detectors ------------------------------------------------------------------
+
+SCRUBLET_METHOD, CLASSIFIER_METHOD, BOTH_METHOD = "scrublet", "scdblfinder-style", "both"
+METHODS = (SCRUBLET_METHOD, CLASSIFIER_METHOD, BOTH_METHOD)
+METHOD_ALIASES = {"classifier": CLASSIFIER_METHOD, "scdblfinder": CLASSIFIER_METHOD,
+                  "scdblfinder_style": CLASSIFIER_METHOD}
+CLASSIFIER_SCORE = doublet_source.CLASSIFIER_SCORE
+CLASSIFIER_CALL = doublet_source.CLASSIFIER_CALL
+CLASSIFIER_KEY = "scview_doublet_classifier"  # uns: its per-channel record
 
 # --- capture channels ---------------------------------------------------------------
 
@@ -416,11 +435,121 @@ def run_scrublet(adata, counts, rate: float | None = None, key: str | None = Non
     return found
 
 
+def run_classifier(adata, counts, rate: float | None = None, key: str | None = None) -> dict:
+    """The scDblFinder-style classifier (core/doublet_classifier.py) in each capture
+    channel of ``adata``, as ``run_scrublet`` runs Scrublet: the same channels, rates (the
+    rule of thumb unless ``rate`` is set) and floor, on the rows of ``counts``.
+
+    Writes ``doublet_score_classifier`` and ``predicted_doublet_classifier`` (NaN score and
+    False for cells not scored), the barcode channels to ``CHANNEL_COLUMN`` when they came
+    from the barcodes, and the per-channel record to ``uns[CLASSIFIER_KEY]``. Returns what
+    the provenance records under ``classifier``: each channel's rate, threshold and calls."""
+    ch = channels(adata, key)
+    sizes = ch.sizes
+    rates = _rates(sizes, rate)
+    score, call, runs = doublet_classifier.classify_by_channel(
+        counts, ch.codes, rates, MIN_CHANNEL_CELLS, rows=scrublet_lean.channel_rows)
+    obs = adata.obs
+    obs[CLASSIFIER_SCORE] = score
+    obs[CLASSIFIER_CALL] = call
+    if ch.derived:
+        obs[CHANNEL_COLUMN] = ch.labels()
+    table = {
+        "name": list(ch.names),
+        "n_cells": [r["n_cells"] for r in runs],
+        "n_scored": [r["n_scored"] for r in runs],
+        "expected_doublet_rate": rates,
+        "threshold": [np.nan if r["threshold"] is None else r["threshold"] for r in runs],
+        "n_called": [r["n_called"] for r in runs],
+        "status": [r["status"] for r in runs],
+    }
+    info: dict = {"scview_channels": table, "scview_channel_reason": ch.reason,
+                  "parameters": {"min_channel_cells": MIN_CHANNEL_CELLS, "seed": doublet_classifier.SEED}}
+    if ch.column is not None:
+        info["scview_channel_column"] = ch.column
+    adata.uns[CLASSIFIER_KEY] = info
+    failed = [r.get("error") for r in runs if r["status"] == "failed"]
+    if failed:
+        logger.warning("The doublet classifier failed in %d channel(s), left unscored: %s",
+                       len(failed), failed[0])
+    logger.info("Doublet detection (classifier, %d channel(s) by %s): %d / %d cells flagged",
+                len(runs), ch.reason, int(call.sum()), int(adata.n_obs))
+    return {
+        "channel_column": ch.column,
+        "channel_reason": ch.reason,
+        "channels": [{"name": g, "n_cells": r["n_cells"], "expected_doublet_rate": rt,
+                      "status": r["status"], "threshold": r["threshold"], "n_called": r["n_called"]}
+                     for g, r, rt in zip(ch.names, runs, rates)],
+        "n_called": int(call.sum()),
+        "n_unscored": int(np.isnan(score).sum()),
+    }
+
+
+def _drop_scrublet(adata) -> None:
+    """Forget Scrublet's results (a doublet step that ran the classifier alone)."""
+    for col in (SCORE, CALL, SCRUBLET_CALL):
+        if col in adata.obs.columns:
+            del adata.obs[col]
+    adata.uns.pop("scrublet", None)
+    adata.uns.pop(THRESHOLD_KEY, None)
+
+
+def _drop_classifier(adata) -> None:
+    """Forget the classifier's results (a doublet step that ran Scrublet alone)."""
+    for col in (CLASSIFIER_SCORE, CLASSIFIER_CALL):
+        if col in adata.obs.columns:
+            del adata.obs[col]
+    adata.uns.pop(CLASSIFIER_KEY, None)
+
+
+def method_of(value: str | None) -> str:
+    """The doublet step's ``doublet_method`` as one of ``METHODS`` (an alias of the
+    classifier read as it; empty: Scrublet). Raises DoubletError for anything else."""
+    m = (value or SCRUBLET_METHOD).strip().lower()
+    m = METHOD_ALIASES.get(m, m)
+    if m not in METHODS:
+        raise DoubletError(f"Unknown doublet method '{value}': use {', '.join(METHODS)}.")
+    return m
+
+
+def run_doublets(adata, counts, method: str | None = None, rate: float | None = None,
+                 key: str | None = None) -> dict:
+    """The doublet step: ``method`` (``METHODS``) in each capture channel. Each run
+    writes its own columns and drops the other detector's, so the obs holds what this
+    step found. Returns what the provenance records: ``doublet_method`` and, for
+    Scrublet, ``run_scrublet``'s record at the top level (as before the classifier),
+    the classifier's under ``classifier``."""
+    m = method_of(method)
+    found: dict = {"doublet_method": m}
+    if m in (SCRUBLET_METHOD, BOTH_METHOD):
+        found.update(run_scrublet(adata, counts, rate, key))
+    else:
+        _drop_scrublet(adata)
+    if m in (CLASSIFIER_METHOD, BOTH_METHOD):
+        found["classifier"] = run_classifier(adata, counts, rate, key)
+        if m == CLASSIFIER_METHOD:
+            ch = found["classifier"]
+            found.update(expected_doublet_rate=float(rate) if rate is not None and rate > 0 else None,
+                         doublet_channel_key=key or "", channel_column=ch["channel_column"],
+                         channel_reason=ch["channel_reason"], min_channel_cells=MIN_CHANNEL_CELLS)
+    else:
+        _drop_classifier(adata)
+    return found
+
+
+def classifier_record(adata) -> dict | None:
+    """The classifier's last channels (``uns[CLASSIFIER_KEY]``), as ``channel_record``."""
+    return _record(adata.uns.get(CLASSIFIER_KEY))
+
+
 def channel_record(adata) -> dict | None:
     """The last doublet step's channels from ``uns["scrublet"]``: the column (None: all
     cells as one), why, and one row per channel; None for scores from before channels
     were recorded, or from another tool."""
-    info = adata.uns.get("scrublet")
+    return _record(adata.uns.get("scrublet"))
+
+
+def _record(info) -> dict | None:
     table = info.get("scview_channels") if isinstance(info, dict) else None
     if not isinstance(table, dict) or "name" not in table:
         return None
@@ -435,10 +564,12 @@ def channel_record(adata) -> dict | None:
     for i, name in enumerate(names):
         t = cols["threshold"][i] if i < len(cols["threshold"]) else None
         t = float(t) if t is not None and np.isfinite(float(t)) else None
-        rows.append({"name": name, "n_cells": int(cols["n_cells"][i]), "n_scored": int(cols["n_scored"][i]),
-                     "expected_doublet_rate": float(cols["expected_doublet_rate"][i]), "threshold": t,
-                     "n_called": int(cols["n_called"][i]), "neighbors": str(cols["neighbors"][i]),
-                     "status": str(cols["status"][i])})
+        row = {"name": name, "n_cells": int(cols["n_cells"][i]), "n_scored": int(cols["n_scored"][i]),
+               "expected_doublet_rate": float(cols["expected_doublet_rate"][i]), "threshold": t,
+               "n_called": int(cols["n_called"][i]), "status": str(cols["status"][i])}
+        if i < len(cols["neighbors"]):  # Scrublet's; the classifier has none to choose
+            row["neighbors"] = str(cols["neighbors"][i])
+        rows.append(row)
     column = info.get("scview_channel_column")
     return {"column": None if column is None else str(column),
             "reason": str(info.get("scview_channel_reason") or ""), "rows": rows}
@@ -557,7 +688,12 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
     suggestion = suggest_rate(adata, column)
     n = int(adata.n_obs)
     if SCORE not in adata.obs.columns:
-        return {"available": False, "n_cells": n, "suggestion": suggestion}
+        out: dict = {"available": False, "n_cells": n, "suggestion": suggestion}
+        if CLASSIFIER_CALL in adata.obs.columns:  # the classifier ran alone
+            ch, _ = _grouping(adata, column, classifier_record(adata))
+            out.update(classifier=_classifier_summary(adata, ch, n_bins), methods=None,
+                       source=doublet_source.describe(adata.obs))
+        return out
     scores = _scores(adata)
     scored = np.isfinite(scores)
     finite = scores[scored]
@@ -609,7 +745,83 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
         "few_called_min_cells": FEW_CALLED_MIN_CELLS,
         "source": doublet_source.describe(adata.obs),  # what the doublet views use
         "agreement": _agreement(adata, called if called is not None else now, threshold),
+        # The second detector, and how its calls agree with Scrublet's (at the threshold shown)
+        "classifier": _classifier_summary(adata, ch, n_bins),
+        "methods": _methods(adata, called if called is not None else now, ch),
     }
+    return out
+
+
+def _classifier_summary(adata, ch: Channels | None, n_bins: int = N_BINS) -> dict | None:
+    """The classifier's calls (None when it did not run): cells scored, called, its score
+    histogram over 0-1, and per channel of ``ch`` the cells, cells scored and called, with
+    the threshold and status of its record (when the channels are the ones it ran in)."""
+    obs = adata.obs
+    calls = doublet_source.classifier_calls(obs)
+    if calls is None:
+        return None
+    scores = (pd.to_numeric(obs[CLASSIFIER_SCORE], errors="coerce").to_numpy(dtype=np.float64)
+              if CLASSIFIER_SCORE in obs.columns else np.full(calls.size, np.nan))
+    finite = np.isfinite(scores)
+    counts, edges = np.histogram(scores[finite], bins=n_bins, range=(0.0, 1.0))
+    n = int(calls.size)
+    record = classifier_record(adata)
+    by = {r["name"]: r for r in record["rows"]} if record else {}
+    rows = []
+    if ch is not None:
+        k = len(ch.names)
+        lab = ch.codes >= 0
+        sizes = np.bincount(ch.codes[lab], minlength=k)
+        scored = np.bincount(ch.codes[lab & finite], minlength=k)
+        hits = np.bincount(ch.codes[lab & calls], minlength=k)
+        mine = record is not None and record["column"] == ch.column
+        for i, name in enumerate(ch.names):
+            r = by.get(name, {}) if mine else {}
+            rows.append({"name": name, "n_cells": int(sizes[i]), "n_scored": int(scored[i]),
+                         "n_called": int(hits[i]),
+                         "fraction": round(int(hits[i]) / int(sizes[i]), 4) if sizes[i] else 0.0,
+                         "threshold": r.get("threshold"),
+                         "status": r.get("status") or ("scored" if scored[i] else "not_scored")})
+    elif record and len(record["rows"]) == 1:
+        r = record["rows"][0]
+        rows.append({"name": r["name"], "n_cells": n, "n_scored": int(finite.sum()),
+                     "n_called": int(calls.sum()), "fraction": round(float(calls.mean()), 4) if n else 0.0,
+                     "threshold": r["threshold"], "status": r["status"]})
+    return {
+        "label": doublet_source.CLASSIFIER_LABEL,
+        "n_scored": int(finite.sum()),
+        "n_unscored": int(n - finite.sum()),
+        "n_called": int(calls.sum()),
+        "fraction": round(float(calls.mean()), 4) if n else 0.0,
+        "median": round(float(np.median(scores[finite])), 4) if finite.any() else None,
+        "hist": {"bin_edges": np.round(edges, 6).tolist(), "counts": counts.tolist()},
+        "channel_column": record["column"] if record else None,
+        "channels": rows,
+    }
+
+
+def _methods(adata, scrublet: np.ndarray | None, ch: Channels | None) -> dict | None:
+    """Scrublet's calls (at the threshold shown) x the classifier's: called by both, by
+    one only, by neither, over all cells and per channel of ``ch``. None unless both ran."""
+    classifier = doublet_source.classifier_calls(adata.obs)
+    if scrublet is None or classifier is None:
+        return None
+    s, c = np.asarray(scrublet, dtype=bool), np.asarray(classifier, dtype=bool)
+    out: dict = {"n_cells": int(s.size), "scrublet": int(s.sum()), "classifier": int(c.sum()),
+                 "both": int((s & c).sum()), "scrublet_only": int((s & ~c).sum()),
+                 "classifier_only": int((~s & c).sum()), "neither": int((~s & ~c).sum()),
+                 "channels": []}
+    if ch is not None:
+        k = len(ch.names)
+        lab = ch.codes >= 0
+
+        def count(mask: np.ndarray) -> np.ndarray:
+            return np.bincount(ch.codes[lab & mask], minlength=k)
+
+        sizes, both, so, co = count(np.ones_like(s)), count(s & c), count(s & ~c), count(~s & c)
+        out["channels"] = [{"name": g, "n_cells": int(sizes[i]), "both": int(both[i]),
+                            "scrublet_only": int(so[i]), "classifier_only": int(co[i])}
+                           for i, g in enumerate(ch.names)]
     return out
 
 

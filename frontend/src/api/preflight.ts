@@ -107,6 +107,7 @@ export interface IngestPreflight {
 const RUN_PARAMS = [
   "n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
   "doublet_channel_key", // doublet detection's peak is its largest channel's
+  "doublet_method", // Scrublet, the classifier or both
   "clustering_method", "leiden_iterations", // clustering's time, and the fast-Leiden offer
   "umap_3d", // UMAP's time, and the 3D UMAP note
   "regress_out", // scaling's fit (a list, sent comma-separated)

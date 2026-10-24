@@ -24,8 +24,19 @@ export function sourceOptionLabel(source: DoubletSource, choices: DoubletChoices
       return `Cell hashing${count}`;
     case "scrublet":
       return `Scrublet${count}`;
-    case "either":
-      return `Either: hashing or Scrublet${count}`;
+    case "classifier":
+      return `Classifier${count}`;
+    case "consensus":
+      return `Both detectors (Scrublet and classifier)${count}`;
+    case "either": {
+      const o = choices.options;
+      const which = !o.includes("classifier")
+        ? "hashing or Scrublet"
+        : o.includes("hashing")
+          ? o.includes("scrublet") ? "hashing, Scrublet or classifier" : "hashing or classifier"
+          : "Scrublet or classifier";
+      return `Either: ${which}${count}`;
+    }
   }
 }
 
@@ -35,6 +46,9 @@ export function sourceText(info: DoubletSourceInfo | null | undefined): string {
   let text = `${pct(info.fraction)} doublets by ${info.label}`;
   if (info.both && info.scrublet && info.source === "hashing") {
     text += `; Scrublet flags ${pct(info.scrublet.fraction)}, ${pct(info.both.fraction)} by both`;
+  }
+  if (info.source === "consensus" && info.scrublet && info.classifier) {
+    text += ` (Scrublet ${pct(info.scrublet.fraction)}, the classifier ${pct(info.classifier.fraction)})`;
   }
   return `${text}.`;
 }
@@ -49,10 +63,14 @@ export function choiceText(c: DoubletChoices): string {
   const n = c.used.n.toLocaleString();
   const both = c.both?.toLocaleString();
   const kept = c.unscored
-    ? ` ${c.unscored.toLocaleString()} cells Scrublet did not score (channels too small for it) are kept.`
+    ? ` ${c.unscored.toLocaleString()} cells ${c.used.source === "scrublet" ? "Scrublet" : c.used.source === "classifier" ? "the classifier" : "a detector"} did not score (channels too small for it) are kept.`
     : "";
   if (c.used.source === "either") {
-    return `Drops ${n} cells that cell hashing or Scrublet calls doublets${both ? ` (${both} by both)` : ""}.${kept}`;
+    const pair = c.used.label === "cell hashing or Scrublet" && both ? ` (${both} by both)` : "";
+    return `Drops ${n} cells that ${c.used.label} calls doublets${pair}.${kept}`;
+  }
+  if (c.used.source === "consensus") {
+    return `Drops ${n} cells that both Scrublet and the classifier call doublets.${kept}`;
   }
   const other = c.used.source === "hashing" ? "Scrublet" : c.used.source === "scrublet" ? "cell hashing" : null;
   return `Drops ${n} doublets by ${c.used.label}${other && both ? `; ${other} calls ${both} of them too` : ""}.${kept}`;

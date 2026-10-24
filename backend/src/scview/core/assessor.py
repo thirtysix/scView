@@ -125,7 +125,8 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
     """Check if doublet detection (Scrublet) has annotated obs."""
     try:
         obs_cols = set(adata.obs.columns)
-        dbl_cols = {"doublet_score", "predicted_doublet"} & obs_cols
+        dbl_cols = {"doublet_score", "predicted_doublet", "doublet_score_classifier",
+                    "predicted_doublet_classifier"} & obs_cols
         if dbl_cols:
             from scview.core import doublet_source
 
@@ -134,6 +135,9 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
             detail = f"Found doublet columns: {', '.join(sorted(dbl_cols))}"
             if scr is not None:
                 detail += f" ({int(scr.sum())} cells flagged)"
+            cls = doublet_source.classifier_calls(adata.obs)
+            if cls is not None:
+                detail += f"; the doublet classifier flags {int(cls.sum())}"
             hashing = doublet_source.hashing_calls(adata.obs)
             if hashing is not None:
                 detail += (f"; cell hashing calls {int(hashing.sum())} doublets, the doublet views' "

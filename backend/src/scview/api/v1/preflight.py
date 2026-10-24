@@ -48,6 +48,7 @@ async def dataset_preflight(
     normalization_method: str | None = None,
     annotation_method: str | None = None,
     doublet_channel_key: str | None = None,
+    doublet_method: str | None = None,
     chunked: str | None = None,
     clustering_method: str | None = None,
     leiden_iterations: int | None = None,
@@ -83,6 +84,7 @@ async def dataset_preflight(
         "n_top_genes": n_top_genes, "n_comps": n_comps, "n_neighbors": n_neighbors,
         "normalization_method": normalization_method, "annotation_method": annotation_method,
         "doublet_channel_key": doublet_channel_key,  # its largest channel sets the peak
+        "doublet_method": doublet_method,  # Scrublet, the classifier or both
         "chunked": chunked,
         "clustering_method": clustering_method, "leiden_iterations": leiden_iterations,
         "umap_3d": umap_3d,
@@ -102,6 +104,10 @@ async def dataset_preflight(
             from scview.core.pipeline import check_umap_3d
 
             check_umap_3d(umap_3d)
+        if doublet_method is not None:
+            from scview.core.doublets import method_of
+
+            method_of(doublet_method)  # DoubletError is a ValueError
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     try:

@@ -169,6 +169,21 @@ describe("ClusterQcTable", () => {
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
 
+  it("names the two clusters a doublet-like cluster looks like", async () => {
+    const MIX = row("9", {
+      n_cells: 40, median_counts: 7800, flags: ["doublet_like"], doublet_like_of: ["0", "1"],
+      reasons: ["Looks like doublets of 0 + 1: 16 of its top 25 markers are theirs (9 of 0's, 7 of 1's), and its cells carry more RNA, median 7,800 counts vs 4,200 and 4,200."],
+    });
+    getClusterQc.mockResolvedValue({
+      ...report([row("0"), row("1"), MIX]),
+      flag_help: { doublet_like: "Looks like doublets of two other clusters." },
+    });
+    render(<ClusterQcTable datasetId="d1" />);
+    const chip = await screen.findByText("Doublet-like: 0 + 1");
+    expect(chip).toHaveAttribute("title", MIX.reasons[0]);
+    expect(screen.getByText(/Looks like doublets of two other clusters\./)).toBeInTheDocument();
+  });
+
   it("explains a dataset with no clustering", async () => {
     getClusterQc.mockResolvedValue({
       ...report([]), column: null, n_groups: 0, note: "No clustering yet: run clustering.",

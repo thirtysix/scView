@@ -19,7 +19,7 @@ each a lazy row-block matrix on disk (``core/chunked.py``):
     step                    here                                         equal to in memory
     reset_to_counts         X := the counts layer / .raw / counts sidecar  same
     qc_metrics              chunked.qc_metrics                           bitwise
-    doublet_detection       doublets.run_scrublet on the stored counts,  bitwise
+    doublet_detection       doublets.run_doublets on the stored counts,  bitwise
                             one capture channel's rows at a time
     filtering               the step's own masks from obs, gene counts   same cells, genes
                             by blocks, lazy cuts
@@ -784,9 +784,7 @@ class LargeRun:
 
     def _doublet_detection(self) -> dict[str, Any]:
         params = self.params
-        method = (params.doublet_method or "scrublet").lower()
-        if method != "scrublet":
-            logger.warning("Unknown doublet method '%s'; falling back to scrublet", method)
+        method = doublets.method_of(params.doublet_method)  # an unknown one fails here
         # pipeline._doublet_matrix: X unless it holds processed values, then the counts.
         where = None
         m = self.x
@@ -799,7 +797,7 @@ class LargeRun:
                 raise StepSkipped("Doublet detection needs raw counts: X holds processed values "
                                   "and there is no counts layer or counts in .raw.")
         with self._rows(m) as counts:
-            found = doublets.run_scrublet(self.light, counts, params.expected_doublet_rate,
+            found = doublets.run_doublets(self.light, counts, method, params.expected_doublet_rate,
                                           params.doublet_channel_key or None)
         if where is not None:
             found["input"] = where

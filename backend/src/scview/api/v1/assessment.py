@@ -284,7 +284,7 @@ async def get_filter_preview(
     ``mito_mode`` "per_type" judges % mito by each type of ``mito_type_column``
     (default: as the step picks it) with ``mito_types`` the per-type table;
     ``mito_type_floor`` makes it never stricter than the global rule.
-    ``doublet_source`` (auto | hashing | scrublet | either) is whose doublets
+    ``doublet_source`` (auto | hashing | scrublet | classifier | consensus | either) is whose doublets
     ``drop_doublets`` drops, ``drop_hash_negatives`` drops cell hashing's
     negatives; ``doublets`` describes the choice (core/doublet_source.py).
     Small and fast at any cell count (one pass over cached per-cell values), so

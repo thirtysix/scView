@@ -34,6 +34,8 @@ export interface ClusterQc {
   median_pct_intronic?: number | null;
   /** Top markers whose signal in the other clusters looks like ambient RNA (core/ambient.py). */
   ambient_markers?: string[];
+  /** doublet_like: the two clusters it looks like doublets of. */
+  doublet_like_of?: string[];
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
   /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
@@ -45,6 +47,7 @@ export type ClusterFlag =
   | "high_mito"
   | "low_genes"
   | "doublet_rich"
+  | "doublet_like"
   | "stress_driven"
   | "hb_ambient"
   | "cycling"
@@ -259,6 +262,44 @@ export interface DoubletSummary {
   source?: DoubletSourceInfo | null;
   /** Cell hashing x Scrublet at this threshold, when the dataset has both. */
   agreement?: DoubletAgreement | null;
+  /** The doublet step's second detector, the scDblFinder-style classifier, when it ran
+   *  (also when it ran alone: then `available` is false, there are no Scrublet scores). */
+  classifier?: ClassifierCalls | null;
+  /** Scrublet (at this threshold) x the classifier, when both ran. */
+  methods?: DetectorAgreement | null;
+}
+
+export interface ClassifierCalls {
+  label: string;
+  n_scored: number;
+  n_unscored: number;
+  n_called: number;
+  fraction: number;
+  median: number | null;
+  /** Its scores over 0-1. */
+  hist: { bin_edges: number[]; counts: number[] };
+  channel_column: string | null;
+  /** Per capture channel, with its own threshold and status from the run. */
+  channels: {
+    name: string;
+    n_cells: number;
+    n_scored: number;
+    n_called: number;
+    fraction: number;
+    threshold: number | null;
+    status: string;
+  }[];
+}
+
+export interface DetectorAgreement {
+  n_cells: number;
+  scrublet: number;
+  classifier: number;
+  both: number;
+  scrublet_only: number;
+  classifier_only: number;
+  neither: number;
+  channels: { name: string; n_cells: number; both: number; scrublet_only: number; classifier_only: number }[];
 }
 
 /** `channel`: the doublet step's `doublet_channel_key` (an obs column, or
