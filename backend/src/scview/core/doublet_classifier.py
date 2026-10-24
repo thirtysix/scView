@@ -251,7 +251,7 @@ def classify_counts(counts, expected_doublet_rate=0.05, seed=SEED):
     # 1. quick clusters on the genes most expressed overall
     top = np.argsort(-np.asarray(L.mean(axis=0)).ravel(), kind="stable")[:min(N_FEATURES, L.shape[1])]
     clusters = _clusters(_pcs(L[:, np.sort(top)], N_PCS, seed), seed)
-    # 2. artificial doublets of two cells of different clusters
+    # 2. artificial doublets: two cells added together, most of them of different clusters
     feats = _features_genes(L, clusters, N_FEATURES)
     m = int(np.clip(ok.size, MIN_ARTIFICIAL, MAX_ARTIFICIAL))
     a, b = _pairs(clusters, m, rng)
