@@ -22,7 +22,7 @@ Edit `.env` if needed:
 # Directory where uploaded datasets are stored (inside the container)
 DATA_DIR=/data
 
-# Maximum upload size in MB
+# Maximum upload size in MB (public mode only; private mode has no limit)
 MAX_UPLOAD_SIZE_MB=2048
 
 # CORS origins (comma-separated; default allows localhost)
@@ -150,7 +150,7 @@ make test
 - Verify the backend is healthy: `curl http://localhost:8000/health`
 
 ### Upload fails with large files
-- Increase `MAX_UPLOAD_SIZE_MB` in `.env`
+- In private mode there is no upload limit; in public mode raise `MAX_UPLOAD_SIZE_MB` in `.env`
 - Ensure Docker has enough disk space for the data volume
 
 ### Seurat conversion fails
