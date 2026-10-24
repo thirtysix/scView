@@ -2011,6 +2011,7 @@ def _finish_run(
     The file is written beside the derived file and then swapped in, so a backend
     killed mid-write (out of memory) leaves the previous file whole."""
     if outcome is not None:
+        step_failures.settle_unrun(adata, outcome)  # markers of a column clustered again
         _end_status(result, outcome)
     if result.status in SAVED_STATUSES and control is not None and control.cancelled:
         # Cancelled after the last step ended but before the save.

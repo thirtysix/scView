@@ -77,6 +77,7 @@ from scview.core import (
     qc_filter,
     scaling,
     sparse_markers,
+    step_failures,
 )
 from scview.core.pipeline import (
     ALL_STEPS,
@@ -1304,6 +1305,7 @@ def _finish(run: LargeRun, params: PipelineParams, result: PipelineResult, t0: f
     step (reset, normalisation, log transform) leaves it otherwise, the run is stopped
     with nothing saved, the dataset as it was."""
     if outcome is not None:
+        step_failures.settle_unrun(run.light, outcome)  # markers of a column clustered again
         _end_status(result, outcome)
     if result.status in SAVED_STATUSES and control is not None and control.cancelled:
         _halted(result, ("cancelled", cancelled_reason("before", "saving")))
