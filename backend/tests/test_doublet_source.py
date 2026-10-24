@@ -5,6 +5,8 @@ negatives (core/qc_filter.py), recorded and replayed.
 The fixture's answers are counted by hand: 20 cells, hashing calls cells 0-3
 doublets and 4-5 negatives, Scrublet calls cells 2, 3, 4 and 10. So both call
 2 and 3; hashing alone 0 and 1; Scrublet alone 4 (a hashing negative) and 10.
+With the classifier (cells 3, 4, 7 and 12; cell 15 not scored): it and Scrublet both
+call 3 and 4 (the consensus); either detector 2, 3, 4, 7, 10 and 12.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ API = "/api/v1"
 HASH_DOUBLETS = [0, 1, 2, 3]
 NEGATIVES = [4, 5]
 SCRUBLET = [2, 3, 4, 10]
+CLASSIFIER = [3, 4, 7, 12]
 
 
 def _mask(idx, n=20) -> np.ndarray:
@@ -35,7 +38,7 @@ def _mask(idx, n=20) -> np.ndarray:
     return m
 
 
-def _obs(hash_class: bool = True, scrublet: bool = True) -> pd.DataFrame:
+def _obs(hash_class: bool = True, scrublet: bool = True, classifier: bool = False) -> pd.DataFrame:
     obs = pd.DataFrame(index=[f"c{i}" for i in range(20)])
     if hash_class:
         cls = np.array(["Singlet"] * 20, dtype=object)
@@ -44,6 +47,10 @@ def _obs(hash_class: bool = True, scrublet: bool = True) -> pd.DataFrame:
         obs["hash_class"] = pd.Categorical(cls, categories=["Singlet", "Doublet", "Negative"])
     if scrublet:
         obs["predicted_doublet"] = _mask(SCRUBLET)
+    if classifier:
+        obs["predicted_doublet_classifier"] = _mask(CLASSIFIER)
+        obs["doublet_score_classifier"] = np.where(_mask(CLASSIFIER), 0.9, 0.1)
+        obs.loc["c15", "doublet_score_classifier"] = np.nan
     return obs
 
 
@@ -169,6 +176,55 @@ def test_cluster_views_and_scrublet_card_read_their_own_calls():
     assert np.flatnonzero(a.obs["predicted_doublet_scrublet"]).tolist() == SCRUBLET
 
 
+@pytest.mark.parametrize("hash_class, source, expected, used", [
+    (False, "auto", [3, 4], "consensus"),  # both detectors ran: cells both call
+    (False, "consensus", [3, 4], "consensus"),
+    (False, "classifier", CLASSIFIER, "classifier"),
+    (False, "scrublet", SCRUBLET, "scrublet"),
+    (False, "either", [2, 3, 4, 7, 10, 12], "either"),
+    (True, "auto", HASH_DOUBLETS, "hashing"),  # hashing still first
+    (True, "consensus", [3, 4], "consensus"),
+    (True, "either", [0, 1, 2, 3, 4, 7, 10, 12], "either"),
+    (False, "legacy", SCRUBLET, "scrublet"),
+])
+def test_the_classifier_and_the_consensus(hash_class, source, expected, used):
+    got = doublet_source.resolve(_obs(hash_class=hash_class, classifier=True), source)
+    assert got.source == used and np.flatnonzero(got.calls).tolist() == expected
+    if used in ("consensus", "classifier", "either"):
+        assert np.flatnonzero(got.unscored).tolist() == [15]  # the classifier's NaN score
+
+
+def test_one_detector_alone_stands_for_the_consensus():
+    alone = _obs(hash_class=False, scrublet=False, classifier=True)
+    for source in ("auto", "consensus", "either"):
+        got = doublet_source.resolve(alone, source)
+        assert got.source == "classifier" and np.flatnonzero(got.calls).tolist() == CLASSIFIER
+    assert doublet_source.resolve(alone, "scrublet") is None
+    assert doublet_source.resolve(_obs(hash_class=False), "classifier") is None
+    assert doublet_source.resolve(_obs(hash_class=False), "consensus").source == "scrublet"
+    assert doublet_source.resolve(pd.DataFrame(index=range(3)), "consensus") is None
+
+
+def test_describe_text_and_options_with_the_classifier():
+    obs = _obs(hash_class=False, classifier=True)
+    info = doublet_source.describe(obs)
+    assert info["options"] == ["auto", "scrublet", "classifier", "consensus", "either"]
+    assert info["classifier"] == {"n_doublets": 4, "fraction": 0.2, "n_unscored": 1}
+    assert info["detectors_both"] == {"n": 2, "fraction": 0.1} and info["both"] is None
+    assert doublet_source.text(info) == (
+        "2 cells (10.0%) are doublets by both Scrublet and the doublet classifier (Scrublet 4, "
+        "the classifier 4); 1 cell not scored by the doublet classifier (a capture channel too "
+        "small for it, or under 3 genes), so not called")
+    scr = doublet_source.describe(obs, "scrublet")
+    assert doublet_source.text(scr) == ("4 cells (20.0%) are doublets by Scrublet; the doublet "
+                                        "classifier flags 4, 2 by both")
+    three = doublet_source.describe(_obs(classifier=True), "either")
+    assert three["label"] == "cell hashing, Scrublet or the doublet classifier"
+    assert three["columns"] == ["hash_class", "predicted_doublet", "predicted_doublet_classifier"]
+    assert doublet_source.options(_obs(scrublet=False, classifier=True)) == [
+        "auto", "hashing", "classifier", "either"]
+
+
 # ---------------------------------------------------------------------------
 # The filtering step: the source choice and hashing negatives
 # ---------------------------------------------------------------------------
@@ -198,6 +254,19 @@ def test_filtering_drops_each_choice(kw, dropped):
     else:
         assert "qc_doublet_source" not in found
     assert found.get("drop_hash_negatives", False) is bool(kw.get("drop_hash_negatives"))
+
+
+@pytest.mark.parametrize("source, dropped, used", [
+    ("auto", [3, 4], "consensus"), ("classifier", CLASSIFIER, "classifier"),
+    ("either", [2, 3, 4, 7, 10, 12], "either"),
+])
+def test_filtering_drops_the_detectors_choice(source, dropped, used):
+    a = ad.AnnData(np.ones((20, 3), dtype="float32"), obs=_obs(hash_class=False, classifier=True))
+    params = PipelineParams(qc_threshold_mode="fixed", min_genes=0, min_cells=0, drop_doublets=True,
+                            qc_doublet_source=source)
+    out, found = _run_filtering(a, params)
+    assert out.obs_names.tolist() == [f"c{i}" for i in range(20) if i not in dropped]
+    assert found["qc_doublet_source_used"] == used and found["doublets_unscored_kept"] == 1
 
 
 def test_without_hashing_auto_is_scrublet_and_hashing_drops_nothing():
@@ -273,7 +342,14 @@ def _cases() -> list[pd.DataFrame]:
     finder = pd.DataFrame({"DF.classification_x": ["Singlet", "Doublet"] * 10}, index=both.index)
     finder_h = finder.assign(hash_class=both["hash_class"].to_numpy())
     named_h = finder_h.assign(**{"scDblFinder.class": ["doublet"] + ["singlet"] * 19})
-    return [both, text, _obs(scrublet=False), _obs(hash_class=False), finder, finder_h, named_h,
+    detectors = [_obs(classifier=True), _obs(hash_class=False, classifier=True),
+                 _obs(hash_class=False, scrublet=False, classifier=True),
+                 _obs(scrublet=False, classifier=True)]
+    texted = detectors[1].copy()
+    texted["predicted_doublet_classifier"] = texted["predicted_doublet_classifier"].map(
+        {True: "True", False: "False"})
+    return [both, text, _obs(scrublet=False), _obs(hash_class=False), finder, finder_h, named_h, *detectors,
+            texted,
             pd.DataFrame(index=both.index)]
 
 

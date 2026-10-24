@@ -1,6 +1,7 @@
 import { leidenIterationsText } from "@/lib/fastLeiden";
 import { umap3dText } from "@/lib/umap3d";
 import { clearedText } from "@/lib/runErrors";
+import { doubletMethodText } from "@/lib/doubletMethods";
 
 const LIST_SHOWN = 12;
 
@@ -37,8 +38,9 @@ interface ChannelRun {
   status?: string;
 }
 
-/** The doublet step's channels (one object each, 133 for the 1.3M brain) in one chip. */
-function channelsText(rows: ChannelRun[]): string {
+/** The doublet step's channels (one object each, 133 for the 1.3M brain) in one chip;
+ *  `who`: the detector that ran in them. */
+function channelsText(rows: ChannelRun[], who = "Scrublet"): string {
   const sizes = rows.map((r) => r.n_cells ?? 0);
   const rates = rows.map((r) => 100 * (r.expected_doublet_rate ?? 0));
   const called = rows.reduce((t, r) => t + (r.n_called ?? 0), 0);
@@ -49,7 +51,7 @@ function channelsText(rows: ChannelRun[]): string {
       : `${lo.toLocaleString(undefined, { maximumFractionDigits: d })}-${hi.toLocaleString(undefined, { maximumFractionDigits: d })}`;
   };
   return (
-    `Scrublet per channel: ${rows.length.toLocaleString()} channel${rows.length === 1 ? "" : "s"}, ` +
+    `${who} per channel: ${rows.length.toLocaleString()} channel${rows.length === 1 ? "" : "s"}, ` +
     `${range(sizes, 0)} cells, expected ${range(rates, 1)}%, ${called.toLocaleString()} called` +
     (small ? `, ${small} too small to score` : "")
   );
@@ -63,6 +65,10 @@ export function paramText(key: string, value: unknown): string {
   if (key === "channels" && Array.isArray(value) && value.length && typeof value[0] === "object")
     return channelsText(value as ChannelRun[]);
   if (key === "leiden_iterations") return leidenIterationsText(value);
+  if (key === "doublet_method") return doubletMethodText(value);
+  // The doublet step's second detector: its channels, as Scrublet's
+  const cls = key === "classifier" && value && typeof value === "object" ? (value as { channels?: unknown }).channels : null;
+  if (Array.isArray(cls) && cls.length && typeof cls[0] === "object") return channelsText(cls as ChannelRun[], "Classifier");
   if (key === "umap_3d") return umap3dText(value);
   // A run that finished with errors (step run_errors): its failed and skipped steps
   if (value && typeof value === "object" && !Array.isArray(value)) {

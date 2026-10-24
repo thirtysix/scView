@@ -1,12 +1,15 @@
 /** Whose doublet calls the app uses (backend core/doublet_source.py): cell hashing when
- *  it was run, else Scrublet, else another tool's text column. */
-export type DoubletSource = "auto" | "hashing" | "scrublet" | "either";
+ *  it was run, else the two detectors' consensus (Scrublet and the scDblFinder-style
+ *  classifier both call it), else the one that ran, else another tool's text column. */
+export type DoubletSource = "auto" | "hashing" | "scrublet" | "classifier" | "consensus" | "either";
 
-export const DOUBLET_SOURCES: readonly DoubletSource[] = ["auto", "hashing", "scrublet", "either"];
+export const DOUBLET_SOURCES: readonly DoubletSource[] = [
+  "auto", "hashing", "scrublet", "classifier", "consensus", "either",
+];
 
 /** What the doublet views use, with the hashing x Scrublet overlap when both exist. */
 export interface DoubletSourceInfo {
-  /** hashing | scrublet | either | a text column's name */
+  /** hashing | scrublet | classifier | consensus | either | a text column's name */
   source: string;
   label: string;
   columns: string[];
@@ -15,7 +18,11 @@ export interface DoubletSourceInfo {
   fraction: number;
   hashing: { n_doublets: number; fraction: number; n_negatives: number } | null;
   scrublet: { n_doublets: number; fraction: number } | null;
+  classifier?: { n_doublets: number; fraction: number; n_unscored: number } | null;
+  /** hashing x Scrublet */
   both: { n: number; fraction: number } | null;
+  /** Scrublet x the classifier */
+  detectors_both?: { n: number; fraction: number } | null;
   options: DoubletSource[];
 }
 

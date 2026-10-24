@@ -852,6 +852,20 @@ DBL_SECONDS_COEF = 2e-5
 DBL_SECONDS_COEF_APPROX = 6.9e-5
 DBL_SECONDS_POWER = 1.4
 DBL_SECONDS_PER_CHANNEL = 0.2
+# The scDblFinder-style classifier (core/doublet_classifier.py), in the same channels after
+# Scrublet: its largest channel's counts as float32 CSR about twice over (the channel, its
+# filtered genes, the selected genes of real and artificial cells), plus per point (cells and
+# artificial doublets: as many as cells, 1,500 to 25,000) the dense selected genes, the PCs,
+# neighbours, features and the co-expression score. Peak RSS over the process before
+# (2 CPUs): Kang 6.6k / 13.8k cells 306 / 619 MB, hgmm 11.5k 1,380 MB, paul15 179 MB, the
+# brain 2k-50k 181-3,277 MB; this model is within -7 % .. +18 % of each. Seconds: 0.24 ms
+# per point (Kang 3.3 / 6.2 s, the brain at 50k 29 s: slower per point there).
+DBL_CLS_CSR_COPIES = 2.2
+DBL_CLS_PER_POINT = 18_000
+DBL_CLS_FIXED = 50 * MiB
+DBL_CLS_MIN_ARTIFICIAL = 1500  # doublet_classifier.MIN_ARTIFICIAL / MAX_ARTIFICIAL
+DBL_CLS_MAX_ARTIFICIAL = 25_000
+DBL_CLS_SECONDS_PER_POINT = 2.4e-4
 # Steps that import or JIT-compile libraries the first time they run in a process
 # (numba, umap, pynndescent, the MSigDB cache): held afterwards.
 WARMUP = {"doublet_detection": 150 * MiB, "neighbors": 100 * MiB, "marker_genes": 100 * MiB,
@@ -1018,10 +1032,32 @@ def _step_doublet(s: _State, params, plan: DoubletPlan | None = None) -> tuple[i
         dense = int(DBL_PER_CELL_HVG * largest * plan.hvg)
     else:
         dense = int(DBL_DENSE_PER_VALUE * largest * counts.n_genes)
-    s.other += s.n * 16
-    secs = 3.0 + sum((DBL_SECONDS_COEF if c <= EXACT_KNN_MAX_CELLS else DBL_SECONDS_COEF_APPROX)
-                     * c ** DBL_SECONDS_POWER + DBL_SECONDS_PER_CHANNEL for c in sizes)
-    return max(copies, dense) + DBL_OUT_PER_CELL * s.n, s, secs
+    method = _doublet_method(params)
+    s.other += s.n * 16 * (2 if method == "both" else 1)
+    peak, secs = 0, 0.0
+    if method in ("scrublet", "both"):
+        peak = max(copies, dense)
+        secs = 3.0 + sum((DBL_SECONDS_COEF if c <= EXACT_KNN_MAX_CELLS else DBL_SECONDS_COEF_APPROX)
+                         * c ** DBL_SECONDS_POWER + DBL_SECONDS_PER_CHANNEL for c in sizes)
+    if method in ("scdblfinder-style", "both"):  # after Scrublet, one channel at a time
+        nnz = (counts.nnz if counts.nonzero is None else counts.nonzero) * largest / max(1, counts.n_cells)
+        points = largest + (min(max(largest, DBL_CLS_MIN_ARTIFICIAL), DBL_CLS_MAX_ARTIFICIAL) if largest else 0)
+        peak = max(peak, int(DBL_CLS_CSR_COPIES * nnz * 8 + DBL_CLS_PER_POINT * points + DBL_CLS_FIXED))
+        secs += 1.0 + sum(DBL_CLS_SECONDS_PER_POINT * (c + min(max(c, DBL_CLS_MIN_ARTIFICIAL),
+                                                              DBL_CLS_MAX_ARTIFICIAL))
+                          + DBL_SECONDS_PER_CHANNEL for c in sizes)
+    return peak + DBL_OUT_PER_CELL * s.n, s, secs
+
+
+def _doublet_method(params) -> str:
+    """The doublet step's detectors (core/doublets.py ``method_of``; Scrublet for anything
+    it does not know: the step itself then fails)."""
+    from scview.core.doublets import DoubletError, method_of
+
+    try:
+        return method_of(_p(params, "doublet_method", "scrublet"))
+    except DoubletError:
+        return "scrublet"
 
 
 def doublet_plan(adata, params=None) -> DoubletPlan | None:

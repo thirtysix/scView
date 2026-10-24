@@ -43,7 +43,35 @@ describe("doublet source texts", () => {
       .toBe("Drops 4 doublets by Scrublet. 40 cells Scrublet did not score (channels too small for it) are kept.");
   });
 
+  it("names the two detectors' choices", () => {
+    // tests/test_doublet_source.py with the classifier, no hashing: Scrublet 4, the classifier 4, both 2
+    const det: DoubletChoices = {
+      ...CHOICES, hash_negatives: null, both: null,
+      used: { source: "consensus", label: "both Scrublet and the doublet classifier", n: 2 },
+      auto: { source: "consensus", label: "both Scrublet and the doublet classifier" },
+      options: ["auto", "scrublet", "classifier", "consensus", "either"],
+      n_by_source: { auto: 2, scrublet: 4, classifier: 4, consensus: 2, either: 6 },
+    };
+    expect(sourceOptionLabel("auto", det)).toBe("Auto: both Scrublet and the doublet classifier (2)");
+    expect(sourceOptionLabel("consensus", det)).toBe("Both detectors (Scrublet and classifier) (2)");
+    expect(sourceOptionLabel("classifier", det)).toBe("Classifier (4)");
+    expect(sourceOptionLabel("either", det)).toBe("Either: Scrublet or classifier (6)");
+    expect(sourceOptionLabel("either", { ...det, options: [...det.options, "hashing"] })).toBe(
+      "Either: hashing, Scrublet or classifier (6)",
+    );
+    expect(choiceText(det)).toBe("Drops 2 cells that both Scrublet and the classifier call doublets.");
+    expect(choiceText({ ...det, used: { source: "classifier", label: "the doublet classifier", n: 4 }, unscored: 1 }))
+      .toBe("Drops 4 doublets by the doublet classifier. 1 cells the classifier did not score (channels too small for it) are kept.");
+    expect(
+      sourceText({
+        ...HASHED, source: "consensus", label: "both Scrublet and the doublet classifier", n_doublets: 2, fraction: 0.1,
+        hashing: null, both: null, classifier: { n_doublets: 4, fraction: 0.2, n_unscored: 1 },
+      }),
+    ).toBe("10.0% doublets by both Scrublet and the doublet classifier (Scrublet 20.0%, the classifier 20.0%).");
+  });
+
   it("reads anything else as auto", () => {
+    expect(asDoubletSource("consensus")).toBe("consensus");
     expect(asDoubletSource("either")).toBe("either");
     expect(asDoubletSource("nope")).toBe("auto");
     expect(asDoubletSource(undefined)).toBe("auto");

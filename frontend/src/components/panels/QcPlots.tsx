@@ -52,6 +52,7 @@ const METRIC_LABELS: Record<string, string> = {
   total_counts: "Counts per cell",
   pct_counts_mt: "% Mitochondrial",
   doublet_score: "Doublet score",
+  doublet_score_classifier: "Doublet score (classifier)",
   S_score: "Cell-cycle S score",
   G2M_score: "Cell-cycle G2M score",
   dissociation_stress_score: "Dissociation stress score",
@@ -446,7 +447,8 @@ export function QcPlots({
   }
 
   // The doublet score has a card of its own, with its threshold.
-  const metricKeys = Object.keys(data.metrics).filter((k) => k !== "doublet_score");
+  // The doublet card shows both detectors' scores
+  const metricKeys = Object.keys(data.metrics).filter((k) => k !== "doublet_score" && k !== "doublet_score_classifier");
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -528,7 +530,7 @@ export function QcPlots({
         />
       )}
       <PseudobulkQc datasetId={datasetId} refreshKey={refreshKey} />
-      {data.metrics.doublet_score && (
+      {(data.metrics.doublet_score || data.metrics.doublet_score_classifier) && (
         <DoubletCard datasetId={datasetId} refreshKey={refreshKey} onApplied={onDoubletsApplied} />
       )}
       {grouped?.column ? <GroupedQc data={grouped} /> : <ScatterCard scatter={data.scatter} />}

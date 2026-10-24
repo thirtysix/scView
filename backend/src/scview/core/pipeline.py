@@ -91,12 +91,14 @@ class PipelineParams:
     # per_type: never stricter than the global rule (a type's bound = max(own, global)); opt-in
     qc_mito_type_floor: bool = False
     drop_doublets: bool = False  # drop cells flagged by doublet detection (opt-in)
-    # Whose doublets: "auto" (cell hashing when run, else Scrublet) | "hashing" |
-    # "scrublet" | "either" (core/doublet_source.py); hashing negatives are a separate opt-in.
+    # Whose doublets: "auto" (cell hashing when run, else the detectors' consensus, else the
+    # one that ran) | "hashing" | "scrublet" | "classifier" | "consensus" | "either"
+    # (core/doublet_source.py); hashing negatives are a separate opt-in.
     qc_doublet_source: str = "auto"
     drop_hash_negatives: bool = False
 
-    # Doublet detection: Scrublet in each capture channel (core/doublets.py)
+    # Doublet detection in each capture channel (core/doublets.py): "scrublet" | the
+    # "scdblfinder-style" classifier (core/doublet_classifier.py) | "both"
     doublet_method: str = "scrublet"
     # None: each channel's own, from its cells (a rule of thumb); a number: every channel's
     expected_doublet_rate: float | None = None
@@ -425,8 +427,11 @@ def _doublet_matrix(adata: ad.AnnData):
 
 
 def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
-    """Detect doublets with Scrublet in each capture channel; annotate ``.obs`` only
-    (removal is opt-in).
+    """Detect doublets with Scrublet, the scDblFinder-style classifier or both
+    (``doublet_method``: scrublet | scdblfinder-style | both; ``doublets.run_doublets``)
+    in each capture channel; annotate ``.obs`` only (removal is opt-in). The classifier
+    runs in the same channels with the same rates and writes its own columns
+    (``doublet_score_classifier``, ``predicted_doublet_classifier``).
 
     Writes ``doublet_score`` (float; NaN for a cell not scored) and ``predicted_doublet``
     (bool) to ``.obs``. Ordered before normalization so Scrublet sees raw counts. The
@@ -445,13 +450,11 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     gives, without copying the whole dataset); they come from ``layers['counts']`` or
     ``.raw`` when X holds processed values (recorded as ``input``).
     """
-    method = (params.doublet_method or "scrublet").lower()
-    if method != "scrublet":
-        logger.warning("Unknown doublet method '%s'; falling back to scrublet", method)
     counts, where = _doublet_matrix(adata)
-    # A channel column that is not there raises DoubletError: the step's error.
-    found = doublets.run_scrublet(adata, counts, params.expected_doublet_rate,
-                                  params.doublet_channel_key or None)
+    # A channel column that is not there, or an unknown method, raises DoubletError: the
+    # step's error.
+    found = doublets.run_doublets(adata, counts, params.doublet_method,
+                                  params.expected_doublet_rate, params.doublet_channel_key or None)
     if where is not None:
         found["input"] = where
     return found
@@ -1741,6 +1744,12 @@ def _new_adata(step_name: str, ret: Any) -> tuple[ad.AnnData | None, Any]:
     return (ret, None) if isinstance(ret, ad.AnnData) else (None, ret)
 
 
+# The doublet step's tool by the detectors it ran (doublets.METHODS).
+_DOUBLET_TOOLS = {
+    "scdblfinder-style": "scview scDblFinder-style classifier (per capture channel)",
+    "both": "scanpy.pp.scrublet + scview scDblFinder-style classifier (per capture channel)",
+}
+
 # step -> (human tool label, PipelineParams fields worth recording)
 _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "reset_to_counts": ("scview.reset_to_counts", ()),
@@ -1793,6 +1802,8 @@ def _record_pipeline_step(
     ``resources`` (the step's seconds and sampled peak memory, from a watched
     run) is kept beside the params, not in them, so replay ignores it."""
     tool, keys = _STEP_PROVENANCE.get(step_name, (f"scview.{step_name}", ()))
+    if step_name == "doublet_detection" and isinstance(ret, dict):
+        tool = _DOUBLET_TOOLS.get(ret.get("doublet_method"), tool)
     if params.normalization_method == "pearson_residuals":
         tool = _PEARSON_TOOLS.get(step_name, tool)
     try:

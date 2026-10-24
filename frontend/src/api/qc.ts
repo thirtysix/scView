@@ -253,6 +253,44 @@ export interface DoubletSummary {
   source?: DoubletSourceInfo | null;
   /** Cell hashing x Scrublet at this threshold, when the dataset has both. */
   agreement?: DoubletAgreement | null;
+  /** The doublet step's second detector, the scDblFinder-style classifier, when it ran
+   *  (also when it ran alone: then `available` is false, there are no Scrublet scores). */
+  classifier?: ClassifierCalls | null;
+  /** Scrublet (at this threshold) x the classifier, when both ran. */
+  methods?: DetectorAgreement | null;
+}
+
+export interface ClassifierCalls {
+  label: string;
+  n_scored: number;
+  n_unscored: number;
+  n_called: number;
+  fraction: number;
+  median: number | null;
+  /** Its scores over 0-1. */
+  hist: { bin_edges: number[]; counts: number[] };
+  channel_column: string | null;
+  /** Per capture channel, with its own threshold and status from the run. */
+  channels: {
+    name: string;
+    n_cells: number;
+    n_scored: number;
+    n_called: number;
+    fraction: number;
+    threshold: number | null;
+    status: string;
+  }[];
+}
+
+export interface DetectorAgreement {
+  n_cells: number;
+  scrublet: number;
+  classifier: number;
+  both: number;
+  scrublet_only: number;
+  classifier_only: number;
+  neither: number;
+  channels: { name: string; n_cells: number; both: number; scrublet_only: number; classifier_only: number }[];
 }
 
 /** `channel`: the doublet step's `doublet_channel_key` (an obs column, or
