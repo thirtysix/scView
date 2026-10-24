@@ -423,10 +423,16 @@ def _check_log_transform(adata: Any) -> StepStatus:
                 confidence="high",
                 details="Raw integer counts — not log-transformed yet",
             )
+        from scview.core.pipeline import looks_like_counts  # lazy: pipeline is heavy
+
         has_raw = adata.raw is not None
+        # .raw holding the counts beside a log-normalised X (Kang as published): X says
+        # whether it was logged. Reading .raw called it "not log-transformed", and the
+        # step was then pre-selected: a second log1p of X.
+        raw_counts = has_raw and looks_like_counts(adata.raw.X[: min(200, adata.raw.n_obs)])
 
         # Prefer raw.X (pre-scaling data) for a cleaner signal; fall back to X
-        if has_raw:
+        if has_raw and not raw_counts:
             raw_X = adata.raw.X
             n_sample = min(1000, raw_X.shape[0])
             sample = _dense_sample(raw_X, n_sample).ravel()
@@ -446,7 +452,8 @@ def _check_log_transform(adata: Any) -> StepStatus:
             )
         elif max_val <= 20:
             confidence = "high" if has_raw else "medium"
-            extra = "; raw data preserved" if has_raw else "; no raw to compare"
+            extra = ("; .raw holds the raw counts" if raw_counts
+                     else "; raw data preserved" if has_raw else "; no raw to compare")
             return StepStatus(
                 done=True,
                 confidence=confidence,
