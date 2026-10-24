@@ -352,10 +352,12 @@ def _normalise(counts, target_sum: float) -> sp.csr_matrix:
 
 
 def test_pair(log, var_names: pd.Index, in_a: np.ndarray, in_b: np.ndarray) -> dict[str, Any]:
-    """Wilcoxon (scanpy's, BH-adjusted) of the cells in_a vs in_b on ``log``,
-    genes detected in DE_MIN_PCT of either side; the distinguishing genes."""
+    """Wilcoxon (scanpy's, BH-adjusted; by blocks of genes, ``core/rank_genes.py``) of
+    the cells in_a vs in_b on ``log``, genes detected in DE_MIN_PCT of either side; the
+    distinguishing genes."""
     import anndata as ad
-    import scanpy as sc
+
+    from scview.core import rank_genes
 
     rows = np.concatenate([in_a, in_b])
     X = log[rows]
@@ -369,7 +371,8 @@ def test_pair(log, var_names: pd.Index, in_a: np.ndarray, in_b: np.ndarray) -> d
         {"g": pd.Categorical(["a"] * in_a.size + ["b"] * in_b.size)}, index=[str(i) for i in range(rows.size)]))
     tmp.var_names = var_names[genes]
     tmp.uns["log1p"] = {"base": None}
-    sc.tl.rank_genes_groups(tmp, "g", groups=["a"], reference="b", method="wilcoxon", n_genes=genes.size)
+    rank_genes.rank_genes_groups(tmp, "g", groups=["a"], reference="b", method="wilcoxon",
+                                 n_genes=genes.size)
     r = tmp.uns["rank_genes_groups"]
     names = np.asarray(r["names"]["a"]).astype(str)
     padj = np.asarray(r["pvals_adj"]["a"], dtype=np.float64)

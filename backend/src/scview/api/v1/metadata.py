@@ -132,8 +132,8 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
     """Carry a category rename into the column's markers and cached enrichment,
     which are keyed by group name and otherwise keep the old label."""
     import pandas as pd
-    import scanpy as sc
 
+    from scview.core import rank_genes
     from scview.core.ora_background import meta_key
     from scview.core.pipeline import drop_enrichment_cache
 
@@ -147,10 +147,9 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
             for key in keys:
                 adata.uns.pop(key, None)
         elif keys:
-            sc.tl.rank_genes_groups(
-                adata, groupby=column, method="wilcoxon", pts=True,
-                key_added=markers_key(column),
-            )
+            # by blocks of genes, bit for bit scanpy's (core/rank_genes.py)
+            rank_genes.rank_genes_groups(adata, column, method="wilcoxon", pts=True,
+                                         key_added=markers_key(column), specificity=True)
             if "rank_genes_groups" in keys:
                 adata.uns["rank_genes_groups"] = adata.uns[markers_key(column)]
         return

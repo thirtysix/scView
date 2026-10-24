@@ -97,13 +97,16 @@ def logfoldchanges(M, in_a: np.ndarray, uns: dict) -> np.ndarray:
     return np.log2((expm1(mean_a) + 1e-9) / (expm1(mean_b) + 1e-9))
 
 
-def _scanpy_test(test, method: str) -> MethodResult:
-    """Wilcoxon or Welch t-test of ``test`` (obs ``_de_group`` = selection / rest)."""
-    import scanpy as sc
+def _ranked_test(test, method: str) -> MethodResult:
+    """Wilcoxon or Welch t-test of ``test`` (obs ``_de_group`` = selection / rest):
+    scanpy's, by blocks of genes (``core/rank_genes.py``, bit for bit). ``test`` holds
+    only the two sides' cells, so between groups the ranks are within A and B, as
+    scanpy's ``reference=`` mode takes them."""
+    from scview.core import rank_genes
 
     t0 = time.perf_counter()
-    sc.tl.rank_genes_groups(
-        test, groupby="_de_group", groups=["selection"], reference="rest",
+    rank_genes.rank_genes_groups(
+        test, "_de_group", groups=["selection"], reference="rest",
         method=method, use_raw=False,
         n_genes=test.n_vars,  # every tested gene, not the top-scoring ones
     )
@@ -157,7 +160,7 @@ def run(test, method: str) -> MethodResult:
         raise MethodError(f"Unknown DE method '{method}'.")
     if method == "logreg":
         return _logreg(test)
-    return _scanpy_test(test, method)
+    return _ranked_test(test, method)
 
 
 # ---------------------------------------------------------------------------

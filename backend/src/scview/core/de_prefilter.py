@@ -50,8 +50,29 @@ class Prefilter:
         return int(self.keep.size - self.keep.sum())
 
 
+# Stored values per pass when counting a CSR matrix's detections.
+_CHUNK = 4_000_000
+
+
 def _n_detected(M, rows: np.ndarray) -> np.ndarray:
-    """Per gene, how many of the ``rows`` cells have a value above zero."""
+    """Per gene, how many of the ``rows`` cells have a value above zero.
+
+    A CSR matrix is counted a chunk of rows at a time, in place: copying the rest of the
+    cells out (and a boolean matrix of them) took +3.0 GiB on 100k neurons in memory,
+    enough to get the backend killed at 8 GB."""
+    if sp.issparse(M) and M.format == "csr":
+        rows = np.asarray(rows, dtype=bool)
+        indptr = np.asarray(M.indptr, dtype=np.int64)
+        counts = np.zeros(M.shape[1], dtype=np.int64)
+        r0, n = 0, M.shape[0]
+        while r0 < n:
+            r1 = int(np.searchsorted(indptr, indptr[r0] + _CHUNK, side="right")) - 1
+            r1 = min(max(r1, r0 + 1), n)
+            p0, p1 = indptr[r0], indptr[r1]
+            hit = np.repeat(rows[r0:r1], np.diff(indptr[r0:r1 + 1])) & (M.data[p0:p1] > 0)
+            counts += np.bincount(M.indices[p0:p1][hit], minlength=M.shape[1])
+            r0 = r1
+        return counts
     sub = M[rows]
     if sp.issparse(sub):
         return np.asarray((sub > 0).sum(axis=0)).ravel().astype(np.int64)
