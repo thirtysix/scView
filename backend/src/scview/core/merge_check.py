@@ -381,13 +381,14 @@ def test_pair(log, var_names: pd.Index, in_a: np.ndarray, in_b: np.ndarray) -> d
     return out
 
 
-def _cluster_graph(graph, method: str, resolution: float) -> pd.Categorical:
+def _cluster_graph(graph, method: str, resolution: float,
+                   n_iterations: int = leiden.N_ITERATIONS) -> pd.Categorical:
     import anndata as ad
 
     tmp = ad.AnnData(obs=pd.DataFrame(index=[str(i) for i in range(graph.shape[0])]))
     tmp.obsp["connectivities"] = graph
     tmp.uns["neighbors"] = {"connectivities_key": "connectivities"}
-    return rs.cluster(tmp, method, resolution)
+    return rs.cluster(tmp, method, resolution, n_iterations)
 
 
 def _count(graph, method: str, resolution: float) -> int:
@@ -399,13 +400,15 @@ def _count(graph, method: str, resolution: float) -> int:
 
 
 def resolution_for_count(graph, method: str, resolution: float, labels: pd.Categorical, target: int,
-                         stop: Callable[[], bool] | None = None) -> tuple[float, pd.Categorical]:
+                         stop: Callable[[], bool] | None = None,
+                         n_iterations: int = leiden.N_ITERATIONS) -> tuple[float, pd.Categorical]:
     """The resolution (and its labels) whose clustering of ``graph`` has the
     number of clusters closest to ``target``, starting from ``labels`` (the
     clustering at ``resolution``): a bisection on log resolution up to four
     times, or down to a quarter of, ``resolution``, with at most RESOLUTION_TRIES
     quick counts; of equally close ones, the nearest to ``resolution``. The
-    chosen resolution is then clustered in full, as the pipeline does."""
+    chosen resolution is then clustered as the pipeline clustered the reference
+    (Leiden's ``n_iterations``: its recorded passes)."""
     k = len(labels.categories)
     best: tuple[int, float, float] = (abs(k - target), 0.0, resolution)
     lo, hi = (np.log(resolution), np.log(resolution * 4)) if k < target else (np.log(resolution / 4),
@@ -422,7 +425,7 @@ def resolution_for_count(graph, method: str, resolution: float, labels: pd.Categ
         lo, hi = (np.log(r), hi) if k < target else (lo, np.log(r))
     r = best[2]
     hs._check_stop(stop)
-    return r, labels if r == resolution else _cluster_graph(graph, method, r)
+    return r, labels if r == resolution else _cluster_graph(graph, method, r, n_iterations)
 
 
 def _side(rows: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -626,7 +629,7 @@ def iter_merge_check(adata, p: Plan, stop: Callable[[], bool] | None = None,
         yield {"step": "resolution", "label": f"Finding the resolution that gives {n_ref_used} clusters on the "
                                               "training half"}
         train_resolution, labels = resolution_for_count(graph, rec.method, rec.resolution, labels, n_ref_used,
-                                                         stop)
+                                                         stop, rec.leiden_iterations)
     train_seconds = time.perf_counter() - t_train
     hs._check_stop(stop)
 

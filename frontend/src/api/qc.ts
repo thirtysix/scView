@@ -196,6 +196,13 @@ export interface DoubletChannelCalls {
   scrublet_threshold: number | null;
   /** scored | too_small | failed | not_scored */
   status: string;
+  /** Cells Scrublet's own threshold calls here now (null: no threshold of its own). Missing
+   *  from an older backend. */
+  scrublet_called?: number | null;
+  /** That threshold called almost nothing in a channel of some size: it may have missed. */
+  few_called?: boolean;
+  /** For a few_called channel: its scores on the card's histogram bins. */
+  hist?: number[];
 }
 
 /** The doublet-score histogram and the calls a threshold makes. Without scores
@@ -237,6 +244,11 @@ export interface DoubletSummary {
   /** The column of those rows; whether they are the last run's channels. */
   channels_column?: string | null;
   channels_recorded?: boolean;
+  /** Channels whose automatic threshold called almost nothing (under `few_called_share` of
+   *  a channel of `few_called_min_cells` or more). */
+  few_called?: string[];
+  few_called_share?: number;
+  few_called_min_cells?: number;
   /** What the doublet views use (cell hashing when run, else Scrublet). */
   source?: DoubletSourceInfo | null;
   /** Cell hashing x Scrublet at this threshold, when the dataset has both. */

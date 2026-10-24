@@ -116,7 +116,8 @@ def test_provenance_keeps_the_params_of_the_run_that_clustered():
     )
     assert res.errors == {}
     recorded = _recorded_clustering(out)
-    assert recorded == {"column": "scview_leiden_r1.2", "method": "leiden", "resolution": 1.2}
+    assert recorded == {"column": "scview_leiden_r1.2", "method": "leiden", "resolution": 1.2,
+                        "leiden_iterations": -1}
     # A later run without clustering used to overwrite these with its defaults.
     out, res = run_pipeline(out, ["marker_genes"], PipelineParams(clustering_method="louvain"))
     assert res.errors == {}

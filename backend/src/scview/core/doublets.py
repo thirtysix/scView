@@ -37,6 +37,10 @@ score and no call, and the views say how many cells that is.
   all scores. Applying it rewrites ``predicted_doublet`` (what the filtering step drops with
   ``drop_doublets``, unless cell hashing is the doublet source) and keeps Scrublet's own
   per-channel call in ``predicted_doublet_scrublet``, so it can be put back.
+- A channel whose **automatic threshold calls almost nothing** (under
+  ``FEW_CALLED_SHARE`` of a channel of ``FEW_CALLED_MIN_CELLS`` or more; Kang's STIM lane,
+  9 of 7,263) is named in ``summary``'s ``few_called``, with its scores' histogram, for
+  the doublet card to say its threshold may have missed them.
 
 ``uns["scrublet"]`` keeps each channel's record in ``scview_channels`` (cells, cells
 scored, rate, Scrublet's threshold, cells called, neighbours, status) with the column in
@@ -76,6 +80,17 @@ RULE_OF_THUMB = (
     "Rule of thumb from 10x Genomics: about 0.8 % doublets per 1,000 cells captured "
     "in one channel. Chemistry, loading and filtering before upload all move it."
 )
+
+# A channel whose automatic threshold called almost nothing (``summary``'s ``few_called``):
+# Scrublet's own threshold calls under this share of its cells, in a channel of at least
+# FEW_CALLED_MIN_CELLS. On Kang the STIM lane's threshold landed at 0.54 (CTRL's 0.22) and
+# called 9 of 7,263 cells (0.12 %; CTRL 179 of 6,573, 2.7 %), where the rule of thumb
+# expects ~5.8 %: 1 in 500 flags it, the ~0.1 % first proposed would not. At 2,000 cells the
+# rule of thumb expects 1.6 % doublets (32), so calling under 0.2 % (4) there is unlikely by
+# chance; in a smaller channel (the 100k brain's GEM wells hold 512-1,034 cells, 0.4-0.8 %
+# expected) a few calls or none is ordinary, and 0.2 % is a cell or two.
+FEW_CALLED_SHARE = 0.002
+FEW_CALLED_MIN_CELLS = 2_000
 
 SCORE = "doublet_score"
 CALL = "predicted_doublet"
@@ -534,8 +549,11 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
     ``threshold`` defaults to the applied one, else Scrublet's when it ran once over every
     cell; with a run per channel there is none (each channel had its own) until one is
     given, and ``n_called_now`` counts the calls. ``column`` names the channels for the
-    table (default: the last run's). Without scores the answer still carries the
-    suggestion (the channels and rates the doublet step would use)."""
+    table (default: the last run's). ``few_called`` names the channels where Scrublet's
+    own threshold called almost nothing (``FEW_CALLED_SHARE`` of a channel of at least
+    ``FEW_CALLED_MIN_CELLS``): its threshold may have missed the doublets there. Without
+    scores the answer still carries the suggestion (the channels and rates the doublet
+    step would use)."""
     suggestion = suggest_rate(adata, column)
     n = int(adata.n_obs)
     if SCORE not in adata.obs.columns:
@@ -557,7 +575,7 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
     called = _calls_at(scores, threshold) if threshold is not None else None
     ch, recorded = _grouping(adata, column, record)
     rows = _channel_rows(scores, called if called is not None else now, ch,
-                         record if recorded else None)
+                         record if recorded else None, edges)
     small = sum(r["n_cells"] for r in (record or {}).get("rows", []) if r["status"] == "too_small")
     out = {
         "available": True,
@@ -584,6 +602,11 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
         "channels": rows,
         "channels_column": None if ch is None else ch.column,
         "channels_recorded": recorded,
+        # Channels whose automatic threshold called almost nothing: worth a look at their
+        # scores, and maybe a threshold set by hand (FEW_CALLED_*)
+        "few_called": [r["name"] for r in rows if r["few_called"]],
+        "few_called_share": FEW_CALLED_SHARE,
+        "few_called_min_cells": FEW_CALLED_MIN_CELLS,
         "source": doublet_source.describe(adata.obs),  # what the doublet views use
         "agreement": _agreement(adata, called if called is not None else now, threshold),
     }
@@ -601,18 +624,28 @@ def _hist_top(finite: np.ndarray, thresholds: list) -> float:
     return top * 1.05 if top * 1.05 <= 1.0 else max(1.0, top)
 
 
+def few_called(n_scored: int, n_called: int) -> bool:
+    """Scrublet's own threshold called almost nothing in a channel of this size
+    (``FEW_CALLED_SHARE``, ``FEW_CALLED_MIN_CELLS``)."""
+    return n_scored >= FEW_CALLED_MIN_CELLS and n_called < FEW_CALLED_SHARE * n_scored
+
+
 def _channel_rows(scores: np.ndarray, called: np.ndarray | None, ch: Channels | None,
-                  record: dict | None) -> list[dict]:
+                  record: dict | None, edges: np.ndarray | None = None) -> list[dict]:
     """Per channel: cells now, cells scored, cells called (at the threshold shown, else
     the calls now), the rate the run used (its record) or would use, Scrublet's own
-    threshold in that channel, and its status (scored | too_small | failed)."""
+    threshold in that channel, its status (scored | too_small | failed), and the cells
+    Scrublet's own threshold calls there now (``scrublet_called``). ``few_called``: that
+    threshold called almost nothing (``few_called``); such a row carries its scores'
+    histogram over ``edges`` (``hist``), to look for the doublets it may have missed."""
     if ch is None:
         return []
     k = len(ch.names)
     codes = ch.codes
     lab = codes >= 0
+    finite = np.isfinite(scores)
     sizes = np.bincount(codes[lab], minlength=k)
-    n_scored = np.bincount(codes[lab & np.isfinite(scores)], minlength=k)
+    n_scored = np.bincount(codes[lab & finite], minlength=k)
     hits = None if called is None else np.bincount(codes[lab & called], minlength=k)
     by = {r["name"]: r for r in record["rows"]} if record else {}
     rows = []
@@ -622,13 +655,25 @@ def _channel_rows(scores: np.ndarray, called: np.ndarray | None, ch: Channels | 
         status = r.get("status") or ("scored" if n_scored[i] else
                                      "too_small" if size < MIN_CHANNEL_CELLS else "not_scored")
         h = None if hits is None else int(hits[i])
-        rows.append({
+        own = r.get("threshold")
+        row = {
             "name": name, "n_cells": size, "n_scored": int(n_scored[i]), "n_called": h,
             "fraction": round(h / size, 4) if h is not None and size else 0.0,
             "expected_rate": round(float(r.get("expected_doublet_rate", rate_for_cells(size))), 4),
-            "scrublet_threshold": r.get("threshold"),
+            "scrublet_threshold": own,
             "status": status,
-        })
+            "scrublet_called": None,
+            "few_called": False,
+        }
+        if status == "scored" and own is not None:
+            mine = lab & (codes == i) & finite
+            n_own = int(_calls_at(np.where(mine, scores, np.nan), float(own)).sum())
+            row["scrublet_called"] = n_own
+            row["few_called"] = few_called(int(n_scored[i]), n_own)
+            if row["few_called"] and edges is not None:
+                counts, _ = np.histogram(scores[mine], bins=edges)
+                row["hist"] = counts.tolist()
+        rows.append(row)
     return rows
 
 

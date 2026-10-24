@@ -172,6 +172,28 @@ def test_resolution_for_count_reaches_the_reference_count():
     assert len(found.categories) > len(labels.categories)
 
 
+def test_resolution_for_count_clusters_the_choice_with_the_recorded_passes(monkeypatch):
+    from scview.core import leiden
+
+    a = _processed(resolution=1.0)
+    graph = a.obsp["connectivities"]
+    labels = mc._cluster_graph(graph, "leiden", 0.5, 2)
+    target = len(mc._cluster_graph(graph, "leiden", 2.0, 2).categories)
+    seen: list[int] = []
+    real = leiden.membership
+
+    def spy(adjacency, resolution, random_state=0, n_iterations=-1):
+        seen.append(n_iterations)
+        return real(adjacency, resolution, random_state, n_iterations)
+
+    monkeypatch.setattr(leiden, "membership", spy)
+    mc.resolution_for_count(graph, "leiden", 0.5, labels, target, n_iterations=2)
+    assert seen and set(seen) == {2}  # the quick counts (2 passes) and the chosen one's labels
+    seen.clear()
+    mc.resolution_for_count(graph, "leiden", 0.5, labels, target)
+    assert seen[-1] == -1  # a clustering made in full is matched in full
+
+
 def test_merged_labels_join_sets_in_the_columns_order():
     s = pd.Series(pd.Categorical(["a", "b", "c", "d", None], categories=["d", "c", "b", "a"]))
     out = mc.merged_labels(s, [("a", "c"), ("c", "b")])

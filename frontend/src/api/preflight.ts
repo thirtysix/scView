@@ -46,10 +46,29 @@ export interface PreflightStep {
   measured: boolean;
 }
 
+/** A run that clusters with Leiden: its time both ways, and whether to offer fast Leiden. */
+export interface LeidenChoice {
+  /** Cells clustered (after filtering's share, when the run filters) */
+  n_cells: number;
+  /** Point estimates; Leiden uses one CPU */
+  full_seconds: number;
+  fast_seconds: number;
+  /** As ranges in words: "roughly 20 to 80 min" */
+  full_text: string;
+  fast_text: string;
+  /** The full optimisation's estimate over this offers fast Leiden (600 s by default) */
+  offer_seconds: number;
+  offer_fast: boolean;
+  /** The run's setting now: -1 full optimisation, 2 fast Leiden */
+  iterations: number;
+}
+
 export interface RunPreflight {
   dataset_id: string;
   steps: PreflightStep[];
   verdict: PreflightVerdict;
+  /** Null when the run does not cluster with Leiden (missing from an older backend) */
+  leiden?: LeidenChoice | null;
 }
 
 export interface UnitPreflight {
@@ -69,6 +88,7 @@ export interface IngestPreflight {
 const RUN_PARAMS = [
   "n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
   "doublet_channel_key", // doublet detection's peak is its largest channel's
+  "clustering_method", "leiden_iterations", // clustering's time, and the fast-Leiden offer
 ] as const;
 
 export function getRunPreflight(

@@ -547,10 +547,11 @@ def match_genes(genes, names, aliases=None):
 ''',
     "subcluster": '''
 def subcluster(adata, column, group, resolution, batch_key=None, n_top_genes=2000, n_pcs=30,
-               n_neighbors=15, seed=0):
+               n_neighbors=15, seed=0, n_iterations=-1):
     """Split one group of a column on its own graph into <column>_sub, as scView does:
     log-normalised expression of the group's cells, Seurat HVGs, scaled PCA,
-    Harmony when the dataset was corrected, a neighbour graph and Leiden."""
+    Harmony when the dataset was corrected, a neighbour graph and Leiden
+    (two passes for fast Leiden, when the dataset's clustering was made that way)."""
     labels = adata.obs[column]
     mask = (labels.astype(str).where(labels.notna()) == group).to_numpy()
     n = int(mask.sum())
@@ -588,7 +589,7 @@ def subcluster(adata, column, group, resolution, batch_key=None, n_top_genes=200
         rep = "X_pca_harmony"
     sc.pp.neighbors(sub, n_neighbors=min(n_neighbors, n - 1), use_rep=rep, random_state=seed)
     sc.tl.leiden(sub, resolution=resolution, key_added="s", random_state=seed,
-                 flavor="leidenalg")
+                 flavor="leidenalg", n_iterations=n_iterations)
     codes = sub.obs["s"].astype(str).to_numpy()
     new = [f"{group}.{k}" for k in sorted(set(codes), key=int)]
     target = column if column.endswith("_sub") else f"{column}_sub"
@@ -1210,22 +1211,31 @@ def _neighbors(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+def _iterations(p: dict) -> int:
+    """Leiden's recorded passes (-1 before fast Leiden existed, or a malformed record)."""
+    v = p.get("leiden_iterations")
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and int(v) == v \
+        and (v == -1 or v > 0) else -1
+
+
 def _leiden_or_louvain(method: str, resolution: Any, column: str, ctx: _Ctx,
-                       on: str = "adata") -> list[str]:
+                       on: str = "adata", n_iterations: int = -1) -> list[str]:
     """Clustering of ``on``'s graph: scView's Leiden child process runs exactly
-    sc.tl.leiden's leidenalg flavour (core/leiden.py)."""
+    sc.tl.leiden's leidenalg flavour (core/leiden.py), stopped after ``n_iterations``
+    passes for fast Leiden (2)."""
     if method == "louvain":
         _need(ctx, "louvain")
         return [f"louvain_igraph({on}, {_lit(resolution)}, {_lit(column)})"]
+    passes = f", n_iterations={_lit(n_iterations)}" if n_iterations != -1 else ""
     return [f"sc.tl.leiden({on}, resolution={_lit(resolution)}, key_added={_lit(column)}, "
-            'flavor="leidenalg")']
+            f'flavor="leidenalg"{passes})']
 
 
 def _clustering(p: dict, ctx: _Ctx) -> Snippet:
     method = p.get("clustering_method") or "leiden"
     res = p.get("clustering_resolution", 0.5)
     column = f"scview_{method}_r{res}"
-    code = _leiden_or_louvain(method, res, column, ctx)
+    code = _leiden_or_louvain(method, res, column, ctx, n_iterations=_iterations(p))
     code.append(f'adata.uns["scview_active_clustering"] = {_lit(column)}')
     return Snippet(EXACT, code)
 
@@ -1473,7 +1483,8 @@ def _subcluster(p: dict, ctx: _Ctx) -> Snippet:
         f"subcluster(adata, {_lit(str(p.get('column')))}, {_lit(str(p.get('group')))}, "
         f"{_lit(p.get('resolution', sub.DEFAULT_RESOLUTION))}, batch_key={_lit(p.get('batch_key'))}, "
         f"n_top_genes={_lit(sub.N_TOP_GENES)}, n_pcs={_lit(sub.N_PCS)}, "
-        f"n_neighbors={_lit(sub.N_NEIGHBORS)}, seed={_lit(sub.SEED)})",
+        f"n_neighbors={_lit(sub.N_NEIGHBORS)}, seed={_lit(sub.SEED)}"
+        + (f", n_iterations={_lit(_iterations(p))}" if _iterations(p) != -1 else "") + ")",
     ])
 
 
@@ -1483,7 +1494,8 @@ def _keep_resolution(p: dict, ctx: _Ctx) -> Snippet:
     column = str(p.get("column") or f"scview_{method}_r{res}")
     code = ["# A clustering kept from the resolution sweep (the active one does not change)."]
     code += [f"if {_lit(column)} not in adata.obs.columns:"]
-    code += ["    " + line for line in _leiden_or_louvain(method, res, column, ctx)]
+    code += ["    " + line for line in _leiden_or_louvain(method, res, column, ctx,
+                                                          n_iterations=_iterations(p))]
     return Snippet(EXACT, code)
 
 
@@ -1517,7 +1529,7 @@ def _keep_hvg_setting(p: dict, ctx: _Ctx) -> Snippet:
         code += [f'tmp.obsm["X_pca_harmony"] = harmony(tmp.obsm["X_pca"], tmp.obs, '
                  f"{_lit(p['batch_key'])})", 'rep = "X_pca_harmony"']
     code.append(f"sc.pp.neighbors(tmp, n_neighbors={_lit(p.get('n_neighbors', 15))}, use_rep=rep)")
-    code += _leiden_or_louvain(method, res, "c", ctx, on="tmp")
+    code += _leiden_or_louvain(method, res, "c", ctx, on="tmp", n_iterations=_iterations(p))
     code.append(f'adata.obs[{_lit(column)}] = tmp.obs["c"].values')
     return Snippet(APPROXIMATE, code, "re-run in plain scanpy; clusters can differ a little")
 
@@ -1789,6 +1801,35 @@ def _vdj_remove(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, ["clear(adata)  # every V(D)J column removed"])
 
 
+def _run_errors(p: dict, ctx: _Ctx) -> Snippet:
+    """A run that finished with errors (core/step_failures.py): which steps failed and were
+    skipped (not in the history, so not replayed), and the earlier results it removed as
+    stale, removed here too."""
+    failed = p.get("failed") if isinstance(p.get("failed"), dict) else {}
+    skipped = p.get("skipped") if isinstance(p.get("skipped"), dict) else {}
+    cleared = p.get("cleared") if isinstance(p.get("cleared"), dict) else {}
+    code = ["# The run of the steps above finished with errors: these steps were not run."]
+    for step, err in failed.items():
+        code.append(f"#   {comment_text(step, 40)} failed: {comment_text(err, 100)}")
+    for step, because in skipped.items():
+        code.append(f"#   {comment_text(step, 40)} skipped: it needs {comment_text(because, 40)}")
+    names = {where: [str(k) for k in keys] for where, keys in cleared.items()
+             if isinstance(keys, list) and keys}
+    if names:
+        code.append("# Results of an earlier run they would have replaced were removed as stale:")
+    for where in ("obsm", "varm", "obsp", "uns"):
+        if names.get(where):
+            code.append(f"for k in {_lit(names[where])}:")
+            code.append(f"    adata.{where}.pop(k, None)")
+    for where in ("var", "obs"):
+        if names.get(where):
+            code.append(f"adata.{where} = adata.{where}.drop(columns=[c for c in {_lit(names[where])} "
+                        f"if c in adata.{where}.columns])")
+    if names.get("raw"):
+        code.append("adata.raw = None")
+    return Snippet(EXACT, code)
+
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -1832,6 +1873,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "vdj_attach": _vdj_attach,
     "vdj_clonotypes": _vdj_clonotypes,
     "vdj_remove": _vdj_remove,
+    "run_errors": _run_errors,
 }
 
 

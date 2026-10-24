@@ -1,9 +1,11 @@
 """Trying several clustering resolutions without changing the dataset.
 
 Every resolution is clustered on the dataset's own neighbour graph with the
-method and seed the pipeline uses (``_run_clustering``), so keeping one gives
-exactly the labels the pipeline would have made at that resolution, under the
-pipeline's name for them (``scview_leiden_r0.5``).
+method and seed the pipeline uses (``_run_clustering``), and Leiden with the passes
+the dataset's clustering was made with (fast Leiden or the full optimisation,
+``leiden.recorded_iterations``), so keeping one gives exactly the labels the pipeline
+would have made at that resolution, under the pipeline's name for them
+(``scview_leiden_r0.5``).
 
 For each resolution the sweep reports the number of clusters and their sizes,
 a silhouette score in the representation the graph was built from (on a fixed,
@@ -111,13 +113,18 @@ def dataset_method(adata) -> str:
     return m.group(1) if m else "leiden"
 
 
-def cluster(adata, method: str, resolution: float) -> pd.Categorical:
-    """Cluster labels at ``resolution``, numbered by size; ``adata`` is not changed."""
+def cluster(adata, method: str, resolution: float, n_iterations: int | None = None) -> pd.Categorical:
+    """Cluster labels at ``resolution``, numbered by size; ``adata`` is not changed.
+    Leiden makes the passes ``n_iterations`` says, by default as many as the dataset's
+    clustering was made with (``leiden.recorded_iterations``: fast Leiden's 2, or until
+    none improves), so a resolution kept is the pipeline's clustering at it."""
     from scview.core.pipeline import _louvain_igraph
 
     graph = _graph(adata)
     if method == "leiden":
-        return leiden.labels(graph, resolution)
+        if n_iterations is None:
+            n_iterations = leiden.recorded_iterations(adata)
+        return leiden.labels(graph, resolution, n_iterations=n_iterations)
     work = ad.AnnData(obs=pd.DataFrame(index=adata.obs_names.copy()))
     work.obsp["connectivities"] = graph
     _louvain_igraph(work, resolution, "c")
@@ -155,8 +162,11 @@ def iter_sweep(adata, resolutions: list[float], method: str) -> Iterator[dict[st
         rng = np.random.default_rng(SEED)
         sub = np.sort(rng.choice(adata.n_obs, size=min(adata.n_obs, SILHOUETTE_CELLS), replace=False))
         X = np.asarray(X[sub], dtype=np.float32)
+    n_iterations = leiden.recorded_iterations(adata) if method == "leiden" else None
     yield {
         "method": method,
+        # Leiden's passes, as the dataset's clustering made them (-1: until none improves)
+        "leiden_iterations": n_iterations,
         "n_cells": int(adata.n_obs),
         "resolutions": resolutions,
         "representation": rep,
@@ -171,7 +181,7 @@ def iter_sweep(adata, resolutions: list[float], method: str) -> Iterator[dict[st
         # column, which "Keep this one" returns: re-clustering may not reproduce it
         # (files processed before the UMAP graph fix carry an altered graph).
         labels = (pd.Categorical(adata.obs[existing].astype(str).where(adata.obs[existing].notna()))
-                  if existing is not None else cluster(adata, method, r))
+                  if existing is not None else cluster(adata, method, r, n_iterations))
         codes = np.asarray(labels.codes)
         names = [str(c) for c in labels.categories]
         if (codes < 0).any():  # missing labels: one group
@@ -211,15 +221,19 @@ def keep(adata, method: str, resolution: float) -> dict[str, Any]:
         return {"column": existing, "created": False, "n_clusters": int(adata.obs[existing].nunique())}
     column = column_name(method, resolution)
     check(adata)
-    labels = cluster(adata, method, resolution)
+    n_iterations = leiden.recorded_iterations(adata) if method == "leiden" else None
+    labels = cluster(adata, method, resolution, n_iterations)
     adata.obs[column] = labels
     forget_column_results(adata, column)  # left by an earlier column of that name
+    params: dict[str, Any] = {"clustering_method": method, "clustering_resolution": resolution,
+                              "column": column, "from": "resolution sweep"}
+    if n_iterations is not None:
+        params["leiden_iterations"] = n_iterations
     try:
         provenance.record_step(
             adata, step="keep_resolution",
             tool="scanpy.tl.leiden" if method == "leiden" else "igraph multilevel (Louvain)",
-            params={"clustering_method": method, "clustering_resolution": resolution,
-                    "column": column, "from": "resolution sweep"},
+            params=params,
         )
     except Exception as e:  # provenance must never block the result
         logger.warning("Could not record keep_resolution provenance: %s", e)

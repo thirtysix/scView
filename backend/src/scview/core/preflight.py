@@ -1145,9 +1145,57 @@ def _step_neighbors(s: _State, params) -> tuple[int, _State, float]:
     return g, s, (10.0 + 1e-3 * s.n) if s.n <= 4096 else (28.0 + 3e-4 * s.n)
 
 
+# Leiden's time (core/leiden.py; one thread in its child, so more CPUs do not speed it
+# up): the small-data line measured on the calibration runs, or a power law in the cells,
+# whichever is larger. The power laws are fits to the same saved graph of the brain data
+# clustered on Roihu at resolution 0.5 (research/out-of-core, 2026-10-23), scaled by 1.08,
+# the laptop's 253 s against Roihu's 234 s at 88,640 cells:
+#   full optimisation (n_iterations -1): 234 / 1,586 / 8,738 s at 88,640 / 221,828 /
+#   443,946 cells -> 224 x (n / 88,640)^2.24 (fit within -5..+10 %);
+#   fast Leiden (2 passes): 17 / 44 / 138 / 446 s at 88,640 / 221,828 / 443,946 /
+#   1,214,593 cells -> 16.0 x (n / 88,640)^1.275 (fit within -10..+17 %).
+LEIDEN_SCALE_CELLS = 88_640
+LEIDEN_SECONDS = {-1: (242.0, 2.24), 2: (17.3, 1.275)}  # (seconds at LEIDEN_SCALE_CELLS, power)
+LEIDEN_SMALL = {-1: (0.5, 4e-4), 2: (0.5, 2e-4)}  # (fixed, per cell): child start, the graph
+# Clustering estimated over this (the full optimisation) offers fast Leiden before a run;
+# SCVIEW_LEIDEN_OFFER_SECONDS in .env changes it.
+LEIDEN_OFFER_SECONDS = 600.0
+
+
+def leiden_seconds(n_cells: int, n_iterations: int = -1) -> float:
+    """Seconds Leiden takes on ``n_cells`` (2 CPUs or more: it uses one)."""
+    key = -1 if n_iterations == -1 else 2
+    fixed, per_cell = LEIDEN_SMALL[key]
+    s0, power = LEIDEN_SECONDS[key]
+    n = max(0, int(n_cells))
+    return float(max(fixed + per_cell * n, s0 * (n / LEIDEN_SCALE_CELLS) ** power))
+
+
+def leiden_offer_seconds() -> float:
+    """The full optimisation's estimate above which a run's note offers fast Leiden."""
+    raw = os.environ.get("SCVIEW_LEIDEN_OFFER_SECONDS", "").strip()
+    try:
+        return float(raw) if raw else LEIDEN_OFFER_SECONDS
+    except ValueError:
+        return LEIDEN_OFFER_SECONDS
+
+
 def _step_clustering(s: _State, params) -> tuple[int, _State, float]:
     # Leiden runs in a child process (core/leiden.py): its interpreter and the graph.
-    return 60 * MiB + s.n * 9000, s, 0.5 + 4e-4 * s.n
+    if _p(params, "clustering_method", "leiden") == "louvain":  # igraph's multilevel, fast
+        secs = LEIDEN_SMALL[-1][0] + LEIDEN_SMALL[-1][1] * s.n
+    else:
+        secs = leiden_seconds(s.n, leiden_iterations(params))
+    return 60 * MiB + s.n * 9000, s, secs
+
+
+def leiden_iterations(params) -> int:
+    """-1 or 2: the run's Leiden passes (anything else is the step's error, not an estimate's)."""
+    v = _p(params, "leiden_iterations", -1)
+    try:
+        return 2 if int(float(v)) == 2 else -1
+    except (TypeError, ValueError):
+        return -1
 
 
 def _epochs(n: int) -> int:
@@ -1259,6 +1307,16 @@ def _warm(step: str, warm: bool) -> int:
     return 0 if warm else WARMUP.get(step, 0)
 
 
+# Steps that use one CPU whatever the quota: their time is not scaled by the CPUs.
+SINGLE_THREAD_STEPS = ("clustering",)
+
+
+def _cpu_free(step: str, secs: float, cpus: float | None) -> float:
+    """``secs`` such that ``_range`` (which scales by the CPUs) gives it back unscaled for
+    a single-threaded step (Leiden); other steps' unchanged."""
+    return secs / _cpu_factor(cpus) if step in SINGLE_THREAD_STEPS else secs
+
+
 def process_warm() -> bool:
     """True once this process has run the libraries whose first use costs memory."""
     import sys
@@ -1299,6 +1357,7 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
         model = _STEP_MODELS[step]
         t, s, secs = (_step_doublet(s, params, doublets) if model is _step_doublet
                       else model(s, params))
+        secs = _cpu_free(step, secs, cpus)
         w = _warm(step, warm)
         warm_held += w
         total += secs
@@ -1390,8 +1449,8 @@ def step_peak_for(adata, step: str, params=None) -> int:
 # write + variable genes 1.81, PCA 1.62, neighbours 1.21, Leiden 2.04 (the run's peak,
 # -7%), UMAP 1.33 (1.58), markers 1.57, cell cycle 1.69; QC 1.07, filtering 1.16 (over).
 # Seconds: a pass 3.5e-8 per stored value (QC 6.2 s, filtering 5.3 s, scaling 5.4 s), the
-# write 4e-7 (71 s), Leiden 253 s at 88,640 cells (in memory and on Roihu it grew as
-# n^2.2-2.5; a fixed iteration count would change that). Disk: X 520 MB, counts 418 MB,
+# write 4e-7 (71 s), Leiden 253 s at 88,640 cells (``leiden_seconds``: about n^2.2, or
+# n^1.25 with fast Leiden's two passes). Disk: X 520 MB, counts 418 MB,
 # gene store 710 MB, and the store's build spills 8 bytes per value while it runs.
 
 CHUNKED_FIXED = 500 * MiB  # kept by the process from its first pass on (see above)
@@ -1406,7 +1465,6 @@ CHUNKED_NEIGHBORS_PER_CELL = 2_600  # building the graph; 1,300 of it kept
 CHUNKED_GRAPH_PER_CELL = 1_300
 CHUNKED_LEIDEN_PER_CELL = 10_500  # the Leiden child: its graph copy and partition
 CHUNKED_LEIDEN_KEPT_PER_CELL = 2_500  # kept by the server after it (the edges it sent)
-CHUNKED_LEIDEN_SECONDS = (253.0, 88_640, 2.4)  # (seconds, at cells, power)
 # Seconds per stored value: a pass that reads the matrix (gzip CSR, 2 CPUs), and the one
 # write (X and counts gzip, the gene store built and filled); markers per column.
 CHUNKED_PASS_SECONDS_PER_VALUE = 3.5e-8
@@ -1500,11 +1558,9 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
     elif step == "neighbors":
         t, held = n * CHUNKED_NEIGHBORS_PER_CELL, n * CHUNKED_GRAPH_PER_CELL
         secs = _STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2]
-    elif step == "clustering":
+    elif step == "clustering":  # the in-memory step's own time (leiden_seconds)
         t, held = 60 * MiB + n * CHUNKED_LEIDEN_PER_CELL, n * CHUNKED_LEIDEN_KEPT_PER_CELL
-        s0, n0, power = CHUNKED_LEIDEN_SECONDS
-        secs = max(_STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2],
-                   s0 * (n / n0) ** power)
+        secs = _STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2]
     elif step in ("embeddings", "uncorrected_embedding", "batch_correction", "enrichment"):
         s = _State(n, m, None, {}, None, 0)
         before = s.other
@@ -1572,6 +1628,7 @@ def estimate_chunked_run(sh: ChunkedShape | Header, steps: list[str], params=Non
     fixed = 0
     for step in ordered + ["save"]:
         t, held, secs = chunked_step(step, cur, params, write=step == write_at, doublets=doublets)
+        secs = _cpu_free(step, secs, cpus)
         if step not in ("reset_to_counts", "neighbors", "clustering", "embeddings",
                         "uncorrected_embedding", "batch_correction", "enrichment", "save"):
             fixed = CHUNKED_FIXED
@@ -2048,7 +2105,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
                      avail=avail, cached=cached, lead=lead, breakdown=breakdown, notes=notes,
                      alternatives=alternatives)
     out = {"dataset_id": dataset_id, "in_memory": in_memory, "header": h.to_dict(),
-           "steps": [e.to_dict() for e in est.steps], "verdict": v}
+           "steps": [e.to_dict() for e in est.steps], "verdict": v,
+           "leiden": leiden_choice(h.n_cells, steps, params)}
     chunked, reason = _would_chunk(requested, need, avail, cached, large)
     out["mode"] = {"chunked": chunked, "requested": requested, "reason": reason}
     if chunked:
@@ -2057,6 +2115,31 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
                                       large=large,
                                       disk_folder=Path(dm.data_dir)))
     return out
+
+
+def leiden_choice(n_cells: int | None, steps: list[str], params=None) -> dict | None:
+    """For a run that clusters with Leiden: its time with the full optimisation and with
+    fast Leiden (point estimates, one CPU's worth; ``*_text`` as ranges), the setting the
+    run has, and ``offer_fast`` when the full optimisation's estimate is over
+    ``leiden_offer_seconds()`` (10 min): the pre-run note then offers fast Leiden. None
+    for a run without Leiden clustering. The cells are the dataset's, less filtering's
+    share when the run filters (``FILTER_CELLS_KEPT``)."""
+    if "clustering" not in (steps or []) or not n_cells:
+        return None
+    if _p(params, "clustering_method", "leiden") != "leiden":
+        return None
+    n = int(n_cells * FILTER_CELLS_KEPT) if "filtering" in steps else int(n_cells)
+    full, fast = leiden_seconds(n, -1), leiden_seconds(n, 2)
+    limit = leiden_offer_seconds()
+    return {
+        "n_cells": n,
+        "full_seconds": round(full, 1), "fast_seconds": round(fast, 1),
+        "full_text": time_text(_range(full, CALIBRATION_CPUS)),
+        "fast_text": time_text(_range(fast, CALIBRATION_CPUS)),
+        "offer_seconds": limit,
+        "offer_fast": bool(full > limit),
+        "iterations": leiden_iterations(params),
+    }
 
 
 def _would_chunk(requested: str, need: int, avail: Available, cached: Cached,

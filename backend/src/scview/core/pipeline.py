@@ -33,6 +33,7 @@ from scview.core import (
     provenance,
     qc_filter,
     scaling,
+    step_failures,
     stress,
 )
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
@@ -123,6 +124,9 @@ class PipelineParams:
     # Clustering
     clustering_resolution: float = 0.5
     clustering_method: str = "leiden"
+    # Leiden's passes: -1 until one improves nothing (scanpy's default), or 2 ("fast
+    # Leiden", opt-in: the same optimisation stopped early; see core/leiden.py)
+    leiden_iterations: int = -1
 
     # Batch correction
     batch_key: str = ""  # obs column for batch identity (empty = skip)
@@ -181,15 +185,22 @@ class PipelineResult:
     """Result of running the preprocessing pipeline."""
 
     steps_run: list[str] = field(default_factory=list)
+    # Steps not run because a step they need failed (core/step_failures.py), in order;
+    # ``skipped`` gives the failed step each one needs.
     steps_skipped: list[str] = field(default_factory=list)
+    skipped: dict[str, str] = field(default_factory=dict)
     errors: dict[str, str] = field(default_factory=dict)
+    # Results of an earlier run that a failed or skipped step would have replaced, removed
+    # as stale: where (obsm, obsp, uns, var, obs, raw) -> keys.
+    cleared: dict[str, list[str]] = field(default_factory=dict)
     # Steps that ran but had nothing to do, and why (not errors; see StepSkipped).
     notes: dict[str, str] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
     output_path: str | None = None
-    # "complete" (ran to the end, errors or not) | "stopped" (the pre-step check
-    # stopped it before a step) | "cancelled"; neither of the last two saves
-    # anything. See core/run_watchdog.py.
+    # "complete" (every step ran) | "finished_with_errors" (a step failed: the steps that
+    # need it were skipped, the others ran, and the run was saved) | "stopped" (the
+    # pre-step check stopped it before a step) | "cancelled"; neither of the last two
+    # saves anything. See core/run_watchdog.py.
     status: str = "complete"
     stop_reason: str | None = None
     # Requested names that are not steps (the run endpoints refuse these with 422).
@@ -860,29 +871,39 @@ def _louvain_igraph(adata: ad.AnnData, resolution: float, key_added: str, seed: 
     adata.obs[key_added] = pd.Categorical(labels, categories=[str(i) for i in range(order.size)])
 
 
-def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
+def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
     """Run clustering (Leiden or Louvain).
 
     Stores results in a custom column ``scview_{method}_r{resolution}`` so that
     the original dataset's clustering column (if any) is preserved.  The active
     column name is recorded in ``adata.uns["scview_active_clustering"]`` for
     downstream steps (marker genes, violin groupby, etc.).
+
+    Leiden runs until a pass improves nothing, or with ``leiden_iterations`` 2 stops
+    after two passes (fast Leiden, recorded with the step and in the column's
+    ``uns[column]["params"]``, as ``sc.tl.leiden(..., n_iterations=2)`` stores it).
     """
     method = params.clustering_method
     # Written straight to the scview_* column: scanpy's default key ("leiden" /
     # "louvain") would overwrite a clustering the dataset came with.
     scview_col = f"scview_{method}_r{params.clustering_resolution}"
+    found = None
     if method == "leiden":
-        leiden.leiden(adata, params.clustering_resolution, scview_col)  # in a child process
+        n_iterations = leiden.check_iterations(params.leiden_iterations)
+        # In a child process
+        leiden.leiden(adata, params.clustering_resolution, scview_col, n_iterations=n_iterations)
+        found = {"leiden_iterations": n_iterations}
     else:
         _louvain_igraph(adata, params.clustering_resolution, scview_col)
     adata.uns["scview_active_clustering"] = scview_col
 
     n_clusters = adata.obs[scview_col].nunique()
     logger.info(
-        "Clustering (%s): %d clusters at resolution %.2f → column '%s'",
-        method, n_clusters, params.clustering_resolution, scview_col,
+        "Clustering (%s%s): %d clusters at resolution %.2f → column '%s'",
+        method, ", fast" if found and found["leiden_iterations"] != leiden.N_ITERATIONS else "",
+        n_clusters, params.clustering_resolution, scview_col,
     )
+    return found
 
 
 def _run_embeddings(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -1748,32 +1769,47 @@ def _record_pipeline_step(
         logger.warning("Could not record provenance for step '%s': %s", step_name, e)
 
 
-def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list[str]) -> None:
-    """Update the denormalised ``current`` state summary after a pipeline run."""
+def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list[str],
+                      result: PipelineResult | None = None) -> None:
+    """Update the denormalised ``current`` state summary after a pipeline run. With
+    ``result``: how the run ended (``last_run``), and, when it removed stale results
+    (``result.cleared``), the summary of what is left, emptied where nothing is."""
     try:
         ran = set(steps_run)
+        cleared = result.cleared if result is not None else {}
         current: dict[str, Any] = {}
+        if result is not None:
+            current["last_run"] = {"status": result.status, "failed": sorted(result.errors),
+                                   "skipped": list(result.steps_skipped)}
         if "normalization" in ran:
             current["normalized"] = True
         if "log_transform" in ran:
             current["log1p"] = True
         if "scaling" in ran:
             current["scaled"] = True
+        elif scaling.PLAN_KEY in cleared.get("uns", []):
+            current["scaled"] = False
         if ran & {"highly_variable_genes", "scaling"}:
             # What X and the variable genes came from: z-scored log values or residuals.
             current["normalization_method"] = params.normalization_method
         if "pca" in ran or "X_pca" in adata.obsm:
             current["pca"] = True
+        elif "X_pca" in cleared.get("obsm", []):
+            current["pca"] = False
         embs = sorted(k for k in adata.obsm.keys() if k.startswith("X_"))
-        if embs:
+        if embs or cleared:
             current["embeddings"] = embs
         active = adata.uns.get("scview_active_clustering")
+        if not active and "scview_active_clustering" in cleared.get("uns", []):
+            current["clustering"] = None  # stale: the clustering stopped being active
         if active and "clustering" in ran:
             current["clustering"] = {
                 "column": active,
                 "method": params.clustering_method,
                 "resolution": params.clustering_resolution,
             }
+            if params.clustering_method == "leiden":  # what re-clustering follows
+                current["clustering"]["leiden_iterations"] = int(params.leiden_iterations)
         elif active:
             # Clustering did not run, so params.clustering_* are just defaults: keep
             # what the run that made the column recorded.
@@ -1783,12 +1819,12 @@ def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list
         markers_for = sorted(
             c for c in (markers_column(k) for k in adata.uns) if c is not None
         )
-        if markers_for:
+        if markers_for or cleared:
             current["markers_for"] = markers_for
         enr_for = sorted(
             {c for c in (enrichment_column(k) for k in adata.uns) if c is not None}
         )
-        if enr_for:
+        if enr_for or cleared:
             current["enrichment_for"] = enr_for
         anchors = []
         if "counts" in adata.layers:
@@ -1828,6 +1864,60 @@ def _cancelled_during(result: PipelineResult, step: str) -> None:
     _halted(result, ("cancelled", cancelled_reason("during", step)))
 
 
+# How a run ended when it is saved (the others save nothing).
+SAVED_STATUSES = ("complete", step_failures.FINISHED_WITH_ERRORS)
+
+
+def _new_outcome(adata: ad.AnnData, ordered_steps: list[str],
+                 params: PipelineParams) -> step_failures.Outcome:
+    active = adata.uns.get("scview_active_clustering")
+    return step_failures.Outcome(list(ordered_steps), params,
+                                 active_before=active if isinstance(active, str) else None)
+
+
+def _skip_if_blocked(adata: ad.AnnData, result: PipelineResult, outcome: step_failures.Outcome,
+                     step: str) -> str | None:
+    """When a step ``step`` needs failed: record it as skipped, remove its stale results,
+    and return the failed step's name (None: it runs)."""
+    because = outcome.blocked_by(step)
+    if because is None:
+        return None
+    outcome.skipped[step] = because
+    result.steps_skipped.append(step)
+    result.skipped[step] = because
+    step_failures.settle(adata, step, outcome)
+    logger.info("Step '%s' skipped: it needs '%s', which failed", step, because)
+    return because
+
+
+def _step_failed(adata: ad.AnnData, result: PipelineResult, outcome: step_failures.Outcome,
+                 step: str, error: str) -> None:
+    logger.error("Step '%s' failed: %s", step, error)
+    result.errors[step] = error
+    outcome.failed[step] = error
+    step_failures.settle(adata, step, outcome)
+
+
+def _end_status(result: PipelineResult, outcome: step_failures.Outcome) -> None:
+    """A run that reached its end with a failed step finished with errors."""
+    if result.status == "complete" and outcome.any:
+        result.status = step_failures.FINISHED_WITH_ERRORS
+    result.cleared = {k: list(v) for k, v in outcome.cleared.items() if v}
+
+
+def _record_errors(adata: ad.AnnData, result: PipelineResult,
+                   outcome: step_failures.Outcome | None) -> None:
+    """The run's failed and skipped steps (and the stale results removed) in provenance,
+    after its steps: ``run_errors``, which the replay script follows. Never raises."""
+    if outcome is None or result.status != step_failures.FINISHED_WITH_ERRORS:
+        return
+    try:
+        provenance.record_step(adata, step="run_errors", tool="scview pipeline",
+                               params=outcome.record())
+    except Exception as e:  # provenance must never break the pipeline
+        logger.warning("Could not record the run's errors in provenance: %s", e)
+
+
 def _finish_run(
     adata: ad.AnnData,
     params: PipelineParams,
@@ -1835,20 +1925,26 @@ def _finish_run(
     t0: float,
     output_path: str | None,
     control: RunControl | None,
+    outcome: step_failures.Outcome | None = None,
 ) -> None:
-    """Finalise and save a run that reached its end. A cancelled run, or one the
-    pre-step check stopped, saves nothing: a reprocess or re-filter stopped halfway
-    would otherwise replace the dataset with a half-processed one (reset to counts,
-    not yet normalised). The dataset reopens as it was before the run.
+    """Finalise and save a run that reached its end, also one that finished with
+    errors (what ran is saved; ``run_errors`` in provenance lists what did not). A
+    cancelled run, or one the pre-step check stopped, saves nothing: a reprocess or
+    re-filter stopped halfway would otherwise replace the dataset with a
+    half-processed one (reset to counts, not yet normalised). The dataset reopens as
+    it was before the run.
 
     The file is written beside the derived file and then swapped in, so a backend
     killed mid-write (out of memory) leaves the previous file whole."""
-    if result.status == "complete" and control is not None and control.cancelled:
+    if outcome is not None:
+        _end_status(result, outcome)
+    if result.status in SAVED_STATUSES and control is not None and control.cancelled:
         # Cancelled after the last step ended but before the save.
         _halted(result, ("cancelled", cancelled_reason("before", "saving")))
-    save = result.status == "complete"
+    save = result.status in SAVED_STATUSES
     if save:
-        _finalize_current(adata, params, result.steps_run)
+        _record_errors(adata, result, outcome)
+        _finalize_current(adata, params, result.steps_run, result)
     result.elapsed_seconds = round(time.time() - t0, 2)
     write_s = None
     if output_path and save:
@@ -1891,6 +1987,9 @@ def run_pipeline(
         Checked before each step (cancel, the pre-step hook) and times and
         watches each step (``core/run_watchdog.py``). None: neither.
 
+    A step that fails skips the steps that need it (``core/step_failures.py``); the
+    others run, and the run is saved with status "finished_with_errors".
+
     Returns
     -------
     Tuple of (processed AnnData, PipelineResult).
@@ -1915,11 +2014,12 @@ def run_pipeline(
     # Ensure steps are in canonical order
     ordered_steps = [s for s in ALL_STEPS if s in steps]
     result.unknown_steps = _unknown_requested(steps)
+    outcome = _new_outcome(adata, ordered_steps, params)
 
     for step_name in ordered_steps:
-        runner = _STEP_RUNNERS.get(step_name)
-        if runner is None:
-            result.steps_skipped.append(step_name)
+        runner = _STEP_RUNNERS[step_name]
+        # A step that needs a failed one is skipped; the others still run.
+        if _skip_if_blocked(adata, result, outcome, step_name) is not None:
             continue
         halt = control.halt_before(step_name, adata, params) if control is not None else None
         if halt is not None:
@@ -1936,6 +2036,7 @@ def run_pipeline(
                 provenance.carry(adata, new)  # keep history across the new object
                 adata = new
             result.steps_run.append(step_name)
+            outcome.succeeded.append(step_name)
             _record_pipeline_step(adata, step_name, params, ret,
                                   _step_resources(control, step_name))
         except StepSkipped as e:
@@ -1945,10 +2046,9 @@ def run_pipeline(
             if control is not None and control.cancelled:  # e.g. its Leiden child was ended
                 _cancelled_during(result, step_name)
                 break
-            logger.error("Step '%s' failed: %s", step_name, e)
-            result.errors[step_name] = str(e)
+            _step_failed(adata, result, outcome, step_name, str(e))
 
-    _finish_run(adata, params, result, t0, output_path, control)
+    _finish_run(adata, params, result, t0, output_path, control, outcome)
     return adata, result
 
 
@@ -1967,8 +2067,10 @@ def run_pipeline_streamed(
     Yields
     ------
     Tuples of (event_type, event_data) where event_type is one of:
-      "step_start", "step_done", "step_error", "substep", "complete". The
-    "complete" data is the result, with ``status`` complete | stopped | cancelled.
+      "step_start", "step_done", "step_error", "step_skipped" (a step not run because
+      one it needs failed: ``skipped_event``), "substep", "complete". The "complete"
+      data is the result, with ``status`` complete | finished_with_errors | stopped |
+      cancelled.
     """
     if params is None:
         params = PipelineParams()
@@ -1982,15 +2084,17 @@ def run_pipeline_streamed(
     ordered_steps = [s for s in ALL_STEPS if s in steps]
     total = len(ordered_steps)
     result.unknown_steps = _unknown_requested(steps)
+    outcome = _new_outcome(adata, ordered_steps, params)
 
     # Runners that accept a substep progress callback (3rd arg)
     _SUBSTEP_RUNNERS = {"marker_genes", "enrichment"}
     _SENTINEL = object()  # marks thread completion
 
     for idx, step_name in enumerate(ordered_steps):
-        runner = _STEP_RUNNERS.get(step_name)
-        if runner is None:
-            result.steps_skipped.append(step_name)
+        runner = _STEP_RUNNERS[step_name]
+        because = _skip_if_blocked(adata, result, outcome, step_name)
+        if because is not None:
+            yield ("step_skipped", skipped_event(step_name, idx, total, because))
             continue
         halt = control.halt_before(step_name, adata, params) if control is not None else None
         if halt is not None:
@@ -2046,6 +2150,7 @@ def run_pipeline_streamed(
                 provenance.carry(adata, new)  # keep history across the new object
                 adata = new
             result.steps_run.append(step_name)
+            outcome.succeeded.append(step_name)
             _record_pipeline_step(adata, step_name, params, ret,
                                   _step_resources(control, step_name))
             elapsed = round(time.time() - step_t0, 2)
@@ -2059,11 +2164,16 @@ def run_pipeline_streamed(
             if control is not None and control.cancelled:  # its Leiden child ended, or a substep
                 _cancelled_during(result, step_name)
                 break
-            logger.error("Step '%s' failed: %s", step_name, e)
-            result.errors[step_name] = str(e)
+            _step_failed(adata, result, outcome, step_name, str(e))
             yield ("step_error", {"step": step_name, "index": idx, "error": str(e)})
 
-    _finish_run(adata, params, result, t0, output_path, control)
+    _finish_run(adata, params, result, t0, output_path, control, outcome)
     yield ("complete", result.to_dict())
 
     return adata, result
+
+
+def skipped_event(step: str, index: int, total: int, because: str) -> dict[str, Any]:
+    """The ``step_skipped`` event of a step not run because ``because`` failed."""
+    return {"step": step, "index": index, "total": total, "because": because,
+            "reason": step_failures.skip_reason(step, because)}

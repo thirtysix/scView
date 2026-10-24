@@ -75,6 +75,31 @@ def test_script_reproduces_the_pipeline_and_follow_up_steps(tmp_path):
     assert list(rep.uns[key]["names"][0]) == list(out.uns[key]["names"][0])
 
 
+def test_fast_leiden_replays_exactly_with_scanpys_n_iterations(tmp_path):
+    """sc.tl.leiden(..., n_iterations=2) gives fast Leiden's labels: the clustering, a
+    resolution kept from the sweep and a sub-clustering, which follow its setting."""
+    inp = _counts(seed=2)
+    params = PipelineParams(n_top_genes=60, n_comps=15, qc_threshold_mode="fixed", min_genes=20,
+                            leiden_iterations=2)
+    steps = ["qc_metrics", "filtering", "normalization", "log_transform", "highly_variable_genes",
+             "scaling", "pca", "neighbors", "clustering"]
+    out, res = run_pipeline(inp.copy(), steps, params)
+    assert res.errors == {}
+    col = out.uns["scview_active_clustering"]
+    subcluster(out, col, "0", 0.8)
+    resolution_sweep.keep(out, "leiden", 1.5)
+    script = replay_script.build_script(out, dataset_id="t", dataset_name="test")
+    assert script.count("n_iterations=2") == 3, script  # clustering, sub-cluster, kept resolution
+    assert {d["status"] for d in replay_script.describe(out)} == {"exact"}
+    m = run_manifest.build_manifest(out, dataset_id="t", dataset_name="test")
+    assert next(s for s in m["steps"] if s["step"] == "clustering")["params"]["leiden_iterations"] == 2
+
+    rep = _replay(tmp_path, inp, out)
+    for c in (col, f"{col}_sub", resolution_sweep.column_name("leiden", 1.5)):
+        assert (rep.obs[c].astype(str) == out.obs[c].astype(str)).all(), c
+    assert rep.uns[col]["params"]["n_iterations"] == 2
+
+
 def test_pearson_residuals_and_louvain_replay(tmp_path):
     inp = _counts(seed=1)
     params = PipelineParams(normalization_method="pearson_residuals", clustering_method="louvain",
@@ -123,6 +148,12 @@ _STEPS = [
     ("batch_correction", {"batch_key": "stim", "batch_method": "harmony"}),
     ("neighbors", {"n_neighbors": 15}),
     ("clustering", {"clustering_method": "louvain", "clustering_resolution": 1.0}),
+    ("clustering", {"clustering_method": "leiden", "clustering_resolution": 0.5,
+                    "leiden_iterations": 2}),
+    ("run_errors", {"status": "finished_with_errors", "failed": {"pca": "boom"},
+                    "skipped": {"neighbors": "pca"},
+                    "cleared": {"obsm": ["X_pca"], "uns": ["neighbors"], "obs": ["S_score"],
+                                "var": ["highly_variable"], "raw": ["raw"]}}),
     ("embeddings", {"umap_min_dist": 0.3}),
     ("marker_genes", {"marker_columns": ["cell_type", "a/b"]}),
     ("enrichment", {"enrichment_columns": ["x"], "enrichment_n_genes": 100}),

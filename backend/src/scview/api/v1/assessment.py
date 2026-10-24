@@ -20,7 +20,7 @@ from scview.core.assessor import assess_preprocessing, recorded_normalization_me
 from scview.core import (
     cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
-from scview.core import large_mode, large_run
+from scview.core import large_mode, large_run, leiden
 from scview.core import qc_states
 from scview.core.obs_writes import (
     dataset_edit, edit_room, editable, save_edit, uns_snapshot,
@@ -411,14 +411,15 @@ def _check_steps(steps: list[str]) -> None:
 
 
 def _run_params(raw: dict[str, Any] | None) -> PipelineParams:
-    """PipelineParams from a request body; 422 for a large-dataset mode that is not one
-    (before loading: a wrong value costs nothing)."""
+    """PipelineParams from a request body; 422 for a large-dataset mode or a Leiden
+    iteration count that is not one (before loading: a wrong value costs nothing)."""
     params = PipelineParams()
     for key, value in (raw or {}).items():
         if hasattr(params, key):
             setattr(params, key, value)
     try:
         params.chunked = check_chunked(params.chunked)
+        params.leiden_iterations = leiden.check_iterations(params.leiden_iterations)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     return params

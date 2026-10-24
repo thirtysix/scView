@@ -587,3 +587,78 @@ def test_doublets_on_a_processed_dataset_are_estimated_on_the_counts_alone():
     proc_no_counts = ad.AnnData(X=rng.normal(size=(3000, 2000)))
     proc_no_counts.obsm["X_pca"] = proc.obsm["X_pca"]
     assert pf.step_peak_for(proc_no_counts, "doublet_detection") > lean + dense_x
+
+
+# --- Leiden's time and the fast-Leiden offer ----------------------------------------------
+# Measured on Roihu on the same saved graph of the brain data, resolution 0.5 (seconds), and
+# the laptop's live 100k run (253 s at 88,640 cells, 2 CPUs; Roihu 234 s there).
+ROIHU_FULL = {88_640: 234, 221_828: 1_586, 443_946: 8_738}
+ROIHU_FAST = {88_640: 17, 221_828: 44, 443_946: 138, 1_214_593: 446}
+LAPTOP = 253 / 234
+
+
+@pytest.mark.parametrize(("iterations", "measured"), [(-1, ROIHU_FULL), (2, ROIHU_FAST)])
+def test_leiden_time_follows_the_measured_runs(iterations, measured):
+    for n, secs in measured.items():
+        est = pf.leiden_seconds(n, iterations)
+        assert abs(est / (secs * LAPTOP) - 1) <= 0.2, (n, est, secs)
+        lo, hi = pf._range(est, 2.0)
+        assert lo <= secs * LAPTOP <= hi  # the range shown holds it
+    assert abs(pf.leiden_seconds(88_640) / 253 - 1) <= 0.05  # the laptop's own run
+
+
+def test_fast_leiden_grows_far_slower_and_small_data_keeps_its_line():
+    assert pf.leiden_seconds(1_200_000, 2) < 600 < pf.leiden_seconds(1_200_000, -1) / 50
+    assert pf.leiden_seconds(13_836) == pytest.approx(0.5 + 4e-4 * 13_836)  # Kang: the old line
+    assert pf.leiden_seconds(13_836, 2) < pf.leiden_seconds(13_836)
+
+
+def test_the_run_estimate_uses_the_runs_setting_and_no_cpu_speed_up():
+    def clustering(params, cpus):
+        est = pf.estimate_run((300_000, 20_000), 300_000_000, steps=["clustering"], params=params,
+                              cpus=cpus)
+        return next(e for e in est.steps if e.step == "clustering").seconds
+
+    full, fast = clustering(PipelineParams(), 2.0), clustering(PipelineParams(leiden_iterations=2), 2.0)
+    assert fast[1] < full[0]
+    assert clustering(PipelineParams(), 8.0) == full  # Leiden uses one CPU
+    louvain = clustering(PipelineParams(clustering_method="louvain"), 2.0)
+    assert louvain == pf._range(0.5 + 4e-4 * 300_000, 2.0)  # igraph's multilevel: the old line
+    sh = pf.ChunkedShape(300_000, 20_000, 300_000_000)
+    assert pf.chunked_step("clustering", sh, PipelineParams(leiden_iterations=2))[2] == \
+        pytest.approx(pf.leiden_seconds(300_000, 2))
+
+
+def test_leiden_choice_offers_fast_leiden_over_ten_minutes(monkeypatch):
+    monkeypatch.delenv("SCVIEW_LEIDEN_OFFER_SECONDS", raising=False)
+    steps = ["neighbors", "clustering"]
+    big = pf.leiden_choice(300_000, steps, PipelineParams())
+    assert big["offer_fast"] and big["full_seconds"] > 600 > big["fast_seconds"]
+    assert big["iterations"] == -1 and big["n_cells"] == 300_000 and big["offer_seconds"] == 600
+    assert big["full_text"].startswith("roughly") and big["fast_text"].startswith("roughly")
+    assert pf.leiden_choice(300_000, steps, PipelineParams(leiden_iterations=2))["iterations"] == 2
+    small = pf.leiden_choice(88_640, steps, PipelineParams())
+    assert not small["offer_fast"]
+    # Filtering's share of the cells comes off first
+    assert pf.leiden_choice(100_000, ["filtering", *steps], PipelineParams())["n_cells"] == 90_000
+    # The threshold can be lowered for a check (.env)
+    monkeypatch.setenv("SCVIEW_LEIDEN_OFFER_SECONDS", "120")
+    assert pf.leiden_choice(88_640, steps, PipelineParams())["offer_fast"]
+    assert pf.leiden_choice(300_000, ["pca"], PipelineParams()) is None  # no clustering
+    assert pf.leiden_choice(300_000, steps, PipelineParams(clustering_method="louvain")) is None
+
+
+async def test_dataset_preflight_reports_the_leiden_choice(client, dataset_manager, monkeypatch):
+    monkeypatch.setenv("SCVIEW_LEIDEN_OFFER_SECONDS", "0")  # 40 cells: any time offers it
+    did = _register(dataset_manager)
+    url = f"{API}/datasets/{did}/preflight"
+    body = (await client.get(url, params={"steps": "neighbors,clustering"})).json()
+    assert body["leiden"]["offer_fast"] and body["leiden"]["iterations"] == -1
+    body = (await client.get(url, params={"steps": "neighbors,clustering",
+                                          "leiden_iterations": 2})).json()
+    assert body["leiden"]["iterations"] == 2
+    body = (await client.get(url, params={"steps": "neighbors,clustering",
+                                          "clustering_method": "louvain"})).json()
+    assert body["leiden"] is None
+    r = await client.get(url, params={"steps": "clustering", "leiden_iterations": 3})
+    assert r.status_code == 422 and "Leiden iterations" in r.json()["detail"]

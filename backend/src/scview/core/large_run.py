@@ -81,13 +81,19 @@ from scview.core import (
 from scview.core.pipeline import (
     ALL_STEPS,
     HVG_FLAVORS,
+    SAVED_STATUSES,
     PipelineParams,
     PipelineResult,
     StepSkipped,
     _cancelled_during,
+    _end_status,
     _finalize_current,
     _halted,
+    _new_outcome,
+    _record_errors,
     _record_pipeline_step,
+    _skip_if_blocked,
+    _step_failed,
     _STEP_RUNNERS,
     _unknown_requested,
     _var_from_hvg_frame,
@@ -98,6 +104,7 @@ from scview.core.pipeline import (
     looks_like_counts,
     run_pipeline,
     run_pipeline_streamed,
+    skipped_event,
     subset_lean,
 )
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason, default_before_step
@@ -1165,8 +1172,8 @@ def run_streamed(
     control: RunControl | None = None,
 ) -> Generator[tuple[str, dict[str, Any]], None, PipelineResult]:
     """``pipeline.run_pipeline_streamed`` in large-dataset mode on the h5ad at ``path``:
-    the same events (step_start, step_done, step_error, substep, complete; substeps also
-    from the passes over the blocks) and result (``chunked`` true). Saved to
+    the same events (step_start, step_done, step_error, step_skipped, substep, complete;
+    substeps also from the passes over the blocks) and result (``chunked`` true). Saved to
     ``output_path`` only when the run reaches its end."""
     params = params or PipelineParams()
     result = PipelineResult(chunked=True)
@@ -1180,7 +1187,13 @@ def run_streamed(
         why = _plan_check(run, ordered) or _disk_check(run, ordered)
         if why is not None:
             _halted(result, ("stopped", why))
+        # A failed step skips the steps that need it, as in memory (core/step_failures.py).
+        outcome = _new_outcome(run.light, ordered, params)
         for idx, step in enumerate(ordered if result.status == "complete" else []):
+            because = _skip_if_blocked(run.light, result, outcome, step)
+            if because is not None:
+                yield ("step_skipped", skipped_event(step, idx, total, because))
+                continue
             halt = run.halt_before(step)
             if halt is not None:
                 _halted(result, halt)
@@ -1192,6 +1205,7 @@ def run_streamed(
                 with scope:
                     ret = yield from _in_thread(run, step, control)
                 result.steps_run.append(step)
+                outcome.succeeded.append(step)
                 recorded = dict(ret) if isinstance(ret, dict) else {}
                 recorded["chunked"] = True
                 _record_pipeline_step(run.light, step, params, recorded,
@@ -1207,10 +1221,9 @@ def run_streamed(
                 if control is not None and control.cancelled:
                     _cancelled_during(result, step)
                     break
-                logger.error("Step '%s' failed (large-dataset mode): %s", step, e)
-                result.errors[step] = str(e)
+                _step_failed(run.light, result, outcome, step, str(e))  # logs it
                 yield ("step_error", {"step": step, "index": idx, "error": str(e)})
-        _finish(run, params, result, t0, control)
+        _finish(run, params, result, t0, control, outcome)
     finally:
         run.cleanup()
     yield ("complete", result.to_dict())
@@ -1256,13 +1269,19 @@ def _in_thread(run: LargeRun, step: str, control: RunControl | None):
 
 
 def _finish(run: LargeRun, params: PipelineParams, result: PipelineResult, t0: float,
-            control: RunControl | None) -> None:
-    """``pipeline._finish_run`` for this mode: save only a run that reached its end."""
-    if result.status == "complete" and control is not None and control.cancelled:
+            control: RunControl | None, outcome=None) -> None:
+    """``pipeline._finish_run`` for this mode: save only a run that reached its end (also
+    one that finished with errors). This mode saves X log-normalised only: when a failed
+    step (reset, normalisation, log transform) leaves it otherwise, the run is stopped
+    with nothing saved, the dataset as it was."""
+    if outcome is not None:
+        _end_status(result, outcome)
+    if result.status in SAVED_STATUSES and control is not None and control.cancelled:
         _halted(result, ("cancelled", cancelled_reason("before", "saving")))
-    save = result.status == "complete"
+    save = result.status in SAVED_STATUSES
     if save:
-        _finalize_current(run.light, params, result.steps_run)
+        _record_errors(run.light, result, outcome)
+        _finalize_current(run.light, params, result.steps_run, result)
         provenance.set_current(run.light, anchors=["counts", "lognorm"], large=True)
     result.elapsed_seconds = round(time.time() - t0, 2)
     write_s = None
@@ -1272,6 +1291,12 @@ def _finish(run: LargeRun, params: PipelineParams, result: PipelineResult, t0: f
             run.save()
         except RunCancelled:  # cancelled while the matrices were written for the save
             _halted(result, ("cancelled", cancelled_reason("during", "saving")))
+        except LargeRunError as e:
+            if not result.errors:
+                raise
+            failed = ", ".join(s.replace("_", " ") for s in result.errors)
+            _halted(result, ("stopped", f"Nothing was saved: {failed} failed. {e} The dataset "
+                                        "is as it was before the run."))
         else:
             write_s = round(time.time() - tw, 2)
             result.output_path = str(run.output)
