@@ -283,6 +283,29 @@ def test_preflight_both_detectors_take_the_larger_peak_and_both_times():
     assert 6.2 / 1.25 <= sc_ - 1.0 <= 6.2 * 1.25  # Kang's two lanes: 3.3 + 3.7 s measured
 
 
+async def test_the_preflight_endpoint_takes_the_method(client, dataset_manager):
+    import json
+    from pathlib import Path
+
+    a, _ = _adata(seed=9)
+    d = Path(dataset_manager.data_dir) / "uploads" / "pfm"
+    d.mkdir(parents=True)
+    (d / "metadata.json").write_text(json.dumps({"id": "pfm", "name": "pfm", "status": "ready"}))
+    a.write_h5ad(d / "data.h5ad")
+
+    async def secs(method):
+        r = await client.get("/api/v1/datasets/pfm/preflight",
+                             params={"steps": "doublet_detection", "doublet_method": method})
+        assert r.status_code == 200, r.text
+        return next(s for s in r.json()["steps"] if s["step"] == "doublet_detection")["seconds"]
+
+    one, both = await secs("scrublet"), await secs("both")
+    assert both[0] > one[0]
+    r = await client.get("/api/v1/datasets/pfm/preflight",
+                         params={"steps": "doublet_detection", "doublet_method": "nope"})
+    assert r.status_code == 422 and "doublet method" in r.json()["detail"]
+
+
 # --- the replay script ------------------------------------------------------------------
 
 
