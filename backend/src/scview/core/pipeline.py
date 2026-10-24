@@ -123,6 +123,9 @@ class PipelineParams:
     # Clustering
     clustering_resolution: float = 0.5
     clustering_method: str = "leiden"
+    # Leiden's passes: -1 until one improves nothing (scanpy's default), or 2 ("fast
+    # Leiden", opt-in: the same optimisation stopped early; see core/leiden.py)
+    leiden_iterations: int = -1
 
     # Batch correction
     batch_key: str = ""  # obs column for batch identity (empty = skip)
@@ -860,29 +863,39 @@ def _louvain_igraph(adata: ad.AnnData, resolution: float, key_added: str, seed: 
     adata.obs[key_added] = pd.Categorical(labels, categories=[str(i) for i in range(order.size)])
 
 
-def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
+def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
     """Run clustering (Leiden or Louvain).
 
     Stores results in a custom column ``scview_{method}_r{resolution}`` so that
     the original dataset's clustering column (if any) is preserved.  The active
     column name is recorded in ``adata.uns["scview_active_clustering"]`` for
     downstream steps (marker genes, violin groupby, etc.).
+
+    Leiden runs until a pass improves nothing, or with ``leiden_iterations`` 2 stops
+    after two passes (fast Leiden, recorded with the step and in the column's
+    ``uns[column]["params"]``, as ``sc.tl.leiden(..., n_iterations=2)`` stores it).
     """
     method = params.clustering_method
     # Written straight to the scview_* column: scanpy's default key ("leiden" /
     # "louvain") would overwrite a clustering the dataset came with.
     scview_col = f"scview_{method}_r{params.clustering_resolution}"
+    found = None
     if method == "leiden":
-        leiden.leiden(adata, params.clustering_resolution, scview_col)  # in a child process
+        n_iterations = leiden.check_iterations(params.leiden_iterations)
+        # In a child process
+        leiden.leiden(adata, params.clustering_resolution, scview_col, n_iterations=n_iterations)
+        found = {"leiden_iterations": n_iterations}
     else:
         _louvain_igraph(adata, params.clustering_resolution, scview_col)
     adata.uns["scview_active_clustering"] = scview_col
 
     n_clusters = adata.obs[scview_col].nunique()
     logger.info(
-        "Clustering (%s): %d clusters at resolution %.2f → column '%s'",
-        method, n_clusters, params.clustering_resolution, scview_col,
+        "Clustering (%s%s): %d clusters at resolution %.2f → column '%s'",
+        method, ", fast" if found and found["leiden_iterations"] != leiden.N_ITERATIONS else "",
+        n_clusters, params.clustering_resolution, scview_col,
     )
+    return found
 
 
 def _run_embeddings(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -1774,6 +1787,8 @@ def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list
                 "method": params.clustering_method,
                 "resolution": params.clustering_resolution,
             }
+            if params.clustering_method == "leiden":  # what re-clustering follows
+                current["clustering"]["leiden_iterations"] = int(params.leiden_iterations)
         elif active:
             # Clustering did not run, so params.clustering_* are just defaults: keep
             # what the run that made the column recorded.

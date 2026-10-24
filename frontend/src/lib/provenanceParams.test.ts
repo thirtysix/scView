@@ -1,5 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { paramText } from "./provenanceParams";
+import { keptRerunParams, paramText } from "./provenanceParams";
+
+describe("fast Leiden in the History", () => {
+  it("the chip says which Leiden optimisation ran", () => {
+    expect(paramText("leiden_iterations", 2)).toBe("Leiden: fast (2 passes)");
+    expect(paramText("leiden_iterations", -1)).toBe("Leiden: full optimisation");
+  });
+
+  it("re-clustering from the History keeps the method and Leiden's passes", () => {
+    const rec = { step: "clustering", params: { clustering_method: "leiden", clustering_resolution: 0.5, leiden_iterations: 2 } };
+    expect(keptRerunParams(rec)).toEqual({ clustering_method: "leiden", leiden_iterations: 2 });
+    expect(keptRerunParams({ step: "clustering", params: { clustering_method: "louvain" } })).toEqual({
+      clustering_method: "louvain",
+    });
+    expect(keptRerunParams({ step: "embeddings", params: { umap_min_dist: 0.3 } })).toEqual({});
+  });
+});
 
 describe("paramText", () => {
   it("shows plain values and lists as before", () => {

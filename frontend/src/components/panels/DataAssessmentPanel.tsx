@@ -27,6 +27,8 @@ import { asDoubletSource } from "@/lib/doubletSource";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
+import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
+import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLeiden";
 import { QcStates } from "@/components/qc/QcStates";
 import { SequencingQc } from "@/components/qc/SequencingQc";
 import { Hashing } from "@/components/qc/Hashing";
@@ -164,6 +166,8 @@ interface ParamConfig {
   options?: string[];
   /** Display text per select option (the value is sent). */
   optionLabels?: Record<string, string>;
+  /** A select whose options are numbers: the value is sent as a number. */
+  numeric?: boolean;
   /** One line of guidance under the input. */
   help?: string;
   default: unknown;
@@ -264,6 +268,18 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
   clustering: [
     { param: "clustering_resolution", label: "Resolution", type: "number", min: 0.1, max: 3.0, step: 0.1, default: 0.5 },
     { param: "clustering_method", label: "Method", type: "select", options: ["leiden", "louvain"], default: "leiden" },
+    {
+      param: "leiden_iterations",
+      label: "Leiden optimisation",
+      type: "select",
+      options: [String(FULL_LEIDEN), String(FAST_LEIDEN)],
+      optionLabels: LEIDEN_ITERATION_LABELS,
+      numeric: true,
+      default: FULL_LEIDEN,
+      help:
+        "The full optimisation repeats Leiden's passes until one improves nothing. Fast Leiden stops after two: " +
+        "nearly the same clusters, much sooner on large datasets.",
+    },
   ],
   embeddings: [
     { param: "umap_min_dist", label: "UMAP min dist", type: "number", min: 0.0, max: 1.0, step: 0.05, default: 0.5 },
@@ -907,6 +923,7 @@ export function DataAssessmentPanel() {
   const doneCount = state ? STEP_ORDER.length - missingCount : 0;
   const selectedCount = selectedSteps.size;
   const pearson = normalizationMethod(stepParams, state?.normalization_method) === "pearson_residuals";
+  const louvain = stepParams.clustering?.clustering_method === "louvain";
 
   /* ---- Find suggestion for a step ---- */
   const suggestionForStep = (key: string): LLMSuggestion | undefined =>
@@ -1024,6 +1041,7 @@ export function DataAssessmentPanel() {
                   datasetId={datasetId}
                   steps={STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key)}
                   params={flattenStepParams(STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key), stepParams)}
+                  onLeidenIterations={(n) => setStepParam("clustering", "leiden_iterations", n)}
                 />
               </div>
             )}
@@ -1371,8 +1389,9 @@ export function DataAssessmentPanel() {
                                     : (pc.options ?? []);
                                 return (
                                   <div key={pc.param} className={`flex flex-col gap-0.5 ${pc.type === "checkbox_list" || pc.type === "msigdb_tree" || pc.help ? "col-span-2" : ""}`}>
-                                    <label className="text-[10px] font-medium text-slate-500">
+                                    <label className="flex items-center gap-1 text-[10px] font-medium text-slate-500">
                                       {pc.label}
+                                      {pc.param === "leiden_iterations" && <FastLeidenInfo />}
                                     </label>
                                     {pc.type === "msigdb_tree" ? (
                                       <MSigDBCollectionTree
@@ -1463,9 +1482,9 @@ export function DataAssessmentPanel() {
                                       <select
                                         value={String(currentVal)}
                                         onChange={(e) =>
-                                          setStepParam(step.key, pc.param, e.target.value)
+                                          setStepParam(step.key, pc.param, pc.numeric ? Number(e.target.value) : e.target.value)
                                         }
-                                        disabled={running || unused || (pc.param === "hvg_flavor" && pearson)}
+                                        disabled={running || unused || (pc.param === "hvg_flavor" && pearson) || (pc.param === "leiden_iterations" && louvain)}
                                         title={
                                           pc.param === "hvg_flavor" && pearson
                                             ? "Pearson residuals rank genes by residual variance (Normalization step)"
@@ -1518,6 +1537,9 @@ export function DataAssessmentPanel() {
                                       <p className="text-[10px] leading-snug text-slate-400">
                                         Not used: Pearson residuals (chosen on Normalization) rank genes by residual variance.
                                       </p>
+                                    )}
+                                    {pc.param === "leiden_iterations" && louvain && (
+                                      <p className="text-[10px] leading-snug text-slate-400">Not used: Louvain.</p>
                                     )}
                                   </div>
                                 );

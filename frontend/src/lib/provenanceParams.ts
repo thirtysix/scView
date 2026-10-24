@@ -1,4 +1,22 @@
+import { leidenIterationsText } from "@/lib/fastLeiden";
+
 const LIST_SHOWN = 12;
+
+// Recorded params a History re-run keeps: re-clustering at another resolution stays
+// Louvain, or fast Leiden, when the step was.
+const KEPT_ON_RERUN: Record<string, readonly string[]> = {
+  clustering: ["clustering_method", "leiden_iterations"],
+};
+
+/** The recorded params of `step` that its re-run sends again (the edited one goes on top). */
+export function keptRerunParams(step: { step: string; params?: Record<string, unknown> | null }): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of KEPT_ON_RERUN[step.step] ?? []) {
+    const v = step.params?.[key];
+    if (v !== undefined && v !== null) out[key] = v;
+  }
+  return out;
+}
 
 interface ChannelRun {
   n_cells?: number;
@@ -32,6 +50,7 @@ function channelsText(rows: ChannelRun[]): string {
 export function paramText(key: string, value: unknown): string {
   if (key === "channels" && Array.isArray(value) && value.length && typeof value[0] === "object")
     return channelsText(value as ChannelRun[]);
+  if (key === "leiden_iterations") return leidenIterationsText(value);
   // A long list (the gene programs step records its 2,000 genes): the first few and the count.
   if (Array.isArray(value) && value.length > LIST_SHOWN)
     return `${key}=${value.slice(0, LIST_SHOWN).join(", ")}, ... (${value.length.toLocaleString()})`;

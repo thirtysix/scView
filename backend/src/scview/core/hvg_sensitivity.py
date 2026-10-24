@@ -7,7 +7,8 @@ the feature-selection method and gene count change the partition. This check
 re-selects the variable genes under a few other settings and, for each, re-runs
 scaling (or Pearson residuals), PCA, Harmony when the dataset's graph was
 corrected, the neighbour graph and the clustering on copies, with the dataset's
-own recorded method, resolution, PCs and neighbours. Each partition is compared
+own recorded method, resolution, PCs, neighbours and Leiden passes (fast Leiden's
+2 when the clustering was made that way). Each partition is compared
 with the current clustering:
 
 - ARI and AMI over all cells;
@@ -50,7 +51,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from scview.core import normalization, provenance
+from scview.core import leiden, normalization, provenance
 from scview.core import resolution_sweep as rs
 from scview.core.anndata_adaptor import CLUSTERING_CANDIDATES
 from scview.core.obs_writes import forget_column_results
@@ -154,6 +155,9 @@ class Recorded:
     pcs_made_by: str | None = None  # scView version that made the graph's PCs (None: not recorded)
     pcs_made_on: str | None = None  # and the date
     pcs_older: bool = False  # by an older scView: the re-runs build them with this version's pipeline
+    # Leiden's passes the reference was made with (-1: until none improves; 2: fast Leiden),
+    # which every re-run uses, so the control reproduces the reference
+    leiden_iterations: int = -1
 
     @property
     def current(self) -> Setting:
@@ -305,6 +309,7 @@ def recorded(adata, reference: str | None = None) -> Recorded:
         and reference != current_col,
         pcs_made_by=made_by, pcs_made_on=(made.get("timestamp") or "")[:10] or None,
         pcs_older=_older_than_this(made_by),
+        leiden_iterations=leiden.recorded_iterations(adata, reference),
     )
 
 
@@ -575,7 +580,8 @@ def _cluster(X: np.ndarray, rec: Recorded) -> tuple[pd.Categorical, sp.csr_matri
     tmp = ad.AnnData(obs=pd.DataFrame(index=[str(i) for i in range(X.shape[0])]))
     tmp.obsm["X_rep"] = X
     sc.pp.neighbors(tmp, n_neighbors=min(rec.n_neighbors, tmp.n_obs - 1), use_rep="X_rep")
-    return rs.cluster(tmp, rec.method, rec.resolution), tmp.obsp["connectivities"]
+    return (rs.cluster(tmp, rec.method, rec.resolution, rec.leiden_iterations),
+            tmp.obsp["connectivities"])
 
 
 def _embed(inp: _Inputs, s: Setting, rec: Recorded, stop: Callable[[], bool] | None = None,
@@ -697,7 +703,7 @@ def fingerprint(adata, rec: Recorded) -> str:
         if key:
             h.update(_hash(adata.obs[key].to_numpy()))
     params = (rec.method, rec.resolution, rec.target_sum, rec.n_comps, rec.n_neighbors,
-              rec.batch_key, rec.hvg_batch_key, M.shape, nnz, float(M.sum()))
+              rec.batch_key, rec.hvg_batch_key, M.shape, nnz, float(M.sum()), rec.leiden_iterations)
     h.update(repr(params).encode())
     return h.hexdigest()
 
@@ -785,7 +791,8 @@ def keep(adata, setting: Setting, rec: Recorded) -> dict[str, Any]:
                     "clustering_method": eff.method, "clustering_resolution": rec.resolution,
                     "n_comps": rec.n_comps, "n_neighbors": eff.n_neighbors,
                     "batch_key": rec.batch_key, "column": column,
-                    "from": "variable-gene sensitivity check"},
+                    "from": "variable-gene sensitivity check",
+                    **({"leiden_iterations": rec.leiden_iterations} if eff.method == "leiden" else {})},
         )
     except Exception as e:  # provenance must never block the result
         logger.warning("Could not record keep_hvg_setting provenance: %s", e)
