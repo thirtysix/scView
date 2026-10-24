@@ -16,10 +16,9 @@ call or both.
 
 Sources (``resolve``):
 
-- ``auto`` (the default): hashing when ``hash_class`` is present; else, when both
-  detectors ran, their consensus; else the one detector that ran (the classifier's
-  ``predicted_doublet_classifier`` or Scrublet's ``predicted_doublet``); else the first
-  text class column;
+- ``auto`` (the default): hashing when ``hash_class`` is present; else the classifier's
+  ``predicted_doublet_classifier`` when it ran (alone or beside Scrublet); else Scrublet's
+  ``predicted_doublet``; else the first text class column;
 - ``hashing``: ``hash_class`` == Doublet only;
 - ``scrublet``: ``predicted_doublet`` only;
 - ``classifier``: ``predicted_doublet_classifier`` only;
@@ -27,13 +26,15 @@ Sources (``resolve``):
 - ``either``: a cell any of the calls present calls a doublet (hashing, Scrublet, the
   classifier).
 
-Why consensus for auto once both detectors ran: the two find doublets in different ways
-(Scrublet: a cell's neighbourhood among simulated doublets; the classifier: a model
-trained on them, with more features), and each makes false calls of its own. A cell both
-call is a doublet with more confidence, and removing a real cell (a rare or transitional
-state that sits between two types) costs more than keeping a doublet, which the
-doublet-like cluster flag and the doublet views still show. ``either`` is there for the
-strict cut.
+Why the classifier, not the consensus, for auto once both detectors ran: an intersection
+inherits the weaker detector's misses, and Scrublet's automatic threshold is the weak
+point. On Kang's STIM lane it called 9 of 7,263 cells (the classifier 410, scDblFinder
+itself 526); on paul15 1 of 2,730 (the classifier 87), so the consensus would drop next to
+nothing. The classifier sets its threshold from its artificial doublets and the expected
+rate in every channel, and ranked planted and cross-species doublets as well as R
+scDblFinder (core/doublet_classifier.py). ``consensus`` (both call it: fewer, surer
+calls, for keeping rare states that sit between two types) and ``either`` (any call:
+the strict cut) are the two choices beside it.
 
 A hashing ``Negative`` (no tag above background) is not a doublet: usually an empty
 droplet or a cell whose tagging failed. ``hash_negatives`` gives them, for the
@@ -230,9 +231,11 @@ def resolve(obs: pd.DataFrame, source: str = AUTO) -> Calls | None:
         return _either(obs)
     if source in (SCRUBLET, CLASSIFIER):
         return _detector(obs, source)
-    if source in (AUTO, CONSENSUS):
-        found = _consensus(obs)
-        if found is not None or source == CONSENSUS:
+    if source == CONSENSUS:
+        return _consensus(obs)
+    if source == AUTO:
+        found = _detector(obs, CLASSIFIER) or _detector(obs, SCRUBLET)
+        if found is not None:
             return found
     if source == LEGACY:
         scrublet = _detector(obs, SCRUBLET)

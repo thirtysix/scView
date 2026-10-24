@@ -17,7 +17,8 @@ export const DOUBLET_METHOD_POINTS: readonly string[] = [
     "clues than Scrublet: how many artificial doublets are near the cell, its RNA content, and genes " +
     "seen together that rarely are. It sets its own threshold from the expected doublet rate.",
   "Both: each runs in every capture channel and the doublet card shows where they agree. " +
-    "Filtering's Auto then drops only cells both call.",
+    "Filtering's Auto uses the classifier's calls (its threshold holds where Scrublet's calls almost " +
+    "nothing); pick Both detectors there to drop only cells both call.",
   "Doublets of two cells of one type look like one cell of it: neither finds them.",
 ];
 

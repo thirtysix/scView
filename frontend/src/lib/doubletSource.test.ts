@@ -44,15 +44,16 @@ describe("doublet source texts", () => {
   });
 
   it("names the two detectors' choices", () => {
-    // tests/test_doublet_source.py with the classifier, no hashing: Scrublet 4, the classifier 4, both 2
+    // tests/test_doublet_source.py with the classifier, no hashing: Scrublet 4, the classifier 4, both 2;
+    // auto = the classifier, the choice here: both detectors
     const det: DoubletChoices = {
       ...CHOICES, hash_negatives: null, both: null,
       used: { source: "consensus", label: "both Scrublet and the doublet classifier", n: 2 },
-      auto: { source: "consensus", label: "both Scrublet and the doublet classifier" },
+      source: "consensus", auto: { source: "classifier", label: "the doublet classifier" },
       options: ["auto", "scrublet", "classifier", "consensus", "either"],
-      n_by_source: { auto: 2, scrublet: 4, classifier: 4, consensus: 2, either: 6 },
+      n_by_source: { auto: 4, scrublet: 4, classifier: 4, consensus: 2, either: 6 },
     };
-    expect(sourceOptionLabel("auto", det)).toBe("Auto: both Scrublet and the doublet classifier (2)");
+    expect(sourceOptionLabel("auto", det)).toBe("Auto: the doublet classifier (4)");
     expect(sourceOptionLabel("consensus", det)).toBe("Both detectors (Scrublet and classifier) (2)");
     expect(sourceOptionLabel("classifier", det)).toBe("Classifier (4)");
     expect(sourceOptionLabel("either", det)).toBe("Either: Scrublet or classifier (6)");

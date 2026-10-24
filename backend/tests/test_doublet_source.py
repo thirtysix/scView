@@ -177,7 +177,7 @@ def test_cluster_views_and_scrublet_card_read_their_own_calls():
 
 
 @pytest.mark.parametrize("hash_class, source, expected, used", [
-    (False, "auto", [3, 4], "consensus"),  # both detectors ran: cells both call
+    (False, "auto", CLASSIFIER, "classifier"),  # both detectors ran: the classifier's calls
     (False, "consensus", [3, 4], "consensus"),
     (False, "classifier", CLASSIFIER, "classifier"),
     (False, "scrublet", SCRUBLET, "scrublet"),
@@ -207,7 +207,8 @@ def test_one_detector_alone_stands_for_the_consensus():
 
 def test_describe_text_and_options_with_the_classifier():
     obs = _obs(hash_class=False, classifier=True)
-    info = doublet_source.describe(obs)
+    assert doublet_source.describe(obs)["source"] == "classifier"  # auto
+    info = doublet_source.describe(obs, "consensus")
     assert info["options"] == ["auto", "scrublet", "classifier", "consensus", "either"]
     assert info["classifier"] == {"n_doublets": 4, "fraction": 0.2, "n_unscored": 1}
     assert info["detectors_both"] == {"n": 2, "fraction": 0.1} and info["both"] is None
@@ -257,7 +258,7 @@ def test_filtering_drops_each_choice(kw, dropped):
 
 
 @pytest.mark.parametrize("source, dropped, used", [
-    ("auto", [3, 4], "consensus"), ("classifier", CLASSIFIER, "classifier"),
+    ("auto", CLASSIFIER, "classifier"), ("consensus", [3, 4], "consensus"),
     ("either", [2, 3, 4, 7, 10, 12], "either"),
 ])
 def test_filtering_drops_the_detectors_choice(source, dropped, used):

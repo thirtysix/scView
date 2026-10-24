@@ -239,7 +239,7 @@ def doublet_calls(obs, source="legacy"):
     (core/doublet_source.py): "hashing" (hash_class), "scrublet" (predicted_doublet),
     "classifier" (predicted_doublet_classifier), "consensus" (both detectors; the one
     that ran alone), "either" (any of hashing, Scrublet, the classifier), "auto"
-    (hashing, else the detectors' consensus, else a text column), a text column's
+    (hashing, else the classifier, else Scrublet, else a text column), a text column's
     name, or "legacy" (a filtering recorded before the choice existed: Scrublet's
     column first, then the text ones)."""
     def text_in(col, values):
@@ -267,11 +267,12 @@ def doublet_calls(obs, source="legacy"):
         return scrublet
     if source == "classifier":
         return classifier
-    if source in ("auto", "consensus"):
+    if source == "consensus":
         if scrublet is not None and classifier is not None:
             return scrublet & classifier
-        if scrublet is not None or classifier is not None or source == "consensus":
-            return scrublet if classifier is None else classifier
+        return scrublet if classifier is None else classifier
+    if source == "auto" and (classifier is not None or scrublet is not None):
+        return classifier if classifier is not None else scrublet
     if source == "legacy" and scrublet is not None:
         return scrublet
     if source == "legacy" and hashing is not None and not named:

@@ -1,6 +1,6 @@
 /** Whose doublet calls the app uses (backend core/doublet_source.py): cell hashing when
- *  it was run, else the two detectors' consensus (Scrublet and the scDblFinder-style
- *  classifier both call it), else the one that ran, else another tool's text column. */
+ *  it was run, else the scDblFinder-style classifier when it ran, else Scrublet, else
+ *  another tool's text column. "consensus": cells both detectors call. */
 export type DoubletSource = "auto" | "hashing" | "scrublet" | "classifier" | "consensus" | "either";
 
 export const DOUBLET_SOURCES: readonly DoubletSource[] = [

@@ -142,9 +142,9 @@ def test_both_detectors_write_their_own_columns_per_channel():
     assert [r["name"] for r in rows] == ["L1", "L2"] and all(r["status"] == "scored" for r in rows)
     assert sum(r["n_called"] for r in rows) == int(obs["predicted_doublet_classifier"].sum())
     assert a.uns[doublets.CLASSIFIER_KEY]["scview_channel_column"] == "channel"
-    # auto = both detectors' consensus
-    used = doublet_source.resolve(obs)
-    assert used.source == "consensus"
+    # auto = the classifier's calls; the consensus = cells both call
+    assert doublet_source.resolve(obs).source == "classifier"
+    used = doublet_source.resolve(obs, "consensus")
     assert used.n == int((obs["predicted_doublet"] & obs["predicted_doublet_classifier"]).sum())
     assert roc_auc_score(truth, obs["doublet_score_classifier"]) > 0.95
 
@@ -207,7 +207,7 @@ async def test_the_doublet_card_endpoint_carries_the_classifier_and_a_threshold_
     body = r.json()
     assert body["classifier"]["n_called"] == int(cls.sum())
     assert [row["name"] for row in body["methods"]["channels"]] == ["L1", "L2"]
-    assert body["source"]["source"] == "consensus"
+    assert body["source"]["source"] == "classifier"
     # A threshold on Scrublet's scores moves Scrublet's calls only
     r = await client.post("/api/v1/datasets/dcls/qc/doublets/threshold", json={"threshold": 0.01})
     assert r.status_code == 200, r.text
