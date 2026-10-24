@@ -230,6 +230,34 @@ class MatrixGenes:
         return sp.csc_matrix((gm.data, gm.indices, gm.indptr), shape=(self.n_cells, g1 - g0))
 
 
+class GeneSubset:
+    """Some genes of a source (``keep``: a boolean mask over its genes), read by blocks
+    as the source reads them, each block cut to its kept genes: what ``mask_var`` asks of
+    scanpy, without a copy of the kept genes' matrix (+1.4 GiB at 100k cells for DE)."""
+
+    def __init__(self, source: Any, keep: Any) -> None:
+        keep = np.asarray(keep, dtype=bool)
+        if keep.shape != (source.n_genes,):
+            raise ValueError(f"a mask of {keep.size} genes for {source.n_genes}")
+        self.source, self.keep = source, keep
+        self.n_cells, self.n_genes = source.n_cells, int(keep.sum())
+        self.var_names = pd.Index(source.var_names)[keep]
+        self.dtype = source.dtype
+        self.square_dtype = getattr(source, "square_dtype", None)
+        self.nnz = source.nnz  # the values read (block sizes follow the source's)
+        self._before = np.concatenate([[0], np.cumsum(keep)])  # kept genes before each gene
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.n_cells, self.n_genes
+
+    def blocks(self, max_entries: int = BLOCK_ENTRIES) -> Iterator[tuple[int, int, sp.csc_matrix]]:
+        for g0, g1, block in self.source.blocks(max_entries):
+            sel = self.keep[g0:g1]
+            if sel.any():
+                yield int(self._before[g0]), int(self._before[g1]), block[:, np.flatnonzero(sel)]
+
+
 def _csc_blocks(m: sp.csc_matrix, max_entries: int) -> Iterator[tuple[int, int, sp.csc_matrix]]:
     for g0, g1 in _gene_blocks(np.asarray(m.indptr, dtype=np.int64), max_entries):
         block = sp.csc_matrix(m[:, g0:g1])

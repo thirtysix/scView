@@ -519,6 +519,7 @@ def rank_genes_groups(
     check_store: bool = True,
     max_entries: int = MAX_ENTRIES,
     progress: Progress | None = None,
+    mask_var: Any = None,
 ) -> None:
     """``sc.tl.rank_genes_groups(adata, groupby, method=..., pts=...)`` with the values
     read from ``store`` (a ``GeneStore``, or a ``matrix_genes.MatrixGenes`` over the
@@ -529,7 +530,8 @@ def rank_genes_groups(
     ``StaleGeneStore``. ``groups`` and ``reference`` as scanpy's. ``specificity`` also
     stores the tau frame
     ``marker_specificity.attach`` would add, from the group means computed here
-    (saving it a pass over the matrix)."""
+    (saving it a pass over the matrix). ``mask_var``: the genes ``store`` holds, as a
+    boolean mask over the matrix's (``matrix_genes.GeneSubset``; scanpy's ``mask_var``)."""
     if use_raw is None:
         use_raw = adata.raw is not None
     elif use_raw is True and adata.raw is None:
@@ -545,6 +547,8 @@ def rank_genes_groups(
         if reason is not None:
             raise StaleGeneStore(f"The gene store does not hold the {source} matrix: {reason}")
     var_names = adata.raw.var_names if use_raw else adata.var_names
+    if mask_var is not None:
+        var_names = var_names[np.asarray(mask_var, dtype=bool)]
     base = adata.uns.get("log1p", {}).get("base")
     result, means = _compute(
         store, adata.obs[groupby], groupby=groupby, method=method, groups=groups,
