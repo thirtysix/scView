@@ -923,6 +923,11 @@ def _apply_recorded_provenance(adata: Any, state: PreprocessingState) -> Preproc
             field = _PROV_STEP_TO_FIELD.get(h.get("step", ""))
             if field:
                 last[field] = h
+            elif h.get("step") == "run_errors":
+                # A later run removed these steps' results as stale (core/step_failures.py):
+                # no longer done; the data decides.
+                for step in (h.get("params") or {}).get("stale") or []:
+                    last.pop(_PROV_STEP_TO_FIELD.get(step, ""), None)
         for field, h in last.items():
             ts = h.get("timestamp", "")
             when = ts.split("T")[0] if ts else ""

@@ -153,6 +153,34 @@ describe("DataAssessmentPanel run progress: watchdog, Cancel, outcome", () => {
     expect(screen.getByText("Peak memory 2.5 of 8.0 GB (sampled every 2 s).")).toBeTruthy();
   });
 
+  it("a run that finished with errors: not 'complete'; what failed, what was skipped, what was removed", async () => {
+    await startRun();
+    stream.send("step_start", { step: "qc_metrics", index: 0, total: 2 });
+    stream.send("step_error", { step: "qc_metrics", index: 0, error: "out of disk" });
+    stream.send("step_skipped", {
+      step: "doublet_detection", index: 1, total: 2, because: "qc_metrics",
+      reason: "Skipped: it needs qc metrics, which failed.",
+    });
+    stream.send("complete", {
+      ...RESULT, steps_run: [], status: "finished_with_errors", errors: { qc_metrics: "out of disk" },
+      steps_skipped: ["doublet_detection"], skipped: { doublet_detection: "qc_metrics" },
+      cleared: { obsm: ["X_pca", "X_umap"], uns: ["scview_active_clustering"] },
+    });
+    stream.close();
+    const card = await screen.findByTestId("run-with-errors");
+    expect(card).toHaveTextContent("Pipeline finished with errors in 1s");
+    expect(card).toHaveTextContent("QC Metrics failed: out of disk");
+    expect(card).toHaveTextContent("Skipped, as they need a step that failed: Doublet Detection (needs QC Metrics).");
+    expect(card).toHaveTextContent(
+      "Results of an earlier run that these steps would have replaced were removed, as they no longer match the data: PCA, UMAP and active clustering.",
+    );
+    expect(screen.getByText(/Finished with errors: 0 of 2 steps ran/)).toBeTruthy();
+    expect(screen.queryByText(/Pipeline completed/)).toBeNull();
+    expect(screen.queryByText(/All 2 steps complete/)).toBeNull();
+    expect(screen.getByTitle("QC Metrics: failed")).toHaveTextContent("✗ QC Metrics");
+    expect(screen.getByTitle("Doublet Detection: skipped (needs a step that failed)")).toBeTruthy();
+  });
+
   it("shows a refused run's reason through readError, not its JSON", async () => {
     const detail = "Unknown pipeline step 'umap' (did you mean 'embeddings'?). Valid steps: qc_metrics, embeddings.";
     fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ detail }), { status: 422 }));

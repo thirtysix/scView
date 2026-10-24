@@ -1,6 +1,7 @@
 import { AlertTriangle, Clock, Loader2, Square } from "lucide-react";
 import {
   peakMemoryText,
+  runErrorLines,
   runOutcome,
   watchdogMessage,
   type RunOutcomeFields,
@@ -79,6 +80,24 @@ export function RunOutcome({ result, label }: { result: RunOutcomeFields; label:
       <p className="mt-1">{outcome.reason}</p>
       <p className="mt-1">{outcome.steps}</p>
       {peak && <p className="mt-1 text-xs text-amber-700">{peak}</p>}
+    </div>
+  );
+}
+
+/** A run that finished with errors: each failed step and its error, the steps skipped
+ *  because they need one, and the stale results of an earlier run that were removed. */
+export function RunErrors({ result, label }: { result: RunOutcomeFields; label: Label }) {
+  const lines = runErrorLines(result, label);
+  if (!lines.failed.length && !lines.skipped && !lines.cleared) return null;
+  return (
+    <div className="mt-2 space-y-1">
+      {lines.failed.map((f) => (
+        <p key={f} className="text-red-700">
+          {f}
+        </p>
+      ))}
+      {lines.skipped && <p>{lines.skipped}</p>}
+      {lines.cleared && <p className="text-xs text-amber-800">{lines.cleared}</p>}
     </div>
   );
 }

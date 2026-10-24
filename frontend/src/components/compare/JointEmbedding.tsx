@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, AlertTriangle, CheckCircle2, Circle, Layers, Loader2, XCircle } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Circle, Layers, Loader2, MinusCircle, XCircle } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -31,7 +31,8 @@ const STEP_LABELS: Record<string, string> = {
   marker_genes: "Marker genes",
 };
 
-type StepStatus = "pending" | "running" | "done" | "error";
+// skipped: not run, as a step it needs failed (backend core/step_failures.py)
+type StepStatus = "pending" | "running" | "done" | "error" | "skipped";
 
 interface Progress {
   stage: string;
@@ -129,6 +130,9 @@ export function JointEmbedding() {
         case "step_error":
           status[step] = "error";
           return { ...p, status, substep: null, errors: { ...p.errors, [step]: String(e.data.error) } };
+        case "step_skipped":
+          status[step] = "skipped";
+          return { ...p, status, substep: null };
         case "substep":
           return { ...p, substep: String(e.data.message ?? "") };
         case "complete":
@@ -362,6 +366,9 @@ export function JointEmbedding() {
                 <StepIcon status={progress.status[s] ?? "pending"} />
                 <span className={progress.status[s] === "error" ? "text-red-600" : "text-slate-600"}>
                   {STEP_LABELS[s] ?? s}
+                  {progress.status[s] === "skipped" && (
+                    <span className="text-slate-400"> (skipped: needs a step that failed)</span>
+                  )}
                 </span>
               </li>
             ))}
@@ -398,6 +405,7 @@ function StepIcon({ status }: { status: StepStatus }) {
   if (status === "running") return <Loader2 className="h-4 w-4 animate-spin text-primary" />;
   if (status === "done") return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;
   if (status === "error") return <XCircle className="h-4 w-4 text-red-500" />;
+  if (status === "skipped") return <MinusCircle className="h-4 w-4 text-slate-400" />;
   return <Circle className="h-4 w-4 text-slate-300" />;
 }
 

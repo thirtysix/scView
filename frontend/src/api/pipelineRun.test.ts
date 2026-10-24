@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { BACKEND_DOWN_MESSAGE } from "@/api/client";
 import {
+  clearedText,
   peakMemoryText,
+  runErrorLines,
   runErrorMessage,
   runOutcome,
   watchdogMessage,
@@ -66,6 +68,37 @@ describe("runOutcome", () => {
     expect(runOutcome({ steps_run: [], status: "stopped", stop_reason: "No." }, label)!.steps).toBe(
       "No step had run, so nothing changed.",
     );
+  });
+});
+
+describe("a run that finished with errors", () => {
+  const r = {
+    steps_run: ["qc_metrics"],
+    status: "finished_with_errors" as const,
+    errors: { doublet_detection: "Scrublet failed" },
+    skipped: { filtering: "doublet_detection" },
+    cleared: { obsm: ["X_pca", "X_umap_3d", "X_umap"], obsp: ["connectivities"], uns: ["rank_genes_groups__leiden", "enrichment__leiden__0"] },
+  };
+  const lbl = (s: string) => ({ filtering: "Cell/Gene Filtering" })[s] ?? label(s);
+
+  it("runOutcome: saved, with what failed and what was skipped", () => {
+    expect(runOutcome(r, lbl)).toEqual({
+      title: "Finished with errors",
+      reason: "Doublet Detection failed: Scrublet failed",
+      steps:
+        "Saved: QC Metrics. Skipped, as they need a step that failed: Cell/Gene Filtering (needs Doublet Detection). " +
+        "Results of an earlier run that these steps would have replaced were removed, as they no longer match the data: " +
+        "PCA, UMAP, neighbour graph, marker genes and enrichment.",
+    });
+  });
+
+  it("names what was removed once each, and nothing when nothing was", () => {
+    expect(clearedText(r.cleared)).toBe("PCA, UMAP, neighbour graph, marker genes and enrichment");
+    expect(clearedText({ uns: ["scview_active_clustering"] })).toBe("active clustering");
+    expect(clearedText({})).toBeNull();
+    expect(runErrorLines({ steps_run: [], errors: { pca: "boom" } }, label)).toEqual({
+      failed: ["pca failed: boom"], skipped: null, cleared: null,
+    });
   });
 });
 

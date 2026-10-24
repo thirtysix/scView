@@ -1801,6 +1801,35 @@ def _vdj_remove(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, ["clear(adata)  # every V(D)J column removed"])
 
 
+def _run_errors(p: dict, ctx: _Ctx) -> Snippet:
+    """A run that finished with errors (core/step_failures.py): which steps failed and were
+    skipped (not in the history, so not replayed), and the earlier results it removed as
+    stale, removed here too."""
+    failed = p.get("failed") if isinstance(p.get("failed"), dict) else {}
+    skipped = p.get("skipped") if isinstance(p.get("skipped"), dict) else {}
+    cleared = p.get("cleared") if isinstance(p.get("cleared"), dict) else {}
+    code = ["# The run of the steps above finished with errors: these steps were not run."]
+    for step, err in failed.items():
+        code.append(f"#   {comment_text(step, 40)} failed: {comment_text(err, 100)}")
+    for step, because in skipped.items():
+        code.append(f"#   {comment_text(step, 40)} skipped: it needs {comment_text(because, 40)}")
+    names = {where: [str(k) for k in keys] for where, keys in cleared.items()
+             if isinstance(keys, list) and keys}
+    if names:
+        code.append("# Results of an earlier run they would have replaced were removed as stale:")
+    for where in ("obsm", "varm", "obsp", "uns"):
+        if names.get(where):
+            code.append(f"for k in {_lit(names[where])}:")
+            code.append(f"    adata.{where}.pop(k, None)")
+    for where in ("var", "obs"):
+        if names.get(where):
+            code.append(f"adata.{where} = adata.{where}.drop(columns=[c for c in {_lit(names[where])} "
+                        f"if c in adata.{where}.columns])")
+    if names.get("raw"):
+        code.append("adata.raw = None")
+    return Snippet(EXACT, code)
+
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -1844,6 +1873,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "vdj_attach": _vdj_attach,
     "vdj_clonotypes": _vdj_clonotypes,
     "vdj_remove": _vdj_remove,
+    "run_errors": _run_errors,
 }
 
 

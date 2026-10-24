@@ -32,8 +32,14 @@ import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLei
 import { QcStates } from "@/components/qc/QcStates";
 import { SequencingQc } from "@/components/qc/SequencingQc";
 import { Hashing } from "@/components/qc/Hashing";
-import { CancelRunButton, RunOutcome, RunPeakMemory, RunWatchNotes } from "@/components/panels/RunWatch";
-import { cancelPipelineRun, runErrorMessage, type RunOutcomeFields, type WatchdogEvent } from "@/api/pipelineRun";
+import { CancelRunButton, RunErrors, RunOutcome, RunPeakMemory, RunWatchNotes } from "@/components/panels/RunWatch";
+import {
+  cancelPipelineRun,
+  FINISHED_WITH_ERRORS,
+  runErrorMessage,
+  type RunOutcomeFields,
+  type WatchdogEvent,
+} from "@/api/pipelineRun";
 import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
   ClipboardCheck,
@@ -481,6 +487,9 @@ export function DataAssessmentPanel() {
   const [runningStep, setRunningStep] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<{ current: number; total: number } | null>(null);
   const [completedRunSteps, setCompletedRunSteps] = useState<Set<string>>(new Set());
+  // Steps of this run that failed, and those skipped because a step they need failed.
+  const [failedRunSteps, setFailedRunSteps] = useState<Record<string, number>>({}); // step -> index
+  const [skippedRunSteps, setSkippedRunSteps] = useState<Record<string, number>>({});
   const [substep, setSubstep] = useState<{ message: string; current: number; total: number } | null>(null);
   // The run watchdog's latest warnings (backend core/run_watchdog.py), and a requested cancel.
   const [memoryNote, setMemoryNote] = useState<WatchdogEvent | null>(null);
@@ -732,6 +741,8 @@ export function DataAssessmentPanel() {
     setRunningStep(null);
     setRunProgress(null);
     setCompletedRunSteps(new Set());
+    setFailedRunSteps({});
+    setSkippedRunSteps({});
     setSubstep(null);
     setMemoryNote(null);
     setSlowNote(null);
@@ -792,8 +803,13 @@ export function DataAssessmentPanel() {
             } else if (currentEvent === "substep") {
               setSubstep({ message: data.message, current: data.current, total: data.total });
             } else if (currentEvent === "step_error") {
-              setCompletedRunSteps((prev) => new Set(prev).add(data.step));
+              setFailedRunSteps((prev) => ({ ...prev, [data.step]: data.index }));
+              setRunProgress((p) => (p ? { ...p, current: data.index + 1 } : p));
               setSubstep(null);
+            } else if (currentEvent === "step_skipped") {
+              // Not run: a step it needs failed.
+              setSkippedRunSteps((prev) => ({ ...prev, [data.step]: data.index }));
+              setRunProgress({ current: data.index + 1, total: data.total });
             } else if (currentEvent === "complete") {
               final = data as PipelineResult;
               setRunResult(final);
@@ -865,9 +881,12 @@ export function DataAssessmentPanel() {
     useSettingsStore.getState().setColorBy(target);
   };
 
-  /* ---- Derived: how the last run ended (cancelled / stopped = halted) ---- */
+  /* ---- Derived: how the last run ended (cancelled / stopped = halted, nothing saved;
+     finished with errors = saved, a step failed and those needing it were skipped) ---- */
   const finished = !!runResult && !running;
-  const halted = finished && (runResult.status ?? "complete") !== "complete";
+  const endStatus = runResult?.status ?? "complete";
+  const halted = finished && endStatus !== "complete" && endStatus !== FINISHED_WITH_ERRORS;
+  const withErrors = finished && endStatus === FINISHED_WITH_ERRORS;
 
   /* ---- Derived: re-run count ---- */
   const rerunCount = state
@@ -1079,14 +1098,19 @@ export function DataAssessmentPanel() {
 
           {/* Pipeline progress bar — visible while running or just completed */}
           {(running || runResult) && runProgress && (
-            <div className={`rounded-xl border p-4 ${finished ? (halted ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50") : "border-blue-200 bg-blue-50"}`}>
+            <div className={`rounded-xl border p-4 ${finished ? (halted || withErrors ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50") : "border-blue-200 bg-blue-50"}`}>
               {/* Header row: step counter + percentage (+ Cancel while running) */}
               <div className="mb-2 flex items-center justify-between gap-2 text-sm">
-                <span className={`font-medium ${finished ? (halted ? "text-amber-800" : "text-emerald-800") : "text-blue-800"}`}>
+                <span className={`font-medium ${finished ? (halted || withErrors ? "text-amber-800" : "text-emerald-800") : "text-blue-800"}`}>
                   {finished && halted ? (
                     <>
                       {runResult!.status === "cancelled" ? "Cancelled" : "Stopped"}: {runResult!.steps_run.length} of{" "}
                       {runProgress.total} step{runProgress.total !== 1 ? "s" : ""} finished
+                    </>
+                  ) : withErrors ? (
+                    <>
+                      Finished with errors: {runResult!.steps_run.length} of {runProgress.total} step
+                      {runProgress.total !== 1 ? "s" : ""} ran
                     </>
                   ) : finished ? (
                     <>All {runProgress.total} step{runProgress.total !== 1 ? "s" : ""} complete</>
@@ -1102,7 +1126,7 @@ export function DataAssessmentPanel() {
                 </span>
                 <span className="flex items-center gap-2">
                   {running && <CancelRunButton onCancel={cancelRun} cancelling={cancelling} />}
-                  <span className={`text-xs font-medium ${finished ? (halted ? "text-amber-600" : "text-emerald-600") : "text-blue-600"}`}>
+                  <span className={`text-xs font-medium ${finished ? (halted || withErrors ? "text-amber-600" : "text-emerald-600") : "text-blue-600"}`}>
                     {finished && !halted
                       ? "100%"
                       : `${Math.round((runProgress.current / runProgress.total) * 100)}%`}
@@ -1110,20 +1134,26 @@ export function DataAssessmentPanel() {
                 </span>
               </div>
 
-              {/* Segmented progress bar */}
+              {/* Segmented progress bar (red: failed; grey: skipped, as it needs a failed step) */}
               <div className="flex gap-1">
                 {Array.from({ length: runProgress.total }, (_, i) => {
+                  const failedHere = Object.values(failedRunSteps).includes(i);
+                  const skippedHere = Object.values(skippedRunSteps).includes(i);
                   const isDone = i < runProgress.current || (finished && !halted);
                   const isActive = i === runProgress.current && !!runningStep && running;
                   return (
                     <div
                       key={i}
                       className={`h-2.5 flex-1 rounded-full transition-all duration-300 ${
-                        isDone
-                          ? "bg-emerald-500"
-                          : isActive
-                            ? "animate-pulse bg-blue-400"
-                            : "bg-blue-200"
+                        failedHere
+                          ? "bg-red-400"
+                          : skippedHere
+                            ? "bg-slate-300"
+                            : isDone
+                              ? "bg-emerald-500"
+                              : isActive
+                                ? "animate-pulse bg-blue-400"
+                                : "bg-blue-200"
                       }`}
                     />
                   );
@@ -1172,21 +1202,27 @@ export function DataAssessmentPanel() {
                     .filter((s) => selectedSteps.has(s.key) || completedRunSteps.has(s.key))
                     .slice(0, runProgress.total)
                     .map((s) => {
-                      const isDone = completedRunSteps.has(s.key) || (finished && !halted);
+                      const isFailed = s.key in failedRunSteps;
+                      const isSkipped = s.key in skippedRunSteps;
+                      const isDone = !isFailed && !isSkipped && (completedRunSteps.has(s.key) || (finished && !halted));
                       const isActive = s.key === runningStep && running;
                       return (
                         <div key={s.key} className="min-w-0 flex-1 text-center">
                           <span
                             className={`block truncate text-[9px] ${
-                              isDone
-                                ? "font-medium text-emerald-700"
-                                : isActive
-                                  ? "font-medium text-blue-700"
-                                  : "text-blue-400"
+                              isFailed
+                                ? "font-medium text-red-700"
+                                : isSkipped
+                                  ? "text-slate-400 line-through"
+                                  : isDone
+                                    ? "font-medium text-emerald-700"
+                                    : isActive
+                                      ? "font-medium text-blue-700"
+                                      : "text-blue-400"
                             }`}
-                            title={s.label}
+                            title={isFailed ? `${s.label}: failed` : isSkipped ? `${s.label}: skipped (needs a step that failed)` : s.label}
                           >
-                            {isDone ? "✓ " : ""}{s.label}
+                            {isFailed ? "✗ " : isDone ? "✓ " : ""}{s.label}
                           </span>
                         </div>
                       );
@@ -1199,8 +1235,26 @@ export function DataAssessmentPanel() {
           {/* A run cancelled, or stopped before a step: why, and what finished */}
           {runResult && halted && <RunOutcome result={runResult} label={stepLabel} />}
 
+          {/* A run that finished with errors: saved; what failed, what was skipped */}
+          {runResult && withErrors && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-testid="run-with-errors">
+              <p className="font-medium">Pipeline finished with errors in {runResult.elapsed_seconds}s</p>
+              <RunPeakMemory result={runResult} />
+              <p className="mt-1">
+                {runResult.steps_run.length > 0
+                  ? `Steps run and saved: ${runResult.steps_run.map(stepLabel).join(", ")}.`
+                  : "No step finished; nothing changed."}
+              </p>
+              <RunErrors result={runResult} label={stepLabel} />
+              <SkippedSteps notes={runResult.notes} />
+              {!running &&
+                runResult.steps_run.length > 0 &&
+                (dataset?.available_embeddings.length ?? 0) > 0 && <OpenInUnifiedView />}
+            </div>
+          )}
+
           {/* Pipeline run result */}
-          {runResult && !halted && (
+          {runResult && !halted && !withErrors && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
               <p className="font-medium">
                 Pipeline completed in {runResult.elapsed_seconds}s

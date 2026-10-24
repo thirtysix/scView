@@ -102,8 +102,14 @@ def test_unknown_method_is_rejected():
         normalization.check_method("sct")
     _, res = run_pipeline(_counts(), ["normalization", "highly_variable_genes", "scaling"],
                           PipelineParams(normalization_method="sct"))
-    assert set(res.errors) == {"normalization", "highly_variable_genes", "scaling"}
     assert "Unknown normalization method" in res.errors["normalization"]
+    # The two steps that need the normalisation are skipped (core/step_failures.py)...
+    assert set(res.errors) == {"normalization"}
+    assert res.skipped == {"highly_variable_genes": "normalization", "scaling": "normalization"}
+    # ...and each refuses the method on its own when run alone.
+    for step in ("highly_variable_genes", "scaling"):
+        _, res = run_pipeline(_counts(), [step], PipelineParams(normalization_method="sct"))
+        assert "Unknown normalization method" in res.errors[step], step
 
 
 # --- the pipeline ------------------------------------------------------------

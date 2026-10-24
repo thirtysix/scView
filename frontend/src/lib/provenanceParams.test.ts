@@ -17,6 +17,19 @@ describe("fast Leiden in the History", () => {
   });
 });
 
+describe("a run that finished with errors in the History", () => {
+  it("says what failed, what was skipped and what was removed, not JSON", () => {
+    expect(paramText("status", "finished_with_errors")).toBe("finished with errors");
+    expect(paramText("failed", { pca: "boom" })).toBe("failed: pca (boom)");
+    expect(paramText("skipped", { neighbors: "pca", clustering: "pca" })).toBe(
+      "skipped, needing a failed step: neighbors, clustering",
+    );
+    expect(paramText("cleared", { obsm: ["X_pca", "X_umap"], uns: ["neighbors"] })).toBe(
+      "removed as stale: PCA, UMAP and neighbour graph",
+    );
+  });
+});
+
 describe("paramText", () => {
   it("shows plain values and lists as before", () => {
     expect(paramText("min_cells", 3)).toBe("min_cells=3");
