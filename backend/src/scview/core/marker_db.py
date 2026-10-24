@@ -1023,9 +1023,11 @@ def _stored_key(adata, groupby: str, groups: list[str]) -> str | None:
 
 def _computed(adata, groupby: str, groups: list[str]):
     """Wilcoxon markers (with pts) on a throwaway object sharing the matrix, so the
-    dataset is not touched; None when fewer than two groups have 3 cells."""
+    dataset is not touched (by blocks of genes, ``core/rank_genes.py``); None when fewer
+    than two groups have 3 cells."""
     import anndata as ad
-    import scanpy as sc
+
+    from scview.core import rank_genes
 
     src = adata.raw if adata.raw is not None else adata
     X = src.X
@@ -1038,8 +1040,8 @@ def _computed(adata, groupby: str, groups: list[str]):
     obs = pd.DataFrame({groupby: pd.Categorical(adata.obs[groupby].astype(str), categories=groups)},
                        index=adata.obs_names)
     tmp = ad.AnnData(X=X, obs=obs, var=pd.DataFrame(index=src.var_names))
-    sc.tl.rank_genes_groups(tmp, groupby=groupby, groups=keep, reference="rest", method="wilcoxon",
-                            pts=True, use_raw=False, key_added=markers_key(groupby))
+    rank_genes.rank_genes_groups(tmp, groupby, groups=keep, reference="rest", method="wilcoxon",
+                                 pts=True, use_raw=False, key_added=markers_key(groupby))
     return tmp
 
 

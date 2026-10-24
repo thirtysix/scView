@@ -49,12 +49,14 @@ def _no_markers(format: str, reason: str):
 
 
 def _compute_markers(adata: ad.AnnData, column: str) -> dict:
-    """Wilcoxon markers for every group of ``column``, as the pipeline computes them.
+    """Wilcoxon markers for every group of ``column``, as the pipeline computes them
+    (by blocks of genes, ``core/rank_genes.py``: bit for bit scanpy's, with the
+    specificity frame from the group means unless scanpy ran).
 
     Runs on a light AnnData sharing the dataset's matrix rather than on a copy of
     the whole dataset, and leaves the dataset's own obs column as it is.
     """
-    import scanpy as sc
+    from scview.core import rank_genes
 
     if getattr(adata, "isbacked", False):
         adata = adata.to_memory()
@@ -71,7 +73,10 @@ def _compute_markers(adata: ad.AnnData, column: str) -> dict:
         obs=pd.DataFrame({column: labels.values}, index=adata.obs_names),
         var=pd.DataFrame(index=src.var_names),
     )
-    sc.tl.rank_genes_groups(work, groupby=column, method="wilcoxon", pts=True, use_raw=False)
+    if "log1p" in adata.uns:  # the base the fold changes undo, as for the pipeline's
+        work.uns["log1p"] = adata.uns["log1p"]
+    rank_genes.rank_genes_groups(work, column, method="wilcoxon", pts=True, use_raw=False,
+                                 specificity=True)
     rgg = work.uns["rank_genes_groups"]
     rgg["params"]["use_raw"] = use_raw  # what the ranking actually read
     return rgg
@@ -132,7 +137,7 @@ def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str)
         else:
             adata.uns[key] = _compute_markers(adata, column)
         drop_enrichment_cache(adata, column)
-        if not large:  # computed with the markers and saved with them (best effort)
+        if not marker_specificity.has_specificity(adata.uns[key]):  # scanpy ran: best effort
             marker_specificity.attach(adata, adata.uns[key], column)
     except LargeDatasetError:
         raise

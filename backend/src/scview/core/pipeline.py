@@ -232,14 +232,17 @@ def large_backend(backend: Any):
 
 def _wilcoxon(adata: ad.AnnData, groupby: str, key_added: str | None = None) -> None:
     """Wilcoxon markers with pts, as ``sc.tl.rank_genes_groups`` writes them (into
-    ``uns[key_added or "rank_genes_groups"]``); in a large-dataset run from its gene store,
-    with the specificity frame already in (``sparse_markers``)."""
+    ``uns[key_added or "rank_genes_groups"]``), by blocks of genes (``core/rank_genes.py``,
+    bit for bit scanpy's); in a large-dataset run from its gene store. Either way with the
+    specificity frame already in (``sparse_markers``) unless scanpy ran."""
     backend = _LARGE.get()
     if backend is not None:
         backend.rank_genes_groups(adata, groupby, key_added=key_added)
     else:
-        sc.tl.rank_genes_groups(adata, groupby=groupby, method="wilcoxon", pts=True,
-                                key_added=key_added)
+        from scview.core import rank_genes
+
+        rank_genes.rank_genes_groups(adata, groupby, method="wilcoxon", pts=True,
+                                     key_added=key_added, specificity=True)
 
 
 def _attach_specificity(adata: ad.AnnData, rgg: Any, col: str) -> None:

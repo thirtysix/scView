@@ -555,7 +555,10 @@ def rank_genes_groups(
     if specificity:
         from scview.core import marker_specificity
 
-        index = pd.Index([str(g) for g in var_names])
-        result[marker_specificity.SPECIFICITY_FIELD] = pd.DataFrame(
-            {"tau": marker_specificity.tau(means).astype(np.float32)}, index=index)
+        try:
+            index = pd.Index([str(g) for g in var_names])
+            result[marker_specificity.SPECIFICITY_FIELD] = pd.DataFrame(
+                {"tau": marker_specificity.tau(means).astype(np.float32)}, index=index)
+        except Exception as exc:  # never fail the markers over their extra columns
+            logger.warning("Marker specificity for '%s' failed: %s", groupby, exc)
     adata.uns[key_added or "rank_genes_groups"] = result
