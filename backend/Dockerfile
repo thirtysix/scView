@@ -14,6 +14,11 @@ RUN uv pip install --system -e ".[dev]"
 
 COPY src/ src/
 
+# The container runs as root, so bytecode written into a bind-mounted src/ or
+# tests/ lands root-owned in the host checkout. Set here, not only in compose,
+# so a one-off `docker run` of this image (e.g. to run pytest) is covered too.
+ENV PYTHONDONTWRITEBYTECODE=1
+
 # Dev target: source mounted as volume, uvicorn with reload
 FROM base AS dev
 ENV PYTHONPATH=/app/src

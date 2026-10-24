@@ -16,7 +16,8 @@ can be wrong, and the user decides.
   what the dataset holds when it starts, and seconds; the run's peak is the largest
   held + transient as the dataset's state changes through the steps (reset to counts
   replaces X, filtering cuts each matrix once and the opened copy gives its matrices up,
-  scaling makes X dense float32 and keeps the old X as .raw).
+  scaling sets .raw to X itself and PCA makes the variable genes dense for its own length,
+  core/scaling.py).
 - ``estimate_step_peak(step, shape, nnz, dense, params, *, other_bytes=0,
   dtype="float32", nonzero=None) -> int``: one step, pure, for a hook before each step;
   ``step_peak_for(adata, step, params)`` reads the same from a live AnnData.
@@ -61,6 +62,17 @@ paul15 0.140 / 0.147 (+5%), Kang 1.79 / 1.91 (+7%). Not measured: loom and zarr 
 UMAP and cell-type annotation (reasoned from what they allocate; the estimate says so).
 Header reads take 3-35 ms (Kang's 1.9 GB h5ad: 17 ms).
 
+Scaling, PCA and markers were re-measured 2026-10-23, once scaling stopped making X dense
+(core/scaling.py): each step alone on the saved state before it, warm, 2 CPUs, process RSS
+every 20 ms, GiB over the step's start, measured / estimated. paul15: PCA 0.048 / 0.045,
+markers (dense) 0.110 / 0.113. Kang: PCA 0.240 / 0.226, markers 0.220 / 0.222. 100k
+neurons (88,640 x 19,824 after filtering, 187M stored values): PCA 1.43 / 1.45, markers
+2.85 / 2.86 (the old model said 1.54, as Roihu found: 1.8x under). Markers by blocks of
+genes (core/rank_genes.py, 2026-10-24, the same way on the states a live run saved):
+Kang 0.105 / 0.116 in 0.8 s, 100k neurons 0.329 / 0.315 in 18 s. Scaling: 0-0.08
+against 0.01-0.12 (it was +14.5 GiB at 100k, +38 at 250k). In a whole run the 100k
+peak is doublet detection, 15.5 GiB (scaling's 18.3 GiB before).
+
 Time: the same runs' seconds per step, as a function of cells, stored values and
 groups, measured at 2 CPUs and scaled by the square root of the CPU quota; shown as
 half to twice the point estimate, which held every measured run (Kang 124 s within
@@ -79,6 +91,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from scview.core import scaling as _scaling
 
 GiB = 1 << 30
 MiB = 1 << 20
@@ -142,6 +156,11 @@ class Header:
     var_columns: int = 0
     file_bytes: int = 0
     backed: bool = False  # opened from disk (files over 2 GB): X is not read into memory
+    # In large-dataset layout (uns["scview_large"], core/large_layout.py): opens backed
+    # whatever its size and is never read into memory (core/large_run.py).
+    large: bool = False
+    # Variable genes (var["highly_variable"]), what PCA reads; None: no such column (every gene).
+    n_hvg: int | None = None
     estimated: bool = False  # cells / genes estimated from a sample (text tables)
     guess: bool = False  # nothing in the file could be read (RDS): sizes are a guess
     note: str = ""  # what the numbers rest on, when not read exactly
@@ -234,6 +253,11 @@ def _read_h5ad(path: Path) -> Header:
         obs = f.get("obs")
         h.obs_columns = _n_columns(obs)
         h.var_columns = _n_columns(f.get("var"))
+        # var is a group of columns, or in older files one compound dataset (Kang's).
+        var = f.get("var")
+        hv = var.get("highly_variable") if isinstance(var, h5py.Group) else None
+        if isinstance(hv, h5py.Dataset) and hv.ndim == 1 and hv.dtype.kind in "bui":
+            h.n_hvg = int(np.count_nonzero(hv[()]))
         if "X" in f:
             x = _h5_matrix(f["X"], "X")
             if x is not None:
@@ -272,6 +296,9 @@ def _read_h5ad(path: Path) -> Header:
             h.varm_bytes += _h5_bytes(f["varm"][key])
         if "uns" in f:
             h.uns_bytes = _h5_bytes(f["uns"])
+            from scview.core.large_layout import KEY as LARGE_KEY
+
+            h.large = LARGE_KEY in f["uns"]
     return h
 
 
@@ -288,8 +315,10 @@ def _read_10x_h5(path: Path) -> Header:
         n_genes, n_cells = (int(x) for x in g["shape"][()][:2])
         nnz = int(g["data"].shape[0])
     h.n_cells, h.n_genes = n_cells, n_genes
-    # scanpy reads the counts as float32 (cells x genes CSR).
-    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32"))
+    # scanpy reads the counts as float32 (cells x genes CSR); scipy's indices are int64
+    # once the values outnumber int32 (the 1.3M-cell brain: 2.6e9).
+    idx = "int64" if max(nnz, n_genes) > np.iinfo(np.int32).max else "int32"
+    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32", idx))
     return h
 
 
@@ -570,7 +599,9 @@ def read_header(path: str | Path, fmt: str | None = None, genes_in_rows: bool = 
         h = Header("unknown", note=f"The file could not be read ({type(e).__name__}: {e}).")
     h.file_bytes = _size(path)
     # The adaptor opens files over 2 GB on disk (anndata backed mode).
-    h.backed = fmt == "h5ad" and h.file_bytes > 2 * GiB
+    from scview.core.anndata_adaptor import opens_backed
+
+    h.backed = fmt == "h5ad" and (opens_backed(h.file_bytes) or h.large)
     h.seconds = round(time.perf_counter() - t0, 4)
     return h
 
@@ -622,6 +653,8 @@ def header_from_adata(adata) -> Header:
         h.varm_bytes += _array_bytes(v)
     h.obs_columns = adata.obs.shape[1]
     h.var_columns = adata.var.shape[1]
+    if "highly_variable" in adata.var.columns:
+        h.n_hvg = int(np.count_nonzero(adata.var["highly_variable"].to_numpy()))
     return h
 
 
@@ -675,8 +708,23 @@ def _frames_bytes(h: Header) -> int:
     return n * (_STR_BYTES + 8 * h.obs_columns) + m * (_STR_BYTES + 8 * h.var_columns)
 
 
+# What a backed open leaves on disk (anndata reads X and .raw's X when used; the
+# layers, obsm and the rest are read into memory).
+ON_DISK_WHEN_BACKED = ("X", "raw/X")
+
+
+def _in_memory(h: Header, mm: Matrix) -> bool:
+    return not (h.backed and mm.where in ON_DISK_WHEN_BACKED)
+
+
 def _matrices_bytes(h: Header) -> int:
-    return sum(mm.nbytes for mm in h.matrices if not (h.backed and mm.where == "X"))
+    return sum(mm.nbytes for mm in h.matrices if _in_memory(h, mm))
+
+
+def backed_bytes(h: Header) -> int:
+    """Memory that reading a backed dataset's on-disk matrices into memory adds (0 for
+    one opened in memory): what ``core/working_copy.py`` makes room for."""
+    return sum(mm.nbytes for mm in h.matrices if not _in_memory(h, mm))
 
 
 def resident_bytes(h: Header) -> int:
@@ -717,10 +765,10 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
         return LoadEstimate(mid, mid, "opening the converted file",
                             _range(h.file_bytes / READ_FILE_BPS["rds"], cpus),
                             [("Guess from the file size", mid)], notes)
-    values = sum(mm.nnz for mm in h.matrices if not (h.backed and mm.where == "X"))
+    values = sum(mm.nnz for mm in h.matrices if _in_memory(h, mm))
     read = int(values * READ_BYTES_PER_VALUE.get(h.format, 8.0))
     breakdown = [(f"{mm.where} ({'sparse' if mm.sparse else 'dense'}, {mm.dtype})", mm.nbytes)
-                 for mm in h.matrices if not (h.backed and mm.where == "X")]
+                 for mm in h.matrices if _in_memory(h, mm)]
     other = res - _matrices_bytes(h)
     breakdown.append(("Cell and gene tables, embeddings, results", other))
     peak, stage = res + read, "reading the file"
@@ -735,8 +783,10 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
     if read:
         breakdown.append(("Reading (converting the values)", read))
     if h.backed:
-        notes.append("Files over 2 GB open from disk: the matrix X is read when needed, "
-                     "not held in memory.")
+        from scview.core.anndata_adaptor import BACKED_MIN_BYTES
+
+        notes.append(f"Files over {BACKED_MIN_BYTES / GiB:.3g} GB open from disk: the matrix X is "
+                     "read when needed, not held in memory (processing reads it in first).")
     return LoadEstimate(res, peak, stage, _range(secs, cpus), breakdown, notes)
 
 
@@ -774,21 +824,61 @@ FILTER_GENES_KEPT_RAW = 0.8
 FILTER_SECONDS_PER_BYTE = 3e-9
 
 # Scrublet (core/scrublet_lean.py: sc.pp.scrublet's steps on a sparse matrix of the counts
-# alone, never a copy of the dataset). While it picks its variable genes it holds about six
-# copies of that matrix (filtered, raw, normalised, log, expm1). Then it z-scores the
-# observed and 2x simulated cells' variable genes densely in float64, and scipy makes a CSC
-# of each fully dense result: 108 bytes per cell x variable gene over the ~20 it holds by
-# then (Kang and ovary alike). Its variable-gene cut-offs keep ~10% of the genes (Kang 11%,
-# ovary 9.5%, paul15 19%), so per cell x gene of the counts, 12.8 bytes.
+# alone, never a copy of the dataset), run in each capture channel alone, one after another
+# (core/doublets.py): the step's peak is its largest channel's, plus the per-cell results.
+# While it picks its variable genes it holds about six copies of the channel's counts
+# (filtered, raw, normalised, log, expm1). Then it z-scores the observed and 2x simulated
+# cells' variable genes densely in float64, and scipy makes a CSC of each fully dense
+# result: 144 bytes per cell x variable gene (peak RSS over the process before, one channel
+# of 750 to 40,000 cells of the mouse brain, 2,000 to 13,836 of Kang, paul15: 132-154).
+# How many variable genes its cut-offs keep is the dataset's: about 1,450 of Kang's 14,053
+# genes, 1,300 of the mouse brain's 27,998, 1,900 of ovary's 20,082, 750 of paul15's 3,451,
+# and more in a small channel (the brain: 1,884 at 750 cells, 1,207 at 100,000). So on a
+# dataset in memory the step's own selection is run on up to DBL_HVG_SAMPLE cells of the
+# largest channel (``doublet_plan``); from a header alone they are taken as 10% of the
+# genes, 12.8 bytes per cell x gene (Kang 11%, ovary 9.5%; the brain's 4.7% is over 2x).
 DBL_SPARSE_COPIES = 6.0
-DBL_DENSE_PER_VALUE = 12.8
-DBL_SECONDS_PER_VALUE = 1e-7  # per cell x gene (z-scoring and neighbours, not stored values)
+DBL_PER_CELL_HVG = 144
+DBL_DENSE_PER_VALUE = 12.8  # per cell x gene, when the variable genes are not counted
+DBL_HVG_SAMPLE = 5000
+# Per cell, beside the largest channel: the scores, calls, channel codes and their sort,
+# and the obs columns written (core/doublets.py run_scrublet).
+DBL_OUT_PER_CELL = 48
+# Seconds per channel of c cells: 2e-5 x c^1.4 with exact neighbours (one channel of the
+# brain: 0.3 s at 750 cells, 9.7 s at 10k, 68.6 s at 40k; Kang 8.2 s at 13.8k; its 133
+# wells 43 s in all), 6.9e-5 x c^1.4 with pynndescent's over doublets.EXACT_KNN_MAX_CELLS
+# (the 100k brain as one channel: 688 s), and 0.2 s each.
+DBL_SECONDS_COEF = 2e-5
+DBL_SECONDS_COEF_APPROX = 6.9e-5
+DBL_SECONDS_POWER = 1.4
+DBL_SECONDS_PER_CHANNEL = 0.2
 # Steps that import or JIT-compile libraries the first time they run in a process
 # (numba, umap, pynndescent, the MSigDB cache): held afterwards.
 WARMUP = {"doublet_detection": 150 * MiB, "neighbors": 100 * MiB, "marker_genes": 100 * MiB,
           "enrichment": 80 * MiB, "embeddings": 20 * MiB}
 WARMUP_MODULE = "umap"  # imported by the first neighbour graph: warm-up already paid
 NEIGHBORS_PER_CELL = 12_000
+# Scaling (core/scaling.py) holds one chunk of a sparse X's stored values at a time
+# (int64 column numbers, the values and their squares in float32 and float64: ~33 bytes
+# each), or a dense X's genes STAT_BLOCK at a time.
+SPARSE_STATS_CHUNK = _scaling.SPARSE_CHUNK
+STAT_BLOCK = _scaling.STAT_BLOCK
+SCALING_SECONDS_PER_VALUE = 5e-9  # per stored value of a sparse X, per cell x gene of a dense one
+# PCA: copies of the n x variable-genes float32 matrix at its peak (the matrix and
+# scikit-learn's centred copy), bytes per cell x component (ARPACK's vectors, the
+# scores), and the variable genes' share of a sparse X's stored values relative to
+# their share of the genes (they are the more expressed ones).
+PCA_DENSE_COPIES = 2.1
+PCA_BYTES_PER_COMP = 16
+PCA_CUT_SHARE = 2.0
+PCA_SECONDS_PER_VALUE = 4.5e-8
+# Markers (Wilcoxon on the log values) by blocks of genes (core/rank_genes.py): one block
+# of values in flight (matrix_genes.block_entries, ~70 bytes a value) and per gene x group
+# statistics, never a copy of the matrix (a CSR whose rows are in no gene order adds a
+# byte per stored value, not counted). scanpy's own took 2.85 GiB on 100k neurons, where
+# this takes 0.33. Seconds per stored value (a dense matrix: per cell x gene) per column.
+MARKERS_MEMORY_PER_VALUE = 70
+MARKERS_SECONDS_PER_VALUE = 8e-8
 
 
 @dataclass
@@ -803,6 +893,8 @@ class _State:
     other: int  # obsm, obsp, varm, uns, frames
     held: int = 0  # an earlier copy the dataset's adaptor keeps until the run ends
     processed: bool = False  # an embedding or .raw on arrival: genes already filtered
+    n_hvg: int | None = None  # the variable genes PCA reads; None: every gene
+    raw_is_x: bool = False  # .raw set to X by the scaling step: one matrix until saved
 
     @classmethod
     def from_header(cls, h: Header) -> "_State":
@@ -813,13 +905,18 @@ class _State:
         return cls(h.n_cells or 0, h.n_genes or 0, x, layers, raw,
                    h.obsm_bytes + h.obsp_bytes + h.varm_bytes + h.uns_bytes + _frames_bytes(h)
                    + (h.n_cells or 0) * LOAD_PER_CELL + LOAD_FIXED,
-                   processed=bool(h.obsm) or h.matrix("raw/X") is not None)
+                   processed=bool(h.obsm) or h.matrix("raw/X") is not None, n_hvg=h.n_hvg)
 
     def matrices(self) -> list[Matrix]:
         return [mm for mm in [self.x, self.raw, *self.layers.values()] if mm is not None]
 
     def resident(self) -> int:
-        return sum(mm.nbytes for mm in self.matrices()) + self.other + self.held
+        shared = self.raw.nbytes if self.raw_is_x and self.raw is not None else 0
+        return sum(mm.nbytes for mm in self.matrices()) - shared + self.other + self.held
+
+    def pca_genes(self) -> int:
+        """The genes PCA reads: the variable genes, else every gene."""
+        return self.m if self.n_hvg is None else max(1, min(self.m, self.n_hvg))
 
     def xb(self) -> int:
         return self.x.nbytes if self.x is not None else 0
@@ -864,10 +961,6 @@ def _csr_bytes(mm: Matrix) -> int:
     return nz * (np.dtype(mm.dtype).itemsize + 4) + (mm.n_cells + 1) * 4
 
 
-def _dense_f32(s: _State) -> int:
-    return s.n * s.m * 4
-
-
 def _p(params, name: str, default):
     return getattr(params, name, default) if params is not None else default
 
@@ -894,7 +987,16 @@ def _step_qc(s: _State, params) -> tuple[int, _State, float]:
     return t, s, 0.1 + s.x.nnz * (1.8e-7 if s.x.sparse else 1.2e-8)
 
 
-def _step_doublet(s: _State, params) -> tuple[int, _State, float]:
+@dataclass
+class DoubletPlan:
+    """What the doublet step will run on: each capture channel's cells (core/doublets.py
+    ``channels``) and, when counted, Scrublet's variable genes in the largest channel."""
+
+    channels: list[int]
+    hvg: int | None = None
+
+
+def _step_doublet(s: _State, params, plan: DoubletPlan | None = None) -> tuple[int, _State, float]:
     counts = s.x
     beside = s.layers.get("counts") or s.raw
     if s.processed and s.x is not None and not s.x.sparse and beside is not None:
@@ -903,12 +1005,48 @@ def _step_doublet(s: _State, params) -> tuple[int, _State, float]:
         counts = beside
     if counts is None:
         return 0, s, 0.1
-    # Only the counts, as CSR (a dense matrix made so by blocks): the layers, .raw and a
-    # dense X are not copied.
-    copies = int(DBL_SPARSE_COPIES * _csr_bytes(counts))
-    dense = int(DBL_DENSE_PER_VALUE * s.n * counts.n_genes)
+    from scview.core.doublets import EXACT_KNN_MAX_CELLS
+    from scview.core.scrublet_lean import MIN_CHANNEL_CELLS
+
+    # No plan: all cells as one channel (a header alone does not say which cells share one).
+    sizes = [c for c in (plan.channels if plan is not None else [s.n]) if c >= MIN_CHANNEL_CELLS]
+    largest = max(sizes, default=0)
+    # Only the channel's counts, as CSR (a dense matrix made so by blocks): the layers,
+    # .raw and a dense X are not copied.
+    copies = int(DBL_SPARSE_COPIES * _csr_bytes(counts) * largest / max(1, counts.n_cells))
+    if plan is not None and plan.hvg:
+        dense = int(DBL_PER_CELL_HVG * largest * plan.hvg)
+    else:
+        dense = int(DBL_DENSE_PER_VALUE * largest * counts.n_genes)
     s.other += s.n * 16
-    return max(copies, dense), s, 3.0 + DBL_SECONDS_PER_VALUE * s.n * counts.n_genes
+    secs = 3.0 + sum((DBL_SECONDS_COEF if c <= EXACT_KNN_MAX_CELLS else DBL_SECONDS_COEF_APPROX)
+                     * c ** DBL_SECONDS_POWER + DBL_SECONDS_PER_CHANNEL for c in sizes)
+    return max(copies, dense) + DBL_OUT_PER_CELL * s.n, s, secs
+
+
+def doublet_plan(adata, params=None) -> DoubletPlan | None:
+    """The doublet step's channels on a live AnnData (in memory), and Scrublet's variable
+    genes counted on up to ``DBL_HVG_SAMPLE`` evenly spaced cells of the largest channel
+    (its own selection, ``scrublet_lean.n_variable_genes``). None when they can't be read."""
+    from scview.core import doublets, scrublet_lean
+    from scview.core.pipeline import StepSkipped, _doublet_matrix
+
+    try:
+        ch = doublets.channels(adata, _p(params, "doublet_channel_key", "") or None)
+    except doublets.DoubletError:
+        return None
+    sizes = [int(k) for k in ch.sizes]
+    plan = DoubletPlan(sizes)
+    if not sizes or max(sizes) < scrublet_lean.MIN_CHANNEL_CELLS:
+        return plan
+    try:
+        counts, _ = _doublet_matrix(adata)
+        idx = np.flatnonzero(ch.codes == int(np.argmax(sizes)))
+        idx = idx[np.linspace(0, idx.size - 1, min(idx.size, DBL_HVG_SAMPLE)).astype(np.int64)]
+        plan.hvg = scrublet_lean.n_variable_genes(scrublet_lean.channel_rows(counts, np.unique(idx)))
+    except (StepSkipped, ValueError, TypeError, IndexError):
+        pass
+    return plan
 
 
 def _cut_peak(old: list[Matrix], new: list[Matrix]) -> tuple[int, int]:
@@ -944,7 +1082,7 @@ def _step_filter(s: _State, params) -> tuple[int, _State, float]:
                               [mm for mm in [x2, *layers2.values()] if mm is not None])
     mask = 0 if x1 is None else (x1.nnz if x1.sparse else n2 * s.m)
     transient = max(cells_peak, max(genes_peak, mask) - cells_freed)
-    new = _State(n2, m2, x2, layers2, raw1, s.other, s.held, s.processed)
+    new = _State(n2, m2, x2, layers2, raw1, s.other, s.held, s.processed, n_hvg=s.n_hvg)
     return max(0, transient), new, 0.2 + FILTER_SECONDS_PER_BYTE * sum(mm.nbytes for mm in old)
 
 
@@ -963,29 +1101,42 @@ def _step_log(s: _State, params) -> tuple[int, _State, float]:
 
 def _step_hvg(s: _State, params) -> tuple[int, _State, float]:
     sparse = s.x is not None and s.x.sparse
+    s.n_hvg = min(s.m, int(_p(params, "n_top_genes", 2000)))
     return 2 * s.xb(), s, 0.05 + (s.x.nnz if s.x else 0) * (1e-8 if sparse else 2.2e-8)
 
 
 def _step_scaling(s: _State, params) -> tuple[int, _State, float]:
+    """Plans the matrix PCA reads (core/scaling.py): X stays as it is and becomes .raw
+    too (one matrix until saved). The variable genes' statistics come from a sparse X's
+    stored values (no dense copy), or a dense X's genes a block at a time."""
     if s.x is None:
         return 0, s, 0.1
-    dense = _dense_f32(s)
-    cast = s.x.nnz * 8 if s.x.sparse else 0
-    if s.raw is None and "counts" not in s.layers:
-        s.layers["counts"] = _like(s.x, "layers/counts", s.n, s.m)  # counts kept from .raw
-    raw = Matrix("raw/X", s.n, s.m, s.x.sparse, s.x.nnz, s.x.dtype, s.x.index_dtype)
-    after = _State(s.n, s.m, Matrix("X", s.n, s.m, False, s.n * s.m, "float32"), s.layers, raw,
-                   s.other, s.held, s.processed)
-    grow = after.resident() - s.resident()
-    return max(grow, 0) + dense + cast, after, 0.2 + s.n * s.m * 1.5e-8
+    if s.raw is not None and not s.raw_is_x and "counts" not in s.layers:
+        s.layers["counts"] = _like(s.raw, "layers/counts", s.n, s.m)  # counts kept from .raw
+    k = s.pca_genes()
+    if s.x.sparse:
+        t = SPARSE_STATS_CHUNK * 33 + s.m * 24  # one chunk's column numbers, values, squares
+        secs = 0.1 + s.x.nnz * SCALING_SECONDS_PER_VALUE
+    else:
+        t = 3 * s.n * min(k, STAT_BLOCK) * 4  # a dense block, its square and its copy
+        secs = 0.1 + s.n * k * SCALING_SECONDS_PER_VALUE
+    s.raw = Matrix("raw/X", s.n, s.m, s.x.sparse, s.x.nnz, s.x.dtype, s.x.index_dtype)
+    s.raw_is_x = True
+    return t, s, secs
 
 
 def _step_pca(s: _State, params) -> tuple[int, _State, float]:
-    n_hvg = min(s.m, int(_p(params, "n_top_genes", 2000)))
+    """The matrix PCA reads (core/scaling.py: the variable genes, dense float32) and
+    scikit-learn's centred copy of it, ARPACK's vectors; a sparse X's columns are cut
+    out first. An older scaled X is read the same way (a masked copy)."""
+    k = s.pca_genes()
     n_comps = int(_p(params, "n_comps", 50))
-    t = int(2.5 * s.n * n_hvg * 4) + s.n * n_comps * 16
+    dense = s.n * k * 4
+    cut = int(s.x.nnz * min(1.0, PCA_CUT_SHARE * k / max(1, s.m))) * 8 \
+        if s.x is not None and s.x.sparse else 0
+    t = max(cut + dense, int(PCA_DENSE_COPIES * dense)) + s.n * n_comps * PCA_BYTES_PER_COMP
     s.other += s.n * n_comps * 4 + s.m * n_comps * 8
-    return t, s, 0.3 + s.n * n_hvg * 9e-8
+    return t, s, 2.0 + s.n * k * PCA_SECONDS_PER_VALUE
 
 
 def _step_neighbors(s: _State, params) -> tuple[int, _State, float]:
@@ -996,18 +1147,76 @@ def _step_neighbors(s: _State, params) -> tuple[int, _State, float]:
     return g, s, (10.0 + 1e-3 * s.n) if s.n <= 4096 else (28.0 + 3e-4 * s.n)
 
 
+# Leiden's time (core/leiden.py; one thread in its child, so more CPUs do not speed it
+# up): the small-data line measured on the calibration runs, or a power law in the cells,
+# whichever is larger. The power laws are fits to the same saved graph of the brain data
+# clustered on Roihu at resolution 0.5 (research/out-of-core, 2026-10-23), scaled by 1.08,
+# the laptop's 253 s against Roihu's 234 s at 88,640 cells:
+#   full optimisation (n_iterations -1): 234 / 1,586 / 8,738 s at 88,640 / 221,828 /
+#   443,946 cells -> 224 x (n / 88,640)^2.24 (fit within -5..+10 %);
+#   fast Leiden (2 passes): 17 / 44 / 138 / 446 s at 88,640 / 221,828 / 443,946 /
+#   1,214,593 cells -> 16.0 x (n / 88,640)^1.275 (fit within -10..+17 %).
+LEIDEN_SCALE_CELLS = 88_640
+LEIDEN_SECONDS = {-1: (242.0, 2.24), 2: (17.3, 1.275)}  # (seconds at LEIDEN_SCALE_CELLS, power)
+LEIDEN_SMALL = {-1: (0.5, 4e-4), 2: (0.5, 2e-4)}  # (fixed, per cell): child start, the graph
+# Clustering estimated over this (the full optimisation) offers fast Leiden before a run;
+# SCVIEW_LEIDEN_OFFER_SECONDS in .env changes it.
+LEIDEN_OFFER_SECONDS = 600.0
+
+
+def leiden_seconds(n_cells: int, n_iterations: int = -1) -> float:
+    """Seconds Leiden takes on ``n_cells`` (2 CPUs or more: it uses one)."""
+    key = -1 if n_iterations == -1 else 2
+    fixed, per_cell = LEIDEN_SMALL[key]
+    s0, power = LEIDEN_SECONDS[key]
+    n = max(0, int(n_cells))
+    return float(max(fixed + per_cell * n, s0 * (n / LEIDEN_SCALE_CELLS) ** power))
+
+
+def leiden_offer_seconds() -> float:
+    """The full optimisation's estimate above which a run's note offers fast Leiden."""
+    raw = os.environ.get("SCVIEW_LEIDEN_OFFER_SECONDS", "").strip()
+    try:
+        return float(raw) if raw else LEIDEN_OFFER_SECONDS
+    except ValueError:
+        return LEIDEN_OFFER_SECONDS
+
+
 def _step_clustering(s: _State, params) -> tuple[int, _State, float]:
     # Leiden runs in a child process (core/leiden.py): its interpreter and the graph.
-    return 60 * MiB + s.n * 9000, s, 0.5 + 4e-4 * s.n
+    if _p(params, "clustering_method", "leiden") == "louvain":  # igraph's multilevel, fast
+        secs = LEIDEN_SMALL[-1][0] + LEIDEN_SMALL[-1][1] * s.n
+    else:
+        secs = leiden_seconds(s.n, leiden_iterations(params))
+    return 60 * MiB + s.n * 9000, s, secs
+
+
+def leiden_iterations(params) -> int:
+    """-1 or 2: the run's Leiden passes (anything else is the step's error, not an estimate's)."""
+    v = _p(params, "leiden_iterations", -1)
+    try:
+        return 2 if int(float(v)) == 2 else -1
+    except (TypeError, ValueError):
+        return -1
 
 
 def _epochs(n: int) -> int:
     return 500 if n <= 10_000 else 200  # umap-learn's default
 
 
+# UMAP (3D then 2D) on the mouse brain: 88,640 cells +0.47 GiB / 90 s at 2 CPUs; 1.16M
+# cells about +10 GB / 2,941 s at 8 CPUs (Roihu e2e, 2026-10-24). Memory per cell grows
+# a little with n (5.7 -> ~9 kB, ~n^1.18), time ~n^1.36 and barely with CPUs.
+UMAP_BYTES_PER_CELL = 5_700  # at 88,640 cells
+UMAP_MEMORY_EXPONENT = 0.18
+UMAP_TIME_EXPONENT = 0.36
+
+
 def _step_embeddings(s: _State, params) -> tuple[int, _State, float]:
     s.other += s.n * 5 * 4
-    return s.n * 200, s, 0.5 + 3.8e-6 * s.n * _epochs(s.n)
+    size = max(1.0, s.n / 88_640)
+    t = s.n * UMAP_BYTES_PER_CELL * size ** UMAP_MEMORY_EXPONENT
+    return int(t), s, 0.5 + 5e-6 * s.n * _epochs(s.n) * size ** UMAP_TIME_EXPONENT
 
 
 def _step_uncorrected(s: _State, params) -> tuple[int, _State, float]:
@@ -1034,11 +1243,15 @@ def _step_markers(s: _State, params) -> tuple[int, _State, float]:
     ln = s.lognorm()
     if ln is None:
         return 0, s, 0.1
-    # Wilcoxon ranks dense chunks of 10M values; each group's cells are copied out.
-    t = (2 * ln.nbytes if not ln.sparse else ln.nbytes) + 150 * MiB
+    from scview.core import matrix_genes
+
+    # One block of genes at a time, and each group's statistics (as the large-dataset
+    # estimate below, with the in-memory gather's working set).
     groups = _groups(params)
+    t = (matrix_genes.block_entries(ln.nnz) * MARKERS_MEMORY_PER_VALUE
+         + groups * ln.n_genes * 8 * 12 + s.n * 16)
     s.other += 56 * ln.n_genes * groups
-    return t, s, 1.0 + s.n * ln.n_genes * groups * (5e-9 if ln.sparse else 2e-8)
+    return t, s, 1.0 + (groups // 15) * ln.nnz * MARKERS_SECONDS_PER_VALUE
 
 
 def _step_enrichment(s: _State, params) -> tuple[int, _State, float]:
@@ -1109,6 +1322,16 @@ def _warm(step: str, warm: bool) -> int:
     return 0 if warm else WARMUP.get(step, 0)
 
 
+# Steps that use one CPU whatever the quota: their time is not scaled by the CPUs.
+SINGLE_THREAD_STEPS = ("clustering",)
+
+
+def _cpu_free(step: str, secs: float, cpus: float | None) -> float:
+    """``secs`` such that ``_range`` (which scales by the CPUs) gives it back unscaled for
+    a single-threaded step (Leiden); other steps' unchanged."""
+    return secs / _cpu_factor(cpus) if step in SINGLE_THREAD_STEPS else secs
+
+
 def process_warm() -> bool:
     """True once this process has run the libraries whose first use costs memory."""
     import sys
@@ -1118,7 +1341,7 @@ def process_warm() -> bool:
 
 def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense: bool = False,
                  steps: list[str] | None = None, params=None, cpus: float | None = None,
-                 warm: bool | None = None) -> RunEstimate:
+                 warm: bool | None = None, doublets: DoubletPlan | None = None) -> RunEstimate:
     """Memory per step and at the run's peak, and rough seconds, for ``steps`` (any
     order; run in the pipeline's) on a dataset.
 
@@ -1127,8 +1350,9 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
     it). The run's peak is the largest (held at the step's start + the step's
     transient) over the steps, as the dataset's state changes through them (reset
     to counts replaces X, filtering cuts each matrix once and the opened copy gives
-    its matrices up, scaling makes X dense), then saving and reopening the result. ``warm``: the
-    process already paid its one-time imports (default: looked up)."""
+    its matrices up, scaling sets .raw to X itself), then saving and reopening the result. ``warm``: the
+    process already paid its one-time imports (default: looked up). ``doublets``: the
+    doublet step's channels (``doublet_plan``; None: all cells as one)."""
     from scview.core.pipeline import ALL_STEPS
 
     if isinstance(shape, Header):
@@ -1145,7 +1369,10 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
     warm_held = 0
     for step in [x for x in ALL_STEPS if x in set(steps or [])]:
         before = s.resident() + warm_held
-        t, s, secs = _STEP_MODELS[step](s, params)
+        model = _STEP_MODELS[step]
+        t, s, secs = (_step_doublet(s, params, doublets) if model is _step_doublet
+                      else model(s, params))
+        secs = _cpu_free(step, secs, cpus)
         w = _warm(step, warm)
         warm_held += w
         total += secs
@@ -1168,7 +1395,7 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
 
 def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
                        params=None, *, other_bytes: int = 0, dtype: str = "float32",
-                       nonzero: int | None = None) -> int:
+                       nonzero: int | None = None, doublets: DoubletPlan | None = None) -> int:
     """Memory (bytes) ``step`` needs at its peak over what the dataset holds when it
     starts. Pure: no I/O, no process state (one-time imports not counted).
 
@@ -1177,9 +1404,10 @@ def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
     (None: the defaults); ``other_bytes`` the bytes of the layers and .raw, which
     filtering copies (0 underestimates it); ``dtype`` of X's values; ``nonzero`` the
     non-zero values of a dense X (None: every value, which overestimates doublet
-    detection on dense counts). Filtering is taken to remove cells (one cut of each
-    matrix), also on data filtered before. Unknown steps give 0. From a live AnnData use
-    ``step_peak_for(adata, step, params)``, which reads all of this from it.
+    detection on dense counts); ``doublets`` its channels (None: all cells as one). Filtering
+    is taken to remove cells (one cut of each matrix), also on data filtered before. Unknown
+    steps give 0. From a live AnnData use ``step_peak_for(adata, step, params)``, which reads
+    all of this from it.
     """
     model = _STEP_MODELS.get(step)
     if model is None:
@@ -1190,18 +1418,275 @@ def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
     layers = {}
     if other_bytes and n:  # an opaque block of the layers' and .raw's bytes, per cell
         layers["other"] = Matrix("layers/other", n, max(1, other_bytes // n), False, 0, "uint8")
-    t, _, _ = model(_State(n, m, x, layers, None, 0), params)
+    # PCA reads the variable genes a run picks (n_top_genes).
+    hvg = min(m, int(_p(params, "n_top_genes", 2000)))
+    st = _State(n, m, x, layers, None, 0, n_hvg=hvg)
+    t, _, _ = _step_doublet(st, params, doublets) if model is _step_doublet else model(st, params)
     return int(t)
 
 
 def step_peak_for(adata, step: str, params=None) -> int:
     """``estimate_step_peak`` for a live AnnData (in memory, not backed): its X,
-    layers and .raw as they are, e.g. from a hook before each pipeline step."""
+    layers and .raw as they are (and for doublet detection its channels,
+    ``doublet_plan``), e.g. from a hook before each pipeline step."""
     model = _STEP_MODELS.get(step)
     if model is None:
         return 0
-    t, _, _ = model(_State.from_header(header_from_adata(adata)), params)
+    st = _State.from_header(header_from_adata(adata))
+    if model is _step_doublet:
+        t, _, _ = _step_doublet(st, params, doublet_plan(adata, params))
+    else:
+        t, _, _ = model(st, params)
     return int(t)
+
+
+# ---------------------------------------------------------------------------
+# Large-dataset (chunked) runs: core/large_run.py
+# ---------------------------------------------------------------------------
+#
+# The matrices stay on disk: the run holds the dataset without them (obs, var, obsm,
+# obsp, uns) and what its steps add, and each pass over the matrix holds a batch of row
+# blocks (``chunked.step_bytes``: one block's working memory per worker). The one write
+# of X, the counts and the gene store holds a batch of blocks and the gene store's staged
+# rows and gene block.
+#
+# Calibration (2026-10-24): the live run of the UI's 15 steps on the 100k-cell brain
+# (100,000 x 27,998, 201M stored values, gzip; 88,640 x 19,824 after filtering) in a
+# 6 GB / 2-CPU container, auto mode, through /assessment/run-stream: 551 s, peak 2.19 GB
+# (Leiden), cgroup memory (current - inactive_file) sampled every 0.5 s. Per step, GB at the
+# peak, measured / estimated: QC 0.82 / 0.73 (first estimate, before calibration), write
+# + variable genes 1.86 / 1.86, PCA 1.43 / 0.89, neighbours 1.33 / 1.27, Leiden 2.19 / 2.08,
+# markers 1.58 / 1.52, cell cycle 1.76 / 1.65. The first estimate had the memory a process
+# keeps after its first pass too low (+0.45-0.55 GB: dask's threads, numba, h5py caches,
+# freed memory glibc keeps; another 0.4 GB after the write) and the neighbour graph too
+# high (the in-memory model's 12 KB per cell; 2.5 KB measured, 1.2 KB of it kept); these
+# are set from this run, as is what the server keeps after Leiden (0.2 GB). Calibrated:
+# write + variable genes 1.81, PCA 1.62, neighbours 1.21, Leiden 2.04 (the run's peak,
+# -7%), UMAP 1.33 (1.58), markers 1.57, cell cycle 1.69; QC 1.07, filtering 1.16 (over).
+# Seconds: a pass 3.5e-8 per stored value (QC 6.2 s, filtering 5.3 s, scaling 5.4 s), the
+# write 4e-7 (71 s), Leiden 253 s at 88,640 cells (``leiden_seconds``: about n^2.2, or
+# n^1.25 with fast Leiden's two passes). Disk: X 520 MB, counts 418 MB,
+# gene store 710 MB, and the store's build spills 8 bytes per value while it runs.
+
+CHUNKED_FIXED = 500 * MiB  # kept by the process from its first pass on (see above)
+# The gene store's build (core/gene_store.py): one staged chunk of rows (STAGE_ENTRIES
+# values, cleaned, stacked and transposed) or one gene block (BLOCK_ENTRIES), 8 bytes each
+# a few times over; 0.80 GB peak RSS building 100k cells on its own.
+GENESTORE_BUILD_BYTES = 750 * MiB
+CHUNKED_WRITE_KEPT = 400 * MiB  # kept by the process after the write (measured, as above)
+MARKERS_STORE_PER_VALUE = 60  # sparse_markers: working set per stored value of a gene block
+CELLTYPIST_LABELS = 100  # probabilities kept per cell (float32)
+CHUNKED_NEIGHBORS_PER_CELL = 2_600  # building the graph; 1,300 of it kept
+CHUNKED_GRAPH_PER_CELL = 1_300
+CHUNKED_LEIDEN_PER_CELL = 10_500  # the Leiden child: its graph copy and partition
+CHUNKED_LEIDEN_KEPT_PER_CELL = 2_500  # kept by the server after it (the edges it sent)
+# Seconds per stored value: a pass that reads the matrix (gzip CSR, 2 CPUs), and the one
+# write (X and counts gzip, the gene store built and filled); markers per column.
+CHUNKED_PASS_SECONDS_PER_VALUE = 3.5e-8
+CHUNKED_WRITE_SECONDS_PER_VALUE = 4e-7
+CHUNKED_MARKERS_SECONDS_PER_VALUE = 7e-8
+# Disk per stored value: X (float32 + int64 index, gzip), the counts (gzip), the gene store
+# (gzip-4 + shuffle) and its build's spill files (8 bytes, removed after).
+DISK_X_PER_VALUE = 2.8
+DISK_COUNTS_PER_VALUE = 2.5
+DISK_STORE_PER_VALUE = 4.0
+DISK_STORE_TEMP_PER_VALUE = 8.0
+# Steps after which the large run writes X, the counts and the gene store again (any
+# step on a dataset not yet in large-dataset layout writes them too).
+CHUNKED_WRITES = ("reset_to_counts", "filtering", "normalization", "log_transform")
+# Steps whose first need of X makes the run write it (else the save does).
+_CHUNKED_READS_X = ("highly_variable_genes", "scaling", "pca", "marker_genes", "cell_cycle",
+                    "dissociation_stress", "cell_type_annotation")
+
+
+@dataclass
+class ChunkedShape:
+    """What a large-dataset run works on: cells, genes, the counts' stored values (every
+    value of a dense matrix), and the bytes of the dataset without its matrices."""
+
+    n: int
+    m: int
+    nnz: int
+    dense: bool = False
+    other: int = 0
+    n_groups: int | None = None  # the active clustering's groups (markers), when known
+
+    @classmethod
+    def from_header(cls, h: Header) -> "ChunkedShape":
+        mats = h.matrices
+        nnz = max((mm.nnz for mm in mats), default=0)
+        dense = any(not mm.sparse for mm in mats)
+        n = h.n_cells or 0
+        other = (h.obsm_bytes + h.obsp_bytes + h.varm_bytes + h.uns_bytes + _frames_bytes(h)
+                 + n * LOAD_PER_CELL + LOAD_FIXED)
+        return cls(n, h.n_genes or 0, int(nnz), dense, int(other))
+
+
+def _chunk_pass(sh: ChunkedShape, params, factor: float = 1.0) -> int:
+    from scview.core import chunked
+
+    hvg = min(sh.m, int(_p(params, "n_top_genes", 2000)))
+    per_row = sh.nnz / max(1, sh.n)
+    rows = chunked.rows_per_block(sh.m, nnz_per_row=per_row, dense=sh.dense, n_hvg=hvg)
+    return int(factor * chunked.step_bytes(rows, sh.m, nnz_per_row=per_row, dense=sh.dense,
+                                           n_hvg=hvg))
+
+
+def _pass_secs(sh: ChunkedShape, passes: float = 1.0) -> float:
+    return 0.5 + passes * sh.nnz * CHUNKED_PASS_SECONDS_PER_VALUE
+
+
+def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
+                 doublets: DoubletPlan | None = None) -> tuple[int, int, float]:
+    """(transient bytes over what the run holds, bytes the step adds to it, seconds at 2
+    CPUs) of one step in large-dataset mode; ``write``: the step first writes X, the
+    counts and the gene store."""
+    n, m = sh.n, sh.m
+    held = 0
+    if step in ("reset_to_counts",):
+        t, secs = int(0.5 * sh.other), 0.5
+    elif step == "qc_metrics":
+        t, secs, held = _chunk_pass(sh, params), _pass_secs(sh), n * 5 * 8 + m * 5 * 8
+    elif step == "doublet_detection":
+        x = Matrix("X", n, m, not sh.dense, sh.nnz if not sh.dense else n * m, "float32",
+                   nonzero=sh.nnz if sh.dense else None)
+        t, _, secs = _step_doublet(_State(n, m, x, {}, None, 0), params, doublets)
+        held = n * 16
+    elif step == "filtering":
+        t, secs = _chunk_pass(sh, params) + sh.other, _pass_secs(sh)
+    elif step == "normalization":
+        target = _p(params, "target_sum", 1e4)
+        t, secs = (_chunk_pass(sh, params), _pass_secs(sh)) if target is None else (0, 0.1)
+    elif step == "log_transform":
+        t, secs = 0, 0.1
+    elif step == "highly_variable_genes":
+        two = (_p(params, "hvg_flavor", "seurat") == "seurat_v3"
+               or _p(params, "normalization_method", "log") == "pearson_residuals")
+        t, secs = _chunk_pass(sh, params), _pass_secs(sh, 2 if two else 1)
+    elif step == "scaling":
+        t, secs = _chunk_pass(sh, params), _pass_secs(sh)
+    elif step == "pca":
+        k = min(m, int(_p(params, "n_top_genes", 2000)))
+        c = int(_p(params, "n_comps", 50))
+        t = _chunk_pass(sh, params) + k * k * 8 * 4 + n * c * 4 * 2
+        secs, held = _pass_secs(sh, 2) + 2e-9 * n * k * k / 50, n * c * 4 + m * c * 8
+    elif step == "neighbors":
+        t, held = n * CHUNKED_NEIGHBORS_PER_CELL, n * CHUNKED_GRAPH_PER_CELL
+        secs = _STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2]
+    elif step == "clustering":  # the in-memory step's own time (leiden_seconds)
+        t, held = 60 * MiB + n * CHUNKED_LEIDEN_PER_CELL, n * CHUNKED_LEIDEN_KEPT_PER_CELL
+        secs = _STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2]
+    elif step in ("embeddings", "uncorrected_embedding", "batch_correction", "enrichment"):
+        s = _State(n, m, None, {}, None, 0)
+        before = s.other
+        t, s, secs = _STEP_MODELS[step](s, params)
+        held = s.other - before
+    elif step == "marker_genes":
+        from scview.core import sparse_markers
+
+        g = sh.n_groups or 15
+        cols = len(_p(params, "marker_columns", []) or []) or 1
+        t = sparse_markers.MAX_ENTRIES * MARKERS_STORE_PER_VALUE + g * m * 8 * 12 + n * 16
+        held = (56 + 16) * m * g * cols
+        secs = 1.0 + cols * sh.nnz * CHUNKED_MARKERS_SECONDS_PER_VALUE
+    elif step in ("cell_cycle", "dissociation_stress"):
+        from scview.core import gene_store
+
+        t = max(_chunk_pass(sh, params, 0.5), gene_store.BLOCK_ENTRIES * 12)
+        secs, held = _pass_secs(sh, 1.5), n * 4 * 8
+    elif step == "cell_type_annotation":
+        from scview.core import large_scores
+
+        if _p(params, "annotation_method", "llm") == "celltypist":
+            t = _chunk_pass(sh, params) + large_scores.CELLTYPIST_BLOCK_BYTES
+            held = n * CELLTYPIST_LABELS * 4 + n * 3 * 8
+            secs = 5.0 + _pass_secs(sh) + 2e-3 * n
+        else:
+            t, secs, held = 100 * MiB, 10.0 + 2e-4 * n, n * 8
+    elif step == "save":
+        t, secs = int(0.3 * sh.other) + 64 * MiB, 1.0 + sh.other / WRITE_BPS
+    else:
+        t, secs = 0, 0.1
+    if write:
+        t = max(t, _chunk_pass(sh, params) + GENESTORE_BUILD_BYTES)
+        held += CHUNKED_WRITE_KEPT
+        secs += sh.nnz * CHUNKED_WRITE_SECONDS_PER_VALUE
+    return int(t), int(held), float(secs)
+
+
+def _writes_at(steps: list[str], rewrite: bool) -> str | None:
+    """The step at which the run writes X, the counts and the gene store (None: none)."""
+    if not rewrite:
+        return None
+    first = next((s for s in steps if s in _CHUNKED_READS_X), None)
+    return first or "save"
+
+
+def estimate_chunked_run(sh: ChunkedShape | Header, steps: list[str], params=None, *,
+                         large: bool = False, cpus: float | None = None,
+                         doublets: DoubletPlan | None = None) -> RunEstimate:
+    """Memory per step and at the peak, and rough seconds, of ``steps`` in large-dataset
+    mode. ``large``: the dataset is in that layout already (its matrices are written
+    again only after a step that changes them, ``CHUNKED_WRITES``)."""
+    from scview.core.pipeline import ALL_STEPS
+
+    if isinstance(sh, Header):
+        sh = ChunkedShape.from_header(sh)
+    ordered = [s for s in ALL_STEPS if s in set(steps or [])]
+    rewrite = not large or any(s in CHUNKED_WRITES for s in ordered)
+    write_at = _writes_at(ordered, rewrite)
+    resident = sh.other
+    start = resident
+    out: list[StepEstimate] = []
+    total = 0.0
+    cur = sh
+    fixed = 0
+    for step in ordered + ["save"]:
+        t, held, secs = chunked_step(step, cur, params, write=step == write_at, doublets=doublets)
+        secs = _cpu_free(step, secs, cpus)
+        if step not in ("reset_to_counts", "neighbors", "clustering", "embeddings",
+                        "uncorrected_embedding", "batch_correction", "enrichment", "save"):
+            fixed = CHUNKED_FIXED
+        total += secs
+        out.append(StepEstimate(step, resident + fixed, t, _range(secs, cpus),
+                                step in CHUNKED_MEASURED))
+        resident += held
+        if step == "filtering":  # as the in-memory model takes it
+            n2 = int(cur.n * FILTER_CELLS_KEPT)
+            m2 = cur.m if large else int(cur.m * FILTER_GENES_KEPT_RAW)
+            cur = ChunkedShape(n2, m2, int(cur.nnz * FILTER_CELLS_KEPT), cur.dense,
+                               int(cur.other * FILTER_CELLS_KEPT), cur.n_groups)
+    peak = max(out, key=lambda e: e.peak_bytes)
+    return RunEstimate(out, start, peak.peak_bytes, peak.step, resident + fixed,
+                       _range(total, cpus))
+
+
+# Steps of large-dataset mode whose coefficients come from a measured run (the live
+# 100k-cell run; see CHUNKED_CALIBRATION).
+CHUNKED_MEASURED: set[str] = {
+    "reset_to_counts", "qc_metrics", "doublet_detection", "filtering", "normalization",
+    "log_transform", "highly_variable_genes", "scaling", "pca", "neighbors", "clustering",
+    "embeddings", "marker_genes", "cell_cycle", "dissociation_stress", "save",
+}
+
+
+def chunked_step_peak(step: str, sh: ChunkedShape, params=None, *, write: bool = False,
+                      doublets: DoubletPlan | None = None) -> int:
+    """``estimate_step_peak`` for large-dataset mode: memory ``step`` needs at its peak
+    over what the run holds (the pre-step check, core/large_run.py)."""
+    t, _, _ = chunked_step(step, sh, params, write=write, doublets=doublets)
+    return int(t)
+
+
+def chunked_disk_bytes(sh: ChunkedShape, *, rewrite: bool = True, x_file_bytes: int = 0) -> int:
+    """Disk a large-dataset run writes before it can swap the result in: X, the counts, the
+    gene store and its build's temporary files (``rewrite``), else a copy of X
+    (``x_file_bytes``), and the rest of the dataset."""
+    if not rewrite:
+        return int(x_file_bytes + sh.other)
+    per_value = (DISK_X_PER_VALUE + DISK_COUNTS_PER_VALUE + DISK_STORE_PER_VALUE
+                 + DISK_STORE_TEMP_PER_VALUE)
+    return int(sh.nnz * per_value + sh.other)
 
 
 # ---------------------------------------------------------------------------
@@ -1439,32 +1924,59 @@ def session_preflight(mgr, sid: str, dm) -> dict:
     """Per staged unit (and the merge of several): header, load estimate, verdict."""
     from scview.core.ingestion.bundling import UnitFormat, build_bundle
 
+    from scview.core.ingestion import streamed
+
     bundle = build_bundle(mgr.staged_paths(sid))
     opts = mgr.get_options(sid)
     avail = available_memory()
     cached = cached_others(dm)
+    loadable = [u for u in bundle.units if u.format != UnitFormat.unknown and u.complete]
+    # Too large to read whole: the commit reads and saves the matrices in blocks.
+    try:
+        choice = streamed.choose(loadable, opts.streamed, opts.genes_in_rows) if loadable else None
+    except streamed.StreamUnsupported:
+        choice = None
+    blocks = bool(choice and choice.streamed)
     units, residents, peaks, secs = [], [], [], [0.0, 0.0]
-    for u in bundle.units:
-        if u.format == UnitFormat.unknown or not u.complete:
-            continue
+    for u in loadable:
         h = read_unit_header(u, opts.genes_in_rows)
+        h.backed = False  # the ingest reads an .h5ad whole, whatever its size
         est = estimate_load(h)
         half = estimate_load(_half_cells(h)) if not h.guess else None
-        v = make_verdict(
-            need=est.peak_bytes, peak=est.peak_bytes, stage=est.peak_stage, seconds=est.seconds,
-            avail=avail, cached=cached, lead=_load_lead(h, est), breakdown=est.breakdown,
-            notes=est.notes,
-            alternatives=[("Subsample the cells before loading: half of them", half.peak_bytes)]
-            if half else [])
+        if blocks:
+            need = streamed.streamed_need([u], opts.genes_in_rows)
+            v = make_verdict(
+                need=need, peak=need, stage="reading and saving it in blocks", seconds=est.seconds,
+                avail=avail, cached=cached,
+                lead=(_load_lead(h, est).replace("Loading takes", "Read whole, loading would take")
+                      + f"; it is read and saved in blocks instead, {_about(need)} at its peak"),
+                breakdown=[("Cell and gene tables, one block", need)],
+                notes=est.notes + [streamed.BLOCKS_NOTE], alternatives=[])
+        else:
+            v = make_verdict(
+                need=est.peak_bytes, peak=est.peak_bytes, stage=est.peak_stage, seconds=est.seconds,
+                avail=avail, cached=cached, lead=_load_lead(h, est), breakdown=est.breakdown,
+                notes=est.notes,
+                alternatives=[("Subsample the cells before loading: half of them", half.peak_bytes)]
+                if half else [])
         units.append({"label": u.label, "format": u.format.value, "header": h.to_dict(),
                       "load": {"resident_bytes": est.resident_bytes, "peak_bytes": est.peak_bytes,
                                "peak_stage": est.peak_stage, "seconds": list(est.seconds)},
-                      "verdict": v})
+                      "streamed": blocks, "verdict": v})
         residents.append(est.resident_bytes)
         peaks.append(est.peak_bytes)
         secs = [secs[0] + est.seconds[0], secs[1] + est.seconds[1]]
     merge = None
-    if len(units) > 1:
+    if len(units) > 1 and blocks:
+        need = streamed.streamed_need(loadable, opts.genes_in_rows)
+        merge = make_verdict(
+            need=need, peak=need, stage="merging the samples in blocks", seconds=tuple(secs),
+            avail=avail, cached=cached,
+            lead=(f"Merging the {len(units)} samples in blocks takes {_about(need)} at its peak "
+                  f"(read whole, {_about(sum(residents) * 2)})"),
+            breakdown=[("Cell and gene tables, one block", need)],
+            notes=[streamed.BLOCKS_NOTE], alternatives=[])
+    elif len(units) > 1:
         # Every sample is loaded, then merged into one more copy, saved and reopened.
         peak = sum(residents) * 2
         merge = make_verdict(
@@ -1487,54 +1999,99 @@ def _params_with(params, **changes):
     return p
 
 
+def in_memory_header(adata) -> Header:
+    """The header of a live AnnData as a run sees it: in memory as it is, or, opened
+    backed, from its file as read in (``core/working_copy.py`` reads it in before the
+    run; ``header_from_adata`` would take its on-disk X for a dense one)."""
+    if getattr(adata, "isbacked", False):
+        h = read_header(adata.filename, "h5ad")
+        h.backed = False
+        return h
+    return header_from_adata(adata)
+
+
 def run_need(adata, steps: list[str], params=None) -> int:
-    """Memory a run of ``steps`` needs beyond what the (in-memory) dataset holds now."""
-    est = estimate_run(header_from_adata(adata), steps=steps, params=params, warm=process_warm())
+    """Memory a run of ``steps`` needs beyond what the dataset holds in memory (a backed
+    one: once read in, which the run makes room for separately)."""
+    plan = doublet_plan(adata, params) if "doublet_detection" in steps else None
+    est = estimate_run(in_memory_header(adata), steps=steps, params=params, warm=process_warm(),
+                       doublets=plan)
     return max(0, int(est.peak_bytes - est.start_bytes))
+
+
+def _file_doublet_plan(path, params=None) -> DoubletPlan | None:
+    """The doublet step's channels from a file's obs alone (its matrix is not read, so
+    Scrublet's variable genes are not counted). None when obs can't be read."""
+    try:
+        import anndata as ad
+        import h5py
+
+        from scview.core import doublets
+
+        with h5py.File(path, "r") as f:
+            obs = ad.io.read_elem(f["obs"])
+        ch = doublets.channels(ad.AnnData(obs=obs), _p(params, "doublet_channel_key", "") or None)
+        return DoubletPlan([int(k) for k in ch.sizes])
+    except Exception:  # noqa: BLE001 — an estimate never fails a request: one channel then
+        return None
 
 
 def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | None = None) -> dict:
     """The run estimate for ``steps`` on a dataset, with its verdict. The shape comes
-    from the cached dataset, else from the header of its file (never loaded here)."""
-    from scview.core.pipeline import PipelineParams
+    from the cached dataset, else from the header of its file (never loaded here).
+    ``mode`` says whether the run would go to large-dataset mode (``params.chunked``:
+    auto by the rule ``large_run.choose_mode`` applies, or on / off); in that mode the
+    steps and verdict are that mode's (``estimate_chunked_run``, with the disk it writes)
+    and ``in_memory`` holds the in-memory estimate it replaced."""
+    from scview.core import large_layout
+    from scview.core.pipeline import PipelineParams, check_chunked
 
     params = PipelineParams()
     for k, v in (overrides or {}).items():
         if hasattr(params, k):
             setattr(params, k, v)
+    requested = check_chunked(params.chunked)
     adaptor = dm.get_dataset(dataset_id)
     in_memory = adaptor is not None
     h = None
+    plan = None
+    dbl = "doublet_detection" in steps
+    files = dm.h5ad_candidates(dataset_id)
     # Not while a run changes it in a worker thread: its file says what it was.
     if in_memory and not dm.is_busy(dataset_id):
         a = adaptor.adata
         if not getattr(a, "isbacked", False):
             try:
                 h = header_from_adata(a)
+                plan = doublet_plan(a, params) if dbl else None
             except (RuntimeError, ValueError):  # changed under us
                 h = None
     if h is None:
-        files = dm.h5ad_candidates(dataset_id)
         if not files:
             raise FileNotFoundError(dataset_id)
         h = read_header(files[0], "h5ad")
+        plan = _file_doublet_plan(files[0], params) if dbl else None
+    large = h.large or (in_memory and large_layout.is_large(adaptor.adata))
     warm = process_warm()
-    est = estimate_run(h, steps=steps, params=params, warm=warm)
-    held = est.start_bytes if in_memory else 0
+    est = estimate_run(h, steps=steps, params=params, warm=warm, doublets=plan)
+    # A backed dataset holds less than the run's start (its matrices are read in first).
+    held = (resident_bytes(h) if h.backed else est.start_bytes) if in_memory else 0
     need = est.peak_bytes - held
     avail = available_memory()
     cached = cached_others(dm, dataset_id)
 
     alternatives: list[tuple[str, int]] = []
-    if "doublet_detection" in steps:
+    if dbl:
         alt = estimate_run(h, steps=[s for s in steps if s != "doublet_detection"],
                            params=params, warm=warm)
         alternatives.append(("Skip doublet detection", alt.peak_bytes - held))
     if set(steps) & {"highly_variable_genes", "pca"} and params.n_top_genes > 1000:
-        alt = estimate_run(h, steps=steps, params=_params_with(params, n_top_genes=1000), warm=warm)
+        alt = estimate_run(h, steps=steps, params=_params_with(params, n_top_genes=1000), warm=warm,
+                           doublets=plan)
         alternatives.append((f"Use 1,000 variable genes instead of {params.n_top_genes:,}",
                              alt.peak_bytes - held))
-    alt = estimate_run(_half_cells(h), steps=steps, params=params, warm=warm)
+    half = None if plan is None else DoubletPlan([c // 2 for c in plan.channels], plan.hvg)
+    alt = estimate_run(_half_cells(h), steps=steps, params=params, warm=warm, doublets=half)
     alternatives.append(("Subsample the cells: half of them", alt.peak_bytes - held))
 
     stage = STEP_LABELS.get(est.peak_step, est.peak_step)
@@ -1543,7 +2100,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         lead = f"{about[0].upper()}{about[1:]} more than now at its peak ({stage})"
     else:
         lead = f"No more memory than this dataset holds now at its peak ({stage})"
-    breakdown = [("This dataset now" if in_memory else "This dataset once loaded", est.start_bytes),
+    breakdown = [("This dataset now" if in_memory else "This dataset once loaded",
+                  held if in_memory else est.start_bytes),
                  (f"At the peak ({stage})", est.peak_bytes),
                  ("After the run (saved and reopened)", est.end_bytes)]
     notes = []
@@ -1561,5 +2119,101 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
     v = make_verdict(need=need, peak=est.peak_bytes, stage=stage, seconds=est.seconds,
                      avail=avail, cached=cached, lead=lead, breakdown=breakdown, notes=notes,
                      alternatives=alternatives)
-    return {"dataset_id": dataset_id, "in_memory": in_memory, "header": h.to_dict(),
-            "steps": [e.to_dict() for e in est.steps], "verdict": v}
+    out = {"dataset_id": dataset_id, "in_memory": in_memory, "header": h.to_dict(),
+           "steps": [e.to_dict() for e in est.steps], "verdict": v,
+           "leiden": leiden_choice(h.n_cells, steps, params)}
+    chunked, reason = _would_chunk(requested, need, avail, cached, large)
+    out["mode"] = {"chunked": chunked, "requested": requested, "reason": reason}
+    if chunked:
+        out["in_memory_estimate"] = {"steps": out["steps"], "verdict": v}
+        out.update(_chunked_preflight(h, steps, params, held, avail, cached, plan,
+                                      large=large,
+                                      disk_folder=Path(dm.data_dir)))
+    return out
+
+
+def leiden_choice(n_cells: int | None, steps: list[str], params=None) -> dict | None:
+    """For a run that clusters with Leiden: its time with the full optimisation and with
+    fast Leiden (point estimates, one CPU's worth; ``*_text`` as ranges), the setting the
+    run has, and ``offer_fast`` when the full optimisation's estimate is over
+    ``leiden_offer_seconds()`` (10 min): the pre-run note then offers fast Leiden. None
+    for a run without Leiden clustering. The cells are the dataset's, less filtering's
+    share when the run filters (``FILTER_CELLS_KEPT``)."""
+    if "clustering" not in (steps or []) or not n_cells:
+        return None
+    if _p(params, "clustering_method", "leiden") != "leiden":
+        return None
+    n = int(n_cells * FILTER_CELLS_KEPT) if "filtering" in steps else int(n_cells)
+    full, fast = leiden_seconds(n, -1), leiden_seconds(n, 2)
+    limit = leiden_offer_seconds()
+    return {
+        "n_cells": n,
+        "full_seconds": round(full, 1), "fast_seconds": round(fast, 1),
+        "full_text": time_text(_range(full, CALIBRATION_CPUS)),
+        "fast_text": time_text(_range(fast, CALIBRATION_CPUS)),
+        "offer_seconds": limit,
+        "offer_fast": bool(full > limit),
+        "iterations": leiden_iterations(params),
+    }
+
+
+def _would_chunk(requested: str, need: int, avail: Available, cached: Cached,
+                 large: bool = False) -> tuple[bool, str]:
+    """Large-dataset mode or not, by the rule ``large_run.choose_mode`` applies."""
+    from scview.core.dataset_manager import LOAD_MARGIN, working_reserve
+
+    if large:
+        return True, ("This dataset is in large-dataset layout, so it runs in large-dataset "
+                      "mode: it is never read into memory.")
+    if requested == "on":
+        return True, "Large-dataset mode was chosen for this run."
+    if requested == "off":
+        return False, "In memory was chosen for this run."
+    if avail.limit_bytes is None or avail.available_bytes is None:
+        return False, "No memory limit is known: the run works in memory."
+    free = avail.available_bytes + cached.bytes
+    target = max(0, need) * LOAD_MARGIN + working_reserve(avail.limit_bytes)
+    if target <= free:
+        return False, "The run fits in memory."
+    return True, (f"In memory the run needs {_about(max(0, need))} more at its peak, more "
+                  f"than scView can give it with its working reserve, so it runs in "
+                  "large-dataset mode: the matrices stay on disk, read in blocks.")
+
+
+def _chunked_preflight(h: Header, steps: list[str], params, held: int, avail: Available,
+                       cached: Cached, plan, *, large: bool, disk_folder: Path) -> dict:
+    """The large-dataset estimate, its verdict (memory and disk) and the in-memory steps."""
+    import shutil
+
+    sh = ChunkedShape.from_header(h)
+    est = estimate_chunked_run(sh, steps, params, large=large, doublets=plan)
+    need = est.peak_bytes - held
+    stage = STEP_LABELS.get(est.peak_step, est.peak_step)
+    rewrite = not large or any(s in steps for s in CHUNKED_WRITES)
+    x_bytes = (h.x.nbytes // 2) if (not rewrite and h.x is not None) else 0  # its gzip copy
+    disk = chunked_disk_bytes(sh, rewrite=rewrite, x_file_bytes=x_bytes)
+    try:
+        free = shutil.disk_usage(disk_folder).free
+    except OSError:
+        free = None
+    about = _about(max(0, need))
+    lead = (f"In large-dataset mode (the matrices stay on disk, read in blocks): "
+            f"{about} more than now at its peak ({stage}), and {_about(disk)} of disk")
+    notes = ["Large-dataset mode writes the log-normalised matrix, the counts and a gene-major "
+             "copy beside the dataset; the steps' results are the in-memory ones."]
+    unmeasured = [STEP_LABELS.get(e.step, e.step) for e in est.steps if not e.measured]
+    if unmeasured:
+        notes.append("Not measured, estimated from what the step allocates: "
+                     + ", ".join(unmeasured) + ".")
+    v = make_verdict(need=need, peak=est.peak_bytes, stage=stage, seconds=est.seconds,
+                     avail=avail, cached=cached, lead=lead,
+                     breakdown=[("This dataset without its matrices", est.start_bytes),
+                                (f"At the peak ({stage})", est.peak_bytes)],
+                     notes=notes, alternatives=[])
+    if free is not None and disk > free:
+        v["level"] = "wont_fit"
+        v["sentence"] += (f" The data folder has {_about(free)} of disk free: not enough, so "
+                          "the run would stop before it starts.")
+        v["suggestions"].insert(0, "Free some disk: delete datasets you no longer need.")
+    return {"steps": [e.to_dict() for e in est.steps], "verdict": v,
+            "disk": {"need_bytes": int(disk), "free_bytes": free}}

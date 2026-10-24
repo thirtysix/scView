@@ -239,6 +239,32 @@ def test_the_control_reproduces_the_dataset():
     assert adjusted_rand_score(a.obs[rec.reference], np.asarray(labels)) == 1.0
 
 
+def test_the_fast_leiden_control_reproduces_the_dataset(monkeypatch):
+    """A dataset clustered with fast Leiden: the re-runs make the same two passes."""
+    from scview.core import leiden
+
+    a = _processed(leiden_iterations=2)
+    rec = hs.recorded(a)
+    assert rec.leiden_iterations == 2
+    seen: list[int] = []
+    real = leiden.membership
+
+    def spy(adjacency, resolution, random_state=0, n_iterations=-1):
+        seen.append(n_iterations)
+        return real(adjacency, resolution, random_state, n_iterations)
+
+    monkeypatch.setattr(leiden, "membership", spy)
+    _, labels = hs.run_setting(hs._inputs(a, rec), rec.current, rec)
+    assert seen == [2]
+    assert adjusted_rand_score(a.obs[rec.reference], np.asarray(labels)) == 1.0
+    # Another setting of the passes is another fingerprint (the cached labels differ)
+    assert hs.fingerprint(a, rec) != hs.fingerprint(a, hs.Recorded(**{**rec.to_dict(),
+                                                                       "leiden_iterations": -1}))
+    out = hs.keep(a, hs.Setting("seurat", 100), rec)
+    assert provenance.read_provenance(a)["history"][-1]["params"]["leiden_iterations"] == 2
+    assert out["created"]
+
+
 def test_the_pearson_control_reproduces_the_dataset():
     a = _processed(normalization_method="pearson_residuals")
     rec = hs.recorded(a)
@@ -317,7 +343,8 @@ def test_iter_sensitivity_streams_each_setting_and_leaves_the_dataset_alone():
         assert {c["status"] for c in r["clusters"]} == {"stable"}, r["key"]
     after = (list(a.obs.columns), sorted(a.uns.keys()), a.X, a.uns[provenance.UNS_KEY])
     assert before[0] == after[0] and before[1] == after[1] and before[3] == after[3]
-    assert np.array_equal(before[2], after[2])
+    dense = lambda M: M.toarray() if sp.issparse(M) else np.asarray(M)  # noqa: E731 - X stays sparse now
+    assert np.array_equal(dense(before[2]), dense(after[2]))
 
 
 def test_neighbour_and_algorithm_settings_share_the_pcs_and_change_only_the_graph(monkeypatch):
@@ -334,7 +361,7 @@ def test_neighbour_and_algorithm_settings_share_the_pcs_and_change_only_the_grap
                         or real_neighbors(ad_, n_neighbors=n_neighbors, **k))
     methods = []
     real_cluster = rs.cluster
-    monkeypatch.setattr(rs, "cluster", lambda ad_, m, r: methods.append(m) or real_cluster(ad_, m, r))
+    monkeypatch.setattr(rs, "cluster", lambda ad_, m, r, *it: methods.append(m) or real_cluster(ad_, m, r, *it))
     settings = [rec.current, hs.Setting("seurat", 200, n_neighbors=30), hs.Setting("seurat", 200, method="louvain")]
     rows = list(hs.iter_sensitivity(a, settings, rec))[1:]
     assert embedded == ["seurat_200"]  # one PCA for the three

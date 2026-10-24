@@ -15,14 +15,17 @@ from pydantic import BaseModel
 from scview.core.sse import keepalive
 from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
-from scview.core.dataset_manager import DatasetManager
+from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.assessor import assess_preprocessing, recorded_normalization_method
 from scview.core import (
     cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
+from scview.core import large_mode, large_run, leiden
 from scview.core import qc_states
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
-from scview.core.pipeline import PipelineParams, run_pipeline, run_pipeline_streamed
+from scview.core.obs_writes import (
+    dataset_edit, edit_room, editable, save_edit, uns_snapshot,
+)
+from scview.core.pipeline import PipelineParams, check_chunked
 from scview.core.processing import cancel_run, iterate_exclusive, run_exclusive
 from scview.core.run_watchdog import RunControl
 from scview.core.step_names import unknown_steps, unknown_steps_message
@@ -325,7 +328,7 @@ async def get_filter_preview(
 class DoubletThresholdRequest(BaseModel):
     """Call doublets above ``threshold``; ``None`` puts Scrublet's own call back."""
     threshold: float | None = None
-    column: str = ""  # the sample column for the per-sample counts (default: detected)
+    column: str = ""  # the channels for the per-channel counts (default: the last run's)
 
 
 @router.get("/datasets/{dataset_id}/qc/doublets")
@@ -336,9 +339,11 @@ async def get_doublets(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The doublet-score histogram and how many cells ``threshold`` (default: the
-    applied one, else Scrublet's) calls doublets, overall and per sample, with
-    the expected doublet rate suggested from the cells per sample. Without scores
-    only the suggestion is returned (``available`` false)."""
+    applied one, else Scrublet's when it ran once over every cell) calls doublets,
+    overall and per capture channel, with each channel's expected rate. ``column``
+    names the channels (an obs column, or ``__all__``: all cells as one; default: the
+    last run's, else the doublet step's own choice). Without scores only the
+    suggestion (the channels the step would use) is returned (``available`` false)."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
@@ -365,13 +370,14 @@ async def apply_doublet_threshold(
         if adaptor is None:
             raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        # A large dataset is edited where it is (its X stays on disk), written in place.
+        backed = getattr(adaptor.adata, "isbacked", False) and not adaptor.is_large
 
         def _run():
             work = adaptor.adata.to_memory() if backed else adaptor.adata
             before = uns_snapshot(work)
             result = doublets.apply_threshold(work, body.threshold, body.column or None)
-            write_derived(work, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, work, output_path, before)
             return result
 
         try:
@@ -404,6 +410,21 @@ def _check_steps(steps: list[str]) -> None:
         raise HTTPException(status_code=422, detail=unknown_steps_message(unknown))
 
 
+def _run_params(raw: dict[str, Any] | None) -> PipelineParams:
+    """PipelineParams from a request body; 422 for a large-dataset mode or a Leiden
+    iteration count that is not one (before loading: a wrong value costs nothing)."""
+    params = PipelineParams()
+    for key, value in (raw or {}).items():
+        if hasattr(params, key):
+            setattr(params, key, value)
+    try:
+        params.chunked = check_chunked(params.chunked)
+        params.leiden_iterations = leiden.check_iterations(params.leiden_iterations)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return params
+
+
 
 @router.post("/datasets/{dataset_id}/assessment/run")
 async def run_assessment_pipeline(
@@ -413,16 +434,10 @@ async def run_assessment_pipeline(
 ):
     """Run specified preprocessing steps on the dataset and save the result."""
     _check_steps(body.steps)  # before loading: a wrong name costs nothing
+    params = _run_params(body.params)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-
-    # Build PipelineParams from the request body
-    params = PipelineParams()
-    if body.params:
-        for key, value in body.params.items():
-            if hasattr(params, key):
-                setattr(params, key, value)
     control = RunControl(plan=(body.steps, params))
     # Drop this request's hold on the cached copy before the run: run_exclusive
     # reloads the dataset from disk afterwards, and a reference kept here would
@@ -432,15 +447,10 @@ async def run_assessment_pipeline(
 
     def _run(adaptor):
         # Write processing output to the derived layer, never the original
-        # upload or conversion — those stay immutable.
+        # upload or conversion — those stay immutable. In memory or in large-dataset
+        # mode, as core/processing.py chose (control.mode).
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        return run_pipeline(
-            adata=adaptor.adata,
-            steps=body.steps,
-            params=params,
-            output_path=output_path,
-            control=control,
-        )[1]
+        return large_run.run_for(adaptor, body.steps, params, output_path, control)
 
     try:
         # In a worker thread with the dataset to itself; the cached copy is
@@ -448,7 +458,7 @@ async def run_assessment_pipeline(
         result = await run_exclusive(dm, dataset_id, _run, control)
         return result.to_dict()
 
-    except HTTPException:
+    except (HTTPException, DatasetMemoryError):  # a 507 from reading a backed dataset in
         raise
     except Exception as e:
         logger.error("Pipeline run failed for %s: %s", dataset_id, e, exc_info=True)
@@ -468,27 +478,20 @@ async def run_assessment_pipeline_stream(
 ):
     """Run preprocessing steps with Server-Sent Events progress streaming."""
     _check_steps(body.steps)  # before loading: a wrong name costs nothing
+    params = _run_params(body.params)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-
-    params = PipelineParams()
-    if body.params:
-        for key, value in body.params.items():
-            if hasattr(params, key):
-                setattr(params, key, value)
+    del adaptor  # as /assessment/run: no hold on the copy the run replaces
     control = RunControl(plan=(body.steps, params))
 
     def _events(adaptor):
         # Write processing output to the derived layer, never the original
-        # upload or conversion — those stay immutable.
-        return run_pipeline_streamed(
-            adata=adaptor.adata,
-            steps=body.steps,
-            params=params,
-            output_path=str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path)),
-            control=control,
-        )
+        # upload or conversion — those stay immutable. In memory or in large-dataset
+        # mode, as core/processing.py chose (control.mode).
+        return large_run.run_streamed_for(
+            adaptor, body.steps, params,
+            str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path)), control)
 
     async def event_generator():
         # Steps run in a worker thread with the dataset to itself. When the
@@ -609,27 +612,19 @@ async def rerun_step(
     if plan.requires_reprocess:
         raise HTTPException(status_code=409, detail=plan.message)
 
-    params = PipelineParams()
-    if body.params:
-        for key, value in body.params.items():
-            if hasattr(params, key):
-                setattr(params, key, value)
-
+    params = _run_params(body.params)
     control = RunControl(plan=(plan.rerun_steps, params))
     del adaptor  # as /assessment/run: no hold on the copy the run replaces
 
     def _run(adaptor):
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        return run_pipeline(
-            adata=adaptor.adata, steps=plan.rerun_steps, params=params, output_path=output_path,
-            control=control,
-        )[1]
+        return large_run.run_for(adaptor, plan.rerun_steps, params, output_path, control)
 
     try:
         # As /assessment/run: a worker thread, then serve what is on disk.
         result = await run_exclusive(dm, dataset_id, _run, control)
         return {"plan": plan.model_dump(), "result": result.to_dict()}
-    except HTTPException:
+    except (HTTPException, DatasetMemoryError):  # a 507 from reading a backed dataset in
         raise
     except Exception as e:
         logger.error("Re-run failed for %s: %s", dataset_id, e, exc_info=True)
@@ -817,17 +812,17 @@ async def save_qc_state_label(
         if body.column and body.column not in adaptor.adata.obs.columns:
             raise HTTPException(status_code=404, detail=f"Column '{body.column}' not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def _run():
+            work = editable(adaptor)
             result, states = qc_states.for_adaptor(adaptor, body.column or None)
             if result.get("column") is None or states is None:
                 raise qc_states.QcStatesError(result.get("note") or "No column to label by.")
-            work = adaptor.adata.to_memory() if backed else adaptor.adata
             name = qc_states.check_name(work, result["column"], body.name)
             before = uns_snapshot(work)
             saved = qc_states.label(work, result, states, name)
-            write_derived(work, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, work, output_path, before)
             return saved
 
         try:
@@ -896,6 +891,8 @@ async def preview_mito_refilter(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    large_mode.check(adaptor, "Re-filtering from the original upload",
+                     "it reads the original upload and re-processes it in memory")
     try:
         return await asyncio.to_thread(mito_refilter.preview, dm, dataset_id, adaptor, column or None,
                                        mito_mode, floor)
@@ -923,6 +920,8 @@ async def run_mito_refilter(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    large_mode.check(adaptor, "Re-filtering from the original upload",
+                     "it reads the original upload and re-processes it in memory")
     try:  # refuse before streaming what can be refused cheaply
         await asyncio.to_thread(mito_refilter.check_runnable, dm, dataset_id, adaptor, body.column or None,
                                 body.mito_mode)

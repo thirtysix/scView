@@ -7,6 +7,7 @@ import tracemalloc
 
 import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 import scanpy as sc
 import scipy.sparse as sp
@@ -149,17 +150,30 @@ def test_the_doublet_step_never_hands_scrublet_the_dataset(monkeypatch):
     assert a.obs["doublet_score"].notna().sum() == a.n_obs - 2
 
 
-def test_the_doublet_step_writes_what_sc_pp_scrublet_wrote_on_the_dataset():
-    # main ran sc.pp.scrublet on the dataset itself; the step's columns and uns are its own.
+def _same_step(a: ad.AnnData, ref: ad.AnnData):
+    """The doublet step's columns and uns are sc.pp.scrublet's on ``ref``, except that a
+    cell Scrublet dropped (under 3 genes) is not called: False, not NaN, so the calls are
+    a bool column that saves (an object column of True / False / NaN did not)."""
+    call = ref.obs["predicted_doublet"].to_numpy()
+    want = np.where(pd.isna(call), False, call).astype(bool)
+    assert a.obs["predicted_doublet"].dtype == bool
+    assert np.array_equal(a.obs["predicted_doublet"].to_numpy(), want)
+    _same(a.obs["doublet_score"].to_numpy(), want, a.uns["scrublet"],
+          ad.AnnData(obs=ref.obs.assign(predicted_doublet=want), uns=ref.uns))
+
+
+def test_the_doublet_step_writes_what_sc_pp_scrublet_wrote_on_the_dataset(tmp_path):
+    # main ran sc.pp.scrublet on the dataset itself; with no channel (one channel of every
+    # cell) the step's scores and uns are its own.
     X = _counts(seed=5)
     ref = _whole(X.copy(), counts=X.copy())
     sc.pp.scrublet(ref, expected_doublet_rate=0.06, use_approx_neighbors=False)
+    assert ref.obs["predicted_doublet"].isna().sum() == 2  # scanpy leaves them uncalled
     a = _whole(X.copy(), counts=X.copy())
     found = _run_doublet_detection(a, PipelineParams(expected_doublet_rate=0.06))
     assert found["neighbors"] == "exact" and "input" not in found
-    _same(a.obs["doublet_score"].to_numpy(), a.obs["predicted_doublet"].to_numpy(),
-          a.uns["scrublet"], ref)
-    assert a.obs["predicted_doublet"].dtype == ref.obs["predicted_doublet"].dtype
+    _same_step(a, ref)
+    a.write_h5ad(tmp_path / "saved.h5ad")  # failed on the NaN calls before
 
 
 def test_a_processed_x_is_scored_on_its_counts_layer():
@@ -169,5 +183,4 @@ def test_a_processed_x_is_scored_on_its_counts_layer():
     a = _whole(np.log1p(X / X.sum(1, keepdims=True).clip(1) * 1e4), counts=sp.csr_matrix(X))
     found = _run_doublet_detection(a, PipelineParams(expected_doublet_rate=0.06))
     assert found["input"] == "layers['counts']"
-    _same(a.obs["doublet_score"].to_numpy(), a.obs["predicted_doublet"].to_numpy(),
-          a.uns["scrublet"], ref)
+    _same_step(a, ref)

@@ -6,6 +6,68 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-24
+
+### Added
+- **Large-dataset mode.** A run that would not fit the memory budget now works with the matrices on
+  disk, read in row blocks. It is chosen automatically (`chunked` auto/on/off), and its results equal
+  the in-memory run (PCA to float precision). The 100k-cell mouse brain runs in 2.2 GB of a 6 GB
+  backend; the full 1.3M-cell brain (imported from its 10x .h5) ran end to end in 1 h 45 min with
+  fast Leiden, peaking at about 17 GB in clustering and UMAP, so give it 22 GB. Preflight shows the mode's memory, time and the disk it writes, and the run stops before
+  it starts when the disk is short.
+- **Large datasets open with their matrices on disk.** A processed large dataset keeps its counts and
+  a gene-major copy beside it and is never read into memory: overlays, violins and dot plots answer in
+  milliseconds, and the header says "Large dataset: matrices stay on disk". Labels, category order,
+  renames, colours and other edits are saved without rewriting the matrix. Gene-set scores, markers
+  for a new column, co-expression, per-donor values, pseudobulk QC, the sex check, PAGA and pseudotime
+  work on them; DE, AUCell, gene programs, TF activity, ligand-receptor, sub-clustering, the HVG and
+  merge checks, trend genes, re-filtering and joint embeddings say why they are not available yet.
+  The download is one self-contained h5ad with its counts. A dataset too big for the memory left
+  opens from disk instead of being refused.
+- **Large imports are streamed.** 10x .h5 (both Cell Ranger layouts), MEX and .h5ad files are read
+  and saved a block of cells at a time when reading them whole would not fit, giving the same dataset
+  (the 10x 1.3M-cell brain: 6 minutes, 0.7 GB, in a 4 GB scView). Merging several large samples
+  streams as well.
+- **Doublets per capture channel.** Scrublet runs in each 10x lane / GEM well on its own, with its own
+  expected rate and threshold. Channels come from the doublet step's "Capture channels" choice, else a
+  lane / GEM well / library column, else the barcodes' prefix or `-N` suffix (saved as
+  `capture_channel`), else donor / batch (a guess, said so), else all cells. The 100k mouse brain: 0.7%
+  flagged instead of 8.6%. The doublet card lists the channels and warns when a channel's automatic
+  threshold calls almost no doublets (under 0.2% of a channel of 2,000+ cells), with that channel's
+  histogram for setting a threshold by hand. Channels under 100 cells are not scored, and the views
+  say how many cells that leaves uncalled.
+- **Fast Leiden.** When clustering would take over 10 minutes, the pre-run note offers Leiden stopped
+  after two passes (opt-in; same algorithm and seed; ARI 0.93-0.97 against the full optimisation).
+  It is recorded in the History and replay script, and the sweep, variable-gene and merge checks and
+  sub-clustering follow it.
+
+### Changed
+- **A failed pipeline step skips only the steps that need it.** The others still run, results it would
+  have replaced are removed, and the run is saved as "finished with errors" (run summary, provenance
+  and replay).
+- **Scaling no longer makes every gene dense.** PCA reads the z-scores (or Pearson residuals) of the
+  variable genes only, with the same PCs. At 100k cells the scaling step needs 0.06 GB instead of
+  14.5 GB. X keeps the log-normalised values (labelled as such) and saved files are about a third
+  smaller.
+- **Marker genes and cell-level DE (Wilcoxon, t-test) rank by blocks of genes**, identical to scanpy:
+  100k cells' markers in 15 s instead of 2.5 min, +0.3 GB instead of +3.1 GB. DE no longer copies the
+  cells to count detections (+3 GiB at 100k). On-demand markers use the dataset's log base for fold
+  changes, as the pipeline's markers do.
+- In private mode uploads have no size limit, and the proxy no longer cuts off a long import after
+  5 minutes; `MAX_UPLOAD_SIZE_MB` applies in public mode, to the import wizard too.
+- Preflight estimates for doublets, PCA and marker genes match measured runs within 10% (doublets were
+  2x over on the mouse brain, markers up to 1.9x under). UMAP's memory and time are recalibrated on
+  1.16M cells (they were 2.3x and 3x under there).
+
+### Fixed
+- Processing a dataset larger than 2 GB works: scView reads it into memory first, within
+  `SCVIEW_MEMORY_GB`, or says it cannot fit. The threshold is `SCVIEW_BACKED_MIN_MB` in `.env`.
+- 10x .h5 files in the Cell Ranger 2 layout (`/mm10`, `/GRCh38`) are recognised.
+- Seurat v3 variable genes were wrong on dense integer counts above 46,340 (squared in int32).
+- `predicted_doublet` is always true/false: a cell Scrublet dropped left empty calls, which stopped the
+  dataset saving.
+- The backend image no longer writes `.pyc` files into bind-mounted sources.
+
 ## [0.33.0] - 2026-10-22
 
 ### Added

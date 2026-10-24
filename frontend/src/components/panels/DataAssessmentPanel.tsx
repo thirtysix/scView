@@ -5,8 +5,14 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { apiFetch, BACKEND_DOWN_MESSAGE } from "@/api/client";
 import { getDataset } from "@/api/datasets";
-import { getDoublets, type DoubletRateSuggestion, type FilterThresholds, type QcThresholdMode } from "@/api/qc";
-import { pct } from "@/lib/qcThresholds";
+import {
+  ALL_CELLS_CHANNEL,
+  getDoublets,
+  type DoubletRateSuggestion,
+  type FilterThresholds,
+  type QcThresholdMode,
+} from "@/api/qc";
+import { channelsText, suggestionText } from "@/lib/doubletChannels";
 import { API_BASE } from "@/lib/constants";
 import { QcPlots } from "@/components/panels/QcPlots";
 import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
@@ -21,11 +27,19 @@ import { asDoubletSource } from "@/lib/doubletSource";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
+import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
+import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLeiden";
 import { QcStates } from "@/components/qc/QcStates";
 import { SequencingQc } from "@/components/qc/SequencingQc";
 import { Hashing } from "@/components/qc/Hashing";
-import { CancelRunButton, RunOutcome, RunPeakMemory, RunWatchNotes } from "@/components/panels/RunWatch";
-import { cancelPipelineRun, runErrorMessage, type RunOutcomeFields, type WatchdogEvent } from "@/api/pipelineRun";
+import { CancelRunButton, RunErrors, RunOutcome, RunPeakMemory, RunWatchNotes } from "@/components/panels/RunWatch";
+import {
+  cancelPipelineRun,
+  FINISHED_WITH_ERRORS,
+  runErrorMessage,
+  type RunOutcomeFields,
+  type WatchdogEvent,
+} from "@/api/pipelineRun";
 import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import {
   ClipboardCheck,
@@ -131,7 +145,7 @@ const STEP_ORDER: {
   description: string;
 }[] = [
   { key: "qc_metrics", label: "QC Metrics", description: "Calculate quality control metrics" },
-  { key: "doublet_detection", label: "Doublet Detection", description: "Flag likely doublets with Scrublet (doublet_score + predicted_doublet)" },
+  { key: "doublet_detection", label: "Doublet Detection", description: "Flag likely doublets with Scrublet in each capture channel (doublet_score + predicted_doublet)" },
   { key: "filtering", label: "Cell/Gene Filtering", description: "Filter low-quality cells and rare genes" },
   { key: "normalization", label: "Normalization", description: "Normalize library size" },
   { key: "log_transform", label: "Log Transform", description: "Log-transform expression values" },
@@ -158,6 +172,8 @@ interface ParamConfig {
   options?: string[];
   /** Display text per select option (the value is sent). */
   optionLabels?: Record<string, string>;
+  /** A select whose options are numbers: the value is sent as a number. */
+  numeric?: boolean;
   /** One line of guidance under the input. */
   help?: string;
   default: unknown;
@@ -175,6 +191,17 @@ const QC_MODE_OPTION_LABELS: Record<string, string> = {
 
 const STEP_PARAMS: Record<string, ParamConfig[]> = {
   doublet_detection: [
+    {
+      param: "doublet_channel_key",
+      label: "Capture channels",
+      type: "select",
+      options: [],
+      default: "",
+      help:
+        "Doublets form within one capture channel (a 10x lane or GEM well), so Scrublet runs in each channel " +
+        "alone, with its own rate and threshold. Detect: a lane / GEM well column, else the barcodes' -N suffix " +
+        "or prefix (saved as capture_channel), else the donors or batches (a guess), else all cells.",
+    },
     { param: "expected_doublet_rate", label: "Expected doublet rate", type: "number", min: 0.0, max: 0.5, step: 0.001, default: null, dynamicDefault: "suggested_doublet_rate" },
   ],
   filtering: [
@@ -247,6 +274,18 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
   clustering: [
     { param: "clustering_resolution", label: "Resolution", type: "number", min: 0.1, max: 3.0, step: 0.1, default: 0.5 },
     { param: "clustering_method", label: "Method", type: "select", options: ["leiden", "louvain"], default: "leiden" },
+    {
+      param: "leiden_iterations",
+      label: "Leiden optimisation",
+      type: "select",
+      options: [String(FULL_LEIDEN), String(FAST_LEIDEN)],
+      optionLabels: LEIDEN_ITERATION_LABELS,
+      numeric: true,
+      default: FULL_LEIDEN,
+      help:
+        "The full optimisation repeats Leiden's passes until one improves nothing. Fast Leiden stops after two: " +
+        "nearly the same clusters, much sooner on large datasets.",
+    },
   ],
   embeddings: [
     { param: "umap_min_dist", label: "UMAP min dist", type: "number", min: 0.0, max: 1.0, step: 0.05, default: 0.5 },
@@ -379,12 +418,30 @@ export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
 /** Under the expected doublet rate: where the default comes from. */
 export function SuggestedRateNote({ suggestion }: { suggestion: DoubletRateSuggestion | null }) {
   if (!suggestion) return null;
-  const where = suggestion.column
-    ? `the cells per ${suggestion.column} sample (${suggestion.samples.length})`
-    : "all cells as one channel (no sample column found)";
   return (
     <span className="text-[10px] text-slate-400" title={suggestion.basis}>
-      Default {pct(suggestion.rate)}, from {where}: a rule of thumb, ~0.8 % per 1,000 cells captured.
+      {suggestionText(suggestion)}
+    </span>
+  );
+}
+
+/** Under the channel choice: the channels Scrublet will run in, and what to know about them. */
+export function ChannelNote({ suggestion }: { suggestion: DoubletRateSuggestion | null }) {
+  if (!suggestion) return null;
+  const unscored = suggestion.n_unscored ?? 0;
+  return (
+    <span className="flex flex-col gap-0.5 text-[10px] leading-snug text-slate-500" data-testid="doublet-channel-note">
+      <span>Scrublet will run in {channelsText(suggestion)}.</span>
+      {suggestion.note && <span className="text-amber-700">{suggestion.note}</span>}
+      {unscored > 0 && (
+        <span>
+          {unscored.toLocaleString()} cells are in channels under {suggestion.min_channel_cells ?? 100} cells (or have
+          no channel): not scored, never called doublets.
+        </span>
+      )}
+      {(suggestion.skipped ?? []).map((t) => (
+        <span key={t} className="text-slate-400">Passed over {t}.</span>
+      ))}
     </span>
   );
 }
@@ -430,6 +487,9 @@ export function DataAssessmentPanel() {
   const [runningStep, setRunningStep] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<{ current: number; total: number } | null>(null);
   const [completedRunSteps, setCompletedRunSteps] = useState<Set<string>>(new Set());
+  // Steps of this run that failed, and those skipped because a step they need failed.
+  const [failedRunSteps, setFailedRunSteps] = useState<Record<string, number>>({}); // step -> index
+  const [skippedRunSteps, setSkippedRunSteps] = useState<Record<string, number>>({});
   const [substep, setSubstep] = useState<{ message: string; current: number; total: number } | null>(null);
   // The run watchdog's latest warnings (backend core/run_watchdog.py), and a requested cancel.
   const [memoryNote, setMemoryNote] = useState<WatchdogEvent | null>(null);
@@ -443,13 +503,14 @@ export function DataAssessmentPanel() {
   const [selectedSteps, setSelectedSteps] = useState<Set<string>>(new Set());
   const [stepParams, setStepParams] = useState<Record<string, Record<string, unknown>>>({});
 
-  // The doublet step's default expected rate, from the cells per sample.
+  // The doublet step's channels and their default expected rates, for its channel choice.
   const [doubletRate, setDoubletRate] = useState<DoubletRateSuggestion | null>(null);
+  const doubletChannel = String(stepParams.doublet_detection?.doublet_channel_key ?? "");
   useEffect(() => {
     if (!datasetId) return;
     let cancelled = false;
     setDoubletRate(null);
-    getDoublets(datasetId)
+    getDoublets(datasetId, null, doubletChannel || undefined)
       .then((s) => {
         if (!cancelled) setDoubletRate(s.suggestion ?? null);
       })
@@ -459,7 +520,7 @@ export function DataAssessmentPanel() {
     return () => {
       cancelled = true;
     };
-  }, [datasetId, qcRefreshKey]);
+  }, [datasetId, qcRefreshKey, doubletChannel]);
 
   // The QC histograms set the filtering step's thresholds: one state, two places.
   const filterValues = useMemo(() => filterThresholds(stepParams.filtering), [stepParams.filtering]);
@@ -485,6 +546,15 @@ export function DataAssessmentPanel() {
       .map((c) => c.name);
   }, [dataset]);
   const batchColumnOptions = categoricalObsColumns;
+  // Capture channels can be many (133 GEM wells): no group cap, only not one per cell.
+  const channelColumnOptions = useMemo(() => {
+    if (!dataset) return [];
+    const nCells = dataset.n_cells ?? 0;
+    return dataset.obs_columns
+      .filter((c) => (c.dtype === "category" || c.dtype === "object") && c.n_unique >= 1 &&
+        !(nCells > 0 && c.n_unique / nCells >= 0.5))
+      .map((c) => c.name);
+  }, [dataset]);
 
   /* ---- Reprocess from scratch ---- */
   const reprocessFromScratch = () => {
@@ -671,6 +741,8 @@ export function DataAssessmentPanel() {
     setRunningStep(null);
     setRunProgress(null);
     setCompletedRunSteps(new Set());
+    setFailedRunSteps({});
+    setSkippedRunSteps({});
     setSubstep(null);
     setMemoryNote(null);
     setSlowNote(null);
@@ -726,13 +798,19 @@ export function DataAssessmentPanel() {
               else setSlowNote(w);
             } else if (currentEvent === "step_done") {
               setCompletedRunSteps((prev) => new Set(prev).add(data.step));
-              setRunProgress({ current: data.index + 1, total: data.total });
+              // step_done carries no total: keep step_start's (else the bar lost its segments)
+              setRunProgress((p) => ({ current: data.index + 1, total: data.total ?? p?.total ?? data.index + 1 }));
               setSubstep(null);
             } else if (currentEvent === "substep") {
               setSubstep({ message: data.message, current: data.current, total: data.total });
             } else if (currentEvent === "step_error") {
-              setCompletedRunSteps((prev) => new Set(prev).add(data.step));
+              setFailedRunSteps((prev) => ({ ...prev, [data.step]: data.index }));
+              setRunProgress((p) => (p ? { ...p, current: data.index + 1 } : p));
               setSubstep(null);
+            } else if (currentEvent === "step_skipped") {
+              // Not run: a step it needs failed.
+              setSkippedRunSteps((prev) => ({ ...prev, [data.step]: data.index }));
+              setRunProgress({ current: data.index + 1, total: data.total });
             } else if (currentEvent === "complete") {
               final = data as PipelineResult;
               setRunResult(final);
@@ -804,9 +882,12 @@ export function DataAssessmentPanel() {
     useSettingsStore.getState().setColorBy(target);
   };
 
-  /* ---- Derived: how the last run ended (cancelled / stopped = halted) ---- */
+  /* ---- Derived: how the last run ended (cancelled / stopped = halted, nothing saved;
+     finished with errors = saved, a step failed and those needing it were skipped) ---- */
   const finished = !!runResult && !running;
-  const halted = finished && (runResult.status ?? "complete") !== "complete";
+  const endStatus = runResult?.status ?? "complete";
+  const halted = finished && endStatus !== "complete" && endStatus !== FINISHED_WITH_ERRORS;
+  const withErrors = finished && endStatus === FINISHED_WITH_ERRORS;
 
   /* ---- Derived: re-run count ---- */
   const rerunCount = state
@@ -862,6 +943,7 @@ export function DataAssessmentPanel() {
   const doneCount = state ? STEP_ORDER.length - missingCount : 0;
   const selectedCount = selectedSteps.size;
   const pearson = normalizationMethod(stepParams, state?.normalization_method) === "pearson_residuals";
+  const louvain = stepParams.clustering?.clustering_method === "louvain";
 
   /* ---- Find suggestion for a step ---- */
   const suggestionForStep = (key: string): LLMSuggestion | undefined =>
@@ -979,6 +1061,7 @@ export function DataAssessmentPanel() {
                   datasetId={datasetId}
                   steps={STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key)}
                   params={flattenStepParams(STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key), stepParams)}
+                  onLeidenIterations={(n) => setStepParam("clustering", "leiden_iterations", n)}
                 />
               </div>
             )}
@@ -1016,14 +1099,19 @@ export function DataAssessmentPanel() {
 
           {/* Pipeline progress bar — visible while running or just completed */}
           {(running || runResult) && runProgress && (
-            <div className={`rounded-xl border p-4 ${finished ? (halted ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50") : "border-blue-200 bg-blue-50"}`}>
+            <div className={`rounded-xl border p-4 ${finished ? (halted || withErrors ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50") : "border-blue-200 bg-blue-50"}`}>
               {/* Header row: step counter + percentage (+ Cancel while running) */}
               <div className="mb-2 flex items-center justify-between gap-2 text-sm">
-                <span className={`font-medium ${finished ? (halted ? "text-amber-800" : "text-emerald-800") : "text-blue-800"}`}>
+                <span className={`font-medium ${finished ? (halted || withErrors ? "text-amber-800" : "text-emerald-800") : "text-blue-800"}`}>
                   {finished && halted ? (
                     <>
                       {runResult!.status === "cancelled" ? "Cancelled" : "Stopped"}: {runResult!.steps_run.length} of{" "}
                       {runProgress.total} step{runProgress.total !== 1 ? "s" : ""} finished
+                    </>
+                  ) : withErrors ? (
+                    <>
+                      Finished with errors: {runResult!.steps_run.length} of {runProgress.total} step
+                      {runProgress.total !== 1 ? "s" : ""} ran
                     </>
                   ) : finished ? (
                     <>All {runProgress.total} step{runProgress.total !== 1 ? "s" : ""} complete</>
@@ -1039,7 +1127,7 @@ export function DataAssessmentPanel() {
                 </span>
                 <span className="flex items-center gap-2">
                   {running && <CancelRunButton onCancel={cancelRun} cancelling={cancelling} />}
-                  <span className={`text-xs font-medium ${finished ? (halted ? "text-amber-600" : "text-emerald-600") : "text-blue-600"}`}>
+                  <span className={`text-xs font-medium ${finished ? (halted || withErrors ? "text-amber-600" : "text-emerald-600") : "text-blue-600"}`}>
                     {finished && !halted
                       ? "100%"
                       : `${Math.round((runProgress.current / runProgress.total) * 100)}%`}
@@ -1047,20 +1135,26 @@ export function DataAssessmentPanel() {
                 </span>
               </div>
 
-              {/* Segmented progress bar */}
+              {/* Segmented progress bar (red: failed; grey: skipped, as it needs a failed step) */}
               <div className="flex gap-1">
                 {Array.from({ length: runProgress.total }, (_, i) => {
+                  const failedHere = Object.values(failedRunSteps).includes(i);
+                  const skippedHere = Object.values(skippedRunSteps).includes(i);
                   const isDone = i < runProgress.current || (finished && !halted);
                   const isActive = i === runProgress.current && !!runningStep && running;
                   return (
                     <div
                       key={i}
                       className={`h-2.5 flex-1 rounded-full transition-all duration-300 ${
-                        isDone
-                          ? "bg-emerald-500"
-                          : isActive
-                            ? "animate-pulse bg-blue-400"
-                            : "bg-blue-200"
+                        failedHere
+                          ? "bg-red-400"
+                          : skippedHere
+                            ? "bg-slate-300"
+                            : isDone
+                              ? "bg-emerald-500"
+                              : isActive
+                                ? "animate-pulse bg-blue-400"
+                                : "bg-blue-200"
                       }`}
                     />
                   );
@@ -1109,21 +1203,27 @@ export function DataAssessmentPanel() {
                     .filter((s) => selectedSteps.has(s.key) || completedRunSteps.has(s.key))
                     .slice(0, runProgress.total)
                     .map((s) => {
-                      const isDone = completedRunSteps.has(s.key) || (finished && !halted);
+                      const isFailed = s.key in failedRunSteps;
+                      const isSkipped = s.key in skippedRunSteps;
+                      const isDone = !isFailed && !isSkipped && (completedRunSteps.has(s.key) || (finished && !halted));
                       const isActive = s.key === runningStep && running;
                       return (
                         <div key={s.key} className="min-w-0 flex-1 text-center">
                           <span
                             className={`block truncate text-[9px] ${
-                              isDone
-                                ? "font-medium text-emerald-700"
-                                : isActive
-                                  ? "font-medium text-blue-700"
-                                  : "text-blue-400"
+                              isFailed
+                                ? "font-medium text-red-700"
+                                : isSkipped
+                                  ? "text-slate-400 line-through"
+                                  : isDone
+                                    ? "font-medium text-emerald-700"
+                                    : isActive
+                                      ? "font-medium text-blue-700"
+                                      : "text-blue-400"
                             }`}
-                            title={s.label}
+                            title={isFailed ? `${s.label}: failed` : isSkipped ? `${s.label}: skipped (needs a step that failed)` : s.label}
                           >
-                            {isDone ? "✓ " : ""}{s.label}
+                            {isFailed ? "✗ " : isDone ? "✓ " : ""}{s.label}
                           </span>
                         </div>
                       );
@@ -1136,8 +1236,28 @@ export function DataAssessmentPanel() {
           {/* A run cancelled, or stopped before a step: why, and what finished */}
           {runResult && halted && <RunOutcome result={runResult} label={stepLabel} />}
 
+          {/* A run that finished with errors: saved; what failed, what was skipped */}
+          {runResult && withErrors && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-testid="run-with-errors">
+              <p className="font-medium">Pipeline finished with errors in {runResult.elapsed_seconds}s</p>
+              <RunPeakMemory result={runResult} tone="text-amber-700" />
+              <p className="mt-1">
+                {runResult.steps_run.length > 0
+                  ? `Steps run and saved: ${runResult.steps_run.map(stepLabel).join(", ")}.`
+                  : "No step finished; nothing changed."}
+              </p>
+              <RunErrors result={runResult} label={stepLabel} />
+              <SkippedSteps notes={runResult.notes} />
+              {!running &&
+                runResult.steps_run.length > 0 &&
+                (dataset?.available_embeddings.length ?? 0) > 0 && <OpenInUnifiedView />}
+            </div>
+          )}
+
           {/* Pipeline run result */}
-          {runResult && !halted && (
+          {/* finished: between the stream's last event and the reload, a halted run is not
+              yet "halted" and would flash as completed */}
+          {runResult && finished && !halted && !withErrors && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
               <p className="font-medium">
                 Pipeline completed in {runResult.elapsed_seconds}s
@@ -1312,8 +1432,11 @@ export function DataAssessmentPanel() {
                             </p>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
                               {STEP_PARAMS[step.key]!.map((pc) => {
+                                // Per channel, no one number stands for the default: the input stays empty.
                                 const suggested =
-                                  pc.dynamicDefault === "suggested_doublet_rate" ? doubletRate?.rate : undefined;
+                                  pc.dynamicDefault === "suggested_doublet_rate" && !doubletRate?.per_channel
+                                    ? doubletRate?.rate
+                                    : undefined;
                                 const currentVal = stepParams[step.key]?.[pc.param] ?? suggested ?? pc.default;
                                 // A filtering param of the other threshold mode: shown, not used.
                                 const unused = pc.mode !== undefined && pc.mode !== filterValues.qc_threshold_mode;
@@ -1323,8 +1446,9 @@ export function DataAssessmentPanel() {
                                     : (pc.options ?? []);
                                 return (
                                   <div key={pc.param} className={`flex flex-col gap-0.5 ${pc.type === "checkbox_list" || pc.type === "msigdb_tree" || pc.help ? "col-span-2" : ""}`}>
-                                    <label className="text-[10px] font-medium text-slate-500">
+                                    <label className="flex items-center gap-1 text-[10px] font-medium text-slate-500">
                                       {pc.label}
+                                      {pc.param === "leiden_iterations" && <FastLeidenInfo />}
                                     </label>
                                     {pc.type === "msigdb_tree" ? (
                                       <MSigDBCollectionTree
@@ -1400,7 +1524,8 @@ export function DataAssessmentPanel() {
                                     ) : pc.type === "number" ? (
                                       <input
                                         type="number"
-                                        value={Number(currentVal)}
+                                        value={currentVal == null ? "" : Number(currentVal)}
+                                        placeholder={pc.dynamicDefault === "suggested_doublet_rate" ? "each channel's own" : undefined}
                                         min={pc.min}
                                         max={pc.max}
                                         step={pc.step}
@@ -1414,9 +1539,9 @@ export function DataAssessmentPanel() {
                                       <select
                                         value={String(currentVal)}
                                         onChange={(e) =>
-                                          setStepParam(step.key, pc.param, e.target.value)
+                                          setStepParam(step.key, pc.param, pc.numeric ? Number(e.target.value) : e.target.value)
                                         }
-                                        disabled={running || unused || (pc.param === "hvg_flavor" && pearson)}
+                                        disabled={running || unused || (pc.param === "hvg_flavor" && pearson) || (pc.param === "leiden_iterations" && louvain)}
                                         title={
                                           pc.param === "hvg_flavor" && pearson
                                             ? "Pearson residuals rank genes by residual variance (Normalization step)"
@@ -1424,7 +1549,15 @@ export function DataAssessmentPanel() {
                                         }
                                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                       >
-                                        {pc.param === "batch_key" || pc.param === "hvg_batch_key" || pc.param === "qc_sample_column" ? (
+                                        {pc.param === "doublet_channel_key" ? (
+                                          <>
+                                            <option value="">Detect (lane / GEM well, barcodes, donor)</option>
+                                            <option value={ALL_CELLS_CHANNEL}>All cells as one channel</option>
+                                            {channelColumnOptions.map((opt) => (
+                                              <option key={opt} value={opt}>{opt}</option>
+                                            ))}
+                                          </>
+                                        ) : pc.param === "batch_key" || pc.param === "hvg_batch_key" || pc.param === "qc_sample_column" ? (
                                           <>
                                             <option value="">
                                               {pc.param === "hvg_batch_key"
@@ -1448,6 +1581,7 @@ export function DataAssessmentPanel() {
                                       stepParams[step.key]?.[pc.param] == null && (
                                         <SuggestedRateNote suggestion={doubletRate} />
                                       )}
+                                    {pc.param === "doublet_channel_key" && <ChannelNote suggestion={doubletRate} />}
                                     {pc.help && (
                                       <p className="text-[10px] leading-snug text-slate-400">{pc.help}</p>
                                     )}
@@ -1460,6 +1594,9 @@ export function DataAssessmentPanel() {
                                       <p className="text-[10px] leading-snug text-slate-400">
                                         Not used: Pearson residuals (chosen on Normalization) rank genes by residual variance.
                                       </p>
+                                    )}
+                                    {pc.param === "leiden_iterations" && louvain && (
+                                      <p className="text-[10px] leading-snug text-slate-400">Not used: Louvain.</p>
                                     )}
                                   </div>
                                 );

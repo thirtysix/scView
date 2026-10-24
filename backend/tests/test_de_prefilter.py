@@ -99,6 +99,35 @@ def test_zero_tests_every_gene_and_scaled_values_cannot_be_filtered():
     assert pre.keep.all() and pre.min_pct is None and pre.histogram == []
 
 
+def test_detection_counts_read_a_csr_in_place(monkeypatch):
+    # Counted a chunk of rows at a time without copying the cells out: every count equal
+    # to a dense count of values above zero (explicit zeros and negatives are not).
+    rng = np.random.default_rng(4)
+    m = sp.random(3000, 80, density=0.2, format="csr", random_state=rng, dtype=np.float64)
+    m.data = (m.data * 4 - 1).astype(np.float32)  # a quarter negative
+    m.data[::9] = 0  # explicit zeros
+    m.indices[m.indptr[10]:m.indptr[11]] = m.indices[m.indptr[10]:m.indptr[11]][::-1].copy()
+    rows = rng.random(3000) < 0.3
+    dense = m.toarray()
+    monkeypatch.setattr(de_prefilter, "_CHUNK", 500)  # many chunks, a ragged last one
+    for side in (rows, ~rows):
+        want = (dense[side] > 0).sum(axis=0)
+        np.testing.assert_array_equal(de_prefilter._n_detected(m, side), want)
+    np.testing.assert_array_equal(de_prefilter._n_detected(dense, rows), (dense[rows] > 0).sum(0))
+
+    import tracemalloc
+
+    big = sp.random(40_000, 300, density=0.2, format="csr", random_state=rng, dtype=np.float32)
+    monkeypatch.setattr(de_prefilter, "_CHUNK", 100_000)
+    tracemalloc.start()
+    try:
+        de_prefilter._n_detected(big, np.ones(big.shape[0], dtype=bool))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 0.2 * (big.data.nbytes + big.indices.nbytes), peak
+
+
 # --- endpoints --------------------------------------------------------------------
 
 

@@ -15,6 +15,7 @@ import {
 } from "@/api/activity";
 import { activityLabel, filterRows, heatmapData, sourceRows } from "@/lib/activity";
 import { plotConfig } from "@/lib/plotConfig";
+import { RequestError } from "@/components/common/RequestError";
 
 interface Props {
   /** Colour the embedding by one source's per-cell activity. */
@@ -161,11 +162,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
           Scoring {NETWORK_LABELS[network].short.toLowerCase()}… (the first use downloads the network)
         </div>
       )}
-      {error && (
-        <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          {error}
-        </p>
-      )}
+      <RequestError message={error} />
 
       {summary && !loading && (
         <>

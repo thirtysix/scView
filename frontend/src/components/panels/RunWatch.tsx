@@ -1,6 +1,7 @@
 import { AlertTriangle, Clock, Loader2, Square } from "lucide-react";
 import {
   peakMemoryText,
+  runErrorLines,
   runOutcome,
   watchdogMessage,
   type RunOutcomeFields,
@@ -83,13 +84,31 @@ export function RunOutcome({ result, label }: { result: RunOutcomeFields; label:
   );
 }
 
+/** A run that finished with errors: each failed step and its error, the steps skipped
+ *  because they need one, and the stale results of an earlier run that were removed. */
+export function RunErrors({ result, label }: { result: RunOutcomeFields; label: Label }) {
+  const lines = runErrorLines(result, label);
+  if (!lines.failed.length && !lines.skipped && !lines.cleared) return null;
+  return (
+    <div className="mt-2 space-y-1">
+      {lines.failed.map((f) => (
+        <p key={f} className="text-red-700">
+          {f}
+        </p>
+      ))}
+      {lines.skipped && <p>{lines.skipped}</p>}
+      {lines.cleared && <p className="text-xs text-amber-800">{lines.cleared}</p>}
+    </div>
+  );
+}
+
 /** The peak memory line under a completed run, from the watchdog's samples. */
-export function RunPeakMemory({ result }: { result: RunOutcomeFields }) {
+export function RunPeakMemory({ result, tone = "text-emerald-700" }: { result: RunOutcomeFields; tone?: string }) {
   const peak = peakMemoryText(result.resources);
   if (!peak) return null;
   return (
     <p
-      className="mt-1 text-xs text-emerald-700"
+      className={`mt-1 text-xs ${tone}`}
       title="The most memory the run was seen using (without the file cache the system can drop). Samples are seconds apart, so a shorter spike can be missed."
     >
       {peak}

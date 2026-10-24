@@ -6,13 +6,17 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from scview.config import get_settings
+from scview.core import large_mode
 from scview.core.dataset_manager import DatasetBusyError, DatasetMemoryError
+from scview.core.large_mode import LargeDatasetError
 from scview.core.guards import require_access
 from scview.api.router import api_router
 
@@ -124,6 +128,29 @@ async def dataset_busy_handler(_request: Request, exc: DatasetBusyError):
 async def dataset_memory_handler(_request: Request, exc: DatasetMemoryError):
     # 507: the request may work once memory is raised; not a proxy's 502/503/504.
     return JSONResponse(status_code=507, content={"detail": str(exc)})
+
+
+def _large_refusal(exc: LargeDatasetError) -> JSONResponse:
+    # 422: work refused on a large dataset (its matrices stay on disk), with the reason;
+    # the UI shows it as a note in the panel, not as an error.
+    return JSONResponse(status_code=422, content={"detail": str(exc), "large_dataset": True})
+
+
+@app.exception_handler(LargeDatasetError)
+async def large_dataset_handler(_request: Request, exc: LargeDatasetError):
+    return _large_refusal(exc)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException):
+    # Many endpoints turn any failure into a 500 ("... failed: {e}"). When the failure
+    # was a large-dataset refusal (the guard on its on-disk matrix, core/large_mode.py),
+    # the refusal is what the client gets: a 422 with the plain reason.
+    if exc.status_code >= 500:
+        refusal = large_mode.refusal_in(exc)
+        if refusal is not None:
+            return _large_refusal(refusal)
+    return await http_exception_handler(request, exc)
 
 
 # ---------------------------------------------------------------------------

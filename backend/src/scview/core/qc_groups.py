@@ -42,24 +42,26 @@ def _n_groups(obs: pd.DataFrame, col: str) -> int:
     return int(obs[col].nunique(dropna=True))
 
 
-def _usable(obs: pd.DataFrame, col: str | None) -> bool:
-    return bool(col) and col in obs.columns and 2 <= _n_groups(obs, col) <= MAX_GROUPS
+def _usable(obs: pd.DataFrame, col: str | None, max_groups: int | None = MAX_GROUPS) -> bool:
+    return (bool(col) and col in obs.columns
+            and 2 <= _n_groups(obs, col) <= (max_groups if max_groups is not None else len(obs)))
 
 
-def sample_grouping(adata) -> tuple[str | None, str | None]:
+def sample_grouping(adata, max_groups: int | None = MAX_GROUPS) -> tuple[str | None, str | None]:
     """(column, why) for the samples: the donor/sample column, picked as the DE
     replicate guard and the QC report pick it (core/replicates.py), else a batch
-    column. Each with 2 to MAX_GROUPS groups."""
+    column. Each with 2 to ``max_groups`` groups (None: no upper limit; the doublet
+    step's fallback channels, which are never drawn side by side)."""
     obs = adata.obs
     # A sample column that only repeats the condition loses to a real donor column.
-    candidates = [c for c in donor_candidates(obs) if _usable(obs, c)]
+    candidates = [c for c in donor_candidates(obs) if _usable(obs, c, max_groups)]
     levels = [(obs[c].astype(str) == lvl).to_numpy()
               for c in condition_columns(obs) for lvl in obs[c].astype(str).unique()]
     donor = pick_donor(obs, candidates, levels)
     if donor:
         return donor, "donor"
     key = recorded_batch_key(adata)
-    batches = [c for c in batch_columns(obs, [key] if key else []) if _usable(obs, c)]
+    batches = [c for c in batch_columns(obs, [key] if key else []) if _usable(obs, c, max_groups)]
     if batches:
         return batches[0], "batch"
     return None, None

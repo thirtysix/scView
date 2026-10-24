@@ -47,12 +47,21 @@ async def dataset_preflight(
     n_neighbors: int | None = Query(default=None, ge=1),
     normalization_method: str | None = None,
     annotation_method: str | None = None,
+    doublet_channel_key: str | None = None,
+    chunked: str | None = None,
+    clustering_method: str | None = None,
+    leiden_iterations: int | None = None,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Peak memory and rough time of running ``steps`` on the dataset: per step
     (transient memory over what it holds, seconds as a range) and for the run,
     with a verdict against the memory scView has free. The shape comes from the
-    cached dataset, else from its file's header (the dataset is not loaded)."""
+    cached dataset, else from its file's header (the dataset is not loaded). ``chunked``
+    (auto | on | off, as the run's param): ``mode`` says whether the run would go to
+    large-dataset mode, whose estimate (with the disk it writes) then replaces the
+    in-memory one (kept as ``in_memory_estimate``). A run that clusters with Leiden gets
+    ``leiden``: its time with the full optimisation and with fast Leiden
+    (``leiden_iterations`` 2), and ``offer_fast`` when the full one is over 10 minutes."""
     names = [s.strip() for s in steps.split(",") if s.strip()]
     unknown = [s for s in names if s not in ALL_STEPS]
     if not names or unknown:
@@ -67,7 +76,21 @@ async def dataset_preflight(
     overrides = {k: v for k, v in {
         "n_top_genes": n_top_genes, "n_comps": n_comps, "n_neighbors": n_neighbors,
         "normalization_method": normalization_method, "annotation_method": annotation_method,
+        "doublet_channel_key": doublet_channel_key,  # its largest channel sets the peak
+        "chunked": chunked,
+        "clustering_method": clustering_method, "leiden_iterations": leiden_iterations,
     }.items() if v is not None}
+    try:
+        if chunked is not None:
+            from scview.core.pipeline import check_chunked
+
+            check_chunked(chunked)
+        if leiden_iterations is not None:
+            from scview.core.leiden import check_iterations
+
+            check_iterations(leiden_iterations)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     try:
         result = await asyncio.to_thread(preflight.dataset_preflight, dm, dataset_id, names,
                                          overrides)

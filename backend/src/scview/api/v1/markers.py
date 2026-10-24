@@ -14,6 +14,8 @@ from scview.core.dataset_manager import DatasetManager
 from scview.core import marker_specificity
 from scview.core.arrow_serializer import dataframe_to_arrow_ipc
 from scview.core.obs_writes import dataset_edit
+from scview.core import working_copy
+from scview.core.large_mode import LargeDatasetError
 from scview.core.ora_background import resolve_markers_key
 from scview.core.pipeline import drop_enrichment_cache
 from scview.core.uns_keys import markers_column, markers_key
@@ -47,12 +49,14 @@ def _no_markers(format: str, reason: str):
 
 
 def _compute_markers(adata: ad.AnnData, column: str) -> dict:
-    """Wilcoxon markers for every group of ``column``, as the pipeline computes them.
+    """Wilcoxon markers for every group of ``column``, as the pipeline computes them
+    (by blocks of genes, ``core/rank_genes.py``: bit for bit scanpy's, with the
+    specificity frame from the group means unless scanpy ran).
 
     Runs on a light AnnData sharing the dataset's matrix rather than on a copy of
     the whole dataset, and leaves the dataset's own obs column as it is.
     """
-    import scanpy as sc
+    from scview.core import rank_genes
 
     if getattr(adata, "isbacked", False):
         adata = adata.to_memory()
@@ -69,15 +73,47 @@ def _compute_markers(adata: ad.AnnData, column: str) -> dict:
         obs=pd.DataFrame({column: labels.values}, index=adata.obs_names),
         var=pd.DataFrame(index=src.var_names),
     )
-    sc.tl.rank_genes_groups(work, groupby=column, method="wilcoxon", pts=True, use_raw=False)
+    if "log1p" in adata.uns:  # the base the fold changes undo, as for the pipeline's
+        work.uns["log1p"] = adata.uns["log1p"]
+    rank_genes.rank_genes_groups(work, column, method="wilcoxon", pts=True, use_raw=False,
+                                 specificity=True)
     rgg = work.uns["rank_genes_groups"]
     rgg["params"]["use_raw"] = use_raw  # what the ranking actually read
     return rgg
 
 
-def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str) -> None:
-    """Compute ``column``'s markers into the dataset and save them with it."""
+def _compute_markers_large(adaptor, column: str) -> dict:
+    """``_compute_markers`` for a large dataset: the same Wilcoxon test from the gene
+    store (``core/sparse_markers.py``, equal to scanpy's), its specificity columns from
+    the group means computed on the way; the matrix stays on disk."""
+    from scview.core import large_mode, sparse_markers
+
+    store = adaptor.gene_store()
+    if store is None:
+        large_mode.refuse("Marker genes for a new column",
+                          (adaptor.large_info() or {}).get("gene_store_note")
+                          or "the gene-major copy is not ready")
     adata = adaptor.adata
+    labels = adata.obs[column]
+    if not isinstance(labels.dtype, pd.CategoricalDtype):
+        labels = labels.astype(str).astype("category")
+    work = ad.AnnData(obs=pd.DataFrame({column: labels.values}, index=adata.obs_names),
+                      var=pd.DataFrame(index=adata.var_names))
+    if "log1p" in adata.uns:
+        work.uns["log1p"] = adata.uns["log1p"]
+    sparse_markers.rank_genes_groups(work, column, store, method="wilcoxon", pts=True,
+                                     use_raw=False, specificity=True, check_store=False)
+    rgg = work.uns["rank_genes_groups"]
+    rgg["params"]["use_raw"] = False
+    return rgg
+
+
+def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str) -> None:
+    """Compute ``column``'s markers into the dataset and save them with it (in memory:
+    a backed dataset is read in first, after ``working_copy.make_room``; a large one
+    stays on disk, its markers from the gene store)."""
+    large = adaptor.is_large
+    adata = adaptor.adata if large else working_copy.in_memory(adaptor)
     if column not in adata.obs.columns:
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found in obs.")
     n_groups = adata.obs[column].nunique()
@@ -96,10 +132,15 @@ def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str)
         )
     try:
         key = markers_key(column)
-        adata.uns[key] = _compute_markers(adata, column)
+        if large:  # specificity comes with them
+            adata.uns[key] = _compute_markers_large(adaptor, column)
+        else:
+            adata.uns[key] = _compute_markers(adata, column)
         drop_enrichment_cache(adata, column)
-        # Computed with the markers and saved with them (best effort).
-        marker_specificity.attach(adata, adata.uns[key], column)
+        if not marker_specificity.has_specificity(adata.uns[key]):  # scanpy ran: best effort
+            marker_specificity.attach(adata, adata.uns[key], column)
+    except LargeDatasetError:
+        raise
     except Exception as e:
         logger.error("On-demand marker computation failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Marker computation failed: {e!s}")
@@ -186,6 +227,8 @@ async def get_markers(
                 if adaptor is None:
                     raise HTTPException(status_code=404, detail="Dataset not found.")
                 if not adaptor.has_markers(column=groupby_column):
+                    if not adaptor.is_large:  # a large dataset is not read in
+                        await working_copy.make_room(dm, dataset_id, adaptor)
                     # Seconds to tens of seconds: in a worker thread, so the server
                     # keeps answering meanwhile.
                     await held.run(_compute_and_save, dm, dataset_id, adaptor, groupby_column)

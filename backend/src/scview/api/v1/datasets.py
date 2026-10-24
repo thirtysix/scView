@@ -232,6 +232,8 @@ async def get_dataset_info(
         info["expression_layers"] = adaptor.available_expression_layers()
         info["default_expression_layer"] = adaptor.default_expression_layer()
         info["protein"] = adaptor.protein_info()
+        # A large dataset (matrices on disk): the gene store's state (checked once).
+        info["large"] = await asyncio.to_thread(adaptor.large_info)
         # Which cells, in which order: a saved session checks it (hashing a
         # million barcodes takes a moment the first time, so off the loop).
         info["cells_fingerprint"] = await asyncio.to_thread(adaptor.cells_fingerprint)

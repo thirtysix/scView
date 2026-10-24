@@ -89,7 +89,7 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
         for k, v in fi.attrs.items():
             fo.attrs[k] = v
         var = read_elem(fi["var"])
-        obs_names = pd.Index(read_elem(fi["obs"]).index.astype(str))
+        obs_names = _obs_names(fi["obs"])
         extracted: list[np.ndarray] = []
         for key in fi.keys():
             if key == "X":
@@ -163,6 +163,16 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
 # ---------------------------------------------------------------------------
 # Streaming one matrix
 # ---------------------------------------------------------------------------
+
+
+def _obs_names(obs) -> pd.Index:
+    """The cell names alone (a million-cell obs table can hold many columns)."""
+    idx = obs.attrs.get("_index") if isinstance(obs, h5py.Group) else None
+    if isinstance(idx, bytes):
+        idx = idx.decode()
+    if idx and idx in obs:
+        return pd.Index(np.asarray(read_elem(obs[idx])).astype(str))
+    return pd.Index(read_elem(obs).index.astype(str))
 
 
 def _new_dict(parent: h5py.Group, name: str) -> h5py.Group:

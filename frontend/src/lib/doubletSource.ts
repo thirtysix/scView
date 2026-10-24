@@ -48,11 +48,14 @@ export function choiceText(c: DoubletChoices): string {
   }
   const n = c.used.n.toLocaleString();
   const both = c.both?.toLocaleString();
+  const kept = c.unscored
+    ? ` ${c.unscored.toLocaleString()} cells Scrublet did not score (channels too small for it) are kept.`
+    : "";
   if (c.used.source === "either") {
-    return `Drops ${n} cells that cell hashing or Scrublet calls doublets${both ? ` (${both} by both)` : ""}.`;
+    return `Drops ${n} cells that cell hashing or Scrublet calls doublets${both ? ` (${both} by both)` : ""}.${kept}`;
   }
   const other = c.used.source === "hashing" ? "Scrublet" : c.used.source === "scrublet" ? "cell hashing" : null;
-  return `Drops ${n} doublets by ${c.used.label}${other && both ? `; ${other} calls ${both} of them too` : ""}.`;
+  return `Drops ${n} doublets by ${c.used.label}${other && both ? `; ${other} calls ${both} of them too` : ""}.${kept}`;
 }
 
 /** Under the doublet card's agreement table: what the two calls share and why they differ. */

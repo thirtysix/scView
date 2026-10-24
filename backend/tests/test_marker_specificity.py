@@ -175,7 +175,9 @@ async def test_computed_once_and_saved_with_the_markers(
     _register(dataset_manager, _adata())
     await _markers(client)
     await _markers(client, groupby="B")
-    assert count_specificity == ["cell_type"]
+    # tau comes with the ranking itself (core/rank_genes.py, from its group means): no
+    # second pass over the matrix
+    assert count_specificity == []
 
     derived = Path(dataset_manager.data_dir) / "derived" / "sp" / "data.h5ad"
     saved = ad.read_h5ad(derived).uns[markers_key("cell_type")]
@@ -184,7 +186,7 @@ async def test_computed_once_and_saved_with_the_markers(
     dataset_manager.evict("sp")
     body = await _markers(client)
     assert body["markers"]["T"][0]["tau"] is not None
-    assert count_specificity == ["cell_type"]
+    assert count_specificity == []
 
 
 async def test_markers_saved_before_get_them_on_first_visit(
@@ -288,6 +290,7 @@ def test_on_demand_compute_keeps_the_markers_when_specificity_fails(monkeypatch,
         raise RuntimeError("no")
 
     monkeypatch.setattr(ms, "compute", boom)
+    monkeypatch.setattr(ms, "tau", boom)  # what the ranking's own frame is made with
     rgg = markers_api._compute_markers(a, "cell_type")
     assert ms.attach(a, rgg, "cell_type") is False
     assert "names" in rgg and not ms.has_specificity(rgg)

@@ -18,7 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import aucell
+from scview.core import aucell, working_copy
+from scview.core import large_mode
 from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
 from scview.core.geneset_sources import custom_collections_for_dataset
@@ -203,8 +204,8 @@ def _score_genes(adata, genes_found: list[str], gene_set: list[str], score_key: 
     used, genes missing, where from). Call in a worker thread."""
     import scanpy as sc
 
-    # Materialize backed sparse datasets — scanpy score_genes cannot
-    # operate on anndata._core.sparse_dataset._CSRDataset.
+    # A light AnnData sharing the arrays, so the score column is not written into the
+    # dataset (a backed one is read in first by the endpoint, core/working_copy.py).
     work_adata = adata.to_memory() if hasattr(adata, "to_memory") else adata.copy()
 
     # Filter genes_found to those actually present in the expression matrix
@@ -249,6 +250,26 @@ def _score_genes(adata, genes_found: list[str], gene_set: list[str], score_key: 
             "with the expression matrix."
         ),
     )
+
+
+# Why AUCell and the method comparison are not run on a large dataset.
+_RANKS_EVERY_GENE = "it ranks every gene in every cell, which needs the whole matrix"
+
+
+def _score_genes_large(adaptor, genes_found: list[str], gene_set: list[str]):
+    """``_score_genes`` for a large dataset: scanpy's score_genes from the gene store
+    (``core/large_views.py``, the same scores), on X (log-normalised)."""
+    from scview.core import large_views
+
+    store = adaptor.gene_store()
+    if store is None:
+        large_mode.refuse("Gene set scoring", (adaptor.large_info() or {}).get("gene_store_note")
+                          or "the gene-major copy is not ready")
+    scores, used, _ = large_views.score_genes(store, adaptor.adata.var_names, genes_found,
+                                              means=adaptor.gene_means())
+    upper = {g.upper() for g in used}
+    missing = [g for g in gene_set if g.upper() not in upper]
+    return np.nan_to_num(np.asarray(scores, dtype=float), nan=0.0), list(used), missing, "X"
 
 
 def _aucell(adata, gene_set: list[str], max_rank: int | None):
@@ -310,6 +331,8 @@ async def score_genesets(
     adata = adaptor.adata
 
     if body.method == "aucell":
+        large_mode.check(adaptor, "AUCell scoring", _RANKS_EVERY_GENE)
+
         def _run_aucell() -> GeneSetScoreResponse:
             scores, m, rk = _aucell(adata, body.gene_set, body.max_rank)
             return GeneSetScoreResponse(
@@ -334,9 +357,16 @@ async def score_genesets(
     if len(genes_found) == 0:
         raise _none_found(body.gene_set)
 
+    large = adaptor.is_large
+    if not large:  # a large dataset is scored from its gene store, never read in
+        await working_copy.make_room(dm, dataset_id, adaptor)
+
     def _score() -> GeneSetScoreResponse:
-        scores, used, missing, source = _score_genes(
-            adata, genes_found, body.gene_set, body.score_name)
+        if large:
+            scores, used, missing, source = _score_genes_large(adaptor, genes_found, body.gene_set)
+        else:
+            scores, used, missing, source = _score_genes(
+                working_copy.in_memory(adaptor), genes_found, body.gene_set, body.score_name)
         return GeneSetScoreResponse(
             score_name=body.score_name,
             n_cells=int(len(scores)),
@@ -378,6 +408,7 @@ async def compare_score_methods(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    large_mode.check(adaptor, "Comparing scoring methods (AUCell)", _RANKS_EVERY_GENE)
     if not body.gene_set:
         raise HTTPException(status_code=400, detail="gene_set must contain at least one gene name.")
     adata = adaptor.adata
@@ -389,7 +420,10 @@ async def compare_score_methods(
     if not genes_found:
         raise _none_found(body.gene_set)
 
+    await working_copy.make_room(dm, dataset_id, adaptor)
+
     def _check() -> dict:
+        adata = working_copy.in_memory(adaptor)
         au, m, rk = _aucell(adata, body.gene_set, body.max_rank)
         sg, _, _, _ = _score_genes(adata, genes_found, body.gene_set, "_scview_depth_check")
         depth: dict[str, np.ndarray] = {}

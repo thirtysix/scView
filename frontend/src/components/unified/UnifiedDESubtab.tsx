@@ -46,6 +46,7 @@ import {
 } from "@/lib/de";
 import { formatPValue, prettyObsLabel } from "@/lib/formatting";
 import type { ObsColumnInfo } from "@/api/types";
+import { RequestError } from "@/components/common/RequestError";
 
 type Mode = DEMode;
 type Test = DETest;
@@ -584,9 +585,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
         />
       )}
 
-      {error && (
-        <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">{error}</div>
-      )}
+      <RequestError message={error} />
       {methodsError && (
         <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
           Compare methods: {methodsError}

@@ -1529,12 +1529,14 @@ def _call_masks(t: Thresholds, calls) -> dict[str, np.ndarray]:
 def doublet_choices(obs: pd.DataFrame, t: Thresholds) -> dict | None:
     """For the preview's doublet control: the sources that mean something here, the
     one ``t.doublet_source`` stands for and what auto picks, each source's count,
-    how many cells hashing and Scrublet both call, and the hashing negatives.
+    how many cells hashing and Scrublet both call, the hashing negatives, and the
+    cells the chosen calls leave unscored (Scrublet's small channels: kept, not called).
     None without any doublet calls."""
     auto = doublet_source.describe(obs)
     if auto is None:
         return None
     used = doublet_source.resolve(obs, t.doublet_source)
+    unscored = None if used is None or used.unscored is None else int(used.unscored.sum())
     n_by: dict[str, int | None] = {}
     for s in auto["options"]:
         c = doublet_source.resolve(obs, s)
@@ -1551,6 +1553,7 @@ def doublet_choices(obs: pd.DataFrame, t: Thresholds) -> dict | None:
         "hash_negatives": None if neg is None else int(neg.sum()),
         "drop_hash_negatives": t.drop_hash_negatives,
         "negative_note": doublet_source.NEGATIVE_NOTE,
+        "unscored": unscored,
     }
 
 
@@ -1568,6 +1571,9 @@ def after_filter(adata, t: Thresholds, n_removed: int) -> dict:
         used = doublet_source.resolve(adata.obs, t.doublet_source)
         out.update(qc_doublet_source=t.doublet_source,
                    qc_doublet_source_used=None if used is None else used.source)
+        if used is not None and used.unscored is not None and used.unscored.any():
+            # Cells Scrublet did not score (a channel too small for it) are kept: no call.
+            out["doublets_unscored_kept"] = int(used.unscored.sum())
     if t.drop_hash_negatives:
         out["drop_hash_negatives"] = True
     if n_removed:

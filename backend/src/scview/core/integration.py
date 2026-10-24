@@ -264,6 +264,12 @@ def load_units(
         if not paths:
             check.error = "dataset not found or has no data file"
             continue
+        from scview.core import large_mode
+
+        if large_mode.file_is_large(paths[0]):  # never read whole: its matrices stay on disk
+            check.error = str(large_mode.LargeDatasetError(
+                "A joint embedding", "it reads each dataset's counts into memory"))
+            continue
         try:
             cached = dm.get_dataset(did)
             adata = cached.adata if cached is not None else ad.read_h5ad(paths[0])

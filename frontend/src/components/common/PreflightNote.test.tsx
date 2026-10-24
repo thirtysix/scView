@@ -4,8 +4,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 const api = vi.hoisted(() => ({ getRunPreflight: vi.fn(), getIngestPreflight: vi.fn() }));
 vi.mock("@/api/preflight", () => api);
 
-import type { PreflightVerdict } from "@/api/preflight";
-import { PreflightIngestNotes, PreflightNote, PreflightRunNote } from "./PreflightNote";
+import type { LeidenChoice, PreflightVerdict } from "@/api/preflight";
+import { FastLeidenOffer, PreflightIngestNotes, PreflightNote, PreflightRunNote } from "./PreflightNote";
 
 const GB = 1024 ** 3;
 
@@ -137,6 +137,75 @@ describe("PreflightRunNote", () => {
     const { container } = render(<PreflightRunNote datasetId="d1" steps={["pca"]} params={null} />);
     await waitFor(() => expect(api.getRunPreflight).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+function leiden(extra: Partial<LeidenChoice> = {}): LeidenChoice {
+  return {
+    n_cells: 270_000,
+    full_seconds: 3500,
+    fast_seconds: 70,
+    full_text: "roughly 29 min to 1.9 h",
+    fast_text: "roughly 35 s to 2 min",
+    offer_seconds: 600,
+    offer_fast: true,
+    iterations: -1,
+    ...extra,
+  };
+}
+
+describe("FastLeidenOffer", () => {
+  it("over ten minutes: both times and a one-click opt-in, with what it changes in a tooltip", () => {
+    const onChange = vi.fn();
+    render(<FastLeidenOffer choice={leiden()} onChange={onChange} />);
+    const offer = screen.getByTestId("fast-leiden-offer");
+    expect(offer).toHaveTextContent(
+      "Clustering 270,000 cells with Leiden's full optimisation may take roughly 29 min to 1.9 h. Fast Leiden: roughly 35 s to 2 min.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use fast Leiden" }));
+    expect(onChange).toHaveBeenCalledWith(2);
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "What fast Leiden changes" }));
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent("same Leiden algorithm with the same seed, stopped after two passes");
+    expect(tip).toHaveTextContent("ARI 0.93-0.97");
+    expect(tip).toHaveTextContent("different seeds agree with each other (ARI 0.46-0.60)");
+    expect(tip).toHaveTextContent("0.1-0.35 %");
+    expect(tip).toHaveTextContent("History and the replay script (sc.tl.leiden(..., n_iterations=2))");
+  });
+
+  it("once chosen: says so and offers the way back", () => {
+    const onChange = vi.fn();
+    render(<FastLeidenOffer choice={leiden({ iterations: 2 })} onChange={onChange} />);
+    expect(screen.getByTestId("fast-leiden-offer")).toHaveTextContent(
+      "Clustering 270,000 cells with fast Leiden: roughly 35 s to 2 min (the full optimisation: roughly 29 min to 1.9 h).",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use the full optimisation" }));
+    expect(onChange).toHaveBeenCalledWith(-1);
+  });
+
+  it("a quick clustering: no offer", () => {
+    const { container } = render(<FastLeidenOffer choice={leiden({ offer_fast: false })} onChange={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("PreflightRunNote and fast Leiden", () => {
+  it("shows the offer from the run estimate and sets the clustering param", async () => {
+    api.getRunPreflight.mockResolvedValue({ dataset_id: "d1", steps: [], verdict: verdict("fits"), leiden: leiden() });
+    const onLeiden = vi.fn();
+    render(
+      <PreflightRunNote datasetId="d1" steps={["neighbors", "clustering"]} params={null} onLeidenIterations={onLeiden} />,
+    );
+    await waitFor(() => expect(screen.getByTestId("fast-leiden-offer")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Use fast Leiden" }));
+    expect(onLeiden).toHaveBeenCalledWith(2);
+  });
+
+  it("an older backend without the field: the note alone", async () => {
+    api.getRunPreflight.mockResolvedValue({ dataset_id: "d1", steps: [], verdict: verdict("fits") });
+    render(<PreflightRunNote datasetId="d1" steps={["clustering"]} params={null} />);
+    await waitFor(() => expect(screen.getByText(/About 3.1 GB more than now/)).toBeInTheDocument());
+    expect(screen.queryByTestId("fast-leiden-offer")).toBeNull();
   });
 });
 

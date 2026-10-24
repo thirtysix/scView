@@ -72,6 +72,23 @@ def test_seurat_v3_ranks_the_counts_not_the_log_values():
     assert ret == {"counts_source": "layers['counts']"}
 
 
+def test_seurat_v3_dense_int32_counts_over_46340_pick_the_float_genes():
+    # scanpy squares a dense matrix in its own dtype: 60,000^2 overflowed int32 into a
+    # negative variance (picked a different gene set before the fix). The genes must
+    # be those of the same counts as float64.
+    rng = np.random.default_rng(1)
+    counts = rng.poisson(2.0, size=(300, 200)).astype(np.int32)
+    counts[0, :20] = 60_000
+
+    def picked(X):
+        a = ad.AnnData(X)
+        a.var_names = [f"G{i}" for i in range(200)]
+        _run_hvg(a, PipelineParams(n_top_genes=50, hvg_flavor="seurat_v3"))
+        return a.var["highly_variable"].to_numpy()
+
+    assert np.array_equal(picked(counts), picked(counts.astype(np.float64)))
+
+
 def test_seurat_v3_drops_another_flavours_columns():
     a = _with_counts()
     _run_hvg(a, PipelineParams(n_top_genes=50, hvg_flavor="seurat"))

@@ -58,6 +58,9 @@ class _Ctx:
 
     adata: Any
     helpers: set[str] = field(default_factory=set)
+    # The matrix the last scaling step planned for PCA (core/scaling.py), or None: an
+    # older scView's scaling wrote it into X, so PCA reads X as it is.
+    scaling: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -165,13 +168,16 @@ def counts_hvg(adata, flavor, n_top_genes, batch_key, theta=None):
     var_from_hvg_frame(adata, df)
 ''',
     "pearson_residuals": '''
-def pearson_residuals(counts, theta, clip, chunk=1000):
+def pearson_residuals(counts, theta, clip, chunk=1000, columns=None):
     """Analytic Pearson residuals (float32), a block of genes at a time: the values
-    of sc.experimental.pp.normalize_pearson_residuals without its dense copies."""
+    of sc.experimental.pp.normalize_pearson_residuals without its dense copies.
+    ``columns``: only those genes' residuals (the totals still over every gene)."""
     n, g = counts.shape
     cells = np.asarray(counts.sum(axis=1), dtype=np.float64).ravel()
     genes = np.asarray(counts.sum(axis=0), dtype=np.float64).ravel()
     total = float(genes.sum())
+    if columns is not None:
+        counts, genes, g = counts[:, columns], genes[columns], len(columns)
     out = np.empty((n, g), dtype=np.float32)
     for j0 in range(0, g, chunk):
         j1 = min(g, j0 + chunk)
@@ -541,10 +547,11 @@ def match_genes(genes, names, aliases=None):
 ''',
     "subcluster": '''
 def subcluster(adata, column, group, resolution, batch_key=None, n_top_genes=2000, n_pcs=30,
-               n_neighbors=15, seed=0):
+               n_neighbors=15, seed=0, n_iterations=-1):
     """Split one group of a column on its own graph into <column>_sub, as scView does:
     log-normalised expression of the group's cells, Seurat HVGs, scaled PCA,
-    Harmony when the dataset was corrected, a neighbour graph and Leiden."""
+    Harmony when the dataset was corrected, a neighbour graph and Leiden
+    (two passes for fast Leiden, when the dataset's clustering was made that way)."""
     labels = adata.obs[column]
     mask = (labels.astype(str).where(labels.notna()) == group).to_numpy()
     n = int(mask.sum())
@@ -582,7 +589,7 @@ def subcluster(adata, column, group, resolution, batch_key=None, n_top_genes=200
         rep = "X_pca_harmony"
     sc.pp.neighbors(sub, n_neighbors=min(n_neighbors, n - 1), use_rep=rep, random_state=seed)
     sc.tl.leiden(sub, resolution=resolution, key_added="s", random_state=seed,
-                 flavor="leidenalg")
+                 flavor="leidenalg", n_iterations=n_iterations)
     codes = sub.obs["s"].astype(str).to_numpy()
     new = [f"{group}.{k}" for k in sorted(set(codes), key=int)]
     target = column if column.endswith("_sub") else f"{column}_sub"
@@ -768,7 +775,24 @@ def _scrublet_helper() -> str:
 
 
 _HELPERS["scrublet_counts"] = _scrublet_helper()
-_HELPER_ORDER += ("scrublet_counts",)
+
+
+def _barcode_channels_helper() -> str:
+    """core/doublets.py's reading of the capture channels from 10x barcodes (numpy,
+    pandas and re only), copied so the script finds the channels scView found."""
+    import inspect
+
+    from scview.core import doublets
+
+    lines = ["import re", ""]
+    lines += [f"{name} = {_lit(getattr(doublets, name))}" for name in doublets.REPLAY_CONSTANTS]
+    for obj in doublets.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["barcode_channels"] = _barcode_channels_helper()
+_HELPER_ORDER += ("scrublet_counts", "barcode_channels")
 
 
 def _need(ctx: _Ctx, *names: str) -> None:
@@ -828,9 +852,12 @@ _DOUBLET_INPUT = {"layers['counts']": 'adata.layers["counts"]', ".raw": "adata.r
 
 def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "scrublet_counts")
+    counts = _DOUBLET_INPUT.get(p.get("input"), "adata.X")
+    channels = p.get("channels")
+    if isinstance(channels, list) and channels and all(isinstance(c, dict) for c in channels):
+        return _doublet_channels(p, ctx, counts, channels)
     rate = p.get("expected_doublet_rate")
     recorded = isinstance(rate, (int, float)) and rate > 0
-    counts = _DOUBLET_INPUT.get(p.get("input"), "adata.X")
     approx = {"exact": "False", "approximate": "True"}.get(p.get("neighbors"), "None")
     code = ["# Scrublet on the counts alone (scrublet_counts above): sc.pp.scrublet's scores, "
             "without its copies of the dataset.",
@@ -838,7 +865,8 @@ def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
             f"expected_doublet_rate={_lit(float(rate) if recorded else 0.05)}, "
             f"use_approx_neighbors={approx})",
             'adata.obs["doublet_score"] = score',
-            'adata.obs["predicted_doublet"] = call',
+            "# A cell Scrublet dropped (under 3 genes) has no call: not a doublet (as scView).",
+            'adata.obs["predicted_doublet"] = np.isfinite(score) & (call == True)',
             'adata.uns["scrublet"] = uns']
     if recorded:
         if p.get("expected_rate_from"):
@@ -847,6 +875,64 @@ def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(EXACT, code, "")
     code.insert(0, "# NOTE: the expected doublet rate was not recorded; scanpy's default (0.05) is used.")
     return Snippet(APPROXIMATE, code, "doublet rate not recorded: scanpy's default")
+
+
+def _doublet_channels(p: dict, ctx: _Ctx, counts: str, channels: list[dict]) -> Snippet:
+    """Scrublet in each capture channel, as scView ran it: the channels from the recorded
+    column (or the barcodes, or all cells as one), each with its recorded rate and
+    neighbours (core/doublets.py ``run_scrublet``)."""
+    column, reason = p.get("channel_column"), str(p.get("channel_reason") or "")
+    names = [str(c.get("name")) for c in channels]
+    rates = [float(c["expected_doublet_rate"]) if isinstance(c.get("expected_doublet_rate"), (int, float))
+             else 0.05 for c in channels]
+    approx = [c.get("neighbors") == "approximate" for c in channels]
+    min_cells = p.get("min_channel_cells")
+    min_cells = int(min_cells) if isinstance(min_cells, (int, float)) else 100
+    status, note = EXACT, ""
+    code = ["# Scrublet in each capture channel alone (scrublet_by_channel above), one after another,",
+            "# each with the expected rate and neighbours scView used; a channel under",
+            f"# {min_cells} cells is not scored (NaN score, no call).",
+            f"CHANNELS = {_lit(names)}",
+            f"RATES = {_lit(rates)}",
+            f"APPROX = {_lit(approx)}"]
+    if column is None:
+        code += ["# All cells as one channel.", "codes = np.zeros(adata.n_obs, dtype=np.int64)"]
+    elif reason.startswith("barcode"):
+        _need(ctx, "barcode_channels")
+        code += ["# The channels read from the cell barcodes (barcode_channels above), as scView did.",
+                 "found = barcode_channels(adata.obs_names)",
+                 "if found is None:",
+                 '    sys.exit("The cell barcodes do not carry the capture channels scView read from them.")',
+                 "labels = np.asarray(found[0], dtype=object)[found[1]]",
+                 "codes = pd.Categorical(labels, categories=CHANNELS).codes.astype(np.int64)"]
+    else:
+        col = _lit(str(column))
+        code += [f"# The channels: obs column {comment_text(column, 80)}.",
+                 f"if {col} not in adata.obs.columns:",
+                 f"    sys.exit('obs column ' + {col} + ' (the capture channels) is missing.')",
+                 f"labels = adata.obs[{col}].astype(str).where(adata.obs[{col}].notna())",
+                 "codes = pd.Categorical(labels, categories=CHANNELS).codes.astype(np.int64)"]
+    code += [f"score, call, runs = scrublet_by_channel({counts}, codes, RATES, APPROX, {_lit(min_cells)})",
+             'adata.obs["doublet_score"] = score',
+             'adata.obs["predicted_doublet"] = call']
+    if column is not None and reason.startswith("barcode"):
+        code.append('adata.obs["capture_channel"] = pd.Categorical.from_codes(codes, categories=CHANNELS)')
+    code += ["# Scrublet's own uns when one run covered every cell, and each channel's record.",
+             "one = len(runs) == 1 and runs[0]['uns'] is not None",
+             'adata.uns["scrublet"] = dict(runs[0]["uns"]) if one else {}',
+             'adata.uns["scrublet"]["scview_channels"] = {',
+             '    "name": CHANNELS, "n_cells": [r["n_cells"] for r in runs],',
+             '    "n_scored": [r["n_scored"] for r in runs], "expected_doublet_rate": RATES,',
+             '    "threshold": [np.nan if r["threshold"] is None else r["threshold"] for r in runs],',
+             '    "n_called": [r["n_called"] for r in runs],',
+             '    "neighbors": ["approximate" if x else "exact" for x in APPROX],',
+             '    "status": [r["status"] for r in runs]}',
+             f'adata.uns["scrublet"]["scview_channel_reason"] = {_lit(reason)}']
+    if column is not None:
+        code.append(f'adata.uns["scrublet"]["scview_channel_column"] = {_lit(str(column))}')
+    if reason in ("donor", "batch"):
+        code.insert(0, "# NOTE: scView took the samples as the channels (no lane or GEM well column): a guess.")
+    return Snippet(status, code, note)
 
 
 def _mito_rule(p: dict) -> dict | None:
@@ -1010,7 +1096,28 @@ def _hvg(p: dict, ctx: _Ctx) -> Snippet:
 
 def _scaling(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "keep_raw_counts")
-    if p.get("normalization_method") == "pearson_residuals":
+    pearson = p.get("normalization_method") == "pearson_residuals"
+    if "scaled_genes" in p:
+        # Since the step plans the matrix PCA reads (core/scaling.py): X keeps the log
+        # values; the PCA step below scales a copy of the variable genes.
+        ctx.scaling = {"method": "pearson" if pearson else "zscore",
+                       "theta": p.get("theta", 100.0), "max_value": p.get("max_value", 10.0)}
+        raw = _block('''
+if adata.raw is None or not adata.X[:2000].min() < 0:  # z-scores an older scView left in X: kept
+    adata.raw = adata  # the log-normalised values, which X keeps too
+''')
+        if pearson:
+            _need(ctx, "find_counts", "pearson_residuals")
+            return Snippet(EXACT, ["keep_raw_counts(adata)",
+                                   "find_counts(adata)  # the residuals for PCA need the counts",
+                                   "if looks_like_counts(adata.X):",
+                                   '    raise ValueError("Run normalization and log transform before the '
+                                   'Pearson residuals.")', *raw,
+                                   "pearson_clip = np.sqrt(adata.n_obs)  # for the PCA step's residuals"])
+        return Snippet(EXACT, ["keep_raw_counts(adata)", *raw,
+                               "# The z-scores of the variable genes are made at the PCA step."])
+    ctx.scaling = None  # an older scView: the scaled values go into X
+    if pearson:
         _need(ctx, "find_counts", "pearson_residuals")
         theta = p.get("theta", 100.0)
         clip = "np.sqrt(adata.n_obs)"
@@ -1033,9 +1140,39 @@ sc.pp.scale(adata, max_value=10)
 
 def _pca(p: dict, ctx: _Ctx) -> Snippet:
     n = p.get("n_comps", 50)
+    plan = ctx.scaling if p.get("pca_input") else None
+    if plan is None:  # scaling skipped, or an older scView's scaled X
+        return Snippet(EXACT, [
+            f"sc.tl.pca(adata, n_comps=min({_lit(n)}, adata.n_obs - 1, adata.n_vars - 1), "
+            'svd_solver="arpack")',
+            'adata.obsm.pop("X_pca_harmony", None)',
+        ])
+    if plan["method"] == "pearson":
+        _need(ctx, "find_counts", "pearson_residuals")
+        make = [f"X = pearson_residuals(find_counts(adata), theta={_lit(plan['theta'])}, clip=pearson_clip,",
+                "                      columns=None if mask is None else np.flatnonzero(mask))",
+                "sub = ad.AnnData(X=X)"]
+    else:
+        make = ["X = (adata.X if mask is None else adata.X[:, mask]).astype(np.float32)",
+                "sub = ad.AnnData(X=X.toarray() if sp.issparse(X) else np.ascontiguousarray(X))",
+                f"sc.pp.scale(sub, max_value={_lit(plan['max_value'])})"]
     return Snippet(EXACT, [
-        f"sc.tl.pca(adata, n_comps=min({_lit(n)}, adata.n_obs - 1, adata.n_vars - 1), "
-        'svd_solver="arpack")',
+        "# PCA reads the scaled variable genes; scView scales a copy of them for PCA alone (X",
+        "# keeps the log-normalised values): a copy, scaled, PCA on it, the results copied back.",
+        'mask = adata.var["highly_variable"].to_numpy(dtype=bool) if "highly_variable" in adata.var.columns else None',
+        *make,
+        "if mask is not None:",
+        '    sub.var["highly_variable"] = True  # PCA reads it through the mask, as scView\'s did',
+        f"n_comps = min({_lit(n)}, adata.n_obs - 1, adata.n_vars - 1)",
+        'sc.tl.pca(sub, n_comps=n_comps, svd_solver="arpack")',
+        'adata.obsm["X_pca"] = sub.obsm["X_pca"]',
+        'adata.uns["pca"] = sub.uns["pca"]',
+        "if mask is None:",
+        '    adata.varm["PCs"] = sub.varm["PCs"]',
+        "else:",
+        '    adata.varm["PCs"] = np.zeros((adata.n_vars, n_comps))  # zero rows for the other genes',
+        '    adata.varm["PCs"][mask] = sub.varm["PCs"]',
+        "del sub, X",
         'adata.obsm.pop("X_pca_harmony", None)',
     ])
 
@@ -1074,22 +1211,31 @@ def _neighbors(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+def _iterations(p: dict) -> int:
+    """Leiden's recorded passes (-1 before fast Leiden existed, or a malformed record)."""
+    v = p.get("leiden_iterations")
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and int(v) == v \
+        and (v == -1 or v > 0) else -1
+
+
 def _leiden_or_louvain(method: str, resolution: Any, column: str, ctx: _Ctx,
-                       on: str = "adata") -> list[str]:
+                       on: str = "adata", n_iterations: int = -1) -> list[str]:
     """Clustering of ``on``'s graph: scView's Leiden child process runs exactly
-    sc.tl.leiden's leidenalg flavour (core/leiden.py)."""
+    sc.tl.leiden's leidenalg flavour (core/leiden.py), stopped after ``n_iterations``
+    passes for fast Leiden (2)."""
     if method == "louvain":
         _need(ctx, "louvain")
         return [f"louvain_igraph({on}, {_lit(resolution)}, {_lit(column)})"]
+    passes = f", n_iterations={_lit(n_iterations)}" if n_iterations != -1 else ""
     return [f"sc.tl.leiden({on}, resolution={_lit(resolution)}, key_added={_lit(column)}, "
-            'flavor="leidenalg")']
+            f'flavor="leidenalg"{passes})']
 
 
 def _clustering(p: dict, ctx: _Ctx) -> Snippet:
     method = p.get("clustering_method") or "leiden"
     res = p.get("clustering_resolution", 0.5)
     column = f"scview_{method}_r{res}"
-    code = _leiden_or_louvain(method, res, column, ctx)
+    code = _leiden_or_louvain(method, res, column, ctx, n_iterations=_iterations(p))
     code.append(f'adata.uns["scview_active_clustering"] = {_lit(column)}')
     return Snippet(EXACT, code)
 
@@ -1337,7 +1483,8 @@ def _subcluster(p: dict, ctx: _Ctx) -> Snippet:
         f"subcluster(adata, {_lit(str(p.get('column')))}, {_lit(str(p.get('group')))}, "
         f"{_lit(p.get('resolution', sub.DEFAULT_RESOLUTION))}, batch_key={_lit(p.get('batch_key'))}, "
         f"n_top_genes={_lit(sub.N_TOP_GENES)}, n_pcs={_lit(sub.N_PCS)}, "
-        f"n_neighbors={_lit(sub.N_NEIGHBORS)}, seed={_lit(sub.SEED)})",
+        f"n_neighbors={_lit(sub.N_NEIGHBORS)}, seed={_lit(sub.SEED)}"
+        + (f", n_iterations={_lit(_iterations(p))}" if _iterations(p) != -1 else "") + ")",
     ])
 
 
@@ -1347,7 +1494,8 @@ def _keep_resolution(p: dict, ctx: _Ctx) -> Snippet:
     column = str(p.get("column") or f"scview_{method}_r{res}")
     code = ["# A clustering kept from the resolution sweep (the active one does not change)."]
     code += [f"if {_lit(column)} not in adata.obs.columns:"]
-    code += ["    " + line for line in _leiden_or_louvain(method, res, column, ctx)]
+    code += ["    " + line for line in _leiden_or_louvain(method, res, column, ctx,
+                                                          n_iterations=_iterations(p))]
     return Snippet(EXACT, code)
 
 
@@ -1381,7 +1529,7 @@ def _keep_hvg_setting(p: dict, ctx: _Ctx) -> Snippet:
         code += [f'tmp.obsm["X_pca_harmony"] = harmony(tmp.obsm["X_pca"], tmp.obs, '
                  f"{_lit(p['batch_key'])})", 'rep = "X_pca_harmony"']
     code.append(f"sc.pp.neighbors(tmp, n_neighbors={_lit(p.get('n_neighbors', 15))}, use_rep=rep)")
-    code += _leiden_or_louvain(method, res, "c", ctx, on="tmp")
+    code += _leiden_or_louvain(method, res, "c", ctx, on="tmp", n_iterations=_iterations(p))
     code.append(f'adata.obs[{_lit(column)}] = tmp.obs["c"].values')
     return Snippet(APPROXIMATE, code, "re-run in plain scanpy; clusters can differ a little")
 
@@ -1653,6 +1801,35 @@ def _vdj_remove(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, ["clear(adata)  # every V(D)J column removed"])
 
 
+def _run_errors(p: dict, ctx: _Ctx) -> Snippet:
+    """A run that finished with errors (core/step_failures.py): which steps failed and were
+    skipped (not in the history, so not replayed), and the earlier results it removed as
+    stale, removed here too."""
+    failed = p.get("failed") if isinstance(p.get("failed"), dict) else {}
+    skipped = p.get("skipped") if isinstance(p.get("skipped"), dict) else {}
+    cleared = p.get("cleared") if isinstance(p.get("cleared"), dict) else {}
+    code = ["# The run of the steps above finished with errors: these steps were not run."]
+    for step, err in failed.items():
+        code.append(f"#   {comment_text(step, 40)} failed: {comment_text(err, 100)}")
+    for step, because in skipped.items():
+        code.append(f"#   {comment_text(step, 40)} skipped: it needs {comment_text(because, 40)}")
+    names = {where: [str(k) for k in keys] for where, keys in cleared.items()
+             if isinstance(keys, list) and keys}
+    if names:
+        code.append("# Results of an earlier run they would have replaced were removed as stale:")
+    for where in ("obsm", "varm", "obsp", "uns"):
+        if names.get(where):
+            code.append(f"for k in {_lit(names[where])}:")
+            code.append(f"    adata.{where}.pop(k, None)")
+    for where in ("var", "obs"):
+        if names.get(where):
+            code.append(f"adata.{where} = adata.{where}.drop(columns=[c for c in {_lit(names[where])} "
+                        f"if c in adata.{where}.columns])")
+    if names.get("raw"):
+        code.append("adata.raw = None")
+    return Snippet(EXACT, code)
+
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -1696,6 +1873,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "vdj_attach": _vdj_attach,
     "vdj_clonotypes": _vdj_clonotypes,
     "vdj_remove": _vdj_remove,
+    "run_errors": _run_errors,
 }
 
 
@@ -1795,6 +1973,9 @@ def build_script(adata, *, dataset_id: str = "", dataset_name: str = "",
                     f"({comment_text(h.get('tool') or '', 80)}) ---")
         body.append(f"# Ran {when} in scView {ver}; replay: {snip.status}"
                     + (f" ({comment_text(snip.note, 120)})" if snip.note else ""))
+        if (h.get("params") or {}).get("chunked") is True:
+            body.append("# scView ran it in large-dataset mode (matrices on disk, in row blocks): the "
+                        "same results; this script runs it in memory.")
         effect = h.get("effect") if isinstance(h.get("effect"), dict) else {}
         if effect.get("n_cells") is not None:
             body.append(f"# scView had {comment_text(effect.get('n_cells'), 20)} cells x "
@@ -1829,6 +2010,15 @@ def build_script(adata, *, dataset_id: str = "", dataset_name: str = "",
         if steps else "# No steps are recorded for this dataset.",
         "# PCA, UMAP, Harmony and the neighbour graph are seeded, but thread count and BLAS",
         "# can move their last digits, and with them a few cells' clusters.",
+    ]
+    n_chunked = sum(1 for h in steps if (h.get("params") or {}).get("chunked") is True)
+    if n_chunked:
+        header += [
+            f"# scView ran {n_chunked} of these steps in large-dataset mode: the matrices stayed",
+            "# on disk and were read in row blocks (the same results; scaling and PCA to float",
+            "# precision). Run in memory, this script needs the memory the dataset would take.",
+        ]
+    header += [
         "",
         "import sys",
         "",

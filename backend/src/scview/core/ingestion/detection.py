@@ -182,6 +182,15 @@ def _peek_text(path: Path, gzipped: bool) -> str | None:
         return None
 
 
+_LEGACY_TENX_KEYS = {"data", "indices", "indptr", "shape", "barcodes", "genes", "gene_names"}
+
+
+def legacy_tenx_genomes(f: h5py.File) -> list[str]:
+    """The genome groups of a Cell Ranger 1.x/2.x HDF5 (scanpy's legacy layout), or []."""
+    return [k for k in f.keys()
+            if isinstance(f[k], h5py.Group) and _LEGACY_TENX_KEYS <= set(f[k].keys())]
+
+
 def _classify_hdf5(path: Path) -> DetectionResult:
     """Disambiguate the HDF5 family by top-level structure."""
     try:
@@ -206,6 +215,23 @@ def _classify_hdf5(path: Path) -> DetectionResult:
                         ),
                         details=details,
                     )
+
+            # Cell Ranger 1.x/2.x: one group per genome (/mm10, /GRCh38) holding the same
+            # sparse arrays with genes / gene_names (the 10x 1.3M mouse brain file).
+            legacy = legacy_tenx_genomes(f)
+            if legacy:
+                raw = _raw_tenx_h5(path, f[legacy[0]])
+                if raw:
+                    details["raw_matrix"] = raw
+                details["genomes"] = legacy
+                return DetectionResult(
+                    kind=FileKind.tenx_h5,
+                    confidence=0.9,
+                    format_family="10x",
+                    reason=(f"10x CellRanger raw (unfiltered) HDF5: {raw}" if raw else
+                            f"10x CellRanger HDF5, Cell Ranger 2 layout (/{legacy[0]} group)"),
+                    details=details,
+                )
 
             # Loom: row_attrs / col_attrs groups beside a /matrix *dataset*.
             if {"row_attrs", "col_attrs"} <= keys:

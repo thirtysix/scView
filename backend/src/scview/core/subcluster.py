@@ -127,7 +127,10 @@ def subcluster(
         _run_batch_correction(sub, PipelineParams(batch_key=batch_key))
         rep = "X_pca_harmony"
     sc.pp.neighbors(sub, n_neighbors=min(N_NEIGHBORS, n - 1), use_rep=rep, random_state=SEED)
-    leiden.leiden(sub, resolution, "s", random_state=SEED)
+    # Leiden's passes as the split column (else the dataset's clustering) was made: fast
+    # Leiden's 2 there gives sub-clusters of the same kind, and a large group fast ones.
+    n_iterations = leiden.recorded_iterations(adata, column)
+    leiden.leiden(sub, resolution, "s", random_state=SEED, n_iterations=n_iterations)
     codes = sub.obs["s"].astype(str).to_numpy()  # Leiden numbers communities by size
     new_cats = [f"{group}.{k}" for k in sorted(set(codes), key=int)]
 
@@ -141,7 +144,7 @@ def subcluster(
     sizes = [int((codes == k.split(".")[-1]).sum()) for k in new_cats]
     params = {"column": column, "group": group, "resolution": resolution, "target": target,
               "n_top_genes": int(sub.n_vars), "n_pcs": n_comps, "n_neighbors": min(N_NEIGHBORS, n - 1),
-              "batch_key": batch_key if use_batch else None}
+              "batch_key": batch_key if use_batch else None, "leiden_iterations": n_iterations}
     try:
         provenance.record_step(adata, step="subcluster",
                                tool="scanpy HVG + PCA + neighbors + leiden on the group's cells",

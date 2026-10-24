@@ -1,6 +1,6 @@
 [project]
 name = "scview"
-version = "0.33.0"
+version = "0.34.0"
 description = "Single-cell RNA-seq browser-based visualization tool"
 requires-python = ">=3.11"
 dependencies = [
@@ -28,6 +28,7 @@ dependencies = [
     "openpyxl>=3.1.0",
     "loompy>=3.0.7",
     "zarr>=2.18.0",
+    "dask>=2026.8.0",  # chunked QC..PCA for large datasets (core/chunked.py); pure Python, tested with anndata 0.12.19
     "asyncpg>=0.30.0",  # Neon/Postgres + pgvector for the RAG co-pilot corpora
     "beautifulsoup4>=4.12.0",  # tutorial-corpus HTML extraction (RAG ingestion)
     "celltypist>=1.6.0",  # reference-based cell-type annotation (small CPU models)

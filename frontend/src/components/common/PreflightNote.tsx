@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Gauge } from "lucide-react";
+import { AlertTriangle, Gauge, Timer } from "lucide-react";
 
 import {
   getIngestPreflight,
   getRunPreflight,
   type IngestPreflight,
+  type LeidenChoice,
   type PreflightVerdict,
 } from "@/api/preflight";
+import { FAST_LEIDEN, FULL_LEIDEN } from "@/lib/fastLeiden";
+import { FastLeidenInfo } from "./FastLeidenInfo";
 import { InfoTip } from "./InfoTip";
 
 const GB = 1024 ** 3;
@@ -99,35 +102,97 @@ export function PreflightNote({ verdict, label }: { verdict: PreflightVerdict; l
   );
 }
 
+/** When clustering with Leiden's full optimisation would take over 10 minutes: the offer of
+ *  fast Leiden, one click to opt in (and back), with what it changes in a tooltip. Nothing
+ *  for a run that is quick enough, unless fast Leiden is already chosen. */
+export function FastLeidenOffer({
+  choice,
+  onChange,
+}: {
+  choice: LeidenChoice;
+  onChange?: (iterations: number) => void;
+}) {
+  const fast = choice.iterations === FAST_LEIDEN;
+  if (!choice.offer_fast) return null;
+  const cells = choice.n_cells.toLocaleString();
+  return (
+    <div
+      className="mt-1 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[11px] leading-snug text-sky-900"
+      data-testid="fast-leiden-offer"
+    >
+      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+        <Timer className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {fast ? (
+          <span>
+            Clustering {cells} cells with fast Leiden: {choice.fast_text} (the full optimisation:{" "}
+            {choice.full_text}).
+          </span>
+        ) : (
+          <span>
+            Clustering {cells} cells with Leiden&apos;s full optimisation may take {choice.full_text}. Fast Leiden:{" "}
+            {choice.fast_text}.
+          </span>
+        )}
+        {onChange && (
+          <button
+            type="button"
+            onClick={() => onChange(fast ? FULL_LEIDEN : FAST_LEIDEN)}
+            className={
+              fast
+                ? "text-sky-800 underline hover:text-sky-950"
+                : "rounded border border-sky-300 bg-white px-1.5 py-0.5 font-medium text-sky-800 hover:bg-sky-100"
+            }
+          >
+            {fast ? "Use the full optimisation" : "Use fast Leiden"}
+          </button>
+        )}
+        {/* Opens rightwards: the icon sits near the card's left edge, beside the sidebar */}
+        <FastLeidenInfo />
+      </p>
+    </div>
+  );
+}
+
 /** The run estimate for the selected steps, next to the pipeline Run button. Refetched
- *  (debounced) when the steps, the parameters it depends on, or `refreshKey` change. */
+ *  (debounced) when the steps, the parameters it depends on, or `refreshKey` change.
+ *  `onLeidenIterations`: the run's clustering setting, for the fast-Leiden offer's button. */
 export function PreflightRunNote({
   datasetId,
   steps,
   params,
   refreshKey = 0,
+  onLeidenIterations,
 }: {
   datasetId: string;
   steps: string[];
   params: Record<string, unknown> | null;
   refreshKey?: number;
+  onLeidenIterations?: (iterations: number) => void;
 }) {
   const [verdict, setVerdict] = useState<PreflightVerdict | null>(null);
+  const [leiden, setLeiden] = useState<LeidenChoice | null>(null);
   const key = steps.join(",");
   const paramKey = JSON.stringify(params ?? {});
 
   useEffect(() => {
     if (!key) {
       setVerdict(null);
+      setLeiden(null);
       return;
     }
     const ctl = new AbortController();
     const timer = setTimeout(() => {
       getRunPreflight(datasetId, key.split(","), JSON.parse(paramKey), ctl.signal)
-        .then((r) => setVerdict(r.verdict))
+        .then((r) => {
+          setVerdict(r.verdict);
+          setLeiden(r.leiden ?? null);
+        })
         .catch(() => {
           /* advisory only: an older backend or a restart leaves no note */
-          if (!ctl.signal.aborted) setVerdict(null);
+          if (!ctl.signal.aborted) {
+            setVerdict(null);
+            setLeiden(null);
+          }
         });
     }, 300);
     return () => {
@@ -137,7 +202,12 @@ export function PreflightRunNote({
   }, [datasetId, key, paramKey, refreshKey]);
 
   if (!verdict) return null;
-  return <PreflightNote verdict={verdict} />;
+  return (
+    <>
+      <PreflightNote verdict={verdict} />
+      {leiden && <FastLeidenOffer choice={leiden} onChange={onLeidenIterations} />}
+    </>
+  );
 }
 
 /** One note per staged sample (and one for the merge) before an ingest commit. */

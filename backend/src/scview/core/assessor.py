@@ -326,13 +326,21 @@ def _check_normalization_basic(adata: Any) -> StepStatus:
         X = adata.X
         is_float = False
 
-        if sparse.issparse(X):
-            is_float = np.issubdtype(X.dtype, np.floating)
-        else:
-            is_float = np.issubdtype(np.asarray(X).dtype, np.floating)
+        # A backed matrix (a large dataset's, a file over 2 GB) has a dtype but is no array.
+        dtype = getattr(X, "dtype", None)
+        if dtype is None or not (sparse.issparse(X) or hasattr(X, "shape")):
+            dtype = np.asarray(X).dtype
+        is_float = np.issubdtype(dtype, np.floating)
 
         has_raw = adata.raw is not None
         has_counts_layer = "counts" in adata.layers if hasattr(adata, "layers") else False
+        if not has_counts_layer:  # a large dataset keeps its counts in a file of their own
+            from scview.core import large_mode
+
+            try:
+                has_counts_layer = large_mode.counts_of(adata) is not None
+            except large_mode.LargeDatasetError:
+                pass
 
         evidence: list[str] = []
         if is_float:
@@ -873,6 +881,21 @@ _PEARSON_DETAILS = {
 }
 
 
+def _scaling_details(params: dict, method: str | None) -> str | None:
+    """What a recorded scaling step did since it plans only the matrix PCA reads
+    (core/scaling.py; ``scaled_genes`` recorded), or None for an older record (it
+    wrote z-scores or residuals of every gene into X)."""
+    genes = params.get("scaled_genes")
+    if genes is None:
+        return None
+    n = params.get("n_scaled_genes")
+    which = (f"the {n:,} variable genes" if isinstance(n, int) else "the variable genes") \
+        if genes == "highly_variable" else "every gene"
+    made = ("analytic Pearson residuals of the counts" if method == "pearson_residuals"
+            else "z-scores")
+    return f"PCA reads {made} of {which}; X keeps the log-normalised values"
+
+
 def recorded_normalization_method(adata: Any) -> str | None:
     """The normalisation method scView last processed this dataset with ("log" or
     "pearson_residuals"), or None when it never ran the HVG or scaling step."""
@@ -900,15 +923,24 @@ def _apply_recorded_provenance(adata: Any, state: PreprocessingState) -> Preproc
             field = _PROV_STEP_TO_FIELD.get(h.get("step", ""))
             if field:
                 last[field] = h
+            elif h.get("step") == "run_errors":
+                # A later run removed these steps' results as stale (core/step_failures.py):
+                # no longer done; the data decides.
+                for step in (h.get("params") or {}).get("stale") or []:
+                    last.pop(_PROV_STEP_TO_FIELD.get(step, ""), None)
         for field, h in last.items():
             ts = h.get("timestamp", "")
             when = ts.split("T")[0] if ts else ""
             details = f"Run by scView{(' on ' + when) if when else ''} (recorded)"
             # Under Pearson residuals these two steps did something else than their
             # names say: residual-variance HVGs, residuals in X instead of z-scores.
-            method = (h.get("params") or {}).get("normalization_method")
-            if field in _PEARSON_DETAILS and method == "pearson_residuals":
-                details = f"{_PEARSON_DETAILS[field]}; {details[0].lower()}{details[1:]}"
+            params = h.get("params") or {}
+            method = params.get("normalization_method")
+            what = _scaling_details(params, method) if field == "scaling" else None
+            if what is None and field in _PEARSON_DETAILS and method == "pearson_residuals":
+                what = _PEARSON_DETAILS[field]
+            if what:
+                details = f"{what}; {details[0].lower()}{details[1:]}"
             setattr(
                 state,
                 field,

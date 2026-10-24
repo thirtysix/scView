@@ -97,8 +97,13 @@ def _matrix(adata) -> tuple[object, pd.Index, str, bool]:
     """(cells x genes matrix, gene names, where from, holds counts). Raw counts
     when there are any; else the log values (.raw, then X), which still say
     whether a gene was detected in a cell, but give no CPM."""
+    from scview.core import large_layout
     from scview.core.pseudobulk import PseudobulkError, raw_counts
 
+    if large_layout.is_large(adata):
+        # Matrices on disk: the few genes from the gene-major copy of the log values
+        # (the counts are stored cell by cell, so a gene would need every cell read).
+        return adata.X, pd.Index(adata.var_names), "X (log values)", False
     try:
         M, names, source = raw_counts(adata)
         return M, pd.Index(names), source, True

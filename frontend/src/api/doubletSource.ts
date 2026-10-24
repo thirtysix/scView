@@ -60,4 +60,6 @@ export interface DoubletChoices {
   hash_negatives: number | null;
   drop_hash_negatives: boolean;
   negative_note: string;
+  /** Cells the chosen calls leave unscored (Scrublet's channels too small for it): kept. */
+  unscored?: number | null;
 }

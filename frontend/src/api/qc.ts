@@ -146,25 +146,63 @@ export async function getQcByGroup(datasetId: string, column?: string): Promise<
   }
 }
 
-/** The expected doublet rate from the cells per sample (backend core/doublets.py): a
- *  rule of thumb, ~0.8 % per 1,000 cells captured in one channel. */
+/** `doublet_channel_key` for all cells as one channel (backend doublets.ALL_CELLS). */
+export const ALL_CELLS_CHANNEL = "__all__";
+/** Where the doublet step writes the channels it read from the barcodes. */
+export const CAPTURE_CHANNEL_COLUMN = "capture_channel";
+
+/** The capture channels the doublet step runs Scrublet in, each with its expected rate
+ *  (backend core/doublets.py): a rule of thumb, ~0.8 % per 1,000 cells captured in one
+ *  channel. */
 export interface DoubletRateSuggestion {
-  /** For the whole dataset: the cell-weighted mean of the samples' rates. */
+  /** The share of all cells expected to be doublets (cell-weighted mean of the channels'). */
   rate: number;
-  /** The sample column used; null = all cells taken as one channel. */
+  /** Scrublet runs once per channel (false: all cells as one channel). */
+  per_channel?: boolean;
+  /** The obs column of the channels (`capture_channel` when read from the barcodes);
+   *  null = all cells taken as one channel. */
   column: string | null;
+  /** requested | requested_all | channel_column | barcode_prefix | barcode_suffix |
+   *  barcode_prefix_suffix | donor | batch | none */
   reason: string | null;
+  reason_text?: string;
+  /** Read from the barcodes: the step writes them to `capture_channel`. */
+  derived?: boolean;
+  /** A caveat (donors or batches taken as channels are a guess). */
+  note?: string | null;
+  /** Candidate columns passed over, and why. */
+  skipped?: string[];
   n_cells: number;
-  samples: { name: string; n_cells: number; rate: number }[];
+  n_channels?: number;
+  largest_channel?: number;
+  /** Cells not scored: in channels under `min_channel_cells`, or with no channel. */
+  n_unscored?: number;
+  min_channel_cells?: number;
+  channels: { name: string; n_cells: number; rate: number; scored: boolean }[];
   basis: string;
 }
 
-export interface DoubletSampleCalls {
+/** One capture channel on the doublet card. */
+export interface DoubletChannelCalls {
   name: string;
   n_cells: number;
-  n_called: number;
+  n_scored: number;
+  /** At the threshold shown; with none, the calls there are now (Scrublet's per channel). */
+  n_called: number | null;
   fraction: number;
+  /** The rate the run used in this channel (or would use). */
   expected_rate: number;
+  /** The threshold Scrublet picked in this channel (null: none found, or not run). */
+  scrublet_threshold: number | null;
+  /** scored | too_small | failed | not_scored */
+  status: string;
+  /** Cells Scrublet's own threshold calls here now (null: no threshold of its own). Missing
+   *  from an older backend. */
+  scrublet_called?: number | null;
+  /** That threshold called almost nothing in a channel of some size: it may have missed. */
+  few_called?: boolean;
+  /** For a few_called channel: its scores on the card's histogram bins. */
+  hist?: number[];
 }
 
 /** The doublet-score histogram and the calls a threshold makes. Without scores
@@ -176,8 +214,19 @@ export interface DoubletSummary {
   n_scored?: number;
   hist?: { bin_edges: number[]; counts: number[] };
   median?: number | null;
-  /** The threshold Scrublet picked (null when it ran per batch or found none). */
+  /** The threshold Scrublet picked (null when it ran per channel or found none). */
   scrublet_threshold?: number | null;
+  /** Cells with no score: their channel was too small for Scrublet (or failed), or
+   *  Scrublet dropped them for under 3 genes. Never called doublets. */
+  n_unscored?: number;
+  n_unscored_small_channels?: number;
+  min_channel_cells?: number;
+  /** The last run scored each channel alone (more than one). */
+  per_channel?: boolean;
+  /** The last run's channels: their column (null: all cells as one) and why. */
+  channel_column?: string | null;
+  channel_reason?: string | null;
+  channel_reason_text?: string | null;
   /** The threshold applied over Scrublet's call, if any. */
   applied?: { threshold: number; n_called: number } | null;
   /** Scrublet's own call is kept in `predicted_doublet_scrublet`. */
@@ -190,15 +239,33 @@ export interface DoubletSummary {
   threshold?: number | null;
   n_called?: number | null;
   fraction_called?: number | null;
-  samples?: DoubletSampleCalls[];
+  /** Per capture channel (empty for one channel of every cell). */
+  channels?: DoubletChannelCalls[];
+  /** The column of those rows; whether they are the last run's channels. */
+  channels_column?: string | null;
+  channels_recorded?: boolean;
+  /** Channels whose automatic threshold called almost nothing (under `few_called_share` of
+   *  a channel of `few_called_min_cells` or more). */
+  few_called?: string[];
+  few_called_share?: number;
+  few_called_min_cells?: number;
   /** What the doublet views use (cell hashing when run, else Scrublet). */
   source?: DoubletSourceInfo | null;
   /** Cell hashing x Scrublet at this threshold, when the dataset has both. */
   agreement?: DoubletAgreement | null;
 }
 
-export async function getDoublets(datasetId: string, threshold?: number | null): Promise<DoubletSummary> {
-  const q = threshold !== undefined && threshold !== null ? `?threshold=${threshold}` : "";
+/** `channel`: the doublet step's `doublet_channel_key` (an obs column, or
+ *  `ALL_CELLS_CHANNEL`); empty: the last run's channels, else the step's own choice. */
+export async function getDoublets(
+  datasetId: string,
+  threshold?: number | null,
+  channel?: string,
+): Promise<DoubletSummary> {
+  const params = new URLSearchParams();
+  if (threshold !== undefined && threshold !== null) params.set("threshold", String(threshold));
+  if (channel) params.set("column", channel);
+  const q = params.toString() ? `?${params}` : "";
   try {
     return await apiFetch<DoubletSummary>(`/datasets/${datasetId}/qc/doublets${q}`);
   } catch (e) {

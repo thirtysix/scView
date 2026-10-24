@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from scview.core import hashing, protein
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -73,13 +73,13 @@ async def _save(dm: DatasetManager, dataset_id: str, edit, what: str):
     async with dataset_edit(dataset_id) as held:
         adaptor = await _adaptor(dm, dataset_id)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def _run():
-            work = adaptor.adata.to_memory() if backed else adaptor.adata
+            work = editable(adaptor)
             before = uns_snapshot(work)
             result = edit(work)
-            write_derived(work, output_path, adaptor.h5ad_path, before, obsm_keys=_OBSM_KEYS)
+            save_edit(adaptor, work, output_path, before, obsm_keys=_OBSM_KEYS)
             return result
 
         try:

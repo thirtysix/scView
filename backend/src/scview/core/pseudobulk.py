@@ -59,8 +59,12 @@ class PseudobulkResult:
 def raw_counts(adata):
     """(matrix, gene names, where it came from) for the dataset's raw counts:
     ``layers['counts']``, else ``.raw``, else ``X``, whichever first holds counts."""
+    from scview.core.large_mode import counts_of
     from scview.core.pipeline import looks_like_counts  # lazy: pipeline is heavy
 
+    large = counts_of(adata)  # a large dataset's counts sidecar (row reads only)
+    if large is not None:
+        return large, adata.var_names, "the counts file"
     candidates = []
     if "counts" in adata.layers:
         candidates.append((adata.layers["counts"], adata.var_names, "layers['counts']"))

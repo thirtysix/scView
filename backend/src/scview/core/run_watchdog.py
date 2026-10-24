@@ -305,6 +305,9 @@ class RunControl:
         # (steps, PipelineParams) the run will make: before it starts, core/processing.py
         # closes other open datasets whose memory its estimated peak needs.
         self.plan = plan
+        # In memory or in large-dataset mode (core/large_run.py ModeChoice): chosen by
+        # core/processing.py before the run starts; None: not chosen (in memory).
+        self.mode: Any = None
         # Looked up now, so a check plugged into default_before_step applies.
         self.before_step = default_before_step if before_step is _DEFAULT else before_step
         self._cancel = threading.Event()

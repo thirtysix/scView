@@ -7,10 +7,10 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from scview.dependencies import get_dataset_manager
-from scview.core import category_order
+from scview.core import category_order, large_layout
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import series_to_arrow_ipc
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.uns_keys import enrichment_key, markers_key
 
 router = APIRouter()
@@ -132,8 +132,8 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
     """Carry a category rename into the column's markers and cached enrichment,
     which are keyed by group name and otherwise keep the old label."""
     import pandas as pd
-    import scanpy as sc
 
+    from scview.core import rank_genes
     from scview.core.ora_background import meta_key
     from scview.core.pipeline import drop_enrichment_cache
 
@@ -141,11 +141,15 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
         # Two groups became one: markers and enrichment no longer apply.
         drop_enrichment_cache(adata, column)
         keys = _marker_keys(adata, column)
-        if keys:
-            sc.tl.rank_genes_groups(
-                adata, groupby=column, method="wilcoxon", pts=True,
-                key_added=markers_key(column),
-            )
+        if keys and large_layout.is_large(adata):
+            # A large dataset's matrix stays on disk: the markers go, and are computed
+            # again from the gene store on the next visit to the column.
+            for key in keys:
+                adata.uns.pop(key, None)
+        elif keys:
+            # by blocks of genes, bit for bit scanpy's (core/rank_genes.py)
+            rank_genes.rank_genes_groups(adata, column, method="wilcoxon", pts=True,
+                                         key_added=markers_key(column), specificity=True)
             if "rank_genes_groups" in keys:
                 adata.uns["rank_genes_groups"] = adata.uns[markers_key(column)]
         return
@@ -187,14 +191,14 @@ async def set_category_order(
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def _run() -> list[str]:
-            adata = adaptor.adata.to_memory() if backed else adaptor.adata
+            adata = editable(adaptor)
             before = uns_snapshot(adata)
             order = category_order.reorder(adata, column, body.order, body.sort)
             # Only obs (and a colours list in uns) changed: no matrix rewrite.
-            write_derived(adata, output_path, adaptor.h5ad_path, before)
+            save_edit(adaptor, adata, output_path, before)
             return order
 
         try:
@@ -239,10 +243,10 @@ async def rename_obs_category(
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = getattr(adaptor.adata, "isbacked", False)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def _run() -> None:
-            adata = adaptor.adata.to_memory() if backed else adaptor.adata
+            adata = editable(adaptor)
             if column not in adata.obs.columns:
                 raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
             col = adata.obs[column]
@@ -264,7 +268,7 @@ async def rename_obs_category(
             _follow_rename(adata, column, body.old, new, merge)
             category_order.follow_rename(adata, column, body.old, new, merge)
             # A full write (markers are edited in place), beside the file then swapped in.
-            write_derived(adata, output_path)
+            save_edit(adaptor, adata, output_path)
 
         try:
             # Markers may be recomputed on a merge: seconds, so in a worker thread.

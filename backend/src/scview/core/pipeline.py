@@ -8,6 +8,7 @@ then saves the result to disk.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -31,7 +32,8 @@ from scview.core import (
     normalization,
     provenance,
     qc_filter,
-    scrublet_lean,
+    scaling,
+    step_failures,
     stress,
 )
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
@@ -94,10 +96,13 @@ class PipelineParams:
     qc_doublet_source: str = "auto"
     drop_hash_negatives: bool = False
 
-    # Doublet detection
+    # Doublet detection: Scrublet in each capture channel (core/doublets.py)
     doublet_method: str = "scrublet"
-    # None: suggested from the cells per sample (core/doublets.py, a rule of thumb)
+    # None: each channel's own, from its cells (a rule of thumb); a number: every channel's
     expected_doublet_rate: float | None = None
+    # The channels: an obs column, "__all__" (all cells as one channel), or empty: a
+    # channel column, else the barcodes' -N / PREFIX_, else donor / batch, else all cells
+    doublet_channel_key: str = ""
 
     # Normalization: "log" = shifted log, normalize_total + log1p (the default) |
     # "pearson_residuals" = analytic Pearson residuals of the counts, for HVG
@@ -119,6 +124,9 @@ class PipelineParams:
     # Clustering
     clustering_resolution: float = 0.5
     clustering_method: str = "leiden"
+    # Leiden's passes: -1 until one improves nothing (scanpy's default), or 2 ("fast
+    # Leiden", opt-in: the same optimisation stopped early; see core/leiden.py)
+    leiden_iterations: int = -1
 
     # Batch correction
     batch_key: str = ""  # obs column for batch identity (empty = skip)
@@ -152,27 +160,57 @@ class PipelineParams:
     annotation_tissue: str = ""                  # optional tissue hint for method="llm"
     annotation_marker_sets: str = "databases"    # marker_score: databases (core/marker_db.py) | builtin (14 immune sets)
 
+    # Large-dataset mode (core/large_run.py): "auto" runs the steps with the matrices on
+    # disk, in row blocks, when the run would not fit the memory budget in memory; "on"
+    # always, "off" never.
+    chunked: str = "auto"
+
+
+CHUNKED_MODES: tuple[str, ...] = ("auto", "on", "off")
+
+
+def check_chunked(value: Any) -> str:
+    """``PipelineParams.chunked`` as one of ``CHUNKED_MODES`` (true/false as on/off); a
+    ValueError naming the choices for anything else."""
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    mode = str(value if value is not None else "auto").strip().lower()
+    if mode not in CHUNKED_MODES:
+        raise ValueError(f"Unknown chunked mode '{value}'; choose from {', '.join(CHUNKED_MODES)}.")
+    return mode
+
 
 @dataclass
 class PipelineResult:
     """Result of running the preprocessing pipeline."""
 
     steps_run: list[str] = field(default_factory=list)
+    # Steps not run because a step they need failed (core/step_failures.py), in order;
+    # ``skipped`` gives the failed step each one needs.
     steps_skipped: list[str] = field(default_factory=list)
+    skipped: dict[str, str] = field(default_factory=dict)
     errors: dict[str, str] = field(default_factory=dict)
+    # Results of an earlier run that a failed or skipped step would have replaced, removed
+    # as stale: where (obsm, obsp, uns, var, obs, raw) -> keys.
+    cleared: dict[str, list[str]] = field(default_factory=dict)
     # Steps that ran but had nothing to do, and why (not errors; see StepSkipped).
     notes: dict[str, str] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
     output_path: str | None = None
-    # "complete" (ran to the end, errors or not) | "stopped" (the pre-step check
-    # stopped it before a step) | "cancelled"; neither of the last two saves
-    # anything. See core/run_watchdog.py.
+    # "complete" (every step ran) | "finished_with_errors" (a step failed: the steps that
+    # need it were skipped, the others ran, and the run was saved) | "stopped" (the
+    # pre-step check stopped it before a step) | "cancelled"; neither of the last two
+    # saves anything. See core/run_watchdog.py.
     status: str = "complete"
     stop_reason: str | None = None
     # Requested names that are not steps (the run endpoints refuse these with 422).
     unknown_steps: list[str] = field(default_factory=list)
     # What the run used (RunWatchdog.summary + write_s), when it was watched.
     resources: dict[str, Any] | None = None
+    # Ran in large-dataset mode (core/large_run.py), and how the mode was chosen
+    # (``ModeChoice.to_dict``: chunked, requested, reason, need / free bytes).
+    chunked: bool = False
+    mode: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -183,6 +221,56 @@ class StepSkipped(Exception):
 
     Not an error: the run goes on, nothing is recorded in provenance, and the
     reason is returned in ``PipelineResult.notes``."""
+
+
+# The large-dataset run's stand-ins for the steps below that read the matrix
+# (core/large_run.py ``LargeBackend``): marker tests from the gene store, gene scores and
+# CellTypist by row blocks, so those steps run unchanged on a copy of the dataset without
+# X. None: in memory.
+_LARGE: contextvars.ContextVar[Any] = contextvars.ContextVar("scview_large_backend",
+                                                             default=None)
+
+
+@contextlib.contextmanager
+def large_backend(backend: Any):
+    """Run steps in this thread with ``backend`` reading the matrices (see ``_LARGE``)."""
+    token = _LARGE.set(backend)
+    try:
+        yield backend
+    finally:
+        _LARGE.reset(token)
+
+
+def _wilcoxon(adata: ad.AnnData, groupby: str, key_added: str | None = None) -> None:
+    """Wilcoxon markers with pts, as ``sc.tl.rank_genes_groups`` writes them (into
+    ``uns[key_added or "rank_genes_groups"]``), by blocks of genes (``core/rank_genes.py``,
+    bit for bit scanpy's); in a large-dataset run from its gene store. Either way with the
+    specificity frame already in (``sparse_markers``) unless scanpy ran."""
+    backend = _LARGE.get()
+    if backend is not None:
+        backend.rank_genes_groups(adata, groupby, key_added=key_added)
+    else:
+        from scview.core import rank_genes
+
+        rank_genes.rank_genes_groups(adata, groupby, method="wilcoxon", pts=True,
+                                     key_added=key_added, specificity=True)
+
+
+def _attach_specificity(adata: ad.AnnData, rgg: Any, col: str) -> None:
+    if not marker_specificity.has_specificity(rgg):  # markers from a gene store have it
+        marker_specificity.attach(adata, rgg, col)
+
+
+def _score_genes(adata: ad.AnnData, genes, *, score_name: str, use_raw=None,
+                 ctrl_size: int = 50, random_state: int = 0) -> None:
+    """``sc.tl.score_genes``; in a large-dataset run the same scores by row blocks."""
+    backend = _LARGE.get()
+    if backend is not None:
+        backend.score_genes(adata, genes, score_name=score_name, ctrl_size=ctrl_size,
+                            random_state=random_state)
+    else:
+        sc.tl.score_genes(adata, genes, score_name=score_name, use_raw=use_raw,
+                          ctrl_size=ctrl_size, random_state=random_state)
 
 
 # Ordered list of all steps
@@ -224,8 +312,15 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
     else:
         logger.warning("No counts layer or raw found; proceeding with current X")
         return adata
+    clear_processing(adata)
+    logger.info("Reset to counts (%d cells, %d genes)", adata.n_obs, adata.n_vars)
+    return adata
 
-    # Clear preprocessing artifacts
+
+def clear_processing(adata: ad.AnnData) -> None:
+    """What resetting to counts clears besides X: .raw, the variable-gene columns,
+    embeddings, graphs, the results in uns and scView's obs columns (the large-dataset
+    run clears the same on its matrix-free copy, core/large_run.py)."""
     adata.raw = None
 
     # Remove HVG annotation from var (both flavours' columns)
@@ -246,7 +341,7 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
 
     # Clear uns entries (fixed keys + multi-column marker/enrichment keys)
     for key in ["neighbors", "rank_genes_groups", "scview_active_clustering",
-                "pca", "umap", "leiden", "louvain", BATCH_MIXING_KEY]:
+                "pca", "umap", "leiden", "louvain", BATCH_MIXING_KEY, scaling.PLAN_KEY]:
         if key in adata.uns:
             del adata.uns[key]
     multi_keys = [k for k in list(adata.uns.keys())
@@ -259,9 +354,6 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
     scview_cols = [c for c in adata.obs.columns if c.startswith("scview_") and c != "scview_mito_type"]
     if scview_cols:
         adata.obs.drop(columns=scview_cols, inplace=True, errors="ignore")
-
-    logger.info("Reset to counts (%d cells, %d genes)", adata.n_obs, adata.n_vars)
-    return adata
 
 
 def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -308,50 +400,35 @@ def _doublet_matrix(adata: ad.AnnData):
 
 
 def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
-    """Detect doublets with Scrublet; annotate ``.obs`` only (removal is opt-in).
+    """Detect doublets with Scrublet in each capture channel; annotate ``.obs`` only
+    (removal is opt-in).
 
-    Writes ``doublet_score`` (float) and ``predicted_doublet`` (bool) to ``.obs``.
-    Ordered before normalization so Scrublet sees raw counts. The flags are
-    informational here — actual removal happens in the filtering step when
+    Writes ``doublet_score`` (float; NaN for a cell not scored) and ``predicted_doublet``
+    (bool) to ``.obs``. Ordered before normalization so Scrublet sees raw counts. The
+    flags are informational here — actual removal happens in the filtering step when
     ``params.drop_doublets`` is set, so users can inspect the QC distribution first.
-    Without an ``expected_doublet_rate`` the rate is suggested from the cells per
-    sample (``doublets.suggest_rate``); the rate used is recorded in provenance.
-    Neighbours are exact up to ``doublets.EXACT_KNN_MAX_CELLS`` cells (recorded as
-    ``neighbors``). Scrublet scores a sparse matrix of the counts alone
-    (``scrublet_lean.scrublet_counts``: the same scores, without copying the whole
-    dataset); they come from ``layers['counts']`` or ``.raw`` when X holds processed
-    values (recorded as ``input``).
+
+    Scrublet runs on each capture channel's cells alone, one after another
+    (``doublets.run_scrublet``: the channels from ``doublet_channel_key``, else a channel
+    column, the barcodes, the donors / batches, else all cells as one; channels read from
+    the barcodes are written to ``capture_channel``). Each channel gets its own expected
+    rate from its cells unless ``expected_doublet_rate`` is set, its own threshold, and
+    exact neighbours up to ``doublets.EXACT_KNN_MAX_CELLS`` cells; a channel under
+    ``doublets.MIN_CHANNEL_CELLS`` is not scored. The channels and each one's rate,
+    threshold and calls are recorded in provenance. Scrublet scores a sparse matrix of
+    the counts alone (``scrublet_lean.scrublet_counts``: the scores ``sc.pp.scrublet``
+    gives, without copying the whole dataset); they come from ``layers['counts']`` or
+    ``.raw`` when X holds processed values (recorded as ``input``).
     """
     method = (params.doublet_method or "scrublet").lower()
     if method != "scrublet":
         logger.warning("Unknown doublet method '%s'; falling back to scrublet", method)
-    rate = params.expected_doublet_rate
-    if rate is not None and rate > 0:
-        found: dict[str, Any] = {"expected_doublet_rate": float(rate)}
-    else:
-        suggestion = doublets.suggest_rate(adata)
-        found = {"expected_doublet_rate": suggestion["rate"],
-                 "expected_rate_from": suggestion["column"] or "all cells (no sample column)"}
-    exact = adata.n_obs <= doublets.EXACT_KNN_MAX_CELLS
-    found["neighbors"] = "exact" if exact else "approximate"
     counts, where = _doublet_matrix(adata)
+    # A channel column that is not there raises DoubletError: the step's error.
+    found = doublets.run_scrublet(adata, counts, params.expected_doublet_rate,
+                                  params.doublet_channel_key or None)
     if where is not None:
         found["input"] = where
-    score, call, uns = scrublet_lean.scrublet_counts(
-        counts, expected_doublet_rate=found["expected_doublet_rate"], use_approx_neighbors=not exact)
-    adata.obs["doublet_score"] = score
-    adata.obs["predicted_doublet"] = call
-    adata.uns["scrublet"] = uns
-    doublets.clear_threshold(adata)  # set on the previous run's scores
-    n_dbl = (
-        int(adata.obs["predicted_doublet"].sum())
-        if "predicted_doublet" in adata.obs.columns
-        else 0
-    )
-    logger.info(
-        "Doublet detection (scrublet, expected rate %.4f): %d / %d cells flagged as doublets",
-        found["expected_doublet_rate"], n_dbl, adata.n_obs,
-    )
     return found
 
 
@@ -378,6 +455,22 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
     with ``qc_mito_type_floor`` never stricter than the global rule.
     """
     n_before = adata.n_obs
+    t, keep, record, found = filter_judgement(adata, params)
+    if not keep.all():
+        adata = subset_lean(adata, obs=keep)
+    adata.uns[qc_filter.RECORD_KEY] = record
+    # Whose doublets were dropped; V(D)J clone sizes recomputed on the cells kept.
+    found.update(qc_filter.after_filter(adata, t, int((~keep).sum())))
+    adata = _filter_genes_lean(adata, params.min_cells)
+    logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, adata.n_obs)
+    return adata, found
+
+
+def filter_judgement(adata: ad.AnnData, params: PipelineParams):
+    """The cells the filtering step keeps, from obs alone: (thresholds, keep mask, removal
+    record, what to record beside the params). ``_run_filtering`` and the large-dataset
+    run (core/large_run.py) then cut the matrices each its own way."""
+    n_before = adata.n_obs
     t = qc_filter.Thresholds.from_params(params)
     samples = qc_filter.samples_of(adata, params.qc_sample_column or None)
     cells = per_cell_qc(adata)
@@ -400,14 +493,7 @@ def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnDat
         else:
             found.update(qc_mito_type_column=params.qc_mito_type_column,
                          qc_mito_note="% mito can't be measured (no MT- genes): no per-type bounds.")
-    if not keep.all():
-        adata = subset_lean(adata, obs=keep)
-    adata.uns[qc_filter.RECORD_KEY] = record
-    # Whose doublets were dropped; V(D)J clone sizes recomputed on the cells kept.
-    found.update(qc_filter.after_filter(adata, t, int((~keep).sum())))
-    adata = _filter_genes_lean(adata, params.min_cells)
-    logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, adata.n_obs)
-    return adata, found
+    return t, keep, record, found
 
 
 def _plain_matrix(M) -> bool:
@@ -543,12 +629,14 @@ def _run_normalization(adata: ad.AnnData, params: PipelineParams) -> None:
         else:
             _keep_raw_counts(adata)
     sc.pp.normalize_total(adata, target_sum=params.target_sum)
+    scaling.drop_plan(adata)  # X changed: a scaling plan's statistics no longer hold
     logger.info("Normalized to target sum %.0f", params.target_sum)
 
 
 def _run_log_transform(adata: ad.AnnData, params: PipelineParams) -> None:
     """Log-transform expression values (log1p)."""
     sc.pp.log1p(adata)
+    scaling.drop_plan(adata)
     logger.info("Applied log1p transformation")
 
 
@@ -567,6 +655,15 @@ def _var_from_hvg_frame(adata: ad.AnnData, df: pd.DataFrame) -> None:
     adata.var["highly_variable"] = adata.var["highly_variable"].astype(bool)
 
 
+def _wide_ints(counts):
+    """Dense counts of a small integer type as int64. scanpy squares a dense matrix in
+    its own dtype for the gene variances, so an int32 count over 46,340 overflowed
+    into a negative variance and wrong Seurat v3 variable genes."""
+    if isinstance(counts, np.ndarray) and counts.dtype.kind in "iu" and counts.dtype.itemsize < 8:
+        return counts.astype(np.int64)
+    return counts
+
+
 def _seurat_v3_hvg(adata: ad.AnnData, params: PipelineParams, batch_key: str | None) -> dict[str, Any]:
     """Variable genes ranked by the standardised variance of the counts (Seurat v3)."""
     _keep_raw_counts(adata)
@@ -577,7 +674,7 @@ def _seurat_v3_hvg(adata: ad.AnnData, params: PipelineParams, batch_key: str | N
             "The Seurat v3 flavour ranks raw counts (layers['counts'], .raw or X), and this "
             "dataset has none: choose the Seurat or Cell Ranger flavour."
         ) from None
-    tmp = ad.AnnData(X=counts, obs=adata.obs[[batch_key]] if batch_key else None)
+    tmp = ad.AnnData(X=_wide_ints(counts), obs=adata.obs[[batch_key]] if batch_key else None)
     tmp.var_names = adata.var_names
     df = sc.pp.highly_variable_genes(
         tmp, flavor="seurat_v3", n_top_genes=min(params.n_top_genes, adata.n_vars),
@@ -635,12 +732,15 @@ def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None
     return None
 
 
-def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
-    """Scale expression to unit variance and zero mean, or, with Pearson residuals
-    chosen, put the residuals of the counts in X instead. Either way .raw keeps
-    the log-normalised matrix that markers, DE and the scores read."""
+def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
+    """Plan the matrix PCA reads (core/scaling.py): z-scores of the log values of the
+    variable genes (every gene without them), or, with Pearson residuals chosen, the
+    residuals of the counts. Nothing dense is made here: X keeps the log-normalised
+    matrix of every gene, .raw is set to it (markers, DE and the scores read it), and
+    the PCA step builds the scaled matrix for its own length. The old step made X dense
+    float32 for every gene and z-scored it: 38 of a 46 GB run peak at 250k cells."""
     method = normalization.check_method(params.normalization_method)
-    # Store the full data before subsetting to HVGs
+    # Counts held only in .raw: kept in layers['counts'] before .raw is replaced.
     _keep_raw_counts(adata)
     if method == "pearson_residuals":
         counts, source = normalization.find_counts(adata)
@@ -649,34 +749,41 @@ def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | 
                 "Pearson residuals replace only the matrix PCA reads: run normalization "
                 "and log transform too, so markers, DE and plots keep log-normalised values."
             )
-        adata.raw = adata
+        _raw_from_x(adata)
         clip = normalization.default_clip(adata.n_obs)
-        # A new array: .raw, which may share a dense X, keeps the log values.
-        adata.X = normalization.pearson_residuals(counts, clip=clip)
-        logger.info("Pearson residuals in X (theta=%g, clip=%.1f; counts from %s)",
-                    normalization.THETA, clip, source)
-        return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source}
+        found = scaling.plan_residuals(adata, normalization.THETA, clip, source)
+        return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source,
+                **found}
+    _raw_from_x(adata)
+    return scaling.plan_zscores(adata, max_value=scaling.MAX_VALUE)
+
+
+def _raw_from_x(adata: ad.AnnData) -> None:
+    """``.raw = adata``: the log-normalised matrix, X itself. Over an X an older scView
+    scaled (z-scores or residuals), .raw keeps the log values it has."""
+    if adata.raw is not None and scaling.holds_scaled(adata.X):
+        logger.info("X holds scaled values (an older run): .raw kept as it is")
+        return
     adata.raw = adata
-    # Scaled X is dense (every gene), so it is kept as float32: sc.pp.scale turns
-    # a sparse matrix into dense float64, which on Kang (13,836 x 13,912) took
-    # 1.5 GB and the run's peak from 3.4 to 4.9 GB (PCs identical, Leiden ARI
-    # 0.987). The new array also keeps .raw, which may share a dense X, log-scaled.
-    X = adata.X.astype(np.float32)
-    adata.X = X.toarray() if sp.issparse(X) else X
-    sc.pp.scale(adata, max_value=10)
-    logger.info("Scaled expression (max_value=10)")
-    return None
 
 
-def _run_pca(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Run PCA."""
+def _run_pca(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
+    """PCA on the matrix the scaling step planned (``scaling.run_pca``: the variable
+    genes, scaled for this step only), else on X as it is: the log values when scaling
+    was skipped, or the z-scores an older scView wrote into X. Stored as sc.tl.pca
+    stores it either way."""
     n_comps = min(params.n_comps, adata.n_obs - 1, adata.n_vars - 1)
-    sc.tl.pca(adata, n_comps=n_comps, svd_solver="arpack")
+    found = None
+    if scaling.read_plan(adata) is not None:
+        found = scaling.run_pca(adata, n_comps)
+    else:
+        sc.tl.pca(adata, n_comps=n_comps, svd_solver="arpack")
     # A Harmony embedding of the previous PCA would otherwise still be picked up
     # by the neighbour graph; the batch-correction step rebuilds it if it runs.
     adata.obsm.pop("X_pca_harmony", None)
     adata.uns.pop(BATCH_MIXING_KEY, None)  # scored the previous PCA
     logger.info("PCA: %d components", n_comps)
+    return found
 
 
 def _run_uncorrected_embedding(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -767,29 +874,39 @@ def _louvain_igraph(adata: ad.AnnData, resolution: float, key_added: str, seed: 
     adata.obs[key_added] = pd.Categorical(labels, categories=[str(i) for i in range(order.size)])
 
 
-def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> None:
+def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
     """Run clustering (Leiden or Louvain).
 
     Stores results in a custom column ``scview_{method}_r{resolution}`` so that
     the original dataset's clustering column (if any) is preserved.  The active
     column name is recorded in ``adata.uns["scview_active_clustering"]`` for
     downstream steps (marker genes, violin groupby, etc.).
+
+    Leiden runs until a pass improves nothing, or with ``leiden_iterations`` 2 stops
+    after two passes (fast Leiden, recorded with the step and in the column's
+    ``uns[column]["params"]``, as ``sc.tl.leiden(..., n_iterations=2)`` stores it).
     """
     method = params.clustering_method
     # Written straight to the scview_* column: scanpy's default key ("leiden" /
     # "louvain") would overwrite a clustering the dataset came with.
     scview_col = f"scview_{method}_r{params.clustering_resolution}"
+    found = None
     if method == "leiden":
-        leiden.leiden(adata, params.clustering_resolution, scview_col)  # in a child process
+        n_iterations = leiden.check_iterations(params.leiden_iterations)
+        # In a child process
+        leiden.leiden(adata, params.clustering_resolution, scview_col, n_iterations=n_iterations)
+        found = {"leiden_iterations": n_iterations}
     else:
         _louvain_igraph(adata, params.clustering_resolution, scview_col)
     adata.uns["scview_active_clustering"] = scview_col
 
     n_clusters = adata.obs[scview_col].nunique()
     logger.info(
-        "Clustering (%s): %d clusters at resolution %.2f → column '%s'",
-        method, n_clusters, params.clustering_resolution, scview_col,
+        "Clustering (%s%s): %d clusters at resolution %.2f → column '%s'",
+        method, ", fast" if found and found["leiden_iterations"] != leiden.N_ITERATIONS else "",
+        n_clusters, params.clustering_resolution, scview_col,
     )
+    return found
 
 
 def _run_embeddings(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -857,10 +974,10 @@ def _run_marker_genes(adata: ad.AnnData, params: PipelineParams, cb: SubstepCall
         # columns (e.g. predicted_doublet) so they don't raise a .cat accessor error.
         if adata.obs[col].dtype.name != "category":
             adata.obs[col] = adata.obs[col].astype(str).astype("category")
-        sc.tl.rank_genes_groups(adata, groupby=col, method="wilcoxon", pts=True)
+        _wilcoxon(adata, col)
         # Store under namespaced key
         adata.uns[markers_key(col)] = adata.uns["rank_genes_groups"].copy()
-        marker_specificity.attach(adata, adata.uns[markers_key(col)], col)
+        _attach_specificity(adata, adata.uns[markers_key(col)], col)
         drop_enrichment_cache(adata, col)
         computed += 1
 
@@ -1086,9 +1203,13 @@ def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]
                 "Need at least 5 of each."
             )
 
-        sc.tl.score_genes_cell_cycle(
-            adata, s_genes=s_present, g2m_genes=g2m_present, use_raw=use_raw
-        )
+        backend = _LARGE.get()
+        if backend is not None:
+            backend.score_genes_cell_cycle(adata, s_genes=s_present, g2m_genes=g2m_present)
+        else:
+            sc.tl.score_genes_cell_cycle(
+                adata, s_genes=s_present, g2m_genes=g2m_present, use_raw=use_raw
+            )
         logger.info("Cell cycle scored (%s; %d S genes, %d G2M genes)",
                     species, len(s_present), len(g2m_present))
     except Exception as e:
@@ -1112,7 +1233,7 @@ def _run_dissociation_stress(adata: ad.AnnData, params: PipelineParams) -> dict[
             "was written."
         )
     n_pool = len(names) - len(genes)
-    sc.tl.score_genes(
+    _score_genes(
         adata, genes, score_name=stress.SCORE_COLUMN, use_raw=use_raw,
         ctrl_size=max(1, min(50, n_pool)), random_state=0,
     )
@@ -1163,17 +1284,23 @@ def _annotate_celltypist(
     # CellTypist expects log1p of counts-per-10k. Build that from raw counts so the
     # result is correct regardless of the current X state (scaled/HVG-subset/etc.).
     # layers['counts'] first: after scaling, .raw holds log-normalised values.
-    if "counts" in adata.layers:
-        counts, var_names = adata.layers["counts"], list(adata.var_names)
-    elif adata.raw is not None:
-        counts, var_names = adata.raw.X, list(adata.raw.var_names)
+    backend = _LARGE.get()
+    inp = None
+    if backend is not None:  # the counts' genes; the input is built a block of cells at a time
+        input_genes = pd.Index(adata.var_names)
     else:
-        counts, var_names = adata.X, list(adata.var_names)
-    inp = ad.AnnData(X=counts.copy() if hasattr(counts, "copy") else counts)
-    inp.obs_names = adata.obs_names
-    inp.var_names = var_names
-    sc.pp.normalize_total(inp, target_sum=1e4)
-    sc.pp.log1p(inp)
+        if "counts" in adata.layers:
+            counts, var_names = adata.layers["counts"], list(adata.var_names)
+        elif adata.raw is not None:
+            counts, var_names = adata.raw.X, list(adata.raw.var_names)
+        else:
+            counts, var_names = adata.X, list(adata.var_names)
+        inp = ad.AnnData(X=counts.copy() if hasattr(counts, "copy") else counts)
+        inp.obs_names = adata.obs_names
+        inp.var_names = var_names
+        sc.pp.normalize_total(inp, target_sum=1e4)
+        sc.pp.log1p(inp)
+        input_genes = inp.var_names
 
     # How well the model suits the data (core/celltypist_fit.py): its species
     # against the dataset's, and the share of its genes the dataset has.
@@ -1188,7 +1315,7 @@ def _annotate_celltypist(
         model = models.Model.load(model=model_name)
         details = str((getattr(model, "description", None) or {}).get("details", ""))
         run["model_species"] = celltypist_fit.model_species(model_name, details)
-        run.update(celltypist_fit.gene_overlap(model.features, inp.var_names))
+        run.update(celltypist_fit.gene_overlap(model.features, input_genes))
     except Exception as e:  # no local copy: CellTypist's own load below says why
         logger.warning("CellTypist model %s not loaded for the overlap check: %s", model_name, e)
     if run.get("n_shared_genes") == 0:
@@ -1197,12 +1324,14 @@ def _annotate_celltypist(
             f"None of the {run['n_model_genes']:,} genes of {model_name} are in this dataset. "
             + (warning or "CellTypist needs gene symbols matching the model's (not Ensembl ids).")
         )
-    annotate_kwargs: dict[str, Any] = {"model": model, "majority_voting": True}
-    if groupby:
-        inp.obs[groupby] = adata.obs[groupby].values  # consensus over the user's clusters
-        annotate_kwargs["over_clustering"] = groupby
-
-    pred = celltypist.annotate(inp, **annotate_kwargs)
+    if backend is not None:  # per block of cells, then the vote over the clustering
+        pred = backend.celltypist(adata, model, groupby)
+    else:
+        annotate_kwargs: dict[str, Any] = {"model": model, "majority_voting": True}
+        if groupby:
+            inp.obs[groupby] = adata.obs[groupby].values  # consensus over the user's clusters
+            annotate_kwargs["over_clustering"] = groupby
+        pred = celltypist.annotate(inp, **annotate_kwargs)
     labels = pred.predicted_labels
     col = "majority_voting" if "majority_voting" in labels.columns else "predicted_labels"
     adata.obs[target] = labels[col].astype(str).astype("category").values
@@ -1245,9 +1374,7 @@ def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 25) -> dict
     if resolve_markers_key(adata.uns, groupby) is None:
         if adata.obs[groupby].dtype.name != "category":
             adata.obs[groupby] = adata.obs[groupby].astype(str).astype("category")
-        sc.tl.rank_genes_groups(
-            adata, groupby=groupby, method="wilcoxon", pts=True, key_added=markers_key(groupby)
-        )
+        _wilcoxon(adata, groupby, key_added=markers_key(groupby))
     return group_markers(adata, groupby, n=n)
 
 
@@ -1423,7 +1550,18 @@ def _annotate_marker_score(
     builtin = (params.annotation_marker_sets or "databases").lower() == "builtin"
     db = None if builtin else _marker_db_or_none()
     if db is not None:
-        mapping, info = marker_db.annotate(adata, groupby, db=db)
+        # In a large-dataset run the database check reads stored markers only (it would
+        # rank the matrix otherwise): the clustering's, for the check alone.
+        key = markers_key(groupby)
+        temporary = (_LARGE.get() is not None and key not in adata.uns
+                     and adata.obs[groupby].dtype.name == "category")
+        if temporary:
+            _wilcoxon(adata, groupby, key_added=key)
+        try:
+            mapping, info = marker_db.annotate(adata, groupby, db=db)
+        finally:
+            if temporary:
+                adata.uns.pop(key, None)
     else:
         mapping = _marker_set_mapping(adata, groupby)
         info = {"marker_source": "built-in", "n_types": len(_MARKER_SETS),
@@ -1447,7 +1585,7 @@ def _marker_set_mapping(adata: ad.AnnData, groupby: str) -> dict[str, str]:
             if len(present) < 2:
                 continue
             key = f"_ms__{ct}"
-            sc.tl.score_genes(adata, present, score_name=key, ctrl_size=min(50, adata.n_vars - 1))
+            _score_genes(adata, present, score_name=key, ctrl_size=min(50, adata.n_vars - 1))
             score_cols[ct] = key
         if not score_cols:
             raise ValueError("None of the marker-set genes are present in this dataset.")
@@ -1526,10 +1664,8 @@ def _markers_for_column(adata: ad.AnnData, col: str) -> None:
     try:
         if adata.obs[col].dtype.name != "category":
             adata.obs[col] = adata.obs[col].astype(str).astype("category")
-        sc.tl.rank_genes_groups(
-            adata, groupby=col, method="wilcoxon", pts=True, key_added=markers_key(col)
-        )
-        marker_specificity.attach(adata, adata.uns[markers_key(col)], col)
+        _wilcoxon(adata, col, key_added=markers_key(col))
+        _attach_specificity(adata, adata.uns[markers_key(col)], col)
         drop_enrichment_cache(adata, col)
     except Exception as exc:
         logger.warning("Markers for '%s' failed: %s", col, exc)
@@ -1576,7 +1712,8 @@ def _new_adata(step_name: str, ret: Any) -> tuple[ad.AnnData | None, Any]:
 _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "reset_to_counts": ("scview.reset_to_counts", ()),
     "qc_metrics": ("scanpy.pp.calculate_qc_metrics", ()),
-    "doublet_detection": ("scanpy.pp.scrublet", ("doublet_method", "expected_doublet_rate")),
+    "doublet_detection": ("scanpy.pp.scrublet (per capture channel)",
+                          ("doublet_method", "expected_doublet_rate", "doublet_channel_key")),
     # The mode's own params (fixed cut-offs, or k and per-sample thresholds) come
     # back from the step itself.
     "filtering": ("scview.qc_filter + scanpy.pp.filter_genes",
@@ -1635,32 +1772,47 @@ def _record_pipeline_step(
         logger.warning("Could not record provenance for step '%s': %s", step_name, e)
 
 
-def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list[str]) -> None:
-    """Update the denormalised ``current`` state summary after a pipeline run."""
+def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list[str],
+                      result: PipelineResult | None = None) -> None:
+    """Update the denormalised ``current`` state summary after a pipeline run. With
+    ``result``: how the run ended (``last_run``), and, when it removed stale results
+    (``result.cleared``), the summary of what is left, emptied where nothing is."""
     try:
         ran = set(steps_run)
+        cleared = result.cleared if result is not None else {}
         current: dict[str, Any] = {}
+        if result is not None:
+            current["last_run"] = {"status": result.status, "failed": sorted(result.errors),
+                                   "skipped": list(result.steps_skipped)}
         if "normalization" in ran:
             current["normalized"] = True
         if "log_transform" in ran:
             current["log1p"] = True
         if "scaling" in ran:
             current["scaled"] = True
+        elif scaling.PLAN_KEY in cleared.get("uns", []):
+            current["scaled"] = False
         if ran & {"highly_variable_genes", "scaling"}:
             # What X and the variable genes came from: z-scored log values or residuals.
             current["normalization_method"] = params.normalization_method
         if "pca" in ran or "X_pca" in adata.obsm:
             current["pca"] = True
+        elif "X_pca" in cleared.get("obsm", []):
+            current["pca"] = False
         embs = sorted(k for k in adata.obsm.keys() if k.startswith("X_"))
-        if embs:
+        if embs or cleared:
             current["embeddings"] = embs
         active = adata.uns.get("scview_active_clustering")
+        if not active and "scview_active_clustering" in cleared.get("uns", []):
+            current["clustering"] = None  # stale: the clustering stopped being active
         if active and "clustering" in ran:
             current["clustering"] = {
                 "column": active,
                 "method": params.clustering_method,
                 "resolution": params.clustering_resolution,
             }
+            if params.clustering_method == "leiden":  # what re-clustering follows
+                current["clustering"]["leiden_iterations"] = int(params.leiden_iterations)
         elif active:
             # Clustering did not run, so params.clustering_* are just defaults: keep
             # what the run that made the column recorded.
@@ -1670,12 +1822,12 @@ def _finalize_current(adata: ad.AnnData, params: PipelineParams, steps_run: list
         markers_for = sorted(
             c for c in (markers_column(k) for k in adata.uns) if c is not None
         )
-        if markers_for:
+        if markers_for or cleared:
             current["markers_for"] = markers_for
         enr_for = sorted(
             {c for c in (enrichment_column(k) for k in adata.uns) if c is not None}
         )
-        if enr_for:
+        if enr_for or cleared:
             current["enrichment_for"] = enr_for
         anchors = []
         if "counts" in adata.layers:
@@ -1715,6 +1867,60 @@ def _cancelled_during(result: PipelineResult, step: str) -> None:
     _halted(result, ("cancelled", cancelled_reason("during", step)))
 
 
+# How a run ended when it is saved (the others save nothing).
+SAVED_STATUSES = ("complete", step_failures.FINISHED_WITH_ERRORS)
+
+
+def _new_outcome(adata: ad.AnnData, ordered_steps: list[str],
+                 params: PipelineParams) -> step_failures.Outcome:
+    active = adata.uns.get("scview_active_clustering")
+    return step_failures.Outcome(list(ordered_steps), params,
+                                 active_before=active if isinstance(active, str) else None)
+
+
+def _skip_if_blocked(adata: ad.AnnData, result: PipelineResult, outcome: step_failures.Outcome,
+                     step: str) -> str | None:
+    """When a step ``step`` needs failed: record it as skipped, remove its stale results,
+    and return the failed step's name (None: it runs)."""
+    because = outcome.blocked_by(step)
+    if because is None:
+        return None
+    outcome.skipped[step] = because
+    result.steps_skipped.append(step)
+    result.skipped[step] = because
+    step_failures.settle(adata, step, outcome)
+    logger.info("Step '%s' skipped: it needs '%s', which failed", step, because)
+    return because
+
+
+def _step_failed(adata: ad.AnnData, result: PipelineResult, outcome: step_failures.Outcome,
+                 step: str, error: str) -> None:
+    logger.error("Step '%s' failed: %s", step, error)
+    result.errors[step] = error
+    outcome.failed[step] = error
+    step_failures.settle(adata, step, outcome)
+
+
+def _end_status(result: PipelineResult, outcome: step_failures.Outcome) -> None:
+    """A run that reached its end with a failed step finished with errors."""
+    if result.status == "complete" and outcome.any:
+        result.status = step_failures.FINISHED_WITH_ERRORS
+    result.cleared = {k: list(v) for k, v in outcome.cleared.items() if v}
+
+
+def _record_errors(adata: ad.AnnData, result: PipelineResult,
+                   outcome: step_failures.Outcome | None) -> None:
+    """The run's failed and skipped steps (and the stale results removed) in provenance,
+    after its steps: ``run_errors``, which the replay script follows. Never raises."""
+    if outcome is None or result.status != step_failures.FINISHED_WITH_ERRORS:
+        return
+    try:
+        provenance.record_step(adata, step="run_errors", tool="scview pipeline",
+                               params=outcome.record())
+    except Exception as e:  # provenance must never break the pipeline
+        logger.warning("Could not record the run's errors in provenance: %s", e)
+
+
 def _finish_run(
     adata: ad.AnnData,
     params: PipelineParams,
@@ -1722,20 +1928,26 @@ def _finish_run(
     t0: float,
     output_path: str | None,
     control: RunControl | None,
+    outcome: step_failures.Outcome | None = None,
 ) -> None:
-    """Finalise and save a run that reached its end. A cancelled run, or one the
-    pre-step check stopped, saves nothing: a reprocess or re-filter stopped halfway
-    would otherwise replace the dataset with a half-processed one (reset to counts,
-    not yet normalised). The dataset reopens as it was before the run.
+    """Finalise and save a run that reached its end, also one that finished with
+    errors (what ran is saved; ``run_errors`` in provenance lists what did not). A
+    cancelled run, or one the pre-step check stopped, saves nothing: a reprocess or
+    re-filter stopped halfway would otherwise replace the dataset with a
+    half-processed one (reset to counts, not yet normalised). The dataset reopens as
+    it was before the run.
 
     The file is written beside the derived file and then swapped in, so a backend
     killed mid-write (out of memory) leaves the previous file whole."""
-    if result.status == "complete" and control is not None and control.cancelled:
+    if outcome is not None:
+        _end_status(result, outcome)
+    if result.status in SAVED_STATUSES and control is not None and control.cancelled:
         # Cancelled after the last step ended but before the save.
         _halted(result, ("cancelled", cancelled_reason("before", "saving")))
-    save = result.status == "complete"
+    save = result.status in SAVED_STATUSES
     if save:
-        _finalize_current(adata, params, result.steps_run)
+        _record_errors(adata, result, outcome)
+        _finalize_current(adata, params, result.steps_run, result)
     result.elapsed_seconds = round(time.time() - t0, 2)
     write_s = None
     if output_path and save:
@@ -1778,6 +1990,9 @@ def run_pipeline(
         Checked before each step (cancel, the pre-step hook) and times and
         watches each step (``core/run_watchdog.py``). None: neither.
 
+    A step that fails skips the steps that need it (``core/step_failures.py``); the
+    others run, and the run is saved with status "finished_with_errors".
+
     Returns
     -------
     Tuple of (processed AnnData, PipelineResult).
@@ -1802,11 +2017,12 @@ def run_pipeline(
     # Ensure steps are in canonical order
     ordered_steps = [s for s in ALL_STEPS if s in steps]
     result.unknown_steps = _unknown_requested(steps)
+    outcome = _new_outcome(adata, ordered_steps, params)
 
     for step_name in ordered_steps:
-        runner = _STEP_RUNNERS.get(step_name)
-        if runner is None:
-            result.steps_skipped.append(step_name)
+        runner = _STEP_RUNNERS[step_name]
+        # A step that needs a failed one is skipped; the others still run.
+        if _skip_if_blocked(adata, result, outcome, step_name) is not None:
             continue
         halt = control.halt_before(step_name, adata, params) if control is not None else None
         if halt is not None:
@@ -1823,6 +2039,7 @@ def run_pipeline(
                 provenance.carry(adata, new)  # keep history across the new object
                 adata = new
             result.steps_run.append(step_name)
+            outcome.succeeded.append(step_name)
             _record_pipeline_step(adata, step_name, params, ret,
                                   _step_resources(control, step_name))
         except StepSkipped as e:
@@ -1832,10 +2049,9 @@ def run_pipeline(
             if control is not None and control.cancelled:  # e.g. its Leiden child was ended
                 _cancelled_during(result, step_name)
                 break
-            logger.error("Step '%s' failed: %s", step_name, e)
-            result.errors[step_name] = str(e)
+            _step_failed(adata, result, outcome, step_name, str(e))
 
-    _finish_run(adata, params, result, t0, output_path, control)
+    _finish_run(adata, params, result, t0, output_path, control, outcome)
     return adata, result
 
 
@@ -1854,8 +2070,10 @@ def run_pipeline_streamed(
     Yields
     ------
     Tuples of (event_type, event_data) where event_type is one of:
-      "step_start", "step_done", "step_error", "substep", "complete". The
-    "complete" data is the result, with ``status`` complete | stopped | cancelled.
+      "step_start", "step_done", "step_error", "step_skipped" (a step not run because
+      one it needs failed: ``skipped_event``), "substep", "complete". The "complete"
+      data is the result, with ``status`` complete | finished_with_errors | stopped |
+      cancelled.
     """
     if params is None:
         params = PipelineParams()
@@ -1869,15 +2087,17 @@ def run_pipeline_streamed(
     ordered_steps = [s for s in ALL_STEPS if s in steps]
     total = len(ordered_steps)
     result.unknown_steps = _unknown_requested(steps)
+    outcome = _new_outcome(adata, ordered_steps, params)
 
     # Runners that accept a substep progress callback (3rd arg)
     _SUBSTEP_RUNNERS = {"marker_genes", "enrichment"}
     _SENTINEL = object()  # marks thread completion
 
     for idx, step_name in enumerate(ordered_steps):
-        runner = _STEP_RUNNERS.get(step_name)
-        if runner is None:
-            result.steps_skipped.append(step_name)
+        runner = _STEP_RUNNERS[step_name]
+        because = _skip_if_blocked(adata, result, outcome, step_name)
+        if because is not None:
+            yield ("step_skipped", skipped_event(step_name, idx, total, because))
             continue
         halt = control.halt_before(step_name, adata, params) if control is not None else None
         if halt is not None:
@@ -1933,6 +2153,7 @@ def run_pipeline_streamed(
                 provenance.carry(adata, new)  # keep history across the new object
                 adata = new
             result.steps_run.append(step_name)
+            outcome.succeeded.append(step_name)
             _record_pipeline_step(adata, step_name, params, ret,
                                   _step_resources(control, step_name))
             elapsed = round(time.time() - step_t0, 2)
@@ -1946,11 +2167,16 @@ def run_pipeline_streamed(
             if control is not None and control.cancelled:  # its Leiden child ended, or a substep
                 _cancelled_during(result, step_name)
                 break
-            logger.error("Step '%s' failed: %s", step_name, e)
-            result.errors[step_name] = str(e)
+            _step_failed(adata, result, outcome, step_name, str(e))
             yield ("step_error", {"step": step_name, "index": idx, "error": str(e)})
 
-    _finish_run(adata, params, result, t0, output_path, control)
+    _finish_run(adata, params, result, t0, output_path, control, outcome)
     yield ("complete", result.to_dict())
 
     return adata, result
+
+
+def skipped_event(step: str, index: int, total: int, because: str) -> dict[str, Any]:
+    """The ``step_skipped`` event of a step not run because ``because`` failed."""
+    return {"step": step, "index": index, "total": total, "because": because,
+            "reason": step_failures.skip_reason(step, because)}

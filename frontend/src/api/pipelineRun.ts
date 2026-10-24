@@ -1,4 +1,5 @@
 import { apiFetch, readError } from "@/api/client";
+import { clearedText } from "@/lib/runErrors";
 
 /** A warning the run watchdog sends into a run's stream (backend core/run_watchdog.py). */
 export type WatchdogEvent =
@@ -16,8 +17,12 @@ export type WatchdogEvent =
     }
   | { type: "watchdog"; kind: "slow_step"; step: string; elapsed_s: number };
 
-/** How a run ended: ran to the end (errors or not), stopped by the pre-step check, or cancelled. */
-export type RunStatus = "complete" | "stopped" | "cancelled";
+/** How a run ended: every step ran; a step failed (the steps that need it were skipped, the
+ *  others ran, and it was saved); stopped by the pre-step check; or cancelled. */
+export type RunStatus = "complete" | "finished_with_errors" | "stopped" | "cancelled";
+
+/** The status of a run that was saved with failed steps (backend core/step_failures.py). */
+export const FINISHED_WITH_ERRORS = "finished_with_errors";
 
 /** What a watched run used: memory sampled every `sample_seconds`, each step's seconds. */
 export interface RunResources {
@@ -37,6 +42,12 @@ export interface RunOutcomeFields {
   status?: RunStatus;
   stop_reason?: string | null;
   resources?: RunResources | null;
+  /** Failed steps and their errors */
+  errors?: Record<string, string>;
+  /** Steps not run because a step they need failed -> that step */
+  skipped?: Record<string, string>;
+  /** Results of an earlier run removed as stale: where (obsm, obsp, uns, var, obs, raw) -> keys */
+  cleared?: Record<string, string[]>;
 }
 
 /** Ask the backend to cancel the pipeline run working on a dataset (404: none is). */
@@ -74,7 +85,29 @@ export function watchdogMessage(e: WatchdogEvent, label: (step: string) => strin
   return `${label(e.step)}: ${minutes} min so far.`;
 }
 
-/** The sentences for a run that did not run to its end, or null when it did. */
+export { clearedText };
+
+/** The lines of a run that finished with errors: each failed step and its error, the steps
+ *  skipped because of it, and the stale results removed. */
+export function runErrorLines(
+  r: RunOutcomeFields,
+  label: (step: string) => string,
+): { failed: string[]; skipped: string | null; cleared: string | null } {
+  const failed = Object.entries(r.errors ?? {}).map(([s, e]) => `${label(s)} failed: ${e}`);
+  const entries = Object.entries(r.skipped ?? {});
+  const skipped = entries.length
+    ? "Skipped, as they need a step that failed: " +
+      entries.map(([s, because]) => `${label(s)} (needs ${label(because)})`).join(", ") + "."
+    : null;
+  const what = clearedText(r.cleared);
+  const cleared = what
+    ? `Results of an earlier run that these steps would have replaced were removed, as they no longer match the data: ${what}.`
+    : null;
+  return { failed, skipped, cleared };
+}
+
+/** The sentences for a run that did not run to its end, or null when it did (every step
+ *  ran). A run that finished with errors was saved: what failed, what was skipped. */
 export function runOutcome(
   r: RunOutcomeFields,
   label: (step: string) => string,
@@ -82,6 +115,16 @@ export function runOutcome(
   const status = r.status ?? "complete";
   if (status === "complete") return null;
   const done = r.steps_run.map(label).join(", ");
+  if (status === FINISHED_WITH_ERRORS) {
+    const lines = runErrorLines(r, label);
+    return {
+      title: "Finished with errors",
+      reason: lines.failed.join(" ") || "A step failed.",
+      steps: [done ? `Saved: ${done}.` : "No step finished.", lines.skipped, lines.cleared]
+        .filter(Boolean)
+        .join(" "),
+    };
+  }
   if (status === "cancelled")
     return {
       title: "Run cancelled",

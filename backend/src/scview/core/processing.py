@@ -15,6 +15,17 @@ Both are released, and the cached copy dropped, only when the worker thread has
 stopped, even if the client went away first: the thread can't be interrupted
 mid-step, and until it stops it may still be writing the derived file.
 
+Steps need the dataset in memory: one the adaptor opened backed (a file over
+``SCVIEW_BACKED_MIN_MB``) is read in first, within the memory budget
+(``core/working_copy.py``), in the worker thread. Unless the run goes to large-dataset
+mode (``core/large_run.py``): with a plan, the mode is chosen first (``choose_mode``, on
+``PipelineParams.chunked``), and a run in that mode reads the file in blocks itself, so
+the cached copy is dropped instead and the work gets a fresh adaptor that has read
+nothing (``control.mode`` tells the run endpoints which way to run). Work that needs only
+obs, obsm, obsp and uns (PAGA, pseudotime: ``run_exclusive(light=True)``) gets the same
+on a large dataset and reads it without its matrices (``large_run.read_light``). Any
+other work on a large dataset is refused (422): it would read the matrices into memory.
+
 A pipeline run passes its ``RunControl`` (``core/run_watchdog.py``): while the
 run works it is registered for ``cancel_run`` (``POST .../assessment/cancel``)
 and its watchdog samples memory, sending warnings into a streamed run's events.
@@ -34,7 +45,7 @@ from typing import Any, TypeVar
 
 from fastapi import HTTPException
 
-from scview.core import memory_budget
+from scview.core import memory_budget, working_copy
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_lock
@@ -83,20 +94,95 @@ async def _claim(dm: DatasetManager, dataset_id: str) -> tuple[AnnDataAdaptor, C
 
 
 async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAdaptor,
-                         control: RunControl | None) -> None:
-    """Before a run with a plan: close other open datasets whose memory its estimated
-    peak needs (the pre-step check, in the worker thread, can only stop the run)."""
-    if control is None or control.plan is None:
-        return
-    from scview.core import preflight
+                         control: RunControl | None) -> AnnDataAdaptor:
+    """Before a run: with a plan, the mode (``large_run.choose_mode``, set as
+    ``control.mode``). In memory: room to read a backed dataset into memory
+    (``working_copy``, a 507 when that cannot fit) and close other open datasets whose
+    memory its estimated peak needs (the pre-step check, in the worker thread, can only
+    stop the run). In large-dataset mode: the cached copy dropped, room for that mode's
+    peak, and a fresh adaptor of the same file (it reads nothing until asked). Returns
+    the adaptor the work gets."""
+    need = None
+    if control is not None and control.plan is not None:
+        from scview.core import large_run, preflight
 
-    steps, params = control.plan
-    try:
-        need = await asyncio.to_thread(preflight.run_need, adaptor.adata, steps, params)
-    except Exception as e:  # never block a run on the estimate itself
-        logger.warning("No run estimate for %s: %s", dataset_id, e)
-        return
-    await dm.free_memory_for(need, keep=dataset_id)
+        steps, params = control.plan
+        try:
+            control.mode = await asyncio.to_thread(large_run.choose_mode, dm, dataset_id, adaptor,
+                                                   steps, params)
+        except ValueError:  # a chunked value that is not a mode: the endpoints check it first
+            raise
+        except Exception as e:  # never block a run on the estimate itself
+            logger.warning("No mode estimate for %s (in memory): %s", dataset_id, e)
+            path = getattr(adaptor, "h5ad_path", None)
+            large = await asyncio.to_thread(large_run.large_info, path) is not None
+            control.mode = large_run.ModeChoice(large, "auto", f"No estimate ({e}).")
+        logger.info("Run on %s: %s", dataset_id, control.mode.reason)
+        if control.mode.chunked:
+            path = adaptor.h5ad_path
+            dm.evict(dataset_id)  # the run reads the file itself; nothing may serve a stale copy
+            try:
+                peak = await asyncio.to_thread(large_run.run_need, path, steps, params)
+            except Exception as e:  # never block a run on the estimate itself
+                logger.warning("No large-run estimate for %s: %s", dataset_id, e)
+                peak = 0
+            await dm.free_memory_for(peak, keep=dataset_id)
+            return AnnDataAdaptor(path)
+        need = control.mode.run_bytes
+        if need is None:
+            try:
+                need = await asyncio.to_thread(preflight.run_need, adaptor.adata, steps, params)
+            except Exception as e:  # never block a run on the estimate itself
+                logger.warning("No run estimate for %s: %s", dataset_id, e)
+    else:  # work that reads the dataset into memory: never a large one
+        from scview.core import large_run
+
+        path = getattr(adaptor, "h5ad_path", None)
+        if await asyncio.to_thread(large_run.large_info, path) is not None:
+            raise HTTPException(status_code=422, detail=LARGE_REFUSED)
+    await working_copy.make_room(dm, dataset_id, adaptor, then=need or 0)
+    return adaptor
+
+
+def _chunked(control: RunControl | None) -> bool:
+    return bool(getattr(getattr(control, "mode", None), "chunked", False))
+
+
+async def _for_light_work(dm: DatasetManager, dataset_id: str,
+                          adaptor: AnnDataAdaptor) -> AnnDataAdaptor | None:
+    """For work that needs no matrix on a large dataset: its cached copy dropped and a
+    fresh adaptor (it reads nothing until asked); None for any other dataset."""
+    from scview.core import large_run
+
+    path = adaptor.h5ad_path
+    if await asyncio.to_thread(large_run.large_info, path) is None:
+        return None
+    dm.evict(dataset_id)
+    return AnnDataAdaptor(path)
+
+
+LARGE_REFUSED = ("This dataset is in large-dataset layout (its matrices stay on disk), and "
+                 "this work reads them into memory, which large datasets never are. Run the "
+                 "pipeline on it instead (it works in large-dataset mode).")
+
+
+def _in_memory(work: Callable[[AnnDataAdaptor], T],
+               on_disk: bool = False) -> Callable[[AnnDataAdaptor], T]:
+    """``work``, called with the dataset in memory (``working_copy.in_memory``: a backed
+    one is read in first, in the worker thread): steps need every value at hand. Not for
+    work that reads a large dataset itself (``on_disk``: a run in large-dataset mode, or
+    light work on one); any other work on a large dataset is refused (a 422)."""
+
+    def run(adaptor: AnnDataAdaptor) -> T:
+        if not on_disk:
+            from scview.core import large_run
+
+            if large_run.large_info(adaptor.h5ad_path) is not None:
+                raise HTTPException(status_code=422, detail=LARGE_REFUSED)
+            working_copy.in_memory(adaptor)
+        return work(adaptor)
+
+    return run
 
 
 # The pipeline run working on each dataset now (one at most: it holds the lock).
@@ -142,13 +228,24 @@ async def run_exclusive(
     dataset_id: str,
     work: Callable[[AnnDataAdaptor], T],
     control: RunControl | None = None,
+    *,
+    light: bool = False,
 ) -> T:
     """Run ``work(adaptor)`` in a worker thread with the dataset to itself, then
     reload the dataset from disk. ``control``: the pipeline run ``work`` makes
-    with it, registered for cancel and watched (no events: nothing streams)."""
+    with it, registered for cancel and watched (no events: nothing streams).
+    ``light``: ``work`` needs no matrix and reads a large dataset itself
+    (``large_run.read_light``), so a large one is not refused."""
     adaptor, claimed = await _claim(dm, dataset_id)
     try:
-        await _make_run_room(dm, dataset_id, adaptor, control)
+        fresh = await _for_light_work(dm, dataset_id, adaptor) if light else None
+        if fresh is not None:
+            adaptor = fresh
+        else:
+            adaptor = await _make_run_room(dm, dataset_id, adaptor, control)
+        on_disk = fresh is not None or _chunked(control)
+        if on_disk:
+            await asyncio.to_thread(_give_back_memory)  # the copy dropped for the work
         unwatch = _watch(dataset_id, control)
     except BaseException:
         claimed()
@@ -159,7 +256,7 @@ async def run_exclusive(
         claimed()
 
     try:
-        task = asyncio.ensure_future(asyncio.to_thread(work, adaptor))
+        task = asyncio.ensure_future(asyncio.to_thread(_in_memory(work, on_disk), adaptor))
     except BaseException:
         release()
         raise
@@ -201,7 +298,9 @@ async def iterate_exclusive(
             pass
 
     try:
-        await _make_run_room(dm, dataset_id, adaptor, control)
+        adaptor = await _make_run_room(dm, dataset_id, adaptor, control)
+        if _chunked(control):
+            await asyncio.to_thread(_give_back_memory)  # the copy dropped for the run
         unwatch = _watch(dataset_id, control, lambda event: post("item", ("watchdog", event)))
     except BaseException:
         claimed()
@@ -213,7 +312,7 @@ async def iterate_exclusive(
 
     def drive() -> None:
         try:
-            gen = make_events(adaptor)
+            gen = _in_memory(make_events, _chunked(control))(adaptor)
             try:
                 for item in gen:
                     post("item", item)

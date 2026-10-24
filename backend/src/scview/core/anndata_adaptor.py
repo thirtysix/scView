@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import shutil
+import threading
+import weakref
 from pathlib import Path
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 
-from scview.core import category_order, expression_range, haemoglobin, marker_specificity, protein
+from scview.core import (
+    category_order, expression_range, haemoglobin, large_layout, large_mode, marker_specificity,
+    protein, scaling,
+)
+from scview.core import gene_store as gene_store_mod
 from scview.core.ora_background import resolve_markers_key
 from scview.core.species import detect_species
 from scview.core.uns_keys import markers_column, repair_slash_keys
@@ -22,6 +30,29 @@ CLUSTERING_CANDIDATES = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _backed_min_bytes() -> int:
+    """Files larger than this open backed (X read from disk when needed):
+    ``SCVIEW_BACKED_MIN_MB`` in .env, default 2048 (2 GiB)."""
+    raw = os.environ.get("SCVIEW_BACKED_MIN_MB", "").strip()
+    try:
+        mb = float(raw) if raw else 2048.0
+    except ValueError:
+        logger.warning("SCVIEW_BACKED_MIN_MB=%r is not a number; using 2048", raw)
+        mb = 2048.0
+    return int(mb * 1024**2)
+
+
+# The adaptor opens an h5ad larger than this in anndata's backed mode (preflight
+# reads the same number). Work that needs the matrix in memory reads it in first
+# (core/working_copy.py).
+BACKED_MIN_BYTES = _backed_min_bytes()
+
+
+def opens_backed(file_bytes: int) -> bool:
+    """Whether the adaptor opens an h5ad of ``file_bytes`` backed."""
+    return file_bytes > BACKED_MIN_BYTES
 
 
 def _dense_rows(block) -> np.ndarray:
@@ -61,8 +92,10 @@ def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
     chunks so a backed (on-disk) matrix, which has no .sum, works too."""
     tc, ng = [], []
     sums: list[list[np.ndarray]] = [[] for _ in masks]
-    for i in range(0, M.shape[0], chunk):
-        block = M[i:i + chunk]
+    # A large dataset's on-disk matrix: blocks of a bounded number of values.
+    blocks = (M.row_blocks() if hasattr(M, "row_blocks")
+              else ((i, M[i:i + chunk]) for i in range(0, M.shape[0], chunk)))
+    for _i, block in blocks:
         if not hasattr(block, "toarray"):
             block = np.asarray(block)
         tc.append(np.asarray(block.sum(axis=1)).ravel())
@@ -101,7 +134,7 @@ def malat1_mask(var_names: pd.Index) -> np.ndarray:
     return np.asarray(pd.Index(var_names).str.upper().isin(MALAT1_NAMES))
 
 
-def per_cell_qc(adata, ribo: bool = False) -> dict:
+def per_cell_qc(adata, ribo: bool = False, counts=None) -> dict:
     """Per-cell QC arrays: ``total_counts``, ``n_genes``, ``pct_mt`` and, when they
     can be had cheaply, ``pct_ribo``, ``pct_hb`` (haemoglobin genes for the
     dataset's species, ``core/haemoglobin.py``) and ``pct_malat1`` (share of
@@ -111,6 +144,8 @@ def per_cell_qc(adata, ribo: bool = False) -> dict:
     one chunked pass (no mutation of the AnnData, no disk write). ``computed`` is
     True when one of the three core metrics had to be computed; ``has_mt`` is
     False when it was computed and no MT- genes exist (pct_mt is then all zero).
+    ``counts``: (matrix, gene names) to compute from instead of the AnnData's own (a
+    large dataset's counts sidecar).
     """
     obs = adata.obs
 
@@ -135,7 +170,7 @@ def per_cell_qc(adata, ribo: bool = False) -> dict:
     want_malat1 = out["pct_malat1"] is None and extra_ok
     has_mt = True
     if need or want_ribo or want_hb or want_malat1:
-        M, var_names = _counts_matrix(adata)
+        M, var_names = counts if counts is not None else _counts_matrix(adata)
         mt_mask = np.asarray(var_names.str.startswith("MT-") | var_names.str.startswith("mt-"))
         none = np.zeros(len(var_names), dtype=bool)
         ribo_mask = np.asarray(var_names.str.startswith(("RPS", "RPL", "Rps", "Rpl"))) \
@@ -188,33 +223,76 @@ class AnnDataAdaptor:
     Loads the AnnData object lazily on first access.
     """
 
-    def __init__(self, h5ad_path: str) -> None:
+    def __init__(self, h5ad_path: str, backed: bool = False) -> None:
         self.h5ad_path = h5ad_path
+        # Open backed although the file is under BACKED_MIN_BYTES: the dataset manager
+        # found its in-memory peak too big for the memory left (DatasetManager.reserve).
+        self.force_backed = bool(backed)
         self._adata: ad.AnnData | None = None
+        self._memory_lock = threading.Lock()  # one read of a backed file into memory at a time
         self._qc_cache: dict | None = None
         self._qc_cells: dict | None = None
         self._fingerprint: tuple[pd.Index, str] | None = None  # (obs_names hashed, hash)
         self._ranges: dict[tuple, tuple[float, float]] = {}  # (layer, id, shape) -> colour range
+        self._large = _LargeFiles()  # a large dataset's sidecars (core/large_mode.py)
 
     @property
     def adata(self) -> ad.AnnData:
         if self._adata is None:
             logger.info("Loading %s", self.h5ad_path)
             file_size = Path(self.h5ad_path).stat().st_size
-            # Use backed mode for very large files (>2GB)
-            if file_size > 2 * 1024**3:
-                self._adata = ad.read_h5ad(self.h5ad_path, backed="r")
-                logger.info("Loaded in backed mode (%d bytes)", file_size)
+            # A large dataset (matrices on disk, core/large_layout.py) opens backed at any
+            # size, its X behind a guard that refuses whole-matrix reads.
+            large = large_mode.file_is_large(self.h5ad_path)
+            # Backed mode for very large files (BACKED_MIN_BYTES, 2 GiB by default)
+            if large or self.force_backed or opens_backed(file_size):
+                adata = ad.read_h5ad(self.h5ad_path, backed="r")
+                if large:
+                    large_mode.guard_backed(adata, self._large.lock)
+                    self._large.serve(adata, weakref.ref(self))
+                logger.info("Loaded in backed mode (%d bytes%s)", file_size,
+                            ", large dataset" if large else "")
             else:
-                self._adata = ad.read_h5ad(self.h5ad_path)
+                adata = ad.read_h5ad(self.h5ad_path)
                 logger.info("Loaded in memory (%d bytes)", file_size)
-            if repair_slash_keys(self._adata.uns):
+            if repair_slash_keys(adata.uns):
                 logger.info("Re-keyed cached results saved under '/' keys")
-            if not self._adata.isbacked:
+            if not adata.isbacked:
                 # Protein counts that came without the CLR (a converted Seurat ADT
                 # assay, totalVI's obsm): normalised here, in memory.
-                protein.adopt_obsm(self._adata)
+                protein.adopt_obsm(adata)
+            self._large.opened(self.h5ad_path, large)
+            self._adata = adata
         return self._adata
+
+    @property
+    def isbacked(self) -> bool:
+        """Whether the dataset is open backed (its X read from disk when used)."""
+        return bool(getattr(self.adata, "isbacked", False))
+
+    @property
+    def is_large(self) -> bool:
+        """Whether this is a large dataset: its matrices stay on disk, genes are read
+        from the gene store, counts from their sidecar (``core/large_mode.py``)."""
+        self.adata  # noqa: B018 - opening the file decides it
+        return self._large.large
+
+    def to_memory(self) -> ad.AnnData:
+        """The dataset in memory from now on: a backed one is read whole (anndata closes
+        its file) and this adaptor serves the in-memory copy, so the backed object and
+        its file handle are let go; one already in memory is returned as it is.
+        Callers make room first (``core/working_copy.py``). A large dataset is never
+        read in (``LargeDatasetError``): work on it reads its files in chunks."""
+        if self.is_large:
+            large_mode.refuse("Reading this dataset into memory", large_mode.REPROCESS)
+        with self._memory_lock:
+            adata = self.adata
+            if getattr(adata, "isbacked", False):
+                mem = adata.to_memory()  # the arrays already in memory are shared, not copied
+                protein.adopt_obsm(mem)  # as an in-memory open does
+                self._adata = mem
+                logger.info("Read %s into memory (%d x %d)", self.h5ad_path, mem.n_obs, mem.n_vars)
+            return self._adata
 
     # ------------------------------------------------------------------
     # Shape
@@ -351,7 +429,11 @@ class AnnDataAdaptor:
         ``ribo`` also works out % ribosomal when obs lacks it (an extra pass)."""
         cells = self._qc_cells
         if cells is None or (ribo and not cells["ribo_checked"]):
-            self._qc_cells = per_cell_qc(self.adata, ribo=ribo)
+            counts = None
+            if self.is_large:  # X holds log values: counts come from their sidecar
+                counts = (self.counts_matrix(what="Per-cell QC metrics not stored in obs"),
+                          self.adata.var_names) if _qc_missing(self.adata.obs) else None
+            self._qc_cells = per_cell_qc(self.adata, ribo=ribo, counts=counts)
         return self._qc_cells
 
     def qc_distributions(self, n_scatter: int = 5000, n_bins: int = 40) -> dict:
@@ -473,12 +555,22 @@ class AnnDataAdaptor:
                 "n_genes": len(self.adata.raw.var_names),
             })
 
-        # X (main matrix — may be scaled/HVG-subset)
+        # X: the log-normalised values after scView's pipeline (scaling plans only the
+        # matrix PCA reads, core/scaling.py); z-scores or residuals of every gene in a
+        # dataset an older scView processed; or whatever an upload holds.
         n_x = self.adata.n_vars
-        if self.adata.raw is not None:
-            label = f"Scaled/HVG ({n_x} genes)" if n_x < len(self.adata.raw.var_names) else "Main matrix (X)"
+        try:
+            scaled = scaling.holds_scaled(self.adata.X, rows=200)
+        except Exception:  # noqa: BLE001 - an unreadable X: no claim about it
+            scaled = False
+        if scaled:
+            label = "Scaled (X)"
+        elif scaling.read_plan(self.adata) is not None:
+            label = "Log-normalized (X)"
         else:
             label = "Main matrix (X)"
+        if self.adata.raw is not None and n_x < len(self.adata.raw.var_names):
+            label = f"{label}, {n_x} of {len(self.adata.raw.var_names)} genes"
         layers.append({"key": "X", "label": label, "n_genes": n_x})
 
         # Named layers (counts, spliced, unspliced, etc.)
@@ -568,6 +660,15 @@ class AnnDataAdaptor:
         if not indices:
             return np.zeros((self.n_cells(), 0), dtype=np.float32)
 
+        if layer == "X" and self.is_large:  # from the gene store, never the on-disk CSR
+            dense = self.n_cells() * len(indices) * 4
+            if dense > large_mode.MAX_READ_BYTES:
+                large_mode.refuse(
+                    f"Every cell's values for {len(indices)} genes at once",
+                    f"they would take {dense / 2**30:.1f} GB as a dense table; ask for fewer genes")
+            block = self.gene_block(np.asarray(indices))
+            return np.nan_to_num(block.toarray().astype(np.float32, copy=False), nan=0.0)
+
         # Extract expression data — handle scipy sparse, backed sparse datasets,
         # and dense arrays via duck typing
         # Read the columns in increasing order, once each (an on-disk h5py matrix
@@ -622,6 +723,12 @@ class AnnDataAdaptor:
         else:
             groups = sorted(str(v) for v in col.dropna().unique())
         labels = col.astype(str).to_numpy()
+        if layer == "X" and self.is_large and genes:
+            stats = _group_stats_sparse(self.gene_block(genes), labels, groups)
+            return {
+                "groupby": groupby, "layer": layer, "groups": groups, "genes": genes, **stats,
+                "scale_range": list(self.layer_scale_range(layer)),
+            }
         expr = self.get_expression(genes, layer=layer) if genes else np.zeros((len(labels), 0))
         mean, mean_expressing, fraction = [], [], []
         for g in groups:
@@ -645,7 +752,9 @@ class AnnDataAdaptor:
             if layer in PROTEIN_LAYERS and protein.has_protein(self.adata)
             else self._get_matrix_for_layer(layer)
         )
-        key = (layer, id(source), tuple(source.shape))
+        # A backed X is a new object at each access: its key is the file, not the object.
+        key = ((layer, "on disk", tuple(source.shape)) if self.isbacked and layer == "X"
+               else (layer, id(source), tuple(source.shape)))
         if key not in self._ranges:
             self._ranges[key] = expression_range.layer_range(self._get_matrix_for_layer(layer))
         return self._ranges[key]
@@ -856,8 +965,325 @@ class AnnDataAdaptor:
         that took this adaptor before the drop: dropping it made their next ``adata``
         read the whole file again outside the manager's cache and its memory check
         (after a stopped run on ovary, 3.2 GB beside the copy being reopened: the
-        backend was killed). It is freed when the last of them lets go."""
+        backend was killed). It is freed when the last of them lets go. A large
+        dataset's files are closed (its gene store, counts and h5ad, opened again,
+        without a new check, if such a request reads a gene) but its tables are kept
+        the same way: at a million cells they are a gigabyte a re-read would hold twice.
+        A gene-store rebuild is stopped."""
+        self._large.close()
+        if self._large.large and self._adata is not None:
+            if self._adata.file is not None:
+                self._adata.file.close()
+            return
         if self._adata is not None and getattr(self._adata, "isbacked", False):
             if self._adata.file is not None:
                 self._adata.file.close()
             self._adata = None
+
+    # ------------------------------------------------------------------
+    # Large datasets: matrices on disk (core/large_mode.py)
+    # ------------------------------------------------------------------
+
+    def gene_store(self) -> gene_store_mod.GeneStore | None:
+        """The large dataset's open gene store, checked against X once (``mismatch``);
+        None when it is missing, stale or being rebuilt (``large_info`` says why)."""
+        return self._large.store(self.adata) if self.is_large else None
+
+    def gene_block(self, genes, cells=None):
+        """Genes (names or X column positions) as a sparse cells x genes block (CSC) of a
+        large dataset's X: from the gene store, or, while it is missing or rebuilt, by
+        one pass over the on-disk rows (memory-bounded, slow)."""
+        store = self.gene_store()
+        if store is not None:
+            return store.genes(genes, cells)
+        return self._large.scan_genes(self.adata, genes, cells)
+
+    def gene_means(self) -> np.ndarray:
+        """A large dataset's genes' means over all cells (for score_genes' control
+        genes): one pass over the gene store, kept while the store is."""
+        store = self.gene_store()
+        if store is None:
+            large_mode.refuse("Gene means", "the gene-major copy is not ready")
+        cached = self._large.means
+        if cached is None or cached[0] != self._large.store_stat():
+            from scview.core.large_views import gene_means
+
+            self._large.means = cached = (self._large.store_stat(), gene_means(store))
+        return cached[1]
+
+    def counts_matrix(self, what: str = "This view"):
+        """A large dataset's counts (``OnDiskMatrix`` of the counts sidecar, row reads
+        only), checked once against the cells and genes; ``LargeDatasetError`` naming
+        ``what`` when the sidecar is missing or holds other cells."""
+        if not self.is_large:
+            raise ValueError("Only a large dataset keeps its counts in a sidecar")
+        return self._large.counts(self.adata, what)
+
+    def large_info(self) -> dict | None:
+        """For the UI: whether the matrices stay on disk, and the state of the gene store
+        and the counts (None for a dataset in memory)."""
+        if not self.is_large:
+            return None
+        return self._large.info(self.adata)
+
+    def store_rebuild_needed(self) -> bool:
+        """Whether a large dataset's gene store is missing or stale and not being rebuilt."""
+        return self.is_large and self._large.rebuild_needed(self.adata)
+
+    def start_store_rebuild(self) -> bool:
+        """Rebuild a missing or stale gene store in a background thread (the dataset
+        manager makes room first); whether one was started."""
+        return self.is_large and self._large.start_rebuild(self.adata)
+
+    def write_in_place(self, *, obs: bool = True, uns_keys=(), uns_removed=(), obsm_keys=()) -> None:
+        """Save an obs / uns / obsm edit of a large dataset into its h5ad, X untouched
+        (``large_mode.write_in_place``). Call with the dataset's edit lock held, in a
+        worker thread."""
+        large_mode.write_in_place(self.adata, self.h5ad_path, self._large.lock, obs=obs,
+                                  uns_keys=uns_keys, uns_removed=uns_removed, obsm_keys=obsm_keys)
+
+
+def _qc_missing(obs: pd.DataFrame) -> bool:
+    """Whether obs lacks one of the per-cell QC metrics ``per_cell_qc`` must have."""
+    return any(not any(n in obs.columns for n in _QC_OBS_NAMES[k])
+               for k in ("total_counts", "n_genes", "pct_mt"))
+
+
+def _group_stats_sparse(block, labels: np.ndarray, groups: list[str]) -> dict:
+    """``expression_by_group``'s mean, mean_expressing and fraction from a sparse
+    cells x genes block (CSC) without densifying it: per gene, sums of its stored
+    values by group (every value not stored is 0)."""
+    import scipy.sparse as sp
+
+    block = sp.csc_matrix(block)
+    index = {g: i for i, g in enumerate(groups)}
+    codes = pd.Series(labels).map(index).fillna(-1).to_numpy(dtype=np.int64)
+    n_groups, k = len(groups), block.shape[1]
+    size = np.bincount(codes[codes >= 0], minlength=n_groups).astype(np.float64)
+    sums = np.zeros((n_groups, k))
+    pos_sums = np.zeros((n_groups, k))
+    n_pos = np.zeros((n_groups, k))
+    for j in range(k):
+        p0, p1 = block.indptr[j], block.indptr[j + 1]
+        c = codes[block.indices[p0:p1]]
+        v = np.asarray(block.data[p0:p1], dtype=np.float64)
+        ok = c >= 0
+        c, v = c[ok], v[ok]
+        sums[:, j] = np.bincount(c, weights=v, minlength=n_groups)
+        pos = v > 0
+        pos_sums[:, j] = np.bincount(c[pos], weights=v[pos], minlength=n_groups)
+        n_pos[:, j] = np.bincount(c[pos], minlength=n_groups)
+    per_cell = np.maximum(size, 1)[:, None]
+    level = pos_sums / np.maximum(n_pos, 1)
+    as_rows = lambda a: [[round(float(v), 4) for v in row] for row in a]  # noqa: E731
+    return {"mean": as_rows(sums / per_cell), "mean_expressing": as_rows(level),
+            "fraction": as_rows(n_pos / per_cell)}
+
+
+# Free disk a gene-store rebuild needs per stored value: the store (~6 bytes, gzip) and the
+# build's spill files beside it (8 bytes, core/gene_store.py).
+REBUILD_DISK_PER_VALUE = 14
+
+
+class _LargeFiles:
+    """The sidecars of one adaptor's large dataset: the gene store and the counts,
+    opened on first use, checked once, closed with the adaptor; and a background
+    rebuild of a missing or stale gene store."""
+
+    def __init__(self) -> None:
+        # Orders reads of the backed file against in-place writes (large_mode).
+        self.lock = threading.RLock()
+        self.large = False
+        self.path: str | None = None
+        self._open_lock = threading.RLock()
+        self._store: gene_store_mod.GeneStore | None = None
+        self._store_ok: tuple | None = None  # (path, mtime_ns, size) of the store found good
+        self._store_note: str | None = None
+        self._counts: tuple | None = None  # (h5py file, OnDiskMatrix)
+        self._counts_ok: tuple | None = None
+        self._counts_note: str | None = None
+        self._rebuild: threading.Thread | None = None
+        self._rebuild_stop = threading.Event()
+        self._rebuild_progress: tuple[int, int] | None = None
+        self.means: tuple | None = None  # (store file's stat, per-gene means): gene_means
+
+    def opened(self, h5ad_path: str, large: bool) -> None:
+        self.path, self.large = h5ad_path, large
+
+    @staticmethod
+    def serve(adata, adaptor_ref) -> None:
+        """Let the backed X answer reads of a few genes from the gene store, and the
+        helpers that look for counts find the sidecar (core/large_mode.py). Weak
+        references: the AnnData must not keep its adaptor alive."""
+
+        def columns(pos, cells):
+            adaptor = adaptor_ref()
+            if adaptor is None:
+                raise large_mode.LargeDatasetError("Reading genes", "the dataset was closed")
+            return adaptor.gene_block(pos, cells)
+
+        def counts():
+            adaptor = adaptor_ref()
+            return None if adaptor is None else adaptor.counts_matrix("Reading the counts")
+
+        guard = adata.file._guard
+        guard.columns, guard.counts = columns, counts
+
+    @staticmethod
+    def _stat(path: Path) -> tuple | None:
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        return (str(path), st.st_mtime_ns, st.st_size)
+
+    def store_stat(self) -> tuple | None:
+        return self._store_ok
+
+    def rebuilding(self) -> bool:
+        return self._rebuild is not None and self._rebuild.is_alive()
+
+    # -- gene store
+    def _genes_path(self, adata) -> Path:
+        return large_layout.genes_path(self.path, adata.uns)
+
+    def store(self, adata):
+        with self._open_lock:
+            if self._store is not None:
+                return self._store
+            if self.rebuilding():
+                return None
+            path = self._genes_path(adata)
+            stat = self._stat(path)
+            if stat is None:
+                self._store_note = f"{path.name} is missing"
+                return None
+            try:
+                store = gene_store_mod.GeneStore(path)
+            except gene_store_mod.GeneStoreError as e:
+                self._store_note = str(e)
+                return None
+            if self._store_ok != stat:
+                why = store.mismatch((adata.X, adata.obs_names, adata.var_names), source="X")
+                if why is not None:
+                    store.close()
+                    self._store_note = f"{path.name} does not match the dataset: {why}"
+                    logger.warning("Gene store %s: %s", path, self._store_note)
+                    return None
+                self._store_ok = stat
+            self._store, self._store_note = store, None
+            return store
+
+    def rebuild_needed(self, adata) -> bool:
+        return not self.rebuilding() and self.store(adata) is None
+
+    def scan_genes(self, adata, genes, cells=None):
+        """Genes from one pass over the on-disk rows (no gene store to read them from)."""
+        import scipy.sparse as sp
+
+        arr = np.asarray([genes] if isinstance(genes, (str, int, np.integer)) else list(genes))
+        pos = (arr.astype(np.int64) if arr.dtype.kind in "iu"
+               else adata.var_names.get_indexer([str(g) for g in arr]))
+        if (pos < 0).any():
+            raise KeyError(f"Genes not in the dataset: {', '.join(map(str, arr[pos < 0][:5]))}")
+        parts = [sp.csr_matrix(block)[:, pos] for _start, block in adata.X.row_blocks()]
+        m = sp.vstack(parts, format="csc") if parts else sp.csc_matrix((adata.n_obs, len(pos)))
+        if cells is None:
+            return m
+        idx = np.asarray(cells)
+        return sp.csc_matrix(m.tocsr()[np.flatnonzero(idx) if idx.dtype == bool else idx])
+
+    def start_rebuild(self, adata) -> bool:
+        if not self.rebuild_needed(adata):
+            return False
+        path = self._genes_path(adata)
+        x = adata.X
+        x._row_values(0)  # caches the row pointer
+        values = int(x._guard.indptr[-1])
+        free = shutil.disk_usage(path.parent).free
+        need = values * REBUILD_DISK_PER_VALUE
+        if free < need:
+            self._store_note = (f"{self._store_note}; not rebuilt: that needs about "
+                                f"{need / 2**30:.1f} GB of free disk, {free / 2**30:.1f} GB is free")
+            return False
+        self._rebuild_stop.clear()
+        obs_names, var_names = adata.obs_names.copy(), adata.var_names.copy()
+        n_obs = adata.n_obs
+
+        def run() -> None:
+            try:
+                with gene_store_mod.GeneStoreWriter(path, obs_names=obs_names, var_names=var_names,
+                                                    source="X", source_nnz=values) as writer:
+                    for start, block in adata.X.row_blocks():
+                        if self._rebuild_stop.is_set():
+                            raise InterruptedError
+                        writer.add(block, copy=False)
+                        self._rebuild_progress = (start + block.shape[0], n_obs)
+                    writer.finish()
+                logger.info("Rebuilt the gene store %s", path)
+                with self._open_lock:
+                    self._store_note, self._store_ok = None, None
+            except InterruptedError:
+                logger.info("Gene store rebuild of %s stopped", path)
+            except Exception as e:  # noqa: BLE001 - reported in the dataset's note
+                if self._rebuild_stop.is_set():  # the dataset was closed or deleted meanwhile
+                    logger.info("Gene store rebuild of %s stopped (%s)", path, e)
+                    return
+                logger.exception("Gene store rebuild of %s failed", path)
+                self._store_note = f"rebuilding {path.name} failed: {e}"
+            finally:
+                self._rebuild_progress = None
+
+        self._store_note = f"{self._store_note}; rebuilding it"
+        self._rebuild = threading.Thread(target=run, name=f"gene-store-{path.name}", daemon=True)
+        self._rebuild.start()
+        return True
+
+    # -- counts
+    def counts(self, adata, what: str):
+        with self._open_lock:
+            if self._counts is not None:
+                return self._counts[1]
+            try:
+                path = large_layout.counts_path(self.path, adata.uns)
+            except large_layout.LargeLayoutError as e:
+                large_mode.refuse(what, str(e))
+            stat = self._stat(path)
+            if stat is None or self._counts_ok != stat:
+                why = large_layout.counts_mismatch(path, adata.obs_names, adata.var_names)
+                if why is not None:
+                    self._counts_note = why
+                    large_mode.refuse(what, f"the counts sidecar cannot be used ({why})")
+                self._counts_ok = stat
+            f, m = large_mode.open_matrix(path, large_layout.COUNTS_KEY, self.lock, "the counts")
+            self._counts, self._counts_note = (f, m), None
+            return m
+
+    def info(self, adata) -> dict:
+        store = self.store(adata)
+        if self._counts is None:
+            try:
+                self.counts(adata, "Counts")
+            except large_mode.LargeDatasetError:
+                pass
+        progress = self._rebuild_progress
+        rebuilding = self.rebuilding()
+        return {
+            "matrices_on_disk": True,
+            "gene_store": "ready" if store is not None else ("rebuilding" if rebuilding else "missing"),
+            "gene_store_note": self._store_note,
+            "gene_store_progress": (round(progress[0] / max(progress[1], 1), 3)
+                                    if rebuilding and progress else None),
+            "counts": self._counts is not None,
+            "counts_note": self._counts_note,
+        }
+
+    def close(self) -> None:
+        self._rebuild_stop.set()
+        with self._open_lock:
+            if self._store is not None:
+                self._store.close()
+                self._store = None
+            if self._counts is not None:
+                self._counts[0].close()
+                self._counts = None

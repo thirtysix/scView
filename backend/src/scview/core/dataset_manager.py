@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
+import dataclasses
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from scview.core import memory_budget
+from scview.core import large_layout, large_mode, memory_budget
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from scview.core.obs_writes import is_locked
 
@@ -65,10 +68,11 @@ class DatasetMemoryError(Exception):
     """Opening a dataset would need more memory than scView has, even with every
     other dataset closed: refused, instead of the system stopping the backend."""
 
-    def __init__(self, dataset_id: str, need: int, available: int, limit: int) -> None:
+    def __init__(self, dataset_id: str, need: int, available: int, limit: int,
+                 what: str = "Opening this dataset") -> None:
         gb = 1024**3
         super().__init__(
-            f"Opening this dataset needs about {need / gb:.1f} GB at its peak; scView has "
+            f"{what} needs about {need / gb:.1f} GB at its peak; scView has "
             f"{available / gb:.1f} GB free of its {limit / gb:.1f} GB limit, even with the other "
             "datasets closed. Raise SCVIEW_MEMORY_GB in .env (then restart scView).")
         self.dataset_id = dataset_id
@@ -87,6 +91,77 @@ REFUSAL_WAIT_SECONDS = 10
 
 def working_reserve(limit_bytes: int) -> int:
     return max(RESERVE_MIN, int(RESERVE_SHARE * limit_bytes))
+
+
+# Memory a gene-store rebuild of a large dataset takes while it runs: one staged row chunk
+# and its CSC copy, then one gene block (core/gene_store.py: 0.80 GB peak RSS for the whole
+# process at 100k cells, 0.93 GB at 1.3M).
+GENE_STORE_BUILD_BYTES = 768 * 1024**2
+
+
+@dataclass
+class LoadPlan:
+    """How a dataset opens: its load peak in memory (None when it opens backed whatever
+    happens: a large dataset, a file over ``BACKED_MIN_BYTES``) and backed."""
+
+    in_memory: int | None
+    backed: int
+
+
+def load_plan(path: str) -> LoadPlan:
+    """Memory opening ``path`` peaks at, in memory and backed (``preflight.estimate_load``
+    from its header). A large dataset opens backed at any size: its X and sidecars stay
+    on disk, so it holds its tables, embeddings, graphs and results, plus its open files
+    (``large_mode``)."""
+    from scview.core import preflight
+
+    h = preflight.read_header(path)
+    h5ad = getattr(h, "format", None) == "h5ad"
+    large = h5ad and large_mode.file_is_large(path)
+    in_memory = None
+    if not (large or getattr(h, "backed", False)):
+        in_memory = int(preflight.estimate_load(h, ingest=False).peak_bytes)
+    if h5ad:
+        h = dataclasses.replace(h, backed=True)
+    backed = int(preflight.estimate_load(h, ingest=False).peak_bytes)
+    held = large_mode.held_bytes(getattr(h, "n_cells", 0) or 0) if large else 0
+    return LoadPlan(in_memory, backed + held)
+
+
+def load_peak_bytes(path: str) -> int:
+    """The load peak of ``path`` as it would open with memory to spare (``load_plan``)."""
+    plan = load_plan(path)
+    return plan.backed if plan.in_memory is None else plan.in_memory
+
+
+def large_derived(adaptor: AnnDataAdaptor, target: str | Path) -> None:
+    """Before an in-place edit of a large dataset opened from somewhere other than its
+    derived file (an uploaded large layout): the h5ad is copied to ``target`` (once; X is
+    copied, never rewritten) and the sidecars linked beside it, and the adaptor reads the
+    copy from then on. Originals are never written."""
+    target = Path(target)
+    source = Path(adaptor.h5ad_path)
+    if source == target:
+        return
+    adata = adaptor.adata
+    sidecars = (large_layout.counts_path(source, adata.uns), large_layout.genes_path(source, adata.uns))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f".{target.name}.part")
+    shutil.copyfile(source, partial)
+    partial.chmod(0o644)
+    os.replace(partial, target)
+    for side in sidecars:
+        dest = target.with_name(side.name)
+        if side.exists() and not dest.exists():
+            try:
+                os.link(side, dest)  # the same volume: no second copy
+            except OSError:
+                shutil.copyfile(side, dest)
+    with adaptor._large.lock:
+        adata.file.close()
+        adata.file.open(str(target), "r")
+    adaptor.h5ad_path = str(target)
+    adaptor._large.opened(str(target), True)
 
 
 class DatasetManager:
@@ -141,9 +216,9 @@ class DatasetManager:
         # Make room first, so the new dataset never sits beside a full cache.
         if self._evict_lru(keep=dataset_id, room_for_one=True):
             await asyncio.to_thread(memory_budget.release_memory)
-        await self._make_memory_room(dataset_id, h5ad_path)
+        backed = await self._make_memory_room(dataset_id, h5ad_path)
 
-        adaptor = AnnDataAdaptor(h5ad_path)
+        adaptor = AnnDataAdaptor(h5ad_path, backed=backed)
         updates = await asyncio.to_thread(self._metadata_updates, dataset_id, adaptor)
         if self._generation.get(dataset_id, 0) != generation:
             # Evicted while reading (its file was rewritten or removed): this copy
@@ -155,7 +230,24 @@ class DatasetManager:
         self._datasets[dataset_id] = adaptor
         self._load_order.append(dataset_id)
         self._evict_lru(keep=dataset_id)  # two loads may have finished at once
+        await self._rebuild_gene_store(dataset_id, adaptor)
         return adaptor
+
+    async def _rebuild_gene_store(self, dataset_id: str, adaptor: AnnDataAdaptor) -> None:
+        """A large dataset whose gene store is missing or stale gets it rebuilt in the
+        background (gene views read the on-disk rows meanwhile, slowly), once there is
+        room for the build (``GENE_STORE_BUILD_BYTES``); never blocks the open."""
+        try:
+            if not await asyncio.to_thread(adaptor.store_rebuild_needed):
+                return
+            free = await self.free_memory_for(GENE_STORE_BUILD_BYTES, keep=dataset_id)
+            if free is not None and free < GENE_STORE_BUILD_BYTES:
+                logger.warning("No room to rebuild the gene store of %s", dataset_id)
+                return
+            if await asyncio.to_thread(adaptor.start_store_rebuild):
+                logger.info("Rebuilding the gene store of %s in the background", dataset_id)
+        except Exception as e:  # noqa: BLE001 - the dataset still opens; its note says why
+            logger.warning("Gene store rebuild of %s not started: %s", dataset_id, e)
 
     def _evictable(self, keep: str) -> list[str]:
         """Cached datasets that may be dropped, least recently used first: never
@@ -208,41 +300,64 @@ class DatasetManager:
             budget = memory_budget.read_budget()
         return free()
 
-    async def _make_memory_room(self, dataset_id: str, path: str) -> None:
+    async def _make_memory_room(self, dataset_id: str, path: str) -> bool:
         """Before opening ``path``: make room for its estimated load peak
-        (``preflight``, from the file header) with ``free_memory_for``.
+        (``preflight``, from the file header) with ``free_memory_for``. Returns whether
+        it must open backed although it is under the size threshold (its in-memory
+        peak does not fit).
 
         Three cached datasets fit on a big machine and not under a small limit: on
         a 6 GB backend holding ovary (3.2 GB, dense counts) and pbmc, opening Kang
         got the backend killed. Refused (``DatasetMemoryError``) only when even the
         low end of the estimate's error band is more than what is free with every
         other dataset closed; without a container limit nothing is checked."""
-        from scview.core import preflight
-
         try:
-            est = await asyncio.to_thread(
-                lambda: preflight.estimate_load(preflight.read_header(path), ingest=False))
+            plan = await asyncio.to_thread(load_plan, path)
         except Exception as e:  # never block opening on the estimate itself
             logger.warning("No load estimate for %s: %s", path, e)
-            return
-        need = int(est.peak_bytes)
+            return False
+        if plan.in_memory is not None:
+            # A file under the backed threshold can still be too big to read in (a
+            # streamed ingest of a million cells): it opens backed when its in-memory
+            # peak does not fit with the working reserve, even with the others closed.
+            free = await self.free_memory_for(plan.in_memory, keep=dataset_id)
+            budget = memory_budget.read_budget()
+            if (free is None or budget.limit_bytes is None
+                    or free >= plan.in_memory * LOAD_MARGIN + working_reserve(budget.limit_bytes)):
+                await self.reserve(dataset_id, plan.in_memory)
+                return False
+            logger.info("Opening %s backed: about %.1f GB in memory, %.1f GB free",
+                        dataset_id, plan.in_memory / 1024**3, free / 1024**3)
+        await self.reserve(dataset_id, plan.backed)
+        return plan.in_memory is not None
+
+    async def reserve(self, dataset_id: str, need: int, extra: int = 0,
+                      what: str = "Opening this dataset") -> None:
+        """Make room for ``need`` bytes (and ``extra`` the work needs beyond them) with
+        ``free_memory_for``; ``DatasetMemoryError`` (a 507) when even the low end of
+        ``need``'s error band is more than what is free with every other dataset closed.
+        ``extra`` is room asked for, never a reason to refuse (a run's pre-step check
+        stops a step that cannot fit). Without a container limit nothing is checked."""
+        from scview.core import preflight
 
         def refused(free: int | None) -> bool:
             return free is not None and need * (1 - preflight.ERROR_BAND) > free
 
-        free = await self.free_memory_for(need, keep=dataset_id)
+        free = await self.free_memory_for(need + extra, keep=dataset_id)
         # A run that just ended may still hold its copy for a moment (the request that
         # follows a stopped ovary run got a 507): give it a few seconds to let go.
         for i in range(REFUSAL_WAIT_SECONDS):
             if not refused(free):
                 return
             if i == 0:
-                logger.info("Opening %s needs about %.1f GB; %.1f GB free: waiting up to %d s for memory",
-                            dataset_id, need / 1024**3, max(0, free or 0) / 1024**3, REFUSAL_WAIT_SECONDS)
+                logger.info("%s (%s) needs about %.1f GB; %.1f GB free: waiting up to %d s for memory",
+                            what, dataset_id, need / 1024**3, max(0, free or 0) / 1024**3,
+                            REFUSAL_WAIT_SECONDS)
             await asyncio.sleep(1)
-            free = await self.free_memory_for(need, keep=dataset_id)
+            free = await self.free_memory_for(need + extra, keep=dataset_id)
         if refused(free):
-            raise DatasetMemoryError(dataset_id, need, max(0, free), memory_budget.read_budget().limit_bytes)
+            raise DatasetMemoryError(dataset_id, need, max(0, free),
+                                     memory_budget.read_budget().limit_bytes, what)
 
     def get_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
         return self._datasets.get(dataset_id)
@@ -342,7 +457,22 @@ class DatasetManager:
             if not self._is_openable(entry.name, meta.get("status", "")):
                 if self.remove_dataset(entry.name):
                     removed.append({"id": entry.name, "name": meta.get("name", entry.name)})
+            else:
+                self.prune_sidecars(entry.name)
         return removed
+
+    def prune_sidecars(self, dataset_id: str) -> int:
+        """Delete large-dataset sidecars in the dataset's derived folder that no h5ad there
+        names (a run that stopped before saving its h5ad, an h5ad since processed in
+        memory) and gene-store builds of a process that is gone. Never while a run or an
+        edit works on the dataset: a run writes its sidecars before its h5ad."""
+        if not is_safe_id(dataset_id) or self.is_busy(dataset_id) or is_locked(dataset_id):
+            return 0
+        d = self.data_dir / "derived" / dataset_id
+        stray = large_mode.stray_sidecars(d)
+        if stray:
+            logger.info("Removing sidecars no dataset names in %s: %s", d, [p.name for p in stray])
+        return large_mode.remove_paths(stray)
 
     def get_dataset_info(self, dataset_id: str) -> dict[str, Any] | None:
         if not is_safe_id(dataset_id):
@@ -410,6 +540,11 @@ class DatasetManager:
         if dataset_id in self._load_order:
             self._load_order.remove(dataset_id)
 
+        # A large dataset's sidecars sit beside its h5ad and go with the folder below;
+        # named here too, so sidecars beside an h5ad elsewhere cannot be left behind.
+        for h5ad in self.h5ad_candidates(dataset_id):
+            if large_mode.file_is_large(h5ad):
+                large_layout.remove_sidecars(h5ad)
         found = False
         for subdir in ("uploads", "ingested", "converted", "cache", "derived"):
             d = self.data_dir / subdir / dataset_id
@@ -481,6 +616,10 @@ class DatasetManager:
         read-only, so its entries stay in memory. Returns whether it saved.
         """
         adata = adaptor.adata
+        if adaptor.is_large:  # into its h5ad, X untouched
+            large_derived(adaptor, self.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+            adaptor.write_in_place(obs=False, uns_keys=keys)
+            return True
         if getattr(adata, "isbacked", False):
             logger.info("Dataset %s is backed; not saving %s", dataset_id, keys)
             return False
@@ -534,6 +673,8 @@ class DatasetManager:
                 "expression_layers": adaptor.available_expression_layers(),
                 "default_expression_layer": adaptor.default_expression_layer(),
                 "protein": adaptor.protein_info(),
+                # A large dataset: matrices on disk, and how its gene store and counts are.
+                "large": adaptor.large_info(),
                 "status": "ready",
             }
         except Exception as e:

@@ -17,7 +17,7 @@ import {
   type RerunPlan,
 } from "@/api/provenance";
 import { getDataset } from "@/api/datasets";
-import { paramText } from "@/lib/provenanceParams";
+import { keptRerunParams, lastRunText, paramText } from "@/lib/provenanceParams";
 import { RecipeViewer } from "@/components/panels/RecipeViewer";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -100,13 +100,17 @@ export function ProvenancePanel() {
   );
 
   const confirmRerun = useCallback(
-    async (step: string) => {
+    async (rec: ProvStep) => {
       if (!dataset) return;
+      const step = rec.step;
       setRerunning(true);
       setRerunMsg(null);
       try {
         const cfg = RERUN_PARAM[step];
-        const params = cfg ? { [cfg.key]: Number(paramValue) } : {};
+        const params = {
+          ...keptRerunParams(rec),
+          ...(cfg ? { [cfg.key]: Number(paramValue) } : {}),
+        };
         const { result } = await rerunStep(dataset.id, step, params);
         await load(dataset.id);
         setCurrentDataset(await getDataset(dataset.id)); // propagate new state to other panels
@@ -264,7 +268,7 @@ export function ProvenancePanel() {
                     paramValue={paramValue}
                     setParamValue={setParamValue}
                     rerunning={rerunning}
-                    onConfirm={() => confirmRerun(h.step)}
+                    onConfirm={() => confirmRerun(h)}
                     onCancel={() => setEditingIdx(null)}
                     onGoAssessment={() => setPanel("assessment")}
                   />
@@ -285,9 +289,15 @@ export function ProvenancePanel() {
                 className="rounded bg-primary/10 px-2 py-0.5 text-xs text-primary"
                 title={typeof v === "object" ? JSON.stringify(v) : undefined}
               >
-                {k}
-                {typeof v !== "boolean" &&
-                  `: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`}
+                {k === "last_run"
+                  ? lastRunText(v)
+                  : (
+                      <>
+                        {k}
+                        {typeof v !== "boolean" &&
+                          `: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`}
+                      </>
+                    )}
               </span>
             ))}
           </div>

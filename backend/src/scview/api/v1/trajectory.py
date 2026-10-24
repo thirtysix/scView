@@ -16,8 +16,10 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from scview.core import large_run
 from scview.core import pseudotime_genes as ptg
-from scview.core.dataset_manager import DatasetManager
+from scview.core import large_mode
+from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.obs_writes import uns_snapshot, write_derived
 from scview.core.processing import run_exclusive
 from scview.core.trajectory import (
@@ -36,6 +38,16 @@ router = APIRouter()
 
 # RNA velocity needs both (scVelo's names); scView does not compute it yet.
 VELOCITY_LAYERS = ("spliced", "unspliced")
+
+
+
+
+def _light_or_memory(adaptor):
+    """The dataset for PAGA and pseudotime: without its matrices when it is a large one
+    (``large_run.read_light``; they need obs, obsp and uns alone), else in memory."""
+    if large_run.large_info(adaptor.h5ad_path) is not None:
+        return large_run.read_light(adaptor.h5ad_path)
+    return adaptor.adata
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +126,9 @@ async def compute_paga_graph(
     del adaptor  # no hold on the cached copy through run_exclusive's reload
 
     def _run(adaptor):
-        work = adaptor.adata.to_memory() if getattr(adaptor.adata, "isbacked", False) else adaptor.adata
+        # In memory (run_exclusive reads a backed dataset in first), or a large dataset
+        # without its matrices: PAGA reads the graph and obs alone.
+        work = _light_or_memory(adaptor)
         before = uns_snapshot(work)
         record = compute_paga(work, body.groupby)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
@@ -123,8 +137,8 @@ async def compute_paga_graph(
 
     try:
         # In a worker thread with the dataset to itself; then served from disk.
-        record = await run_exclusive(dm, dataset_id, _run)
-    except HTTPException:
+        record = await run_exclusive(dm, dataset_id, _run, light=True)
+    except (HTTPException, DatasetMemoryError):  # a 507 from reading a backed dataset in
         raise
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))  # raised before any change
@@ -167,10 +181,16 @@ async def compute_pseudotime(
     del adaptor, adata, col  # no hold on the cached copy through run_exclusive's reload
 
     def _run(adaptor):
-        work = adaptor.adata.to_memory() if getattr(adaptor.adata, "isbacked", False) else adaptor.adata
+        work = _light_or_memory(adaptor)  # as for PAGA: DPT reads the graph and obs alone
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        if large_run.large_info(adaptor.h5ad_path) is not None:
+            # No matrix in hand: the file keeps its own, obs and uns are rewritten.
+            before = uns_snapshot(work)
+            params = compute_dpt(work, body.root_column, body.root_value)
+            write_derived(work, output_path, adaptor.h5ad_path, before)
+            return params
         params = compute_dpt(work, body.root_column, body.root_value)
         # Write beside, then swap in: a backed dataset may be reading this path.
-        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
         partial = output_path + ".partial"
         work.write_h5ad(partial, compression="gzip")
         os.replace(partial, output_path)
@@ -179,8 +199,8 @@ async def compute_pseudotime(
     try:
         # In a worker thread with the dataset to itself (busy, locked until the
         # thread ends even if the client goes away); then served from disk.
-        params = await run_exclusive(dm, dataset_id, _run)
-    except HTTPException:
+        params = await run_exclusive(dm, dataset_id, _run, light=True)
+    except (HTTPException, DatasetMemoryError):  # a 507 from reading a backed dataset in
         raise
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -360,6 +380,8 @@ async def rank_trend_genes(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    large_mode.check(adaptor, "Genes along pseudotime",
+                     "it fits every gene's values along the cells in memory")
     if column not in adaptor.available_pseudotime_columns():
         raise HTTPException(
             status_code=404,
