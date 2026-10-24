@@ -75,9 +75,28 @@ _QUIET = ("Detected unsupported threading environment", "Some cells have zero co
 # Scheduling
 # ---------------------------------------------------------------------------
 
+# Blocks in flight may hold at most this share of the memory limit, and no more workers
+# than this run at once: each worker holds a block (~CHUNK_BYTES), and a container sees
+# every CPU of the machine (16 workers = 4 GB per pass, the whole of a 4 GB limit).
+WORKERS_MEMORY_SHARE = 0.25
+MAX_WORKERS = 8
+
+
+def _memory_limit() -> int | None:
+    from scview.core.memory_budget import read_budget
+
+    return read_budget().limit_bytes
+
+
 def n_workers() -> int:
-    """Dask workers: the container's CPU quota (``preflight.cpu_quota``), at least one."""
-    return max(1, int(cpu_quota()))
+    """Dask workers: the container's CPU quota (``preflight.cpu_quota``), at most
+    ``MAX_WORKERS`` and as many blocks as ``WORKERS_MEMORY_SHARE`` of the memory limit
+    holds; at least one."""
+    w = min(int(cpu_quota()), MAX_WORKERS)
+    limit = _memory_limit()
+    if limit:
+        w = min(w, int(limit * WORKERS_MEMORY_SHARE // CHUNK_BYTES))
+    return max(1, w)
 
 
 @contextlib.contextmanager

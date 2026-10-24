@@ -145,8 +145,19 @@ def test_rows_per_block_follow_memory_target():
 def test_workers_follow_cpu_quota(monkeypatch):
     import dask
 
+    monkeypatch.setattr(chunked, "_memory_limit", lambda: None)
     monkeypatch.setattr(chunked, "cpu_quota", lambda: 2.5)
     assert chunked.n_workers() == 2
+    monkeypatch.setattr(chunked, "cpu_quota", lambda: 16.0)
+    assert chunked.n_workers() == chunked.MAX_WORKERS
+    # a 4 GB limit: a quarter holds 4 blocks of 256 MiB, whatever the CPUs
+    monkeypatch.setattr(chunked, "_memory_limit", lambda: 4 * 2**30)
+    assert chunked.n_workers() == 4
+    assert chunked.step_bytes(chunked.rows_per_block(28_000, nnz_per_row=2_000), 28_000,
+                              nnz_per_row=2_000) <= 1.1 * 2**30
+    monkeypatch.setattr(chunked, "_memory_limit", lambda: 2**29)
+    assert chunked.n_workers() == 1
+    monkeypatch.setattr(chunked, "_memory_limit", lambda: None)
     monkeypatch.setattr(chunked, "cpu_quota", lambda: 0.5)
     assert chunked.n_workers() == 1
     with chunked.scheduler(3) as w:
