@@ -38,8 +38,17 @@ import scipy.sparse as sp
 
 from scview.core.gene_store import _gene_blocks
 
-# Values per block, as sparse_markers.MAX_ENTRIES (a dense block counts every element).
+# Values per block, as sparse_markers.MAX_ENTRIES (a dense block counts every element);
+# a smaller matrix in blocks of an eighth of its values, at least MIN_BLOCK_ENTRIES: a
+# block's working set is about 70 bytes per value, and in 4M-value blocks Kang's markers
+# (9.6M values) took +0.34 GiB, more than scanpy's +0.22.
 BLOCK_ENTRIES = 4_000_000
+MIN_BLOCK_ENTRIES = 500_000
+
+
+def block_entries(nnz: int) -> int:
+    """Values per block for a matrix of ``nnz`` stored values."""
+    return int(min(BLOCK_ENTRIES, max(MIN_BLOCK_ENTRIES, nnz // 8)))
 # Stored values per pass when counting, checking or finding a block (bincount and the
 # order check take them as int64: 32 MB a pass).
 _CHUNK = 4_000_000

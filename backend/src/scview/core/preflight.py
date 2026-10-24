@@ -67,7 +67,9 @@ Scaling, PCA and markers were re-measured 2026-10-23, once scaling stopped makin
 every 20 ms, GiB over the step's start, measured / estimated. paul15: PCA 0.048 / 0.045,
 markers (dense) 0.110 / 0.113. Kang: PCA 0.240 / 0.226, markers 0.220 / 0.222. 100k
 neurons (88,640 x 19,824 after filtering, 187M stored values): PCA 1.43 / 1.45, markers
-2.85 / 2.86 (the old model said 1.54, as Roihu found: 1.8x under). Scaling: 0-0.08
+2.85 / 2.86 (the old model said 1.54, as Roihu found: 1.8x under). Markers by blocks of
+genes (core/rank_genes.py, 2026-10-24, the same way on the states a live run saved):
+Kang 0.105 / 0.116 in 0.8 s, 100k neurons 0.329 / 0.315 in 18 s. Scaling: 0-0.08
 against 0.01-0.12 (it was +14.5 GiB at 100k, +38 at 250k). In a whole run the 100k
 peak is doublet detection, 15.5 GiB (scaling's 18.3 GiB before).
 
@@ -870,13 +872,13 @@ PCA_DENSE_COPIES = 2.1
 PCA_BYTES_PER_COMP = 16
 PCA_CUT_SHARE = 2.0
 PCA_SECONDS_PER_VALUE = 4.5e-8
-# Markers (Wilcoxon on the log values): copies of that matrix held at the peak, and a
-# fixed part (scanpy's dense blocks of 10M values in float64, the group statistics).
-# One copy and 150 MiB were 1.9x under on 100k neurons (2.85 GiB measured).
-MARKERS_SPARSE_COPIES = 2.0
-MARKERS_DENSE_COPIES = 1.0
-MARKERS_FIXED = 80 * MiB
-MARKERS_SECONDS_PER_VALUE = 2.8e-9  # per cell x gene x group, sparse (x4 dense)
+# Markers (Wilcoxon on the log values) by blocks of genes (core/rank_genes.py): one block
+# of values in flight (matrix_genes.block_entries, ~70 bytes a value) and per gene x group
+# statistics, never a copy of the matrix (a CSR whose rows are in no gene order adds a
+# byte per stored value, not counted). scanpy's own took 2.85 GiB on 100k neurons, where
+# this takes 0.33. Seconds per stored value (a dense matrix: per cell x gene) per column.
+MARKERS_MEMORY_PER_VALUE = 70
+MARKERS_SECONDS_PER_VALUE = 8e-8
 
 
 @dataclass
@@ -1183,12 +1185,15 @@ def _step_markers(s: _State, params) -> tuple[int, _State, float]:
     ln = s.lognorm()
     if ln is None:
         return 0, s, 0.1
-    # Wilcoxon ranks dense chunks of 10M values; each group's cells are copied out.
-    copies = MARKERS_SPARSE_COPIES if ln.sparse else MARKERS_DENSE_COPIES
-    t = int(copies * ln.nbytes) + MARKERS_FIXED
+    from scview.core import matrix_genes
+
+    # One block of genes at a time, and each group's statistics (as the large-dataset
+    # estimate below, with the in-memory gather's working set).
     groups = _groups(params)
+    t = (matrix_genes.block_entries(ln.nnz) * MARKERS_MEMORY_PER_VALUE
+         + groups * ln.n_genes * 8 * 12 + s.n * 16)
     s.other += 56 * ln.n_genes * groups
-    return t, s, 1.0 + s.n * ln.n_genes * groups * MARKERS_SECONDS_PER_VALUE * (1 if ln.sparse else 4)
+    return t, s, 1.0 + (groups // 15) * ln.nnz * MARKERS_SECONDS_PER_VALUE
 
 
 def _step_enrichment(s: _State, params) -> tuple[int, _State, float]:

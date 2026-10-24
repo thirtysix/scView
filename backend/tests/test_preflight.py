@@ -186,10 +186,12 @@ def test_step_peak_scaling_holds_no_dense_copy_of_every_gene():
 @pytest.mark.parametrize("cells, genes, nnz, step, measured_gib", [
     # Each step alone on the state before it, warm, 2 CPUs (2026-10-23, process RSS):
     # Kang and the 100k-neuron subset of 10x's 1.3M (after filtering), 2,000 variable genes.
+    # Markers re-measured 2026-10-24 by blocks of genes (core/rank_genes.py) on the states
+    # a live in-memory run saved; scanpy's own took 0.220 and 2.851.
     (13_815, 13_908, 9_643_068, "pca", 0.240),
-    (13_815, 13_908, 9_643_068, "marker_genes", 0.220),
+    (13_815, 13_908, 9_643_068, "marker_genes", 0.105),
     (88_640, 19_824, 186_795_611, "pca", 1.431),
-    (88_640, 19_824, 186_795_611, "marker_genes", 2.851),
+    (88_640, 19_824, 186_795_611, "marker_genes", 0.329),
 ])
 def test_pca_and_marker_estimates_are_within_the_error_band_of_measured_runs(
         cells, genes, nnz, step, measured_gib):

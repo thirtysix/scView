@@ -107,7 +107,7 @@ def rank_genes_groups(
     tie_correct: bool = False,
     mask_var: Any = None,
     specificity: bool = False,
-    max_entries: int = matrix_genes.BLOCK_ENTRIES,
+    max_entries: int | None = None,
     progress: sparse_markers.Progress | None = None,
     **kwds: Any,
 ) -> str:
@@ -117,7 +117,8 @@ def rank_genes_groups(
     ``adata.uns[key_added or "rank_genes_groups"]``. Returns which ran: "sparse" | "scanpy".
 
     ``specificity``: the blocks path also stores the tau frame ``marker_specificity``
-    would attach (from the group means it has); scanpy's path leaves that to the caller."""
+    would attach (from the group means it has); scanpy's path leaves that to the caller.
+    ``max_entries``: values per block (default ``matrix_genes.block_entries``)."""
     # scanpy's first step (sanitize_anndata): string columns become categorical
     adata.strings_to_categoricals()
     reason = unsupported(adata, groupby, method=method, groups=groups, reference=reference,
@@ -127,9 +128,12 @@ def rank_genes_groups(
         if use_raw is None:
             use_raw = adata.raw is not None
         matrix, var_names = _matrix(adata, use_raw, layer)
+        source = matrix_genes.MatrixGenes(matrix, var_names)
+        if max_entries is None:
+            max_entries = matrix_genes.block_entries(source.nnz)
         try:
             sparse_markers.rank_genes_groups(
-                adata, groupby, matrix_genes.MatrixGenes(matrix, var_names), method=method,
+                adata, groupby, source, method=method,
                 groups=groups, reference=reference, pts=pts, use_raw=use_raw, layer=layer,
                 key_added=key_added, corr_method=corr_method, n_genes=n_genes,
                 rankby_abs=rankby_abs, specificity=specificity, check_store=False,
