@@ -282,13 +282,38 @@ def test_counts_in_raw_or_a_layer(tmp_path, where):
     assert (big.var["highly_variable"] == mem.var["highly_variable"]).all()
 
 
+def _copy_large(res, tmp_path: Path, folder: str = "derived") -> Path:
+    out = tmp_path / folder / "data.h5ad"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    for p in Path(res.output_path).parent.iterdir():
+        shutil.copy2(p, out.parent / p.name)
+    return out
+
+
+def test_rows_stored_out_of_order_give_the_in_memory_scores(tmp_path):
+    # 10x's own subsets store each cell's genes out of order; the in-memory scaling step
+    # sorts X in place before the scores read it, so X is written sorted too.
+    a = _counts(n=1600, seed=3)
+    rng = np.random.default_rng(0)
+    X = a.X.tocsr()
+    for i in range(X.shape[0]):
+        a0, b0 = X.indptr[i], X.indptr[i + 1]
+        p = rng.permutation(b0 - a0)
+        X.indices[a0:b0] = X.indices[a0:b0][p]
+        X.data[a0:b0] = X.data[a0:b0][p]
+    X.has_sorted_indices = False
+    a.X = X
+    src = _write(a, tmp_path / "in" / "u.h5ad")
+    big, res, mem, mres = _both(src, tmp_path / "out" / "u.h5ad")
+    assert res.errors == mres.errors == {}
+    assert big.X.has_canonical_format
+    for c in ("S_score", "G2M_score", "dissociation_stress_score"):
+        np.testing.assert_array_equal(big.obs[c].to_numpy(), mem.obs[c].to_numpy())
+
+
 def test_a_large_dataset_is_run_again_from_its_files(processed, tmp_path):
     big, res, _, _, _ = processed
-    out = tmp_path / "derived" / "data.h5ad"
-    out.parent.mkdir(parents=True)
-    src = Path(res.output_path)
-    for p in src.parent.iterdir():
-        shutil.copy2(p, out.parent / p.name)
+    out = _copy_large(res, tmp_path)
     counts, genes = large_layout.sidecar_paths(out)
     before = {p: (p.stat().st_ino, p.stat().st_mtime_ns) for p in (counts, genes)}
     # Steps that change no matrix: X is copied, the sidecars stay as they are.
@@ -302,9 +327,13 @@ def test_a_large_dataset_is_run_again_from_its_files(processed, tmp_path):
     assert "scview_leiden_r1.0" in again.obs and markers_key("scview_leiden_r1.0") in again.uns
     np.testing.assert_array_equal(again.obs["dissociation_stress_score"],
                                   big.obs["dissociation_stress_score"])
-    # Reprocessed from scratch: the counts come from the sidecar, as an in-memory run
-    # reads them (the layer working_copy makes of them).
-    mem = working_copy.in_memory(AnnDataAdaptor(str(out)))
+    # Reprocessed from scratch: the counts come from the sidecar, as in memory from the
+    # same dataset with its counts as the layer (the recorded filtering thresholds too).
+    mem = large_run.read_light(out)
+    with h5py.File(counts, "r") as f:
+        c = ad.io.read_elem(f["counts"])
+    mem = ad.AnnData(c.copy(), obs=mem.obs, var=mem.var, obsm=dict(mem.obsm),
+                     obsp=dict(mem.obsp), uns=mem.uns, layers={"counts": c})
     mem, _ = run_pipeline(mem, STEPS, PipelineParams(**PARAMS))
     r = large_run.run(out, STEPS, PipelineParams(**PARAMS, chunked="on"), str(out))
     assert r.status == "complete" and r.errors == {}, r.errors
@@ -316,25 +345,29 @@ def test_a_large_dataset_is_run_again_from_its_files(processed, tmp_path):
         assert again.obs[c].dtype == mem.obs[c].dtype
 
 
-def test_an_in_memory_run_reads_a_large_dataset_s_counts_and_drops_its_sidecars(
-        processed, tmp_path):
+def test_a_large_dataset_always_runs_in_large_mode(processed, tmp_path, monkeypatch):
     _, res, _, _, _ = processed
-    out = tmp_path / "derived" / "data.h5ad"
-    out.parent.mkdir(parents=True)
-    for p in Path(res.output_path).parent.iterdir():
-        shutil.copy2(p, out.parent / p.name)
+    out = _copy_large(res, tmp_path)
     adaptor = AnnDataAdaptor(str(out))
-    assert working_copy.copy_bytes(adaptor) > 0  # the counts sidecar, read in
-    adata = working_copy.in_memory(adaptor)
-    assert "counts" in adata.layers and not large_layout.is_large(adata)
-    control = RunControl()
-    control.mode = large_run.ModeChoice(False, "off")
-    r = large_run.run_for(adaptor, ["reset_to_counts", "qc_metrics"],
-                          PipelineParams(chunked="off"), str(out), control)
-    assert r.status == "complete" and not r.chunked and r.mode["chunked"] is False
-    saved = ad.read_h5ad(out)
-    assert not large_layout.is_large(saved) and "counts" in saved.layers
-    assert not any(p.exists() for p in large_layout.sidecar_paths(out))
+    _budget(monkeypatch, 64 * GB, 1 * GB)  # it would fit in memory
+    for mode in ("auto", "off"):
+        choice = large_run.choose_mode(_DM(), "d", adaptor, STEPS, PipelineParams(chunked=mode))
+        assert choice.chunked and "never read into memory" in choice.reason
+
+
+def test_the_h5ad_keeps_its_free_space_for_edits_in_place(processed):
+    _, res, _, _, _ = processed
+    with h5py.File(res.output_path, "r") as f:
+        strategy, persist, _ = f.id.get_create_plist().get_file_space_strategy()
+    assert persist and strategy == h5py.h5f.FSPACE_STRATEGY_FSM_AGGR
+
+
+def test_the_header_says_a_large_dataset_opens_backed(processed):
+    _, res, _, _, d = processed
+    h = preflight.read_header(res.output_path)
+    assert h.large and h.backed
+    plain = preflight.read_header(d / "in" / "data.h5ad")
+    assert not plain.large and not plain.backed
 
 
 # ---------------------------------------------------------------------------
@@ -349,11 +382,7 @@ def _snapshot(folder: Path) -> dict:
 @pytest.fixture()
 def large_copy(processed, tmp_path) -> Path:
     _, res, _, _, _ = processed
-    out = tmp_path / "derived" / "data.h5ad"
-    out.parent.mkdir(parents=True)
-    for p in Path(res.output_path).parent.iterdir():
-        shutil.copy2(p, out.parent / p.name)
-    return out
+    return _copy_large(res, tmp_path)
 
 
 def test_a_cancelled_run_leaves_the_dataset_as_it_was(large_copy, monkeypatch):
@@ -589,6 +618,53 @@ async def test_the_cached_copy_is_let_go_before_a_large_run(client, dataset_mana
     assert alive == [False]
 
 
+def _register_large(processed, data_dir: Path, did: str = "lg") -> Path:
+    _, res, _, _, _ = processed
+    up = data_dir / "uploads" / did
+    up.mkdir(parents=True, exist_ok=True)
+    (up / "metadata.json").write_text(json.dumps({"id": did, "name": did, "status": "ready"}))
+    out = data_dir / "derived" / did / "data.h5ad"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    for p in Path(res.output_path).parent.iterdir():
+        shutil.copy2(p, out.parent / p.name)
+    return out
+
+
+async def test_paga_and_pseudotime_read_a_large_dataset_without_its_matrices(
+        client, dataset_manager, processed, monkeypatch):
+    out = _register_large(processed, Path(dataset_manager.data_dir))
+    counts, genes = large_layout.sidecar_paths(out)
+    sidecars = {p: p.read_bytes() for p in (counts, genes)}
+    reads = []
+    monkeypatch.setattr(working_copy, "in_memory", lambda a: reads.append(a) or a.to_memory())
+    col = "scview_leiden_r0.5"
+    r = await client.post(f"{API}/datasets/lg/trajectory/paga", json={"groupby": col})
+    assert r.status_code == 200, r.text
+    r = await client.post(f"{API}/datasets/lg/trajectory/dpt",
+                          json={"root_column": "group", "root_value": "t0"})
+    assert r.status_code == 200, r.text
+    assert reads == []
+    saved = ad.read_h5ad(out)
+    assert "scview_dpt_pseudotime" in saved.obs and large_layout.is_large(saved)
+    np.testing.assert_array_equal(_dense(saved.X), _dense(processed[0].X))
+    assert {p: p.read_bytes() for p in (counts, genes)} == sidecars
+    steps = [h["step"] for h in provenance.read_provenance(saved)["history"]]
+    assert steps[-2:] == ["paga", "pseudotime"]
+
+
+async def test_work_that_reads_a_large_dataset_into_memory_is_refused(dataset_manager, processed):
+    from fastapi import HTTPException
+
+    from scview.core import processing
+
+    _register_large(processed, Path(dataset_manager.data_dir))
+    with pytest.raises(HTTPException) as e:
+        await processing.run_exclusive(dataset_manager, "lg", lambda a: a.adata)
+    assert e.value.status_code == 422 and "large-dataset layout" in e.value.detail
+    # and the dataset is free again
+    assert not dataset_manager.is_busy("lg")
+
+
 async def test_an_unknown_mode_is_refused_before_loading(client, dataset_manager):
     did = _register(Path(dataset_manager.data_dir))
     r = await client.post(f"{API}/datasets/{did}/assessment/run",
@@ -628,6 +704,23 @@ def test_chunked_estimate_grows_with_blocks_not_cells():
     mem = preflight.estimate_run(h, steps=STEPS, params=PipelineParams(), doublets=wells)
     assert eb.peak_bytes < mem.peak_bytes / 2
     assert preflight.chunked_disk_bytes(big) > 40 * GB
+
+
+def test_chunked_estimate_matches_the_live_100k_run(monkeypatch):
+    """The live run of the UI's steps on the 100k-cell brain (6 GB, 2 CPUs; see preflight's
+    calibration): peak 2.19 GB in Leiden, 551 s, 1.65 GB of files."""
+    monkeypatch.setattr(chunked, "n_workers", lambda: 2)
+    n, m, nnz = 100_000, 27_998, 201_003_839
+    h = preflight.Header("h5ad", n, m, [preflight.Matrix("X", n, m, True, nnz)], obs_columns=1,
+                         var_columns=1)
+    steps = [s for s in STEPS if s != "marker_genes"] + ["marker_genes"]
+    est = preflight.estimate_chunked_run(h, steps, PipelineParams(),
+                                         doublets=preflight.DoubletPlan([752] * 133))
+    assert est.peak_step == "clustering"
+    assert abs(est.peak_bytes / (2.19 * GB) - 1) < preflight.ERROR_BAND
+    assert est.seconds[0] <= 551 <= est.seconds[1]
+    disk = preflight.chunked_disk_bytes(preflight.ChunkedShape.from_header(h))
+    assert 1.65 * GB < disk < 4 * GB  # the files, and the gene store's spill while it builds
 
 
 # ---------------------------------------------------------------------------

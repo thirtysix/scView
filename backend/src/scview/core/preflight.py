@@ -154,6 +154,9 @@ class Header:
     var_columns: int = 0
     file_bytes: int = 0
     backed: bool = False  # opened from disk (files over 2 GB): X is not read into memory
+    # In large-dataset layout (uns["scview_large"], core/large_layout.py): opens backed
+    # whatever its size and is never read into memory (core/large_run.py).
+    large: bool = False
     # Variable genes (var["highly_variable"]), what PCA reads; None: no such column (every gene).
     n_hvg: int | None = None
     estimated: bool = False  # cells / genes estimated from a sample (text tables)
@@ -291,6 +294,9 @@ def _read_h5ad(path: Path) -> Header:
             h.varm_bytes += _h5_bytes(f["varm"][key])
         if "uns" in f:
             h.uns_bytes = _h5_bytes(f["uns"])
+            from scview.core.large_layout import KEY as LARGE_KEY
+
+            h.large = LARGE_KEY in f["uns"]
     return h
 
 
@@ -591,7 +597,7 @@ def read_header(path: str | Path, fmt: str | None = None, genes_in_rows: bool = 
     # The adaptor opens files over 2 GB on disk (anndata backed mode).
     from scview.core.anndata_adaptor import opens_backed
 
-    h.backed = fmt == "h5ad" and opens_backed(h.file_bytes)
+    h.backed = fmt == "h5ad" and (opens_backed(h.file_bytes) or h.large)
     h.seconds = round(time.perf_counter() - t0, 4)
     return h
 
@@ -1365,25 +1371,50 @@ def step_peak_for(adata, step: str, params=None) -> int:
 # The matrices stay on disk: the run holds the dataset without them (obs, var, obsm,
 # obsp, uns) and what its steps add, and each pass over the matrix holds a batch of row
 # blocks (``chunked.step_bytes``: one block's working memory per worker). The one write
-# of X, the counts and the gene store holds two blocks per worker and the gene store's
-# staged rows and gene block. Coefficients: see CHUNKED_CALIBRATION below.
+# of X, the counts and the gene store holds a batch of blocks and the gene store's staged
+# rows and gene block.
+#
+# Calibration (2026-10-24): the live run of the UI's 15 steps on the 100k-cell brain
+# (100,000 x 27,998, 201M stored values, gzip; 88,640 x 19,824 after filtering) in a
+# 6 GB / 2-CPU container, auto mode, through /assessment/run-stream: 551 s, peak 2.19 GB
+# (Leiden), cgroup memory (current - inactive_file) sampled every 0.5 s. Per step, GB at the
+# peak, measured / estimated: QC 0.82 / 0.73 (first estimate, before calibration), write
+# + variable genes 1.86 / 1.86, PCA 1.43 / 0.89, neighbours 1.33 / 1.27, Leiden 2.19 / 2.08,
+# markers 1.58 / 1.52, cell cycle 1.76 / 1.65. The first estimate had the memory a process
+# keeps after its first pass too low (+0.45-0.55 GB: dask's threads, numba, h5py caches,
+# freed memory glibc keeps; another 0.4 GB after the write) and the neighbour graph too
+# high (the in-memory model's 12 KB per cell; 2.5 KB measured, 1.2 KB of it kept); these
+# are set from this run, as is what the server keeps after Leiden (0.2 GB). Calibrated:
+# write + variable genes 1.81, PCA 1.62, neighbours 1.21, Leiden 2.04 (the run's peak,
+# -7%), UMAP 1.33 (1.58), markers 1.57, cell cycle 1.69; QC 1.07, filtering 1.16 (over).
+# Seconds: a pass 3.5e-8 per stored value (QC 6.2 s, filtering 5.3 s, scaling 5.4 s), the
+# write 4e-7 (71 s), Leiden 253 s at 88,640 cells (in memory and on Roihu it grew as
+# n^2.2-2.5; a fixed iteration count would change that). Disk: X 520 MB, counts 418 MB,
+# gene store 710 MB, and the store's build spills 8 bytes per value while it runs.
 
-CHUNKED_FIXED = 150 * MiB  # dask and its threads, h5py caches: held from the first pass
+CHUNKED_FIXED = 500 * MiB  # kept by the process from its first pass on (see above)
 # The gene store's build (core/gene_store.py): one staged chunk of rows (STAGE_ENTRIES
 # values, cleaned, stacked and transposed) or one gene block (BLOCK_ENTRIES), 8 bytes each
 # a few times over; 0.80 GB peak RSS building 100k cells on its own.
-GENESTORE_BUILD_BYTES = 640 * MiB
+GENESTORE_BUILD_BYTES = 750 * MiB
+CHUNKED_WRITE_KEPT = 400 * MiB  # kept by the process after the write (measured, as above)
 MARKERS_STORE_PER_VALUE = 60  # sparse_markers: working set per stored value of a gene block
 CELLTYPIST_LABELS = 100  # probabilities kept per cell (float32)
+CHUNKED_NEIGHBORS_PER_CELL = 2_600  # building the graph; 1,300 of it kept
+CHUNKED_GRAPH_PER_CELL = 1_300
+CHUNKED_LEIDEN_PER_CELL = 10_500  # the Leiden child: its graph copy and partition
+CHUNKED_LEIDEN_KEPT_PER_CELL = 2_500  # kept by the server after it (the edges it sent)
+CHUNKED_LEIDEN_SECONDS = (253.0, 88_640, 2.4)  # (seconds, at cells, power)
 # Seconds per stored value: a pass that reads the matrix (gzip CSR, 2 CPUs), and the one
-# write (X and counts gzip, the gene store built and filled).
-CHUNKED_PASS_SECONDS_PER_VALUE = 1.2e-7
-CHUNKED_WRITE_SECONDS_PER_VALUE = 6e-7
+# write (X and counts gzip, the gene store built and filled); markers per column.
+CHUNKED_PASS_SECONDS_PER_VALUE = 3.5e-8
+CHUNKED_WRITE_SECONDS_PER_VALUE = 4e-7
+CHUNKED_MARKERS_SECONDS_PER_VALUE = 7e-8
 # Disk per stored value: X (float32 + int64 index, gzip), the counts (gzip), the gene store
 # (gzip-4 + shuffle) and its build's spill files (8 bytes, removed after).
-DISK_X_PER_VALUE = 4.5
-DISK_COUNTS_PER_VALUE = 3.0
-DISK_STORE_PER_VALUE = 3.9
+DISK_X_PER_VALUE = 2.8
+DISK_COUNTS_PER_VALUE = 2.5
+DISK_STORE_PER_VALUE = 4.0
 DISK_STORE_TEMP_PER_VALUE = 8.0
 # Steps after which the large run writes X, the counts and the gene store again (any
 # step on a dataset not yet in large-dataset layout writes them too).
@@ -1464,8 +1495,15 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
         c = int(_p(params, "n_comps", 50))
         t = _chunk_pass(sh, params) + k * k * 8 * 4 + n * c * 4 * 2
         secs, held = _pass_secs(sh, 2) + 2e-9 * n * k * k / 50, n * c * 4 + m * c * 8
-    elif step in ("neighbors", "clustering", "embeddings", "uncorrected_embedding",
-                  "batch_correction", "enrichment"):
+    elif step == "neighbors":
+        t, held = n * CHUNKED_NEIGHBORS_PER_CELL, n * CHUNKED_GRAPH_PER_CELL
+        secs = _STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2]
+    elif step == "clustering":
+        t, held = 60 * MiB + n * CHUNKED_LEIDEN_PER_CELL, n * CHUNKED_LEIDEN_KEPT_PER_CELL
+        s0, n0, power = CHUNKED_LEIDEN_SECONDS
+        secs = max(_STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2],
+                   s0 * (n / n0) ** power)
+    elif step in ("embeddings", "uncorrected_embedding", "batch_correction", "enrichment"):
         s = _State(n, m, None, {}, None, 0)
         before = s.other
         t, s, secs = _STEP_MODELS[step](s, params)
@@ -1477,7 +1515,7 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
         cols = len(_p(params, "marker_columns", []) or []) or 1
         t = sparse_markers.MAX_ENTRIES * MARKERS_STORE_PER_VALUE + g * m * 8 * 12 + n * 16
         held = (56 + 16) * m * g * cols
-        secs = 1.0 + cols * sh.nnz * 1.5e-7
+        secs = 1.0 + cols * sh.nnz * CHUNKED_MARKERS_SECONDS_PER_VALUE
     elif step in ("cell_cycle", "dissociation_stress"):
         from scview.core import gene_store
 
@@ -1497,7 +1535,8 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
     else:
         t, secs = 0, 0.1
     if write:
-        t = max(t, _chunk_pass(sh, params, 2.0) + GENESTORE_BUILD_BYTES)
+        t = max(t, _chunk_pass(sh, params) + GENESTORE_BUILD_BYTES)
+        held += CHUNKED_WRITE_KEPT
         secs += sh.nnz * CHUNKED_WRITE_SECONDS_PER_VALUE
     return int(t), int(held), float(secs)
 
@@ -1550,7 +1589,11 @@ def estimate_chunked_run(sh: ChunkedShape | Header, steps: list[str], params=Non
 
 # Steps of large-dataset mode whose coefficients come from a measured run (the live
 # 100k-cell run; see CHUNKED_CALIBRATION).
-CHUNKED_MEASURED: set[str] = set()
+CHUNKED_MEASURED: set[str] = {
+    "reset_to_counts", "qc_metrics", "doublet_detection", "filtering", "normalization",
+    "log_transform", "highly_variable_genes", "scaling", "pca", "neighbors", "clustering",
+    "embeddings", "marker_genes", "cell_cycle", "dissociation_stress", "save",
+}
 
 
 def chunked_step_peak(step: str, sh: ChunkedShape, params=None, *, write: bool = False,
@@ -1899,7 +1942,7 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
     auto by the rule ``large_run.choose_mode`` applies, or on / off); in that mode the
     steps and verdict are that mode's (``estimate_chunked_run``, with the disk it writes)
     and ``in_memory`` holds the in-memory estimate it replaced."""
-    from scview.core import working_copy
+    from scview.core import large_layout
     from scview.core.pipeline import PipelineParams, check_chunked
 
     params = PipelineParams()
@@ -1927,9 +1970,7 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
             raise FileNotFoundError(dataset_id)
         h = read_header(files[0], "h5ad")
         plan = _file_doublet_plan(files[0], params) if dbl else None
-    large_counts = working_copy.large_counts_matrix(files[0]) if files else None
-    if large_counts is not None and h.matrix("layers/counts") is None:
-        h.matrices.append(large_counts)  # an in-memory run reads them in as the layer
+    large = h.large or (in_memory and large_layout.is_large(adaptor.adata))
     warm = process_warm()
     est = estimate_run(h, steps=steps, params=params, warm=warm, doublets=plan)
     # A backed dataset holds less than the run's start (its matrices are read in first).
@@ -1979,20 +2020,24 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
                      alternatives=alternatives)
     out = {"dataset_id": dataset_id, "in_memory": in_memory, "header": h.to_dict(),
            "steps": [e.to_dict() for e in est.steps], "verdict": v}
-    chunked, reason = _would_chunk(requested, need, avail, cached)
+    chunked, reason = _would_chunk(requested, need, avail, cached, large)
     out["mode"] = {"chunked": chunked, "requested": requested, "reason": reason}
     if chunked:
         out["in_memory_estimate"] = {"steps": out["steps"], "verdict": v}
         out.update(_chunked_preflight(h, steps, params, held, avail, cached, plan,
-                                      large=large_counts is not None,
+                                      large=large,
                                       disk_folder=Path(dm.data_dir)))
     return out
 
 
-def _would_chunk(requested: str, need: int, avail: Available, cached: Cached) -> tuple[bool, str]:
+def _would_chunk(requested: str, need: int, avail: Available, cached: Cached,
+                 large: bool = False) -> tuple[bool, str]:
     """Large-dataset mode or not, by the rule ``large_run.choose_mode`` applies."""
     from scview.core.dataset_manager import LOAD_MARGIN, working_reserve
 
+    if large:
+        return True, ("This dataset is in large-dataset layout, so it runs in large-dataset "
+                      "mode: it is never read into memory.")
     if requested == "on":
         return True, "Large-dataset mode was chosen for this run."
     if requested == "off":
@@ -2003,7 +2048,7 @@ def _would_chunk(requested: str, need: int, avail: Available, cached: Cached) ->
     target = max(0, need) * LOAD_MARGIN + working_reserve(avail.limit_bytes)
     if target <= free:
         return False, "The run fits in memory."
-    return True, (f"In memory the run needs about {_about(max(0, need))} more at its peak, more "
+    return True, (f"In memory the run needs {_about(max(0, need))} more at its peak, more "
                   f"than scView can give it with its working reserve, so it runs in "
                   "large-dataset mode: the matrices stay on disk, read in blocks.")
 
@@ -2026,7 +2071,7 @@ def _chunked_preflight(h: Header, steps: list[str], params, held: int, avail: Av
         free = None
     about = _about(max(0, need))
     lead = (f"In large-dataset mode (the matrices stay on disk, read in blocks): "
-            f"{about} more than now at its peak ({stage}), and about {_about(disk)} of disk")
+            f"{about} more than now at its peak ({stage}), and {_about(disk)} of disk")
     notes = ["Large-dataset mode writes the log-normalised matrix, the counts and a gene-major "
              "copy beside the dataset; the steps' results are the in-memory ones."]
     unmeasured = [STEP_LABELS.get(e.step, e.step) for e in est.steps if not e.measured]

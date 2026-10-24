@@ -5,8 +5,11 @@ says otherwise: "on" always runs it here, "off" never, and "auto" (the default) 
 here when the in-memory run would not fit the memory budget (``choose_mode``: its
 estimated need, a backed dataset's read-in included, with ``LOAD_MARGIN`` and the working
 reserve, against what is free with the other open datasets closed: the rule
-``DatasetManager.free_memory_for`` uses). ``core/processing.py`` makes that choice before
-the run and, for this mode, never reads the dataset into memory.
+``DatasetManager.free_memory_for`` uses). A dataset already in this layout always runs
+here, "off" or not: it is never read into memory. ``core/processing.py`` makes that choice
+before the run and, for this mode, never reads the dataset into memory. Work that needs
+only obs, obsm, obsp and uns (PAGA, pseudotime) gets the dataset without its matrices
+(``read_light``).
 
 The run has the in-memory pipeline's step names, parameters and stored results. It keeps
 a copy of the dataset without matrices (obs, var, obsm, obsp, varm, uns: "light") and a
@@ -100,6 +103,10 @@ from scview.core.pipeline import (
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason, default_before_step
 from scview.core.uns_keys import BATCH_MIXING_KEY, repair_slash_keys
 
+# The h5ad is created with HDF5's free-space manager kept in the file, so the in-place
+# edits of obs and uns the viewer makes reuse the space of what they replace.
+H5AD_CREATE = {"fs_strategy": "fsm", "fs_persist": True}
+
 logger = logging.getLogger(__name__)
 
 GB = 1024**3
@@ -142,6 +149,43 @@ class ModeChoice:
                 "limit_bytes": self.limit_bytes}
 
 
+def large_info(h5ad_path) -> dict | None:
+    """``uns["scview_large"]`` of an h5ad on disk (read alone), or None: not a large dataset."""
+    from anndata.io import read_elem
+
+    if not h5ad_path:
+        return None
+    try:
+        with h5py.File(h5ad_path, "r") as f:
+            key = f"uns/{large_layout.KEY}"
+            return read_elem(f[key]) if key in f else None
+    except OSError:
+        return None
+
+
+def read_light(path: str | Path) -> ad.AnnData:
+    """The dataset at ``path`` without its matrices (obs, var, obsm, obsp, varm, varp,
+    uns), as an in-memory open leaves them: for work that needs only those (PAGA,
+    pseudotime) on a large dataset, and for the large-dataset run itself."""
+    from anndata.io import read_elem
+
+    from scview.core import protein
+
+    with h5py.File(str(path), "r") as f:
+        def get(key, default=None):
+            return read_elem(f[key]) if key in f else default
+
+        light = ad.AnnData(obs=get("obs"), var=get("var"), obsm=get("obsm", {}),
+                           obsp=get("obsp", {}), varm=get("varm", {}), varp=get("varp", {}),
+                           uns=get("uns", {}))
+    if repair_slash_keys(light.uns):
+        logger.info("Re-keyed cached results saved under '/' keys")
+    protein.adopt_obsm(light)  # as an in-memory open does
+    if light.obs.index.name is not None and light.obs.index.name in light.obs.columns:
+        light.obs.index.name = None  # as run_pipeline does
+    return light
+
+
 def is_chunked(control: RunControl | None) -> bool:
     """Whether ``core/processing.py`` chose large-dataset mode for this run."""
     return bool(getattr(getattr(control, "mode", None), "chunked", False))
@@ -149,20 +193,20 @@ def is_chunked(control: RunControl | None) -> bool:
 
 def in_memory_need(adaptor, steps: list[str], params) -> tuple[int, int]:
     """(memory the in-memory run needs beyond what the dataset holds now, the run's own
-    part of it): reading a backed dataset (and a large one's counts sidecar) into memory,
-    then the run's peak over that (``preflight.estimate_run``)."""
+    part of it): reading a backed dataset into memory (``working_copy.copy_bytes``), then
+    the run's peak over that (``preflight.run_need``; a backed dataset's doublet channels
+    from its file, never by reading its matrix)."""
     from scview.core import preflight, working_copy
 
     adata = adaptor.adata
     copy = working_copy.copy_bytes(adaptor)
-    h = working_copy.run_header(adaptor)
-    if "doublet_detection" in steps:
-        plan = (preflight._file_doublet_plan(adaptor.h5ad_path, params)
-                if getattr(adata, "isbacked", False) else preflight.doublet_plan(adata, params))
-    else:
-        plan = None
-    est = preflight.estimate_run(h, steps=steps, params=params, warm=preflight.process_warm(),
-                                 doublets=plan)
+    if not getattr(adata, "isbacked", False):
+        run = preflight.run_need(adata, steps, params)
+        return copy + run, run
+    plan = (preflight._file_doublet_plan(adaptor.h5ad_path, params)
+            if "doublet_detection" in steps else None)
+    est = preflight.estimate_run(preflight.in_memory_header(adata), steps=steps, params=params,
+                                 warm=preflight.process_warm(), doublets=plan)
     run = max(0, int(est.peak_bytes - est.start_bytes))
     return copy + run, run
 
@@ -174,6 +218,10 @@ def choose_mode(dm, dataset_id: str, adaptor, steps: list[str], params) -> ModeC
     from scview.core.dataset_manager import LOAD_MARGIN, working_reserve
 
     requested = check_chunked(getattr(params, "chunked", "auto"))
+    if large_info(getattr(adaptor, "h5ad_path", None)) is not None:
+        return ModeChoice(True, requested, "This dataset is in large-dataset layout (its counts "
+                          "and gene-major copy are on disk beside it), so it runs in "
+                          "large-dataset mode: it is never read into memory.")
     if requested == "on":
         return ModeChoice(True, requested, "Large-dataset mode was chosen for this run.")
     if requested == "off":
@@ -247,8 +295,15 @@ def _index_dtype(dense: bool, nnz: int, n_vars: int) -> np.dtype:
 
 
 def _f32_csr(b) -> sp.csr_matrix:
+    """A block of X as written: CSR float32 in canonical order (each row's genes sorted,
+    duplicates summed), as the in-memory scaling step leaves X (``scaling.gene_stats``
+    sorts it in place): the gene scores add each cell's values in this order."""
     m = sp.csr_matrix(b) if sp.issparse(b) else sp.csr_matrix(np.asarray(b))
-    return m if m.dtype == np.float32 else m.astype(np.float32)
+    m = m if m.dtype == np.float32 else m.astype(np.float32)
+    if not m.has_canonical_format:
+        m = m.copy()  # the block may share its arrays with the matrix it came from
+        m.sum_duplicates()
+    return m
 
 
 def _csr(b) -> sp.csr_matrix:
@@ -334,16 +389,12 @@ class LargeRun:
     def open(self) -> None:
         from anndata.io import read_elem
 
-        from scview.core import protein
-
         p = str(self.path)
+        light = read_light(p)
         with h5py.File(p, "r") as f:
             def get(key, default=None):
                 return read_elem(f[key]) if key in f else default
 
-            obs, var = get("obs"), get("var")
-            light = ad.AnnData(obs=obs, var=var, obsm=get("obsm", {}), obsp=get("obsp", {}),
-                               varm=get("varm", {}), varp=get("varp", {}), uns=get("uns", {}))
             info = {}
             for key in ("X", "layers/counts", "raw/X"):
                 if key not in f:
@@ -355,11 +406,6 @@ class LargeRun:
                 info[key] = (dense, shape, nnz, _index_dtype(dense, nnz, shape[1]))
             raw_var = get("raw/var") if "raw/X" in info else None
             raw_varm = get("raw/varm", {}) if "raw/X" in info else None
-        if repair_slash_keys(light.uns):
-            logger.info("Re-keyed cached results saved under '/' keys")
-        protein.adopt_obsm(light)  # as an in-memory open does
-        if light.obs.index.name is not None and light.obs.index.name in light.obs.columns:
-            light.obs.index.name = None  # as run_pipeline does
         self.light = light
         self.large_in = large_layout.is_large(light.uns)
         self._shape0 = (light.n_obs, light.n_vars)
@@ -569,7 +615,7 @@ class LargeRun:
         with contextlib.ExitStack() as es:
             xa = gw = ca = None
             if x is not None:
-                fx = es.enter_context(h5py.File(self._x_file, "w"))
+                fx = es.enter_context(h5py.File(self._x_file, "w", **H5AD_CREATE))
                 xa = chunked.CsrAppender(fx, "X")
                 gw = es.enter_context(gene_store.GeneStoreWriter(
                     self._store_file, obs_names=light.obs_names, var_names=light.var_names,
@@ -880,10 +926,10 @@ class LargeRun:
         target = self._x_file or stage / "x.h5ad"
         kw = {"compression": "gzip"}
         self._label = "Saving"
+        if self._x_file is None:  # X unchanged: the input's, copied as stored
+            with h5py.File(target, "w", **H5AD_CREATE) as f, h5py.File(self.path, "r") as src:
+                src.copy(src["X"], f, name="X")
         with h5py.File(target, "a") as f:
-            if self._x_file is None:  # X unchanged: the input's, copied as stored
-                with h5py.File(self.path, "r") as src:
-                    src.copy(src["X"], f, name="X")
             for key in [k for k in f.keys() if k != "X"]:
                 del f[key]
             f.attrs.setdefault("encoding-type", "anndata")
@@ -1101,12 +1147,12 @@ def _stored_bytes(path: Path, key: str) -> int:
 def run_need(path: str | Path, steps: list[str], params=None) -> int:
     """Memory a large-dataset run of ``steps`` on the h5ad at ``path`` needs at its peak
     (nothing of the dataset is held when it starts: its cached copy is dropped)."""
-    from scview.core import preflight, working_copy
+    from scview.core import preflight
 
     h = preflight.read_header(path, "h5ad")
     plan = (preflight._file_doublet_plan(path, params) if "doublet_detection" in steps
             else None)
-    large = working_copy.large_info(path) is not None
+    large = large_info(path) is not None
     est = preflight.estimate_chunked_run(h, steps, params, large=large, doublets=plan)
     return int(est.peak_bytes)
 
@@ -1249,12 +1295,6 @@ def run(path: str | Path, steps: list[str], params: PipelineParams | None = None
 # ---------------------------------------------------------------------------
 
 
-def _forget_sidecars(adata, output_path: str | None) -> None:
-    """After an in-memory run saved a dataset that was large: its sidecars are stale."""
-    if output_path and not large_layout.is_large(adata):
-        large_layout.remove_sidecars(output_path)
-
-
 def run_for(adaptor, steps: list[str], params: PipelineParams, output_path: str,
             control: RunControl | None) -> PipelineResult:
     """The run in the mode ``core/processing.py`` chose (``control.mode``)."""
@@ -1262,9 +1302,7 @@ def run_for(adaptor, steps: list[str], params: PipelineParams, output_path: str,
     if is_chunked(control):
         result = run(adaptor.h5ad_path, steps, params, output_path, control)
     else:
-        adata, result = run_pipeline(adaptor.adata, steps, params, output_path, control)
-        if result.output_path:
-            _forget_sidecars(adata, result.output_path)
+        result = run_pipeline(adaptor.adata, steps, params, output_path, control)[1]
     result.mode = mode.to_dict() if mode is not None else None
     return result
 
@@ -1276,18 +1314,8 @@ def run_streamed_for(adaptor, steps: list[str], params: PipelineParams, output_p
     if is_chunked(control):
         gen = run_streamed(adaptor.h5ad_path, steps, params, output_path, control)
     else:
-        gen = _in_memory_streamed(adaptor.adata, steps, params, output_path, control)
+        gen = run_pipeline_streamed(adaptor.adata, steps, params, output_path, control)
     for event, data in gen:
         if event == "complete":
             data = {**data, "mode": mode.to_dict() if mode is not None else None}
-        yield event, data
-
-
-def _in_memory_streamed(adata, steps, params, output_path, control):
-    gen = run_pipeline_streamed(adata, steps, params, output_path, control)
-    saved = None
-    for event, data in gen:
-        if event == "complete":
-            saved = data.get("output_path")
-            _forget_sidecars(adata, saved)
         yield event, data
