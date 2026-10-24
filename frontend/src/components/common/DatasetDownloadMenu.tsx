@@ -8,6 +8,8 @@ import {
   h5adDownloadUrl,
   type H5adInfo,
 } from "@/api/export";
+import type { ExportFormat } from "@/api/exportFormats";
+import { ExportFormatDialog } from "@/components/common/ExportFormatDialog";
 import { ExportMenu, type ExportMenuItem } from "@/components/common/ExportMenu";
 import { formatBytes } from "@/lib/formatting";
 
@@ -20,12 +22,13 @@ interface DatasetDownloadMenuProps {
 
 /**
  * "Download" menu for one dataset: the .h5ad scView works on (size shown before
- * the download starts), the cell metadata, the marker tables, and the replay
+ * the download starts), copies for CELLxGENE and Vitessce (options in a dialog), the cell metadata, the marker tables, and the replay
  * script + run manifest of its recorded steps.
  */
 export function DatasetDownloadMenu({ datasetId, compact = false, className }: DatasetDownloadMenuProps) {
   const [info, setInfo] = useState<H5adInfo | null>(null);
   const [infoError, setInfoError] = useState(false);
+  const [dialog, setDialog] = useState<ExportFormat | null>(null);
 
   useEffect(() => {
     setInfo(null);
@@ -58,6 +61,20 @@ export function DatasetDownloadMenu({ datasetId, compact = false, className }: D
       onSelect: () => {
         if (info) downloadUrl(h5adDownloadUrl(datasetId), info.filename);
       },
+    },
+    {
+      key: "cellxgene",
+      icon: "data",
+      label: "For CELLxGENE (.h5ad)…",
+      hint: "Desktop explorer; Discover readiness check",
+      onSelect: () => setDialog("cellxgene"),
+    },
+    {
+      key: "vitessce",
+      icon: "data",
+      label: "For Vitessce (.zip)…",
+      hint: "AnnData-Zarr + view config",
+      onSelect: () => setDialog("vitessce"),
     },
     {
       key: "metadata-csv",
@@ -99,12 +116,15 @@ export function DatasetDownloadMenu({ datasetId, compact = false, className }: D
   ];
 
   return (
-    <ExportMenu
-      items={items}
-      label="Download"
-      onOpen={loadInfo}
-      compact={compact}
-      className={className}
-    />
+    <>
+      <ExportMenu
+        items={items}
+        label="Download"
+        onOpen={loadInfo}
+        compact={compact}
+        className={className}
+      />
+      {dialog && <ExportFormatDialog datasetId={datasetId} format={dialog} onClose={() => setDialog(null)} />}
+    </>
   );
 }
