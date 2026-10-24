@@ -79,7 +79,7 @@ export function AmbientRna({
           <span>
             No raw (unfiltered) matrix is attached, so there are no empty droplets to read the soup from and rho
             can&apos;t be estimated: attach <code>raw_feature_bc_matrix.h5</code> in Sequencing QC. Until then the
-            cells&apos; own counts stand in for the soup (approximate), only to flag markers that may spill.
+            cells&apos; own counts stand in for the soup (approximate), and no markers are flagged.
           </span>
         </p>
       )}

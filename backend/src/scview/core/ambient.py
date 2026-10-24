@@ -32,9 +32,9 @@ package documentation (SoupX is GPL-2; no code of it is used):
   cluster, is found at about what rho x soup puts there (``AMBIENT_RATIO_MIN`` to
   ``AMBIENT_RATIO_MAX``: half to twice). Its signal in the other clusters is then likely
   ambient; far below that the soup adds too little to matter (a clean sample at the 1%
-  floor of rho), far above it the gene is expressed there. Without rho (no raw matrix, or
-  no estimate) only the soup share is used, from the approximate profile (its top
-  ``SOUP_TOP_GENES_APPROX`` genes).
+  floor of rho), far above it the gene is expressed there. With empty droplets but no rho
+  estimate only the soup share is used (its top ``SOUP_TOP_GENES_APPROX`` genes); without a
+  raw matrix nothing is flagged, as the cells' own total is no soup.
 - **Correction** (``correct_counts``, the pipeline's ``ambient_correction`` step, opt-in):
   SoupX's ``adjustCounts`` subtraction for each cell alone (``clusters = FALSE``): rho x
   the cell's UMIs are removed, shared out in proportion to the soup profile over the
@@ -121,8 +121,8 @@ HELP = {
     ),
     "approximate": (
         "No raw matrix is attached, so there are no empty droplets to read the soup from. "
-        "The cells' own summed counts stand in for it: good enough to say which markers are "
-        "abundant enough to spill, not to estimate a contamination fraction."
+        "The cells' own summed counts stand in for it, to show the most abundant genes: not "
+        "enough to estimate a contamination fraction or to say which markers are ambient."
     ),
     "flag": (
         "Ambient-looking marker: one of the top genes of the soup, and outside this cluster it "
@@ -130,8 +130,8 @@ HELP = {
         "signal in the other clusters is likely ambient, which can inflate DE against them."
     ),
     "flag_approximate": (
-        "Possibly ambient: one of the most abundant genes of the whole sample (no raw matrix "
-        "to read the soup from), so it is the kind of gene that spills into other clusters."
+        "Possibly ambient: one of the top genes of the soup (its empty droplets), but rho could "
+        "not be estimated, so how much of its signal elsewhere is ambient is not known."
     ),
     "correction": (
         "Removes rho x each cell's UMIs, shared out over its genes by the soup profile and never "
@@ -698,7 +698,9 @@ def marker_flags(adata, column: str, found: list[Sample], fits: dict[str, RhoFit
 
     with_rho = [s for s in found if s.name in fits and fits[s.name].rho is not None]
     approximate = not with_rho
-    use = with_rho or found
+    # Without empty droplets the "soup" is the cells' own total, whose top genes are the
+    # big clusters' real markers (paul15: Elane, Prtn3; Kang: CCL2, CCL8): no flags then
+    use = with_rho or [s for s in found if s.source == "empty_droplets"]
     markers = group_markers(adata, column)
     cc = cluster_codes(adata, column)
     if not markers or cc is None:

@@ -289,9 +289,8 @@ def test_without_a_raw_matrix_the_profile_is_approximate():
     assert body["approximate"] and not body["available"]
     (s,) = body["samples"]
     assert s["source"] == "cells" and s["rho"] is None and s["rho_status"] == "no_soup"
-    assert body["markers"]["approximate"]
-    for rows in body["markers"]["groups"].values():
-        assert all(r["ratio"] is None and r["soup_rank"] <= ambient.SOUP_TOP_GENES_APPROX for r in rows)
+    # The cells' own total is no soup: its top genes are the clusters' real markers
+    assert body["markers"]["approximate"] and body["markers"]["groups"] == {}
 
 
 def test_the_cached_answer_follows_edits_made_in_place():
