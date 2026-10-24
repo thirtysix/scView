@@ -4,6 +4,7 @@ import { applyDoubletThreshold, getDoublets, type DoubletChannelCalls, type Doub
 import { CapNote, Caption } from "@/components/common/Caption";
 import { Panel } from "@/components/common/Panel";
 import { DoubletAgreement } from "@/components/qc/DoubletAgreement";
+import { DoubletMethods } from "@/components/qc/DoubletMethods";
 import { ThresholdHistogram, type RefLine } from "@/components/plots/ThresholdHistogram";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { InfoTip } from "@/components/common/InfoTip";
@@ -161,7 +162,22 @@ export function DoubletCard({
       </div>
     ) : null;
   }
-  if (!summary.available || !summary.hist) return null;
+  if (!summary.available || !summary.hist) {
+    // The classifier ran alone: no Scrublet scores to threshold, its own calls
+    if (!summary.classifier) return null;
+    return (
+      <Panel title="Doublet calls">
+        <div className="space-y-2">
+          <DoubletMethods classifier={summary.classifier} scrubletAt="Scrublet" showHistogram />
+          {summary.source && (
+            <Caption testId="doublet-source">
+              Doublet views use: {sourceText(summary.source)}
+            </Caption>
+          )}
+        </div>
+      </Panel>
+    );
+  }
 
   const apply = async (t: number | null) => {
     setApplying(true);
@@ -433,6 +449,13 @@ export function DoubletCard({
                 ? `Scrublet at ${fmtScore(summary.agreement.threshold)}`
                 : "Scrublet's saved call"
             }
+          />
+        )}
+        {summary.classifier && (
+          <DoubletMethods
+            classifier={summary.classifier}
+            methods={summary.methods}
+            scrubletAt={summary.threshold != null ? `Scrublet at ${fmtScore(summary.threshold)}` : "Scrublet"}
           />
         )}
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">

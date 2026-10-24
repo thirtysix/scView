@@ -6,6 +6,45 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-24
+
+### Added
+- **Ambient RNA.** A new Ambient RNA card on Data Assessment shows each sample's soup (the RNA in the
+  empty droplets of an attached raw matrix) and its contamination fraction rho, estimated as SoupX's
+  autoEstCont does. It matches R SoupX 1.6.2 on 10x pbmc, heart and neuron 1k, also with 5% and 20%
+  soup added. Top markers whose signal outside their cluster is about what rho x soup predicts are
+  flagged in the marker tables and counted in cluster QC. Without a raw matrix the card shows the
+  cells' most abundant genes and says to attach one; it flags nothing.
+- **Ambient RNA correction**, an opt-in step before normalisation: SoupX's subtraction for each cell
+  with each sample's estimated or a set rho. The original counts are kept, and reset to counts brings
+  them back. It is recorded in the History, replayed by the script from the raw matrices and estimated
+  before the run. Not available in large-dataset mode yet.
+- **A second doublet detector.** The doublet step's Detector setting: Scrublet (the default) | an
+  scDblFinder-style classifier written from Germain et al. 2021 | both, per capture channel. On 10x's
+  human + mouse mix it finds cross-species doublets as well as R scDblFinder (AUC 0.948 vs 0.951) in
+  7 s instead of 232 s. It works in large-dataset mode, and the replay script reproduces it.
+- The doublet card compares the two detectors, overall and per channel. Doublet sources gain
+  "classifier", "consensus" (both detectors call it) and a wider "either"; Auto uses the classifier
+  once it has run (hashing still comes first), because Scrublet's automatic threshold can call almost
+  nothing (Kang's STIM lane: 9 of 7,263 cells).
+- **Doublet-like clusters.** Cluster QC flags a cluster whose top markers are mostly two other
+  clusters', with about two cells' RNA and fewer cells than either, and names the pair.
+- **Regress out** in the Scaling step: total counts, % mito, S and G2M scores, S - G2M or any numeric
+  column, fitted off the variable genes before their z-scores as `sc.pp.regress_out` does. Off by
+  default; X keeps the log values. It works in large-dataset mode and is in the History, the replay
+  script and the pre-run estimate. Cluster QC and the technical-driver check point to it when the
+  cell cycle drives clusters.
+
+### Fixed
+- Large-dataset mode failed on files written by anndata older than 0.7 (Kang 2018 as published);
+  they are now rewritten for the run.
+- A log-normalised X with counts in .raw (Kang as published) was reported as not log-transformed, so
+  Log Transform was offered and would have logged X twice.
+- DE no longer copies the tested genes: about 1.4 GiB less at 100k cells.
+- A PCA that cannot make a component says which setting to change.
+- Markers of an earlier clustering are removed when a run clusters again on a new graph without the
+  marker step.
+
 ## [0.34.1] - 2026-10-24
 
 ### Changed

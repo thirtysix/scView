@@ -14,10 +14,12 @@ The run is saved with status "finished_with_errors" and the failed and skipped s
     filtering              reset_to_counts; doublet_detection only with drop_doublets (it
                            judges cells by the QC values, worked out from the counts when
                            qc_metrics did not write them)
-    normalization          filtering (the cells it keeps)
+    ambient_correction     filtering (the cells it keeps)
+    normalization          filtering, ambient_correction (the counts it normalises: a failed
+                           correction must not leave the run going on uncorrected counts)
     log_transform          normalization
-    highly_variable_genes  log_transform; filtering alone for Seurat v3 / Pearson residuals,
-                           which rank the counts
+    highly_variable_genes  log_transform; filtering + ambient_correction alone for Seurat v3 /
+                           Pearson residuals, which rank the counts
     scaling                log_transform (not the variable genes: PCA works out the
                            statistics of genes variable after scaling)
     pca                    highly_variable_genes, scaling
@@ -58,7 +60,8 @@ DEPENDS_ON: dict[str, tuple[str, ...]] = {
     "qc_metrics": ("reset_to_counts",),
     "doublet_detection": ("reset_to_counts",),
     "filtering": ("reset_to_counts",),
-    "normalization": ("filtering",),
+    "ambient_correction": ("filtering",),
+    "normalization": ("filtering", "ambient_correction"),
     "log_transform": ("normalization",),
     "highly_variable_genes": ("log_transform",),
     "scaling": ("log_transform",),
@@ -88,7 +91,7 @@ def depends_on(step: str, params=None) -> tuple[str, ...]:
     if step == "highly_variable_genes" and (
             _p(params, "normalization_method", "log") == "pearson_residuals"
             or _p(params, "hvg_flavor", "seurat") == "seurat_v3"):
-        return ("filtering",)  # ranks the counts
+        return ("filtering", "ambient_correction")  # ranks the counts
     if step == "cell_type_annotation" and _p(params, "annotation_groupby", ""):
         return ("log_transform",)
     return DEPENDS_ON.get(step, ())
@@ -245,6 +248,39 @@ def clear_outputs(adata, step: str, outcome: Outcome) -> dict[str, list[str]]:
         bucket = outcome.cleared.setdefault(where, [])
         bucket.extend(k for k in keys if k not in bucket)
     return out
+
+
+def settle_unrun(adata, outcome: Outcome) -> None:
+    """At the end of a run: markers left for the clustering column the run wrote again.
+
+    A clustering on a new graph (a step it needs ran too) writes its column again
+    (``scview_leiden_r0.5``), and when the marker step was not in the run, an earlier
+    run's markers and enrichment for that column stayed attached to the new labels.
+    They are removed as stale, as ``settle`` removes a failed step's. A re-clustering
+    of the same graph gives the same labels, so its markers stay."""
+    if "clustering" not in outcome.succeeded or "marker_genes" in outcome.order:
+        return
+    if not needs("clustering", outcome.params) & set(outcome.succeeded):
+        return
+    col = adata.uns.get("scview_active_clustering")
+    if not isinstance(col, str):
+        return
+    out: dict[str, list[str]] = {}
+    keys = _column_results(adata, [col])
+    rgg = adata.uns.get("rank_genes_groups")
+    if isinstance(rgg, dict) and (rgg.get("params") or {}).get("groupby") == col:
+        keys.append("rank_genes_groups")
+    _drop(adata, out, "uns", keys)
+    removed = out.get("uns", [])
+    if not removed:
+        return
+    if markers_key(col) in removed or "rank_genes_groups" in removed:
+        outcome.stale_steps.append("marker_genes")
+    if any(k.startswith((enrichment_prefix(col), meta_prefix(col))) for k in removed) \
+            and "enrichment" not in outcome.order:
+        outcome.stale_steps.append("enrichment")
+    bucket = outcome.cleared.setdefault("uns", [])
+    bucket.extend(k for k in removed if k not in bucket)
 
 
 def settle(adata, step: str, outcome: Outcome) -> None:

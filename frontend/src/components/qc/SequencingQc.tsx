@@ -293,7 +293,8 @@ function newestSample(r: SeqMetricsResponse): number {
  * curve with the knee and inflection (DropletUtils barcodeRanks) and the dataset's
  * cells marked (core/seq_metrics.py). Files come with the upload or are attached here.
  */
-export function SequencingQc({ datasetId }: { datasetId: string }) {
+/** `onChange`: a record was attached or removed (an attached raw matrix brings a soup). */
+export function SequencingQc({ datasetId, onChange }: { datasetId: string; onChange?: () => void }) {
   const [data, setData] = useState<SeqMetricsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -330,6 +331,7 @@ export function SequencingQc({ datasetId }: { datasetId: string }) {
     setError(null);
     try {
       setData(await removeSeqMetrics(datasetId, name));
+      onChange?.();
       setFocus(0);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -390,6 +392,7 @@ export function SequencingQc({ datasetId }: { datasetId: string }) {
             setData(r);
             setAttaching(false);
             setFocus(newestSample(r));
+            onChange?.();
           }}
           onCancel={() => setAttaching(false)}
         />

@@ -818,7 +818,7 @@ def build_insight(adaptor) -> DatasetInsight:
             report = cluster_qc.for_adaptor(adaptor)
         except Exception:  # pragma: no cover - defensive
             report = None
-        bad_flags = {"low_quality", "doublet_rich", "high_mito", "low_genes", "hb_ambient"}
+        bad_flags = {"low_quality", "doublet_rich", "doublet_like", "high_mito", "low_genes", "hb_ambient"}
         bad = [c for c in (report.flagged if report else []) if set(c.flags) & bad_flags]
         if bad:
             first = bad[0]

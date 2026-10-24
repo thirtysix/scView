@@ -76,7 +76,10 @@ def test_the_map_names_only_real_steps_and_runs_forward():
 def test_what_each_step_needs():
     needs = step_failures.needs
     assert needs("pca") == {"highly_variable_genes", "scaling", "log_transform", "normalization",
-                            "filtering", "reset_to_counts"}
+                            "ambient_correction", "filtering", "reset_to_counts"}
+    # A failed ambient RNA correction must not leave the run going on uncorrected counts
+    assert "ambient_correction" in needs("normalization")
+    assert "ambient_correction" in needs("highly_variable_genes", _params(hvg_flavor="seurat_v3"))
     # Scrublet reads the counts, not the QC metrics; filtering works them out when missing
     assert needs("doublet_detection") == {"reset_to_counts"}
     assert "qc_metrics" not in needs("filtering")

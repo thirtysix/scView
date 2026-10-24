@@ -237,31 +237,44 @@ def per_cell_qc(adata):
 def doublet_calls(obs, source="legacy"):
     """Per-cell doublet calls as booleans from the source scView's filtering used
     (core/doublet_source.py): "hashing" (hash_class), "scrublet" (predicted_doublet),
-    "either" (both), "auto" (hashing, else Scrublet, else a text column), a text
-    column's name, or "legacy" (a filtering recorded before the choice existed:
-    Scrublet's column first, then the text ones)."""
+    "classifier" (predicted_doublet_classifier), "consensus" (both detectors; the one
+    that ran alone), "either" (any of hashing, Scrublet, the classifier), "auto"
+    (hashing, else the classifier, else Scrublet, else a text column), a text column's
+    name, or "legacy" (a filtering recorded before the choice existed: Scrublet's
+    column first, then the text ones)."""
     def text_in(col, values):
         return col.astype(str).str.lower().isin(values).to_numpy()
 
+    def flag(name):
+        if name not in obs.columns:
+            return None
+        col = obs[name]
+        return (col.to_numpy(dtype=bool) if pd.api.types.is_bool_dtype(col)
+                else text_in(col, ("true", "1", "1.0", "doublet")))
+
     hashing = text_in(obs["hash_class"], ("doublet",)) if "hash_class" in obs.columns else None
-    scrublet = None
-    if "predicted_doublet" in obs.columns:
-        col = obs["predicted_doublet"]
-        scrublet = (col.to_numpy(dtype=bool) if pd.api.types.is_bool_dtype(col)
-                    else text_in(col, ("true", "1", "1.0", "doublet")))
+    scrublet = flag("predicted_doublet")
+    classifier = flag("predicted_doublet_classifier")
     named = [c for c in ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class")
              if c in obs.columns]
     finder = [c for c in obs.columns if str(c).startswith("DF.classification")]
     if source == "hashing" or (source == "auto" and hashing is not None):
         return hashing
     if source == "either":
-        if hashing is not None and scrublet is not None:
-            return hashing | scrublet
-        return hashing if hashing is not None else scrublet
-    if source in ("scrublet", "auto", "legacy") and scrublet is not None:
-        return scrublet
+        found = [c for c in (hashing, scrublet, classifier) if c is not None]
+        return np.logical_or.reduce(found) if found else None
     if source == "scrublet":
-        return None
+        return scrublet
+    if source == "classifier":
+        return classifier
+    if source == "consensus":
+        if scrublet is not None and classifier is not None:
+            return scrublet & classifier
+        return scrublet if classifier is None else classifier
+    if source == "auto" and (classifier is not None or scrublet is not None):
+        return classifier if classifier is not None else scrublet
+    if source == "legacy" and scrublet is not None:
+        return scrublet
     if source == "legacy" and hashing is not None and not named:
         return hashing  # hash_class came after the named text columns, before DoubletFinder's
     if source not in ("auto", "legacy"):  # a text column another tool left
@@ -792,7 +805,60 @@ def _barcode_channels_helper() -> str:
 
 
 _HELPERS["barcode_channels"] = _barcode_channels_helper()
-_HELPER_ORDER += ("scrublet_counts", "barcode_channels")
+
+
+def _classifier_helper() -> str:
+    """core/doublet_classifier.py's code (the scDblFinder-style classifier: numpy, scipy
+    and scikit-learn), copied so the script scores what scView scored."""
+    import inspect
+
+    from scview.core import doublet_classifier
+
+    lines = [f"{name} = {_lit(getattr(doublet_classifier, name))}"
+             for name in doublet_classifier.REPLAY_CONSTANTS]
+    for obj in doublet_classifier.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["doublet_classifier"] = _classifier_helper()
+_HELPER_NEEDS["doublet_classifier"] = ("scrublet_counts",)  # channel_rows
+_HELPER_ORDER += ("scrublet_counts", "barcode_channels", "doublet_classifier")
+
+
+def _ambient_helper() -> str:
+    """core/ambient.py's soup reading and count subtraction (numpy, scipy, pandas, h5py,
+    anndata only), copied so the script removes what scView removed; the soup is read
+    again from each sample's raw matrix, found beside the script or the input file."""
+    import inspect
+
+    from scview.core import ambient
+
+    lines = ["import os", "", "import h5py", ""]
+    lines += [f"{name} = {_lit(getattr(ambient, name))}" for name in ambient.REPLAY_CONSTANTS]
+    for obj in ambient.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def raw_soup(files):
+    """The soup of a sample's raw matrix (one .h5, or the MEX matrix, barcodes, features)."""
+    paths = []
+    for name in files:
+        for folder in (".", os.path.dirname(os.path.abspath(INPUT))):
+            path = os.path.join(folder, name)
+            if os.path.exists(path):
+                paths.append(path)
+                break
+        else:
+            sys.exit(f"Raw matrix {name} not found: put it beside this script or the input file.")
+    if len(paths) == 1:
+        return soup_from_h5(paths[0], SOUP_UMI_MAX)
+    return soup_from_mex(*paths, umi_max=SOUP_UMI_MAX)
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["ambient"] = _ambient_helper()
+_HELPER_ORDER += ("ambient",)
 
 
 def _need(ctx: _Ctx, *names: str) -> None:
@@ -814,6 +880,9 @@ def _block(text: str) -> list[str]:
 
 def _reset_to_counts(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, _block('''
+if "counts_uncorrected" in adata.layers:  # the counts before an ambient RNA correction
+    adata.layers["counts"] = adata.layers["counts_uncorrected"]
+    del adata.layers["counts_uncorrected"]
 if "counts" in adata.layers or adata.raw is not None:
     if "counts" in adata.layers:
         adata.X = adata.layers["counts"].copy()
@@ -851,6 +920,85 @@ _DOUBLET_INPUT = {"layers['counts']": 'adata.layers["counts"]', ".raw": "adata.r
 
 
 def _doublet_detection(p: dict, ctx: _Ctx) -> Snippet:
+    method = str(p.get("doublet_method") or "scrublet")  # recorded before the choice: Scrublet
+    if method == "scdblfinder-style":
+        return _doublet_classifier(p, ctx, _DOUBLET_INPUT.get(p.get("input"), "adata.X"))
+    found = _doublet_scrublet(p, ctx)
+    if method != "both":
+        return found
+    more = _doublet_classifier(p, ctx, _DOUBLET_INPUT.get(p.get("input"), "adata.X"), codes_known=True)
+    status = found.status if more.status == EXACT else more.status
+    return Snippet(status, found.code + more.code, "; ".join(n for n in (found.note, more.note) if n))
+
+
+def _doublet_classifier(p: dict, ctx: _Ctx, counts: str, codes_known: bool = False) -> Snippet:
+    """The scDblFinder-style classifier in each capture channel, as scView ran it
+    (core/doublets.py ``run_classifier``): its recorded channels and rates."""
+    _need(ctx, "doublet_classifier")
+    rec = p.get("classifier") if isinstance(p.get("classifier"), dict) else {}
+    channels = [c for c in rec.get("channels") or [] if isinstance(c, dict)]
+    if not channels:
+        return Snippet(APPROXIMATE, ["# NOTE: the doublet classifier's channels were not recorded; skipped."],
+                       "doublet classifier channels not recorded")
+    names = [str(c.get("name")) for c in channels]
+    rates = [float(c["expected_doublet_rate"]) if isinstance(c.get("expected_doublet_rate"), (int, float))
+             else 0.05 for c in channels]
+    min_cells = p.get("min_channel_cells")
+    min_cells = int(min_cells) if isinstance(min_cells, (int, float)) else 100
+    code = ["# The scDblFinder-style classifier (classify_by_channel above) in each capture channel",
+            "# alone, with the rates scView used; a channel under "
+            f"{min_cells} cells is not scored."]
+    if codes_known:
+        if names != [str(c.get("name")) for c in p.get("channels") or [] if isinstance(c, dict)]:
+            return Snippet(APPROXIMATE, ["# NOTE: the classifier ran in other channels than Scrublet; skipped."],
+                           "doublet classifier channels differ")
+    else:
+        code += _channel_codes(p, ctx, names)
+    code += [f"CLS_RATES = {_lit(rates)}",
+             f"cls_score, cls_call, cls_runs = classify_by_channel({counts}, codes, CLS_RATES, "
+             f"{_lit(min_cells)}, rows=channel_rows)",
+             'adata.obs["doublet_score_classifier"] = cls_score',
+             'adata.obs["predicted_doublet_classifier"] = cls_call',
+             'adata.uns["scview_doublet_classifier"] = {"scview_channels": {',
+             f'    "name": {_lit(names)}, "n_cells": [r["n_cells"] for r in cls_runs],',
+             '    "n_scored": [r["n_scored"] for r in cls_runs], "expected_doublet_rate": CLS_RATES,',
+             '    "threshold": [np.nan if r["threshold"] is None else r["threshold"] for r in cls_runs],',
+             '    "n_called": [r["n_called"] for r in cls_runs], "status": [r["status"] for r in cls_runs]},',
+             f'    "scview_channel_reason": {_lit(str(p.get("channel_reason") or ""))}}}']
+    column = p.get("channel_column")
+    if column is not None:
+        code.append(f'adata.uns["scview_doublet_classifier"]["scview_channel_column"] = {_lit(str(column))}')
+        if not codes_known and str(p.get("channel_reason") or "").startswith("barcode"):
+            code.append('adata.obs["capture_channel"] = pd.Categorical.from_codes(codes, categories=CHANNELS)')
+    return Snippet(EXACT, code, "")
+
+
+def _channel_codes(p: dict, ctx: _Ctx, names: list[str]) -> list[str]:
+    """Code that sets ``codes`` (each cell's channel, an index into CHANNELS; -1: none)
+    as the doublet step found them: the recorded column, the barcodes, or all cells."""
+    column, reason = p.get("channel_column"), str(p.get("channel_reason") or "")
+    code = [f"CHANNELS = {_lit(names)}"]
+    if column is None:
+        code += ["# All cells as one channel.", "codes = np.zeros(adata.n_obs, dtype=np.int64)"]
+    elif reason.startswith("barcode"):
+        _need(ctx, "barcode_channels")
+        code += ["# The channels read from the cell barcodes (barcode_channels above), as scView did.",
+                 "found = barcode_channels(adata.obs_names)",
+                 "if found is None:",
+                 '    sys.exit("The cell barcodes do not carry the capture channels scView read from them.")',
+                 "labels = np.asarray(found[0], dtype=object)[found[1]]",
+                 "codes = pd.Categorical(labels, categories=CHANNELS).codes.astype(np.int64)"]
+    else:
+        col = _lit(str(column))
+        code += [f"# The channels: obs column {comment_text(column, 80)}.",
+                 f"if {col} not in adata.obs.columns:",
+                 f"    sys.exit('obs column ' + {col} + ' (the capture channels) is missing.')",
+                 f"labels = adata.obs[{col}].astype(str).where(adata.obs[{col}].notna())",
+                 "codes = pd.Categorical(labels, categories=CHANNELS).codes.astype(np.int64)"]
+    return code
+
+
+def _doublet_scrublet(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "scrublet_counts")
     counts = _DOUBLET_INPUT.get(p.get("input"), "adata.X")
     channels = p.get("channels")
@@ -892,26 +1040,9 @@ def _doublet_channels(p: dict, ctx: _Ctx, counts: str, channels: list[dict]) -> 
     code = ["# Scrublet in each capture channel alone (scrublet_by_channel above), one after another,",
             "# each with the expected rate and neighbours scView used; a channel under",
             f"# {min_cells} cells is not scored (NaN score, no call).",
-            f"CHANNELS = {_lit(names)}",
             f"RATES = {_lit(rates)}",
             f"APPROX = {_lit(approx)}"]
-    if column is None:
-        code += ["# All cells as one channel.", "codes = np.zeros(adata.n_obs, dtype=np.int64)"]
-    elif reason.startswith("barcode"):
-        _need(ctx, "barcode_channels")
-        code += ["# The channels read from the cell barcodes (barcode_channels above), as scView did.",
-                 "found = barcode_channels(adata.obs_names)",
-                 "if found is None:",
-                 '    sys.exit("The cell barcodes do not carry the capture channels scView read from them.")',
-                 "labels = np.asarray(found[0], dtype=object)[found[1]]",
-                 "codes = pd.Categorical(labels, categories=CHANNELS).codes.astype(np.int64)"]
-    else:
-        col = _lit(str(column))
-        code += [f"# The channels: obs column {comment_text(column, 80)}.",
-                 f"if {col} not in adata.obs.columns:",
-                 f"    sys.exit('obs column ' + {col} + ' (the capture channels) is missing.')",
-                 f"labels = adata.obs[{col}].astype(str).where(adata.obs[{col}].notna())",
-                 "codes = pd.Categorical(labels, categories=CHANNELS).codes.astype(np.int64)"]
+    code += _channel_codes(p, ctx, names)
     code += [f"score, call, runs = scrublet_by_channel({counts}, codes, RATES, APPROX, {_lit(min_cells)})",
              'adata.obs["doublet_score"] = score',
              'adata.obs["predicted_doublet"] = call']
@@ -1061,6 +1192,43 @@ def _mito_refilter(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, code)
 
 
+def _ambient_correction(p: dict, ctx: _Ctx) -> Snippet:
+    """Each sample's recorded rho, its soup read again from its raw matrix (by the file
+    names recorded), subtracted per cell as core/ambient.py does."""
+    samples = p.get("samples")
+    if not isinstance(samples, list) or not samples or not all(
+            isinstance(s, dict) and s.get("raw_files") for s in samples):
+        return Snippet(NOT_REPLAYABLE, ["# Ambient RNA correction: the raw matrices are not recorded, "
+                                        "so the soup can't be read again. Recorded:",
+                                        *_param_comment(p)], "raw matrices not recorded")
+    _need(ctx, "ambient")
+    rows = [[str(s.get("sample")), s.get("column"), float(s.get("rho", 0.0)),
+             [str(f) for f in s.get("raw_files") or []]] for s in samples]
+    return Snippet(EXACT, [
+        "# Ambient RNA removed from the counts (SoupX-style subtraction per cell, core/ambient.py):",
+        "# per sample (name, obs column or None for every cell, rho scView used, raw matrix files),",
+        "# its soup read again from the raw matrix's empty droplets.",
+        f"AMBIENT_SAMPLES = {_lit(rows)}",
+        *_block('''
+original = adata.layers["counts_uncorrected"] if "counts_uncorrected" in adata.layers else adata.X
+original = sp.csr_matrix(original)
+groups = []
+for sample, column, rho, files in AMBIENT_SAMPLES:
+    frac, _ = soup_fractions(raw_soup(files), adata.var_names, _var_ids(adata))
+    rows = (np.flatnonzero(adata.obs[column].astype(str).to_numpy() == sample) if column
+            else np.arange(adata.n_obs))
+    groups.append((rows, rho, frac))
+corrected = correct_counts(original, groups)
+if "counts_uncorrected" not in adata.layers:
+    adata.layers["counts_uncorrected"] = original
+adata.X = corrected
+if "counts" in adata.layers:
+    adata.layers["counts"] = corrected.copy()
+del original, groups, corrected
+'''),
+    ])
+
+
 def _normalization(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "keep_raw_counts")
     target = p.get("target_sum", 1e4)
@@ -1100,12 +1268,19 @@ def _scaling(p: dict, ctx: _Ctx) -> Snippet:
     if "scaled_genes" in p:
         # Since the step plans the matrix PCA reads (core/scaling.py): X keeps the log
         # values; the PCA step below scales a copy of the variable genes.
+        regress = [str(k) for k in (p.get("regress_out") or [])]
         ctx.scaling = {"method": "pearson" if pearson else "zscore",
-                       "theta": p.get("theta", 100.0), "max_value": p.get("max_value", 10.0)}
+                       "theta": p.get("theta", 100.0), "max_value": p.get("max_value", 10.0),
+                       "regress_out": regress}
         raw = _block('''
 if adata.raw is None or not adata.X[:2000].min() < 0:  # z-scores an older scView left in X: kept
     adata.raw = adata  # the log-normalised values, which X keeps too
 ''')
+        if regress and not pearson:
+            return Snippet(EXACT, ["keep_raw_counts(adata)", *raw,
+                                   *_regress_covariates(regress, ctx),
+                                   "# The variable genes' fit on these is regressed out of a copy at the PCA step,",
+                                   "# then the z-scores of the residuals are made there."])
         if pearson:
             _need(ctx, "find_counts", "pearson_residuals")
             return Snippet(EXACT, ["keep_raw_counts(adata)",
@@ -1138,6 +1313,21 @@ sc.pp.scale(adata, max_value=10)
 '''))
 
 
+def _regress_covariates(keys: list[str], ctx: _Ctx) -> list[str]:
+    """The cell-cycle covariates the scaling step scored before regress-out (S, G2M and
+    S - G2M), as the cell-cycle step scores them."""
+    from scview.core import scaling
+
+    if not set(keys) & set(scaling.CELL_CYCLE_COVARIATES):
+        return []
+    code = ["# The cell-cycle scores to regress out, made first (as scView's scaling step does):",
+            *_cell_cycle({}, ctx).code]
+    if scaling.CC_DIFFERENCE in keys:
+        code.append(f'adata.obs[{_lit(scaling.CC_DIFFERENCE)}] = (adata.obs["S_score"].to_numpy(np.float64)'
+                    ' - adata.obs["G2M_score"].to_numpy(np.float64))  # S - G2M')
+    return code
+
+
 def _pca(p: dict, ctx: _Ctx) -> Snippet:
     n = p.get("n_comps", 50)
     plan = ctx.scaling if p.get("pca_input") else None
@@ -1153,9 +1343,14 @@ def _pca(p: dict, ctx: _Ctx) -> Snippet:
                 "                      columns=None if mask is None else np.flatnonzero(mask))",
                 "sub = ad.AnnData(X=X)"]
     else:
+        regress = plan.get("regress_out") or []
         make = ["X = (adata.X if mask is None else adata.X[:, mask]).astype(np.float32)",
-                "sub = ad.AnnData(X=X.toarray() if sp.issparse(X) else np.ascontiguousarray(X))",
-                f"sc.pp.scale(sub, max_value={_lit(plan['max_value'])})"]
+                "sub = ad.AnnData(X=X.toarray() if sp.issparse(X) else np.ascontiguousarray(X))"]
+        if regress:
+            make += [f"sub.obs = adata.obs[{_lit(regress)}].copy()",
+                     "sub.obs.index = sub.obs.index.astype(str)",
+                     f"sc.pp.regress_out(sub, {_lit(regress)})  # each gene's least-squares fit taken off"]
+        make.append(f"sc.pp.scale(sub, max_value={_lit(plan['max_value'])})")
     return Snippet(EXACT, [
         "# PCA reads the scaled variable genes; scView scales a copy of them for PCA alone (X",
         "# keeps the log-normalised values): a copy, scaled, PCA on it, the results copied back.",
@@ -1839,6 +2034,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "qc_metrics": _qc_metrics,
     "doublet_detection": _doublet_detection,
     "filtering": _filtering,
+    "ambient_correction": _ambient_correction,
     "normalization": _normalization,
     "log_transform": _log_transform,
     "highly_variable_genes": _hvg,

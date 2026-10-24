@@ -61,6 +61,7 @@ class PreprocessingState(BaseModel):
     qc_metrics: StepStatus
     doublet_detection: StepStatus
     filtering: StepStatus
+    ambient_correction: StepStatus
     normalization: StepStatus
     log_transform: StepStatus
     highly_variable_genes: StepStatus
@@ -124,7 +125,8 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
     """Check if doublet detection (Scrublet) has annotated obs."""
     try:
         obs_cols = set(adata.obs.columns)
-        dbl_cols = {"doublet_score", "predicted_doublet"} & obs_cols
+        dbl_cols = {"doublet_score", "predicted_doublet", "doublet_score_classifier",
+                    "predicted_doublet_classifier"} & obs_cols
         if dbl_cols:
             from scview.core import doublet_source
 
@@ -133,6 +135,9 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
             detail = f"Found doublet columns: {', '.join(sorted(dbl_cols))}"
             if scr is not None:
                 detail += f" ({int(scr.sum())} cells flagged)"
+            cls = doublet_source.classifier_calls(adata.obs)
+            if cls is not None:
+                detail += f"; the doublet classifier flags {int(cls.sum())}"
             hashing = doublet_source.hashing_calls(adata.obs)
             if hashing is not None:
                 detail += (f"; cell hashing calls {int(hashing.sum())} doublets, the doublet views' "
@@ -143,6 +148,30 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
         )
     except Exception as exc:
         logger.warning("Error checking doublet detection: %s", exc)
+        return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
+
+
+def _check_ambient_correction(adata: Any) -> StepStatus:
+    """Corrected for ambient RNA: the original counts are kept beside the corrected ones
+    (``core/ambient.py``). Not read from provenance: a reset to counts undoes it."""
+    try:
+        from scview.core import ambient
+
+        if ambient.ORIGINAL_LAYER in getattr(adata, "layers", {}):
+            rec = ambient.correction_record(adata) or {}
+            rhos = ", ".join(f"{s.get('sample')}: {float(s.get('rho', 0)):.1%}"
+                             for s in rec.get("samples") or [])
+            return StepStatus(done=True, confidence="high",
+                              details="Counts corrected for ambient RNA"
+                                      + (f" (rho {rhos})" if rhos else "")
+                                      + f"; the originals are in layers['{ambient.ORIGINAL_LAYER}']")
+        has_soup = bool(ambient.read_soups(adata))
+        return StepStatus(done=False, confidence="high",
+                          details=("Optional. A raw matrix's soup profile is attached"
+                                   if has_soup else
+                                   "Optional; needs each sample's raw (unfiltered) matrix attached"))
+    except Exception as exc:
+        logger.warning("Error checking ambient correction: %s", exc)
         return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
 
 
@@ -423,10 +452,16 @@ def _check_log_transform(adata: Any) -> StepStatus:
                 confidence="high",
                 details="Raw integer counts — not log-transformed yet",
             )
+        from scview.core.pipeline import looks_like_counts  # lazy: pipeline is heavy
+
         has_raw = adata.raw is not None
+        # .raw holding the counts beside a log-normalised X (Kang as published): X says
+        # whether it was logged. Reading .raw called it "not log-transformed", and the
+        # step was then pre-selected: a second log1p of X.
+        raw_counts = has_raw and looks_like_counts(adata.raw.X[: min(200, adata.raw.n_obs)])
 
         # Prefer raw.X (pre-scaling data) for a cleaner signal; fall back to X
-        if has_raw:
+        if has_raw and not raw_counts:
             raw_X = adata.raw.X
             n_sample = min(1000, raw_X.shape[0])
             sample = _dense_sample(raw_X, n_sample).ravel()
@@ -446,7 +481,8 @@ def _check_log_transform(adata: Any) -> StepStatus:
             )
         elif max_val <= 20:
             confidence = "high" if has_raw else "medium"
-            extra = "; raw data preserved" if has_raw else "; no raw to compare"
+            extra = ("; .raw holds the raw counts" if raw_counts
+                     else "; raw data preserved" if has_raw else "; no raw to compare")
             return StepStatus(
                 done=True,
                 confidence=confidence,
@@ -858,6 +894,7 @@ def assess_preprocessing(adata: Any) -> PreprocessingState:
         qc_metrics=_check_qc_metrics(adata),
         doublet_detection=_check_doublet_detection(adata),
         filtering=_check_filtering(adata),
+        ambient_correction=_check_ambient_correction(adata),
         normalization=_check_normalization(adata),
         log_transform=_check_log_transform(adata),
         highly_variable_genes=_check_highly_variable_genes(adata),
@@ -893,6 +930,9 @@ def _scaling_details(params: dict, method: str | None) -> str | None:
         if genes == "highly_variable" else "every gene"
     made = ("analytic Pearson residuals of the counts" if method == "pearson_residuals"
             else "z-scores")
+    regressed = params.get("regress_out")
+    if isinstance(regressed, list) and regressed:
+        made += f" (after regressing out {', '.join(map(str, regressed))})"
     return f"PCA reads {made} of {which}; X keeps the log-normalised values"
 
 

@@ -48,10 +48,13 @@ async def dataset_preflight(
     normalization_method: str | None = None,
     annotation_method: str | None = None,
     doublet_channel_key: str | None = None,
+    doublet_method: str | None = None,
     chunked: str | None = None,
     clustering_method: str | None = None,
     leiden_iterations: int | None = None,
     umap_3d: str | None = None,
+    regress_out: str | None = Query(default=None, description="Comma-separated obs columns"),
+    ambient_rho: float | None = Query(default=None, gt=0, lt=1),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Peak memory and rough time of running ``steps`` on the dataset: per step
@@ -64,7 +67,8 @@ async def dataset_preflight(
     ``leiden``: its time with the full optimisation and with fast Leiden
     (``leiden_iterations`` 2), and ``offer_fast`` when the full one is over 10 minutes.
     A run with the UMAP step gets ``umap_3d``: whether it makes the 3D UMAP (``umap_3d``
-    auto | on | off; auto leaves it out in large-dataset mode) and the time it adds."""
+    auto | on | off; auto leaves it out in large-dataset mode) and the time it adds.
+    ``regress_out`` (comma-separated, the scaling step's): the fit's time and memory."""
     names = [s.strip() for s in steps.split(",") if s.strip()]
     unknown = [s for s in names if s not in ALL_STEPS]
     if not names or unknown:
@@ -80,9 +84,12 @@ async def dataset_preflight(
         "n_top_genes": n_top_genes, "n_comps": n_comps, "n_neighbors": n_neighbors,
         "normalization_method": normalization_method, "annotation_method": annotation_method,
         "doublet_channel_key": doublet_channel_key,  # its largest channel sets the peak
+        "doublet_method": doublet_method,  # Scrublet, the classifier or both
         "chunked": chunked,
         "clustering_method": clustering_method, "leiden_iterations": leiden_iterations,
         "umap_3d": umap_3d,
+        "regress_out": None if regress_out is None else [k for k in regress_out.split(",") if k.strip()],
+        "ambient_rho": ambient_rho,  # set: no estimate (and no clustering of its own)
     }.items() if v is not None}
     try:
         if chunked is not None:
@@ -97,6 +104,10 @@ async def dataset_preflight(
             from scview.core.pipeline import check_umap_3d
 
             check_umap_3d(umap_3d)
+        if doublet_method is not None:
+            from scview.core.doublets import method_of
+
+            method_of(doublet_method)  # DoubletError is a ValueError
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     try:

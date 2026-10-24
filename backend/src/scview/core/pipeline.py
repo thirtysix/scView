@@ -26,6 +26,7 @@ import scanpy as sc
 import scipy.sparse as sp
 
 from scview.core import (
+    ambient,
     doublets,
     leiden,
     marker_specificity,
@@ -91,18 +92,24 @@ class PipelineParams:
     # per_type: never stricter than the global rule (a type's bound = max(own, global)); opt-in
     qc_mito_type_floor: bool = False
     drop_doublets: bool = False  # drop cells flagged by doublet detection (opt-in)
-    # Whose doublets: "auto" (cell hashing when run, else Scrublet) | "hashing" |
-    # "scrublet" | "either" (core/doublet_source.py); hashing negatives are a separate opt-in.
+    # Whose doublets: "auto" (cell hashing when run, else the detectors' consensus, else the
+    # one that ran) | "hashing" | "scrublet" | "classifier" | "consensus" | "either"
+    # (core/doublet_source.py); hashing negatives are a separate opt-in.
     qc_doublet_source: str = "auto"
     drop_hash_negatives: bool = False
 
-    # Doublet detection: Scrublet in each capture channel (core/doublets.py)
+    # Doublet detection in each capture channel (core/doublets.py): "scrublet" | the
+    # "scdblfinder-style" classifier (core/doublet_classifier.py) | "both"
     doublet_method: str = "scrublet"
     # None: each channel's own, from its cells (a rule of thumb); a number: every channel's
     expected_doublet_rate: float | None = None
     # The channels: an obs column, "__all__" (all cells as one channel), or empty: a
     # channel column, else the barcodes' -N / PREFIX_, else donor / batch, else all cells
     doublet_channel_key: str = ""
+
+    # Ambient RNA correction (opt-in step, core/ambient.py): None = each sample's own
+    # contamination fraction (SoupX autoEstCont), a number = every sample's
+    ambient_rho: float | None = None
 
     # Normalization: "log" = shifted log, normalize_total + log1p (the default) |
     # "pearson_residuals" = analytic Pearson residuals of the counts, for HVG
@@ -114,6 +121,11 @@ class PipelineParams:
     n_top_genes: int = 2000
     hvg_flavor: str = "seurat"
     hvg_batch_key: str = ""  # obs column for batch-aware HVG selection (empty = pooled)
+
+    # Scaling: numeric obs columns regressed out of the variable genes before their
+    # z-scores (sc.pp.regress_out; empty = off). S_score / G2M_score / cc_difference
+    # (S - G2M) are scored at the step itself (core/scaling.py).
+    regress_out: list[str] = field(default_factory=list)
 
     # PCA
     n_comps: int = 50
@@ -304,6 +316,7 @@ ALL_STEPS = [
     "qc_metrics",
     "doublet_detection",
     "filtering",
+    "ambient_correction",
     "normalization",
     "log_transform",
     "highly_variable_genes",
@@ -327,8 +340,11 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
 
     Returns a fresh AnnData ready for reprocessing from scratch.
     """
-    # Restore counts from layers or raw
-    if "counts" in adata.layers:
+    # Restore counts from layers or raw; counts an ambient RNA correction replaced come
+    # back first (core/ambient.py), so a new run starts from the uncorrected counts.
+    if ambient.restore_original(adata):
+        logger.info("Restored the counts from before the ambient RNA correction")
+    elif "counts" in adata.layers:
         adata.X = adata.layers["counts"].copy()
         logger.info("Restored counts from adata.layers['counts']")
     elif adata.raw is not None:
@@ -425,8 +441,11 @@ def _doublet_matrix(adata: ad.AnnData):
 
 
 def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
-    """Detect doublets with Scrublet in each capture channel; annotate ``.obs`` only
-    (removal is opt-in).
+    """Detect doublets with Scrublet, the scDblFinder-style classifier or both
+    (``doublet_method``: scrublet | scdblfinder-style | both; ``doublets.run_doublets``)
+    in each capture channel; annotate ``.obs`` only (removal is opt-in). The classifier
+    runs in the same channels with the same rates and writes its own columns
+    (``doublet_score_classifier``, ``predicted_doublet_classifier``).
 
     Writes ``doublet_score`` (float; NaN for a cell not scored) and ``predicted_doublet``
     (bool) to ``.obs``. Ordered before normalization so Scrublet sees raw counts. The
@@ -445,16 +464,25 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     gives, without copying the whole dataset); they come from ``layers['counts']`` or
     ``.raw`` when X holds processed values (recorded as ``input``).
     """
-    method = (params.doublet_method or "scrublet").lower()
-    if method != "scrublet":
-        logger.warning("Unknown doublet method '%s'; falling back to scrublet", method)
     counts, where = _doublet_matrix(adata)
-    # A channel column that is not there raises DoubletError: the step's error.
-    found = doublets.run_scrublet(adata, counts, params.expected_doublet_rate,
-                                  params.doublet_channel_key or None)
+    # A channel column that is not there, or an unknown method, raises DoubletError: the
+    # step's error.
+    found = doublets.run_doublets(adata, counts, params.doublet_method,
+                                  params.expected_doublet_rate, params.doublet_channel_key or None)
     if where is not None:
         found["input"] = where
     return found
+
+
+def _run_ambient_correction(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
+    """Remove ambient ("soup") RNA from the counts (opt-in; ``core/ambient.py``): each
+    sample's contamination fraction (``ambient_rho``, else its own SoupX-style
+    estimate) times each cell's UMIs is taken off, shared out by the soup profile the
+    attached raw matrix gave. X holds the corrected counts the rest of the run uses; the
+    originals stay in ``layers['counts_uncorrected']`` (reset to counts restores them).
+    An AmbientError (no raw matrix, no counts, no estimate) is the step's error."""
+    rho = params.ambient_rho
+    return ambient.run_correction(adata, None if rho is None or rho == "" else float(rho))
 
 
 def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnData, dict[str, Any]]:
@@ -765,6 +793,9 @@ def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
     the PCA step builds the scaled matrix for its own length. The old step made X dense
     float32 for every gene and z-scored it: 38 of a 46 GB run peak at 250k cells."""
     method = normalization.check_method(params.normalization_method)
+    keys = scaling.check_regress_out(params.regress_out)
+    if keys and method == "pearson_residuals":
+        raise ValueError(_REGRESS_PEARSON)
     # Counts held only in .raw: kept in layers['counts'] before .raw is replaced.
     _keep_raw_counts(adata)
     if method == "pearson_residuals":
@@ -780,7 +811,30 @@ def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
         return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source,
                 **found}
     _raw_from_x(adata)
-    return scaling.plan_zscores(adata, max_value=scaling.MAX_VALUE)
+    scored = regress_covariates(adata, params, keys)
+    found = scaling.plan_zscores(adata, max_value=scaling.MAX_VALUE, regress_out=keys)
+    return {**found, **scored}
+
+
+_REGRESS_PEARSON = (
+    "Regress-out works on the log-normalised values, before their z-scores. Pearson residuals "
+    "already take sequencing depth into account: choose the shifted log (Normalization step) "
+    "to regress covariates out, or leave regress-out empty."
+)
+
+
+def regress_covariates(adata: ad.AnnData, params: PipelineParams, keys: list[str]) -> dict[str, Any]:
+    """Make the cell-cycle covariates ``keys`` asks for, as the scanpy tutorial does
+    before ``regress_out``: S and G2M scores on the log values now (the cell-cycle step
+    gives the same later), and ``cc_difference`` = S - G2M. Returns what to record."""
+    if not set(keys) & set(scaling.CELL_CYCLE_COVARIATES):
+        return {}
+    found = _run_cell_cycle(adata, params)
+    if scaling.CC_DIFFERENCE in keys:
+        adata.obs[scaling.CC_DIFFERENCE] = (adata.obs["S_score"].to_numpy(dtype=np.float64)
+                                            - adata.obs["G2M_score"].to_numpy(dtype=np.float64))
+    return {"cell_cycle_scored": True, "n_s_genes": found["n_s_genes"],
+            "n_g2m_genes": found["n_g2m_genes"]}
 
 
 def _raw_from_x(adata: ad.AnnData) -> None:
@@ -797,6 +851,13 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None
     genes, scaled for this step only), else on X as it is: the log values when scaling
     was skipped, or the z-scores an older scView wrote into X. Stored as sc.tl.pca
     stores it either way."""
+    from scview.core.chunked import pca_size_problem
+
+    mask = scaling.gene_mask(adata)
+    problem = pca_size_problem(params.n_comps, adata.n_obs,
+                               adata.n_vars if mask is None else int(mask.sum()))
+    if problem:
+        raise ValueError(problem)
     n_comps = min(params.n_comps, adata.n_obs - 1, adata.n_vars - 1)
     found = None
     if scaling.read_plan(adata) is not None:
@@ -1710,6 +1771,7 @@ _STEP_RUNNERS: dict[str, Any] = {
     "qc_metrics": _run_qc_metrics,
     "doublet_detection": _run_doublet_detection,
     "filtering": _run_filtering,
+    "ambient_correction": _run_ambient_correction,
     "normalization": _run_normalization,
     "log_transform": _run_log_transform,
     "highly_variable_genes": _run_hvg,
@@ -1741,6 +1803,12 @@ def _new_adata(step_name: str, ret: Any) -> tuple[ad.AnnData | None, Any]:
     return (ret, None) if isinstance(ret, ad.AnnData) else (None, ret)
 
 
+# The doublet step's tool by the detectors it ran (doublets.METHODS).
+_DOUBLET_TOOLS = {
+    "scdblfinder-style": "scview scDblFinder-style classifier (per capture channel)",
+    "both": "scanpy.pp.scrublet + scview scDblFinder-style classifier (per capture channel)",
+}
+
 # step -> (human tool label, PipelineParams fields worth recording)
 _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "reset_to_counts": ("scview.reset_to_counts", ()),
@@ -1751,12 +1819,14 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     # back from the step itself.
     "filtering": ("scview.qc_filter + scanpy.pp.filter_genes",
                   ("qc_threshold_mode", "min_cells", "max_pct_mt", "drop_doublets")),
+    # Each sample's rho, its source and the raw matrices come back from the step.
+    "ambient_correction": ("scview.ambient (SoupX-style subtraction per cell)", ("ambient_rho",)),
     "normalization": ("scanpy.pp.normalize_total", ("target_sum", "normalization_method")),
     "log_transform": ("scanpy.pp.log1p", ()),
     "highly_variable_genes": ("scanpy.pp.highly_variable_genes",
                               ("n_top_genes", "hvg_flavor", "hvg_batch_key",
                                "normalization_method")),
-    "scaling": ("scanpy.pp.scale", ("normalization_method",)),
+    "scaling": ("scanpy.pp.scale", ("normalization_method", "regress_out")),
     "pca": ("scanpy.pp.pca", ("n_comps",)),
     "uncorrected_embedding": ("scanpy.tl.umap (uncorrected PCA)", ("n_neighbors", "umap_min_dist")),
     "batch_correction": ("scview.batch_correction", ("batch_key", "batch_method")),
@@ -1793,6 +1863,8 @@ def _record_pipeline_step(
     ``resources`` (the step's seconds and sampled peak memory, from a watched
     run) is kept beside the params, not in them, so replay ignores it."""
     tool, keys = _STEP_PROVENANCE.get(step_name, (f"scview.{step_name}", ()))
+    if step_name == "doublet_detection" and isinstance(ret, dict):
+        tool = _DOUBLET_TOOLS.get(ret.get("doublet_method"), tool)
     if params.normalization_method == "pearson_residuals":
         tool = _PEARSON_TOOLS.get(step_name, tool)
     try:
@@ -1973,6 +2045,7 @@ def _finish_run(
     The file is written beside the derived file and then swapped in, so a backend
     killed mid-write (out of memory) leaves the previous file whole."""
     if outcome is not None:
+        step_failures.settle_unrun(adata, outcome)  # markers of a column clustered again
         _end_status(result, outcome)
     if result.status in SAVED_STATUSES and control is not None and control.cancelled:
         # Cancelled after the last step ended but before the save.

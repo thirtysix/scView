@@ -98,7 +98,8 @@ def _reason(d: Driver) -> str:
         head += f", and inside clusters too (r = {rw})"
         if d.score in ("S_score", "G2M_score"):
             return (head + ": the cell cycle is an axis of the embedding. If it is not the "
-                    "biology of interest, regress out the S and G2M scores.")
+                    "biology of interest, regress out the S and G2M scores (Scaling step, "
+                    "Regress out).")
         fix = (" Pearson-residual normalisation models depth and usually removes it."
                if d.score == "log_counts" else "")
         return (head + ": it is an axis of the embedding, not only a difference between cell "

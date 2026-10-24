@@ -83,6 +83,17 @@ def _expm1(uns: dict):
     return lambda x: np.expm1(x * np.log(base))
 
 
+TESTED = "_de_tested"  # test.var: the genes the prefilter kept (absent: every gene)
+
+
+def tested_genes(test) -> np.ndarray | None:
+    """The tested genes' mask (``TESTED``), None when every gene is tested."""
+    if TESTED not in test.var.columns:
+        return None
+    mask = test.var[TESTED].to_numpy(dtype=bool)
+    return None if mask.all() else mask
+
+
 def _column_means(M, rows: np.ndarray) -> np.ndarray:
     sub = M[rows]
     return np.asarray(sub.mean(axis=0), dtype=np.float64).ravel()
@@ -105,16 +116,18 @@ def _ranked_test(test, method: str) -> MethodResult:
     from scview.core import rank_genes
 
     t0 = time.perf_counter()
+    mask = tested_genes(test)
+    genes = np.asarray(test.var_names if mask is None else test.var_names[mask]).astype(str)
     rank_genes.rank_genes_groups(
         test, "_de_group", groups=["selection"], reference="rest",
         method=method, use_raw=False,
-        n_genes=test.n_vars,  # every tested gene, not the top-scoring ones
+        n_genes=genes.size,  # every tested gene, not the top-scoring ones
+        mask_var=mask,  # the prefilter's genes, read from the matrix as it is (no copy)
     )
     rgg = test.uns.pop("rank_genes_groups")
     names = np.asarray(rgg["names"]["selection"]).astype(str)
     # Back into the matrix's gene order (scanpy sorts by score), so results of
     # different tests line up gene for gene.
-    genes = np.asarray(test.var_names).astype(str)
     idx = pd.Index(names).get_indexer(genes)
 
     def col(field: str) -> np.ndarray:
@@ -136,7 +149,9 @@ def _logreg(test) -> MethodResult:
 
     t0 = time.perf_counter()
     in_a = (test.obs["_de_group"] == "selection").to_numpy()
-    X = test.X
+    mask = tested_genes(test)
+    # The model is fitted on the tested genes only (their columns: scikit-learn needs them)
+    X = test.X if mask is None else test.X[:, mask]
     if sp.issparse(X):
         X = sp.csr_matrix(X)
     with warnings.catch_warnings():
@@ -145,10 +160,11 @@ def _logreg(test) -> MethodResult:
         clf.fit(X, in_a.astype(np.int8))
     if clf.n_iter_[0] >= LOGREG_MAX_ITER:
         logger.warning("logreg DE stopped at %d iterations before converging", LOGREG_MAX_ITER)
+    names = test.var_names if mask is None else test.var_names[mask]
     return MethodResult(
-        method="logreg", genes=np.asarray(test.var_names).astype(str),
+        method="logreg", genes=np.asarray(names).astype(str),
         scores=np.asarray(clf.coef_[0], dtype=np.float64),
-        logfoldchanges=logfoldchanges(test.X, in_a, test.uns),
+        logfoldchanges=logfoldchanges(X, in_a, test.uns),
         pvals=None, pvals_adj=None, seconds=time.perf_counter() - t0,
     )
 

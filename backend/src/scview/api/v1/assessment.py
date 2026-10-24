@@ -21,7 +21,7 @@ from scview.core import (
     cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
 from scview.core import large_mode, large_run, leiden
-from scview.core import qc_states
+from scview.core import qc_states, scaling
 from scview.core.obs_writes import (
     dataset_edit, edit_room, editable, save_edit, uns_snapshot,
 )
@@ -284,7 +284,7 @@ async def get_filter_preview(
     ``mito_mode`` "per_type" judges % mito by each type of ``mito_type_column``
     (default: as the step picks it) with ``mito_types`` the per-type table;
     ``mito_type_floor`` makes it never stricter than the global rule.
-    ``doublet_source`` (auto | hashing | scrublet | either) is whose doublets
+    ``doublet_source`` (auto | hashing | scrublet | classifier | consensus | either) is whose doublets
     ``drop_doublets`` drops, ``drop_hash_negatives`` drops cell hashing's
     negatives; ``doublets`` describes the choice (core/doublet_source.py).
     Small and fast at any cell count (one pass over cached per-cell values), so
@@ -421,6 +421,7 @@ def _run_params(raw: dict[str, Any] | None) -> PipelineParams:
         params.chunked = check_chunked(params.chunked)
         params.leiden_iterations = leiden.check_iterations(params.leiden_iterations)
         params.umap_3d = check_umap_3d(params.umap_3d)
+        params.regress_out = scaling.check_regress_out(params.regress_out)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     return params

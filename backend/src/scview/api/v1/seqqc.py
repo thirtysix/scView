@@ -6,7 +6,8 @@ downsampled rank curve (``core/seq_metrics.py``); 404 when none is attached.
 ``POST /datasets/{id}/seq-metrics``: attach those files to a dataset uploaded without
 them (multipart ``files``; optional ``sample`` + ``column`` for one sample of a merged
 dataset); ``DELETE ...?sample=`` removes one sample's record. Only that ``uns`` entry
-is written (the file is copied and the entry rewritten; the matrix is never read).
+is written, with the ambient RNA profile a raw matrix gives (the file is copied and the
+entries rewritten; the matrix is never read).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from anndata.io import write_elem
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from scview.config import Settings
-from scview.core import seq_metrics
+from scview.core import ambient, seq_metrics
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, save_edit, uns_snapshot
 from scview.dependencies import get_dataset_manager, get_settings_dep
@@ -54,20 +55,22 @@ async def get_seq_metrics(
     return body
 
 
-def _save_uns_entry(source: str, output: str, value: str | None) -> None:
-    """Save only the sequencing entry: copy the dataset's file and rewrite that one uns
-    key, so the matrix is never read, written or recompressed (a full write of a
-    freshly uploaded 2 GB file takes minutes and its memory)."""
+def _save_uns_entry(source: str, output: str, values: dict) -> None:
+    """Save only the sequencing entries (the record, and the ambient RNA profiles read from
+    a raw matrix): copy the dataset's file and rewrite those uns keys, so the matrix is
+    never read, written or recompressed (a full write of a freshly uploaded 2 GB file
+    takes minutes and its memory). ``values``: key -> value, None to remove it."""
     partial = output + ".partial"
     shutil.copyfile(source, partial)  # content only: a read-only original gives a writable copy
     try:
         with h5py.File(partial, "a") as f:
             if "uns" not in f:
                 write_elem(f, "uns", {})
-            if seq_metrics.UNS_KEY in f["uns"]:
-                del f["uns"][seq_metrics.UNS_KEY]
-            if value is not None:  # None: the entry is removed
-                write_elem(f["uns"], seq_metrics.UNS_KEY, value)
+            for key, value in values.items():
+                if key in f["uns"]:
+                    del f["uns"][key]
+                if value is not None:  # None: the entry is removed
+                    write_elem(f["uns"], key, value)
     except Exception:
         os.remove(partial)
         raise
@@ -153,7 +156,8 @@ async def _edit(dataset_id: str, dm: DatasetManager, edit) -> dict | None:
             if large:  # written into its h5ad in place (core/large_mode.py)
                 save_edit(adaptor, work, output_path, before)
             else:
-                _save_uns_entry(adaptor.h5ad_path, output_path, work.uns.get(seq_metrics.UNS_KEY))
+                _save_uns_entry(adaptor.h5ad_path, output_path,
+                                {k: work.uns.get(k) for k in (seq_metrics.UNS_KEY, ambient.UNS_SOUP)})
             return seq_metrics.payload(work)
 
         try:

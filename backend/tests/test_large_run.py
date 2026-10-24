@@ -781,3 +781,27 @@ def test_real_data_equals_in_memory(name, tmp_path, monkeypatch):
     for c in ("S_score", "G2M_score", "dissociation_stress_score"):
         if c in mem.obs:
             np.testing.assert_array_equal(big.obs[c], mem.obs[c])
+
+
+def _write_legacy_h5ad(path: Path, counts: np.ndarray) -> None:
+    """An h5ad as anndata < 0.7 wrote it (Kang 2018 as published): obs and var as
+    compound datasets, X a plain dense dataset."""
+    n, g = counts.shape
+    rec = lambda names: np.array([(s.encode(),) for s in names], dtype=[("index", "S16")])  # noqa: E731
+    with h5py.File(path, "w") as f:
+        f.create_dataset("X", data=counts.astype(np.float32))
+        f.create_dataset("obs", data=rec([f"c{i}" for i in range(n)]))
+        f.create_dataset("var", data=rec([f"g{j}" for j in range(g)]))
+
+
+def test_an_old_layout_input_is_rewritten_and_runs(tmp_path):
+    rng = np.random.default_rng(0)
+    src = tmp_path / "old.h5ad"
+    _write_legacy_h5ad(src, rng.poisson(1.0, size=(120, 60)))
+    assert large_run.is_legacy_layout(src)
+    assert ad.read_h5ad(src).n_obs == 120  # anndata itself still reads it
+    res = large_run.run(str(src), ["qc_metrics", "normalization", "log_transform"],
+                        PipelineParams(chunked="on"), str(tmp_path / "out" / "old.h5ad"))
+    assert res.status == "complete", res.stop_reason or res.errors
+    assert not large_run.is_legacy_layout(res.output_path)
+    assert ad.read_h5ad(res.output_path, backed="r").obs_names[0] == "c0"

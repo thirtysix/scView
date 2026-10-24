@@ -51,8 +51,10 @@ export function DoubletFilterControl({
             <InfoTip label="About the doublet sources">
               Cell hashing sees doublets of two samples by their tags: the ground truth for those. It cannot
               see two cells of one sample; Scrublet, from simulated doublets of the cells&apos; own profiles,
-              is the only call that can. Auto uses hashing when it was run, else Scrublet; Either drops a
-              cell that either one calls. The counts are cells called on the current data.
+              is the only call that can (the scDblFinder-style classifier too, when the doublet step ran it).
+              Auto uses hashing when it was run, else the classifier when it ran, else Scrublet; Both
+              detectors drops only a cell both call; Either drops a cell any of them calls. The counts are cells called on the current
+              data.
             </InfoTip>
           </label>
         )}

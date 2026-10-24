@@ -30,6 +30,7 @@ import {
   type MarkerSortField,
 } from "@/lib/markerSpecificity";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
+import { AmbientFlag, useAmbientFlags } from "@/components/common/AmbientFlag";
 import { CellHeatmap } from "@/components/plots/CellHeatmap";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
 import { GeneSearch } from "@/components/common/GeneSearch";
@@ -70,6 +71,7 @@ export function MarkerGenesPanel() {
     [markerGenes, setMarkerGenes],
   );
   const initialFetchDone = useRef(false);
+  const ambient = useAmbientFlags(datasetId, groupbyColumn, markersData);
 
   // Categorical columns suitable for marker gene grouping
   const groupbyColumns = useMemo(() => {
@@ -648,8 +650,15 @@ export function MarkerGenesPanel() {
                     className="border-b border-slate-50 transition-colors hover:bg-slate-50"
                   >
                     <td className="px-4 py-2">
-                      <span className="font-mono font-medium text-slate-800">
-                        {marker.gene}
+                      <span className="flex items-center gap-1">
+                        <span className="font-mono font-medium text-slate-800">
+                          {marker.gene}
+                        </span>
+                        <AmbientFlag
+                          flag={ambient.flags.get(marker.group)?.get(marker.gene)}
+                          group={marker.group}
+                          approximate={ambient.approximate}
+                        />
                       </span>
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums">

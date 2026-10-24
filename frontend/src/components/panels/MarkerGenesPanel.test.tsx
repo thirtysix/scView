@@ -71,3 +71,24 @@ describe("MarkerGenesPanel", () => {
     useViewStore.setState({ markerView: "table" });
   });
 });
+
+describe("MarkerGenesPanel ambient flag", () => {
+  beforeEach(() => {
+    apiFetch.mockReset();
+    useDatasetStore.setState({ currentDatasetId: "d1", currentDataset: DATASET });
+    useViewStore.setState({ markerView: "table" });
+  });
+
+  it("marks a marker that looks ambient, as the Unified View table does", async () => {
+    apiFetch.mockImplementation(async (url: string) =>
+      url.includes("/qc/ambient")
+        ? { markers: { column: "leiden", approximate: false, n_flagged: 1,
+            groups: { "0": [{ gene: "CD3E", soup_rank: 3, ratio: 1.1 }] } } }
+        : MARKERS,
+    );
+    render(<MarkerGenesPanel />);
+    const flag = await screen.findByTestId("ambient-marker-flag");
+    expect(flag).toHaveTextContent("ambient");
+    expect(flag.closest("tr")).toHaveTextContent("CD3E");
+  });
+});

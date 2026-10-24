@@ -19,7 +19,7 @@ each a lazy row-block matrix on disk (``core/chunked.py``):
     step                    here                                         equal to in memory
     reset_to_counts         X := the counts layer / .raw / counts sidecar  same
     qc_metrics              chunked.qc_metrics                           bitwise
-    doublet_detection       doublets.run_scrublet on the stored counts,  bitwise
+    doublet_detection       doublets.run_doublets on the stored counts,  bitwise
                             one capture channel's rows at a time
     filtering               the step's own masks from obs, gene counts   same cells, genes
                             by blocks, lazy cuts
@@ -77,6 +77,7 @@ from scview.core import (
     qc_filter,
     scaling,
     sparse_markers,
+    step_failures,
 )
 from scview.core.pipeline import (
     ALL_STEPS,
@@ -92,6 +93,7 @@ from scview.core.pipeline import (
     _new_outcome,
     _record_errors,
     _record_pipeline_step,
+    _REGRESS_PEARSON,
     _skip_if_blocked,
     _step_failed,
     _STEP_RUNNERS,
@@ -103,6 +105,7 @@ from scview.core.pipeline import (
     filter_judgement,
     large_backend,
     looks_like_counts,
+    regress_covariates,
     resolve_umap_3d,
     run_pipeline,
     run_pipeline_streamed,
@@ -133,6 +136,26 @@ PROGRESS_SECONDS = 1.0
 class LargeRunError(ValueError):
     """A run large-dataset mode cannot make (no raw counts, an X that would not end up
     log-normalised, a stale sidecar)."""
+
+
+# Steps this mode does not run: (what, why), refused before the run starts (a 422).
+REFUSED_STEPS = {
+    "ambient_correction": (
+        "Ambient RNA correction",
+        "it rewrites every cell's counts and keeps the originals beside them, a second "
+        "copy of the counts this mode does not hold. Run it on a smaller dataset, or with "
+        "large-dataset mode off when the memory allows"),
+}
+
+
+def refused(steps: list[str]) -> str | None:
+    """Why a large-dataset run of ``steps`` is refused (the first such step), or None."""
+    from scview.core.large_mode import LargeDatasetError
+
+    for step in steps:
+        if step in REFUSED_STEPS:
+            return str(LargeDatasetError(*REFUSED_STEPS[step]))
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +193,13 @@ def large_info(h5ad_path) -> dict | None:
             return read_elem(f[key]) if key in f else None
     except OSError:
         return None
+
+
+def is_legacy_layout(path: str | Path) -> bool:
+    """Whether the h5ad at ``path`` was written by anndata < 0.7 (obs as a compound
+    dataset, raw as ``raw.X``), as Kang 2018 was published."""
+    with h5py.File(str(path), "r") as f:
+        return isinstance(f.get("obs"), h5py.Dataset)
 
 
 def read_light(path: str | Path) -> ad.AnnData:
@@ -398,6 +428,8 @@ class LargeRun:
     def open(self) -> None:
         from anndata.io import read_elem
 
+        if is_legacy_layout(self.path):
+            self.path = self._modernised()
         p = str(self.path)
         light = read_light(p)
         with h5py.File(p, "r") as f:
@@ -457,6 +489,15 @@ class LargeRun:
             if "raw/X" in info:
                 self.raw = mat("raw/X", raw_var.index, var=raw_var, varm=raw_varm)
         self.dense = self.x.dense
+
+    def _modernised(self) -> Path:
+        """A copy of a pre-0.7 anndata file in today's layout, staged: the blocks the run
+        reads (``X``, ``raw/X``, ``obs`` as a group) do not exist in the old one. Such files
+        date from before 2020 and are small, so it is read whole."""
+        target = self.stage() / "input.h5ad"
+        ad.read_h5ad(str(self.path)).write_h5ad(target)
+        logger.info("%s is in the anndata < 0.7 layout: rewrote it for the run", self.path.name)
+        return target
 
     # -- staging ------------------------------------------------------------
 
@@ -743,9 +784,7 @@ class LargeRun:
 
     def _doublet_detection(self) -> dict[str, Any]:
         params = self.params
-        method = (params.doublet_method or "scrublet").lower()
-        if method != "scrublet":
-            logger.warning("Unknown doublet method '%s'; falling back to scrublet", method)
+        method = doublets.method_of(params.doublet_method)  # an unknown one fails here
         # pipeline._doublet_matrix: X unless it holds processed values, then the counts.
         where = None
         m = self.x
@@ -758,7 +797,7 @@ class LargeRun:
                 raise StepSkipped("Doublet detection needs raw counts: X holds processed values "
                                   "and there is no counts layer or counts in .raw.")
         with self._rows(m) as counts:
-            found = doublets.run_scrublet(self.light, counts, params.expected_doublet_rate,
+            found = doublets.run_doublets(self.light, counts, method, params.expected_doublet_rate,
                                           params.doublet_channel_key or None)
         if where is not None:
             found["input"] = where
@@ -860,6 +899,9 @@ class LargeRun:
 
     def _scaling(self) -> dict[str, Any]:
         method = normalization.check_method(self.params.normalization_method)
+        keys = scaling.check_regress_out(self.params.regress_out)
+        if keys and method == "pearson_residuals":
+            raise ValueError(_REGRESS_PEARSON)
         self.write_matrices()
         light = self.light
         self._label = "Scaling statistics"
@@ -870,12 +912,25 @@ class LargeRun:
             return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source,
                     **found}
         X = self.lognorm()
-        return scaling.plan_zscores(light, max_value=scaling.MAX_VALUE,
-                                    stats=lambda idx: chunked.scaled_stats(X, idx))
+        scored = {}
+        if keys:
+            with large_backend(_Backend(self)):
+                scored = regress_covariates(light, self.params, keys)
+            self._label = "Regress-out"
+
+        def regress(idx, C):
+            B = chunked.regression_coef(X, idx, C)
+            return (B, *chunked.regressed_stats(X, idx, C, B))
+
+        found = scaling.plan_zscores(light, max_value=scaling.MAX_VALUE,
+                                     stats=lambda idx: chunked.scaled_stats(X, idx),
+                                     regress_out=keys, regress=regress)
+        return {**found, **scored}
 
     def _pca(self) -> dict[str, Any] | None:
         light, params = self.light, self.params
-        n_comps = min(params.n_comps, light.n_obs - 1, light.n_vars - 1)
+        # chunked caps it at cells - 1 and variable genes - 1, or says what to change
+        n_comps = params.n_comps
         plan = scaling.read_plan(light)
         mask = scaling.gene_mask(light)
         hvg = mask if mask is not None else np.ones(light.n_vars, dtype=bool)
@@ -892,12 +947,19 @@ class LargeRun:
             X = self.lognorm()
             mean = scaling._var_column(light, scaling.MEAN, cols)
             std = scaling._var_column(light, scaling.STD, cols)
+            fit = scaling.plan_regression(light, plan, cols,
+                                          fit=lambda c, C: chunked.regression_coef(X, c, C))
             missing = np.flatnonzero(~np.isfinite(mean) | ~np.isfinite(std))
+            if fit is not None:
+                missing = np.union1d(missing, fit[2])
             if missing.size:  # variable since scaling: worked out now, as pca_matrix does
-                mean[missing], std[missing] = chunked.scaled_stats(X, cols[missing])
+                mean[missing], std[missing] = (
+                    chunked.scaled_stats(X, cols[missing]) if fit is None else
+                    chunked.regressed_stats(X, cols[missing], fit[0], fit[1][:, missing]))
             res = chunked.pca_scaled(X, hvg, n_comps=n_comps,
                                      max_value=float(plan.get("max_value", scaling.MAX_VALUE)),
-                                     stats=(mean, std))
+                                     stats=(mean, std),
+                                     regress=None if fit is None else fit[:2])
         else:  # sc.tl.pca on X as it is: centred, not scaled
             res = chunked.pca_scaled(self.lognorm(), hvg, n_comps=n_comps, max_value=None,
                                      stats=(np.zeros(cols.size), np.ones(cols.size)))
@@ -1119,6 +1181,9 @@ def _disk_check(run: LargeRun, steps: list[str]) -> str | None:
 def _plan_check(run: LargeRun, steps: list[str]) -> str | None:
     """Why this mode cannot make the run (it stores X log-normalised, beside the counts),
     before any step: None when it can."""
+    why = refused(steps)
+    if why is not None:
+        return f"{why} Nothing was changed."
     if not (_holds_counts(run.layer) or _holds_counts(run.raw) or _holds_counts(run.x)):
         return ("Large-dataset mode keeps the raw counts beside the log values, and this "
                 "dataset has none (layers['counts'], .raw or X). Nothing was changed.")
@@ -1279,6 +1344,7 @@ def _finish(run: LargeRun, params: PipelineParams, result: PipelineResult, t0: f
     step (reset, normalisation, log transform) leaves it otherwise, the run is stopped
     with nothing saved, the dataset as it was."""
     if outcome is not None:
+        step_failures.settle_unrun(run.light, outcome)  # markers of a column clustered again
         _end_status(result, outcome)
     if result.status in SAVED_STATUSES and control is not None and control.cancelled:
         _halted(result, ("cancelled", cancelled_reason("before", "saving")))

@@ -9,6 +9,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
 import type { MarkersResponse } from "@/api/markers";
+import { AmbientFlag, useAmbientFlags } from "@/components/common/AmbientFlag";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
 import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
@@ -144,6 +145,8 @@ export function UnifiedMarkersSubtab({
       cancelled = true;
     };
   }, [datasetId, groupByColumn, revision]);
+
+  const { flags: ambientFlags, approximate: ambientApprox } = useAmbientFlags(datasetId, groupByColumn, markersData);
 
   // A group clicked in the legend, the cluster map or an Observations row (or
   // highlighted by the co-pilot) opens its markers, switching to its column when
@@ -426,7 +429,10 @@ export function UnifiedMarkersSubtab({
               >
                 <td className="px-2 py-1.5">
                   <div className="flex items-center justify-between gap-1">
-                    <span className="font-mono font-medium text-slate-800">{marker.gene}</span>
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span className="font-mono font-medium text-slate-800">{marker.gene}</span>
+                      <AmbientFlag flag={ambientFlags.get(marker.group)?.get(marker.gene)} group={marker.group} approximate={ambientApprox} />
+                    </span>
                     <span className="flex items-center gap-1">
                       <button
                         onClick={(e) => {

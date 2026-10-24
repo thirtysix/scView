@@ -284,6 +284,55 @@ describe("DoubletCard", () => {
     expect(screen.getByText(/Cell hashing is the primary call here/)).toBeInTheDocument();
   });
 
+  const CLASSIFIER = {
+    label: "the doublet classifier", n_scored: 200, n_unscored: 0, n_called: 12, fraction: 0.06, median: 0.02,
+    hist: { bin_edges: [0, 0.5, 1], counts: [188, 12] }, channel_column: "lane",
+    channels: [
+      { name: "L1", n_cells: 100, n_scored: 100, n_called: 8, fraction: 0.08, threshold: 0.71, status: "scored" },
+      { name: "L2", n_cells: 100, n_scored: 100, n_called: 4, fraction: 0.04, threshold: 0.8, status: "scored" },
+    ],
+  };
+
+  it("shows where Scrublet and the classifier agree, per channel", async () => {
+    getDoublets.mockResolvedValue({
+      ...perChannel(2),
+      classifier: CLASSIFIER,
+      methods: {
+        n_cells: 200, scrublet: 31, classifier: 12, both: 9, scrublet_only: 22, classifier_only: 3, neither: 166,
+        channels: [
+          { name: "1", n_cells: 100, both: 7, scrublet_only: 23, classifier_only: 1 },
+          { name: "2", n_cells: 100, both: 2, scrublet_only: 8, classifier_only: 2 },
+        ],
+      },
+    });
+    render(<DoubletCard datasetId="d1" />);
+    const table = await screen.findByRole("table", { name: "Detector agreement per capture channel" });
+    const rows = within(table).getAllByRole("row");
+    expect(rows[0]).toHaveTextContent("ChannelCellsBothOnly ScrubletOnly classifier");
+    expect(rows[1]).toHaveTextContent("1100723" + "1");
+    expect(screen.getByRole("table", { name: "Scrublet x classifier doublet calls" })).toHaveTextContent("9");
+    expect(screen.getByTestId("doublet-methods-text")).toHaveTextContent(
+      "Scrublet calls 31 cells doublets, the classifier 12; both call 9 (26.5% of the cells either calls).",
+    );
+    expect(screen.getByTestId("doublet-classifier-text")).toHaveTextContent("The classifier calls 12 cells doublets (6.0%)");
+    expect(screen.getByRole("button", { name: "About the classifier" })).toBeInTheDocument();
+  });
+
+  it("with the classifier alone shows its own calls per channel, nothing to threshold", async () => {
+    getDoublets.mockResolvedValue({
+      available: false, n_cells: 200, suggestion: summary(0.3).suggestion, classifier: CLASSIFIER, methods: null,
+      source: {
+        source: "classifier", label: "the doublet classifier", columns: ["predicted_doublet_classifier"], n_cells: 200,
+        n_doublets: 12, fraction: 0.06, hashing: null, scrublet: null, both: null, options: ["auto", "classifier"],
+      },
+    });
+    render(<DoubletCard datasetId="d1" />);
+    const table = await screen.findByRole("table", { name: "Classifier calls per capture channel" });
+    expect(within(table).getAllByRole("row")[1]).toHaveTextContent("L11008" + "8.0%0.71");
+    expect(screen.queryByLabelText("Threshold")).not.toBeInTheDocument();
+    expect(screen.getByTestId("doublet-source")).toHaveTextContent("6.0% doublets by the doublet classifier.");
+  });
+
   it("renders nothing before doublet detection has run", async () => {
     getDoublets.mockResolvedValue({ available: false, n_cells: 10, suggestion: summary(0.3).suggestion });
     const { container } = render(<DoubletCard datasetId="d1" />);
