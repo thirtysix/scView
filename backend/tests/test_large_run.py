@@ -259,6 +259,19 @@ def test_replay_script_and_manifest_say_the_run_was_chunked(processed):
 # ---------------------------------------------------------------------------
 
 
+def test_batch_correction_and_the_uncorrected_layout_run_on_the_light_copy(tmp_path):
+    src = _write(_counts(n=1600), tmp_path / "in" / "d.h5ad")
+    steps = STEPS[:9] + ["uncorrected_embedding", "batch_correction", "neighbors"]
+    big, res, mem, mres = _both(src, tmp_path / "out" / "d.h5ad", steps, batch_key="lane")
+    assert res.errors == mres.errors == {} and res.steps_run == steps
+    for k in ("X_umap_uncorrected", "X_pca_harmony"):
+        assert big.obsm[k].shape == mem.obsm[k].shape
+    # Harmony iterates on the PCs, so their float-precision difference grows a little.
+    hb, hm = big.obsm["X_pca_harmony"], mem.obsm["X_pca_harmony"]
+    assert min(np.corrcoef(hb[:, i], hm[:, i])[0, 1] for i in range(hb.shape[1])) > 0.999
+    assert big.uns["neighbors"]["params"]["use_rep"] == "X_pca_harmony"
+
+
 @pytest.mark.parametrize("where", ["raw", "layer"])
 def test_counts_in_raw_or_a_layer(tmp_path, where):
     a = _counts(n=1600)
@@ -738,7 +751,13 @@ def test_real_data_equals_in_memory(name, tmp_path, monkeypatch):
     monkeypatch.setattr(chunked, "rows_per_block", lambda *a, **k: 1500)
     path = tmp_path / "in" / name
     path.parent.mkdir()
-    ad.read_h5ad(src).write_h5ad(path, compression="gzip")
+    a = ad.read_h5ad(src)
+    # Counts as float32 (Kang keeps float64 counts in .raw): in memory X is then float32
+    # too, as large-dataset mode stores it, so every value can be compared bit for bit.
+    a.X = a.X.astype(np.float32)
+    if a.raw is not None:
+        a.raw = ad.AnnData(a.raw.X.astype(np.float32), var=a.raw.var, obs=a.obs[[]])
+    a.write_h5ad(path, compression="gzip")
     marker_cols = ["cluster"] if "kang" in name else ["paul15_clusters"]
     steps = [s for s in STEPS if s != "doublet_detection"] + ["doublet_detection"]
     big, res, mem, mres = _both(path, tmp_path / "out" / name, steps, doublet_channel_key="",
@@ -748,7 +767,7 @@ def test_real_data_equals_in_memory(name, tmp_path, monkeypatch):
     for c in QC_OBS + ["doublet_score"]:
         np.testing.assert_array_equal(big.obs[c], mem.obs[c])
     assert (big.var["highly_variable"] == mem.var["highly_variable"]).all()
-    np.testing.assert_array_equal(_dense(big.X), _dense(mem.X).astype(np.float32))
+    np.testing.assert_array_equal(_dense(big.X), _dense(mem.X))
     key = markers_key(marker_cols[0])
     for f in ("names", "scores", "pvals", "pvals_adj"):
         for g in mem.uns[key][f].dtype.names:
