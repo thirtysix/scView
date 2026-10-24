@@ -14,14 +14,17 @@ the sums are the ones scanpy takes):
   values gathered and put in gene order by scipy's counting sort (cells stay
   ascending). Every value is read once over all blocks; memory is one block (about 40
   bytes per value) and a few arrays of n_cells, never a copy of the matrix.
-- CSR in no order: one CSC copy (8 bytes per value at float32 / int32: 1.6 GB for the
-  201M values of 100k neurons; scanpy's own Wilcoxon peaks 3.2 GB over the data there),
-  then as CSC.
+- CSR in no order (a merge can leave rows so): each value's block of genes is noted
+  once (one byte per value), then each block's values are found by one pass over those
+  bytes. Converting to CSC instead would hold a copy (8 bytes per value at float32 /
+  int32: 1.6 GB for the 201M values of 100k neurons).
 - CSC: a slice of columns, each put in canonical form. Dense: a slice of columns, its
   non-zeros.
 
 A stored duplicate (two values for one cell and gene) stops the read with
-``DuplicateEntries``: scanpy counts both in ``pts``, so scanpy ranks that matrix.
+``DuplicateEntries``: scanpy counts both in ``pts``, so scanpy ranks that matrix. No
+layout copies the matrix: the working memory is one block, a few arrays of n_cells, and
+for rows in no order one byte per stored value.
 """
 
 from __future__ import annotations
@@ -37,8 +40,9 @@ from scview.core.gene_store import _gene_blocks
 
 # Values per block, as sparse_markers.MAX_ENTRIES (a dense block counts every element).
 BLOCK_ENTRIES = 4_000_000
-# Stored values per pass when counting or checking (bincount takes int64).
-_CHUNK = 16_000_000
+# Stored values per pass when counting, checking or finding a block (bincount and the
+# order check take them as int64: 32 MB a pass).
+_CHUNK = 4_000_000
 FLOATS = (np.dtype(np.float32), np.dtype(np.float64))
 
 
@@ -97,7 +101,7 @@ class MatrixGenes:
             raise ValueError(f"{len(self.var_names)} gene names for {self.n_genes} genes")
         self.dtype = np.dtype(matrix.dtype)
         self.nnz = int(matrix.nnz) if sp.issparse(matrix) else self.n_cells * self.n_genes
-        # how blocks are read: dense | csc | ascending | descending | copy (to CSC)
+        # how blocks are read: dense | csc | ascending | descending | unordered
         if not sp.issparse(matrix):
             self.layout = "dense"
         elif matrix.format == "csc":
@@ -107,8 +111,8 @@ class MatrixGenes:
         elif _descending(matrix):
             self.layout = "descending"
         else:
-            self.layout = "copy"
-        self._csc: sp.csc_matrix | None = None
+            self.layout = "unordered"
+        self._cum: np.ndarray | None = None  # stored values up to each gene (CSR)
         # scanpy's mean/variance kernel for a CSC matrix squares in float64, for CSR and
         # dense in the value dtype (sparse_markers squares as scanpy would)
         self.square_dtype = np.dtype(np.float64) if self.layout == "csc" else self.dtype
@@ -123,11 +127,10 @@ class MatrixGenes:
         each gene's cells ascending."""
         if self.layout == "dense":
             yield from self._dense_blocks(max_entries)
-        elif self.layout in ("csc", "copy"):
-            if self.layout == "copy" and self._csc is None:
-                self._csc = self.matrix.tocsc()  # kept for the passes of a reference test
-            yield from _csc_blocks(self._csc if self.layout == "copy" else self.matrix,
-                                   max_entries)
+        elif self.layout == "csc":
+            yield from _csc_blocks(self.matrix, max_entries)
+        elif self.layout == "unordered":
+            yield from self._unordered_blocks(max_entries)
         else:
             yield from self._csr_blocks(max_entries, descending=self.layout == "descending")
 
@@ -139,21 +142,23 @@ class MatrixGenes:
             # scipy takes the non-zeros row by row, then sorts them into columns stably
             yield g0, g1, sp.csc_matrix(np.asarray(self.matrix[:, g0:g1]))
 
-    # -- CSR with ordered rows
-    def _gene_counts(self) -> np.ndarray:
-        """Stored values per gene (explicit zeros included), a chunk of values at a time."""
-        idx = self.matrix.indices
-        counts = np.zeros(self.n_genes, dtype=np.int64)
-        for start in range(0, idx.size, _CHUNK):
-            counts += np.bincount(idx[start:start + _CHUNK], minlength=self.n_genes)
-        return counts
+    # -- CSR
+    def _gene_ranges(self, max_entries: int) -> list[tuple[int, int]]:
+        """Gene ranges of at most ``max_entries`` stored values (explicit zeros included),
+        each gene's values counted a chunk of values at a time (once: a reference test
+        reads the blocks once per group)."""
+        if self._cum is None:
+            idx = self.matrix.indices
+            cum = np.zeros(self.n_genes + 1, dtype=np.int64)
+            for start in range(0, idx.size, _CHUNK):
+                cum[1:] += np.bincount(idx[start:start + _CHUNK], minlength=self.n_genes)
+            self._cum = np.cumsum(cum)
+        return _gene_blocks(self._cum, max_entries)
 
     def _csr_blocks(self, max_entries: int, *, descending: bool
                     ) -> Iterator[tuple[int, int, sp.csc_matrix]]:
         m = self.matrix
         indices, data = m.indices, m.data
-        cum = np.zeros(self.n_genes + 1, dtype=np.int64)
-        np.cumsum(self._gene_counts(), out=cum[1:])
         row_start = np.asarray(m.indptr[:-1], dtype=np.int64)
         row_end = np.asarray(m.indptr[1:], dtype=np.int64)
         cell_dtype = np.int32 if self.n_cells <= np.iinfo(np.int32).max else np.int64
@@ -161,7 +166,7 @@ class MatrixGenes:
         # Each row's values not yet read lie in [start, stop): blocks are taken in gene
         # order, from the front of ascending rows and from the back of descending ones.
         start, stop = row_start, row_end
-        for g0, g1 in _gene_blocks(cum, max_entries):
+        for g0, g1 in self._gene_ranges(max_entries):
             last = g1 == self.n_genes
             if descending:
                 lo = row_start if last else _first(indices, row_start, stop, g1, descending=True)
@@ -177,20 +182,42 @@ class MatrixGenes:
         """The values at positions lo[r] .. hi[r] of every row r as a CSC block."""
         lengths = hi - lo
         k = int(lengths.sum())
-        if k == 0:
-            return sp.csc_matrix((self.n_cells, g1 - g0), dtype=self.dtype)
         first = np.cumsum(lengths) - lengths
         pos = np.repeat(lo - first, lengths)
         pos += np.arange(k, dtype=np.int64)
-        vals = data[pos]
-        genes = indices[pos] - g0
-        rows = np.repeat(cells, lengths)
-        del pos
+        return self._block(data[pos], indices[pos] - g0, np.repeat(cells, lengths), g0, g1)
+
+    def _unordered_blocks(self, max_entries: int) -> Iterator[tuple[int, int, sp.csc_matrix]]:
+        m = self.matrix
+        indices, data = m.indices, m.data
+        indptr = np.asarray(m.indptr, dtype=np.int64)
+        ranges = self._gene_ranges(max_entries)
+        n = len(ranges)
+        code = np.uint8 if n <= 1 << 8 else np.uint16 if n <= 1 << 16 else np.uint32
+        of_gene = np.repeat(np.arange(n, dtype=code), [g1 - g0 for g0, g1 in ranges])
+        block_of = np.empty(indices.size, dtype=code)
+        for s in range(0, indices.size, _CHUNK):
+            block_of[s:s + _CHUNK] = of_gene[indices[s:s + _CHUNK]]
+        for b, (g0, g1) in enumerate(ranges):
+            # positions ascending, so rows ascending
+            pos = np.concatenate([np.flatnonzero(block_of[s:s + _CHUNK] == b) + s
+                                  for s in range(0, block_of.size, _CHUNK)]
+                                 or [np.zeros(0, dtype=np.int64)])
+            rows = np.searchsorted(indptr, pos, side="right") - 1
+            yield g0, g1, self._block(data[pos], indices[pos] - g0, rows, g0, g1)
+
+    def _block(self, vals, genes, rows, g0, g1) -> sp.csc_matrix:
+        """Values with their (block-local) genes and cells, cells ascending, as a CSC
+        block without zeros."""
         nonzero = vals != 0
         if not nonzero.all():
             vals, genes, rows = vals[nonzero], genes[nonzero], rows[nonzero]
+        if vals.size == 0:
+            return sp.csc_matrix((self.n_cells, g1 - g0), dtype=self.dtype)
         # genes x cells, then read as cells x genes: a gene's cells stay ascending
         gm = sp.coo_matrix((vals, (genes, rows)), shape=(g1 - g0, self.n_cells)).tocsr()
+        if gm.nnz != vals.size:  # scipy summed two values of one cell and gene
+            raise DuplicateEntries("The matrix stores duplicate entries.")
         return sp.csc_matrix((gm.data, gm.indices, gm.indptr), shape=(self.n_cells, g1 - g0))
 
 

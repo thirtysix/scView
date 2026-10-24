@@ -124,6 +124,11 @@ def test_pipeline_marker_step(runner, name):
 
     (ref, ref_caps), (got, got_caps) = runner.both(lambda: a.copy(), step)
     _same_captures(ref_caps, got_caps)
+    # tau comes with the ranking: no second pass over the matrix for it
+    passes = []
+    runner.mp.setattr(ms, "compute", lambda *args: passes.append(args) or None)
+    step(a.copy())
+    assert passes == []
     for key in [k for k in ref.uns if str(k).startswith("rank_genes_groups")]:
         _same_entry({k: v for k, v in ref.uns[key].items() if k != ms.SPECIFICITY_FIELD},
                     got.uns[key])

@@ -83,7 +83,7 @@ def _check(m, max_entries, layout):
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("max_entries", [1, 97, 10**9])
-@pytest.mark.parametrize("how", ["ascending", "descending", "copy"])
+@pytest.mark.parametrize("how", ["ascending", "descending", "unordered"])
 def test_csr_blocks_equal_scipy_csc(dtype, max_entries, how):
     m = _with_explicit_zeros(_random(dtype=dtype))
     if how != "ascending":
@@ -134,12 +134,12 @@ def test_layout_detection():
     a = d.indptr[7]
     assert d.indptr[8] - a >= 2
     d.indices[a:a + 2] = d.indices[a:a + 2][::-1].copy()
-    assert mg.MatrixGenes(d, range(m.shape[1])).layout == "copy"
+    assert mg.MatrixGenes(d, range(m.shape[1])).layout == "unordered"
     # a duplicate inside a descending row is not "descending"
     dup = _reorder_rows(m, "descending")
     a = dup.indptr[2]
     dup.indices[a + 1] = dup.indices[a]
-    assert mg.MatrixGenes(dup, range(m.shape[1])).layout == "copy"
+    assert mg.MatrixGenes(dup, range(m.shape[1])).layout == "unordered"
 
 
 def test_duplicate_entries_are_refused():
@@ -167,3 +167,27 @@ def test_unsupported():
         mg.MatrixGenes(m.astype(np.int32), range(m.shape[1]))
     with pytest.raises(ValueError, match="gene names"):
         mg.MatrixGenes(m, range(3))
+
+
+@pytest.mark.parametrize("how", ["ascending", "descending", "unordered"])
+def test_no_layout_copies_the_matrix(how, monkeypatch):
+    # Reading every block holds one block, a chunk of values for the passes that count
+    # them (and, for rows in no order, a byte per value), never a second copy of the
+    # values and indices (8 bytes per value here).
+    import tracemalloc
+
+    monkeypatch.setattr(mg, "_CHUNK", 200_000)  # passes over 10% of the values, as at scale
+    m = _random(n=20_000, g=400, density=0.25, seed=5)  # 2M values, 16 MB
+    if how != "ascending":
+        m = _reorder_rows(m, how)
+    src = mg.MatrixGenes(m, range(m.shape[1]))
+    assert src.layout == how
+    tracemalloc.start()
+    try:
+        n = sum(block.nnz for _, _, block in src.blocks(100_000))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert n == m.nnz
+    matrix_bytes = m.data.nbytes + m.indices.nbytes
+    assert peak < (0.2 if how == "unordered" else 0.1) * matrix_bytes + 6_000_000, peak

@@ -18,9 +18,10 @@ matrix, whose squares scanpy takes in float64). A reference comparison is ranked
 the two groups' cells, as scanpy's ``reference=`` mode ranks them: bit for bit too.
 
 100k neurons x 28k genes (201M values in rows of descending genes), 21 groups, 2 cores,
-in memory: Wilcoxon with pts 17 s at +0.35 GB over the loaded data, scanpy 162-201 s at
-+3.2 GB (it copies each group's rest of the matrix, then ranks dense chunks of 10M
-values); t-test 9.5 s against 32 s. Every field bit for bit equal.
+in memory: Wilcoxon with pts 16-17 s at +0.35 GB over the loaded data (rows shuffled
+into no order: 24 s at +0.60 GB), scanpy 162-201 s at +3.2 GB (it copies each group's
+rest of the matrix, then ranks dense chunks of 10M values); t-test 9.5 s against 32 s.
+Every field bit for bit equal.
 """
 
 from __future__ import annotations

@@ -111,12 +111,12 @@ def test_subset_of_groups_against_all_the_rest(no_scanpy, method):
     _assert_exact(ref, got, ALL_FIELDS)
 
 
-@pytest.mark.parametrize("layout", ["csc", "descending", "copy", "dense"])
+@pytest.mark.parametrize("layout", ["csc", "descending", "unordered", "dense"])
 def test_every_matrix_layout(no_scanpy, layout):
     a, col = _data("kang")
     X = a.X
     a.X = {"csc": lambda: sp.csc_matrix(X), "descending": lambda: _reorder_rows(X, "descending"),
-           "copy": lambda: _reorder_rows(X, "copy"), "dense": lambda: X.toarray()}[layout]()
+           "unordered": lambda: _reorder_rows(X, "unordered"), "dense": lambda: X.toarray()}[layout]()
     assert matrix_genes.MatrixGenes(a.X, a.var_names).layout == layout
     ref, got = _both(a, col, no_scanpy, method="wilcoxon", pts=True)
     _assert_structure(ref, got)
