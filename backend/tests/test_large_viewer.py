@@ -258,6 +258,8 @@ def test_load_estimate_counts_the_tables_not_the_matrix(counts, tmp_path):
 
     h5ad = make_large(tmp_path / "ds", counts)
     h = preflight.read_header(h5ad)
+    assert h.large and h.backed  # read_header knows the layout opens from disk
+    h.backed = False  # what reading it whole would cost, for comparison
     in_memory = preflight.estimate_load(h, ingest=False).peak_bytes
     peak = load_peak_bytes(str(h5ad))
     x = next(m for m in h.matrices if m.where == "X")
