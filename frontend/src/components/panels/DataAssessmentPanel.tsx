@@ -29,6 +29,7 @@ import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
 import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLeiden";
+import { UMAP_3D_LABELS } from "@/lib/umap3d";
 import { QcStates } from "@/components/qc/QcStates";
 import { SequencingQc } from "@/components/qc/SequencingQc";
 import { Hashing } from "@/components/qc/Hashing";
@@ -289,6 +290,17 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
   ],
   embeddings: [
     { param: "umap_min_dist", label: "UMAP min dist", type: "number", min: 0.0, max: 1.0, step: 0.05, default: 0.5 },
+    {
+      param: "umap_3d",
+      label: "3D UMAP",
+      type: "select",
+      options: ["auto", "on", "off"],
+      optionLabels: UMAP_3D_LABELS,
+      default: "auto",
+      help:
+        "The 3D view needs its own UMAP, about as long as the 2D one. Automatic makes it, " +
+        "except in large-dataset mode, where it would add up to half an hour or more.",
+    },
   ],
   marker_genes: [
     { param: "marker_columns", label: "Compute markers for these columns", type: "checkbox_list", dynamicOptions: "categorical_obs_columns", default: [] },
@@ -1062,6 +1074,7 @@ export function DataAssessmentPanel() {
                   steps={STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key)}
                   params={flattenStepParams(STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key), stepParams)}
                   onLeidenIterations={(n) => setStepParam("clustering", "leiden_iterations", n)}
+                  onUmap3d={(v) => setStepParam("embeddings", "umap_3d", v)}
                 />
               </div>
             )}

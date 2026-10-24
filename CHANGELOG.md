@@ -6,6 +6,15 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- **3D UMAP is opt-in for large datasets.** The UMAP step's new `umap_3d` setting (Automatic | On
+  | Off): Automatic makes the 3D UMAP in memory, as before, and leaves it out in large-dataset
+  mode, where it is about half the step's time (about 25 min at 1.2 million cells). The pre-run
+  note says when a run leaves it out, how long adding it would take, and adds it in one click;
+  it also shows the cost when the 3D UMAP alone would take over 10 minutes. Recorded in the
+  History; the replay script leaves out `n_components=3` for a run without it. Turning it off
+  removes an older run's 3D UMAP, which came from another graph.
+
 ## [0.34.0] - 2026-10-24
 
 ### Added

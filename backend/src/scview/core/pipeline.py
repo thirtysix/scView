@@ -134,6 +134,9 @@ class PipelineParams:
 
     # UMAP
     umap_min_dist: float = 0.5
+    # The 3D UMAP besides the 2D one: auto computes it in memory and leaves it out in
+    # large-dataset mode (about half the UMAP step's time: 25 min at 1.2M cells), on / off
+    umap_3d: str = "auto"
 
     # Marker genes: obs columns to compute markers for (empty = single-column fallback)
     marker_columns: list[str] = field(default_factory=list)
@@ -177,6 +180,28 @@ def check_chunked(value: Any) -> str:
     mode = str(value if value is not None else "auto").strip().lower()
     if mode not in CHUNKED_MODES:
         raise ValueError(f"Unknown chunked mode '{value}'; choose from {', '.join(CHUNKED_MODES)}.")
+    return mode
+
+
+UMAP_3D_MODES: tuple[str, ...] = ("auto", "on", "off")
+
+
+def check_umap_3d(value: Any) -> str:
+    """``PipelineParams.umap_3d`` as one of ``UMAP_3D_MODES`` (true/false as on/off); a
+    ValueError naming the choices for anything else."""
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    mode = str(value if value is not None else "auto").strip().lower()
+    if mode not in UMAP_3D_MODES:
+        raise ValueError(f"Unknown umap_3d setting '{value}'; choose from {', '.join(UMAP_3D_MODES)}.")
+    return mode
+
+
+def resolve_umap_3d(value: Any, large: bool) -> str:
+    """on or off: auto is on in memory and off in large-dataset mode."""
+    mode = check_umap_3d(value)
+    if mode == "auto":
+        return "off" if large else "on"
     return mode
 
 
@@ -909,8 +934,9 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]
     return found
 
 
-def _run_embeddings(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Compute 2D and 3D UMAP embeddings."""
+def _run_embeddings(adata: ad.AnnData, params: PipelineParams) -> dict:
+    """Compute the 2D UMAP and, unless ``umap_3d`` leaves it out, the 3D one. Returns
+    the 3D setting the step used (on / off), for the History and the replay."""
     # sc.tl.umap hands umap-learn the neighbour graph without copying it, and
     # umap-learn zeroes the graph's weakest edges in place. The saved graph was
     # then not the one the clustering ran on: re-clustering it (the resolution
@@ -918,15 +944,22 @@ def _run_embeddings(adata: ad.AnnData, params: PipelineParams) -> None:
     key = (adata.uns.get("neighbors") or {}).get("connectivities_key", "connectivities")
     graph = adata.obsp[key].copy() if key in adata.obsp else None
 
-    # 3D UMAP first (stored temporarily in X_umap, then moved)
-    sc.tl.umap(adata, min_dist=params.umap_min_dist, n_components=3)
-    adata.obsm["X_umap_3d"] = adata.obsm["X_umap"].copy()
+    # Large-dataset mode resolves auto to off before the step runs (large_run.run_streamed)
+    three_d = resolve_umap_3d(params.umap_3d, large=False)
+    if three_d == "on":
+        # 3D UMAP first (stored temporarily in X_umap, then moved)
+        sc.tl.umap(adata, min_dist=params.umap_min_dist, n_components=3)
+        adata.obsm["X_umap_3d"] = adata.obsm["X_umap"].copy()
+    else:
+        adata.obsm.pop("X_umap_3d", None)  # an older run's, from another graph
 
     # 2D UMAP (overwrites X_umap)
     sc.tl.umap(adata, min_dist=params.umap_min_dist, n_components=2)
     if graph is not None:
         adata.obsp[key] = graph
-    logger.info("UMAP computed: 2D and 3D (min_dist=%.2f)", params.umap_min_dist)
+    logger.info("UMAP computed: 2D%s (min_dist=%.2f)", " and 3D" if three_d == "on" else "",
+                params.umap_min_dist)
+    return {"umap_3d": three_d}
 
 
 def _run_marker_genes(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallback = _NOOP_CB) -> None:
@@ -1729,7 +1762,7 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "batch_correction": ("scview.batch_correction", ("batch_key", "batch_method")),
     "neighbors": ("scanpy.pp.neighbors", ("n_neighbors", "n_comps")),
     "clustering": ("scanpy.tl.leiden/louvain", ("clustering_method", "clustering_resolution")),
-    "embeddings": ("scanpy.tl.umap", ("umap_min_dist",)),
+    "embeddings": ("scanpy.tl.umap", ("umap_min_dist", "umap_3d")),
     "marker_genes": ("scanpy.tl.rank_genes_groups", ("marker_columns",)),
     "enrichment": ("scview.enrichment",
                    ("enrichment_columns", "enrichment_n_genes", "enrichment_collections")),

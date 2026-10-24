@@ -1242,13 +1242,15 @@ def _clustering(p: dict, ctx: _Ctx) -> Snippet:
 
 def _embeddings(p: dict, ctx: _Ctx) -> Snippet:
     md = p.get("umap_min_dist", 0.5)
+    # Runs before umap_3d was recorded always made the 3D UMAP
+    three_d = "" if p.get("umap_3d") == "off" else (
+        f'sc.tl.umap(adata, min_dist={_lit(md)}, n_components=3)\n'
+        'adata.obsm["X_umap_3d"] = adata.obsm["X_umap"].copy()\n')
     return Snippet(EXACT, _block(f'''
 # umap-learn trims the graph it is given in place: keep the one clustering used.
 key = (adata.uns.get("neighbors") or {{}}).get("connectivities_key", "connectivities")
 graph = adata.obsp[key].copy() if key in adata.obsp else None
-sc.tl.umap(adata, min_dist={_lit(md)}, n_components=3)
-adata.obsm["X_umap_3d"] = adata.obsm["X_umap"].copy()
-sc.tl.umap(adata, min_dist={_lit(md)}, n_components=2)
+{three_d}sc.tl.umap(adata, min_dist={_lit(md)}, n_components=2)
 if graph is not None:
     adata.obsp[key] = graph
 '''))

@@ -664,3 +664,41 @@ async def test_dataset_preflight_reports_the_leiden_choice(client, dataset_manag
     assert body["leiden"] is None
     r = await client.get(url, params={"steps": "clustering", "leiden_iterations": 3})
     assert r.status_code == 422 and "Leiden iterations" in r.json()["detail"]
+
+
+def test_umap_3d_choice_in_memory_and_in_large_dataset_mode():
+    steps = ["neighbors", "embeddings"]
+    assert pf.umap_3d_choice(300_000, ["pca"], PipelineParams(), False) is None  # no UMAP
+    mem = pf.umap_3d_choice(50_000, steps, PipelineParams(), chunked=False)
+    assert mem["on"] and mem["default_on"] and mem["setting"] == "auto" and not mem["offer"]
+    big = pf.umap_3d_choice(1_160_000, steps, PipelineParams(), chunked=True)
+    assert not big["on"] and not big["default_on"] and big["offer"]
+    # About half the UMAP step's time at 1.16M cells (2,941 s measured on Roihu with both)
+    assert 1000 < big["extra_seconds"] < 2000 and big["extra_text"].startswith("roughly")
+    assert pf.umap_3d_choice(1_160_000, steps, PipelineParams(umap_3d="on"), True)["on"]
+    assert not pf.umap_3d_choice(50_000, steps, PipelineParams(umap_3d="off"), False)["on"]
+    assert pf.umap_3d_choice(100_000, ["filtering", *steps], PipelineParams(), False)["n_cells"] \
+        == 90_000
+
+
+def test_umap_time_without_the_3d_umap_is_about_half():
+    both, two_d = pf.umap_seconds(1_000_000, True), pf.umap_seconds(1_000_000, False)
+    assert two_d == pytest.approx(0.5 + (both - 0.5) * (1 - pf.UMAP_3D_SHARE))
+    s = pf._State(1_000_000, 2000, None, {}, None, 0)
+    assert pf._step_embeddings(s, PipelineParams(umap_3d="off"))[2] == pytest.approx(two_d)
+    sh = pf.ChunkedShape(1_000_000, 20_000, 1_000_000_000)
+    assert pf.chunked_step("embeddings", sh, pf._large_params(PipelineParams()))[2] == \
+        pytest.approx(two_d)
+
+
+async def test_dataset_preflight_reports_the_umap_3d_choice(client, dataset_manager):
+    did = _register(dataset_manager)
+    url = f"{API}/datasets/{did}/preflight"
+    body = (await client.get(url, params={"steps": "neighbors,embeddings"})).json()
+    assert body["umap_3d"]["on"] and body["umap_3d"]["setting"] == "auto"
+    body = (await client.get(url, params={"steps": "neighbors,embeddings", "umap_3d": "off"})).json()
+    assert not body["umap_3d"]["on"]
+    body = (await client.get(url, params={"steps": "neighbors,embeddings", "chunked": "on"})).json()
+    assert not body["umap_3d"]["on"] and body["umap_3d"]["offer"]
+    r = await client.get(url, params={"steps": "embeddings", "umap_3d": "maybe"})
+    assert r.status_code == 422 and "umap_3d" in r.json()["detail"]

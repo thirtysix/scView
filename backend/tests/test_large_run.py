@@ -185,8 +185,11 @@ def test_graph_clusters_and_umap_are_the_pipeline_s(processed):
     col = mem.uns["scview_active_clustering"]
     assert big.uns["scview_active_clustering"] == col
     assert adjusted_rand_score(big.obs[col], mem.obs[col]) > 0.9
-    for k in ("X_umap", "X_umap_3d"):
-        assert big.obsm[k].shape == mem.obsm[k].shape
+    assert big.obsm["X_umap"].shape == mem.obsm["X_umap"].shape
+    # umap_3d auto: the 3D UMAP in memory, left out in large-dataset mode
+    assert "X_umap_3d" in mem.obsm and "X_umap_3d" not in big.obsm
+    rec = [h for h in provenance.read_provenance(big)["history"] if h["step"] == "embeddings"]
+    assert rec and rec[-1]["params"]["umap_3d"] == "off"
     assert big.obsp["connectivities"].shape == mem.obsp["connectivities"].shape
 
 
@@ -220,6 +223,8 @@ def test_provenance_records_the_same_steps_marked_chunked(processed):
     assert [h["tool"] for h in hb] == [h["tool"] for h in hm]
     for b, m in zip(hb, hm):
         assert b["params"].pop("chunked") is True
+        if b["step"] == "embeddings":  # auto: the 3D UMAP only in memory
+            assert (b["params"].pop("umap_3d"), m["params"].pop("umap_3d")) == ("off", "on")
         assert b["params"] == m["params"], b["step"]
     cur = provenance.read_provenance(big)["current"]
     assert cur["large"] is True and cur["anchors"] == ["counts", "lognorm"]
