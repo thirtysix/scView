@@ -119,6 +119,9 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
             control.mode = large_run.ModeChoice(large, "auto", f"No estimate ({e}).")
         logger.info("Run on %s: %s", dataset_id, control.mode.reason)
         if control.mode.chunked:
+            why = large_run.refused(steps)  # a step this mode does not run: before anything
+            if why is not None:
+                raise HTTPException(status_code=422, detail=why)
             path = adaptor.h5ad_path
             dm.evict(dataset_id)  # the run reads the file itself; nothing may serve a stale copy
             try:

@@ -32,6 +32,7 @@ import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLei
 import { UMAP_3D_LABELS } from "@/lib/umap3d";
 import { QcStates } from "@/components/qc/QcStates";
 import { SequencingQc } from "@/components/qc/SequencingQc";
+import { AmbientRna } from "@/components/qc/AmbientRna";
 import { Hashing } from "@/components/qc/Hashing";
 import { CancelRunButton, RunErrors, RunOutcome, RunPeakMemory, RunWatchNotes } from "@/components/panels/RunWatch";
 import {
@@ -76,6 +77,8 @@ interface PreprocessingState {
   qc_metrics: StepStatus;
   doublet_detection: StepStatus;
   filtering: StepStatus;
+  /** Opt-in; missing from older backends' answers (stepStatus fills it in). */
+  ambient_correction?: StepStatus;
   normalization: StepStatus;
   log_transform: StepStatus;
   highly_variable_genes: StepStatus;
@@ -122,6 +125,22 @@ interface PipelineResult extends RunOutcomeFields {
   output_path: string | null;
 }
 
+/** Steps never selected for the user: run only when ticked. */
+const OPT_IN_STEPS = new Set<string>(["ambient_correction"]);
+/** Steps not selected when the assessment lists the missing ones. */
+const SKIP_BY_DEFAULT = new Set<string>(["batch_correction", "enrichment", ...OPT_IN_STEPS]);
+const OPTIONAL_STEP: StepStatus = { done: false, confidence: "high", details: "Optional" };
+
+/** A step's status; an optional step an older backend does not report is "not done". */
+function stepStatus(state: PreprocessingState, key: keyof PreprocessingState): StepStatus {
+  return state[key] ?? OPTIONAL_STEP;
+}
+
+/** The correction step's rho as set: a number, or null for each sample's own estimate. */
+function ambientRho(v: unknown): number | null {
+  return typeof v === "number" && isFinite(v) && v > 0 ? v : null;
+}
+
 const stepLabel = (step: string) => STEP_ORDER.find((s) => s.key === step)?.label ?? step;
 
 interface LLMSuggestion {
@@ -148,6 +167,7 @@ const STEP_ORDER: {
   { key: "qc_metrics", label: "QC Metrics", description: "Calculate quality control metrics" },
   { key: "doublet_detection", label: "Doublet Detection", description: "Flag likely doublets with Scrublet in each capture channel (doublet_score + predicted_doublet)" },
   { key: "filtering", label: "Cell/Gene Filtering", description: "Filter low-quality cells and rare genes" },
+  { key: "ambient_correction", label: "Ambient RNA Correction", description: "Optional: remove ambient (soup) RNA from the counts, SoupX-style; needs each sample's raw matrix" },
   { key: "normalization", label: "Normalization", description: "Normalize library size" },
   { key: "log_transform", label: "Log Transform", description: "Log-transform expression values" },
   { key: "highly_variable_genes", label: "Variable Genes", description: "Identify highly variable genes" },
@@ -183,6 +203,8 @@ interface ParamConfig {
   dynamicDefault?: "suggested_doublet_rate";
   /** Used only in this filtering mode (qc_threshold_mode); disabled in the other. */
   mode?: QcThresholdMode;
+  /** Shown in an empty number input. */
+  placeholder?: string;
 }
 
 const QC_MODE_OPTION_LABELS: Record<string, string> = {
@@ -235,6 +257,22 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
     { param: "min_cells", label: "Min cells/gene", type: "number", min: 0, max: 100, step: 1, default: 3 },
     { param: "max_pct_mt", label: "Max % mito (ceiling in MAD mode)", type: "number", min: 0, max: 100, step: 1, default: 20 },
     { param: "drop_doublets", label: "Drop predicted doublets", type: "boolean", default: false },
+  ],
+  ambient_correction: [
+    {
+      param: "ambient_rho",
+      label: "Contamination fraction (rho)",
+      type: "number",
+      min: 0.01,
+      max: 0.5,
+      step: 0.01,
+      default: null,
+      placeholder: "each sample's own estimate",
+      help:
+        "The share of each droplet's UMIs that is ambient RNA. Empty: estimated per sample as SoupX does (see the " +
+        "Ambient RNA card). The corrected counts are used by the rest of the run; the originals are kept, and reset " +
+        "to counts brings them back.",
+    },
   ],
   normalization: [
     { param: "target_sum", label: "Target sum", type: "number", min: 1000, max: 100000, step: 1000, default: 10000 },
@@ -491,6 +529,7 @@ export function DataAssessmentPanel() {
   // Bumped after each pipeline run so the QC plots refetch (e.g. to pick up a
   // newly computed doublet_score) without needing a tab switch.
   const [qcRefreshKey, setQcRefreshKey] = useState(0);
+  const [ambientKey, setAmbientKey] = useState(0); // the soup changes when a raw matrix is attached
   // Bumped when doublet calls are re-thresholded: the cluster QC and report count them.
   const [callsRevision, setCallsRevision] = useState(0);
 
@@ -572,7 +611,13 @@ export function DataAssessmentPanel() {
   const reprocessFromScratch = () => {
     if (!confirm("This will reset to raw counts and reprocess everything from scratch. Continue?")) return;
     // All steps including reset_to_counts
-    const allSteps = ["reset_to_counts", ...STEP_ORDER.filter((s) => s.key !== "batch_correction").map((s) => s.key)];
+    // Opt-in steps only when ticked (ambient RNA correction); batch correction never.
+    const allSteps = [
+      "reset_to_counts",
+      ...STEP_ORDER.filter(
+        (s) => s.key !== "batch_correction" && (!OPT_IN_STEPS.has(s.key) || selectedSteps.has(s.key)),
+      ).map((s) => s.key),
+    ];
     runSteps(allSteps, flattenStepParams(allSteps, stepParams));
   };
 
@@ -616,8 +661,7 @@ export function DataAssessmentPanel() {
         );
       }
       // Auto-select all missing steps
-      const skipByDefault = new Set(["batch_correction", "enrichment"]);
-      const missing = STEP_ORDER.filter((s) => !data[s.key].done && !skipByDefault.has(s.key)).map((s) => s.key);
+      const missing = STEP_ORDER.filter((s) => !stepStatus(data, s.key).done && !SKIP_BY_DEFAULT.has(s.key)).map((s) => s.key);
       setSelectedSteps(new Set(missing));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to fetch assessment";
@@ -737,7 +781,7 @@ export function DataAssessmentPanel() {
 
   const selectAllMissing = () => {
     if (!state) return;
-    const missing = STEP_ORDER.filter((s) => !state[s.key].done).map((s) => s.key);
+    const missing = STEP_ORDER.filter((s) => !stepStatus(state, s.key).done && !OPT_IN_STEPS.has(s.key)).map((s) => s.key);
     setSelectedSteps(new Set(missing));
   };
 
@@ -903,7 +947,7 @@ export function DataAssessmentPanel() {
 
   /* ---- Derived: re-run count ---- */
   const rerunCount = state
-    ? STEP_ORDER.filter((s) => state[s.key].done && selectedSteps.has(s.key)).length
+    ? STEP_ORDER.filter((s) => stepStatus(state, s.key).done && selectedSteps.has(s.key)).length
     : 0;
 
   /* ---- Set param for a step ---- */
@@ -950,7 +994,7 @@ export function DataAssessmentPanel() {
 
   /* ---- Derived values ---- */
   const missingCount = state
-    ? STEP_ORDER.filter((s) => !state[s.key].done).length
+    ? STEP_ORDER.filter((s) => !stepStatus(state, s.key).done && !OPT_IN_STEPS.has(s.key)).length
     : 0;
   const doneCount = state ? STEP_ORDER.length - missingCount : 0;
   const selectedCount = selectedSteps.size;
@@ -1345,7 +1389,7 @@ export function DataAssessmentPanel() {
           <div className="rounded-xl border border-slate-200 bg-white">
             <div className="divide-y divide-slate-100">
               {STEP_ORDER.map((step, idx) => {
-                const status = state[step.key];
+                const status = stepStatus(state, step.key);
                 const isExpanded = expandedStep === step.key;
                 const suggestion = suggestionForStep(step.key);
                 const isSelected = selectedSteps.has(step.key);
@@ -1538,7 +1582,7 @@ export function DataAssessmentPanel() {
                                       <input
                                         type="number"
                                         value={currentVal == null ? "" : Number(currentVal)}
-                                        placeholder={pc.dynamicDefault === "suggested_doublet_rate" ? "each channel's own" : undefined}
+                                        placeholder={pc.dynamicDefault === "suggested_doublet_rate" ? "each channel's own" : pc.placeholder}
                                         min={pc.min}
                                         max={pc.max}
                                         step={pc.step}
@@ -1678,7 +1722,24 @@ export function DataAssessmentPanel() {
         </div>
         {/* Right: QC distributions */}
         <div className="w-full flex-shrink-0 space-y-4 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
-          {datasetId && <SequencingQc datasetId={datasetId} />}
+          {datasetId && <SequencingQc datasetId={datasetId} onChange={() => setAmbientKey((k) => k + 1)} />}
+          {datasetId && (
+            <AmbientRna
+              datasetId={datasetId}
+              refreshKey={qcRefreshKey + ambientKey}
+              step={{
+                selected: selectedSteps.has("ambient_correction"),
+                onSelectedChange: (on) =>
+                  setSelectedSteps((prev) => {
+                    const next = new Set(prev);
+                    if (on) next.add("ambient_correction");
+                    else next.delete("ambient_correction");
+                    return next;
+                  }),
+                rho: ambientRho(stepParams.ambient_correction?.ambient_rho),
+              }}
+            />
+          )}
           {datasetId && (
             <Hashing datasetId={datasetId} refreshKey={qcRefreshKey} onSaved={() => setCallsRevision((r) => r + 1)} />
           )}

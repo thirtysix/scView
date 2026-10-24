@@ -109,6 +109,7 @@ const RUN_PARAMS = [
   "doublet_channel_key", // doublet detection's peak is its largest channel's
   "clustering_method", "leiden_iterations", // clustering's time, and the fast-Leiden offer
   "umap_3d", // UMAP's time, and the 3D UMAP note
+  "ambient_rho", // set: the ambient RNA correction estimates nothing (no clustering of its own)
 ] as const;
 
 export function getRunPreflight(

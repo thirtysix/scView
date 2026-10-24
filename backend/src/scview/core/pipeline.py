@@ -26,6 +26,7 @@ import scanpy as sc
 import scipy.sparse as sp
 
 from scview.core import (
+    ambient,
     doublets,
     leiden,
     marker_specificity,
@@ -103,6 +104,10 @@ class PipelineParams:
     # The channels: an obs column, "__all__" (all cells as one channel), or empty: a
     # channel column, else the barcodes' -N / PREFIX_, else donor / batch, else all cells
     doublet_channel_key: str = ""
+
+    # Ambient RNA correction (opt-in step, core/ambient.py): None = each sample's own
+    # contamination fraction (SoupX autoEstCont), a number = every sample's
+    ambient_rho: float | None = None
 
     # Normalization: "log" = shifted log, normalize_total + log1p (the default) |
     # "pearson_residuals" = analytic Pearson residuals of the counts, for HVG
@@ -304,6 +309,7 @@ ALL_STEPS = [
     "qc_metrics",
     "doublet_detection",
     "filtering",
+    "ambient_correction",
     "normalization",
     "log_transform",
     "highly_variable_genes",
@@ -327,8 +333,11 @@ def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnDat
 
     Returns a fresh AnnData ready for reprocessing from scratch.
     """
-    # Restore counts from layers or raw
-    if "counts" in adata.layers:
+    # Restore counts from layers or raw; counts an ambient RNA correction replaced come
+    # back first (core/ambient.py), so a new run starts from the uncorrected counts.
+    if ambient.restore_original(adata):
+        logger.info("Restored the counts from before the ambient RNA correction")
+    elif "counts" in adata.layers:
         adata.X = adata.layers["counts"].copy()
         logger.info("Restored counts from adata.layers['counts']")
     elif adata.raw is not None:
@@ -455,6 +464,17 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     if where is not None:
         found["input"] = where
     return found
+
+
+def _run_ambient_correction(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
+    """Remove ambient ("soup") RNA from the counts (opt-in; ``core/ambient.py``): each
+    sample's contamination fraction (``ambient_rho``, else its own SoupX-style
+    estimate) times each cell's UMIs is taken off, shared out by the soup profile the
+    attached raw matrix gave. X holds the corrected counts the rest of the run uses; the
+    originals stay in ``layers['counts_uncorrected']`` (reset to counts restores them).
+    An AmbientError (no raw matrix, no counts, no estimate) is the step's error."""
+    rho = params.ambient_rho
+    return ambient.run_correction(adata, None if rho is None or rho == "" else float(rho))
 
 
 def _run_filtering(adata: ad.AnnData, params: PipelineParams) -> tuple[ad.AnnData, dict[str, Any]]:
@@ -1710,6 +1730,7 @@ _STEP_RUNNERS: dict[str, Any] = {
     "qc_metrics": _run_qc_metrics,
     "doublet_detection": _run_doublet_detection,
     "filtering": _run_filtering,
+    "ambient_correction": _run_ambient_correction,
     "normalization": _run_normalization,
     "log_transform": _run_log_transform,
     "highly_variable_genes": _run_hvg,
@@ -1751,6 +1772,8 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     # back from the step itself.
     "filtering": ("scview.qc_filter + scanpy.pp.filter_genes",
                   ("qc_threshold_mode", "min_cells", "max_pct_mt", "drop_doublets")),
+    # Each sample's rho, its source and the raw matrices come back from the step.
+    "ambient_correction": ("scview.ambient (SoupX-style subtraction per cell)", ("ambient_rho",)),
     "normalization": ("scanpy.pp.normalize_total", ("target_sum", "normalization_method")),
     "log_transform": ("scanpy.pp.log1p", ()),
     "highly_variable_genes": ("scanpy.pp.highly_variable_genes",

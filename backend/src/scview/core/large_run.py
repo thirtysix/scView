@@ -135,6 +135,26 @@ class LargeRunError(ValueError):
     log-normalised, a stale sidecar)."""
 
 
+# Steps this mode does not run: (what, why), refused before the run starts (a 422).
+REFUSED_STEPS = {
+    "ambient_correction": (
+        "Ambient RNA correction",
+        "it rewrites every cell's counts and keeps the originals beside them, a second "
+        "copy of the counts this mode does not hold. Run it on a smaller dataset, or with "
+        "large-dataset mode off when the memory allows"),
+}
+
+
+def refused(steps: list[str]) -> str | None:
+    """Why a large-dataset run of ``steps`` is refused (the first such step), or None."""
+    from scview.core.large_mode import LargeDatasetError
+
+    for step in steps:
+        if step in REFUSED_STEPS:
+            return str(LargeDatasetError(*REFUSED_STEPS[step]))
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Which mode
 # ---------------------------------------------------------------------------
@@ -1119,6 +1139,9 @@ def _disk_check(run: LargeRun, steps: list[str]) -> str | None:
 def _plan_check(run: LargeRun, steps: list[str]) -> str | None:
     """Why this mode cannot make the run (it stores X log-normalised, beside the counts),
     before any step: None when it can."""
+    why = refused(steps)
+    if why is not None:
+        return f"{why} Nothing was changed."
     if not (_holds_counts(run.layer) or _holds_counts(run.raw) or _holds_counts(run.x)):
         return ("Large-dataset mode keeps the raw counts beside the log values, and this "
                 "dataset has none (layers['counts'], .raw or X). Nothing was changed.")

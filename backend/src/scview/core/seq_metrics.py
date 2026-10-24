@@ -5,7 +5,9 @@ enough and mapped well, and the raw (unfiltered) barcode matrix shows how cells 
 called. Users upload the filtered matrix and rarely look at either, so the ingest
 flow attaches them as side files of a sample (``core/ingestion/bundling.py``), and
 ``POST /datasets/{id}/seq-metrics`` attaches them to a dataset uploaded earlier.
-One record per sample is kept as a JSON string in ``uns["scview_seq_metrics"]``.
+One record per sample is kept as a JSON string in ``uns["scview_seq_metrics"]``; the
+raw matrix's empty droplets also give the sample's ambient RNA profile, kept beside it in
+``uns["scview_ambient_soup"]`` (``core/ambient.py``).
 
 Metrics: both layouts Cell Ranger writes are read. ``cellranger count`` writes one
 header row of metric names and one row of values ("1,222", "97.4%");
@@ -51,6 +53,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from scview.core import ambient
 from scview.core.ingestion.detection import looks_like_metrics
 
 logger = logging.getLogger(__name__)
@@ -824,7 +827,33 @@ def build_record(
                     "The knee needs the raw (unfiltered) raw_feature_bc_matrix.")
         except (SeqQcError, OSError, KeyError, ValueError) as e:
             notes.append(f"The raw matrix could not be read: {e}")
+        if rec["knee"] is not None:
+            _add_soup(rec, h5, mex, notes)
     return rec
+
+
+# Fewer empty droplets than this (a filtered matrix sent as the raw one): no soup.
+MIN_SOUP_DROPLETS = 100
+
+
+def _add_soup(rec: dict, h5: Path | None, mex: tuple[Path, Path, Path] | None,
+              notes: list[str]) -> None:
+    """The ambient RNA profile of the raw matrix's empty droplets (``core/ambient.py``):
+    a summary in the record, the profile itself under ``_soup`` until ``store`` moves it
+    to ``uns[ambient.UNS_SOUP]``."""
+    try:
+        soup = ambient.soup_for_files(h5, mex)
+    except (OSError, KeyError, ValueError) as e:
+        notes.append(f"The ambient RNA profile (empty droplets) could not be read: {e}")
+        return
+    if soup is None:
+        return
+    if soup["n_droplets"] < MIN_SOUP_DROPLETS:
+        notes.append(f"Only {soup['n_droplets']:,} droplets with fewer than {soup['umi_max']} UMIs: "
+                     "too few empty droplets for an ambient RNA profile.")
+        return
+    rec["soup"] = ambient.soup_summary(soup)
+    rec["_soup"] = soup
 
 
 def read(adata) -> dict | None:
@@ -846,9 +875,17 @@ def store(adata, records: list[dict]) -> None:
     """Add (or replace, by sample) records; a new JSON string so write_derived saves it."""
     data = read(adata) or {"version": VERSION, "samples": {}}
     samples = dict(data.get("samples") or {})
+    soups: dict[str, dict] = {}
     for rec in records:
+        soup = rec.pop("_soup", None)
+        if soup is not None:
+            soups[rec["sample"]] = soup
+        elif rec.get("knee") is not None:  # a new raw matrix without a soup replaces one
+            ambient.remove_soup(adata, rec["sample"])
         samples[rec["sample"]] = rec
     adata.uns[UNS_KEY] = json.dumps({"version": VERSION, "samples": samples})
+    if soups:  # the profiles beside it (``core/ambient.py``)
+        ambient.store_soups(adata, soups)
 
 
 def summary_sentence(rec: dict, flags: list[dict]) -> str:
@@ -994,6 +1031,7 @@ def remove(adata, sample: str) -> bool:
     if not data or sample not in data["samples"]:
         return False
     samples = {k: v for k, v in data["samples"].items() if k != sample}
+    ambient.remove_soup(adata, sample)
     if samples:
         adata.uns[UNS_KEY] = json.dumps({"version": VERSION, "samples": samples})
     else:

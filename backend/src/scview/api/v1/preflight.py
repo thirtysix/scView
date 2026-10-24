@@ -52,6 +52,7 @@ async def dataset_preflight(
     clustering_method: str | None = None,
     leiden_iterations: int | None = None,
     umap_3d: str | None = None,
+    ambient_rho: float | None = Query(default=None, gt=0, lt=1),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Peak memory and rough time of running ``steps`` on the dataset: per step
@@ -83,6 +84,7 @@ async def dataset_preflight(
         "chunked": chunked,
         "clustering_method": clustering_method, "leiden_iterations": leiden_iterations,
         "umap_3d": umap_3d,
+        "ambient_rho": ambient_rho,  # set: no estimate (and no clustering of its own)
     }.items() if v is not None}
     try:
         if chunked is not None:
