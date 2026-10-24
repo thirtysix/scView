@@ -1,5 +1,6 @@
 import { leidenIterationsText } from "@/lib/fastLeiden";
 import { umap3dText } from "@/lib/umap3d";
+import { regressOutText } from "@/lib/regressOut";
 import { clearedText } from "@/lib/runErrors";
 
 const LIST_SHOWN = 12;
@@ -64,6 +65,7 @@ export function paramText(key: string, value: unknown): string {
     return channelsText(value as ChannelRun[]);
   if (key === "leiden_iterations") return leidenIterationsText(value);
   if (key === "umap_3d") return umap3dText(value);
+  if (key === "regress_out") return regressOutText(value);
   // A run that finished with errors (step run_errors): its failed and skipped steps
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const entries = Object.entries(value as Record<string, unknown>);

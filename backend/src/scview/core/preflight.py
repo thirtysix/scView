@@ -864,6 +864,11 @@ NEIGHBORS_PER_CELL = 12_000
 SPARSE_STATS_CHUNK = _scaling.SPARSE_CHUNK
 STAT_BLOCK = _scaling.STAT_BLOCK
 SCALING_SECONDS_PER_VALUE = 5e-9  # per stored value of a sparse X, per cell x gene of a dense one
+# Regress-out (scaling ``regress_out``): the fit and the residuals' statistics, per cell x
+# variable gene (Kang 13,836 x 2,000, two covariates: +0.25 s at 2 CPUs, 2026-10-24); at
+# PCA the fit taken off again, per cell x gene x regressor (too small to measure there).
+REGRESS_SECONDS_PER_VALUE = 9e-9
+REGRESS_PCA_SECONDS_PER_VALUE = 1e-9
 # PCA: copies of the n x variable-genes float32 matrix at its peak (the matrix and
 # scikit-learn's centred copy), bytes per cell x component (ARPACK's vectors, the
 # scores), and the variable genes' share of a sparse X's stored values relative to
@@ -1122,7 +1127,25 @@ def _step_scaling(s: _State, params) -> tuple[int, _State, float]:
         secs = 0.1 + s.n * k * SCALING_SECONDS_PER_VALUE
     s.raw = Matrix("raw/X", s.n, s.m, s.x.sparse, s.x.nnz, s.x.dtype, s.x.index_dtype)
     s.raw_is_x = True
+    keys = _regress_keys(params)
+    if keys:
+        # The fit and the residuals' statistics, a block of genes dense at a time
+        # (core/scaling.py), and the cell-cycle scores first when they are covariates.
+        p = len(keys) + 1
+        b = min(k, STAT_BLOCK)
+        t = max(t, s.n * b * 4 * 2 + _scaling.REGRESS_ROWS * b * 8 + s.n * p * 8)
+        secs += s.n * k * REGRESS_SECONDS_PER_VALUE
+        if set(keys) & set(_scaling.CELL_CYCLE_COVARIATES):
+            t2, s, secs2 = _step_scores(s, params)
+            t, secs = max(t, t2), secs + secs2
     return t, s, secs
+
+
+def _regress_keys(params) -> list[str]:
+    try:
+        return _scaling.check_regress_out(_p(params, "regress_out", []))
+    except ValueError:
+        return []
 
 
 def _step_pca(s: _State, params) -> tuple[int, _State, float]:
@@ -1136,7 +1159,12 @@ def _step_pca(s: _State, params) -> tuple[int, _State, float]:
         if s.x is not None and s.x.sparse else 0
     t = max(cut + dense, int(PCA_DENSE_COPIES * dense)) + s.n * n_comps * PCA_BYTES_PER_COMP
     s.other += s.n * n_comps * 4 + s.m * n_comps * 8
-    return t, s, 2.0 + s.n * k * PCA_SECONDS_PER_VALUE
+    secs = 2.0 + s.n * k * PCA_SECONDS_PER_VALUE
+    keys = _regress_keys(params)
+    if keys:  # the fit taken off the matrix, a block of cells at a time
+        t += s.n * (len(keys) + 1) * 8 + _scaling.REGRESS_ROWS * k * 8
+        secs += s.n * k * (len(keys) + 1) * REGRESS_PCA_SECONDS_PER_VALUE
+    return t, s, secs
 
 
 def _step_neighbors(s: _State, params) -> tuple[int, _State, float]:
@@ -1615,11 +1643,22 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
         t, secs = _chunk_pass(sh, params), _pass_secs(sh, 2 if two else 1)
     elif step == "scaling":
         t, secs = _chunk_pass(sh, params), _pass_secs(sh)
+        keys = _regress_keys(params)
+        if keys:  # two passes (the fit, the residuals' statistics) for the plain one
+            t += n * (len(keys) + 1) * 8
+            secs = _pass_secs(sh, 2)
+            if set(keys) & set(_scaling.CELL_CYCLE_COVARIATES):
+                t2, held, secs2 = chunked_step("cell_cycle", sh, params)
+                t, secs = max(t, t2), secs + secs2
     elif step == "pca":
         k = min(m, int(_p(params, "n_top_genes", 2000)))
         c = int(_p(params, "n_comps", 50))
         t = _chunk_pass(sh, params) + k * k * 8 * 4 + n * c * 4 * 2
         secs, held = _pass_secs(sh, 2) + 2e-9 * n * k * k / 50, n * c * 4 + m * c * 8
+        keys = _regress_keys(params)
+        if keys:
+            t += n * (len(keys) + 1) * 8
+            secs += 2 * n * k * (len(keys) + 1) * REGRESS_PCA_SECONDS_PER_VALUE
     elif step == "neighbors":
         t, held = n * CHUNKED_NEIGHBORS_PER_CELL, n * CHUNKED_GRAPH_PER_CELL
         secs = _STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2]

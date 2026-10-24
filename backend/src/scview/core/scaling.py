@@ -18,6 +18,12 @@ read. Now:
   genes only, for the length of the step) and stores ``X_pca``, ``uns["pca"]`` and
   ``varm["PCs"]`` (zero rows for genes left out) as ``sc.tl.pca`` with the mask wrote them.
   A chunked build would replace ``pca_matrix`` and nothing else.
+- Regress-out (``regress_out``: obs columns, empty = off; ``sc.pp.regress_out``) fits each
+  planned gene's log values on the covariates by least squares at the scaling step and
+  keeps the coefficients in ``varm[REGRESS_KEY]`` (intercept first; NaN rows for genes left
+  out). ``var["mean"]`` and ``var["std"]`` are then those of the residuals, and the PCA
+  step z-scores the residuals: "copy of the variable genes -> ``sc.pp.regress_out`` ->
+  ``sc.pp.scale``" to float precision. X itself is never regressed.
 - PCA with no plan (scaling skipped, or a dataset an older scView processed, whose X
   already holds the z-scores or residuals of every gene) runs ``sc.tl.pca`` on X as before.
 
@@ -44,6 +50,12 @@ PEARSON = "pearson_residuals"
 MAX_VALUE = 10.0  # z-scores are clipped to +-10, as sc.pp.scale(max_value=10)
 STAT_BLOCK = 256  # genes per block while the means and standard deviations are worked out
 MEAN, STD = "mean", "std"  # var columns, as sc.pp.scale names them
+REGRESS_KEY = "scview_regress_coef"  # varm: per gene, the fit on the covariates (intercept first)
+REGRESS_ROWS = 1024  # cells per block while the fitted values are taken off
+# S - G2M (Seurat's CC.Difference): regressing it keeps cycling cells apart from resting
+# ones and removes only the differences between the cycling phases.
+CC_DIFFERENCE = "cc_difference"
+CELL_CYCLE_COVARIATES = ("S_score", "G2M_score", CC_DIFFERENCE)
 
 
 def read_plan(adata) -> dict[str, Any] | None:
@@ -55,6 +67,88 @@ def read_plan(adata) -> dict[str, Any] | None:
 def drop_plan(adata) -> None:
     """Forget the plan: X changed, so its statistics no longer describe it."""
     adata.uns.pop(PLAN_KEY, None)
+    adata.varm.pop(REGRESS_KEY, None)
+
+
+def check_regress_out(value: Any) -> list[str]:
+    """``PipelineParams.regress_out`` as a list of distinct column names (None or "" = [])."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)) or not all(isinstance(v, str) for v in value):
+        raise ValueError("regress_out must be a list of obs column names.")
+    return list(dict.fromkeys(v.strip() for v in value if v.strip()))
+
+
+def covariates(obs, keys: list[str]) -> np.ndarray:
+    """The regressors ``sc.pp.regress_out`` builds from ``obs[keys]``: a column of ones,
+    then each column (float64). A ValueError in plain words for a column that is missing,
+    not numeric, or has missing values."""
+    import pandas as pd
+
+    cols = [np.ones(len(obs))]
+    for k in keys:
+        if k not in obs.columns:
+            raise ValueError(f"Regress-out: there is no column '{k}' in the cell annotations.")
+        v = obs[k]
+        if isinstance(v.dtype, pd.CategoricalDtype) or not pd.api.types.is_numeric_dtype(v):
+            raise ValueError(f"Regress-out: '{k}' is not a number per cell; choose numeric columns.")
+        x = np.asarray(v.to_numpy(), dtype=np.float64)
+        if not np.isfinite(x).all():
+            raise ValueError(f"Regress-out: '{k}' has missing values for some cells.")
+        cols.append(x)
+    return np.column_stack(cols)
+
+
+def _inverse_gram(C: np.ndarray) -> np.ndarray:
+    """``inv(C.T @ C)`` as scanpy's ``numpy_regress_out``; a pseudo-inverse when the
+    covariates are collinear (scanpy fits a GLM per gene for an exactly singular design:
+    the same residuals; for a nearly singular one its inverse is noise, so the
+    pseudo-inverse is taken from a condition number of 1e12)."""
+    G = C.T @ C
+    if np.linalg.det(G) != 0 and np.linalg.cond(G) < 1e12:
+        return np.linalg.inv(G)
+    logger.info("Regress-out: the covariates are collinear; least squares by pseudo-inverse")
+    return np.linalg.pinv(G)
+
+
+def regression_coef(X, idx: np.ndarray, C: np.ndarray) -> np.ndarray:
+    """Least-squares coefficients (covariates x genes, float64) of X's columns ``idx``
+    (as float32: the values regress_out reads) on the regressors C, by blocks of genes."""
+    inv = _inverse_gram(C)
+    out = np.empty((C.shape[1], idx.size))
+    for j0 in range(0, idx.size, STAT_BLOCK):
+        cols = idx[j0:j0 + STAT_BLOCK]
+        M = X[:, cols]
+        if sp.issparse(M):
+            CtX = np.asarray((M.astype(np.float32, copy=False).T @ C).T)
+        else:
+            CtX = C.T @ np.asarray(M, dtype=np.float32)
+        out[:, j0:j0 + cols.size] = inv @ CtX
+    return out
+
+
+def remove_fit(M: np.ndarray, C: np.ndarray, B: np.ndarray) -> None:
+    """Take the fitted values ``C @ B`` off the float32 matrix M in place, as scanpy's
+    ``get_resid`` (``data[i] -= regressor[i] @ coeff``: float64, stored float32), a block
+    of cells at a time."""
+    for r0 in range(0, M.shape[0], REGRESS_ROWS):
+        M[r0:r0 + REGRESS_ROWS] -= C[r0:r0 + REGRESS_ROWS] @ B
+
+
+def residual_stats(X, idx: np.ndarray, C: np.ndarray, B: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``_mean_std`` of the residuals of X's columns ``idx``, ``STAT_BLOCK`` genes at a time."""
+    means, stds = [], []
+    for j0 in range(0, idx.size, STAT_BLOCK):
+        M = _dense(X, idx[j0:j0 + STAT_BLOCK], "C")
+        remove_fit(M, C, B[:, j0:j0 + STAT_BLOCK])
+        m, s = _mean_std(M)
+        means.append(m)
+        stds.append(s)
+    if not means:
+        return np.zeros(0), np.zeros(0)
+    return np.concatenate(means), np.concatenate(stds)
 
 
 def gene_mask(adata) -> np.ndarray | None:
@@ -153,22 +247,68 @@ def gene_stats(X, idx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.concatenate(means), np.concatenate(stds)
 
 
-def plan_zscores(adata, max_value: float = MAX_VALUE, stats=None) -> dict[str, Any]:
+def plan_zscores(adata, max_value: float = MAX_VALUE, stats=None,
+                 regress_out: list[str] | None = None, regress=None) -> dict[str, Any]:
     """Record z-scores of X (log-normalised) for the genes PCA reads, with each one's
     mean and standard deviation in var; returns what to record in provenance.
     ``stats(idx) -> (mean, std)`` works them out instead of ``gene_stats`` on X (the
-    large-dataset run's, by row blocks from disk)."""
+    large-dataset run's, by row blocks from disk). ``regress_out``: obs columns whose
+    least-squares fit is taken off first (the statistics are then the residuals');
+    ``regress(idx, C) -> (coef, mean, std)`` fits them instead of X in memory."""
     mask = gene_mask(adata)
     idx = np.arange(adata.n_vars) if mask is None else np.flatnonzero(mask)
-    mean, std = gene_stats(adata.X, idx) if stats is None else stats(idx)
+    keys = check_regress_out(regress_out)
+    adata.varm.pop(REGRESS_KEY, None)
+    if keys:
+        C = covariates(adata.obs, keys)
+        if regress is None:
+            B = regression_coef(adata.X, idx, C)
+            mean, std = residual_stats(adata.X, idx, C, B)
+        else:
+            B, mean, std = regress(idx, C)
+        full = np.full((adata.n_vars, B.shape[0]), np.nan)
+        full[idx] = B.T
+        adata.varm[REGRESS_KEY] = full
+    else:
+        mean, std = gene_stats(adata.X, idx) if stats is None else stats(idx)
     for col, values in ((MEAN, mean), (STD, std)):
         full = np.full(adata.n_vars, np.nan)
         full[idx] = values
         adata.var[col] = full
     genes = "all" if mask is None else "highly_variable"
     adata.uns[PLAN_KEY] = {"method": ZSCORE, "genes": genes, "max_value": float(max_value)}
-    logger.info("Scaling planned: z-scores of %d genes (%s), max_value=%g", idx.size, genes, max_value)
-    return {"scaled_genes": genes, "n_scaled_genes": int(idx.size), "max_value": float(max_value)}
+    if keys:
+        adata.uns[PLAN_KEY]["regress_out"] = keys
+    logger.info("Scaling planned: z-scores of %d genes (%s), max_value=%g%s", idx.size, genes,
+                max_value, f", {', '.join(keys)} regressed out" if keys else "")
+    found = {"scaled_genes": genes, "n_scaled_genes": int(idx.size), "max_value": float(max_value)}
+    return {**found, "regress_out": keys} if keys else found
+
+
+def plan_regress_out(plan: dict[str, Any] | None) -> list[str]:
+    """The covariates a plan regresses out ([]: none)."""
+    return check_regress_out((plan or {}).get("regress_out"))
+
+
+def plan_regression(adata, plan, cols: np.ndarray, fit=None):
+    """(regressors, coefficients of ``cols``, positions fitted now) of the plan's
+    regress-out, or None without one. Genes with no stored fit (variable since scaling)
+    are fitted now with ``fit(cols, C)`` (default ``regression_coef`` on X); their
+    statistics are then worked out on the residuals."""
+    keys = plan_regress_out(plan)
+    if not keys:
+        return None
+    C = covariates(adata.obs, keys)
+    stored = adata.varm[REGRESS_KEY] if REGRESS_KEY in adata.varm else None
+    if stored is not None and np.asarray(stored).shape[1] == C.shape[1]:
+        B = np.asarray(stored, dtype=np.float64)[cols].T.copy()
+    else:
+        B = np.full((C.shape[1], cols.size), np.nan)
+    unfit = np.flatnonzero(~np.isfinite(B).all(axis=0))
+    if unfit.size:
+        B[:, unfit] = (regression_coef(adata.X, cols[unfit], C) if fit is None
+                       else fit(cols[unfit], C))
+    return C, B, unfit
 
 
 def plan_residuals(adata, theta: float, clip: float, counts_source: str) -> dict[str, Any]:
@@ -211,12 +351,21 @@ def pca_matrix(adata, plan: dict[str, Any] | None = None) -> tuple[np.ndarray, n
     cols = np.arange(adata.n_vars) if idx is None else idx
     mean = _var_column(adata, MEAN, cols)
     std = _var_column(adata, STD, cols)
+    fit = plan_regression(adata, plan, cols)
     missing = np.flatnonzero(~np.isfinite(mean) | ~np.isfinite(std))
+    if fit is not None:
+        missing = np.union1d(missing, fit[2])
     if missing.size:
         logger.info("PCA: %d genes have no scaling statistics (variable since scaling): worked out now",
                     missing.size)
-        mean[missing], std[missing] = gene_stats(adata.X, cols[missing])
+        if fit is None:
+            mean[missing], std[missing] = gene_stats(adata.X, cols[missing])
+        else:
+            mean[missing], std[missing] = residual_stats(adata.X, cols[missing], fit[0],
+                                                         fit[1][:, missing])
     M = _dense(adata.X, idx, order)
+    if fit is not None:
+        remove_fit(M, fit[0], fit[1])
     _zscores_in_place(M, mean, std, float(plan.get("max_value", MAX_VALUE)))
     return M, mask
 

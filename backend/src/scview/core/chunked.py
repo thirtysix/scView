@@ -1051,19 +1051,22 @@ def _proj_block(b, transform: Callable, args: tuple, mean: np.ndarray, V: np.nda
     return ((Z - mean) @ V).astype(np.float32)
 
 
-def _pca_blocks(X: da.Array, transform: Callable, args: tuple, hvg: np.ndarray,
+def _pca_blocks(X: da.Array, transform: Callable, args: tuple | list, hvg: np.ndarray,
                 n_comps: int) -> dict:
     """PCA of the transformed variable-gene blocks: covariance by blocks, ``eigh``,
-    projection by blocks; laid out as ``sc.tl.pca`` stores it with a variable-gene mask."""
+    projection by blocks; laid out as ``sc.tl.pca`` stores it with a variable-gene mask.
+    ``args``: the transform's arguments after the block, or a list of them, one per block."""
     n = X.shape[0]
     k = int(hvg.sum())
     n_comps = int(min(n_comps, n - 1, k - 1))
     if n_comps < 1:
         raise ValueError(f"PCA needs at least 2 cells and 2 variable genes ({n} x {k})")
     nb = X.numblocks[0]
+    if not isinstance(args, list):
+        args = [args] * nb
     zz = np.zeros((k, k))
     z = np.zeros(k)
-    for r in _each_block(X, _cov_block, [transform] * nb, [args] * nb):
+    for r in _each_block(X, _cov_block, [transform] * nb, args):
         zz += r["zz"]
         z += r["z"]
     mean = z / n
@@ -1076,7 +1079,7 @@ def _pca_blocks(X: da.Array, transform: Callable, args: tuple, hvg: np.ndarray,
     signs = np.sign(V[np.argmax(np.abs(V), axis=0), np.arange(n_comps)])
     signs[signs == 0] = 1
     V = V * signs
-    X_pca = np.concatenate(list(_each_block(X, _proj_block, [transform] * nb, [args] * nb,
+    X_pca = np.concatenate(list(_each_block(X, _proj_block, [transform] * nb, args,
                                             [mean] * nb, [V] * nb)))
     pcs = np.zeros((len(hvg), n_comps))
     pcs[hvg] = V.astype(np.float32)
@@ -1103,8 +1106,73 @@ def scaled_stats(X: da.Array, cols) -> tuple[np.ndarray, np.ndarray]:
     return mean, std
 
 
+def _float32(X: da.Array) -> da.Array:
+    if X.dtype == np.float32:
+        return X
+    return X.map_blocks(_as_float32, dtype=np.float32, meta=_meta_like(X, np.float32))
+
+
+def _coef_block(b, Cb: np.ndarray, cols: np.ndarray) -> np.ndarray:
+    return Cb.T @ _dense_cols(b, cols)  # float64: covariates x genes
+
+
+def _regressed_block(b, Cb: np.ndarray, cols: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """These cells' columns ``cols`` (float32) less their fit on the covariates, as
+    ``sc.pp.regress_out`` leaves them (``scaling.remove_fit``)."""
+    from scview.core import scaling
+
+    Z = _dense_cols(b, cols)
+    scaling.remove_fit(Z, Cb, B)
+    return Z
+
+
+def _regressed_sums_block(b, Cb, cols, B) -> dict:
+    Z = _regressed_block(b, Cb, cols, B)
+    return {"s": Z.sum(axis=0, dtype=np.float64),
+            "q": np.multiply(Z, Z).sum(axis=0, dtype=np.float64)}
+
+
+def _regressed_scaled_block(b, Cb, cols, B, mean, std, max_value) -> np.ndarray:
+    Z = _regressed_block(b, Cb, cols, B)
+    Z -= mean
+    np.true_divide(Z, std, out=Z)
+    if max_value is not None:
+        np.clip(Z, -max_value, max_value, out=Z)
+    return Z
+
+
+def regression_coef(X: da.Array, cols, C: np.ndarray) -> np.ndarray:
+    """``scaling.regression_coef`` by row blocks: the covariates' cross-products with the
+    columns ``cols`` (as float32) summed over the blocks, then ``inv(C.T C) @`` them. One pass."""
+    from scview.core import scaling
+
+    X = _float32(X)
+    cols = np.asarray(cols, dtype=np.int64)
+    nb = X.numblocks[0]
+    CtX = np.zeros((C.shape[1], cols.size))
+    for r in _each_block(X, _coef_block, _row_slices(X, C), [cols] * nb):
+        CtX += r
+    return scaling._inverse_gram(C) @ CtX
+
+
+def regressed_stats(X: da.Array, cols, C: np.ndarray, B: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``scaling.residual_stats`` by row blocks (float64 sums of the float32 residuals and
+    their squares); one pass."""
+    from scview.core import scaling
+
+    X = _float32(X)
+    cols = np.asarray(cols, dtype=np.int64)
+    nb = X.numblocks[0]
+    s, q = np.zeros(cols.size), np.zeros(cols.size)
+    for r in _each_block(X, _regressed_sums_block, _row_slices(X, C), [cols] * nb, [B] * nb):
+        s += r["s"]
+        q += r["q"]
+    return scaling._finish(s, q, X.shape[0])
+
+
 def pca_scaled(X: da.Array, hvg, *, n_comps: int = 50, max_value: float | None = 10,
-               stats: tuple[np.ndarray, np.ndarray] | None = None) -> dict:
+               stats: tuple[np.ndarray, np.ndarray] | None = None,
+               regress: tuple[np.ndarray, np.ndarray] | None = None) -> dict:
     """PCA of the scaled variable genes, as "copy of the HVG columns (float32) ->
     ``sc.pp.scale(max_value=10)`` -> ``sc.tl.pca(svd_solver='arpack')``" (the same values
     as scaling every gene and masking: scaling is per gene).
@@ -1116,11 +1184,17 @@ def pca_scaled(X: da.Array, hvg, *, n_comps: int = 50, max_value: float | None =
     for other genes, float32 values), variance and variance_ratio (float32), params (as
     ``uns['pca']['params']``), n_comps = min(n_comps, cells - 1, variable genes - 1).
     ``stats``: the genes' (mean, sd) already worked out (``scaled_stats``, the scaling step's
-    plan); mean 0 and sd 1 with ``max_value=None`` is PCA of the unscaled values."""
+    plan); mean 0 and sd 1 with ``max_value=None`` is PCA of the unscaled values.
+    ``regress``: (regressors, coefficients of the variable genes) taken off before the
+    scaling (``sc.pp.regress_out``); ``stats`` are then the residuals'."""
     hvg = np.asarray(hvg, dtype=bool)
     cols = np.flatnonzero(hvg)
-    if X.dtype != np.float32:  # the copy is float32 before its mean and sd are taken
-        X = X.map_blocks(_as_float32, dtype=np.float32, meta=_meta_like(X, np.float32))
+    X = _float32(X)  # the copy is float32 before its mean and sd are taken
+    if regress is not None:
+        C, B = regress
+        mean, std = regressed_stats(X, cols, C, B) if stats is None else stats
+        args = [(Cb, cols, B, mean, std, max_value) for Cb in _row_slices(X, C)]
+        return _pca_blocks(X, _regressed_scaled_block, args, hvg, n_comps)
     mean, std = scaled_stats(X, cols) if stats is None else stats
     return _pca_blocks(X, _scaled_block, (cols, mean, std, max_value), hvg, n_comps)
 

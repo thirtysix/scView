@@ -92,6 +92,7 @@ from scview.core.pipeline import (
     _new_outcome,
     _record_errors,
     _record_pipeline_step,
+    _REGRESS_PEARSON,
     _skip_if_blocked,
     _step_failed,
     _STEP_RUNNERS,
@@ -103,6 +104,7 @@ from scview.core.pipeline import (
     filter_judgement,
     large_backend,
     looks_like_counts,
+    regress_covariates,
     resolve_umap_3d,
     run_pipeline,
     run_pipeline_streamed,
@@ -860,6 +862,9 @@ class LargeRun:
 
     def _scaling(self) -> dict[str, Any]:
         method = normalization.check_method(self.params.normalization_method)
+        keys = scaling.check_regress_out(self.params.regress_out)
+        if keys and method == "pearson_residuals":
+            raise ValueError(_REGRESS_PEARSON)
         self.write_matrices()
         light = self.light
         self._label = "Scaling statistics"
@@ -870,8 +875,20 @@ class LargeRun:
             return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source,
                     **found}
         X = self.lognorm()
-        return scaling.plan_zscores(light, max_value=scaling.MAX_VALUE,
-                                    stats=lambda idx: chunked.scaled_stats(X, idx))
+        scored = {}
+        if keys:
+            with large_backend(_Backend(self)):
+                scored = regress_covariates(light, self.params, keys)
+            self._label = "Regress-out"
+
+        def regress(idx, C):
+            B = chunked.regression_coef(X, idx, C)
+            return (B, *chunked.regressed_stats(X, idx, C, B))
+
+        found = scaling.plan_zscores(light, max_value=scaling.MAX_VALUE,
+                                     stats=lambda idx: chunked.scaled_stats(X, idx),
+                                     regress_out=keys, regress=regress)
+        return {**found, **scored}
 
     def _pca(self) -> dict[str, Any] | None:
         light, params = self.light, self.params
@@ -892,12 +909,19 @@ class LargeRun:
             X = self.lognorm()
             mean = scaling._var_column(light, scaling.MEAN, cols)
             std = scaling._var_column(light, scaling.STD, cols)
+            fit = scaling.plan_regression(light, plan, cols,
+                                          fit=lambda c, C: chunked.regression_coef(X, c, C))
             missing = np.flatnonzero(~np.isfinite(mean) | ~np.isfinite(std))
+            if fit is not None:
+                missing = np.union1d(missing, fit[2])
             if missing.size:  # variable since scaling: worked out now, as pca_matrix does
-                mean[missing], std[missing] = chunked.scaled_stats(X, cols[missing])
+                mean[missing], std[missing] = (
+                    chunked.scaled_stats(X, cols[missing]) if fit is None else
+                    chunked.regressed_stats(X, cols[missing], fit[0], fit[1][:, missing]))
             res = chunked.pca_scaled(X, hvg, n_comps=n_comps,
                                      max_value=float(plan.get("max_value", scaling.MAX_VALUE)),
-                                     stats=(mean, std))
+                                     stats=(mean, std),
+                                     regress=None if fit is None else fit[:2])
         else:  # sc.tl.pca on X as it is: centred, not scaled
             res = chunked.pca_scaled(self.lognorm(), hvg, n_comps=n_comps, max_value=None,
                                      stats=(np.zeros(cols.size), np.ones(cols.size)))

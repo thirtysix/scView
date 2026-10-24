@@ -58,7 +58,7 @@ FLAG_HELP = (
     "Mostly cycling cells: most of its cells have clear S or G2M cell-cycle scores, far "
     "more than in the typical cluster. The cell cycle may be what sets it apart: a cell type "
     "that divides, or a dividing state of another. If the cell cycle is not the biology of "
-    "interest, regress out the S and G2M scores before clustering."
+    "interest, regress out the S and G2M scores before clustering (Scaling step, Regress out)."
 )
 
 

@@ -893,6 +893,9 @@ def _scaling_details(params: dict, method: str | None) -> str | None:
         if genes == "highly_variable" else "every gene"
     made = ("analytic Pearson residuals of the counts" if method == "pearson_residuals"
             else "z-scores")
+    regressed = params.get("regress_out")
+    if isinstance(regressed, list) and regressed:
+        made += f" (after regressing out {', '.join(map(str, regressed))})"
     return f"PCA reads {made} of {which}; X keeps the log-normalised values"
 
 
