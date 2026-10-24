@@ -9,8 +9,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { apiFetch } from "@/api/client";
 import type { MarkersResponse } from "@/api/markers";
-import { getAmbient, type AmbientMarker, type AmbientResponse } from "@/api/ambient";
-import { flagIndex, flagTitle } from "@/lib/ambient";
+import { AmbientFlag, useAmbientFlags } from "@/components/common/AmbientFlag";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
 import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
@@ -59,21 +58,6 @@ export function followHighlight(
   return group ? { group } : null;
 }
 type SortDir = "asc" | "desc";
-
-/** A small "ambient" mark beside a marker gene whose signal outside its cluster looks
- *  like ambient RNA; the tooltip says why. */
-function AmbientFlag({ flag, group, approximate }: { flag?: AmbientMarker; group: string; approximate: boolean }) {
-  if (!flag) return null;
-  return (
-    <span
-      title={flagTitle(flag, group, approximate)}
-      data-testid="ambient-marker-flag"
-      className="rounded border border-sky-100 bg-sky-50 px-1 text-[9px] font-medium leading-4 text-sky-700"
-    >
-      ambient{approximate ? "?" : ""}
-    </span>
-  );
-}
 
 interface UnifiedMarkersSubtabProps {
   onGeneClick: (gene: string) => void;
@@ -162,26 +146,7 @@ export function UnifiedMarkersSubtab({
     };
   }, [datasetId, groupByColumn, revision]);
 
-  // The column's ambient-looking top markers (backend core/ambient.py), flagged in the
-  // table. Optional: no flags when they can't be worked out (a large dataset, no counts).
-  const [ambient, setAmbient] = useState<AmbientResponse | null>(null);
-  useEffect(() => {
-    setAmbient(null);
-    if (!datasetId || !markersData) return;
-    let cancelled = false;
-    getAmbient(datasetId, groupByColumn || undefined)
-      .then((d) => {
-        if (!cancelled) setAmbient(d ?? null);
-      })
-      .catch(() => {
-        /* no flags */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [datasetId, groupByColumn, markersData]);
-  const ambientFlags = useMemo(() => flagIndex(ambient), [ambient]);
-  const ambientApprox = ambient?.markers?.approximate ?? false;
+  const { flags: ambientFlags, approximate: ambientApprox } = useAmbientFlags(datasetId, groupByColumn, markersData);
 
   // A group clicked in the legend, the cluster map or an Observations row (or
   // highlighted by the co-pilot) opens its markers, switching to its column when
