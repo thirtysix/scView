@@ -138,9 +138,13 @@ class Outcome:
 
     def record(self) -> dict[str, Any]:
         """The run's outcome as provenance records it (``run_errors``)."""
-        return {"status": FINISHED_WITH_ERRORS, "failed": dict(self.failed),
-                "skipped": dict(self.skipped), "stale": list(self.stale_steps),
-                "cleared": {k: list(v) for k, v in self.cleared.items() if v}}
+        out: dict[str, Any] = {"status": FINISHED_WITH_ERRORS, "failed": dict(self.failed)}
+        cleared = {k: list(v) for k, v in self.cleared.items() if v}
+        for key, value in (("skipped", dict(self.skipped)), ("stale", list(self.stale_steps)),
+                           ("cleared", cleared)):
+            if value:  # left out when empty: nothing to say in the History
+                out[key] = value
+        return out
 
 
 def skip_reason(step: str, because: str) -> str:

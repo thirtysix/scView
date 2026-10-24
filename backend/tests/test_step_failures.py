@@ -155,6 +155,9 @@ def test_a_failed_batch_correction_is_tolerated(monkeypatch):
     assert res.steps_run[-2:] == ["neighbors", "clustering"]
     assert "X_pca_harmony" not in out.obsm
     assert out.uns["neighbors"]["params"]["use_rep"] == "X_pca"
+    # Nothing was skipped or removed: the History says only what failed
+    rec = provenance.read_provenance(out)["history"][-1]["params"]
+    assert rec["failed"] == res.errors and "skipped" not in rec and "cleared" not in rec
 
 
 def test_a_failed_reclustering_alone_keeps_the_clustering_there_was(monkeypatch):

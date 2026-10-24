@@ -798,7 +798,8 @@ export function DataAssessmentPanel() {
               else setSlowNote(w);
             } else if (currentEvent === "step_done") {
               setCompletedRunSteps((prev) => new Set(prev).add(data.step));
-              setRunProgress({ current: data.index + 1, total: data.total });
+              // step_done carries no total: keep step_start's (else the bar lost its segments)
+              setRunProgress((p) => ({ current: data.index + 1, total: data.total ?? p?.total ?? data.index + 1 }));
               setSubstep(null);
             } else if (currentEvent === "substep") {
               setSubstep({ message: data.message, current: data.current, total: data.total });
@@ -1239,7 +1240,7 @@ export function DataAssessmentPanel() {
           {runResult && withErrors && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" data-testid="run-with-errors">
               <p className="font-medium">Pipeline finished with errors in {runResult.elapsed_seconds}s</p>
-              <RunPeakMemory result={runResult} />
+              <RunPeakMemory result={runResult} tone="text-amber-700" />
               <p className="mt-1">
                 {runResult.steps_run.length > 0
                   ? `Steps run and saved: ${runResult.steps_run.map(stepLabel).join(", ")}.`

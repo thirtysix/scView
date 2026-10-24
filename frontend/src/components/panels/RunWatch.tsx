@@ -103,12 +103,12 @@ export function RunErrors({ result, label }: { result: RunOutcomeFields; label: 
 }
 
 /** The peak memory line under a completed run, from the watchdog's samples. */
-export function RunPeakMemory({ result }: { result: RunOutcomeFields }) {
+export function RunPeakMemory({ result, tone = "text-emerald-700" }: { result: RunOutcomeFields; tone?: string }) {
   const peak = peakMemoryText(result.resources);
   if (!peak) return null;
   return (
     <p
-      className="mt-1 text-xs text-emerald-700"
+      className={`mt-1 text-xs ${tone}`}
       title="The most memory the run was seen using (without the file cache the system can drop). Samples are seconds apart, so a shorter spike can be missed."
     >
       {peak}

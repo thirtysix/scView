@@ -181,6 +181,17 @@ describe("DataAssessmentPanel run progress: watchdog, Cancel, outcome", () => {
     expect(screen.getByTitle("Doublet Detection: skipped (needs a step that failed)")).toBeTruthy();
   });
 
+  it("keeps the step count after the last step: step_done carries no total", async () => {
+    await startRun();
+    stream.send("step_start", { step: "qc_metrics", index: 0, total: 2 });
+    stream.send("step_done", { step: "qc_metrics", index: 0, elapsed: 1 });
+    stream.send("step_start", { step: "doublet_detection", index: 1, total: 2 });
+    stream.send("step_done", { step: "doublet_detection", index: 1, elapsed: 1 });
+    stream.send("complete", { ...RESULT, steps_run: ["qc_metrics", "doublet_detection"], status: "complete" });
+    stream.close();
+    expect(await screen.findByText("All 2 steps complete")).toBeTruthy();
+  });
+
   it("shows a refused run's reason through readError, not its JSON", async () => {
     const detail = "Unknown pipeline step 'umap' (did you mean 'embeddings'?). Valid steps: qc_metrics, embeddings.";
     fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ detail }), { status: 422 }));
