@@ -20,6 +20,7 @@ from scview.api.v1 import (
     clustering,
     assistant,
     export,
+    export_formats,
     ingest,
     integration,
     cells,
@@ -58,6 +59,7 @@ api_router.include_router(labels.router, tags=["labels"])
 api_router.include_router(clustering.router, tags=["clustering"])
 api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(export.router, tags=["export"])
+api_router.include_router(export_formats.router, tags=["export"])
 api_router.include_router(ingest.router, tags=["ingest"])
 api_router.include_router(integration.router, tags=["integration"])
 api_router.include_router(normalization.router, tags=["assessment"])
