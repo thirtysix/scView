@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-10-24
+
 ### Changed
 - **3D UMAP is opt-in for large datasets.** The UMAP step's new `umap_3d` setting (Automatic | On
   | Off): Automatic makes the 3D UMAP in memory, as before, and leaves it out in large-dataset
