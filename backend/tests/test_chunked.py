@@ -479,6 +479,60 @@ def test_pca_scaled_equals_scale_then_arpack(processed):
     _check_pca(got, ref, Z, hvg, 30)
 
 
+def test_pca_scaled_with_given_statistics(processed):
+    m, a, L = processed
+    hvg = sc.pp.highly_variable_genes(a, n_top_genes=150, flavor="seurat",
+                                      inplace=False)["highly_variable"].to_numpy()
+    cols = np.flatnonzero(hvg)
+    stats = chunked.scaled_stats(L, cols)
+    want = _dense(a.X[:, hvg]).astype(np.float32)
+    np.testing.assert_allclose(stats[0], want.mean(axis=0, dtype=np.float64), rtol=1e-12)
+    got = chunked.pca_scaled(L, hvg, n_comps=20, stats=stats)
+    base = chunked.pca_scaled(L, hvg, n_comps=20)
+    np.testing.assert_array_equal(got["X_pca"], base["X_pca"])
+    # mean 0, sd 1, no clip: PCA of the values as they are (sc.tl.pca without scaling)
+    raw = chunked.pca_scaled(L, hvg, n_comps=20, max_value=None,
+                             stats=(np.zeros(cols.size), np.ones(cols.size)))
+    _check_pca(raw, _scanpy_pca(want, 20, scale=False), want, hvg, 20)
+
+
+def test_block_hook_sees_every_batch_and_can_stop_a_pass(processed):
+    m, _, _ = processed
+    seen = []
+    with chunked.on_blocks(lambda done, total: seen.append((done, total))):
+        chunked.gene_detection(m.X)
+    nb = m.X.numblocks[0]
+    assert seen[-1] == (nb, nb) and seen[0] == (0, nb)
+
+    class Stop(Exception):
+        pass
+
+    def stop(done, total):
+        if done:
+            raise Stop
+
+    with chunked.on_blocks(stop), pytest.raises(Stop):
+        chunked.gene_detection(m.X)
+    chunked.gene_detection(m.X)  # the hook ends with its block
+
+
+def test_csr_appender_writes_blocks_and_an_empty_matrix(tmp_path):
+    rng = np.random.default_rng(1)
+    blocks = [sp.random(n, 30, density=0.2, format="csr", dtype=np.float32, random_state=rng)
+              for n in (7, 0, 5)]
+    with h5py.File(tmp_path / "m.h5", "w") as f:
+        out = chunked.CsrAppender(f, "M")
+        for b in blocks:
+            out.add(b)
+        out.finish(30, np.float32)
+        empty = chunked.CsrAppender(f, "E")
+        empty.finish(30, np.float32)
+    with h5py.File(tmp_path / "m.h5", "r") as f:
+        got = ad.io.read_elem(f["M"])
+        assert ad.io.read_elem(f["E"]).shape == (0, 30)
+    np.testing.assert_array_equal(got.toarray(), sp.vstack(blocks).toarray())
+
+
 def test_pca_scaled_equals_todays_scale_all_then_mask(processed):
     """Scaling every gene and masking gives the same PCA (scaling is per gene)."""
     m, a, L = processed

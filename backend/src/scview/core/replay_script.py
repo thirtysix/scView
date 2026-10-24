@@ -1931,6 +1931,9 @@ def build_script(adata, *, dataset_id: str = "", dataset_name: str = "",
                     f"({comment_text(h.get('tool') or '', 80)}) ---")
         body.append(f"# Ran {when} in scView {ver}; replay: {snip.status}"
                     + (f" ({comment_text(snip.note, 120)})" if snip.note else ""))
+        if (h.get("params") or {}).get("chunked") is True:
+            body.append("# scView ran it in large-dataset mode (matrices on disk, in row blocks): the "
+                        "same results; this script runs it in memory.")
         effect = h.get("effect") if isinstance(h.get("effect"), dict) else {}
         if effect.get("n_cells") is not None:
             body.append(f"# scView had {comment_text(effect.get('n_cells'), 20)} cells x "
@@ -1965,6 +1968,15 @@ def build_script(adata, *, dataset_id: str = "", dataset_name: str = "",
         if steps else "# No steps are recorded for this dataset.",
         "# PCA, UMAP, Harmony and the neighbour graph are seeded, but thread count and BLAS",
         "# can move their last digits, and with them a few cells' clusters.",
+    ]
+    n_chunked = sum(1 for h in steps if (h.get("params") or {}).get("chunked") is True)
+    if n_chunked:
+        header += [
+            f"# scView ran {n_chunked} of these steps in large-dataset mode: the matrices stayed",
+            "# on disk and were read in row blocks (the same results; scaling and PCA to float",
+            "# precision). Run in memory, this script needs the memory the dataset would take.",
+        ]
+    header += [
         "",
         "import sys",
         "",

@@ -16,7 +16,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from scview.core import provenance, replay_script
+from scview.core import large_layout, provenance, replay_script
 
 MANIFEST_VERSION = 1
 
@@ -115,6 +115,9 @@ def build_manifest(adata, *, dataset_id: str, dataset_name: str,
             "n_genes": int(adata.n_vars),
             "layers": layers,
             "raw": getattr(adata, "raw", None) is not None,
+            # processed in large-dataset mode: X log-normalised, counts and gene store in
+            # sidecars (core/large_layout.py)
+            "large": large_layout.is_large(adata),
             "embeddings": sorted(k for k in getattr(adata, "obsm", {}).keys()),
             "active_clustering": _str_or_none(adata.uns.get("scview_active_clustering")),
         },

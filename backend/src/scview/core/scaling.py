@@ -153,12 +153,14 @@ def gene_stats(X, idx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.concatenate(means), np.concatenate(stds)
 
 
-def plan_zscores(adata, max_value: float = MAX_VALUE) -> dict[str, Any]:
+def plan_zscores(adata, max_value: float = MAX_VALUE, stats=None) -> dict[str, Any]:
     """Record z-scores of X (log-normalised) for the genes PCA reads, with each one's
-    mean and standard deviation in var; returns what to record in provenance."""
+    mean and standard deviation in var; returns what to record in provenance.
+    ``stats(idx) -> (mean, std)`` works them out instead of ``gene_stats`` on X (the
+    large-dataset run's, by row blocks from disk)."""
     mask = gene_mask(adata)
     idx = np.arange(adata.n_vars) if mask is None else np.flatnonzero(mask)
-    mean, std = gene_stats(adata.X, idx)
+    mean, std = gene_stats(adata.X, idx) if stats is None else stats(idx)
     for col, values in ((MEAN, mean), (STD, std)):
         full = np.full(adata.n_vars, np.nan)
         full[idx] = values
