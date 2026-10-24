@@ -11,6 +11,10 @@ tests/fixtures/sparse_markers; small ``max_entries`` split the genes into many b
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
@@ -239,3 +243,41 @@ def test_scanpy_runs_what_the_blocks_path_does_not(monkeypatch):
         rank_genes.rank_genes_groups(a, col, method="wilcoxon", reference="nope")
     with pytest.raises(IndexError):
         rank_genes.rank_genes_groups(a, col, method="wilcoxon", groups=["nope"])
+
+
+# The full datasets, when present (not in the repo): SCVIEW_TESTDATA=<dir with
+# kang2018_ifnb_pbmc.h5ad and paul15.h5ad>.
+_DATA = Path(os.environ.get("SCVIEW_TESTDATA", "/nonexistent"))
+
+
+def _full(name):
+    if name == "kang":
+        k = ad.read_h5ad(_DATA / "kang2018_ifnb_pbmc.h5ad")
+        a = ad.AnnData(sp.csr_matrix(k.raw.X, dtype=np.float32), obs=k.obs.copy(),
+                       var=k.raw.var.copy())
+        col = "cluster"
+    else:
+        p = ad.read_h5ad(_DATA / "paul15.h5ad")
+        a = ad.AnnData(np.asarray(p.X, dtype=np.float32), obs=p.obs.copy(), var=p.var.copy())
+        col = "paul15_clusters"
+    sc.pp.normalize_total(a, target_sum=1e4)
+    sc.pp.log1p(a)
+    a.obs[col] = a.obs[col].astype(str).astype("category")
+    return a, col
+
+
+@pytest.mark.parametrize("name", ["kang", "paul15"])
+def test_full_datasets(no_scanpy, name):
+    file = "kang2018_ifnb_pbmc.h5ad" if name == "kang" else "paul15.h5ad"
+    if not (_DATA / file).exists():
+        pytest.skip(f"full {name} absent")
+    a, col = _full(name)
+    cats = list(a.obs[col].cat.categories)
+    for kw in ({"method": "wilcoxon", "pts": True}, {"method": "t-test", "pts": True},
+               {"method": "wilcoxon", "groups": [cats[0]], "reference": cats[2]}):
+        sc.tl.rank_genes_groups(a, col, key_added="ref", **kw)
+        with no_scanpy:
+            assert rank_genes.rank_genes_groups(a, col, key_added="got", **kw) == rank_genes.SPARSE
+        ref, got = a.uns.pop("ref"), a.uns.pop("got")
+        _assert_structure(ref, got)
+        _assert_exact(ref, got, ALL_FIELDS)
