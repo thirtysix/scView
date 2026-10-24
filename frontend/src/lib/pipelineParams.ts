@@ -37,6 +37,8 @@ export function flattenStepParams(steps: string[], stepParams: StepParams): Reco
     const value = stepParams[home]?.[param];
     if (value !== undefined) flat[param] = value;
   }
+  // Regress-out works on the log values only; its checkboxes are off with Pearson residuals.
+  if (flat.normalization_method === "pearson_residuals") delete flat.regress_out;
   return Object.keys(flat).length > 0 ? flat : null;
 }
 

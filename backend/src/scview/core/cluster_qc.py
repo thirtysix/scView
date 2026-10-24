@@ -564,7 +564,8 @@ def _flag(row: ClusterQC, z: dict[str, float], typical: dict[str, float], small_
             f"Mostly cycling cells: {cyc:.0%} have a clear S or G2M score (above "
             f"{cell_cycle.NEAR_ZERO_MARGIN:g}) vs {t_cyc:.0%} in a typical cluster. The cell cycle "
             "may be what sets it apart (a dividing cell type, or a dividing state of another); "
-            "regress out the S and G2M scores if that is not the biology of interest."
+            "regress out the S and G2M scores if that is not the biology of interest (Scaling "
+            "step, Regress out; S - G2M keeps dividing cells apart from resting ones)."
         )
 
     if row.n_cells < small_cut:

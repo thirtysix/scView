@@ -5,9 +5,10 @@
 ``t-test_overestim_var``; each group against the rest, a subset of groups, or a
 reference group) and the matrix is in memory as float32 or float64 (CSR, CSC or
 dense), the matrix is read by blocks of genes (``core/matrix_genes.py``) and only its
-stored values are sorted. Anything else (logistic regression, tie correction,
-``mask_var``, a matrix on disk, integer values, stored duplicates, a group that is not a
-category) runs scanpy's own, which also raises scanpy's errors.
+stored values are sorted; ``mask_var`` (one boolean per gene, or a var column) cuts each
+block to its genes (``GeneSubset``), with no copy of them. Anything else (logistic
+regression, tie correction, a matrix on disk, integer values, stored duplicates, a group
+that is not a category) runs scanpy's own, which also raises scanpy's errors.
 
 Equal to scanpy 1.11: names in order, scores, p-values, adjusted p-values and pts bit
 for bit (rank sums are exact). Means and variances, so fold changes and the t-test, are
@@ -46,6 +47,26 @@ def _matrix(adata: Any, use_raw: bool, layer: str | None) -> tuple[Any, Any]:
     return adata.X, adata.var_names
 
 
+def _gene_mask(adata: Any, mask_var: Any, use_raw: bool | None, layer: str | None):
+    """``mask_var`` as one boolean per gene of the ranked matrix, or None: a var column
+    name (of X's genes) or a boolean array, as scanpy takes it."""
+    import numpy as np
+
+    if use_raw is None:
+        use_raw = adata.raw is not None
+    if isinstance(mask_var, str):
+        if use_raw or mask_var not in adata.var.columns:
+            return None
+        mask_var = adata.var[mask_var].to_numpy()
+    mask = np.asarray(mask_var)
+    if mask.dtype != bool:
+        return None
+    if (use_raw and adata.raw is None) or (layer is not None and layer not in adata.layers):
+        return None
+    _, names = _matrix(adata, use_raw, layer)
+    return mask if mask.shape == (len(names),) else None
+
+
 def unsupported(adata: Any, groupby: str, *, method: str = "wilcoxon", groups: Any = "all",
                 reference: str = "rest", use_raw: bool | None = None, layer: str | None = None,
                 corr_method: str = "benjamini-hochberg", n_genes: int | None = None,
@@ -55,8 +76,8 @@ def unsupported(adata: Any, groupby: str, *, method: str = "wilcoxon", groups: A
         return f"method {method!r}"
     if tie_correct:
         return "tie correction"
-    if mask_var is not None:
-        return "a gene mask"
+    if mask_var is not None and _gene_mask(adata, mask_var, use_raw, layer) is None:
+        return "a gene mask that is not one boolean per gene"
     if kwds:
         return f"arguments {sorted(kwds)}"
     if corr_method not in ("benjamini-hochberg", "bonferroni"):
@@ -131,13 +152,16 @@ def rank_genes_groups(
         source = matrix_genes.MatrixGenes(matrix, var_names)
         if max_entries is None:
             max_entries = matrix_genes.block_entries(source.nnz)
+        mask = None if mask_var is None else _gene_mask(adata, mask_var, use_raw, layer)
+        if mask is not None:  # the kept genes, cut from each block: no copy of them
+            source = matrix_genes.GeneSubset(source, mask)
         try:
             sparse_markers.rank_genes_groups(
                 adata, groupby, source, method=method,
                 groups=groups, reference=reference, pts=pts, use_raw=use_raw, layer=layer,
                 key_added=key_added, corr_method=corr_method, n_genes=n_genes,
                 rankby_abs=rankby_abs, specificity=specificity, check_store=False,
-                max_entries=max_entries, progress=progress)
+                max_entries=max_entries, progress=progress, mask_var=mask)
             return SPARSE
         except matrix_genes.DuplicateEntries as exc:  # found while reading; nothing written
             reason = str(exc)

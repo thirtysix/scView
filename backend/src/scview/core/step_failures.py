@@ -247,6 +247,39 @@ def clear_outputs(adata, step: str, outcome: Outcome) -> dict[str, list[str]]:
     return out
 
 
+def settle_unrun(adata, outcome: Outcome) -> None:
+    """At the end of a run: markers left for the clustering column the run wrote again.
+
+    A clustering on a new graph (a step it needs ran too) writes its column again
+    (``scview_leiden_r0.5``), and when the marker step was not in the run, an earlier
+    run's markers and enrichment for that column stayed attached to the new labels.
+    They are removed as stale, as ``settle`` removes a failed step's. A re-clustering
+    of the same graph gives the same labels, so its markers stay."""
+    if "clustering" not in outcome.succeeded or "marker_genes" in outcome.order:
+        return
+    if not needs("clustering", outcome.params) & set(outcome.succeeded):
+        return
+    col = adata.uns.get("scview_active_clustering")
+    if not isinstance(col, str):
+        return
+    out: dict[str, list[str]] = {}
+    keys = _column_results(adata, [col])
+    rgg = adata.uns.get("rank_genes_groups")
+    if isinstance(rgg, dict) and (rgg.get("params") or {}).get("groupby") == col:
+        keys.append("rank_genes_groups")
+    _drop(adata, out, "uns", keys)
+    removed = out.get("uns", [])
+    if not removed:
+        return
+    if markers_key(col) in removed or "rank_genes_groups" in removed:
+        outcome.stale_steps.append("marker_genes")
+    if any(k.startswith((enrichment_prefix(col), meta_prefix(col))) for k in removed) \
+            and "enrichment" not in outcome.order:
+        outcome.stale_steps.append("enrichment")
+    bucket = outcome.cleared.setdefault("uns", [])
+    bucket.extend(k for k in removed if k not in bucket)
+
+
 def settle(adata, step: str, outcome: Outcome) -> None:
     """After ``step`` failed or was skipped: remove its stale results (``stale``); the step
     is then no longer done (``stale_steps``: the assessment reads it from provenance)."""

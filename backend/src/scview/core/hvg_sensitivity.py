@@ -158,6 +158,8 @@ class Recorded:
     # Leiden's passes the reference was made with (-1: until none improves; 2: fast Leiden),
     # which every re-run uses, so the control reproduces the reference
     leiden_iterations: int = -1
+    # obs columns the scaling step regressed out of the variable genes (core/scaling.py)
+    regress_out: list[str] = field(default_factory=list)
 
     @property
     def current(self) -> Setting:
@@ -310,7 +312,24 @@ def recorded(adata, reference: str | None = None) -> Recorded:
         pcs_made_by=made_by, pcs_made_on=(made.get("timestamp") or "")[:10] or None,
         pcs_older=_older_than_this(made_by),
         leiden_iterations=leiden.recorded_iterations(adata, reference),
+        regress_out=_recorded_regress_out(adata, history, notes),
     )
+
+
+def _recorded_regress_out(adata, history: list[dict], notes: list[str]) -> list[str]:
+    """The covariates the last scaling step regressed out, when they are still there."""
+    from scview.core import scaling
+
+    try:
+        keys = scaling.check_regress_out((_last_params(history, "scaling") or {}).get("regress_out"))
+    except ValueError:
+        return []
+    gone = [k for k in keys if k not in adata.obs.columns]
+    if gone:
+        notes.append(f"Regress-out of {', '.join(gone)} is recorded but the column is gone: "
+                     "the re-runs regress out nothing.")
+        return []
+    return keys
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +519,7 @@ def inputs_from_counts(adata, rec: Recorded, counts) -> _Inputs:
 
 
 def _with_obs(adata, rec: Recorded, counts, log) -> _Inputs:
-    keys = [k for k in (rec.hvg_batch_key, rec.batch_key) if k]
+    keys = [k for k in (rec.hvg_batch_key, rec.batch_key, *rec.regress_out) if k]
     obs = adata.obs[list(dict.fromkeys(keys))].copy() if keys else pd.DataFrame(index=adata.obs_names)
     hv = adata.var.get("highly_variable")
     current = np.asarray(hv, dtype=bool) if hv is not None else None
@@ -552,6 +571,11 @@ def _pcs(inp: _Inputs, mask: np.ndarray, s: Setting, rec: Recorded) -> np.ndarra
         # Dense float32 first, as core/scaling.py builds the matrix the pipeline's PCA reads.
         part = inp.log[:, idx].astype(np.float32)
         sub = ad.AnnData(X=part.toarray() if sp.issparse(part) else part)
+        if rec.regress_out:  # the recorded covariates' fit taken off, as the scaling step does
+            from scview.core import scaling
+
+            C = scaling.covariates(inp.obs, rec.regress_out)
+            scaling.remove_fit(sub.X, C, scaling.regression_coef(inp.log, idx, C))
         sc.pp.scale(sub, max_value=10)
         X = sub.X
     # Column-major, as the pipeline's PCA reads the variable genes (a masked view

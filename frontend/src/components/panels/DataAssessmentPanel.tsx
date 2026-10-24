@@ -30,6 +30,8 @@ import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
 import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLeiden";
 import { UMAP_3D_LABELS } from "@/lib/umap3d";
+import { regressOptions } from "@/lib/regressOut";
+import { RegressOutChoice } from "@/components/common/RegressOutChoice";
 import { QcStates } from "@/components/qc/QcStates";
 import { SequencingQc } from "@/components/qc/SequencingQc";
 import { Hashing } from "@/components/qc/Hashing";
@@ -166,7 +168,7 @@ const STEP_ORDER: {
 interface ParamConfig {
   param: string;
   label: string;
-  type: "number" | "select" | "checkbox_list" | "msigdb_tree" | "boolean";
+  type: "number" | "select" | "checkbox_list" | "msigdb_tree" | "boolean" | "regress_out";
   min?: number;
   max?: number;
   step?: number;
@@ -262,6 +264,10 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
       default: "seurat",
     },
     { param: "hvg_batch_key", label: "HVG batch column", type: "select", options: [], default: "" },
+  ],
+  scaling: [
+    // Covariates regressed out of the variable genes before their z-scores (none = off)
+    { param: "regress_out", label: "Regress out", type: "regress_out", default: [] },
   ],
   pca: [
     { param: "n_comps", label: "N components", type: "number", min: 10, max: 200, step: 5, default: 50 },
@@ -558,6 +564,7 @@ export function DataAssessmentPanel() {
       .map((c) => c.name);
   }, [dataset]);
   const batchColumnOptions = categoricalObsColumns;
+  const regressCovariates = useMemo(() => regressOptions(dataset?.obs_columns), [dataset]);
   // Capture channels can be many (133 GEM wells): no group cap, only not one per cell.
   const channelColumnOptions = useMemo(() => {
     if (!dataset) return [];
@@ -1458,12 +1465,20 @@ export function DataAssessmentPanel() {
                                     ? augmentedCategoricalOptions
                                     : (pc.options ?? []);
                                 return (
-                                  <div key={pc.param} className={`flex flex-col gap-0.5 ${pc.type === "checkbox_list" || pc.type === "msigdb_tree" || pc.help ? "col-span-2" : ""}`}>
+                                  <div key={pc.param} className={`flex flex-col gap-0.5 ${pc.type === "checkbox_list" || pc.type === "msigdb_tree" || pc.type === "regress_out" || pc.help ? "col-span-2" : ""}`}>
                                     <label className="flex items-center gap-1 text-[10px] font-medium text-slate-500">
                                       {pc.label}
                                       {pc.param === "leiden_iterations" && <FastLeidenInfo />}
                                     </label>
-                                    {pc.type === "msigdb_tree" ? (
+                                    {pc.type === "regress_out" ? (
+                                      <RegressOutChoice
+                                        options={regressCovariates}
+                                        value={(currentVal as string[] | undefined) ?? []}
+                                        onChange={(next) => setStepParam(step.key, pc.param, next)}
+                                        disabled={running}
+                                        pearson={pearson}
+                                      />
+                                    ) : pc.type === "msigdb_tree" ? (
                                       <MSigDBCollectionTree
                                         selected={new Set((currentVal as string[]) || DEFAULT_MSIGDB_COLLECTIONS)}
                                         onChange={(sel) => setStepParam(step.key, pc.param, Array.from(sel))}

@@ -334,14 +334,16 @@ def _prepare(adata, mask_a, mask_b, min_pct: float = 0.0):
             detail=(f"No gene is detected in {min_pct * 100:g}% or more of the cells of "
                     "either group; lower the minimum detection."),
         )
+    # Every gene's column as it is; the tests read the prefilter's genes through
+    # de_methods.TESTED. Cutting them out copied the tested matrix (+1.4 GiB at 100k cells).
     test = ad.AnnData(
-        X=rows if pre.keep.all() else rows[:, pre.keep],
+        X=rows,
         obs=pd.DataFrame(
             {"_de_group": pd.Categorical(np.where(mask_a, "selection", "rest"),
                                          categories=["rest", "selection"])},
             index=pd.RangeIndex(len(mask_a)).astype(str),
         ),
-        var=pd.DataFrame(index=names[pre.keep]),
+        var=pd.DataFrame({de_methods.TESTED: pre.keep}, index=names),
         # The log base scanpy undoes to take the fold change.
         uns={"log1p": log1p} if log1p is not None else {},
     )

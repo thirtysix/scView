@@ -52,6 +52,7 @@ async def dataset_preflight(
     clustering_method: str | None = None,
     leiden_iterations: int | None = None,
     umap_3d: str | None = None,
+    regress_out: str | None = Query(default=None, description="Comma-separated obs columns"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Peak memory and rough time of running ``steps`` on the dataset: per step
@@ -64,7 +65,8 @@ async def dataset_preflight(
     ``leiden``: its time with the full optimisation and with fast Leiden
     (``leiden_iterations`` 2), and ``offer_fast`` when the full one is over 10 minutes.
     A run with the UMAP step gets ``umap_3d``: whether it makes the 3D UMAP (``umap_3d``
-    auto | on | off; auto leaves it out in large-dataset mode) and the time it adds."""
+    auto | on | off; auto leaves it out in large-dataset mode) and the time it adds.
+    ``regress_out`` (comma-separated, the scaling step's): the fit's time and memory."""
     names = [s.strip() for s in steps.split(",") if s.strip()]
     unknown = [s for s in names if s not in ALL_STEPS]
     if not names or unknown:
@@ -83,6 +85,7 @@ async def dataset_preflight(
         "chunked": chunked,
         "clustering_method": clustering_method, "leiden_iterations": leiden_iterations,
         "umap_3d": umap_3d,
+        "regress_out": None if regress_out is None else [k for k in regress_out.split(",") if k.strip()],
     }.items() if v is not None}
     try:
         if chunked is not None:

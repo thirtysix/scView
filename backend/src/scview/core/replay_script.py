@@ -1100,12 +1100,19 @@ def _scaling(p: dict, ctx: _Ctx) -> Snippet:
     if "scaled_genes" in p:
         # Since the step plans the matrix PCA reads (core/scaling.py): X keeps the log
         # values; the PCA step below scales a copy of the variable genes.
+        regress = [str(k) for k in (p.get("regress_out") or [])]
         ctx.scaling = {"method": "pearson" if pearson else "zscore",
-                       "theta": p.get("theta", 100.0), "max_value": p.get("max_value", 10.0)}
+                       "theta": p.get("theta", 100.0), "max_value": p.get("max_value", 10.0),
+                       "regress_out": regress}
         raw = _block('''
 if adata.raw is None or not adata.X[:2000].min() < 0:  # z-scores an older scView left in X: kept
     adata.raw = adata  # the log-normalised values, which X keeps too
 ''')
+        if regress and not pearson:
+            return Snippet(EXACT, ["keep_raw_counts(adata)", *raw,
+                                   *_regress_covariates(regress, ctx),
+                                   "# The variable genes' fit on these is regressed out of a copy at the PCA step,",
+                                   "# then the z-scores of the residuals are made there."])
         if pearson:
             _need(ctx, "find_counts", "pearson_residuals")
             return Snippet(EXACT, ["keep_raw_counts(adata)",
@@ -1138,6 +1145,21 @@ sc.pp.scale(adata, max_value=10)
 '''))
 
 
+def _regress_covariates(keys: list[str], ctx: _Ctx) -> list[str]:
+    """The cell-cycle covariates the scaling step scored before regress-out (S, G2M and
+    S - G2M), as the cell-cycle step scores them."""
+    from scview.core import scaling
+
+    if not set(keys) & set(scaling.CELL_CYCLE_COVARIATES):
+        return []
+    code = ["# The cell-cycle scores to regress out, made first (as scView's scaling step does):",
+            *_cell_cycle({}, ctx).code]
+    if scaling.CC_DIFFERENCE in keys:
+        code.append(f'adata.obs[{_lit(scaling.CC_DIFFERENCE)}] = (adata.obs["S_score"].to_numpy(np.float64)'
+                    ' - adata.obs["G2M_score"].to_numpy(np.float64))  # S - G2M')
+    return code
+
+
 def _pca(p: dict, ctx: _Ctx) -> Snippet:
     n = p.get("n_comps", 50)
     plan = ctx.scaling if p.get("pca_input") else None
@@ -1153,9 +1175,14 @@ def _pca(p: dict, ctx: _Ctx) -> Snippet:
                 "                      columns=None if mask is None else np.flatnonzero(mask))",
                 "sub = ad.AnnData(X=X)"]
     else:
+        regress = plan.get("regress_out") or []
         make = ["X = (adata.X if mask is None else adata.X[:, mask]).astype(np.float32)",
-                "sub = ad.AnnData(X=X.toarray() if sp.issparse(X) else np.ascontiguousarray(X))",
-                f"sc.pp.scale(sub, max_value={_lit(plan['max_value'])})"]
+                "sub = ad.AnnData(X=X.toarray() if sp.issparse(X) else np.ascontiguousarray(X))"]
+        if regress:
+            make += [f"sub.obs = adata.obs[{_lit(regress)}].copy()",
+                     "sub.obs.index = sub.obs.index.astype(str)",
+                     f"sc.pp.regress_out(sub, {_lit(regress)})  # each gene's least-squares fit taken off"]
+        make.append(f"sc.pp.scale(sub, max_value={_lit(plan['max_value'])})")
     return Snippet(EXACT, [
         "# PCA reads the scaled variable genes; scView scales a copy of them for PCA alone (X",
         "# keeps the log-normalised values): a copy, scaled, PCA on it, the results copied back.",

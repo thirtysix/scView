@@ -109,6 +109,7 @@ const RUN_PARAMS = [
   "doublet_channel_key", // doublet detection's peak is its largest channel's
   "clustering_method", "leiden_iterations", // clustering's time, and the fast-Leiden offer
   "umap_3d", // UMAP's time, and the 3D UMAP note
+  "regress_out", // scaling's fit (a list, sent comma-separated)
 ] as const;
 
 export function getRunPreflight(
@@ -121,6 +122,7 @@ export function getRunPreflight(
   for (const key of RUN_PARAMS) {
     const v = params?.[key];
     if (typeof v === "number" || (typeof v === "string" && v)) q.set(key, String(v));
+    else if (Array.isArray(v) && v.length) q.set(key, v.map(String).join(","));
   }
   return apiFetch<RunPreflight>(`/datasets/${datasetId}/preflight?${q}`, { signal });
 }

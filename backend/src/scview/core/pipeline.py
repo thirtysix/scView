@@ -115,6 +115,11 @@ class PipelineParams:
     hvg_flavor: str = "seurat"
     hvg_batch_key: str = ""  # obs column for batch-aware HVG selection (empty = pooled)
 
+    # Scaling: numeric obs columns regressed out of the variable genes before their
+    # z-scores (sc.pp.regress_out; empty = off). S_score / G2M_score / cc_difference
+    # (S - G2M) are scored at the step itself (core/scaling.py).
+    regress_out: list[str] = field(default_factory=list)
+
     # PCA
     n_comps: int = 50
 
@@ -765,6 +770,9 @@ def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
     the PCA step builds the scaled matrix for its own length. The old step made X dense
     float32 for every gene and z-scored it: 38 of a 46 GB run peak at 250k cells."""
     method = normalization.check_method(params.normalization_method)
+    keys = scaling.check_regress_out(params.regress_out)
+    if keys and method == "pearson_residuals":
+        raise ValueError(_REGRESS_PEARSON)
     # Counts held only in .raw: kept in layers['counts'] before .raw is replaced.
     _keep_raw_counts(adata)
     if method == "pearson_residuals":
@@ -780,7 +788,30 @@ def _run_scaling(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
         return {"theta": normalization.THETA, "clip": round(clip, 3), "counts_source": source,
                 **found}
     _raw_from_x(adata)
-    return scaling.plan_zscores(adata, max_value=scaling.MAX_VALUE)
+    scored = regress_covariates(adata, params, keys)
+    found = scaling.plan_zscores(adata, max_value=scaling.MAX_VALUE, regress_out=keys)
+    return {**found, **scored}
+
+
+_REGRESS_PEARSON = (
+    "Regress-out works on the log-normalised values, before their z-scores. Pearson residuals "
+    "already take sequencing depth into account: choose the shifted log (Normalization step) "
+    "to regress covariates out, or leave regress-out empty."
+)
+
+
+def regress_covariates(adata: ad.AnnData, params: PipelineParams, keys: list[str]) -> dict[str, Any]:
+    """Make the cell-cycle covariates ``keys`` asks for, as the scanpy tutorial does
+    before ``regress_out``: S and G2M scores on the log values now (the cell-cycle step
+    gives the same later), and ``cc_difference`` = S - G2M. Returns what to record."""
+    if not set(keys) & set(scaling.CELL_CYCLE_COVARIATES):
+        return {}
+    found = _run_cell_cycle(adata, params)
+    if scaling.CC_DIFFERENCE in keys:
+        adata.obs[scaling.CC_DIFFERENCE] = (adata.obs["S_score"].to_numpy(dtype=np.float64)
+                                            - adata.obs["G2M_score"].to_numpy(dtype=np.float64))
+    return {"cell_cycle_scored": True, "n_s_genes": found["n_s_genes"],
+            "n_g2m_genes": found["n_g2m_genes"]}
 
 
 def _raw_from_x(adata: ad.AnnData) -> None:
@@ -797,6 +828,13 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None
     genes, scaled for this step only), else on X as it is: the log values when scaling
     was skipped, or the z-scores an older scView wrote into X. Stored as sc.tl.pca
     stores it either way."""
+    from scview.core.chunked import pca_size_problem
+
+    mask = scaling.gene_mask(adata)
+    problem = pca_size_problem(params.n_comps, adata.n_obs,
+                               adata.n_vars if mask is None else int(mask.sum()))
+    if problem:
+        raise ValueError(problem)
     n_comps = min(params.n_comps, adata.n_obs - 1, adata.n_vars - 1)
     found = None
     if scaling.read_plan(adata) is not None:
@@ -1756,7 +1794,7 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "highly_variable_genes": ("scanpy.pp.highly_variable_genes",
                               ("n_top_genes", "hvg_flavor", "hvg_batch_key",
                                "normalization_method")),
-    "scaling": ("scanpy.pp.scale", ("normalization_method",)),
+    "scaling": ("scanpy.pp.scale", ("normalization_method", "regress_out")),
     "pca": ("scanpy.pp.pca", ("n_comps",)),
     "uncorrected_embedding": ("scanpy.tl.umap (uncorrected PCA)", ("n_neighbors", "umap_min_dist")),
     "batch_correction": ("scview.batch_correction", ("batch_key", "batch_method")),
@@ -1973,6 +2011,7 @@ def _finish_run(
     The file is written beside the derived file and then swapped in, so a backend
     killed mid-write (out of memory) leaves the previous file whole."""
     if outcome is not None:
+        step_failures.settle_unrun(adata, outcome)  # markers of a column clustered again
         _end_status(result, outcome)
     if result.status in SAVED_STATUSES and control is not None and control.cancelled:
         # Cancelled after the last step ended but before the save.
