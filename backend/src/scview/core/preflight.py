@@ -1204,9 +1204,19 @@ def _epochs(n: int) -> int:
     return 500 if n <= 10_000 else 200  # umap-learn's default
 
 
+# UMAP (3D then 2D) on the mouse brain: 88,640 cells +0.47 GiB / 90 s at 2 CPUs; 1.16M
+# cells about +10 GB / 2,941 s at 8 CPUs (Roihu e2e, 2026-10-24). Memory per cell grows
+# a little with n (5.7 -> ~9 kB, ~n^1.18), time ~n^1.36 and barely with CPUs.
+UMAP_BYTES_PER_CELL = 5_700  # at 88,640 cells
+UMAP_MEMORY_EXPONENT = 0.18
+UMAP_TIME_EXPONENT = 0.36
+
+
 def _step_embeddings(s: _State, params) -> tuple[int, _State, float]:
     s.other += s.n * 5 * 4
-    return s.n * 200, s, 0.5 + 3.8e-6 * s.n * _epochs(s.n)
+    size = max(1.0, s.n / 88_640)
+    t = s.n * UMAP_BYTES_PER_CELL * size ** UMAP_MEMORY_EXPONENT
+    return int(t), s, 0.5 + 5e-6 * s.n * _epochs(s.n) * size ** UMAP_TIME_EXPONENT
 
 
 def _step_uncorrected(s: _State, params) -> tuple[int, _State, float]:

@@ -12,7 +12,8 @@ All notable changes to scView are documented here. The format is based on
 - **Large-dataset mode.** A run that would not fit the memory budget now works with the matrices on
   disk, read in row blocks. It is chosen automatically (`chunked` auto/on/off), and its results equal
   the in-memory run (PCA to float precision). The 100k-cell mouse brain runs in 2.2 GB of a 6 GB
-  backend. Preflight shows the mode's memory, time and the disk it writes, and the run stops before
+  backend; the full 1.3M-cell brain (imported from its 10x .h5) ran end to end in 1 h 45 min with
+  fast Leiden, peaking at about 17 GB in clustering and UMAP, so give it 22 GB. Preflight shows the mode's memory, time and the disk it writes, and the run stops before
   it starts when the disk is short.
 - **Large datasets open with their matrices on disk.** A processed large dataset keeps its counts and
   a gene-major copy beside it and is never read into memory: overlays, violins and dot plots answer in
@@ -55,7 +56,8 @@ All notable changes to scView are documented here. The format is based on
 - In private mode uploads have no size limit, and the proxy no longer cuts off a long import after
   5 minutes; `MAX_UPLOAD_SIZE_MB` applies in public mode, to the import wizard too.
 - Preflight estimates for doublets, PCA and marker genes match measured runs within 10% (doublets were
-  2x over on the mouse brain, markers up to 1.9x under).
+  2x over on the mouse brain, markers up to 1.9x under). UMAP's memory and time are recalibrated on
+  1.16M cells (they were 2.3x and 3x under there).
 
 ### Fixed
 - Processing a dataset larger than 2 GB works: scView reads it into memory first, within
