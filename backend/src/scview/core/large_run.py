@@ -175,6 +175,13 @@ def large_info(h5ad_path) -> dict | None:
         return None
 
 
+def is_legacy_layout(path: str | Path) -> bool:
+    """Whether the h5ad at ``path`` was written by anndata < 0.7 (obs as a compound
+    dataset, raw as ``raw.X``), as Kang 2018 was published."""
+    with h5py.File(str(path), "r") as f:
+        return isinstance(f.get("obs"), h5py.Dataset)
+
+
 def read_light(path: str | Path) -> ad.AnnData:
     """The dataset at ``path`` without its matrices (obs, var, obsm, obsp, varm, varp,
     uns), as an in-memory open leaves them: for work that needs only those (PAGA,
@@ -401,6 +408,8 @@ class LargeRun:
     def open(self) -> None:
         from anndata.io import read_elem
 
+        if is_legacy_layout(self.path):
+            self.path = self._modernised()
         p = str(self.path)
         light = read_light(p)
         with h5py.File(p, "r") as f:
@@ -460,6 +469,15 @@ class LargeRun:
             if "raw/X" in info:
                 self.raw = mat("raw/X", raw_var.index, var=raw_var, varm=raw_varm)
         self.dense = self.x.dense
+
+    def _modernised(self) -> Path:
+        """A copy of a pre-0.7 anndata file in today's layout, staged: the blocks the run
+        reads (``X``, ``raw/X``, ``obs`` as a group) do not exist in the old one. Such files
+        date from before 2020 and are small, so it is read whole."""
+        target = self.stage() / "input.h5ad"
+        ad.read_h5ad(str(self.path)).write_h5ad(target)
+        logger.info("%s is in the anndata < 0.7 layout: rewrote it for the run", self.path.name)
+        return target
 
     # -- staging ------------------------------------------------------------
 
