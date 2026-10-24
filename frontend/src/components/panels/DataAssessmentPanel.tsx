@@ -26,6 +26,7 @@ import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeCon
 import { asDoubletSource } from "@/lib/doubletSource";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { ConversionReport } from "@/components/panels/ConversionReport";
+import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
 import { DoubletMethodInfo } from "@/components/qc/DoubletMethodInfo";
@@ -1048,6 +1049,7 @@ export function DataAssessmentPanel() {
         Automatically assess preprocessing state and run missing analysis steps.
       </p>
       {dataset?.conversion && <ConversionReport report={dataset.conversion} />}
+      {dataset?.public_source && <PublicSourceCard source={dataset.public_source} />}
 
       {/* Two columns: controls + steps on the left, QC plots on the right */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
