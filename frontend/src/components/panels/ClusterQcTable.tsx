@@ -301,6 +301,15 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                             Erythroid
                           </span>
                         )}
+                        {(c.ambient_markers ?? []).length > 0 && (
+                          <span
+                            title={`${data.ambient_markers_approximate ? "Possibly ambient" : "Ambient-looking"} markers: ${(c.ambient_markers ?? []).join(", ")}. ${data.ambient_markers_help ?? ""}`}
+                            className="rounded border border-sky-100 bg-white px-1 py-px text-[10px] font-medium text-sky-700"
+                            data-testid="cluster-ambient-markers"
+                          >
+                            Ambient markers: {c.ambient_markers?.length}
+                          </span>
+                        )}
                         {c.flags.map((f, i) => (
                           <span
                             key={f}

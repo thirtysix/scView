@@ -16,7 +16,9 @@ see ``core/haemoglobin.py``), ``cycling`` (mostly cells with clear S/G2M scores;
 see ``core/cell_cycle.py``), ``low_malat1`` (little of the nuclear-retained MALAT1
 RNA: fragments or cytoplasm without a nucleus) and ``small``. An author's
 intronic / unspliced share column, when obs has one, is summarised (never computed). Erythroid clusters get a note, not a
-flag: their haemoglobin is their own. At the dataset level, haemoglobin spread
+flag: their haemoglobin is their own. Top markers whose signal in the other clusters
+looks like ambient RNA are listed per cluster (``ambient_markers``, ``core/ambient.py``),
+also a note, not a flag. At the dataset level, haemoglobin spread
 across the non-erythroid clusters (ambient RNA) and technical scores that track
 the leading PCs of the clustering's space (``core/qc_drivers.py``) are reported.
 The same numbers ground the co-pilot, so "which clusters look low quality?" is
@@ -33,6 +35,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
+from scview.core import ambient as ambient_rna
 from scview.core import cell_cycle, doublet_source, haemoglobin, qc_drivers, stress
 from scview.core.anndata_adaptor import per_cell_qc
 
@@ -112,6 +115,8 @@ class ClusterQC(BaseModel):
     cycling_fraction: float | None = None  # share of cells with a clear S or G2M score
     median_pct_malat1: float | None = None  # % of a cell's counts from MALAT1
     median_pct_intronic: float | None = None  # the author's intronic/unspliced share, %
+    # Top markers whose signal outside the cluster looks like ambient RNA (core/ambient.py)
+    ambient_markers: list[str] = []
     flags: list[str] = []
     reasons: list[str] = []  # one plain-language sentence per flag, with the numbers
     notes: list[str] = []  # not a problem, but worth saying (erythroid: Hb is real)
@@ -139,6 +144,9 @@ class ClusterQCReport(BaseModel):
     dataset_median_pct_malat1: float | None = None  # the median cell's, for low_malat1
     intronic_column: str | None = None  # obs column of an intronic/unspliced share, if any
     doublet_source: str | None = None  # whose doublet calls doublet_fraction counts (doublet_source)
+    # Ambient-looking top markers per cluster are from the soup share alone (no raw matrix)
+    ambient_markers_approximate: bool = False
+    ambient_markers_help: str = ""
 
     @property
     def flagged(self) -> list[ClusterQC]:
@@ -365,6 +373,9 @@ def cluster_qc(
             "before import (SoupX, CellBender) cleans it."
         )
     drivers = _drivers(adata, labels, cells, frame, erythroid)
+    amb, amb_approx = _ambient(adata, column)
+    for row in rows:
+        row.ambient_markers = amb.get(row.group, [])
     return ClusterQCReport(
         column=column,
         n_cells=n,
@@ -401,7 +412,27 @@ def cluster_qc(
         dataset_median_pct_malat1=malat1_median,
         doublet_source=None if used is None else used.label,
         intronic_column=intronic[0] if intronic is not None else None,
+        ambient_markers_approximate=amb_approx,
+        ambient_markers_help=(ambient_rna.HELP["flag_approximate"] if amb_approx
+                              else ambient_rna.HELP["flag"]) if amb else "",
     )
+
+
+def _ambient(adata, column: str) -> tuple[dict[str, list[str]], bool]:
+    """Ambient-looking top markers per cluster (``core/ambient.py``), and whether they come
+    from the soup share alone. Empty for a large or backed dataset (it reads every
+    cell's counts) and when they can't be worked out; never fails the table."""
+    from scview.core import large_mode
+
+    if large_mode.is_large(adata) or getattr(adata, "isbacked", False):
+        return {}, False
+    try:
+        body = ambient_rna.diagnose_cached(adata, column)
+    except Exception as exc:  # noqa: BLE001 - optional
+        logger.debug("cluster QC: no ambient markers: %s", exc)
+        return {}, False
+    groups = body["markers"]["groups"]
+    return {g: [r["gene"] for r in rows] for g, rows in groups.items()}, bool(body["markers"]["approximate"])
 
 
 def _drivers(adata, labels: pd.Series, cells: dict, frame: pd.DataFrame,

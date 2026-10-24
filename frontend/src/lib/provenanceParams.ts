@@ -2,6 +2,7 @@ import { leidenIterationsText } from "@/lib/fastLeiden";
 import { umap3dText } from "@/lib/umap3d";
 import { regressOutText } from "@/lib/regressOut";
 import { clearedText } from "@/lib/runErrors";
+import { correctionText, isCorrectionSamples, pct } from "@/lib/ambient";
 
 const LIST_SHOWN = 12;
 
@@ -63,6 +64,9 @@ function channelsText(rows: ChannelRun[]): string {
 export function paramText(key: string, value: unknown): string {
   if (key === "channels" && Array.isArray(value) && value.length && typeof value[0] === "object")
     return channelsText(value as ChannelRun[]);
+  if (isCorrectionSamples(key, value)) return correctionText(value);
+  if (key === "ambient_rho") return value == null ? "rho: each sample's own estimate" : `rho set: ${String(value)}`;
+  if (key === "removed_share" && typeof value === "number") return `${pct(value)} of the UMIs removed as ambient`;
   if (key === "leiden_iterations") return leidenIterationsText(value);
   if (key === "umap_3d") return umap3dText(value);
   if (key === "regress_out") return regressOutText(value);

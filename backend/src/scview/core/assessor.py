@@ -61,6 +61,7 @@ class PreprocessingState(BaseModel):
     qc_metrics: StepStatus
     doublet_detection: StepStatus
     filtering: StepStatus
+    ambient_correction: StepStatus
     normalization: StepStatus
     log_transform: StepStatus
     highly_variable_genes: StepStatus
@@ -143,6 +144,30 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
         )
     except Exception as exc:
         logger.warning("Error checking doublet detection: %s", exc)
+        return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
+
+
+def _check_ambient_correction(adata: Any) -> StepStatus:
+    """Corrected for ambient RNA: the original counts are kept beside the corrected ones
+    (``core/ambient.py``). Not read from provenance: a reset to counts undoes it."""
+    try:
+        from scview.core import ambient
+
+        if ambient.ORIGINAL_LAYER in getattr(adata, "layers", {}):
+            rec = ambient.correction_record(adata) or {}
+            rhos = ", ".join(f"{s.get('sample')}: {float(s.get('rho', 0)):.1%}"
+                             for s in rec.get("samples") or [])
+            return StepStatus(done=True, confidence="high",
+                              details="Counts corrected for ambient RNA"
+                                      + (f" (rho {rhos})" if rhos else "")
+                                      + f"; the originals are in layers['{ambient.ORIGINAL_LAYER}']")
+        has_soup = bool(ambient.read_soups(adata))
+        return StepStatus(done=False, confidence="high",
+                          details=("Optional. A raw matrix's soup profile is attached"
+                                   if has_soup else
+                                   "Optional; needs each sample's raw (unfiltered) matrix attached"))
+    except Exception as exc:
+        logger.warning("Error checking ambient correction: %s", exc)
         return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
 
 
@@ -865,6 +890,7 @@ def assess_preprocessing(adata: Any) -> PreprocessingState:
         qc_metrics=_check_qc_metrics(adata),
         doublet_detection=_check_doublet_detection(adata),
         filtering=_check_filtering(adata),
+        ambient_correction=_check_ambient_correction(adata),
         normalization=_check_normalization(adata),
         log_transform=_check_log_transform(adata),
         highly_variable_genes=_check_highly_variable_genes(adata),

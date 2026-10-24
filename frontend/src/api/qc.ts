@@ -32,6 +32,8 @@ export interface ClusterQc {
   median_pct_malat1?: number | null;
   /** Median of the author's intronic / unspliced share column, in % (never computed here). */
   median_pct_intronic?: number | null;
+  /** Top markers whose signal in the other clusters looks like ambient RNA (core/ambient.py). */
+  ambient_markers?: string[];
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
   /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
@@ -87,6 +89,10 @@ export interface ClusterQcReport {
   intronic_column?: string | null;
   /** Whose doublet calls `doublet_fraction` counts: "cell hashing", "Scrublet", ... */
   doublet_source?: string | null;
+  /** The ambient markers come from the soup share alone (no raw matrix attached). */
+  ambient_markers_approximate?: boolean;
+  /** What an ambient marker means; "" when no cluster has one. */
+  ambient_markers_help?: string;
 }
 
 export async function getClusterQc(datasetId: string, groupby?: string): Promise<ClusterQcReport> {

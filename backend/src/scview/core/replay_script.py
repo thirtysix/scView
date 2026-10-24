@@ -795,6 +795,41 @@ _HELPERS["barcode_channels"] = _barcode_channels_helper()
 _HELPER_ORDER += ("scrublet_counts", "barcode_channels")
 
 
+def _ambient_helper() -> str:
+    """core/ambient.py's soup reading and count subtraction (numpy, scipy, pandas, h5py,
+    anndata only), copied so the script removes what scView removed; the soup is read
+    again from each sample's raw matrix, found beside the script or the input file."""
+    import inspect
+
+    from scview.core import ambient
+
+    lines = ["import os", "", "import h5py", ""]
+    lines += [f"{name} = {_lit(getattr(ambient, name))}" for name in ambient.REPLAY_CONSTANTS]
+    for obj in ambient.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def raw_soup(files):
+    """The soup of a sample's raw matrix (one .h5, or the MEX matrix, barcodes, features)."""
+    paths = []
+    for name in files:
+        for folder in (".", os.path.dirname(os.path.abspath(INPUT))):
+            path = os.path.join(folder, name)
+            if os.path.exists(path):
+                paths.append(path)
+                break
+        else:
+            sys.exit(f"Raw matrix {name} not found: put it beside this script or the input file.")
+    if len(paths) == 1:
+        return soup_from_h5(paths[0], SOUP_UMI_MAX)
+    return soup_from_mex(*paths, umi_max=SOUP_UMI_MAX)
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["ambient"] = _ambient_helper()
+_HELPER_ORDER += ("ambient",)
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -814,6 +849,9 @@ def _block(text: str) -> list[str]:
 
 def _reset_to_counts(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, _block('''
+if "counts_uncorrected" in adata.layers:  # the counts before an ambient RNA correction
+    adata.layers["counts"] = adata.layers["counts_uncorrected"]
+    del adata.layers["counts_uncorrected"]
 if "counts" in adata.layers or adata.raw is not None:
     if "counts" in adata.layers:
         adata.X = adata.layers["counts"].copy()
@@ -1059,6 +1097,43 @@ def _mito_refilter(p: dict, ctx: _Ctx) -> Snippet:
                     f"target_sum={_lit(target)})")
     code.append("del pass1")
     return Snippet(EXACT, code)
+
+
+def _ambient_correction(p: dict, ctx: _Ctx) -> Snippet:
+    """Each sample's recorded rho, its soup read again from its raw matrix (by the file
+    names recorded), subtracted per cell as core/ambient.py does."""
+    samples = p.get("samples")
+    if not isinstance(samples, list) or not samples or not all(
+            isinstance(s, dict) and s.get("raw_files") for s in samples):
+        return Snippet(NOT_REPLAYABLE, ["# Ambient RNA correction: the raw matrices are not recorded, "
+                                        "so the soup can't be read again. Recorded:",
+                                        *_param_comment(p)], "raw matrices not recorded")
+    _need(ctx, "ambient")
+    rows = [[str(s.get("sample")), s.get("column"), float(s.get("rho", 0.0)),
+             [str(f) for f in s.get("raw_files") or []]] for s in samples]
+    return Snippet(EXACT, [
+        "# Ambient RNA removed from the counts (SoupX-style subtraction per cell, core/ambient.py):",
+        "# per sample (name, obs column or None for every cell, rho scView used, raw matrix files),",
+        "# its soup read again from the raw matrix's empty droplets.",
+        f"AMBIENT_SAMPLES = {_lit(rows)}",
+        *_block('''
+original = adata.layers["counts_uncorrected"] if "counts_uncorrected" in adata.layers else adata.X
+original = sp.csr_matrix(original)
+groups = []
+for sample, column, rho, files in AMBIENT_SAMPLES:
+    frac, _ = soup_fractions(raw_soup(files), adata.var_names, _var_ids(adata))
+    rows = (np.flatnonzero(adata.obs[column].astype(str).to_numpy() == sample) if column
+            else np.arange(adata.n_obs))
+    groups.append((rows, rho, frac))
+corrected = correct_counts(original, groups)
+if "counts_uncorrected" not in adata.layers:
+    adata.layers["counts_uncorrected"] = original
+adata.X = corrected
+if "counts" in adata.layers:
+    adata.layers["counts"] = corrected.copy()
+del original, groups, corrected
+'''),
+    ])
 
 
 def _normalization(p: dict, ctx: _Ctx) -> Snippet:
@@ -1866,6 +1941,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "qc_metrics": _qc_metrics,
     "doublet_detection": _doublet_detection,
     "filtering": _filtering,
+    "ambient_correction": _ambient_correction,
     "normalization": _normalization,
     "log_transform": _log_transform,
     "highly_variable_genes": _hvg,

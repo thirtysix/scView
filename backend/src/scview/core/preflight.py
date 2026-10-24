@@ -161,6 +161,9 @@ class Header:
     large: bool = False
     # Variable genes (var["highly_variable"]), what PCA reads; None: no such column (every gene).
     n_hvg: int | None = None
+    # An obs clustering a reset to counts keeps (``CLUSTER_COLUMNS``): the ambient RNA
+    # step estimates rho on it instead of clustering the cells itself.
+    has_clusters: bool = False
     estimated: bool = False  # cells / genes estimated from a sample (text tables)
     guess: bool = False  # nothing in the file could be read (RDS): sizes are a guess
     note: str = ""  # what the numbers rest on, when not read exactly
@@ -252,6 +255,7 @@ def _read_h5ad(path: Path) -> Header:
     with h5py.File(path, "r") as f:
         obs = f.get("obs")
         h.obs_columns = _n_columns(obs)
+        h.has_clusters = isinstance(obs, h5py.Group) and any(c in obs for c in CLUSTER_COLUMNS)
         h.var_columns = _n_columns(f.get("var"))
         # var is a group of columns, or in older files one compound dataset (Kang's).
         var = f.get("var")
@@ -653,6 +657,7 @@ def header_from_adata(adata) -> Header:
         h.varm_bytes += _array_bytes(v)
     h.obs_columns = adata.obs.shape[1]
     h.var_columns = adata.var.shape[1]
+    h.has_clusters = any(c in adata.obs.columns for c in CLUSTER_COLUMNS)
     if "highly_variable" in adata.var.columns:
         h.n_hvg = int(np.count_nonzero(adata.var["highly_variable"].to_numpy()))
     return h
@@ -797,6 +802,7 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
 STEP_LABELS = {
     "reset_to_counts": "reset to counts", "qc_metrics": "QC metrics",
     "doublet_detection": "doublet detection", "filtering": "filtering",
+    "ambient_correction": "ambient RNA correction",
     "normalization": "normalisation", "log_transform": "log transform",
     "highly_variable_genes": "variable genes", "scaling": "scaling", "pca": "PCA",
     "uncorrected_embedding": "uncorrected UMAP", "batch_correction": "batch correction",
@@ -808,7 +814,8 @@ STEP_LABELS = {
 # Steps whose coefficients come from a measured run; the others are reasoned from
 # what the step allocates and say so.
 MEASURED_STEPS = {
-    "reset_to_counts", "qc_metrics", "doublet_detection", "filtering", "normalization",
+    "reset_to_counts", "qc_metrics", "doublet_detection", "filtering", "ambient_correction",
+    "normalization",
     "log_transform", "highly_variable_genes", "scaling", "pca", "neighbors", "clustering",
     "embeddings", "marker_genes", "enrichment", "cell_cycle", "dissociation_stress", "save",
 }
@@ -900,6 +907,7 @@ class _State:
     processed: bool = False  # an embedding or .raw on arrival: genes already filtered
     n_hvg: int | None = None  # the variable genes PCA reads; None: every gene
     raw_is_x: bool = False  # .raw set to X by the scaling step: one matrix until saved
+    clusters: bool = False  # a clustering the ambient RNA step can estimate rho on
 
     @classmethod
     def from_header(cls, h: Header) -> "_State":
@@ -910,7 +918,8 @@ class _State:
         return cls(h.n_cells or 0, h.n_genes or 0, x, layers, raw,
                    h.obsm_bytes + h.obsp_bytes + h.varm_bytes + h.uns_bytes + _frames_bytes(h)
                    + (h.n_cells or 0) * LOAD_PER_CELL + LOAD_FIXED,
-                   processed=bool(h.obsm) or h.matrix("raw/X") is not None, n_hvg=h.n_hvg)
+                   processed=bool(h.obsm) or h.matrix("raw/X") is not None, n_hvg=h.n_hvg,
+                   clusters=h.has_clusters)
 
     def matrices(self) -> list[Matrix]:
         return [mm for mm in [self.x, self.raw, *self.layers.values()] if mm is not None]
@@ -972,15 +981,21 @@ def _p(params, name: str, default):
 
 # Each step: (state) -> (transient bytes over the state's resident, state after, seconds at 2 CPUs).
 def _step_reset(s: _State, params) -> tuple[int, _State, float]:
-    counts = s.layers.get("counts")
+    layers = dict(s.layers)
+    # Counts an ambient RNA correction replaced come back as the counts (core/ambient.py).
+    original = layers.pop("counts_uncorrected", None)
+    if original is not None:
+        layers["counts"] = _like(original, "layers/counts", s.n, s.m)
+    counts = layers.get("counts")
     if counts is not None:
         x = _like(counts, "X", s.n, s.m)
-        return counts.nbytes, _State(s.n, s.m, x, dict(s.layers), None, s.other // 2, s.held,
-                                     s.processed), 0.05 + counts.nbytes * 1.5e-9
+        return counts.nbytes, _State(s.n, s.m, x, layers, None, s.other // 2, s.held,
+                                     s.processed, clusters=s.clusters), 0.05 + counts.nbytes * 1.5e-9
     if s.raw is not None:  # a new object: the adaptor keeps the old one
         x = _like(s.raw, "X", s.n, s.raw.n_genes)
         return s.raw.nbytes, _State(s.n, s.raw.n_genes, x, {}, None, s.other // 2,
-                                    s.held + s.resident(), s.processed), 0.05 + s.raw.nbytes * 1.5e-9
+                                    s.held + s.resident(), s.processed,
+                                    clusters=s.clusters), 0.05 + s.raw.nbytes * 1.5e-9
     return 0, s, 0.1
 
 
@@ -1087,8 +1102,54 @@ def _step_filter(s: _State, params) -> tuple[int, _State, float]:
                               [mm for mm in [x2, *layers2.values()] if mm is not None])
     mask = 0 if x1 is None else (x1.nnz if x1.sparse else n2 * s.m)
     transient = max(cells_peak, max(genes_peak, mask) - cells_freed)
-    new = _State(n2, m2, x2, layers2, raw1, s.other, s.held, s.processed, n_hvg=s.n_hvg)
+    new = _State(n2, m2, x2, layers2, raw1, s.other, s.held, s.processed, n_hvg=s.n_hvg,
+                 clusters=s.clusters)
     return max(0, transient), new, 0.2 + FILTER_SECONDS_PER_BYTE * sum(mm.nbytes for mm in old)
+
+
+# Ambient RNA correction (core/ambient.py): the counts as CSR (kept as
+# layers['counts_uncorrected']), a float64 copy of their values while each cell is worked
+# on, and the corrected CSR that becomes X (and layers['counts'], a copy, when there is
+# one). Without rho set, each sample's estimate (marker genes counted per cluster) and,
+# with no clustering, a quick one of its own (a normalised copy, PCA, graph, Leiden).
+# Calibrated 2026-10-24 after filtering, one fresh 2-CPU container per run, process RSS
+# every 20 ms over the step's start, measured / estimated. Kang (13,836 cells, 9.65M stored
+# values, X CSR float64): rho set 1.2 / 1.3 s and 0.181 / 0.189 GiB; rho estimated on the
+# author's clusters 6.4 / 6.1 s; clustering the cells itself 47.8 / 46 s and 0.654 / 0.68
+# GiB. paul15 (2,730 cells, dense float32, 2.39M non-zeros): rho set 0.3 / 0.7 s and
+# 0.041 / 0.063 GiB; clustering itself 19.7 / 17 s and 0.311 / 0.35 GiB (its first neighbour
+# graph and Leiden child in a fresh process are most of that: a fixed cost).
+CLUSTER_COLUMNS = ("leiden", "louvain", "cluster", "clusters", "seurat_clusters")  # cluster_qc's
+AMBIENT_SECONDS_FIXED = 0.3
+AMBIENT_SECONDS_PER_CELL = 7e-5  # the subtraction, one cell at a time
+AMBIENT_ESTIMATE_SECONDS = 1.5  # the estimate: posterior over 1,001 rho values, per sample
+AMBIENT_ESTIMATE_PER_VALUE = 3.5e-7  # its passes over the counts (markers, Poisson tests)
+AMBIENT_WORK_PER_VALUE = 21  # float64 values + the corrected CSR's values and indices
+AMBIENT_QUICK_SECONDS = 8.0  # its own clustering (log, HVG, PCA, graph, Leiden): fixed...
+AMBIENT_QUICK_SECONDS_PER_CELL = 2.3e-3  # ... and per cell
+AMBIENT_QUICK_BYTES = 240 * MiB
+AMBIENT_QUICK_PER_CELL = 20_000  # PCA, the graph, the Leiden child's share
+
+
+def _step_ambient(s: _State, params) -> tuple[int, _State, float]:
+    if s.x is None:
+        return 0, s, 0.1
+    nz = s.x.nnz if s.x.sparse else (s.x.nonzero if s.x.nonzero is not None else s.x.nnz)
+    csr = Matrix("layers/counts_uncorrected", s.n, s.m, True, nz, s.x.dtype)
+    transient = nz * AMBIENT_WORK_PER_VALUE + (0 if s.x.sparse else csr.nbytes)
+    secs = AMBIENT_SECONDS_FIXED + s.n * AMBIENT_SECONDS_PER_CELL
+    if _p(params, "ambient_rho", None) is None:
+        secs += AMBIENT_ESTIMATE_SECONDS + nz * AMBIENT_ESTIMATE_PER_VALUE
+        if not s.clusters:
+            secs += AMBIENT_QUICK_SECONDS + s.n * AMBIENT_QUICK_SECONDS_PER_CELL
+            transient += AMBIENT_QUICK_BYTES + s.n * AMBIENT_QUICK_PER_CELL
+    # The originals stay as a layer (CSR), the corrected counts become X (and the counts).
+    if "counts_uncorrected" not in s.layers:
+        s.layers["counts_uncorrected"] = csr
+    s.x = _like(csr, "X", s.n, s.m)
+    if "counts" in s.layers:
+        s.layers["counts"] = _like(csr, "layers/counts", s.n, s.m)
+    return int(transient), s, secs
 
 
 def _step_normalization(s: _State, params) -> tuple[int, _State, float]:
@@ -1355,7 +1416,8 @@ def _step_annotation(s: _State, params) -> tuple[int, _State, float]:
 
 _STEP_MODELS = {
     "reset_to_counts": _step_reset, "qc_metrics": _step_qc, "doublet_detection": _step_doublet,
-    "filtering": _step_filter, "normalization": _step_normalization, "log_transform": _step_log,
+    "filtering": _step_filter, "ambient_correction": _step_ambient,
+    "normalization": _step_normalization, "log_transform": _step_log,
     "highly_variable_genes": _step_hvg, "scaling": _step_scaling, "pca": _step_pca,
     "uncorrected_embedding": _step_uncorrected, "batch_correction": _step_batch,
     "neighbors": _step_neighbors, "clustering": _step_clustering, "embeddings": _step_embeddings,

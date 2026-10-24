@@ -110,6 +110,7 @@ const RUN_PARAMS = [
   "clustering_method", "leiden_iterations", // clustering's time, and the fast-Leiden offer
   "umap_3d", // UMAP's time, and the 3D UMAP note
   "regress_out", // scaling's fit (a list, sent comma-separated)
+  "ambient_rho", // set: the ambient RNA correction estimates nothing (no clustering of its own)
 ] as const;
 
 export function getRunPreflight(
