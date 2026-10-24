@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { applyDoubletThreshold, getDoublets, type DoubletChannelCalls, type DoubletSummary } from "@/api/qc";
 import { CapNote, Caption } from "@/components/common/Caption";
 import { Panel } from "@/components/common/Panel";
 import { DoubletAgreement } from "@/components/qc/DoubletAgreement";
 import { ThresholdHistogram, type RefLine } from "@/components/plots/ThresholdHistogram";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
-import { perChannelText, rateRange, statusText, unscoredText } from "@/lib/doubletChannels";
+import { InfoTip } from "@/components/common/InfoTip";
+import {
+  fewCalledHelp,
+  fewCalledText,
+  perChannelText,
+  rateRange,
+  statusText,
+  unscoredText,
+} from "@/lib/doubletChannels";
 import { sourceText } from "@/lib/doubletSource";
 import { pct, roundTo } from "@/lib/qcThresholds";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -15,6 +23,7 @@ import { useViewStore } from "@/stores/viewStore";
 const STEPS = [0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01];
 const DEBOUNCE_MS = 120;
 const CHANNEL_ROWS = 8; // more behind "show all"
+const FEW_CALLED_SHOWN = 3; // channels named in the warning; the rest in the table
 const GUESS =
   "No lane or GEM well column was found, so Scrublet ran in each sample: donors pooled in one lane are not " +
   "channels, so its expected rates are a guess. Pick the capture channel in the Doublet Detection step if the " +
@@ -75,6 +84,7 @@ export function DoubletCard({
   const [error, setError] = useState<string | null>(null);
   const [logY, setLogY] = useState(true);
   const [allChannels, setAllChannels] = useState(false);
+  const [openChannel, setOpenChannel] = useState<string | null>(null); // its scores' histogram
   const refresh = useDatasetRefresh();
   const request = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -184,6 +194,8 @@ export function DoubletCard({
   const perChannel = perChannelText(summary);
   const unscored = unscoredText(summary.n_unscored ?? 0, summary.n_unscored_small_channels ?? 0, minCells);
   const guess = summary.channel_reason === "donor" || summary.channel_reason === "batch";
+  // Channels whose automatic threshold called almost nothing (backend doublets.FEW_CALLED_*)
+  const fewCalled = channels.filter((r) => r.few_called);
 
   return (
     <Panel
@@ -266,6 +278,60 @@ export function DoubletCard({
             )}
           </p>
         )}
+        {fewCalled.length > 0 && (
+          <div className="space-y-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="doublet-few-called">
+            {fewCalled.slice(0, FEW_CALLED_SHOWN).map((r) => (
+              <div key={r.name}>
+                <p className="flex flex-wrap items-center gap-x-1.5">
+                  <span>{fewCalledText(r)}</span>
+                  <InfoTip width={320} label={`Why ${r.name} is flagged`}>
+                    {fewCalledHelp(summary.few_called_share ?? 0.002, summary.few_called_min_cells ?? 2000)}
+                  </InfoTip>
+                  {r.hist && (
+                    <button
+                      type="button"
+                      onClick={() => setOpenChannel((c) => (c === r.name ? null : r.name))}
+                      className="text-primary hover:underline"
+                    >
+                      {openChannel === r.name ? "Hide its scores" : "Show its scores"}
+                    </button>
+                  )}
+                </p>
+                {openChannel === r.name && r.hist && (
+                  <div className="mt-1 h-[140px] rounded bg-white" data-testid="doublet-channel-hist">
+                    <ThresholdHistogram
+                      edges={summary.hist!.bin_edges}
+                      counts={r.hist}
+                      // Draggable from the channel's own threshold when none is set yet
+                      lines={
+                        lines.length || r.scrublet_threshold == null
+                          ? lines
+                          : [{ id: "t", value: r.scrublet_threshold, label: "threshold" }]
+                      }
+                      refLines={
+                        r.scrublet_threshold != null
+                          ? [{ value: r.scrublet_threshold, label: `Scrublet (${r.name})`, color: "#b45309", dash: "dot", showLabel: true }]
+                          : []
+                      }
+                      logY={logY}
+                      barColor="#f59e0b"
+                      plotName={`qc_doublet_score_${r.name}`}
+                      onDrag={(_, v) => {
+                        const t = roundTo(v, step);
+                        setText(fmtScore(t));
+                        ask(t);
+                      }}
+                      onCommit={(_, v) => commit(v)}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+            {fewCalled.length > FEW_CALLED_SHOWN && (
+              <p>And {(fewCalled.length - FEW_CALLED_SHOWN).toLocaleString()} more channels (in the table).</p>
+            )}
+          </div>
+        )}
         {guess && (
           <p className="rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="doublet-guess">
             {summary.suggestion.note && summary.suggestion.reason === summary.channel_reason ? summary.suggestion.note : GUESS}
@@ -336,8 +402,14 @@ export function DoubletCard({
                       <td colSpan={2} className="text-right">{note ?? "not scored"}</td>
                     )}
                     <td className="text-right tabular-nums text-slate-400">~{pct(r.expected_rate)}</td>
-                    <td className="text-right tabular-nums text-slate-400" title={note ?? undefined}>
+                    <td
+                      className={`text-right tabular-nums ${r.few_called ? "font-semibold text-amber-700" : "text-slate-400"}`}
+                      title={r.few_called ? fewCalledText(r) : (note ?? undefined)}
+                    >
                       {r.scrublet_threshold != null ? fmtScore(r.scrublet_threshold) : "—"}
+                      {r.few_called && (
+                        <AlertTriangle className="ml-0.5 inline h-3 w-3 align-[-2px]" aria-label="called almost nothing" />
+                      )}
                     </td>
                   </tr>
                 );

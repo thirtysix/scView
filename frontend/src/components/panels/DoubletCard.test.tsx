@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { DoubletSummary } from "@/api/qc";
 
 const { getDoublets, applyDoubletThreshold, refresh } = vi.hoisted(() => ({
@@ -167,6 +167,47 @@ describe("DoubletCard", () => {
     getDoublets.mockResolvedValue(perChannel(2, { channel_column: "Donor", channel_reason: "donor", channels_column: "Donor" }));
     render(<DoubletCard datasetId="d1" />);
     expect(await screen.findByTestId("doublet-guess")).toHaveTextContent(/donors pooled in one lane are not channels/);
+  });
+
+  it("warns when a channel's automatic threshold called almost nothing, with its scores to look at", async () => {
+    // Kang: the STIM lane's threshold landed at 0.54 and called 9 of 7,263 cells.
+    const kang = perChannel(2, {
+      channel_column: "capture_channel", channel_reason: "barcode_prefix", channels_column: "capture_channel",
+      few_called: ["STIM"], few_called_share: 0.002, few_called_min_cells: 2000,
+    });
+    kang.channels = [
+      { name: "CTRL", n_cells: 6573, n_scored: 6573, n_called: 179, fraction: 0.0272, expected_rate: 0.0526,
+        scrublet_threshold: 0.22, status: "scored", scrublet_called: 179, few_called: false },
+      { name: "STIM", n_cells: 7263, n_scored: 7263, n_called: 9, fraction: 0.0012, expected_rate: 0.0581,
+        scrublet_threshold: 0.5412, status: "scored", scrublet_called: 9, few_called: true, hist: [7000, 263] },
+    ];
+    getDoublets.mockResolvedValue(kang);
+    render(<DoubletCard datasetId="d1" />);
+    const warning = await screen.findByTestId("doublet-few-called");
+    expect(warning).toHaveTextContent(
+      "STIM: Scrublet's automatic threshold (0.5412) called 9 of 7,263 cells (0.12%), where about 5.8% are expected.",
+    );
+    expect(warning).not.toHaveTextContent("CTRL");
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Why STIM is flagged" }));
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent("The automatic threshold may have missed the doublets in this channel");
+    expect(tip).toHaveTextContent("Look at this channel's histogram");
+    expect(tip).toHaveTextContent("set a threshold by hand");
+    // The table marks the channel's own threshold
+    expect(screen.getByRole("cell", { name: /0\.5412/ })).toHaveClass("text-amber-700");
+    // Its scores: dragging a threshold there asks for the counts at it, as on the main plot
+    fireEvent.click(screen.getByRole("button", { name: "Show its scores" }));
+    const hist = screen.getByTestId("doublet-channel-hist");
+    fireEvent.click(within(hist).getByRole("button", { name: "drag line" }));
+    expect(screen.getByLabelText("Threshold")).toHaveValue(0.42);
+    await waitFor(() => expect(getDoublets).toHaveBeenLastCalledWith("d1", 0.42));
+  });
+
+  it("no warning when every automatic threshold called its share", async () => {
+    getDoublets.mockResolvedValue(perChannel(3));
+    render(<DoubletCard datasetId="d1" />);
+    await screen.findByTestId("doublet-per-channel");
+    expect(screen.queryByTestId("doublet-few-called")).not.toBeInTheDocument();
   });
 
   it("asks for the counts at a typed or dragged threshold", async () => {

@@ -361,6 +361,55 @@ def test_the_histogram_spans_the_scores_and_thresholds_not_always_0_to_1():
     assert s["hist"]["bin_edges"][-1] == pytest.approx(1.3) and sum(s["hist"]["counts"]) == 500
 
 
+def test_few_called_is_almost_nothing_in_a_channel_of_some_size():
+    assert doublets.few_called(7_263, 9)  # Kang's STIM lane: its threshold landed at 0.54
+    assert not doublets.few_called(6_573, 179)  # its CTRL lane
+    assert doublets.few_called(2_000, 3) and not doublets.few_called(2_000, 4)
+    assert not doublets.few_called(1_999, 0)  # a small channel can call none by chance
+
+
+def _recorded_channels(sizes: dict[str, int], thresholds: dict[str, float]) -> ad.AnnData:
+    """Scores 0..1 in each channel (evenly spread) and the doublet step's record of them."""
+    names = list(sizes)
+    a = _obs([f"c{i}" for i in range(sum(sizes.values()))],
+             gem_well=[g for g in names for _ in range(sizes[g])])
+    scores = np.concatenate([np.linspace(0, 1, sizes[g]) for g in names])
+    a.obs["doublet_score"] = scores
+    own = np.concatenate([np.full(sizes[g], thresholds[g]) for g in names])
+    a.obs["predicted_doublet"] = scores > own
+    a.uns["scrublet"] = {
+        "scview_channels": {
+            "name": names, "n_cells": [sizes[g] for g in names], "n_scored": [sizes[g] for g in names],
+            "expected_doublet_rate": [doublets.rate_for_cells(sizes[g]) for g in names],
+            "threshold": [thresholds[g] for g in names],
+            "n_called": [int((np.linspace(0, 1, sizes[g]) > thresholds[g]).sum()) for g in names],
+            "neighbors": ["exact"] * len(names), "status": ["scored"] * len(names),
+        },
+        "scview_channel_reason": "channel_column", "scview_channel_column": "gem_well",
+    }
+    return a
+
+
+def test_summary_flags_a_channel_whose_own_threshold_called_almost_nothing():
+    a = _recorded_channels({"A": 3_000, "B": 2_500, "C": 1_500},
+                           {"A": 0.8, "B": 0.9995, "C": 0.9999})
+    s = doublets.summary(a)
+    assert s["few_called"] == ["B"]  # C calls almost none too, but is under 2,000 cells
+    assert (s["few_called_share"], s["few_called_min_cells"]) == (0.002, 2_000)
+    by = {r["name"]: r for r in s["channels"]}
+    assert by["B"]["few_called"] and by["B"]["scrublet_called"] == 2  # 0.08 %
+    assert by["A"]["scrublet_called"] == 600 and not by["A"]["few_called"]
+    assert not by["C"]["few_called"] and by["C"]["scrublet_called"] == 1
+    # B's own scores, on the card's bins, to look for what its threshold missed
+    assert sum(by["B"]["hist"]) == 2_500 and len(by["B"]["hist"]) == len(s["hist"]["counts"])
+    assert "hist" not in by["A"]
+    # A threshold set by hand changes the calls shown, not what Scrublet's own called
+    doublets.apply_threshold(a, 0.5)
+    s = doublets.summary(a)
+    assert s["few_called"] == ["B"]
+    assert {r["name"]: r["n_called"] for r in s["channels"]}["B"] == 1250
+
+
 def test_doublet_source_filtering_and_the_report_keep_and_say_the_unscored():
     a = _scored_with_a_small_channel()
     k = int(np.isnan(a.obs["doublet_score"].to_numpy()).sum())

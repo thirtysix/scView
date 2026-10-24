@@ -79,6 +79,30 @@ export function perChannelText(s: DoubletSummary): string | null {
   );
 }
 
+/** A channel whose automatic threshold called almost nothing, in one sentence:
+ *  "STIM: Scrublet's automatic threshold (0.54) called 9 of 7,263 cells (0.12%), where
+ *  about 5.8% are expected." */
+export function fewCalledText(r: DoubletChannelCalls): string {
+  const called = r.scrublet_called ?? 0;
+  const t = r.scrublet_threshold != null ? ` (${String(Number(r.scrublet_threshold.toFixed(4)))})` : "";
+  const share = r.n_scored ? called / r.n_scored : 0;
+  return (
+    `${r.name}: Scrublet's automatic threshold${t} called ${called.toLocaleString()} of ` +
+    `${r.n_scored.toLocaleString()} cells (${(100 * share).toFixed(2)}%), where about ${pct(r.expected_rate)} are expected.`
+  );
+}
+
+/** The tooltip of that warning: what it means and what to do. */
+export function fewCalledHelp(share: number, minCells: number): string {
+  return (
+    `The automatic threshold may have missed the doublets in this channel: it called under ${(100 * share).toLocaleString()}% ` +
+    `of the cells in a channel of ${minCells.toLocaleString()} or more, where the rule of thumb expects several per cent. ` +
+    "Scrublet places its threshold in the dip between the singlets' scores and the doublets'; when it finds no clear dip " +
+    "it can land far out in the tail. Look at this channel's histogram: if its scores have a second peak or a long tail " +
+    "below the threshold, set a threshold by hand (it applies to every channel's scores)."
+  );
+}
+
 /** A channel's status for its table cell. */
 export function statusText(r: DoubletChannelCalls, minCells: number): string | null {
   if (r.status === "too_small") return `under ${minCells} cells: not scored`;
