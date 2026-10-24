@@ -828,6 +828,13 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None
     genes, scaled for this step only), else on X as it is: the log values when scaling
     was skipped, or the z-scores an older scView wrote into X. Stored as sc.tl.pca
     stores it either way."""
+    from scview.core.chunked import pca_size_problem
+
+    mask = scaling.gene_mask(adata)
+    problem = pca_size_problem(params.n_comps, adata.n_obs,
+                               adata.n_vars if mask is None else int(mask.sum()))
+    if problem:
+        raise ValueError(problem)
     n_comps = min(params.n_comps, adata.n_obs - 1, adata.n_vars - 1)
     found = None
     if scaling.read_plan(adata) is not None:

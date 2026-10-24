@@ -892,7 +892,8 @@ class LargeRun:
 
     def _pca(self) -> dict[str, Any] | None:
         light, params = self.light, self.params
-        n_comps = min(params.n_comps, light.n_obs - 1, light.n_vars - 1)
+        # chunked caps it at cells - 1 and variable genes - 1, or says what to change
+        n_comps = params.n_comps
         plan = scaling.read_plan(light)
         mask = scaling.gene_mask(light)
         hvg = mask if mask is not None else np.ones(light.n_vars, dtype=bool)

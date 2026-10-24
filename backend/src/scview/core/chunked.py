@@ -1051,6 +1051,22 @@ def _proj_block(b, transform: Callable, args: tuple, mean: np.ndarray, V: np.nda
     return ((Z - mean) @ V).astype(np.float32)
 
 
+def pca_size_problem(n_comps: int, n_cells: int, n_genes: int) -> str | None:
+    """What to change, in plain words, when PCA would get no component (n_comps capped at
+    cells - 1 and genes - 1 comes to 0); None when it gets at least one."""
+    if min(n_comps, n_cells - 1, n_genes - 1) >= 1:
+        return None
+    if n_comps < 1:
+        return (f"PCA was asked for {n_comps} components: set N components (PCA step) to "
+                "1 or more.")
+    if n_cells < 2:
+        return (f"PCA needs at least 2 cells, and {n_cells} passed filtering: loosen the "
+                "filtering thresholds.")
+    return (f"PCA needs at least 2 variable genes, and there {'is' if n_genes == 1 else 'are'} "
+            f"{n_genes}: run Variable Genes again (N top genes 2 or more), or keep more genes "
+            "at filtering (Min cells/gene).")
+
+
 def _pca_blocks(X: da.Array, transform: Callable, args: tuple | list, hvg: np.ndarray,
                 n_comps: int) -> dict:
     """PCA of the transformed variable-gene blocks: covariance by blocks, ``eigh``,
@@ -1058,9 +1074,10 @@ def _pca_blocks(X: da.Array, transform: Callable, args: tuple | list, hvg: np.nd
     ``args``: the transform's arguments after the block, or a list of them, one per block."""
     n = X.shape[0]
     k = int(hvg.sum())
+    problem = pca_size_problem(int(n_comps), n, k)
+    if problem:
+        raise ValueError(problem)
     n_comps = int(min(n_comps, n - 1, k - 1))
-    if n_comps < 1:
-        raise ValueError(f"PCA needs at least 2 cells and 2 variable genes ({n} x {k})")
     nb = X.numblocks[0]
     if not isinstance(args, list):
         args = [args] * nb
