@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Fetch the CytoSig cytokine-response signature into DATA_DIR/networks/cytosig on
     # first use (core/cytokine_activity.py).
     CYTOSIG_AUTO_DOWNLOAD: bool = True
+    # Fetch STRING v12.0 physical links per species into DATA_DIR/networks on
+    # first use (core/ppi.py).
+    PPI_AUTO_DOWNLOAD: bool = True
     # Import public datasets from CELLxGENE Discover (core/public_import.py). Unset:
     # on in private mode, off in public mode (the server would download for anyone).
     PUBLIC_IMPORT_ENABLED: bool | None = None
