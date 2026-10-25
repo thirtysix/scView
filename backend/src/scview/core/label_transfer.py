@@ -85,8 +85,9 @@ TARGET_SUM = 1e4
 SEED = 0
 UNMAPPED_PERCENTILE = 99.0
 # A cluster with more than this share of its cells "not in reference" is a candidate
-# state absent from the reference.
-CLUSTER_UNMAPPED_SHARE = 0.5
+# state absent from the reference. 30 times the 1% chance rate: with B cells left out of
+# a Kang reference, the query's B cluster was 40% unmapped (other clusters at most 6%).
+CLUSTER_UNMAPPED_SHARE = 0.3
 # Fewer shared genes than this and the space is built on too little to place cells:
 # a reference of another species, a pre-filtered gene list, or Ensembl ids against
 # symbols that could not be matched.
