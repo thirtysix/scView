@@ -17,6 +17,7 @@ import { VolcanoPlot } from "@/components/plots/VolcanoPlot";
 import { DetectionHistogram } from "@/components/plots/DetectionHistogram";
 import { DEEnrichment } from "@/components/unified/DEEnrichment";
 import { DEActivity } from "@/components/unified/DEActivity";
+import { ProteinNetwork } from "@/components/unified/ProteinNetwork";
 import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
 import { DEMethodsAgreement } from "@/components/unified/DEMethodsAgreement";
 import { DeCompositionNote } from "@/components/unified/DeCompositionNote";
@@ -886,6 +887,16 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             labelB={comparison?.b ?? refLabel}
             onScore={onScoreGeneSet}
           />
+
+          {/* Significant genes -> STRING protein interaction subnetwork */}
+          {datasetId && result.result_id && (
+            <ProteinNetwork
+              datasetId={datasetId}
+              sources={[{ value: `de:${result.result_id}`, label: result.label }]}
+              showDirection
+              onGeneClick={onGeneClick}
+            />
+          )}
         </>
       )}
 

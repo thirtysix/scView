@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ProteinNetwork } from "@/components/unified/ProteinNetwork";
 import { Loader2 } from "lucide-react";
 import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
@@ -310,6 +311,14 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
           </div>
 
           {enrichment && <ProgramsEnrichment result={enrichment} />}
+
+          {datasetId && programs.length > 0 && (
+            <ProteinNetwork
+              datasetId={datasetId}
+              sources={programs.map((p) => ({ value: `program:${p.index}`, label: p.name }))}
+              title="Protein network of a program"
+            />
+          )}
 
           <div>
             <label className="mb-1 block text-[11px] font-medium text-slate-500">Group by (heatmap)</label>

@@ -19,6 +19,7 @@ import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/mar
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { GeneReportButton } from "@/components/report/ReportButtons";
 import { MinimalPanel } from "@/components/unified/MinimalPanel";
+import { ProteinNetwork } from "@/components/unified/ProteinNetwork";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -548,6 +549,13 @@ export function UnifiedMarkersSubtab({
         onResult={setSplitResult}
       />
       {datasetId && groupByColumn && <MinimalPanel datasetId={datasetId} groupby={groupByColumn} />}
+      {datasetId && groupByColumn && selectedGroup && (
+        <ProteinNetwork
+          datasetId={datasetId}
+          sources={[{ value: `markers:${groupByColumn}/${selectedGroup}`, label: `${selectedGroup} markers` }]}
+          onGeneClick={onGeneClick}
+        />
+      )}
     </div>
   );
 }
