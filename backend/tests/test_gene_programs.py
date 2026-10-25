@@ -237,7 +237,7 @@ def test_save_stores_usage_programs_and_provenance(tmp_path):
     a, fit, inp, out = _saved()
     assert out["available"] and out["k"] == 3 and [p["name"] for p in out["programs"]] == ["P1", "P2", "P3"]
     assert a.obsm[gp.OBSM_KEY].shape == (a.n_obs, 3) and a.obsm[gp.OBSM_KEY].dtype == np.float32
-    assert set(NOT_EMBEDDINGS) == {gp.OBSM_KEY, gp.OBSM_RAW_KEY}
+    assert {gp.OBSM_KEY, gp.OBSM_RAW_KEY} <= set(NOT_EMBEDDINGS)
     p1 = out["programs"][0]
     assert len(p1["top_genes"]) <= gp.N_TOP and p1["top_genes"][0]["score"] > 0
     assert p1["mean_usage"] >= out["programs"][1]["mean_usage"]  # most used first

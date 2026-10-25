@@ -18,6 +18,7 @@ from scview.api.v1 import (
     annotation,
     labels,
     clustering,
+    cnv,
     assistant,
     export,
     export_formats,
@@ -83,6 +84,7 @@ api_router.include_router(preflight.router, tags=["system"])
 api_router.include_router(report.router, tags=["report"])
 api_router.include_router(planner.router, tags=["planner"])
 api_router.include_router(programs.router, tags=["programs"])
+api_router.include_router(cnv.router, tags=["cnv"])
 api_router.include_router(layouts.router, tags=["embeddings"])
 api_router.include_router(batch_compare.router, tags=["integration"])
 api_router.include_router(seqqc.router, tags=["assessment"])

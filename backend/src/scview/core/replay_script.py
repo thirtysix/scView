@@ -694,6 +694,89 @@ def gene_programs(adata, genes, k, seeds, source="raw", solver="cd", init="rando
 """,
 }
 
+_HELPERS["infer_cnv"] = """
+def infer_cnv(adata, genes, chromosomes, ref_column, ref_groups, window=100, step=10,
+              threshold=1.5, lfc_clip=3.0, source="raw", target_sum=1e4, n_pcs=50,
+              n_neighbors=15, resolution=1.0, seed=0, chunk=1000):
+    \"\"\"Copy number from expression as scView inferred it (inferCNV-style, as infercnvpy):
+    the genes in genomic order; log values minus the reference groups' means (bounded
+    difference between the groups' lowest and highest mean), clipped; a pyramid-weighted
+    running mean over `window` genes per chromosome, every `step`th window; each cell's
+    median subtracted; values under `threshold` SD of all values set to 0. Returns
+    (cells x windows, per-cell score, CNV clusters).\"\"\"
+    if source == "raw":
+        M, names = adata.raw.X, adata.raw.var_names
+    elif source == "X":
+        M, names = adata.X, adata.var_names
+    elif adata.raw is not None and adata.raw.n_vars > adata.n_vars and looks_like_counts(adata.raw.X):
+        M, names = adata.raw.X, adata.raw.var_names
+    else:
+        M, names = find_counts(adata), adata.var_names
+    cols = pd.Index(names).get_indexer(genes)
+
+    def block(s, e):
+        B = M[s:e]
+        if source == "counts":
+            B = sp.csr_matrix(B, dtype=np.float32)
+            tot = np.asarray(B.sum(axis=1), dtype=np.float64).ravel()
+            scale = np.divide(target_sum, tot, out=np.zeros_like(tot), where=tot > 0).astype(np.float32)
+            return np.log1p(B[:, cols].toarray() * scale[:, None])
+        B = B[:, cols]
+        return (B.toarray() if sp.issparse(B) else np.asarray(B)).astype(np.float32)
+
+    chroms = np.asarray(chromosomes, dtype=object)
+    rows, cols_w, vals = [], [], []
+    bounds = np.flatnonzero(np.r_[True, chroms[1:] != chroms[:-1], True])
+    j = 0
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        n = b - a
+        if window < n:
+            r = np.arange(1, window + 1, dtype=np.float64)
+            w = np.minimum(r, r[::-1]) / np.minimum(r, r[::-1]).sum()
+            starts = np.arange(0, n - window + 1, step)
+        else:
+            w, starts = np.full(n, 1.0 / n), np.array([0])
+        for st in starts:
+            rows.append(np.arange(a + st, a + st + len(w)))
+            cols_w.append(np.full(len(w), j))
+            vals.append(w)
+            j += 1
+    WT = sp.csr_matrix((np.concatenate(vals), (np.concatenate(cols_w), np.concatenate(rows))),
+                       shape=(j, len(genes)))
+    lab = adata.obs[ref_column].astype(str).to_numpy()
+    sums = np.zeros((len(ref_groups), len(genes)))
+    sizes = np.zeros(len(ref_groups))
+    for s in range(0, adata.n_obs, chunk):
+        B = block(s, s + chunk)
+        for i, g in enumerate(ref_groups):
+            m = lab[s:s + chunk] == g
+            sums[i] += B[m].sum(axis=0, dtype=np.float64)
+            sizes[i] += m.sum()
+    ref = (sums / np.maximum(sizes, 1)[:, None]).astype(np.float32)
+    lo, hi = ref.min(axis=0), ref.max(axis=0)
+    X = np.empty((adata.n_obs, j), dtype=np.float32)
+    for s in range(0, adata.n_obs, chunk):
+        B = block(s, s + chunk)
+        if len(ref_groups) == 1:
+            D = B - ref[0]
+        else:
+            D = np.zeros_like(B)
+            np.subtract(B, hi, out=D, where=B > hi)
+            np.subtract(B, lo, out=D, where=B < lo)
+        np.clip(D, -lfc_clip, lfc_clip, out=D)
+        S = np.asarray(WT @ D.T.astype(np.float64)).T
+        X[s:s + chunk] = S - np.median(S, axis=1, keepdims=True)
+    if threshold:
+        X[np.abs(X) < threshold * float(X.astype(np.float64).std())] = 0
+    score = np.abs(X).mean(axis=1)
+    tmp = ad.AnnData(X=sp.csr_matrix(X, dtype=np.float64))
+    k = max(1, min(n_pcs, X.shape[1] - 1, X.shape[0] - 1))
+    sc.tl.pca(tmp, n_comps=k, svd_solver="arpack", zero_center=False, random_state=seed)
+    sc.pp.neighbors(tmp, n_neighbors=min(n_neighbors, X.shape[0] - 1), use_rep="X_pca", random_state=seed)
+    sc.tl.leiden(tmp, resolution=resolution, random_state=seed, key_added="cnv_leiden")
+    return X, score, tmp.obs["cnv_leiden"].astype(str).to_numpy()
+"""
+
 _HELPERS["read_hashtags"] = '''
 def read_hashtags(path, cells, features, sources):
     """The tag counts scView demultiplexed, read again from the input file (cells x
@@ -773,7 +856,7 @@ _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_fro
                  "counts_hvg", "pearson_residuals", "per_cell_qc", "doublet_calls",
                  "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
                  "markers_key", "louvain",
-                 "harmony", "scanorama", "lognorm_scoring", "subcluster", "gene_programs",
+                 "harmony", "scanorama", "lognorm_scoring", "subcluster", "gene_programs", "infer_cnv",
                  "read_hashtags", "hashing", "vdj")
 
 # Helpers another helper calls.
@@ -786,6 +869,7 @@ _HELPER_NEEDS = {
     "subcluster": ("looks_like_counts", "harmony"),
     "refilter_types": ("looks_like_counts",),
     "gene_programs": ("find_counts",),
+    "infer_cnv": ("looks_like_counts", "find_counts"),
 }
 
 
@@ -1974,6 +2058,38 @@ def _gene_programs(p: dict, ctx: _Ctx) -> Snippet:
         'adata.obsm["X_nmf_usage_raw"] = usage.astype(np.float32)',
     ])
 
+
+def _cnv(p: dict, ctx: _Ctx) -> Snippet:
+    genes, chroms = p.get("genes"), p.get("chromosomes")
+    col, groups = p.get("reference_column"), p.get("reference_groups")
+    if (not isinstance(genes, list) or not genes or not isinstance(chroms, list)
+            or len(chroms) != len(genes) or not col or not isinstance(groups, list) or not groups):
+        return Snippet(NOT_REPLAYABLE, ["# Copy number: genes or reference not recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items()
+                                                         if x not in ("genes", "chromosomes")})],
+                       "genes or reference not recorded")
+    _need(ctx, "infer_cnv")
+    return Snippet(EXACT, [
+        "# Copy number inferred from expression (inferCNV-style): the genes scView placed on the",
+        f"# {p.get('assembly', 'genome')} genome (Ensembl {p.get('ensembl_release', '?')}), in genomic order.",
+        "CNV_GENES = [",
+        *_packed([repr(str(g)) for g in genes]),
+        "]",
+        "CNV_CHROMOSOMES = [",
+        *_packed([repr(str(c)) for c in chroms]),
+        "]",
+        f"cnv_x, cnv_score, cnv_leiden = infer_cnv(adata, CNV_GENES, CNV_CHROMOSOMES, {_lit(str(col))}, "
+        f"{_lit([str(g) for g in groups])}, window={_lit(p.get('window', 100))}, "
+        f"step={_lit(p.get('step', 10))}, threshold={_lit(p.get('threshold', 1.5))}, "
+        f"lfc_clip={_lit(p.get('lfc_clip', 3.0))}, source={_lit(p.get('source', 'raw'))}, "
+        f"target_sum={_lit(p.get('target_sum', 1e4))}, n_pcs={_lit(p.get('n_pcs', 50))}, "
+        f"n_neighbors={_lit(p.get('n_neighbors', 15))}, resolution={_lit(p.get('resolution', 1.0))}, "
+        f"seed={_lit(p.get('seed', 0))})",
+        'adata.obsm["X_cnv"] = cnv_x',
+        'adata.obs["cnv_score"] = cnv_score.astype(np.float32)',
+        'adata.obs["cnv_leiden"] = pd.Categorical(cnv_leiden)',
+    ])
+
 def _keep_layout(p: dict, ctx: _Ctx) -> Snippet:
     key, seed, k = p.get("key"), p.get("seed"), p.get("n_neighbors")
     if not key or seed is None or k is None:
@@ -2215,6 +2331,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "qc_state_label": _qc_state_label,
     "mito_refilter": _mito_refilter,
     "gene_programs": _gene_programs,
+    "cnv": _cnv,
     "keep_layout": _keep_layout,
     "label_transfer": _label_transfer,
     "hashing_demux": _hashing_demux,
