@@ -6,6 +6,35 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-25
+
+### Added
+- **Dark mode.** Light / Dark / System (default System, follows your computer) in the sidebar, remembered
+  per browser. Panels, tables, warnings, inputs, every plot and the cell scatters follow it. Downloaded
+  figures stay on a white background in both themes.
+- **SVG and PDF figures of the embeddings.** The scatter and the split / compare / gene grids download as
+  PNG, SVG or PDF from one menu (Download figure / Download grid): vector points in the screen's order and
+  colours, group labels, axis names, a title, the legend and the colour-scale caption, on white. Above
+  50,000 points the SVG/PDF puts the points in as one high-resolution image with every text vector (what
+  journals accept); all-vector is still offered. The PAGA graph drawn over the trajectory plot is in the PNG only.
+- **PDF for every plot.** Each Plotly plot has a third download button, Download PDF (vector, text selectable).
+- **Weighted density (Nebulosa-style).** A "Density" toggle in the Expression subtab colours the plot by an
+  expression-weighted kernel density of the gene (plug-in bandwidth = `ks::hpi`), which shows where a gene is
+  expressed even when few cells have reads; "Joint density" of several genes is in Several genes. Computed
+  once over all cells, so split panels share one bandwidth. `GET /expression/density`.
+- **Tracks plot** (scanpy's tracksplot): Marker Genes > Heatmap > Tracks draws each gene's per-cell value as a
+  filled track in the groups' colours, each gene on its own scale.
+- **Linked selection.** The current selection shows in the violin and stacked violin (a Selection group), the
+  marker dot plot and heatmap (a Selection row), the composition bars (selected share per bar), the QC
+  histograms and scatter, and gene vs gene; a "Selection: n cells [Clear]" chip marks each panel that reacts.
+  Box or lasso select on the QC counts-vs-genes scatter and on gene vs gene sets the selection.
+  `POST /expression/by-group` takes a cell set (large-dataset mode too).
+- **Lasso in split view.** The lasso works in any split panel (that panel's cells, or every panel's); each
+  panel's title says "n selected of N"; the compare and gene grids take the lasso too.
+
+### Changed
+- The scatter's Light/Dark background follows the app theme until you pick one in the plot toolbar.
+
 ## [0.36.0] - 2026-10-25
 
 ### Added
