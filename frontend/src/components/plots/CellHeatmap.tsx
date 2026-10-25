@@ -21,6 +21,7 @@ import {
   type HeatmapCells,
 } from "@/lib/cellHeatmap";
 import { pickMarkerGenes, type MarkerRow } from "@/lib/markerPlot";
+import { TRACKS_MAX_GENES, tracksCaption, tracksFigure, type TrackOrder } from "@/lib/tracksplot";
 
 const selectClass = "rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-700";
 
@@ -37,7 +38,9 @@ function errorText(err: unknown): string {
 /**
  * The marker heatmap's "Per cell" view (C034): the same genes as the group
  * means heatmap (top markers per group, or the user's), drawn for a seeded,
- * stratified sample of cells grouped in the column's stored order.
+ * stratified sample of cells grouped in the column's stored order. `kind`
+ * "tracks": the same sample as scanpy's tracksplot (lib/tracksplot.ts), one
+ * filled line per gene on its own scale.
  */
 export function CellHeatmap({
   datasetId,
@@ -47,6 +50,7 @@ export function CellHeatmap({
   perGroup,
   genes: chosenGenes,
   layer,
+  kind = "heatmap",
 }: {
   datasetId: string;
   groupby: string;
@@ -56,7 +60,10 @@ export function CellHeatmap({
   perGroup: number;
   genes?: string[];
   layer?: string;
+  /** A genes x cells heatmap, or the genes as tracks */
+  kind?: "heatmap" | "tracks";
 }) {
+  const tracks = kind === "tracks";
   const colormapName = useSettingsStore((s) => s.continuousColormap);
   const divergingName = useSettingsStore((s) => s.divergingColormap);
   const layers = useDatasetStore((s) => s.currentDataset?.expression_layers);
@@ -67,9 +74,13 @@ export function CellHeatmap({
     () => (custom ? chosenGenes! : pickMarkerGenes(groups, markers, perGroup).map((p) => p.gene)),
     [custom, chosenGenes, groups, markers, perGroup],
   );
-  const genes = useMemo(() => allGenes.slice(0, HEATMAP_MAX_GENES), [allGenes]);
+  const maxGenes = tracks ? TRACKS_MAX_GENES : HEATMAP_MAX_GENES;
+  const genes = useMemo(() => allGenes.slice(0, maxGenes), [allGenes, maxGenes]);
   const [cellsPerGroup, setCellsPerGroup] = useState<number>(DEFAULT_CELLS_PER_GROUP);
-  const [scale, setScale] = useState<CellScale>("zscore");
+  const [chosenScale, setScale] = useState<CellScale>("zscore");
+  // Tracks draw the values themselves, each gene from 0 (scanpy's tracksplot).
+  const scale: CellScale = tracks ? "none" : chosenScale;
+  const [order, setOrder] = useState<TrackOrder>({ by: "dataset" });
   const [data, setData] = useState<HeatmapCells | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -89,8 +100,12 @@ export function CellHeatmap({
   const figure = useMemo(() => {
     if (!data) return null;
     const colours = data.meta.groups.map((g) => rgbCss(colorOf(g)));
+    if (tracks) {
+      const valid = order.by === "dataset" || order.gene < data.meta.genes.length;
+      return tracksFigure(data, colours, valid ? order : { by: "dataset" });
+    }
     return cellHeatmapFigure(data, colours, plotlyColorscale(colormapName), plotlyColorscale(divergingName));
-  }, [data, colorOf, colormapName, divergingName]);
+  }, [data, colorOf, colormapName, divergingName, tracks, order]);
 
   if (genes.length === 0) {
     return <p className="py-8 text-center text-sm text-slate-400">No up-regulated marker genes to plot.</p>;
@@ -109,16 +124,35 @@ export function CellHeatmap({
           <option key={n} value={n}>{n}</option>
         ))}
       </select>
-      <label htmlFor="cell-heatmap-scale" className="ml-2 font-medium">Colour:</label>
-      <select
-        id="cell-heatmap-scale"
-        value={scale}
-        onChange={(e) => setScale(e.target.value as CellScale)}
-        className={selectClass}
-      >
-        <option value="zscore">z-score per gene</option>
-        <option value="none">expression (fixed range)</option>
-      </select>
+      {tracks ? (
+        <>
+          <label htmlFor="tracks-order" className="ml-2 font-medium">Cells in a group:</label>
+          <select
+            id="tracks-order"
+            value={order.by === "dataset" ? "" : String(order.gene)}
+            onChange={(e) => setOrder(e.target.value === "" ? { by: "dataset" } : { by: "gene", gene: Number(e.target.value) })}
+            className={selectClass}
+          >
+            <option value="">in dataset order</option>
+            {(data?.meta.genes ?? []).slice(0, TRACKS_MAX_GENES).map((g, i) => (
+              <option key={g} value={i}>by {g}</option>
+            ))}
+          </select>
+        </>
+      ) : (
+        <>
+          <label htmlFor="cell-heatmap-scale" className="ml-2 font-medium">Colour:</label>
+          <select
+            id="cell-heatmap-scale"
+            value={chosenScale}
+            onChange={(e) => setScale(e.target.value as CellScale)}
+            className={selectClass}
+          >
+            <option value="zscore">z-score per gene</option>
+            <option value="none">expression (fixed range)</option>
+          </select>
+        </>
+      )}
       {loading && data && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
     </div>
   );
@@ -157,7 +191,7 @@ export function CellHeatmap({
       <Plot
         data={figure.data as Data[]}
         layout={figure.layout as Partial<Layout>}
-        config={plotConfig("markers_heatmap_cells")}
+        config={plotConfig(tracks ? "markers_tracksplot" : "markers_heatmap_cells")}
         useResizeHandler
         style={{ width: "100%" }}
       />
@@ -169,14 +203,17 @@ export function CellHeatmap({
       )}
       {left > 0 && (
         <p className="mt-1 text-xs text-amber-700">
-          The first {HEATMAP_MAX_GENES} genes are drawn per cell; {left} more are in the group means heatmap.
+          {tracks
+            ? `The first ${TRACKS_MAX_GENES} genes are drawn as tracks; ${left} more are in the heatmaps.`
+            : `The first ${HEATMAP_MAX_GENES} genes are drawn per cell; ${left} more are in the group means heatmap.`}
         </p>
       )}
       <p className="mt-1 text-xs text-slate-500" data-testid="cell-heatmap-caption">
         {custom
           ? `Your ${meta.genes.length} gene${meta.genes.length === 1 ? "" : "s"} in single cells of each ${groupby} group.`
           : `Top ${perGroup} up-regulated markers of each ${groupby} group, in single cells.`}{" "}
-        {cellHeatmapCaption(meta)} {cellScaleCaption(meta.scale, meta.value_range)} Layer: {layerLabel}.
+        {cellHeatmapCaption(meta)}{" "}
+        {tracks ? tracksCaption(order, meta.genes) : cellScaleCaption(meta.scale, meta.value_range)} Layer: {layerLabel}.
       </p>
     </div>
   );
