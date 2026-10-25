@@ -43,6 +43,7 @@ def _adata(n: int = 300, genes: int = 50, seed: int = 0) -> ad.AnnData:
     a.uns["long_text"] = "x" * 500
     a.uns["big"] = np.arange(100_000)
     a.uns["table"] = pd.DataFrame({"a": [1, 2]})
+    a.uns["about_short_title"] = np.array(["Kang"], dtype=object)
     return a
 
 
@@ -72,6 +73,7 @@ def test_in_memory_matrices_tables_and_uns():
     assert "value" not in uns["long_text"] and uns["long_text"]["size"] == 500
     assert uns["big"] == {"key": "big", "type": "array", "shape": [100000], "dtype": "int64"}
     assert uns["table"]["type"] == "DataFrame"
+    assert uns["about_short_title"]["value"] == "Kang"
     json.dumps(s)  # serialisable as it is
 
 

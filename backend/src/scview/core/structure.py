@@ -198,6 +198,10 @@ def uns_node(key: str, v: Any, depth: int = 0) -> dict[str, Any]:
             node.update(type=str(v.dtype), value=_short(v.item()))
         else:
             node.update(type="array", **_shape_of(v))
+            if v.size <= 3 and v.dtype.kind in "OUSb":  # a file's string stored as a 1-array
+                shown = [_short(x) for x in v.ravel()]
+                if all(isinstance(x, (str, bool)) for x in shown):
+                    node["value"] = shown[0] if len(shown) == 1 else shown
             if v.dtype.names:
                 node["fields"] = list(v.dtype.names)[:UNS_CHILDREN]
     elif isinstance(v, (str, bytes)):
