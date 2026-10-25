@@ -43,5 +43,11 @@ describe("UnifiedExpressionSubtab", () => {
   it("offers nothing to add before a gene is searched", () => {
     renderTab(null);
     expect(screen.queryByRole("button", { name: "Add to gene list" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /Density/ })).toBeNull();
+  });
+
+  it("offers the density toggle next to the gene's colour", () => {
+    renderTab("MS4A1");
+    expect(screen.getByRole("checkbox", { name: /Density/ })).toBeTruthy();
   });
 });

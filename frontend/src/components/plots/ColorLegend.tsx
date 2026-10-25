@@ -1,6 +1,7 @@
 import { useMemo, useState, type MouseEvent } from "react";
 import { ArrowUpDown, ChevronDown, ChevronUp, GripVertical, Loader2, Pencil, Sparkles, Split } from "lucide-react";
 import { ClipControl } from "@/components/plots/ClipControl";
+import { InfoTip } from "@/components/common/InfoTip";
 import { colormapColor } from "@/lib/colors";
 import { colorScaleCaption, type ClipSetting, type ResolvedColorScale } from "@/lib/colorScale";
 import { moveCategory } from "@/lib/categoryOrder";
@@ -46,6 +47,8 @@ interface ColorLegendProps {
   onAsk?: () => void;
   /** Continuous: a line under the scale's caption (what a fixed scale means, its baseline) */
   note?: string;
+  /** Continuous: an InfoTip after the note, explaining it */
+  noteTip?: string;
   /** When provided, each category gets a "split into sub-clusters" button */
   onSubcluster?: (category: string) => void;
   /** The category being split right now (its button shows a spinner) */
@@ -87,6 +90,7 @@ export function ColorLegend({
   onAskAbout,
   onAsk,
   note,
+  noteTip,
   onSubcluster,
   splittingCategory,
   onCategoryToggle,
@@ -370,6 +374,11 @@ export function ColorLegend({
         {note && (
           <p className="text-[10px] leading-snug text-slate-500" data-testid="colour-scale-note">
             {note}
+            {noteTip && (
+              <span className="ml-1 inline-flex align-middle">
+                <InfoTip label="What the colour shows">{noteTip}</InfoTip>
+              </span>
+            )}
           </p>
         )}
         {scale && !scale.fixed && clip && onClipChange && (

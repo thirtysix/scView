@@ -24,6 +24,9 @@ type ScatterOverlay =
     }
   // One gene program's per-cell usage share (Programs subtab; 1-based index, P1..Pk)
   | { type: "program"; index: number; name: string }
+  // Expression-weighted kernel density (lib/density.ts) of one gene, or the joint
+  // density of several, on the embedding (and PCA pair) and layer it was computed for
+  | { type: "density"; genes: string[]; embedding: string; dims?: [number, number]; layer: string }
   | null;
 
 type Subtab = UnifiedSubtab;
@@ -43,6 +46,9 @@ interface UnifiedViewState {
 
   scatterOverlay: ScatterOverlay;
   setScatterOverlay: (overlay: ScatterOverlay) => void;
+  // A gene picked anywhere is drawn as its weighted density, not its expression
+  densityMode: boolean;
+  setDensityMode: (on: boolean) => void;
 
   // Overlay payload — lifted out of UnifiedViewPanel so it survives the
   // unmount/remount that PanelContainer triggers on every tab switch
@@ -116,6 +122,8 @@ export const useUnifiedViewStore = create<UnifiedViewState>((set) => ({
 
   scatterOverlay: null,
   setScatterOverlay: (overlay) => set({ scatterOverlay: overlay }),
+  densityMode: false,
+  setDensityMode: (on) => set({ densityMode: on }),
 
   overlayValues: null,
   setOverlayValues: (values) => set({ overlayValues: values }),
