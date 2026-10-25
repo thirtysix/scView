@@ -6,6 +6,12 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-10-25
+
+### Fixed
+- `docker-compose.yml` pins the 0.39 images: the 0.39.0 tag still pinned 0.38.0, so its images were not
+  published. 0.39.1 carries everything listed under 0.39.0.
+
 ## [0.39.0] - 2026-10-25
 
 ### Added
