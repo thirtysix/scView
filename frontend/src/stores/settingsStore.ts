@@ -14,6 +14,8 @@ interface SettingsState {
   pointSize: number;
   opacity: number;
   plotBackground: "white" | "dark";
+  /** The user picked the scatter background; until then it follows the app theme (lib/theme.ts) */
+  plotBackgroundChosen: boolean;
   categoricalPalette: CategoricalPaletteName;
   continuousColormap: ColormapName;
   /** For signed scores (lib/colorScale.ts decides when) */
@@ -50,6 +52,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   pointSize: 2,
   opacity: 0.8,
   plotBackground: "white",
+  plotBackgroundChosen: false,
   categoricalPalette: "cvd",
   continuousColormap: "viridis",
   divergingColormap: "RdBu",
@@ -64,7 +67,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setExpressionLayer: (layer) => set({ expressionLayer: layer }),
   setPointSize: (size) => set({ pointSize: size }),
   setOpacity: (opacity) => set({ opacity }),
-  setPlotBackground: (bg) => set({ plotBackground: bg }),
+  setPlotBackground: (bg) => set({ plotBackground: bg, plotBackgroundChosen: true }),
   setCategoricalPalette: (categoricalPalette) => set({ categoricalPalette }),
   setContinuousColormap: (continuousColormap) => set({ continuousColormap }),
   setDivergingColormap: (divergingColormap) => set({ divergingColormap }),

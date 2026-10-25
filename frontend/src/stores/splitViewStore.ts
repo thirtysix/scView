@@ -27,6 +27,9 @@ interface SplitViewState {
   /** Genes shown side by side (or blended); null = off. */
   geneGrid: GeneGrid | null;
   setGeneGrid: (grid: GeneGrid | null) => void;
+  /** Split view lasso: the panel's own cells under the outline, or every panel's. */
+  lassoScope: "panel" | "all";
+  setLassoScope: (scope: "panel" | "all") => void;
 }
 
 export const useSplitViewStore = create<SplitViewState>((set) => ({
@@ -45,9 +48,11 @@ export const useSplitViewStore = create<SplitViewState>((set) => ({
   geneGrid: null,
   setGeneGrid: (grid) =>
     set(grid && grid.genes.length > 0 ? { geneGrid: grid, splitBy: null, compareColumns: null } : { geneGrid: null }),
+  lassoScope: "panel",
+  setLassoScope: (scope) => set({ lassoScope: scope }),
 }));
 
-/** A grid covers the single plot (lasso is off while it does). */
+/** A grid covers the single plot (its panels take the lasso while it does). */
 export const isGridActive = (
   s: Pick<SplitViewState, "splitBy" | "compareColumns"> & Partial<Pick<SplitViewState, "geneGrid">>,
 ): boolean => s.splitBy != null || s.compareColumns != null || s.geneGrid != null;

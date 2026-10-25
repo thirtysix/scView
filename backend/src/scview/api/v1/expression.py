@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import expression_to_arrow_ipc
-from scview.core import coexpression, donor_expression, heatmap_cells
+from scview.core import coexpression, density, donor_expression, heatmap_cells
+from scview.api.v1.embeddings import parse_dims
 
 router = APIRouter()
 
@@ -154,6 +155,52 @@ async def get_expression_by_group(
     return result
 
 
+class ByGroupCellsBody(BaseModel):
+    genes: list[str] = Field(..., min_length=1, max_length=300)
+    groupby: str = ""
+    layer: str = ""
+    # A selection (lasso, gate, filter): unique row positions.
+    cells: list[int] = Field(..., min_length=1)
+    # False: only the selection's row (the groups are the GET's, cached by the client).
+    include_groups: bool = True
+
+
+@router.post("/datasets/{dataset_id}/expression/by-group")
+async def post_expression_by_group(
+    dataset_id: str,
+    body: ByGroupCellsBody,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The GET's per-group summary plus ``selection``: the same mean, mean over
+    expressing cells and fraction over a set of cells (C035: the marker dot plot's
+    and heatmap's "Selection" row). ``include_groups`` false returns only that row."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    cells = np.unique(np.asarray(body.cells, dtype=np.int64))
+    n_obs = adaptor.adata.n_obs
+    if cells[0] < 0 or cells[-1] >= n_obs:
+        raise HTTPException(status_code=400, detail=f"Cell positions must be in 0..{n_obs - 1}.")
+    groupby = body.groupby or adaptor.active_clustering_column() or ""
+    layer = body.layer or None
+
+    def _run() -> dict:
+        selection = adaptor.expression_for_cells(body.genes, cells, layer=layer)
+        if not body.include_groups:
+            return {"groupby": groupby, "layer": selection["layer"], "groups": [],
+                    "genes": selection["genes"], "selection": selection}
+        return {**adaptor.expression_by_group(body.genes, groupby, layer=layer), "selection": selection}
+
+    try:
+        # Reads every cell's values (or the selection's) for up to 300 genes: off the loop.
+        result = await asyncio.to_thread(_run)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not result["genes"]:
+        raise HTTPException(status_code=404, detail="None of the requested genes are in this layer.")
+    return result
+
+
 @router.get("/datasets/{dataset_id}/expression/heatmap-cells")
 async def get_heatmap_cells(
     dataset_id: str,
@@ -197,6 +244,65 @@ async def get_heatmap_cells(
         # Reads a few thousand rows of the matrix (and the layer's range): off the loop.
         ipc_bytes = await asyncio.to_thread(_run)
     except heatmap_cells.HeatmapCellsError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    return Response(content=ipc_bytes, media_type=ARROW_CONTENT_TYPE)
+
+
+@router.get("/datasets/{dataset_id}/expression/density")
+async def get_expression_density(
+    dataset_id: str,
+    genes: str = Query(..., description="Comma-separated gene names (at most 9; joint density when more than one)"),
+    embedding: str = Query(default="X_umap", description="obsm key of the embedding"),
+    dims: str = Query(default="", description="Two 0-based columns as x,y (e.g. '2,3'); default the first two"),
+    layer: str = Query(default="", description="Expression layer key (default: the dataset's)"),
+    adjust: float = Query(default=1.0, ge=0.25, le=4.0, description="Bandwidth multiplier"),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Expression-weighted kernel density of the genes on the embedding, one value
+    per cell (core/density.py, Nebulosa-style); several genes give their joint
+    density. Arrow IPC: one float32 column ``density``; the genes used and not
+    found, the bandwidths and the cells expressing each gene ride in the schema
+    metadata (``scview``). A large dataset reads the genes from its gene store."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    asked = [g for g in dict.fromkeys(g.strip() for g in genes.split(",")) if g]
+    if not asked:
+        raise HTTPException(status_code=400, detail="No genes specified.")
+    if len(asked) > density.MAX_GENES:
+        raise HTTPException(status_code=400, detail=f"At most {density.MAX_GENES} genes for a joint density.")
+    try:
+        coords = adaptor.get_embedding(embedding)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if coords.ndim != 2 or coords.shape[1] < 2:
+        raise HTTPException(status_code=400, detail=f"'{embedding}' has fewer than two dimensions.")
+    idx = parse_dims(dims, coords.shape[1]) if dims else [0, 1]
+    layer_key = layer or adaptor.default_expression_layer()
+    try:
+        present = set(adaptor._var_names_for_layer(layer_key))
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    found = [g for g in asked if g in present]
+    missing = [g for g in asked if g not in present]
+    if not found:
+        raise HTTPException(
+            status_code=404,
+            detail=f"None of the genes are in layer '{layer_key}': {', '.join(missing[:10])}.")
+
+    def _run() -> bytes:
+        weights = adaptor.get_expression(found, layer=layer_key)
+        values, facts = density.weighted_density(coords[:, idx], weights, adjust=adjust)
+        meta = {
+            "genes": found, "missing_genes": missing, "embedding": embedding, "dims": idx,
+            "layer": layer_key, "joint": len(found) > 1, "n_cells": int(coords.shape[0]), **facts,
+        }
+        return density.to_arrow_ipc(values, meta)
+
+    try:
+        # Every cell's values of a few genes and a lattice convolution: off the loop.
+        ipc_bytes = await asyncio.to_thread(_run)
+    except density.DensityError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc))
     return Response(content=ipc_bytes, media_type=ARROW_CONTENT_TYPE)
 

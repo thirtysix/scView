@@ -3,7 +3,10 @@ import { BarChart3, Blend, Grid2x2, Loader2, ScatterChart, X } from "lucide-reac
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { Panel } from "@/components/common/Panel";
 import { StackedViolin } from "@/components/plots/StackedViolin";
+import { SelectionChip } from "@/components/common/SelectionChip";
+import { useLinkedSelection } from "@/hooks/useLinkedSelection";
 import { GeneVsGene } from "@/components/unified/GeneVsGene";
+import { JointDensityButton } from "@/components/unified/DensityToggle";
 import { useGeneExpression } from "@/hooks/useGeneExpression";
 import { useObsCodes } from "@/hooks/useObsCodes";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -138,6 +141,7 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
           <BarChart3 className="h-3.5 w-3.5" />
           Stacked violin
         </button>
+        <JointDensityButton datasetId={datasetId} genes={genes} onShow={() => geneGrid && setGeneGrid(null)} />
       </div>
       {showViolins && enough && groupByColumn && (
         <StackedViolinSection datasetId={datasetId} genes={genes} groupByColumn={groupByColumn} />
@@ -231,6 +235,7 @@ function StackedViolinSection({ datasetId, genes, groupByColumn }: { datasetId: 
     [values, codes, genes],
   );
   const cells = useMemo(() => (codes ? strideSample(codes.length, VIOLIN_MAX_CELLS) : null), [codes]);
+  const hasSelection = useLinkedSelection().size > 0;
 
   let body;
   if (error || codesError) {
@@ -260,7 +265,9 @@ function StackedViolinSection({ datasetId, genes, groupByColumn }: { datasetId: 
             ? ` ${cells.length.toLocaleString()} of ${codes.length.toLocaleString()} cells, sampled evenly.`
             : ` All ${codes.length.toLocaleString()} cells.`}
           {missing.length > 0 ? ` Not in this layer: ${missing.join(", ")}.` : ""}
+          {hasSelection ? " Last column (orange): the selected cells, from any group." : ""}
         </p>
+        <SelectionChip className="ml-1" />
       </>
     );
   }

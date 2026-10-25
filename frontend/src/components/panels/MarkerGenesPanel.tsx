@@ -60,7 +60,7 @@ export function MarkerGenesPanel() {
   const [groupbyColumn, setGroupbyColumn] = useState<string>("");
   const [perGroup, setPerGroup] = useState(5);
   // Heatmap of group means, or of single cells sampled per group (C034).
-  const [heatmapOf, setHeatmapOf] = useState<"means" | "cells">("means");
+  const [heatmapOf, setHeatmapOf] = useState<"means" | "cells" | "tracks">("means");
   const markerView = useViewStore((s) => s.markerView);
   const setMarkerView = useViewStore((s) => s.setMarkerView);
   const markerGenes = useViewStore((s) => s.markerGenes);
@@ -375,12 +375,18 @@ export function MarkerGenesPanel() {
 
         {markerView === "heatmap" && (
           <div className="flex overflow-hidden rounded-lg border border-slate-300 text-sm shadow-sm" role="group" aria-label="Heatmap of">
-            {([["means", "Group means"], ["cells", "Per cell"]] as const).map(([v, label]) => (
+            {([["means", "Group means"], ["cells", "Per cell"], ["tracks", "Tracks"]] as const).map(([v, label]) => (
               <button
                 key={v}
                 onClick={() => setHeatmapOf(v)}
                 aria-pressed={heatmapOf === v}
-                title={v === "cells" ? "Single cells, a seeded sample of each group" : "One row per group: the group's mean"}
+                title={
+                  v === "cells"
+                    ? "Single cells, a seeded sample of each group"
+                    : v === "tracks"
+                      ? "Each gene's value per cell as a filled line, cells grouped (scanpy's tracksplot)"
+                      : "One row per group: the group's mean"
+                }
                 className={`px-3 py-1.5 font-medium transition-colors ${
                   heatmapOf === v ? "bg-slate-700 text-white" : "bg-white text-slate-700 hover:bg-slate-50"
                 }`}
@@ -506,8 +512,10 @@ export function MarkerGenesPanel() {
               </>
             )}
           </div>
-          {markerView === "heatmap" && heatmapOf === "cells" ? (
+          {markerView === "heatmap" && heatmapOf !== "means" ? (
             <CellHeatmap
+              key={heatmapOf}
+              kind={heatmapOf === "tracks" ? "tracks" : "heatmap"}
               datasetId={datasetId}
               groupby={groupbyColumn}
               groups={markersData.groups}

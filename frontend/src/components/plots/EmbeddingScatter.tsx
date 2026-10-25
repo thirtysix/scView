@@ -4,8 +4,21 @@ import { OrthographicView, OrbitView, type Layer } from "@deck.gl/core";
 import { ScatterplotLayer, PointCloudLayer } from "@deck.gl/layers";
 import { mapCategoryToColor, mapValueToColor, type AnyColormapName } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { RotateCcw, AlertTriangle, ImageDown } from "lucide-react";
+import { RotateCcw, AlertTriangle } from "lucide-react";
 import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
+import {
+  buildScatterSvg,
+  canvasRasterizer,
+  embeddingAxisLabels,
+  nextFrame,
+  pointRadius,
+  projectPoints,
+  svgLabels,
+  type PointMode,
+} from "@/lib/scatterSvg";
+import { saveFigure } from "@/lib/pdfExport";
+import { prettyEmbeddingLabel } from "@/lib/formatting";
+import { ScatterExportMenu, type FigureFormat } from "@/components/plots/ScatterExportMenu";
 import { exportFilename } from "@/lib/exportFilename";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { colorByLine } from "@/lib/hoverInfo";
@@ -86,6 +99,10 @@ interface EmbeddingScatterProps {
   /** The embedding's obsm key: a UMAP or t-SNE gets a note that its cluster
    *  gaps aren't distances, linking to the cluster-distance view */
   embedding?: string | null;
+  /** Axis names in the SVG / PDF (default from `embedding`: UMAP1/UMAP2, PC1/PC2) */
+  axisLabels?: readonly [string, string] | null;
+  /** Title of the SVG / PDF (default: the embedding, and what colours it) */
+  exportTitle?: string;
 }
 
 function computeInitialViewState3D(
@@ -162,6 +179,8 @@ export function EmbeddingScatter({
   overlayElement = null,
   overlayLayers = null,
   embedding = null,
+  axisLabels = null,
+  exportTitle,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<DeckGLRef>(null);
@@ -566,19 +585,25 @@ export function EmbeddingScatter({
 
   // Labels are placed for the current camera: kept inside the plot, and off
   // each other (the bigger group keeps its spot).
-  const labelLayers = useMemo(() => {
-    if (!centroids || !viewState) return [];
+  const placedLabels = useMemo(() => {
+    if (!centroids || !viewState) return null;
     const view = labelViewOf(views, containerSize.width, containerSize.height, viewState);
-    if (!view) return [];
-    const placed = placeLabels(centroids, view, {
+    if (!view) return null;
+    return placeLabels(centroids, view, {
       highlight: highlightCategory,
       avoid: avoidBox ? [avoidBox] : [],
     });
-    return centroidLabelLayers("embedding-labels", placed, {
-      dark: background === "dark",
-      highlight: highlightCategory,
-    });
-  }, [centroids, viewState, views, containerSize.width, containerSize.height, background, highlightCategory, avoidBox]);
+  }, [centroids, viewState, views, containerSize.width, containerSize.height, highlightCategory, avoidBox]);
+  const labelLayers = useMemo(
+    () =>
+      placedLabels
+        ? centroidLabelLayers("embedding-labels", placedLabels, {
+            dark: background === "dark",
+            highlight: highlightCategory,
+          })
+        : [],
+    [placedLabels, background, highlightCategory],
+  );
   const layers = useMemo(
     () => [...pointLayers, ...labelLayers, ...(overlayLayers ?? [])],
     [pointLayers, labelLayers, overlayLayers],
@@ -597,6 +622,46 @@ export function EmbeddingScatter({
         : undefined,
     });
   }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells]);
+
+  // SVG / PDF: the drawn points projected with the camera shown, in their draw
+  // order and colours, the labels where they are on screen (lib/scatterSvg.ts).
+  const downloadFigure = useCallback(
+    async (format: FigureFormat, mode: PointMode) => {
+      if (!viewState || !renderPositions || !renderColors) return;
+      const view = labelViewOf(views, containerSize.width, containerSize.height, viewState);
+      if (!view) return;
+      await nextFrame();
+      const projected = projectPoints(view.project, renderPositions, stride, renderColors);
+      const legendTitle = exportLegend?.title;
+      const plotName = embedding ? prettyEmbeddingLabel(embedding) : "";
+      const figure = buildScatterSvg({
+        width: view.width,
+        height: view.height,
+        panels: [
+          {
+            view: { x: 0, y: 0, width: view.width, height: view.height },
+            sets: [{ ...projected, radius: pointRadius(pointSize, stride) }],
+            labels: placedLabels ? svgLabels(placedLabels, view.project, highlightCategory) : [],
+          },
+        ],
+        legend: exportLegend,
+        colormap: continuousColormap,
+        title: exportTitle ?? [plotName, legendTitle].filter(Boolean).join(", coloured by "),
+        axes: dimensions === 3 ? null : (axisLabels ?? embeddingAxisLabels(embedding)),
+        notes: isSampled
+          ? [`Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} cells (sampled)`]
+          : [],
+        mode,
+        rasterize: canvasRasterizer,
+      });
+      await saveFigure(format, figure, exportFilename(useDatasetStore.getState().currentDataset?.name, exportName));
+    },
+    [
+      viewState, renderPositions, renderColors, views, containerSize.width, containerSize.height, stride,
+      pointSize, placedLabels, highlightCategory, exportLegend, continuousColormap, exportTitle, embedding,
+      dimensions, axisLabels, isSampled, renderCount, totalCells, exportName,
+    ],
+  );
 
   if (!positions || positions.length === 0) {
     return (
@@ -660,14 +725,13 @@ export function EmbeddingScatter({
         </button>
       )}
       {!minimal && viewState && !contextLost && (
-        <button
-          onClick={downloadPng}
-          title="Download PNG (high resolution, white background, with legend)"
-          aria-label="Download PNG"
-          className="absolute right-3 top-12 z-10 rounded-md border border-slate-300 bg-white/90 p-1.5 text-slate-600 shadow-sm transition-colors hover:bg-slate-100 hover:text-slate-800"
-        >
-          <ImageDown className="h-4 w-4" />
-        </button>
+        <ScatterExportMenu
+          nPoints={renderCount}
+          onPng={downloadPng}
+          onFigure={downloadFigure}
+          figureNote={overlayLayers?.length ? "Without the graph drawn over the points (the PNG has it)." : undefined}
+          className="absolute right-3 top-12 z-10 rounded-md border border-slate-300 bg-white/90 p-0.5 shadow-sm"
+        />
       )}
 
       {/* Sampling indicator */}

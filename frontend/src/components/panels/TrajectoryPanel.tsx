@@ -5,6 +5,7 @@ import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useScatterBackground } from "@/lib/theme";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useEmbedding } from "@/hooks/useEmbedding";
 import { apiFetch, apiFetchBinary } from "@/api/client";
@@ -67,7 +68,7 @@ export function TrajectoryPanel() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
-  const plotBackground = useSettingsStore((s) => s.plotBackground);
+  const plotBackground = useScatterBackground();
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
   const highlighted = useSelectionStore((s) => s.highlightedGroup);

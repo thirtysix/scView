@@ -8,6 +8,9 @@ import { ColorLegend } from "@/components/plots/ColorLegend";
 import type { ResolvedColorScale } from "@/lib/colorScale";
 import { MultiGenePanel } from "@/components/unified/MultiGenePanel";
 import { CoexpressedGenes } from "@/components/unified/CoexpressedGenes";
+import { DensityToggle } from "@/components/unified/DensityToggle";
+import { DENSITY_SCALE_NAME, DENSITY_TIP, densityLegendNote, lastDensityMeta } from "@/lib/density";
+import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 
 interface UnifiedExpressionSubtabProps {
   onGeneSelect: (gene: string) => void;
@@ -27,6 +30,7 @@ export function UnifiedExpressionSubtab({
 }: UnifiedExpressionSubtabProps) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
+  const showsDensity = useUnifiedViewStore((s) => s.scatterOverlay?.type === "density");
 
   const categoricalColumns = useMemo(() => {
     if (!dataset) return [];
@@ -79,10 +83,13 @@ export function UnifiedExpressionSubtab({
               <ColorLegend
                 type="continuous"
                 scale={expressionScale}
-                label={`${activeGene} expression`}
+                label={showsDensity ? `${activeGene} ${DENSITY_SCALE_NAME}` : `${activeGene} expression`}
+                note={showsDensity ? densityLegendNote(lastDensityMeta()) : undefined}
+                noteTip={showsDensity ? DENSITY_TIP : undefined}
               />
             </div>
           )}
+          <DensityToggle datasetId={datasetId} gene={activeGene} onGeneSelect={onGeneSelect} />
         </div>
       )}
 

@@ -9,6 +9,7 @@ import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 import { useObsRevision } from "@/stores/obsRevisionStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useScatterBackground } from "@/lib/theme";
 import { ClusterReportButton } from "@/components/report/ReportButtons";
 
 /**
@@ -41,6 +42,7 @@ export function ClusterReference({
   onViewStateChange?: (vs: Record<string, unknown>) => void;
 }) {
   const paletteName = useSettingsStore((s) => s.categoricalPalette);
+  const background = useScatterBackground();
   const slots = useCategorySlots(column);
   const [clusterValues, setClusterValues] = useState<Int32Array | null>(null);
   const revision = useObsRevision(datasetId, column); // refetch after hand labels
@@ -135,6 +137,7 @@ export function ClusterReference({
           onClick={handlePointClick}
           dimToGray
           minimal
+          background={background}
         />
       </div>
       <div className="flex flex-wrap gap-1 p-2">

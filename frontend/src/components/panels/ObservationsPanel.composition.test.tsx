@@ -9,6 +9,8 @@ const { apiFetch, downloadCsv, plotProps } = vi.hoisted(() => ({
 }));
 vi.mock("@/api/client", () => ({ apiFetch }));
 vi.mock("@/lib/csv", () => ({ downloadCsv }));
+// No selection here: the selection overlay's group codes are never read.
+vi.mock("@/hooks/useObsCodes", () => ({ useObsCodes: () => ({ codes: null, error: false }) }));
 // Plotly needs a real canvas; the traces and layout it is handed are what matters.
 vi.mock("@/components/plots/Plot", () => ({
   default: (props: Record<string, unknown>) => {

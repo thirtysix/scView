@@ -13,6 +13,8 @@ interface ViolinPlotProps {
   xLabel?: string;
   yLabel?: string;
   height?: number;
+  /** One more violin after the groups, in its own colour (C035: the selection) */
+  extra?: { name: string; values: ArrayLike<number>; color: string } | null;
 }
 
 const STATS = [
@@ -24,23 +26,31 @@ const STATS = [
 ] as const;
 
 export function ViolinPlot({
-  data,
+  data: groupData,
   groupColumn,
   title,
   xLabel,
   yLabel,
   height = 400,
+  extra = null,
 }: ViolinPlotProps) {
-  const colorOf = useCategoryColors(groupColumn);
+  const groupColorOf = useCategoryColors(groupColumn);
   const order = useCategoryOrder(groupColumn);
   // A log value axis, per plot (lib/logAxis.ts: zeros and negatives stay).
   const [log, setLog] = useState(false);
-  const groups = useMemo(() => sortByCategoryOrder(Object.keys(data), order), [data, order]);
+  const data = useMemo(
+    () => (extra ? { ...groupData, [extra.name]: Array.from(extra.values) } : groupData),
+    [groupData, extra],
+  );
+  const groups = useMemo(() => {
+    const sorted = sortByCategoryOrder(Object.keys(groupData), order);
+    return extra ? [...sorted.filter((g) => g !== extra.name), extra.name] : sorted;
+  }, [groupData, order, extra]);
   const traces = useMemo(() => {
     const violins = groups.map((group) => {
-      const color = colorOf(group);
-      const rgbStr = rgbCss(color);
-      const rgbaStr = rgbCss(color, 0.5);
+      const extraGroup = extra && group === extra.name;
+      const rgbStr = extraGroup ? extra.color : rgbCss(groupColorOf(group));
+      const rgbaStr = extraGroup ? extra.color + "80" : rgbCss(groupColorOf(group), 0.5);
       const values = data[group] ?? [];
 
       return {
@@ -85,7 +95,7 @@ export function ViolinPlot({
       name: "summary",
     };
     return [...violins, stats];
-  }, [data, groups, colorOf, log]);
+  }, [data, groups, groupColorOf, extra, log]);
 
   const ticks = useMemo(() => {
     if (!log) return null;
@@ -134,7 +144,7 @@ export function ViolinPlot({
     [title, xLabel, yLabel, height, log, ticks],
   );
 
-  if (Object.keys(data).length === 0) {
+  if (Object.keys(groupData).length === 0) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-400" style={{ height }}>
         No data to display

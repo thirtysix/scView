@@ -10,6 +10,16 @@
     <script>
       window.global = window.global || window;
     </script>
+    <!-- Dark theme before first paint (no white flash); lib/theme.ts takes over. -->
+    <script>
+      try {
+        var p = localStorage.getItem("scview.theme.v1");
+        if (p === "dark" || (p !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+          document.documentElement.classList.add("dark");
+          document.documentElement.style.colorScheme = "dark";
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

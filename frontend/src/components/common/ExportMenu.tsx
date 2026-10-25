@@ -35,6 +35,8 @@ interface ExportMenuProps {
   label?: string;
   /** Called each time the menu opens, e.g. to fetch a file size lazily */
   onOpen?: () => void;
+  /** Called when the menu opens or closes (e.g. to lift its container above an overlay) */
+  onOpenChange?: (open: boolean) => void;
   disabled?: boolean;
   /** Small icon-only button for dense rows */
   compact?: boolean;
@@ -50,11 +52,15 @@ export function ExportMenu({
   items,
   label = "Export",
   onOpen,
+  onOpenChange,
   disabled = false,
   compact = false,
   className = "",
 }: ExportMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  useEffect(() => onOpenChangeRef.current?.(isOpen), [isOpen]);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
