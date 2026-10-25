@@ -6,6 +6,42 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-10-25
+
+### Added
+- **Cytokine response** (Activity, "Cytokine response"): which of 43 cytokines a group is responding to, by
+  CytoSig's signature matrix (Jiang et al. 2021): ridge regression of each group's profile on the signatures
+  with a gene-shuffle z-score. Each group against the others or all cells, or condition A vs B within each
+  group. Heatmap (z, diverging about 0) and top cytokines per group. Matches the reference CytoSig on Kang
+  STIM vs CTRL (Spearman 0.9997; IFN1 tops every cell type). Works on large datasets; mouse genes are matched
+  by upper-cased symbol. The signature (GPL-3.0 data) is fetched on first use and checked against a pinned
+  sha256, not shipped; `CYTOSIG_AUTO_DOWNLOAD=false` turns fetching off. `POST /datasets/{id}/cytokines/activity`.
+- **Elsewhere in the body** (Markers tab, "Look up in HPA"): where a group's markers are expressed across
+  43 human tissues and 154 cell types (Human Protein Atlas v25.1, CC BY-SA 4.0), with HPA's specificity
+  categories rebuilt from its published cut-offs, tau, top tissues and cell types, a tissue heatmap and a link
+  per gene. Markers that are specific among your clusters but broadly expressed in the body are flagged.
+  Tables fetched on first use (~21 MB; `HPA_AUTO_DOWNLOAD=false` turns this off).
+  `GET /datasets/{id}/markers/offtarget`, `POST /offtarget/genes`.
+- **Protein network** (DE results, Markers, Programs): STRING v12.0 physical interactions (CC BY 4.0) among a
+  DE result's genes, a group's markers or a gene program: hubs, Leiden communities, colour by community or
+  log2FC, a sortable node table with CSV, and a connectivity test (observed vs expected links from 1,000
+  random protein sets matched on degree). Score cut-off 400/700/900, at most 500 genes. STRING is fetched once
+  per species and queried locally: gene lists never leave the machine (`PPI_AUTO_DOWNLOAD=false` turns
+  fetching off). `GET /datasets/{id}/ppi`, `POST /ppi/network`.
+- **Copy number** (new Unified View tab): inferCNV-style inference of large-scale gains and losses from
+  expression against normal reference cells you pick, to tell malignant from normal cells in tumour samples.
+  Genome heatmap by group, CNV score per cell (`cnv_score`), CNV clusters (`cnv_leiden`) with gain/loss
+  calls, both colourable on the embedding; Cancel, preflight estimate, replay step. Matches infercnvpy 0.6.1
+  per-cell scores (Pearson 0.9999996 on maynard2020_3k). Gene positions for human GRCh38 and mouse GRCm39
+  (Ensembl 113) ship with scView. A counts layer that holds log values gets a warning (logged twice flattens
+  the profile). `POST /datasets/{id}/cnv/run`.
+- The co-pilot can cite all four (`[result:cytokines]`, `[result:offtarget]`, `[result:ppi]`, `[result:cnv]`),
+  and routes questions about them to the dataset's results.
+
+### Fixed
+- Marker genes failed ("float16") on an upload stored in half precision; such a matrix is now widened to
+  float32 before ranking.
+
 ## [0.38.0] - 2026-10-25
 
 ### Added
