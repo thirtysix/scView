@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LayoutDashboard, AlertCircle, Loader2 } from "lucide-react";
 import { useEmbedding } from "@/hooks/useEmbedding";
+import { embeddingAxisLabels } from "@/lib/scatterSvg";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useScatterBackground } from "@/lib/theme";
@@ -9,7 +10,14 @@ import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useViewStore } from "@/stores/viewStore";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { ColorLegend } from "@/components/plots/ColorLegend";
-import { fixedColorScale, overlayStats, resolveColorScale, scatterScale, type OverlayKind } from "@/lib/colorScale";
+import {
+  colorScaleCaption,
+  fixedColorScale,
+  overlayStats,
+  resolveColorScale,
+  scatterScale,
+  type OverlayKind,
+} from "@/lib/colorScale";
 import { reliabilityLegendNote, showReliability } from "@/lib/embeddingReliability";
 import { LassoSelector } from "@/components/plots/LassoSelector";
 import { UnifiedToolbar } from "@/components/unified/UnifiedToolbar";
@@ -86,6 +94,7 @@ export function UnifiedViewPanel() {
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const colorBy = useSettingsStore((s) => s.colorBy);
   const embedding = useSettingsStore((s) => s.embedding);
+  const pcaDims = useSettingsStore((s) => s.pcaDims);
   const expressionLayer = useSettingsStore((s) => s.expressionLayer);
   const setExpressionLayer = useSettingsStore((s) => s.setExpressionLayer);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
@@ -853,6 +862,7 @@ export function UnifiedViewPanel() {
           max: colorScale.max,
           colormap: colorScale.colormap,
           centre: colorScale.centre,
+          caption: colorScaleCaption(colorScale),
         }
       : categories && categoryColors
         ? { type: "categorical", title: colorColumnName ?? colorBy, categories, colors: categoryColors }
@@ -933,6 +943,7 @@ export function UnifiedViewPanel() {
                 highlightCategory={labelHighlight}
                 overlayElement={splitActive ? null : legendColumn}
                 embedding={embedding}
+                axisLabels={embeddingAxisLabels(embedding, pcaDims, dataset?.embedding_dimensions?.[embedding])}
               />
             )}
             {!gridActive && (

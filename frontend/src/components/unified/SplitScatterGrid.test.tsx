@@ -22,6 +22,12 @@ vi.mock("@deck.gl/react", async () => {
   };
 });
 vi.mock("@/api/embeddings", () => ({ fetchEmbeddingBinary }));
+const saved = vi.hoisted(() => ({ calls: [] as { format: string; svg: string; filename: string }[] }));
+vi.mock("@/lib/pdfExport", () => ({
+  saveFigure: vi.fn(async (format: string, figure: { svg: string }, filename: string) => {
+    saved.calls.push({ format, svg: figure.svg, filename });
+  }),
+}));
 
 import { SplitScatterGrid } from "./SplitScatterGrid";
 import { SplitByControl } from "./SplitByControl";
@@ -193,6 +199,42 @@ describe("SplitScatterGrid", () => {
       expect(ids).toEqual(["split-fg-0", "split-fg-1"]);
     });
     expect(useSplitViewStore.getState().showContext).toBe(false);
+  });
+
+  it("downloads the grid as one SVG: every panel with its title and frame, the grey context, ONE legend", async () => {
+    saved.calls = [];
+    render(
+      withQuery(
+        <SplitScatterGrid
+          datasetId="ds1"
+          embedding="X_umap"
+          column="stim"
+          positions={positions}
+          dimensions={2}
+          colorValues={expression}
+          colorType="continuous"
+          exportName="UMAP_IFIT1"
+          exportLegend={{ type: "continuous", title: "IFIT1", min: 0, max: 5, caption: "Colour range 0 to 5." }}
+        />,
+      ),
+    );
+    await screen.findByTestId("deck");
+    fireEvent.click(screen.getByRole("button", { name: "Download grid" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /SVG \(vector\)/ }));
+    });
+    await waitFor(() => expect(saved.calls).toHaveLength(1));
+    const { svg, filename } = saved.calls[0]!;
+    expect(filename).toBe("scview_kang_UMAP_IFIT1_split_stim");
+    const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
+    const panels = [...doc.querySelectorAll("g.panel")];
+    expect(panels).toHaveLength(2);
+    // Each panel: 6 grey context cells + its own 3, and a frame
+    expect(panels.map((p) => p.querySelectorAll("g.points circle").length)).toEqual([9, 9]);
+    expect(panels.every((p) => p.querySelector(":scope > rect[stroke]"))).toBe(true);
+    expect(doc.querySelectorAll("g.legend")).toHaveLength(1);
+    const texts = [...doc.querySelectorAll("text")].map((t) => t.textContent);
+    expect(texts).toEqual(expect.arrayContaining(["CTRL", "STIM", "IFIT1", "Colour range 0 to 5."]));
   });
 
   it("labels each panel's colour groups at their centre in that panel, skipping absent groups", async () => {

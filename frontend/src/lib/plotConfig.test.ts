@@ -7,10 +7,13 @@ import { rememberBaseFigure, themedLayout, useThemeStore } from "@/lib/theme";
 const plotly = vi.hoisted(() => ({
   Icons: { camera: { name: "camera" }, disk: { name: "disk" } },
   downloadImage: vi.fn(),
+  toImage: vi.fn(),
 }));
 vi.mock("@/lib/plotly", () => ({ default: plotly }));
+const pdf = vi.hoisted(() => ({ svgToPdf: vi.fn(), saveBlob: vi.fn() }));
+vi.mock("@/lib/pdfExport", () => pdf);
 
-import { PNG_SCALE, exportFilename, plotConfig } from "./plotConfig";
+import { PNG_SCALE, exportFilename, plotConfig, plotlySvgText } from "./plotConfig";
 
 const gd = {} as PlotlyHTMLElement;
 const buttons = (plot: string, dataset?: string) =>
@@ -36,11 +39,29 @@ describe("plotConfig", () => {
     useDatasetStore.setState({ currentDataset: { id: "a", name: "pbmc 3k" } as DatasetInfo });
   });
 
-  it("shows only the two download buttons, without the Plotly logo", () => {
+  it("shows only the three download buttons, without the Plotly logo", () => {
     const cfg = plotConfig("volcano");
     expect(cfg.displaylogo).toBe(false);
     expect(cfg.displayModeBar).toBeUndefined(); // default: on hover
-    expect(buttons("volcano").map((b) => b.name)).toEqual(["scviewDownloadPng", "scviewDownloadSvg"]);
+    expect(buttons("volcano").map((b) => b.name)).toEqual(["scviewDownloadPng", "scviewDownloadSvg", "scviewDownloadPdf"]);
+  });
+
+  it("makes the PDF from the plot's own SVG export, on white", async () => {
+    plotly.toImage.mockReset().mockResolvedValue('<svg width="400" height="300"></svg>');
+    const blob = new Blob(["%PDF-"]);
+    pdf.svgToPdf.mockReset().mockResolvedValue(blob);
+    pdf.saveBlob.mockReset();
+    click(buttons("volcano")[2]!);
+    await vi.waitFor(() => expect(pdf.saveBlob).toHaveBeenCalled());
+    expect(plotly.toImage.mock.calls[0]![1]).toMatchObject({ format: "svg", setBackground: "opaque", imageDataOnly: true });
+    expect(pdf.svgToPdf).toHaveBeenCalledWith('<svg width="400" height="300"></svg>');
+    expect(pdf.saveBlob).toHaveBeenCalledWith(blob, "scview_pbmc_3k_volcano", "pdf");
+  });
+
+  it("reads the SVG out of a data URL too", () => {
+    expect(plotlySvgText(`data:image/svg+xml,${encodeURIComponent("<svg>é</svg>")}`)).toBe("<svg>é</svg>");
+    expect(plotlySvgText(`data:image/svg+xml;base64,${btoa("<svg/>")}`)).toBe("<svg/>");
+    expect(plotlySvgText("<svg/>")).toBe("<svg/>");
   });
 
   it("returns the same buttons for the same plot, so Plotly doesn't redraw on every render", () => {
@@ -84,6 +105,23 @@ describe("plotConfig", () => {
     const [fig, opts] = plotly.downloadImage.mock.calls[0]!;
     expect(fig.layout).toMatchObject({ paper_bgcolor: "white", font: { color: "#334155" }, width: 500, height: 300 });
     expect(opts.setBackground).toBe("opaque");
+    useThemeStore.setState({ preference: "light" });
+  });
+
+  it("makes the PDF on white in dark mode too", async () => {
+    useThemeStore.setState({ preference: "dark", systemDark: false });
+    const base = { paper_bgcolor: "white", font: { color: "#334155" } };
+    const div = document.createElement("div") as unknown as Record<string, unknown>;
+    div.layout = themedLayout(base, "dark");
+    div.data = [];
+    div._fullLayout = { width: 500, height: 300 };
+    rememberBaseFigure(div as unknown as HTMLElement, [], base);
+    plotly.toImage.mockReset().mockResolvedValue("<svg/>");
+    pdf.svgToPdf.mockReset().mockResolvedValue(new Blob(["%PDF-"]));
+    pdf.saveBlob.mockReset();
+    buttons("volcano")[2]!.click(div as unknown as PlotlyHTMLElement, new MouseEvent("click"));
+    await vi.waitFor(() => expect(pdf.saveBlob).toHaveBeenCalled());
+    expect(plotly.toImage.mock.calls[0]![0].layout).toMatchObject({ paper_bgcolor: "white", font: { color: "#334155" } });
     useThemeStore.setState({ preference: "light" });
   });
 });
