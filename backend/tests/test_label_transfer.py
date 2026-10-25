@@ -112,10 +112,12 @@ def test_integration_removes_a_shift_shared_by_every_query_cell():
     known = truth != "D"
     proj = _map(p, lt.METHOD_PROJECTION)
     integ = _map(p, lt.METHOD_INTEGRATION)
-    # Projection assumes no shift: it flags many known cells (~9%, against ~1% by chance);
-    # integration flags as few as by chance.
-    assert proj["unmapped"][known].mean() > 0.05
-    assert integ["unmapped"][known].mean() < 0.02
+    # Projection keeps the shift (it flagged ~9% of known cells before the cut followed
+    # the query's median ratio); the cut now absorbs it, and D still flags in both.
+    assert proj["shift"] > 1.05 and integ["shift"] < proj["shift"]
+    for out in (proj, integ):
+        assert out["unmapped"][known].mean() < 0.02
+        assert out["unmapped"][~known].mean() > 0.8
     assert (integ["label"][known] == truth[known]).mean() > 0.95
 
 

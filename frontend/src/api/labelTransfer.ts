@@ -24,6 +24,8 @@ export interface LabelTransferSummary {
   n_shared_genes: number;
   n_hvg: number;
   threshold: number;
+  /** Query median novelty ratio over the reference's (>= 1); the cut is scaled by it. Absent on old results. */
+  shift?: number;
   percentile: number;
   n_unmapped: number;
   unmapped_share: number;

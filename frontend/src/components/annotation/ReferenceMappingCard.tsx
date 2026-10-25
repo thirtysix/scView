@@ -24,6 +24,9 @@ const colourBy = (column: string) => {
   useViewStore.getState().setPanel("unified");
 };
 
+/** A shift of the query from the reference this large gets a note (Kang vs Kang: 1.0, another study: 2.1). */
+const SHIFT_NOTE = 1.3;
+
 /**
  * Reference mapping (C042): label this dataset's cells from another library dataset's
  * cell-type column, and flag cells the reference does not contain.
@@ -240,6 +243,13 @@ export function ReferenceMappingCard({
                 not in reference
                 <InfoTip width={320}>{result.note}</InfoTip>
               </p>
+              {(result.shift ?? 1) >= SHIFT_NOTE && (
+                <p className="text-amber-700" data-testid="reference-mapping-shift">
+                  This dataset sits {result.shift!.toFixed(1)}x farther from the reference than its own cells do (another
+                  study, chemistry or depth). The &quot;not in reference&quot; cut was scaled to match, so it flags cells
+                  unlike the rest of this dataset, not the shift itself.
+                </p>
+              )}
               <div className="flex flex-wrap gap-2">
                 {[result.columns.label, result.columns.score, result.columns.unmapped].map((c) => (
                   <button key={c} className="rounded border px-2 py-0.5 hover:bg-slate-50" onClick={() => colourBy(c)}>

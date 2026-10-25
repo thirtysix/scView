@@ -87,6 +87,17 @@ describe("ReferenceMappingCard", () => {
     expect((screen.getByText("Map cells").closest("button") as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("notes a shift between the datasets only when it is large", async () => {
+    getLabelTransfer.mockResolvedValue({ ...INFO, saved: [{ ...RESULT, shift: 2.1 }] });
+    const { unmount } = render(<ReferenceMappingCard datasetId="q" />);
+    expect((await screen.findByTestId("reference-mapping-shift")).textContent).toContain("2.1x");
+    unmount();
+    getLabelTransfer.mockResolvedValue({ ...INFO, saved: [{ ...RESULT, shift: 1.02 }] });
+    render(<ReferenceMappingCard datasetId="q" />);
+    await screen.findByTestId("reference-mapping-result");
+    expect(screen.queryByTestId("reference-mapping-shift")).toBeNull();
+  });
+
   it("explains a large dataset", async () => {
     getLabelTransfer.mockResolvedValue({ ...INFO, available: false, reason: "Reference mapping is not available" });
     render(<ReferenceMappingCard datasetId="q" />);

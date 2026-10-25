@@ -33,8 +33,10 @@ distances to their ``k`` nearest other reference cells (``lt_novelty``, a local
 density ratio after the local outlier factor). The reference's own cells get the
 same ratio, leave one out; a query cell above the reference's 99th percentile is
 "not in reference", so about 1% of query cells are flagged by chance even when the
-reference holds every type. A cluster with most of its cells flagged is a candidate
-state the reference lacks.
+reference holds every type. The cut is scaled by the query's median ratio over the
+reference's (``shift``, at least 1), so a shift between the datasets that no
+correction removes does not flag the whole query: most of it is taken to be covered.
+A cluster with 30% of its cells flagged is a candidate state the reference lacks.
 
 Why not the plain distance in the vote's space: on Kang split by donor (4 donors as
 reference with B cells removed, the other 4 as query) a 99th-percentile cut on the
@@ -328,9 +330,15 @@ def lt_map(ref_log, query_log, ref_labels, method, k, vote_genes, novelty_genes,
     nr, nq = lt_space(ref_log[:, novelty_genes], query_log[:, novelty_genes], "joint" if method != "integration"
                       else "integration", n_pcs=n_pcs, clip=clip, seed=seed)
     ratio, ref_ratio = lt_novelty(nr, nq, k)
-    threshold = float(np.percentile(ref_ratio, percentile))
+    # A shift between the datasets (another study, chemistry or depth) moves every query
+    # cell away from the reference, which no correction fully removes: the cut follows
+    # the query's median ratio, so most of the query is taken to be covered and only
+    # cells far beyond the rest of it flag. Kang query vs Kang reference: shift 1.0x;
+    # a COVID PBMC study from Discover vs Kang: 99.9% flagged without it.
+    shift = max(1.0, float(np.median(ratio)) / max(float(np.median(ref_ratio)), 1e-12))
+    threshold = float(np.percentile(ref_ratio, percentile)) * shift
     return {"label": np.asarray(label, dtype=object).astype(str), "score": np.asarray(score, np.float32),
-            "ratio": ratio, "unmapped": ratio > threshold, "threshold": threshold,
+            "ratio": ratio, "unmapped": ratio > threshold, "threshold": threshold, "shift": shift,
             "ref_ratio": ref_ratio, "umap": umap}
 
 
@@ -677,6 +685,7 @@ def summarize(p: Prepared, out: dict[str, Any], *, method: str, prefix: str) -> 
         "n_hvg": len(out["hvg"]),
         "n_pcs": N_PCS,
         "threshold": round(float(out["threshold"]), 4),
+        "shift": round(float(out.get("shift", 1.0)), 3),
         "percentile": UNMAPPED_PERCENTILE,
         "n_unmapped": int(unmapped.sum()),
         "unmapped_share": round(float(unmapped.mean()), 4),
