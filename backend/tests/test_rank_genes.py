@@ -281,3 +281,21 @@ def test_full_datasets(no_scanpy, name):
         ref, got = a.uns.pop("ref"), a.uns.pop("got")
         _assert_structure(ref, got)
         _assert_exact(ref, got, ALL_FIELDS)
+
+
+@pytest.mark.parametrize("where", ["raw", "X"])
+def test_float16_matrix_is_ranked_as_float32(where):
+    """A half-precision matrix (a published h5ad) is widened in place, then ranked like float32."""
+    rng = np.random.default_rng(0)
+    vals = np.log1p(rng.poisson(1.0, size=(60, 12)).astype(np.float32))
+    vals[:30, 0] += 2.0
+    obs = pd.DataFrame({"g": pd.Categorical(["a"] * 30 + ["b"] * 30)}, index=[f"c{i}" for i in range(60)])
+    var = pd.DataFrame(index=[f"G{i}" for i in range(12)])
+    half = vals.astype(np.float16)  # dense: scipy.sparse has no float16
+    a = ad.AnnData(X=half if where == "X" else sp.csr_matrix(vals), obs=obs, var=var)
+    if where == "raw":
+        a.raw = ad.AnnData(X=half, obs=obs[[]], var=var)
+    ran = rank_genes.rank_genes_groups(a, "g", method="wilcoxon", use_raw=where == "raw")
+    m = a.raw.X if where == "raw" else a.X
+    assert m.dtype == np.float32 and ran == rank_genes.SPARSE
+    assert a.uns["rank_genes_groups"]["names"]["a"][0] == "G0"
