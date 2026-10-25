@@ -253,6 +253,21 @@ def _add_marker_panel(adaptor, lines: list[str], sources: list[ChatSource]) -> N
                                   evidence="\n".join(mp_lines)))
 
 
+def _add_offtarget(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Groups whose markers were looked up in the Human Protein Atlas (core/offtarget.py)."""
+    from scview.core import offtarget
+
+    try:
+        ot_lines, ot_detail = offtarget.grounding_lines(adaptor, adaptor.adata.obs)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: off-target fact failed: %s", exc)
+        return
+    if ot_detail:
+        lines.extend(ot_lines)
+        sources.append(ChatSource(kind="result", ref=offtarget.TAG, detail=ot_detail,
+                                  evidence="\n".join(ot_lines[1:])))
+
+
 def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """TCR/BCR contigs (core/vdj.py): cells with chains, the clonotypes, and the largest
     expanded ones with the cell types they sit in, only once contigs are attached."""
@@ -593,6 +608,7 @@ def build_grounding_context(
         _add_programs(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)
+        _add_offtarget(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []
