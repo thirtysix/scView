@@ -338,6 +338,7 @@ export function UnifiedEnrichmentSubtab({
         <div className="flex-1">
           <label className="mb-1 block text-[11px] font-medium text-slate-500">Column</label>
           <select
+            aria-label="Column"
             value={groupByColumn}
             onChange={(e) => setGroupByColumn(e.target.value)}
             className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700"
@@ -352,6 +353,7 @@ export function UnifiedEnrichmentSubtab({
         <div className="flex-1">
           <label className="mb-1 block text-[11px] font-medium text-slate-500">Group</label>
           <select
+            aria-label="Group"
             value={selectedGroup}
             onChange={(e) => setSelectedGroup(e.target.value)}
             disabled={isLoadingGroups || groups.length === 0}
@@ -399,6 +401,7 @@ export function UnifiedEnrichmentSubtab({
         <div className="w-20">
           <label className="mb-1 block text-[11px] font-medium text-slate-500">Top N</label>
           <input
+            aria-label="Top N"
             type="number"
             value={topN}
             onChange={(e) => setTopN(parseInt(e.target.value) || 100)}

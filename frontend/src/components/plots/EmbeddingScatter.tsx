@@ -34,6 +34,9 @@ import { gatherByOrder, selectedLast, shuffledOrder } from "@/lib/drawOrder";
 import { sampleCellIndices } from "@/lib/splitView";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 import { EmbeddingCaveat } from "@/components/plots/EmbeddingCaveat";
+import { useScatterKeyboard } from "@/components/plots/ScatterKeyboard";
+import { scatterAriaLabel } from "@/lib/scatterKeyboard";
+import { useReducedMotion } from "@/lib/reducedMotion";
 
 interface EmbeddingScatterProps {
   positions: Float32Array | null;
@@ -103,6 +106,9 @@ interface EmbeddingScatterProps {
   axisLabels?: readonly [string, string] | null;
   /** Title of the SVG / PDF (default: the embedding, and what colours it) */
   exportTitle?: string;
+  /** The cells of a keyboard rectangle selection (focus the plot, press S);
+   *  without it the plot still pans and zooms by keyboard */
+  onKeyboardSelect?: (indices: Set<number>) => void;
 }
 
 function computeInitialViewState3D(
@@ -181,6 +187,7 @@ export function EmbeddingScatter({
   embedding = null,
   axisLabels = null,
   exportTitle,
+  onKeyboardSelect,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<DeckGLRef>(null);
@@ -663,6 +670,31 @@ export function EmbeddingScatter({
     ],
   );
 
+  // Keyboard and screen readers: the plot is focusable and named; arrows pan,
+  // +/- zoom, 0 fits, S draws a selection rectangle (components/plots/ScatterKeyboard).
+  const reducedMotion = useReducedMotion();
+  const keyboardCamera = useCallback(
+    (vs: Record<string, unknown>) => handleViewStateChange({ viewState: vs }),
+    [handleViewStateChange],
+  );
+  const { containerProps: keyboardProps, overlay: keyboardOverlay } = useScatterKeyboard({
+    enabled: !minimal,
+    label: scatterAriaLabel({
+      embedding,
+      colorLabel: exportLegend?.title ?? (colorLabel !== "Value" ? colorLabel : null),
+      total: totalCells,
+      shown: renderCount,
+      dimensions: dimensions === 3 ? 3 : 2,
+    }),
+    viewState,
+    onCamera: keyboardCamera,
+    onFit: resetView,
+    positions,
+    dimensions: dimensions === 3 ? 3 : 2,
+    size: containerSize,
+    onSelect: onKeyboardSelect,
+  });
+
   if (!positions || positions.length === 0) {
     return (
       <div
@@ -677,7 +709,12 @@ export function EmbeddingScatter({
   const bgColor = background === "dark" ? "#1e293b" : "#ffffff";
 
   return (
-    <div ref={containerRef} className="relative h-full w-full overflow-hidden rounded-lg">
+    <div
+      ref={containerRef}
+      {...keyboardProps}
+      className="relative h-full w-full overflow-hidden rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+    >
+      {keyboardOverlay}
       {viewState && !contextLost && (
         <DeckGL
           key={renderKey}
@@ -689,7 +726,7 @@ export function EmbeddingScatter({
           onHover={handleHover}
           onClick={handleClick}
           onError={handleGpuError}
-          controller={{ scrollZoom: { speed: 0.002, smooth: true } }}
+          controller={{ scrollZoom: { speed: 0.002, smooth: !reducedMotion } }}
           style={{ background: bgColor }}
           getCursor={({ isDragging }: { isDragging: boolean }) =>
             isDragging ? "grabbing" : "crosshair"
@@ -719,6 +756,7 @@ export function EmbeddingScatter({
         <button
           onClick={resetView}
           title="Reset view"
+          aria-label="Reset view"
           className="absolute right-3 top-3 z-10 rounded-md border border-slate-300 bg-white/90 p-1.5 text-slate-600 shadow-sm transition-colors hover:bg-slate-100 hover:text-slate-800"
         >
           <RotateCcw className="h-4 w-4" />

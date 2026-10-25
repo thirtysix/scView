@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { AlertTriangle, Tags, Loader2, Check } from "lucide-react";
 import { getCellTypistModels, getCellTypistSummary, type CellTypistModel } from "@/api/annotation";
 import { getLlmStatus } from "@/api/assistant";
@@ -49,6 +49,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   }, [dataset?.obs_columns]);
   const primary = dataset?.active_clustering ?? (groupings.includes("cluster") ? "cluster" : groupings[0]);
 
+  const fieldId = useId();
   const [method, setMethod] = useState<"llm" | "celltypist" | "marker_score">("llm");
   const [methodPicked, setMethodPicked] = useState(false);
   // null until known; without a key the server runs CellTypist for "llm".
@@ -196,10 +197,11 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
       {/* Grouping + output column */}
       <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">
+          <label htmlFor={`${fieldId}-groupby`} className="mb-1 block text-xs font-medium text-slate-600">
             Base predictions on (clustering)
           </label>
           <select
+            id={`${fieldId}-groupby`}
             value={groupby}
             onChange={(e) => setGroupby(e.target.value)}
             className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
@@ -213,8 +215,9 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Output column</label>
+          <label htmlFor={`${fieldId}-target`} className="mb-1 block text-xs font-medium text-slate-600">Output column</label>
           <input
+            id={`${fieldId}-target`}
             type="text"
             value={target}
             onChange={(e) => {
@@ -261,6 +264,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
         <div className="mb-3">
           <label className="mb-1 block text-xs font-medium text-slate-600">Tissue (optional)</label>
           <input
+            aria-label="Tissue (optional)"
             type="text"
             value={tissue}
             onChange={(e) => setTissue(e.target.value)}

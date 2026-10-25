@@ -1455,6 +1455,7 @@ export function DataAssessmentPanel() {
                           checked={isSelected}
                           onChange={() => toggleStep(step.key)}
                           disabled={running}
+                          aria-label={`Run ${step.label}`}
                           className={`h-4 w-4 cursor-pointer rounded border-slate-300 focus:ring-primary ${
                             isRerun ? "accent-amber-500 text-amber-500" : "accent-primary text-primary"
                           }`}
@@ -1474,6 +1475,7 @@ export function DataAssessmentPanel() {
                         onClick={() =>
                           setExpandedStep(isExpanded ? null : step.key)
                         }
+                        aria-expanded={isExpanded}
                         className="min-w-0 flex-1 text-left"
                       >
                         <div className="flex items-center gap-1">
@@ -1502,6 +1504,8 @@ export function DataAssessmentPanel() {
                         onClick={() =>
                           setExpandedStep(isExpanded ? null : step.key)
                         }
+                        aria-expanded={isExpanded}
+                        aria-label={`${isExpanded ? "Hide" : "Show"} ${step.label} details`}
                         className="text-slate-300"
                       >
                         {isExpanded ? (

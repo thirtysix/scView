@@ -299,6 +299,7 @@ export function DataPanel() {
           ref={fileInput}
           type="file"
           multiple
+          aria-label="Choose files"
           className="hidden"
           onChange={(e) => {
             void addFiles(itemsFromFiles(e.target.files ?? []));
@@ -309,6 +310,7 @@ export function DataPanel() {
           ref={folderInput}
           type="file"
           multiple
+          aria-label="Choose a folder"
           // @ts-expect-error non-standard but widely supported directory upload
           webkitdirectory=""
           data-testid="folder-input"
@@ -373,6 +375,7 @@ export function DataPanel() {
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">Dataset name</label>
             <input
+              aria-label="Dataset name"
               type="text"
               value={options.name ?? ""}
               placeholder={loadable.length > 1 ? "merged_dataset" : loadable[0]?.label}
@@ -571,6 +574,7 @@ function MergeSection({
           Sample label column
         </label>
         <input
+          aria-label="Sample label column"
           type="text"
           value={options.sample_label}
           onChange={(e) => setOptions((o) => ({ ...o, sample_label: e.target.value }))}

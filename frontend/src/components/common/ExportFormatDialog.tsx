@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { createPortal } from "react-dom";
 import { Loader2, X } from "lucide-react";
 
@@ -52,6 +53,8 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
   const [genes, setGenes] = useState<"all" | "variable">("all");
   const [progress, setProgress] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose);
 
   const opts: ExportFormatOptions =
     format === "cellxgene" ? { embeddings, include_raw: includeRaw } : { embeddings, columns, genes };
@@ -108,6 +111,7 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
   return createPortal(
     <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/40 p-4" role="presentation">
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={TITLES[format]}

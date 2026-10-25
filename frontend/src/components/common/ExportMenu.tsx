@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
 import {
   ChevronDown,
   Database,
@@ -15,6 +15,10 @@ const ICONS = {
   image: <Image className="h-4 w-4 text-blue-500" />,
   data: <Database className="h-4 w-4 text-violet-500" />,
 } as const;
+
+function enabledItems(menu: HTMLElement | null): HTMLButtonElement[] {
+  return Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []);
+}
 
 export interface ExportMenuItem {
   key: string;
@@ -84,6 +88,40 @@ export function ExportMenu({
     setIsOpen(!isOpen);
   }, [isOpen, onOpen]);
 
+  // Keyboard (menu pattern): opening focuses the first item, Up/Down/Home/End
+  // move between items, Escape closes and returns to the button, Tab closes.
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const menuItems = () => enabledItems(listRef.current);
+  useEffect(() => {
+    if (isOpen) enabledItems(listRef.current)[0]?.focus();
+  }, [isOpen]);
+  const onMenuKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsOpen(false);
+      buttonRef.current?.focus();
+      return;
+    }
+    if (e.key === "Tab") {
+      setIsOpen(false);
+      return;
+    }
+    const all = menuItems();
+    if (all.length === 0) return;
+    const at = all.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      e.key === "ArrowDown" ? (at + 1) % all.length
+      : e.key === "ArrowUp" ? (at <= 0 ? all.length - 1 : at - 1)
+      : e.key === "Home" ? 0
+      : e.key === "End" ? all.length - 1
+      : null;
+    if (next === null) return;
+    e.preventDefault();
+    all[next]!.focus();
+  };
+
   const handleAction = useCallback(async (item: ExportMenuItem) => {
     setError(null);
     const result = item.onSelect();
@@ -107,6 +145,7 @@ export function ExportMenu({
   return (
     <div ref={menuRef} className={`relative inline-block ${className}`}>
       <button
+        ref={buttonRef}
         onClick={toggle}
         disabled={disabled}
         title={compact ? label : undefined}
@@ -130,7 +169,10 @@ export function ExportMenu({
 
       {isOpen && (
         <div
+          ref={listRef}
           role="menu"
+          aria-label={label}
+          onKeyDown={onMenuKeyDown}
           className="absolute right-0 z-50 mt-1 w-64 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
           {items.map((item) => (

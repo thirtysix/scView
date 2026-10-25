@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { SortableTh, ariaSort } from "@/components/common/SortableTh";
 import {
   Loader2, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Sparkles, ChevronDown, ChevronRight,
 } from "lucide-react";
@@ -325,6 +326,7 @@ export function UnifiedMarkersSubtab({
       <div className="flex items-center gap-2">
         <label className="text-[11px] font-medium text-slate-500 whitespace-nowrap">|FC| &ge;</label>
         <input
+          aria-label="Minimum |FC|"
           type="range"
           min={0}
           max={5}
@@ -372,50 +374,61 @@ export function UnifiedMarkersSubtab({
         <table className="w-full text-xs">
           <thead className="sticky top-0 z-10">
             <tr className="border-b border-slate-200 bg-slate-50">
-              <th
-                onClick={() => handleSort("gene")}
+              <SortableTh
+                onSort={() => handleSort("gene")}
+                sort={ariaSort("gene", sortField, sortDir)}
                 title="Gene symbol; click a row to colour the scatter by its expression"
-                className="cursor-pointer px-2 py-1.5 text-left font-medium text-slate-600 hover:text-slate-800"
+                className="px-2 py-1.5 text-left font-medium text-slate-600"
               >
-                <span className="flex items-center gap-1">Gene {sortIcon("gene")}</span>
-              </th>
-              <th
-                onClick={() => handleSort("logfoldchange")}
+                Gene {sortIcon("gene")}
+              </SortableTh>
+              <SortableTh
+                onSort={() => handleSort("logfoldchange")}
+                sort={ariaSort("logfoldchange", sortField, sortDir)}
                 title="log2 fold change of this group's mean expression over all other cells (scanpy rank_genes_groups: expm1 of the mean log-normalised values on each side)"
-                className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                className="px-2 py-1.5 text-right font-medium text-slate-600"
+                align="right"
               >
-                <span className="flex items-center justify-end gap-1">LogFC {sortIcon("logfoldchange")}</span>
-              </th>
-              <th
-                onClick={() => handleSort("pval_adj")}
+                LogFC {sortIcon("logfoldchange")}
+              </SortableTh>
+              <SortableTh
+                onSort={() => handleSort("pval_adj")}
+                sort={ariaSort("pval_adj", sortField, sortDir)}
                 title="For ranking only: the clusters were found from these same cells, so marker p-values are inflated."
-                className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                className="px-2 py-1.5 text-right font-medium text-slate-600"
+                align="right"
               >
-                <span className="flex items-center justify-end gap-1">Adj.P {sortIcon("pval_adj")}</span>
-              </th>
+                Adj.P {sortIcon("pval_adj")}
+              </SortableTh>
               {specificity && (
                 <>
-                  <th
-                    onClick={() => handleSort("tau")}
+                  <SortableTh
+                    onSort={() => handleSort("tau")}
+                    sort={ariaSort("tau", sortField, sortDir)}
                     title={SPECIFICITY_HELP.tau}
-                    className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                    className="px-2 py-1.5 text-right font-medium text-slate-600"
+                    align="right"
                   >
-                    <span className="flex items-center justify-end gap-1">Tau {sortIcon("tau")}</span>
-                  </th>
-                  <th
-                    onClick={() => handleSort("pct_in")}
+                    Tau {sortIcon("tau")}
+                  </SortableTh>
+                  <SortableTh
+                    onSort={() => handleSort("pct_in")}
+                    sort={ariaSort("pct_in", sortField, sortDir)}
                     title={SPECIFICITY_HELP.detection}
-                    className="cursor-pointer whitespace-nowrap px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                    className="whitespace-nowrap px-2 py-1.5 text-right font-medium text-slate-600"
+                    align="right"
                   >
-                    <span className="flex items-center justify-end gap-1">In / next {sortIcon("pct_in")}</span>
-                  </th>
-                  <th
-                    onClick={() => handleSort("pct_ratio")}
+                    In / next {sortIcon("pct_in")}
+                  </SortableTh>
+                  <SortableTh
+                    onSort={() => handleSort("pct_ratio")}
+                    sort={ariaSort("pct_ratio", sortField, sortDir)}
                     title={SPECIFICITY_HELP.ratio}
-                    className="cursor-pointer px-2 py-1.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                    className="px-2 py-1.5 text-right font-medium text-slate-600"
+                    align="right"
                   >
-                    <span className="flex items-center justify-end gap-1">Ratio {sortIcon("pct_ratio")}</span>
-                  </th>
+                    Ratio {sortIcon("pct_ratio")}
+                  </SortableTh>
                 </>
               )}
             </tr>

@@ -10,6 +10,7 @@ import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useViewStore } from "@/stores/viewStore";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { ColorLegend } from "@/components/plots/ColorLegend";
+import { TabList, TabPanel } from "@/components/common/TabList";
 import {
   colorScaleCaption,
   fixedColorScale,
@@ -751,6 +752,40 @@ export function UnifiedViewPanel() {
   // The picks stand in for the selection on the plots while there are any.
   const shownSelection = pickedCells ?? selectedIndices;
 
+  // "By group" in the toolbar: the keyboard path to selecting whole groups. One
+  // group behaves as a legend click (highlighted too); several as legend picks.
+  const handleSelectGroups = useCallback(
+    (groups: string[]) => {
+      if (!colors || !categories) return;
+      const cells = cellsInCategories(colors, categories, groups);
+      setPicked([]);
+      if (!cells || cells.size === 0) {
+        clearSelection();
+        setHighlight(null);
+        return;
+      }
+      setSelection(cells);
+      setHighlight(groups.length === 1 && colorBy ? { column: colorBy, value: groups[0]! } : null, { select: false });
+    },
+    [colors, categories, setSelection, clearSelection, setHighlight, colorBy],
+  );
+  const groupCounts = useMemo(() => {
+    if (!colors || !categories || colorColumnName !== colorBy) return undefined;
+    const counts = new Array<number>(categories.length).fill(0);
+    for (let i = 0; i < colors.length; i++) {
+      const c = colors[i]!;
+      if (c >= 0 && c < counts.length) counts[c] = (counts[c] ?? 0) + 1;
+    }
+    return counts;
+  }, [colors, categories, colorColumnName, colorBy]);
+  const groupSelect = useMemo(
+    () =>
+      categories && colorBy && colorColumnName === colorBy
+        ? { column: colorBy, categories, counts: groupCounts, onSelect: handleSelectGroups }
+        : null,
+    [categories, colorBy, colorColumnName, groupCounts, handleSelectGroups],
+  );
+
   // A group highlighted elsewhere (an Observations row, the co-pilot's "highlight
   // the NK cluster") selects its cells here once the plot is coloured by its
   // column, as a legend click does. Applied once per highlight.
@@ -926,7 +961,7 @@ export function UnifiedViewPanel() {
       <div ref={splitContainerRef} className="flex min-h-0 flex-1">
         {/* Left column — UMAP width: toolbar, scatter, and distribution stacked */}
         <div className="flex min-w-0 flex-col gap-2" style={{ width: `${splitFraction * 100}%` }}>
-          <UnifiedToolbar numCells={numCells} />
+          <UnifiedToolbar numCells={numCells} groupSelect={groupSelect} />
           <div className="relative min-h-0 flex-1">
             <div className="h-full w-full rounded-xl border border-slate-200 bg-white shadow-sm">
             {isLoading && !positions ? (
@@ -961,6 +996,7 @@ export function UnifiedViewPanel() {
                 overlayElement={splitActive ? null : legendColumn}
                 embedding={embedding}
                 axisLabels={embeddingAxisLabels(embedding, pcaDims, dataset?.embedding_dimensions?.[embedding])}
+                onKeyboardSelect={gridActive ? undefined : handleSelectionComplete}
               />
             )}
             {!gridActive && (
@@ -1079,6 +1115,7 @@ export function UnifiedViewPanel() {
                   categoryColors={categoryColors}
                   label={colorColumnName ?? colorBy}
                   onCategoryClick={handleCategoryClick}
+                  selectedCategory={labelHighlight}
                   onRenameCategory={handleRenameCategory}
                   onAskAbout={handleAskAboutCategory}
                   onSubcluster={handleSubcluster}
@@ -1232,24 +1269,22 @@ export function UnifiedViewPanel() {
             </div>
           )}
           {/* Tab bar: wraps onto a second row rather than scrolling, so no tab is cut off */}
-          <div className="flex flex-shrink-0 flex-wrap border-b border-slate-200">
-            {SUBTABS.filter((tab) => tab.id !== "protein" || dataset?.protein).map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveSubtab(tab.id)}
-                className={`flex-1 whitespace-nowrap px-2 py-2 text-xs font-medium transition-colors ${
-                  activeSubtab === tab.id
-                    ? "border-b-2 border-primary text-primary"
-                    : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          <TabList
+            tabs={SUBTABS.filter((tab) => tab.id !== "protein" || dataset?.protein)}
+            active={activeSubtab}
+            onChange={setActiveSubtab}
+            label="Analysis"
+            idPrefix="unified"
+            className="flex flex-shrink-0 flex-wrap border-b border-slate-200"
+            tabClassName={(selected) =>
+              `flex-1 whitespace-nowrap px-2 py-2 text-xs font-medium transition-colors ${
+                selected ? "border-b-2 border-primary text-primary" : "text-slate-500 hover:text-slate-700"
+              }`
+            }
+          />
 
           {/* Tab content */}
-          <div className="flex-1 overflow-y-auto p-3">
+          <TabPanel idPrefix="unified" id={activeSubtab} className="flex-1 overflow-y-auto p-3">
             {activeSubtab === "markers" && (
               <UnifiedMarkersSubtab
                 onGeneClick={handleGeneClick}
@@ -1320,7 +1355,7 @@ export function UnifiedViewPanel() {
               />
             )}
             {activeSubtab === "clonotypes" && <ClonotypeSubtab groupByColumn={groupByColumn} />}
-          </div>
+          </TabPanel>
         </div>
       </div>
     </div>

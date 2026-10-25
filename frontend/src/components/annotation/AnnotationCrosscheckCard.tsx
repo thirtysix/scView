@@ -207,7 +207,11 @@ export function AnnotationCrosscheckCard({
   const others = result ? result.columns.filter((c) => c !== result.reference) : [];
 
   const sortHeader = (key: LabelSortKey, label: string, className: string, title?: string) => (
-    <th className={`${className} font-medium`} title={title}>
+    <th
+      className={`${className} font-medium`}
+      title={title}
+      aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : "none"}
+    >
       <button
         type="button"
         className="hover:text-slate-600"

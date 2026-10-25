@@ -14,6 +14,7 @@ import { getPalette } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { prettyObsLabel } from "@/lib/formatting";
 import type { DatasetInfo } from "@/api/types";
+import { TabList, TabPanel } from "@/components/common/TabList";
 
 interface SummaryRaw {
   groupby: string | null;
@@ -59,22 +60,22 @@ export function ComparePanel() {
   return (
     <div className="space-y-5">
       <Header />
-      <div className="flex gap-1 border-b border-slate-200">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-              tab === t.id
-                ? "border-primary text-primary"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {tab === "joint" ? <JointEmbedding /> : tab === "planner" ? <PlannerTab /> : <CompositionTab />}
+      <TabList
+        tabs={TABS}
+        active={tab}
+        onChange={setTab}
+        label="Compare"
+        idPrefix="compare"
+        className="flex gap-1 border-b border-slate-200"
+        tabClassName={(selected) =>
+          `-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+            selected ? "border-primary text-primary" : "border-transparent text-slate-500 hover:text-slate-700"
+          }`
+        }
+      />
+      <TabPanel idPrefix="compare" id={tab}>
+        {tab === "joint" ? <JointEmbedding /> : tab === "planner" ? <PlannerTab /> : <CompositionTab />}
+      </TabPanel>
     </div>
   );
 }
@@ -131,6 +132,7 @@ function CompositionTab() {
           <button
             key={m}
             onClick={() => setMode(m)}
+            aria-pressed={mode === m}
             className={`rounded px-3 py-1 font-medium transition ${
               mode === m ? "bg-primary text-white" : "text-slate-500 hover:text-slate-700"
             }`}
@@ -296,6 +298,7 @@ function CompositionCompare() {
         <div>
           <label className="mb-1 block text-xs font-medium text-slate-500">Dataset B</label>
           <select
+            aria-label="Dataset B"
             value={datasetBId}
             onChange={(e) => setDatasetBId(e.target.value)}
             className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700"
@@ -312,6 +315,7 @@ function CompositionCompare() {
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-500">Compare by</label>
             <select
+              aria-label="Compare by"
               value={column}
               onChange={(e) => setColumn(e.target.value)}
               className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700"

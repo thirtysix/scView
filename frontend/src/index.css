@@ -214,3 +214,9 @@ body {
 .a11y a { text-decoration: underline; }
 /* No transitions (spinners keep turning: they show that work is going on). */
 .a11y *, .a11y *::before, .a11y *::after { transition-duration: 0s !important; }
+
+/* The system's "reduce motion" setting: no transitions either, with or without
+   accessibility mode (plots drop their own animation: lib/reducedMotion.ts). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0s !important; scroll-behavior: auto !important; }
+}

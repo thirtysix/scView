@@ -314,6 +314,7 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
           <div>
             <label className="mb-1 block text-[11px] font-medium text-slate-500">Group by (heatmap)</label>
             <select
+              aria-label="Group by (heatmap)"
               value={groupby}
               onChange={(e) => setGroupByColumn(e.target.value)}
               className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700"

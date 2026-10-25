@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { DialogBox } from "@/components/common/DialogBox";
 import { Columns2 } from "lucide-react";
 import { prettyObsLabel } from "@/lib/formatting";
 import {
@@ -87,9 +88,9 @@ export function CompareColoringsControl() {
         Compare
       </button>
       {open && (
-        <div
-          role="dialog"
-          aria-label="Compare colourings"
+        <DialogBox
+          label="Compare colourings"
+          onClose={() => setOpen(false)}
           className="absolute left-0 top-full z-40 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-3 text-xs shadow-lg"
         >
           <p className="mb-2 font-semibold text-slate-700">Compare colourings side by side</p>
@@ -142,7 +143,7 @@ export function CompareColoringsControl() {
               Show {picked.length > 0 ? picked.length : ""} side by side
             </button>
           </div>
-        </div>
+        </DialogBox>
       )}
     </div>
   );

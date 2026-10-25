@@ -118,6 +118,7 @@ export function UnifiedExpressionSubtab({
           Group by (violin)
         </label>
         <select
+          aria-label="Group by (violin)"
           value={groupByColumn}
           onChange={(e) => setGroupByColumn(e.target.value)}
           className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700"

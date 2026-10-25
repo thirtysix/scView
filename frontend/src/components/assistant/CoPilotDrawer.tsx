@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Sparkles, PanelRightClose } from "lucide-react";
 import { useViewStore } from "@/stores/viewStore";
 import { AssistantChat } from "@/components/assistant/AssistantChat";
@@ -18,6 +18,32 @@ export function CoPilotDrawer() {
   const width = useViewStore((s) => s.copilotWidth);
   const setWidth = useViewStore((s) => s.setCopilotWidth);
   const onAssistantPanel = useViewStore((s) => s.activePanel === "assistant");
+
+  // Keyboard: opening moves focus into the drawer (its message box), closing
+  // hands it back to where it was. Closed, the drawer is inert: off screen,
+  // nothing in it can take focus or be read out.
+  const drawerRef = useRef<HTMLElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const el = drawerRef.current;
+    if (!el) return;
+    if (open) {
+      el.removeAttribute("inert");
+      const active = document.activeElement;
+      // (The launcher has gone by now: it hides while the drawer is open.)
+      returnFocus.current =
+        active instanceof HTMLElement && active !== document.body && !el.contains(active) ? active : null;
+      (el.querySelector<HTMLElement>("textarea") ?? el.querySelector<HTMLElement>("input, button"))?.focus();
+      return;
+    }
+    if (el.contains(document.activeElement)) {
+      const back = returnFocus.current?.isConnected ? returnFocus.current : launcherRef.current;
+      back?.focus();
+    }
+    returnFocus.current = null;
+    el.setAttribute("inert", "");
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -56,8 +82,10 @@ export function CoPilotDrawer() {
       {/* Floating launcher (hidden when the full AI Co-pilot panel is open) */}
       {!open && !onAssistantPanel && (
         <button
+          ref={launcherRef}
           onClick={toggle}
           title="Ask the AI co-pilot"
+          aria-label="Ask the AI co-pilot"
           className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-full bg-primary px-4 py-3 text-sm font-medium text-primary-foreground shadow-lg transition-transform hover:scale-105"
         >
           <Sparkles className="h-5 w-5" />
@@ -67,6 +95,8 @@ export function CoPilotDrawer() {
 
       {/* Drawer */}
       <aside
+        ref={drawerRef}
+        aria-label="AI co-pilot"
         style={{ width, maxWidth: "90vw" }}
         className={`fixed bottom-0 right-0 top-0 z-[60] flex flex-col border-l bg-white shadow-2xl transition-transform duration-200 ${
           open ? "translate-x-0" : "pointer-events-none translate-x-full"
@@ -93,6 +123,7 @@ export function CoPilotDrawer() {
           <button
             onClick={() => setOpen(false)}
             title="Hide (Esc) — your conversation is kept"
+            aria-label="Hide the co-pilot (Esc), the conversation is kept"
             className="flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <PanelRightClose className="h-4 w-4" />

@@ -20,13 +20,16 @@ import { HvgSensitivityControl } from "@/components/unified/HvgSensitivity";
 import { PcPairChooser } from "@/components/unified/PcPairChooser";
 import { EmbeddingReliabilityControl } from "@/components/unified/EmbeddingReliability";
 import { LayoutStabilityControl } from "@/components/unified/LayoutStability";
+import { SelectByGroupControl, type GroupSelectSource } from "@/components/unified/SelectByGroup";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
   numCells: number;
+  /** The colour-by groups, for "By group" selection (keyboard path to a lasso) */
+  groupSelect?: GroupSelectSource | null;
 }
 
-export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
+export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: UnifiedToolbarProps) {
   const dataset = useDatasetStore((s) => s.currentDataset);
 
   const embedding = useSettingsStore((s) => s.embedding);
@@ -93,6 +96,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
         <select
           value={embedding}
           onChange={(e) => setEmbedding(e.target.value)}
+          aria-label="Embedding"
           className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none"
         >
           {availableEmbeddings.length === 0 && <option value="">None</option>}
@@ -116,6 +120,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
         <select
           value={colorBy}
           onChange={(e) => setColorBy(e.target.value)}
+          aria-label="Colour by"
           className="max-w-[160px] rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none"
         >
           <option value="">None</option>
@@ -147,6 +152,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             <select
               value={expressionLayer}
               onChange={(e) => setExpressionLayer(e.target.value)}
+              aria-label="Expression layer"
               title="Expression units used for the gene overlay and violin plots"
               className="max-w-[160px] rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none"
             >
@@ -172,6 +178,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
           step={0.5}
           value={pointSize}
           onChange={(e) => setPointSize(parseFloat(e.target.value))}
+          aria-label="Point size"
           className="w-16 accent-blue-500"
         />
         <span className="w-4 text-[10px] tabular-nums text-slate-400">{pointSize}</span>
@@ -187,6 +194,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
           step={0.05}
           value={opacity}
           onChange={(e) => setOpacity(parseFloat(e.target.value))}
+          aria-label="Point opacity"
           className="w-16 accent-blue-500"
         />
       </div>
@@ -199,6 +207,8 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
             <button
               key={bg}
               onClick={() => setPlotBackground(bg)}
+              aria-pressed={plotBackground === bg}
+              aria-label={`${bg === "white" ? "Light" : "Dark"} plot background`}
               className={`px-1.5 py-0.5 text-[10px] capitalize transition-colors ${
                 plotBackground === bg
                   ? "bg-blue-500 text-white"
@@ -311,6 +321,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
         <select
           value={maxRenderedCells}
           onChange={(e) => setMaxRenderedCells(parseInt(e.target.value))}
+          aria-label="Most cells drawn (larger datasets are downsampled)"
           className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700 focus:border-blue-400 focus:outline-none"
         >
           {[25000, 50000, 100000, 250000, 500000].map((n) => (
@@ -326,6 +337,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
       {/* Lasso */}
       <button
         onClick={() => setSelectionMode(selectionMode === "lasso" ? "none" : "lasso")}
+        aria-pressed={selectionMode === "lasso"}
         title={gridActive ? "Lasso selection (L): draw in any panel; every panel shows the selection" : "Lasso selection (L). On a 3D embedding it selects every cell under the outline, at any depth; turn the lasso off to rotate"}
         className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
           selectionMode === "lasso"
@@ -336,6 +348,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
         <Lasso className="h-3.5 w-3.5" />
         Lasso
       </button>
+      <SelectByGroupControl source={groupSelect} />
       <CellFilterControl />
       <GatesControl />
 
@@ -378,6 +391,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
         <button
           onClick={onResetView}
           title="Reset view"
+          aria-label="Reset view"
           className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
         >
           <RotateCcw className="h-3.5 w-3.5" />

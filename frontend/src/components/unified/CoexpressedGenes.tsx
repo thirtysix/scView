@@ -241,8 +241,14 @@ export function CoexpressedGenes({ datasetId, activeGene, onGeneSelect }: Props)
                         ["n", "Expressing", "text-right", "Cells with any count of the gene among those scored"],
                       ] as const
                     ).map(([field, label, align, title]) => (
-                      <th key={field} title={title} className={`px-1.5 py-1 font-medium ${align}`}>
+                      <th
+                        key={field}
+                        title={title}
+                        aria-sort={sort.field === field ? (sort.desc ? "descending" : "ascending") : "none"}
+                        className={`px-1.5 py-1 font-medium ${align}`}
+                      >
                         <button
+                          type="button"
                           onClick={() => onSort(field)}
                           className={`inline-flex items-center gap-0.5 hover:text-slate-700 ${align === "text-right" ? "flex-row-reverse" : ""}`}
                         >

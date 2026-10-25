@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SortableTh } from "@/components/common/SortableTh";
 import { Download, Loader2, Play, Search, Square } from "lucide-react";
 import type { Data, PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
@@ -188,7 +189,7 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
       <div className="grid grid-cols-2 gap-2">
         <div>
           <label className="mb-1 block text-[11px] font-medium text-slate-500">Senders and receivers</label>
-          <select value={groupby} onChange={(e) => update({ groupby: e.target.value })} className={sel}>
+          <select aria-label="Senders and receivers" value={groupby} onChange={(e) => update({ groupby: e.target.value })} className={sel}>
             <option value="">Choose a column</option>
             {groupColumns.map((c) => (
               <option key={c.name} value={c.name}>
@@ -200,6 +201,7 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
         <div>
           <label className="mb-1 block text-[11px] font-medium text-slate-500">Cells</label>
           <select
+            aria-label="Cells"
             value={subsetColumn ? `${subsetColumn}\u0000${subsetValue}` : ""}
             onChange={(e) => {
               const [col, val] = e.target.value ? e.target.value.split("\u0000") : ["", ""];
@@ -390,17 +392,19 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
                 <thead className="sticky top-0 bg-slate-50">
                   <tr className="border-b border-slate-200 text-slate-600">
                     {COLUMNS.map((c) => (
-                      <th
+                      <SortableTh
                         key={c.key}
                         title={c.title}
-                        onClick={() =>
+                        onSort={() =>
                           setSort((s) => (s.key === c.key ? { key: c.key, asc: !s.asc } : { key: c.key, asc: !!c.num && c.key !== "lr_means" }))
                         }
-                        className={`cursor-pointer select-none px-1.5 py-1.5 font-medium ${c.num ? "text-right" : "text-left"}`}
+                        sort={sort.key === c.key ? (sort.asc ? "ascending" : "descending") : "none"}
+                        align={c.num ? "right" : "left"}
+                        className="select-none px-1.5 py-1.5 font-medium"
                       >
                         {c.label}
-                        {sort.key === c.key ? (sort.asc ? " ▲" : " ▼") : ""}
-                      </th>
+                        {sort.key === c.key && <span aria-hidden="true">{sort.asc ? " ▲" : " ▼"}</span>}
+                      </SortableTh>
                     ))}
                   </tr>
                 </thead>

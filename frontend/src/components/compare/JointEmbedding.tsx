@@ -313,6 +313,7 @@ export function JointEmbedding() {
           <div className="min-w-[220px] flex-1">
             <label className="mb-1 block text-xs font-medium text-slate-500">Name</label>
             <input
+              aria-label="Name"
               value={name}
               placeholder={defaultName}
               onChange={(e) => setName(e.target.value)}
@@ -323,6 +324,7 @@ export function JointEmbedding() {
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-500">Batch correction</label>
             <select
+              aria-label="Batch correction"
               value={method}
               onChange={(e) => setMethod(e.target.value as IntegrationMethod)}
               disabled={running}
@@ -341,6 +343,7 @@ export function JointEmbedding() {
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-500">Cluster resolution</label>
             <input
+              aria-label="Cluster resolution"
               type="number"
               min={0.1}
               max={3}
