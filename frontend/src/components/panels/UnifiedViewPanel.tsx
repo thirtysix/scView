@@ -3,6 +3,7 @@ import { LayoutDashboard, AlertCircle, Loader2 } from "lucide-react";
 import { useEmbedding } from "@/hooks/useEmbedding";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useScatterBackground } from "@/lib/theme";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -80,7 +81,7 @@ export function UnifiedViewPanel() {
   const queryClient = useQueryClient();
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
-  const plotBackground = useSettingsStore((s) => s.plotBackground);
+  const plotBackground = useScatterBackground();
   const paletteName = useSettingsStore((s) => s.categoricalPalette);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const colorBy = useSettingsStore((s) => s.colorBy);

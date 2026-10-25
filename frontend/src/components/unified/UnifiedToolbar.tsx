@@ -1,4 +1,5 @@
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useScatterBackground } from "@/lib/theme";
 import { CATEGORICAL_PALETTE_OPTIONS, COLORMAP_OPTIONS, DIVERGING_COLORMAP_OPTIONS } from "@/lib/colors";
 import type { CategoricalPaletteName, ColormapName, DivergingColormapName } from "@/lib/colors";
 import { CLIP_PRESET_OPTIONS, SIGNED_MODE_OPTIONS, type ClipPreset, type SignedColormapMode } from "@/lib/colorScale";
@@ -38,7 +39,7 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
   const setExpressionLayer = useSettingsStore((s) => s.setExpressionLayer);
   const setPointSize = useSettingsStore((s) => s.setPointSize);
   const setOpacity = useSettingsStore((s) => s.setOpacity);
-  const plotBackground = useSettingsStore((s) => s.plotBackground);
+  const plotBackground = useScatterBackground();
   const setPlotBackground = useSettingsStore((s) => s.setPlotBackground);
   const categoricalPalette = useSettingsStore((s) => s.categoricalPalette);
   const setCategoricalPalette = useSettingsStore((s) => s.setCategoricalPalette);

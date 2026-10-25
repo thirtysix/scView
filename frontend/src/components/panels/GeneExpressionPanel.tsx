@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from "react";
 import { Dna, Loader2 } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useScatterBackground } from "@/lib/theme";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useEmbedding } from "@/hooks/useEmbedding";
@@ -24,7 +25,7 @@ export function GeneExpressionPanel() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
-  const plotBackground = useSettingsStore((s) => s.plotBackground);
+  const plotBackground = useScatterBackground();
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const embedding = useSettingsStore((s) => s.embedding);
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);

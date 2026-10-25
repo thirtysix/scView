@@ -140,7 +140,7 @@ export function captureSession(now: Date = new Date()): SessionFile {
       clip: settings.colorClip,
       point_size: settings.pointSize,
       opacity: settings.opacity,
-      background: settings.plotBackground,
+      background: settings.plotBackgroundChosen ? settings.plotBackground : undefined,
       max_rendered_cells: settings.maxRenderedCells,
     },
     communication: {

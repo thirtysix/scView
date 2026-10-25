@@ -19,3 +19,163 @@ body {
 #root {
   min-height: 100vh;
 }
+
+/* `dark:` classes follow the app theme (lib/theme.ts puts `.dark` on <html>), not the OS. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Dark theme. Components keep their light-theme classes: white and the slate
+ * ramp are redefined (dark surfaces at 50-300, light text at 400-950), and the
+ * tinted families get dark 50-300 (boxes, badges, borders) and light 600-950
+ * (their text); 400/500 stay. lib/theme.ts DARK_SLATE / DARK_SURFACE match.
+ */
+.dark {
+  color-scheme: dark;
+  --color-white: #1a2436;
+  --color-slate-50: #131c2e;
+  --color-slate-100: #222d42;
+  --color-slate-200: #2f3b52;
+  --color-slate-300: #3e4b63;
+  --color-slate-400: #8a98ad;
+  --color-slate-500: #9aa8bc;
+  --color-slate-600: #b4c0d0;
+  --color-slate-700: #cbd5e1;
+  --color-slate-800: #e2e8f0;
+  --color-slate-900: #f1f5f9;
+  --color-slate-950: #f8fafc;
+  --color-amber-50: color-mix(in srgb, #f59e0b 13%, #1a2436);
+  --color-amber-100: color-mix(in srgb, #f59e0b 20%, #1a2436);
+  --color-amber-200: color-mix(in srgb, #f59e0b 32%, #1a2436);
+  --color-amber-300: color-mix(in srgb, #f59e0b 48%, #1a2436);
+  --color-amber-600: #fbbf24;
+  --color-amber-700: #fcd34d;
+  --color-amber-800: #fde68a;
+  --color-amber-900: #fef3c7;
+  --color-amber-950: #fffbeb;
+  --color-red-50: color-mix(in srgb, #ef4444 13%, #1a2436);
+  --color-red-100: color-mix(in srgb, #ef4444 20%, #1a2436);
+  --color-red-200: color-mix(in srgb, #ef4444 32%, #1a2436);
+  --color-red-300: color-mix(in srgb, #ef4444 48%, #1a2436);
+  --color-red-600: #f87171;
+  --color-red-700: #fca5a5;
+  --color-red-800: #fecaca;
+  --color-red-900: #fee2e2;
+  --color-red-950: #fef2f2;
+  --color-blue-50: color-mix(in srgb, #3b82f6 13%, #1a2436);
+  --color-blue-100: color-mix(in srgb, #3b82f6 20%, #1a2436);
+  --color-blue-200: color-mix(in srgb, #3b82f6 32%, #1a2436);
+  --color-blue-300: color-mix(in srgb, #3b82f6 48%, #1a2436);
+  --color-blue-600: #60a5fa;
+  --color-blue-700: #93c5fd;
+  --color-blue-800: #bfdbfe;
+  --color-blue-900: #dbeafe;
+  --color-blue-950: #eff6ff;
+  --color-emerald-50: color-mix(in srgb, #10b981 13%, #1a2436);
+  --color-emerald-100: color-mix(in srgb, #10b981 20%, #1a2436);
+  --color-emerald-200: color-mix(in srgb, #10b981 32%, #1a2436);
+  --color-emerald-300: color-mix(in srgb, #10b981 48%, #1a2436);
+  --color-emerald-600: #34d399;
+  --color-emerald-700: #6ee7b7;
+  --color-emerald-800: #a7f3d0;
+  --color-emerald-900: #d1fae5;
+  --color-emerald-950: #ecfdf5;
+  --color-sky-50: color-mix(in srgb, #0ea5e9 13%, #1a2436);
+  --color-sky-100: color-mix(in srgb, #0ea5e9 20%, #1a2436);
+  --color-sky-200: color-mix(in srgb, #0ea5e9 32%, #1a2436);
+  --color-sky-300: color-mix(in srgb, #0ea5e9 48%, #1a2436);
+  --color-sky-600: #38bdf8;
+  --color-sky-700: #7dd3fc;
+  --color-sky-800: #bae6fd;
+  --color-sky-900: #e0f2fe;
+  --color-sky-950: #f0f9ff;
+  --color-orange-50: color-mix(in srgb, #f97316 13%, #1a2436);
+  --color-orange-100: color-mix(in srgb, #f97316 20%, #1a2436);
+  --color-orange-200: color-mix(in srgb, #f97316 32%, #1a2436);
+  --color-orange-300: color-mix(in srgb, #f97316 48%, #1a2436);
+  --color-orange-600: #fb923c;
+  --color-orange-700: #fdba74;
+  --color-orange-800: #fed7aa;
+  --color-orange-900: #ffedd5;
+  --color-orange-950: #fff7ed;
+  --color-violet-50: color-mix(in srgb, #8b5cf6 13%, #1a2436);
+  --color-violet-100: color-mix(in srgb, #8b5cf6 20%, #1a2436);
+  --color-violet-200: color-mix(in srgb, #8b5cf6 32%, #1a2436);
+  --color-violet-300: color-mix(in srgb, #8b5cf6 48%, #1a2436);
+  --color-violet-600: #a78bfa;
+  --color-violet-700: #c4b5fd;
+  --color-violet-800: #ddd6fe;
+  --color-violet-900: #ede9fe;
+  --color-violet-950: #f5f3ff;
+  --color-rose-50: color-mix(in srgb, #f43f5e 13%, #1a2436);
+  --color-rose-100: color-mix(in srgb, #f43f5e 20%, #1a2436);
+  --color-rose-200: color-mix(in srgb, #f43f5e 32%, #1a2436);
+  --color-rose-300: color-mix(in srgb, #f43f5e 48%, #1a2436);
+  --color-rose-600: #fb7185;
+  --color-rose-700: #fda4af;
+  --color-rose-800: #fecdd3;
+  --color-rose-900: #ffe4e6;
+  --color-rose-950: #fff1f2;
+  --color-teal-50: color-mix(in srgb, #14b8a6 13%, #1a2436);
+  --color-teal-100: color-mix(in srgb, #14b8a6 20%, #1a2436);
+  --color-teal-200: color-mix(in srgb, #14b8a6 32%, #1a2436);
+  --color-teal-300: color-mix(in srgb, #14b8a6 48%, #1a2436);
+  --color-teal-600: #2dd4bf;
+  --color-teal-700: #5eead4;
+  --color-teal-800: #99f6e4;
+  --color-teal-900: #ccfbf1;
+  --color-teal-950: #f0fdfa;
+  --color-purple-50: color-mix(in srgb, #a855f7 13%, #1a2436);
+  --color-purple-100: color-mix(in srgb, #a855f7 20%, #1a2436);
+  --color-purple-200: color-mix(in srgb, #a855f7 32%, #1a2436);
+  --color-purple-300: color-mix(in srgb, #a855f7 48%, #1a2436);
+  --color-purple-600: #c084fc;
+  --color-purple-700: #d8b4fe;
+  --color-purple-800: #e9d5ff;
+  --color-purple-900: #f3e8ff;
+  --color-purple-950: #faf5ff;
+  --color-green-50: color-mix(in srgb, #22c55e 13%, #1a2436);
+  --color-green-100: color-mix(in srgb, #22c55e 20%, #1a2436);
+  --color-green-200: color-mix(in srgb, #22c55e 32%, #1a2436);
+  --color-green-300: color-mix(in srgb, #22c55e 48%, #1a2436);
+  --color-green-600: #4ade80;
+  --color-green-700: #86efac;
+  --color-green-800: #bbf7d0;
+  --color-green-900: #dcfce7;
+  --color-green-950: #f0fdf4;
+}
+
+.dark body {
+  background: #111a2b;
+  color: #e2e8f0;
+}
+
+/* White text stays white (it sits on solid colours), and the solid buttons it
+   sits on keep their strong light-theme shade. */
+.dark .text-white { color: #ffffff; }
+.dark .text-white\/80 { color: rgb(255 255 255 / 0.8); }
+.dark .bg-blue-600, .dark .hover\:bg-blue-600:hover { background-color: #2563eb; }
+.dark .hover\:bg-blue-700:hover { background-color: #1d4ed8; }
+.dark .bg-red-600 { background-color: #dc2626; }
+.dark .hover\:bg-red-700:hover { background-color: #b91c1c; }
+.dark .bg-emerald-600 { background-color: #059669; }
+.dark .hover\:bg-emerald-700:hover { background-color: #047857; }
+.dark .bg-amber-600 { background-color: #d97706; }
+.dark .hover\:bg-amber-700:hover { background-color: #b45309; }
+.dark .bg-slate-600, .dark .hover\:bg-slate-600:hover { background-color: #56637a; }
+.dark .bg-slate-700 { background-color: #475569; }
+.dark .hover\:bg-slate-800:hover { background-color: #56637a; }
+.dark .bg-slate-900\/40 { background-color: rgb(2 6 23 / 0.6); }
+.dark .bg-slate-900\/80 { background-color: rgb(2 6 23 / 0.8); }
+
+/* Mid-tone text (links, icons) one step lighter for contrast on dark. */
+.dark .text-blue-500 { color: #60a5fa; }
+.dark .text-red-500 { color: #f87171; }
+.dark .text-emerald-500 { color: #34d399; }
+.dark .text-violet-500 { color: #a78bfa; }
+.dark .text-rose-500 { color: #fb7185; }
+
+/* The sidebar is dark in both themes: its white overlays stay white. */
+.dark .bg-white\/10 { background-color: rgb(255 255 255 / 0.1); }
+.dark .border-white\/10 { border-color: rgb(255 255 255 / 0.1); }
+.dark .hover\:bg-white\/30:hover { background-color: rgb(255 255 255 / 0.3); }
+.dark .hover\:bg-black\/5:hover { background-color: rgb(255 255 255 / 0.06); }

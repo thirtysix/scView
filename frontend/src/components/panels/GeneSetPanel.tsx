@@ -27,6 +27,7 @@ import {
 import { useViewStore } from "@/stores/viewStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useScatterBackground } from "@/lib/theme";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useEmbedding } from "@/hooks/useEmbedding";
 import { apiFetch } from "@/api/client";
@@ -105,7 +106,7 @@ export function GeneSetPanel() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
-  const plotBackground = useSettingsStore((s) => s.plotBackground);
+  const plotBackground = useScatterBackground();
   const colormapName = useSettingsStore((s) => s.continuousColormap);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
   const embedding = useSettingsStore((s) => s.embedding);

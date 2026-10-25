@@ -2,6 +2,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { PANEL_IDS, PANEL_LABELS, type PanelId } from "@/lib/constants";
 import { MemoryIndicator } from "./MemoryIndicator";
+import { ThemeToggle } from "./ThemeToggle";
 import {
   Database,
   ClipboardCheck,
@@ -85,6 +86,7 @@ export function Sidebar() {
         })}
       </nav>
 
+      <ThemeToggle collapsed={sidebarCollapsed} />
       <MemoryIndicator collapsed={sidebarCollapsed} />
 
       {/* Collapse toggle */}

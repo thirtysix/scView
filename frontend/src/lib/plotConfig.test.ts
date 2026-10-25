@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ModeBarButton, PlotlyHTMLElement } from "plotly.js";
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { rememberBaseFigure, themedLayout, useThemeStore } from "@/lib/theme";
 
 const plotly = vi.hoisted(() => ({
   Icons: { camera: { name: "camera" }, disk: { name: "disk" } },
@@ -69,5 +70,20 @@ describe("plotConfig", () => {
     expect(plotly.downloadImage.mock.calls[0]![1].filename).toBe("scview_renamed_violin");
     click(buttons("composition", "Dataset A")[0]!);
     expect(plotly.downloadImage.mock.calls[1]![1].filename).toBe("scview_Dataset_A_composition");
+  });
+
+  it("downloads on white in dark mode too: the light colours are put back", () => {
+    useThemeStore.setState({ preference: "dark", systemDark: false });
+    const base = { paper_bgcolor: "white", font: { color: "#334155" } };
+    const div = document.createElement("div") as unknown as Record<string, unknown>;
+    div.layout = themedLayout(base, "dark");
+    div.data = [];
+    div._fullLayout = { width: 500, height: 300 };
+    rememberBaseFigure(div as unknown as HTMLElement, [], base);
+    buttons("volcano")[0]!.click(div as unknown as PlotlyHTMLElement, new MouseEvent("click"));
+    const [fig, opts] = plotly.downloadImage.mock.calls[0]!;
+    expect(fig.layout).toMatchObject({ paper_bgcolor: "white", font: { color: "#334155" }, width: 500, height: 300 });
+    expect(opts.setBackground).toBe("opaque");
+    useThemeStore.setState({ preference: "light" });
   });
 });
