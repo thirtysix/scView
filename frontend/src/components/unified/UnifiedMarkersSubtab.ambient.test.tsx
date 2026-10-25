@@ -7,6 +7,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 const { apiFetch } = vi.hoisted(() => ({ apiFetch: vi.fn() }));
 vi.mock("@/api/client", () => ({ apiFetch }));
 vi.mock("@/components/plots/MarkerSpecificityPlot", () => ({ MarkerSpecificityPlot: () => null }));
+vi.mock("@/components/unified/CountSplitCheck", () => ({ CountSplitCheck: () => null }));
 
 import { UnifiedMarkersSubtab } from "./UnifiedMarkersSubtab";
 
