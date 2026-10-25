@@ -2476,3 +2476,31 @@ def label_transfer_need(ref: Header, query: Header, *, method: str, ref_open: bo
     if method == "celltypist":
         need += LT_CT_PER_VALUE * n_ref * min(ref.n_genes or 0, query.n_genes or 0)
     return int(need + LT_FIXED)
+
+
+# ---------------------------------------------------------------------------
+# Copy-number inference (core/cnv.py): the cells x windows result, one dense block
+# ---------------------------------------------------------------------------
+
+CNV_BLOCK_BYTES = 14  # per cell x gene of a block: log values, the difference, masks, a float64 copy
+# Measured on maynard2020_3k (3,000 cells, 23,182 genes, 2,099 windows): 411 MiB above
+# the open dataset at the peak; estimated 449 MiB.
+CNV_CLUSTER_BYTES = 10  # per cell x window: the sparse float64 copy PCA reads (about half non-zero)
+CNV_FIXED = 100 * MiB
+
+
+def cnv_need(n_cells: int, n_genes: int, n_windows: int) -> int:
+    """Peak memory of a copy-number run beyond the open dataset: its result (cells x
+    windows, float32) plus the larger of one block of cells (dense, every positioned
+    gene) and the copy the CNV clustering reads."""
+    from scview.core.cnv import CHUNK, N_PCS
+
+    result = n_cells * n_windows * 4
+    block = min(CHUNK, n_cells) * n_genes * CNV_BLOCK_BYTES
+    clustering = n_cells * n_windows * CNV_CLUSTER_BYTES + n_cells * N_PCS * 8 * 3
+    return int(result + max(block, clustering) + CNV_FIXED)
+
+
+def memory_level(need: int, avail: int | None) -> str:
+    """fits / tight / wont_fit / unknown, as the run preflight words it."""
+    return _level(need, avail)

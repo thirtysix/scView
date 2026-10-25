@@ -2072,6 +2072,28 @@ def _finish_run(
         result.resources = {**control.watchdog.summary(), "write_s": write_s}
 
 
+def widen_half(adata: ad.AnnData) -> None:
+    """Store float16 matrices (X, layers, .raw) as float32, in place, before any step.
+
+    A published h5ad saved in half precision (infercnvpy's maynard2020_3k) overflows in
+    expm1 (65,504 is float16's largest value: highly variable genes raised "infinity")
+    and scanpy's numba kernels refuse it ("float16"). scipy.sparse has no float16, so
+    only dense arrays can hold it."""
+    def wide(m):
+        return m.astype(np.float32) if isinstance(m, np.ndarray) and m.dtype == np.float16 else None
+
+    if (w := wide(adata.X)) is not None:
+        adata.X = w
+        logger.info("X stored as float32 (was float16)")
+    for key in list(adata.layers.keys()):
+        if (w := wide(adata.layers[key])) is not None:
+            adata.layers[key] = w
+            logger.info("layers[%r] stored as float32 (was float16)", key)
+    if adata.raw is not None and (w := wide(adata.raw.X)) is not None:
+        adata.raw = ad.AnnData(X=w, obs=adata.obs[[]], var=adata.raw.var.copy())
+        logger.info(".raw stored as float32 (was float16)")
+
+
 def run_pipeline(
     adata: ad.AnnData,
     steps: list[str],
@@ -2108,6 +2130,7 @@ def run_pipeline(
     # Fix common pandas conflict: obs.index.name clashes with a column name.
     # This happens when e.g. index is named 'cell_id' and a 'cell_id' column
     # also exists with different values. Rename the index to avoid the error.
+    widen_half(adata)
     if adata.obs.index.name is not None and adata.obs.index.name in adata.obs.columns:
         logger.warning(
             "obs.index.name '%s' conflicts with a column of the same name; "
@@ -2183,6 +2206,7 @@ def run_pipeline_streamed(
     if params is None:
         params = PipelineParams()
 
+    widen_half(adata)
     if adata.obs.index.name is not None and adata.obs.index.name in adata.obs.columns:
         adata.obs.index.name = None
 

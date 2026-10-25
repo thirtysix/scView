@@ -335,3 +335,26 @@ async def test_run_stream_endpoint_sends_watchdog_events(client, dataset_manager
     result = json.loads(complete.split("data: ", 1)[1])
     assert result["status"] == "complete"
     assert result["resources"]["steps"]["qc_metrics"]["peak_gb"] == 7.4
+
+
+def test_log_only_stop_before_normalization():
+    """Log-normalised values with no counts stop the run before normalisation; counts,
+    ambient-corrected counts and other steps pass."""
+    import anndata as ad
+    import numpy as np
+    import scipy.sparse as sp
+
+    from scview.core import run_watchdog as rw
+
+    rng = np.random.default_rng(0)
+    counts = rng.poisson(2.0, size=(50, 30)).astype(np.float32)
+    logged = np.log1p(counts / counts.sum(1, keepdims=True).clip(1) * 1e4).astype(np.float16)
+    a = ad.AnnData(X=logged)
+    msg = rw.log_only_stop("normalization", a)
+    assert msg and "already log-normalised" in msg and "Nothing was saved" in msg
+    assert rw.log_only_stop("log_transform", a) is None
+    assert rw.log_only_stop("normalization", ad.AnnData(X=sp.csr_matrix(counts))) is None
+    corrected = ad.AnnData(X=sp.csr_matrix(counts * 0.7), layers={"counts_uncorrected": sp.csr_matrix(counts)})
+    assert rw.log_only_stop("normalization", corrected) is None
+    big = ad.AnnData(X=(counts * 10.5).astype(np.float32))  # scaled, not logged: max > 20
+    assert rw.log_only_stop("normalization", big) is None

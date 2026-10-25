@@ -34,6 +34,7 @@ import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSub
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
 import { ReportSubtab } from "@/components/report/ReportSubtab";
 import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
+import { CnvSubtab } from "@/components/unified/CnvSubtab";
 import { ClonotypeSubtab } from "@/components/unified/ClonotypeSubtab";
 import { getProgramUsage, type ProgramUsage } from "@/api/programs";
 import { usageLabel } from "@/lib/programs";
@@ -77,6 +78,7 @@ const SUBTABS = [
   { id: "communication" as const, label: "Communication" },
   { id: "report" as const, label: "Report" },
   { id: "programs" as const, label: "Programs" },
+  { id: "cnv" as const, label: "Copy number" },
   { id: "clonotypes" as const, label: "Clonotypes" },
 ] as const;
 
@@ -1354,6 +1356,7 @@ export function UnifiedViewPanel() {
                 setGroupByColumn={setGroupByColumn}
               />
             )}
+            {activeSubtab === "cnv" && <CnvSubtab />}
             {activeSubtab === "clonotypes" && <ClonotypeSubtab groupByColumn={groupByColumn} />}
           </TabPanel>
         </div>

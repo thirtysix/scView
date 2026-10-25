@@ -593,12 +593,16 @@ _FAMILY_PREFIX = {
     "pca": "result:pca", "qcstates": "result:qcstates",
     "mito": "result:mito_by_type",
     "programs": "result:programs",
+    "cnv": "result:cnv",
     "embedding": "result:embedding_reliability", "reliability": "result:embedding_reliability",
     "planner": "result:planner",
     "layouts": "result:layouts", "layout": "result:layouts",
     "seqqc": "result:seqqc",
     "hashing": "result:hashing",
     "vdj": "result:vdj", "clonotypes": "result:vdj", "clonotype": "result:vdj",
+    "offtarget": "result:offtarget", "hpa": "result:offtarget",
+    "cytokines": "result:cytokines", "cytokine": "result:cytokines", "cytosig": "result:cytokines",
+    "ppi": "result:ppi",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -638,8 +642,9 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
         if fam_refs and (fam in ("dataset", "provenance", "preprocessing", "markers",
                                   "composition", "milo", "enrichment", "qc", "communication", "pca",
                                   "mito", "qcstates", "embedding", "reliability", "planner",
-                                  "seqqc", "hashing", "vdj",
-                                  "clonotypes", "clonotype")
+                                  "seqqc", "hashing", "vdj", "offtarget", "hpa",
+                                  "cytokines", "cytokine", "cytosig",
+                                  "clonotypes", "clonotype", "ppi", "cnv")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]

@@ -222,6 +222,22 @@ def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(gp_lines[1:])))
 
 
+def _add_cnv(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved copy-number inference (core/cnv.py): reference, high-score groups,
+    high CNV clusters with their gained / lost chromosomes, once run."""
+    from scview.core import cnv
+
+    try:
+        cnv_lines, cnv_detail = cnv.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: copy number failed: %s", exc)
+        return
+    if cnv_lines:
+        lines.extend(cnv_lines)
+        sources.append(ChatSource(kind="result", ref=cnv.TAG, detail=cnv_detail,
+                                  evidence="\n".join(cnv_lines[1:])))
+
+
 def _add_count_split(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last count-split marker check (core/split_markers.py): which groups keep
     their markers on held-out counts."""
@@ -253,6 +269,36 @@ def _add_marker_panel(adaptor, lines: list[str], sources: list[ChatSource]) -> N
                                   evidence="\n".join(mp_lines)))
 
 
+def _add_offtarget(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Groups whose markers were looked up in the Human Protein Atlas (core/offtarget.py)."""
+    from scview.core import offtarget
+
+    try:
+        ot_lines, ot_detail = offtarget.grounding_lines(adaptor, adaptor.adata.obs)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: off-target fact failed: %s", exc)
+        return
+    if ot_detail:
+        lines.extend(ot_lines)
+        sources.append(ChatSource(kind="result", ref=offtarget.TAG, detail=ot_detail,
+                                  evidence="\n".join(ot_lines[1:])))
+
+
+def _add_ppi(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last protein-interaction queries on this dataset (core/ppi.py), once run."""
+    from scview.core import ppi
+
+    try:
+        p_lines, p_detail = ppi.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: PPI fact failed: %s", exc)
+        return
+    if p_lines:
+        lines.extend(p_lines)
+        sources.append(ChatSource(kind="result", ref=ppi.TAG, detail=p_detail,
+                                  evidence="\n".join(p_lines[1:])))
+
+
 def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """TCR/BCR contigs (core/vdj.py): cells with chains, the clonotypes, and the largest
     expanded ones with the cell types they sit in, only once contigs are attached."""
@@ -266,6 +312,21 @@ def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     if v_lines:
         lines.extend(v_lines)
         sources.append(ChatSource(kind="result", ref=vdj.TAG, detail=v_detail, evidence="\n".join(v_lines)))
+
+
+def _add_cytokines(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last cytokine-response run (core/cytokine_activity.py): top cytokines per group."""
+    from scview.core import cytokine_activity
+
+    try:
+        c_lines, c_detail = cytokine_activity.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: cytokine fact failed: %s", exc)
+        return
+    if c_lines:
+        lines.extend(c_lines)
+        sources.append(ChatSource(kind="result", ref=cytokine_activity.TAG, detail=c_detail,
+                                  evidence="\n".join(c_lines[1:])))
 
 
 def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -526,6 +587,7 @@ def build_grounding_context(
             logger.debug("assistant: merge-check grounding failed: %s", exc)
         _add_study_planner(adaptor, lines, sources)
         _add_vdj(adaptor, lines, sources)
+        _add_cytokines(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).
@@ -591,8 +653,11 @@ def build_grounding_context(
         _add_layout_stability(adaptor, lines, sources)
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
+        _add_cnv(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)
+        _add_offtarget(adaptor, lines, sources)
+        _add_ppi(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []

@@ -47,6 +47,31 @@ def _matrix(adata: Any, use_raw: bool, layer: str | None) -> tuple[Any, Any]:
     return adata.X, adata.var_names
 
 
+def _widen_half(adata: Any, use_raw: bool | None, layer: str | None) -> None:
+    """Store a float16 ranked matrix as float32, in place: scanpy's numba kernels raise
+    "float16" on it (a published h5ad saved in half precision, e.g. infercnvpy's
+    maynard2020_3k), and the blocks reader takes float32/float64 only."""
+    import anndata as ad
+    import numpy as np
+
+    if use_raw is None:
+        use_raw = adata.raw is not None
+    if use_raw and adata.raw is None or layer is not None and layer not in adata.layers:
+        return  # unsupported() names the problem
+    matrix, _ = _matrix(adata, use_raw, layer)
+    if np.dtype(getattr(matrix, "dtype", object)) != np.float16:
+        return
+    wide = matrix.astype(np.float32)
+    logger.info("rank_genes_groups: float16 %s stored as float32",
+                f"layer {layer!r}" if layer is not None else ".raw" if use_raw else "X")
+    if layer is not None:
+        adata.layers[layer] = wide
+    elif use_raw:
+        adata.raw = ad.AnnData(X=wide, obs=adata.obs[[]], var=adata.raw.var.copy())
+    else:
+        adata.X = wide
+
+
 def _gene_mask(adata: Any, mask_var: Any, use_raw: bool | None, layer: str | None):
     """``mask_var`` as one boolean per gene of the ranked matrix, or None: a var column
     name (of X's genes) or a boolean array, as scanpy takes it."""
@@ -142,6 +167,7 @@ def rank_genes_groups(
     ``max_entries``: values per block (default ``matrix_genes.block_entries``)."""
     # scanpy's first step (sanitize_anndata): string columns become categorical
     adata.strings_to_categoricals()
+    _widen_half(adata, use_raw, layer)
     reason = unsupported(adata, groupby, method=method, groups=groups, reference=reference,
                          use_raw=use_raw, layer=layer, corr_method=corr_method,
                          n_genes=n_genes, tie_correct=tie_correct, mask_var=mask_var, **kwds)

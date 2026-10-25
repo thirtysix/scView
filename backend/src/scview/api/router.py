@@ -18,6 +18,7 @@ from scview.api.v1 import (
     annotation,
     labels,
     clustering,
+    cnv,
     assistant,
     export,
     export_formats,
@@ -45,6 +46,9 @@ from scview.api.v1 import (
     split_markers,
     marker_panel,
     structure,
+    offtarget,
+    cytokines,
+    ppi,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -80,6 +84,7 @@ api_router.include_router(preflight.router, tags=["system"])
 api_router.include_router(report.router, tags=["report"])
 api_router.include_router(planner.router, tags=["planner"])
 api_router.include_router(programs.router, tags=["programs"])
+api_router.include_router(cnv.router, tags=["cnv"])
 api_router.include_router(layouts.router, tags=["embeddings"])
 api_router.include_router(batch_compare.router, tags=["integration"])
 api_router.include_router(seqqc.router, tags=["assessment"])
@@ -91,3 +96,6 @@ api_router.include_router(label_transfer.router, tags=["annotation"])
 api_router.include_router(split_markers.router, tags=["markers"])
 api_router.include_router(marker_panel.router, tags=["markers"])
 api_router.include_router(structure.router, tags=["assessment"])
+api_router.include_router(offtarget.router, tags=["markers"])
+api_router.include_router(cytokines.router, tags=["activity"])
+api_router.include_router(ppi.router, tags=["ppi"])

@@ -40,6 +40,9 @@ _DATA_HINTS = (
     "my data", "this dataset", "this cluster", "my cluster", "what cell types", "how many cells",
     "what did i run", "what was run", "my results", "my markers", "my umap", "this gene",
     "these cells", "current dataset", "annotation", "what's in my", "whats in my",
+    "outside blood", "other tissues", "elsewhere in the body", "protein atlas", "hpa",
+    "copy number", "cnv", "malignant", "protein network", "interaction network",
+    "cytokine response",
 )
 _METHODS_HINTS = (
     "how do i", "how to", "why ", "should i", "what does", "parameter", "resolution",
@@ -167,7 +170,11 @@ how to see or do something in scView (e.g. "what datasets do we have?", "how do 
 load data?", "what can this tool do?", "how do I plot markers in scView?").
 - "data": about the user's CURRENTLY LOADED dataset — its analysis/results AND its \
 own identity/source (e.g. "what cell types are in my data?", "markers of this \
-cluster", "what steps ran?", "what paper/publication is THIS dataset from?").
+cluster", "what steps ran?", "what paper/publication is THIS dataset from?"). This \
+includes results of analyses run in scView on it: where its markers are expressed in \
+other tissues (Human Protein Atlas lookup), cytokine response (CytoSig), protein \
+interaction networks (STRING), copy number / malignant cells (inferCNV-style), e.g. \
+"are the B cell markers specific outside blood?" → data with ["markers"].
 - "tutorials": single-cell METHODS / how-to / parameter / interpretation questions \
 (e.g. "why log-normalize?", "what clustering resolution?").
 - "literature": BIOLOGY / evidence answerable from research abstracts \

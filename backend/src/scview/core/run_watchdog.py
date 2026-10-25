@@ -244,6 +244,38 @@ class RunWatchdog:
 BeforeStep = Callable[[str, Any, Any], "str | None"]
 
 
+LOG_MAX = 20.0  # log1p of normalised counts stays under this (the assessor's log check)
+_LOG_ROWS = 200
+
+
+def log_only_stop(step: str, adata: Any) -> str | None:
+    """Stop before normalisation when X already holds log-normalised values and there
+    are no counts to start from: not whole numbers, none negative, max <= ``LOG_MAX``.
+
+    The normalisation step keeps X as the counts when there is nothing else, so a
+    published h5ad that ships only log values (infercnvpy's maynard2020_3k) was logged
+    twice, which flattens every fold change (its tumour cells' copy-number score fell
+    from 5.5x to 1.8x the reference). Counts an ambient RNA correction made are not whole
+    numbers either; they keep their originals in ``counts_uncorrected`` and pass."""
+    import numpy as np
+    import scipy.sparse as sp
+
+    if step != "normalization" or "counts_uncorrected" in adata.layers:
+        return None
+    m = adata.X
+    m = m[: min(_LOG_ROWS, m.shape[0])]
+    vals = np.asarray(m.data if sp.issparse(m) else (m.toarray() if hasattr(m, "toarray") else m))
+    vals = vals.ravel().astype(np.float64)
+    vals = vals[np.isfinite(vals) & (vals != 0)]
+    if vals.size == 0 or vals.min() < 0 or np.all(np.mod(vals, 1) == 0) or vals.max() > LOG_MAX:
+        return None
+    return (f"Stopped before normalization: the expression values are already log-normalised "
+            f"(not whole numbers, largest {vals.max():.1f}) and the dataset has no raw counts, so "
+            f"normalising and logging them again would flatten every difference between cells. "
+            f"Leave out Reset to counts, Normalization and Log transform, and run the other steps. "
+            f"Nothing was saved: the dataset is as it was before the run.")
+
+
 def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     """The check every pipeline run makes before each step: stop before a step the
     preflight estimate says cannot fit in the memory left.
@@ -251,7 +283,8 @@ def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     A step that outgrows the container limit gets the backend killed, which loses
     the whole run; the watchdog's 2 s sampler cannot warn in time (Scrublet on Kang
     grows 2.3 GB inside 2 s). So the run stops before such a step instead, keeping
-    the steps already done. It stops only when even the low end of the estimate's
+    the steps already done. It also stops before normalising values that are already
+    log-normalised (``log_only_stop``). The memory stop happens only when even the low end of the estimate's
     error band (``preflight.ERROR_BAND``) is more than the memory free, and only
     under a container limit: without one the "limit" is the machine's memory,
     which the backend shares with everything else, so the check would be a guess.
@@ -267,6 +300,9 @@ def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     """
     from scview.core import preflight
 
+    reason = log_only_stop(step, adata)
+    if reason:
+        return reason
     avail = preflight.available_memory()
     if not avail.limited or avail.available_bytes is None or avail.limit_bytes is None:
         return None
