@@ -283,6 +283,21 @@ def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
         sources.append(ChatSource(kind="result", ref=vdj.TAG, detail=v_detail, evidence="\n".join(v_lines)))
 
 
+def _add_cytokines(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last cytokine-response run (core/cytokine_activity.py): top cytokines per group."""
+    from scview.core import cytokine_activity
+
+    try:
+        c_lines, c_detail = cytokine_activity.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: cytokine fact failed: %s", exc)
+        return
+    if c_lines:
+        lines.extend(c_lines)
+        sources.append(ChatSource(kind="result", ref=cytokine_activity.TAG, detail=c_detail,
+                                  evidence="\n".join(c_lines[1:])))
+
+
 def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Which group relations in the plot hold across other seeds and neighbour counts
     (core/layout_stability.py), only once a layout check has run for this dataset."""
@@ -541,6 +556,7 @@ def build_grounding_context(
             logger.debug("assistant: merge-check grounding failed: %s", exc)
         _add_study_planner(adaptor, lines, sources)
         _add_vdj(adaptor, lines, sources)
+        _add_cytokines(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).

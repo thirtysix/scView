@@ -16,6 +16,7 @@ import {
 import { activityLabel, filterRows, heatmapData, sourceRows } from "@/lib/activity";
 import { plotConfig } from "@/lib/plotConfig";
 import { RequestError } from "@/components/common/RequestError";
+import { CytokineResponse } from "./CytokineResponse";
 
 interface Props {
   /** Colour the embedding by one source's per-cell activity. */
@@ -51,6 +52,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
   const [topN, setTopN] = useState<number>(20);
   const [colouring, setColouring] = useState<string | null>(null);
   const [shown, setShown] = useState<string | null>(null);
+  const [cytokines, setCytokines] = useState(false);
 
   const groupColumns = useMemo(() => {
     if (!dataset) return [];
@@ -66,7 +68,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
   const groupby = groupColumns.some((c) => c.name === groupByColumn) ? groupByColumn : "";
 
   useEffect(() => {
-    if (!datasetId) return;
+    if (!datasetId || cytokines) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -86,7 +88,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
     return () => {
       cancelled = true;
     };
-  }, [datasetId, network, groupby]);
+  }, [datasetId, network, groupby, cytokines]);
 
   const colourBy = useCallback(
     async (source: string) => {
@@ -115,30 +117,52 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
 
   if (!dataset || !datasetId) return <div className="text-xs text-slate-400">No dataset loaded.</div>;
 
+  const tabs = (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {(Object.keys(NETWORK_LABELS) as ActivityNetwork[]).map((n) => (
+        <button
+          key={n}
+          onClick={() => {
+            setCytokines(false);
+            setNetwork(n);
+            setQuery("");
+          }}
+          className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+            !cytokines && network === n ? "bg-primary text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
+          }`}
+        >
+          {NETWORK_LABELS[n].long}
+        </button>
+      ))}
+      <button
+        type="button"
+        onClick={() => setCytokines(true)}
+        className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+          cytokines ? "bg-primary text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
+        }`}
+      >
+        Cytokine response
+      </button>
+      <InfoTip label="About TF and pathway activity" align="right">
+        Each cell gets one score per transcription factor (CollecTRI) or pathway (PROGENy): the
+        t-value of a linear fit of its log-normalised expression on the source&apos;s signed
+        target weights (decoupler&apos;s ULM). Positive: the targets it activates are high and the
+        ones it represses low. Human networks only.
+      </InfoTip>
+    </div>
+  );
+  if (cytokines) {
+    return (
+      <div className="space-y-3">
+        {tabs}
+        <CytokineResponse groupByColumn={groupByColumn} setGroupByColumn={setGroupByColumn} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5">
-        {(Object.keys(NETWORK_LABELS) as ActivityNetwork[]).map((n) => (
-          <button
-            key={n}
-            onClick={() => {
-              setNetwork(n);
-              setQuery("");
-            }}
-            className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-              network === n ? "bg-primary text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
-            }`}
-          >
-            {NETWORK_LABELS[n].long}
-          </button>
-        ))}
-        <InfoTip label="About TF and pathway activity" align="right">
-          Each cell gets one score per transcription factor (CollecTRI) or pathway (PROGENy): the
-          t-value of a linear fit of its log-normalised expression on the source&apos;s signed
-          target weights (decoupler&apos;s ULM). Positive: the targets it activates are high and the
-          ones it represses low. Human networks only.
-        </InfoTip>
-      </div>
+      {tabs}
 
       <div>
         <label className="mb-1 block text-[11px] font-medium text-slate-500">Group by (heatmap)</label>

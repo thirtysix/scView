@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # Fetch the Human Protein Atlas tissue / cell-type RNA tables into DATA_DIR/hpa
     # on first use (core/offtarget.py).
     HPA_AUTO_DOWNLOAD: bool = True
+    # Fetch the CytoSig cytokine-response signature into DATA_DIR/networks/cytosig on
+    # first use (core/cytokine_activity.py).
+    CYTOSIG_AUTO_DOWNLOAD: bool = True
     # Import public datasets from CELLxGENE Discover (core/public_import.py). Unset:
     # on in private mode, off in public mode (the server would download for anyone).
     PUBLIC_IMPORT_ENABLED: bool | None = None

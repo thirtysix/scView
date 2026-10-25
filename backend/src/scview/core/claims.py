@@ -600,6 +600,7 @@ _FAMILY_PREFIX = {
     "hashing": "result:hashing",
     "vdj": "result:vdj", "clonotypes": "result:vdj", "clonotype": "result:vdj",
     "offtarget": "result:offtarget", "hpa": "result:offtarget",
+    "cytokines": "result:cytokines", "cytokine": "result:cytokines", "cytosig": "result:cytokines",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -640,6 +641,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "composition", "milo", "enrichment", "qc", "communication", "pca",
                                   "mito", "qcstates", "embedding", "reliability", "planner",
                                   "seqqc", "hashing", "vdj", "offtarget", "hpa",
+                                  "cytokines", "cytokine", "cytosig",
                                   "clonotypes", "clonotype")
                          or not last):
             if fam == "dataset":
