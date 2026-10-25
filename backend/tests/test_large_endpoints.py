@@ -146,6 +146,7 @@ async def test_category_order_and_rename_are_written_in_place(client, both):
     ("GET", "/activity/progeny", {}),
     ("POST", "/trajectory/leiden/trend-genes", {"json": {}}),
     ("GET", "/qc/mito-refilter", {}),
+    ("POST", "/communication/compare", {"json": {"groupby": "leiden", "condition": "sample", "a": "x", "b": "y"}}),
 ])
 async def test_whole_matrix_methods_refuse_with_a_reason(client, both, method, path, kw):
     res = await client.request(method, f"{API}/{LARGE}{path}", **kw)

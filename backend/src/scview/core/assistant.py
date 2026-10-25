@@ -40,6 +40,7 @@ from scview.core import (
     ccc, cluster_qc, composition, doublets, merge_check, milo, pca_diagnostics, provenance,
     qc_filter,
 )
+from scview.core import ccc_compare
 from scview.core import mito_by_type
 from scview.core import qc_states
 from scview.core import embedding_reliability
@@ -467,6 +468,14 @@ def build_grounding_context(
                                           detail=ccc_detail, evidence="\n".join(ccc_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: communication grounding failed: %s", exc)
+        try:
+            cmp_lines, cmp_detail = ccc_compare.grounding_lines(adaptor, adata.obs)
+            lines.extend(cmp_lines)
+            if cmp_detail:
+                sources.append(ChatSource(kind="result", ref="result:communication_compare",
+                                          detail=cmp_detail, evidence="\n".join(cmp_lines[1:])))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: communication comparison grounding failed: %s", exc)
         try:
             milo_lines, milo_detail = milo.grounding_lines(adaptor)
             lines.extend(milo_lines)

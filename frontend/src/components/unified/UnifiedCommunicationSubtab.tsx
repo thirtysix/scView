@@ -29,6 +29,7 @@ import { plotConfig } from "@/lib/plotConfig";
 import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { RequestError } from "@/components/common/RequestError";
+import { CommunicationCompare } from "@/components/unified/CommunicationCompare";
 
 interface Props {
   /** The Unified View's group-by column: the default sender / receiver groups */
@@ -168,9 +169,9 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
 
   const pct = progress ? Math.round((100 * progress.done) / Math.max(1, progress.total)) : 0;
   const sel = "w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700";
-
-  return (
-    <div className="space-y-3">
+  const mode = settings.mode;
+  const top = (
+    <>
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-slate-600">Ligand-receptor communication</span>
         <InfoTip label="About cell-cell communication" align="right">
@@ -182,22 +183,57 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
           expressed, specificity rank = how specific to these two groups. Lower is stronger. Both
           genes must be detected in at least the set share of each group&apos;s cells; a complex
           counts by its weakest subunit. These are predictions from expression, not measured
-          signalling. To compare conditions, run each condition on its own.
+          signalling. To compare two conditions, use Compare conditions.
         </InfoTip>
       </div>
+      <div className="flex overflow-hidden rounded-md border border-slate-300 text-[11px]" role="group" aria-label="Mode">
+        {(["single", "compare"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            aria-pressed={mode === m}
+            onClick={() => update({ mode: m })}
+            className={`flex-1 px-2 py-1 ${mode === m ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+          >
+            {m === "single" ? "One run" : "Compare conditions"}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+  const groupbySelect = (
+    <div>
+      <label htmlFor="ccc-groupby" className="mb-1 block text-[11px] font-medium text-slate-500">
+        Senders and receivers
+      </label>
+      <select id="ccc-groupby" value={groupby} onChange={(e) => update({ groupby: e.target.value })} className={sel}>
+        <option value="">Choose a column</option>
+        {groupColumns.map((c) => (
+          <option key={c.name} value={c.name}>
+            {c.name} ({c.n_unique})
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
+  if (mode === "compare") {
+    return (
+      <div className="space-y-3">
+        {top}
+        {groupbySelect}
+        <CommunicationCompare datasetId={datasetId} datasetName={dataset.name} groupby={groupby} options={options} />
+        <RequestError message={error} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {top}
 
       <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="mb-1 block text-[11px] font-medium text-slate-500">Senders and receivers</label>
-          <select aria-label="Senders and receivers" value={groupby} onChange={(e) => update({ groupby: e.target.value })} className={sel}>
-            <option value="">Choose a column</option>
-            {groupColumns.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.name} ({c.n_unique})
-              </option>
-            ))}
-          </select>
-        </div>
+        {groupbySelect}
         <div>
           <label className="mb-1 block text-[11px] font-medium text-slate-500">Cells</label>
           <select
