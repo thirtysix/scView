@@ -42,9 +42,13 @@ from scview.core import large_layout, large_mode
 
 # CELLxGENE Discover dataset schema the readiness report follows:
 # https://github.com/chanzuckerberg/single-cell-curation/blob/main/schema/5.3.0/schema.md
-# (read 2026-10-24; 6.0.0 and 7.x exist and move organism to uns, so a curator
-# submitting today should check the current version's changelog too).
-SCHEMA_VERSION = "5.3.0"
+# (read 2026-10-25). Against 5.3.0: organism_ontology_term_id lives in uns (6.0.0;
+# obs organism columns are reserved), several terms are joined with " || " (disease,
+# self-reported ethnicity, 6.0.0), tissue_type "cell culture" became "primary cell
+# culture" and "cell line" was added (Cellosaurus CVCL_ tissue; "na" donor, sex, stage
+# and ethnicity; 7.0.0), and optional perturbation / experimental-condition fields
+# arrived (7.1.0).
+SCHEMA_VERSION = "7.1.0"
 SCHEMA_URL = ("https://github.com/chanzuckerberg/single-cell-curation/blob/main/schema/"
               f"{SCHEMA_VERSION}/schema.md")
 
@@ -529,30 +533,35 @@ def write(p: Plan, out_path: Path, note: dict[str, str],
 # Readiness for CELLxGENE Discover
 
 # (field, allowed term prefixes or literal values, what it is) for the obs columns a
-# curator MUST annotate (schema 5.3.0, "obs (Cell Metadata)").
+# curator MUST annotate (schema 7.1.0, "obs (Cell Metadata)"); "na" is the value for
+# cell lines (tissue_type "cell line"). organism_ontology_term_id is checked in uns.
 _ONTOLOGY_FIELDS: list[tuple[str, tuple[str, ...], tuple[str, ...], str]] = [
-    ("organism_ontology_term_id", ("NCBITaxon",), (), "organism (NCBITaxon)"),
     ("assay_ontology_term_id", ("EFO",), (), "assay (EFO)"),
-    ("tissue_ontology_term_id", ("UBERON", "CL", "WBbt", "ZFA", "FBbt"), (), "tissue (UBERON)"),
+    ("tissue_ontology_term_id", ("UBERON", "CL", "WBbt", "ZFA", "FBbt", "CVCL"), (),
+     "tissue (UBERON; Cellosaurus CVCL_ for a cell line)"),
     ("disease_ontology_term_id", ("MONDO", "PATO"), (), "disease (MONDO, or PATO:0000461 for normal)"),
-    ("cell_type_ontology_term_id", ("CL", "WBbt", "ZFA", "FBbt"), ("unknown",), "cell type (CL)"),
+    ("cell_type_ontology_term_id", ("CL", "WBbt", "ZFA", "FBbt"), ("unknown", "na"), "cell type (CL)"),
     ("development_stage_ontology_term_id", ("HsapDv", "MmusDv", "UBERON", "WBls", "ZFS", "FBdv"),
-     ("unknown",), "development stage (HsapDv / MmusDv)"),
-    ("sex_ontology_term_id", ("PATO",), ("unknown",), "sex (PATO)"),
-    ("self_reported_ethnicity_ontology_term_id", ("HANCESTRO",), ("unknown", "na"),
+     ("unknown", "na"), "development stage (HsapDv / MmusDv)"),
+    ("sex_ontology_term_id", ("PATO",), ("unknown", "na"), "sex (PATO)"),
+    ("self_reported_ethnicity_ontology_term_id", ("HANCESTRO", "AfPO"), ("unknown", "na"),
      "self-reported ethnicity (HANCESTRO; 'na' for non-human)"),
 ]
 _LITERAL_FIELDS = {
     "suspension_type": ("cell", "nucleus", "na"),
-    "tissue_type": ("tissue", "organoid", "cell culture"),
+    "tissue_type": ("tissue", "organoid", "primary cell culture", "cell line"),
 }
 # Columns Discover adds itself from the term ids: curators MUST NOT annotate them.
 _ADDED_BY_DISCOVER = ("assay", "cell_type", "development_stage", "disease", "organism",
-                      "self_reported_ethnicity", "sex", "tissue", "observation_joinid")
+                      "self_reported_ethnicity", "sex", "tissue", "observation_joinid",
+                      "experimental_condition", "perturbation_types")
+# Fields joined with " || " when a cell has several terms (6.0.0).
+_MULTI_TERM = ("disease_ontology_term_id", "self_reported_ethnicity_ontology_term_id")
 _VAR_ADDED_BY_DISCOVER = ("feature_name", "feature_reference", "feature_biotype",
                           "feature_length", "feature_type")
-_DEPRECATED_OBS = ("ethnicity", "ethnicity_ontology_term_id")
-_TERM = re.compile(r"^([A-Za-z]+):\d+$")
+_DEPRECATED_OBS = ("ethnicity", "ethnicity_ontology_term_id", "organism", "organism_ontology_term_id")
+# OBO CURIE (EFO:0009922), or Cellosaurus's underscore form (CVCL_1P02).
+_TERM = re.compile(r"^(?:([A-Za-z]+):\d+|(CVCL)_[A-Z0-9]+)$")
 _DONOR_HINTS = re.compile(r"donor|patient|individual|subject|^ind$|replicate|sample", re.I)
 
 
@@ -564,19 +573,35 @@ def _bad_terms(values: pd.Series, prefixes: tuple[str, ...], literals: tuple[str
                multi: bool = False) -> list[str]:
     bad: list[str] = []
     for v in pd.unique(values.astype(str)):
-        parts = v.split(",") if multi else [v]
-        ok = v in literals or all(
-            (m := _TERM.match(p)) is not None and m.group(1) in prefixes for p in parts)
+        parts = v.split(" || ") if multi else [v]
+        ok = v in literals or (len(set(parts)) == len(parts) and parts == sorted(parts) and all(
+            (m := _TERM.match(p)) is not None and (m.group(1) or m.group(2)) in prefixes
+            for p in parts))
         if not ok:
             bad.append(v)
     return bad
 
 
-def readiness(p: Plan, species: str | None = None, title: str | None = None) -> dict[str, Any]:
+def readiness(p: Plan, species: str | None = None, title: str | None = None,
+              uns: dict | None = None) -> dict[str, Any]:
     """Which Discover fields the export has, lacks or has in another form. ``status``:
-    ok | missing | invalid | warn. Nothing is filled in."""
+    ok | missing | invalid | warn. ``uns``: the dataset's own uns, where the organism is
+    read. Nothing is filled in."""
     obs, var = p.obs, p.var
     items: list[dict[str, str]] = []
+    org = (uns or {}).get("organism_ontology_term_id")
+    org_label = "organism (uns, NCBITaxon)"
+    m = _TERM.match(org) if isinstance(org, str) else None
+    if org is None:
+        where = (" (it is in the cell metadata; schema 6.0.0 moved it to uns)"
+                 if "organism_ontology_term_id" in obs.columns else "")
+        items.append(_item("organism_ontology_term_id", org_label, "missing",
+                           "uns['organism_ontology_term_id'] is not set" + where + "."))
+    elif m is None or m.group(1) != "NCBITaxon":
+        items.append(_item("organism_ontology_term_id", org_label, "invalid",
+                           f"Not an NCBITaxon term: {org}."))
+    else:
+        items.append(_item("organism_ontology_term_id", org_label, "ok", str(org)))
     for key, prefixes, literals, label in _ONTOLOGY_FIELDS:
         if key not in obs.columns:
             items.append(_item(key, label, "missing", "Not in the cell metadata."))
@@ -585,12 +610,14 @@ def readiness(p: Plan, species: str | None = None, title: str | None = None) -> 
         if s.isna().any():
             items.append(_item(key, label, "invalid", f"{int(s.isna().sum()):,} cells have no value."))
             continue
-        bad = _bad_terms(s, prefixes, literals, multi=key.startswith("self_reported"))
+        bad = _bad_terms(s, prefixes, literals, multi=key in _MULTI_TERM)
         if key == "disease_ontology_term_id":
             bad += [v for v in pd.unique(s.astype(str)) if v.startswith("PATO") and v != "PATO:0000461"]
         if bad:
             shown = ", ".join(bad[:3]) + (" …" if len(bad) > 3 else "")
-            items.append(_item(key, label, "invalid", f"Not a term id of the expected kind: {shown}."))
+            items.append(_item(key, label, "invalid",
+                               "Not a term id of the expected kind (several terms: sorted, "
+                               f"joined with ' || '): {shown}."))
         else:
             items.append(_item(key, label, "ok", f"{s.nunique():,} values."))
     for key, allowed in _LITERAL_FIELDS.items():

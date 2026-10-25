@@ -41,7 +41,7 @@ describe("ExportFormatDialog", () => {
       has_counts: true,
       raw_from: null,
       readiness: {
-        schema_version: "5.3.0",
+        schema_version: "7.1.0",
         schema_url: "https://example.org/schema",
         items: [{ key: "donor_id", label: "donor id", status: "missing", detail: "Not in the cell metadata." }],
         n_ok: 0,
