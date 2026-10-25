@@ -588,6 +588,8 @@ _FAMILY_PREFIX = {
     "composition": "result:composition", "milo": "result:milo", "qc": "result:qc:",
     "enrichment": "result:enrichment", "communication": "result:communication",
     "merge_check": "result:merge_check",
+    "count_split": "result:count_split", "count": "result:count_split",
+    "marker": "result:marker_panel", "panel": "result:marker_panel",
     "pca": "result:pca", "qcstates": "result:qcstates",
     "mito": "result:mito_by_type",
     "programs": "result:programs",

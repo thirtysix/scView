@@ -41,7 +41,8 @@ export function Sidebar() {
   const hasDataset = currentDataset !== null;
 
   return (
-    <aside
+    <nav
+      aria-label="Sidebar"
       className={`fixed left-0 top-0 z-40 flex h-screen flex-col bg-sidebar text-sidebar-foreground transition-all duration-200 ${
         sidebarCollapsed ? "w-16" : "w-60"
       }`}
@@ -57,7 +58,7 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto p-2">
         {PANEL_IDS.map((id) => {
           const Icon = PANEL_ICONS[id];
           const isActive = activePanel === id;
@@ -71,6 +72,8 @@ export function Sidebar() {
               key={id}
               onClick={() => !isDisabled && setPanel(id)}
               disabled={isDisabled}
+              aria-current={isActive ? "page" : undefined}
+              aria-label={sidebarCollapsed ? PANEL_LABELS[id] : undefined}
               className={`mb-0.5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
                 isActive
                   ? "bg-primary/20 text-primary"
@@ -85,7 +88,7 @@ export function Sidebar() {
             </button>
           );
         })}
-      </nav>
+      </div>
 
       <ThemeToggle collapsed={sidebarCollapsed} />
       <AccessibilityToggle collapsed={sidebarCollapsed} />
@@ -94,6 +97,9 @@ export function Sidebar() {
       {/* Collapse toggle */}
       <button
         onClick={toggleSidebar}
+        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-expanded={!sidebarCollapsed}
+        title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         className="flex h-10 items-center justify-center border-t border-white/10 text-sidebar-foreground/50 hover:text-sidebar-foreground"
       >
         {sidebarCollapsed ? (
@@ -102,6 +108,6 @@ export function Sidebar() {
           <PanelLeftClose className="h-4 w-4" />
         )}
       </button>
-    </aside>
+    </nav>
   );
 }

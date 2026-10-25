@@ -261,7 +261,11 @@ export function EmbeddingReliabilityPanel({
   const header = (key: GroupSortKey, label: string, align: "left" | "right" = "right") => {
     const active = sort?.key === key;
     return (
-      <th className={`px-1.5 py-1 font-medium ${align === "right" ? "text-right" : "text-left"}`} title={COLUMN_TIPS[key]}>
+      <th
+        className={`px-1.5 py-1 font-medium ${align === "right" ? "text-right" : "text-left"}`}
+        title={COLUMN_TIPS[key]}
+        aria-sort={active ? (sort!.desc ? "descending" : "ascending") : "none"}
+      >
         <button
           type="button"
           onClick={() => setSort({ key, desc: active ? !sort!.desc : key === "share_low" || key === "n" })}

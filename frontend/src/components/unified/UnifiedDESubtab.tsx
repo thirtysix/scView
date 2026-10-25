@@ -612,6 +612,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <label className="whitespace-nowrap font-medium text-slate-500">|log2FC| &ge;</label>
             <input
+              aria-label="Minimum |log2FC|"
               type="range"
               min={0}
               max={5}

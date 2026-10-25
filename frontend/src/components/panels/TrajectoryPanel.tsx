@@ -407,14 +407,14 @@ export function TrajectoryPanel() {
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium text-slate-600">Compute pseudotime from</span>
-          <select value={rootColumn} onChange={(e) => setRootColumn(e.target.value)} className={selectCls}>
+          <select value={rootColumn} onChange={(e) => setRootColumn(e.target.value)} aria-label="Root column" className={selectCls}>
             {rootCols.map((c) => (
               <option key={c.name} value={c.name}>
                 {prettyObsLabel(c.name)}
               </option>
             ))}
           </select>
-          <select value={rootValue} onChange={(e) => setRootValue(e.target.value)} className={selectCls}>
+          <select value={rootValue} onChange={(e) => setRootValue(e.target.value)} aria-label="Root group" className={selectCls}>
             {rootValues.map((v) => (
               <option key={v} value={v}>
                 {v}
@@ -516,6 +516,7 @@ export function TrajectoryPanel() {
             Pseudotime:
           </label>
           <select
+            aria-label="Pseudotime"
             value={selectedColumn}
             onChange={(e) => setSelectedColumn(e.target.value)}
             className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"

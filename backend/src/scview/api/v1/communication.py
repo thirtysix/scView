@@ -1,8 +1,8 @@
 """Cell-cell communication: ligand-receptor scoring with LIANA's consensus rank aggregate.
 
 Between the groups of one obs column, optionally on one condition's cells only
-(e.g. Kang's STIM), so conditions can be run one at a time; a differential
-comparison between conditions is not done here. Computed on demand and never
+(e.g. Kang's STIM), or two conditions compared on the same groups, resource
+and genes (``/communication/compare``, core/ccc_compare.py). Computed on demand and never
 written to the dataset: the last few results are kept in memory for the CSV
 download and the co-pilot. See ``core/ccc.py`` and ``core/lr_resource.py``.
 """
@@ -27,7 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import ccc, large_mode, lr_resource
+from scview.core import ccc, ccc_compare, large_mode, lr_resource
 from scview.core.activity import lognorm_matrix
 from scview.core.confounding import condition_columns
 from scview.core.dataset_manager import DatasetManager
@@ -329,3 +329,216 @@ async def communication_csv(dataset_id: str, result_id: str):
     name = re.sub(r"[^A-Za-z0-9_.-]", "_", f"scview_communication_{r.groupby}{where}") + ".csv"
     return StreamingResponse(iter([text]), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ---------------------------------------------------------------------------
+# Two conditions compared (core/ccc_compare.py)
+# ---------------------------------------------------------------------------
+
+
+class CompareRequest(BaseModel):
+    groupby: str = Field(min_length=1, max_length=256)
+    condition: str = Field(min_length=1, max_length=256)
+    a: str = Field(min_length=1, max_length=1024)
+    b: str = Field(min_length=1, max_length=1024)
+    sample_key: str | None = Field(default="auto", max_length=256)  # auto | a column | null (no test)
+    resource: str = Field(default="auto", max_length=32)
+    expr_prop: float = Field(default=ccc.EXPR_PROP, ge=0.0, le=1.0)
+    n_perms: int = Field(default=ccc.N_PERMS, ge=0, le=MAX_PERMS)
+    min_cells: int = Field(default=ccc_compare.MIN_CELLS, ge=1, le=10_000)
+
+
+COMPARE_TEXT = ["source", "target", "ligand_complex", "receptor_complex", "call"]
+COMPARE_NUM = ["lr_means_a", "lr_means_b", "delta", "log2_fold", "magnitude_rank_a", "magnitude_rank_b",
+               "specificity_rank_a", "specificity_rank_b", "p_value", "p_adj"]
+
+
+def compare_body(r: ccc_compare.CompareResult) -> dict[str, Any]:
+    tab = r.table.head(MAX_ROWS)
+    calls = r.table["call"].value_counts()
+    return {
+        "result_id": r.id,
+        "groupby": r.groupby,
+        "condition": r.condition,
+        "a": r.a,
+        "b": r.b,
+        "resource": r.resource,
+        "resource_label": RESOURCE_LABELS[r.resource],
+        "species": r.species,
+        "matrix_source": r.matrix_source,
+        "n_cells": r.n_cells,
+        "groups": r.groups,
+        "sizes_a": r.sizes_a,
+        "sizes_b": r.sizes_b,
+        "dropped_groups": r.dropped_groups,
+        "min_cells": int(r.min_cells),
+        "expr_prop": r.expr_prop,
+        "n_perms": r.n_perms,
+        "seed": ccc.SEED,
+        "n_interactions": r.n_interactions,
+        "n_rows": int(len(r.table)),
+        "rows_shown": int(len(tab)),
+        "calls": {c: int(calls.get(c, 0)) for c in ccc_compare.CALLS},
+        "specific_threshold": ccc.SPECIFIC,
+        "fold": ccc_compare.FOLD,
+        "columns": {**{c: tab[c].astype(str).tolist() for c in COMPARE_TEXT},
+                    **{c: _num(tab[c]) for c in COMPARE_NUM},
+                    "n_donors": tab["n_donors"].astype(int).tolist(),
+                    "composition_note": tab["composition_note"].astype(bool).tolist()},
+        "counts_a": r.counts_a.astype(int).tolist(),
+        "counts_b": r.counts_b.astype(int).tolist(),
+        "strength_a": [_num(row) for row in r.strength_a],
+        "strength_b": [_num(row) for row in r.strength_b],
+        "replicates": r.replicates,
+        "composition": r.composition,
+        "share_fold": ccc_compare.SHARE_FOLD,
+        "elapsed_seconds": r.elapsed_seconds,
+        "citation": lr_resource.CITATION,
+    }
+
+
+@router.post("/datasets/{dataset_id}/communication/compare")
+async def compare_communication(
+    dataset_id: str,
+    body: CompareRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Score both conditions on the same groups, resource and genes and compare.
+
+    Events as the single run: ``start``, ``progress`` (with the condition being
+    scored), ``result``, ``complete`` or ``error``. A client that goes away stops
+    the run at its next batch of permutations."""
+    if body.resource not in ("auto", *lr_resource.RESOURCES):
+        raise HTTPException(status_code=400, detail=f"Unknown resource '{body.resource}'.")
+    adaptor = await _adaptor(dm, dataset_id)
+    large_mode.check(adaptor, "Ligand-receptor communication",
+                     "it reads the chosen cells' values and totals over every gene in memory")
+    adata = adaptor.adata
+    obs = adata.obs
+    for col in (body.groupby, body.condition):
+        if col not in obs.columns:
+            raise HTTPException(status_code=404, detail=f"Column '{col}' not found.")
+    if body.sample_key not in (None, "auto") and body.sample_key not in obs.columns:
+        raise HTTPException(status_code=404, detail=f"Column '{body.sample_key}' not found.")
+    if body.groupby == body.condition:
+        raise HTTPException(status_code=400, detail="The groups and the condition must be different columns.")
+    if body.a == body.b:
+        raise HTTPException(status_code=400, detail="Choose two different conditions.")
+    cond = obs[body.condition].astype(str).where(obs[body.condition].notna())
+    n_a, n_b = int((cond == body.a).sum()), int((cond == body.b).sum())
+    for v, n in ((body.a, n_a), (body.b, n_b)):
+        if n == 0:
+            raise HTTPException(status_code=400, detail=f"No cells have {body.condition} = {v}.")
+    n_groups = _groups(obs, body.groupby, ((cond == body.a) | (cond == body.b)).to_numpy())
+    if dataset_id in _running:
+        raise HTTPException(status_code=409, detail="A communication run is already going on this dataset.")
+    res_dir = _res_dir(settings)
+
+    async def events():
+        if dataset_id in _running:
+            yield _sse("error", {"error": "A communication run is already going on this dataset."})
+            return
+        _running.add(dataset_id)
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        stop = threading.Event()
+
+        def put(event: str, data: dict) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, (event, data))
+
+        def work() -> None:
+            t0 = time.time()
+            try:
+                table = lr_resource.load(res_dir)
+                resource, species, why = _choose_resource(body.resource, adata, table)
+                put("start", {"n_cells": n_a + n_b, "n_groups": n_groups, "resource": resource,
+                              "resource_label": RESOURCE_LABELS[resource], "species": species,
+                              "species_evidence": why, "n_perms": body.n_perms, "a": body.a, "b": body.b,
+                              "estimate_seconds": ccc_compare.estimate_seconds(n_a, n_b, n_groups,
+                                                                                body.n_perms)})
+                M, genes, source = lognorm_matrix(adata)
+                parts = ccc_compare.compare(
+                    M, genes, obs, body.groupby, body.condition, body.a, body.b,
+                    lr_resource.select(table, resource), expr_prop=body.expr_prop, n_perms=body.n_perms,
+                    min_cells=body.min_cells, sample_key=body.sample_key,
+                    progress=lambda c, d, n: put("progress", {"condition": c, "done": d, "total": n}),
+                    stop=stop.is_set)
+                del M
+                result = ccc_compare.CompareResult(
+                    id=uuid.uuid4().hex[:12], dataset_id=dataset_id, groupby=body.groupby,
+                    condition=body.condition, a=body.a, b=body.b, resource=resource, species=species,
+                    matrix_source=source, expr_prop=body.expr_prop, n_perms=body.n_perms,
+                    min_cells=body.min_cells, elapsed_seconds=round(time.time() - t0, 2), **parts)
+                ccc_compare.keep(result)
+                ccc_compare.remember(adaptor, result)
+                put("result", compare_body(result))
+                put("complete", {})
+            except InterruptedError:
+                put("complete", {})
+            except (lr_resource.ResourceUnavailable, ccc.CCCError, ValueError) as e:
+                put("error", {"error": str(e)})
+            except Exception as e:  # noqa: BLE001 - surface to the client, keep the server up
+                logger.error("Communication comparison failed for %s: %s", dataset_id, e, exc_info=True)
+                put("error", {"error": f"The comparison failed: {e}"})
+            finally:
+                put("_done", {})
+
+        fut = loop.run_in_executor(None, work)
+        try:
+            while True:
+                event, data = await queue.get()
+                if event == "_done":
+                    break
+                yield _sse(event, data)
+                if event in ("complete", "error"):
+                    break
+        finally:
+            stop.set()  # a client gone: the worker stops at its next permutation batch
+
+            def release(_f) -> None:
+                _running.discard(dataset_id)
+
+            if fut.done():
+                _running.discard(dataset_id)
+            else:
+                fut.add_done_callback(release)
+
+    return StreamingResponse(
+        keepalive(events()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _kept_compare(dataset_id: str, result_id: str) -> ccc_compare.CompareResult:
+    r = ccc_compare.recall(dataset_id, result_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="That comparison is no longer kept on the server: run it again.")
+    return r
+
+
+@router.get("/datasets/{dataset_id}/communication/compare/{result_id}.csv")
+async def compare_csv(dataset_id: str, result_id: str):
+    """Every compared row, biggest change first."""
+    r = _kept_compare(dataset_id, result_id)
+
+    def _csv() -> str:
+        buf = io.StringIO()
+        ccc_compare.export_table(r).to_csv(buf, index=False, float_format="%.6g")
+        return buf.getvalue()
+
+    text = await asyncio.to_thread(_csv)
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", f"scview_communication_{r.groupby}_{r.b}_vs_{r.a}") + ".csv"
+    return StreamingResponse(iter([text]), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.get("/datasets/{dataset_id}/communication/compare/{result_id}/donors/{row}")
+async def compare_donors(dataset_id: str, result_id: str, row: int):
+    """One compared interaction's ligand x receptor product per donor and condition."""
+    r = _kept_compare(dataset_id, result_id)
+    try:
+        return ccc_compare.donor_points(r, row)
+    except IndexError:
+        raise HTTPException(status_code=404, detail=f"No row {row} in that comparison.") from None

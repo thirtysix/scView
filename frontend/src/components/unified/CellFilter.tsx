@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { Filter, Loader2, Plus, Trash2, X } from "lucide-react";
 import { cellsMatching, filterCells } from "@/api/cells";
 import type { DatasetInfo, ObsColumnInfo } from "@/api/types";
@@ -124,6 +125,8 @@ interface CellFilterPanelProps {
 }
 
 export function CellFilterPanel({ dataset, onClose }: CellFilterPanelProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose);
   const layer = useSettingsStore((s) => s.expressionLayer);
   const [draft, setDraftState] = useState<Draft>(() => {
     const current = useSelectionStore.getState().selectionFilter;
@@ -201,11 +204,9 @@ export function CellFilterPanel({ dataset, onClose }: CellFilterPanelProps) {
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-label="Filter cells"
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
       className="absolute left-0 top-full z-50 mt-1 w-[30rem] max-w-[90vw] space-y-2.5 rounded-lg border border-slate-200 bg-white p-3 text-xs shadow-lg"
     >
       <div className="flex items-center justify-between">

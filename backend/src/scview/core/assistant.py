@@ -40,6 +40,7 @@ from scview.core import (
     ccc, cluster_qc, composition, doublets, merge_check, milo, pca_diagnostics, provenance,
     qc_filter,
 )
+from scview.core import ccc_compare
 from scview.core import mito_by_type
 from scview.core import qc_states
 from scview.core import embedding_reliability
@@ -219,6 +220,37 @@ def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
         lines.extend(gp_lines)
         sources.append(ChatSource(kind="result", ref=gene_programs.TAG, detail=gp_detail,
                                   evidence="\n".join(gp_lines[1:])))
+
+
+def _add_count_split(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last count-split marker check (core/split_markers.py): which groups keep
+    their markers on held-out counts."""
+    from scview.core import split_markers
+
+    try:
+        cs_lines, cs_detail = split_markers.grounding_lines(adaptor, adaptor.adata.obs)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: count-split grounding failed: %s", exc)
+        return
+    if cs_detail:
+        lines.extend(cs_lines)
+        sources.append(ChatSource(kind="result", ref="result:count_split", detail=cs_detail,
+                                  evidence="\n".join(cs_lines[1:])))
+
+
+def _add_marker_panel(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The latest minimal marker panel (core/marker_panel.py), once one has been made."""
+    from scview.core import marker_panel
+
+    try:
+        mp_lines, mp_detail = marker_panel.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: marker panel fact failed: %s", exc)
+        return
+    if mp_lines:
+        lines.extend(mp_lines)
+        sources.append(ChatSource(kind="result", ref=marker_panel.TAG, detail=mp_detail,
+                                  evidence="\n".join(mp_lines)))
 
 
 def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -468,6 +500,14 @@ def build_grounding_context(
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: communication grounding failed: %s", exc)
         try:
+            cmp_lines, cmp_detail = ccc_compare.grounding_lines(adaptor, adata.obs)
+            lines.extend(cmp_lines)
+            if cmp_detail:
+                sources.append(ChatSource(kind="result", ref="result:communication_compare",
+                                          detail=cmp_detail, evidence="\n".join(cmp_lines[1:])))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: communication comparison grounding failed: %s", exc)
+        try:
             milo_lines, milo_detail = milo.grounding_lines(adaptor)
             lines.extend(milo_lines)
             if milo_detail:
@@ -551,6 +591,8 @@ def build_grounding_context(
         _add_layout_stability(adaptor, lines, sources)
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
+        _add_count_split(adaptor, lines, sources)
+        _add_marker_panel(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []

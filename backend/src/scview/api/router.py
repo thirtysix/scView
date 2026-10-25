@@ -42,6 +42,9 @@ from scview.api.v1 import (
     ambient,
     public_import,
     label_transfer,
+    split_markers,
+    marker_panel,
+    structure,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -85,3 +88,6 @@ api_router.include_router(vdj.router, tags=["vdj"])
 api_router.include_router(ambient.router, tags=["assessment"])
 api_router.include_router(public_import.router, tags=["datasets"])
 api_router.include_router(label_transfer.router, tags=["annotation"])
+api_router.include_router(split_markers.router, tags=["markers"])
+api_router.include_router(marker_panel.router, tags=["markers"])
+api_router.include_router(structure.router, tags=["assessment"])

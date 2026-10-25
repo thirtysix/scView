@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { createPortal } from "react-dom";
 import { Layers, Loader2, X } from "lucide-react";
 import {
@@ -53,6 +54,8 @@ export function ResolutionSweepControl() {
 const METHOD_LABEL = { leiden: "Leiden", louvain: "Louvain" } as const;
 
 export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose, { trap: false });
   const refresh = useDatasetRefresh();
   const [info, setInfo] = useState<SweepInfo | null>(null);
   const [infoError, setInfoError] = useState<string | null>(null);
@@ -139,6 +142,7 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-label="Try clustering resolutions"
       className="fixed right-4 top-20 z-50 flex max-h-[calc(100vh-6rem)] w-[36rem] max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 text-xs shadow-xl"

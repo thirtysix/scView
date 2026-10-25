@@ -49,7 +49,7 @@ describe("ComparePanel composition", () => {
 
   it("opens on the replicate-aware test of the loaded dataset", async () => {
     render(<ComparePanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Composition" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Composition" }));
     expect(screen.getByRole("button", { name: "Between conditions" })).toHaveClass("bg-primary");
     await waitFor(() =>
       expect(testComposition).toHaveBeenCalledWith("a", {
@@ -60,7 +60,7 @@ describe("ComparePanel composition", () => {
 
   it("offers Milo next to the group test, with when to use which", async () => {
     render(<ComparePanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Composition" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Composition" }));
     expect(screen.getByText(/Between conditions tests whether whole cell types/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Neighbourhoods (Milo)" }));
     expect(screen.getByTestId("milo").textContent).toBe("a");
@@ -70,7 +70,7 @@ describe("ComparePanel composition", () => {
 
   it("calls two datasets' differences descriptive, on screen and to the co-pilot", async () => {
     render(<ComparePanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Composition" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Composition" }));
     fireEvent.click(screen.getByRole("button", { name: "Two datasets" }));
     await screen.findByRole("option", { name: "Other" });
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "b" } });

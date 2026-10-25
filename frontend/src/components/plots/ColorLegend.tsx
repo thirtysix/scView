@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { ArrowUpDown, ChevronDown, ChevronUp, GripVertical, Loader2, Pencil, Sparkles, Split } from "lucide-react";
 import { ClipControl } from "@/components/plots/ClipControl";
 import { InfoTip } from "@/components/common/InfoTip";
@@ -9,8 +9,18 @@ import { fmtValue } from "@/lib/overlayHistogram";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 /** Ctrl, Cmd or Shift held: a click adds to (or takes from) the picked categories. */
-function isToggleClick(e: MouseEvent): boolean {
+function isToggleClick(e: MouseEvent | KeyboardEvent): boolean {
   return e.ctrlKey || e.metaKey || e.shiftKey;
+}
+
+/** Index of the entry a legend key moves to (Up/Down/Home/End), or null. */
+export function legendKeyTarget(key: string, index: number, count: number): number | null {
+  if (count === 0) return null;
+  if (key === "ArrowDown" || key === "ArrowRight") return Math.min(count - 1, index + 1);
+  if (key === "ArrowUp" || key === "ArrowLeft") return Math.max(0, index - 1);
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return null;
 }
 
 interface ColorLegendProps {
@@ -39,6 +49,9 @@ interface ColorLegendProps {
   onCategoryClick?: (category: string) => void;
   /** Currently highlighted category (if any) */
   highlightedCategory?: string | null;
+  /** The category whose cells are the selection (a legend click): announced
+   *  as pressed, without dimming the others */
+  selectedCategory?: string | null;
   /** When provided, each category becomes inline-renamable (e.g. fix a cell-type label) */
   onRenameCategory?: (category: string, newName: string) => void;
   /** When provided, each category gets an "ask the co-pilot about this" button */
@@ -86,6 +99,7 @@ export function ColorLegend({
   label,
   onCategoryClick,
   highlightedCategory,
+  selectedCategory = null,
   onRenameCategory,
   onAskAbout,
   onAsk,
@@ -106,6 +120,9 @@ export function ColorLegend({
   const [draft, setDraft] = useState("");
   const [ordering, setOrdering] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
+  // Keyboard: the entries are one Tab stop; arrows move between them (roving tabindex).
+  const [focusIndex, setFocusIndex] = useState<number | null>(null);
+  const entryRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const picked = pickedCategories ?? [];
   const commitEdit = (cat: string) => {
     const v = draft.trim();
@@ -134,6 +151,12 @@ export function ColorLegend({
       const next = moveCategory(categories, from, to);
       if (next !== categories) onReorder?.(next);
     };
+    // The row in the Tab order (its entry, then its action buttons): the last
+    // focused, else the highlighted, else the first.
+    const current = highlightedCategory ?? selectedCategory;
+    const highlightedIndex = current != null ? categories.indexOf(current) : -1;
+    const rovingIndex =
+      focusIndex !== null && focusIndex < categories.length ? focusIndex : Math.max(0, highlightedIndex);
     const orderButton = "rounded px-1 text-[10px] font-medium text-slate-500 hover:bg-slate-100 hover:text-primary disabled:opacity-40";
     return (
       <div className="flex flex-col gap-0.5">
@@ -176,7 +199,13 @@ export function ColorLegend({
             </p>
           </div>
         )}
-        <div className="max-h-60 overflow-y-auto pr-1">
+        <div
+          className="max-h-60 overflow-y-auto pr-1"
+          role="group"
+          aria-label={`Legend${label ? `: ${label}` : ""}. Arrow keys move between groups; Enter or Space selects one${
+            onCategoryToggle ? ", with Shift adds it to the picked groups" : ""
+          }.`}
+        >
           {categories.map((cat, i) => {
             const color = categoryColors?.[i] ?? [127, 127, 127];
             const isHighlighted = highlightedCategory === cat;
@@ -246,11 +275,18 @@ export function ColorLegend({
                       else if (e.key === "Escape") setEditing(null);
                     }}
                     onBlur={() => commitEdit(cat)}
+                    aria-label={`New name for ${cat}`}
                     className="min-w-0 flex-1 rounded border border-primary px-1 py-0 text-xs focus:outline-none"
                   />
                 ) : (
                   <>
                     <button
+                      ref={(el) => {
+                        entryRefs.current[i] = el;
+                      }}
+                      type="button"
+                      tabIndex={i === rovingIndex ? 0 : -1}
+                      onFocus={() => setFocusIndex(i)}
                       onMouseDown={(e) => {
                         if (e.shiftKey) e.preventDefault(); // no text selection on shift-click
                       }}
@@ -258,7 +294,21 @@ export function ColorLegend({
                         if (onCategoryToggle && isToggleClick(e)) onCategoryToggle(cat);
                         else onCategoryClick?.(cat);
                       }}
-                      aria-pressed={pickedCategories ? isPicked : undefined}
+                      onKeyDown={(e) => {
+                        // Shift/Ctrl/Cmd + Enter or Space picks, as the modified click does
+                        // (a browser's synthetic click from a key carries no modifiers).
+                        if ((e.key === "Enter" || e.key === " ") && onCategoryToggle && isToggleClick(e)) {
+                          e.preventDefault();
+                          onCategoryToggle(cat);
+                          return;
+                        }
+                        const to = legendKeyTarget(e.key, i, categories.length);
+                        if (to === null) return;
+                        e.preventDefault();
+                        setFocusIndex(to);
+                        entryRefs.current[to]?.focus();
+                      }}
+                      aria-pressed={isPicked || isHighlighted || (picked.length === 0 && selectedCategory === cat)}
                       title={onCategoryToggle ? "Click: select this group. Ctrl/Cmd/Shift-click: pick several" : undefined}
                       className="min-w-0 flex-1 truncate text-left text-slate-700"
                     >
@@ -271,7 +321,9 @@ export function ColorLegend({
                           onAskAbout(cat);
                         }}
                         title="Ask the co-pilot about this"
-                        className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                        aria-label={`Ask the co-pilot about ${cat}`}
+                        tabIndex={i === rovingIndex ? 0 : -1}
+                        className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-focus-within:opacity-100 group-hover:opacity-100"
                       >
                         <Sparkles className="h-3 w-3" />
                       </button>
@@ -285,10 +337,11 @@ export function ColorLegend({
                         disabled={!!splittingCategory}
                         title="Split into sub-clusters (on this group's own graph)"
                         aria-label={`Split ${cat} into sub-clusters`}
+                        tabIndex={i === rovingIndex ? 0 : -1}
                         className={`flex-shrink-0 transition-opacity hover:text-primary ${
                           splittingCategory === cat
                             ? "text-primary opacity-100"
-                            : "text-slate-300 opacity-0 group-hover:opacity-100"
+                            : "text-slate-300 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
                         }`}
                       >
                         {splittingCategory === cat ? (
@@ -306,7 +359,9 @@ export function ColorLegend({
                           setEditing(cat);
                         }}
                         title="Rename label"
-                        className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                        aria-label={`Rename ${cat}`}
+                        tabIndex={i === rovingIndex ? 0 : -1}
+                        className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-focus-within:opacity-100 group-hover:opacity-100"
                       >
                         <Pencil className="h-3 w-3" />
                       </button>
@@ -350,6 +405,7 @@ export function ColorLegend({
               <button
                 onClick={onAsk}
                 title="Ask the co-pilot about this"
+                aria-label={`Ask the co-pilot about ${label}`}
                 className="flex-shrink-0 text-slate-300 transition-colors hover:text-primary"
               >
                 <Sparkles className="h-3 w-3" />

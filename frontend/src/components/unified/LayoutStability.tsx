@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { LayoutGrid, Loader2, X } from "lucide-react";
@@ -77,6 +78,8 @@ export function LayoutStabilityControl() {
 }
 
 export function LayoutStabilityPanel({ datasetId, onClose }: { datasetId: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose, { trap: false });
   const dataset = useDatasetStore((s) => s.currentDataset);
   const embedding = useSettingsStore((s) => s.embedding);
   const colorBy = useSettingsStore((s) => s.colorBy);
@@ -281,6 +284,7 @@ export function LayoutStabilityPanel({ datasetId, onClose }: { datasetId: string
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-label="Layout stability check"
       className="fixed right-4 top-20 z-50 flex max-h-[calc(100vh-6rem)] w-[62rem] max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 text-xs shadow-xl"

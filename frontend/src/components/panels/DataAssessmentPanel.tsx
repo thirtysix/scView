@@ -26,6 +26,7 @@ import { MitoByType } from "@/components/qc/MitoByType";
 import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
 import { asDoubletSource } from "@/lib/doubletSource";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
+import { ObjectInspector } from "@/components/panels/ObjectInspector";
 import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
@@ -1455,6 +1456,7 @@ export function DataAssessmentPanel() {
                           checked={isSelected}
                           onChange={() => toggleStep(step.key)}
                           disabled={running}
+                          aria-label={`Run ${step.label}`}
                           className={`h-4 w-4 cursor-pointer rounded border-slate-300 focus:ring-primary ${
                             isRerun ? "accent-amber-500 text-amber-500" : "accent-primary text-primary"
                           }`}
@@ -1474,6 +1476,7 @@ export function DataAssessmentPanel() {
                         onClick={() =>
                           setExpandedStep(isExpanded ? null : step.key)
                         }
+                        aria-expanded={isExpanded}
                         className="min-w-0 flex-1 text-left"
                       >
                         <div className="flex items-center gap-1">
@@ -1502,6 +1505,8 @@ export function DataAssessmentPanel() {
                         onClick={() =>
                           setExpandedStep(isExpanded ? null : step.key)
                         }
+                        aria-expanded={isExpanded}
+                        aria-label={`${isExpanded ? "Hide" : "Show"} ${step.label} details`}
                         className="text-slate-300"
                       >
                         {isExpanded ? (
@@ -1802,6 +1807,7 @@ export function DataAssessmentPanel() {
         </div>
         {/* Right: QC distributions */}
         <div className="w-full flex-shrink-0 space-y-4 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
+          {datasetId && <ObjectInspector datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <SequencingQc datasetId={datasetId} onChange={() => setAmbientKey((k) => k + 1)} />}
           {datasetId && (
             <AmbientRna

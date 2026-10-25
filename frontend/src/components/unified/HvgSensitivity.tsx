@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { createPortal } from "react-dom";
 import { Dna, Loader2, Palette, X } from "lucide-react";
 import {
@@ -98,6 +99,8 @@ function settingOf(
 const NEIGHBOUR_OPTIONS = [5, 10, 15, 20, 30, 50];
 
 export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose, { trap: false });
   const refresh = useDatasetRefresh();
   const [info, setInfo] = useState<HvgSensitivityInfo | null>(null);
   const [infoError, setInfoError] = useState<string | null>(null);
@@ -252,6 +255,7 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-label="Variable-gene sensitivity check"
       className="fixed right-4 top-20 z-50 flex max-h-[calc(100vh-6rem)] w-[40rem] max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 text-xs shadow-xl"

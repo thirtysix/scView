@@ -673,11 +673,14 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
             }}
             rows={1}
             placeholder="Ask about your data…"
+            aria-label="Message to the co-pilot"
             className="max-h-32 flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
           />
           <button
             type="submit"
             disabled={busy || !input.trim()}
+            aria-label="Send"
+            title="Send (Enter)"
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground disabled:opacity-40"
           >
             <Send className="h-4 w-4" />

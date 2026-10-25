@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { Loader2, Tag, Undo2 } from "lucide-react";
 import { ApiDetailError, labelCells, listLabelColumns, undoLabel } from "@/api/labels";
 import type { DatasetInfo } from "@/api/types";
@@ -134,6 +135,8 @@ interface LabelSelectionFormProps {
 }
 
 function LabelSelectionForm({ dataset, indices, onClose }: LabelSelectionFormProps) {
+  const dialogRef = useRef<HTMLFormElement>(null);
+  useDialogFocus(dialogRef, onClose);
   const refresh = useDatasetRefresh();
   const lastColumn = useLabelUndoStore((s) => s.lastColumn[dataset.id]);
   const existingNames = dataset.obs_columns.map((c) => c.name);
@@ -203,12 +206,10 @@ function LabelSelectionForm({ dataset, indices, onClose }: LabelSelectionFormPro
 
   return (
     <form
+      ref={dialogRef}
       role="dialog"
       aria-label="Label selection"
       onSubmit={(e) => void submit(e)}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
       className="absolute left-0 top-full z-50 mt-1 w-72 space-y-2.5 rounded-lg border border-slate-200 bg-white p-3 text-xs shadow-lg"
     >
       <div className="font-semibold text-slate-700">

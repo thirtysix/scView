@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { SortableTh, ariaSort } from "@/components/common/SortableTh";
 import { plotlyColorscale } from "@/lib/colors";
 import {
   Library,
@@ -781,6 +782,7 @@ export function GeneSetPanel() {
               <select
                 value={selectedCollection}
                 onChange={(e) => setSelectedCollection(e.target.value)}
+                aria-label="Gene-set collection"
                 className="flex-shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
               >
                 <CollectionOptions collections={collections} />
@@ -907,6 +909,7 @@ export function GeneSetPanel() {
                     Group by:
                   </label>
                   <select
+                    aria-label="Group by"
                     value={currentGroupBy}
                     onChange={handleGroupByChange}
                     className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
@@ -1045,6 +1048,7 @@ export function GeneSetPanel() {
                   Obs Column
                 </label>
                 <select
+                  aria-label="Obs Column"
                   value={selectedColumn}
                   onChange={(e) => setSelectedColumn(e.target.value)}
                   disabled={isLoadingColumns || availableColumns.length === 0}
@@ -1070,6 +1074,7 @@ export function GeneSetPanel() {
                   Cluster / Group
                 </label>
                 <select
+                  aria-label="Cluster / Group"
                   value={selectedGroup}
                   onChange={(e) => setSelectedGroup(e.target.value)}
                   disabled={isLoadingGroups || groups.length === 0}
@@ -1096,6 +1101,7 @@ export function GeneSetPanel() {
                   Top N genes
                 </label>
                 <input
+                  aria-label="Top N genes"
                   type="number"
                   value={nGenes}
                   onChange={(e) =>
@@ -1238,6 +1244,7 @@ export function GeneSetPanel() {
                         Show top:
                       </label>
                       <select
+                        aria-label="Show top"
                         value={topN}
                         onChange={(e) => setTopN(parseInt(e.target.value))}
                         className="rounded border border-slate-200 px-2 py-1 text-xs"
@@ -1345,44 +1352,43 @@ export function GeneSetPanel() {
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 z-10">
                         <tr className="border-b border-slate-200 bg-slate-50">
-                          <th
-                            onClick={() => handleSort("term")}
-                            className="cursor-pointer px-4 py-2.5 text-left font-medium text-slate-600 hover:text-slate-800"
+                          <SortableTh
+                            onSort={() => handleSort("term")}
+                            sort={ariaSort("term", sortField, sortDir)}
+                            className="px-4 py-2.5 text-left font-medium text-slate-600"
                           >
-                            <span className="flex items-center gap-1">
-                              Term {sortIcon("term")}
-                            </span>
-                          </th>
+                            Term {sortIcon("term")}
+                          </SortableTh>
                           <th className="px-3 py-2.5 text-left font-medium text-slate-600">
                             Collection
                           </th>
-                          <th
-                            onClick={() => handleSort("pvalue")}
+                          <SortableTh
+                            onSort={() => handleSort("pvalue")}
+                            sort={ariaSort("pvalue", sortField, sortDir)}
                             title="Hypergeometric p of the overlap between the query genes and the set, with the tested genes as background"
-                            className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                            className="px-4 py-2.5 text-right font-medium text-slate-600"
+                            align="right"
                           >
-                            <span className="flex items-center justify-end gap-1">
-                              P-value {sortIcon("pvalue")}
-                            </span>
-                          </th>
-                          <th
-                            onClick={() => handleSort("adjusted_pvalue")}
+                            P-value {sortIcon("pvalue")}
+                          </SortableTh>
+                          <SortableTh
+                            onSort={() => handleSort("adjusted_pvalue")}
+                            sort={ariaSort("adjusted_pvalue", sortField, sortDir)}
                             title="The same p, Benjamini-Hochberg adjusted over the sets tested"
-                            className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                            className="px-4 py-2.5 text-right font-medium text-slate-600"
+                            align="right"
                           >
-                            <span className="flex items-center justify-end gap-1">
-                              Adj. P-value {sortIcon("adjusted_pvalue")}
-                            </span>
-                          </th>
-                          <th
-                            onClick={() => handleSort("overlap_count")}
+                            Adj. P-value {sortIcon("adjusted_pvalue")}
+                          </SortableTh>
+                          <SortableTh
+                            onSort={() => handleSort("overlap_count")}
+                            sort={ariaSort("overlap_count", sortField, sortDir)}
                             title="Query genes in the set / genes in the set"
-                            className="cursor-pointer px-4 py-2.5 text-right font-medium text-slate-600 hover:text-slate-800"
+                            className="px-4 py-2.5 text-right font-medium text-slate-600"
+                            align="right"
                           >
-                            <span className="flex items-center justify-end gap-1">
-                              Overlap {sortIcon("overlap_count")}
-                            </span>
-                          </th>
+                            Overlap {sortIcon("overlap_count")}
+                          </SortableTh>
                           <th className="px-4 py-2.5 text-left font-medium text-slate-600">
                             Genes
                           </th>
