@@ -20,12 +20,14 @@ import { QcReportCard } from "@/components/panels/QcReportCard";
 import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfidenceCard";
 import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCrosscheckCard";
+import { ReferenceMappingCard } from "@/components/annotation/ReferenceMappingCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
 import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
 import { asDoubletSource } from "@/lib/doubletSource";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { ConversionReport } from "@/components/panels/ConversionReport";
+import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
 import { DoubletMethodInfo } from "@/components/qc/DoubletMethodInfo";
@@ -46,7 +48,14 @@ import {
   type RunOutcomeFields,
   type WatchdogEvent,
 } from "@/api/pipelineRun";
-import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
+import {
+  BATCH_METHOD_OPTION_LABELS,
+  flattenStepParams,
+  HVG_FLAVOR_OPTION_LABELS,
+  normalizationMethod,
+  NORMALIZATION_LABELS,
+} from "@/lib/pipelineParams";
+import { BatchMethodCompare } from "@/components/common/BatchMethodCompare";
 import {
   ClipboardCheck,
   Check,
@@ -177,7 +186,11 @@ const STEP_ORDER: {
   { key: "highly_variable_genes", label: "Variable Genes", description: "Identify highly variable genes" },
   { key: "scaling", label: "Scaling", description: "Scale and center gene expression" },
   { key: "pca", label: "PCA", description: "Principal component analysis" },
-  { key: "batch_correction", label: "Batch Correction", description: "Harmony integration to correct batch effects in PCA space" },
+  {
+    key: "batch_correction",
+    label: "Batch Correction",
+    description: "Correct batch effects on the PCA: Harmony or Scanorama (corrected PCs), or BBKNN (a batch-balanced neighbour graph)",
+  },
   { key: "neighbors", label: "Neighbor Graph", description: "Compute nearest neighbor graph" },
   { key: "clustering", label: "Clustering", description: "Cluster cells into groups" },
   { key: "embeddings", label: "UMAP/tSNE", description: "Compute embedding for visualization" },
@@ -322,6 +335,17 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
   ],
   batch_correction: [
     { param: "batch_key", label: "Batch Column", type: "select", options: [], default: "" },
+    {
+      param: "batch_method",
+      label: "Method",
+      type: "select",
+      options: ["harmony", "scanorama", "bbknn"],
+      optionLabels: BATCH_METHOD_OPTION_LABELS,
+      default: "harmony",
+      help:
+        "Harmony and Scanorama correct the PCs the neighbour graph is built on. BBKNN builds the graph itself, " +
+        "taking each cell's nearest neighbours in every batch, so the Neighbors step keeps its graph.",
+    },
   ],
   neighbors: [
     { param: "n_neighbors", label: "N neighbors", type: "number", min: 5, max: 100, step: 1, default: 15 },
@@ -538,6 +562,7 @@ export function DataAssessmentPanel() {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const setPipelineRunning = useSettingsStore((s) => s.setPipelineRunning);
   const queryClient = useQueryClient();
+  const [crosscheckPreset, setCrosscheckPreset] = useState<{ columns: string[]; key: number } | null>(null);
 
   const [state, setState] = useState<AssessmentResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1048,6 +1073,7 @@ export function DataAssessmentPanel() {
         Automatically assess preprocessing state and run missing analysis steps.
       </p>
       {dataset?.conversion && <ConversionReport report={dataset.conversion} />}
+      {dataset?.public_source && <PublicSourceCard source={dataset.public_source} />}
 
       {/* Two columns: controls + steps on the left, QC plots on the right */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
@@ -1165,11 +1191,17 @@ export function DataAssessmentPanel() {
           {/* Cell-type annotation */}
           <AnnotationControl onAnnotate={annotate} running={running} species={state.species?.species} />
 
+          {/* Labels from an annotated reference dataset, with "not in reference" flags */}
+          <ReferenceMappingCard
+            datasetId={datasetId}
+            onCrosscheck={(columns) => setCrosscheckPreset((p) => ({ columns, key: (p?.key ?? 0) + 1 }))}
+          />
+
           {/* How well each cell's label fits (conformal prediction sets) */}
           <AnnotationConfidenceCard datasetId={datasetId} />
 
           {/* Do the annotation methods agree? (pairwise ARI/AMI, mapped agreement, consensus) */}
-          <AnnotationCrosscheckCard datasetId={datasetId} />
+          <AnnotationCrosscheckCard datasetId={datasetId} preset={crosscheckPreset} />
 
           {/* Pipeline progress bar — visible while running or just completed */}
           {(running || runResult) && runProgress && (
@@ -1687,6 +1719,28 @@ export function DataAssessmentPanel() {
                             </div>
                             {step.key === "filtering" && (
                               <MitoModeControl datasetId={datasetId} values={filterValues} onChange={running ? undefined : setFilter} />
+                            )}
+                            {step.key === "batch_correction" && datasetId && (
+                              <div className="mt-3">
+                                <BatchMethodCompare
+                                  datasetId={datasetId}
+                                  batchKey={(stepParams.batch_correction?.batch_key as string | undefined) || null}
+                                  disabled={running}
+                                  applyLabel="Set the step to"
+                                  onApply={(m) => {
+                                    if (m === "none") {
+                                      setSelectedSteps((prev) => {
+                                        const next = new Set(prev);
+                                        next.delete("batch_correction");
+                                        return next;
+                                      });
+                                    } else {
+                                      setStepParam("batch_correction", "batch_method", m);
+                                      setSelectedSteps((prev) => new Set(prev).add("batch_correction"));
+                                    }
+                                  }}
+                                />
+                              </div>
                             )}
                           </div>
                         )}

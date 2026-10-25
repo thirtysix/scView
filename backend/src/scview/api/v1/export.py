@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -107,12 +107,22 @@ def _h5ad_download_name(dm: DatasetManager, dataset_id: str) -> str:
 async def h5ad_download_info(
     dataset_id: str,
     raw: bool = False,
+    format: str = "h5ad",
+    embedding: list[str] | None = Query(None),
+    column: list[str] | None = Query(None),
+    genes: str = "all",
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Size and name of the .h5ad a download would send, so the UI can show the
     size before the user starts a multi-GB transfer. A large dataset's download is
     one file put together from its h5ad and counts (``large``; the size is close, not
-    exact)."""
+    exact). ``format=cellxgene|vitessce``: the export for that viewer with these
+    options instead (``export_formats.format_info``; ``raw`` = include raw counts)."""
+    if format != "h5ad":
+        from scview.api.v1.export_formats import FormatOptions, format_info
+
+        return await format_info(dm, dataset_id, format, FormatOptions(
+            embeddings=embedding, columns=column, include_raw=raw, genes=genes))
     path = _active_h5ad(dm, dataset_id)
     layer = path.parent.parent.name
     out = {

@@ -136,7 +136,7 @@ def _representation(adata) -> tuple[str, np.ndarray] | tuple[None, None]:
     params = (adata.uns.get("neighbors") or {}).get("params") or {}
     rep = params.get("use_rep")
     if rep not in adata.obsm:
-        rep = next((r for r in ("X_pca_harmony", "X_pca") if r in adata.obsm), None)
+        rep = next((r for r in ("X_pca_harmony", "X_scanorama", "X_pca") if r in adata.obsm), None)
     if rep is None:
         return None, None
     X = np.asarray(adata.obsm[rep])

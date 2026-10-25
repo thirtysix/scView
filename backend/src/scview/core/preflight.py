@@ -922,6 +922,7 @@ class _State:
     n_hvg: int | None = None  # the variable genes PCA reads; None: every gene
     raw_is_x: bool = False  # .raw set to X by the scaling step: one matrix until saved
     clusters: bool = False  # a clustering the ambient RNA step can estimate rho on
+    bbknn_graph: bool = False  # batch correction made the graph (BBKNN): neighbours keep it
 
     @classmethod
     def from_header(cls, h: Header) -> "_State":
@@ -1265,6 +1266,8 @@ def _step_pca(s: _State, params) -> tuple[int, _State, float]:
 
 
 def _step_neighbors(s: _State, params) -> tuple[int, _State, float]:
+    if s.bbknn_graph:  # the BBKNN graph batch correction made is kept: nothing to build
+        return 0, s, 0.0
     # The graph, and what building it keeps (pynndescent's index structures): held.
     g = s.n * NEIGHBORS_PER_CELL
     s.other += g
@@ -1400,12 +1403,41 @@ def _step_uncorrected(s: _State, params) -> tuple[int, _State, float]:
     return s.n * k * 48, s, 1.5e-3 * s.n + 1.9e-6 * s.n * _epochs(s.n)
 
 
+# Batch correction per method (core/batch_methods.py), measured on Kang (13,836 cells,
+# ``stim`` as batch, 50 PCs, 2 CPUs; and a random half, 6,918), 2026-10-24:
+#   Harmony (harmonypy 2.x) 0.13 / 0.28 s;
+#   Scanorama 1.93 / 4.87 s, Python peak 172 / 190 MiB: the Gaussian kernel block
+#     (_KERNEL_ROWS x batch size 5,000, float64 = 164 MB) and copies of the PCs; its time
+#     grows faster than the cells (every cell against every matched cell);
+#   BBKNN 26.7 / 29.0 s, peak 60 / 64 MiB: mostly numba compiling UMAP's connectivities
+#     (as the neighbours step's own fixed cost, which BBKNN replaces); then the graph.
+SCANORAMA_SCALE_CELLS = 13_836
+SCANORAMA_SECONDS = (0.5, 4.4, 1.6)  # fixed + s0 x (n / scale)^power
+BBKNN_SECONDS = (26.0, 2.2e-4)  # fixed (compilation), per cell
+
+
 def _step_batch(s: _State, params) -> tuple[int, _State, float]:
+    method = str(_p(params, "batch_method", "harmony") or "harmony").lower()
+    n_comps = int(_p(params, "n_comps", 50))
+    if method == "scanorama":
+        from scview.core.batch_methods import _KERNEL_ROWS, SCANORAMA_BATCH_SIZE
+
+        t = min(s.n, _KERNEL_ROWS) * SCANORAMA_BATCH_SIZE * 8 + s.n * n_comps * 8 * 4
+        s.other += s.n * n_comps * 8
+        fixed, s0, power = SCANORAMA_SECONDS
+        return t, s, fixed + s0 * (s.n / SCANORAMA_SCALE_CELLS) ** power
+    if method == "bbknn":
+        # The graph replaces the neighbours step's (same size), so it is held from here.
+        g = s.n * NEIGHBORS_PER_CELL
+        s.other += g
+        s.bbknn_graph = True
+        fixed, per_cell = BBKNN_SECONDS
+        return g + s.n * n_comps * 8 * 2, s, fixed + per_cell * s.n
     # Harmony: cluster x cell matrices (float64, up to 100 clusters) and PC copies.
     clusters = min(100, max(1, s.n // 30))
     t = s.n * clusters * 8 * 3 + s.n * 50 * 8 * 4
     s.other += s.n * 50 * 8
-    return t, s, 1.0 + 1e-3 * s.n
+    return t, s, 0.1 + 1.3e-5 * s.n
 
 
 def _groups(params) -> int:
@@ -2405,3 +2437,42 @@ def _chunked_preflight(h: Header, steps: list[str], params, held: int, avail: Av
         v["suggestions"].insert(0, "Free some disk: delete datasets you no longer need.")
     return {"steps": [e.to_dict() for e in est.steps], "verdict": v,
             "disk": {"need_bytes": int(disk), "free_bytes": free}}
+
+
+# ---------------------------------------------------------------------------
+# Reference mapping (core/label_transfer.py): both datasets' values in memory
+# ---------------------------------------------------------------------------
+
+# Measured on Kang split by donor (reference 6.5k cells, query 7.3k, both in memory;
+# VmHWM over the run): see label_transfer_need.
+LT_COUNTS_COPIES = 2.5  # per byte of each dataset's counts: the recovered CSR, its log copy, the shared-gene cut
+LT_NOVELTY_GENES = 1.5  # genes variable in either dataset, per variable gene of the reference
+LT_DENSE_COPIES = 3.0  # per cell x gene of the joint matrix: scaled values, PCA's centred copy, its output
+LT_CT_PER_VALUE = 12  # CellTypist: the reference densified (float32) and scaled (float64)
+LT_FIXED = 100 * MiB
+
+
+def _lt_counts_bytes(h: Header) -> int:
+    """The matrix the run reads counts from (layers['counts'], else .raw, else X) as a
+    float32 CSR of its non-zeros."""
+    for where in ("layers/counts", "raw/X", "X"):
+        mm = h.matrix(where)
+        if mm is not None:
+            nz = mm.nnz if mm.sparse else (mm.nonzero if mm.nonzero is not None else mm.nnz)
+            return int(nz * 8 + (mm.n_cells + 1) * 4)
+    return 0
+
+
+def label_transfer_need(ref: Header, query: Header, *, method: str, ref_open: bool,
+                        n_hvg: int = 2000) -> int:
+    """Peak memory of mapping ``query`` onto ``ref`` beyond what the open datasets hold:
+    the reference read from its file (unless it is open), each dataset's counts copied
+    and log-normalised, the joint dense matrix of the variable genes, and CellTypist's
+    dense reference when that method runs."""
+    n_ref, n_query = ref.n_cells or 0, query.n_cells or 0
+    need = 0 if ref_open else estimate_load(ref, ingest=False).peak_bytes
+    need += LT_COUNTS_COPIES * (_lt_counts_bytes(ref) + _lt_counts_bytes(query))
+    need += LT_DENSE_COPIES * (n_ref + n_query) * n_hvg * LT_NOVELTY_GENES * 4
+    if method == "celltypist":
+        need += LT_CT_PER_VALUE * n_ref * min(ref.n_genes or 0, query.n_genes or 0)
+    return int(need + LT_FIXED)

@@ -1,0 +1,451 @@
+[
+ {
+  "assay": [
+   {
+    "label": "10x 3' v3",
+    "ontology_term_id": "EFO:0009922"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 7253526062,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/b840a9b5-0dbf-4760-969f-8bb73c19b87b.h5ad"
+   }
+  ],
+  "cell_count": 638930,
+  "cell_type": [
+   {
+    "label": "B cell",
+    "ontology_term_id": "CL:0000236"
+   },
+   {
+    "label": "CD16-negative, CD56-bright natural killer cell, human",
+    "ontology_term_id": "CL:0000938"
+   },
+   {
+    "label": "CD16-positive, CD56-dim natural killer cell, human",
+    "ontology_term_id": "CL:0000939"
+   }
+  ],
+  "citation": "Publication: https://doi.org/10.1002/mco2.71022 Dataset Version: https://datasets.cellxgene.cziscience.com/b840a9b5-0dbf-4760-969f-8bb73c19b87b.h5ad curated and distributed by CZ CELLxGENE Discover in Collection: https://cellxgene.cziscience.com/collections/384e373e-4db1-4605-812f-d9da7cfd246f",
+  "collection_doi": "10.1002/mco2.71022",
+  "collection_doi_label": "Zaman et al. (2026) MedComm",
+  "collection_id": "384e373e-4db1-4605-812f-d9da7cfd246f",
+  "collection_name": "A Single-Cell and Spatial Transcriptomic Atlas Characterising Transcriptional and Immune Diversity in Adult-Type Diffuse Gliomas",
+  "collection_version_id": "d6481c1b-7617-48d9-8839-721392708e84",
+  "dataset_id": "8f3cb9c4-38d5-4b9c-b309-bcccd76d0075",
+  "dataset_version_id": "b840a9b5-0dbf-4760-969f-8bb73c19b87b",
+  "development_stage": [
+   {
+    "label": "13-year-old stage",
+    "ontology_term_id": "HsapDv:0000107"
+   },
+   {
+    "label": "25-year-old stage",
+    "ontology_term_id": "HsapDv:0000119"
+   },
+   {
+    "label": "30-year-old stage",
+    "ontology_term_id": "HsapDv:0000124"
+   }
+  ],
+  "disease": [
+   {
+    "label": "IDH-wildtype glioblastoma",
+    "ontology_term_id": "MONDO:0850335"
+   },
+   {
+    "label": "astrocytoma, IDH-mutant, grade 2",
+    "ontology_term_id": "MONDO:0956994"
+   },
+   {
+    "label": "astrocytoma, IDH-mutant, grade 3",
+    "ontology_term_id": "MONDO:0956995"
+   },
+   {
+    "label": "astrocytoma, IDH-mutant, grade 4",
+    "ontology_term_id": "MONDO:0956981"
+   },
+   {
+    "label": "oligodendroglioma, IDH-mutant and 1p/19q-codeleted grade 2",
+    "ontology_term_id": "MONDO:0956996"
+   },
+   {
+    "label": "oligodendroglioma, IDH-mutant and 1p/19q-codeleted, grade 3",
+    "ontology_term_id": "MONDO:0956997"
+   }
+  ],
+  "donor_id": [
+   "donor2",
+   "donor27",
+   "donor1"
+  ],
+  "explorer_url": "https://cellxgene.cziscience.com/e/8f3cb9c4-38d5-4b9c-b309-bcccd76d0075.cxg/",
+  "genetic_perturbation_strategy": null,
+  "is_pre_analysis": false,
+  "is_primary_data": [
+   true
+  ],
+  "mean_genes_per_cell": 2238.397851094799,
+  "organism": [
+   {
+    "label": "Homo sapiens",
+    "ontology_term_id": "NCBITaxon:9606"
+   }
+  ],
+  "perturbation_types": null,
+  "primary_cell_count": 638930,
+  "processing_status": "SUCCESS",
+  "published_at": "2026-10-16T16:35:23+00:00",
+  "revised_at": null,
+  "revision_of_collection": null,
+  "revision_of_dataset": null,
+  "schema_version": "7.1.0",
+  "self_reported_ethnicity": [
+   {
+    "label": "unknown",
+    "ontology_term_id": "unknown"
+   }
+  ],
+  "sex": [
+   {
+    "label": "female",
+    "ontology_term_id": "PATO:0000383"
+   },
+   {
+    "label": "male",
+    "ontology_term_id": "PATO:0000384"
+   }
+  ],
+  "spatial": null,
+  "suspension_type": [
+   "cell",
+   "nucleus"
+  ],
+  "tissue": [
+   {
+    "label": "brain",
+    "ontology_term_id": "UBERON:0000955",
+    "tissue_type": "tissue"
+   }
+  ],
+  "title": "Brain tumour single-cell atlas (glioma cohort, 66 samples)",
+  "tombstone": false,
+  "visibility": "PUBLIC",
+  "x_approximate_distribution": null
+ },
+ {
+  "assay": [
+   {
+    "label": "Smart-seq2",
+    "ontology_term_id": "EFO:0008931"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 5783332,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/39f99ba3-f30d-45f4-b8ba-06590c359c20.h5ad"
+   }
+  ],
+  "cell_count": 66,
+  "cell_type": [
+   {
+    "label": "adipocyte",
+    "ontology_term_id": "CL:0000136"
+   },
+   {
+    "label": "capillary endothelial cell",
+    "ontology_term_id": "CL:0002144"
+   },
+   {
+    "label": "endothelial cell of artery",
+    "ontology_term_id": "CL:1000413"
+   }
+  ],
+  "citation": "Publication: https://doi.org/10.1038/s41586-025-09113-9 Dataset Version: https://datasets.cellxgene.cziscience.com/39f99ba3-f30d-45f4-b8ba-06590c359c20.h5ad curated and distributed by CZ CELLxGENE Discover in Collection: https://cellxgene.cziscience.com/collections/a137437b-d284-4a27-b1e9-36958a8f92c1",
+  "collection_doi": "10.1038/s41586-025-09113-9",
+  "collection_doi_label": "The Tabula Microcebus Consortium et al. (2025) Nature",
+  "collection_id": "a137437b-d284-4a27-b1e9-36958a8f92c1",
+  "collection_name": "Tabula Microcebus: A transcriptomic cell atlas of mouse lemur, an emerging primate model organism",
+  "collection_version_id": "4432c56b-5006-4d78-99e3-bea1a3aaae2a",
+  "dataset_id": "1a2c2433-b90a-46ff-9082-a15d81d2a695",
+  "dataset_version_id": "39f99ba3-f30d-45f4-b8ba-06590c359c20",
+  "development_stage": [
+   {
+    "label": "post-juvenile adult stage",
+    "ontology_term_id": "UBERON:0000113"
+   }
+  ],
+  "disease": [
+   {
+    "label": "normal",
+    "ontology_term_id": "PATO:0000461"
+   }
+  ],
+  "donor_id": [
+   "L4"
+  ],
+  "explorer_url": "https://cellxgene.cziscience.com/e/1a2c2433-b90a-46ff-9082-a15d81d2a695.cxg/",
+  "genetic_perturbation_strategy": null,
+  "is_pre_analysis": false,
+  "is_primary_data": [
+   false
+  ],
+  "mean_genes_per_cell": 1611.969696969697,
+  "organism": [
+   {
+    "label": "Microcebus murinus",
+    "ontology_term_id": "NCBITaxon:30608"
+   }
+  ],
+  "perturbation_types": null,
+  "primary_cell_count": 0,
+  "processing_status": "SUCCESS",
+  "published_at": "2025-11-11T21:05:02+00:00",
+  "revised_at": "2026-06-11T16:54:10+00:00",
+  "revision_of_collection": null,
+  "revision_of_dataset": null,
+  "schema_version": "7.1.0",
+  "self_reported_ethnicity": [
+   {
+    "label": "na",
+    "ontology_term_id": "na"
+   }
+  ],
+  "sex": [
+   {
+    "label": "male",
+    "ontology_term_id": "PATO:0000384"
+   }
+  ],
+  "spatial": null,
+  "suspension_type": [
+   "cell"
+  ],
+  "tissue": [
+   {
+    "label": "thymus",
+    "ontology_term_id": "UBERON:0002370",
+    "tissue_type": "tissue"
+   }
+  ],
+  "title": "Thymus",
+  "tombstone": false,
+  "visibility": "PUBLIC",
+  "x_approximate_distribution": null
+ },
+ {
+  "assay": [
+   {
+    "label": "Slide-seqV2",
+    "ontology_term_id": "EFO:0030062"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 7065335,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/eca80be0-05e9-4002-a3fc-2ec5cb0ecc11.h5ad"
+   }
+  ],
+  "cell_count": 499,
+  "cell_type": [
+   {
+    "label": "paraxial cell",
+    "ontology_term_id": "CL:0011007"
+   },
+   {
+    "label": "spinal cord interneuron",
+    "ontology_term_id": "CL:0005000"
+   }
+  ],
+  "citation": "Publication: https://doi.org/10.1038/s41588-023-01435-6 Dataset Version: https://datasets.cellxgene.cziscience.com/eca80be0-05e9-4002-a3fc-2ec5cb0ecc11.h5ad curated and distributed by CZ CELLxGENE Discover in Collection: https://cellxgene.cziscience.com/collections/d74b6979-efba-47cd-990a-9d80ccf29055",
+  "collection_doi": "10.1038/s41588-023-01435-6",
+  "collection_doi_label": "Sampath Kumar et al. (2023) Nat Genet",
+  "collection_id": "d74b6979-efba-47cd-990a-9d80ccf29055",
+  "collection_name": "Spatial transcriptomic maps of whole mouse embryos reveal principles of neural tube patterning",
+  "collection_version_id": "91dcbada-524c-4428-9e88-2deea0c2648f",
+  "dataset_id": "c233842b-9430-41b8-8ec6-4342428e43f3",
+  "dataset_version_id": "eca80be0-05e9-4002-a3fc-2ec5cb0ecc11",
+  "development_stage": [
+   {
+    "label": "Theiler stage 14",
+    "ontology_term_id": "MmusDv:0000021"
+   }
+  ],
+  "disease": [
+   {
+    "label": "normal",
+    "ontology_term_id": "PATO:0000461"
+   }
+  ],
+  "donor_id": [
+   "unknown"
+  ],
+  "explorer_url": "https://cellxgene.cziscience.com/e/c233842b-9430-41b8-8ec6-4342428e43f3.cxg/",
+  "genetic_perturbation_strategy": null,
+  "is_pre_analysis": false,
+  "is_primary_data": [
+   true
+  ],
+  "mean_genes_per_cell": 1565.9298597194388,
+  "organism": [
+   {
+    "label": "Mus musculus",
+    "ontology_term_id": "NCBITaxon:10090"
+   }
+  ],
+  "perturbation_types": null,
+  "primary_cell_count": 499,
+  "processing_status": "SUCCESS",
+  "published_at": "2023-09-29T17:31:37+00:00",
+  "revised_at": "2026-06-11T16:55:02+00:00",
+  "revision_of_collection": null,
+  "revision_of_dataset": null,
+  "schema_version": "7.1.0",
+  "self_reported_ethnicity": [
+   {
+    "label": "na",
+    "ontology_term_id": "na"
+   }
+  ],
+  "sex": [
+   {
+    "label": "female",
+    "ontology_term_id": "PATO:0000383"
+   }
+  ],
+  "spatial": {
+   "has_fullres": false,
+   "is_single": true
+  },
+  "suspension_type": [
+   "na"
+  ],
+  "tissue": [
+   {
+    "label": "embryo",
+    "ontology_term_id": "UBERON:0000922",
+    "tissue_type": "tissue"
+   }
+  ],
+  "title": "mouse_trunkTbx6WT_KO",
+  "tombstone": false,
+  "visibility": "PUBLIC",
+  "x_approximate_distribution": null
+ },
+ {
+  "assay": [
+   {
+    "label": "10x 3' v2",
+    "ontology_term_id": "EFO:0009899"
+   },
+   {
+    "label": "10x 3' v3",
+    "ontology_term_id": "EFO:0009922"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 5382428,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/0d5aa69f-1ad1-470f-9a1b-4a167da3b545.h5ad"
+   }
+  ],
+  "cell_count": 146,
+  "cell_type": [
+   {
+    "label": "mature B cell",
+    "ontology_term_id": "CL:0000785"
+   },
+   {
+    "label": "plasma cell",
+    "ontology_term_id": "CL:0000786"
+   }
+  ],
+  "citation": "Publication: https://doi.org/10.1002/hep4.1854 Dataset Version: https://datasets.cellxgene.cziscience.com/0d5aa69f-1ad1-470f-9a1b-4a167da3b545.h5ad curated and distributed by CZ CELLxGENE Discover in Collection: https://cellxgene.cziscience.com/collections/44531dd9-1388-4416-a117-af0a99de2294",
+  "collection_doi": "10.1002/hep4.1854",
+  "collection_doi_label": "Andrews et al. (2022) Hepatol Commun",
+  "collection_id": "44531dd9-1388-4416-a117-af0a99de2294",
+  "collection_name": "Single-Cell, Single-Nucleus, and Spatial RNA Sequencing of the Human Liver Identifies Cholangiocyte and Mesenchymal Heterogeneity",
+  "collection_version_id": "d900c30c-9659-4b0a-9a77-a2abca1d1bdd",
+  "dataset_id": "0895c838-e550-48a3-a777-dbcd35d30272",
+  "dataset_version_id": "0d5aa69f-1ad1-470f-9a1b-4a167da3b545",
+  "development_stage": [
+   {
+    "label": "prime adult stage",
+    "ontology_term_id": "HsapDv:0000226"
+   },
+   {
+    "label": "young adult stage",
+    "ontology_term_id": "HsapDv:0000266"
+   }
+  ],
+  "disease": [
+   {
+    "label": "normal",
+    "ontology_term_id": "PATO:0000461"
+   }
+  ],
+  "donor_id": [
+   "C41",
+   "C58",
+   "C70"
+  ],
+  "explorer_url": "https://cellxgene.cziscience.com/e/0895c838-e550-48a3-a777-dbcd35d30272.cxg/",
+  "genetic_perturbation_strategy": null,
+  "is_pre_analysis": false,
+  "is_primary_data": [
+   false
+  ],
+  "mean_genes_per_cell": 671.1849315068494,
+  "organism": [
+   {
+    "label": "Homo sapiens",
+    "ontology_term_id": "NCBITaxon:9606"
+   }
+  ],
+  "perturbation_types": null,
+  "primary_cell_count": 0,
+  "processing_status": "SUCCESS",
+  "published_at": "2022-01-07T18:27:42+00:00",
+  "revised_at": "2026-06-11T16:52:29+00:00",
+  "revision_of_collection": null,
+  "revision_of_dataset": null,
+  "schema_version": "7.1.0",
+  "self_reported_ethnicity": [
+   {
+    "label": "unknown",
+    "ontology_term_id": "unknown"
+   }
+  ],
+  "sex": [
+   {
+    "label": "female",
+    "ontology_term_id": "PATO:0000383"
+   },
+   {
+    "label": "male",
+    "ontology_term_id": "PATO:0000384"
+   }
+  ],
+  "spatial": null,
+  "suspension_type": [
+   "cell",
+   "nucleus"
+  ],
+  "tissue": [
+   {
+    "label": "caudate lobe of liver",
+    "ontology_term_id": "UBERON:0001117",
+    "tissue_type": "tissue"
+   }
+  ],
+  "title": "Healthy human liver: B cells",
+  "tombstone": false,
+  "visibility": "PUBLIC",
+  "x_approximate_distribution": null
+ }
+]

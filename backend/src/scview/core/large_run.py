@@ -67,6 +67,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from scview.core import (
+    batch_methods,
     chunked,
     doublets,
     gene_store,
@@ -148,13 +149,30 @@ REFUSED_STEPS = {
 }
 
 
-def refused(steps: list[str]) -> str | None:
-    """Why a large-dataset run of ``steps`` is refused (the first such step), or None."""
+# Batch-correction methods this mode does not run (core/batch_methods.py): (what, why).
+REFUSED_BATCH_METHODS = {
+    "scanorama": (
+        "Scanorama batch correction",
+        "it weighs every cell against every matched cell of the other batches, so its time "
+        "grows with the square of the cells. Use Harmony, which runs on the PCs in this mode"),
+    "bbknn": (
+        "BBKNN batch correction",
+        "its exact neighbour search per batch in 50 dimensions slows down sharply at this "
+        "size. Use Harmony, which runs on the PCs in this mode"),
+}
+
+
+def refused(steps: list[str], params: Any = None) -> str | None:
+    """Why a large-dataset run of ``steps`` is refused (the first such step, or a batch
+    method this mode does not run), or None."""
     from scview.core.large_mode import LargeDatasetError
 
     for step in steps:
         if step in REFUSED_STEPS:
             return str(LargeDatasetError(*REFUSED_STEPS[step]))
+    method = str(getattr(params, "batch_method", "") or "").lower()
+    if "batch_correction" in steps and method in REFUSED_BATCH_METHODS:
+        return str(LargeDatasetError(*REFUSED_BATCH_METHODS[method]))
     return None
 
 
@@ -974,7 +992,7 @@ class LargeRun:
             "variance": res["variance"],
             "variance_ratio": res["variance_ratio"],
         }
-        light.obsm.pop("X_pca_harmony", None)
+        batch_methods.clear(light)  # corrected PCs / a BBKNN graph of the old PCA
         light.uns.pop(BATCH_MIXING_KEY, None)
         logger.info("PCA: %d components", res["n_comps"])
         return found
@@ -1181,7 +1199,7 @@ def _disk_check(run: LargeRun, steps: list[str]) -> str | None:
 def _plan_check(run: LargeRun, steps: list[str]) -> str | None:
     """Why this mode cannot make the run (it stores X log-normalised, beside the counts),
     before any step: None when it can."""
-    why = refused(steps)
+    why = refused(steps, run.params)
     if why is not None:
         return f"{why} Nothing was changed."
     if not (_holds_counts(run.layer) or _holds_counts(run.raw) or _holds_counts(run.x)):

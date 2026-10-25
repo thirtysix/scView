@@ -5,7 +5,7 @@
 
 /** Plain names of what a run removed (keys of obsm, obsp, uns, var, obs, raw). */
 const CLEARED_NAMES: Record<string, string> = {
-  X_pca: "PCA", PCs: "PCA", pca: "PCA", X_pca_harmony: "Harmony PCs", X_umap: "UMAP",
+  X_pca: "PCA", PCs: "PCA", pca: "PCA", X_pca_harmony: "Harmony PCs", X_scanorama: "Scanorama PCs", X_umap: "UMAP",
   X_umap_3d: "UMAP", umap: "UMAP", X_umap_uncorrected: "uncorrected UMAP",
   neighbors: "neighbour graph", connectivities: "neighbour graph", distances: "neighbour graph",
   scview_active_clustering: "active clustering", highly_variable: "variable genes", hvg: "variable genes",

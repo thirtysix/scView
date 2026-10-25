@@ -24,6 +24,13 @@ export const HVG_FLAVOR_OPTION_LABELS: Record<string, string> = {
   seurat_v3: "Seurat v3 (ranks raw counts)",
 };
 
+/** Batch-correction methods (backend core/batch_methods.py METHODS). */
+export const BATCH_METHOD_OPTION_LABELS: Record<string, string> = {
+  harmony: "Harmony (corrected PCs)",
+  scanorama: "Scanorama (corrected PCs)",
+  bbknn: "BBKNN (batch-balanced graph)",
+};
+
 /** Flattened params for running `steps`, or null when there are none. */
 export function flattenStepParams(steps: string[], stepParams: StepParams): Record<string, unknown> | null {
   const flat: Record<string, unknown> = {};

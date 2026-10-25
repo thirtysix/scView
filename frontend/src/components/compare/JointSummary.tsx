@@ -5,6 +5,9 @@ import { getPalette } from "@/lib/colors";
 import { prettyObsLabel } from "@/lib/formatting";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { CompositionTest } from "./CompositionTest";
+import { BATCH_METHOD_LABELS, type CompareMethod } from "@/api/batchCompare";
+import { streamEvents } from "@/api/clustering";
+import { BatchMethodCompare } from "@/components/common/BatchMethodCompare";
 
 /** A score as a share of the ideal, for bar widths: 0 = datasets apart, 1 = ideal. */
 export function shareOfIdeal(value: number | null | undefined, ideal: number): number {
@@ -49,6 +52,8 @@ export function JointSummary({ datasetId, title }: { datasetId: string; title: s
   const [summary, setSummary] = useState<Summary | null>(null);
   const [crosstab, setCrosstab] = useState<Crosstab | null>(null);
 
+  const [reload, setReload] = useState(0);
+
   useEffect(() => {
     let cancelled = false;
     setSummary(null);
@@ -67,7 +72,7 @@ export function JointSummary({ datasetId, title }: { datasetId: string; title: s
     return () => {
       cancelled = true;
     };
-  }, [datasetId]);
+  }, [datasetId, reload]);
 
   if (!summary?.joint) return null;
   return (
@@ -77,6 +82,19 @@ export function JointSummary({ datasetId, title }: { datasetId: string; title: s
         <MixingScore mixing={summary.mixing} />
       ) : (
         <p className="text-sm text-slate-400">No batch-mixing score for this dataset.</p>
+      )}
+      {summary.mixing?.spaces?.corrected === "graph" && (
+        <p className="text-[11px] text-slate-500">
+          Corrected with BBKNN: a neighbour graph, not an embedding, so &ldquo;after correction&rdquo; scores
+          each cell&apos;s {summary.mixing.k_by_space?.corrected ?? summary.mixing.k} strongest graph links.
+        </p>
+      )}
+      {summary.label_column && (
+        <JointMethodChoice
+          datasetId={datasetId}
+          batchKey={summary.label_column}
+          onApplied={() => setReload((r) => r + 1)}
+        />
       )}
       {crosstab && summary.cluster_column && (
         <ClusterComposition crosstab={crosstab} clusterColumn={summary.cluster_column} />
@@ -88,6 +106,68 @@ export function JointSummary({ datasetId, title }: { datasetId: string; title: s
           clusterColumn={summary.cluster_column}
         />
       )}
+    </div>
+  );
+}
+
+/** Steps of applying a method to a joint dataset: a normal run on its current PCA ("none"
+ *  re-runs PCA, which drops the corrected PCs or BBKNN graph, and builds the graph on it). */
+export function applySteps(method: CompareMethod): string[] {
+  const after = ["neighbors", "clustering", "embeddings", "marker_genes"];
+  return method === "none" ? ["pca", ...after] : ["batch_correction", ...after];
+}
+
+/** Compare methods on the joint dataset and apply one (a normal pipeline run). */
+function JointMethodChoice({
+  datasetId,
+  batchKey,
+  onApplied,
+}: {
+  datasetId: string;
+  batchKey: string;
+  onApplied: () => void;
+}) {
+  const [applying, setApplying] = useState<CompareMethod | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const apply = async (method: CompareMethod) => {
+    setApplying(method);
+    setError(null);
+    setMessage(null);
+    try {
+      await streamEvents(
+        `/datasets/${datasetId}/assessment/run-stream`,
+        {
+          steps: applySteps(method),
+          params: method === "none" ? {} : { batch_key: batchKey, batch_method: method },
+        },
+        () => undefined,
+        "The run",
+      );
+      setMessage(`Re-ran the joint graph, clusters, UMAP and markers with ${BATCH_METHOD_LABELS[method]}.`);
+      onApplied();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApplying(null);
+    }
+  };
+
+  return (
+    <div className="space-y-1">
+      <BatchMethodCompare
+        datasetId={datasetId}
+        batchKey={batchKey}
+        disabled={applying !== null}
+        applyLabel="Re-run with"
+        onApply={apply}
+      />
+      {applying && (
+        <p className="text-xs text-slate-500">Re-running with {BATCH_METHOD_LABELS[applying]}…</p>
+      )}
+      {message && <p className="text-xs text-emerald-700">{message}</p>}
+      {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   );
 }

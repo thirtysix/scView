@@ -533,6 +533,22 @@ def harmony(X, obs, batch_key):
         Z = Z.T
     return np.ascontiguousarray(Z)
 ''',
+    "scanorama": '''
+def scanorama(adata, batch_key):
+    """Scanorama's corrected PCs (sc.external.pp.scanorama_integrate with exact neighbours,
+    as scView ran it; pip install scanorama) for batches in any cell order: scanpy's
+    wrapper wants each batch's cells together, so they are gathered and put back."""
+    b = adata.obs[batch_key].astype(str).to_numpy()
+    names, first = np.unique(b, return_index=True)
+    order = np.concatenate([np.flatnonzero(b == n) for n in names[np.argsort(first)]])
+    tmp = ad.AnnData(X=np.zeros((b.size, 1), np.float32),  # the wrapper reads X.shape
+                     obs=pd.DataFrame({batch_key: b[order]}, index=adata.obs_names[order]))
+    tmp.obsm["X_pca"] = np.asarray(adata.obsm["X_pca"])[order]
+    sc.external.pp.scanorama_integrate(tmp, batch_key, approx=False, verbose=0)
+    Z = np.empty(tmp.obsm["X_scanorama"].shape)
+    Z[order] = tmp.obsm["X_scanorama"]
+    return Z
+''',
     "lognorm_scoring": '''
 def lognorm_scoring(adata):
     """(use_raw, gene names) of the log-normalised matrix: .raw after scaling, else X."""
@@ -757,7 +773,7 @@ _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_fro
                  "counts_hvg", "pearson_residuals", "per_cell_qc", "doublet_calls",
                  "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
                  "markers_key", "louvain",
-                 "harmony", "lognorm_scoring", "subcluster", "gene_programs",
+                 "harmony", "scanorama", "lognorm_scoring", "subcluster", "gene_programs",
                  "read_hashtags", "hashing", "vdj")
 
 # Helpers another helper calls.
@@ -859,6 +875,35 @@ def raw_soup(files):
 
 _HELPERS["ambient"] = _ambient_helper()
 _HELPER_ORDER += ("ambient",)
+
+
+def _label_transfer_helper() -> str:
+    """core/label_transfer.py's mapping code (numpy, scipy, pandas, anndata, scanpy,
+    scikit-learn, harmonypy; celltypist for that method), copied so the script maps the
+    cells as scView did; the reference is read from its file beside the script or input."""
+    import inspect
+
+    from scview.core import label_transfer
+
+    lines = ["import os", ""]
+    lines += [f"{name} = {_lit(getattr(label_transfer, name))}" for name in label_transfer.REPLAY_CONSTANTS]
+    for obj in label_transfer.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def reference_file(name):
+    """A reference dataset's file by name: in the working directory, else beside the input."""
+    for folder in (".", os.path.dirname(os.path.abspath(INPUT))):
+        path = os.path.join(folder, name)
+        if os.path.exists(path):
+            return path
+    sys.exit(f"Reference file {name} not found: export the reference dataset from scView as .h5ad "
+             "and put it beside this script or the input file.")
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["label_transfer"] = _label_transfer_helper()
+_HELPER_ORDER += ("label_transfer",)
 
 
 def _need(ctx: _Ctx, *names: str) -> None:
@@ -1335,7 +1380,7 @@ def _pca(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(EXACT, [
             f"sc.tl.pca(adata, n_comps=min({_lit(n)}, adata.n_obs - 1, adata.n_vars - 1), "
             'svd_solver="arpack")',
-            'adata.obsm.pop("X_pca_harmony", None)',
+            *_DROP_CORRECTED,
         ])
     if plan["method"] == "pearson":
         _need(ctx, "find_counts", "pearson_residuals")
@@ -1368,7 +1413,7 @@ def _pca(p: dict, ctx: _Ctx) -> Snippet:
         '    adata.varm["PCs"] = np.zeros((adata.n_vars, n_comps))  # zero rows for the other genes',
         '    adata.varm["PCs"][mask] = sub.varm["PCs"]',
         "del sub, X",
-        'adata.obsm.pop("X_pca_harmony", None)',
+        *_DROP_CORRECTED,
     ])
 
 
@@ -1384,24 +1429,47 @@ adata.uns.pop("X_umap_uncorrected", None)
 '''))
 
 
+_DROP_CORRECTED = ['adata.obsm.pop("X_pca_harmony", None)', 'adata.obsm.pop("X_scanorama", None)']
+
+
 def _batch_correction(p: dict, ctx: _Ctx) -> Snippet:
-    _need(ctx, "harmony")
     key = p.get("batch_key")
     if not key:
         return Snippet(NOT_REPLAYABLE, ["# No batch key was recorded, so nothing is replayed."],
                        "no batch key recorded")
     method = p.get("batch_method") or "harmony"
-    code = [f'adata.obsm["X_pca_harmony"] = harmony(adata.obsm["X_pca"], adata.obs, {_lit(key)})']
+    if method == "scanorama":
+        _need(ctx, "scanorama")
+        return Snippet(EXACT, [
+            'adata.obsm.pop("X_pca_harmony", None)',
+            f'adata.obsm["X_scanorama"] = scanorama(adata, {_lit(key)})'])
+    if method == "bbknn":
+        w, n_pcs, trim = p.get("neighbors_within_batch"), p.get("n_pcs"), p.get("trim")
+        if w is None:
+            return Snippet(NOT_REPLAYABLE, ["# BBKNN's neighbours per batch were not recorded."],
+                           "BBKNN settings not recorded")
+        return Snippet(EXACT, [
+            "import bbknn  # pip install bbknn (MIT): the neighbour graph, built batch by batch",
+            *_DROP_CORRECTED,
+            f"bbknn.bbknn(adata, batch_key={_lit(key)}, neighbors_within_batch={_lit(w)}, "
+            f"n_pcs={_lit(n_pcs or 50)}, trim={_lit(trim)}, computation=\"cKDTree\")",
+            "# The graph is BBKNN's: the neighbours step below keeps it."])
+    _need(ctx, "harmony")
+    code = ['adata.obsm.pop("X_scanorama", None)',
+            f'adata.obsm["X_pca_harmony"] = harmony(adata.obsm["X_pca"], adata.obs, {_lit(key)})']
     if method != "harmony":
         code.insert(0, f"# NOTE: the record names the method {comment_text(method, 40)!s}; "
-                       "scView runs Harmony for every batch correction.")
+                       "it is replayed with Harmony.")
     return Snippet(EXACT, code)
 
 
 def _neighbors(p: dict, ctx: _Ctx) -> Snippet:
+    if p.get("kept"):
+        return Snippet(EXACT, ["# The BBKNN graph from batch correction is the neighbour graph "
+                               "(kept, as scView did)."])
     k = p.get("n_neighbors", 15)
     return Snippet(EXACT, [
-        'use_rep = "X_pca_harmony" if "X_pca_harmony" in adata.obsm else "X_pca"',
+        'use_rep = next((r for r in ("X_pca_harmony", "X_scanorama") if r in adata.obsm), "X_pca")',
         f"sc.pp.neighbors(adata, n_neighbors={_lit(k)}, use_rep=use_rep)",
     ])
 
@@ -1647,6 +1715,30 @@ def _uns_mapping(adata, key: str) -> dict[str, str] | None:
 
 def _ingest(p: dict, ctx: _Ctx) -> Snippet:
     lines = ["# The import itself is read_input() at the top of this script."]
+    pub = p.get("public_import")
+    if isinstance(pub, dict):  # a CELLxGENE Discover dataset version (core/public_import.py)
+        return Snippet(EXACT, lines + [
+            f"# Downloaded from {comment_text(pub.get('source') or 'CELLxGENE Discover', 40)}: "
+            f"{comment_text(pub.get('url'), 120)}",
+            f"# (dataset version {comment_text(pub.get('dataset_version_id'), 40)}, sha256 "
+            f"{comment_text(pub.get('sha256'), 64)}, licence {comment_text(pub.get('license'), 20)}).",
+            "# Either that file or scView's stored copy works as INPUT: gene symbols become the",
+            "# gene index (Ensembl ids kept in var['gene_ids']), in X and in .raw.",
+            "def _symbols(var):",
+            "    ids = var.index.astype(str)",
+            "    names = var[\"feature_name\"].astype(str).to_numpy()",
+            "    names = [n if n and n.lower() != \"nan\" else i for n, i in zip(names, ids)]",
+            "    var = var.copy()",
+            "    var[\"gene_ids\"] = list(ids)",
+            "    var.index = ad.utils.make_index_unique(pd.Index(names))",
+            "    return var",
+            "if \"feature_name\" in adata.var.columns and \"gene_ids\" not in adata.var.columns:",
+            "    if adata.raw is not None and \"feature_name\" in adata.raw.var.columns:",
+            "        raw = adata.raw.to_adata()",
+            "        raw.var = _symbols(raw.var)",
+            "        adata.raw = raw",
+            "    adata.var = _symbols(adata.var)",
+        ])
     if isinstance(p.get("feature_split"), dict):  # an .h5ad upload with antibody / tag features in X
         lines += [
             "# scView kept only the 'Gene Expression' features in X; the antibody (CITE-seq) and",
@@ -1905,6 +1997,64 @@ def _keep_layout(p: dict, ctx: _Ctx) -> Snippet:
         f"adata.uns.pop({_lit(str(key))}, None)",
     ])
 
+def _label_transfer(p: dict, ctx: _Ctx) -> Snippet:
+    from scview.core import label_transfer as lt
+
+    genes, vote, label, prefix = p.get("novelty_genes"), p.get("genes"), p.get("label_column"), p.get("prefix")
+    method, k, ref_file = p.get("method"), p.get("k"), p.get("reference_file")
+    ok = (isinstance(genes, list) and genes and isinstance(vote, list) and vote
+          and set(map(str, vote)) <= set(map(str, genes)) and isinstance(label, str) and label
+          and isinstance(prefix, str) and prefix and method in lt.METHODS and isinstance(k, int)
+          and isinstance(ref_file, str) and ref_file)
+    if not ok:
+        return Snippet(NOT_REPLAYABLE, ["# Reference mapping: its genes, reference file or settings are not "
+                                        "recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items()
+                                                         if x not in ("genes", "novelty_genes")})],
+                       "settings not recorded")
+    _need(ctx, "label_transfer")
+    cols = lt.columns_for(prefix)
+    status, notes = EXACT, []
+    if p.get("renamed"):
+        status = APPROXIMATE
+        notes.append(f"scView matched genes after re-indexing {comment_text(p['renamed'], 80)}; here they "
+                     "are matched by name, so the reference must name them as this dataset does.")
+    if method == lt.METHOD_CELLTYPIST:
+        status = APPROXIMATE
+        notes.append("scView trained CellTypist on every shared gene; here on the recorded variable "
+                     "genes only, so a few labels can differ.")
+    code = [
+        f"# Reference mapping onto {comment_text(p.get('reference'), 80)} (its column "
+        f"{comment_text(label, 60)}), {comment_text(lt.METHOD_TEXT.get(method, method), 60)}, k={k}.",
+        "# NOTE: scView read counts from the dataset or its source files; this reads them (or",
+        "# log-normalised values) from the reference file and the data at this point.",
+        *[f"# NOTE: {n}" for n in notes],
+        "MAP_GENES = [",
+        *_packed([repr(str(g)) for g in genes]),
+        "]",
+        "VOTE_GENES = [",
+        *_packed([repr(str(g)) for g in vote]),
+        "]",
+        f"ref = read_input(reference_file({_lit(ref_file)}))",
+        f"ref = ref[ref.obs[{_lit(label)}].notna().to_numpy()].copy()",
+        "ref_log, _ = lt_expression(ref, MAP_GENES)",
+        "query_log, _ = lt_expression(adata, MAP_GENES)",
+        "ref_umap = np.asarray(ref.obsm[\"X_umap\"])[:, :2] if \"X_umap\" in ref.obsm else None",
+        "where = {g: i for i, g in enumerate(MAP_GENES)}",
+        f"mapped = lt_map(ref_log, query_log, ref.obs[{_lit(label)}].astype(str).to_numpy(), {_lit(method)}, "
+        f"{_lit(k)}, np.array([where[g] for g in VOTE_GENES]), np.arange(len(MAP_GENES)), "
+        f"n_pcs={_lit(p.get('n_pcs', lt.N_PCS))}, clip={_lit(lt.CLIP)}, seed={_lit(lt.SEED)}, ref_umap=ref_umap, "
+        f"percentile={_lit(p.get('percentile', lt.UNMAPPED_PERCENTILE))}, genes=MAP_GENES)",
+        f"adata.obs[{_lit(cols['label'])}] = pd.Categorical(mapped[\"label\"])",
+        f"adata.obs[{_lit(cols['score'])}] = mapped[\"score\"]",
+        f"adata.obs[{_lit(cols['unmapped'])}] = mapped[\"unmapped\"]",
+        "if mapped[\"umap\"] is not None:",
+        f"    adata.obsm[{_lit(cols['embedding'])}] = mapped[\"umap\"]",
+        "del ref, ref_log, query_log",
+    ]
+    return Snippet(status, code, "; ".join(notes)[:200] if notes else "")
+
+
 def _sample_code(column: object, mapping: object) -> list[str] | None:
     if not isinstance(column, str) or not column or not isinstance(mapping, dict) \
             or not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
@@ -2066,6 +2216,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "mito_refilter": _mito_refilter,
     "gene_programs": _gene_programs,
     "keep_layout": _keep_layout,
+    "label_transfer": _label_transfer,
     "hashing_demux": _hashing_demux,
     "hashing_samples": _hashing_samples,
     "vdj_attach": _vdj_attach,

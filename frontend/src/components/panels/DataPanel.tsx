@@ -1,10 +1,11 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
   CircleDashed,
   FileUp,
   FolderUp,
+  Globe,
   Info,
   Loader2,
   RotateCcw,
@@ -28,9 +29,11 @@ import {
   type UnitFormat,
 } from "@/api/ingest";
 import { getDataset, listDatasets, uploadDataset } from "@/api/datasets";
+import { getPublicImportStatus } from "@/api/publicImport";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { DatasetLibrary } from "@/components/panels/DatasetLibrary";
+import { PublicImport } from "@/components/panels/PublicImport";
 import { PreflightIngestNotes } from "@/components/common/PreflightNote";
 import { SequencingQcSideFiles } from "@/components/qc/SequencingQcSideFiles";
 import { ClonotypeUnitFiles } from "@/components/unified/ClonotypeUnitFiles";
@@ -83,6 +86,19 @@ export function DataPanel() {
   const [error, setError] = useState<string | null>(null);
   // Files of a picked/dropped folder that were not sent (BAM, Loupe, report), in one sentence.
   const [notSent, setNotSent] = useState<string | null>(null);
+
+  // CELLxGENE Discover import: offered when the server allows it (PUBLIC_IMPORT_ENABLED).
+  const [publicEnabled, setPublicEnabled] = useState(false);
+  const [publicOpen, setPublicOpen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getPublicImportStatus()
+      .then((s) => live && setPublicEnabled(s.enabled))
+      .catch(() => live && setPublicEnabled(false));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -264,6 +280,16 @@ export function DataPanel() {
           >
             <FolderUp className="h-4 w-4" /> Choose folder
           </button>
+          {publicEnabled && (
+            <button
+              onClick={() => setPublicOpen((o) => !o)}
+              disabled={busy}
+              aria-expanded={publicOpen}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <Globe className="h-4 w-4" /> Import public dataset
+            </button>
+          )}
         </div>
         <p className="mt-2 text-xs text-slate-400">
           .h5ad · Seurat / SingleCellExperiment .rds · 10x (matrix/barcodes/features or .h5) · loom · CSV/TSV ·
@@ -294,6 +320,8 @@ export function DataPanel() {
           }}
         />
       </div>
+
+      {publicEnabled && publicOpen && <PublicImport onClose={() => setPublicOpen(false)} />}
 
       {busy && (
         <div className="flex items-center gap-2 text-sm text-slate-500">

@@ -29,7 +29,7 @@ from scipy.spatial.distance import pdist, squareform
 
 MAX_GROUPS = 100  # as the Unified View's categorical columns
 LINKAGE = "complete"
-_PCA_KEYS = ("X_pca_harmony", "X_pca")
+_PCA_KEYS = ("X_pca_harmony", "X_scanorama", "X_pca")
 
 
 class DistanceError(ValueError):

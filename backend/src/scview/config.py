@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Fetch the PanglaoDB + CellMarker 2.0 marker databases (and the Cell Ontology)
     # into DATA_DIR/marker_db on first use (core/marker_db.py).
     MARKER_DB_AUTO_DOWNLOAD: bool = True
+    # Import public datasets from CELLxGENE Discover (core/public_import.py). Unset:
+    # on in private mode, off in public mode (the server would download for anyone).
+    PUBLIC_IMPORT_ENABLED: bool | None = None
 
     # --- Deployment posture --------------------------------------------------
     # "private" (default): assume a single trusted user on localhost — the only
@@ -66,6 +69,12 @@ class Settings(BaseSettings):
     @property
     def rag_enabled(self) -> bool:
         return bool(self.RAG_DATABASE_URL and self.DEEPINFRA_API_KEY)
+
+    @property
+    def public_import_enabled(self) -> bool:
+        if self.PUBLIC_IMPORT_ENABLED is not None:
+            return self.PUBLIC_IMPORT_ENABLED
+        return not self.is_public
 
     @property
     def is_public(self) -> bool:

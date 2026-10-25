@@ -20,6 +20,7 @@ from scview.api.v1 import (
     clustering,
     assistant,
     export,
+    export_formats,
     ingest,
     integration,
     cells,
@@ -34,10 +35,13 @@ from scview.api.v1 import (
     system,
     report,
     layouts,
+    batch_compare,
     seqqc,
     hashing,
     vdj,
     ambient,
+    public_import,
+    label_transfer,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -58,6 +62,7 @@ api_router.include_router(labels.router, tags=["labels"])
 api_router.include_router(clustering.router, tags=["clustering"])
 api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(export.router, tags=["export"])
+api_router.include_router(export_formats.router, tags=["export"])
 api_router.include_router(ingest.router, tags=["ingest"])
 api_router.include_router(integration.router, tags=["integration"])
 api_router.include_router(normalization.router, tags=["assessment"])
@@ -73,7 +78,10 @@ api_router.include_router(report.router, tags=["report"])
 api_router.include_router(planner.router, tags=["planner"])
 api_router.include_router(programs.router, tags=["programs"])
 api_router.include_router(layouts.router, tags=["embeddings"])
+api_router.include_router(batch_compare.router, tags=["integration"])
 api_router.include_router(seqqc.router, tags=["assessment"])
 api_router.include_router(hashing.router, tags=["hashing"])
 api_router.include_router(vdj.router, tags=["vdj"])
 api_router.include_router(ambient.router, tags=["assessment"])
+api_router.include_router(public_import.router, tags=["datasets"])
+api_router.include_router(label_transfer.router, tags=["annotation"])
