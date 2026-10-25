@@ -41,6 +41,7 @@ from scview.api.v1 import (
     vdj,
     ambient,
     public_import,
+    label_transfer,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -83,3 +84,4 @@ api_router.include_router(hashing.router, tags=["hashing"])
 api_router.include_router(vdj.router, tags=["vdj"])
 api_router.include_router(ambient.router, tags=["assessment"])
 api_router.include_router(public_import.router, tags=["datasets"])
+api_router.include_router(label_transfer.router, tags=["annotation"])

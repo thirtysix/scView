@@ -64,7 +64,14 @@ function errorText(e: unknown): string {
  * column's labels onto the reference's, and the consensus and agreement saved
  * as columns to colour the embedding by.
  */
-export function AnnotationCrosscheckCard({ datasetId }: { datasetId: string }) {
+export function AnnotationCrosscheckCard({
+  datasetId,
+  preset,
+}: {
+  datasetId: string;
+  /** Columns to open on (reference first), e.g. from the reference mapping; a new key re-applies them */
+  preset?: { columns: string[]; key: number } | null;
+}) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const available = useMemo(() => crosscheckColumns(dataset), [dataset]);
   const palette = useSettingsStore((s) => s.categoricalPalette);
@@ -130,6 +137,15 @@ export function AnnotationCrosscheckCard({ datasetId }: { datasetId: string }) {
     setResult(null);
     setSaved(null);
   }, [selected, reference]);
+
+  const card = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!preset || preset.columns.length < 2) return;
+    touched.current = true;
+    setSelected(preset.columns);
+    setReference(preset.columns[0] ?? "");
+    card.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [preset]);
 
   const maxColumns = info?.max_columns ?? MAX_CROSSCHECK_COLUMNS;
   const toggle = (col: string) => {
@@ -204,7 +220,7 @@ export function AnnotationCrosscheckCard({ datasetId }: { datasetId: string }) {
   );
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4" data-testid="annotation-crosscheck">
+    <div ref={card} className="rounded-xl border border-slate-200 bg-white p-4" data-testid="annotation-crosscheck">
       <div className="mb-2 flex items-center gap-2">
         <GitCompare className="h-5 w-5 text-primary" />
         <h3 className="text-sm font-semibold text-slate-900">Annotation cross-check</h3>

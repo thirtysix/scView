@@ -2437,3 +2437,42 @@ def _chunked_preflight(h: Header, steps: list[str], params, held: int, avail: Av
         v["suggestions"].insert(0, "Free some disk: delete datasets you no longer need.")
     return {"steps": [e.to_dict() for e in est.steps], "verdict": v,
             "disk": {"need_bytes": int(disk), "free_bytes": free}}
+
+
+# ---------------------------------------------------------------------------
+# Reference mapping (core/label_transfer.py): both datasets' values in memory
+# ---------------------------------------------------------------------------
+
+# Measured on Kang split by donor (reference 6.5k cells, query 7.3k, both in memory;
+# VmHWM over the run): see label_transfer_need.
+LT_COUNTS_COPIES = 2.5  # per byte of each dataset's counts: the recovered CSR, its log copy, the shared-gene cut
+LT_NOVELTY_GENES = 1.5  # genes variable in either dataset, per variable gene of the reference
+LT_DENSE_COPIES = 3.0  # per cell x gene of the joint matrix: scaled values, PCA's centred copy, its output
+LT_CT_PER_VALUE = 12  # CellTypist: the reference densified (float32) and scaled (float64)
+LT_FIXED = 100 * MiB
+
+
+def _lt_counts_bytes(h: Header) -> int:
+    """The matrix the run reads counts from (layers['counts'], else .raw, else X) as a
+    float32 CSR of its non-zeros."""
+    for where in ("layers/counts", "raw/X", "X"):
+        mm = h.matrix(where)
+        if mm is not None:
+            nz = mm.nnz if mm.sparse else (mm.nonzero if mm.nonzero is not None else mm.nnz)
+            return int(nz * 8 + (mm.n_cells + 1) * 4)
+    return 0
+
+
+def label_transfer_need(ref: Header, query: Header, *, method: str, ref_open: bool,
+                        n_hvg: int = 2000) -> int:
+    """Peak memory of mapping ``query`` onto ``ref`` beyond what the open datasets hold:
+    the reference read from its file (unless it is open), each dataset's counts copied
+    and log-normalised, the joint dense matrix of the variable genes, and CellTypist's
+    dense reference when that method runs."""
+    n_ref, n_query = ref.n_cells or 0, query.n_cells or 0
+    need = 0 if ref_open else estimate_load(ref, ingest=False).peak_bytes
+    need += LT_COUNTS_COPIES * (_lt_counts_bytes(ref) + _lt_counts_bytes(query))
+    need += LT_DENSE_COPIES * (n_ref + n_query) * n_hvg * LT_NOVELTY_GENES * 4
+    if method == "celltypist":
+        need += LT_CT_PER_VALUE * n_ref * min(ref.n_genes or 0, query.n_genes or 0)
+    return int(need + LT_FIXED)
