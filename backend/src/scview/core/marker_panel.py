@@ -30,6 +30,7 @@ with the groups it raises.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from collections.abc import Callable, Iterator
@@ -112,7 +113,7 @@ class Plan:
 def estimate_seconds(n_groups: int, n_cells: int, size: int) -> float:
     """Rough run time (each step: SCREEN x FOLDS fits plus one; the baseline: size x
     FOLDS); fits of a few thousand cells and up to 50 genes take ~20-60 ms."""
-    per_fit = 0.004 + n_cells * n_groups * 6e-7
+    per_fit = 0.004 + n_cells * n_groups * 7.5e-7
     return round((size * (SCREEN * FOLDS + 1) + size * FOLDS + FOLDS + 1) * per_fit, 1)
 
 
@@ -273,18 +274,29 @@ def folds(y: np.ndarray, seed: int = SEED) -> list[tuple[np.ndarray, np.ndarray]
     return list(skf.split(np.zeros(y.size), y))
 
 
-def cv_predict(Z: np.ndarray, y: np.ndarray, splits, n_classes: int) -> np.ndarray:
-    """Each cell's group predicted by the model fitted on the other folds."""
+@contextlib.contextmanager
+def _fitting():
+    """One BLAS thread per fit, convergence warnings off. The fits are small (a few
+    thousand cells, up to 50 genes): with BLAS free to start a thread per core the
+    server ran them ~10x slower than one thread (411 s vs ~40 s on Kang in a 2-CPU
+    container), its threads fighting over the CPUs the container was given."""
     import warnings
 
     from sklearn.exceptions import ConvergenceWarning
+    from threadpoolctl import threadpool_limits
 
+    with threadpool_limits(limits=1, user_api="blas"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", ConvergenceWarning)
+        yield
+
+
+def cv_predict(Z: np.ndarray, y: np.ndarray, splits, n_classes: int) -> np.ndarray:
+    """Each cell's group predicted by the model fitted on the other folds."""
     pred = np.empty(y.size, dtype=np.int64)
-    for train, test in splits:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", ConvergenceWarning)
+    with _fitting():
+        for train, test in splits:
             m = _model().fit(Z[train], y[train])
-        pred[test] = m.predict(Z[test])
+            pred[test] = m.predict(Z[test])
     return pred
 
 
@@ -295,12 +307,7 @@ def recalls(y: np.ndarray, pred: np.ndarray, n_classes: int) -> np.ndarray:
 
 
 def _fit_all(Z: np.ndarray, y: np.ndarray):
-    import warnings
-
-    from sklearn.exceptions import ConvergenceWarning
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", ConvergenceWarning)
+    with _fitting():
         return _model().fit(Z, y)
 
 

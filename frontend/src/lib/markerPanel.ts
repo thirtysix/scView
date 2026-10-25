@@ -42,10 +42,10 @@ export function curveLayout(size: number): Partial<Layout> {
   return {
     autosize: true,
     height: 220,
-    margin: { l: 48, r: 10, t: 6, b: 40 },
+    margin: { l: 48, r: 10, t: 28, b: 40 },
     xaxis: { title: { text: "genes in the panel" }, range: [0.5, Math.max(size, 2) + 0.5], dtick: size > 20 ? 5 : 2 },
     yaxis: { title: { text: "balanced accuracy" }, range: [0, 1.02] },
-    legend: { orientation: "h", x: 0, y: -0.28, font: { size: 10 } },
+    legend: { orientation: "h", x: 0, y: 1.02, yanchor: "bottom", font: { size: 10 } },
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
   };
