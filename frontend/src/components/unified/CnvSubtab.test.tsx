@@ -109,8 +109,9 @@ describe("CnvSubtab", () => {
     await waitFor(() => screen.getByText("Infer copy number"));
     expect(screen.getByText(/About 40 s and 300 MB of memory/)).toBeTruthy();
     // The cell-type column and its immune groups are suggested; the tumour is left out.
+    // The suggestion lands after the first render (an effect): wait for it, CI is slower.
+    await waitFor(() => expect((screen.getByLabelText("T cell") as HTMLInputElement).checked).toBe(true));
     expect((screen.getByLabelText("Reference column") as HTMLSelectElement).value).toBe("cell_type");
-    expect((screen.getByLabelText("T cell") as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText("Epithelial") as HTMLInputElement).checked).toBe(false);
     fireEvent.click(screen.getByLabelText("leave out X"));
     fireEvent.click(screen.getByText("Infer copy number"));
