@@ -26,6 +26,7 @@ import { MitoByType } from "@/components/qc/MitoByType";
 import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
 import { asDoubletSource } from "@/lib/doubletSource";
 import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
+import { ObjectInspector } from "@/components/panels/ObjectInspector";
 import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
@@ -1802,6 +1803,7 @@ export function DataAssessmentPanel() {
         </div>
         {/* Right: QC distributions */}
         <div className="w-full flex-shrink-0 space-y-4 lg:sticky lg:top-0 lg:w-[44%] lg:self-start">
+          {datasetId && <ObjectInspector datasetId={datasetId} refreshKey={qcRefreshKey} />}
           {datasetId && <SequencingQc datasetId={datasetId} onChange={() => setAmbientKey((k) => k + 1)} />}
           {datasetId && (
             <AmbientRna
