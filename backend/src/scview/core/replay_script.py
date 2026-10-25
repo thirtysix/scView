@@ -861,6 +861,35 @@ _HELPERS["ambient"] = _ambient_helper()
 _HELPER_ORDER += ("ambient",)
 
 
+def _label_transfer_helper() -> str:
+    """core/label_transfer.py's mapping code (numpy, scipy, pandas, anndata, scanpy,
+    scikit-learn, harmonypy; celltypist for that method), copied so the script maps the
+    cells as scView did; the reference is read from its file beside the script or input."""
+    import inspect
+
+    from scview.core import label_transfer
+
+    lines = ["import os", ""]
+    lines += [f"{name} = {_lit(getattr(label_transfer, name))}" for name in label_transfer.REPLAY_CONSTANTS]
+    for obj in label_transfer.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def reference_file(name):
+    """A reference dataset's file by name: in the working directory, else beside the input."""
+    for folder in (".", os.path.dirname(os.path.abspath(INPUT))):
+        path = os.path.join(folder, name)
+        if os.path.exists(path):
+            return path
+    sys.exit(f"Reference file {name} not found: export the reference dataset from scView as .h5ad "
+             "and put it beside this script or the input file.")
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["label_transfer"] = _label_transfer_helper()
+_HELPER_ORDER += ("label_transfer",)
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -1905,6 +1934,64 @@ def _keep_layout(p: dict, ctx: _Ctx) -> Snippet:
         f"adata.uns.pop({_lit(str(key))}, None)",
     ])
 
+def _label_transfer(p: dict, ctx: _Ctx) -> Snippet:
+    from scview.core import label_transfer as lt
+
+    genes, vote, label, prefix = p.get("novelty_genes"), p.get("genes"), p.get("label_column"), p.get("prefix")
+    method, k, ref_file = p.get("method"), p.get("k"), p.get("reference_file")
+    ok = (isinstance(genes, list) and genes and isinstance(vote, list) and vote
+          and set(map(str, vote)) <= set(map(str, genes)) and isinstance(label, str) and label
+          and isinstance(prefix, str) and prefix and method in lt.METHODS and isinstance(k, int)
+          and isinstance(ref_file, str) and ref_file)
+    if not ok:
+        return Snippet(NOT_REPLAYABLE, ["# Reference mapping: its genes, reference file or settings are not "
+                                        "recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items()
+                                                         if x not in ("genes", "novelty_genes")})],
+                       "settings not recorded")
+    _need(ctx, "label_transfer")
+    cols = lt.columns_for(prefix)
+    status, notes = EXACT, []
+    if p.get("renamed"):
+        status = APPROXIMATE
+        notes.append(f"scView matched genes after re-indexing {comment_text(p['renamed'], 80)}; here they "
+                     "are matched by name, so the reference must name them as this dataset does.")
+    if method == lt.METHOD_CELLTYPIST:
+        status = APPROXIMATE
+        notes.append("scView trained CellTypist on every shared gene; here on the recorded variable "
+                     "genes only, so a few labels can differ.")
+    code = [
+        f"# Reference mapping onto {comment_text(p.get('reference'), 80)} (its column "
+        f"{comment_text(label, 60)}), {comment_text(lt.METHOD_TEXT.get(method, method), 60)}, k={k}.",
+        "# NOTE: scView read counts from the dataset or its source files; this reads them (or",
+        "# log-normalised values) from the reference file and the data at this point.",
+        *[f"# NOTE: {n}" for n in notes],
+        "MAP_GENES = [",
+        *_packed([repr(str(g)) for g in genes]),
+        "]",
+        "VOTE_GENES = [",
+        *_packed([repr(str(g)) for g in vote]),
+        "]",
+        f"ref = read_input(reference_file({_lit(ref_file)}))",
+        f"ref = ref[ref.obs[{_lit(label)}].notna().to_numpy()].copy()",
+        "ref_log, _ = lt_expression(ref, MAP_GENES)",
+        "query_log, _ = lt_expression(adata, MAP_GENES)",
+        "ref_umap = np.asarray(ref.obsm[\"X_umap\"])[:, :2] if \"X_umap\" in ref.obsm else None",
+        "where = {g: i for i, g in enumerate(MAP_GENES)}",
+        f"mapped = lt_map(ref_log, query_log, ref.obs[{_lit(label)}].astype(str).to_numpy(), {_lit(method)}, "
+        f"{_lit(k)}, np.array([where[g] for g in VOTE_GENES]), np.arange(len(MAP_GENES)), "
+        f"n_pcs={_lit(p.get('n_pcs', lt.N_PCS))}, clip={_lit(lt.CLIP)}, seed={_lit(lt.SEED)}, ref_umap=ref_umap, "
+        f"percentile={_lit(p.get('percentile', lt.UNMAPPED_PERCENTILE))}, genes=MAP_GENES)",
+        f"adata.obs[{_lit(cols['label'])}] = pd.Categorical(mapped[\"label\"])",
+        f"adata.obs[{_lit(cols['score'])}] = mapped[\"score\"]",
+        f"adata.obs[{_lit(cols['unmapped'])}] = mapped[\"unmapped\"]",
+        "if mapped[\"umap\"] is not None:",
+        f"    adata.obsm[{_lit(cols['embedding'])}] = mapped[\"umap\"]",
+        "del ref, ref_log, query_log",
+    ]
+    return Snippet(status, code, "; ".join(notes)[:200] if notes else "")
+
+
 def _sample_code(column: object, mapping: object) -> list[str] | None:
     if not isinstance(column, str) or not column or not isinstance(mapping, dict) \
             or not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
@@ -2066,6 +2153,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "mito_refilter": _mito_refilter,
     "gene_programs": _gene_programs,
     "keep_layout": _keep_layout,
+    "label_transfer": _label_transfer,
     "hashing_demux": _hashing_demux,
     "hashing_samples": _hashing_samples,
     "vdj_attach": _vdj_attach,
