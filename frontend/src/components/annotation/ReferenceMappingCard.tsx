@@ -290,7 +290,7 @@ export function ReferenceMappingCard({
                       <th className="text-right" title="Share of the cluster's cells not in the reference">
                         Not in ref.
                       </th>
-                      <th title="The cluster's commonest transferred label">Label</th>
+                      <th className="pl-3 text-left" title="The cluster's commonest transferred label">Label</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -307,7 +307,7 @@ export function ReferenceMappingCard({
                           </td>
                           <td className="text-right">{c.n_cells.toLocaleString()}</td>
                           <td className="text-right">{pct(c.unmapped_share)}</td>
-                          <td>
+                          <td className="pl-3">
                             {c.top_label} ({pct(c.top_label_share)})
                           </td>
                         </tr>
