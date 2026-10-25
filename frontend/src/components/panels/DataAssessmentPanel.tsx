@@ -20,6 +20,7 @@ import { QcReportCard } from "@/components/panels/QcReportCard";
 import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfidenceCard";
 import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCrosscheckCard";
+import { ReferenceMappingCard } from "@/components/annotation/ReferenceMappingCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
 import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
@@ -538,6 +539,7 @@ export function DataAssessmentPanel() {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const setPipelineRunning = useSettingsStore((s) => s.setPipelineRunning);
   const queryClient = useQueryClient();
+  const [crosscheckPreset, setCrosscheckPreset] = useState<{ columns: string[]; key: number } | null>(null);
 
   const [state, setState] = useState<AssessmentResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1165,11 +1167,17 @@ export function DataAssessmentPanel() {
           {/* Cell-type annotation */}
           <AnnotationControl onAnnotate={annotate} running={running} species={state.species?.species} />
 
+          {/* Labels from an annotated reference dataset, with "not in reference" flags */}
+          <ReferenceMappingCard
+            datasetId={datasetId}
+            onCrosscheck={(columns) => setCrosscheckPreset((p) => ({ columns, key: (p?.key ?? 0) + 1 }))}
+          />
+
           {/* How well each cell's label fits (conformal prediction sets) */}
           <AnnotationConfidenceCard datasetId={datasetId} />
 
           {/* Do the annotation methods agree? (pairwise ARI/AMI, mapped agreement, consensus) */}
-          <AnnotationCrosscheckCard datasetId={datasetId} />
+          <AnnotationCrosscheckCard datasetId={datasetId} preset={crosscheckPreset} />
 
           {/* Pipeline progress bar — visible while running or just completed */}
           {(running || runResult) && runProgress && (
