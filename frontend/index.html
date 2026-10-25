@@ -10,7 +10,7 @@
     <script>
       window.global = window.global || window;
     </script>
-    <!-- Dark theme before first paint (no white flash); lib/theme.ts takes over. -->
+    <!-- Dark theme + accessibility mode before first paint (no white flash); lib/theme.ts takes over. -->
     <script>
       try {
         var p = localStorage.getItem("scview.theme.v1");
@@ -18,6 +18,7 @@
           document.documentElement.classList.add("dark");
           document.documentElement.style.colorScheme = "dark";
         }
+        if (localStorage.getItem("scview.a11y.v1") === "on") document.documentElement.classList.add("a11y");
       } catch (e) {}
     </script>
   </head>

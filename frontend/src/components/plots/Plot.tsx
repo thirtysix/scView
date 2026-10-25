@@ -4,6 +4,7 @@ import type { Figure, PlotParams } from "react-plotly.js";
 import createPlotlyComponent from "react-plotly.js/factory";
 import Plotly from "@/lib/plotly";
 import { rememberBaseFigure, themedData, themedLayout, useResolvedTheme } from "@/lib/theme";
+import { a11yLayout, useA11y } from "@/lib/accessibility";
 
 // A drop-in replacement for the default `react-plotly.js` export, but bound to
 // our slimmed custom Plotly bundle (src/lib/plotly.ts). Use this everywhere
@@ -13,12 +14,17 @@ const BasePlot = createPlotlyComponent(Plotly);
 /**
  * The plot in the app theme (lib/theme.ts): layout and trace neutrals are
  * swapped for dark ones in dark mode and left alone in light mode. A theme
- * change hands Plotly a new layout, so the plot redraws in place.
+ * change hands Plotly a new layout, so the plot redraws in place. In
+ * accessibility mode (lib/accessibility.ts) no text is below 12 px.
  */
 export function Plot(props: PlotParams) {
   const theme = useResolvedTheme();
+  const a11y = useA11y();
   const { data, layout, onInitialized, onUpdate } = props;
-  const themedLayoutValue = useMemo(() => themedLayout(layout, theme), [layout, theme]);
+  const themedLayoutValue = useMemo(
+    () => a11yLayout(themedLayout(layout, theme), a11y) as Partial<Layout>,
+    [layout, theme, a11y],
+  );
   const themedDataValue = useMemo(() => themedData(data, theme), [data, theme]);
 
   // Downloads re-render the light figure (lib/plotConfig.ts -> exportFigure).

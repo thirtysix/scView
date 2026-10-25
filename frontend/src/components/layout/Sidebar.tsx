@@ -3,6 +3,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { PANEL_IDS, PANEL_LABELS, type PanelId } from "@/lib/constants";
 import { MemoryIndicator } from "./MemoryIndicator";
 import { ThemeToggle } from "./ThemeToggle";
+import { AccessibilityToggle } from "./AccessibilityToggle";
 import {
   Database,
   ClipboardCheck,
@@ -87,6 +88,7 @@ export function Sidebar() {
       </nav>
 
       <ThemeToggle collapsed={sidebarCollapsed} />
+      <AccessibilityToggle collapsed={sidebarCollapsed} />
       <MemoryIndicator collapsed={sidebarCollapsed} />
 
       {/* Collapse toggle */}

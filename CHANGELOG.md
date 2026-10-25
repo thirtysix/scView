@@ -6,6 +6,12 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Accessibility mode.** A switch in the sidebar (under Theme), off by default and remembered per browser. On:
+  text contrast to WCAG AA (4.5:1) in the light theme, no text under 12 px in the app or the plots, an always
+  visible focus outline, underlined links, no transitions, and the colour-blind-safe group colours. Off, the
+  settings stay tuned for clarity and looks.
+
 ## [0.37.0] - 2026-10-25
 
 ### Added
