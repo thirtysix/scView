@@ -19,6 +19,7 @@ import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/mar
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { GeneReportButton } from "@/components/report/ReportButtons";
 import { MinimalPanel } from "@/components/unified/MinimalPanel";
+import { OffTargetPanel } from "@/components/unified/OffTargetPanel";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -547,6 +548,9 @@ export function UnifiedMarkersSubtab({
         onShowSplitPChange={setShowSplitP}
         onResult={setSplitResult}
       />
+      {datasetId && groupByColumn && (
+        <OffTargetPanel datasetId={datasetId} column={groupByColumn} group={selectedGroup} onGeneClick={onGeneClick} />
+      )}
       {datasetId && groupByColumn && <MinimalPanel datasetId={datasetId} groupby={groupByColumn} />}
     </div>
   );
