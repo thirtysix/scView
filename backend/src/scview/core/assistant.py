@@ -221,6 +221,22 @@ def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(gp_lines[1:])))
 
 
+def _add_count_split(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last count-split marker check (core/split_markers.py): which groups keep
+    their markers on held-out counts."""
+    from scview.core import split_markers
+
+    try:
+        cs_lines, cs_detail = split_markers.grounding_lines(adaptor, adaptor.adata.obs)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: count-split grounding failed: %s", exc)
+        return
+    if cs_detail:
+        lines.extend(cs_lines)
+        sources.append(ChatSource(kind="result", ref="result:count_split", detail=cs_detail,
+                                  evidence="\n".join(cs_lines[1:])))
+
+
 def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """TCR/BCR contigs (core/vdj.py): cells with chains, the clonotypes, and the largest
     expanded ones with the cell types they sit in, only once contigs are attached."""
@@ -551,6 +567,7 @@ def build_grounding_context(
         _add_layout_stability(adaptor, lines, sources)
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
+        _add_count_split(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []

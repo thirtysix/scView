@@ -11,6 +11,9 @@ import { apiFetch } from "@/api/client";
 import type { MarkersResponse } from "@/api/markers";
 import { AmbientFlag, useAmbientFlags } from "@/components/common/AmbientFlag";
 import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot";
+import { CountSplitCheck } from "@/components/unified/CountSplitCheck";
+import type { SplitMarkersResult } from "@/api/splitMarkers";
+import { splitPValueMap } from "@/lib/splitMarkers";
 import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { GeneReportButton } from "@/components/report/ReportButtons";
@@ -90,6 +93,9 @@ export function UnifiedMarkersSubtab({
   const [filterQuery, setFilterQuery] = useState("");
   const [minAbsFC, setMinAbsFC] = useState(0);
   const [showPlot, setShowPlot] = useState(false);
+  // Count-split check (CountSplitCheck): its result, and its p-values as a table column.
+  const [splitResult, setSplitResult] = useState<SplitMarkersResult | null>(null);
+  const [showSplitP, setShowSplitP] = useState(false);
 
   const groupbyColumns = useMemo(() => {
     if (!dataset) return [];
@@ -188,6 +194,10 @@ export function UnifiedMarkersSubtab({
     [filteredMarkers, sortField, sortDir],
   );
   const specificity = useMemo(() => hasSpecificity(currentMarkers), [currentMarkers]);
+  const splitP = useMemo(
+    () => (showSplitP && splitResult ? splitPValueMap(splitResult.groups.find((g) => g.group === selectedGroup)) : null),
+    [showSplitP, splitResult, selectedGroup],
+  );
 
   const handleSort = useCallback(
     (field: SortField) => {
@@ -393,6 +403,14 @@ export function UnifiedMarkersSubtab({
               >
                 <span className="flex items-center justify-end gap-1">Adj.P {sortIcon("pval_adj")}</span>
               </th>
+              {splitP && (
+                <th
+                  title="Adjusted p on held-out counts (count splitting): the group's training cluster vs the rest, tested on the half of the counts the clustering never saw. Blank: not among the check's top genes."
+                  className="whitespace-nowrap px-2 py-1.5 text-right font-medium text-slate-600"
+                >
+                  Split adj.P
+                </th>
+              )}
               {specificity && (
                 <>
                   <th
@@ -458,6 +476,17 @@ export function UnifiedMarkersSubtab({
                     {formatPValue(marker.pval_adj)}
                   </span>
                 </td>
+                {splitP && (
+                  <td className="px-2 py-1.5 text-right tabular-nums" data-testid="split-p">
+                    {splitP.get(marker.gene) == null ? (
+                      <span className="text-slate-400">–</span>
+                    ) : (
+                      <span className={(splitP.get(marker.gene) as number) < 0.05 ? "font-medium text-blue-600" : "text-orange-700"}>
+                        {formatPValue(splitP.get(marker.gene) as number)}
+                      </span>
+                    )}
+                  </td>
+                )}
                 {specificity && (
                   <>
                     <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">
@@ -478,7 +507,7 @@ export function UnifiedMarkersSubtab({
             ))}
             {sortedMarkers.length === 0 && (
               <tr>
-                <td colSpan={specificity ? 6 : 3} className="px-2 py-4 text-center text-slate-400">
+                <td colSpan={(specificity ? 6 : 3) + (splitP ? 1 : 0)} className="px-2 py-4 text-center text-slate-400">
                   {filterQuery ? "No genes match filter" : "No markers for this group"}
                 </td>
               </tr>
@@ -494,6 +523,16 @@ export function UnifiedMarkersSubtab({
         expression on the scatter plot. Use p-values to rank markers, not as evidence: the clusters were found
         from these same cells, so markers always test as significant.
       </p>
+
+      <CountSplitCheck
+        datasetId={datasetId}
+        column={groupByColumn}
+        group={selectedGroup}
+        onGroupChange={(g) => { setSelectedGroup(g); setFilterQuery(""); }}
+        showSplitP={showSplitP}
+        onShowSplitPChange={setShowSplitP}
+        onResult={setSplitResult}
+      />
     </div>
   );
 }
