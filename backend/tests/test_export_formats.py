@@ -129,6 +129,9 @@ def test_embedding_choices_default_to_2d_and_3d_layouts():
     assert set(choices) == {"X_umap", "X_pca", "X_umap_3d"}  # not usage or protein
     assert choices["X_umap"]["default"] and choices["X_umap_3d"]["default"]
     assert not choices["X_pca"]["default"]
+    # Vitessce draws 2D scatters only: the 3D UMAP is offered, not chosen by default
+    flat = {c["key"]: c for c in cx.embedding_choices(_processed(), vx.MAX_DIMS)}
+    assert flat["X_umap"]["default"] and not flat["X_umap_3d"]["default"]
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +333,7 @@ async def test_vitessce_bundle_paths_exist_and_values_match(client, dataset_mana
     assert f["fileType"] == "anndata.zarr" and f["url"].startswith("http://127.0.0.1:")
     assert f["url"].endswith("/My_PBMC.zarr")
     components = [v["component"] for v in cfg["layout"]]
-    assert components.count("scatterplot") == 2  # X_umap, X_umap_3d
+    assert components.count("scatterplot") == 1  # X_umap (no X_umap_3d: Vitessce is 2D)
     for c in ("obsSets", "obsSetSizes", "featureList", "heatmap"):
         assert c in components
     store = tmp_path / "My_PBMC.zarr"

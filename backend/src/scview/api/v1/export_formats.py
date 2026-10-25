@@ -87,7 +87,7 @@ def _summary(adaptor, fmt: str, o: FormatOptions, name: str) -> dict[str, Any]:
     p = _plan(adaptor, fmt, o)
     out: dict[str, Any] = {
         "format": fmt,
-        "embeddings": cx.embedding_choices(adata),
+        "embeddings": cx.embedding_choices(adata, vx.MAX_DIMS if fmt == "vitessce" else 3),
         "label_columns": vx.label_columns(adata),
         "has_variable_genes": "highly_variable" in adata.var.columns,
         "n_cells": int(adata.n_obs),

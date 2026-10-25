@@ -116,9 +116,9 @@ def _label(key: str) -> str:
     return known.get(suffix.lower(), suffix)
 
 
-def embedding_choices(adata) -> list[dict[str, Any]]:
+def embedding_choices(adata, max_dims: int = 3) -> list[dict[str, Any]]:
     """The obsm layouts an export can carry: name, columns, whether chosen by default
-    (2 or 3 columns), and the name it gets in the export."""
+    (2 to ``max_dims`` columns), and the name it gets in the export."""
     out: list[dict[str, Any]] = []
     taken: set[str] = set()
     for key in adata.obsm.keys():
@@ -138,12 +138,12 @@ def embedding_choices(adata) -> list[dict[str, Any]]:
             name, n = f"{base}_{n}", n + 1
         taken.add(name)
         out.append({"key": key, "label": _label(key), "n_dims": int(shape[1]),
-                    "default": int(shape[1]) <= 3, "export_name": name})
+                    "default": int(shape[1]) <= max_dims, "export_name": name})
     return out
 
 
-def _pick_embeddings(adata, chosen: list[str] | None) -> tuple[list[dict], list[str]]:
-    choices = embedding_choices(adata)
+def _pick_embeddings(adata, chosen: list[str] | None, max_dims: int = 3) -> tuple[list[dict], list[str]]:
+    choices = embedding_choices(adata, max_dims)
     by_key = {c["key"]: c for c in choices}
     if chosen is None:
         picked = [c for c in choices if c["default"]]

@@ -91,10 +91,14 @@ def _nnz(m: cx.Matrix) -> int:
         return int(np.prod(node.shape))
 
 
+MAX_DIMS = 2  # default layouts: 2D only (a 3D UMAP is left out unless chosen)
+
+
 def plan(adaptor, opts: cx.Options, genes: str = "all") -> dict[str, Any]:
     """What the bundle holds: obs, var, embeddings, the expression matrix and gene mask."""
     adata = adaptor.adata
-    picked, obsm_dropped = cx._pick_embeddings(adata, opts.embeddings)
+    # Vitessce's scatterplot is 2D: a 3D layout shows as its first two axes, so not by default
+    picked, obsm_dropped = cx._pick_embeddings(adata, opts.embeddings, max_dims=MAX_DIMS)
     if not picked:
         raise cx.ExportError("Choose at least one embedding (a 2D layout) for the scatterplots.")
     if opts.columns is None:

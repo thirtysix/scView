@@ -144,7 +144,11 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
                   />
                   {e.label}
                   <span className="text-xs text-slate-400">
-                    {e.n_dims > 3 ? `${e.n_dims} columns, first 2 exported` : `${e.n_dims}D`}
+                    {e.n_dims > 3
+                      ? `${e.n_dims} columns, first 2 exported`
+                      : format === "vitessce" && e.n_dims === 3
+                        ? "3D, Vitessce shows its first 2 axes"
+                        : `${e.n_dims}D`}
                   </span>
                 </label>
               ))}
