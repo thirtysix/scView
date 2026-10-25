@@ -14,6 +14,7 @@ import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot"
 import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { GeneReportButton } from "@/components/report/ReportButtons";
+import { MinimalPanel } from "@/components/unified/MinimalPanel";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -494,6 +495,7 @@ export function UnifiedMarkersSubtab({
         expression on the scatter plot. Use p-values to rank markers, not as evidence: the clusters were found
         from these same cells, so markers always test as significant.
       </p>
+      {datasetId && groupByColumn && <MinimalPanel datasetId={datasetId} groupby={groupByColumn} />}
     </div>
   );
 }

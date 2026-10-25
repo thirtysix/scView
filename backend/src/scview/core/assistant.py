@@ -221,6 +221,21 @@ def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(gp_lines[1:])))
 
 
+def _add_marker_panel(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The latest minimal marker panel (core/marker_panel.py), once one has been made."""
+    from scview.core import marker_panel
+
+    try:
+        mp_lines, mp_detail = marker_panel.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: marker panel fact failed: %s", exc)
+        return
+    if mp_lines:
+        lines.extend(mp_lines)
+        sources.append(ChatSource(kind="result", ref=marker_panel.TAG, detail=mp_detail,
+                                  evidence="\n".join(mp_lines)))
+
+
 def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """TCR/BCR contigs (core/vdj.py): cells with chains, the clonotypes, and the largest
     expanded ones with the cell types they sit in, only once contigs are attached."""
@@ -551,6 +566,7 @@ def build_grounding_context(
         _add_layout_stability(adaptor, lines, sources)
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
+        _add_marker_panel(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []

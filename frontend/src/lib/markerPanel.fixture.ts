@@ -1,0 +1,46 @@
+import type { PanelResult } from "@/api/markerPanel";
+
+/** A finished panel run, for tests. */
+export const RESULT: PanelResult = {
+  groupby: "cell_type",
+  groups: ["B", "T", "NK"],
+  n_cells: 900,
+  n_per_group: { B: 300, T: 300, NK: 300 },
+  group_sizes: { B: 1000, T: 4000, NK: 300 },
+  cells_per_group: 500,
+  n_candidates: 30,
+  per_group: 10,
+  size: 2,
+  required: [],
+  excluded: [],
+  missing: [],
+  dropped_groups: [],
+  restricted: null,
+  folds: 3,
+  seed: 0,
+  screen: 15,
+  cv: "stratified 3-fold CV, seed 0",
+  estimate_seconds: 4,
+  notes: [],
+  panel: ["MS4A1", "GNLY"],
+  path: [
+    { gene: "MS4A1", n_genes: 1, balanced_accuracy: 0.6, recall: { B: 0.95, T: 0.8, NK: 0.05 }, required: false, tried: 15 },
+    { gene: "GNLY", n_genes: 2, balanced_accuracy: 0.9, recall: { B: 0.95, T: 0.85, NK: 0.9 }, required: false, tried: 15 },
+  ],
+  baseline: [
+    { gene: "MS4A1", n_genes: 1, balanced_accuracy: 0.6 },
+    { gene: "CD3E", n_genes: 2, balanced_accuracy: 0.7 },
+  ],
+  genes: [
+    { gene: "MS4A1", required: false, helps: ["B"], marker_of: ["B"], coef: { B: 2, T: -1, NK: -1 } },
+    { gene: "GNLY", required: false, helps: ["NK"], marker_of: ["NK"], coef: { B: -1, T: -0.5, NK: 2.5 } },
+  ],
+  confusion: { groups: ["B", "T", "NK"], counts: [[285, 15, 0], [20, 255, 25], [0, 30, 270]] },
+  balanced_accuracy: 0.9,
+  baseline_accuracy: 0.7,
+  best_n: 2,
+  best_accuracy: 0.9,
+  within: 0.01,
+  importance_note: "Importance is the standardised coefficient (no SHAP).",
+  seconds: 3,
+};
