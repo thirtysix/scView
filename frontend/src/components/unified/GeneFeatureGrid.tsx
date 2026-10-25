@@ -2,6 +2,8 @@ import { useCallback, useMemo } from "react";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { BlendLegend } from "@/components/plots/BlendLegend";
 import { MultiPanelScatter, type GridHover, type GridPanel } from "@/components/unified/MultiPanelScatter";
+import { useSameCellsGridLasso } from "@/components/unified/GridLasso";
+import { SelectionChip } from "@/components/common/SelectionChip";
 import { useGeneExpression } from "@/hooks/useGeneExpression";
 import { exportFilename } from "@/lib/exportFilename";
 import { prettyEmbeddingLabel } from "@/lib/formatting";
@@ -33,6 +35,8 @@ interface GeneFeatureGridProps {
   selectedIndices?: Set<number> | null;
   /** Hovered cell with x/y in the scatter area's pixels, and its value of every gene */
   onHover?: (info: { index: number; x: number; y: number; lines: HoverLine[] } | null) => void;
+  /** A lasso closed in any panel: the cells under it */
+  onLassoComplete?: (cells: Set<number>) => void;
 }
 
 const CLIP_OPTIONS = [
@@ -45,8 +49,8 @@ const CLIP_OPTIONS = [
  * The embedding coloured by several genes side by side (feature plots), or by
  * two genes and their blend (Seurat FeaturePlot blend: A red, B green, both
  * yellow). Built on MultiPanelScatter like the split and compare grids: one
- * camera, one WebGL context, lasso off while it shows. Each panel draws its
- * expressing cells on top of the rest.
+ * camera, one WebGL context; a lasso in any panel selects the cells under it.
+ * Each panel draws its expressing cells on top of the rest.
  */
 export function GeneFeatureGrid({
   datasetId,
@@ -56,7 +60,9 @@ export function GeneFeatureGrid({
   dimensions,
   selectedIndices = null,
   onHover,
+  onLassoComplete,
 }: GeneFeatureGridProps) {
+  const lasso = useSameCellsGridLasso(positions, dimensions, onLassoComplete);
   const opacity = useSettingsStore((s) => s.opacity);
   const sequentialColormap = useSettingsStore((s) => s.continuousColormap);
   const divergingColormap = useSettingsStore((s) => s.divergingColormap);
@@ -220,7 +226,9 @@ export function GeneFeatureGrid({
         </>
       }
       headerControls={
-        blend ? (
+        <>
+        <SelectionChip />
+        {blend ? (
           <>
             <select
               aria-label="Blend colours"
@@ -264,7 +272,8 @@ export function GeneFeatureGrid({
             />
             Shared scale
           </label>
-        )
+        )}
+        </>
       }
       sampledNote={sampledNote}
       sampledBadge={
@@ -273,6 +282,8 @@ export function GeneFeatureGrid({
       onClose={() => setGeneGrid(null)}
       closeTitle={blend ? "Close the blend" : "Close the gene grid"}
       onHover={handleHover}
+      lassoActive={lasso.lassoActive}
+      onLasso={lasso.onLasso}
       exportLegend={exportLegend}
       exportFilename={exportFilename(
         datasetName,

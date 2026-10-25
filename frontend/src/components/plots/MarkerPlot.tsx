@@ -14,6 +14,9 @@ import { discreteColorscale } from "@/lib/cellHeatmap";
 import { rgbCss } from "@/lib/categoryColors";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { useObsRevision } from "@/stores/obsRevisionStore";
+import { useSelectionByGroup } from "@/hooks/useSelectionByGroup";
+import { selectionName, selectionRow } from "@/lib/linkedTraces";
+import { SelectionChip } from "@/components/common/SelectionChip";
 import {
   DOT_LEGEND,
   MIN_FRACTION,
@@ -159,6 +162,10 @@ export function MarkerPlot({
     return () => { cancelled = true; };
   }, [byTree, datasetId, groupby, treeKey, tree?.key]);
 
+  // C035: the current selection as an extra row, over the same genes.
+  const pickedGenes = useMemo(() => picked.map((p) => p.gene), [picked]);
+  const selectionStats = useSelectionByGroup(datasetId, pickedGenes, layer);
+
   useEffect(() => {
     if (picked.length === 0) return;
     let cancelled = false;
@@ -218,10 +225,10 @@ export function MarkerPlot({
   // exactly the plotted groups.
   const treeData = byTree && tree?.key === treeKey ? tree.d : null;
   const baseRows = baseIdx.map((i) => data.groups[i]!);
-  const rows = treeData ? dendrogramRowOrder(treeData.groups, treeData.order, baseRows) : baseRows;
-  const rowIdx = rows.map((g) => data.groups.indexOf(g));
+  const groupRows = treeData ? dendrogramRowOrder(treeData.groups, treeData.order, baseRows) : baseRows;
+  const rowIdx = groupRows.map((g) => data.groups.indexOf(g));
   const sameGroups =
-    !!treeData && treeData.groups.length === rows.length && treeData.groups.every((g) => rows.includes(g));
+    !!treeData && treeData.groups.length === groupRows.length && treeData.groups.every((g) => groupRows.includes(g));
   const lines = sameGroups && treeData?.tree ? dendrogramSegments(treeData.tree, treeData.order) : null;
   const treeLoading = byTree && tree?.key !== treeKey;
   const treeError = byTree && tree?.key === treeKey ? tree.error : null;
@@ -233,9 +240,18 @@ export function MarkerPlot({
   const cols = <T,>(row: T[]) => colIdx.map((c) => row[c]!);
   const genes = cols(data.genes);
   const missing = custom ? missingGenes(chosenGenes!, genes) : [];
+  // The selection's row goes last (C035), but not under a dendrogram whose leaves are the groups.
+  const selRow = lines ? null : selectionRow(selectionStats, data.genes, colIdx);
+  const selRowName = selRow && selectionStats ? selectionName(selectionStats.n_cells) : null;
+  const rows = selRowName ? [...groupRows, selRowName] : groupRows;
   const mean = rowIdx.map((i) => cols(data.mean[i]!));
   const meanExpressing = data.mean_expressing ? rowIdx.map((i) => cols(data.mean_expressing![i]!)) : null;
   const fraction = rowIdx.map((i) => cols(data.fraction[i]!));
+  if (selRow) {
+    mean.push(selRow.mean);
+    meanExpressing?.push(selRow.meanExpressing);
+    fraction.push(selRow.fraction);
+  }
   // Bands above a heatmap: which group each top marker came from, then the gene tree.
   const geneLines = geneTree ? dendrogramSegments(geneTree.tree, geneTree.order) : null;
   const showStrip = kind === "heatmap" && !custom;
@@ -275,7 +291,7 @@ export function MarkerPlot({
   const hover = rows.map((g, r) =>
     genes.map(
       (gene, c) =>
-        `<b>${gene}</b>${custom ? "" : ` (marker of ${markerOf.get(gene) ?? "?"})`}<br>${groupby}: ${g}` +
+        `<b>${gene}</b>${custom ? "" : ` (marker of ${markerOf.get(gene) ?? "?"})`}<br>${g === selRowName ? g : `${groupby}: ${g}`}` +
         `<br>mean ${(mean[r]?.[c] ?? 0).toFixed(2)}` +
         (meanExpressing ? `<br>mean in expressing cells ${(meanExpressing[r]?.[c] ?? 0).toFixed(2)}` : "") +
         `<br>${Math.round((fraction[r]?.[c] ?? 0) * 100)}% of cells express it`,
@@ -353,10 +369,16 @@ export function MarkerPlot({
     ? ` ${isProtein ? "Proteins" : "Genes"} ordered by the average-linkage clustering of their mean over all cells across the groups (correlation distance; tree above).`
     : "";
   const stripNote = strip ? " Strip above: the group each gene is a top marker of." : "";
+  const selectionNote = selRowName
+    ? " Last row: the selected cells (any group)."
+    : selectionStats && lines
+      ? " The selection's row is left out while the groups follow the dendrogram."
+      : "";
 
   return (
     <div>
       <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
+        <SelectionChip note="the last row" />
         <label htmlFor="marker-colour-mean" className="font-medium">Colour:</label>
         <select
           id="marker-colour-mean"
@@ -488,6 +510,7 @@ export function MarkerPlot({
           {blankNote}
           {treeNote}
           {geneTreeNote}
+          {selectionNote}
         </p>
       ) : (
         <p className="mt-1 text-xs text-slate-500">
@@ -501,6 +524,7 @@ export function MarkerPlot({
           {treeNote}
           {geneTreeNote}
           {stripNote}
+          {selectionNote}
           {` Layer: ${layerLabel}.`}
         </p>
       )}

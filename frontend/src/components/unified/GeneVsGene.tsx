@@ -17,6 +17,10 @@ import {
   type QuadrantCounts,
 } from "@/lib/geneCoexpression";
 import { plotConfig } from "@/lib/plotConfig";
+import { SelectionChip } from "@/components/common/SelectionChip";
+import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { SELECTION_COLOR, cellsInPlotlySelection, type PlotlySelection } from "@/lib/linkedSelection";
+import { selectedPoints, selectionName } from "@/lib/linkedTraces";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -66,6 +70,8 @@ export function GeneVsGene({ datasetId, geneA, geneB, groupColumn }: GeneVsGeneP
   const order = useCategoryOrder(groupColumn);
   const hlOrder = useCategoryOrder(highlighted?.column);
 
+  const linked = useLinkedSelection();
+  const selected = linked.selected;
   const genes = useMemo(() => [geneA, geneB], [geneA, geneB]);
   const { values, missing, isLoading, error } = useGeneExpression(datasetId, genes, layer);
   const { codes } = useObsCodes(datasetId, embedding, groupColumn);
@@ -94,16 +100,39 @@ export function GeneVsGene({ datasetId, geneA, geneB, groupColumn }: GeneVsGeneP
       t.x.push(a[i]!);
       t.y.push(b[i]!);
     }
-    return sortByCategoryOrder([...byGroup.keys()], order).map((group) => ({
+    const groupTraces = sortByCategoryOrder([...byGroup.keys()], order).map((group) => ({
       type: "scattergl" as const,
       mode: "markers" as const,
       name: group,
       x: byGroup.get(group)!.x,
       y: byGroup.get(group)!.y,
-      marker: { size: 3, color: group === "cells" ? "#2563eb" : rgbCss(colorOf(group)), opacity: 0.5 },
+      // Faded under a selection, which is drawn on top (C035).
+      marker: { size: 3, color: group === "cells" ? "#2563eb" : rgbCss(colorOf(group)), opacity: selected ? 0.15 : 0.5 },
       hovertemplate: `${group}<br>${geneA} %{x:.2f}<br>${geneB} %{y:.2f}<extra></extra>`,
     }));
-  }, [a, b, codes, order, colorOf, geneA, geneB]);
+    if (!selected) return groupTraces;
+    const s = selectedPoints(a, b, selected, MAX_POINTS);
+    return [
+      ...groupTraces,
+      {
+        type: "scattergl" as const,
+        mode: "markers" as const,
+        name: selectionName(s.n),
+        x: s.x,
+        y: s.y,
+        marker: { size: 4, color: SELECTION_COLOR, opacity: 0.85 },
+        hovertemplate: `selected<br>${geneA} %{x:.2f}<br>${geneB} %{y:.2f}<extra></extra>`,
+      },
+    ];
+  }, [a, b, codes, order, colorOf, geneA, geneB, selected]);
+
+  // Reverse direction: a box or lasso drawn here selects every cell inside it
+  // (all cells, not only the points drawn).
+  const handleSelected = (e: Readonly<PlotlySelection> | undefined) => {
+    if (!a || !b) return;
+    const cells = cellsInPlotlySelection(a, b, e);
+    if (cells) linked.select(cells);
+  };
 
   const select = (q: Quadrant) => {
     if (!a || !b) return;
@@ -159,9 +188,14 @@ export function GeneVsGene({ datasetId, geneA, geneB, groupColumn }: GeneVsGeneP
           font: { family: "Inter, system-ui, sans-serif" },
         }}
         config={plotConfig(`gene_vs_gene_${geneA}_${geneB}`)}
+        onSelected={handleSelected}
         useResizeHandler
         style={{ width: "100%" }}
       />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <SelectionChip note="orange, over the faded rest" />
+        <span className="text-[10px] text-slate-400">Box or lasso select (plot toolbar) to select cells.</span>
+      </div>
       <p className="text-[11px] leading-snug text-slate-500" data-testid="gene-vs-gene-stats">
         All {all.n.toLocaleString()} cells: Pearson r {fmtR(all.pearson)}, Spearman ρ {fmtR(all.spearman)}
         {traces.reduce((s, t) => s + t.x.length, 0) < all.n ? ` (${MAX_POINTS.toLocaleString()} or fewer drawn)` : ""}.

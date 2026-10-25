@@ -4,6 +4,9 @@ import { useCategoryColors, useCategoryOrder } from "@/hooks/useCategoryColors";
 import { rgbCss, sortByCategoryOrder } from "@/lib/categoryColors";
 import { valuesByGroup } from "@/lib/geneCoexpression";
 import { plotConfig } from "@/lib/plotConfig";
+import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { SELECTION_COLOR, SELECTION_FILL, selectedValues } from "@/lib/linkedSelection";
+import { selectionName } from "@/lib/linkedTraces";
 
 interface StackedViolinProps {
   /** Genes, one row each, top to bottom */
@@ -42,29 +45,49 @@ export function StackedViolin({
 }: StackedViolinProps) {
   const colorOf = useCategoryColors(groupColumn);
   const order = useCategoryOrder(groupColumn);
+  // C035: the selection as one more column, from its cells among those drawn.
+  const { selected, mask } = useLinkedSelection(codes.length);
+  const selName = selected ? selectionName(selected.size) : null;
+  const selCells = useMemo(() => {
+    if (!mask) return null;
+    if (!cells) return null;
+    const out: number[] = [];
+    for (let k = 0; k < cells.length; k++) if (mask[cells[k]!]) out.push(cells[k]!);
+    return Uint32Array.from(out);
+  }, [mask, cells]);
 
   const byGene = useMemo(
-    () => genes.map((g) => valuesByGroup(values[g]!, codes, order, cells)),
-    [genes, values, codes, order, cells],
+    () =>
+      genes.map((g) => {
+        const d: Record<string, number[] | Float32Array> = valuesByGroup(values[g]!, codes, order, cells);
+        if (!selected || !selName) return d;
+        const v = values[g]!;
+        return { ...d, [selName]: selCells ? Float32Array.from(selCells, (i) => v[i]!) : selectedValues(v, selected) };
+      }),
+    [genes, values, codes, order, cells, selected, selName, selCells],
   );
-  const groups = useMemo(
-    () => sortByCategoryOrder([...new Set(byGene.flatMap((d) => Object.keys(d)))], order),
-    [byGene, order],
-  );
+  const groups = useMemo(() => {
+    const sorted = sortByCategoryOrder(
+      [...new Set(byGene.flatMap((d) => Object.keys(d)))].filter((g) => g !== selName),
+      order,
+    );
+    return selName ? [...sorted, selName] : sorted;
+  }, [byGene, order, selName]);
 
   const traces = useMemo(
     () =>
       genes.flatMap((gene, i) =>
         groups.map((group) => {
-          const color = colorOf(group);
+          const isSel = group === selName;
+          const line = isSel ? SELECTION_COLOR : rgbCss(colorOf(group));
           return {
             type: "violin" as const,
             y: byGene[i]![group] ?? [],
             name: group,
             xaxis: "x",
             yaxis: yId(i),
-            line: { color: rgbCss(color), width: 0.8 },
-            fillcolor: rgbCss(color, 0.6),
+            line: { color: line, width: 0.8 },
+            fillcolor: isSel ? SELECTION_FILL : rgbCss(colorOf(group), 0.6),
             spanmode: "hard" as const,
             scalemode: "width" as const,
             width: 0.85,
@@ -77,7 +100,7 @@ export function StackedViolin({
           };
         }),
       ),
-    [genes, groups, byGene, colorOf],
+    [genes, groups, byGene, colorOf, selName],
   );
 
   const height = genes.length * rowHeight + 110;

@@ -13,6 +13,8 @@ import { drawnIndices, gatherPositions, panelColors, sampleCellIndices } from "@
 import { selectedLast, shuffledOrder } from "@/lib/drawOrder";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { MultiPanelScatter, type GridHover, type GridPanel } from "@/components/unified/MultiPanelScatter";
+import { useSameCellsGridLasso } from "@/components/unified/GridLasso";
+import { SelectionChip } from "@/components/common/SelectionChip";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
@@ -32,6 +34,8 @@ interface CompareColoringsGridProps {
   selectedIndices?: Set<number> | null;
   /** Hovered cell with x/y in the scatter area's pixels, and its value in every column */
   onHover?: (info: { index: number; x: number; y: number; lines: HoverLine[] } | null) => void;
+  /** A lasso closed in any panel: the cells under it */
+  onLassoComplete?: (cells: Set<number>) => void;
 }
 
 // Each embedding buffer carries one column's codes; decode it once.
@@ -56,7 +60,7 @@ function useStableList<T>(list: T[]): T[] {
  * The same cells coloured by 2–4 columns side by side (two annotations, or an
  * annotation and a clustering), on one camera, with each column's legend in the
  * legend column. Built on MultiPanelScatter like the split-by grid, so it costs
- * one WebGL context; lasso is off while it shows.
+ * one WebGL context; a lasso in any panel selects the cells under it.
  */
 export function CompareColoringsGrid({
   datasetId,
@@ -66,7 +70,9 @@ export function CompareColoringsGrid({
   dimensions,
   selectedIndices = null,
   onHover,
+  onLassoComplete,
 }: CompareColoringsGridProps) {
+  const lasso = useSameCellsGridLasso(positions, dimensions, onLassoComplete);
   const opacity = useSettingsStore((s) => s.opacity);
   const palette = useSettingsStore((s) => s.categoricalPalette);
   const maxRenderedCells = useSettingsStore((s) => s.maxRenderedCells);
@@ -224,6 +230,9 @@ export function CompareColoringsGrid({
       onClose={() => setCompareColumns(null)}
       closeTitle="Stop comparing"
       onHover={handleHover}
+      headerControls={<SelectionChip />}
+      lassoActive={lasso.lassoActive}
+      onLasso={lasso.onLasso}
       exportLegend={exportLegend}
       exportFilename={exportFilename(
         dataset?.name,

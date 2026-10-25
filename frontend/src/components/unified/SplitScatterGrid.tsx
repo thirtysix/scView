@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
@@ -19,10 +19,14 @@ import { useCategoryOrder } from "@/hooks/useCategoryColors";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
-import { MultiPanelScatter, type GridPanel } from "@/components/unified/MultiPanelScatter";
+import { MultiPanelScatter, type GridLassoEvent, type GridPanel } from "@/components/unified/MultiPanelScatter";
 import { groupCentroids } from "@/lib/centroidLabels";
 import type { ResolvedColorScale } from "@/lib/colorScale";
 import { selectedLast, shuffledOrder } from "@/lib/drawOrder";
+import { countSelectedByCode, selectionMask } from "@/lib/linkedSelection";
+import { cellsInPanelLasso, panelSelectionText } from "@/lib/splitLasso";
+import { useSelectionStore } from "@/stores/selectionStore";
+import { SelectionChip } from "@/components/common/SelectionChip";
 
 interface SplitScatterGridProps {
   datasetId: string;
@@ -49,6 +53,8 @@ interface SplitScatterGridProps {
   /** Draw each colour group's label at its centroid within each panel */
   showLabels?: boolean;
   highlightCategory?: string | null;
+  /** A lasso closed in a panel: its cells (the panel's own, or every panel's) */
+  onLassoComplete?: (cells: Set<number>) => void;
 }
 
 /**
@@ -58,8 +64,10 @@ interface SplitScatterGridProps {
  *
  * It covers the single plot rather than replacing it: UnifiedViewPanel keeps
  * that plot mounted underneath, so leaving split mode shows it exactly as it
- * was. Lasso selection is off while split (one polygon would have to be mapped
- * through six viewports); a selection made before still fades the other cells.
+ * was. The lasso works in any panel (C039): the outline maps through the shared
+ * camera and picks that panel's cells under it, or every panel's ("Lasso"
+ * control in the header); every panel fades the unselected cells and its title
+ * says how many of its cells are selected.
  */
 export function SplitScatterGrid({
   datasetId,
@@ -78,7 +86,11 @@ export function SplitScatterGrid({
   labelCategories = null,
   showLabels = false,
   highlightCategory = null,
+  onLassoComplete,
 }: SplitScatterGridProps) {
+  const lassoActive = useSelectionStore((s) => s.selectionMode === "lasso");
+  const lassoScope = useSplitViewStore((s) => s.lassoScope);
+  const setLassoScope = useSplitViewStore((s) => s.setLassoScope);
   const opacity = useSettingsStore((s) => s.opacity);
   const palette = useSettingsStore((s) => s.categoricalPalette);
   const defaultColormap = useSettingsStore((s) => s.continuousColormap);
@@ -172,6 +184,25 @@ export function SplitScatterGrid({
     [showLabels, labelCategories, colorValues, colorType, panels, positions, stride],
   );
 
+  // Selected cells per panel (all of the panel's cells, drawn or not).
+  const selectedPerCode = useMemo(
+    () =>
+      ready && selectedIndices && selectedIndices.size > 0
+        ? countSelectedByCode(codes, selectionMask(selectedIndices, total), categories.length).selected
+        : null,
+    [ready, codes, selectedIndices, total, categories.length],
+  );
+
+  const handleLasso = useCallback(
+    ({ panel, polygon, viewState, width, height }: GridLassoEvent) => {
+      const p = panels[panel];
+      if (!p || !codes || !onLassoComplete) return;
+      const keep = lassoScope === "panel" ? (i: number) => codes[i] === p.code : undefined;
+      onLassoComplete(cellsInPanelLasso(positions, dimensions, polygon, viewState, width, height, keep));
+    },
+    [panels, codes, onLassoComplete, lassoScope, positions, dimensions],
+  );
+
   const gridPanels = useMemo<GridPanel[]>(
     () =>
       panels.map((p, i) => {
@@ -179,7 +210,7 @@ export function SplitScatterGrid({
         return {
           key: p.code,
           title: label,
-          subtitle: count,
+          subtitle: selectedPerCode ? panelSelectionText(selectedPerCode[p.code] ?? 0, p.count) : count,
           indices: orders[i]!,
           positions: panelPositions[i]!,
           colors: panelRgba[i]!,
@@ -187,7 +218,7 @@ export function SplitScatterGrid({
           highlight: highlightCategory,
         };
       }),
-    [panels, orders, panelPositions, panelRgba, panelLabels, highlightCategory],
+    [panels, orders, panelPositions, panelRgba, panelLabels, highlightCategory, selectedPerCode],
   );
 
   return (
@@ -206,7 +237,28 @@ export function SplitScatterGrid({
           {missing > 0 && ` · ${formatNumber(missing)} cells without a value not shown`}
         </>
       }
+      lassoActive={lassoActive}
+      onLasso={onLassoComplete ? handleLasso : undefined}
       headerControls={
+        <>
+        <SelectionChip />
+        {lassoActive && (
+          <label
+            className="flex flex-shrink-0 items-center gap-1"
+            title="What a lasso drawn in a panel selects: that panel's cells under the outline, or the cells under it in every panel"
+          >
+            Lasso picks
+            <select
+              aria-label="Lasso picks"
+              value={lassoScope}
+              onChange={(e) => setLassoScope(e.target.value as "panel" | "all")}
+              className="rounded border border-slate-300 bg-white px-1 py-0 text-[11px] text-slate-700"
+            >
+              <option value="panel">this panel's cells</option>
+              <option value="all">every panel's cells</option>
+            </select>
+          </label>
+        )}
         <label
           className="flex flex-shrink-0 cursor-pointer items-center gap-1"
           title="Draw the other panels' cells as faint grey behind each panel"
@@ -219,6 +271,7 @@ export function SplitScatterGrid({
           />
           Other cells
         </label>
+        </>
       }
       sampledNote={sampledNote}
       sampledBadge={

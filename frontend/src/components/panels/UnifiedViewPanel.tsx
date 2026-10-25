@@ -40,7 +40,7 @@ import { ClusterReference } from "@/components/unified/ClusterReference";
 import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
 import { CompareColoringsGrid } from "@/components/unified/CompareColoringsGrid";
 import { GeneFeatureGrid } from "@/components/unified/GeneFeatureGrid";
-import { isGridActive, useSplitViewStore } from "@/stores/splitViewStore";
+import { useSplitViewStore } from "@/stores/splitViewStore";
 import type { ScatterLegend } from "@/lib/scatterExport";
 import { mapCategoryToColor } from "@/lib/colors";
 import { isCategoricalDtype } from "@/lib/obsColumns";
@@ -590,7 +590,7 @@ export function UnifiedViewPanel() {
       // Don't intercept when typing in inputs
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if ((e.key === "l" || e.key === "L") && !isGridActive(useSplitViewStore.getState())) {
+      if (e.key === "l" || e.key === "L") {
         const store = useSelectionStore.getState();
         store.setSelectionMode(store.selectionMode === "lasso" ? "none" : "lasso");
       }
@@ -973,6 +973,7 @@ export function UnifiedViewPanel() {
                 labelCategories={labelCategories}
                 showLabels={showLabels}
                 highlightCategory={labelHighlight}
+                onLassoComplete={handleSelectionComplete}
               />
             )}
             {compareColumns && datasetId && positions && (
@@ -984,6 +985,7 @@ export function UnifiedViewPanel() {
                 dimensions={dimensions}
                 selectedIndices={selectedIndices}
                 onHover={handleHover}
+                onLassoComplete={handleSelectionComplete}
               />
             )}
             {geneGridActive && datasetId && positions && (
@@ -995,6 +997,7 @@ export function UnifiedViewPanel() {
                 dimensions={dimensions}
                 selectedIndices={shownSelection}
                 onHover={handleHover}
+                onLassoComplete={handleSelectionComplete}
               />
             )}
 
