@@ -18,6 +18,7 @@ import { splitPValueMap } from "@/lib/splitMarkers";
 import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { GeneReportButton } from "@/components/report/ReportButtons";
+import { MinimalPanel } from "@/components/unified/MinimalPanel";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -546,6 +547,7 @@ export function UnifiedMarkersSubtab({
         onShowSplitPChange={setShowSplitP}
         onResult={setSplitResult}
       />
+      {datasetId && groupByColumn && <MinimalPanel datasetId={datasetId} groupby={groupByColumn} />}
     </div>
   );
 }
