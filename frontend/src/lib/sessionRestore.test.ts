@@ -63,6 +63,7 @@ function resetStores() {
     pointSize: 2,
     opacity: 0.8,
     plotBackground: "white",
+    plotBackgroundChosen: false,
     categoricalPalette: "cvd",
     continuousColormap: "viridis",
     divergingColormap: "RdBu",
@@ -485,5 +486,16 @@ describe("communication settings", () => {
     delete older.communication;
     await restoreSession(older);
     expect(useCommunicationStore.getState().groupby).toBe("cell_type");
+  });
+});
+
+describe("scatter background", () => {
+  it("is saved only when the user picked one; otherwise it follows the theme", async () => {
+    expect(captureSession().colors?.background).toBeUndefined();
+    buildWorkspace("lasso"); // picks Dark
+    const session = saveAndReset();
+    expect(session.colors?.background).toBe("dark");
+    await restoreSession(session);
+    expect(useSettingsStore.getState().plotBackgroundChosen).toBe(true);
   });
 });

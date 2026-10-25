@@ -27,6 +27,7 @@ import {
   splitViewId,
 } from "@/lib/splitView";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useScatterBackground } from "@/lib/theme";
 
 /**
  * Width kept free on the right of the grid for the legend: UnifiedViewPanel
@@ -122,7 +123,7 @@ export function MultiPanelScatter({
 }: MultiPanelScatterProps) {
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
-  const background = useSettingsStore((s) => s.plotBackground);
+  const background = useScatterBackground();
   const colormap = useSettingsStore((s) => s.continuousColormap);
   const stride = dimensions === 3 ? 3 : 2;
 

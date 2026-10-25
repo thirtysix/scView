@@ -12,13 +12,15 @@ import type { Config, DownloadImgopts, ModeBarButton, PlotlyHTMLElement } from "
 import Plotly from "@/lib/plotly";
 import { exportFilename } from "@/lib/exportFilename";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { exportFigure } from "@/lib/theme";
 
 export { exportFilename };
 
 /** PNG downloads render at this multiple of the on-screen size. */
 export const PNG_SCALE = 3;
 
-/** Save the plot in `gd` as PNG (at PNG_SCALE) or SVG, on a white background. */
+/** Save the plot in `gd` as PNG (at PNG_SCALE) or SVG, on a white background
+ *  (in dark mode too: exportFigure puts the light colours back). */
 export function downloadPlot(gd: PlotlyHTMLElement, format: "png" | "svg", filename: string): Promise<void> {
   const opts = {
     format,
@@ -30,7 +32,8 @@ export function downloadPlot(gd: PlotlyHTMLElement, format: "png" | "svg", filen
     // come out see-through and unreadable on a dark slide.
     setBackground: "opaque",
   };
-  return Plotly.downloadImage(gd, opts as DownloadImgopts).then(
+  const figure = exportFigure(gd);
+  return Plotly.downloadImage(figure as PlotlyHTMLElement, opts as DownloadImgopts).then(
     () => undefined,
     (e: unknown) => console.error("[plotConfig] download failed:", e),
   );
