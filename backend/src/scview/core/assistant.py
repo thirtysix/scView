@@ -342,7 +342,11 @@ def build_grounding_context(
     if want("identity"):
         has_pub = False
         for key, label in (("about_title", "Title"), ("about_short_title", "Short title"),
-                           ("about_readme", "About")):
+                           ("about_readme", "About"), ("about_source", "Source"),
+                           ("about_publication", "Publication"), ("about_doi", "DOI"),
+                           ("about_citation", "Citation"), ("about_license", "Licence"),
+                           ("about_dataset_version_id", "Dataset version"),
+                           ("about_schema_version", "Schema version")):
             val = _uns_str(adata, key)
             if val:
                 ident.append(f"- {label}: {val}")
@@ -973,6 +977,24 @@ def _param_text(key: str, value) -> str:
     return f"{key}={value}"
 
 
+def data_citation(adata) -> str | None:
+    """The public source to cite (a CELLxGENE Discover import: ``uns["about_*"]``,
+    ``core/public_import.py``), as one line; None for any other dataset."""
+    from scview.core import public_import
+
+    if _uns_str(adata, "about_source", limit=100) != public_import.SOURCE:
+        return None
+    info = {k: _uns_str(adata, k, limit=600) or "" for k in (
+        "about_publication", "about_doi", "about_citation", "about_license")}
+    version = _uns_str(adata, "about_dataset_version_id", limit=60)
+    schema = _uns_str(adata, "about_schema_version", limit=20)
+    line = public_import.citation_text(info)
+    if version:
+        line += f" {public_import.SOURCE} dataset version {version}"
+        line += f" (schema {schema})." if schema else "."
+    return line
+
+
 def _methods_skeleton(adaptor) -> str:
     """A compact, factual recipe digest: dataset size + each recorded step with
     its tool and parameters, in order. This is the *only* thing the methods writer
@@ -986,6 +1008,10 @@ def _methods_skeleton(adaptor) -> str:
         if val:
             lines.append(f"Source: {val}")
             break
+
+    cite = data_citation(adata)
+    if cite:
+        lines.append(f"Data: {cite}")
 
     hist = provenance.read_provenance(adata).get("history", [])
     if not hist:

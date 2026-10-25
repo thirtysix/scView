@@ -1647,6 +1647,30 @@ def _uns_mapping(adata, key: str) -> dict[str, str] | None:
 
 def _ingest(p: dict, ctx: _Ctx) -> Snippet:
     lines = ["# The import itself is read_input() at the top of this script."]
+    pub = p.get("public_import")
+    if isinstance(pub, dict):  # a CELLxGENE Discover dataset version (core/public_import.py)
+        return Snippet(EXACT, lines + [
+            f"# Downloaded from {comment_text(pub.get('source') or 'CELLxGENE Discover', 40)}: "
+            f"{comment_text(pub.get('url'), 120)}",
+            f"# (dataset version {comment_text(pub.get('dataset_version_id'), 40)}, sha256 "
+            f"{comment_text(pub.get('sha256'), 64)}, licence {comment_text(pub.get('license'), 20)}).",
+            "# Either that file or scView's stored copy works as INPUT: gene symbols become the",
+            "# gene index (Ensembl ids kept in var['gene_ids']), in X and in .raw.",
+            "def _symbols(var):",
+            "    ids = var.index.astype(str)",
+            "    names = var[\"feature_name\"].astype(str).to_numpy()",
+            "    names = [n if n and n.lower() != \"nan\" else i for n, i in zip(names, ids)]",
+            "    var = var.copy()",
+            "    var[\"gene_ids\"] = list(ids)",
+            "    var.index = ad.utils.make_index_unique(pd.Index(names))",
+            "    return var",
+            "if \"feature_name\" in adata.var.columns and \"gene_ids\" not in adata.var.columns:",
+            "    if adata.raw is not None and \"feature_name\" in adata.raw.var.columns:",
+            "        raw = adata.raw.to_adata()",
+            "        raw.var = _symbols(raw.var)",
+            "        adata.raw = raw",
+            "    adata.var = _symbols(adata.var)",
+        ])
     if isinstance(p.get("feature_split"), dict):  # an .h5ad upload with antibody / tag features in X
         lines += [
             "# scView kept only the 'Gene Expression' features in X; the antibody (CITE-seq) and",

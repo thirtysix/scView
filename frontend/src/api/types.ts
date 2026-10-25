@@ -1,3 +1,5 @@
+import type { PublicSource } from "./publicImport";
+
 export interface ExpressionLayerInfo {
   key: string;
   label: string;
@@ -31,6 +33,8 @@ export interface DatasetInfo {
   conversion_progress?: ConversionProgress | null;
   /** A large dataset (backend core/large_mode.py): its matrices stay on disk; null otherwise */
   large?: LargeDatasetInfo | null;
+  /** Where a public dataset came from (a CELLxGENE Discover import), to cite it */
+  public_source?: PublicSource | null;
 }
 
 /** How a large dataset's on-disk files are (backend AnnDataAdaptor.large_info). */
