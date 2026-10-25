@@ -593,6 +593,7 @@ _FAMILY_PREFIX = {
     "pca": "result:pca", "qcstates": "result:qcstates",
     "mito": "result:mito_by_type",
     "programs": "result:programs",
+    "cnv": "result:cnv",
     "embedding": "result:embedding_reliability", "reliability": "result:embedding_reliability",
     "planner": "result:planner",
     "layouts": "result:layouts", "layout": "result:layouts",
@@ -638,7 +639,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
         if fam_refs and (fam in ("dataset", "provenance", "preprocessing", "markers",
                                   "composition", "milo", "enrichment", "qc", "communication", "pca",
                                   "mito", "qcstates", "embedding", "reliability", "planner",
-                                  "seqqc", "hashing", "vdj",
+                                  "seqqc", "hashing", "vdj", "cnv",
                                   "clonotypes", "clonotype")
                          or not last):
             if fam == "dataset":

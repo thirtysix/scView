@@ -222,6 +222,22 @@ def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(gp_lines[1:])))
 
 
+def _add_cnv(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved copy-number inference (core/cnv.py): reference, high-score groups,
+    high CNV clusters with their gained / lost chromosomes, once run."""
+    from scview.core import cnv
+
+    try:
+        cnv_lines, cnv_detail = cnv.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: copy number failed: %s", exc)
+        return
+    if cnv_lines:
+        lines.extend(cnv_lines)
+        sources.append(ChatSource(kind="result", ref=cnv.TAG, detail=cnv_detail,
+                                  evidence="\n".join(cnv_lines[1:])))
+
+
 def _add_count_split(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last count-split marker check (core/split_markers.py): which groups keep
     their markers on held-out counts."""
@@ -591,6 +607,7 @@ def build_grounding_context(
         _add_layout_stability(adaptor, lines, sources)
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
+        _add_cnv(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)
 

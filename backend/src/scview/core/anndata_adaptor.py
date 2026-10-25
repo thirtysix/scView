@@ -83,8 +83,9 @@ def _counts_matrix(adata):
 
 
 # obsm entries named like embeddings that are not coordinates: gene-program usages
-# (core/gene_programs.py), one column per program.
-NOT_EMBEDDINGS = ("X_nmf_usage", "X_nmf_usage_raw")
+# (core/gene_programs.py), one column per program; inferred copy number (core/cnv.py),
+# one column per genomic window.
+NOT_EMBEDDINGS = ("X_nmf_usage", "X_nmf_usage_raw", "X_cnv")
 
 
 def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):

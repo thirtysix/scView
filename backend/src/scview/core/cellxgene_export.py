@@ -60,7 +60,7 @@ SYMBOL_COLUMNS = ("feature_name", "gene_symbols", "gene_symbol", "symbol", "symb
 # var columns that may hold Ensembl ids next to symbol names (as species.py reads them).
 ID_COLUMNS = ("gene_ids", "gene_id", "ensembl_id", "ensembl", "gene_ensembl", "feature_id", "id")
 # obsm entries that are per-cell values, not layouts.
-NOT_EMBEDDINGS = {"X_nmf_usage"}
+NOT_EMBEDDINGS = {"X_nmf_usage", "X_cnv"}
 
 
 class ExportError(ValueError):
