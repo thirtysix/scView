@@ -6,6 +6,29 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-25
+
+### Added
+- **Import from CELLxGENE Discover.** Search Discover's public catalogue by text, organism, tissue,
+  disease, assay and size, and import one dataset pinned to its version id. The download shows
+  progress, can be cancelled, and is checked for disk space and memory first. The working copy uses
+  gene symbols, and its source and citation are kept in the History, the methods text and the report.
+- **Label from a reference dataset.** Label this dataset's cells from another library dataset's
+  cell-type column: project onto the reference, integrate with it first (Harmony), or train CellTypist
+  on it. Each cell gets a label, a score and a "not in reference" flag, and a cluster with 30% or more
+  of its cells flagged is marked as possibly absent from the reference (Kang split by donor, B cells
+  left out of the reference: the B cluster flagged, 36% vs at most 4% elsewhere). Reference and
+  dataset of different species are refused. When the two datasets come from different studies, the
+  flag's cut is scaled to the shift between them and the card says so. In the History and the replay
+  script.
+- **Scanorama and BBKNN** as batch-correction methods, beside Harmony, written natively (no new
+  dependencies). **Compare methods** scores none, Harmony, Scanorama and BBKNN on the current PCA for
+  batch mixing (iLISI) and cell-type separation, and recommends one, with the benchmark of Luecken et
+  al. 2022 as background. Clonotype ids are prefixed by dataset in a joint embedding.
+- **Export for CELLxGENE and Vitessce** from the download menu. CELLxGENE: an h5ad with a readiness
+  check against Discover schema 7.1.0. Vitessce: a zip with an AnnData-Zarr store and a view config
+  (one scatter per 2D layout, cell sets, gene list, heatmap), checked to open in vitessce.io.
+
 ## [0.35.0] - 2026-10-24
 
 ### Added
