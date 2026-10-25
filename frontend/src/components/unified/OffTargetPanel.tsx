@@ -3,9 +3,9 @@ import { ExternalLink, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
-import { getOffTarget, type OffTargetResult } from "@/api/offtarget";
+import { getOffTarget, type OffTargetResult, type TissueLevel } from "@/api/offtarget";
 import { plotConfig } from "@/lib/plotConfig";
-import { VERDICT_STYLE, categoryTitle, heatmapHeight, summaryText, topText } from "@/lib/offtarget";
+import { TISSUE_LEVELS, VERDICT_STYLE, categoryTitle, heatmapHeight, summaryText, topText } from "@/lib/offtarget";
 
 /**
  * "Elsewhere in the body" in the Markers subtab (backend core/offtarget.py): the
@@ -27,6 +27,7 @@ export function OffTargetPanel({
   onGeneClick: (gene: string) => void;
 }) {
   const [on, setOn] = useState(false);
+  const [level, setLevel] = useState<TissueLevel>("tissue");
   const [result, setResult] = useState<OffTargetResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +37,7 @@ export function OffTargetPanel({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getOffTarget(datasetId, column, group)
+    getOffTarget(datasetId, column, group, 20, level)
       .then((r) => !cancelled && setResult(r))
       .catch((e) => {
         if (cancelled) return;
@@ -47,7 +48,8 @@ export function OffTargetPanel({
     return () => {
       cancelled = true;
     };
-  }, [on, datasetId, column, group]);
+  }, [on, datasetId, column, group, level]);
+  const levelInfo = TISSUE_LEVELS.find((l) => l.value === (result?.level ?? level)) ?? TISSUE_LEVELS[0]!;
 
   const hm = result?.heatmap;
   const traces = useMemo(
@@ -78,11 +80,28 @@ export function OffTargetPanel({
           consensus, nTPM) and across HPA&rsquo;s single-cell types (nCPM). The category follows HPA&rsquo;s rules:
           enriched = at least 4x the next tissue; group enriched = a group of 2&ndash;5 tissues (2&ndash;10 cell types)
           at least 4x every other; enhanced = at least 4x the mean of the others; low specificity = detected but none of
-          these. <b>Restricted</b> means enriched or group enriched across tissues, or across cell types with cell-type tau of at least 0.6; <b>broad</b> means low tissue
+          these. Tissues can be read with the nine brain regions as one brain (default), with every region
+          separate, or merged into HPA&rsquo;s organ groups (a gene shared by stomach and colon is then one organ);
+          the categories follow the chosen level. <b>Restricted</b> means enriched or group enriched across tissues, or across cell types with cell-type tau of at least 0.6; <b>broad</b> means low tissue
           specificity. Tau is 0 for even expression and 1 for one tissue only. A marker is flagged when it is specific
           among these groups (tau &ge; 0.5 here) but broad in the body.
         </InfoTip>
         <span className="ml-auto" />
+        {on && (
+          <select
+            value={level}
+            onChange={(e) => setLevel(e.target.value as TissueLevel)}
+            aria-label="Tissue level"
+            title="How HPA tissues are grouped for the categories and the heatmap"
+            className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700"
+          >
+            {TISSUE_LEVELS.map((l) => (
+              <option key={l.value} value={l.value}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        )}
         {!on && (
           <button
             type="button"
@@ -198,8 +217,9 @@ export function OffTargetPanel({
                 useResizeHandler
                 style={{ width: "100%" }}
               />
-              <Caption n={[{ value: hm.genes.length, unit: "genes" }, { value: hm.tissues.length, unit: "tissues" }]}>
-                RNA across human tissues, log2(nTPM + 1); brain regions merged into one brain.
+              <Caption n={[{ value: hm.genes.length, unit: "genes" }, { value: hm.tissues.length, unit: levelInfo.unit }]}>
+                RNA across human tissues, log2(nTPM + 1); {result.level_text ?? "brain regions merged into one brain"}
+                {result.level === "region" || result.level === "tissue" || !result.level ? "" : " (maximum over the tissues of each group)"}.
               </Caption>
             </>
           )}

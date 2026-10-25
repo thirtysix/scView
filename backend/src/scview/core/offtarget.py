@@ -38,9 +38,18 @@ leads when a gene is in only the cell-type table, that table decides. A marker i
 but specific in the dataset (in-dataset tau >= ``TAU_SPECIFIC``, or tau unknown:
 the gene is a marker of the group either way).
 
-The brain regions of the tissue table (amygdala, basal ganglia, cerebellum, ...)
-are merged into one "brain" tissue, as the maximum over regions, so a brain gene
-is not split across nine regions and called "enhanced" instead of "enriched".
+The tissue table is read at one of three levels (``TISSUE_LEVELS``), each a maximum
+over the HPA tissues it merges:
+
+- ``tissue`` (default): the nine brain regions (amygdala, basal ganglia, cerebellum,
+  ...) merged into one "brain", so a brain gene is not split across nine regions and
+  called "enhanced" instead of "enriched";
+- ``region``: every HPA tissue, brain regions separate (a gene enriched in the
+  cerebellum alone shows as such);
+- ``organ``: HPA's organ groups (``ORGAN_OF``: "gastrointestinal tract", "bone marrow
+  & lymphoid tissues", ...), so a gene shared by stomach and colon is one organ.
+
+Categories and the verdict are computed at the chosen level.
 
 Data: HPA version 25.1 (Ensembl 109), CC BY-SA 4.0. scView does not ship it: each
 zip is fetched once, on first use, into ``DATA_DIR/hpa`` (raw zip under ``raw/``,
@@ -100,6 +109,34 @@ BRAIN_REGIONS = frozenset({
     "amygdala", "basal ganglia", "cerebellum", "cerebral cortex", "choroid plexus",
     "hippocampal formation", "hypothalamus", "midbrain", "spinal cord",
 })
+
+TISSUE_LEVELS = ("tissue", "region", "organ")
+LEVEL_TEXT = {
+    "tissue": "brain regions merged into one brain",
+    "region": "brain regions separate",
+    "organ": "tissues merged into HPA organ groups",
+}
+# HPA's organ groups (proteinatlas.org tissue section) for the 50 tissues of v25.1.
+# A tissue not listed keeps its own name at the organ level.
+_ORGANS = {
+    "brain": BRAIN_REGIONS,
+    "eye": {"retina"},
+    "endocrine tissues": {"adrenal gland", "parathyroid gland", "pituitary gland", "thyroid gland"},
+    "respiratory system": {"lung"},
+    "proximal digestive tract": {"esophagus", "salivary gland", "tongue"},
+    "gastrointestinal tract": {"colon", "duodenum", "rectum", "small intestine", "stomach"},
+    "liver & gallbladder": {"gallbladder", "liver"},
+    "pancreas": {"pancreas"},
+    "kidney & urinary bladder": {"kidney", "urinary bladder"},
+    "male tissues": {"epididymis", "prostate", "seminal vesicle", "testis"},
+    "breast & female reproductive system": {"breast", "cervix", "endometrium", "fallopian tube", "ovary",
+                                            "placenta", "vagina"},
+    "muscle & vascular tissue": {"blood vessel", "heart muscle", "skeletal muscle", "smooth muscle"},
+    "adipose & soft tissue": {"adipose tissue"},
+    "skin": {"skin"},
+    "bone marrow & lymphoid tissues": {"appendix", "bone marrow", "lymph node", "spleen", "thymus", "tonsil"},
+}
+ORGAN_OF = {t: organ for organ, ts in _ORGANS.items() for t in ts}
 
 CATEGORY_TEXT = {
     "enriched": "enriched",
@@ -192,6 +229,7 @@ class Table:
     meta: dict
 
     def __post_init__(self) -> None:
+        self._levels: dict[str, Table] = {}  # at_level() results
         self._by_symbol: dict[str, int] = {}
         self._by_upper: dict[str, int] = {}
         # A symbol on two Ensembl ids: the one with the higher peak wins.
@@ -225,13 +263,10 @@ def parse_zip(raw: bytes, spec: HpaFile) -> Table:
     if missing:
         raise ValueError(f"{spec.label} file lacks columns {sorted(missing)}")
     df[spec.value_column] = pd.to_numeric(df[spec.value_column], errors="coerce").fillna(0.0)
-    labels = df[spec.label_column].astype(str)
-    if spec.kind == "tissue":
-        labels = labels.where(~labels.isin(BRAIN_REGIONS), "brain")
-    lab = pd.Categorical(labels)
+    lab = pd.Categorical(df[spec.label_column].astype(str))
     gene = df["Gene"].cat.remove_unused_categories()
     values = np.zeros((len(gene.cat.categories), len(lab.categories)), dtype=np.float32)
-    # max, so merged brain regions keep their highest region (other cells are unique)
+    # one value per gene and label; max in case a file repeats one
     np.maximum.at(values, (gene.cat.codes.to_numpy(), lab.codes),
                   df[spec.value_column].to_numpy(dtype=np.float32))
     first = df.drop_duplicates("Gene").set_index("Gene")["Gene name"]
@@ -243,12 +278,17 @@ def parse_zip(raw: bytes, spec: HpaFile) -> Table:
     return Table(spec.kind, ensg, symbols, np.asarray(lab.categories.astype(str)), values, {})
 
 
+# v2: tissues stored unmerged (v0.39 stored brain regions merged in hpa_tissue.npz);
+# an older store is rebuilt from the zip in raw/, without a download.
+STORE = "v2"
+
+
 def _npz(dest: Path, kind: str) -> Path:
-    return dest / f"hpa_{kind}.npz"
+    return dest / f"hpa_{kind}.{STORE}.npz"
 
 
 def _meta_path(dest: Path, kind: str) -> Path:
-    return dest / f"hpa_{kind}.json"
+    return dest / f"hpa_{kind}.{STORE}.json"
 
 
 def _sha256_bytes(b: bytes) -> str:
@@ -314,7 +354,7 @@ def install(kind: str, dest: Path, *, auto_download: bool = True, client: httpx.
         "attribution": ATTRIBUTION, "sha256": digest, "download_bytes": len(data),
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "unit": spec.unit, "n_genes": int(table.values.shape[0]), "n_labels": int(table.values.shape[1]),
-        "merged": "brain regions merged into 'brain' (max)" if kind == "tissue" else None,
+        "levels": list(TISSUE_LEVELS) if kind == "tissue" else None,
     }
     _meta_path(dest, kind).write_text(json.dumps(meta, indent=1))
     logger.info("HPA %s: %d genes x %d %s", kind, meta["n_genes"], meta["n_labels"], spec.label_column)
@@ -360,6 +400,31 @@ def load_table(kind: str, dest: Path | None = None, *, auto_download: bool | Non
             table = Table(kind, z["ensg"], z["symbols"], z["labels"], z["values"].astype(np.float32), meta)
         _loaded[(kind, str(path))] = (mtime, table)
         return table
+
+
+def at_level(table: Table, level: str = "tissue") -> Table:
+    """The tissue table at one of ``TISSUE_LEVELS`` (max over merged tissues)."""
+    if level not in TISSUE_LEVELS:
+        raise ValueError(f"Unknown tissue level '{level}' (one of {', '.join(TISSUE_LEVELS)}).")
+    if level == "region":
+        return table
+    with _lock:
+        hit = table._levels.get(level)
+        if hit is not None:
+            return hit
+        names = [str(t) for t in table.labels]
+        if level == "tissue":
+            target = ["brain" if t in BRAIN_REGIONS else t for t in names]
+        else:
+            target = [ORGAN_OF.get(t, t) for t in names]
+        lab = pd.Categorical(target)
+        values = np.zeros((table.values.shape[0], len(lab.categories)), dtype=np.float32)
+        for j, code in enumerate(lab.codes):
+            np.maximum(values[:, code], table.values[:, j], out=values[:, code])
+        out = Table(table.kind, table.ensg, table.symbols, np.asarray(lab.categories.astype(str)), values,
+                    {**table.meta, "level": level})
+        table._levels[level] = out
+        return out
 
 
 def status(dest: Path | None = None) -> dict:
@@ -463,7 +528,7 @@ def gene_records(genes: list[str], tissue: Table, cell: Table, *, mouse: bool = 
     return out
 
 
-def heatmap(records: list[dict], tissue: Table) -> dict:
+def heatmap(records: list[dict], tissue: Table) -> dict:  # tissue: at the chosen level
     """log2(nTPM + 1), genes found in the tissue table x tissues."""
     rows, names = [], []
     for r in records:
@@ -497,14 +562,16 @@ def _clean_genes(genes: list[str]) -> list[str]:
 
 def lookup(genes: list[str], *, species: str = "human", dest: Path | None = None,
            auto_download: bool | None = None, client: httpx.Client | None = None,
-           in_dataset_tau: list[float | None] | None = None) -> dict:
+           in_dataset_tau: list[float | None] | None = None, level: str = "tissue") -> dict:
     """Records, heatmap and summary for an explicit gene list (worker thread)."""
+    if level not in TISSUE_LEVELS:
+        raise ValueError(f"Unknown tissue level '{level}' (one of {', '.join(TISSUE_LEVELS)}).")
     genes = _clean_genes(genes)
     if not genes:
         raise ValueError("No genes given.")
     if len(genes) > MAX_GENES:
         raise ValueError(f"At most {MAX_GENES} genes at a time ({len(genes)} given).")
-    tissue = load_table("tissue", dest, auto_download=auto_download, client=client)
+    tissue = at_level(load_table("tissue", dest, auto_download=auto_download, client=client), level)
     cell = load_table("cell_type", dest, auto_download=auto_download, client=client)
     mouse = species == "mouse"
     records = gene_records(genes, tissue, cell, mouse=mouse, in_dataset_tau=in_dataset_tau)
@@ -514,6 +581,8 @@ def lookup(genes: list[str], *, species: str = "human", dest: Path | None = None
         "genes": records,
         "heatmap": heatmap(records, tissue),
         "summary": summarise(records),
+        "level": level,
+        "level_text": LEVEL_TEXT[level],
         "attribution": ATTRIBUTION,
         "version": HPA_VERSION,
         "licence": LICENCE,
@@ -530,7 +599,8 @@ def dataset_species(adata) -> str:
 
 
 def for_group(adata, group_col: str, group: str, n: int = N_DEFAULT, *, dest: Path | None = None,
-              auto_download: bool | None = None, client: httpx.Client | None = None) -> dict:
+              auto_download: bool | None = None, client: httpx.Client | None = None,
+              level: str = "tissue") -> dict:
     """The off-target view of one group's markers (``marker_selection.group_markers``)."""
     from scview.core import marker_specificity
     from scview.core.marker_selection import group_markers
@@ -553,11 +623,11 @@ def for_group(adata, group_col: str, group: str, n: int = N_DEFAULT, *, dest: Pa
     if not genes:
         res = {"species": species, "note": MOUSE_NOTE if species == "mouse" else None, "genes": [],
                "heatmap": {"genes": [], "tissues": [], "log2_ntpm": [], "unit": "log2(nTPM + 1)"},
-               "summary": summarise([]), "attribution": ATTRIBUTION, "version": HPA_VERSION,
-               "licence": LICENCE}
+               "summary": summarise([]), "level": level, "level_text": LEVEL_TEXT[level],
+               "attribution": ATTRIBUTION, "version": HPA_VERSION, "licence": LICENCE}
     else:
         res = lookup(genes, species=species, dest=dest, auto_download=auto_download, client=client,
-                     in_dataset_tau=taus)
+                     in_dataset_tau=taus, level=level)
     res.update(group_col=group_col, group=str(group), n=n,
                marker_rule=("group_markers: detected in >= 20% of the group, adjusted p < 0.05, "
                             "by log fold change, no ribosomal/mitochondrial genes"))

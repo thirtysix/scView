@@ -48,7 +48,7 @@ describe("OffTargetPanel", () => {
     expect(screen.getByText(/about 21 MB/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Look up in HPA" }));
     await screen.findByText(/1 of 3 restricted, 0 enhanced, 1 broad, 1 not in HPA; 1 specific here/);
-    expect(getOffTarget).toHaveBeenCalledWith("ds", "leiden", "3");
+    expect(getOffTarget).toHaveBeenCalledWith("ds", "leiden", "3", 20, "tissue");
     // the flagged row, the HPA link, the heatmap rows and the attribution
     expect(screen.getByTestId("offtarget-row-ACTB").className).toContain("bg-orange");
     expect(screen.getByTestId("offtarget-row-MS4A1").className).not.toContain("bg-orange");
@@ -62,7 +62,10 @@ describe("OffTargetPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "ACTB" }));
     expect(onGeneClick).toHaveBeenCalledWith("ACTB");
     rerender(<OffTargetPanel datasetId="ds" column="leiden" group="5" onGeneClick={onGeneClick} />);
-    await waitFor(() => expect(getOffTarget).toHaveBeenLastCalledWith("ds", "leiden", "5"));
+    await waitFor(() => expect(getOffTarget).toHaveBeenLastCalledWith("ds", "leiden", "5", 20, "tissue"));
+    // the tissue level re-asks the server
+    fireEvent.change(screen.getByLabelText("Tissue level"), { target: { value: "organ" } });
+    await waitFor(() => expect(getOffTarget).toHaveBeenLastCalledWith("ds", "leiden", "5", 20, "organ"));
   });
 
   it("shows the server's reason when HPA cannot be fetched", async () => {
