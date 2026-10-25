@@ -410,7 +410,7 @@ export function UnifiedMarkersSubtab({
               >
                 Adj.P {sortIcon("pval_adj")}
               </SortableTh>
-{splitP && (
+              {splitP && (
                 <th
                   title="Adjusted p on held-out counts (count splitting): the group's training cluster vs the rest, tested on the half of the counts the clustering never saw. Blank: not among the check's top genes."
                   className="whitespace-nowrap px-2 py-1.5 text-right font-medium text-slate-600"
