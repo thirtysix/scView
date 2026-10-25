@@ -27,6 +27,7 @@ import {
   splitViewId,
 } from "@/lib/splitView";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { GridLasso, type GridLassoResult } from "@/components/unified/GridLasso";
 
 /**
  * Width kept free on the right of the grid for the legend: UnifiedViewPanel
@@ -90,6 +91,15 @@ interface MultiPanelScatterProps {
   legend?: ReactNode;
   /** The embedding's obsm key: a UMAP or t-SNE gets the cluster-distance caveat in the header */
   embedding?: string | null;
+  /** Lasso on: a drag in a panel draws an outline there instead of moving the camera */
+  lassoActive?: boolean;
+  /** A lasso closed in one panel: the outline in that view's pixels and the camera it was drawn under */
+  onLasso?: (lasso: GridLassoEvent) => void;
+}
+
+/** A lasso closed in one panel (see `onLasso`). */
+export interface GridLassoEvent extends GridLassoResult {
+  viewState: Record<string, unknown>;
 }
 
 /**
@@ -119,6 +129,8 @@ export function MultiPanelScatter({
   exportFilename,
   legend,
   embedding = null,
+  lassoActive = false,
+  onLasso,
 }: MultiPanelScatterProps) {
   const pointSize = useSettingsStore((s) => s.pointSize);
   const opacity = useSettingsStore((s) => s.opacity);
@@ -326,6 +338,13 @@ export function MultiPanelScatter({
     });
   }, [grid, panels, exportLegend, colormap, exportFilename, sampledNote]);
 
+  const handleLasso = useCallback(
+    (lasso: GridLassoResult) => {
+      if (viewState) onLasso?.({ ...lasso, viewState });
+    },
+    [viewState, onLasso],
+  );
+
   const dark = background === "dark";
   const bgColor = dark ? "#1e293b" : "#ffffff";
 
@@ -385,6 +404,10 @@ export function MultiPanelScatter({
                 isDragging ? "grabbing" : "crosshair"
               }
             />
+          )}
+
+          {ready && lassoActive && onLasso && viewState && !gpuError && (
+            <GridLasso cells={grid.cells} onComplete={handleLasso} />
           )}
 
           {/* Titles + panel frames (the canvas underneath takes the events) */}

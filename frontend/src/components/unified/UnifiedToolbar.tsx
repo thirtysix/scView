@@ -325,10 +325,9 @@ export function UnifiedToolbar({ onResetView, numCells }: UnifiedToolbarProps) {
       {/* Lasso */}
       <button
         onClick={() => setSelectionMode(selectionMode === "lasso" ? "none" : "lasso")}
-        disabled={gridActive}
-        title={gridActive ? "Lasso is off while the plot is split or compared" : "Lasso selection (L). On a 3D embedding it selects every cell under the outline, at any depth; turn the lasso off to rotate"}
+        title={gridActive ? "Lasso selection (L): draw in any panel; every panel shows the selection" : "Lasso selection (L). On a 3D embedding it selects every cell under the outline, at any depth; turn the lasso off to rotate"}
         className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-          selectionMode === "lasso" && !gridActive
+          selectionMode === "lasso"
             ? "bg-orange-50 text-orange-700 ring-1 ring-orange-300"
             : "text-slate-600 hover:bg-slate-100"
         }`}
