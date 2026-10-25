@@ -115,6 +115,7 @@ def test_joint_density_is_the_product_of_peak_scaled_densities():
     joint, facts = density.weighted_density(xy, W)
     each = [density.weighted_density(xy, W[:, j])[0].astype(np.float64) for j in range(3)]
     expected = np.prod([d / d.max() for d in each], axis=0)
+    expected[expected < expected.max() * 1e-6] = 0.0  # far tails are shown as 0
     assert np.allclose(joint, expected, rtol=1e-4, atol=1e-7)
     assert joint.max() <= 1.0 and joint.dtype == np.float32
     assert facts["n_expressing"] == [int((W[:, j] > 0).sum()) for j in range(3)]
@@ -244,3 +245,12 @@ async def test_large_dataset_reads_the_gene_store(client, tmp_data_dir):
     vb, mb = _decode(b.content)
     assert ma == mb
     assert np.allclose(va, vb, rtol=1e-5, atol=1e-7)
+
+
+def test_far_tails_are_zero():
+    rng = np.random.default_rng(3)
+    coords = np.vstack([rng.normal(0, 1, (500, 2)), rng.normal(40, 1, (500, 2))])
+    w = np.r_[np.ones(500), np.zeros(500)]
+    d, _ = density.weighted_density(coords, w)
+    assert d[500:].max() == 0.0
+    assert d[:500].min() > 0.0

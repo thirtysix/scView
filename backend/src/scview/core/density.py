@@ -205,6 +205,10 @@ def weighted_density(coords: np.ndarray, weights: np.ndarray, *, grid: int = GRI
         for d in per_gene:
             peak = d.max()
             joint *= d / peak if peak > 0 else 0.0
+    # Gaussian tails leave values like 1e-35 far from any expressing cell: show
+    # them as 0, so the colour scale reads "0 to max" (1e-6 of the peak).
+    top = float(joint.max()) if joint.size else 0.0
+    joint = np.where(joint < top * 1e-6, 0.0, joint)
     facts = {
         "bandwidth": [float(v) for v in lat.h],
         "grid": grid,
