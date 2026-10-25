@@ -232,7 +232,8 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
                   Ready for CELLxGENE Discover? {info.readiness.n_ok} of {info.readiness.n_items} checks pass
                   <InfoTip label="About the readiness report" align="right">
                     Checked against the published Discover schema {info.readiness.schema_version}. A report only:
-                    scView never fills in ontology terms; the curator chooses them.
+                    scView never fills in ontology terms; the curator chooses them. The organism term goes in
+                    uns, and several terms in one cell are joined with " || ".
                   </InfoTip>
                 </h3>
                 <table className="w-full text-xs">

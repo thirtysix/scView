@@ -233,35 +233,58 @@ def test_readiness_accepts_valid_fields_and_flags_bad_terms():
     n = a.n_obs
     a.obs = a.obs.drop(columns=["cell_type"])
     good = {
-        "organism_ontology_term_id": "NCBITaxon:9606", "assay_ontology_term_id": "EFO:0009922",
-        "tissue_ontology_term_id": "UBERON:0000178", "disease_ontology_term_id": "PATO:0000461",
+        "assay_ontology_term_id": "EFO:0009922",
+        "tissue_ontology_term_id": "UBERON:0000178",
+        "disease_ontology_term_id": "MONDO:0004604 || MONDO:0043004",
         "cell_type_ontology_term_id": "CL:0000236", "development_stage_ontology_term_id": "unknown",
         "sex_ontology_term_id": "PATO:0000383",
-        "self_reported_ethnicity_ontology_term_id": "HANCESTRO:0005,HANCESTRO:0014",
+        "self_reported_ethnicity_ontology_term_id": "HANCESTRO:0005 || HANCESTRO:0014",
         "suspension_type": "cell", "tissue_type": "tissue", "donor_id": "d1",
     }
     for k, v in good.items():
         a.obs[k] = pd.Categorical([v] * n)
     a.obs["is_primary_data"] = True
     a.var["feature_is_filtered"] = False
+    uns = {"organism_ontology_term_id": "NCBITaxon:9606"}  # in uns since schema 6.0.0
 
     class _A:
         adata = a
         h5ad_path = "/nonexistent.h5ad"
         is_large = False
 
-    p = cx.plan(_A(), cx.Options(include_raw=True))
-    by = {i["key"]: i for i in cx.readiness(p)["items"]}
-    for k in good:
+    def check(**kw):
+        p = cx.plan(_A(), cx.Options(include_raw=True))
+        return {i["key"]: i for i in cx.readiness(p, **kw)["items"]}
+
+    by = check(uns=uns)
+    assert cx.SCHEMA_VERSION == "7.1.0"
+    for k in [*good, "organism_ontology_term_id"]:
         assert by[k]["status"] == "ok", by[k]
     assert by["is_primary_data"]["status"] == "ok" and by["raw_counts"]["status"] == "ok"
-    assert "reserved_obs" not in by
+    assert "reserved_obs" not in by and "deprecated_obs" not in by
+    assert check()["organism_ontology_term_id"]["status"] == "missing"
+    assert check(uns={"organism_ontology_term_id": "9606"})["organism_ontology_term_id"]["status"] == "invalid"
+    # a cell line: Cellosaurus tissue, "na" donor-level fields
+    for k, v in {"tissue_type": "cell line", "tissue_ontology_term_id": "CVCL_1P02",
+                 "sex_ontology_term_id": "na", "development_stage_ontology_term_id": "na",
+                 "self_reported_ethnicity_ontology_term_id": "na", "cell_type_ontology_term_id": "na"}.items():
+        a.obs[k] = pd.Categorical([v] * n)
+    by = check(uns=uns)
+    for k in ("tissue_type", "tissue_ontology_term_id", "sex_ontology_term_id", "cell_type_ontology_term_id"):
+        assert by[k]["status"] == "ok", by[k]
+    # renamed / old forms are flagged
+    a.obs["tissue_type"] = pd.Categorical(["cell culture"] * n)  # "primary cell culture" since 7.0.0
     a.obs["tissue_ontology_term_id"] = pd.Categorical(["blood"] * n)
     a.obs["disease_ontology_term_id"] = pd.Categorical(["PATO:0000001"] * n)
-    p = cx.plan(_A(), cx.Options())
-    by = {i["key"]: i for i in cx.readiness(p)["items"]}
-    assert by["tissue_ontology_term_id"]["status"] == "invalid"
-    assert by["disease_ontology_term_id"]["status"] == "invalid"
+    a.obs["self_reported_ethnicity_ontology_term_id"] = pd.Categorical(["HANCESTRO:0005,HANCESTRO:0014"] * n)
+    a.obs["organism_ontology_term_id"] = pd.Categorical(["NCBITaxon:9606"] * n)
+    by = check()
+    for k in ("tissue_type", "tissue_ontology_term_id", "disease_ontology_term_id",
+              "self_reported_ethnicity_ontology_term_id", "deprecated_obs"):
+        assert by[k]["status"] == "invalid", by[k]
+    assert "moved it to uns" in by["organism_ontology_term_id"]["detail"]
+    a.obs["disease_ontology_term_id"] = pd.Categorical(["MONDO:0043004 || MONDO:0004604"] * n)  # unsorted
+    assert check()["disease_ontology_term_id"]["status"] == "invalid"
 
 
 def test_a_stopped_write_leaves_no_file(tmp_path):

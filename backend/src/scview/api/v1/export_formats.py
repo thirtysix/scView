@@ -104,7 +104,8 @@ def _summary(adaptor, fmt: str, o: FormatOptions, name: str) -> dict[str, Any]:
             "dropped": p.dropped,
             "notes": p.notes,
             "renamed": p.renamed,
-            "readiness": cx.readiness(p, species=detect_species(adata).species, title=name),
+            "readiness": cx.readiness(p, species=detect_species(adata).species, title=name,
+                                     uns=dict(adata.uns)),
         })
     else:
         out.update({
