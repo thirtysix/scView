@@ -47,7 +47,14 @@ import {
   type RunOutcomeFields,
   type WatchdogEvent,
 } from "@/api/pipelineRun";
-import { flattenStepParams, HVG_FLAVOR_OPTION_LABELS, normalizationMethod, NORMALIZATION_LABELS } from "@/lib/pipelineParams";
+import {
+  BATCH_METHOD_OPTION_LABELS,
+  flattenStepParams,
+  HVG_FLAVOR_OPTION_LABELS,
+  normalizationMethod,
+  NORMALIZATION_LABELS,
+} from "@/lib/pipelineParams";
+import { BatchMethodCompare } from "@/components/common/BatchMethodCompare";
 import {
   ClipboardCheck,
   Check,
@@ -178,7 +185,11 @@ const STEP_ORDER: {
   { key: "highly_variable_genes", label: "Variable Genes", description: "Identify highly variable genes" },
   { key: "scaling", label: "Scaling", description: "Scale and center gene expression" },
   { key: "pca", label: "PCA", description: "Principal component analysis" },
-  { key: "batch_correction", label: "Batch Correction", description: "Harmony integration to correct batch effects in PCA space" },
+  {
+    key: "batch_correction",
+    label: "Batch Correction",
+    description: "Correct batch effects on the PCA: Harmony or Scanorama (corrected PCs), or BBKNN (a batch-balanced neighbour graph)",
+  },
   { key: "neighbors", label: "Neighbor Graph", description: "Compute nearest neighbor graph" },
   { key: "clustering", label: "Clustering", description: "Cluster cells into groups" },
   { key: "embeddings", label: "UMAP/tSNE", description: "Compute embedding for visualization" },
@@ -323,6 +334,17 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
   ],
   batch_correction: [
     { param: "batch_key", label: "Batch Column", type: "select", options: [], default: "" },
+    {
+      param: "batch_method",
+      label: "Method",
+      type: "select",
+      options: ["harmony", "scanorama", "bbknn"],
+      optionLabels: BATCH_METHOD_OPTION_LABELS,
+      default: "harmony",
+      help:
+        "Harmony and Scanorama correct the PCs the neighbour graph is built on. BBKNN builds the graph itself, " +
+        "taking each cell's nearest neighbours in every batch, so the Neighbors step keeps its graph.",
+    },
   ],
   neighbors: [
     { param: "n_neighbors", label: "N neighbors", type: "number", min: 5, max: 100, step: 1, default: 15 },
@@ -1689,6 +1711,28 @@ export function DataAssessmentPanel() {
                             </div>
                             {step.key === "filtering" && (
                               <MitoModeControl datasetId={datasetId} values={filterValues} onChange={running ? undefined : setFilter} />
+                            )}
+                            {step.key === "batch_correction" && datasetId && (
+                              <div className="mt-3">
+                                <BatchMethodCompare
+                                  datasetId={datasetId}
+                                  batchKey={(stepParams.batch_correction?.batch_key as string | undefined) || null}
+                                  disabled={running}
+                                  applyLabel="Set the step to"
+                                  onApply={(m) => {
+                                    if (m === "none") {
+                                      setSelectedSteps((prev) => {
+                                        const next = new Set(prev);
+                                        next.delete("batch_correction");
+                                        return next;
+                                      });
+                                    } else {
+                                      setStepParam("batch_correction", "batch_method", m);
+                                      setSelectedSteps((prev) => new Set(prev).add("batch_correction"));
+                                    }
+                                  }}
+                                />
+                              </div>
                             )}
                           </div>
                         )}

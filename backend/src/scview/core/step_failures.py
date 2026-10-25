@@ -207,13 +207,13 @@ def clear_outputs(adata, step: str, outcome: Outcome) -> dict[str, list[str]]:
             adata.raw = None
             out.setdefault("raw", []).append("raw")
     elif step == "pca":
-        _drop(adata, out, "obsm", ["X_pca", "X_pca_harmony"])
+        _drop(adata, out, "obsm", ["X_pca", "X_pca_harmony", "X_scanorama"])
         _drop(adata, out, "varm", ["PCs"])
         _drop(adata, out, "uns", ["pca", BATCH_MIXING_KEY])
     elif step == "uncorrected_embedding":
         _drop(adata, out, "obsm", ["X_umap_uncorrected"])
     elif step == "batch_correction":
-        _drop(adata, out, "obsm", ["X_pca_harmony"])
+        _drop(adata, out, "obsm", ["X_pca_harmony", "X_scanorama"])
         _drop(adata, out, "uns", [BATCH_MIXING_KEY])
     elif step == "neighbors":
         nb = adata.uns.get("neighbors")

@@ -621,21 +621,28 @@ def _check_pca(adata: Any) -> StepStatus:
 
 
 def _check_batch_correction(adata: Any) -> StepStatus:
-    """Check for Harmony-corrected PCA embedding (X_pca_harmony) in obsm."""
+    """Check for batch-corrected PCs (Harmony X_pca_harmony, Scanorama X_scanorama) in
+    obsm, or a BBKNN neighbour graph."""
+    from scview.core import batch_methods
+
     try:
-        if "X_pca_harmony" in adata.obsm:
-            n_dims = adata.obsm["X_pca_harmony"].shape[1]
-            return StepStatus(
-                done=True,
-                confidence="high",
-                details=f"Found X_pca_harmony with {n_dims} dimensions",
-            )
-        else:
-            return StepStatus(
-                done=False,
-                confidence="high",
-                details="No 'X_pca_harmony' in obsm (batch correction not applied)",
-            )
+        for key in batch_methods.CORRECTED_KEYS:
+            if key in adata.obsm:
+                n_dims = adata.obsm[key].shape[1]
+                return StepStatus(
+                    done=True,
+                    confidence="high",
+                    details=f"Found {key} with {n_dims} dimensions",
+                )
+        if batch_methods.is_bbknn_graph(adata):
+            return StepStatus(done=True, confidence="high",
+                              details="Found a BBKNN (batch-balanced) neighbour graph")
+        return StepStatus(
+            done=False,
+            confidence="high",
+            details="No corrected PCs (X_pca_harmony, X_scanorama) or BBKNN graph "
+                    "(batch correction not applied)",
+        )
     except Exception as exc:
         logger.warning("Error checking batch correction: %s", exc)
         return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")

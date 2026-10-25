@@ -4,6 +4,7 @@ import { regressOutText } from "@/lib/regressOut";
 import { clearedText } from "@/lib/runErrors";
 import { correctionText, isCorrectionSamples, pct } from "@/lib/ambient";
 import { doubletMethodText } from "@/lib/doubletMethods";
+import { batchParamText } from "@/lib/batchMethods";
 
 const LIST_SHOWN = 12;
 
@@ -76,6 +77,8 @@ export function paramText(key: string, value: unknown): string {
   if (Array.isArray(cls) && cls.length && typeof cls[0] === "object") return channelsText(cls as ChannelRun[], "Classifier");
   if (key === "umap_3d") return umap3dText(value);
   if (key === "regress_out") return regressOutText(value);
+  const batch = batchParamText(key, value);
+  if (batch !== null) return batch;
   // A run that finished with errors (step run_errors): its failed and skipped steps
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const entries = Object.entries(value as Record<string, unknown>);

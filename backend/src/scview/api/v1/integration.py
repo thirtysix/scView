@@ -53,7 +53,7 @@ class IntegratePlanRequest(BaseModel):
 
 class IntegrateRequest(IntegratePlanRequest):
     name: str | None = None
-    method: str = "harmony"  # harmony | none
+    method: str = "harmony"  # harmony | scanorama | bbknn | none (core/integration.py METHODS)
     join: MergeJoin = MergeJoin.inner
     apply_reconciliation: bool = True
     params: dict[str, Any] = Field(default_factory=dict)

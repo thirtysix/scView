@@ -43,7 +43,7 @@ def graph_source(adata) -> str:
     """Where the neighbour graph will come from; raises when there is none to use."""
     if "neighbors" in adata.uns and {"connectivities", "distances"} <= set(adata.obsp.keys()):
         return "neighbors"
-    for rep in ("X_pca_harmony", "X_pca"):
+    for rep in ("X_pca_harmony", "X_scanorama", "X_pca"):
         if rep in adata.obsm:
             return rep
     raise TrajectoryError(
