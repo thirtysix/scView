@@ -38,9 +38,15 @@ All notable changes to scView are documented here. The format is based on
 - The co-pilot can cite all four (`[result:cytokines]`, `[result:offtarget]`, `[result:ppi]`, `[result:cnv]`),
   and routes questions about them to the dataset's results.
 
+### Changed
+- A run stops before normalisation, with nothing saved, when the expression values are already
+  log-normalised and there are no raw counts: normalising and logging them again flattened every difference
+  between cells (a tumour's copy-number score fell from 5.5x to 1.8x the reference). The message says which
+  steps to leave out.
+
 ### Fixed
-- Marker genes failed ("float16") on an upload stored in half precision; such a matrix is now widened to
-  float32 before ranking.
+- Uploads stored in half precision (float16) failed in marker genes ("float16") and highly variable genes
+  ("infinity"); their matrices are now stored as float32 before a run.
 
 ## [0.38.0] - 2026-10-25
 
