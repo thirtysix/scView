@@ -253,6 +253,21 @@ def _add_marker_panel(adaptor, lines: list[str], sources: list[ChatSource]) -> N
                                   evidence="\n".join(mp_lines)))
 
 
+def _add_ppi(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last protein-interaction queries on this dataset (core/ppi.py), once run."""
+    from scview.core import ppi
+
+    try:
+        p_lines, p_detail = ppi.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: PPI fact failed: %s", exc)
+        return
+    if p_lines:
+        lines.extend(p_lines)
+        sources.append(ChatSource(kind="result", ref=ppi.TAG, detail=p_detail,
+                                  evidence="\n".join(p_lines[1:])))
+
+
 def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """TCR/BCR contigs (core/vdj.py): cells with chains, the clonotypes, and the largest
     expanded ones with the cell types they sit in, only once contigs are attached."""
@@ -593,6 +608,7 @@ def build_grounding_context(
         _add_programs(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)
+        _add_ppi(adaptor, lines, sources)
 
     # 4b. Top markers per group, for each column that has computed markers
     marker_cols = []

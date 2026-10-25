@@ -599,6 +599,7 @@ _FAMILY_PREFIX = {
     "seqqc": "result:seqqc",
     "hashing": "result:hashing",
     "vdj": "result:vdj", "clonotypes": "result:vdj", "clonotype": "result:vdj",
+    "ppi": "result:ppi",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -639,7 +640,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "composition", "milo", "enrichment", "qc", "communication", "pca",
                                   "mito", "qcstates", "embedding", "reliability", "planner",
                                   "seqqc", "hashing", "vdj",
-                                  "clonotypes", "clonotype")
+                                  "clonotypes", "clonotype", "ppi")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]
