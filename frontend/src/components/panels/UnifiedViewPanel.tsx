@@ -61,6 +61,8 @@ import { activityLabel } from "@/lib/activity";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { useQueryClient } from "@tanstack/react-query";
+import { densityLegendNote, lastDensityMeta, overlayGene, overlayWord, showDensity } from "@/lib/density";
+import { useDensityFollow } from "@/hooks/useDensityFollow";
 
 const SUBTABS = [
   { id: "markers" as const, label: "Markers" },
@@ -133,6 +135,9 @@ export function UnifiedViewPanel() {
   // --- Embedding data (obs-colored) ---
   const { positions, colors, numCells, colorColumnName, dimensions, isLoading, error } =
     useEmbedding();
+
+  // A density overlay is computed again when the plot or layer changes.
+  useDensityFollow();
 
   // --- Split-by small multiples (SplitScatterGrid covers the single plot,
   // which stays mounted underneath so leaving the split shows it as it was) ---
@@ -282,7 +287,8 @@ export function UnifiedViewPanel() {
 
   // --- Color type from obs column ---
   const colorType = useMemo<"categorical" | "continuous">(() => {
-    if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program")
+    if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program" ||
+      scatterOverlay?.type === "density")
       return "continuous";
     if (!colorBy || !dataset) return "categorical";
     const col = dataset.obs_columns.find((c) => c.name === colorBy);
@@ -299,7 +305,8 @@ export function UnifiedViewPanel() {
   }, [colorBy, dataset]);
 
   const categories = useMemo(() => {
-    if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program")
+    if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program" ||
+      scatterOverlay?.type === "density")
       return undefined;
     if (colorType !== "categorical" || !obsColumn?.values) return undefined;
     return obsColumn.values;
@@ -323,8 +330,8 @@ export function UnifiedViewPanel() {
     // A program's usage share is never negative: the sequential map, as for a score.
     scatterOverlay?.type === "score" || scatterOverlay?.type === "program"
       ? "score"
-      : scatterOverlay?.type === "expression"
-        ? scatterOverlay.layer
+      : scatterOverlay?.type === "expression" || scatterOverlay?.type === "density"
+        ? scatterOverlay.type === "expression" && scatterOverlay.layer
           ? "protein"
           : "expression"
         : "obs";
@@ -364,6 +371,16 @@ export function UnifiedViewPanel() {
       if (!datasetId) return;
       setIsLoadingOverlay(true);
       try {
+        // Density mode (Expression subtab): the gene's weighted density instead;
+        // if that fails, its expression as usual.
+        if (!layer && useUnifiedViewStore.getState().densityMode) {
+          try {
+            await showDensity(datasetId, [gene]);
+            return;
+          } catch (err) {
+            console.error("Failed to compute the density, showing expression:", err);
+          }
+        }
         const useLayer = layer ?? expressionLayer;
         const layerQuery = useLayer ? `&layer=${encodeURIComponent(useLayer)}` : "";
         const buffer = await apiFetchBinary(
@@ -661,7 +678,7 @@ export function UnifiedViewPanel() {
   const hoverColorLine = (index: number, metadata: Record<string, unknown> | null): HoverLine | null => {
     if (scatterOverlay && overlayValues) {
       return colorByLine({
-        label: `${overlayLabel} ${scatterOverlay.type === "program" ? "program" : scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}`,
+        label: `${overlayLabel} ${overlayWord(scatterOverlay)}`,
         values: overlayValues,
         index,
         type: "continuous",
@@ -1021,7 +1038,7 @@ export function UnifiedViewPanel() {
               <div className="pointer-events-auto flex flex-shrink-0 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50/90 px-2 py-1 text-xs text-blue-700">
                 <span className="font-medium">{overlayLabel}</span>
                 <span className="text-blue-500">
-                  {scatterOverlay.type === "program" ? "program" : scatterOverlay.type !== "expression" ? "score" : scatterOverlay.layer ? "protein" : "expression"}
+                  {overlayWord(scatterOverlay)}
                 </span>
                 <button
                   onClick={handleClearOverlay}
@@ -1042,7 +1059,13 @@ export function UnifiedViewPanel() {
                   onClipChange={setViewClip}
                   clipOverridden={viewClip !== null}
                   label={overlayLabel || colorColumnName || colorBy}
-                  note={reliability ? reliabilityLegendNote(reliability) : undefined}
+                  note={
+                    reliability
+                      ? reliabilityLegendNote(reliability)
+                      : scatterOverlay?.type === "density"
+                        ? densityLegendNote(lastDensityMeta())
+                        : undefined
+                  }
                   onAsk={
                     scatterOverlay?.type === "expression" && overlayLabel
                       ? handleAskAboutOverlay
@@ -1201,7 +1224,7 @@ export function UnifiedViewPanel() {
                   label="Overlay"
                   value={
                     scatterOverlay
-                      ? `${overlayLabel} (${scatterOverlay.type === "expression" && scatterOverlay.layer ? "protein" : scatterOverlay.type})`
+                      ? `${overlayLabel} (${scatterOverlay.type === "expression" && scatterOverlay.layer ? "protein" : scatterOverlay.type === "density" ? "Nebulosa-style" : scatterOverlay.type})`
                       : "—"
                   }
                 />
@@ -1237,10 +1260,10 @@ export function UnifiedViewPanel() {
             {activeSubtab === "expression" && (
               <UnifiedExpressionSubtab
                 onGeneSelect={handleGeneClick}
-                activeGene={scatterOverlay?.type === "expression" ? overlayLabel : null}
+                activeGene={overlayGene(scatterOverlay, overlayLabel)}
                 groupByColumn={groupByColumn}
                 setGroupByColumn={setGroupByColumn}
-                expressionScale={scatterOverlay?.type === "expression" ? colorScale : null}
+                expressionScale={overlayGene(scatterOverlay, overlayLabel) ? colorScale : null}
               />
             )}
             {activeSubtab === "protein" && dataset?.protein && datasetId && (

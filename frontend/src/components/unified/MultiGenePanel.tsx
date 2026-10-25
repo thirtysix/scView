@@ -6,6 +6,7 @@ import { StackedViolin } from "@/components/plots/StackedViolin";
 import { SelectionChip } from "@/components/common/SelectionChip";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
 import { GeneVsGene } from "@/components/unified/GeneVsGene";
+import { JointDensityButton } from "@/components/unified/DensityToggle";
 import { useGeneExpression } from "@/hooks/useGeneExpression";
 import { useObsCodes } from "@/hooks/useObsCodes";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -140,6 +141,7 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
           <BarChart3 className="h-3.5 w-3.5" />
           Stacked violin
         </button>
+        <JointDensityButton datasetId={datasetId} genes={genes} onShow={() => geneGrid && setGeneGrid(null)} />
       </div>
       {showViolins && enough && groupByColumn && (
         <StackedViolinSection datasetId={datasetId} genes={genes} groupByColumn={groupByColumn} />
