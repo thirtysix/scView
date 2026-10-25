@@ -283,3 +283,12 @@ async def test_large_dataset_needs_only_the_stored_markers(client, tmp_data_dir,
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["genes"] and all(g["verdict"] == "not_in_hpa" for g in body["genes"])  # synthetic names
+
+
+def test_cell_type_enrichment_needs_specificity():
+    """A gene "group enriched" among cell types at low tau (FTL) is not restricted."""
+    tissue = {"category": "enhanced", "tau": 0.19}
+    assert ot._verdict(tissue, {"category": "group_enriched", "tau": 0.43}) == "enhanced"
+    assert ot._verdict(tissue, {"category": "enriched", "tau": 0.8}) == "restricted"
+    assert ot._verdict({"category": "group_enriched", "tau": 0.7}, {"category": "enhanced", "tau": 0.3}) == "restricted"
+    assert ot._verdict(None, {"category": "enriched", "tau": 0.9}) == "restricted"

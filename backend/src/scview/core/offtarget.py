@@ -29,7 +29,8 @@ Per gene and per table it gives:
 - the top 3 tissues / cell types with their values.
 
 A gene's **verdict** combines the two tables: *restricted* (enriched or group
-enriched in either), *enhanced* (enhanced across tissues, restricted in neither),
+enriched across tissues, or across cell types with cell-type tau >= ``CELL_TAU_RESTRICTED``:
+FTL is "group enriched" in macrophage-like cells at tau 0.43 yet high in every tissue), *enhanced* (enhanced across tissues, restricted in neither),
 *broad* (low tissue specificity, restricted in neither: "enhanced" among 154 cell
 types alone does not count, nearly every gene is 4x the mean in some cell type),
 *not detected* (in both), or *not in HPA* (symbol not found). The tissue table
@@ -89,6 +90,8 @@ FOLD = 4.0  # HPA's fold change for every elevated category
 MIN_LEVEL = 1.0  # nTPM / nCPM: detected, and the floor for an elevated tissue
 TOP_N = 3
 TAU_SPECIFIC = 0.5
+# Live check: true immune markers sit at cell-type tau 0.78-0.94, ubiquitous FTL at 0.43.
+CELL_TAU_RESTRICTED = 0.6
 MAX_GENES = 200
 N_DEFAULT = 20
 N_MAX = 50
@@ -417,7 +420,10 @@ def _side(table: Table, i: int) -> dict:
 
 def _verdict(tissue: dict | None, cell: dict | None) -> str:
     cats = [s["category"] for s in (tissue, cell) if s]
-    if any(c in ("enriched", "group_enriched") for c in cats):
+    elevated = ("enriched", "group_enriched")
+    if tissue and tissue["category"] in elevated:
+        return "restricted"
+    if cell and cell["category"] in elevated and cell["tau"] >= CELL_TAU_RESTRICTED:
         return "restricted"
     if all(c == "not_detected" for c in cats):
         return "not_detected"

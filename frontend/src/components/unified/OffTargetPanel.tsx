@@ -78,7 +78,7 @@ export function OffTargetPanel({
           consensus, nTPM) and across HPA&rsquo;s single-cell types (nCPM). The category follows HPA&rsquo;s rules:
           enriched = at least 4x the next tissue; group enriched = a group of 2&ndash;5 tissues (2&ndash;10 cell types)
           at least 4x every other; enhanced = at least 4x the mean of the others; low specificity = detected but none of
-          these. <b>Restricted</b> means enriched or group enriched in either table; <b>broad</b> means low tissue
+          these. <b>Restricted</b> means enriched or group enriched across tissues, or across cell types with cell-type tau of at least 0.6; <b>broad</b> means low tissue
           specificity. Tau is 0 for even expression and 1 for one tissue only. A marker is flagged when it is specific
           among these groups (tau &ge; 0.5 here) but broad in the body.
         </InfoTip>
