@@ -32,7 +32,7 @@ export interface IntegrationPlan {
   ok: boolean;
 }
 
-export type IntegrationMethod = "harmony" | "none";
+export type IntegrationMethod = "harmony" | "scanorama" | "bbknn" | "none";
 
 export interface IntegrateRequest {
   dataset_ids: string[];
@@ -77,6 +77,10 @@ export interface BatchMixing {
   } | null;
   /** Set when correction cost cell-type separation. */
   overcorrection?: string | null;
+  /** What each space was scored on: an obsm key, or "graph" (a BBKNN neighbour graph). */
+  spaces?: Record<string, string>;
+  /** Neighbours per cell each space was scored with (a BBKNN graph can have fewer). */
+  k_by_space?: Record<string, number>;
 }
 
 export interface JointSummary {

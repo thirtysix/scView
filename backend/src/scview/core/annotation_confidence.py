@@ -192,7 +192,7 @@ def _base_for(adata, column: str, reg: dict[str, dict[str, Any]]) -> str:
 def representation(adata) -> tuple[str, int]:
     """The obsm key the classifier learns from (the batch-corrected PCA when there
     is one, as for the neighbour graph) and how many of its components."""
-    for key in ("X_pca_harmony", "X_pca"):
+    for key in ("X_pca_harmony", "X_scanorama", "X_pca"):
         if key in adata.obsm:
             return key, int(min(MAX_PCS, np.asarray(adata.obsm[key]).shape[1]))
     raise ConfidenceError(

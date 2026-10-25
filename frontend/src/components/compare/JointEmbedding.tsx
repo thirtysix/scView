@@ -24,7 +24,7 @@ const STEP_LABELS: Record<string, string> = {
   scaling: "Scale",
   pca: "PCA",
   uncorrected_embedding: "Uncorrected UMAP (for comparison)",
-  batch_correction: "Harmony integration",
+  batch_correction: "Batch correction",
   neighbors: "Neighbor graph",
   clustering: "Joint clustering",
   embeddings: "Joint UMAP",
@@ -45,7 +45,7 @@ interface Progress {
 /**
  * Build a joint dataset from 2+ library datasets: their raw counts are merged
  * (shared genes), labelled by a `dataset` column, and processed together with
- * Harmony so all of them share one UMAP, one clustering and one marker set.
+ * batch correction so all of them share one UMAP, one clustering and one marker set.
  */
 export function JointEmbedding() {
   const current = useDatasetStore((s) => s.currentDataset);
@@ -146,7 +146,7 @@ export function JointEmbedding() {
   const build = async () => {
     if (!plan?.ok) return;
     const steps = Object.keys(STEP_LABELS).filter(
-      (s) => method === "harmony" || (s !== "batch_correction" && s !== "uncorrected_embedding"),
+      (s) => method !== "none" || (s !== "batch_correction" && s !== "uncorrected_embedding"),
     );
     setRunning(true);
     setRunError(null);
@@ -190,7 +190,7 @@ export function JointEmbedding() {
     <div className="space-y-4">
       <p className="text-sm text-slate-500">
         Merge datasets on their shared genes and process them together, so every cell sits in one
-        UMAP with one clustering. Harmony removes the dataset-to-dataset batch effect; a
+        UMAP with one clustering. Batch correction (Harmony, Scanorama or BBKNN) removes the dataset-to-dataset batch effect; a
         <code className="mx-1 rounded bg-slate-100 px-1 text-xs">dataset</code>column records
         where each cell came from. The source datasets are left untouched.
       </p>
@@ -328,9 +328,15 @@ export function JointEmbedding() {
               disabled={running}
               className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700"
             >
-              <option value="harmony">Harmony (recommended)</option>
+              <option value="harmony">Harmony</option>
+              <option value="scanorama">Scanorama</option>
+              <option value="bbknn">BBKNN (batch-balanced graph)</option>
               <option value="none">None — concatenate only</option>
             </select>
+            <p className="mt-1 max-w-[260px] text-[10px] leading-snug text-slate-400">
+              Not sure? Build it, then use <em>Compare methods</em> on the joint dataset to score each one
+              on its PCA and re-run with the best.
+            </p>
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-500">Cluster resolution</label>

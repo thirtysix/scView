@@ -533,6 +533,22 @@ def harmony(X, obs, batch_key):
         Z = Z.T
     return np.ascontiguousarray(Z)
 ''',
+    "scanorama": '''
+def scanorama(adata, batch_key):
+    """Scanorama's corrected PCs (sc.external.pp.scanorama_integrate with exact neighbours,
+    as scView ran it; pip install scanorama) for batches in any cell order: scanpy's
+    wrapper wants each batch's cells together, so they are gathered and put back."""
+    b = adata.obs[batch_key].astype(str).to_numpy()
+    names, first = np.unique(b, return_index=True)
+    order = np.concatenate([np.flatnonzero(b == n) for n in names[np.argsort(first)]])
+    tmp = ad.AnnData(X=np.zeros((b.size, 1), np.float32),  # the wrapper reads X.shape
+                     obs=pd.DataFrame({batch_key: b[order]}, index=adata.obs_names[order]))
+    tmp.obsm["X_pca"] = np.asarray(adata.obsm["X_pca"])[order]
+    sc.external.pp.scanorama_integrate(tmp, batch_key, approx=False, verbose=0)
+    Z = np.empty(tmp.obsm["X_scanorama"].shape)
+    Z[order] = tmp.obsm["X_scanorama"]
+    return Z
+''',
     "lognorm_scoring": '''
 def lognorm_scoring(adata):
     """(use_raw, gene names) of the log-normalised matrix: .raw after scaling, else X."""
@@ -757,7 +773,7 @@ _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_fro
                  "counts_hvg", "pearson_residuals", "per_cell_qc", "doublet_calls",
                  "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
                  "markers_key", "louvain",
-                 "harmony", "lognorm_scoring", "subcluster", "gene_programs",
+                 "harmony", "scanorama", "lognorm_scoring", "subcluster", "gene_programs",
                  "read_hashtags", "hashing", "vdj")
 
 # Helpers another helper calls.
@@ -1335,7 +1351,7 @@ def _pca(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(EXACT, [
             f"sc.tl.pca(adata, n_comps=min({_lit(n)}, adata.n_obs - 1, adata.n_vars - 1), "
             'svd_solver="arpack")',
-            'adata.obsm.pop("X_pca_harmony", None)',
+            *_DROP_CORRECTED,
         ])
     if plan["method"] == "pearson":
         _need(ctx, "find_counts", "pearson_residuals")
@@ -1368,7 +1384,7 @@ def _pca(p: dict, ctx: _Ctx) -> Snippet:
         '    adata.varm["PCs"] = np.zeros((adata.n_vars, n_comps))  # zero rows for the other genes',
         '    adata.varm["PCs"][mask] = sub.varm["PCs"]',
         "del sub, X",
-        'adata.obsm.pop("X_pca_harmony", None)',
+        *_DROP_CORRECTED,
     ])
 
 
@@ -1384,24 +1400,47 @@ adata.uns.pop("X_umap_uncorrected", None)
 '''))
 
 
+_DROP_CORRECTED = ['adata.obsm.pop("X_pca_harmony", None)', 'adata.obsm.pop("X_scanorama", None)']
+
+
 def _batch_correction(p: dict, ctx: _Ctx) -> Snippet:
-    _need(ctx, "harmony")
     key = p.get("batch_key")
     if not key:
         return Snippet(NOT_REPLAYABLE, ["# No batch key was recorded, so nothing is replayed."],
                        "no batch key recorded")
     method = p.get("batch_method") or "harmony"
-    code = [f'adata.obsm["X_pca_harmony"] = harmony(adata.obsm["X_pca"], adata.obs, {_lit(key)})']
+    if method == "scanorama":
+        _need(ctx, "scanorama")
+        return Snippet(EXACT, [
+            'adata.obsm.pop("X_pca_harmony", None)',
+            f'adata.obsm["X_scanorama"] = scanorama(adata, {_lit(key)})'])
+    if method == "bbknn":
+        w, n_pcs, trim = p.get("neighbors_within_batch"), p.get("n_pcs"), p.get("trim")
+        if w is None:
+            return Snippet(NOT_REPLAYABLE, ["# BBKNN's neighbours per batch were not recorded."],
+                           "BBKNN settings not recorded")
+        return Snippet(EXACT, [
+            "import bbknn  # pip install bbknn (MIT): the neighbour graph, built batch by batch",
+            *_DROP_CORRECTED,
+            f"bbknn.bbknn(adata, batch_key={_lit(key)}, neighbors_within_batch={_lit(w)}, "
+            f"n_pcs={_lit(n_pcs or 50)}, trim={_lit(trim)}, computation=\"cKDTree\")",
+            "# The graph is BBKNN's: the neighbours step below keeps it."])
+    _need(ctx, "harmony")
+    code = ['adata.obsm.pop("X_scanorama", None)',
+            f'adata.obsm["X_pca_harmony"] = harmony(adata.obsm["X_pca"], adata.obs, {_lit(key)})']
     if method != "harmony":
         code.insert(0, f"# NOTE: the record names the method {comment_text(method, 40)!s}; "
-                       "scView runs Harmony for every batch correction.")
+                       "it is replayed with Harmony.")
     return Snippet(EXACT, code)
 
 
 def _neighbors(p: dict, ctx: _Ctx) -> Snippet:
+    if p.get("kept"):
+        return Snippet(EXACT, ["# The BBKNN graph from batch correction is the neighbour graph "
+                               "(kept, as scView did)."])
     k = p.get("n_neighbors", 15)
     return Snippet(EXACT, [
-        'use_rep = "X_pca_harmony" if "X_pca_harmony" in adata.obsm else "X_pca"',
+        'use_rep = next((r for r in ("X_pca_harmony", "X_scanorama") if r in adata.obsm), "X_pca")',
         f"sc.pp.neighbors(adata, n_neighbors={_lit(k)}, use_rep=use_rep)",
     ])
 

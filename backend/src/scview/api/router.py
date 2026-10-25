@@ -34,6 +34,7 @@ from scview.api.v1 import (
     system,
     report,
     layouts,
+    batch_compare,
     seqqc,
     hashing,
     vdj,
@@ -73,6 +74,7 @@ api_router.include_router(report.router, tags=["report"])
 api_router.include_router(planner.router, tags=["planner"])
 api_router.include_router(programs.router, tags=["programs"])
 api_router.include_router(layouts.router, tags=["embeddings"])
+api_router.include_router(batch_compare.router, tags=["integration"])
 api_router.include_router(seqqc.router, tags=["assessment"])
 api_router.include_router(hashing.router, tags=["hashing"])
 api_router.include_router(vdj.router, tags=["vdj"])

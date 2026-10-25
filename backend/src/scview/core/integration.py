@@ -47,6 +47,8 @@ LABEL_COLUMN = "dataset"
 # Categorical annotations with more levels than this (barcodes, free text) are
 # not carried into the joint dataset.
 _MAX_CARRY_CATEGORIES = 200
+# core/vdj.py's clonotype column: carried whatever its levels, ids prefixed per dataset.
+CLONOTYPE_COL = "clonotype"
 # Below this, a dataset can't contribute meaningfully to per-batch HVG selection.
 MIN_CELLS_PER_DATASET = 20
 
@@ -65,10 +67,13 @@ class IntegrationError(RuntimeError):
     """Raised when datasets can't be combined into a joint dataset."""
 
 
-# Integration methods: Harmony on the PCA, or plain concatenation (no correction).
+# Integration methods: a batch correction on the PCA (core/batch_methods.py: Harmony,
+# Scanorama, BBKNN), or plain concatenation (no correction).
 METHOD_HARMONY = "harmony"
+METHOD_SCANORAMA = "scanorama"
+METHOD_BBKNN = "bbknn"
 METHOD_NONE = "none"
-METHODS = (METHOD_HARMONY, METHOD_NONE)
+METHODS = (METHOD_HARMONY, METHOD_SCANORAMA, METHOD_BBKNN, METHOD_NONE)
 
 
 # ---------------------------------------------------------------------------
@@ -146,13 +151,23 @@ def recover_counts(adata: ad.AnnData, fallback_paths: list[str]) -> RecoveredCou
 # ---------------------------------------------------------------------------
 
 
+def _prefixed_clonotypes(s: pd.Series, label: str) -> pd.Series:
+    """Clonotype ids are dataset-local too ("1" in A is not "1" in B): prefixed with the
+    dataset label; cells without a clonotype keep their value."""
+    from scview.core.vdj import NO_CLONOTYPE
+
+    has = s.notna() & (s.astype(str) != NO_CLONOTYPE)
+    return s.where(~has, label + ":" + s.astype(str))
+
+
 def carried_obs(adata: ad.AnnData, label: str) -> pd.DataFrame:
     """Categorical annotations worth keeping in the joint dataset.
 
     Cluster ids are dataset-local (cluster "3" in A is unrelated to "3" in B), so
     the active clustering is carried as ``source_cluster`` prefixed with the
     dataset label, and other cluster columns are dropped — the joint run
-    clusters afresh.
+    clusters afresh. Clonotype ids (``clonotype``, core/vdj.py) are prefixed the
+    same way.
     """
     obs = adata.obs
     active = adata.uns.get("scview_active_clustering")
@@ -167,10 +182,14 @@ def carried_obs(adata: ad.AnnData, label: str) -> pd.DataFrame:
             continue
         n_levels = s.nunique(dropna=True)
         # Too many levels, or nearly one per cell (barcodes / ids): not an annotation.
-        if not 1 <= n_levels <= _MAX_CARRY_CATEGORIES or (n_levels > 1 and n_levels > 0.5 * len(s)):
+        # Clonotypes are ids with many levels by nature, yet worth carrying.
+        if n_levels == 0 or col != CLONOTYPE_COL and (not 1 <= n_levels <= _MAX_CARRY_CATEGORIES
+                                     or (n_levels > 1 and n_levels > 0.5 * len(s))):
             continue
         name = "source_dataset" if col == LABEL_COLUMN else col
         keep[name] = s.astype(object).where(s.notna(), None)
+        if col == CLONOTYPE_COL:
+            keep[name] = _prefixed_clonotypes(keep[name], label)
     if active and active in obs.columns:
         keep["source_cluster"] = (label + ":" + obs[active].astype(str)).astype(object)
     return pd.DataFrame(keep, index=obs.index)
@@ -351,7 +370,7 @@ def confounding_notes(units: dict[str, "Unit"]) -> list[str]:
             continue
         shape = "one" if hit.kind == "confounded" else "a single"
         notes.append(
-            f"Each dataset holds {shape} '{cond}' group, so Harmony removes the '{cond}' difference "
+            f"Each dataset holds {shape} '{cond}' group, so batch correction removes the '{cond}' difference "
             "from the joint embedding along with the dataset difference: a high mixing score is "
             f"expected, and cells of different '{cond}' groups can share clusters. Expression "
             f"values are not corrected, so DE between '{cond}' groups within a cell type still "
@@ -460,8 +479,9 @@ MIXING_K = 30
 # seconds at the 150k-cell cap (standard error ~0.005 at 10k cells).
 MIXING_MAX_SCORED = 10_000
 
-# Embedding scored as "uncorrected" / "corrected".
-_MIXING_SPACES = (("uncorrected", "X_pca"), ("corrected", "X_pca_harmony"))
+# Embedding scored as "corrected": the corrected PCs held, if any (a BBKNN graph is
+# scored from its own neighbour lists instead).
+_CORRECTED_KEYS = ("X_pca_harmony", "X_scanorama")
 
 
 def _neighbours(X: np.ndarray, query: np.ndarray, k: int) -> np.ndarray:
@@ -524,6 +544,20 @@ def _label_agreement(idx: np.ndarray, labels: np.ndarray, codes: np.ndarray,
         return np.where(mine.sum(axis=1) > 0, (same & mine).sum(axis=1) / mine.sum(axis=1), np.nan)
 
 
+def _corrected_source(adata: ad.AnnData) -> str | None:
+    """What "corrected" is scored on: an obsm key of corrected PCs, "graph" for a BBKNN
+    neighbour graph, or None (nothing corrected)."""
+    from scview.core.batch_methods import is_bbknn_graph
+
+    key = next((k for k in _CORRECTED_KEYS if k in adata.obsm), None)
+    if key is not None:
+        return key
+    nb = adata.uns.get("neighbors") or {}
+    if is_bbknn_graph(adata) and nb.get("connectivities_key", "connectivities") in adata.obsp:
+        return "graph"
+    return None
+
+
 def batch_mixing(
     adata: ad.AnnData,
     *,
@@ -531,8 +565,15 @@ def batch_mixing(
     k: int = MIXING_K,
     max_scored: int = MIXING_MAX_SCORED,
     seed: int = 0,
+    neighbours: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """How well the source datasets mix, in the uncorrected and corrected PCA.
+
+    ``neighbours`` gives a space's precomputed neighbour lists instead of a kNN search
+    in an embedding: {space name: callable(query, k) -> (len(query), k') indices}. A
+    BBKNN graph (no corrected embedding) is scored that way by default, from each
+    cell's strongest graph connections (``batch_methods.graph_neighbours``, k' at most
+    the graph's neighbours per cell); ``k_by_space`` says the k each space used.
 
     For each cell, the fraction of its ``k`` nearest neighbours that come from a
     different source dataset, averaged over cells. Were the datasets perfectly
@@ -543,7 +584,19 @@ def batch_mixing(
     """
     if label_column not in adata.obs.columns:
         return None
-    spaces = [(name, key) for name, key in _MIXING_SPACES if key in adata.obsm]
+    neighbours = dict(neighbours or {})
+    spaces = [("uncorrected", "X_pca")] if "X_pca" in adata.obsm else []
+    corrected = _corrected_source(adata)
+    if corrected == "graph" and "corrected" not in neighbours:
+        from scview.core.batch_methods import graph_neighbours
+
+        nb = adata.uns["neighbors"]
+        conn = adata.obsp[nb.get("connectivities_key", "connectivities")]
+        neighbours["corrected"] = lambda q, kk: graph_neighbours(conn, q, kk)
+    if corrected is not None:
+        spaces.append(("corrected", corrected))
+    elif "corrected" in neighbours:
+        spaces.append(("corrected", "neighbours"))
     n = int(adata.n_obs)
     names, codes = np.unique(adata.obs[label_column].astype(str).to_numpy(), return_inverse=True)
     if not spaces or len(names) < 2 or n < 3:
@@ -562,6 +615,7 @@ def batch_mixing(
         "n_scored": int(query.size),
         "ideal": round(float(ideal[q_codes].mean()), 4),
         "spaces": dict(spaces),
+        "k_by_space": {},
         "uncorrected": None,
         "corrected": None,
         "datasets": [
@@ -577,7 +631,11 @@ def batch_mixing(
     cons_labels = (adata.obs[cons_col].astype(str).to_numpy() if cons_col else None)
     agreement: dict[str, np.ndarray] = {}
     for name, key in spaces:
-        idx = _neighbours(np.asarray(adata.obsm[key], dtype=np.float32), query, k)
+        if name in neighbours:
+            idx = np.asarray(neighbours[name](query, k))
+        else:
+            idx = _neighbours(np.asarray(adata.obsm[key], dtype=np.float32), query, k)
+        out["k_by_space"][name] = int(idx.shape[1])
         frac = (codes[idx] != q_codes[:, None]).mean(axis=1)
         out[name] = round(float(frac.mean()), 4)
         for i, row in enumerate(out["datasets"]):
@@ -664,7 +722,7 @@ def read_batch_mixing(adata: ad.AnnData) -> dict[str, Any] | None:
 def joint_steps(method: str) -> list[str]:
     steps = ["qc_metrics", "normalization", "log_transform", "highly_variable_genes",
              "scaling", "pca"]
-    if method == METHOD_HARMONY:
+    if method != METHOD_NONE:
         steps += ["uncorrected_embedding", "batch_correction"]
     return steps + ["neighbors", "clustering", "embeddings", "marker_genes"]
 
@@ -672,8 +730,8 @@ def joint_steps(method: str) -> list[str]:
 def joint_params(method: str, overrides: dict[str, Any] | None = None) -> PipelineParams:
     params = PipelineParams(
         hvg_batch_key=LABEL_COLUMN,
-        batch_key=LABEL_COLUMN if method == METHOD_HARMONY else "",
-        batch_method="harmony",
+        batch_key="" if method == METHOD_NONE else LABEL_COLUMN,
+        batch_method=METHOD_HARMONY if method == METHOD_NONE else method,
     )
     for key, value in (overrides or {}).items():
         if key in TUNABLE_PARAMS and value is not None:
@@ -711,7 +769,7 @@ def run_integration_streamed(
     steps = joint_steps(method)
     params = joint_params(method, overrides)
     # Score once both PCA spaces exist, so the pipeline's final write saves it.
-    score_after = "batch_correction" if method == METHOD_HARMONY else "pca"
+    score_after = "pca" if method == METHOD_NONE else "batch_correction"
     for event, data in run_pipeline_streamed(
         joint, steps, params, output_path=str(output_path_for(str(src)))
     ):

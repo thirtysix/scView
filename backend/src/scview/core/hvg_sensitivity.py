@@ -296,6 +296,10 @@ def recorded(adata, reference: str | None = None) -> Recorded:
             notes.append("The graph was batch-corrected with a key that is not recorded: "
                          "the re-runs skip batch correction.")
             batch_key = None
+    elif nb.get("use_rep") == "X_scanorama" or "bbknn" in nb:
+        notes.append("The graph was batch-corrected with "
+                     + ("BBKNN" if "bbknn" in nb else "Scanorama")
+                     + "; the re-runs only repeat Harmony, so they skip batch correction.")
     hvg_batch_key = hvg.get("hvg_batch_key") or None
     if hvg_batch_key and hvg_batch_key not in adata.obs.columns:
         hvg_batch_key = None

@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from scview.core import protein
+from scview.core import protein, provenance
 from scview.core.dataset_manager import DatasetManager
 from scview.core.ingestion.merge import MergeJoin
 from scview.core.integration import (
@@ -265,6 +265,26 @@ def test_integration_end_to_end_mixes_batches(tmp_path):
     meta = json.loads((tmp_path / "uploads" / "joint1" / "metadata.json").read_text())
     assert meta["source"] == "integrated"
     assert [d["id"] for d in meta["integrated_from"]] == ["a", "b"]
+
+
+def test_integration_with_bbknn_keeps_its_graph_and_scores_it(tmp_path):
+    dm = DatasetManager(str(tmp_path))
+    _add_dataset(tmp_path, "a", "A", _counts_dataset(seed=1))
+    _add_dataset(tmp_path, "b", "B", _counts_dataset(seed=2, batch_shift=2.0))
+    _, units = load_units(dm, ["a", "b"])
+    events = list(run_integration_streamed(
+        units, dataset_id="jb", name="joint", data_dir=tmp_path,
+        output_path_for=lambda src: dm.derived_h5ad_path("jb", src), method="bbknn",
+        overrides={"n_top_genes": 100, "n_comps": 20},
+    ))
+    assert "step_error" not in [e for e, _ in events]
+    out = ad.read_h5ad(tmp_path / "derived" / "jb" / "joint.h5ad")
+    assert "bbknn" in out.uns["neighbors"]["params"] and "X_pca_harmony" not in out.obsm
+    mixing = read_batch_mixing(out)
+    assert mixing["spaces"]["corrected"] == "graph"
+    assert mixing["corrected"] > mixing["uncorrected"] + 0.15
+    steps = [h["step"] for h in provenance.read_provenance(out)["history"]]
+    assert steps.count("neighbors") == 1  # recorded as kept, not rebuilt
 
 
 @pytest.mark.asyncio

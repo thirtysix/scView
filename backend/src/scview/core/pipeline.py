@@ -27,6 +27,7 @@ import scipy.sparse as sp
 
 from scview.core import (
     ambient,
+    batch_methods,
     doublets,
     leiden,
     marker_specificity,
@@ -864,9 +865,9 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None
         found = scaling.run_pca(adata, n_comps)
     else:
         sc.tl.pca(adata, n_comps=n_comps, svd_solver="arpack")
-    # A Harmony embedding of the previous PCA would otherwise still be picked up
-    # by the neighbour graph; the batch-correction step rebuilds it if it runs.
-    adata.obsm.pop("X_pca_harmony", None)
+    # A corrected embedding (or BBKNN graph) of the previous PCA would otherwise still
+    # be picked up by the neighbour step; the batch-correction step rebuilds it if it runs.
+    batch_methods.clear(adata)
     adata.uns.pop(BATCH_MIXING_KEY, None)  # scored the previous PCA
     logger.info("PCA: %d components", n_comps)
     return found
@@ -894,43 +895,30 @@ def _run_uncorrected_embedding(adata: ad.AnnData, params: PipelineParams) -> Non
     logger.info("Uncorrected UMAP -> X_umap_uncorrected %s", adata.obsm["X_umap_uncorrected"].shape)
 
 
-def _run_batch_correction(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Run Harmony integration to correct batch effects in PCA space."""
-    if not params.batch_key:
-        raise ValueError("batch_key parameter is required for batch correction.")
-    if params.batch_key not in adata.obs.columns:
-        raise ValueError(f"Batch key '{params.batch_key}' not found in obs columns.")
-    if "X_pca" not in adata.obsm:
-        raise ValueError("PCA must be computed before batch correction.")
-
-    # Call harmonypy directly rather than scanpy's harmony_integrate: scanpy
-    # unconditionally transposes Harmony's output, which breaks with harmonypy
-    # >= 2.0 (where Z_corr is already cells × PCs) — producing a (n_pcs, n_cells)
-    # array that fails obsm validation. Orient to (n_cells, n_pcs) ourselves so
-    # the step works across harmonypy versions.
-    import harmonypy
-
-    ho = harmonypy.run_harmony(adata.obsm["X_pca"], adata.obs, [params.batch_key])
-    Z = np.asarray(ho.Z_corr)
-    n = adata.n_obs
-    if Z.shape[0] != n and Z.ndim == 2 and Z.shape[1] == n:
-        Z = Z.T  # old harmonypy returns PCs × cells
-    if Z.shape[0] != n:
-        raise ValueError(
-            f"Harmony output shape {Z.shape} does not match n_cells={n}."
-        )
-    adata.obsm["X_pca_harmony"] = np.ascontiguousarray(Z)
+def _run_batch_correction(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
+    """Correct the PCA for batch with ``params.batch_method`` (core/batch_methods.py):
+    Harmony -> obsm X_pca_harmony, Scanorama -> obsm X_scanorama, BBKNN -> the
+    neighbour graph itself (the neighbours step then keeps it). Returns what to record."""
+    found = batch_methods.apply(adata, params.batch_method, params.batch_key,
+                                n_neighbors=params.n_neighbors)
     adata.uns.pop(BATCH_MIXING_KEY, None)  # scored the previous correction
-    logger.info("Harmony batch correction using key '%s' -> X_pca_harmony %s",
-                params.batch_key, adata.obsm["X_pca_harmony"].shape)
+    logger.info("Batch correction (%s) using key '%s': %s", params.batch_method,
+                params.batch_key, found)
+    return found
 
 
-def _run_neighbors(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Compute nearest neighbor graph."""
-    # Use harmony-corrected PCA if available
-    use_rep = "X_pca_harmony" if "X_pca_harmony" in adata.obsm else "X_pca"
+def _run_neighbors(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
+    """Compute the nearest-neighbour graph on the corrected PCs when there are some
+    (Harmony, Scanorama), else on X_pca. A BBKNN graph made by batch correction (since
+    the last PCA) is the graph: kept, and recorded as kept."""
+    if batch_methods.is_bbknn_graph(adata):
+        p = adata.uns["neighbors"]["params"]
+        logger.info("Neighbor graph: BBKNN graph from batch correction kept")
+        return {"graph": "bbknn", "kept": True, "n_neighbors_total": int(p.get("n_neighbors", 0))}
+    use_rep = batch_methods.neighbour_rep(adata)
     sc.pp.neighbors(adata, n_neighbors=params.n_neighbors, use_rep=use_rep)
     logger.info("Neighbor graph: k=%d, use_rep=%s", params.n_neighbors, use_rep)
+    return {"use_rep": use_rep}
 
 
 def _louvain_igraph(adata: ad.AnnData, resolution: float, key_added: str, seed: int = 0) -> None:
@@ -1809,6 +1797,13 @@ _DOUBLET_TOOLS = {
     "both": "scanpy.pp.scrublet + scview scDblFinder-style classifier (per capture channel)",
 }
 
+# The batch-correction step's tool by method (core/batch_methods.py).
+_BATCH_TOOLS = {
+    "harmony": "harmonypy (Harmony on the PCA)",
+    "scanorama": "scview Scanorama port (= scanorama 1.7.4 assemble, exact neighbours)",
+    "bbknn": "scview BBKNN port (= bbknn 1.6.0, cKDTree; replaces the neighbour graph)",
+}
+
 # step -> (human tool label, PipelineParams fields worth recording)
 _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "reset_to_counts": ("scview.reset_to_counts", ()),
@@ -1865,6 +1860,10 @@ def _record_pipeline_step(
     tool, keys = _STEP_PROVENANCE.get(step_name, (f"scview.{step_name}", ()))
     if step_name == "doublet_detection" and isinstance(ret, dict):
         tool = _DOUBLET_TOOLS.get(ret.get("doublet_method"), tool)
+    if step_name == "batch_correction":
+        tool = _BATCH_TOOLS.get(params.batch_method, tool)
+    if step_name == "neighbors" and isinstance(ret, dict) and ret.get("kept"):
+        tool = "BBKNN graph from batch correction (kept)"
     if params.normalization_method == "pearson_residuals":
         tool = _PEARSON_TOOLS.get(step_name, tool)
     try:
