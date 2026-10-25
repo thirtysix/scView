@@ -9,8 +9,20 @@ import {
   type PickingInfo,
 } from "@deck.gl/core";
 import { PointCloudLayer, ScatterplotLayer } from "@deck.gl/layers";
-import { AlertTriangle, ImageDown, Loader2, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, Loader2, RotateCcw, X } from "lucide-react";
 import type { ScatterLegend } from "@/lib/scatterExport";
+import {
+  buildScatterSvg,
+  canvasRasterizer,
+  nextFrame,
+  pointRadius,
+  projectPoints,
+  svgLabels,
+  type PointMode,
+  type SvgPanel,
+} from "@/lib/scatterSvg";
+import { saveFigure } from "@/lib/pdfExport";
+import { ScatterExportMenu, type FigureFormat } from "@/components/plots/ScatterExportMenu";
 import { EmbeddingCaveat } from "@/components/plots/EmbeddingCaveat";
 import { centroidLabelLayers, labelViewOf, placeLabels, type GroupCentroid } from "@/lib/centroidLabels";
 import {
@@ -253,19 +265,26 @@ export function MultiPanelScatter({
   }, [ready, dimensions, context, stride, grey, panels, pointSize]);
   // Labels are placed for the current camera (every panel has the same view
   // size), inside the panel and off each other; drawn last, over the points.
-  const labelLayers = useMemo(() => {
-    if (!ready || !viewState || !views[0]) return [];
+  const placedLabels = useMemo(() => {
+    if (!ready || !viewState || !views[0]) return null;
     const view = labelViewOf(views[0], area.width, area.height, viewState);
-    if (!view) return [];
-    return panels.flatMap((p, i) =>
-      p.labels?.length
-        ? centroidLabelLayers(splitLabelLayerId(i), placeLabels(p.labels, view, { highlight: p.highlight }), {
-            dark: background === "dark",
-            highlight: p.highlight,
-          })
+    if (!view) return null;
+    return panels.map((p) => (p.labels?.length ? placeLabels(p.labels, view, { highlight: p.highlight }) : []));
+  }, [ready, viewState, views, area.width, area.height, panels]);
+  const labelLayers = useMemo(
+    () =>
+      placedLabels
+        ? panels.flatMap((p, i) =>
+            placedLabels[i]?.length
+              ? centroidLabelLayers(splitLabelLayerId(i), placedLabels[i]!, {
+                  dark: background === "dark",
+                  highlight: p.highlight,
+                })
+              : [],
+          )
         : [],
-    );
-  }, [ready, viewState, views, area.width, area.height, panels, background]);
+    [placedLabels, panels, background],
+  );
   const layers = useMemo(() => [...pointLayers, ...labelLayers], [pointLayers, labelLayers]);
 
   const layerFilter = useCallback(
@@ -297,6 +316,8 @@ export function MultiPanelScatter({
   // --- WebGL: release the context on unmount (opening a grid creates one) ---
   const deckRef = useRef<DeckGLRef>(null);
   const [gpuError, setGpuError] = useState(false);
+  // While the download menu is open the grid sits above the legend floated over it.
+  const [menuOpen, setMenuOpen] = useState(false);
   const [renderKey, setRenderKey] = useState(0);
   useEffect(() => {
     const el = areaRef.current;
@@ -326,12 +347,64 @@ export function MultiPanelScatter({
     });
   }, [grid, panels, exportLegend, colormap, exportFilename, sampledNote]);
 
+  // The whole grid as one SVG / PDF: each panel's points projected with the
+  // shared camera, its title band and frame, the grey context on white, and
+  // ONE legend beside the grid (lib/scatterSvg.ts).
+  const figurePanels = useCallback((): SvgPanel[] | null => {
+    if (!viewState || !views[0]) return null;
+    const view = labelViewOf(views[0], area.width, area.height, viewState);
+    if (!view) return null;
+    const radius = pointRadius(pointSize, stride);
+    const greyOnWhite = contextColor("white", opacity);
+    const contextXy = context ? projectPoints(view.project, context, stride, new Uint8Array(0)).xy : null;
+    return grid.cells.flatMap((cell, i) => {
+      const p = panels[i];
+      if (!p) return [];
+      const fg = projectPoints(view.project, p.positions, stride, p.colors);
+      return [
+        {
+          view: cell.view,
+          title: { box: cell.title, label: p.title, subtitle: p.subtitle },
+          frame: true,
+          sets: [
+            ...(contextXy ? [{ xy: contextXy, colors: greyOnWhite, radius }] : []),
+            { ...fg, radius },
+          ],
+          labels: placedLabels?.[i]?.length ? svgLabels(placedLabels[i]!, view.project, p.highlight) : [],
+        },
+      ];
+    });
+  }, [viewState, views, area.width, area.height, pointSize, stride, opacity, context, grid, panels, placedLabels]);
+  const figurePoints = useMemo(() => {
+    const ctx = context ? (context.length / stride) * panels.length : 0;
+    return ctx + panels.reduce((n, p) => n + p.indices.length, 0);
+  }, [context, stride, panels]);
+  const downloadFigure = useCallback(
+    async (format: FigureFormat, mode: PointMode) => {
+      await nextFrame();
+      const svgPanels = figurePanels();
+      if (!svgPanels) return;
+      const figure = buildScatterSvg({
+        width: area.width,
+        height: area.height,
+        panels: svgPanels,
+        legend: exportLegend,
+        colormap,
+        notes: sampledNote ? [sampledNote] : [],
+        mode,
+        rasterize: canvasRasterizer,
+      });
+      await saveFigure(format, figure, exportFilename);
+    },
+    [figurePanels, area.width, area.height, exportLegend, colormap, sampledNote, exportFilename],
+  );
+
   const dark = background === "dark";
   const bgColor = dark ? "#1e293b" : "#ffffff";
 
   return (
     <div
-      className="absolute inset-0 z-10 flex flex-col overflow-hidden rounded-xl border border-slate-200"
+      className={`absolute inset-0 ${menuOpen ? "z-30" : "z-10"} flex flex-col overflow-hidden rounded-xl border border-slate-200`}
       style={{ background: bgColor }}
     >
       {/* Header: what is shown, extra controls, camera + export + close */}
@@ -349,15 +422,14 @@ export function MultiPanelScatter({
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </button>
-        <button
-          onClick={downloadPng}
+        <ScatterExportMenu
+          nPoints={figurePoints}
+          onPng={downloadPng}
+          onFigure={downloadFigure}
+          label="Download grid"
           disabled={!ready || !viewState || gpuError}
-          title="Download PNG of all panels (high resolution, white background, with legend)"
-          aria-label="Download PNG"
-          className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
-        >
-          <ImageDown className="h-3.5 w-3.5" />
-        </button>
+          onOpenChange={setMenuOpen}
+        />
         <button
           onClick={onClose}
           title={closeTitle}

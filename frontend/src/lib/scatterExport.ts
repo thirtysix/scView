@@ -18,7 +18,16 @@ export type ScatterLegend =
     }
   // colormap: the one this legend was drawn with (a diverging map for signed
   // scores), over the sequential default; centre: its labelled midpoint (0).
-  | { type: "continuous"; title?: string; min: number; max: number; colormap?: AnyColormapName; centre?: number | null };
+  // caption: what the range means (colorScaleCaption), printed under SVG/PDF figures.
+  | {
+      type: "continuous";
+      title?: string;
+      min: number;
+      max: number;
+      colormap?: AnyColormapName;
+      centre?: number | null;
+      caption?: string;
+    };
 
 /** Render the capture at this multiple of the on-screen size... */
 export const SCATTER_PNG_SCALE = 3;
@@ -47,6 +56,8 @@ const BAR_W = 14;
 const BAR_MAX_H = 240;
 const MAX_LABEL = 32;
 const MAX_ENTRIES = 120;
+/** The legend metrics, for the SVG export (lib/scatterSvg.ts) to draw the same legend. */
+export const LEGEND_METRICS = { PAD, TITLE_H, ROW_H, SWATCH, GAP, BAR_W } as const;
 export const LEGEND_FONT = "12px Inter, system-ui, sans-serif";
 export const LEGEND_TITLE_FONT = "600 13px Inter, system-ui, sans-serif";
 
