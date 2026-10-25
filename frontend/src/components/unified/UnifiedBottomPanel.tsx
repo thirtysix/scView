@@ -1,4 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { SelectionChip } from "@/components/common/SelectionChip";
+import { useLinkedSelection } from "@/hooks/useLinkedSelection";
+import { SELECTION_COLOR, selectedValues } from "@/lib/linkedSelection";
+import { selectionName } from "@/lib/linkedTraces";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useUnifiedViewStore, type BottomView } from "@/stores/unifiedViewStore";
 import { ViolinPlot } from "@/components/plots/ViolinPlot";
@@ -63,6 +67,18 @@ export function UnifiedBottomPanel({
           : undefined;
 
   const hasData = Object.keys(violinData).length > 0;
+  // C035: the selection as one more violin, from the per-cell values on the plot
+  // (the violin's own values come per group, without cell ids).
+  const overlayValues = useUnifiedViewStore((s) => s.overlayValues);
+  const overlayDatasetId = useUnifiedViewStore((s) => s.overlayDatasetId);
+  const { selected } = useLinkedSelection();
+  const selectionViolin = useMemo(
+    () =>
+      selected && overlay && overlayValues && overlayDatasetId === datasetId
+        ? { name: selectionName(selected.size), values: selectedValues(overlayValues, selected), color: SELECTION_COLOR }
+        : null,
+    [selected, overlay, overlayValues, overlayDatasetId, datasetId],
+  );
   const canDistances = !!datasetId && !!distanceColumn;
   const shown: BottomView = view === "distances" && canDistances ? "distances" : "distribution";
   // A view's header opens it; the open view's header closes the panel.
@@ -156,6 +172,7 @@ export function UnifiedBottomPanel({
                 xLabel={violinGroupLabel}
                 yLabel="Value"
                 height={220}
+                extra={selectionViolin}
               />
               <Caption
                 testId="violin-caption"
@@ -165,8 +182,10 @@ export function UnifiedBottomPanel({
                   { value: Object.keys(violinData).length, unit: "groups" },
                 ]}
               >
-                {violinTitle ?? "Values"} per {violinGroupLabel ?? violinGroupColumn}: one violin per group.
+                {violinTitle ?? "Values"} per {violinGroupLabel ?? violinGroupColumn}: one violin per group
+                {selectionViolin ? `; the last (orange) is the ${selectionViolin.values.length.toLocaleString()} selected cells, from any group` : ""}.
               </Caption>
+              {selected && <SelectionChip className="ml-1" />}
             </>
           ) : (
             <div className="flex items-center justify-center py-8 text-xs text-slate-400">

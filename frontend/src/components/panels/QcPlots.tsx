@@ -19,6 +19,8 @@ import { QcFilterSummary } from "@/components/panels/QcFilterSummary";
 import { PseudobulkQc } from "@/components/panels/PseudobulkQc";
 import { ThresholdHistogram, type RefLine, type ThresholdLine } from "@/components/plots/ThresholdHistogram";
 import { roundTo, thresholdMode } from "@/lib/qcThresholds";
+import { SelectionChip } from "@/components/common/SelectionChip";
+import { useQcHistogramSelection, useQcScatterSelection } from "@/hooks/useQcSelection";
 
 interface QcMetric {
   min: number;
@@ -159,6 +161,8 @@ function HistCard({
   onDrag,
   onCommit,
   logY = false,
+  datasetId,
+  metricKey,
 }: {
   label: string;
   /** Hover text on the title: what the metric is and how it is computed. */
@@ -170,7 +174,11 @@ function HistCard({
   onCommit?: (param: ThresholdParam, value: number) => void;
   /** Cell counts on a log axis */
   logY?: boolean;
+  /** With the metric's obs column: the selection's cells overlaid in the same bins (C035) */
+  datasetId?: string;
+  metricKey?: string;
 }) {
+  const selection = useQcHistogramSelection(datasetId, metricKey, metric.hist.bin_edges);
   const refLines = useMemo<RefLine[]>(
     () => [{ value: metric.median, label: "median", color: "#94a3b8", dash: "dot" }],
     [metric.median],
@@ -188,6 +196,7 @@ function HistCard({
             lines={lines}
             refLines={refLines}
             logY={logY}
+            overlay={selection}
             plotName={`qc_${label}`}
             onDrag={onDrag ? (id, v) => onDrag(id as ThresholdParam, v) : undefined}
             onCommit={onCommit ? (id, v) => onCommit(id as ThresholdParam, v) : undefined}
@@ -198,6 +207,7 @@ function HistCard({
             n = {metric.hist.counts.reduce((s, c) => s + c, 0).toLocaleString()} cells · median {fmt(metric.median)} · IQR{" "}
             {fmt(metric.q1)}–{fmt(metric.q3)} · max {fmt(metric.max)}
           </span>
+          {selection && <SelectionChip note="orange bars, in the same bins" />}
           {thresholds && onCommit && (
             <span className="ml-auto flex items-center gap-2 text-slate-500">
               {thresholds.map((t) => (
@@ -211,13 +221,19 @@ function HistCard({
   );
 }
 
-function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
+function ScatterCard({ scatter, datasetId }: { scatter: QcResponse["scatter"]; datasetId?: string }) {
   const colormapName = useSettingsStore((s) => s.continuousColormap);
+  const linked = useQcScatterSelection(datasetId, scatter.x_label, scatter.y_label);
   // No colour when the dataset has no MT- genes: every cell would be "0 %".
   const byMito = scatter.color.length > 0;
   return (
     <Panel
-      title={byMito ? "Counts vs. genes per cell (colour = % mito)" : "Counts vs. genes per cell"}
+      title={
+        <span title="Box or lasso select (plot toolbar) selects the cells inside, everywhere in the app">
+          {byMito ? "Counts vs. genes per cell (colour = % mito)" : "Counts vs. genes per cell"}
+        </span>
+      }
+      actions={<SelectionChip note="orange, over the faded rest" />}
       className="h-[380px]"
     >
       <Plot
@@ -233,12 +249,13 @@ function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
                   color: scatter.color,
                   colorscale: plotlyColorscale(colormapName),
                   showscale: true,
-                  opacity: 0.55,
+                  opacity: linked.dim ? 0.2 : 0.55,
                   colorbar: { title: { text: "% mito", font: { size: 9 } }, thickness: 8, len: 0.85 },
                 }
-              : { size: 3, color: "#64748b", opacity: 0.55 },
+              : { size: 3, color: "#64748b", opacity: linked.dim ? 0.2 : 0.55 },
             hovertemplate: "counts %{x}<br>genes %{y}<extra></extra>",
           },
+          ...(linked.trace ? [linked.trace] : []),
         ]}
         layout={{
           autosize: true,
@@ -247,6 +264,7 @@ function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
           yaxis: { title: { text: scatter.y_label, font: { size: 10 } }, tickfont: { size: 9 } },
         }}
         config={plotConfig("qc_counts_vs_genes")}
+        onSelected={linked.onSelected}
         style={FILL_STYLE}
         useResizeHandler
       />
@@ -257,8 +275,9 @@ function ScatterCard({ scatter }: { scatter: QcResponse["scatter"] }) {
 /** Violins of each QC metric per group, and the counts-vs-genes scatter coloured by
  *  group (colours shared with the embedding scatter). The backend sends each group's
  *  quantiles and a stratified sample, not every cell, so 200k cells cost no more. */
-function GroupedQc({ data }: { data: QcByGroup }) {
+function GroupedQc({ data, datasetId }: { data: QcByGroup; datasetId?: string }) {
   const column = data.column ?? "";
+  const linked = useQcScatterSelection(datasetId, data.scatter?.x_label ?? "total_counts", data.scatter?.y_label ?? "n_genes_by_counts");
   const colorOf = useCategoryColors(column);
   const order = useCategoryOrder(column);
   const traces = useMemo(
@@ -287,9 +306,17 @@ function GroupedQc({ data }: { data: QcByGroup }) {
         </Panel>
       ))}
       {data.scatter && (
-        <Panel title={`Counts vs. genes per cell (colour = ${column})`} className="h-[380px]">
+        <Panel
+          title={
+            <span title="Box or lasso select (plot toolbar) selects the cells inside, everywhere in the app">
+              Counts vs. genes per cell (colour = {column})
+            </span>
+          }
+          actions={<SelectionChip note="orange, on top" />}
+          className="h-[380px]"
+        >
           <Plot
-            data={traces}
+            data={linked.trace ? [...traces, linked.trace] : traces}
             layout={{
               autosize: true,
               margin: { l: 54, r: 10, t: 28, b: 40 }, // room for the modebar above the legend
@@ -299,6 +326,7 @@ function GroupedQc({ data }: { data: QcByGroup }) {
               legend: { font: { size: 9 }, itemsizing: "constant" },
             }}
             config={plotConfig(`qc_counts_vs_genes_by_${column}`)}
+            onSelected={linked.onSelected}
             style={FILL_STYLE}
             useResizeHandler
           />
@@ -518,6 +546,8 @@ export function QcPlots({
             onDrag={thresholds ? dragThreshold : undefined}
             onCommit={thresholds ? commitThreshold : undefined}
             logY={logHist}
+            datasetId={datasetId}
+            metricKey={k}
           />
         ))}
       </PlotGrid>
@@ -533,7 +563,7 @@ export function QcPlots({
       {(data.metrics.doublet_score || data.metrics.doublet_score_classifier) && (
         <DoubletCard datasetId={datasetId} refreshKey={refreshKey} onApplied={onDoubletsApplied} />
       )}
-      {grouped?.column ? <GroupedQc data={grouped} /> : <ScatterCard scatter={data.scatter} />}
+      {grouped?.column ? <GroupedQc data={grouped} datasetId={datasetId} /> : <ScatterCard scatter={data.scatter} datasetId={datasetId} />}
     </div>
   );
 }

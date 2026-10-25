@@ -23,6 +23,8 @@ import {
   type Crosstab,
 } from "@/lib/compositionBars";
 import { WaffleChart } from "@/components/plots/WaffleChart";
+import { SelectionChip } from "@/components/common/SelectionChip";
+import { useCompositionSelection } from "@/hooks/useCompositionSelection";
 
 /** The waffle's "every cell" option, beside one bar per row. */
 const ALL_CELLS = "\u0000all";
@@ -323,6 +325,28 @@ export function ObservationsPanel() {
       },
     ];
   }, [crosstab, bars, split, stackOrder, percent, summaryBars, summary, primaryColor, colorByColor]);
+
+  // C035: the selected cells' share of each stacked bar (or their number, on a
+  // counts axis); on the plain counts bars only as numbers.
+  const stacked = !!crosstab && bars.length > 0 && crosstab.col_values.length > 0;
+  const selectionBars = useMemo(
+    () => (stacked ? bars : percent ? [] : summaryBars),
+    [stacked, bars, percent, summaryBars],
+  );
+  const selectionX = useMemo(
+    () =>
+      stacked && split
+        ? [bars.map((b) => b.facet ?? ""), bars.map((b) => b.row)]
+        : selectionBars.map((b) => b.row),
+    [stacked, split, bars, selectionBars],
+  );
+  const selectionTrace = useCompositionSelection(
+    datasetId, primaryCol, stacked && split ? facetCol : null, selectionBars, percent, selectionX,
+  );
+  const plotTraces = useMemo(
+    () => (selectionTrace ? [...compositionTraces, selectionTrace] : compositionTraces),
+    [compositionTraces, selectionTrace],
+  );
 
   const compositionLayout = useMemo(
     () => ({
@@ -776,8 +800,16 @@ export function ObservationsPanel() {
                 </button>
               )}
             </div>
+            {selectionTrace && (
+              <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                <SelectionChip />
+                <span>
+                  Orange diamonds: the selected cells&apos; {percent && stacked ? "share of each bar" : "number in each bar"}.
+                </span>
+              </div>
+            )}
             <Plot
-              data={compositionTraces}
+              data={plotTraces}
               layout={compositionLayout}
               config={plotConfig(`composition_${primaryCol}`)}
               onClick={(e) => {

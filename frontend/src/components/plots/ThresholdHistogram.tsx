@@ -30,6 +30,8 @@ interface Props {
   logY?: boolean;
   plotName: string;
   barColor?: string;
+  /** Counts of a subset in the same bins, drawn over the bars (C035: the selection) */
+  overlay?: { counts: number[]; name: string; color: string } | null;
   /** While a line is dragged (the plot is not redrawn meanwhile). */
   onDrag?: (id: string, value: number) => void;
   /** When a drag ends; the parent sets the line's value (rounded as it likes). */
@@ -60,6 +62,7 @@ export function ThresholdHistogram({
   logY = false,
   plotName,
   barColor = "#60a5fa",
+  overlay = null,
   onDrag,
   onCommit,
 }: Props) {
@@ -88,9 +91,20 @@ export function ThresholdHistogram({
       hoverinfo: "skip",
       showlegend: false,
     }));
-    return [bars, ...refs];
+    const sub: Data[] = overlay
+      ? [{
+          type: "bar",
+          x: mids,
+          y: overlay.counts,
+          width,
+          name: overlay.name,
+          marker: { color: overlay.color },
+          hovertemplate: `%{x:.3~f}: %{y} ${overlay.name.toLowerCase()}<extra></extra>`,
+        }]
+      : [];
+    return [bars, ...sub, ...refs];
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refKey stands for `refLines`
-  }, [edges, counts, refKey, barColor]);
+  }, [edges, counts, refKey, barColor, overlay]);
 
   const lineKey = lines.map((l) => `${l.id}:${l.value}:${l.color ?? ""}:${l.label}`).join("|");
   // Bumped when a drag ends: Plotly wrote the dragged position into the layout it
@@ -108,6 +122,7 @@ export function ThresholdHistogram({
       yaxis: { tickfont: { size: 9 }, type: logY ? "log" : "linear" },
       yaxis2: { overlaying: "y", range: [0, 1], visible: false, fixedrange: true },
       bargap: 0.02,
+      barmode: "overlay",
       showlegend: false,
       shapes: lines.map((l) => ({
         type: "line",

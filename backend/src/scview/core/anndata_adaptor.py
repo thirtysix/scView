@@ -746,6 +746,33 @@ class AnnDataAdaptor:
             "scale_range": list(self.layer_scale_range(layer)),
         }
 
+    def expression_for_cells(
+        self, gene_names: list[str], cells: np.ndarray, layer: str | None = None
+    ) -> dict:
+        """``expression_by_group``'s mean, mean_expressing and fraction over one set
+        of cells (a selection: C035's "Selection" row of the marker plots), one value
+        per gene found in the layer. ``cells``: unique row positions."""
+        if layer is None:
+            layer = self.default_expression_layer()
+        present = set(self._var_names_for_layer(layer))
+        genes = [g for g in dict.fromkeys(gene_names) if g in present]
+        cells = np.asarray(cells, dtype=np.int64)
+        labels = np.full(len(cells), "selection", dtype=object)
+        if not genes:
+            stats = {"mean": [[]], "mean_expressing": [[]], "fraction": [[]]}
+        elif layer == "X" and self.is_large:
+            stats = _group_stats_sparse(self.gene_block(genes, cells), labels, ["selection"])
+        else:
+            sub = self.get_expression(genes, layer=layer)[cells]
+            n_expressing = (sub > 0).sum(axis=0)
+            level = np.where(sub > 0, sub, 0).sum(axis=0) / np.maximum(n_expressing, 1)
+            as_row = lambda a: [[round(float(v), 4) for v in a]]  # noqa: E731
+            stats = {"mean": as_row(sub.mean(axis=0)), "mean_expressing": as_row(level),
+                     "fraction": as_row(n_expressing / max(len(cells), 1))}
+        return {"layer": layer, "genes": genes, "n_cells": int(len(cells)),
+                "mean": stats["mean"][0], "mean_expressing": stats["mean_expressing"][0],
+                "fraction": stats["fraction"][0]}
+
     def layer_scale_range(self, layer: str) -> tuple[float, float]:
         """The layer's fixed colour range for marker plots, cached per matrix."""
         source = (

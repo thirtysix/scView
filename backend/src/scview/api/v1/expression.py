@@ -154,6 +154,52 @@ async def get_expression_by_group(
     return result
 
 
+class ByGroupCellsBody(BaseModel):
+    genes: list[str] = Field(..., min_length=1, max_length=300)
+    groupby: str = ""
+    layer: str = ""
+    # A selection (lasso, gate, filter): unique row positions.
+    cells: list[int] = Field(..., min_length=1)
+    # False: only the selection's row (the groups are the GET's, cached by the client).
+    include_groups: bool = True
+
+
+@router.post("/datasets/{dataset_id}/expression/by-group")
+async def post_expression_by_group(
+    dataset_id: str,
+    body: ByGroupCellsBody,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The GET's per-group summary plus ``selection``: the same mean, mean over
+    expressing cells and fraction over a set of cells (C035: the marker dot plot's
+    and heatmap's "Selection" row). ``include_groups`` false returns only that row."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    cells = np.unique(np.asarray(body.cells, dtype=np.int64))
+    n_obs = adaptor.adata.n_obs
+    if cells[0] < 0 or cells[-1] >= n_obs:
+        raise HTTPException(status_code=400, detail=f"Cell positions must be in 0..{n_obs - 1}.")
+    groupby = body.groupby or adaptor.active_clustering_column() or ""
+    layer = body.layer or None
+
+    def _run() -> dict:
+        selection = adaptor.expression_for_cells(body.genes, cells, layer=layer)
+        if not body.include_groups:
+            return {"groupby": groupby, "layer": selection["layer"], "groups": [],
+                    "genes": selection["genes"], "selection": selection}
+        return {**adaptor.expression_by_group(body.genes, groupby, layer=layer), "selection": selection}
+
+    try:
+        # Reads every cell's values (or the selection's) for up to 300 genes: off the loop.
+        result = await asyncio.to_thread(_run)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not result["genes"]:
+        raise HTTPException(status_code=404, detail="None of the requested genes are in this layer.")
+    return result
+
+
 @router.get("/datasets/{dataset_id}/expression/heatmap-cells")
 async def get_heatmap_cells(
     dataset_id: str,
