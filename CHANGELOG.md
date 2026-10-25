@@ -6,11 +6,48 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-25
+
 ### Added
+- **Keyboard and screen-reader access.** A skip link, page landmarks, Unified View and Compare tabs that switch
+  with the arrow keys, named buttons and form fields, and sortable table headers that work by keyboard and say how
+  the table is sorted. Dialogs and menus take focus, keep Tab inside, close on Escape and give focus back; the
+  co-pilot drawer does the same.
+- **Legend by keyboard:** one Tab stop; arrow keys move between groups, Enter selects one, Shift+Enter picks
+  several; screen readers hear which groups are selected.
+- **Scatter by keyboard:** focus the plot, then arrows pan (3D: turn), + and - zoom, 0 fits, and S draws a
+  selection rectangle (Enter sets each corner). Screen readers hear what is plotted and every selection change
+  ("2,481 cells selected"). **By group** in the Unified View toolbar selects the cells of chosen groups without
+  the mouse. Plotly figures carry a description (kind, title, axes) and small ones a hidden data table; with the
+  system's reduce-motion setting on, animations are skipped.
 - **Accessibility mode.** A switch in the sidebar (under Theme), off by default and remembered per browser. On:
   text contrast to WCAG AA (4.5:1) in the light theme, no text under 12 px in the app or the plots, an always
   visible focus outline, underlined links, no transitions, and the colour-blind-safe group colours. Off, the
   settings stay tuned for clarity and looks.
+- **Count-split check of markers** (Markers tab, "Check with count splitting"). Marker p-values test genes on the
+  same counts that made the clusters, so they always look significant. The check splits every cell's counts in
+  two (negative binomial count splitting, Neufeld et al. 2024), re-runs the clustering on one half and tests the
+  markers on the other. Per group: markers kept and lost, ordinary vs split p-values, a "Split adj.P" column in
+  the table, and a group's split result can be kept for GSEA and the DE overlap. Groups that differ only by
+  sequencing depth can still pass (depth survives the split); the panel says so.
+  `GET`/`POST /datasets/{id}/markers/count-split`, `POST .../count-split/keep`.
+- **Compare communication between two conditions** (Communication, "Compare conditions"). Both conditions are
+  scored on the same groups, ligand-receptor pairs and genes; each interaction is gained, lost, changed (means
+  1.5x apart) or unchanged. A sender x receiver heatmap of the change in count or strength, a ranked table with
+  filters and CSV, and one interaction per donor. P-values come from donors only (paired Wilcoxon, or Welch's
+  t when donors differ; BH); without donors the differences are shown without p-values. Groups under 10 cells
+  in either condition are dropped and listed; groups whose share changes 2x or more are flagged.
+  `POST /datasets/{id}/communication/compare`.
+- **Minimal marker panel** (Markers tab): the fewest genes that still tell the groups apart, by greedy forward
+  selection on cross-validated balanced accuracy (logistic regression, 3-fold CV), compared with the top markers
+  taken in turn. Required and excluded genes, an optional gene-list restriction (e.g. surface proteins), an
+  accuracy curve, confusion matrix, dot plot, copy and save as gene list. Works in large-dataset mode.
+  `POST /datasets/{id}/markers/panel`.
+- **Object card** (Data Assessment): what the AnnData file holds (matrices with value range and a counts check,
+  obs/var columns, embeddings and graphs, a uns tree), read cheaply at any size, with flags for missing counts,
+  scaled X without .raw, NaNs, duplicate names and empty columns, and a copy-as-text summary.
+  `GET /datasets/{id}/structure`.
+- The co-pilot can cite the count-split check, the condition comparison and the marker panel.
 
 ## [0.37.0] - 2026-10-25
 
