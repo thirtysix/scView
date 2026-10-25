@@ -272,6 +272,33 @@ def log_block(src: Source, start: int, stop: int, cols: np.ndarray) -> np.ndarra
     return (sub.toarray() if sp.issparse(sub) else np.asarray(sub)).astype(np.float32, copy=False)
 
 
+LOG_COUNTS_MAX = 30.0  # log1p of any count stays below this; real counts reach far higher
+LOG_COUNTS_NOTE = (
+    "layers['counts'] holds log values, not counts (non-integer, at most {top:.1f}): the pipeline's "
+    "normalisation then took the log of log values, which flattens copy-number changes (on "
+    "maynard2020_3k, epithelial cells fell from 5.5x to 1.8x the reference score). Upload the raw "
+    "counts, or infer copy number before resetting to counts.")
+
+
+def log_counts_layer(adata, rows: int = 500) -> float | None:
+    """The largest sampled value when ``layers['counts']`` looks like log values
+    (non-negative, non-integer, all under LOG_COUNTS_MAX), else None. An upload whose
+    only matrix is log-normalised can end up there, and the pipeline then normalises
+    and logs it again."""
+    if "counts" not in adata.layers:
+        return None
+    try:
+        block = adata.layers["counts"][: min(rows, adata.n_obs)]
+        vals = np.asarray(block.data if sp.issparse(block) else block, dtype=np.float64).ravel()
+    except Exception:  # noqa: BLE001 — an unreadable layer is not this check's business
+        return None
+    vals = vals[vals != 0]
+    if not vals.size or vals.min() < 0 or np.all(np.mod(vals, 1) == 0):
+        return None
+    top = float(vals.max())
+    return top if top < LOG_COUNTS_MAX else None
+
+
 def detected_fraction(src: Source, chunk: int = CHUNK) -> np.ndarray:
     """Share of cells with a non-zero value, per gene of the source matrix."""
     M = src.M
@@ -449,6 +476,9 @@ def plan(adata, ref_column: str, ref_groups: list[str], *, window: int | None = 
     src = expression_source(adata)
     genes, match = place_genes(src.names, ensembl_ids(adata, src.names), genome, exclude)
     notes: list[str] = []
+    top = log_counts_layer(adata)
+    if top is not None and src.kind == "log":
+        notes.append(LOG_COUNTS_NOTE.format(top=top))
     frac = detected_fraction(src)
     low = frac[genes["col"].to_numpy()] < min_frac if len(genes) else np.zeros(0, bool)
     n_low = int(low.sum())
@@ -894,6 +924,9 @@ def grounding_lines(adata) -> tuple[list[str], str]:
             pat = ", ".join([f"{x} gain" for x in c["gains"][:3]] + [f"{x} loss" for x in c["losses"][:3]])
             return f"cluster {c['cluster']} (n = {c['n']:,}, {c['ratio']:.1f}x ref{'; ' + pat if pat else ''})"
         parts.append(" High CNV clusters (cnv_leiden): " + "; ".join(one(c) for c in clusters[:5]) + ".")
+    if any(str(n).startswith("layers['counts'] holds log values") for n in info.get("notes") or []):
+        parts.append(" Caution: the counts layer held log values, so the expression was logged twice and "
+                     "the scores understate copy-number changes.")
     parts.append(" Inferred from expression, not DNA; needs a true normal reference; low depth is noisy "
                  f"[{TAG}]")
     return ["\n## Copy number (inferred)", "".join(parts)], detail

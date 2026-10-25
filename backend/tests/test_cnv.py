@@ -360,3 +360,19 @@ def test_copilot_context_carries_the_fact(saved, tmp_path):
     context, sources = build_grounding_context(AnnDataAdaptor(str(path)), {"groups"})
     assert "## Copy number (inferred)" in context and "chr7 gain" in context
     assert any(s.ref == cnv.TAG for s in sources)
+
+
+def test_a_counts_layer_holding_log_values_is_flagged():
+    a = _tumour(n_t=40, n_b=40, n_epi=40)
+    assert cnv.log_counts_layer(a) is None
+    a.layers["counts"] = a.raw.X.copy()  # log values where counts belong (a log-only upload)
+    top = cnv.log_counts_layer(a)
+    assert top is not None and top < cnv.LOG_COUNTS_MAX
+    p = cnv.plan(a, "cell_type", ["T", "B"], window=WINDOW, step=STEP)
+    assert any(n.startswith("layers['counts'] holds log values") for n in p.notes)
+    r = cnv.run(p)
+    b = a.copy()
+    cnv.save(b, p, r)
+    assert "Caution: the counts layer held log values" in cnv.grounding_lines(b)[0][1]
+    a.layers["counts"] = sp.csr_matrix(np.round(a.raw.X.toarray() * 3))  # integers: real counts
+    assert cnv.log_counts_layer(a) is None
