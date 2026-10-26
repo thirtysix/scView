@@ -25,7 +25,7 @@ with the samples (donors) as replicates:
    (min count 3, min total 4, each sample its own group), TMM factors, then
    limma-voom: log-CPM with precision weights from the mean-variance trend,
    weighted least squares per gene, empirical Bayes moderated t of the
-   condition. It matches edgeR 4.10 + limma 3.68 to 1e-4 in log2FC. miloDE
+   condition. It matches edgeR 4.10 + limma 3.68 to 1e-9 (log2FC and log10 p). miloDE
    itself fits edgeR's quasi-likelihood model; voom is the faster of the two
    standard count models and is vectorised across genes here. Library sizes
    are each sample's counts over all genes, also when only the highly
@@ -94,6 +94,9 @@ ONE_SIDED_WARN = 0.25  # share of tested neighbourhoods that are one-sided befor
 ALPHA = 0.1  # spatial FDR (and within-neighbourhood BH) threshold, as miloDE's summaries
 MAX_CELLS = 200_000
 MAX_NHOODS = 5_000
+# Sampled centres before the set cover: more only adds overlap (and memory: each
+# second-order neighbourhood holds hundreds of cells), so prop is lowered above it.
+MAX_SAMPLED = 6_000
 MAX_GENES = 15_000  # "expressed genes": the most counted, at most this many
 HVG = "hvg"
 EXPRESSED = "expressed"
@@ -529,6 +532,10 @@ def plan(adata, condition_key: str, sample_key: str | None, *,
                           .replace("Milo ", "Neighbourhood DE ")) from exc
     M, gene_names, source = _counts(adata)
     gene_idx, mode, notes = choose_genes(adata, M, gene_names, genes)
+    if adata.n_obs * prop > MAX_SAMPLED:
+        prop = round(MAX_SAMPLED / adata.n_obs, 4)
+        notes.append(f"{prop:.1%} of the cells ({MAX_SAMPLED:,}) are sampled as neighbourhood "
+                     "centres: the set cover keeps few of them anyway.")
     rep, nh = nhoods_for(adata, k, prop)
     if len(nh.index) > MAX_NHOODS:
         raise MiloDEError(f"{len(nh.index):,} neighbourhoods is too many (at most "
@@ -662,8 +669,9 @@ class MiloDEResult:
         if ok.size:
             within[ok] = stats.false_discovery_control(p[ok], method="bh")
         order = ok[np.argsort(p[ok], kind="stable")]
-        rows = [{"gene": self.genes[g], "log_fc": _f(self.log_fc[i, g]), "pval": _f(p[g], sig=True),
-                 "fdr": _f(within[g], sig=True), "spatial_fdr": _f(self.spatial_fdr[i, g], sig=True)}
+        rows = [{"gene": self.genes[g], "log_fc": _f(self.log_fc[i, g]),
+                 "pval": _f(p[g], sig=True), "fdr": _f(within[g], sig=True),
+                 "spatial_fdr": _f(self.spatial_fdr[i, g], sig=True)}
                 for g in order[:limit]]
         return {"nhood": i, "index_cell": self.index_cells[i], "size": int(self.sizes[i]),
                 "n_samples": int(self.n_samples_nhood[i]), "tested": bool(self.tested[i]),

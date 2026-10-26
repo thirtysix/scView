@@ -146,8 +146,8 @@ def test_engine_matches_edger_limma_voom():
     tested = got.dropna().index
     assert set(tested) == set(want.index)  # filterByExpr keeps the same genes
     w = want.loc[tested]
-    assert np.allclose(got.loc[tested, "logFC"], w["logFC"], atol=1e-4)
-    assert np.allclose(np.log10(got.loc[tested, "p"]), np.log10(w["P.Value"]), atol=1e-3)
+    assert np.allclose(got.loc[tested, "logFC"], w["logFC"], atol=1e-7)
+    assert np.allclose(np.log10(got.loc[tested, "p"]), np.log10(w["P.Value"]), atol=1e-7)
 
 
 def test_filter_and_tmm_basics():
@@ -249,7 +249,7 @@ def test_unpaired_design_and_gene_and_nhood_reads():
         r.nhood_detail(10_000)
 
 
-def test_bad_requests():
+def test_bad_requests(monkeypatch):
     a = synthetic()
     with pytest.raises(MiloDEError, match="k must be"):
         milode.plan(a, "cond", "donor", k=3)
@@ -269,6 +269,10 @@ def test_bad_requests():
     a.var["highly_variable"] = [i < 40 for i in range(N_GENES)]
     p = milode.plan(a, "cond", "donor", k=15)
     assert p.genes_mode == "hvg" and len(p.genes) == 40
+    # Above MAX_SAMPLED centres the sampled share is lowered, with a note.
+    monkeypatch.setattr(milode, "MAX_SAMPLED", 100)
+    p = milode.plan(a, "cond", "donor", k=15)
+    assert p.prop == round(100 / a.n_obs, 4) and any("sampled as neighbourhood centres" in n for n in p.notes)
 
 
 def test_results_store_round_trip_and_export(tmp_path):
