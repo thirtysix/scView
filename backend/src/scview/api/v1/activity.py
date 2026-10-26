@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import activity, activity_nets, de_results, large_mode
+from scview.core import activity, activity_nets, de_results, large_mode, orthologs
 from scview.core.dataset_manager import DatasetManager
 from scview.core.object_cache import ObjectCache
 from scview.core.species import detect_species
@@ -35,10 +35,8 @@ MAX_GROUPS = 100  # as for markers
 MAX_DE_GENES = 100_000
 
 MOUSE_NOTE = (
-    "TF and pathway activity uses the human CollecTRI and PROGENy networks, and this looks "
-    "like a mouse dataset. Mouse needs the networks mapped through orthologs, which scView "
-    "does not do yet; matching by symbol case would silently miss every gene whose mouse "
-    "symbol differs, so activity is not scored."
+    "Mouse dataset: the human CollecTRI and PROGENy networks were mapped to mouse through "
+    "HGNC HCOP orthologs, as decoupler does; a gene with no confident ortholog is left out."
 )
 
 # (loaded dataset object, network) -> activity.CellModel. A pipeline run drops the
@@ -68,9 +66,10 @@ def _net_dir(settings: Settings) -> Path:
     return Path(settings.DATA_DIR) / "networks"  # the data volume
 
 
-def _network(network: str, dest: Path) -> pd.DataFrame:
-    """The network table, fetched on first use (call in a worker thread)."""
-    return activity_nets.load_network(network, dest)
+def _network(network: str, dest: Path, species: str = "human") -> pd.DataFrame:
+    """The network table in the dataset's species, fetched (and for mouse mapped
+    through orthologs) on first use (call in a worker thread)."""
+    return activity_nets.load_for(network, dest, species)
 
 
 async def _dataset(dm: DatasetManager, dataset_id: str):
@@ -80,21 +79,19 @@ async def _dataset(dm: DatasetManager, dataset_id: str):
     return adaptor.adata
 
 
-def _check_species(adata) -> str:
-    call = detect_species(adata)
-    if call.species == "mouse":
-        raise HTTPException(status_code=422, detail=MOUSE_NOTE)
-    return call.species
+def _species(adata) -> str:
+    """human | mouse | unknown; mouse networks are mapped through orthologs."""
+    return detect_species(adata).species
 
 
-def _model(adata, network: str, dest: Path) -> tuple[activity.CellModel, str]:
+def _model(adata, network: str, dest: Path, species: str = "human") -> tuple[activity.CellModel, str]:
     """The cached ULM model for this loaded dataset, built on first use (worker thread)."""
     large_mode.check(adata, "TF and pathway activity", large_mode.WHOLE_MATRIX)
     cached = _MODELS.get(adata, network)
     if cached is not None:
         return cached
     M, genes, source = activity.lognorm_matrix(adata)
-    model = activity.CellModel.build(M, genes, _network(network, dest))
+    model = activity.CellModel.build(M, genes, _network(network, dest, species))
     _MODELS.put(adata, (model, source), key=network)
     return model, source
 
@@ -137,8 +134,13 @@ async def list_networks(settings: Settings = Depends(get_settings_dep)):
             "url": s.url, "downloaded": meta is not None,
             "n_sources": (meta or {}).get("n_sources"), "n_edges": (meta or {}).get("n_edges"),
             "fetched_at": (meta or {}).get("fetched_at"),
+            "mouse": activity_nets.read_mouse_meta(_net_dir(settings), s.name),
         })
-    return {"networks": out}
+    hcop = orthologs.read_meta(_net_dir(settings))
+    return {"networks": out, "orthologs": {
+        "label": orthologs.LABEL, "url": orthologs.URL, "citation": orthologs.CITATION,
+        "licence": orthologs.LICENCE, "downloaded": hcop is not None,
+        "auto_download": settings.ORTHOLOGS_AUTO_DOWNLOAD, **({"meta": hcop} if hcop else {})}}
 
 
 @router.get("/datasets/{dataset_id}/activity/{network}")
@@ -153,7 +155,7 @@ async def activity_summary(
     activity per source (for the heatmap)."""
     s = _spec(network)
     adata = await _dataset(dm, dataset_id)
-    species = _check_species(adata)
+    species = _species(adata)
     if groupby:
         if groupby not in adata.obs.columns:
             raise HTTPException(status_code=404, detail=f"Column '{groupby}' not found.")
@@ -166,7 +168,7 @@ async def activity_summary(
 
     def _run() -> dict:
         t0 = time.time()
-        model, source = _model(adata, network, _net_dir(settings))
+        model, source = _model(adata, network, _net_dir(settings), species)
         net = model.net
         body = {
             "network": s.name, "label": s.label, "kind": s.kind, "citation": s.citation,
@@ -179,6 +181,9 @@ async def activity_summary(
             means, sizes = model.group_means(codes, len(groups))
             body.update(groups=groups, group_sizes=sizes.tolist(),
                         mean=[_round(row) for row in means])
+        if species == "mouse":
+            body["orthologs"] = {"note": MOUSE_NOTE, **activity_nets.note_mouse_run(
+                adata, network, _net_dir(settings), len(net.sources), net.n_features)}
         body["elapsed_seconds"] = round(time.time() - t0, 2)
         return body
 
@@ -196,10 +201,10 @@ async def activity_cells(
     """Every cell's activity for one source, in cell order (to colour the embedding)."""
     s = _spec(network)
     adata = await _dataset(dm, dataset_id)
-    _check_species(adata)
+    species = _species(adata)
 
     def _run() -> dict:
-        model, _ = _model(adata, network, _net_dir(settings))
+        model, _ = _model(adata, network, _net_dir(settings), species)
         if source not in model.net.sources:
             raise HTTPException(
                 status_code=404,
@@ -244,14 +249,15 @@ async def activity_de(
     if not genes:
         raise HTTPException(status_code=400, detail="No genes given.")
     adata = await _dataset(dm, dataset_id)
-    _check_species(adata)
+    species = _species(adata)
 
     def _run() -> dict:
-        res = activity.score_profile(stats, genes, _network(network, _net_dir(settings)))
+        res = activity.score_profile(stats, genes, _network(network, _net_dir(settings), species))
         res = res.reindex(res["score"].abs().sort_values(ascending=False).index)
         return {
             "network": s.name, "label": s.label, "kind": s.kind, "citation": s.citation,
-            "n_genes": len(genes),
+            "n_genes": len(genes), "species": species,
+            **({"orthologs_note": MOUSE_NOTE} if species == "mouse" else {}),
             **prefilter,
             "results": [
                 {"source": r.source, "score": round(float(r.score), 3), "pvalue": float(r.pvalue),

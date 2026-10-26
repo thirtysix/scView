@@ -12,8 +12,11 @@ built into a source / target / weight table the same way decoupler builds it:
   weights from OmniPath's annotations, kept where the gene's p-value < 0.05, as
   decoupler's ``op.progeny`` does by default (all such genes, not a top 500).
 
-Human only. decoupler maps them to mouse through orthologs; scView does not yet,
-and a mouse dataset is refused with a note rather than matched by symbol case.
+Both are human. For a mouse dataset each is mapped through HGNC HCOP orthologs
+(``core/orthologs.py``) as decoupler's ``op.collectri(organism="mouse")`` /
+``op.progeny(organism="mouse")`` do: CollecTRI's TFs and targets, PROGENy's genes;
+then the first edge per (source, target) is kept. The mouse table is cached next to
+the human one (``<name>_mouse.tsv``) and rebuilt when either input changes.
 
 A download goes to a ``.part`` file and is parsed and checked (columns, row counts,
 signs, known sources) before the table is written, so a captive-portal page or a
@@ -37,6 +40,9 @@ from typing import Callable
 import httpx
 import numpy as np
 import pandas as pd
+
+from scview.core import orthologs
+from scview.core.object_cache import ObjectCache
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +245,127 @@ def load_network(name: str, dest: Path, client: httpx.Client | None = None) -> p
         net = pd.read_csv(path, sep="\t", dtype={"source": str, "target": str})
         _loaded[(name, str(path))] = (mtime, net)
         return net
+
+
+def translate_network(name: str, net: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
+    """A human network mapped to mouse: CollecTRI's sources and targets, PROGENy's
+    genes (its pathways are not genes), the first edge kept per (source, target)."""
+    columns = ["source", "target"] if spec(name).kind == "tf" else ["target"]
+    out = orthologs.translate_net(net, columns, table=table)
+    return out.drop_duplicates(["source", "target"]).reset_index(drop=True)
+
+
+def _mouse_table(dest: Path, name: str) -> Path:
+    return dest / f"{name}_mouse.tsv"
+
+
+def _mouse_meta_path(dest: Path, name: str) -> Path:
+    return dest / f"{name}_mouse.json"
+
+
+def read_mouse_meta(dest: Path, name: str) -> dict | None:
+    """How the mouse network was mapped (counts, HCOP release), or None when not built."""
+    if not _mouse_table(dest, name).is_file():
+        return None
+    try:
+        return json.loads(_mouse_meta_path(dest, name).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _build_mouse(name: str, dest: Path, human: pd.DataFrame, table: pd.DataFrame, key: dict) -> pd.DataFrame:
+    net = translate_network(name, human, table)
+    path = _mouse_table(dest, name)
+    tmp = dest / f"{name}_mouse.tsv.part"
+    net.to_csv(tmp, sep="\t", index=False)
+    tmp.replace(path)
+    hcop = orthologs.read_meta(dest) or {}
+    human_genes = human["target"].astype(str).unique()
+    mapped = orthologs.human_to_mouse(human_genes, table=table)
+    _mouse_meta_path(dest, name).write_text(json.dumps({
+        **key, "name": name, "mapped_by": orthologs.describe(),
+        "hcop_pinned": hcop.get("pinned"), "hcop_last_modified": hcop.get("last_modified"),
+        "n_human_edges": int(len(human)), "n_edges": int(len(net)),
+        "n_human_sources": int(human["source"].nunique()), "n_sources": int(net["source"].nunique()),
+        "n_human_targets": int(len(human_genes)),
+        "n_targets_mapped": int(sum(bool(v) for v in mapped.values())),
+        "n_mouse_targets": int(net["target"].nunique()),
+        "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }, indent=1))
+    logger.info("Mapped %s to mouse: %d of %d edges kept", spec(name).label, len(net), len(human))
+    return net
+
+
+def load_mouse_network(name: str, dest: Path, client: httpx.Client | None = None) -> pd.DataFrame:
+    """The network mapped to mouse, built from the human one and HCOP on first use
+    (both fetched when missing). Raises ``NetworkUnavailable`` with what to do."""
+    human = load_network(name, dest, client=client)
+    try:
+        table = orthologs.load(dest, client=client)
+    except orthologs.OrthologsUnavailable as e:
+        raise NetworkUnavailable(str(e)) from e
+    key = {
+        "human_sha256": (read_meta(dest, name) or {}).get("sha256"),
+        "hcop_sha256": (orthologs.read_meta(dest) or {}).get("table_sha256"),
+        "min_evidence": orthologs.MIN_EVIDENCE, "one_to_many": orthologs.ONE_TO_MANY,
+    }
+    path = _mouse_table(dest, name)
+    with _fetch_lock:
+        meta = read_mouse_meta(dest, name) or {}
+        if not path.is_file() or any(meta.get(k) != v for k, v in key.items()):
+            _build_mouse(name, dest, human, table, key)
+        mtime = path.stat().st_mtime
+        cached = _loaded.get((name, str(path)))
+        if cached and cached[0] == mtime:
+            return cached[1]
+        net = pd.read_csv(path, sep="\t", dtype={"source": str, "target": str})
+        _loaded[(name, str(path))] = (mtime, net)
+        return net
+
+
+def load_for(name: str, dest: Path, species: str, client: httpx.Client | None = None) -> pd.DataFrame:
+    """The network in the dataset's species: mapped to mouse for mouse, human otherwise."""
+    if species == "mouse":
+        return load_mouse_network(name, dest, client=client)
+    return load_network(name, dest, client=client)
+
+
+# Mouse runs, for the co-pilot: loaded dataset -> {network: what was scored and how mapped}.
+_scored = ObjectCache()
+TAG = "result:activity"
+
+
+def note_mouse_run(adata, name: str, dest: Path, n_sources: int, n_genes_measured: int) -> dict:
+    """What a mouse activity run mapped (shown under the plot and kept as a co-pilot fact)."""
+    meta = read_mouse_meta(dest, name) or {}
+    info = {
+        "network": name, "label": spec(name).label, "mapped_by": orthologs.describe(),
+        "n_targets_mapped": meta.get("n_targets_mapped"), "n_human_targets": meta.get("n_human_targets"),
+        "n_edges": meta.get("n_edges"), "n_human_edges": meta.get("n_human_edges"),
+        "n_sources": int(n_sources), "n_genes_measured": int(n_genes_measured),
+    }
+    try:
+        runs = dict(_scored.get(adata) or {})
+        runs[name] = info
+        _scored.put(adata, runs)
+    except TypeError:  # not weak-referenceable (a test double)
+        pass
+    return info
+
+
+def grounding_lines(adata) -> tuple[list[str], str | None]:
+    """For the co-pilot: how TF / pathway activity was mapped on this mouse dataset."""
+    runs = _scored.get(adata) or {}
+    if not runs:
+        return [], None
+    detail = "TF / pathway activity (ULM) on a mouse dataset, human networks mapped through HCOP orthologs"
+    lines = ["\n## TF and pathway activity (mouse; human networks mapped to mouse)"]
+    for r in runs.values():
+        lines.append(
+            f"- activity ({r['label']}): {r['n_targets_mapped']} of {r['n_human_targets']} human target "
+            f"genes mapped to mouse through {r['mapped_by']}; {r['n_edges']} of {r['n_human_edges']} edges "
+            f"kept; {r['n_sources']} sources scored over {r['n_genes_measured']} measured genes [{TAG}].")
+    return lines, detail
 
 
 def networks_dir() -> Path:

@@ -318,6 +318,19 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
               </table>
             </div>
           </div>
+          {summary.orthologs && (
+            <p className="text-[11px] text-amber-700">
+              Mouse dataset: {summary.label} is human, so it was mapped to mouse through{" "}
+              orthologs <InfoTip label="About the ortholog mapping">{summary.orthologs.mapped_by}.</InfoTip>
+              {summary.orthologs.n_targets_mapped != null && summary.orthologs.n_human_targets != null && (
+                <>
+                  {" "}({summary.orthologs.n_targets_mapped.toLocaleString()} of{" "}
+                  {summary.orthologs.n_human_targets.toLocaleString()} target genes mapped)
+                </>
+              )}
+              . A gene with no confident ortholog is left out.
+            </p>
+          )}
           <p className="text-[10px] leading-snug text-slate-400">
             {summary.sources.length} {network === "collectri" ? "TFs" : "pathways"} with at least 5 of
             their targets among {summary.n_genes_measured.toLocaleString()} measured genes; scored on the{" "}

@@ -75,9 +75,30 @@ describe("UnifiedActivitySubtab", () => {
     render(<UnifiedActivitySubtab onScore={vi.fn()} groupByColumn="" setGroupByColumn={() => {}} />);
     await waitFor(() => screen.getByText("JAK-STAT"));
     expect(getActivitySummary).toHaveBeenLastCalledWith("d1", "progeny", undefined);
-    getActivitySummary.mockRejectedValueOnce(new Error("this looks like a mouse dataset"));
+    getActivitySummary.mockRejectedValueOnce(new Error("The HCOP ortholog table is not downloaded yet"));
     fireEvent.click(screen.getByRole("button", { name: "TFs (CollecTRI)" }));
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/mouse dataset/));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/HCOP ortholog table/));
     expect(getActivitySummary).toHaveBeenLastCalledWith("d1", "collectri", undefined);
+  });
+
+  it("says how a mouse dataset's network was mapped", async () => {
+    getActivitySummary.mockReset().mockResolvedValue({
+      ...SUMMARY,
+      species: "mouse",
+      orthologs: {
+        note: "Mouse dataset", mapped_by: "HCOP orthologs (pairs backed by 3+ orthology resources)",
+        n_targets_mapped: 16306, n_human_targets: 17610, n_edges: 60721, n_human_edges: 62421,
+      },
+    });
+    render(<UnifiedActivitySubtab onScore={vi.fn()} groupByColumn="" setGroupByColumn={() => {}} />);
+    await waitFor(() => screen.getByText("JAK-STAT"));
+    expect(screen.getByText(/mapped to mouse through/).textContent).toContain("16,306 of 17,610 target genes mapped");
+    expect(screen.getByRole("button", { name: "About the ortholog mapping" })).toBeTruthy();
+  });
+
+  it("shows no ortholog note for a human dataset", async () => {
+    render(<UnifiedActivitySubtab onScore={vi.fn()} groupByColumn="" setGroupByColumn={() => {}} />);
+    await waitFor(() => screen.getByText("JAK-STAT"));
+    expect(screen.queryByText(/mapped to mouse through/)).toBeNull();
   });
 });

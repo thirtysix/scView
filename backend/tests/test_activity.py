@@ -10,6 +10,7 @@ here ULM is checked against its definition, a least-squares fit per cell.
 from __future__ import annotations
 
 import dataclasses
+import gzip
 import json
 import threading
 from pathlib import Path
@@ -25,7 +26,7 @@ from scipy import stats
 
 from scview.api.v1 import activity as activity_api
 from scview.api.v1.de import DECompareRequest, DERequest, differential_expression, differential_expression_compare
-from scview.core import activity, activity_nets
+from scview.core import activity, activity_nets, orthologs
 from scview.core.pipeline import PipelineParams, run_pipeline
 
 API = "/api/v1"
@@ -364,13 +365,79 @@ async def test_de_endpoint_ranks_sources_on_the_statistic(client, dataset_manage
     assert bad.status_code == 400
 
 
-async def test_mouse_unknown_network_and_offline_are_explained(client, dataset_manager, tmp_data_dir, monkeypatch):
-    mouse = _lognorm(_cells())
+HCOP_RAW = gzip.compress((FIXTURES.parent / "orthologs" / "hcop_sample.tsv").read_bytes(), mtime=0)
+
+
+@pytest.fixture()
+def hcop(networks: Path, monkeypatch) -> Path:
+    """The invented HCOP table (G<i> -> Gene<i>) 'downloaded' next to the networks."""
+    monkeypatch.setattr(orthologs, "MIN_PAIRS", 100)
+    orthologs._loaded.clear()
+    orthologs.download(networks, client=_client(lambda r: httpx.Response(200, content=HCOP_RAW)))
+    return networks
+
+
+async def test_mouse_is_scored_on_networks_mapped_through_orthologs(client, dataset_manager, hcop):
+    from scview.core.assistant import build_grounding_context
+    from scview.core.claims import resolve_tag
+
+    human = _lognorm(_cells())
+    mouse = human.copy()
     mouse.var_names = [f"Gene{i}" for i in range(N_GENES)]  # title case: mouse symbols
     did = _register(dataset_manager, mouse, "mouse")
-    r = await client.get(f"{API}/datasets/{did}/activity/collectri")
-    assert r.status_code == 422 and "mouse" in r.json()["detail"] and "orthologs" in r.json()["detail"]
+    r = await client.get(f"{API}/datasets/{did}/activity/collectri", params={"groupby": "stim"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["species"] == "mouse" and "Stat1" in body["sources"] and "STAT1" not in body["sources"]
+    j = body["sources"].index("Stat1")
+    assert body["mean"][0][j] > body["mean"][1][j] + 5  # the planted STIM change, found in mouse
+    o = body["orthologs"]
+    assert "HCOP" in o["note"] and o["n_targets_mapped"] > 0 and o["n_edges"] < o["n_human_edges"]
+    # Same genes, same values: the mouse scores are the human ones for every TF that maps.
+    hum = activity.CellModel.build(human.X, human.var_names, _net("collectri"))
+    cells = (await client.get(f"{API}/datasets/{did}/activity/collectri/cells",
+                              params={"source": "Stat1"})).json()
+    np.testing.assert_allclose(cells["scores"], hum.source("STAT1"), atol=2e-3)
 
+    y = np.random.default_rng(0).normal(0, 1, N_GENES)
+    y[0:20] += 5
+    de = await client.post(f"{API}/datasets/{did}/activity/progeny/de",
+                           json={"genes": list(mouse.var_names), "stats": y.tolist()})
+    assert de.status_code == 200 and "HCOP" in de.json()["orthologs_note"]
+
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    context, sources = build_grounding_context(adaptor, {"groups"})
+    assert "activity (CollecTRI):" in context and "mapped to mouse through HCOP orthologs" in context
+    refs = [s.ref for s in sources]
+    assert resolve_tag("activity", refs) == [activity_nets.TAG]
+
+
+async def test_human_path_is_unchanged_and_never_fetches_orthologs(client, dataset_manager, networks):
+    a = _lognorm(_cells())
+    did = _register(dataset_manager, a, "hum")
+    body = (await client.get(f"{API}/datasets/{did}/activity/collectri", params={"groupby": "stim"})).json()
+    assert "orthologs" not in body and body["species"] == "human"
+    ref = activity.CellModel.build(a.X, a.var_names, _net("collectri"))
+    assert body["sources"] == ref.net.sources and body["n_targets"] == ref.net.n_targets.tolist()
+    means, _ = ref.group_means(np.repeat([1, 0], 100), 2)
+    assert body["mean"] == [activity_api._round(row) for row in means]
+    assert not (networks / orthologs.TABLE).exists() and activity_nets.read_mouse_meta(networks, "collectri") is None
+
+
+async def test_mouse_without_orthologs_is_a_503(client, dataset_manager, networks, monkeypatch):
+    mouse = _lognorm(_cells())
+    mouse.var_names = [f"Gene{i}" for i in range(N_GENES)]
+    did = _register(dataset_manager, mouse, "mouse_off")
+
+    def offline(*args, **kwargs):
+        raise httpx.ConnectError("no route to host")
+
+    monkeypatch.setattr(orthologs, "download", offline)
+    r = await client.get(f"{API}/datasets/{did}/activity/collectri")
+    assert r.status_code == 503 and "HCOP ortholog table" in r.json()["detail"]
+
+
+async def test_unknown_network_and_offline_are_explained(client, dataset_manager, tmp_data_dir, monkeypatch):
     did = _register(dataset_manager, _lognorm(_cells()), "human")
     assert (await client.get(f"{API}/datasets/{did}/activity/dorothea")).status_code == 404
     assert (await client.get(f"{API}/datasets/ghost/activity/collectri")).status_code == 404
