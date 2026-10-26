@@ -222,7 +222,8 @@ def test_mouse_networks_are_mapped_as_decoupler_maps_them(tmp_path, table):
     assert "JAK-STAT" in set(pg["source"]) and set(pg["target"]) <= {f"Gene{i}" for i in range(300)} | {"Gene290b"}
 
 
-def test_the_mouse_table_is_cached_and_rebuilt_when_an_input_changes(tmp_path):
+def test_the_mouse_table_is_cached_and_rebuilt_when_an_input_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(orthologs, "_auto_download", lambda: True)  # conftest turns it off; served locally here
     urls: list[str] = []
     net = activity_nets.load_mouse_network("collectri", tmp_path, client=_serve(urls))
     assert sorted(urls) == sorted([orthologs.URL, activity_nets.NETWORKS["collectri"].url])

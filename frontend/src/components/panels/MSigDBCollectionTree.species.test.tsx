@@ -44,7 +44,7 @@ describe("MSigDBCollectionTree by species", () => {
     const onChange = vi.fn();
     render(<MSigDBCollectionTree selected={new Set(DEFAULT_MSIGDB_COLLECTIONS)} onChange={onChange} datasetId="mm 1" />);
     expect(await screen.findByText("Mouse gene sets")).toBeInTheDocument();
-    expect(screen.getByText("Human gene sets (human symbols, case-matched)")).toBeInTheDocument();
+    expect(screen.getByText("Human gene sets (mapped to mouse)")).toBeInTheDocument();
     expect(client.apiFetch).toHaveBeenCalledWith("/enrichment/msigdb-collections?dataset_id=mm%201");
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     expect([...onChange.mock.calls[0]![0]]).toEqual(DEFAULT_MOUSE_MSIGDB_COLLECTIONS);

@@ -44,11 +44,22 @@ def genes_for_species(
     sets: dict[str, list[str]], set_species: str, dataset_species: str
 ) -> dict[str, list[str]]:
     """THE place a gene-set library written for one species is made to fit a dataset
-    of another (human MSigDB on a mouse dataset, say). Today the genes are kept as
-    they are and matched ignoring case downstream (``match_query_case``, gseapy), so
-    a mouse gene whose symbol is the human one title-cased is found and one whose
-    mouse symbol differs is missed. An ortholog table plugs in here."""
-    return sets
+    of another. Human sets on a mouse dataset are mapped through the HCOP ortholog
+    table (``core/orthologs.py``, decoupler's rules); a set with no mapped gene is
+    dropped. Without the table (offline, switched off), and for mouse sets on a human
+    dataset, the genes are kept and matched ignoring case downstream
+    (``match_query_case``, gseapy): a gene whose symbol differs is then missed."""
+    if not (set_species == "human" and dataset_species == "mouse"):
+        return sets
+    from scview.core import orthologs
+
+    try:
+        table = orthologs.load()
+    except orthologs.OrthologsUnavailable as e:
+        logger.warning("Human gene sets on a mouse dataset matched by case: %s", e)
+        return sets
+    mapped, _ = orthologs.map_gene_sets(sets, table=table)
+    return {name: genes for name, genes in mapped.items() if genes}
 
 
 def resolve_gene_sets(

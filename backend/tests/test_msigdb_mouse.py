@@ -371,3 +371,27 @@ def test_reports_use_mouse_sets_once_on_disk(msigdb_dir: Path, monkeypatch):
     assert _hallmark(loader, "mouse") == "mh.all" and _hallmark(loader, "human") == "h.all"
     assert _gene_set_collections(loader, "mouse") == MOUSE_DEFAULT_COLLECTIONS
     assert _gene_set_collections(loader, "human") == ["h.all", "c8.all"]
+
+
+def test_human_sets_on_mouse_data_map_through_hcop_orthologs(tmp_path, monkeypatch):
+    """With the HCOP table on disk, human MSigDB sets on a mouse dataset are mapped to
+    mouse orthologs (a renamed gene is found), and the note says so instead of
+    'matched ignoring case'."""
+    import pandas as pd
+
+    from scview.core import geneset_sources, msigdb_species, orthologs
+
+    hcop = pd.DataFrame({"human": ["TP53", "CD3E", "GENE1"], "mouse": ["Trp53", "Cd3e", "Mgene1"],
+                         "evidence": [9, 9, 9]})
+    monkeypatch.setattr(orthologs, "orthologs_dir", lambda: tmp_path)
+    monkeypatch.setattr(orthologs, "load", lambda *a, **k: hcop)
+    monkeypatch.setattr(orthologs, "mapping", lambda table, *a, **k: {
+        h: [m] for h, m in zip(table["human"], table["mouse"])})
+    out = geneset_sources.genes_for_species({"S": ["TP53", "CD3E", "NOPE"], "EMPTY": ["NOPE"]}, "human", "mouse")
+    assert out == {"S": ["Trp53", "Cd3e"]}  # Trp53 is not TP53 title-cased; a set with nothing mapped is dropped
+    assert geneset_sources.genes_for_species({"S": ["Cd3e"]}, "mouse", "human") == {"S": ["Cd3e"]}
+
+    assert "matched ignoring case" in msigdb_species.warning("mouse", ["h.all"])  # no table on disk yet
+    (tmp_path / orthologs.TABLE).write_bytes(b"x")
+    text = msigdb_species.warning("mouse", ["h.all"])
+    assert "mapped to mouse genes through HCOP orthologs" in text and "ignoring case" not in text

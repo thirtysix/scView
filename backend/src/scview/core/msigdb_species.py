@@ -61,13 +61,25 @@ def describe(collections: Iterable[str], species: str | None = None) -> str:
         # In the registry's order (Hallmark first), whatever order the ids came in.
         mine = [short_label(c["id"]) for c in ALL_COLLECTIONS if c["species"] == sp and c["id"] in ids]
         if mine:
-            note = " (human symbols, case-matched)" if sp == "human" and species == "mouse" else ""
+            note = ((" (human sets, mapped through HCOP orthologs)" if orthologs_mapped() else " (human symbols, case-matched)")
+                    if sp == "human" and species == "mouse" else "")
             note = " (mouse symbols, case-matched)" if sp == "mouse" and species == "human" else note
             parts.append(f"{sp} MSigDB {', '.join(mine)}{note}")
     n_custom = sum(1 for c in ids if collection_species(c) is None)
     if n_custom:
         parts.append(f"{n_custom} custom collection{'' if n_custom == 1 else 's'}")
     return "; ".join(parts)
+
+
+def orthologs_mapped() -> bool:
+    """Whether human sets on mouse data go through the ortholog table (it is on disk);
+    else they are matched by case (``geneset_sources.genes_for_species``)."""
+    from scview.core import orthologs
+
+    try:
+        return (orthologs.orthologs_dir() / orthologs.TABLE).is_file()
+    except Exception:  # noqa: BLE001 - no settings (a bare script): say case-matched
+        return False
 
 
 def warning(species: str | None, collections: Iterable[str] = (), *, human_library: bool = False) -> str:
@@ -77,6 +89,13 @@ def warning(species: str | None, collections: Iterable[str] = (), *, human_libra
     from scview.core.species import SpeciesCall, human_genesets_warning
 
     other = cross_species(collections, species)
+    if species == "mouse" and other and not human_library and orthologs_mapped():
+        from scview.core import orthologs
+
+        named = ", ".join(short_label(c) for c in other)
+        return (f"{named} {'is' if len(other) == 1 else 'are'} human gene sets, mapped to mouse genes "
+                f"through {orthologs.describe()}. A human gene with no mouse ortholog is left out. "
+                "The mouse MSigDB collections (MH, M2, M5, M8) need no mapping.")
     if species == "mouse" and (other or human_library):
         named = ", ".join(short_label(c) for c in other)
         text = human_genesets_warning(SpeciesCall(species="mouse"))
@@ -115,6 +134,8 @@ def enrichment_fact(adata) -> str:
         return ""
     species = dataset_species(adata)
     other = cross_species(used, species)
-    caution = (f" ({', '.join(short_label(c) for c in other)}: another species' symbols, matched ignoring case)"
+    how = ("mapped to mouse through HCOP orthologs" if species == "mouse" and orthologs_mapped()
+           else "matched ignoring case")
+    caution = (f" ({', '.join(short_label(c) for c in other)}: another species' symbols, {how})"
                if other else "")
     return f"Gene sets used: {describe(used, species)}{caution}"

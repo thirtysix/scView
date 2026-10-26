@@ -62,10 +62,12 @@ function SpeciesHeading({ species }: { species: "human" | "mouse" }) {
   }
   return (
     <div className="mt-1.5 mb-0.5 flex items-center gap-1 border-t border-slate-100 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-      Human gene sets (human symbols, case-matched)
+      Human gene sets (mapped to mouse)
       <InfoTip label="About human gene sets on mouse data">
-        These sets list human gene symbols. On mouse data a gene is matched ignoring case, so Cd3e finds CD3E,
-        but a gene whose mouse symbol differs from the human one is missed. Prefer the mouse collections above.
+        These sets list human gene symbols. For enrichment on mouse data each gene is replaced by its mouse
+        orthologs from HGNC HCOP (as decoupler does); a gene with no mouse ortholog is left out. If the ortholog
+        table cannot be fetched, genes are matched ignoring case instead. The mouse collections above need no
+        mapping.
       </InfoTip>
     </div>
   );
