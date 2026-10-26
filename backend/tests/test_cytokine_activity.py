@@ -153,6 +153,27 @@ def test_mouse_symbols_are_matched_upper_case_and_ambiguous_ones_dropped():
     assert list(h.signature.index) == ["G1", "G2", "G3"] and h.positions.tolist() == [0, 1, 3]
 
 
+def _hcop(pairs: list[tuple[str, str, int]]) -> pd.DataFrame:
+    return pd.DataFrame(pairs, columns=["human", "mouse", "evidence"]).astype({"evidence": "int16"})
+
+
+def test_mouse_genes_pair_one_to_one_through_hcop_orthologs():
+    sig = ca.parse(RAW)
+    table = _hcop([("G1", "Gm1", 5), ("G2", "Other2", 4),  # a mouse name that differs
+                   ("G3", "Gm3a", 3), ("G3", "Gm3", 9),  # one-to-many: best supported wins
+                   ("G4", "Gm1", 5),  # many-to-one: Gm1 is already G1's
+                   ("G5", "Gm5", 2)])  # under the evidence cut
+    genes = ["Gm1", "Other2", "Gm3a", "Gm3", "Gm5", "G6"]
+    m = ca.match_genes(sig, genes, "mouse", table)
+    assert list(m.signature.index) == ["G1", "G2", "G3"] and m.positions.tolist() == [0, 1, 3]
+    assert "HCOP orthologs" in m.mapped_by
+    off = ca.match_genes(sig, genes, "mouse", None, "offline")
+    assert "upper-cased" in off.mapped_by and "HCOP orthologs unavailable: offline" in off.mapped_by
+    # Human ignores the table: exact symbols, as before.
+    h = ca.match_genes(sig, ["G1", "G2"], "human", table)
+    assert list(h.signature.index) == ["G1", "G2"] and h.mapped_by == "human gene symbols"
+
+
 def test_conditions_profile_is_a_minus_b_within_each_group():
     a = _cells(n_per=20)
     d = ca.design_conditions(a.obs, "cell_type", "stim", "STIM", "CTRL")
@@ -249,7 +270,13 @@ async def test_bad_requests_too_few_genes_and_offline(client, dataset_manager, s
     assert r.status_code == 503 and "check the internet" in r.json()["detail"]
 
 
-async def test_mouse_genes_map_by_upper_case(client, dataset_manager, signature):
+async def test_mouse_genes_map_by_upper_case(client, dataset_manager, signature, monkeypatch):
+    from scview.core import orthologs
+
+    def offline(*args, **kwargs):
+        raise httpx.ConnectError("no route to host")
+
+    monkeypatch.setattr(orthologs, "download", offline)  # no HCOP table: the old upper-case match
     genes = [f"Gm{i}" for i in range(N_GENES)]  # mouse-style: title case
     sig = _signature(genes[:600])
     sig.index = [g.upper() for g in sig.index]
@@ -265,6 +292,7 @@ async def test_mouse_genes_map_by_upper_case(client, dataset_manager, signature)
     assert r.status_code == 200, r.text
     res = r.json()
     assert res["species"] == "mouse" and "upper-cased" in res["mapped_by"]
+    assert "HCOP orthologs unavailable" in res["mapped_by"]
     assert res["groups"] == ["all cells"] and res["top"][0]["cytokines"][0]["cytokine"] == "IFN1"
 
 
@@ -295,3 +323,36 @@ async def test_a_large_dataset_sums_from_the_gene_store(client, tmp_data_dir, si
     assert b["groups"] == s["groups"] and b["n_shared_genes"] == s["n_shared_genes"]
     np.testing.assert_allclose(b["coef"], s["coef"], atol=1e-5)
     np.testing.assert_allclose(b["z"], s["z"], atol=1e-2)
+
+
+async def test_mouse_genes_map_through_hcop_orthologs(client, dataset_manager, signature, tmp_data_dir):
+    """50 signature genes have a mouse name that is not the human one upper-cased:
+    HCOP finds them, upper-casing would not."""
+    from scview.core import orthologs
+
+    genes = [f"Gm{i}" for i in range(N_GENES)]
+    sig = _signature([g.upper() for g in genes[:600]])
+    raw = _raw(sig)
+    (signature / ca.FILENAME).write_bytes(raw)
+    ca._loaded.clear()
+    ca.SHA256 = hashlib.sha256(raw).hexdigest()  # restored by the autouse fixture's monkeypatch
+    mouse_genes = [f"Renamed{i}" if i < 50 else g for i, g in enumerate(genes)]
+    a = _cells(genes=genes, sig=sig)
+    a.var_names = mouse_genes
+    hcop = _hcop([(f"GM{i}", mouse_genes[i], 5) for i in range(600)])
+    dest = tmp_data_dir / "networks"
+    hcop.to_parquet(dest / orthologs.TABLE, index=False)
+    (dest / orthologs.META).write_text(json.dumps({"pinned": True}))
+    orthologs._loaded.clear()
+    did = _register(dataset_manager, a, "mouse_hcop")
+    r = await client.post(f"{API}/datasets/{did}/cytokines/activity",
+                          json={"mode": "conditions", "condition": "stim", "a": "STIM", "b": "CTRL",
+                                "n_permutations": 100})
+    assert r.status_code == 200, r.text
+    res = r.json()
+    assert "HCOP orthologs" in res["mapped_by"] and res["n_signature_genes"] == 600
+    assert res["top"][0]["cytokines"][0]["cytokine"] == "IFN1"
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    lines, _ = ca.grounding_lines(adaptor)
+    assert lines[-1].startswith(
+        "- Caveat: human signature; mouse genes mapped through HCOP orthologs (600 signature genes mapped")

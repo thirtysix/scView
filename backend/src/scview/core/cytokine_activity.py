@@ -26,9 +26,11 @@ The signature file (``signature.centroid``) is fetched once, on first use, into
 ``DATA_DIR/networks/cytosig`` from a pinned commit of the CytoSig repository and
 checked against its sha256; it is GPL-3.0 data, fetched at runtime and never shipped.
 ``CYTOSIG_AUTO_DOWNLOAD=false`` turns fetching off (a file placed there by hand is
-still used when its sha256 matches). Human symbols: a mouse dataset is matched by
-upper-casing its symbols (Ifng -> IFNG), which finds most one-to-one orthologues and
-misses the genes whose names differ.
+still used when its sha256 matches). Human symbols: for a mouse dataset each
+signature gene is paired with one mouse ortholog from HGNC HCOP (``core/orthologs.py``,
+decoupler's evidence and one-to-many cuts), so a gene whose mouse name differs is
+still found. When the ortholog table cannot be had (offline, switched off) the mouse
+symbols are upper-cased instead (Ifng -> IFNG), and the result says so.
 """
 
 from __future__ import annotations
@@ -205,13 +207,45 @@ class GeneMatch:
     mapped_by: str
 
 
-def match_genes(sig: pd.DataFrame, genes, species: str) -> GeneMatch:
-    """The signature genes found in the dataset: exact symbols for human (and unknown),
-    upper-cased symbols for mouse (a symbol two dataset genes share is left out)."""
+def _ortholog_pairs(sig: pd.DataFrame, names: pd.Index, table: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """One dataset gene per signature gene and vice versa: each human gene's HCOP
+    orthologs present in the dataset, best supported first (then the one spelled like
+    the human symbol), and a mouse gene already taken is not used twice.
+    Returns (signature row positions, dataset gene positions)."""
+    from scview.core import orthologs
+
+    m = orthologs.mapping(table)
+    strength = table[table["evidence"] >= orthologs.MIN_EVIDENCE].groupby(["human", "mouse"])["evidence"].max()
+    lookup = pd.Series(np.arange(len(names)), index=names)
+    lookup = lookup[~lookup.index.duplicated(keep=False)]
+    rows, cols, taken = [], [], set()
+    for i, h in enumerate(sig.index):
+        cands = [g for g in m.get(h, []) if g in lookup.index and g not in taken]
+        if not cands:
+            continue
+        best = max(cands, key=lambda g: (strength.get((h, g), 0), g.upper() == h.upper()))
+        taken.add(best)
+        rows.append(i)
+        cols.append(int(lookup[best]))
+    return np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+
+
+def match_genes(sig: pd.DataFrame, genes, species: str, orthologs_table: pd.DataFrame | None = None,
+                unavailable: str = "") -> GeneMatch:
+    """The signature genes found in the dataset: exact symbols for human (and unknown);
+    for mouse, HCOP orthologs (``orthologs_table``), or upper-cased symbols when there
+    is no table (``unavailable`` says why). A symbol two dataset genes share is left out."""
     names = pd.Index(np.asarray(genes, dtype=str))
+    if species == "mouse" and orthologs_table is not None:
+        from scview.core import orthologs
+
+        rows, cols = _ortholog_pairs(sig, names, orthologs_table)
+        return GeneMatch(positions=cols, signature=sig.iloc[rows],
+                         mapped_by=f"human signature genes mapped to mouse through {orthologs.describe()}")
     if species == "mouse":
         key = names.str.upper()
-        mapped_by = "mouse symbols upper-cased to human (orthologues with the same name)"
+        mapped_by = "mouse symbols upper-cased to human (orthologues with the same name)" + (
+            f"; HCOP orthologs unavailable: {unavailable}" if unavailable else "")
     else:
         key = names
         mapped_by = "human gene symbols"
@@ -493,5 +527,9 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
         suffix = f" {r['a']} vs {r['b']}" if r["mode"] == "conditions" else ""
         lines.append(f"- cytokine response (CytoSig): {t['group']}{suffix} top {what}")
     if r["species"] == "mouse":
-        lines.append("- Caveat: human signature; mouse genes matched by upper-cased symbol.")
+        if (r.get("mapped_by") or "").startswith("human signature genes mapped"):
+            lines.append(f"- Caveat: human signature; mouse genes mapped through HCOP orthologs "
+                         f"({r['n_signature_genes']} signature genes mapped, {r['n_shared_genes']} expressed).")
+        else:
+            lines.append("- Caveat: human signature; mouse genes matched by upper-cased symbol.")
     return lines, detail

@@ -262,8 +262,9 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
           )}
           {result.species === "mouse" && (
             <p className="text-[11px] text-amber-700">
-              Mouse dataset: the human signatures were matched by gene symbol in upper case (Ifng to IFNG);
-              genes whose names differ between the species are missed.
+              {result.mapped_by.includes("HCOP orthologs") && !result.mapped_by.includes("unavailable")
+                ? `Mouse dataset: the human signatures were mapped to mouse genes through HCOP orthologs (${result.n_signature_genes.toLocaleString()} signature genes found).`
+                : "Mouse dataset: the human signatures were matched by gene symbol in upper case (Ifng to IFNG); genes whose names differ between the species are missed."}
             </p>
           )}
           <p className="text-[10px] leading-snug text-slate-400">

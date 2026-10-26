@@ -347,6 +347,21 @@ def _add_cytokines(adaptor, lines: list[str], sources: list[ChatSource]) -> None
                                   evidence="\n".join(c_lines[1:])))
 
 
+def _add_activity(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """TF / pathway activity on a mouse dataset: how the human networks were mapped."""
+    from scview.core import activity_nets
+
+    try:
+        a_lines, a_detail = activity_nets.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: activity fact failed: %s", exc)
+        return
+    if a_lines:
+        lines.extend(a_lines)
+        sources.append(ChatSource(kind="result", ref=activity_nets.TAG, detail=a_detail or "",
+                                  evidence="\n".join(a_lines[1:])))
+
+
 def _add_pseudobulk(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last pseudobulk DE run (core/pseudobulk.py): method, hits, group variances."""
     from scview.core import pseudobulk
@@ -630,6 +645,7 @@ def build_grounding_context(
         _add_vdj(adaptor, lines, sources)
         _add_mixscape(adaptor, lines, sources)
         _add_cytokines(adaptor, lines, sources)
+        _add_activity(adaptor, lines, sources)
         _add_pseudobulk(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
