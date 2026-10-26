@@ -112,6 +112,7 @@ const KIND_LABELS: Record<string, string> = {
   ppi: "Protein interactions",
   planner: "Study planner",
   mixscape: "Mixscape",
+  de_audit: "DE audit",
 };
 
 export function kindLabel(kind: string): string {

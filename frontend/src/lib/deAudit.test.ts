@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DEResponse } from "@/api/de";
+import { kindLabel } from "@/api/results";
 import { auditBlocker, concordanceText, fewDonorsNote, nullBins, nullRange, shareText } from "./deAudit";
 
 const RES: DEResponse = {
@@ -74,5 +75,11 @@ describe("text", () => {
     );
     expect(shareText(0.0417, "SNG-1039")).toBe("4% (SNG-1039)");
     expect(shareText(null, null)).toBe("–");
+  });
+});
+
+describe("History > Results", () => {
+  it("names the kept audit", () => {
+    expect(kindLabel("de_audit")).toBe("DE audit");
   });
 });
