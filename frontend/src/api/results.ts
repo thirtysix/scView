@@ -104,6 +104,7 @@ const KIND_LABELS: Record<string, string> = {
   ccc_compare: "L-R change",
   composition: "Composition",
   milo: "Milo",
+  milode: "Neighbourhood DE",
   merge_check: "Merge check",
   count_split: "Count split",
   cytokine: "Cytokines",

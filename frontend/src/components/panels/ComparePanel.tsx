@@ -3,6 +3,7 @@ import { GitCompare, Loader2, AlertCircle, Sparkles } from "lucide-react";
 import { CompositionTest } from "@/components/compare/CompositionTest";
 import { JointEmbedding } from "@/components/compare/JointEmbedding";
 import { MiloTest } from "@/components/compare/MiloTest";
+import { MiloDETest } from "@/components/compare/MiloDETest";
 import { StudyPlanner } from "@/components/compare/StudyPlanner";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
@@ -104,7 +105,7 @@ function PlannerTab() {
   );
 }
 
-type CompositionMode = "conditions" | "milo" | "datasets";
+type CompositionMode = "conditions" | "milo" | "milode" | "datasets";
 
 /** When to use which test, shown with both. */
 const WHICH_TEST =
@@ -126,6 +127,7 @@ function CompositionTab() {
           [
             ["conditions", "Between conditions"],
             ["milo", "Neighbourhoods (Milo)"],
+            ["milode", "Neighbourhood DE (miloDE)"],
             ["datasets", "Two datasets"],
           ] as const
         ).map(([m, label]) => (
@@ -146,7 +148,14 @@ function CompositionTab() {
       ) : dataset ? (
         <>
           <p className="text-sm text-slate-500">
-            {mode === "milo" ? (
+            {mode === "milode" ? (
+              <>
+                Which genes change between two conditions, and where on <span className="font-medium">{dataset.name}</span>
+                &apos;s cell graph? DE is tested inside each neighbourhood with each donor or sample as one
+                replicate, so a change confined to part of a cell type, or crossing cluster borders, shows
+                without clustering first.
+              </>
+            ) : mode === "milo" ? (
               <>
                 Which regions of <span className="font-medium">{dataset.name}</span>&apos;s cell graph
                 change in abundance between two conditions? Each donor or sample is one replicate.
@@ -158,8 +167,10 @@ function CompositionTab() {
               </>
             )}
           </p>
-          <p className="text-xs text-slate-500">{WHICH_TEST}</p>
-          {mode === "milo" ? (
+          {mode !== "milode" && <p className="text-xs text-slate-500">{WHICH_TEST}</p>}
+          {mode === "milode" ? (
+            <MiloDETest key={dataset.id} datasetId={dataset.id} info={dataset} />
+          ) : mode === "milo" ? (
             <MiloTest key={dataset.id} datasetId={dataset.id} info={dataset} />
           ) : (
             <CompositionTest key={dataset.id} datasetId={dataset.id} info={dataset} />
