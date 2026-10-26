@@ -25,10 +25,28 @@ beforeEach(() => {
 });
 
 describe("Plot wrapper", () => {
-  it("passes the layout through untouched in light mode", () => {
+  it("passes an unthemed copy of the layout in light mode, so Plotly never edits the caller's", () => {
     render(<Plot data={data} layout={layout} />);
-    expect(last().layout).toBe(layout);
+    expect(last().layout).toEqual(layout);
+    expect(last().layout).not.toBe(layout);
     expect(last().data).toBe(data);
+  });
+
+  it("keeps a layout-sized plot's height through Plotly's resize and a theme change", () => {
+    const sized: Partial<Layout> = { ...layout, height: 360, autosize: true };
+    render(<Plot data={data} layout={sized} style={{ width: "100%" }} />);
+    expect(last().style).toEqual({ width: "100%", height: 360 });
+    // Plots.resize deletes height from the layout object it was handed.
+    delete (last().layout as Partial<Layout>).height;
+    act(() => useThemeStore.setState({ preference: "dark" }));
+    expect((last().layout as Partial<Layout>).height).toBe(360);
+    expect(last().style).toEqual({ width: "100%", height: 360 });
+    expect(sized.height).toBe(360);
+  });
+
+  it("leaves a height set in style alone", () => {
+    render(<Plot data={data} layout={{ ...layout, height: 360 }} style={{ height: "100%" }} />);
+    expect(last().style).toEqual({ height: "100%" });
   });
 
   it("gets a dark layout in dark mode, and redraws when the theme changes", () => {
@@ -40,7 +58,7 @@ describe("Plot wrapper", () => {
     expect(dark.xaxis!.gridcolor).toBe(plotTheme("dark").grid);
 
     act(() => useThemeStore.setState({ preference: "light" }));
-    expect(last().layout).toBe(layout);
+    expect(last().layout).toEqual(layout);
     act(() => useThemeStore.setState({ preference: "system", systemDark: true }));
     expect((last().layout as Partial<Layout>).paper_bgcolor).toBe(DARK_SURFACE);
   });

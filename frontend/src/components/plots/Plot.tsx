@@ -29,8 +29,10 @@ export function Plot(props: PlotParams) {
   const a11y = useA11y();
   const { data, layout, onInitialized, onUpdate } = props;
   const reducedMotion = useReducedMotion();
+  // Always a copy: Plotly's resize deletes `height` from the layout object it
+  // holds, and that must not be the caller's (a later redraw would lose it).
   const themedLayoutValue = useMemo(() => {
-    const out = a11yLayout(themedLayout(layout, theme), a11y) as Partial<Layout>;
+    const out = { ...(a11yLayout(themedLayout(layout, theme), a11y) as Partial<Layout>) };
     return reducedMotion ? { ...out, transition: { duration: 0, easing: "linear" as const } } : out;
   }, [layout, theme, a11y, reducedMotion]);
   const label = useMemo(() => plotAriaLabel(data as Data[], layout as Partial<Layout>), [data, layout]);
@@ -62,9 +64,23 @@ export function Plot(props: PlotParams) {
     [remember, onUpdate],
   );
 
+  // A plot sized by `layout.height` alone collapsed on a theme change: the first
+  // draw pins Plotly's container to that height while the div is still empty,
+  // but a full redraw under `responsive` sets it to 100% of a div with no height
+  // of its own. Giving the div the layout's height keeps both draws the same.
+  const layoutHeight = (layout as Partial<Layout> | undefined)?.height;
+  const style = useMemo(
+    () =>
+      typeof layoutHeight === "number" && props.style?.height === undefined
+        ? { ...props.style, height: layoutHeight }
+        : props.style,
+    [layoutHeight, props.style],
+  );
+
   const plot = (
     <BasePlot
       {...props}
+      style={style}
       data={themedDataValue}
       layout={themedLayoutValue}
       onInitialized={handleInitialized}
