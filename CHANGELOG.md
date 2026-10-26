@@ -6,6 +6,40 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Download as Seurat or SingleCellExperiment (.rds)**, built by the R converter: counts and
+  log-normalised layers kept sparse (scaled values never go into `data`), cell metadata with factor levels
+  in order, PCA (with loadings) / UMAP / t-SNE, the active clustering as Idents, CITE-seq antibodies as an
+  ADT assay or altExp, VariableFeatures, provenance in `Misc(obj, "scview")` / `metadata(sce)$scview`.
+  Each export reports what went in and what was left out (neighbour graphs, stored results); Seurat's
+  `_` -> `-` gene renames are counted. Checked with Seurat 5.6 (readRDS, DimPlot, FindMarkers,
+  NormalizeData matches the data layer) and scater; counts round-trip exactly on Kang and paul15.
+  Refused up front when the converter is not running or lacks the memory; the .rds is removed after
+  download or after an hour.
+- **Cell Ontology terms for labels**: the Label selection box searches the Cell Ontology (name, synonym,
+  CL id) and attaches the term; free text still works. A "Cell Ontology…" card under the legend shows each
+  label's term (linked to OLS), suggests terms from the label names to accept or reject (12 of Kang's 13
+  labels get the right term first), marks labels unknown, and keeps the mapping through rename, merge and
+  undo. The CELLxGENE export can write `cell_type_ontology_term_id` from a complete mapping you confirmed
+  (opt-in); .rds exports carry it as `<column>_ontology_term_id`. The co-pilot states the term you chose.
+- **Ask the co-pilot about a selection**: a lasso, gate or filter selection becomes chat context ("What
+  are these cells?", "How do they differ from the rest?"), with its composition, QC and genes vs the rest
+  cited as `[result:selection]`; a removable selection chip, "Ask" on the toolbar's selection, and "Run DE
+  for this selection vs the rest" opening the DE tab set up (it does not run by itself). A stored DE on
+  the same cells is cited.
+- **Volcano gene names**: the DE volcano names the top 10 (or 20, or none) genes, split between up and
+  down and stacked so they do not overlap.
+
+### Fixed
+- Plots sized by their own height (the DE volcano, gene-detection histogram and others) collapsed to
+  nothing after switching between light and dark.
+- Co-pilot routing: with the literature search off, a question is never sent to literature alone (it was
+  answered with no sources about half the time); cell-type and gene questions keep the dataset's stored
+  results; the same question gets the same route.
+- p-values below what a float holds read "< 1e-300", not "0.00e+0".
+- Mixscape's "Within" choice shows the setting of the saved run.
+- Info tips no longer pop open, clipped, when a dialog opens.
+
 ## [0.41.0] - 2026-10-26
 
 ### Added
