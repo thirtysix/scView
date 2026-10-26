@@ -39,6 +39,7 @@ RUN Rscript /app/install_bioc.R
 COPY server.R /app/server.R
 COPY convert.R /app/convert.R
 COPY convert_sce.R /app/convert_sce.R
+COPY export_rds.R /app/export_rds.R
 
 EXPOSE 8001
 

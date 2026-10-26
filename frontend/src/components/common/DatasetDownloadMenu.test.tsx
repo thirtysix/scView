@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   h5adDownloadUrl: (id: string) => `/api/v1/datasets/${id}/export/h5ad`,
 }));
 vi.mock("@/api/export", () => api);
+vi.mock("@/api/rdsExport", () => ({ getRExportInfo: () => new Promise(() => {}) }));
 
 import { DatasetDownloadMenu } from "./DatasetDownloadMenu";
 
@@ -51,6 +52,19 @@ describe("DatasetDownloadMenu", () => {
     fireEvent.click(screen.getByRole("button", { name: /download/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: /Run manifest \(\.json\)/ }));
     expect(api.downloadRecipeFile).toHaveBeenLastCalledWith("abc", "manifest");
+  });
+
+  it("opens the R export dialog for a Seurat object and for a SingleCellExperiment", async () => {
+    api.getH5adInfo.mockResolvedValue({ filename: "f.h5ad", size_bytes: 10, source: "uploads", source_label: "as uploaded" });
+    render(<DatasetDownloadMenu datasetId="abc" />);
+    fireEvent.click(screen.getByRole("button", { name: /download/i }));
+    expect(screen.getByText("For R: readRDS(); needs SeuratObject 5 or later")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Seurat object \(\.rds\)/ }));
+    expect(await screen.findByRole("dialog", { name: "Seurat object (.rds)" })).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: /download/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /SingleCellExperiment \(\.rds\)/ }));
+    expect(await screen.findByRole("dialog", { name: "SingleCellExperiment (.rds)" })).toBeInTheDocument();
   });
 
   it("asks for the marker table and shows a failure in the menu", async () => {
