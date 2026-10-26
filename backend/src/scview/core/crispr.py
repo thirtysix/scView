@@ -331,19 +331,22 @@ def _column_values(adata, column: str) -> list[str]:
     return [str(v) for v in pd.unique(col.dropna().astype(str))]
 
 
-def candidate_columns(adata) -> list[dict[str, Any]]:
+def candidate_columns(adata, named_only: bool = False) -> list[dict[str, Any]]:
     """obs columns that look like guide / target labels: a known name, 2..MAX_LEVELS
-    values, at least one control-like (strongest first)."""
+    values, at least one control-like (strongest first). ``named_only``: only the
+    columns with a known name are read (cheap, for the dataset info)."""
     out = []
     obs = adata.obs
     ours = set((read_state(adata).get("call") or {}).get("columns", {}).values())
     for c in obs.columns:
         if c in ours or c in (CR_CALL, CR_N) or str(c).startswith("mixscape_"):
             continue
+        hint = bool(_COLUMN_HINT.match(str(c)))
+        if named_only and not hint:
+            continue
         s = obs[c]
         if pd.api.types.is_numeric_dtype(s) and not isinstance(s.dtype, pd.CategoricalDtype):
             continue
-        hint = bool(_COLUMN_HINT.match(str(c)))
         try:
             n = s.nunique(dropna=True)
         except TypeError:
@@ -544,7 +547,7 @@ def available(adata) -> dict[str, Any] | None:
         frame = guide_counts_frame(adata)
         call = read_state(adata).get("call")
         cr = CR_CALL in adata.obs.columns
-        cols = [] if (frame is not None or cr or call) else candidate_columns(adata)
+        cols = [] if (frame is not None or cr or call) else candidate_columns(adata, named_only=True)
         cols = [c for c in cols if c["control"]]
         if frame is None and not cr and not call and not cols:
             return None

@@ -120,7 +120,8 @@ def test_assign_from_a_column_and_a_clashing_name_is_kept():
     cands = crispr.candidate_columns(a)
     assert cands[0]["column"] == "perturbation" and cands[0]["control"] == "non-targeting"
     assert crispr.default_source(a) == ("column", "perturbation")
-    assert crispr.available(a)["columns"] == ["perturbation", "own"]  # own: guide names, NT among them
+    assert [c["column"] for c in cands] == ["perturbation", "own"]  # own: guide names, NT among them
+    assert crispr.available(a)["columns"] == ["perturbation"]  # the dataset info reads named columns only
     crispr.assign(a)
     # The user's own 'perturbation' stays; scView's goes beside it.
     assert "perturbation_scview" in a.obs.columns
