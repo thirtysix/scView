@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.39.2] - 2026-10-26
+
 ### Added
 - Elsewhere in the body (HPA): a tissue-level menu. Tissues with the nine brain regions as one brain
   (default, as before), every tissue with brain regions separate, or HPA's 15 organ groups (a gene shared by
