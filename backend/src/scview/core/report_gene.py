@@ -386,10 +386,13 @@ _GS_INDEX: dict[tuple, tuple[list[tuple[str, str]], dict[str, np.ndarray]]] = {}
 _GS_LOCK = threading.Lock()
 
 
-def _gene_set_collections(loader) -> list[str]:
-    from scview.core.msigdb_loader import DEFAULT_COLLECTIONS
+def _gene_set_collections(loader, species: str | None = None) -> list[str]:
+    """The default collections of the dataset's species that are on disk (a mouse
+    dataset falls back to the human ones until the mouse files are fetched)."""
+    from scview.core.msigdb_loader import DEFAULT_COLLECTIONS, defaults_for
 
-    return [c for c in DEFAULT_COLLECTIONS if loader._find_file(c) is not None]
+    mine = [c for c in defaults_for(species) if loader._find_file(c) is not None]
+    return mine or [c for c in DEFAULT_COLLECTIONS if loader._find_file(c) is not None]
 
 
 def _gs_index(loader, collections: list[str]) -> tuple[list[tuple[str, str]], dict[str, np.ndarray]]:
@@ -415,12 +418,13 @@ def _gs_index(loader, collections: list[str]) -> tuple[list[tuple[str, str]], di
 
 
 def _gene_sets(ctx: dict, loader) -> dict:
-    from scview.core.msigdb_loader import MSIGDB_COLLECTIONS
-    from scview.core.species import detect_species, human_genesets_warning
+    from scview.core import msigdb_species as ms
+    from scview.core.msigdb_loader import ALL_COLLECTIONS
 
     adata, gene = ctx["adata"], ctx["gene"]
     title = "Gene sets"
-    collections = _gene_set_collections(loader) if loader is not None else []
+    species = ms.dataset_species(adata)
+    collections = _gene_set_collections(loader, species) if loader is not None else []
     if not collections:
         return R.section("gene_sets", title, status=R.NOT_COMPUTED,
                          caption=f"The MSigDB sets holding {gene} are not known.",
@@ -430,11 +434,11 @@ def _gene_sets(ctx: dict, loader) -> dict:
     hits = index.get(gene.upper(), np.zeros(0, dtype=np.int32))
     order = {c: i for i, c in enumerate(collections)}
     named = sorted((sets[j] for j in hits), key=lambda s: (order[s[0]], s[1]))
-    names = {c["id"]: c["name"] for c in MSIGDB_COLLECTIONS}
+    names = {c["id"]: c["name"] for c in ALL_COLLECTIONS}
     per = defaultdict(int)
     for cid, _ in named:
         per[cid] += 1
-    warning = human_genesets_warning(detect_species(adata)) or None
+    warning = ms.warning(species, collections) or None
     caption = (f"{gene} is in {R.plural(len(named), 'set')} of the {len(sets):,} in the default MSigDB "
                f"collections" + (f"; the first {min(N_GENE_SETS, len(named))}, HALLMARK first." if named else "."))
     return R.section(

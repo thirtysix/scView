@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -19,7 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import de_results, gsea
+from scview.core import de_results, gsea, msigdb_fetch
+from scview.core import msigdb_species as ms
 from scview.core import enrichment_network as network
 from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
@@ -32,14 +34,14 @@ from scview.core.geneset_sources import (
     resolve_gene_sets,
     tag_records,
 )
-from scview.core.msigdb_loader import DEFAULT_COLLECTIONS, get_msigdb_loader
+from scview.core.msigdb_loader import defaults_for, get_msigdb_loader
 from scview.core.ora_background import (
     cache_is_current,
     get_background_genes,
     resolve_markers_key,
     write_meta,
 )
-from scview.core.species import detect_species, human_genesets_warning
+from scview.core.species import detect_species
 from scview.core.uns_keys import enrichment_key
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
@@ -82,7 +84,8 @@ class LocalEnrichmentRequest(BaseModel):
     n_genes: int = 100
     # See EnrichmentComputeRequest.exclude_ribo_mito.
     exclude_ribo_mito: bool = True
-    collections: list[str] = DEFAULT_COLLECTIONS
+    # None: the defaults for the dataset's species (mouse: MH, M2, M5, M8).
+    collections: list[str] | None = None
 
 
 class EnrichmentNetworkRequest(LocalEnrichmentRequest):
@@ -119,6 +122,8 @@ class EnrichmentResult(BaseModel):
     # the collection has been deleted since this result was computed.
     collection_name: str = ""
     collection_deleted: bool = False
+    # The MSigDB collection's species (human | mouse); empty for a custom one.
+    species: str = ""
 
 
 class EnrichmentResponse(BaseModel):
@@ -131,6 +136,9 @@ class EnrichmentResponse(BaseModel):
     source: str  # "gseapy" | "precomputed" | "marker_list" | "msigdb_local"
     # Set when the gene sets (human symbols) may not fit the dataset's species.
     warning: str = ""
+    # The collections used, and the dataset's species (human | mouse | unknown).
+    collections: list[str] = []
+    species: str = ""
 
 
 # Far above any genome; caps the request body, not a real list.
@@ -144,7 +152,7 @@ class GeneListEnrichmentRequest(BaseModel):
     down: list[str] = Field(default=[], max_length=MAX_GENE_LIST)
     # The genes that were tested, i.e. the universe both lists were drawn from.
     background: list[str] = Field(min_length=1, max_length=MAX_GENE_LIST)
-    collections: list[str] = DEFAULT_COLLECTIONS
+    collections: list[str] | None = None  # None: the dataset species' defaults
     # See EnrichmentComputeRequest.exclude_ribo_mito (query only, never the background).
     exclude_ribo_mito: bool = True
     # Most significant terms returned per list. A 500-gene DE list overlaps ~8,000
@@ -172,6 +180,7 @@ class GeneListEnrichmentResponse(BaseModel):
     down: GeneListSide
     source: str = "msigdb_local"
     warning: str = ""  # e.g. a mouse dataset against human gene sets
+    species: str = ""  # the dataset's
 
 
 class GseaGene(BaseModel):
@@ -195,7 +204,7 @@ class GseaRequest(BaseModel):
     column: str = ""
     group: str = ""
     rank_by: Literal["auto", "score", "signed_p"] = "auto"
-    collections: list[str] = DEFAULT_COLLECTIONS
+    collections: list[str] | None = None  # None: the dataset species' defaults
     # Left out of the ranking altogether (see EnrichmentComputeRequest.exclude_ribo_mito).
     exclude_ribo_mito: bool = True
     min_size: int = Field(default=gsea.MIN_SIZE, ge=5, le=500)
@@ -218,6 +227,7 @@ class GseaTerm(BaseModel):
     collection: str = ""
     collection_name: str = ""
     collection_deleted: bool = False
+    species: str = ""
 
 
 class GseaSide(BaseModel):
@@ -244,6 +254,7 @@ class GseaResponse(BaseModel):
     column: str = ""
     group: str = ""
     warning: str = ""
+    species: str = ""  # the dataset's
     # A stored DE result's detection prefilter (core/de_prefilter.py): the
     # ranking holds only the genes that DE tested.
     de_min_pct: float | None = None
@@ -306,18 +317,39 @@ async def get_enrichment(
 
 @router.get("/enrichment/msigdb-collections")
 async def get_msigdb_collections(
+    dataset_id: str = Query(default="", description="List the collections for this dataset's species"),
+    dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ):
-    """Return available MSigDB collections with hierarchical structure."""
+    """Return available MSigDB collections with hierarchical structure.
+
+    With ``dataset_id`` of a mouse dataset: the mouse collections first (and the
+    defaults), the human ones after them; the first such request starts fetching
+    the mouse collections in the background (``mouse_download`` says how it goes).
+    Without it, or for a human dataset: the human collections, as always.
+    """
+    species = "unknown"
+    if dataset_id:
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+        species = await asyncio.to_thread(ms.dataset_species, adaptor.adata)
+    defaults = defaults_for(species)
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
     if loader is None:
-        return {"collections": [], "hierarchy": [], "defaults": DEFAULT_COLLECTIONS}
+        return {"collections": [], "hierarchy": [], "defaults": defaults, "species": species}
 
-    return {
-        "collections": loader.available_collections(),
-        "hierarchy": loader.available_collections_hierarchical(),
-        "defaults": DEFAULT_COLLECTIONS,
-    }
+    out: dict[str, Any] = {"species": species, "defaults": defaults}
+    if species == "mouse":
+        if settings.MSIGDB_AUTO_DOWNLOAD:
+            msigdb_fetch.start_mouse_download(loader.dir)
+        out["mouse_download"] = msigdb_fetch.mouse_status(loader.dir, settings.MSIGDB_AUTO_DOWNLOAD)
+
+    def listing() -> dict[str, Any]:  # reads every collection on disk: off the loop
+        return {"collections": loader.available_collections(species),
+                "hierarchy": loader.available_collections_hierarchical(species)}
+
+    return {**await asyncio.to_thread(listing), **out}
 
 
 @router.get("/datasets/{dataset_id}/enrichment/columns")
@@ -487,9 +519,12 @@ def _compute_local(
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
     store = get_custom_store(settings.DATA_DIR)
     # Custom collections need no MSigDB, so only an MSigDB-only request fails here.
-    if loader is None and not any(is_custom_id(c) for c in body.collections):
+    species = ms.dataset_species(adaptor.adata)
+    collections = ms.resolve(body.collections, species)
+    if loader is None and not any(is_custom_id(c) for c in collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
-    warning = human_genesets_warning(detect_species(adaptor.adata))
+    _require_msigdb(collections, settings)
+    warning = ms.warning(species, collections)
 
     col = body.column
     if not col:
@@ -514,7 +549,7 @@ def _compute_local(
             col,
             body.group,
             n_genes=body.n_genes,
-            collections=body.collections,
+            collections=collections,
             exclude_ribo_mito=body.exclude_ribo_mito,
         ):
             cached = adaptor.adata.uns[cached_key]
@@ -530,6 +565,8 @@ def _compute_local(
                 results=results,
                 source="precomputed",
                 warning=warning,
+                collections=collections,
+                species=species,
             )
 
     # Existence check. n_genes must be passed through: get_markers defaults to 100,
@@ -554,7 +591,7 @@ def _compute_local(
     )
 
     try:
-        all_results = _ora_records(top_genes, background, body.collections, loader, store)
+        all_results = _ora_records(top_genes, background, collections, loader, store, species=species)
 
         # Cache the result
         if col:
@@ -566,7 +603,7 @@ def _compute_local(
                 body.group,
                 background_n=len(background) if background else None,
                 n_genes=body.n_genes,
-                collections=body.collections,
+                collections=collections,
                 exclude_ribo_mito=body.exclude_ribo_mito,
             )
 
@@ -577,6 +614,8 @@ def _compute_local(
             results=[EnrichmentResult(**r) for r in label_records(all_results, store)],
             source="msigdb_local",
             warning=warning,
+            collections=collections,
+            species=species,
         )
 
     except ImportError:
@@ -613,7 +652,8 @@ async def compute_enrichment(
 
 
 def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> EnrichmentResponse:
-    warning = human_genesets_warning(detect_species(adaptor.adata))
+    # The Enrichr libraries are human gene symbols.
+    warning = ms.warning(detect_species(adaptor.adata).species, human_library=True)
     # Resolve which obs column's markers to use
     col = body.column or body.groupby
     if not col:
@@ -786,8 +826,11 @@ def _compute_gene_lists(
 ) -> GeneListEnrichmentResponse:
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
     store = get_custom_store(settings.DATA_DIR)
-    if loader is None and not any(is_custom_id(c) for c in body.collections):
+    species = ms.dataset_species(adaptor.adata)
+    collections = ms.resolve(body.collections, species)
+    if loader is None and not any(is_custom_id(c) for c in collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
+    _require_msigdb(collections, settings)
 
     # Only genes this dataset measures: a list from another dataset (or a typo)
     # must not widen the universe the test is conditioned on.
@@ -803,7 +846,8 @@ def _compute_gene_lists(
         # A query gene outside the universe would break the hypergeometric test.
         query = [g for g in dict.fromkeys(genes) if g in universe]
         kept = select_query_genes(query, len(query), exclude_ribo_mito=body.exclude_ribo_mito)
-        records = _ora_records(kept, background, body.collections, loader, store) if kept else []
+        records = (_ora_records(kept, background, collections, loader, store, species=species)
+                   if kept else [])
         top = records[: body.max_terms]  # already most significant first
         return GeneListSide(
             n_genes_requested=len(genes),
@@ -826,11 +870,12 @@ def _compute_gene_lists(
 
     return GeneListEnrichmentResponse(
         background_n=len(background),
-        collections=list(body.collections),
+        collections=collections,
         exclude_ribo_mito=body.exclude_ribo_mito,
         up=up,
         down=down,
-        warning=human_genesets_warning(detect_species(adaptor.adata)),
+        warning=ms.warning(species, collections),
+        species=species,
     )
 
 
@@ -917,8 +962,11 @@ def _collections_fingerprint(collections: list[str], store) -> list[str]:
 def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Settings) -> GseaResponse:
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
     store = get_custom_store(settings.DATA_DIR)
-    if loader is None and not any(is_custom_id(c) for c in body.collections):
+    species = ms.dataset_species(adaptor.adata)
+    collections = ms.resolve(body.collections, species)
+    if loader is None and not any(is_custom_id(c) for c in collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
+    _require_msigdb(collections, settings)
     ranking = _gsea_ranking(dataset_id, adaptor, body)
     prefilter = _de_prefilter_fields(dataset_id, body)
 
@@ -926,11 +974,11 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
         "min_size": body.min_size, "max_size": body.max_size,
         "permutations": body.permutations, "seed": body.seed,
     }
-    key = gsea.cache_key(ranking, _collections_fingerprint(body.collections, store), params)
+    key = gsea.cache_key(ranking, _collections_fingerprint(collections, store), params)
     run = gsea.cached(key)
     hit = run is not None
     if run is None:
-        resolved = resolve_gene_sets(body.collections, loader, store)
+        resolved = resolve_gene_sets(collections, loader, store, species=species)
         if resolved.missing_custom:
             raise HTTPException(
                 status_code=400,
@@ -978,7 +1026,7 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
         permutations=run.permutations,
         min_size=body.min_size,
         max_size=body.max_size,
-        collections=list(body.collections),
+        collections=collections,
         exclude_ribo_mito=body.exclude_ribo_mito,
         up=side(run.up),
         down=side(run.down),
@@ -986,7 +1034,8 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
         cached=hit,
         column=body.column if body.group else "",
         group=body.group,
-        warning=human_genesets_warning(detect_species(adaptor.adata)),
+        warning=ms.warning(species, collections),
+        species=species,
         **prefilter,
     )
 
@@ -996,20 +1045,32 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
 # ---------------------------------------------------------------------------
 
 
+def _require_msigdb(collections: list[str], settings: Settings) -> None:
+    """Fetch asked-for mouse collections on first use; a 503 with the reason when they
+    cannot be (offline, or MSIGDB_AUTO_DOWNLOAD off). Blocks: call off the event loop."""
+    try:
+        msigdb_fetch.require(collections, Path(settings.MSIGDB_DIR) if settings.MSIGDB_DIR else None,
+                             settings.MSIGDB_AUTO_DOWNLOAD)
+    except msigdb_fetch.MSigDBUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 def _ora_records(
     query: list[str],
     background: list[str] | None,
     collections: list[str],
     loader,
     store,
+    species: str | None = None,
 ) -> list[dict[str, Any]]:
     """gseapy ORA of ``query`` against the selected MSigDB/custom collections over
     ``background``: normalised records tagged with their collection, most
-    significant first. A deleted custom collection or an empty selection is a 400."""
+    significant first. A deleted custom collection or an empty selection is a 400.
+    ``species``: the dataset's (``resolve_gene_sets``)."""
     import gseapy as gp
 
     # Load the selected MSigDB and custom collections as one merged dict
-    resolved = resolve_gene_sets(collections, loader, store)
+    resolved = resolve_gene_sets(collections, loader, store, species=species)
     if resolved.missing_custom:
         raise HTTPException(
             status_code=400,

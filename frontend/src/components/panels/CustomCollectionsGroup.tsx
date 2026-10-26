@@ -26,6 +26,20 @@ export function CollectionOptions({ collections }: { collections: CollectionChoi
       {collectionOptionLabel(c)}
     </option>
   );
+  // A mouse dataset lists the mouse collections first, then the human ones.
+  const mouse = msigdb.filter((c) => c.species === "mouse");
+  if (mouse.length > 0) {
+    const human = msigdb.filter((c) => c.species !== "mouse");
+    return (
+      <>
+        <optgroup label="MSigDB mouse">{mouse.map(option)}</optgroup>
+        {human.length > 0 && (
+          <optgroup label="MSigDB human (human symbols, case-matched)">{human.map(option)}</optgroup>
+        )}
+        {custom.length > 0 && <optgroup label="Custom">{custom.map(option)}</optgroup>}
+      </>
+    );
+  }
   if (custom.length === 0) return <>{msigdb.map(option)}</>;
   return (
     <>

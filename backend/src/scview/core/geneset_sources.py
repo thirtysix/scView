@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from scview.core.custom_genesets import CustomGeneSetStore, coverage, is_custom_id
+from scview.core.msigdb_loader import collection_species
 
 logger = logging.getLogger(__name__)
 
@@ -35,24 +36,45 @@ class ResolvedGeneSets:
     custom_names: dict[str, str] = field(default_factory=dict)
     # MSigDB ids that were asked for while MSigDB is not configured
     msigdb_unavailable: bool = False
+    # MSigDB ids written for another species than the dataset's (genes_for_species ran)
+    cross_species: list[str] = field(default_factory=list)
+
+
+def genes_for_species(
+    sets: dict[str, list[str]], set_species: str, dataset_species: str
+) -> dict[str, list[str]]:
+    """THE place a gene-set library written for one species is made to fit a dataset
+    of another (human MSigDB on a mouse dataset, say). Today the genes are kept as
+    they are and matched ignoring case downstream (``match_query_case``, gseapy), so
+    a mouse gene whose symbol is the human one title-cased is found and one whose
+    mouse symbol differs is missed. An ortholog table plugs in here."""
+    return sets
 
 
 def resolve_gene_sets(
     collection_ids: Iterable[str],
     msigdb_loader: Any,
     custom_store: CustomGeneSetStore | None,
+    species: str | None = None,
 ) -> ResolvedGeneSets:
     """Merge the requested collections into one gseapy gene-set dict.
 
     MSigDB collections go first whatever the request order, so an MSigDB term
     always keeps its plain name: a custom set reusing it (a custom copy of
     Hallmark, say) is kept under "<term> (<collection>)" instead of silently
-    replacing it.
+    replacing it. With the dataset's ``species`` (human or mouse), that species'
+    collections go first (MH and H share their set names, so on a mouse dataset
+    MH keeps the plain ones) and another species' pass through
+    ``genes_for_species``.
     """
     out = ResolvedGeneSets()
     seen: set[str] = set()
     ids = list(collection_ids)
-    ordered = [c for c in ids if not is_custom_id(c)] + [c for c in ids if is_custom_id(c)]
+    msig = [c for c in ids if not is_custom_id(c)]
+    if species in ("human", "mouse"):
+        msig = ([c for c in msig if collection_species(c) in (species, None)]
+                + [c for c in msig if collection_species(c) not in (species, None)])
+    ordered = msig + [c for c in ids if is_custom_id(c)]
     for cid in ordered:
         if cid in seen:
             continue
@@ -72,6 +94,10 @@ def resolve_gene_sets(
                 continue
             sets = msigdb_loader.get_collection_as_dict(cid)
             label = cid
+            set_species = collection_species(cid)
+            if species in ("human", "mouse") and set_species and set_species != species:
+                sets = genes_for_species(sets, set_species, species)
+                out.cross_species.append(cid)
         for term, genes in sets.items():
             key = term
             if key in out.gene_sets:
@@ -103,7 +129,24 @@ def match_query_case(
     mouse query the stored spelling already matches. For a human query the few
     mixed-case symbols (C1orf112, stored as C1ORF112) are mapped back to the
     dataset's own spelling, which is what makes the match case-insensitive.
+
+    gseapy decides that from the first 10-20 sets only, so a selection mixing
+    spellings (mouse MSigDB beside human MSigDB or custom sets, or a library
+    passed through ``genes_for_species``) would lose one side. Then every set is
+    spelled the dataset's way (each gene by the universe's or query's name that
+    matches it ignoring case), and gseapy compares exactly.
     """
+    mixed_species = resolved.cross_species or any(
+        collection_species(c) == "mouse" for c in set(resolved.term_collection.values())
+    )
+    if mixed_species and universe:
+        lookup: dict[str, str] = {}
+        for g in (*query, *universe):
+            lookup.setdefault(str(g).upper(), str(g))
+        return {
+            term: [lookup.get(str(g).upper(), g) for g in genes]
+            for term, genes in resolved.gene_sets.items()
+        }
     if not resolved.custom_terms or not universe or not _mostly_upper(query):
         return resolved.gene_sets
     mixed = {g.upper(): g for g in (str(u) for u in universe) if not g.isupper()}
@@ -120,6 +163,7 @@ def tag_records(records: list[dict], resolved: ResolvedGeneSets) -> list[dict]:
     for rec in records:
         cid = resolved.term_collection.get(rec.get("term", ""), "")
         rec["collection"] = cid
+        rec["species"] = collection_species(cid) or ""
         if cid in resolved.custom_names:
             rec["collection_name"] = resolved.custom_names[cid]
     return records
@@ -137,6 +181,8 @@ def label_records(records: list[dict], custom_store: CustomGeneSetStore | None) 
     for rec in records:
         cid = rec.get("collection", "")
         if not is_custom_id(cid):
+            if "species" not in rec and collection_species(cid):  # cached before species
+                rec = {**rec, "species": collection_species(cid)}
             out.append(rec)
             continue
         if cid not in names:
