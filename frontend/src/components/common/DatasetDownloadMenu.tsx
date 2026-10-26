@@ -9,9 +9,11 @@ import {
   type H5adInfo,
 } from "@/api/export";
 import type { ExportFormat } from "@/api/exportFormats";
+import type { RFormat } from "@/api/rdsExport";
 import { h5adWithResultsUrl, resultsZipUrl } from "@/api/results";
 import { ExportFormatDialog } from "@/components/common/ExportFormatDialog";
 import { ExportMenu, type ExportMenuItem } from "@/components/common/ExportMenu";
+import { RExportDialog } from "@/components/common/RExportDialog";
 import { formatBytes } from "@/lib/formatting";
 
 interface DatasetDownloadMenuProps {
@@ -23,13 +25,15 @@ interface DatasetDownloadMenuProps {
 
 /**
  * "Download" menu for one dataset: the .h5ad scView works on (size shown before
- * the download starts), copies for CELLxGENE and Vitessce (options in a dialog), the cell metadata, the marker tables, and the replay
+ * the download starts), copies for CELLxGENE and Vitessce (options in a dialog), Seurat and
+ * SingleCellExperiment objects for R (built by the R converter), the cell metadata, the marker tables, and the replay
  * script + run manifest of its recorded steps.
  */
 export function DatasetDownloadMenu({ datasetId, compact = false, className }: DatasetDownloadMenuProps) {
   const [info, setInfo] = useState<H5adInfo | null>(null);
   const [infoError, setInfoError] = useState(false);
   const [dialog, setDialog] = useState<ExportFormat | null>(null);
+  const [rDialog, setRDialog] = useState<RFormat | null>(null);
 
   useEffect(() => {
     setInfo(null);
@@ -84,6 +88,20 @@ export function DatasetDownloadMenu({ datasetId, compact = false, className }: D
       label: "For Vitessce (.zip)…",
       hint: "AnnData-Zarr + view config",
       onSelect: () => setDialog("vitessce"),
+    },
+    {
+      key: "seurat-rds",
+      icon: "data",
+      label: "Seurat object (.rds)…",
+      hint: "For R: readRDS(); needs SeuratObject 5 or later",
+      onSelect: () => setRDialog("seurat"),
+    },
+    {
+      key: "sce-rds",
+      icon: "data",
+      label: "SingleCellExperiment (.rds)…",
+      hint: "For R / Bioconductor: readRDS()",
+      onSelect: () => setRDialog("sce"),
     },
     {
       key: "metadata-csv",
@@ -141,6 +159,7 @@ export function DatasetDownloadMenu({ datasetId, compact = false, className }: D
         className={className}
       />
       {dialog && <ExportFormatDialog datasetId={datasetId} format={dialog} onClose={() => setDialog(null)} />}
+      {rDialog && <RExportDialog datasetId={datasetId} format={rDialog} onClose={() => setRDialog(null)} />}
     </>
   );
 }
