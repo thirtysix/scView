@@ -136,6 +136,20 @@ def test_scaled_x_uses_the_lognormalised_raw_and_never_scaled_values():
         rds_export.plan(_A(a), "sce")
 
 
+def test_cell_ontology_terms_travel_as_cell_metadata():
+    import json
+    a = _processed()
+    a.uns["scview_label_terms"] = json.dumps({"leiden": {"0": "CL:0000236", "1": "unknown"}, "gone": {"x": "CL:1"}})
+    p = rds_export.plan(_A(a), "seurat")
+    ids = p.obs["leiden_ontology_term_id"]
+    assert list(ids[a.obs["leiden"] == "0"].unique()) == ["CL:0000236"]
+    assert list(ids[a.obs["leiden"] == "1"].unique()) == ["unknown"]
+    assert ids[a.obs["leiden"].to_numpy() == "2"].isna().all()  # no term: NA
+    assert "gone_ontology_term_id" not in p.obs  # a column no longer in obs
+    assert "scview_label_terms" not in p.dropped.get("uns", [])
+    assert any("Cell Ontology" in n for n in p.notes)
+
+
 def test_unknown_format_is_refused():
     with pytest.raises(rds_export.ExportError, match="Unknown R format"):
         rds_export.plan(_A(_processed()), "loom")

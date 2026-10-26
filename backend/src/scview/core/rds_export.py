@@ -44,6 +44,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from scview.core import cell_ontology as co
 from scview.core import cellxgene_export as cx
 from scview.core import conversion
 
@@ -129,6 +130,21 @@ def _r_obs(adata) -> tuple[pd.DataFrame, list[str], int]:
     return obs, notes, renamed
 
 
+def _ontology_columns(adata, obs: pd.DataFrame) -> list[str]:
+    """Each label column's Cell Ontology mapping (uns scview_label_terms) as a per-cell
+    ``<column>_ontology_term_id`` column in ``obs`` (CELLxGENE's naming); "unknown"
+    stays as written, labels without a term are NA. Returns the columns added."""
+    added = []
+    for col in co.mapped_columns(adata):
+        name = f"{str(col).replace('/', '_')}_ontology_term_id"
+        if name in obs.columns:
+            continue
+        ids = adata.obs[col].astype(str).map(co.stored(adata, col))
+        obs[name] = pd.Categorical(ids.to_numpy(), categories=sorted(set(ids.dropna())))
+        added.append(name)
+    return added
+
+
 def _protein(adata) -> dict[str, Any]:
     from scview.core import protein as prot
 
@@ -199,6 +215,10 @@ def plan(adaptor, fmt: str, dataset_name: str = "", dataset_id: str = "") -> Pla
     notes += vnotes
     obs, onotes, _ = _r_obs(adata)
     notes += onotes
+    terms = _ontology_columns(adata, obs)
+    if terms:
+        notes.append("Cell Ontology terms you chose travel as cell metadata: "
+                     + ", ".join(terms) + " (labels without a term are NA).")
 
     choices = cx.embedding_choices(adata, max_dims=10 ** 6)
     obsm = {c["export_name"]: np.ascontiguousarray(np.asarray(adata.obsm[c["key"]]), dtype=np.float64)
@@ -221,7 +241,8 @@ def plan(adaptor, fmt: str, dataset_name: str = "", dataset_id: str = "") -> Pla
     if protein:
         kept_obsm |= {"protein_counts", "protein_clr"} if "clr" in protein else {"protein_counts"}
     pca = _pca_meta(adata)
-    used_uns = {PROV_KEY, *(f"{c}_colors" for c in adata.obs.columns)} | ({"pca"} if pca else set())
+    used_uns = ({PROV_KEY, *(f"{c}_colors" for c in adata.obs.columns)} | ({"pca"} if pca else set())
+                | ({co.TERMS_KEY} if terms else set()))
     dropped = {
         "obsm": [str(k) for k in adata.obsm.keys() if k not in kept_obsm],
         "layers": [str(k) for k in adata.layers.keys()
