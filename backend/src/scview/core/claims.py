@@ -637,6 +637,7 @@ _FAMILY_PREFIX = {
     "ppi": "result:ppi",
     "activity": "result:activity",
     "pseudobulk": "result:pseudobulk",
+    "deaudit": "result:deaudit", "audit": "result:deaudit",
     "mixscape": "result:mixscape", "perturbation": "result:mixscape", "crispr": "result:mixscape",
     "ontology": "result:ontology",
     "selection": "result:selection", "sel": "result:selection",
@@ -685,7 +686,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "mito", "qcstates", "embedding", "reliability", "planner",
                                   "seqqc", "hashing", "vdj", "offtarget", "hpa",
                                   "cytokines", "cytokine", "cytosig",
-                                  "activity",
+                                  "activity", "deaudit", "audit",
                                   "clonotypes", "clonotype", "ppi", "cnv", "ontology",
                                   "selection", "sel", "screen", "labels")
                          or not last):
