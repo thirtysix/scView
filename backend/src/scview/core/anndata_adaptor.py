@@ -19,6 +19,7 @@ from scview.core import (
     protein, scaling,
 )
 from scview.core import gene_store as gene_store_mod
+from scview.core import uns_history
 from scview.core.ora_background import resolve_markers_key
 from scview.core.species import detect_species
 from scview.core.uns_keys import markers_column, repair_slash_keys
@@ -263,6 +264,8 @@ class AnnDataAdaptor:
                 # assay, totalVI's obsm): normalised here, in memory.
                 protein.adopt_obsm(adata)
             self._large.opened(self.h5ad_path, large)
+            # The markers / enrichment as saved, so a re-run's save keeps the old ones.
+            uns_history.capture(self, adata)
             self._adata = adata
         return self._adata
 
@@ -1068,6 +1071,7 @@ class AnnDataAdaptor:
         """Save an obs / uns / obsm edit of a large dataset into its h5ad, X untouched
         (``large_mode.write_in_place``). Call with the dataset's edit lock held, in a
         worker thread."""
+        uns_history.before_save(self, self.adata)
         large_mode.write_in_place(self.adata, self.h5ad_path, self._large.lock, obs=obs,
                                   uns_keys=uns_keys, uns_removed=uns_removed, obsm_keys=obsm_keys)
 

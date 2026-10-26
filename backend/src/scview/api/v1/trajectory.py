@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from scview.core import large_run
 from scview.core import pseudotime_genes as ptg
-from scview.core import large_mode
+from scview.core import large_mode, uns_history
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.obs_writes import uns_snapshot, write_derived
 from scview.core.processing import run_exclusive
@@ -192,6 +192,7 @@ async def compute_pseudotime(
         params = compute_dpt(work, body.root_column, body.root_value)
         # Write beside, then swap in: a backed dataset may be reading this path.
         partial = output_path + ".partial"
+        uns_history.before_save(output_path, work)
         work.write_h5ad(partial, compression="gzip")
         os.replace(partial, output_path)
         return params

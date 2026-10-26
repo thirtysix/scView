@@ -87,9 +87,10 @@ def test_p_value_column_names():
 
 def test_refuses_classes_outside_scview(tmp_path):
     [e] = _stored("ds1", "test", {"x": 1})
-    rdir = results_store.root() / "ds1" / e["id"]
-    doc = (rdir / "result.json").read_text().replace('{"x": 1}', '{"__dc__": "os:PathLike", "f": {}}')
-    (rdir / "result.json").write_text(doc)
+    import gzip
+    path = results_store.root() / "ds1" / e["id"] / results_store.RESULT
+    doc = gzip.decompress(path.read_bytes()).decode().replace('{"x": 1}', '{"__dc__": "os:PathLike", "f": {}}')
+    path.write_bytes(gzip.compress(doc.encode()))
     assert results_store.load("ds1", e["id"]) is None
 
 
@@ -227,3 +228,130 @@ async def test_results_api(client, dataset_manager, tmp_data_dir):
     _stored(did, "ppi", [{"label": "q"}])
     dataset_manager.remove_dataset(did)
     assert not (results_store.root() / did).exists()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: superseded markers / enrichment (core/uns_history.py)
+# ---------------------------------------------------------------------------
+
+def _clustered(n: int = 60) -> ad.AnnData:
+    rng = np.random.default_rng(0)
+    a = ad.AnnData(rng.poisson(2.0, (n, 30)).astype(np.float32),
+                   obs=pd.DataFrame({"leiden": pd.Categorical(np.repeat(["0", "1", "2"], n // 3))},
+                                    index=[f"c{i}" for i in range(n)]))
+    a.var_names = [f"g{j}" for j in range(30)]
+    a.X[: n // 3, :5] += 6  # group 0 has markers
+    return a
+
+
+def _markers(a: ad.AnnData, method: str) -> dict:
+    import scanpy as sc
+    from scview.core.uns_keys import markers_key
+    sc.tl.rank_genes_groups(a, "leiden", method=method, key_added=markers_key("leiden"))
+    return a.uns[markers_key("leiden")]
+
+
+def test_before_save_keeps_what_a_rerun_replaced(tmp_path):
+    from scview.core import uns_history
+    from scview.core.uns_keys import enrichment_key, markers_key
+
+    a = _clustered()
+    _markers(a, "t-test")
+    a.uns[enrichment_key("leiden", "0")] = '{"terms": [1]}'
+    a.uns["ora_meta__leiden__0"] = '{"ora_version": 5}'
+    uns_history.capture("ds5", a)
+
+    same = a.uns[markers_key("leiden")]
+    a.uns[markers_key("leiden")] = dict(reversed(list(same.items())))  # same content, as read back
+    assert uns_history.before_save("ds5", a) == 0
+
+    _markers(a, "wilcoxon")
+    del a.uns[enrichment_key("leiden", "0")]
+    assert uns_history.before_save("ds5", a) == 2
+    results_store.flush()
+    rows = results_store.entries("ds5", adaptor=FakeAdaptor(tmp_path, "ds5", a))
+    by_kind = {e["kind"]: e for e in rows}
+    assert by_kind["markers"]["label"] == "Markers of 'leiden' (t-test)"
+    assert by_kind["markers"]["status"] == "superseded" and by_kind["markers"]["stale"] is False
+    assert by_kind["enrichment"]["key"] == "leiden|0"
+    _, value = results_store.load("ds5", by_kind["enrichment"]["id"])
+    assert value["value"] == '{"terms": [1]}' and value["meta"] == '{"ora_version": 5}'
+    _, markers = results_store.load("ds5", by_kind["markers"]["id"])
+    assert markers["value"]["params"]["method"] == "t-test"
+    assert list(markers["value"]["names"].dtype.names) == ["0", "1", "2"]
+    assert uns_history.before_save("ds5", a) == 0  # the new ones are the saved ones now
+
+
+def test_archived_markers_stale_after_relabel_not_after_reorder(tmp_path):
+    from scview.core import uns_history
+
+    a = _clustered()
+    _markers(a, "t-test")
+    uns_history.capture("ds6", a)
+    _markers(a, "wilcoxon")
+    uns_history.before_save("ds6", a)
+    results_store.flush()
+    fake = FakeAdaptor(tmp_path, "ds6", a)
+    a.obs["leiden"] = a.obs["leiden"].cat.reorder_categories(["2", "0", "1"])
+    assert results_store.entries("ds6", adaptor=fake)[0]["stale"] is False
+    a.obs["leiden"] = pd.Categorical(np.tile(["0", "1", "2"], 20))
+    assert results_store.entries("ds6", adaptor=fake)[0]["stale"] is True
+
+
+def test_three_superseded_per_column(tmp_path):
+    from scview.core import uns_history
+
+    a = _clustered()
+    _markers(a, "t-test")
+    uns_history.capture("ds7", a)
+    for method in ("wilcoxon", "t-test_overestim_var", "logreg", "t-test", "wilcoxon"):
+        _markers(a, method)
+        uns_history.before_save("ds7", a)
+    results_store.flush()
+    rows = results_store.entries("ds7")
+    assert len(rows) == results_store.KEEP_SUPERSEDED and {e["status"] for e in rows} == {"superseded"}
+
+
+@pytest.mark.asyncio
+async def test_restore_api(client, dataset_manager):
+    from scview.core.obs_writes import uns_snapshot, write_derived
+    from scview.core.uns_keys import enrichment_key, markers_key
+    from tests.test_hvg_sensitivity import _register
+
+    a = _clustered()
+    _markers(a, "t-test")
+    a.uns[enrichment_key("leiden", "0")] = '{"terms": []}'
+    did = _register(dataset_manager, a, "rs")
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+
+    _markers(adaptor.adata, "wilcoxon")  # a re-run, saved
+    assert dataset_manager.persist_uns(did, adaptor, [markers_key("leiden")])
+    results_store.flush()
+    r = await client.get(f"/api/v1/datasets/{did}/results?kind=markers")
+    [old] = r.json()["results"]
+    assert old["label"].endswith("(t-test)") and old["stale"] is False
+
+    assert (await client.post(f"/api/v1/datasets/{did}/results/nope/restore")).status_code == 404
+    r = await client.post(f"/api/v1/datasets/{did}/results/{old['id']}/restore")
+    assert r.status_code == 200, r.text
+    results_store.flush()
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.adata.uns[markers_key("leiden")]["params"]["method"] == "t-test"
+    assert enrichment_key("leiden", "0") not in adaptor.adata.uns  # computed from other markers
+    rows = (await client.get(f"/api/v1/datasets/{did}/results")).json()["results"]
+    assert {(e["kind"], e["label"]) for e in rows} == {("markers", "Markers of 'leiden' (wilcoxon)"),
+                                                        ("enrichment", "Enrichment of 'leiden' 0")}
+    dataset_manager.evict(did)  # from disk: the restore was saved
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.adata.uns[markers_key("leiden")]["params"]["method"] == "t-test"
+
+    wil = next(e for e in rows if e["kind"] == "markers")
+    bad = await client.post(f"/api/v1/datasets/{did}/results/"
+                            f"{next(e for e in rows if e['kind'] == 'enrichment')['id']}/restore")
+    assert bad.status_code == 200  # enrichment comes back too
+    adata = adaptor.adata
+    before = uns_snapshot(adata)
+    adata.obs["leiden"] = pd.Categorical(np.tile(["0", "1", "2"], 20))  # re-clustered
+    write_derived(adata, adaptor.h5ad_path, adaptor.h5ad_path, before)
+    r = await client.post(f"/api/v1/datasets/{did}/results/{wil['id']}/restore")
+    assert r.status_code == 409 and "earlier groups" in r.json()["detail"]

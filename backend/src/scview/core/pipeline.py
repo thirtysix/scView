@@ -37,6 +37,7 @@ from scview.core import (
     scaling,
     step_failures,
     stress,
+    uns_history,
 )
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
 from scview.core.anndata_adaptor import per_cell_qc
@@ -2059,6 +2060,7 @@ def _finish_run(
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         tw = time.time()
         partial = output_path + ".partial"
+        uns_history.before_save(output_path, adata)  # markers / enrichment this run replaced
         try:
             adata.write_h5ad(partial, compression="gzip")
             os.replace(partial, output_path)

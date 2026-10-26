@@ -1,4 +1,5 @@
-"""The per-dataset results store (``core/results_store.py``): list, read, delete."""
+"""The per-dataset results store (``core/results_store.py``): list, read, delete, and
+restore an earlier markers / enrichment result (``core/uns_history.py``)."""
 
 from __future__ import annotations
 
@@ -7,8 +8,9 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from scview.core import results_store
+from scview.core import results_store, uns_history
 from scview.core.dataset_manager import DatasetManager
+from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.dependencies import get_dataset_manager
 
 router = APIRouter()
@@ -61,3 +63,44 @@ async def delete_result(dataset_id: str, result_id: str,
     if not await asyncio.to_thread(results_store.delete, dataset_id, result_id):
         raise HTTPException(status_code=404, detail="No such stored result.")
     return {"deleted": result_id}
+
+
+@router.post("/datasets/{dataset_id}/results/{result_id}/restore")
+async def restore_result(dataset_id: str, result_id: str,
+                         dm: DatasetManager = Depends(get_dataset_manager)) -> dict:
+    """Make an earlier markers or enrichment result current again (the one it
+    replaces is kept in its place). Restored markers drop the column's enrichment,
+    which was computed from the markers they replace. 409 when the column's groups
+    have changed since the result was computed."""
+    _known(dm, dataset_id)
+    async with dataset_edit(dataset_id) as held:
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+        try:
+            entry, value = await asyncio.to_thread(uns_history.check_restorable, dataset_id, result_id, adaptor)
+        except uns_history.RestoreError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail)
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = await edit_room(dm, dataset_id, adaptor)
+
+        def _run() -> list[str]:
+            adata = editable(adaptor)
+            before = uns_snapshot(adata)
+            keys = uns_history.apply(adata, value)
+            save_edit(adaptor, adata, output_path, before)
+            return keys
+
+        try:
+            keys = await held.run(_run)
+        except Exception as exc:
+            dm.evict(dataset_id)  # may hold a restore that was never saved
+            raise HTTPException(status_code=500, detail=f"Could not restore the result: {exc!s}")
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        else:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
+    # It is the current result now (in the h5ad); the one it replaced took its place here.
+    await asyncio.to_thread(results_store.delete, dataset_id, result_id)
+    return {"restored": result_id, "kind": entry["kind"], "key": entry["key"], "uns_keys": keys}

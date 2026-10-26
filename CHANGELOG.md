@@ -13,7 +13,7 @@ All notable changes to scView are documented here. The format is based on
   comparisons (CSV download by id), composition tests, Milo, merge and count-split checks, cytokine
   response, off-target (HPA), protein interactions and study plans. The co-pilot's facts about them come
   back with them. Tables are Parquet (zstd; floats narrowed to float32, p-values kept float64), arrays
-  compressed NumPy.
+  compressed NumPy, structure gzip JSON.
 - Each stored result records the cells it was computed on and the recipe's step count: one computed on
   an earlier version of the dataset (cells filtered, pipeline re-run) is marked stale and not given to
   the co-pilot as a current fact.
@@ -21,6 +21,18 @@ All notable changes to scView are documented here. The format is based on
   per kind, at most 200 MB (compressed) per dataset, oldest first. Deleting a dataset deletes its results.
 - `GET /datasets/{id}/results` (filter `kind=`), `GET /datasets/{id}/results/{rid}`,
   `DELETE /datasets/{id}/results/{rid}`.
+- **Earlier markers and enrichment kept** (results store phase 2): when a save replaces a column's markers
+  or a group's enrichment with a different result, or drops them (markers re-run, groups merged,
+  re-clustering), the saved ones go to the results store (last 3 per column / group). The h5ad keeps only
+  the current one, so exports are unchanged. Each records the column's labels it was computed on: after a
+  relabel, merge or filter it is stale.
+- `POST /datasets/{id}/results/{rid}/restore` makes an earlier markers or enrichment result current again
+  (the one it replaces is kept); refused (409) for a stale one, whose groups no longer exist. Restored
+  markers drop the column's enrichment (computed from other markers; also kept).
+
+### Fixed
+- Enrichment overlap genes are listed sorted: their order came from gseapy's sets and changed between
+  backend processes.
 
 ## [0.39.2] - 2026-10-26
 

@@ -1058,7 +1058,9 @@ def _normalize_gseapy_record(row: dict[str, Any]) -> dict[str, Any]:
     overlap_count = int(parts[0]) if len(parts) >= 1 and parts[0].isdigit() else 0
     gene_count = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
     genes_str = str(row.get("Genes", ""))
-    genes = [g.strip() for g in genes_str.split(";") if g.strip()]
+    # Sorted: gseapy lists them in set order, which differs between processes (hash
+    # seeds), so the same result read twice would look like two (core/uns_history.py).
+    genes = sorted(g.strip() for g in genes_str.split(";") if g.strip())
 
     return {
         "term": str(row.get("Term", "")),

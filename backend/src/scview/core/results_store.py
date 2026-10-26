@@ -10,7 +10,7 @@ Layout (design: research/results-store/DESIGN.md)::
 
     DATA_DIR/results/{dataset_id}/
       index.json             one entry per result
-      {result_id}/result.json  the result's structure and small values
+      {result_id}/result.json.gz  the result's structure and small values (gzip)
       {result_id}/t0.parquet   each DataFrame it holds (zstd, narrowed types)
       {result_id}/arrays.npz   its numpy arrays and sparse matrices
 
@@ -36,6 +36,8 @@ two writes to one index never race; a failed write is logged, never raised.
 from __future__ import annotations
 
 import dataclasses
+import gzip
+import hashlib
 import importlib
 import json
 import logging
@@ -58,6 +60,7 @@ KEEP_SUPERSEDED = 3
 KEEP_PER_KIND = 20
 MAX_BYTES = 200 * 1024**2
 INDEX = "index.json"
+RESULT = "result.json.gz"
 FORMAT = 1
 # p-values and their adjusted forms stay float64 (scRNA-seq DE gives p < 1e-38).
 _P_COLUMN = re.compile(r"(^|_)(p|pval|pvals|pvalue|p_value|padj|pval_adj|pvals_adj|fdr|qval|q_value|"
@@ -92,9 +95,9 @@ def _safe(value: str | None) -> bool:
 
 
 def dataset_id_of(adaptor: Any) -> str | None:
-    """The dataset an adaptor was opened for, from its file's path
+    """The dataset an adaptor (or a dataset file's path) is for, from the path
     (``DATA_DIR/{derived|ingested|...}/{id}/...``), or None."""
-    path = getattr(adaptor, "h5ad_path", None)
+    path = adaptor if isinstance(adaptor, (str, Path)) else getattr(adaptor, "h5ad_path", None)
     if not path:
         return None
     parts = Path(path).parts
@@ -113,6 +116,88 @@ def fingerprint(adaptor: Any) -> dict[str, Any] | None:
                 "n_steps": len(provenance.read_provenance(adata).get("history") or [])}
     except Exception:  # a test double, or no data
         return None
+
+
+def safe_id(value: str | None) -> bool:
+    return _safe(value)
+
+
+def cells_hash(adata: Any) -> str:
+    """A hash of the cell barcodes in order."""
+    h = hashlib.sha256(f"{adata.n_obs}\n".encode())
+    names = adata.obs_names
+    for start in range(0, len(names), 100_000):
+        h.update("\n".join(map(str, names[start:start + 100_000])).encode())
+    return h.hexdigest()[:16]
+
+
+def column_fingerprint(adaptor_or_adata: Any, column: str, cells: str | None = None) -> dict[str, Any] | None:
+    """The cells and one obs column's labels: what a column's markers and
+    enrichment were computed on (a re-clustering or relabelling changes it, a
+    re-run of something else does not)."""
+    try:
+        adata = getattr(adaptor_or_adata, "adata", adaptor_or_adata)
+        out = {"column": column, "n_cells": int(adata.n_obs), "cells": cells or cells_hash(adata), "labels": None}
+        if column in adata.obs.columns:
+            s = adata.obs[column]
+            h = hashlib.sha256()
+            if isinstance(s.dtype, pd.CategoricalDtype):  # the labels, not their order
+                cats = sorted(map(str, s.cat.categories))
+                codes = pd.Categorical(s.astype(str).where(s.notna(), None), categories=cats).codes
+                h.update(np.ascontiguousarray(codes).tobytes())
+                h.update("\n".join(cats).encode())
+            else:
+                h.update("\n".join(s.astype(str)).encode())
+            out["labels"] = h.hexdigest()[:16]
+        return out
+    except Exception:
+        return None
+
+
+def _current_fingerprint(adaptor: Any, stored: dict[str, Any], cache: dict) -> dict[str, Any] | None:
+    if "column" in stored:
+        col = stored["column"]
+        if col not in cache:
+            cache[col] = column_fingerprint(adaptor, col)
+        return cache[col]
+    if "" not in cache:
+        cache[""] = fingerprint(adaptor)
+    return cache[""]
+
+
+def digest(value: Any) -> str:
+    """A content hash of a storable value (for telling a re-computed result from
+    the same one read again)."""
+    if isinstance(value, str):
+        return hashlib.sha256(value.encode()).hexdigest()
+    parts = _Parts()
+    tree = _encode(_key_sorted(value), parts)  # arrays are named in walk order: walk sorted
+    h = hashlib.sha256(json.dumps(tree, sort_keys=True, default=str).encode())
+    for name in sorted(parts.arrays):
+        a = np.ascontiguousarray(parts.arrays[name])
+        h.update(f"{name}{a.dtype.str}{a.dtype.names}{a.shape}".encode())
+        h.update(a.tobytes())
+    for name in sorted(parts.tables):
+        df = parts.tables[name]
+        h.update(f"{name}{list(map(str, df.columns))}{list(map(str, df.dtypes))}".encode())
+        h.update(pd.util.hash_pandas_object(df, index=True).values.tobytes())
+    return h.hexdigest()
+
+
+def _key_sorted(value: Any) -> Any:
+    """Dicts (inside dicts, lists and tuples) rebuilt in key order: a result read
+    back from an h5ad has its keys in another order than when computed."""
+    if isinstance(value, dict):
+        try:
+            items = sorted(value.items(), key=lambda kv: str(kv[0]))
+        except TypeError:
+            items = list(value.items())
+        return {k: _key_sorted(v) for k, v in items}
+    if isinstance(value, list):
+        return [_key_sorted(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_key_sorted(v) for v in value)
+    return value
 
 
 def _version() -> str:
@@ -149,6 +234,10 @@ def _encode(obj: Any, parts: _Parts) -> Any:
                 "data": _encode(m.data, parts), "indices": _encode(m.indices, parts),
                 "indptr": _encode(m.indptr, parts)}
     if isinstance(obj, np.ndarray):
+        if obj.dtype.names and any(obj.dtype[n].kind == "O" for n in obj.dtype.names):
+            obj = _text_fields(obj)  # scanpy's marker recarrays hold str objects
+            if obj is None:
+                raise TypeError("cannot store a structured array with non-text object fields")
         if obj.dtype == object:
             if all(isinstance(v, str) for v in obj.ravel()):
                 obj = obj.astype(str)
@@ -170,6 +259,24 @@ def _encode(obj: Any, parts: _Parts) -> Any:
             return {k: _encode(v, parts) for k, v in obj.items()}
         return {"__items__": [[_encode(k, parts), _encode(v, parts)] for k, v in obj.items()]}
     raise TypeError(f"cannot store a {type(obj).__name__}")
+
+
+def _text_fields(arr: np.ndarray) -> np.ndarray | None:
+    """A structured array with its object fields as fixed-width text, or None when
+    one holds anything but strings."""
+    fields = []
+    for name in arr.dtype.names:
+        dt = arr.dtype[name]
+        if dt.kind == "O":
+            col = arr[name].ravel()
+            if not all(isinstance(v, str) for v in col):
+                return None
+            dt = np.dtype(f"<U{max((len(v) for v in col), default=1) or 1}")
+        fields.append((name, dt))
+    out = np.empty(arr.shape, dtype=fields)
+    for name in arr.dtype.names:
+        out[name] = arr[name]
+    return out
 
 
 def _decode(obj: Any, tables: dict[str, pd.DataFrame], arrays: dict[str, np.ndarray]) -> Any:
@@ -293,7 +400,8 @@ def _retain(dataset_id: str, entries: list[dict[str, Any]]) -> list[dict[str, An
     keep: list[dict[str, Any]] = []
     for e in entries:
         k = (e["kind"], e["key"])
-        n = seen.get(k, 0)
+        # An archived result's primary is in the h5ad (markers, enrichment), not here.
+        n = seen.get(k, 1 if e.get("archived") else 0)
         seen[k] = n + 1
         if e["status"] != "pinned":
             e["status"] = "primary" if n == 0 else "superseded"
@@ -337,7 +445,8 @@ def _save(dataset_id: str, entry: dict[str, Any], value: Any) -> None:
             _write_table(df, tmp / f"{name}.parquet")
         if parts.arrays:
             np.savez_compressed(tmp / "arrays.npz", **parts.arrays)
-        (tmp / "result.json").write_text(json.dumps({"entry": entry, "value": tree}))
+        # gzip: enrichment payloads are JSON text of a few MB each
+        (tmp / RESULT).write_bytes(gzip.compress(json.dumps({"entry": entry, "value": tree}).encode(), 6))
         entry["bytes"] = _dir_bytes(tmp)
         with _lock:
             shutil.rmtree(rdir, ignore_errors=True)
@@ -359,11 +468,15 @@ def keep(
     params: dict[str, Any] | None = None,
     result_id: str | None = None,
     adaptor: Any = None,
+    computed_on: dict[str, Any] | None = None,
+    archived: bool = False,
 ) -> Future | None:
     """Store ``value`` for a dataset (``target`` is its adaptor or its id) in the
     background; returns the write's future (tests wait on it), or None when the
     dataset is unknown. ``key`` names what the result is about: a newer result of
-    the same kind and key supersedes it."""
+    the same kind and key supersedes it. ``archived``: an older copy of a result
+    whose current one lives in the h5ad (always superseded here); ``computed_on``
+    is the fingerprint of the data it was computed on (default: the adaptor's now)."""
     if isinstance(target, str):
         dataset_id = target
     else:
@@ -374,8 +487,12 @@ def keep(
     entry = {
         "id": result_id or uuid.uuid4().hex, "kind": kind, "key": str(key), "label": label,
         "params": params or {}, "created_at": time.time(), "version": _version(),
-        "status": "primary", "fingerprint": fingerprint(adaptor) if adaptor is not None else None,
+        "status": "superseded" if archived else "primary",
+        "fingerprint": computed_on if computed_on is not None else (
+            fingerprint(adaptor) if adaptor is not None else None),
     }
+    if archived:
+        entry["archived"] = True
     return _writer.submit(_save, dataset_id, entry, value)
 
 
@@ -391,9 +508,11 @@ def entries(dataset_id: str, kind: str | None = None, adaptor: Any = None) -> li
         return []
     with _lock:
         out = [dict(e) for e in _read_index(dataset_id) if kind is None or e["kind"] == kind]
-    now = fingerprint(adaptor) if adaptor is not None else None
+    cache: dict = {}
     for e in out:
-        e["stale"] = None if now is None or not e.get("fingerprint") else e["fingerprint"] != now
+        fp = e.get("fingerprint")
+        now = _current_fingerprint(adaptor, fp, cache) if adaptor is not None and fp else None
+        e["stale"] = None if now is None else fp != now
     return sorted(out, key=lambda e: e["created_at"], reverse=True)
 
 
@@ -403,7 +522,7 @@ def load(dataset_id: str, result_id: str) -> tuple[dict[str, Any], Any] | None:
         return None
     rdir = _dir(dataset_id) / result_id
     try:
-        doc = json.loads((rdir / "result.json").read_text())
+        doc = json.loads(gzip.decompress((rdir / RESULT).read_bytes()))
         tables = {p.stem: pd.read_parquet(p) for p in rdir.glob("t*.parquet")}
         arrays: dict[str, np.ndarray] = {}
         if (rdir / "arrays.npz").exists():
