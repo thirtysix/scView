@@ -38,7 +38,7 @@ def _adata(n: int = 240, g: int = 200, seed: int = 0, dense: bool = False) -> ad
     if dense:
         a.X = a.X.toarray()
     a.raw = a
-    a.X = a.X.toarray() if sp.issparse(a.X) else a.X
+    a.X = a.X.toarray() if sp.issparse(a.X) else a.X.copy()  # dense: never scale .raw's array
     sc.pp.scale(a, max_value=10)
     return a
 
