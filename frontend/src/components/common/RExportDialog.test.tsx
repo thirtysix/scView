@@ -46,9 +46,16 @@ describe("RExportDialog", () => {
   it("shows what goes in, runs the job, downloads the file and lists what was left out", async () => {
     api.getRExportInfo.mockResolvedValue(info);
     api.startRExport.mockResolvedValue({ job: "j1", format: "seurat", status: "writing", message: "Preparing the data", filename: info.filename });
+    // The second check waits until the test has seen the progress line (no timing race).
+    let finish: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
     api.getRExportStatus
       .mockResolvedValueOnce({ job: "j1", format: "seurat", status: "converting", message: "Building the Seurat object", filename: info.filename })
-      .mockResolvedValueOnce({ job: "j1", format: "seurat", status: "done", message: "Wrote", filename: info.filename, report, size_bytes: 45_900_000 });
+      .mockImplementationOnce(() =>
+        held.then(() => ({ job: "j1", format: "seurat", status: "done", message: "Wrote", filename: info.filename, report, size_bytes: 45_900_000 })),
+      );
 
     render(<RExportDialog datasetId="abc" format="seurat" onClose={() => {}} pollMs={5} />);
     expect(await screen.findByTestId("rexport-contents")).toHaveTextContent(
@@ -59,6 +66,7 @@ describe("RExportDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     expect(await screen.findByText("Building the Seurat object")).toBeInTheDocument();
+    finish();
     await waitFor(() => expect(exp.downloadUrl).toHaveBeenCalledWith("/api/v1/datasets/abc/export/rds/j1", info.filename));
     expect(api.startRExport).toHaveBeenCalledWith("abc", "seurat");
     expect(screen.getByText(/Downloaded scview_pbmc_seurat\.rds/)).toBeInTheDocument();
