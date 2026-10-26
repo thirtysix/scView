@@ -115,9 +115,12 @@ def test_search_is_fast_on_an_ontology_of_cl_size(index):
     big.ontology().n_desc("CL:0000000")
     worst = 0.0
     for q in ["T", "CD4 T", "monocyte", "alpha beta", "reg", "natural killer cell"]:
-        t0 = time.perf_counter()
-        big.search(q)
-        worst = max(worst, time.perf_counter() - t0)
+        best = float("inf")
+        for _ in range(3):  # best of 3: one call slowed by a busy machine is not the search
+            t0 = time.perf_counter()
+            big.search(q)
+            best = min(best, time.perf_counter() - t0)
+        worst = max(worst, best)
     assert worst < 0.05, worst
 
 
@@ -131,12 +134,14 @@ def test_suggestions_for_kangs_labels(index):
         "B": "CL:0000236", "T activated": "CL:0000896", "CD8 T": "CL:0000625", "NK": "CL:0000623",
         "DC": "CL:0000451", "B activated": "CL:0000236", "Mk": "CL:0000556", "pDC": "CL:0000784",
         "Eryth": "CL:0000764",
-        # CL's own exact synonym "CD16+ monocyte" is on CD14-positive, CD16-positive monocyte
-        "CD16 Mono": "CL:0002397",
+        # Seurat's non-classical monocytes, not CL's synonym on the intermediate term
+        "CD16 Mono": "CL:0002396",
     }
     got = {label: index.suggest(label) for label in KANG}
     assert {k: v[0]["id"] for k, v in got.items() if v} == expected
     assert got["CD14 Mono"][0]["how"] == "exact"
+    assert got["CD16 Mono"][0]["how"] == "atlas"
+    assert "CL:0002397" in [s["id"] for s in got["CD16 Mono"]]  # CL's synonym match stays offered
     assert got["CD4 Naive T"][0]["how"] == "narrower"
     assert got["B activated"][0]["how"] == "subset"  # no activated B cell term: its parent's name
     assert all(len(v) <= co.N_SUGGEST for v in got.values())

@@ -42,6 +42,17 @@ _ID = re.compile(r"^CL[:_](\d{7})$", re.I)
 # Synonym scopes searched: BROAD ones ("suppressor T cell" for Treg) name a wider group.
 _SCOPES = ("EXACT", "NARROW", "RELATED")
 # Labels that name no cell type: nothing is suggested for them.
+# Atlas names whose meaning differs from the CL synonym they match. Seurat /
+# Azimuth "CD16 Mono" are the non-classical monocytes (CELLxGENE annotates them
+# CL:0002396), but CL lists "CD16+ monocyte" as an exact synonym of the
+# intermediate CD14+CD16+ term.
+_ATLAS = {
+    "cd16 mono": "CL:0002396",
+    "cd16 monocyte": "CL:0002396",
+    "cd16 monocytes": "CL:0002396",
+    "fcgr3a mono": "CL:0002396",
+    "fcgr3a+ mono": "CL:0002396",
+}
 _NO_TYPE = {"unassigned", "unknown", "nan", "none", "na", "n/a", "other", "doublet", "doublets"}
 
 
@@ -302,6 +313,10 @@ class Index:
                 if len(picked) < n and c not in {p for p, _ in picked}:
                     picked.append((c, how))
 
+        atlas = _ATLAS.get(" ".join(label.lower().split()))
+        if atlas in self.terms:
+            add([atlas], "atlas")
+
         for k in (_key(label), _key(label, abbr=True)):
             if k:
                 add(self._same(k), "exact")
@@ -312,7 +327,11 @@ class Index:
             hit, how = self._matcher().match(_signs(label))
             if how in ("subset", "cl-ancestor"):
                 add([self._names[h] for h in hit if h in self._names], how)
-        text = {**HOW_TEXT, "narrower": "term holding every word of the label"}
+        text = {
+            **HOW_TEXT,
+            "narrower": "term holding every word of the label",
+            "atlas": "what Seurat / Azimuth atlases mean by this name",
+        }
         return [{**self.describe(c), "how": how, "how_text": text.get(how, how)} for c, how in picked]
 
 
