@@ -677,7 +677,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
 
           <div className="text-[10px] text-slate-400">
             {result.label} (n={result.n_selected.toLocaleString()}) vs {refLabel} (n=
-            {result.n_rest.toLocaleString()}) · {methodLabel(result.method)} ·{" "}
+            {result.n_rest.toLocaleString()}) · {methodLabel(result.method, result)} ·{" "}
             {sigGenes.length.toLocaleString()} {withP ? "significant" : "listed"} of{" "}
             {result.genes.length.toLocaleString()} genes · click a point or row to overlay it
             {!withP && (

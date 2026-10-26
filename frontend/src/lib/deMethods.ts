@@ -1,5 +1,6 @@
 import type { DEGene, DEMethodsResponse, DEResponse } from "@/api/de";
 import type { CsvCell } from "@/lib/csv";
+import { pbMethodLabel } from "@/lib/pseudobulk";
 
 /** The cell-level DE tests (backend core/de_methods.py). */
 export type CellMethod = "wilcoxon" | "t-test" | "logreg";
@@ -50,9 +51,16 @@ export function cellMethodInfo(method: string | undefined | null): CellMethodInf
   return CELL_METHODS.find((m) => m.value === method) ?? CELL_METHODS[0]!;
 }
 
-/** "cell-level Welch t-test", "pseudobulk DESeq2" etc., for captions and the co-pilot. */
-export function methodLabel(method: string | undefined | null): string {
-  if (method === "pseudobulk") return "pseudobulk DESeq2";
+/** "cell-level Welch t-test", "pseudobulk DESeq2", "pseudobulk limma-voom + RUV k=1" etc.,
+ *  for captions and the co-pilot. */
+export function methodLabel(
+  method: string | undefined | null,
+  pb?: Pick<DEResponse, "pb_method" | "ruv_k">,
+): string {
+  if (method === "pseudobulk") {
+    const ruv = pb?.ruv_k ? ` + RUV k=${pb.ruv_k}` : "";
+    return `pseudobulk ${pbMethodLabel(pb?.pb_method)}${ruv}`;
+  }
   return cellMethodInfo(method).label;
 }
 
