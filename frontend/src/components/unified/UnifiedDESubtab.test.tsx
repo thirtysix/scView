@@ -26,6 +26,13 @@ vi.mock("@/components/unified/DeOverlap", () => ({
     return null;
   },
 }));
+const auditProps = vi.hoisted(() => ({ last: null as null | { betweenGroups: boolean; donorColumns: number; replicateKey?: string } }));
+vi.mock("@/components/unified/DEAudit", () => ({
+  DEAudit: (props: { betweenGroups: boolean; donorColumns: number; replicateKey?: string }) => {
+    auditProps.last = props;
+    return null;
+  },
+}));
 type PlotProps = {
   data: { x: number[]; y: number[]; marker?: { color?: string[] } }[];
   layout: { shapes?: { x0: number; line: { dash: string } }[]; xaxis?: { ticktext?: string[] } };
@@ -508,5 +515,25 @@ describe("UnifiedDESubtab DE overlap", () => {
     act(() => useSelectionStore.getState().setSelection(new Set([1, 2, 3, 4])));
     fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
     await waitFor(() => expect(overlapProps.last?.latestResultId).toBe("r-new"));
+  });
+});
+
+describe("UnifiedDESubtab DE audit", () => {
+  beforeEach(() => {
+    auditProps.last = null;
+    computeDE.mockReset().mockResolvedValue({ ...RESULT, result_id: "r1" });
+    computeDECompare.mockReset().mockResolvedValue({ ...RESULT, label: "STIM", result_id: "r2" });
+  });
+
+  it("sits under a result, told whether it compares groups and which donor column is picked", async () => {
+    act(() => useSelectionStore.getState().setSelection(new Set([1, 2, 3, 4])));
+    renderDE();
+    expect(auditProps.last).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await waitFor(() => expect(auditProps.last).toMatchObject({ betweenGroups: false }));
+    fireEvent.click(screen.getByRole("button", { name: "Between groups" }));
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await waitFor(() => expect(auditProps.last).toMatchObject({ betweenGroups: true, replicateKey: "ind" }));
+    expect(auditProps.last!.donorColumns).toBeGreaterThan(0);
   });
 });
