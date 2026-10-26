@@ -1078,7 +1078,8 @@ def _run_marker_genes(adata: ad.AnnData, params: PipelineParams, cb: SubstepCall
     logger.info("Marker genes computed for %d column(s)", computed)
 
 
-def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallback = _NOOP_CB) -> None:
+def _run_enrichment(adata: ad.AnnData, params: PipelineParams,
+                    cb: SubstepCallback = _NOOP_CB) -> dict[str, Any] | None:
     """Run pathway enrichment for marker genes across specified obs columns.
 
     Uses local MSigDB JSON files via MSigDBLoader when enrichment_collections
@@ -1110,16 +1111,33 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
     used_collections: list[str]
     # MSigDB + custom collections merged, when local gene sets are used.
     resolved: ResolvedGeneSets | None = None
+    species = detect_species(adata).species
+    collections = list(params.enrichment_collections or [])
     if params.enrichment_collections:
         import os
+        from pathlib import Path
+
         from scview.config import get_settings
+        from scview.core import msigdb_fetch
         from scview.core.custom_genesets import get_custom_store
-        from scview.core.msigdb_loader import get_msigdb_loader
+        from scview.core.msigdb_loader import DEFAULT_COLLECTIONS, defaults_for, get_msigdb_loader
 
         msigdb_dir = os.environ.get("MSIGDB_DIR", "/msigdb")
         loader = get_msigdb_loader(msigdb_dir)
+        # The untouched default selection on a mouse dataset means the mouse defaults.
+        if species == "mouse" and sorted(collections) == sorted(DEFAULT_COLLECTIONS):
+            collections = defaults_for("mouse")
+        try:
+            msigdb_fetch.require(collections, Path(msigdb_dir) if loader else None,
+                                 get_settings().MSIGDB_AUTO_DOWNLOAD)
+        except msigdb_fetch.MSigDBUnavailable as e:
+            if collections == defaults_for("mouse"):
+                logger.warning("%s Using the human collections instead.", e)
+                collections = list(DEFAULT_COLLECTIONS)
+            else:
+                logger.warning("%s", e)
         resolved = resolve_gene_sets(
-            params.enrichment_collections, loader, get_custom_store(get_settings().DATA_DIR)
+            collections, loader, get_custom_store(get_settings().DATA_DIR), species=species
         )
         if resolved.missing_custom:
             logger.warning("Custom gene-set collections not found (deleted?): %s",
@@ -1127,10 +1145,10 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
         if loader or resolved.custom_names:
             gene_sets_arg = resolved.gene_sets
             if not gene_sets_arg:
-                logger.warning("No gene sets loaded from collections: %s", params.enrichment_collections)
-                return
-            logger.info("Using %d local gene sets from %d collections", len(gene_sets_arg), len(params.enrichment_collections))
-            used_collections = list(params.enrichment_collections)
+                logger.warning("No gene sets loaded from collections: %s", collections)
+                return None
+            logger.info("Using %d local gene sets from %d collections", len(gene_sets_arg), len(collections))
+            used_collections = collections
         else:
             logger.warning("MSigDB loader not available; falling back to Enrichr libraries")
             resolved = None
@@ -1224,6 +1242,13 @@ def _run_enrichment(adata: ad.AnnData, params: PipelineParams, cb: SubstepCallba
             logger.warning("Enrichment failed for %s/%s: %s", col, group, e)
 
     logger.info("Enrichment completed: %d total group results", total_groups)
+    if resolved is None:
+        return None
+    from scview.core import msigdb_species
+
+    # Recorded with the step: the collections used and their species, for replay and the co-pilot.
+    return {"enrichment_collections": used_collections,
+            "enrichment_gene_set_species": msigdb_species.describe(used_collections, species)}
 
 
 # Tirosh et al. 2016 (Science 352:189) S and G2/M genes, as in scanpy's tutorial

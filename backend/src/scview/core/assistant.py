@@ -742,9 +742,15 @@ def build_grounding_context(
             cols = sorted({enrichment_column(k) for k in enr_keys})
             lines.append("\n## Pathway enrichment computed for: " + ", ".join(cols)
                          + " [result:enrichment]")
+            from scview.core.msigdb_species import enrichment_fact
+
+            sets_fact = enrichment_fact(adata)  # which species' MSigDB sets
+            if sets_fact:
+                lines.append(f"- {sets_fact} [result:enrichment]")
             sources.append(ChatSource(
                 kind="result", ref="result:enrichment",
-                detail="enrichment available for: " + ", ".join(cols),
+                detail="enrichment available for: " + ", ".join(cols)
+                + (f"; {sets_fact}" if sets_fact else ""),
             ))
     except Exception:  # pragma: no cover
         pass

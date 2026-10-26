@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 N_MARKERS = 20
 ORA_N = 100  # query genes: the enrichment endpoints' default
-ORA_COLLECTION = "h.all"
+ORA_COLLECTION = "h.all"  # a mouse dataset uses MH when it is on disk (_hallmark)
 N_TERMS = 10
 TOP_LABELS = 3
 MAX_LABEL_COLUMNS = 8
@@ -310,29 +310,52 @@ def _database(adata, column: str, value: str, key: str, marker_db_dir) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _hallmark(loader, species: str) -> str:
+    """MH on a mouse dataset when it is on disk (else the fetch starts for next time
+    and the human sets stand in, with the warning); H otherwise."""
+    from scview.core.msigdb_loader import HALLMARK
+
+    if species != "mouse" or loader is None:
+        return ORA_COLLECTION
+    if loader._find_file(HALLMARK["mouse"]) is not None:
+        return HALLMARK["mouse"]
+    from scview.config import get_settings
+
+    if get_settings().MSIGDB_AUTO_DOWNLOAD:
+        from scview.core.msigdb_fetch import start_mouse_download
+
+        start_mouse_download(loader.dir)
+    return ORA_COLLECTION
+
+
 def _enrichment(ctx: dict, loader) -> dict:
+    from scview.core import msigdb_species as ms
     from scview.core.marker_selection import ora_query_genes
     from scview.core.ora_background import get_background_genes
-    from scview.core.species import detect_species, human_genesets_warning
 
     adata, column, value = ctx["adata"], ctx["column"], ctx["value"]
+    species = ms.dataset_species(adata)
+    hallmark = _hallmark(loader, species)
+    # "MSigDB HALLMARK" on a human (or unknown) dataset, as always.
+    label = ("MSigDB HALLMARK" if species != "mouse"
+             else "mouse MSigDB MH (Hallmark)" if hallmark != ORA_COLLECTION else "human MSigDB HALLMARK")
     title = "Pathway enrichment"
     key, why = R.stored_markers(adata, column)
     if key is None:
         return R.section("enrichment", title, status=R.NOT_COMPUTED,
                          caption="Enrichment tests the cluster's marker genes, and none are stored.",
                          note=why)
-    if loader is None or not loader.get_collection_as_dict(ORA_COLLECTION):
+    if loader is None or not loader.get_collection_as_dict(hallmark):
         return R.section("enrichment", title, status=R.NOT_COMPUTED,
                          caption="The HALLMARK gene sets are not available.",
                          note=("MSigDB is not on disk: scView downloads it into the msigdb volume on "
                                "first start (MSIGDB_DIR must point at it)."))
     query = ora_query_genes(adata, column, value, ORA_N)
     background = get_background_genes(adata, column, value) or []
-    warning = human_genesets_warning(detect_species(adata)) or None
+    warning = ms.warning(species, [hallmark]) or None
     method = (f"Over-representation (gseapy hypergeometric test, Benjamini-Hochberg adjusted p) of up to "
               f"{ORA_N} of the cluster's marker genes ({R.marker_filter_text()}, by log fold change) "
-              f"against the MSigDB HALLMARK sets, with the {len(background):,} genes the marker test "
+              f"against the {label} sets, with the {len(background):,} genes the marker test "
               "ranked as the background, as the Enrichment tab does.")
     if not query:
         return R.section("enrichment", title, method=method, note=warning,
@@ -340,8 +363,8 @@ def _enrichment(ctx: dict, loader) -> dict:
                          data={"terms": [], "n_query": 0, "n_background": len(background)})
     from scview.api.v1.enrichment import _ora_records
 
-    records = _ora_records(query, background or None, [ORA_COLLECTION], loader, None)
-    n_sets = len(loader.get_collection_as_dict(ORA_COLLECTION))
+    records = _ora_records(query, background or None, [hallmark], loader, None, species=species)
+    n_sets = len(loader.get_collection_as_dict(hallmark))
     n_sig = sum(1 for r in records if r.get("adjusted_pvalue", 1.0) < 0.05)
     top = [{"term": r["term"], "p": R.p_value(r["pvalue"]), "padj": R.p_value(r["adjusted_pvalue"]),
             "overlap": int(r["overlap_count"]), "set_size": int(r["gene_count"]), "genes": r["genes"]}
@@ -353,7 +376,7 @@ def _enrichment(ctx: dict, loader) -> dict:
     return R.section("enrichment", title, caption=caption, method=method, note=warning,
                      data={"terms": top, "n_sets": n_sets, "n_tested": len(records), "n_significant": n_sig,
                            "n_query": len(query), "n_background": len(background),
-                           "collection": "MSigDB HALLMARK"})
+                           "collection": label, "collection_id": hallmark})
 
 
 # ---------------------------------------------------------------------------
