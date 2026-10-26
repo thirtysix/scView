@@ -22,8 +22,8 @@ with the samples (donors) as replicates:
    ``min_n_cells_per_sample``); a neighbourhood is tested only when each
    condition keeps 2 or more samples.
 3. **Test** (``test_nhood``): edgeR's ``filterByExpr`` as miloDE calls it
-   (min count 3, min total 4, each sample its own group), TMM factors, then
-   limma-voom: log-CPM with precision weights from the mean-variance trend,
+   (min count 3, min total 4, each sample its own group), then core/voom.py: TMM factors,
+   limma-voom (log-CPM with precision weights from the mean-variance trend),
    weighted least squares per gene, empirical Bayes moderated t of the
    condition. It matches edgeR 4.10 + limma 3.68 to 1e-9 (log2FC and log10 p). miloDE
    itself fits edgeR's quasi-likelihood model; voom is the faster of the two
@@ -71,8 +71,8 @@ import pandas as pd
 import scipy.sparse as sp
 from scipy import stats
 
-from scview.core import milo, results_store
-from scview.core.composition import CompositionError, fit_f_dist, fit_f_dist_robust
+from scview.core import milo, results_store, voom
+from scview.core.composition import CompositionError
 
 logger = logging.getLogger(__name__)
 
@@ -281,58 +281,6 @@ def filter_by_expr(counts: np.ndarray, lib: np.ndarray, min_count: float = MIN_C
     return ((cpm >= cutoff).any(axis=0) & (counts.sum(axis=0) >= min_total - tol))
 
 
-def tmm_factors(counts: np.ndarray, lib: np.ndarray, trim_m: float = 0.3,
-                trim_a: float = 0.05) -> np.ndarray:
-    """edgeR's TMM normalisation factors (samples x genes counts), scaled to a
-    geometric mean of 1."""
-    n = counts.shape[0]
-    q75 = np.array([np.quantile(counts[i] / lib[i], 0.75) for i in range(n)])
-    if np.median(q75) < 1e-20:
-        ref = int(np.argmax(np.sqrt(counts).sum(axis=1)))
-    else:
-        ref = int(np.argmin(np.abs(q75 - q75.mean())))
-    r, nr = counts[ref].astype(np.float64), float(lib[ref])
-    f = np.ones(n)
-    for i in range(n):
-        if i == ref:
-            continue
-        o, no = counts[i].astype(np.float64), float(lib[i])
-        with np.errstate(divide="ignore", invalid="ignore"):
-            log_r = np.log2((o / no) / (r / nr))
-            abs_e = (np.log2(o / no) + np.log2(r / nr)) / 2
-            v = (no - o) / no / o + (nr - r) / nr / r
-        ok = np.isfinite(log_r) & np.isfinite(abs_e)
-        log_r, abs_e, v = log_r[ok], abs_e[ok], v[ok]
-        if log_r.size == 0 or np.abs(log_r).max() < 1e-6:
-            continue
-        m = log_r.size
-        lo_l, lo_s = np.floor(m * trim_m) + 1, np.floor(m * trim_a) + 1
-        rank_r, rank_e = stats.rankdata(log_r), stats.rankdata(abs_e)
-        keep = ((rank_r >= lo_l) & (rank_r <= m + 1 - lo_l)
-                & (rank_e >= lo_s) & (rank_e <= m + 1 - lo_s))
-        if keep.any():
-            f[i] = 2 ** (float((log_r[keep] / v[keep]).sum()) / float((1 / v[keep]).sum()))
-    return f / np.exp(np.log(f).mean())
-
-
-def lowess_span(n_genes: int) -> float:
-    """voom's adaptive span (limma >= 3.62, ``chooseLowessSpan``): wider with
-    fewer genes, 0.3 at very many."""
-    return float(min(0.3 + 0.7 * (50 / max(n_genes, 1)) ** (1 / 3), 1.0))
-
-
-def _lowess_fun(x: np.ndarray, y: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
-    """R's lowess(x, y, f = span) (3 robustness iterations, delta 1% of the
-    range) as a function, linear between points and flat beyond them."""
-    from statsmodels.nonparametric.smoothers_lowess import lowess
-
-    delta = 0.01 * float(x.max() - x.min())
-    fit = lowess(y, x, frac=lowess_span(len(x)), it=3, delta=delta, return_sorted=True)
-    xs, inv = np.unique(fit[:, 0], return_inverse=True)
-    ys = np.bincount(inv, weights=fit[:, 1]) / np.bincount(inv)
-    return lambda q: np.interp(q, xs, ys)
-
-
 @dataclass
 class NhoodTest:
     log_fc: np.ndarray  # per gene (NaN = filtered out)
@@ -351,59 +299,21 @@ def test_nhood(counts: np.ndarray, lib: np.ndarray, X: np.ndarray,
     lib = np.asarray(lib, dtype=np.float64)
     n, p = X.shape
     G = counts.shape[1]
-    df = n - p
     out_fc = np.full(G, np.nan)
     out_p = np.full(G, np.nan)
     keep = filter_by_expr(counts, lib, min_count)
-    if keep.sum() < MIN_GENES_TESTED or df < 1:
+    if keep.sum() < MIN_GENES_TESTED or n - p < 1:
         return None
     y = counts[:, keep]
-    eff = lib * tmm_factors(y, lib)
-
-    # voom: log-CPM, a first unweighted fit, the sqrt-sd trend, the weights.
-    logcpm = np.log2((y + 0.5) / (eff[:, None] + 1) * 1e6)
-    pinv = np.linalg.pinv(X)
-    beta = pinv @ logcpm
-    fitted = X @ beta
-    sigma = np.sqrt(((logcpm - fitted) ** 2).sum(axis=0) / df)
-    sx = logcpm.mean(axis=0) + np.log2(eff + 1).mean() - np.log2(1e6)
-    trend = _lowess_fun(sx, np.sqrt(sigma))
-    fitted_logcount = fitted + np.log2(eff + 1)[:, None] - np.log2(1e6)
-    w = 1.0 / np.maximum(trend(fitted_logcount), 1e-3) ** 4
-
-    # Weighted least squares per gene, then limma's eBayes on the residual variances.
-    XtWX = np.einsum("sg,si,sj->gij", w, X, X)
-    XtWy = np.einsum("sg,si,sg->gi", w, X, logcpm)
     try:
-        V = np.linalg.inv(XtWX)
-    except np.linalg.LinAlgError:
+        eff = lib * voom.norm_factors(y, "TMM", lib_size=lib)
+        E, w = voom.voom(y, X, lib_size=eff)
+        res = voom.ebayes(voom.lm_fit_weighted(E, X, w), coef=p - 1, robust=robust)
+    except (voom.VoomError, np.linalg.LinAlgError, CompositionError):
         return None
-    b = np.einsum("gij,gj->gi", V, XtWy)
-    resid = logcpm - X @ b.T
-    s2 = (w * resid ** 2).sum(axis=0) / df
+    out_fc[keep] = res.logfc
+    out_p[keep] = res.p
     g = int(keep.sum())
-    s0, d0 = float("nan"), np.zeros(g)
-    if g >= 3:
-        try:
-            if robust:
-                s0, d0 = fit_f_dist_robust(s2, float(df))
-            else:
-                s0, d = fit_f_dist(s2, float(df))
-                d0 = np.full(g, d)
-        except CompositionError:
-            s0 = float("nan")
-    if not np.isfinite(s0):
-        s_post, d0 = s2, np.zeros(g)
-    else:
-        with np.errstate(invalid="ignore"):
-            s_post = np.where(np.isfinite(d0), (df * s2 + d0 * s0) / (df + d0), s0)
-    df_total = np.minimum(df + d0, df * g)
-    j = p - 1
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t = b[:, j] / np.sqrt(s_post * V[:, j, j])
-    pv = 2 * stats.t.sf(np.abs(t), df_total)
-    out_fc[keep] = b[:, j]
-    out_p[keep] = pv
     return NhoodTest(log_fc=out_fc, pval=out_p, n_genes=g)
 
 

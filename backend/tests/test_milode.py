@@ -17,7 +17,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from scview.core import milode, results_export, results_store
+from scview.core import milode, results_export, results_store, voom
 from scview.core.milode import MiloDEError
 
 MAIN = threading.main_thread()
@@ -162,11 +162,11 @@ def test_filter_and_tmm_basics():
     one[1, 1] = 1
     flat = np.full(6, 1e4)  # cutoff: 3 / 1e4 * 1e6 = 300 CPM
     assert list(milode.filter_by_expr(np.hstack([counts, one]), flat)[-2:]) == [False, True]
-    f = milode.tmm_factors(counts[:, 5:], lib)
+    f = voom.norm_factors(counts[:, 5:], "TMM", lib_size=lib)
     assert np.isclose(np.exp(np.log(f).mean()), 1.0) and np.allclose(f, 1.0, atol=0.1)
     doubled = counts.copy()
     doubled[0, 5:10] *= 20  # a few genes way up in one sample inflate its library...
-    f2 = milode.tmm_factors(doubled[:, 5:], doubled.sum(axis=1))
+    f2 = voom.norm_factors(doubled[:, 5:], "TMM", lib_size=doubled.sum(axis=1))
     assert f2[0] < 0.6  # ...which TMM, trimming them, scales back down
 
 
