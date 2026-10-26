@@ -13,6 +13,17 @@ export interface ExportFormatOptions {
   include_raw?: boolean;
   /** Vitessce: all genes or the variable genes only */
   genes?: "all" | "variable";
+  /** CELLxGENE: a label column whose Cell Ontology mapping writes cell_type_ontology_term_id */
+  cell_type_terms?: string;
+}
+
+/** A label column with a Cell Ontology mapping (core/cell_ontology.py). */
+export interface OntologyColumn {
+  column: string;
+  complete: boolean;
+  n_labels: number;
+  n_mapped: number;
+  missing: string[];
 }
 
 export interface EmbeddingChoice {
@@ -59,6 +70,17 @@ export interface ExportFormatInfo {
   notes: string[];
   renamed?: { cells: number; genes: number };
   readiness?: Readiness;
+  /** CELLxGENE: columns with a Cell Ontology mapping, and what the chosen one gives */
+  ontology_columns?: OntologyColumn[];
+  cell_type_terms?: {
+    column: string;
+    complete: boolean;
+    written: boolean;
+    missing: string[];
+    n_labels: number;
+    n_mapped: number;
+    n_cells_unlabelled: number;
+  } | null;
 }
 
 /** What an export with these options holds, its size and (CELLxGENE) Discover readiness. */
@@ -72,6 +94,7 @@ export function getExportFormatInfo(
   opts.columns?.forEach((c) => q.append("column", c));
   if (opts.include_raw) q.set("raw", "true");
   if (opts.genes) q.set("genes", opts.genes);
+  if (opts.cell_type_terms) q.set("cell_type_terms", opts.cell_type_terms);
   return apiFetch<ExportFormatInfo>(`/datasets/${id}/export/h5ad/info?${q.toString()}`);
 }
 
