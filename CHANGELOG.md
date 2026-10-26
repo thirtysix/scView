@@ -6,6 +6,18 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.39.2] - 2026-10-26
+
+### Added
+- Elsewhere in the body (HPA): a tissue-level menu. Tissues with the nine brain regions as one brain
+  (default, as before), every tissue with brain regions separate, or HPA's 15 organ groups (a gene shared by
+  stomach and colon is one organ). Categories, verdicts and the heatmap follow the level; `level=` on
+  `GET /datasets/{id}/markers/offtarget` and `POST /offtarget/genes`.
+
+### Changed
+- The HPA tissue table is stored with regions unmerged (`hpa_tissue.v2.npz`); an existing 0.39 store is
+  rebuilt from the downloaded zip on first use, without a new download.
+
 ## [0.39.1] - 2026-10-25
 
 ### Fixed

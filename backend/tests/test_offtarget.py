@@ -87,14 +87,61 @@ def test_classify_follows_hpas_rules():
     assert ot.classify(np.array([0.8, 0.0, 1.0, 0.9]), 5)[0] == "low_specificity"
 
 
-def test_parse_merges_brain_regions_by_their_maximum(fixture_files):
-    t = ot.parse_zip(fixture_files["tissue"], ot.FILES["tissue"])
+def test_parse_keeps_regions_and_levels_merge_by_their_maximum(fixture_files):
+    raw = ot.parse_zip(fixture_files["tissue"], ot.FILES["tissue"])
+    assert sorted(raw.labels) == sorted(TISSUES)
+    assert ot.at_level(raw, "region") is raw
+    t = ot.at_level(raw, "tissue")
     labels = list(t.labels)
     assert "brain" in labels and "cerebellum" not in labels and len(labels) == 9
     i = t.find("GFAP")
     assert t.values[i, labels.index("brain")] == 900
+    assert ot.at_level(raw, "tissue") is t  # cached
+    o = ot.at_level(raw, "organ")
+    assert sorted(o.labels) == sorted(["liver & gallbladder", "pancreas", "kidney & urinary bladder",
+                                       "bone marrow & lymphoid tissues", "brain", "skin", "respiratory system"])
+    j = o.find("PTPRC")
+    assert o.values[j, list(o.labels).index("bone marrow & lymphoid tissues")] == 300
+    with pytest.raises(ValueError):
+        ot.at_level(raw, "planet")
     c = ot.parse_zip(fixture_files["cell_type"], ot.FILES["cell_type"])
     assert list(c.labels) == sorted(CELLS)
+
+
+def test_every_hpa_tissue_has_an_organ():
+    hpa_v25 = {"adipose tissue", "adrenal gland", "amygdala", "appendix", "basal ganglia", "blood vessel",
+               "bone marrow", "breast", "cerebellum", "cerebral cortex", "cervix", "choroid plexus", "colon",
+               "duodenum", "endometrium", "epididymis", "esophagus", "fallopian tube", "gallbladder",
+               "heart muscle", "hippocampal formation", "hypothalamus", "kidney", "liver", "lung", "lymph node",
+               "midbrain", "ovary", "pancreas", "parathyroid gland", "pituitary gland", "placenta", "prostate",
+               "rectum", "retina", "salivary gland", "seminal vesicle", "skeletal muscle", "skin",
+               "small intestine", "smooth muscle", "spinal cord", "spleen", "stomach", "testis", "thymus",
+               "thyroid gland", "tongue", "tonsil", "urinary bladder", "vagina"}
+    assert hpa_v25 == set(ot.ORGAN_OF)
+
+
+def test_the_level_changes_the_category(tmp_path, fixture_files):
+    _place(tmp_path, fixture_files)
+    by = {lvl: {x["gene"]: x for x in ot.lookup(["GFAP", "PTPRC"], dest=tmp_path, auto_download=False,
+                                                 level=lvl)["genes"]} for lvl in ot.TISSUE_LEVELS}
+    assert by["tissue"]["GFAP"]["tissue"]["category"] == "enriched"
+    # cerebral cortex 900 vs cerebellum 200: 4.5x, still enriched, now in one region
+    assert by["region"]["GFAP"]["tissue"]["elevated"] == ["cerebral cortex"]
+    # three lymphoid tissues become one organ: group enriched -> enriched
+    assert by["tissue"]["PTPRC"]["tissue"]["category"] == "group_enriched"
+    assert by["organ"]["PTPRC"]["tissue"]["category"] == "enriched"
+    assert by["organ"]["PTPRC"]["tissue"]["elevated"] == ["bone marrow & lymphoid tissues"]
+    r = ot.lookup(["GFAP"], dest=tmp_path, auto_download=False, level="region")
+    assert r["level"] == "region" and len(r["heatmap"]["tissues"]) == 10
+    with pytest.raises(ValueError):
+        ot.lookup(["GFAP"], dest=tmp_path, auto_download=False, level="planet")
+
+
+def test_an_old_merged_store_is_rebuilt_from_the_zip(tmp_path, fixture_files):
+    _place(tmp_path, fixture_files)
+    np.savez(tmp_path / "hpa_tissue.npz", labels=np.array(["brain"]))  # v0.39 store, ignored
+    t = ot.load_table("tissue", tmp_path, auto_download=False)
+    assert "cerebellum" in list(t.labels)
 
 
 # --- fetch and store -------------------------------------------------------------------------
@@ -111,11 +158,11 @@ def test_install_downloads_checks_the_sha_and_stores_a_plain_npz(tmp_path, fixtu
     client = httpx.Client(transport=httpx.MockTransport(handler))
     t = ot.load_table("tissue", tmp_path, auto_download=True, client=client)
     assert calls == [ot.FILES["tissue"].url] and t.find("ALB") is not None
-    with np.load(tmp_path / "hpa_tissue.npz", allow_pickle=False) as z:  # no object arrays
+    with np.load(tmp_path / "hpa_tissue.v2.npz", allow_pickle=False) as z:  # no object arrays
         assert z["values"].dtype == np.float32
-    meta = json.loads((tmp_path / "hpa_tissue.json").read_text())
+    meta = json.loads((tmp_path / "hpa_tissue.v2.json").read_text())
     assert meta["version"] == ot.HPA_VERSION and meta["licence"] == "CC BY-SA 4.0"
-    assert meta["sha256"] == ot.FILES["tissue"].sha256 and meta["n_labels"] == 9
+    assert meta["sha256"] == ot.FILES["tissue"].sha256 and meta["n_labels"] == 10  # regions kept
     ot.load_table("tissue", tmp_path, auto_download=True, client=client)
     assert len(calls) == 1  # on disk now
 
@@ -124,7 +171,7 @@ def test_a_wrong_download_is_refused_and_leaves_nothing(tmp_path, fixture_files)
     client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"<html>")))
     with pytest.raises(ot.HpaUnavailable, match="sha256"):
         ot.load_table("tissue", tmp_path, auto_download=True, client=client)
-    assert not (tmp_path / "hpa_tissue.npz").exists()
+    assert not (tmp_path / "hpa_tissue.v2.npz").exists()
     assert not any((tmp_path / "raw").iterdir())
 
 
@@ -253,10 +300,16 @@ async def test_endpoints_and_the_copilot_fact(client, dataset_manager, tmp_data_
     assert (await client.get(url, params={"group_col": "nope", "group": "B"})).status_code == 404
     assert (await client.get(url, params={"group_col": "type", "group": "Z"})).status_code == 404
     assert (await client.get(url, params={"group_col": "type", "group": "B", "n": 51})).status_code == 422
+    r = await client.get(url, params={"group_col": "type", "group": "B", "level": "organ"})
+    assert r.status_code == 200 and r.json()["level"] == "organ"
+    assert "bone marrow & lymphoid tissues" in r.json()["heatmap"]["tissues"]
+    assert (await client.get(url, params={"group_col": "type", "group": "B", "level": "x"})).status_code == 422
 
     r = await client.post(f"{API}/offtarget/genes", json={"genes": ["ALB", "Ptprc"], "species": "mouse"})
     assert r.status_code == 200 and r.json()["genes"][1]["hpa_symbol"] == "PTPRC"
     assert (await client.post(f"{API}/offtarget/genes", json={"genes": []})).status_code == 422
+    r = await client.post(f"{API}/offtarget/genes", json={"genes": ["GFAP"], "level": "region"})
+    assert r.status_code == 200 and "cerebellum" in r.json()["heatmap"]["tissues"]
     st = (await client.get(f"{API}/offtarget/status")).json()
     assert st["tables"]["tissue"]["version"] == ot.HPA_VERSION
 

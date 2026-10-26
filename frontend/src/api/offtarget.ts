@@ -5,6 +5,8 @@ import { API_BASE } from "@/lib/constants";
  *  a group's markers are expressed, from the Human Protein Atlas. */
 
 export type HpaCategory = "enriched" | "group_enriched" | "enhanced" | "low_specificity" | "not_detected";
+/** How the tissue table is read: brain regions merged (default), every HPA tissue, or HPA organ groups */
+export type TissueLevel = "tissue" | "region" | "organ";
 export type OffTargetVerdict = "restricted" | "enhanced" | "broad" | "not_detected" | "not_in_hpa";
 
 export interface HpaSide {
@@ -44,6 +46,9 @@ export interface OffTargetResult {
     n_flagged: number;
     flagged: string[];
   };
+  level?: TissueLevel;
+  /** e.g. "brain regions merged into one brain" */
+  level_text?: string;
   attribution: string;
   version: string;
   licence: string;
@@ -73,19 +78,24 @@ export async function getOffTarget(
   groupCol: string,
   group: string,
   n = 20,
+  level: TissueLevel = "tissue",
 ): Promise<OffTargetResult> {
-  const q = new URLSearchParams({ group_col: groupCol, group, n: String(n) });
+  const q = new URLSearchParams({ group_col: groupCol, group, n: String(n), level });
   const res = await fetch(`${API_BASE}/datasets/${datasetId}/markers/offtarget?${q}`);
   if (!res.ok) return fail(res);
   return res.json();
 }
 
 /** An explicit gene list (e.g. a saved gene list) looked up in HPA. */
-export async function offTargetForGenes(genes: string[], species: "human" | "mouse" = "human"): Promise<OffTargetResult> {
+export async function offTargetForGenes(
+  genes: string[],
+  species: "human" | "mouse" = "human",
+  level: TissueLevel = "tissue",
+): Promise<OffTargetResult> {
   const res = await fetch(`${API_BASE}/offtarget/genes`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ genes, species }),
+    body: JSON.stringify({ genes, species, level }),
   });
   if (!res.ok) return fail(res);
   return res.json();

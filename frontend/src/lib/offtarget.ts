@@ -1,4 +1,4 @@
-import type { HpaSide, OffTargetGene, OffTargetResult, OffTargetVerdict } from "@/api/offtarget";
+import type { HpaSide, OffTargetGene, OffTargetResult, OffTargetVerdict, TissueLevel } from "@/api/offtarget";
 
 /** Display helpers for the "Elsewhere in the body" panel (components/unified/OffTargetPanel.tsx). */
 
@@ -9,6 +9,13 @@ export const VERDICT_STYLE: Record<OffTargetVerdict, string> = {
   not_detected: "bg-slate-100 text-slate-600",
   not_in_hpa: "bg-slate-100 text-slate-500",
 };
+
+/** The tissue-level menu: label, and the unit for the heatmap caption. */
+export const TISSUE_LEVELS: { value: TissueLevel; label: string; unit: string }[] = [
+  { value: "tissue", label: "Tissues (brain as one)", unit: "tissues" },
+  { value: "region", label: "Tissues + brain regions", unit: "tissues" },
+  { value: "organ", label: "Organ groups", unit: "organ groups" },
+];
 
 /** "liver 5,000, kidney 6" (the top tissues or cell types), or a dash. */
 export function topText(side: HpaSide | null, k = 3): string {

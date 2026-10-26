@@ -1,6 +1,6 @@
 [project]
 name = "scview"
-version = "0.39.1"
+version = "0.39.2"
 description = "Single-cell RNA-seq browser-based visualization tool"
 requires-python = ">=3.11"
 dependencies = [

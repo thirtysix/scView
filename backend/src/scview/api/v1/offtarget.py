@@ -29,6 +29,7 @@ router = APIRouter()
 class GenesRequest(BaseModel):
     genes: list[str] = Field(..., min_length=1, max_length=ot.MAX_GENES)
     species: Literal["human", "mouse"] = "human"
+    level: Literal["tissue", "region", "organ"] = "tissue"
 
 
 def _dest(settings: Settings) -> Path:
@@ -49,7 +50,7 @@ async def offtarget_genes(body: GenesRequest, settings: Settings = Depends(get_s
     try:
         # first use downloads and converts the tables: off the loop
         return await asyncio.to_thread(ot.lookup, body.genes, species=body.species, dest=_dest(settings),
-                                       auto_download=settings.HPA_AUTO_DOWNLOAD)
+                                       auto_download=settings.HPA_AUTO_DOWNLOAD, level=body.level)
     except ot.HpaUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except ValueError as exc:
@@ -62,10 +63,11 @@ async def offtarget_group(
     group_col: str,
     group: str,
     n: int = Query(ot.N_DEFAULT, ge=1, le=ot.N_MAX),
+    level: Literal["tissue", "region", "organ"] = "tissue",
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ):
-    """A group's markers with their in-dataset tau, HPA category, top tissues and
+    """A group's markers (tissues at ``level``: tissue, region or organ) with their in-dataset tau, HPA category, top tissues and
     cell types, a verdict and a flag when specific here but broad in HPA."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
@@ -77,7 +79,7 @@ async def offtarget_group(
     adata = adaptor.adata
     try:
         res = await asyncio.to_thread(ot.for_group, adata, group_col, group, n, dest=_dest(settings),
-                                      auto_download=settings.HPA_AUTO_DOWNLOAD)
+                                      auto_download=settings.HPA_AUTO_DOWNLOAD, level=level)
     except ot.HpaUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except LookupError as exc:  # no markers stored (KeyError: unknown group)
