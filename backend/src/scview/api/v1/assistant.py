@@ -32,7 +32,7 @@ from scview.core.assistant import (
 from scview.core.guards import enforce_query_limits
 from scview.core.rag.retrieve import retrieve_context
 from scview.core import results_store, selection_facts
-from scview.core.rag.router import RouteState, classify_intent, mentions_app_ui
+from scview.core.rag.router import RouteState, classify_intent, mentions_app_ui, wants_methods
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +277,19 @@ async def _prepare(
     )
 
 
+# The route a methods request takes: the recorded recipe, never the feature list.
+METHODS_ROUTE = ("provenance",)
+
+
+async def _methods_events(adaptor, body: ChatRequest, settings: Settings):
+    """The chat stream's events for a methods request: the methods writer's text
+    (core/assistant.write_methods, grounded in the recipe only) in one delta."""
+    res = await write_methods(adaptor, body.history, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL)
+    yield {"type": "sources", "sources": [], "route": list(METHODS_ROUTE), "grounded": res.grounded}
+    yield {"type": "delta", "text": res.methods}
+    yield {"type": "done", "followups": [], "model": res.model, "claims": []}
+
+
 def _has_results(adaptor) -> bool:
     """Whether the dataset holds stored results: kept results, markers or enrichment."""
     try:
@@ -328,6 +341,10 @@ async def assistant_chat(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
         query = body.query.strip()
+        if wants_methods(query):  # the recipe, as the drawer's "Write methods" button
+            res = await write_methods(adaptor, body.history, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL)
+            return ChatResponse(answer=res.methods, sources=[], grounded=res.grounded,
+                                raw_response=res.methods, route=list(METHODS_ROUTE), model=res.model)
         kwargs = await _prepare(query, body, dm, settings, adaptor=adaptor)
         await _warm_cluster_qc(adaptor, kwargs)
         return await answer_query(query, adaptor, settings.DEEPINFRA_API_KEY, **kwargs)
@@ -360,6 +377,10 @@ async def assistant_chat_stream(
 
     async def event_generator():
         try:
+            if wants_methods(query):  # the recipe, as the drawer's "Write methods" button
+                async for event in _methods_events(adaptor, body, settings):
+                    yield f"data: {json.dumps(event)}\n\n"
+                return
             kwargs = await _prepare(query, body, dm, settings, adaptor=adaptor)
             await _warm_cluster_qc(adaptor, kwargs)
             async for event in stream_answer(

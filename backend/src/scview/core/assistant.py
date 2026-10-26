@@ -48,6 +48,7 @@ from scview.core import embedding_reliability
 from scview.core import study_planner
 from scview.core import layout_stability
 from scview.core import seq_metrics
+from scview.core import methods_guard, screen_facts
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -1205,7 +1206,9 @@ _METHODS_SYSTEM = (
     "short paragraphs) describing the workflow. Name the software/tools and cite "
     "specific parameter values from the recipe. Use ONLY what is in the recipe: do "
     "NOT invent tools, parameters, steps, thresholds, or citations, and omit "
-    "anything not recorded. Do not make clinical or biological claims. End with a "
+    "anything not recorded: a step a typical workflow has (batch correction, "
+    "regression, ambient RNA correction, cell-cycle scoring, annotation) is left "
+    "out unless the recipe lists it. Do not make clinical or biological claims. End with a "
     "one-sentence reproducibility note that the full provenance recipe is embedded "
     "in the dataset."
 )
@@ -1247,6 +1250,10 @@ async def write_methods(
             max_tokens=700,
         )
         text = (resp.choices[0].message.content or "").strip()
+        # Never a step the recipe lacks (it once said batch correction was run).
+        text, dropped = methods_guard.keep_recorded(text, skeleton)
+        if dropped:
+            logger.info("write_methods: dropped sentences claiming unrecorded steps: %s", dropped)
         if text:
             return MethodsResponse(methods=text, grounded=True, model=model)
     except Exception as exc:
@@ -1282,7 +1289,18 @@ def _format_view_context(vc: dict | None) -> str:
     sel = vc.get("selection")
     if isinstance(sel, dict) and isinstance(sel.get("n_cells"), int) and sel["n_cells"] > 0:
         lines.append(f"- Cells selected: {sel['n_cells']:,} (facts under [result:selection] when given)")
+    lines.extend(screen_facts.view_lines(vc))  # the open subtab / Compare tab, the result shown
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _add_screen_facts(adaptor, view_context: dict | None, blocks: list[str],
+                      sources: list[ChatSource]) -> None:
+    """The numbers of the result on screen (core/screen_facts.py): "explain this result"."""
+    lines, detail = screen_facts.fact_lines(adaptor, view_context)
+    if lines:
+        blocks.append("\n".join(lines))
+        sources.append(ChatSource(kind="result", ref=screen_facts.TAG, detail=detail,
+                                  evidence="\n".join(lines[1:])))
 
 
 def _add_label_term(adaptor, view_context: dict | None, blocks: list[str], sources: list[ChatSource]) -> None:
@@ -1323,6 +1341,7 @@ def _assemble(
         blocks.append(data_context)
         sources.extend(data_sources)
         _add_label_term(adaptor, view_context, blocks, sources)
+        _add_screen_facts(adaptor, view_context, blocks, sources)
     if app_context:
         blocks.insert(0, app_context)
         sources = [*(app_sources or []), *sources]
