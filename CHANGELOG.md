@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-10-26
+
 ### Added
 - **Mouse gene sets**: a mouse dataset uses MSigDB's mouse collections (2026.2.Mm: MH Hallmark, M2
   Reactome / WikiPathways, M5 GO, M8 cell types by default; M1, M2 CGP / BioCarta, M3, M5 MPO and M7 to
