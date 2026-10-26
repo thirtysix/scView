@@ -1280,6 +1280,22 @@ def _format_view_context(vc: dict | None) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+def _add_label_term(adaptor, view_context: dict | None, blocks: list[str], sources: list[ChatSource]) -> None:
+    """The Cell Ontology term the user gave the highlighted label (core/cell_ontology.py)."""
+    from scview.core import cell_ontology
+
+    try:
+        lines, detail = cell_ontology.grounding_lines(adaptor.adata, (view_context or {}).get("highlighted"))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: label term grounding failed: %s", exc)
+        return
+    if lines:
+        hl = view_context["highlighted"]
+        blocks.append("\n".join(lines))
+        sources.append(ChatSource(kind="result", ref=f"{cell_ontology.TAG}:{hl['column']}",
+                                  detail=detail, evidence=lines[-1]))
+
+
 def _assemble(
     adaptor,
     *,
@@ -1301,6 +1317,7 @@ def _assemble(
         data_context, data_sources = build_grounding_context(adaptor, facets)
         blocks.append(data_context)
         sources.extend(data_sources)
+        _add_label_term(adaptor, view_context, blocks, sources)
     if app_context:
         blocks.insert(0, app_context)
         sources = [*(app_sources or []), *sources]

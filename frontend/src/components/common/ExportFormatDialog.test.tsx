@@ -34,6 +34,39 @@ const base = {
 describe("ExportFormatDialog", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("writes cell type terms only when the user picks a Cell Ontology mapping, and says what is missing", async () => {
+    const info = {
+      ...base,
+      format: "cellxgene",
+      has_counts: true,
+      raw_from: null,
+      ontology_columns: [
+        { column: "cell_type", complete: false, n_labels: 13, n_mapped: 11, missing: ["Mk", "Eryth"] },
+      ],
+      cell_type_terms: null,
+    };
+    api.getExportFormatInfo.mockImplementation(async (_id, _f, opts) => ({
+      ...info,
+      cell_type_terms: opts.cell_type_terms
+        ? { column: "cell_type", complete: false, written: false, missing: ["Mk", "Eryth"], n_labels: 13,
+            n_mapped: 11, n_cells_unlabelled: 0 }
+        : null,
+    }));
+    render(<ExportFormatDialog datasetId="abc" format="cellxgene" onClose={() => {}} />);
+    const select = await screen.findByRole("combobox", { name: /Cell type terms/ });
+    expect(select).toHaveValue("");
+    expect(screen.getByRole("option", { name: /mapping of cell_type \(11 of 13 labels\)/ })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "cell_type" } });
+    await waitFor(() =>
+      expect(api.getExportFormatInfo).toHaveBeenLastCalledWith("abc", "cellxgene", {
+        embeddings: ["X_umap"],
+        include_raw: false,
+        cell_type_terms: "cell_type",
+      }),
+    );
+    expect(await screen.findByText("Not written: no term yet for Mk, Eryth.")).toBeInTheDocument();
+  });
+
   it("shows size, readiness and builds then downloads the CELLxGENE file", async () => {
     api.getExportFormatInfo.mockResolvedValue({
       ...base,

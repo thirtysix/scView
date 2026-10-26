@@ -735,8 +735,10 @@ def ensure(
     auto_download: bool | None = None,
     retry: bool = False,
     client: httpx.Client | None = None,
+    parts: tuple[str, ...] | None = None,
 ) -> dict:
     """Fetch whatever is missing (call in a worker thread); return ``status``.
+    ``parts``: only these sources (e.g. ``("ontology",)`` for a term search).
 
     A source that failed less than ``FAILURE_COOLDOWN`` seconds ago is not tried
     again unless ``retry``, so a dead site does not stall every check. One fetch at
@@ -744,6 +746,8 @@ def ensure(
     caller waits, then finds the files in place."""
     auto = auto_download_enabled() if auto_download is None else auto_download
     names = [*SOURCES, "ontology"]  # CellMarker 3.0 is tried before its 2.0 fallback
+    if parts is not None:
+        names = [n for n in names if n in parts]
     if all(_installed(dest, n) or not _needed(dest, n) for n in names):
         return status(dest, auto_download=auto)
     with _fetch_lock:

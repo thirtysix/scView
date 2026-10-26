@@ -111,6 +111,7 @@ async def h5ad_download_info(
     embedding: list[str] | None = Query(None),
     column: list[str] | None = Query(None),
     genes: str = "all",
+    cell_type_terms: str | None = None,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Size and name of the .h5ad a download would send, so the UI can show the
@@ -122,7 +123,8 @@ async def h5ad_download_info(
         from scview.api.v1.export_formats import FormatOptions, format_info
 
         return await format_info(dm, dataset_id, format, FormatOptions(
-            embeddings=embedding, columns=column, include_raw=raw, genes=genes))
+            embeddings=embedding, columns=column, include_raw=raw, genes=genes,
+            cell_type_terms=cell_type_terms))
     path = _active_h5ad(dm, dataset_id)
     layer = path.parent.parent.name
     out = {

@@ -397,6 +397,9 @@ def clear_processing(adata: ad.AnnData) -> None:
     scview_cols = [c for c in adata.obs.columns if c.startswith("scview_") and c != "scview_mito_type"]
     if scview_cols:
         adata.obs.drop(columns=scview_cols, inplace=True, errors="ignore")
+        from scview.core.cell_ontology import drop_columns
+
+        drop_columns(adata, scview_cols)  # their labels may name other cells next time
 
 
 def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> None:

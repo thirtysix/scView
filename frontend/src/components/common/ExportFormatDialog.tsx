@@ -51,13 +51,16 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
   const [columns, setColumns] = useState<string[] | undefined>(undefined);
   const [includeRaw, setIncludeRaw] = useState(false);
   const [genes, setGenes] = useState<"all" | "variable">("all");
+  const [termsFrom, setTermsFrom] = useState(""); // a column with a Cell Ontology mapping, or none
   const [progress, setProgress] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, onClose);
 
   const opts: ExportFormatOptions =
-    format === "cellxgene" ? { embeddings, include_raw: includeRaw } : { embeddings, columns, genes };
+    format === "cellxgene"
+      ? { embeddings, include_raw: includeRaw, ...(termsFrom ? { cell_type_terms: termsFrom } : {}) }
+      : { embeddings, columns, genes };
   const key = JSON.stringify(opts);
 
   useEffect(() => {
@@ -175,6 +178,39 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
               </label>
             )}
 
+            {format === "cellxgene" && (info.ontology_columns?.length ?? 0) > 0 && (
+              <div className="space-y-1">
+                <label className="flex flex-wrap items-center gap-2 text-slate-700">
+                  Cell type terms
+                  <select
+                    value={termsFrom}
+                    disabled={busy}
+                    onChange={(e) => setTermsFrom(e.target.value)}
+                    className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs"
+                  >
+                    <option value="">Not written</option>
+                    {info.ontology_columns!.map((c) => (
+                      <option key={c.column} value={c.column}>
+                        From your Cell Ontology mapping of {c.column}
+                        {c.complete ? "" : ` (${c.n_mapped} of ${c.n_labels} labels)`}
+                      </option>
+                    ))}
+                  </select>
+                  <InfoTip label="About cell type terms">
+                    Writes cell_type_ontology_term_id from the terms you gave the labels (Cell Ontology, under the
+                    legend). Only your own choices are written, and only when every label has one.
+                  </InfoTip>
+                </label>
+                {info.cell_type_terms && !info.cell_type_terms.written && (
+                  <p role="status" className="text-xs text-amber-700">
+                    Not written: {info.cell_type_terms.missing.length
+                      ? `no term yet for ${info.cell_type_terms.missing.slice(0, 6).join(", ")}${info.cell_type_terms.missing.length > 6 ? " …" : ""}.`
+                      : `${info.cell_type_terms.n_cells_unlabelled.toLocaleString()} cells have no label.`}
+                  </p>
+                )}
+              </div>
+            )}
+
             {format === "vitessce" && (
               <>
                 <fieldset>
@@ -240,7 +276,8 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
                   Ready for CELLxGENE Discover? {info.readiness.n_ok} of {info.readiness.n_items} checks pass
                   <InfoTip label="About the readiness report" align="right">
                     Checked against the published Discover schema {info.readiness.schema_version}. A report only:
-                    scView never fills in ontology terms; the curator chooses them. The organism term goes in
+                    scView never fills in ontology terms; the curator chooses them (cell type terms are written only
+                    from the mapping you made yourself). The organism term goes in
                     uns, and several terms in one cell are joined with " || ".
                   </InfoTip>
                 </h3>
