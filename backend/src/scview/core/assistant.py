@@ -41,6 +41,7 @@ from scview.core import (
     qc_filter,
 )
 from scview.core import ccc_compare
+from scview.core import milode
 from scview.core import mito_by_type
 from scview.core import qc_states
 from scview.core import embedding_reliability
@@ -591,6 +592,14 @@ def build_grounding_context(
                                           evidence="\n".join(milo_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: milo grounding failed: %s", exc)
+        try:
+            mde_lines, mde_detail = milode.grounding_lines(adaptor)
+            lines.extend(mde_lines)
+            if mde_detail:
+                sources.append(ChatSource(kind="result", ref="result:milode", detail=mde_detail,
+                                          evidence="\n".join(mde_lines[1:])))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: milode grounding failed: %s", exc)
         # The last merge check: which neighbouring clusters held-out counts can't tell apart.
         try:
             merge_lines, merge_detail = merge_check.grounding_lines(adaptor, adata.obs)

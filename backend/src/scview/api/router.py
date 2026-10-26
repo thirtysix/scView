@@ -28,6 +28,7 @@ from scview.api.v1 import (
     communication,
     composition,
     milo,
+    milode,
     normalization,
     pca,
     planner,
@@ -79,6 +80,7 @@ api_router.include_router(cells.router, tags=["cells"])
 api_router.include_router(composition.router, tags=["composition"])
 api_router.include_router(communication.router, tags=["communication"])
 api_router.include_router(milo.router, tags=["composition"])
+api_router.include_router(milode.router, tags=["differential-expression"])
 api_router.include_router(pca.router, tags=["assessment"])
 api_router.include_router(system.router, tags=["system"])
 api_router.include_router(preflight.router, tags=["system"])

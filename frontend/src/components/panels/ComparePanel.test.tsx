@@ -16,6 +16,9 @@ vi.mock("@/components/compare/JointEmbedding", () => ({ JointEmbedding: () => nu
 vi.mock("@/components/compare/MiloTest", () => ({
   MiloTest: ({ datasetId }: { datasetId: string }) => <div data-testid="milo">{datasetId}</div>,
 }));
+vi.mock("@/components/compare/MiloDETest", () => ({
+  MiloDETest: ({ datasetId }: { datasetId: string }) => <div data-testid="milode">{datasetId}</div>,
+}));
 
 import { ComparePanel } from "./ComparePanel";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -66,6 +69,15 @@ describe("ComparePanel composition", () => {
     expect(screen.getByTestId("milo").textContent).toBe("a");
     expect(screen.getByText(/needs no clustering/)).toBeInTheDocument();
     expect(screen.getByText(/change in abundance between two conditions/)).toBeInTheDocument();
+  });
+
+  it("offers neighbourhood DE (miloDE) next to Milo", async () => {
+    render(<ComparePanel />);
+    fireEvent.click(screen.getByRole("tab", { name: "Composition" }));
+    fireEvent.click(screen.getByRole("button", { name: "Neighbourhood DE (miloDE)" }));
+    expect(screen.getByTestId("milode").textContent).toBe("a");
+    expect(screen.getByText(/without clustering first/)).toBeInTheDocument();
+    expect(screen.queryByText(/Between conditions tests whether whole cell types/)).toBeNull();
   });
 
   it("calls two datasets' differences descriptive, on screen and to the co-pilot", async () => {
