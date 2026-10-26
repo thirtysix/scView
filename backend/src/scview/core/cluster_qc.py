@@ -162,6 +162,9 @@ class ClusterQCReport(BaseModel):
     n_groups: int = 0
     metrics: list[str] = []  # per-cluster metrics that could be computed
     typical: dict[str, float] = {}  # median across clusters, per metric
+    # The median CELL's genes and counts (what the QC plots show), not a cluster's
+    cell_median: dict[str, float] = {}
+    after_filtering: bool = False  # the dataset's cell filtering step has run
     clusters: list[ClusterQC] = []
     flag_help: dict[str, str] = FLAG_HELP
     computed_on_demand: bool = False  # genes/counts/mito worked out from counts
@@ -414,6 +417,9 @@ def cluster_qc(
         n_groups=len(order),
         metrics=metrics,
         typical={names[k]: round(v, 4) for k, v in typical.items() if k in names},
+        cell_median={"median_genes": round(float(np.nanmedian(frame["genes"])), 4),
+                     "median_counts": round(float(np.nanmedian(frame["counts"])), 4)},
+        after_filtering=_filtered(adata),
         clusters=rows,
         computed_on_demand=bool(cells.get("computed")),
         note=" ".join(n for n in (
@@ -566,6 +572,17 @@ def for_adaptor(adaptor, groupby: str | None = None) -> ClusterQCReport:
     if callable(fn):
         return cluster_qc(adata, groupby, lambda: fn(ribo=True))
     return cluster_qc(adata, groupby)
+
+
+def _filtered(adata) -> bool:
+    """Whether the dataset's provenance records the cell filtering step."""
+    try:
+        from scview.core import provenance
+
+        return any(h.get("step") == "filtering"
+                   for h in provenance.read_provenance(adata).get("history", []))
+    except Exception:  # pragma: no cover - defensive: a malformed record
+        return False
 
 
 def _num(v, digits: int = 2) -> float | None:
@@ -763,11 +780,16 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
            f"{_pct(t['mean_pct_hb'])} haemoglobin" if "mean_pct_hb" in t else "",
            f"{t['cycling_fraction']:.0%} cycling cells" if "cycling_fraction" in t else ""]
     head = f"result:qc:{report.column}"
-    lines = [
-        f"\n## Per-cluster QC (deterministic; column '{report.column}', {report.n_groups} groups)",
-        "- Typical cluster (median across clusters): " + ", ".join(s for s in typ if s)
-        + f" [{head}]",
-    ]
+    lines = [f"\n## Per-cluster QC (deterministic; column '{report.column}', {report.n_groups} groups)"]
+    cm = report.cell_median
+    if "median_genes" in cm and "median_counts" in cm:
+        # The number the QC plots show; a model read the typical cluster's as this.
+        when = "after QC filtering" if report.after_filtering else "no QC filtering recorded"
+        lines.append(f"- Median cell (all {report.n_cells:,} cells, {when}): "
+                     f"{_fmt(cm['median_genes'])} genes/cell, {_fmt(cm['median_counts'])} "
+                     f"counts/cell [{head}]")
+    lines.append("- Typical cluster (the median of the per-cluster medians, not the median cell): "
+                 + ", ".join(s for s in typ if s) + f" [{head}]")
     cites: list[tuple[str, str]] = [(head, f"{report.column}: {len(report.flagged)} of "
                                             f"{report.n_groups} clusters flagged")]
     flagged = report.flagged

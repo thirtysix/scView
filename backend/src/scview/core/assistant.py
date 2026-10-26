@@ -407,6 +407,38 @@ def _add_hashing(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(h_lines)))
 
 
+def _add_label_clusters(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Every cluster each cell-type label spans (core/label_clusters.py)."""
+    from scview.core import label_clusters
+
+    try:
+        lc_lines, cites = label_clusters.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: label clusters failed: %s", exc)
+        return
+    lines.extend(lc_lines)
+    for tag, detail, rows in cites:
+        sources.append(ChatSource(kind="result", ref=tag, detail=detail, evidence="\n".join(rows)))
+
+
+def _design_lines(adata) -> list[str]:
+    """The condition columns (stim, treatment, disease, ...) with their groups, in the
+    always-present summary: an answer about a gene once ignored that half the cells
+    were IFN-beta treated."""
+    from scview.core import confounding
+
+    out = []
+    try:
+        for col in confounding.condition_columns(adata.obs)[:2]:
+            vc = adata.obs[col].astype(str).value_counts()
+            groups = ", ".join(f"{k} ({v:,})" for k, v in vc.items())
+            out.append(f"- Condition column '{col}': {groups}. A gene's level across cells or "
+                       "clusters mixes these conditions unless compared within one condition.")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: condition columns failed: %s", exc)
+    return out
+
+
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Who the cell QC removed (the filtering step's record) or would remove at the
     pipeline's defaults, per cell type x condition, with the audit's flags."""
@@ -448,6 +480,7 @@ def build_grounding_context(
     lines.append("## Dataset [dataset:summary]")
     lines.append(f"- Cells: {n_cells:,} | Genes: {n_genes:,} | Species: {detect_species(adata).species}")
     lines.append(f"- Embeddings present: {', '.join(embeddings) if embeddings else 'none'}")
+    lines.extend(_design_lines(adata))
     prot = adaptor.protein_info()
     if prot:
         targets = [n for n in prot["names"] if n not in prot["controls"]]
@@ -515,7 +548,7 @@ def build_grounding_context(
         lines.append(f"- Done: {', '.join(done) if done else 'none'}")
         lines.append(f"- Not done: {', '.join(notdone) if notdone else 'none'}")
         # surface a few high-signal details verbatim
-        for step in ("normalization", "clustering", "batch_correction"):
+        for step in ("doublet_detection", "normalization", "clustering", "batch_correction"):
             st = state.get(step)
             if isinstance(st, dict) and st.get("details"):
                 lines.append(f"- {step}: {st['details']}")
@@ -656,6 +689,10 @@ def build_grounding_context(
             detail=f"{acol}: " + "; ".join(f"{k}={v}" for k, v in list(mapping.items())[:12]),
             evidence="\n".join(lines[start:]),
         ))
+
+    # 4a-bis, continued. Every cluster a label spans ("CD14 Mono = clusters 1 and 2"):
+    # a cluster -> label map alone read as "this label is cluster 1".
+    _add_label_clusters(adaptor, lines, sources)
 
     # 4a-ter. Per-cluster QC flags (deterministic), so "which clusters look low
     # quality?" is answered from the numbers. Only flagged clusters are listed.
