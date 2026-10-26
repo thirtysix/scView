@@ -49,7 +49,7 @@ import numpy as np
 import pandas as pd
 from scipy import optimize, special, stats
 
-from scview.core import paired_design
+from scview.core import paired_design, results_store
 from scview.core.confounding import check, condition_columns, for_comparison
 
 Transform = Literal["logit", "asin"]
@@ -660,7 +660,10 @@ def remember(adaptor, result: CompositionResult) -> None:
         with _last_lock:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
-        pass
+        return
+    results_store.keep(adaptor, "composition", result,
+                       key=f"{result.condition_key}|{result.group_key}",
+                       label=f"Composition of '{result.group_key}' by '{result.condition_key}'")
 
 
 _CAUTION = (
@@ -671,11 +674,7 @@ _CAUTION = (
 
 
 def _last_result(adaptor, obs: pd.DataFrame) -> CompositionResult | None:
-    try:
-        with _last_lock:
-            r = _last.get(adaptor)
-    except TypeError:
-        return None
+    r = results_store.remembered(_last, _last_lock, adaptor, "composition")
     if r is None or any(k and k not in obs.columns
                         for k in (r.condition_key, r.sample_key, r.group_key)):
         return None

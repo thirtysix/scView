@@ -50,6 +50,8 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from scview.core import results_store
+
 logger = logging.getLogger(__name__)
 
 COMMIT = "ce53cc7f496f996dc0f759652e21afcd0f20bb8e"
@@ -67,6 +69,7 @@ MIN_SHARED_GENES = 500
 MIN_CELLS = 10  # per side of a profile
 MIN_FILE_CYTOKINES, MIN_FILE_GENES = 20, 1000  # a smaller file is not the signature
 TAG = "result:cytokines"
+KIND = "cytokine"  # in the results store
 
 
 class SignatureUnavailable(RuntimeError):
@@ -427,9 +430,17 @@ _results_lock = threading.Lock()
 def recall(adaptor, key: tuple) -> dict | None:
     try:
         with _results_lock:
-            return (_results.get(adaptor) or {}).get("by_key", {}).get(key)
+            r = (_results.get(adaptor) or {}).get("by_key", {}).get(key)
     except TypeError:
         return None
+    if r is None:
+        stored = results_store.latest(adaptor, KIND, repr(key))
+        r = stored["result"] if stored else None
+        if r is not None:
+            with _results_lock:
+                entry = _results.setdefault(adaptor, {"by_key": {}, "last": None})
+                entry["by_key"].setdefault(key, r)
+    return r
 
 
 def remember(adaptor, key: tuple, result: dict) -> None:
@@ -438,12 +449,16 @@ def remember(adaptor, key: tuple, result: dict) -> None:
     try:
         with _results_lock:
             entry = _results.setdefault(adaptor, {"by_key": {}, "last": None})
+            new = entry["by_key"].get(key) is not result  # not a reused one shown again
             entry["by_key"][key] = result
             while len(entry["by_key"]) > 8:
                 entry["by_key"].pop(next(iter(entry["by_key"])))
             entry["last"] = result
     except TypeError:  # not weak-referenceable (a test double)
-        pass
+        return
+    if new:
+        results_store.keep(adaptor, KIND, {"key": key, "result": result}, key=repr(key),
+                           label=f"Cytokine response: {describe(result)}")
 
 
 def describe(r: dict) -> str:
@@ -460,6 +475,9 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
             r = (_results.get(adaptor) or {}).get("last")
     except TypeError:
         return [], None
+    if not r:
+        stored = results_store.latest(adaptor, KIND)
+        r = stored["result"] if stored else None
     if not r:
         return [], None
     detail = (f"CytoSig cytokine response, {describe(r)}: ridge regression on {r['n_shared_genes']} "

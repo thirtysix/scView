@@ -81,11 +81,13 @@ import httpx
 import numpy as np
 import pandas as pd
 
+from scview.core import results_store
 from scview.core.marker_specificity import tau as _tau
 
 logger = logging.getLogger(__name__)
 
 TAG = "result:offtarget"
+KIND = "offtarget"  # in the results store
 HPA_VERSION = "25.1"
 HPA_ENSEMBL = "109"
 LICENCE = "CC BY-SA 4.0"
@@ -651,7 +653,27 @@ def remember(adaptor, result: dict) -> None:
             while len(per) > 5:
                 per.pop(next(iter(per)))
     except TypeError:  # not weak-referenceable
-        pass
+        return
+    results_store.keep(adaptor, KIND, result, key=f"{result['group_col']}|{result['group']}",
+                       label=f"Off-target (HPA): {result['group_col']} {result['group']} markers")
+
+
+def _restore(adaptor) -> dict:
+    """The last 5 groups' results from the store (newest first), on a fresh dataset object."""
+    dataset_id = results_store.dataset_id_of(adaptor)
+    per: dict = {}
+    for e in results_store.entries(dataset_id, KIND, adaptor=adaptor) if dataset_id else []:
+        if e["status"] == "superseded" or e["stale"] or len(per) >= 5:
+            continue
+        got = results_store.load(dataset_id, e["id"])
+        if got is not None:
+            r = got[1]
+            per[(r["group_col"], r["group"])] = r
+    per = dict(reversed(per.items()))  # oldest first, as remember keeps them
+    if per:
+        with _last_lock:
+            per = _last.setdefault(adaptor, per)
+    return per
 
 
 def grounding_lines(adaptor, obs: pd.DataFrame) -> tuple[list[str], str | None]:
@@ -661,6 +683,8 @@ def grounding_lines(adaptor, obs: pd.DataFrame) -> tuple[list[str], str | None]:
             per = dict(_last.get(adaptor) or {})
     except TypeError:
         return [], None
+    if not per:
+        per = dict(_restore(adaptor))
     rows = [r for (col, _), r in per.items() if col in obs.columns and r["summary"]["n_genes"]]
     if not rows:
         return [], None

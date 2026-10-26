@@ -42,6 +42,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from scview.core import results_store
 from scview.core.object_cache import ObjectCache
 
 logger = logging.getLogger(__name__)
@@ -615,18 +616,26 @@ KEEP_LAST = 3
 RESULTS = ObjectCache()
 
 
-def remember(adata, label: str, result: dict[str, Any], cache: ObjectCache = RESULTS) -> None:
+def remember(adata, label: str, result: dict[str, Any], cache: ObjectCache = RESULTS,
+             adaptor=None) -> None:
     """Keep a short summary of the last few dataset PPI queries against the loaded
-    dataset object, for the co-pilot."""
+    dataset object, for the co-pilot (and in the results store, given the adaptor)."""
     summary = {k: result[k] for k in ("score", "n_proteins", "n_links", "expected_links", "p_value",
                                       "n_draws", "hubs", "n_communities", "n_unmapped")}
     prev = [s for s in (cache.get(adata, "ppi") or []) if s["label"] != label]
-    cache.put(adata, ([{"label": label, **summary}] + prev)[:KEEP_LAST], key="ppi")
+    last = ([{"label": label, **summary}] + prev)[:KEEP_LAST]
+    cache.put(adata, last, key="ppi")
+    if adaptor is not None:
+        results_store.keep(adaptor, "ppi", last, label=f"Protein interactions: last {len(last)} queries")
 
 
-def grounding_lines(adata, cache: ObjectCache = RESULTS) -> tuple[list[str], str]:
+def grounding_lines(adata, cache: ObjectCache = RESULTS, adaptor=None) -> tuple[list[str], str]:
     """The last PPI queries on this dataset as facts; nothing before one is run."""
     last = cache.get(adata, "ppi") or []
+    if not last and adaptor is not None:
+        last = results_store.latest(adaptor, "ppi") or []
+        if last:
+            cache.put(adata, last, key="ppi")
     if not last:
         return [], ""
     lines = ["\n## Protein interactions (STRING)"]

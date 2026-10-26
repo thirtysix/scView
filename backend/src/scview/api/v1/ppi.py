@@ -121,7 +121,7 @@ async def dataset_ppi(
         result = ppi.analyse(net, genes, score=score, logfc=lfc)
         result.update(label=label, source=source, direction=direction,
                       species_evidence=call.evidence if call else "chosen by the user")
-        ppi.remember(adata, label, result)
+        ppi.remember(adata, label, result, adaptor=adaptor)
         return result
 
     return await _in_thread(_run)

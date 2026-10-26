@@ -289,7 +289,7 @@ def _add_ppi(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     from scview.core import ppi
 
     try:
-        p_lines, p_detail = ppi.grounding_lines(adaptor.adata)
+        p_lines, p_detail = ppi.grounding_lines(adaptor.adata, adaptor=adaptor)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("assistant: PPI fact failed: %s", exc)
         return

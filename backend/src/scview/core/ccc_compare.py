@@ -52,7 +52,7 @@ import pandas as pd
 import scipy.sparse as sp
 from scipy import stats
 
-from scview.core import ccc, paired_design
+from scview.core import ccc, paired_design, results_store
 from scview.core.donor_expression import detect_sample_key
 
 FOLD = 1.5  # LR means this far apart: a gain, loss or change
@@ -61,6 +61,7 @@ MIN_SAMPLE_CELLS = 5  # per donor x condition x group pseudobulk
 MIN_DONORS = 2  # per condition, for any test
 SHARE_FOLD = 2.0  # a group's share of the cells this far apart: composition note
 KEEP = 4
+KIND = "ccc_compare"  # in the results store
 
 CALLS = ("gained", "lost", "changed", "unchanged")
 
@@ -468,6 +469,8 @@ def keep(result: CompareResult) -> None:
 def recall(dataset_id: str, result_id: str) -> CompareResult | None:
     with _lock:
         r = _results.get(result_id)
+    if r is None:
+        r = results_store.recall(dataset_id, result_id, KIND)
     return r if r is not None and r.dataset_id == dataset_id else None
 
 
@@ -476,7 +479,10 @@ def remember(adaptor, result: CompareResult) -> None:
         with _lock:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
-        pass
+        return
+    results_store.keep(adaptor, KIND, result, result_id=result.id,
+                       key=f"{result.groupby}|{result.condition}|{result.a}|{result.b}",
+                       label=f"Ligand-receptor change: {result.condition} {result.b} vs {result.a}")
 
 
 def export_table(r: CompareResult) -> pd.DataFrame:
@@ -487,11 +493,7 @@ def export_table(r: CompareResult) -> pd.DataFrame:
 def grounding_lines(adaptor, obs: pd.DataFrame) -> tuple[list[str], str | None]:
     """For the co-pilot: the last comparison's biggest gains and losses and the
     sender-receiver pairs whose interaction count moved most."""
-    try:
-        with _lock:
-            r = _last.get(adaptor)
-    except TypeError:
-        return [], None
+    r = results_store.remembered(_last, _lock, adaptor, KIND)
     if r is None or r.groupby not in obs.columns or r.condition not in obs.columns:
         return [], None
     if not set(r.groups) <= set(obs[r.groupby].dropna().astype(str)):

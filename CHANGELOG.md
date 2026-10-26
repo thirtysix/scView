@@ -6,6 +6,22 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Results store** (phase 1): results that were kept in process memory only now also go to disk under
+  `DATA_DIR/results/{dataset_id}/`, so they survive a backend restart and a dataset dropping out of the
+  cache: DE results (GSEA, DE overlap and activity by result id), ligand-receptor runs and condition
+  comparisons (CSV download by id), composition tests, Milo, merge and count-split checks, cytokine
+  response, off-target (HPA), protein interactions and study plans. The co-pilot's facts about them come
+  back with them. Tables are Parquet (zstd; floats narrowed to float32, p-values kept float64), arrays
+  compressed NumPy.
+- Each stored result records the cells it was computed on and the recipe's step count: one computed on
+  an earlier version of the dataset (cells filtered, pipeline re-run) is marked stale and not given to
+  the co-pilot as a current fact.
+- Retention: per kind and key the newest result plus the last 3 it superseded, at most 20 current results
+  per kind, at most 200 MB (compressed) per dataset, oldest first. Deleting a dataset deletes its results.
+- `GET /datasets/{id}/results` (filter `kind=`), `GET /datasets/{id}/results/{rid}`,
+  `DELETE /datasets/{id}/results/{rid}`.
+
 ## [0.39.2] - 2026-10-26
 
 ### Added

@@ -49,6 +49,8 @@ import pandas as pd
 import scipy.sparse as sp
 from scipy.stats import beta, rankdata
 
+from scview.core import results_store
+
 EXPR_PROP = 0.1  # LIANA's default: share of cells expressing each gene (subunit)
 MIN_CELLS = 5  # LIANA's default: smaller groups are dropped
 N_PERMS = 1000  # LIANA's default
@@ -384,6 +386,7 @@ def estimate_seconds(n_cells: int, n_groups: int, n_perms: int = N_PERMS) -> flo
 
 SPECIFIC = 0.05  # specificity_rank at or below this: counted between two groups
 KEEP = 4  # results held for CSV download, a few MB each
+KIND = "ccc"  # in the results store
 
 
 @dataclass
@@ -463,6 +466,8 @@ def keep(result: Result) -> None:
 def recall(dataset_id: str, result_id: str) -> Result | None:
     with _results_lock:
         r = _results.get(result_id)
+    if r is None:
+        r = results_store.recall(dataset_id, result_id, KIND)
     return r if r is not None and r.dataset_id == dataset_id else None
 
 
@@ -472,15 +477,15 @@ def remember(adaptor, result: Result) -> None:
         with _results_lock:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
-        pass
+        return
+    scope = f" within {result.subset[0]} = {result.subset[1]}" if result.subset else ""
+    results_store.keep(adaptor, KIND, result, result_id=result.id,
+                       key=f"{result.groupby}|{'|'.join(result.subset or ())}",
+                       label=f"Ligand-receptor between '{result.groupby}' groups{scope}")
 
 
 def _last_result(adaptor, obs: pd.DataFrame) -> Result | None:
-    try:
-        with _results_lock:
-            r = _last.get(adaptor)
-    except TypeError:
-        return None
+    r = results_store.remembered(_last, _results_lock, adaptor, KIND)
     if r is None or r.groupby not in obs.columns or (r.subset and r.subset[0] not in obs.columns):
         return None
     if not set(r.groups) <= set(obs[r.groupby].dropna().astype(str)):

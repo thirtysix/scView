@@ -74,7 +74,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from scview.core import hvg_sensitivity as hs
-from scview.core import leiden, provenance
+from scview.core import leiden, provenance, results_store
 from scview.core import resolution_sweep as rs
 from scview.core.obs_writes import forget_column_results
 
@@ -770,16 +770,14 @@ def remember(adaptor, result: dict[str, Any]) -> None:
         with _last_lock:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
-        pass
+        return
+    results_store.keep(adaptor, "merge_check", result, key=str(result.get("reference", "")),
+                       label=f"Merge check of '{result.get('reference')}'")
 
 
 def grounding_lines(adaptor, obs: pd.DataFrame) -> tuple[list[str], str | None]:
     """For the co-pilot: the last merge check's summary and its candidate pairs."""
-    try:
-        with _last_lock:
-            r = _last.get(adaptor)
-    except TypeError:
-        return [], None
+    r = results_store.remembered(_last, _last_lock, adaptor, "merge_check")
     if r is None or (r.get("reference_exists") and r["reference"] not in obs.columns):
         return [], None
     t = r["thresholds"]

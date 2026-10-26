@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from scview.core import large_layout, large_mode, memory_budget
+from scview.core import large_layout, large_mode, memory_budget, results_store
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from scview.core.obs_writes import is_locked
 
@@ -169,6 +169,7 @@ class DatasetManager:
 
     def __init__(self, data_dir: str, max_datasets: int = 3) -> None:
         self.data_dir = Path(data_dir)
+        results_store.configure(self.data_dir)
         self.max_datasets = max_datasets
         self._datasets: dict[str, AnnDataAdaptor] = {}
         self._load_order: list[str] = []
@@ -551,6 +552,7 @@ class DatasetManager:
             if d.exists():
                 shutil.rmtree(d)
                 found = True
+        results_store.delete_dataset(dataset_id)
         return found
 
     # ------------------------------------------------------------------

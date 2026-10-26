@@ -56,6 +56,7 @@ import pandas as pd
 from scipy import special, stats
 
 from scview.core import composition as comp
+from scview.core import results_store
 
 # ---------------------------------------------------------------------------
 # Defaults and bounds
@@ -1636,6 +1637,7 @@ def check_pilot(adata, group_key: str, condition_key: str | None, sample_key: st
 # ---------------------------------------------------------------------------
 
 TAG = "result:planner"
+KIND = "planner"  # in the results store
 _last: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _last_lock = threading.Lock()
 
@@ -1647,15 +1649,24 @@ def remember(adaptor, payload: dict) -> None:
         with _last_lock:
             _last.setdefault(adaptor, {})[payload["kind"]] = payload
     except TypeError:  # not weak-referenceable (a test double)
-        pass
+        return
+    results_store.keep(adaptor, KIND, payload, key=payload["kind"],
+                       label=f"Study planner ({payload['kind']}): '{payload.get('group_key')}'")
 
 
 def last_plans(adaptor) -> dict:
     try:
         with _last_lock:
-            return dict(_last.get(adaptor, {}))
+            plans = dict(_last.get(adaptor, {}))
     except TypeError:
         return {}
+    for kind in ("composition", "de"):
+        if kind not in plans:
+            stored = results_store.latest(adaptor, KIND, kind)
+            if stored is not None:
+                with _last_lock:
+                    plans[kind] = _last.setdefault(adaptor, {}).setdefault(kind, stored)
+    return plans
 
 
 def _n_text(v: float | None, top: int) -> str:

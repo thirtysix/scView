@@ -48,6 +48,7 @@ from scview.api.v1 import (
     structure,
     offtarget,
     cytokines,
+    results,
     ppi,
 )
 
@@ -99,3 +100,4 @@ api_router.include_router(structure.router, tags=["assessment"])
 api_router.include_router(offtarget.router, tags=["markers"])
 api_router.include_router(cytokines.router, tags=["activity"])
 api_router.include_router(ppi.router, tags=["ppi"])
+api_router.include_router(results.router, tags=["results"])

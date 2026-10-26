@@ -412,10 +412,10 @@ def _methods(work, mask_a, mask_b, dataset_id: str, min_pct: float, top_n: int) 
     }
 
 
-def _remember(dataset_id: str, res: _CellTest, comparison: dict) -> str:
+def _remember(dataset_id: str, res: _CellTest, comparison: dict, adaptor=None) -> str:
     return de_results.remember(dataset_id, res.genes, method=res.method,
                                min_pct=res.prefilter.min_pct, n_skipped=res.prefilter.n_skipped,
-                               comparison={**comparison, "min_pct": res.prefilter.min_pct})
+                               comparison={**comparison, "min_pct": res.prefilter.min_pct}, adaptor=adaptor)
 
 
 def _compared(body: _CompareScope, n_a: int, n_b: int, replicate_key: str | None) -> dict:
@@ -480,7 +480,7 @@ async def differential_expression(
     compared = {"mode": "selection", "label": body.label, "n_a": n_sel,
                 "n_b": int(adata.n_obs) - n_sel}
     return DEResponse(n_selected=n_sel, n_rest=int(adata.n_obs) - n_sel, label=body.label,
-                      genes=res.genes, result_id=_remember(dataset_id, res, compared),
+                      genes=res.genes, result_id=_remember(dataset_id, res, compared, adaptor),
                       transcriptome_size=size, **res.fields())
 
 
@@ -612,7 +612,7 @@ async def differential_expression_compare(
     composition = _composition(adata, body, mask_a, mask_b, body.composition_by)
 
     if body.method == "pseudobulk":
-        resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id)
+        resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id, adaptor)
         resp.confounding = confounding
         resp.composition = composition
         return resp
@@ -628,7 +628,7 @@ async def differential_expression_compare(
         obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
-    result_id = _remember(dataset_id, res, _compared(body, n_a, n_b, key))
+    result_id = _remember(dataset_id, res, _compared(body, n_a, n_b, key), adaptor)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=_compare_label(body), genes=res.genes,
                       result_id=result_id, transcriptome_size=size,
                       confounding=confounding, composition=composition, **guard, **res.fields())
@@ -658,7 +658,7 @@ async def differential_expression_compare_methods(
                              label=_compare_label(body), **out)
 
 
-async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str):
+async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str, adaptor=None):
     """Donor-aware A vs B: per-donor count sums, DESeq2 Wald test (off the event loop)."""
     from scview.core.pseudobulk import PseudobulkError, pseudobulk_de
 
@@ -706,7 +706,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         genes=genes,
         result_id=de_results.remember(
             dataset_id, genes, method="pseudobulk",
-            comparison=_compared(body, res.n_cells_a, res.n_cells_b, key),
+            comparison=_compared(body, res.n_cells_a, res.n_cells_b, key), adaptor=adaptor,
         ),
         replicate_key=key,
         n_donors_a=res.n_samples_a,
