@@ -36,6 +36,7 @@ import { ReportSubtab } from "@/components/report/ReportSubtab";
 import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
 import { CnvSubtab } from "@/components/unified/CnvSubtab";
 import { ClonotypeSubtab } from "@/components/unified/ClonotypeSubtab";
+import { PerturbationSubtab } from "@/components/unified/PerturbationSubtab";
 import { getProgramUsage, type ProgramUsage } from "@/api/programs";
 import { usageLabel } from "@/lib/programs";
 import { ClusterReference } from "@/components/unified/ClusterReference";
@@ -80,6 +81,7 @@ const SUBTABS = [
   { id: "programs" as const, label: "Programs" },
   { id: "cnv" as const, label: "Copy number" },
   { id: "clonotypes" as const, label: "Clonotypes" },
+  { id: "perturbation" as const, label: "Perturbation" },
 ] as const;
 
 interface ViolinResponse {
@@ -457,6 +459,7 @@ export function UnifiedViewPanel() {
   // A dataset without proteins has no Protein tab to stay on.
   useEffect(() => {
     if (activeSubtab === "protein" && dataset && !dataset.protein) setActiveSubtab("markers");
+    if (activeSubtab === "perturbation" && dataset && !dataset.perturbation) setActiveSubtab("markers");
   }, [activeSubtab, dataset, setActiveSubtab]);
 
   // Default the expression layer to the dataset's default; re-default when the
@@ -1272,7 +1275,9 @@ export function UnifiedViewPanel() {
           )}
           {/* Tab bar: wraps onto a second row rather than scrolling, so no tab is cut off */}
           <TabList
-            tabs={SUBTABS.filter((tab) => tab.id !== "protein" || dataset?.protein)}
+            tabs={SUBTABS.filter(
+              (tab) => (tab.id !== "protein" || dataset?.protein) && (tab.id !== "perturbation" || dataset?.perturbation),
+            )}
             active={activeSubtab}
             onChange={setActiveSubtab}
             label="Analysis"
@@ -1358,6 +1363,7 @@ export function UnifiedViewPanel() {
             )}
             {activeSubtab === "cnv" && <CnvSubtab />}
             {activeSubtab === "clonotypes" && <ClonotypeSubtab groupByColumn={groupByColumn} />}
+            {activeSubtab === "perturbation" && <PerturbationSubtab />}
           </TabPanel>
         </div>
       </div>

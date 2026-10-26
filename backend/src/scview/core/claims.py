@@ -605,6 +605,7 @@ _FAMILY_PREFIX = {
     "cytokines": "result:cytokines", "cytokine": "result:cytokines", "cytosig": "result:cytokines",
     "ppi": "result:ppi",
     "pseudobulk": "result:pseudobulk",
+    "mixscape": "result:mixscape", "perturbation": "result:mixscape", "crispr": "result:mixscape",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 

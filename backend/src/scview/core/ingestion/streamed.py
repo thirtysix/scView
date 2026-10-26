@@ -49,7 +49,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from scview.core import hashing, protein
+from scview.core import crispr, hashing, protein
 from scview.core.ingestion import feature_split as fs
 from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 from scview.core.ingestion.detection import legacy_tenx_genomes
@@ -313,6 +313,8 @@ class StreamedUnit:
     ab_names: list[str] = field(default_factory=list)
     take_cmo: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
     cmo_names: list[str] = field(default_factory=list)
+    take_guide: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))  # CRISPR guides
+    guide_names: list[str] = field(default_factory=list)
     split: protein.ProteinSplit | None = None
     h5ad: Path | None = None  # an .h5ad: X and layers copied by feature_split, .raw/obsp as stored
     h5ad_extra: list[str] = field(default_factory=list)  # its layers / .raw / obsp present
@@ -477,7 +479,10 @@ def _plan_split(su: StreamedUnit) -> None:
     split = protein.ProteinSplit()
     is_ab = (types == protein.ANTIBODY_TYPE).to_numpy()
     is_cmo = (types == hashing.CMO_TYPE).to_numpy()
-    other = types[(types != protein.GENE_TYPE) & (types != protein.ANTIBODY_TYPE) & ~is_cmo]
+    is_guide = (types == crispr.GUIDE_TYPE).to_numpy()
+    if not 0 < is_guide.sum() <= crispr.MAX_GUIDES:
+        is_guide = np.zeros_like(is_guide)
+    other = types[(types != protein.GENE_TYPE) & (types != protein.ANTIBODY_TYPE) & ~is_cmo & ~is_guide]
     split.other_features = {str(k): int(v) for k, v in other.value_counts().items()}
     genes = (types == protein.GENE_TYPE).to_numpy()
     names = meta.var_names
@@ -491,6 +496,9 @@ def _plan_split(su: StreamedUnit) -> None:
     if 0 < is_cmo.sum() <= hashing.MAX_TAGS:
         su.take_cmo = np.flatnonzero(is_cmo)
         su.cmo_names = [str(v) for v in names[is_cmo]]
+    if is_guide.any():
+        su.take_guide = np.flatnonzero(is_guide)
+        su.guide_names = [str(v) for v in names[is_guide]]
     su.split = split
 
 
@@ -514,13 +522,16 @@ def counts_like(units: list[StreamedUnit]) -> dict[str, bool]:
     return out
 
 
-def attach_split(su: StreamedUnit, ab: np.ndarray | None, cmo: np.ndarray | None) -> None:
-    """The antibody and CellPlex tables, taken out while the matrix was written, attached
-    to the unit as ``split_features`` attaches them."""
+def attach_split(su: StreamedUnit, ab: np.ndarray | None, cmo: np.ndarray | None,
+                 guide: np.ndarray | None = None) -> None:
+    """The antibody, CellPlex and guide tables, taken out while the matrix was written,
+    attached to the unit as ``split_features`` attaches them."""
     if len(su.take_ab) and ab is not None:
         protein.attach(su.meta, ab, su.ab_names, su.split)
     if len(su.take_cmo) and cmo is not None:
         hashing.attach_counts(su.meta, cmo, su.cmo_names, hashing.CMO_TYPE)
+    if len(su.take_guide) and guide is not None:
+        crispr.attach_counts(su.meta, guide, su.guide_names)
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +552,7 @@ def _index_dtype(nnz: int, n_vars: int) -> np.dtype:
 
 def _write_x(group: h5py.Group, parts: list[_Part], n_vars: int) -> list[tuple]:
     """X (cells of every part in order x ``n_vars``) as CSR, with each part's antibody /
-    CellPlex columns returned as dense float32 tables ``(ab, cmo)``. A MEX part found out
+    CellPlex columns returned as dense float32 tables ``(ab, cmo, guide)``. A MEX part found out
     of cell order is read again by buckets (the X written so far is dropped)."""
     while True:
         try:
@@ -571,7 +582,7 @@ def _write_x_once(group: h5py.Group, parts: list[_Part], n_vars: int) -> list[tu
         identity = (p.colmap.size == n_vars and np.array_equal(p.colmap, np.arange(n_vars)))
         monotonic = identity or bool(np.all(np.diff(p.colmap[p.colmap >= 0]) > 0))
         tables = []
-        for cols in (u.take_ab, u.take_cmo):
+        for cols in (u.take_ab, u.take_cmo, u.take_guide):
             if len(cols):
                 where = np.full(rows.n_vars, -1, dtype=np.int64)
                 where[cols] = np.arange(len(cols))
@@ -623,12 +634,12 @@ def _copy_h5ad(su: StreamedUnit, fo: h5py.File) -> tuple:
     keep = np.zeros(su.n_features, dtype=bool)
     keep[su.keep] = True
     masks = []
-    for cols in (su.take_ab, su.take_cmo):
+    for cols in (su.take_ab, su.take_cmo, su.take_guide):
         m = np.zeros(su.n_features, dtype=bool)
         m[cols] = True
         masks.append(m)
     with h5py.File(su.h5ad, "r") as fi:
-        tables = [None, None]
+        tables = [None, None, None]
         if "X" in fi:
             got = fs._subset_matrix(fi["X"], fo, "X", keep, masks)
             tables = [t if m.any() else None for t, m in zip(got, masks)]
@@ -689,6 +700,7 @@ def ingest(units: list[StreamedUnit], part: Path, *, join, sample_label: str, re
             attach_split(su, *tables)
     metas = {su.label: su.meta for su in units}
     protein.common_panel(list(metas.values()))
+    crispr.common_guides(list(metas.values()))
     merged = merge_units(metas, join=join, sample_label=sample_label, reconciliation=reconciliation)
     protein.renormalise(merged)
     if not merged.var_names.equals(var_names):  # pragma: no cover - the same merge twice

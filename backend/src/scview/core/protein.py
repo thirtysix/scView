@@ -15,8 +15,9 @@ ADT counts carry a background from free antibody in the droplet that the
 per-cell ratio cancels in part; DSB, which subtracts that background measured
 in empty droplets, needs the unfiltered matrix and is not done here.
 
-Other non-gene features (CRISPR guides, CellPlex multiplexing tags, custom
-features) are taken out of the gene matrix too, and only counted.
+Other non-gene features are taken out of the gene matrix too: CellPlex tags
+into ``obsm["hto_counts"]`` (core/hashing.py), CRISPR guides into
+``obsm["guide_counts"]`` (core/crispr.py), custom features only counted.
 """
 
 from __future__ import annotations
@@ -119,13 +120,16 @@ def split_features(adata: ad.AnnData) -> tuple[ad.AnnData, ProteinSplit | None]:
     if (types == GENE_TYPE).all():
         return adata, adopt_obsm(adata)
 
-    from scview.core import hashing
+    from scview.core import crispr, hashing
 
     split = ProteinSplit()
     is_ab = (types == ANTIBODY_TYPE).to_numpy()
-    # CellPlex multiplexing tags are kept as tag counts (core/hashing.py), not dropped.
+    # CellPlex multiplexing tags are kept as tag counts (core/hashing.py), not dropped;
+    # CRISPR guides as guide counts (core/crispr.py).
     is_cmo = (types == hashing.CMO_TYPE).to_numpy()
-    other = types[(types != GENE_TYPE) & (types != ANTIBODY_TYPE) & ~is_cmo]
+    is_guide = (types == crispr.GUIDE_TYPE).to_numpy()
+    take_guide = 0 < is_guide.sum() <= crispr.MAX_GUIDES
+    other = types[(types != GENE_TYPE) & (types != ANTIBODY_TYPE) & ~is_cmo & ~(is_guide & take_guide)]
     split.other_features = {str(k): int(v) for k, v in other.value_counts().items()}
     genes = adata[:, (types == GENE_TYPE).to_numpy()].copy()
     if 0 < is_ab.sum() <= MAX_PROTEINS:
@@ -135,6 +139,8 @@ def split_features(adata: ad.AnnData) -> tuple[ad.AnnData, ProteinSplit | None]:
     if 0 < is_cmo.sum() <= hashing.MAX_TAGS:
         hashing.attach_counts(genes, adata.X[:, is_cmo], [str(v) for v in adata.var_names[is_cmo]],
                               hashing.CMO_TYPE)
+    if take_guide:
+        crispr.attach_counts(genes, adata.X[:, is_guide], [str(v) for v in adata.var_names[is_guide]])
     return genes, (split if split.n_proteins or split.other_features else None)
 
 

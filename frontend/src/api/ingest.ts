@@ -5,8 +5,9 @@ import { apiFetch, readError } from "./client";
 // --- Types (mirror backend scview.core.ingestion models) ------------------
 
 export type FileRole = "matrix" | "barcodes" | "features" | "data" | "side" | "unknown";
-/** What a side file is: Cell Ranger metrics, the raw matrix (sequencing QC) or a TCR/BCR contig table. */
-export type SideKind = "metrics" | "raw" | "vdj";
+/** What a side file is: Cell Ranger metrics, the raw matrix (sequencing QC), a TCR/BCR contig
+ *  table, or Cell Ranger's CRISPR guide calls. */
+export type SideKind = "metrics" | "raw" | "vdj" | "crispr";
 export type UnitFormat =
   | "tenx_mex"
   | "tenx_h5"
@@ -50,7 +51,9 @@ export interface IngestUnit {
 
 /** A unit's side files for sequencing QC (metrics, raw matrix), without its contig tables. */
 export function seqQcSideFiles(unit: IngestUnit): BundleFile[] {
-  return (unit.side_files ?? []).filter((f) => f.side_kind !== "vdj" && f.kind !== "vdj_contigs");
+  return (unit.side_files ?? []).filter(
+    (f) => f.side_kind !== "vdj" && f.kind !== "vdj_contigs" && f.side_kind !== "crispr",
+  );
 }
 
 /** A unit's TCR/BCR contig tables. */

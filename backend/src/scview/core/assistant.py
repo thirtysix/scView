@@ -315,6 +315,22 @@ def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
         sources.append(ChatSource(kind="result", ref=vdj.TAG, detail=v_detail, evidence="\n".join(v_lines)))
 
 
+def _add_mixscape(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """A CRISPR screen (core/crispr.py, core/mixscape.py): the guide assignment and
+    the last Mixscape run's KO fraction per target."""
+    from scview.core import mixscape
+
+    try:
+        m_lines, m_detail = mixscape.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: Mixscape fact failed: %s", exc)
+        return
+    if m_lines:
+        lines.extend(m_lines)
+        sources.append(ChatSource(kind="result", ref=mixscape.TAG, detail=m_detail or "",
+                                  evidence="\n".join(m_lines[1:])))
+
+
 def _add_cytokines(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last cytokine-response run (core/cytokine_activity.py): top cytokines per group."""
     from scview.core import cytokine_activity
@@ -611,6 +627,7 @@ def build_grounding_context(
             logger.debug("assistant: merge-check grounding failed: %s", exc)
         _add_study_planner(adaptor, lines, sources)
         _add_vdj(adaptor, lines, sources)
+        _add_mixscape(adaptor, lines, sources)
         _add_cytokines(adaptor, lines, sources)
         _add_pseudobulk(adaptor, lines, sources)
 

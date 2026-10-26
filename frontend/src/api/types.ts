@@ -23,6 +23,8 @@ export interface DatasetInfo {
   default_expression_layer?: string;
   /** CITE-seq antibodies (protein modality), or null/absent without them */
   protein?: ProteinInfo | null;
+  /** A CRISPR screen's guides (backend core/crispr.available), or null/absent without them */
+  perturbation?: { n_guides: number; cellranger: boolean; assigned: boolean; columns: string[] } | null;
   /** Hash of the cell barcodes in order: equal for the same cells (saved sessions) */
   cells_fingerprint?: string;
   created_at: string;

@@ -45,7 +45,9 @@ def test_split_takes_antibodies_and_other_features_out_of_the_genes():
     assert list(genes.obsm[protein.CLR_KEY].index) == list(genes.obs_names)
     assert split.controls == ["IgG1_control"]
     assert split.original["CD3"] == "CD3_TotalSeqB"
-    assert split.other_features == {"CRISPR Guide Capture": 1}
+    assert split.other_features == {}  # the guide is kept as guide counts (core/crispr.py)
+    assert list(genes.obsm["guide_counts"].columns) == ["guide_A"]
+    assert genes.obsm["guide_counts"].to_numpy().ravel().tolist() == a.X[:, 7].toarray().ravel().tolist()
     assert genes.uns[protein.UNS_KEY]["n_proteins"] == 3
     assert protein.protein_names(genes) == ["CD3", "CD19", "IgG1_control"]
     assert protein.values(genes, "CD19", normalised=False).tolist() == a.X[:, 5].toarray().ravel().tolist()
