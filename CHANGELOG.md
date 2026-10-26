@@ -6,6 +6,42 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Mouse gene sets**: a mouse dataset uses MSigDB's mouse collections (2026.2.Mm: MH Hallmark, M2
+  Reactome / WikiPathways, M5 GO, M8 cell types by default; M1, M2 CGP / BioCarta, M3, M5 MPO and M7 to
+  pick), downloaded on first use (~27 MB, sha256-pinned; `MSIGDB_AUTO_DOWNLOAD=false` turns it off).
+  The collection tree lists mouse sets first. Enrichment results, pipeline provenance, the replay script
+  and the co-pilot name the gene sets' species ("mouse MSigDB MH"). Human installs download nothing new.
+- **Human resources on mouse data through orthologs**: human gene sets, CollecTRI / PROGENy (TF and
+  pathway activity, refused on mouse before) and CytoSig are mapped to mouse genes through the HGNC HCOP
+  ortholog table with decoupler's rules (3+ supporting resources, at most 5 orthologs per gene). On paul15
+  the mapped CollecTRI edges are identical to decoupler 2.2 (43,226 of 43,226) and per-cell activity
+  agrees (Pearson 1.0000). The table (3.5 MB, CC0) is fetched once; `ORTHOLOGS_AUTO_DOWNLOAD=false` turns
+  that off, and without it human gene sets fall back to matching symbols ignoring case.
+- **Co-pilot knows what is on screen**: the open Unified tab, the DE result or enrichment shown and the
+  open Compare tab go with each question, so "Explain this result", "What should I do next?" and "Write
+  the methods paragraph" use the dataset's facts (the methods text comes from the recorded steps only).
+- Co-pilot answers render Markdown tables, and code inside bold text.
+
+### Changed
+- Marker database check: a label whose database markers overlap its top markers no more than chance
+  would give (p >= 0.05, often one shared gene) reads "weak support", not "supported" (Kang's B activated
+  and T activated).
+
+### Fixed
+- Co-pilot routing: the question classifier's reply was cut off and failed to parse about half the
+  time; questions naming a stored result (cytokines, miloDE, pseudobulk, CRISPR, programs, communication)
+  keep that result in the answer.
+- Co-pilot facts: median genes per cell after QC filtering, every cluster a label spans, why a Mixscape
+  target with no KO cells has no DE genes, and the condition column are stated so the answer uses them.
+- Claims ledger: a sentence sharing one gene name with a fact but saying more is "uncertain", not
+  "supported"; a count before a bracketed list no longer misreads as a refutation.
+- The first marker database download (several minutes) no longer ends in "backend did not answer": it
+  runs in the background while the card shows progress.
+- Error notes show the server's reason instead of `API error 400: {"detail": ...}`.
+- Step names keep their abbreviations in History and Provenance ("QC metrics", "PCA").
+- A scattered small cluster's label sits on one of its cells instead of in empty space.
+
 ## [0.42.0] - 2026-10-26
 
 ### Added
