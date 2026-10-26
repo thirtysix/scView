@@ -15,6 +15,7 @@ import {
 import { InfoTip } from "@/components/common/InfoTip";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { formatBytes } from "@/lib/formatting";
+import { errorMessage } from "@/lib/errorMessage";
 
 const TITLES: Record<RFormat, string> = {
   seurat: "Seurat object (.rds)",
@@ -53,7 +54,7 @@ export function RExportDialog({ datasetId, format, onClose, pollMs = 1500 }: Pro
         setInfo(i);
         if (i.running_job) setJobId(i.running_job); // started earlier: follow it again
       })
-      .catch((e: unknown) => live && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => live && setError(errorMessage(e)));
     return () => {
       live = false;
     };
@@ -79,7 +80,7 @@ export function RExportDialog({ datasetId, format, onClose, pollMs = 1500 }: Pro
         }
         timer = setTimeout(poll, pollMs);
       } catch (e) {
-        if (live) setError(e instanceof Error ? e.message : String(e));
+        if (live) setError(errorMessage(e));
       }
     };
     void poll();
@@ -97,7 +98,7 @@ export function RExportDialog({ datasetId, format, onClose, pollMs = 1500 }: Pro
       setJob(j);
       setJobId(j.job);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     }
   };
 

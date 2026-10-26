@@ -16,6 +16,7 @@ import { aboutGb, METHOD_LABELS, referenceChoices, unmappedLevel } from "@/lib/l
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const pct = (v: number) => `${(100 * v).toFixed(v < 0.1 ? 1 : 0)}%`;
 
@@ -86,7 +87,7 @@ export function ReferenceMappingCard({
         const guess = cols.find((x) => /cell[ ._-]?type|label|annot/i.test(x.column)) ?? cols[0];
         setColumn(guess?.column ?? "");
       })
-      .catch((e) => live && setCheck({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
+      .catch((e) => live && setCheck({ ok: false, reason: errorMessage(e) }));
     return () => {
       live = false;
     };
@@ -109,7 +110,7 @@ export function ReferenceMappingCard({
       setResult(r);
       await refresh(datasetId, r.columns.label);
     } catch (e) {
-      if (!(e instanceof DOMException && e.name === "AbortError")) setError(e instanceof Error ? e.message : String(e));
+      if (!(e instanceof DOMException && e.name === "AbortError")) setError(errorMessage(e));
     } finally {
       setRunning(false);
       setProgress("");

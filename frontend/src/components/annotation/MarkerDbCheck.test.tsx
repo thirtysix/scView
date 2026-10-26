@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { MarkerDbResult, MarkerDbSource, MarkerDbStatus } from "@/api/annotation";
 
-const { getMarkerDbStatus, runMarkerDbCheck } = vi.hoisted(() => ({
+const { getMarkerDbStatus, runMarkerDbCheck, startMarkerDbDownload } = vi.hoisted(() => ({
   getMarkerDbStatus: vi.fn(),
   runMarkerDbCheck: vi.fn(),
+  startMarkerDbDownload: vi.fn(),
 }));
-vi.mock("@/api/annotation", () => ({ getMarkerDbStatus, runMarkerDbCheck }));
+vi.mock("@/api/annotation", () => ({ getMarkerDbStatus, runMarkerDbCheck, startMarkerDbDownload }));
 
 import { MarkerDbCheck, markerDbSourceText } from "./MarkerDbCheck";
 
@@ -52,7 +53,7 @@ const RESULT: MarkerDbResult = {
       db_type: null, cl_id: null, sources: [], p: null, overlap: [], n_db_genes: 0,
       verdict: "not_in_db", verdict_text: "not in database", suggestions: [] },
   ],
-  verdict_counts: { supported: 1, no_support: 1, too_few: 0, not_in_db: 1, no_markers: 0 },
+  verdict_counts: { supported: 1, weak: 0, no_support: 1, too_few: 0, not_in_db: 1, no_markers: 0 },
   n_measured: 100, n_db_types: 10, ontology: true, sources: SRC,
   verdict_sources: ["PanglaoDB", "CellMarker 2.0", "ACT"], suggestion_sources: ["PanglaoDB", "CellMarker 2.0"], params: {}, note: "A reason to look.", elapsed_seconds: 0.2,
 };
@@ -71,6 +72,7 @@ describe("MarkerDbCheck", () => {
   beforeEach(() => {
     getMarkerDbStatus.mockReset().mockResolvedValue(READY);
     runMarkerDbCheck.mockReset().mockResolvedValue(RESULT);
+    startMarkerDbDownload.mockReset().mockResolvedValue(READY);
   });
 
   it("checks the column and shows verdicts, matches and suggestions", async () => {
@@ -112,6 +114,18 @@ describe("MarkerDbCheck", () => {
     fireEvent.click(screen.getByRole("button", { name: /Retry download/ }));
     await waitFor(() => expect(screen.getByTestId("marker-db-result")).toBeTruthy());
     expect(runMarkerDbCheck).toHaveBeenLastCalledWith("d1", "cell_type", { retry: true });
+  });
+
+  it("fetches in the background and waits on the status before checking", async () => {
+    // a single check request outlived the proxy's 300 s during the ~5 min first download
+    getMarkerDbStatus.mockResolvedValueOnce(MISSING).mockResolvedValueOnce({ ...MISSING, state: "downloading" })
+      .mockResolvedValue(READY);
+    startMarkerDbDownload.mockResolvedValue({ ...MISSING, state: "downloading" });
+    render(<MarkerDbCheck datasetId="d1" column="cell_type" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Download databases and check" }));
+    await waitFor(() => expect(screen.getByTestId("marker-db-result")).toBeTruthy(), { timeout: 6000 });
+    expect(startMarkerDbDownload).toHaveBeenCalledWith("d1", false);
+    expect(startMarkerDbDownload.mock.invocationCallOrder[0]!).toBeLessThan(runMarkerDbCheck.mock.invocationCallOrder[0]!);
   });
 
   it("says when ACT is missing but the other two work", async () => {

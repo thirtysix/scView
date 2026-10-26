@@ -14,6 +14,7 @@ import { prettyObsLabel } from "@/lib/formatting";
 import { formatDuration } from "@/lib/hvgSensitivity";
 import { plotConfig } from "@/lib/plotConfig";
 import { comparisonPoints, groupsByConcern, keptText, summaryText, type PointKind } from "@/lib/splitMarkers";
+import { errorMessage } from "@/lib/errorMessage";
 
 // Blue / orange stay apart under every common colour-vision deficiency.
 const KIND_STYLE: Record<PointKind, { color: string; label: string }> = {
@@ -71,7 +72,7 @@ export function CountSplitCheck({
       .catch(
         (e) =>
           !cancelled &&
-          setInfo({ available: false, reason: e instanceof Error ? e.message : String(e) } as SplitMarkersInfo),
+          setInfo({ available: false, reason: errorMessage(e) } as SplitMarkersInfo),
       );
     return () => {
       cancelled = true;

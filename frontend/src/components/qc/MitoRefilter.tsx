@@ -10,6 +10,7 @@ import { floorText } from "@/components/qc/MitoModeControl";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { RequestError } from "@/components/common/RequestError";
+import { errorMessage } from "@/lib/errorMessage";
 
 const STEP_LABELS: Record<string, string> = {
   qc_metrics: "QC metrics",
@@ -274,7 +275,7 @@ export function MitoRefilter({
       }
       onDone?.(message);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setRunning(false);
       setPipelineRunning(false);

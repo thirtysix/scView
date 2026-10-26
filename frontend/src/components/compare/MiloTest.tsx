@@ -13,6 +13,7 @@ import { isCategoricalDtype, rankGroupingColumns } from "@/lib/obsColumns";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   datasetId: string;
@@ -152,7 +153,7 @@ export function MiloTest({ datasetId, info }: Props) {
       .catch((e) => {
         if (cancelled) return;
         setPlan(null);
-        setPlanError(e instanceof Error ? e.message : String(e));
+        setPlanError(errorMessage(e));
       });
     return () => {
       cancelled = true;
@@ -176,7 +177,7 @@ export function MiloTest({ datasetId, info }: Props) {
       })
       .catch((e) => {
         if (ctrl.signal.aborted) return;
-        setRunError(e instanceof Error ? e.message : String(e));
+        setRunError(errorMessage(e));
       })
       .finally(() => {
         if (abort.current === ctrl) {
@@ -196,7 +197,7 @@ export function MiloTest({ datasetId, info }: Props) {
           setSelection(new Set(cells));
           setPicked(`Selected ${cells.length.toLocaleString()} cells (${what}).`);
         })
-        .catch((e) => setPicked(e instanceof Error ? e.message : String(e)));
+        .catch((e) => setPicked(errorMessage(e)));
     },
     [datasetId, setSelection],
   );

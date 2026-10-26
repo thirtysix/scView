@@ -22,6 +22,7 @@ import { RecipeViewer } from "@/components/panels/RecipeViewer";
 import { ResultsList } from "@/components/panels/ResultsList";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
+import { stepLabel } from "@/lib/stepLabel";
 
 // Steps that can be re-run in place (mirror backend rerun.INPLACE_RERUNNABLE).
 const RERUNNABLE = new Set([
@@ -38,10 +39,6 @@ const RERUN_PARAM: Record<string, { key: string; label: string; step: number; mi
   clustering: { key: "clustering_resolution", label: "Resolution", step: 0.1, min: 0.1, def: 0.5 },
   embeddings: { key: "umap_min_dist", label: "Min distance", step: 0.05, min: 0.0, def: 0.5 },
 };
-
-function prettyStep(step: string): string {
-  return step.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-}
 
 function fmtTime(iso: string): string {
   try {
@@ -117,7 +114,7 @@ export function ProvenancePanel() {
         setCurrentDataset(await getDataset(dataset.id)); // propagate new state to other panels
         setEditingIdx(null);
         const ran = (result?.steps_run as string[]) ?? [];
-        setRerunMsg(`Re-ran: ${ran.map(prettyStep).join(", ")}.`);
+        setRerunMsg(`Re-ran: ${ran.map(stepLabel).join(", ")}.`);
       } catch (e) {
         setRerunMsg(e instanceof Error ? e.message : "Re-run failed.");
       } finally {
@@ -320,7 +317,7 @@ function StepRow({ step }: { step: ProvStep }) {
       <Clock className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />
       <div className="min-w-0">
         <div className="flex flex-wrap items-baseline gap-x-2">
-          <span className="text-sm font-medium text-slate-800">{prettyStep(step.step)}</span>
+          <span className="text-sm font-medium text-slate-800">{stepLabel(step.step)}</span>
           <span className="text-xs text-slate-400">{step.tool}</span>
           <span className="text-xs text-slate-300">{fmtTime(step.timestamp)}</span>
         </div>

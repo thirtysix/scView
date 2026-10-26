@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { ChevronRight, ChevronDown, Loader2 } from "lucide-react";
 import { apiFetch } from "@/api/client";
+import { InfoTip } from "@/components/common/InfoTip";
 import { CustomCollectionsGroup } from "./CustomCollectionsGroup";
 
 /* ------------------------------------------------------------------ */
@@ -16,6 +17,8 @@ interface MSigDBCollection {
   default: boolean;
   n_sets: number;
   available: boolean;
+  /** Whose gene symbols the sets use. */
+  species?: "human" | "mouse";
 }
 
 interface SubcategoryNode {
@@ -26,13 +29,48 @@ interface SubcategoryNode {
 interface CategoryNode {
   category: string;
   name: string;
+  species?: "human" | "mouse";
   children: (MSigDBCollection | SubcategoryNode)[];
+}
+
+/** How the first-use fetch of the mouse collections is going (mouse datasets only). */
+interface MouseDownload {
+  state: "ready" | "downloading" | "failed" | "off" | "missing";
+  release: string;
+  message: string;
 }
 
 interface MSigDBCollectionsResponse {
   collections: MSigDBCollection[];
   hierarchy: CategoryNode[];
+  /** The default selection for the dataset's species. */
   defaults: string[];
+  species?: string;
+  mouse_download?: MouseDownload;
+}
+
+const POLL_MS = 3000;
+
+function sameSet(a: Set<string>, b: string[]): boolean {
+  return a.size === b.length && b.every((x) => a.has(x));
+}
+
+/** The heading above each species' collections on a mouse dataset. */
+function SpeciesHeading({ species }: { species: "human" | "mouse" }) {
+  if (species === "mouse") {
+    return <div className="mt-0.5 mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Mouse gene sets</div>;
+  }
+  return (
+    <div className="mt-1.5 mb-0.5 flex items-center gap-1 border-t border-slate-100 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+      Human gene sets (mapped to mouse)
+      <InfoTip label="About human gene sets on mouse data">
+        These sets list human gene symbols. For enrichment on mouse data each gene is replaced by its mouse
+        orthologs from HGNC HCOP (as decoupler does); a gene with no mouse ortholog is left out. If the ortholog
+        table cannot be fetched, genes are matched ignoring case instead. The mouse collections above need no
+        mapping.
+      </InfoTip>
+    </div>
+  );
 }
 
 function isSubcategory(
@@ -62,7 +100,16 @@ export function MSigDBCollectionTree({
   const [hierarchy, setHierarchy] = useState<CategoryNode[]>([]);
   const [customIds, setCustomIds] = useState<string[]>([]);
   const [defaults, setDefaults] = useState<string[]>([]);
+  const [species, setSpecies] = useState<string>("");
+  const [download, setDownload] = useState<MouseDownload | null>(null);
+  const [poll, setPoll] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  // The selection as it is now, read when the species' defaults arrive.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const swappedFor = useRef<string | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set(),
   );
@@ -70,13 +117,26 @@ export function MSigDBCollectionTree({
     Set<string>
   >(new Set());
 
-  // Fetch hierarchy
+  // Fetch hierarchy (for the dataset's species: a mouse dataset lists mouse collections first)
   useEffect(() => {
-    setIsLoading(true);
-    apiFetch<MSigDBCollectionsResponse>("/enrichment/msigdb-collections")
+    if (poll === 0) setIsLoading(true);
+    const path = datasetId
+      ? `/enrichment/msigdb-collections?dataset_id=${encodeURIComponent(datasetId)}`
+      : "/enrichment/msigdb-collections";
+    apiFetch<MSigDBCollectionsResponse>(path)
       .then((data) => {
         setHierarchy(data.hierarchy);
         setDefaults(data.defaults);
+        setSpecies(data.species ?? "");
+        setDownload(data.mouse_download ?? null);
+        // Once per dataset: an untouched default selection becomes this species' defaults.
+        const key = datasetId ?? "";
+        if (swappedFor.current !== key) {
+          swappedFor.current = key;
+          const cur = selectedRef.current;
+          const untouched = sameSet(cur, DEFAULT_MSIGDB_COLLECTIONS) || sameSet(cur, DEFAULT_MOUSE_MSIGDB_COLLECTIONS);
+          if (untouched && !sameSet(cur, data.defaults)) onChangeRef.current(new Set(data.defaults));
+        }
         // Auto-expand categories that have selected items
         const cats = new Set<string>();
         const subcats = new Set<string>();
@@ -94,12 +154,21 @@ export function MSigDBCollectionTree({
             }
           }
         }
-        setExpandedCategories(cats);
-        setExpandedSubcategories(subcats);
+        if (poll === 0) {
+          setExpandedCategories(cats);
+          setExpandedSubcategories(subcats);
+        }
       })
       .catch(() => setHierarchy([]))
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [datasetId, poll]);
+
+  // While the mouse collections download, look again every few seconds.
+  useEffect(() => {
+    if (download?.state !== "downloading") return;
+    const t = setTimeout(() => setPoll((n) => n + 1), POLL_MS);
+    return () => clearTimeout(t);
+  }, [download, poll]);
 
   const toggleCollection = useCallback(
     (id: string) => {
@@ -225,7 +294,20 @@ export function MSigDBCollectionTree({
             No MSigDB collections available. Check MSIGDB_DIR configuration.
           </div>
         )}
-        {hierarchy.map((cat) => {
+        {download && download.state !== "ready" && download.message && (
+          <div
+            role="status"
+            className={`mb-1 flex items-start gap-1.5 text-[10px] ${download.state === "downloading" ? "text-slate-500" : "text-amber-700"}`}
+          >
+            {download.state === "downloading" && <Loader2 className="mt-0.5 h-3 w-3 flex-shrink-0 animate-spin" />}
+            <span>{download.message}</span>
+          </div>
+        )}
+        {hierarchy.map((cat, i) => {
+          const heading =
+            species === "mouse" && cat.species && cat.species !== hierarchy[i - 1]?.species ? (
+              <SpeciesHeading species={cat.species} />
+            ) : null;
           const isExpanded = expandedCategories.has(cat.category);
           const hasChildren =
             cat.children.length > 1 ||
@@ -235,8 +317,9 @@ export function MSigDBCollectionTree({
           if (!hasChildren && cat.children.length === 1) {
             const col = cat.children[0] as MSigDBCollection;
             return (
+              <div key={col.id}>
+              {heading}
               <label
-                key={col.id}
                 className={`flex items-center gap-2 ${py} ${textSize} text-slate-700`}
                 title={col.description}
               >
@@ -253,11 +336,13 @@ export function MSigDBCollectionTree({
                 <span>{col.name}</span>
                 <span className="text-slate-400">({col.n_sets})</span>
               </label>
+              </div>
             );
           }
 
           return (
             <div key={cat.category}>
+              {heading}
               {/* Category header */}
               <button
                 onClick={() => toggleCategory(cat.category)}
@@ -360,4 +445,15 @@ export const DEFAULT_MSIGDB_COLLECTIONS = [
   "c5.go.cc",
   "c5.go.mf",
   "c8.all",
+];
+/** A mouse dataset's defaults (backend msigdb_loader.MOUSE_DEFAULT_COLLECTIONS); the tree
+ *  swaps an untouched selection to the species' defaults when it loads. */
+export const DEFAULT_MOUSE_MSIGDB_COLLECTIONS = [
+  "mh.all",
+  "m2.cp.reactome",
+  "m2.cp.wikipathways",
+  "m5.go.bp",
+  "m5.go.cc",
+  "m5.go.mf",
+  "m8.all",
 ];

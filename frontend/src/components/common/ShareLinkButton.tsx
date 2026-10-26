@@ -3,6 +3,7 @@ import { Check, Link2, Loader2, X } from "lucide-react";
 import { buildShareUrl, describeSharedView, readShareHash } from "@/lib/shareUrl";
 import { captureSession } from "@/lib/sessionRestore";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Made {
   url: string;
@@ -82,7 +83,7 @@ export function ShareLinkButton() {
       setMade({ url, dropped, copied, restores: shared ? describeSharedView(shared) : [] });
     } catch (e) {
       setMade(null);
-      setError(`The link could not be made: ${e instanceof Error ? e.message : String(e)}`);
+      setError(`The link could not be made: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
     }

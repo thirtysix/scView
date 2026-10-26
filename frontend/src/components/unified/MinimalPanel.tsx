@@ -28,6 +28,7 @@ import {
   panelText,
   parseGenes,
 } from "@/lib/markerPanel";
+import { errorMessage } from "@/lib/errorMessage";
 
 const inputClass =
   "w-full rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-700";
@@ -123,7 +124,7 @@ export function MinimalPanel({ datasetId, groupby }: { datasetId: string; groupb
         },
       );
     } catch (e) {
-      if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      if (!ctrl.signal.aborted) setError(errorMessage(e));
     } finally {
       if (abort.current === ctrl) {
         abort.current = null;

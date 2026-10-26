@@ -55,4 +55,45 @@ describe("MarkdownLite", () => {
     expect(container.querySelector("button")).toBeNull();
     expect(container.textContent).toContain("[link: here](http://x.test)");
   });
+
+  it("renders inline code inside bold, not literal backticks", () => {
+    const { container } = render(<MarkdownLite text="- **`CCL2`**, **`CCL7`** — chemokines" />);
+    const codes = container.querySelectorAll("strong > code");
+    expect(Array.from(codes).map((c) => c.textContent)).toEqual(["CCL2", "CCL7"]);
+    expect(container.textContent).not.toContain("`");
+  });
+
+  it("renders a GFM pipe table with alignment and inline markdown in cells", () => {
+    // The shape of the 2026-10-26 crispr answer's KO table.
+    const text = [
+      "Only **10 of 25 targets** have KO cells:",
+      "",
+      "| Target | KO / total | KO % | DE genes |",
+      "|:---|---|:---:|---:|",
+      "| **STAT2** | 474 / 588 | 81% | 37 |",
+      "| `JAK2` | 724 / 924 | 78% | 508 [result:mixscape] |",
+      "",
+      "After the table.",
+    ].join("\n");
+    const { container } = render(<MarkdownLite text={text} />);
+    const ths = container.querySelectorAll("table thead th");
+    expect(Array.from(ths).map((t) => t.textContent)).toEqual(["Target", "KO / total", "KO %", "DE genes"]);
+    expect((ths[0] as HTMLElement).style.textAlign).toBe("left");
+    expect((ths[2] as HTMLElement).style.textAlign).toBe("center");
+    expect((ths[3] as HTMLElement).style.textAlign).toBe("right");
+    const rows = container.querySelectorAll("table tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.querySelector("strong")?.textContent).toBe("STAT2");
+    expect(rows[1]?.querySelector("code")?.textContent).toBe("JAK2");
+    expect(rows[1]?.textContent).not.toContain("[result:"); // a citation chip, not the tag
+    expect(container.textContent).not.toContain("|");
+    expect(container.querySelectorAll("p")).toHaveLength(2); // the lines around the table
+  });
+
+  it("keeps a lone pipe line as text and pads short rows", () => {
+    const { container } = render(<MarkdownLite text={"a | b without a rule\n\n| x | y |\n|---|---|\n| 1 |"} />);
+    expect(container.querySelector("p")?.textContent).toBe("a | b without a rule");
+    const cells = container.querySelectorAll("table tbody td");
+    expect(Array.from(cells).map((c) => c.textContent)).toEqual(["1", ""]);
+  });
 });

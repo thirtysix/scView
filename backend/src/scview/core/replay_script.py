@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from scview.core import provenance, vdj
+from scview.core import msigdb_species, provenance, vdj
 
 EXACT = "exact"
 APPROXIMATE = "approximate"
@@ -1632,6 +1632,10 @@ def _enrichment(p: dict, ctx: _Ctx) -> Snippet:
                          "enrichment_n_genes": p.get("enrichment_n_genes"),
                          "enrichment_collections": p.get("enrichment_collections")}),
     ]
+    # Which species' gene sets they were (a mouse run uses MSigDB's mouse sets).
+    named = p.get("enrichment_gene_set_species") or msigdb_species.describe(p.get("enrichment_collections") or [])
+    if named:
+        lines.append(f"# Gene sets: {named}.")
     return Snippet(APPROXIMATE, lines, "MSigDB over-representation: not replayed (needs the gene sets)")
 
 

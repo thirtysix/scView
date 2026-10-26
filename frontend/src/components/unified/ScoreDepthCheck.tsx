@@ -10,6 +10,7 @@ import {
 } from "@/api/genesetScore";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { errorMessage } from "@/lib/errorMessage";
 
 const METRICS: { id: DepthMetric; label: string; title: string }[] = [
   { id: "total_counts", label: "Total counts", title: "Spearman's rho of the score with the cell's total counts (UMIs)" },
@@ -73,7 +74,7 @@ export function ScoreDepthCheck({ datasetId, genes }: { datasetId: string; genes
     try {
       setCheck(await checkScoreDepth(datasetId, genes));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }

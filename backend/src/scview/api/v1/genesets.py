@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import aucell, working_copy
+from scview.core import aucell, msigdb_species, working_copy
 from scview.core import large_mode
 from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
@@ -97,21 +97,30 @@ async def list_geneset_collections(
 ):
     """List available gene-set collections (subcategory-level).
 
-    MSigDB collections first, then the custom ones (category "Custom"), which
-    also say how many of their genes this dataset measures.
+    MSigDB collections first (on a mouse dataset the mouse ones, then the human
+    ones), then the custom ones (category "Custom"), which also say how many of
+    their genes this dataset measures. ``species``: the dataset's.
     """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
+    species = await asyncio.to_thread(msigdb_species.dataset_species, adaptor.adata)
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
-    collections = loader.available_collections() if loader is not None else []
+    if loader is not None and species == "mouse" and settings.MSIGDB_AUTO_DOWNLOAD:
+        from scview.core.msigdb_fetch import start_mouse_download
+
+        start_mouse_download(loader.dir)  # first use: fetched in the background
+    # Reads every collection on disk the first time: off the event loop.
+    collections = (await asyncio.to_thread(loader.available_collections, species)
+                   if loader is not None else [])
     collections += custom_collections_for_dataset(
         adaptor, get_custom_store(settings.DATA_DIR)
     )
     return {
         "dataset_id": dataset_id,
         "collections": collections,
+        "species": species,
     }
 
 
@@ -138,18 +147,20 @@ async def search_genesets(
     store = get_custom_store(settings.DATA_DIR)
     custom = is_custom_id(collection)
     query = q.strip()
+    # Across all collections, a mouse dataset's own (mouse) collections come first.
+    species = None if collection else msigdb_species.dataset_species(adaptor.adata)
 
     results: list[dict] = []
     if query:
         exact = None
         if not custom and loader is not None:
-            exact = loader.get_gene_set(query, collection=collection)
+            exact = loader.get_gene_set(query, collection=collection, species=species)
         if exact is None and (custom or not collection):
             exact = store.get_gene_set(query, collection=collection)
         if exact is not None:
             results.append(exact)
     if not custom and loader is not None:
-        results += loader.search(query, collection=collection, limit=limit)
+        results += loader.search(query, collection=collection, limit=limit, species=species)
     if custom or not collection:
         results += store.search(query, collection=collection, limit=limit)
 

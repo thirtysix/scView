@@ -27,7 +27,19 @@ export interface ActivitySummary {
   groups?: string[];
   group_sizes?: number[];
   mean?: number[][];
+  /** Mouse only: the human network was mapped to mouse through HCOP orthologs. */
+  orthologs?: ActivityOrthologs;
   elapsed_seconds: number;
+}
+
+/** How a human network was mapped to a mouse dataset (backend core/orthologs.py). */
+export interface ActivityOrthologs {
+  note: string;
+  mapped_by: string;
+  n_targets_mapped: number | null;
+  n_human_targets: number | null;
+  n_edges: number | null;
+  n_human_edges: number | null;
 }
 
 export interface ActivityCells {

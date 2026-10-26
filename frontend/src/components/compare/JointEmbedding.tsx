@@ -14,6 +14,7 @@ import {
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
 import type { DatasetInfo } from "@/api/types";
 import { JointSummary } from "./JointSummary";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** Pipeline steps of a joint run, in order, with display labels. */
 const STEP_LABELS: Record<string, string> = {
@@ -95,7 +96,7 @@ export function JointEmbedding() {
       setPlanning(true);
       planIntegration(selected, labelList)
         .then((p) => !cancelled && setPlan(p))
-        .catch((e) => !cancelled && setPlanError(e instanceof Error ? e.message : String(e)))
+        .catch((e) => !cancelled && setPlanError(errorMessage(e)))
         .finally(() => !cancelled && setPlanning(false));
     }, 400);
     return () => {
@@ -168,7 +169,7 @@ export function JointEmbedding() {
         .then(setAvailableDatasets)
         .catch(() => undefined);
     } catch (e) {
-      setRunError(e instanceof Error ? e.message : String(e));
+      setRunError(errorMessage(e));
     } finally {
       setRunning(false);
     }

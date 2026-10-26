@@ -58,6 +58,8 @@ export interface CollectionChoice {
   n_sets?: number;
   n_genes?: number;
   n_genes_present?: number;
+  /** An MSigDB collection's species (whose gene symbols it lists). */
+  species?: "human" | "mouse";
 }
 
 export function collectionOptionLabel(c: CollectionChoice): string {

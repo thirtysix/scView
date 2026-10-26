@@ -5,6 +5,7 @@ import { AlertCircle, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { apiFetch } from "@/api/client";
+import { errorMessage } from "@/lib/errorMessage";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { missingGenes } from "@/lib/geneList";
 import { getGroupDistances, type GroupDistances } from "@/api/clustering";
@@ -127,6 +128,7 @@ export function MarkerPlot({
   );
   const [data, setData] = useState<ByGroup | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false); // a 404: none of the chosen genes measured
   const [loading, setLoading] = useState(false);
   const [meanOf, setMeanOf] = useState<MeanOf>("all");
   const [scale, setScale] = useState<ColourScale>("gene");
@@ -171,11 +173,16 @@ export function MarkerPlot({
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setNotFound(false);
     const qs = new URLSearchParams({ groupby, ...(layer ? { layer } : {}) });
     for (const p of picked) qs.append("genes", p.gene);
     apiFetch<ByGroup>(`/datasets/${datasetId}/expression/by-group?${qs}`)
       .then((d) => { if (!cancelled) setData(d); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
+      .catch((e) => {
+        if (cancelled) return;
+        setNotFound(e instanceof Error && e.message.startsWith("API error 404"));
+        setError(errorMessage(e));
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [datasetId, groupby, picked, layer, revision]); // revision: a saved category order or label move
@@ -183,7 +190,7 @@ export function MarkerPlot({
   if (picked.length === 0) {
     return <p className="py-8 text-center text-sm text-slate-400">No up-regulated marker genes to plot.</p>;
   }
-  if (error && custom && error.includes("404")) {
+  if (error && custom && notFound) {
     return (
       <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
         None of these genes are in this dataset (names are case-sensitive):{" "}

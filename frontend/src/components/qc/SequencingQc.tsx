@@ -30,6 +30,7 @@ import {
 } from "@/lib/seqqc";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const FILL_STYLE = { width: "100%", height: "100%" } as const;
 const TH = "whitespace-nowrap px-1.5 py-1 text-left font-medium";
@@ -87,7 +88,7 @@ function AttachForm({
       onAttached(await attachSeqMetrics(datasetId, files, column ? { column, sample } : {}));
       setFiles([]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -313,7 +314,7 @@ export function SequencingQc({ datasetId, onChange }: { datasetId: string; onCha
         if (!cancelled) setData(d);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(errorMessage(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -334,7 +335,7 @@ export function SequencingQc({ datasetId, onChange }: { datasetId: string; onCha
       onChange?.();
       setFocus(0);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setRemoving(false);
     }

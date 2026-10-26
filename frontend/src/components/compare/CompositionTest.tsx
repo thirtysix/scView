@@ -22,6 +22,7 @@ import { rankGroupingColumns } from "@/lib/obsColumns";
 import type { DonorPoint } from "@/lib/donorPlot";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   datasetId: string;
@@ -151,7 +152,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
       .catch((e) => {
         if (cancelled) return;
         setResult(null);
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorMessage(e));
       })
       .finally(() => !cancelled && setLoading(false));
     return () => {

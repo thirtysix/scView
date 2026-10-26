@@ -6,6 +6,7 @@ import { InfoTip } from "@/components/common/InfoTip";
 import { getOffTarget, type OffTargetResult, type TissueLevel } from "@/api/offtarget";
 import { plotConfig } from "@/lib/plotConfig";
 import { TISSUE_LEVELS, VERDICT_STYLE, categoryTitle, heatmapHeight, summaryText, topText } from "@/lib/offtarget";
+import { errorMessage } from "@/lib/errorMessage";
 
 /**
  * "Elsewhere in the body" in the Markers subtab (backend core/offtarget.py): the
@@ -42,7 +43,7 @@ export function OffTargetPanel({
       .catch((e) => {
         if (cancelled) return;
         setResult(null);
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorMessage(e));
       })
       .finally(() => !cancelled && setLoading(false));
     return () => {

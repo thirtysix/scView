@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/api/client";
+import { errorMessage } from "@/lib/errorMessage";
 import { getJointSummary, type BatchMixing, type JointSummary as Summary } from "@/api/integration";
 import { getPalette } from "@/lib/colors";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -148,7 +149,7 @@ function JointMethodChoice({
       setMessage(`Re-ran the joint graph, clusters, UMAP and markers with ${BATCH_METHOD_LABELS[method]}.`);
       onApplied();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setApplying(null);
     }

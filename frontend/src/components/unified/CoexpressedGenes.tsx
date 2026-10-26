@@ -9,6 +9,7 @@ import { MAX_GRID_GENES } from "@/lib/geneCoexpression";
 import { useGeneGridStore } from "@/stores/geneGridStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** The backend's floor on cells (core/coexpression.py MIN_CELLS). */
 const MIN_CELLS = 10;
@@ -73,7 +74,7 @@ export function CoexpressedGenes({ datasetId, activeGene, onGeneSelect }: Props)
       });
       setData(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

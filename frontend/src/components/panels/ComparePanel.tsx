@@ -9,8 +9,10 @@ import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
+import { useOnScreenStore } from "@/stores/onScreenStore";
 import { listDatasets, getDataset } from "@/api/datasets";
 import { apiFetch } from "@/api/client";
+import { errorMessage } from "@/lib/errorMessage";
 import { getPalette } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -58,6 +60,12 @@ const TABS: { id: CompareTab; label: string }[] = [
  * composition comparison of two. */
 export function ComparePanel() {
   const [tab, setTab] = useState<CompareTab>("joint");
+  // The co-pilot's view context names the open tab (stores/onScreenStore.ts)
+  const setOnScreenTab = useOnScreenStore((s) => s.setCompareTab);
+  useEffect(() => {
+    setOnScreenTab(tab);
+  }, [tab, setOnScreenTab]);
+  useEffect(() => () => setOnScreenTab(null), [setOnScreenTab]);
   return (
     <div className="space-y-5">
       <Header />
@@ -255,7 +263,7 @@ function CompositionCompare() {
         setPropsA(a);
         setPropsB(b);
       })
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => !cancelled && setError(errorMessage(e)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;

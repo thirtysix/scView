@@ -25,6 +25,16 @@ def event_loop():
 
 
 @pytest.fixture(autouse=True)
+def _no_ortholog_fetch(monkeypatch):
+    """Human gene sets on mouse data map through HCOP orthologs, fetched on first use:
+    tests never fetch it (a test that wants the table writes it or passes
+    ``auto_download`` itself)."""
+    from scview.core import orthologs
+
+    monkeypatch.setattr(orthologs, "_auto_download", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def _results_store_in_tmp(tmp_path: Path):
     """Every test's results store in its own tmp dir, never DATA_DIR, with its
     background writes finished before the next test points the store elsewhere."""

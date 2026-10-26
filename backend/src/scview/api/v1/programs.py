@@ -43,7 +43,7 @@ router = APIRouter()
 _DONE = object()
 _running: set[str] = set()  # datasets with a programs run streaming: one at a time each
 
-HALLMARK = "h.all"
+HALLMARK = "h.all"  # a mouse dataset's default is MH (msigdb_loader.HALLMARK)
 
 
 class RunRequest(BaseModel):
@@ -54,7 +54,7 @@ class RunRequest(BaseModel):
 
 
 class EnrichRequest(BaseModel):
-    collections: list[str] = [HALLMARK]
+    collections: list[str] | None = None  # None: the Hallmark sets of the dataset's species
     n_genes: int = Field(default=gp.N_TOP, ge=5, le=gp.N_TOP)
     # Ribosomal / mitochondrial genes out of the query, as in the other ORA requests.
     exclude_ribo_mito: bool = True
@@ -280,12 +280,13 @@ async def enrich_program(
     """Over-representation of the program's top genes (by gene score) in the chosen
     collections (MSigDB Hallmark by default), with the genes NMF used as the
     universe. The best terms are kept with the run for the co-pilot."""
-    from scview.api.v1.enrichment import EnrichmentResult, _ora_records
+    from scview.api.v1.enrichment import EnrichmentResult, _ora_records, _require_msigdb
+    from scview.core import msigdb_species as ms
     from scview.core.custom_genesets import get_custom_store, is_custom_id
     from scview.core.gene_filters import select_query_genes
     from scview.core.geneset_sources import label_records
+    from scview.core.msigdb_loader import HALLMARK as HALLMARKS
     from scview.core.msigdb_loader import get_msigdb_loader
-    from scview.core.species import detect_species, human_genesets_warning
 
     adaptor = await _adaptor(dm, dataset_id)
     adata = adaptor.adata
@@ -296,7 +297,10 @@ async def enrich_program(
         raise HTTPException(status_code=404, detail=f"There are {info['k']} programs; no P{index}.")
     loader = get_msigdb_loader(settings.MSIGDB_DIR)
     store = get_custom_store(settings.DATA_DIR)
-    if loader is None and not any(is_custom_id(c) for c in body.collections):
+    species = await asyncio.to_thread(ms.dataset_species, adata)
+    collections = (list(body.collections) if body.collections is not None
+                   else [HALLMARKS.get(species, HALLMARK)])
+    if loader is None and not any(is_custom_id(c) for c in collections):
         raise HTTPException(status_code=500, detail="MSigDB directory not configured.")
     run_id = info["run_id"]
 
@@ -304,16 +308,19 @@ async def enrich_program(
         genes = gp.query_genes(info, index, body.n_genes)
         background = gp.background_genes(adata)
         kept = select_query_genes(genes, len(genes), exclude_ribo_mito=body.exclude_ribo_mito)
-        records = _ora_records(kept, background, body.collections, loader, store) if kept else []
+        _require_msigdb(collections, settings)
+        records = (_ora_records(kept, background, collections, loader, store, species=species)
+                   if kept else [])
         return {
             "index": index, "name": info["programs"][index - 1]["name"], "run_id": run_id,
-            "collections": list(body.collections), "query": kept, "n_query": len(kept),
+            "collections": collections, "query": kept, "n_query": len(kept),
             "n_excluded_ribo_mito": len(genes) - len(kept), "background_n": len(background),
             "n_terms": len(records),
             "n_significant": sum(r.get("adjusted_pvalue", 1.0) < 0.05 for r in records),
             "results": [EnrichmentResult(**r).model_dump()
                         for r in label_records(records[: body.max_terms], store)],
-            "warning": human_genesets_warning(detect_species(adata)),
+            "warning": ms.warning(species, collections),
+            "species": species,
             "_records": records,
         }
 
@@ -329,7 +336,7 @@ async def enrich_program(
             stored_now = gp.stored(current.adata)
             if stored_now is not None and stored_now["run_id"] == run_id:
                 def keep() -> None:
-                    gp.remember_enrichment(current.adata, index, body.collections, records)
+                    gp.remember_enrichment(current.adata, index, collections, records)
                     dm.persist_uns(dataset_id, current, [gp.ENRICH_KEY])
 
                 await held.run(keep)

@@ -3,6 +3,7 @@ import { Database, Loader2, RotateCcw } from "lucide-react";
 import {
   getMarkerDbStatus,
   runMarkerDbCheck,
+  startMarkerDbDownload,
   type MarkerDbLabel,
   type MarkerDbResult,
   type MarkerDbSource,
@@ -10,11 +11,14 @@ import {
   type MarkerDbVerdict,
 } from "@/api/annotation";
 import { formatDate, formatPValue, prettyObsLabel } from "@/lib/formatting";
+import { errorMessage } from "@/lib/errorMessage";
 
 const ROWS = 12; // more behind "show all"
+export const DOWNLOAD_POLL_MS = 2000;
 
 const VERDICT_STYLE: Record<MarkerDbVerdict, string> = {
   supported: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  weak: "bg-teal-50 text-teal-800 border-teal-200",
   no_support: "bg-amber-50 text-amber-800 border-amber-200",
   too_few: "bg-slate-50 text-slate-500 border-slate-200",
   not_in_db: "bg-slate-50 text-slate-500 border-slate-200",
@@ -22,7 +26,8 @@ const VERDICT_STYLE: Record<MarkerDbVerdict, string> = {
 };
 
 const VERDICT_TITLE: Record<MarkerDbVerdict, string> = {
-  supported: "Some of the label's database markers are among this group's top markers",
+  supported: "More of the label's database markers are among this group's top markers than chance would give (p < 0.05)",
+  weak: "One or a few of the label's database markers are among this group's top markers, about as many as chance would give (p >= 0.05)",
   no_support:
     "None of the label's database markers is among this group's top 25 markers: worth a look, not proof the label is wrong",
   too_few: "The matched database type has fewer than 5 genes measured here: too few to judge",
@@ -32,7 +37,7 @@ const VERDICT_TITLE: Record<MarkerDbVerdict, string> = {
 
 /** The server's reason from an apiFetch error ("API error 503: {detail}"). */
 function errorText(e: unknown): string {
-  const body = (e instanceof Error ? e.message : String(e)).replace(/^API error \d+: /, "");
+  const body = (errorMessage(e)).replace(/^API error \d+: /, "");
   try {
     return String(JSON.parse(body).detail ?? body);
   } catch {
@@ -112,6 +117,19 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
     setRunning(true);
     setError(null);
     try {
+      // The first download takes minutes, longer than the proxy holds a request open:
+      // fetch in the background and wait on the status, then check (fast once on disk).
+      if (status && status.auto_download && status.state !== "ready") {
+        let s = await startMarkerDbDownload(datasetId, retry);
+        while (s.state === "downloading") {
+          if (id !== request.current) return;
+          setStatus(s);
+          await new Promise((r) => setTimeout(r, DOWNLOAD_POLL_MS));
+          s = await getMarkerDbStatus(datasetId);
+        }
+        if (id !== request.current) return;
+        setStatus(s);
+      }
       const r = await runMarkerDbCheck(datasetId, column, {
         ...(species ? { species } : {}),
         ...(retry ? { retry: true } : {}),
@@ -224,6 +242,7 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
         <div className="space-y-1.5" data-testid="marker-db-result">
           <p className="text-[11px] text-slate-600">
             {result.verdict_counts.supported} of {result.labels.length} labels supported,{" "}
+            {result.verdict_counts.weak ? `${result.verdict_counts.weak} with weak support, ` : ""}
             {result.verdict_counts.no_support} with no database support, {result.verdict_counts.too_few} with too few
             database markers, {result.verdict_counts.not_in_db} not in the databases ({result.species} rows).
             {result.species_note ? ` ${result.species_note}` : ""}

@@ -1411,7 +1411,7 @@ export function DataAssessmentPanel() {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-semibold uppercase text-amber-700">
-                          {s.step.replace(/_/g, " ")}
+                          {stepLabel(s.step)}
                         </span>
                         <button
                           onClick={() => applySuggestion(s)}

@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import activity, cytokine_activity as ca, large_mode
+from scview.core import activity, cytokine_activity as ca, large_mode, orthologs
 from scview.core.dataset_manager import DatasetManager
 from scview.core.species import detect_species
 from scview.dependencies import get_dataset_manager, get_settings_dep
@@ -96,6 +96,13 @@ async def cytokine_activity(
         t0 = time.time()
         sig = ca.load(_dest(settings), auto_download=settings.CYTOSIG_AUTO_DOWNLOAD)
         species = detect_species(adata).species
+        table, why = None, ""
+        if species == "mouse":
+            try:
+                table = orthologs.load(Path(settings.DATA_DIR) / "networks",
+                                       auto_download=settings.ORTHOLOGS_AUTO_DOWNLOAD)
+            except orthologs.OrthologsUnavailable as e:
+                why = str(e)
         if body.mode == "groups":
             design = ca.design_groups(adata.obs, body.groupby)
         else:
@@ -105,12 +112,12 @@ async def cytokine_activity(
             if store is None:
                 large_mode.refuse("Cytokine response", (adaptor.large_info() or {}).get("gene_store_note")
                                   or "the gene-major copy is not ready")
-            match = ca.match_genes(sig, adata.var_names, species)
+            match = ca.match_genes(sig, adata.var_names, species, table, why)
             sums, sizes = ca.group_sums_store(store, match.positions, design.codes, design.k)
             source = "log-normalised X (gene store)"
         else:
             M, genes, source = activity.lognorm_matrix(adata)
-            match = ca.match_genes(sig, genes, species)
+            match = ca.match_genes(sig, genes, species, table, why)
             sums, sizes = ca.group_sums(M, match.positions, design.codes, design.k)
         res = ca.score(match, design, sums, sizes, reference=body.reference,
                        n_perm=body.n_permutations)

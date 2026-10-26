@@ -48,6 +48,7 @@ from scview.core import embedding_reliability
 from scview.core import study_planner
 from scview.core import layout_stability
 from scview.core import seq_metrics
+from scview.core import methods_guard, screen_facts
 from scview.core.claims import Claim, check_answer, vocab_for
 from scview.core.llm import chat_extra
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
@@ -347,6 +348,21 @@ def _add_cytokines(adaptor, lines: list[str], sources: list[ChatSource]) -> None
                                   evidence="\n".join(c_lines[1:])))
 
 
+def _add_activity(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """TF / pathway activity on a mouse dataset: how the human networks were mapped."""
+    from scview.core import activity_nets
+
+    try:
+        a_lines, a_detail = activity_nets.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: activity fact failed: %s", exc)
+        return
+    if a_lines:
+        lines.extend(a_lines)
+        sources.append(ChatSource(kind="result", ref=activity_nets.TAG, detail=a_detail or "",
+                                  evidence="\n".join(a_lines[1:])))
+
+
 def _add_pseudobulk(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last pseudobulk DE run (core/pseudobulk.py): method, hits, group variances."""
     from scview.core import pseudobulk
@@ -406,6 +422,38 @@ def _add_hashing(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(h_lines)))
 
 
+def _add_label_clusters(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Every cluster each cell-type label spans (core/label_clusters.py)."""
+    from scview.core import label_clusters
+
+    try:
+        lc_lines, cites = label_clusters.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: label clusters failed: %s", exc)
+        return
+    lines.extend(lc_lines)
+    for tag, detail, rows in cites:
+        sources.append(ChatSource(kind="result", ref=tag, detail=detail, evidence="\n".join(rows)))
+
+
+def _design_lines(adata) -> list[str]:
+    """The condition columns (stim, treatment, disease, ...) with their groups, in the
+    always-present summary: an answer about a gene once ignored that half the cells
+    were IFN-beta treated."""
+    from scview.core import confounding
+
+    out = []
+    try:
+        for col in confounding.condition_columns(adata.obs)[:2]:
+            vc = adata.obs[col].astype(str).value_counts()
+            groups = ", ".join(f"{k} ({v:,})" for k, v in vc.items())
+            out.append(f"- Condition column '{col}': {groups}. A gene's level across cells or "
+                       "clusters mixes these conditions unless compared within one condition.")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: condition columns failed: %s", exc)
+    return out
+
+
 def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Who the cell QC removed (the filtering step's record) or would remove at the
     pipeline's defaults, per cell type x condition, with the audit's flags."""
@@ -447,6 +495,7 @@ def build_grounding_context(
     lines.append("## Dataset [dataset:summary]")
     lines.append(f"- Cells: {n_cells:,} | Genes: {n_genes:,} | Species: {detect_species(adata).species}")
     lines.append(f"- Embeddings present: {', '.join(embeddings) if embeddings else 'none'}")
+    lines.extend(_design_lines(adata))
     prot = adaptor.protein_info()
     if prot:
         targets = [n for n in prot["names"] if n not in prot["controls"]]
@@ -514,7 +563,7 @@ def build_grounding_context(
         lines.append(f"- Done: {', '.join(done) if done else 'none'}")
         lines.append(f"- Not done: {', '.join(notdone) if notdone else 'none'}")
         # surface a few high-signal details verbatim
-        for step in ("normalization", "clustering", "batch_correction"):
+        for step in ("doublet_detection", "normalization", "clustering", "batch_correction"):
             st = state.get(step)
             if isinstance(st, dict) and st.get("details"):
                 lines.append(f"- {step}: {st['details']}")
@@ -630,6 +679,7 @@ def build_grounding_context(
         _add_vdj(adaptor, lines, sources)
         _add_mixscape(adaptor, lines, sources)
         _add_cytokines(adaptor, lines, sources)
+        _add_activity(adaptor, lines, sources)
         _add_pseudobulk(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
@@ -655,6 +705,10 @@ def build_grounding_context(
             detail=f"{acol}: " + "; ".join(f"{k}={v}" for k, v in list(mapping.items())[:12]),
             evidence="\n".join(lines[start:]),
         ))
+
+    # 4a-bis, continued. Every cluster a label spans ("CD14 Mono = clusters 1 and 2"):
+    # a cluster -> label map alone read as "this label is cluster 1".
+    _add_label_clusters(adaptor, lines, sources)
 
     # 4a-ter. Per-cluster QC flags (deterministic), so "which clusters look low
     # quality?" is answered from the numbers. Only flagged clusters are listed.
@@ -742,9 +796,15 @@ def build_grounding_context(
             cols = sorted({enrichment_column(k) for k in enr_keys})
             lines.append("\n## Pathway enrichment computed for: " + ", ".join(cols)
                          + " [result:enrichment]")
+            from scview.core.msigdb_species import enrichment_fact
+
+            sets_fact = enrichment_fact(adata)  # which species' MSigDB sets
+            if sets_fact:
+                lines.append(f"- {sets_fact} [result:enrichment]")
             sources.append(ChatSource(
                 kind="result", ref="result:enrichment",
-                detail="enrichment available for: " + ", ".join(cols),
+                detail="enrichment available for: " + ", ".join(cols)
+                + (f"; {sets_fact}" if sets_fact else ""),
             ))
     except Exception:  # pragma: no cover
         pass
@@ -1205,7 +1265,9 @@ _METHODS_SYSTEM = (
     "short paragraphs) describing the workflow. Name the software/tools and cite "
     "specific parameter values from the recipe. Use ONLY what is in the recipe: do "
     "NOT invent tools, parameters, steps, thresholds, or citations, and omit "
-    "anything not recorded. Do not make clinical or biological claims. End with a "
+    "anything not recorded: a step a typical workflow has (batch correction, "
+    "regression, ambient RNA correction, cell-cycle scoring, annotation) is left "
+    "out unless the recipe lists it. Do not make clinical or biological claims. End with a "
     "one-sentence reproducibility note that the full provenance recipe is embedded "
     "in the dataset."
 )
@@ -1247,6 +1309,10 @@ async def write_methods(
             max_tokens=700,
         )
         text = (resp.choices[0].message.content or "").strip()
+        # Never a step the recipe lacks (it once said batch correction was run).
+        text, dropped = methods_guard.keep_recorded(text, skeleton)
+        if dropped:
+            logger.info("write_methods: dropped sentences claiming unrecorded steps: %s", dropped)
         if text:
             return MethodsResponse(methods=text, grounded=True, model=model)
     except Exception as exc:
@@ -1282,7 +1348,18 @@ def _format_view_context(vc: dict | None) -> str:
     sel = vc.get("selection")
     if isinstance(sel, dict) and isinstance(sel.get("n_cells"), int) and sel["n_cells"] > 0:
         lines.append(f"- Cells selected: {sel['n_cells']:,} (facts under [result:selection] when given)")
+    lines.extend(screen_facts.view_lines(vc))  # the open subtab / Compare tab, the result shown
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _add_screen_facts(adaptor, view_context: dict | None, blocks: list[str],
+                      sources: list[ChatSource]) -> None:
+    """The numbers of the result on screen (core/screen_facts.py): "explain this result"."""
+    lines, detail = screen_facts.fact_lines(adaptor, view_context)
+    if lines:
+        blocks.append("\n".join(lines))
+        sources.append(ChatSource(kind="result", ref=screen_facts.TAG, detail=detail,
+                                  evidence="\n".join(lines[1:])))
 
 
 def _add_label_term(adaptor, view_context: dict | None, blocks: list[str], sources: list[ChatSource]) -> None:
@@ -1323,6 +1400,7 @@ def _assemble(
         blocks.append(data_context)
         sources.extend(data_sources)
         _add_label_term(adaptor, view_context, blocks, sources)
+        _add_screen_facts(adaptor, view_context, blocks, sources)
     if app_context:
         blocks.insert(0, app_context)
         sources = [*(app_sources or []), *sources]

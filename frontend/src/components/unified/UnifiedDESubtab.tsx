@@ -4,6 +4,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useDESettingsStore, type DEMode, type DETest } from "@/stores/deSettingsStore";
+import { useOnScreenStore } from "@/stores/onScreenStore";
 import {
   computeDE,
   computeDECompare,
@@ -50,6 +51,7 @@ import {
 import { formatPValue, prettyObsLabel } from "@/lib/formatting";
 import type { ObsColumnInfo } from "@/api/types";
 import { RequestError } from "@/components/common/RequestError";
+import { errorMessage } from "@/lib/errorMessage";
 
 type Mode = DEMode;
 type Test = DETest;
@@ -100,6 +102,12 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pThreshold] = useState(0.05);
+  // The co-pilot's "this result" (stores/onScreenStore.ts)
+  const setOnScreenDE = useOnScreenStore((s) => s.setDE);
+  useEffect(() => {
+    setOnScreenDE(result?.result_id ? { id: result.result_id, label: result.label } : null);
+  }, [result, setOnScreenDE]);
+  useEffect(() => () => setOnScreenDE(null), [setOnScreenDE]);
   // "Compare methods": the same comparison under every cell-level test.
   const [methods, setMethods] = useState<{ res: DEMethodsResponse; a: string; b: string } | null>(null);
   const [methodsLoading, setMethodsLoading] = useState(false);
@@ -197,7 +205,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
       setRefLabel("rest");
       setComparison({ a: label, b: "rest", betweenGroups: false });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -234,7 +242,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
         column: splitBy,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -264,7 +272,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
         setMethods({ res, a: label, b: "rest" });
       }
     } catch (e) {
-      setMethodsError(e instanceof Error ? e.message : String(e));
+      setMethodsError(errorMessage(e));
     } finally {
       setMethodsLoading(false);
     }

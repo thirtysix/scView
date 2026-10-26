@@ -134,6 +134,24 @@ describe("CytokineResponse", () => {
     unmount();
   });
 
+  it("names the ortholog mapping on a mouse dataset, or the upper-case fallback", async () => {
+    getCytokineActivity.mockResolvedValueOnce({
+      ...RESULT, species: "mouse",
+      mapped_by: "human signature genes mapped to mouse through HCOP orthologs (pairs backed by 3+ resources)",
+    });
+    const { unmount } = render(<CytokineResponse groupByColumn="stim" setGroupByColumn={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Score cytokine response" }));
+    await waitFor(() => screen.getByText(/through HCOP orthologs \(4,800 signature genes found\)/));
+    unmount();
+    getCytokineActivity.mockResolvedValueOnce({
+      ...RESULT, species: "mouse",
+      mapped_by: "mouse symbols upper-cased to human; HCOP orthologs unavailable: offline",
+    });
+    render(<CytokineResponse groupByColumn="stim" setGroupByColumn={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Score cytokine response" }));
+    await waitFor(() => screen.getByText(/matched by gene symbol in upper case/));
+  });
+
   it("opens from the activity subtab", async () => {
     render(<UnifiedActivitySubtab onScore={vi.fn()} groupByColumn="" setGroupByColumn={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Cytokine response" }));
