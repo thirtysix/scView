@@ -1,21 +1,31 @@
 import { apiFetch } from "./client";
 
-/** How a gene set is scored per cell (backend api/v1/genesets.py, core/aucell.py). */
-export type ScoreMethod = "score_genes" | "aucell";
+/** How a gene set is scored per cell (backend api/v1/genesets.py, core/aucell.py,
+ *  core/ssgsea.py, core/gsva.py). */
+export type ScoreMethod = "score_genes" | "aucell" | "ssgsea" | "gsva";
 
 export const SCORE_METHODS: { id: ScoreMethod; label: string }[] = [
   { id: "score_genes", label: "score_genes" },
   { id: "aucell", label: "AUCell" },
+  { id: "ssgsea", label: "ssGSEA" },
+  { id: "gsva", label: "GSVA" },
 ];
 
+/** Every method id, for checking a stored or loaded value. */
+export const SCORE_METHOD_IDS = SCORE_METHODS.map((m) => m.id);
+
+export function isScoreMethod(v: unknown): v is ScoreMethod {
+  return typeof v === "string" && (SCORE_METHOD_IDS as string[]).includes(v);
+}
+
 export function methodLabel(method: ScoreMethod | undefined): string {
-  return method === "aucell" ? "AUCell" : "score_genes";
+  return SCORE_METHODS.find((m) => m.id === method)?.label ?? "score_genes";
 }
 
 /** The overlay / legend label: "IFN response (AUCell)"; score_genes (the default
  *  since before there was a choice) keeps the bare name. */
 export function scoreLabel(name: string, method: ScoreMethod | undefined): string {
-  return method === "aucell" ? `${name} (AUCell)` : name;
+  return method && method !== "score_genes" ? `${name} (${methodLabel(method)})` : name;
 }
 
 export interface GeneSetScoreResponse {
@@ -35,6 +45,8 @@ export interface GeneSetScoreResponse {
   genes_undetected: string[];
   /** AUCell: share of cells detecting fewer genes than max_rank */
   share_below_max_rank: number | null;
+  /** ssGSEA / GSVA: how the score was computed, in one line */
+  note?: string | null;
 }
 
 /** Score a gene set on every cell. */
@@ -69,8 +81,14 @@ export interface DepthCheck {
   depth: { total_counts: string | null; n_genes: string };
   /** The measure the sentence quotes: the one either method follows most */
   metric: DepthMetric;
-  methods: Record<ScoreMethod, Partial<Record<DepthMetric, DepthCorrelation>>>;
+  /** Per method scored (ssGSEA / GSVA left out when in `skipped`) */
+  methods: Partial<Record<ScoreMethod, Partial<Record<DepthMetric, DepthCorrelation>>>>;
+  /** score_genes vs AUCell */
   between: DepthCorrelation | null;
+  /** Each other method vs score_genes */
+  agreement?: Partial<Record<ScoreMethod, DepthCorrelation>>;
+  /** Methods left out, with the reason (too large a dataset, no gene to rank) */
+  skipped?: Partial<Record<ScoreMethod, string>>;
   max_rank: number;
   share_below_max_rank: number;
   genes_found: string[];

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const client = vi.hoisted(() => ({ apiFetch: vi.fn() }));
 vi.mock("./client", () => client);
 
-import { checkScoreDepth, methodLabel, scoreGeneSet, scoreLabel } from "./genesetScore";
+import { checkScoreDepth, isScoreMethod, methodLabel, scoreGeneSet, scoreLabel } from "./genesetScore";
 
 beforeEach(() => {
   client.apiFetch.mockReset().mockResolvedValue({});
@@ -15,6 +15,9 @@ describe("gene-set score API", () => {
     expect(scoreLabel("IFN response", "score_genes")).toBe("IFN response");
     expect(scoreLabel("IFN response", undefined)).toBe("IFN response");
     expect(methodLabel("aucell")).toBe("AUCell");
+    expect(scoreLabel("IFN response", "ssgsea")).toBe("IFN response (ssGSEA)");
+    expect(scoreLabel("IFN response", "gsva")).toBe("IFN response (GSVA)");
+    expect(isScoreMethod("gsva") && isScoreMethod("ssgsea") && !isScoreMethod("zscore")).toBe(true);
     expect(methodLabel(undefined)).toBe("score_genes");
   });
 

@@ -123,4 +123,14 @@ export interface ProteinInfo {
   layer: string;
   counts_layer: string;
   normalisation: string;
+  /** The DSB layer once computed (backend core/dsb.py), else null */
+  dsb_layer?: string | null;
+  /** How the DSB values were made, once computed */
+  dsb?: {
+    mode: "empty_droplets" | "model_negative";
+    isotypes: string[];
+    n_droplets: number;
+    denoise: boolean;
+    method: string;
+  } | null;
 }

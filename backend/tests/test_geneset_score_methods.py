@@ -38,7 +38,7 @@ def _adata(n: int = 240, g: int = 200, seed: int = 0, dense: bool = False) -> ad
     if dense:
         a.X = a.X.toarray()
     a.raw = a
-    a.X = a.X.toarray() if sp.issparse(a.X) else a.X
+    a.X = a.X.toarray() if sp.issparse(a.X) else a.X.copy()  # dense: never scale .raw's array
     sc.pp.scale(a, max_value=10)
     return a
 
@@ -149,7 +149,7 @@ async def test_depth_check_matches_scipy(client, dataset_manager):
     assert max(abs(sg_w), abs(au_w)) >= max(abs(body["methods"][m][other]["within"]) for m in ("score_genes", "aucell"))
     assert body["sentence"].startswith(f"score_genes {aucell.verdict(sg_w)} on this data ")
     assert f"(rho {sg_w:.2f} with {aucell.METRIC_TEXT[lead]}, within half groups)" in body["sentence"]
-    assert f"AUCell {aucell.verdict(au_w)} (rho {au_w:.2f})." in body["sentence"]
+    assert f"AUCell {aucell.verdict(au_w)} (rho {au_w:.2f}); ssGSEA " in body["sentence"]
 
 
 async def test_depth_check_defaults_to_the_active_clustering(client, dataset_manager):

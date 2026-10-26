@@ -163,6 +163,8 @@ READERS = {
     "count_split": lambda e, v: _records(v["groups"]),
     "ppi": lambda e, v: _records(v),
     "mixscape": lambda e, r: _mixscape(r),
+    "de_audit": lambda e, r: _records(r.cell_only),
+    "dsb": lambda e, v: _records(v["proteins"]),
 }
 
 

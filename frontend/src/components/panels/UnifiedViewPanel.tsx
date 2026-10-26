@@ -26,6 +26,7 @@ import { UnifiedBottomPanel } from "@/components/unified/UnifiedBottomPanel";
 import { UnifiedMarkersSubtab } from "@/components/unified/UnifiedMarkersSubtab";
 import { UnifiedExpressionSubtab } from "@/components/unified/UnifiedExpressionSubtab";
 import { UnifiedProteinSubtab } from "@/components/unified/UnifiedProteinSubtab";
+import { normLabel, proteinLayerFor, type ProteinNorm } from "@/lib/dsb";
 import { UnifiedGeneSetsSubtab } from "@/components/unified/UnifiedGeneSetsSubtab";
 import { UnifiedEnrichmentSubtab } from "@/components/unified/UnifiedEnrichmentSubtab";
 import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
@@ -425,7 +426,7 @@ export function UnifiedViewPanel() {
           `/datasets/${datasetId}/expression/violin?gene=${encodeURIComponent(gene)}&groupby=${encodeURIComponent(group)}${layerQuery}`,
         );
         setViolinData(data.groups ?? {});
-        setViolinTitle(layer ? `${gene} protein (CLR)` : `${gene} expression`);
+        setViolinTitle(layer ? `${gene} protein (${normLabel(layer)})` : `${gene} expression`);
         openBottomPanel();
       } catch {
         setViolinData({});
@@ -446,7 +447,10 @@ export function UnifiedViewPanel() {
   );
 
   // --- Protein click (CITE-seq): the same overlay + violin, from the protein layer ---
-  const proteinLayer = dataset?.protein?.layer;
+  // CLR or DSB (core/dsb.py, once computed); back to CLR on another dataset.
+  const [proteinNorm, setProteinNorm] = useState<ProteinNorm>("clr");
+  useEffect(() => setProteinNorm("clr"), [datasetId]);
+  const proteinLayer = proteinLayerFor(dataset?.protein, proteinNorm);
   const handleProteinClick = useCallback(
     (protein: string) => {
       if (!proteinLayer) return;
@@ -457,6 +461,13 @@ export function UnifiedViewPanel() {
   );
   const activeProtein =
     scatterOverlay?.type === "expression" && scatterOverlay.layer ? overlayLabel : null;
+  // Another normalisation chosen: the protein on screen is drawn again from its layer.
+  const shownProteinLayer = scatterOverlay?.type === "expression" ? scatterOverlay.layer : undefined;
+  useEffect(() => {
+    if (activeProtein && shownProteinLayer && proteinLayer && shownProteinLayer !== proteinLayer) {
+      handleProteinClick(activeProtein);
+    }
+  }, [proteinLayer, shownProteinLayer, activeProtein, handleProteinClick]);
   // A dataset without proteins has no Protein tab to stay on.
   useEffect(() => {
     if (activeSubtab === "protein" && dataset && !dataset.protein) setActiveSubtab("markers");
@@ -492,7 +503,7 @@ export function UnifiedViewPanel() {
       const label = scoreLabel(name, method);
       setOverlayValues(scores);
       setOverlayLabel(label);
-      setScatterOverlay(method === "aucell" ? { type: "score", name, genes, activity, method } : { type: "score", name, genes, activity });
+      setScatterOverlay(method && method !== "score_genes" ? { type: "score", name, genes, activity, method } : { type: "score", name, genes, activity });
       if (datasetId) setOverlayDatasetId(datasetId);
 
       // Build violin from scores grouped by the active groupBy column
@@ -1337,6 +1348,8 @@ export function UnifiedViewPanel() {
                 groupByColumn={groupByColumn}
                 setGroupByColumn={setGroupByColumn}
                 proteinScale={activeProtein ? colorScale : null}
+                proteinNorm={proteinNorm}
+                onProteinNormChange={setProteinNorm}
               />
             )}
             {activeSubtab === "genesets" && (

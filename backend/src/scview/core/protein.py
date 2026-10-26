@@ -12,8 +12,8 @@ does (the normalisation of its weighted-nearest-neighbour vignette):
     clr(x) = log1p(x / exp(sum(log1p(x)) / n))      for each cell's n proteins
 
 ADT counts carry a background from free antibody in the droplet that the
-per-cell ratio cancels in part; DSB, which subtracts that background measured
-in empty droplets, needs the unfiltered matrix and is not done here.
+per-cell ratio cancels in part; DSB (``core/dsb.py``, opt-in) subtracts that
+background measured in empty droplets into ``obsm["protein_dsb"]``.
 
 Other non-gene features are taken out of the gene matrix too: CellPlex tags
 into ``obsm["hto_counts"]`` (core/hashing.py), CRISPR guides into
@@ -32,6 +32,7 @@ import scipy.sparse as sp
 
 COUNTS_KEY = "protein_counts"
 CLR_KEY = "protein_clr"
+DSB_KEY = "protein_dsb"  # core/dsb.py, made on request
 UNS_KEY = "scview_protein"
 GENE_TYPE = "Gene Expression"
 ANTIBODY_TYPE = "Antibody Capture"
@@ -190,7 +191,7 @@ def common_panel(adatas: list[ad.AnnData]) -> list[str]:
     them when one has none. Returns the shared panel ([] when dropped)."""
     if not adatas or not all(COUNTS_KEY in a.obsm for a in adatas):
         for a in adatas:
-            for key in (COUNTS_KEY, CLR_KEY):
+            for key in (COUNTS_KEY, CLR_KEY, DSB_KEY):
                 a.obsm.pop(key, None)
         return []
     shared = [str(c) for c in adatas[0].obsm[COUNTS_KEY].columns
@@ -198,11 +199,16 @@ def common_panel(adatas: list[ad.AnnData]) -> list[str]:
     for a in adatas:
         a.obsm[COUNTS_KEY] = a.obsm[COUNTS_KEY][shared]
         a.obsm.pop(CLR_KEY, None)
+        a.obsm.pop(DSB_KEY, None)
     return shared
 
 
 def renormalise(adata: ad.AnnData) -> None:
-    """The CLR again from the counts (after a merge changed the panel)."""
+    """The CLR again from the counts (after a merge changed the panel); DSB values
+    made on the old panel are dropped (computed again on request)."""
+    from scview.core import dsb
+
+    dsb.drop(adata)
     m = adata.obsm.get(COUNTS_KEY)
     if isinstance(m, pd.DataFrame) and m.shape[1] > 0:
         adata.obsm[CLR_KEY] = pd.DataFrame(clr(m.to_numpy()), index=adata.obs_names, columns=list(m.columns))

@@ -12,13 +12,15 @@ how far they agree. A between-groups comparison also reports the two sides'
 composition (``core/de_composition.py``), before (``GET /de/composition``)
 and with the result. ``GET /de/results`` lists the results the backend still
 keeps, and ``POST /de/overlap`` compares their significant genes in an UpSet
-plot (``core/de_overlap.py``).
+plot (``core/de_overlap.py``). ``POST /de/audit`` checks a between-groups
+cell-level result against donor-label shuffles and pseudobulk (``core/de_audit.py``).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Literal
 
@@ -921,3 +923,192 @@ async def differential_expression_overlap(dataset_id: str, body: DEOverlapReques
 
     # Up to 8 x 14k genes into sets: tens of ms, so off the event loop.
     return DEOverlapResponse(**(await asyncio.to_thread(_run)))
+
+
+# --- DE audit: shuffles of the donors' labels and pseudobulk (core/de_audit.py) ---
+
+_audit_running: set[str] = set()  # datasets with an audit streaming: one at a time each
+_AUDIT_DONE = object()
+
+
+class DEAuditRequest(BaseModel):
+    """A between-groups comparison to audit: a kept DE result (``result_id``)
+    or the scope a ``/de/compare`` request takes."""
+
+    result_id: str | None = None
+    split_by: str | None = None
+    group_a: str | None = None
+    group_b: str | None = None
+    within_column: str | None = None
+    within_value: str | None = None
+    replicate_key: str | None = None
+    method: Literal["wilcoxon", "t-test"] = "wilcoxon"
+    min_pct: float = _MinPct
+    n_permutations: int = Field(default=20, ge=1, le=100)
+    max_seconds: float = Field(default=300.0, ge=5.0, le=1800.0)
+    pb_method: Literal["deseq2", "voom", "voombygroup"] = "deseq2"
+    seed: int = 0
+
+
+def _audit_scope(dataset_id: str, body: DEAuditRequest) -> tuple[_CompareScope, str, float, str]:
+    """(scope, cell-level test, detection cut-off, pseudobulk model) to audit;
+    400/404 when the request names no between-groups comparison."""
+    method, min_pct, pb_method = body.method, body.min_pct, body.pb_method
+    if body.result_id:
+        stored = de_results.recall(dataset_id, body.result_id)
+        if stored is None:
+            raise HTTPException(status_code=404, detail=_GONE)
+        comp = stored.comparison
+        if comp.get("mode") != "groups":
+            raise HTTPException(status_code=400, detail=(
+                "The audit shuffles condition labels across donors, so it needs a between-groups "
+                "result; this one is a selection against the rest."))
+        if stored.method == "logreg":
+            raise HTTPException(status_code=400, detail=(
+                "The audit counts genes at adjusted p < 0.05, and logistic regression gives no "
+                "p-values: audit the Wilcoxon or Welch t-test result instead."))
+        if stored.method in ("wilcoxon", "t-test"):
+            method = stored.method
+            if comp.get("min_pct") is not None:
+                min_pct = float(comp["min_pct"])
+        elif comp.get("pb_method"):
+            pb_method = comp["pb_method"]
+        scope = _CompareScope(split_by=comp["column"], group_a=comp["group_a"], group_b=comp["group_b"],
+                              within_column=comp.get("within_column"), within_value=comp.get("within_value"),
+                              replicate_key=body.replicate_key or comp.get("replicate_key"))
+        return scope, method, min_pct, pb_method
+    if not (body.split_by and body.group_a is not None and body.group_b is not None):
+        raise HTTPException(status_code=400, detail="Name a DE result, or the column and the two groups to audit.")
+    scope = _CompareScope(split_by=body.split_by, group_a=body.group_a, group_b=body.group_b,
+                          within_column=body.within_column, within_value=body.within_value,
+                          replicate_key=body.replicate_key)
+    return scope, method, min_pct, pb_method
+
+
+@router.post("/datasets/{dataset_id}/de/audit")
+async def differential_expression_audit(
+    dataset_id: str,
+    body: DEAuditRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Audit a cell-level comparison of two groups (core/de_audit.py): the same
+    test after shuffling the condition across donors, and pseudobulk on the
+    same cells. Streams ``start``, ``progress`` (one per step and shuffle),
+    ``result`` and ``complete``, or ``error``; closing the stream stops it
+    between shuffles. The dataset is not changed."""
+    import json
+
+    from fastapi.responses import StreamingResponse
+
+    from scview.core import de_audit, pseudobulk
+    from scview.core.sse import keepalive
+
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    large_mode.check(adaptor, "The DE audit",
+                     "it reruns the cell-level test on every compared cell's values many times")
+    scope, method, min_pct, pb_method = _audit_scope(dataset_id, body)
+    adata = adaptor.adata
+    mask_a, mask_b = _compare_masks(adata, scope)
+    key = scope.replicate_key or _detect_replicate_key(
+        adata.obs, {c for c in (scope.split_by, scope.within_column) if c}, mask_a, mask_b)
+    if not key:
+        raise HTTPException(status_code=400, detail=(
+            "The audit needs a donor or sample column (the shuffles move whole donors); none was "
+            "found, so pick one."))
+    if key == scope.split_by:
+        raise HTTPException(status_code=400, detail="The donor column must differ from the column being compared.")
+    if dataset_id in _audit_running:
+        raise HTTPException(status_code=409, detail="A DE audit is already running on this dataset.")
+
+    donor_col = adata.obs[key]
+    has_donor = donor_col.notna().to_numpy()
+    ma, mb = mask_a & has_donor, mask_b & has_donor
+    if min(int(ma.sum()), int(mb.sum())) < _MIN_GROUP:
+        raise HTTPException(status_code=400,
+                            detail=f"Each group needs at least {_MIN_GROUP} cells with a donor in '{key}'.")
+    comparison = {**_compared(scope, int(mask_a.sum()), int(mask_b.sum()), key), "method": method}
+    label = de_results.describe(comparison)
+    pb_name = pseudobulk.METHOD_NAMES.get(pb_method, pb_method)
+    keep = ma | mb
+    in_a = ma[keep]
+    donors = donor_col.astype(str).to_numpy()[keep]
+
+    def run_pseudobulk():
+        both = mask_a | mask_b
+        sub = adata[both]
+        if getattr(adata, "isbacked", False):
+            sub = sub.to_memory()
+        return pseudobulk.pseudobulk_de(sub, mask_a[both], sub.obs[key], label_a=scope.group_a,
+                                        label_b=scope.group_b, donor_key=key, method=pb_method)
+
+    def prepare():
+        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
+        return _prepare(work, ma, mb, min_pct)[0]
+
+    def sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    async def events():
+        if dataset_id in _audit_running:
+            yield sse("error", {"error": "A DE audit is already running on this dataset."})
+            return
+        _audit_running.add(dataset_id)
+        stop = threading.Event()
+        gen = None
+        pending: asyncio.Future | None = None
+
+        def finish(fut: asyncio.Future | None = None) -> None:
+            if fut is not None and not fut.cancelled():
+                fut.exception()  # retrieved: a stopped run is not an error
+            if gen is not None:
+                gen.close()
+            _audit_running.discard(dataset_id)
+
+        try:
+            d = de_audit.design(donors, in_a)
+            n_perm = 0 if not d.enough else min(body.n_permutations, d.n_possible())
+            yield sse("start", {"label": label, "donor_key": key, "method": method, "scheme": d.scheme,
+                                "n_donors_a": d.n_donors_a, "n_donors_b": d.n_donors_b,
+                                "n_permutations": n_perm, "n_possible": d.n_possible(),
+                                "n_cells_a": int(ma.sum()), "n_cells_b": int(mb.sum())})
+            # Each step in a worker thread; shielded, so a client going away cancels
+            # this wait, not the thread's future, whose callback releases the dataset.
+            pending = asyncio.ensure_future(asyncio.to_thread(prepare))
+            test = await asyncio.shield(pending)
+            pending = None
+            gen = de_audit.iter_audit(
+                test, in_a, donors, method=method, n_permutations=body.n_permutations,
+                max_seconds=body.max_seconds, seed=body.seed, pseudobulk=run_pseudobulk,
+                pb_name=pb_name, label=label, comparison=comparison, donor_key=key, stop=stop.is_set)
+            while True:
+                pending = asyncio.ensure_future(asyncio.to_thread(next, gen, _AUDIT_DONE))
+                item = await asyncio.shield(pending)
+                pending = None
+                if item is _AUDIT_DONE:
+                    break
+                if "result" in item:
+                    result = item["result"]
+                    de_audit.remember(adaptor, result)
+                    yield sse("result", result.to_dict())
+                else:
+                    yield sse("progress", item)
+            yield sse("complete", {})
+        except HTTPException as e:
+            yield sse("error", {"error": str(e.detail)})
+        except Exception as e:  # noqa: BLE001 — surface to the client, keep the server up
+            logger.error("DE audit failed for %s: %s", dataset_id, e, exc_info=True)
+            yield sse("error", {"error": str(e)})
+        finally:
+            stop.set()  # a thread mid-step stops at its next check
+            if pending is not None and not pending.done():
+                pending.add_done_callback(finish)
+            else:
+                finish()
+
+    return StreamingResponse(
+        keepalive(events()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

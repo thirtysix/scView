@@ -6,6 +6,28 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-26
+
+### Added
+- **DE audit** (DE tab, "Audit this result"): reruns the cell-level test with the condition shuffled
+  across whole donors (each shuffled side keeps the same mix of real donors) and runs pseudobulk on the
+  same cells (Squair et al. 2021; Zimmerman et al. 2021). Shows the shuffle counts against the observed
+  count, a QQ plot, the overlap with pseudobulk (Jaccard, Spearman of fold changes) and the genes
+  significant at cell level only with their top-donor share, and gives one plain sentence that names its
+  rule. On Kang CD14 Mono STIM vs CTRL: 1,836 genes at cell level, 10-663 in 20 shuffles (median 310),
+  1,565 also in pseudobulk. Streams with Cancel; kept in History > Results; the co-pilot cites it.
+- **ssGSEA and GSVA** gene-set scoring beside score_genes and AUCell; both give R GSVA 2.6's scores on a
+  dense matrix (Spearman 1.000 over 50 Hallmark sets on 2,000 Kang cells). GSVA is exact up to 20,000
+  cells and takes the non-zero values from a fixed 20,000-cell reference above that; both refuse above
+  300 million non-zero values. On sparse single-cell data (90% or more zeros) GSVA's note says its scores
+  bunch together. "Check depth" compares all four methods.
+- **DSB protein normalisation** (Mulè et al. 2022) for CITE-seq: antibodies against their background in
+  the raw matrix's empty droplets, per-cell noise removed with the isotype controls; the same values as
+  R dsb 2.0.1 to 1e-12 on 10x pbmc_10k_protein_v3. The Protein tab chooses CLR or DSB; "Compute DSB"
+  shows the droplet window, the droplets it takes and the isotypes. Without a raw matrix it runs dsb's
+  ModelNegativeADTnorm and says so. Recorded in provenance and the replay script. A raw matrix attached
+  before this version needs attaching again for DSB.
+
 ## [0.43.0] - 2026-10-26
 
 ### Added

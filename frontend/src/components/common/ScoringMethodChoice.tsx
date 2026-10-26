@@ -2,7 +2,7 @@ import { SCORE_METHODS, type ScoreMethod } from "@/api/genesetScore";
 import { InfoTip } from "@/components/common/InfoTip";
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 
-/** What the two methods compute: the tooltip of every scoring control. */
+/** What the methods compute: the tooltip of every scoring control. */
 export function ScoringMethodHelp() {
   return (
     <>
@@ -19,7 +19,23 @@ export function ScoringMethodHelp() {
         undetected genes in a shallow cell, are broken in one fixed random order.
       </span>
       <span className="mt-1 block">
-        &quot;Check depth&quot; in the Gene Sets tab shows which of the two follows depth on this
+        <b>ssGSEA</b> (Barbie et al. 2009): genes are ranked within each cell, and a running sum
+        walks down the ranking, rising at the set&apos;s genes and falling elsewhere; the score is
+        its total, so it rewards set genes near the top. Like AUCell it uses only the order within
+        the cell, but counts every gene, not just the top 5%. About 2 s per set on 14,000 cells.
+      </span>
+      <span className="mt-1 block">
+        <b>GSVA</b> (H&auml;nzelmann et al. 2013): first places each cell within each gene&apos;s
+        own spread over all cells, then walks the set as ssGSEA does; about -1 to +1. A gene that
+        is high everywhere does not dominate, so it suits sets of commonly expressed genes and
+        comparing cells against the rest of the dataset; the score changes when cells are added or
+        removed. It was made for bulk data: on sparse single-cell data (90% or more of the values 0)
+        the scores bunch together (the note says so); compare cells by rank then, or use ssGSEA or
+        AUCell. About 2 s per set on 14,000 cells. ssGSEA and GSVA
+        match R&apos;s GSVA package and refuse datasets above 300 million non-zero values.
+      </span>
+      <span className="mt-1 block">
+        &quot;Check depth&quot; in the Gene Sets tab shows which of them follows depth on this
         dataset.
       </span>
     </>

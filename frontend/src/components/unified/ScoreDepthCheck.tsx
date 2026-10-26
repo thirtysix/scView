@@ -16,7 +16,7 @@ const METRICS: { id: DepthMetric; label: string; title: string }[] = [
   { id: "total_counts", label: "Total counts", title: "Spearman's rho of the score with the cell's total counts (UMIs)" },
   { id: "n_genes", label: "Genes detected", title: "Spearman's rho of the score with the number of genes the cell expresses" },
 ];
-const METHODS: ScoreMethod[] = ["score_genes", "aucell"];
+const METHODS: ScoreMethod[] = ["score_genes", "aucell", "ssgsea", "gsva"];
 
 function rho(v: number | null | undefined): string {
   return v == null ? "n/a" : v.toFixed(2);
@@ -30,9 +30,12 @@ function Cell({ c }: { c: DepthCorrelation | undefined }) {
   );
 }
 
-/** The depth check's numbers: each method's rho with each depth measure. */
+/** The depth check's numbers: each method's rho with each depth measure, and with
+ *  score_genes. */
 export function DepthCheckTable({ check }: { check: DepthCheck }) {
   const metrics = METRICS.filter((m) => METHODS.some((x) => check.methods[x]?.[m.id]));
+  const methods = METHODS.filter((x) => check.methods[x]);
+  const agreement = check.agreement ?? {};
   const within = check.n_groups > 0;
   return (
     <table className="mt-1 text-[10px] text-slate-600" data-testid="depth-check-table">
@@ -44,13 +47,17 @@ export function DepthCheckTable({ check }: { check: DepthCheck }) {
               {m.label}
             </th>
           ))}
+          <th className="px-1.5 text-right font-normal" title={`Spearman's rho of the method's score with score_genes: ${within ? "median within groups / over all cells" : "over all cells"}`}>
+            vs score_genes
+          </th>
         </tr>
       </thead>
       <tbody>
-        {METHODS.map((x) => (
+        {methods.map((x) => (
           <tr key={x}>
             <td className="px-1.5 py-0.5 font-medium">{methodLabel(x)}</td>
             {metrics.map((m) => <Cell key={m.id} c={check.methods[x]?.[m.id]} />)}
+            {x === "score_genes" ? <td /> : <Cell c={agreement[x] ?? (x === "aucell" ? check.between ?? undefined : undefined)} />}
           </tr>
         ))}
       </tbody>
@@ -59,9 +66,9 @@ export function DepthCheckTable({ check }: { check: DepthCheck }) {
 }
 
 /**
- * "Which method follows depth on this data?": scores the set both ways and
+ * "Which method follows depth on this data?": scores the set with every method and
  * correlates each score with the cells' depth (POST /genesets/score/compare). On
- * request, since it computes both scores.
+ * request, since it computes every score.
  */
 export function ScoreDepthCheck({ datasetId, genes }: { datasetId: string; genes: string[] }) {
   const [check, setCheck] = useState<DepthCheck | null>(null);
@@ -92,16 +99,17 @@ export function ScoreDepthCheck({ datasetId, genes }: { datasetId: string; genes
           onClick={run}
           disabled={busy || genes.length === 0}
           className="flex items-center gap-1 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-          title="Score the set with both methods and see which one follows sequencing depth on this dataset"
+          title="Score the set with every method and see which ones follow sequencing depth on this dataset"
         >
           {busy && <Loader2 className="h-3 w-3 animate-spin" />}
           Check depth
         </button>
         <InfoTip width={300} label="How the depth check works">
-          Scores the set with score_genes and with AUCell, then Spearman&apos;s rho of each score
+          Scores the set with score_genes, AUCell, ssGSEA and GSVA, then Spearman&apos;s rho of each score
           with the cell&apos;s total counts and with its number of detected genes: {groups}. The
           sentence quotes the measure either method follows most; |rho| of 0.3 or more reads
-          &quot;follows depth&quot;, 0.1 to 0.3 &quot;weakly&quot;. A biological signal can also
+          &quot;follows depth&quot;, 0.1 to 0.3 &quot;weakly&quot;. The last column is each
+          method&apos;s rho with score_genes. A biological signal can also
           go with depth (activated cells make more RNA), so a correlation says the score and depth
           move together, not which causes which.
         </InfoTip>
@@ -114,10 +122,10 @@ export function ScoreDepthCheck({ datasetId, genes }: { datasetId: string; genes
           </Caption>
           <DepthCheckTable check={check} />
           <p className="mt-1 text-[10px] leading-snug text-slate-400">
-            rho {check.n_groups > 0 ? `within ${check.groupby} groups / over all cells` : "over all cells"};
-            the two methods agree at rho {rho(check.between?.within ?? check.between?.overall)}.
+            rho {check.n_groups > 0 ? `within ${check.groupby} groups / over all cells` : "over all cells"}.
             {check.share_below_max_rank > 0 &&
               ` AUCell counts each cell's top ${check.max_rank.toLocaleString()} genes; ${Math.round(check.share_below_max_rank * 100)}% of cells detect fewer, so their lowest counted ranks are ties among undetected genes.`}
+            {Object.entries(check.skipped ?? {}).map(([m, why]) => ` ${methodLabel(m as ScoreMethod)} left out: ${why}`).join("")}
           </p>
         </div>
       )}

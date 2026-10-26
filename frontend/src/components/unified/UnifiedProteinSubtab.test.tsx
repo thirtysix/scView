@@ -96,6 +96,22 @@ describe("UnifiedProteinSubtab", () => {
     expect(stats).toMatch(/CD19 RNA is not detected in 50% of cells/);
   });
 
+  it("reads the DSB layer when DSB is chosen and computed", async () => {
+    const protein: ProteinInfo = {
+      ...PROTEIN,
+      dsb_layer: "protein_dsb",
+      dsb: { mode: "empty_droplets", isotypes: ["IgG1_control"], n_droplets: 500, denoise: true, method: "" },
+    };
+    renderTab({ protein, proteinNorm: "dsb", activeProtein: "CD19" });
+    expect(screen.getByTestId("marker-plot").textContent).toBe("heatmap:protein_dsb:CD3,CD19");
+    await waitFor(() => screen.getByTestId("protein-rna-stats"));
+    expect(apiFetchBinary).toHaveBeenCalledWith("/datasets/d1/expression?genes=CD19&layer=protein_dsb");
+    expect(screen.getByTestId("protein-norm-note").textContent).toMatch(/DSB against 500 empty droplets/);
+    // CLR chosen: the CLR layer, though DSB is there
+    renderTab({ protein, proteinNorm: "clr" });
+    expect(screen.getAllByTestId("marker-plot")[1]!.textContent).toBe("heatmap:protein:CD3,CD19");
+  });
+
   it("takes another gene, and says when none is found", async () => {
     renderTab({ activeProtein: "CD19" });
     await waitFor(() => screen.getByTestId("protein-rna-stats"));

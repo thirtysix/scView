@@ -23,6 +23,7 @@ import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
 import { DEMethodsAgreement } from "@/components/unified/DEMethodsAgreement";
 import { DeCompositionNote } from "@/components/unified/DeCompositionNote";
 import { DeOverlap } from "@/components/unified/DeOverlap";
+import { DEAudit } from "@/components/unified/DEAudit";
 import { PseudobulkDiagnostics, PseudobulkModelRows } from "@/components/unified/PseudobulkDiagnostics";
 import { describePbModel, pbMethodLabel } from "@/lib/pseudobulk";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
@@ -893,6 +894,16 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
               </tbody>
             </table>
           </div>
+
+          {/* Donor shuffles + pseudobulk: can the cell-level genes be trusted? */}
+          <DEAudit
+            datasetId={datasetId}
+            result={result}
+            betweenGroups={comparison?.betweenGroups ?? false}
+            donorColumns={donorCols.length}
+            replicateKey={replicateKey}
+            onGeneClick={onGeneClick}
+          />
 
           {/* Significant up / down genes -> pathway enrichment */}
           <DEEnrichment

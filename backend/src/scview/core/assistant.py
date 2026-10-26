@@ -378,6 +378,36 @@ def _add_pseudobulk(adaptor, lines: list[str], sources: list[ChatSource]) -> Non
                                   evidence="\n".join(pb_lines[1:])))
 
 
+def _add_de_audit(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last DE audit (core/de_audit.py): donor shuffles and pseudobulk vs cell level."""
+    from scview.core import de_audit
+
+    try:
+        au_lines, au_detail = de_audit.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: DE audit fact failed: %s", exc)
+        return
+    if au_lines:
+        lines.extend(au_lines)
+        sources.append(ChatSource(kind="result", ref=de_audit.TAG, detail=au_detail or "",
+                                  evidence="\n".join(au_lines[1:])))
+
+
+def _add_dsb(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """How the DSB protein values were made (core/dsb.py), once computed."""
+    from scview.core import dsb
+
+    try:
+        d_lines, d_detail = dsb.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: dsb fact failed: %s", exc)
+        return
+    if d_lines:
+        lines.extend(d_lines)
+        sources.append(ChatSource(kind="result", ref=dsb.TAG, detail=d_detail,
+                                  evidence="\n".join(d_lines[1:])))
+
+
 def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Which group relations in the plot hold across other seeds and neighbour counts
     (core/layout_stability.py), only once a layout check has run for this dataset."""
@@ -681,6 +711,8 @@ def build_grounding_context(
         _add_cytokines(adaptor, lines, sources)
         _add_activity(adaptor, lines, sources)
         _add_pseudobulk(adaptor, lines, sources)
+        _add_de_audit(adaptor, lines, sources)
+        _add_dsb(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).

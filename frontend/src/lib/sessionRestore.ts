@@ -88,8 +88,8 @@ export function captureSession(now: Date = new Date()): SessionFile {
     } else if (overlay.type === "program") {
       view.overlay = { type: "program", index: overlay.index };
     } else if (overlay.type === "score" && overlay.genes?.length) {
-      view.overlay = overlay.method === "aucell"
-        ? { type: "score", name: overlay.name, genes: overlay.genes, method: "aucell" }
+      view.overlay = overlay.method && overlay.method !== "score_genes"
+        ? { type: "score", name: overlay.name, genes: overlay.genes, method: overlay.method }
         : { type: "score", name: overlay.name, genes: overlay.genes };
     }
   }
