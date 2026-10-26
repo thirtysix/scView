@@ -142,6 +142,8 @@ def test_suggestions_for_kangs_labels(index):
     assert got["CD14 Mono"][0]["how"] == "exact"
     assert got["CD16 Mono"][0]["how"] == "atlas"
     assert "CL:0002397" in [s["id"] for s in got["CD16 Mono"]]  # CL's synonym match stays offered
+    found = [t["id"] for t in index.search("CD16 Mono")]
+    assert found[0] == "CL:0002396" and "CL:0002397" in found
     assert got["CD4 Naive T"][0]["how"] == "narrower"
     assert got["B activated"][0]["how"] == "subset"  # no activated B cell term: its parent's name
     assert all(len(v) <= co.N_SUGGEST for v in got.values())

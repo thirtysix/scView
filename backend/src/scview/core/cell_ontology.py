@@ -240,6 +240,10 @@ class Index:
             for i in cand or ():
                 hit(i, 2 if self._entries[i][3].startswith(qf) else 3)
         order = sorted(best.items(), key=lambda kv: kv[1])[: max(1, min(limit, MAX_RESULTS))]
+        atlas = _ATLAS.get(" ".join(q.lower().split()))
+        if atlas in best:  # the atlas meaning first, as in suggest()
+            order = [(atlas, best[atlas])] + [kv for kv in order if kv[0] != atlas]
+            order = order[: max(1, min(limit, MAX_RESULTS))]
         out = []
         for cid_, rank in order:
             _c, text, kind, _f, _k = self._entries[rank[-1]]
