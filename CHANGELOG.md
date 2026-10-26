@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-26
+
 ### Added
 - **Results store** (phase 1): results that were kept in process memory only now also go to disk under
   `DATA_DIR/results/{dataset_id}/`, so they survive a backend restart and a dataset dropping out of the
