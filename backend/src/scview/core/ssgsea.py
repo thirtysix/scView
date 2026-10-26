@@ -68,7 +68,7 @@ def entry_ranks(B: sp.csr_matrix) -> tuple[np.ndarray, np.ndarray]:
     nnz = B.nnz
     rows = _row_ids(B)
     v = B.data
-    order = np.lexsort((B.indices, -v, rows))
+    order = np.lexsort((-v, rows))  # stable: tied values keep CSR (gene) order
     rs, vs = rows[order], v[order]
     pos = np.arange(nnz, dtype=np.int64) - B.indptr[rs] + 1  # zero genes come after
     start = np.ones(nnz, dtype=bool)

@@ -23,6 +23,12 @@ the C097 report), implemented from the paper and GSVA's documentation:
   empirical CDF a sort;
 - genes tied on F within a cell rank in reverse gene order (``ties.method="last"``).
 
+Given a sparse dgCMatrix, R's GSVA runs differently: by default a sparse variant
+(``sparse=TRUE``: CDFs of the non-zero values only, zeros kept at the bottom), and
+with either setting it picks the kernel by non-zeros per gene rather than by cells.
+Its scores are then not these (Spearman median 0.72 over the Hallmark sets on Kang,
+0.66 with ``sparse=FALSE``). Pass ``as.matrix(x)`` in R to compare.
+
 Large data: a gene's F is its share of cells at zero (counted over all cells, exact)
 plus its share of detected cells times the empirical CDF of its non-zero values, which
 come from a reference of at most ``REF_CELLS`` cells (all of them up to that; above, a
