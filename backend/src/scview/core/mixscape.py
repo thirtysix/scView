@@ -649,7 +649,10 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
     ranked = sorted(r.targets, key=lambda t: -t["ko_fraction"])
     per = "; ".join(f"{t['target']}: {t['n_ko']:,} of {t['n_cells']:,} cells KO ({t['ko_fraction']:.0%}), "
                     f"{t['n_de_genes']} DE genes" for t in ranked[:12])
-    none = [t["target"] for t in r.targets if t["n_ko"] == 0]
+    # Why each all-NP target has no KO cells: its DE genes vs the controls are a
+    # different number from 0 when too few cells were called KO (MYC: 17 DE genes).
+    none = [f"{t['target']} ({_np_reason(t, r.params.get('min_de_genes', MIN_DE_GENES))})"
+            for t in r.targets if t["n_ko"] == 0]
     mdetail = (f"{r.n_targets} targets vs {r.n_control:,} '{r.control}' cells: {s['n_ko']:,} of "
                f"{s['n_target_cells']:,} target cells KO ({s['ko_fraction']:.0%}), "
                f"{s['n_targets_with_ko']} targets with any KO cells")
@@ -659,3 +662,11 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
            f"KO fraction per target: {per}" + (f"; no KO cells (all NP): {', '.join(none[:15])}" if none else "")
            + f" [{TAG}]"]
     return out, mdetail
+
+
+def _np_reason(t: dict, min_de_genes: int) -> str:
+    n_de = int(t.get("n_de_genes") or 0)
+    if n_de < min_de_genes:
+        return f"{n_de} DE genes vs the controls, fewer than {min_de_genes}: no signature to test"
+    return (f"{n_de} DE genes vs the controls, but fewer than {min_de_genes} cells called KO: "
+            "not a KO population, not 'no DE genes'")

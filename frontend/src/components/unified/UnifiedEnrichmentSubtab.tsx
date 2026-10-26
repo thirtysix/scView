@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { Loader2, Download } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
+import { useOnScreenStore } from "@/stores/onScreenStore";
 import { apiFetch } from "@/api/client";
 import { runPipelineSteps } from "@/api/assistant";
 import { getDataset } from "@/api/datasets";
@@ -89,6 +90,13 @@ export function UnifiedEnrichmentSubtab({
       return true;
     });
   }, [dataset]);
+
+  // The co-pilot's "this result" (stores/onScreenStore.ts)
+  const setOnScreen = useOnScreenStore((s) => s.setEnrichment);
+  useEffect(() => {
+    setOnScreen(results.length && selectedGroup ? { column: groupByColumn, group: selectedGroup } : null);
+  }, [results, groupByColumn, selectedGroup, setOnScreen]);
+  useEffect(() => () => setOnScreen(null), [setOnScreen]);
 
   // Fetch groups when column changes
   useEffect(() => {

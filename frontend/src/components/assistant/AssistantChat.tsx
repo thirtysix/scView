@@ -26,6 +26,8 @@ import {
 import { MarkdownLite } from "@/components/assistant/MarkdownLite";
 import { SelectionChip } from "@/components/assistant/SelectionChip";
 import { selectionContext } from "@/lib/copilotSelection";
+import { screenContext } from "@/lib/copilotView";
+import { useOnScreenStore } from "@/stores/onScreenStore";
 import { useCopilotSelectionStore } from "@/stores/copilotSelectionStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
 import { ClaimsLedger, mergeVerdicts, toCheck } from "@/components/assistant/ClaimsLedger";
@@ -48,6 +50,7 @@ const ROUTE_LABELS: Record<string, string> = {
   data: "your dataset",
   tutorials: "methods docs",
   literature: "literature",
+  provenance: "recorded steps",
 };
 
 const SUGGESTIONS = [
@@ -76,6 +79,7 @@ function currentViewContext(): ViewContext {
     highlighted: sel.highlightedGroup,
     overlay: uv.overlayLabel || undefined,
     selection: selectionContext(),
+    ...screenContext(v.activePanel, uv.activeSubtab, useOnScreenStore.getState()),
   };
 }
 

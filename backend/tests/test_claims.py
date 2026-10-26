@@ -285,6 +285,34 @@ def test_no_vocabulary_still_checks_numbers():
     assert c.verdict == "supported"
 
 
+CYTO = [_src("result:cytokines", "- T activated: IFN1 z=42.1, IFNG z=25.6\n- DC: IFN1 z=40.8, IFNG z=25.2")]
+CYTO_VOCAB = Vocab(genes=GENES | {"IFNG", "ISG15"}, groups=["T activated", "DC"])
+
+
+def test_a_qualitative_sentence_is_not_supported_by_one_shared_gene():
+    # The 2026-10-26 capture: "supported" only because it shares IFNG with the fact.
+    c = one("**Interferon response is broad and strong across nearly all cell types** — the top "
+            "CytoSig signal in every cluster is **IFN1**, with **IFNG** second [result:cytokines].",
+            sources=CYTO, vocab=CYTO_VOCAB)
+    assert c.verdict == "uncertain" and "says more than that" in c.reason
+    # a number match still supports it; a plain gene list still does too
+    assert one("In T activated, IFNG z=25.6 [result:cytokines].", sources=CYTO,
+               vocab=CYTO_VOCAB).verdict == "supported"
+    assert one("- **`GNLY`**, **`NKG7`** — cytotoxic granule genes [result:markers:NK].").verdict == "supported"
+
+
+def test_a_count_before_a_listed_group_is_not_that_groups_number():
+    # The capture's "refuted" was a misparse: "says ATF2 15; the fact has 0".
+    srcs = [_src("result:mixscape", "- Mixscape: KO fraction per target: ATF2: 0 of 995 cells KO (0%), "
+                                    "0 DE genes; CAV1: 0 of 792 cells KO (0%), 0 DE genes")]
+    vocab = Vocab(genes=GENES, groups=["ATF2", "CAV1", "NT"])
+    c = one("**No effect detected — 15 targets** (ATF2, CAV1): no KO cells [result:mixscape].",
+            sources=srcs, vocab=vocab)
+    assert c.verdict != "refuted", c.reason
+    assert one("ATF2 has 995 cells [result:mixscape].", sources=srcs, vocab=vocab).verdict == "supported"
+    assert one("ATF2 has 500 cells [result:mixscape].", sources=srcs, vocab=vocab).verdict == "refuted"
+
+
 def test_evidence_falls_back_to_detail():
     srcs = [ChatSource(kind="app", ref="app:library", detail="4 dataset(s): a, b, c, d")]
     assert one("There are 4 datasets in the library [app:library].", sources=srcs).verdict == "supported"

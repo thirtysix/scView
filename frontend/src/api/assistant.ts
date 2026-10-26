@@ -33,7 +33,17 @@ export interface ViewContext {
   overlay?: string;
   /** The selected cells (lib/copilotSelection.ts); only when a selection exists */
   selection?: SelectionContext;
+  /** The open Unified View subtab, on that panel */
+  subtab?: string;
+  /** The result the open tab shows (lib/copilotView.ts) */
+  on_screen?: OnScreen;
 }
+
+/** A result on screen, as the co-pilot gets it (backend core/screen_facts.py). */
+export type OnScreen =
+  | { kind: "de"; id: string; label: string }
+  | { kind: "enrichment"; column: string; group: string }
+  | { kind: "compare"; tab: string };
 
 /** The selection as the co-pilot gets it: its size, how it was made, the cells
  *  (encoded as session files keep them) and whether it is new since the last question. */
