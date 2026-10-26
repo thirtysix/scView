@@ -403,9 +403,8 @@ def score_set(adata, gene_set: list[str]):
     Call in a worker thread; ValueError when nothing can be scored."""
     from scview.core import ssgsea
 
-    if _CACHE.get(adata) is None:  # the size check before a preparation is built
-        M, _, _ = gsva_matrix(adata)
-        ssgsea.check_size(M, "GSVA")
+    entry = _CACHE.get(adata)  # the size check comes before a preparation is built
+    ssgsea.check_size(entry[0] if entry is not None else gsva_matrix(adata)[0], "GSVA")
     M, genes, prep = prepared(adata)
     m = ssgsea.match(genes, gene_set, usable=prep.keep)
     if not m.idx:

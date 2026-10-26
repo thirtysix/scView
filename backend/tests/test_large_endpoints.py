@@ -138,6 +138,8 @@ async def test_category_order_and_rename_are_written_in_place(client, both):
 
 @pytest.mark.parametrize("method, path, kw", [
     ("POST", "/genesets/score", {"json": {"gene_set": ["G10", "G11"], "method": "aucell"}}),
+    ("POST", "/genesets/score", {"json": {"gene_set": ["G10", "G11"], "method": "ssgsea"}}),
+    ("POST", "/genesets/score", {"json": {"gene_set": ["G10", "G11"], "method": "gsva"}}),
     ("POST", "/genesets/score/compare", {"json": {"gene_set": ["G10", "G11"]}}),
     ("POST", "/de", {"json": {"indices": list(range(50))}}),
     ("POST", "/de/compare", {"json": {"split_by": "leiden", "group_a": "0", "group_b": "1"}}),

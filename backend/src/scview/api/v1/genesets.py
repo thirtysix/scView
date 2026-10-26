@@ -2,8 +2,10 @@
 
 Provides gene set collection listing, search (MSigDB and custom collections),
 and per-cell scoring: ``scanpy.tl.score_genes`` (the set's mean expression minus a
-binned control set) or AUCell (ranks within each cell, ``core/aucell.py``), and a
-check of which of the two follows sequencing depth on the dataset.
+binned control set), AUCell (ranks within each cell, ``core/aucell.py``), ssGSEA
+(a rank-weighted walk within each cell, ``core/ssgsea.py``) or GSVA (each gene placed
+in its own distribution over the cells first, ``core/gsva.py``), and a check of which
+of them follows sequencing depth on the dataset.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import aucell, msigdb_species, working_copy
+from scview.core import aucell, gsva, msigdb_species, ssgsea, working_copy
 from scview.core import large_mode
 from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
@@ -40,8 +42,9 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-ScoreMethod = Literal["score_genes", "aucell"]
-METHOD_LABELS = {"score_genes": "score_genes", "aucell": "AUCell"}
+ScoreMethod = Literal["score_genes", "aucell", "ssgsea", "gsva"]
+METHOD_LABELS = {"score_genes": "score_genes", "aucell": "AUCell", "ssgsea": "ssGSEA", "gsva": "GSVA"}
+_WALKS = {"ssgsea": ssgsea.score_set, "gsva": gsva.score_set}  # method -> scorer
 
 
 class GeneSetScoreRequest(BaseModel):
@@ -73,15 +76,20 @@ class GeneSetScoreResponse(BaseModel):
     source: str | None = None
     genes_undetected: list[str] = []
     share_below_max_rank: float | None = None
+    # ssGSEA / GSVA: how the score was computed, in one line (genes ranked, the CDF).
+    # GSVA's genes_undetected: the set's genes it leaves out (the same in every cell).
+    note: str | None = None
 
 
 class ScoreCompareRequest(BaseModel):
-    """Body for the depth check: the set, AUCell's ``max_rank``, and the grouping the
-    within-group correlations use (default: the active clustering)."""
+    """Body for the depth check: the set, AUCell's ``max_rank``, the grouping the
+    within-group correlations use (default: the active clustering), and the methods
+    (default all; score_genes and AUCell always)."""
 
     gene_set: list[str]
     max_rank: int | None = Field(default=None, ge=2)
     groupby: str | None = None
+    methods: list[ScoreMethod] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +271,7 @@ def _score_genes(adata, genes_found: list[str], gene_set: list[str], score_key: 
     )
 
 
-# Why AUCell and the method comparison are not run on a large dataset.
+# Why AUCell, ssGSEA, GSVA and the method comparison are not run on a large dataset.
 _RANKS_EVERY_GENE = "it ranks every gene in every cell, which needs the whole matrix"
 
 
@@ -306,7 +314,7 @@ async def _in_thread(fn, dataset_id: str):
         return await asyncio.to_thread(fn)
     except HTTPException:
         raise
-    except ValueError as e:  # AUCell: nothing to rank, or max_rank out of range
+    except ValueError as e:  # nothing to rank, max_rank out of range, too large
         raise HTTPException(status_code=422, detail=str(e))
     except ImportError:
         raise HTTPException(
@@ -327,7 +335,9 @@ async def score_genesets(
     """Per-cell gene-set scores for every cell of the dataset.
 
     ``method``: ``score_genes`` (the default: ``scanpy.tl.score_genes``, on .raw when
-    present) or ``aucell`` (``core/aucell.py``; ``max_rank`` top genes per cell).
+    present), ``aucell`` (``core/aucell.py``; ``max_rank`` top genes per cell),
+    ``ssgsea`` (``core/ssgsea.py``) or ``gsva`` (``core/gsva.py``); the last two refuse
+    (422) a dataset above ``ssgsea.MAX_VALUES`` non-zero values.
     """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
@@ -362,6 +372,28 @@ async def score_genesets(
             )
 
         return await _in_thread(_run_aucell, dataset_id)
+
+    if body.method in _WALKS:
+        label = METHOD_LABELS[body.method]
+        large_mode.check(adaptor, f"{label} scoring", _RANKS_EVERY_GENE)
+
+        def _run_walk() -> GeneSetScoreResponse:
+            r = _WALKS[body.method](adata, body.gene_set)
+            return GeneSetScoreResponse(
+                score_name=body.score_name,
+                n_cells=int(len(r.scores)),
+                scores=r.scores.tolist(),
+                min_score=float(np.min(r.scores)),
+                max_score=float(np.max(r.scores)),
+                genes_found=r.match.found,
+                genes_missing=r.match.missing,
+                method=body.method,
+                source=r.source,
+                genes_undetected=r.match.undetected,
+                note=r.note,
+            )
+
+        return await _in_thread(_run_walk, dataset_id)
 
     # Determine which genes are present in the dataset.
     genes_found, _ = _match(adaptor.gene_names(), body.gene_set)
@@ -408,11 +440,14 @@ async def compare_score_methods(
 ):
     """Which scoring method follows sequencing depth on this dataset (C097).
 
-    Scores the set both ways, then Spearman's rho of each score with the cell's total
+    Scores the set with each method (score_genes, AUCell, ssGSEA, GSVA; ``methods``
+    narrows the last two), then Spearman's rho of each score with the cell's total
     counts and with its detected genes: over all cells, and the median of the rhos
     within each group of the clustering (groups of 20+ cells), so cell types that
     differ in depth and in score do not pass for depth sensitivity. Also the rho
-    between the two methods, and one sentence saying what the numbers show.
+    between score_genes and AUCell (``between``), of each method with score_genes
+    (``agreement``), and one sentence saying what the numbers show. ssGSEA or GSVA on
+    a dataset above their size limit is left out, with the reason in ``skipped``.
     """
     from scview.core.transcriptome_size import per_cell_totals
 
@@ -437,13 +472,23 @@ async def compare_score_methods(
         adata = working_copy.in_memory(adaptor)
         au, m, rk = _aucell(adata, body.gene_set, body.max_rank)
         sg, _, _, _ = _score_genes(adata, genes_found, body.gene_set, "_scview_depth_check")
+        scores = {"score_genes": sg, "aucell": au}
+        skipped: dict[str, str] = {}
+        for name, run in _WALKS.items():
+            if body.methods is not None and name not in body.methods:
+                continue
+            try:
+                scores[name] = run(adata, body.gene_set).scores
+            except ValueError as e:  # too large, or no gene it can rank
+                skipped[name] = str(e)
         depth: dict[str, np.ndarray] = {}
         totals = per_cell_totals(adata)
         if totals is not None:
             depth["total_counts"] = totals[0]
         depth["n_genes"] = rk.n_detected.astype(np.float64)
         codes = _group_codes(adata, groupby)
-        check = aucell.depth_check({"score_genes": sg, "aucell": au}, depth, codes)
+        check = aucell.depth_check(scores, depth, codes)
+        check["between"] = aucell.correlations(sg, au, codes)
         metric = aucell.strongest_metric(check)
         where = "within clusters" if active else f"within {groupby} groups"
         n_groups = check["methods"]["aucell"][metric]["n_groups"]
@@ -459,11 +504,13 @@ async def compare_score_methods(
             "metric": metric,
             "methods": check["methods"],
             "between": check["between"],
+            "agreement": {k: aucell.correlations(sg, v, codes) for k, v in scores.items() if k != "score_genes"},
+            "skipped": skipped,
             "max_rank": rk.max_rank,
             "share_below_max_rank": round(rk.share_below_max_rank(), 4),
             "genes_found": m.found,
             "genes_missing": m.missing,
-            "sentence": aucell.sentence(check, METHOD_LABELS, metric, where),
+            "sentence": aucell.sentence(check, {k: METHOD_LABELS[k] for k in scores}, metric, where),
         }
 
     return await _in_thread(_check, dataset_id)
