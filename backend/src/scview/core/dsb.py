@@ -706,10 +706,9 @@ def compute(adata, *, mode: str = "auto", rna_window=RNA_WINDOW, prot_window=PRO
             mean, sd = mean[order], sd[order]
             norm[rows] = step1_empty(counts[rows], mean, sd)
             covered[rows] = True
-            raw = ((_raw_files(adata, sample)) or [])
             samples.append({"sample": sample, "column": column, "n_cells": int(rows.size),
                             "n_droplets": n_drops, "n_cells_excluded": int(bg["n_cells_excluded"]),
-                            "raw_files": raw})
+                            "raw_files": _raw_files(adata, sample)})
             if n_drops < FEW_DROPLETS:
                 notes.append(f"'{sample}': only {n_drops:,} empty droplets in the window; the "
                              "background estimate is rough.")
