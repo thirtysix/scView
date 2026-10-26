@@ -15,6 +15,7 @@ byte i // 8, whichever is shorter). This module turns it into a few cheap facts:
   shared marker choice (``marker_selection``: detected in >= 20% of the cells,
   log2 fold change >= 0.25, adjusted p < 0.05, by fold change, no ribosomal or
   mitochondrial genes). The candidates passing the detection and fold-change rules
+  (at most 240 per direction, by fold change, tested in batches until enough pass)
   get a Wilcoxon rank-sum test (normal approximation, tie-corrected, as scanpy's
   ``wilcoxon`` with ``tie_correct=True``), read off the sparse columns; every other
   gene counts as p = 1 in the Benjamini-Hochberg adjustment over all genes, which

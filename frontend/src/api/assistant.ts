@@ -31,6 +31,17 @@ export interface ViewContext {
   color_by?: string;
   highlighted?: { column: string; value: string } | null;
   overlay?: string;
+  /** The selected cells (lib/copilotSelection.ts); only when a selection exists */
+  selection?: SelectionContext;
+}
+
+/** The selection as the co-pilot gets it: its size, how it was made, the cells
+ *  (encoded as session files keep them) and whether it is new since the last question. */
+export interface SelectionContext {
+  n_cells: number;
+  source: string; // "lasso" | "gate:<name>" | "filter" | "group"
+  cells: { n_cells: number; indices: number[] } | { n_cells: number; bitmask: string };
+  fresh: boolean;
 }
 
 /** An allow-listed UI action the co-pilot can request (natural-language commands). */
@@ -50,7 +61,8 @@ export interface AssistantAction {
     | "cluster"
     | "detect_doublets"
     | "compute_markers"
-    | "run_enrichment";
+    | "run_enrichment"
+    | "open_de_selection";
   column?: string;
   value?: string;
   panel?: string;

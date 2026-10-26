@@ -24,6 +24,10 @@ import {
   type ViewContext,
 } from "@/api/assistant";
 import { MarkdownLite } from "@/components/assistant/MarkdownLite";
+import { SelectionChip } from "@/components/assistant/SelectionChip";
+import { selectionContext } from "@/lib/copilotSelection";
+import { useCopilotSelectionStore } from "@/stores/copilotSelectionStore";
+import { useDESettingsStore } from "@/stores/deSettingsStore";
 import { ClaimsLedger, mergeVerdicts, toCheck } from "@/components/assistant/ClaimsLedger";
 
 interface Turn {
@@ -71,6 +75,7 @@ function currentViewContext(): ViewContext {
     color_by: settings.colorBy || undefined,
     highlighted: sel.highlightedGroup,
     overlay: uv.overlayLabel || undefined,
+    selection: selectionContext(),
   };
 }
 
@@ -263,6 +268,9 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
     setInput("");
     const history: ChatMessage[] = turns.map((t) => ({ role: t.role, content: t.content }));
     const vc = currentViewContext();
+    if (vc.selection) {
+      useCopilotSelectionStore.getState().markSent(useSelectionStore.getState().selectedCellIndices);
+    }
     // push the user turn + an empty assistant placeholder to stream into
     setTurns((prev) => [...prev, { role: "user", content: q }, { role: "assistant", content: "" }]);
     runEpoch = epoch.current;
@@ -351,6 +359,11 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
       } else if (a.type === "show_gene" && a.gene) {
         useViewStore.getState().setPendingGene(a.gene);
         useViewStore.getState().setPanel("expression");
+      } else if (a.type === "open_de_selection") {
+        // DE pre-set to selection vs rest; the user clicks Run there.
+        useDESettingsStore.getState().update({ mode: "selection" });
+        useUnifiedViewStore.getState().setActiveSubtab("de");
+        useViewStore.getState().setPanel("unified");
       } else if (a.type === "show_marker_plot") {
         useViewStore.getState().setMarkerView(a.plot === "dotplot" ? "dotplot" : "heatmap");
         useViewStore.getState().setPanel("markers");
@@ -654,6 +667,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
         ))}
       </div>
 
+      {datasetId && <SelectionChip onAsk={send} busy={busy} />}
       <div className="border-t p-3">
         <form
           onSubmit={(e) => {
