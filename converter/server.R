@@ -6,6 +6,8 @@
 ##   POST /convert -> accepts JSON {input_path, output_path[, progress_path]},
 ##                    runs conversion (Seurat, SingleCellExperiment,
 ##                    SummarizedExperiment) and returns what was kept / skipped
+##   POST /export  -> accepts JSON {input_path (staged h5ad), output_path (.rds),
+##                    format: seurat | sce[, progress_path]} (export_rds.R)
 ##
 
 library(httpuv)
@@ -13,6 +15,7 @@ library(jsonlite)
 
 source("convert.R")
 source("convert_sce.R")
+source("export_rds.R")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,6 +27,16 @@ json_response <- function(body_list, status = 200L) {
     headers = list("Content-Type" = "application/json"),
     body    = toJSON(body_list, auto_unbox = TRUE)
   )
+}
+
+#' The JSON body as a list, or list(error = why).
+read_json_body <- function(req) {
+  raw <- tryCatch(req$rook.input$read_lines(), error = function(e) NULL)
+  if (is.null(raw) || length(raw) == 0 || !nzchar(paste(raw, collapse = ""))) {
+    return(list(error = "Empty request body"))
+  }
+  params <- tryCatch(fromJSON(paste(raw, collapse = "\n")), error = function(e) NULL)
+  if (!is.list(params)) list(error = "Invalid JSON in request body") else params
 }
 
 log_request <- function(req) {
@@ -121,6 +134,28 @@ app <- list(
           status = 500L
         ))
       }
+    }
+
+    # ---- POST /export: staged h5ad -> Seurat / SCE .rds --------------------
+    if (method == "POST" && path == "/export") {
+      params <- read_json_body(req)
+      if (!is.null(params$error)) {
+        return(json_response(list(status = "error", error = params$error), status = 400L))
+      }
+      if (is.null(params$input_path) || is.null(params$output_path)) {
+        return(json_response(
+          list(status = "error", error = "Missing input_path or output_path"), status = 400L))
+      }
+      result <- tryCatch(
+        export_h5ad_to_rds(params$input_path, params$output_path,
+                           params$format %||% "seurat", params$progress_path),
+        error = function(e) list(success = FALSE, error = conditionMessage(e))
+      )
+      invisible(gc(verbose = FALSE))
+      if (isTRUE(result$success)) {
+        return(json_response(list(status = "ok", message = result$message, report = result$report)))
+      }
+      return(json_response(list(status = "error", error = result$error), status = 500L))
     }
 
     # ---- fallback: 404 ----------------------------------------------------
