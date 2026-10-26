@@ -63,6 +63,7 @@ import pandas as pd
 
 from scview.core import hvg_sensitivity as hs
 from scview.core import merge_check as mc
+from scview.core import results_store
 from scview.core.gene_filters import is_ribo_mito
 from scview.core.marker_selection import MAX_PADJ, MIN_LOGFC, MIN_PTS
 
@@ -417,16 +418,14 @@ def remember(adaptor, result: dict[str, Any]) -> None:
         with _last_lock:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
-        pass
+        return
+    results_store.keep(adaptor, "count_split", result, key=str(result.get("reference", "")),
+                       label=f"Count-split marker check of '{result.get('reference')}'")
 
 
 def grounding_lines(adaptor, obs: pd.DataFrame) -> tuple[list[str], str | None]:
     """For the co-pilot: how many groups keep their markers on held-out counts."""
-    try:
-        with _last_lock:
-            r = _last.get(adaptor)
-    except TypeError:
-        return [], None
+    r = results_store.remembered(_last, _last_lock, adaptor, "count_split")
     if r is None or (r.get("reference_exists") and r["reference"] not in obs.columns):
         return [], None
     tested = [g for g in r["groups"] if g["tested"]]

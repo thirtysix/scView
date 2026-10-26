@@ -6,6 +6,47 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-26
+
+### Added
+- **Results store** (phase 1): results that were kept in process memory only now also go to disk under
+  `DATA_DIR/results/{dataset_id}/`, so they survive a backend restart and a dataset dropping out of the
+  cache: DE results (GSEA, DE overlap and activity by result id), ligand-receptor runs and condition
+  comparisons (CSV download by id), composition tests, Milo, merge and count-split checks, cytokine
+  response, off-target (HPA), protein interactions and study plans. The co-pilot's facts about them come
+  back with them. Tables are Parquet (zstd; floats narrowed to float32, p-values kept float64), arrays
+  compressed NumPy, structure gzip JSON.
+- Each stored result records the cells it was computed on and the recipe's step count: one computed on
+  an earlier version of the dataset (cells filtered, pipeline re-run) is marked stale and not given to
+  the co-pilot as a current fact.
+- Retention: per kind and key the newest result plus the last 3 it superseded, at most 20 current results
+  per kind, at most 200 MB (compressed) per dataset, oldest first. Deleting a dataset deletes its results.
+- `GET /datasets/{id}/results` (filter `kind=`), `GET /datasets/{id}/results/{rid}`,
+  `DELETE /datasets/{id}/results/{rid}`.
+- **Earlier markers and enrichment kept** (results store phase 2): when a save replaces a column's markers
+  or a group's enrichment with a different result, or drops them (markers re-run, groups merged,
+  re-clustering), the saved ones go to the results store (last 3 per column / group). The h5ad keeps only
+  the current one, so exports are unchanged. Each records the column's labels it was computed on: after a
+  relabel, merge or filter it is stale.
+- `POST /datasets/{id}/results/{rid}/restore` makes an earlier markers or enrichment result current again
+  (the one it replaces is kept); refused (409) for a stale one, whose groups no longer exist. Restored
+  markers drop the column's enrichment (computed from other markers; also kept).
+- **Stored results list** (History, below "Reproduce this analysis"; results store phase 3): every stored
+  result with its kind, when, size and badges (earlier = superseded, pinned, "earlier data" = stale), a
+  kind filter, and per row: download as `.tsv.gz`, pin (kept until deleted) / unpin, delete (with a
+  confirm), and for earlier markers and enrichment "compare with current" (top 50 genes shared per group;
+  significant terms shared) and "make current again".
+- **Exports**: one result as `.tsv.gz` (header + rows, 6 significant digits, p-values `%.3e`), all results
+  as a zip with `manifest.json` (parameters, version, fingerprint, stale flag), and "Dataset + stored
+  results (.zip)" in the Download menu (the h5ad beside a `results/` folder). The plain h5ad download is
+  unchanged. `GET /datasets/{id}/results/{rid}/table.tsv.gz`, `GET /datasets/{id}/results.zip`,
+  `GET /datasets/{id}/export/h5ad?with_results=true`, `POST /datasets/{id}/results/{rid}/pin`,
+  `GET /datasets/{id}/results/{rid}/compare`.
+
+### Fixed
+- Enrichment overlap genes are listed sorted: their order came from gseapy's sets and changed between
+  backend processes.
+
 ## [0.39.2] - 2026-10-26
 
 ### Added

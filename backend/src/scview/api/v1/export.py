@@ -179,9 +179,12 @@ async def _large_export(dm: DatasetManager, dataset_id: str, raw: bool) -> Path:
 async def download_h5ad(
     dataset_id: str,
     raw: bool = False,
+    with_results: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Stream the dataset's active .h5ad (processing results included) from disk.
+    ``with_results``: a zip of the h5ad beside a ``results/`` folder of the stored
+    results as .tsv.gz and their ``manifest.json`` (core/results_export.py).
 
     Every write path saves the file before it returns (pipeline steps evict the
     cache afterwards), so the file on disk is what the app shows. It is sent in
@@ -191,6 +194,16 @@ async def download_h5ad(
     path = _active_h5ad(dm, dataset_id)
     if await asyncio.to_thread(large_mode.file_is_large, path):
         path = await _large_export(dm, dataset_id, raw)
+    if with_results:
+        from scview.core import results_export
+
+        name = _h5ad_download_name(dm, dataset_id)
+        out = dm.data_dir / "cache" / dataset_id / "export_with_results.zip"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(results_export.results_zip, dataset_id, out, dm.get_dataset(dataset_id),
+                                path, name)
+        return FileResponse(out, media_type="application/zip", filename=name[:-len(".h5ad")] + "_with_results.zip",
+                            headers={"Content-Encoding": "identity"})
     return FileResponse(
         path,
         media_type="application/x-hdf5",

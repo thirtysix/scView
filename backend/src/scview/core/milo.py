@@ -55,6 +55,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from scview.core import results_store
 from scview.core.composition import MIN_CELLS_PER_SAMPLE, MIN_SAMPLES, _labels, _order
 from scview.core.confounding import check, for_comparison
 
@@ -712,15 +713,13 @@ def remember(adaptor, result: MiloResult) -> None:
         with _last_lock:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
-        pass
+        return
+    results_store.keep(adaptor, "milo", result, key=f"{result.condition_key}|{result.sample_key}",
+                       label=f"Milo neighbourhoods: {' vs '.join(reversed(result.conditions))}")
 
 
 def last_result(adaptor) -> MiloResult | None:
-    try:
-        with _last_lock:
-            r = _last.get(adaptor)
-    except TypeError:
-        return None
+    r = results_store.remembered(_last, _last_lock, adaptor, "milo")
     if r is None:
         return None
     obs = adaptor.adata.obs if hasattr(adaptor, "adata") else None

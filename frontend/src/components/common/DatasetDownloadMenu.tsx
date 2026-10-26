@@ -9,6 +9,7 @@ import {
   type H5adInfo,
 } from "@/api/export";
 import type { ExportFormat } from "@/api/exportFormats";
+import { h5adWithResultsUrl, resultsZipUrl } from "@/api/results";
 import { ExportFormatDialog } from "@/components/common/ExportFormatDialog";
 import { ExportMenu, type ExportMenuItem } from "@/components/common/ExportMenu";
 import { formatBytes } from "@/lib/formatting";
@@ -63,6 +64,14 @@ export function DatasetDownloadMenu({ datasetId, compact = false, className }: D
       },
     },
     {
+      key: "h5ad-results",
+      icon: "data",
+      label: "Dataset + stored results (.zip)",
+      hint: "The .h5ad beside a results/ folder (.tsv.gz + manifest)",
+      disabled: !info,
+      onSelect: () => downloadUrl(h5adWithResultsUrl(datasetId)),
+    },
+    {
       key: "cellxgene",
       icon: "data",
       label: "For CELLxGENE (.h5ad)…",
@@ -97,6 +106,13 @@ export function DatasetDownloadMenu({ datasetId, compact = false, className }: D
       label: "Marker genes (.xlsx)",
       hint: "One sheet per grouping",
       onSelect: () => downloadTable(datasetId, "markers", "xlsx"),
+    },
+    {
+      key: "results-zip",
+      icon: "csv",
+      label: "Stored results (.zip)",
+      hint: "Each result as .tsv.gz, with a manifest of parameters",
+      onSelect: () => downloadUrl(resultsZipUrl(datasetId)),
     },
     {
       key: "replay-script",

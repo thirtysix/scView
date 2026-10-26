@@ -24,6 +24,17 @@ def event_loop():
     loop.close()
 
 
+@pytest.fixture(autouse=True)
+def _results_store_in_tmp(tmp_path: Path):
+    """Every test's results store in its own tmp dir, never DATA_DIR, with its
+    background writes finished before the next test points the store elsewhere."""
+    from scview.core import results_store
+
+    results_store.configure(tmp_path)
+    yield
+    results_store.flush()
+
+
 @pytest.fixture()
 def tmp_data_dir(tmp_path: Path) -> Path:
     """Create a temporary data directory with required subdirectories."""

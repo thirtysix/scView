@@ -24,7 +24,10 @@ from typing import Any
 
 import numpy as np
 
+from scview.core import results_store
+
 KEEP = 8  # ~1 MB each for 14k genes
+KIND = "de"  # in the results store
 # The cell-level methods, whose statistic GSEA ranks by, and its metric name.
 SCORE_METRICS = {"wilcoxon": "wilcoxon_score", "t-test": "t_score", "logreg": "logreg_coef"}
 # How a label names each test.
@@ -110,10 +113,13 @@ def remember(
     min_pct: float | None = None,
     n_skipped: int = 0,
     comparison: dict[str, Any] | None = None,
+    adaptor: Any = None,
 ) -> str:
     """Keep a DE result's genes (objects with gene, logfoldchange, pval, and
     optionally pval_adj and stat), the prefilter that chose them and what was
-    compared; returns the id to ask for them by."""
+    compared; returns the id to ask for them by. Also kept in the results store
+    (with the data's fingerprint when the adaptor is given), so the id still
+    works after a restart."""
     rows = list(genes)
     comparison = {**(comparison or {}), "method": method}
     adj = None
@@ -140,25 +146,50 @@ def remember(
         _results[result_id] = stored
         while len(_results) > KEEP:
             _results.popitem(last=False)
+    results_store.keep(dataset_id, KIND, stored, key=stored.label, label=stored.label,
+                       params=comparison, result_id=result_id, adaptor=adaptor)
     return result_id
+
+
+def _put(result_id: str, stored: StoredResult) -> None:
+    with _lock:
+        _results[result_id] = stored
+        while len(_results) > KEEP:
+            _results.popitem(last=False)
 
 
 def recall(dataset_id: str, result_id: str) -> StoredResult | None:
     """The stored result, or None when it is gone or belongs to another dataset."""
     with _lock:
         stored = _results.get(result_id)
-        if stored is None or stored.dataset_id != dataset_id:
-            return None
-        _results.move_to_end(result_id)
-        return stored
+        if stored is not None:
+            if stored.dataset_id != dataset_id:
+                return None
+            _results.move_to_end(result_id)
+            return stored
+    stored = results_store.recall(dataset_id, result_id, KIND)
+    if not isinstance(stored, StoredResult) or stored.dataset_id != dataset_id:
+        return None
+    _put(result_id, stored)
+    return stored
 
 
 def list_results(dataset_id: str) -> list[tuple[str, StoredResult]]:
     """This dataset's kept results with their ids, newest first (without
-    touching the order in which they drop out)."""
+    touching the order in which they drop out); after a restart, the newest
+    KEEP from the results store."""
     with _lock:
-        items = [(rid, r) for rid, r in _results.items() if r.dataset_id == dataset_id]
-    return sorted(items, key=lambda item: item[1].created_at, reverse=True)
+        items = {rid: r for rid, r in _results.items() if r.dataset_id == dataset_id}
+    for e in results_store.entries(dataset_id, KIND):
+        if len(items) >= KEEP:
+            break
+        if e["id"] in items or e["status"] == "superseded":
+            continue
+        stored = results_store.recall(dataset_id, e["id"], KIND)
+        if isinstance(stored, StoredResult) and stored.dataset_id == dataset_id:
+            items[e["id"]] = stored
+    out = sorted(items.items(), key=lambda item: item[1].created_at, reverse=True)
+    return out[:KEEP]
 
 
 def clear() -> None:

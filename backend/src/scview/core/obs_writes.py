@@ -163,6 +163,9 @@ def write_derived(
     against 0.1 s). Edits must replace an uns entry, not mutate it in place.
     ``obsm_keys``: obsm entries the edit set or removed, rewritten the same way.
     """
+    from scview.core import uns_history
+
+    uns_history.before_save(output_path, adata)
     partial = output_path + ".partial"
     # anndata refuses to write an index named like a column with other values (an
     # uploaded h5ad's obs "cell_id"); the pipeline's save and the ingest drop the name too.
