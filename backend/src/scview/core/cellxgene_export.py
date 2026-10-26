@@ -17,7 +17,10 @@ Annotate) opens as it is:
 
 ``readiness`` reports which fields a CELLxGENE Discover submission needs are present,
 missing or not in the expected form, read from the published schema (``SCHEMA_VERSION``).
-It reports only: no ontology term is ever filled in or guessed.
+It reports only: no ontology term is ever filled in or guessed. The one exception is the
+user's own choice: ``Options.cell_type_terms`` names a label column whose labels the user
+mapped to Cell Ontology terms (``core/cell_ontology.py``), and when every label has one,
+``cell_type_ontology_term_id`` is written from that mapping.
 
 Matrices are never read whole into memory for this: a dataset in memory has its X and
 counts written as they are (``anndata.io.write_elem``); one on disk (large, or opened
@@ -76,6 +79,9 @@ class Options:
     embeddings: list[str] | None = None  # obsm keys; None: every 2D/3D layout
     columns: list[str] | None = None  # obs columns; None: all
     include_raw: bool = False  # raw counts as .raw
+    # A label column: write cell_type_ontology_term_id from the user's Cell Ontology
+    # mapping of it (only when every label has a term)
+    cell_type_terms: str | None = None
 
 
 @dataclass
@@ -103,6 +109,8 @@ class Plan:
     dropped: dict[str, list[str]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     renamed: dict[str, int] = field(default_factory=dict)  # names made unique
+    # The Cell Ontology mapping asked for: column, complete, written, missing labels
+    cell_type_terms: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -433,11 +441,39 @@ def plan(adaptor, opts: Options) -> Plan:
     p = Plan(obs=obs, var=var, obsm=obsm, uns=uns, x=x, raw=raw, counts=counts,
              dropped={k: v for k, v in dropped.items() if v}, notes=notes,
              renamed={"cells": n_cells, "genes": n_genes})
+    if opts.cell_type_terms:
+        p.cell_type_terms = _cell_type_terms(adata, obs, opts.cell_type_terms, notes)
     if n_cells:
         notes.append(f"{n_cells:,} duplicate cell names made unique ('-1', '-2' added).")
     if n_genes:
         notes.append(f"{n_genes:,} duplicate gene names made unique ('-1', '-2' added).")
     return p
+
+
+TERM_COLUMN = "cell_type_ontology_term_id"
+
+
+def _cell_type_terms(adata, obs: pd.DataFrame, column: str, notes: list[str]) -> dict[str, Any]:
+    """Write ``cell_type_ontology_term_id`` from the user's mapping of ``column`` when it
+    covers every cell; say what is missing otherwise."""
+    from scview.core import cell_ontology
+
+    try:
+        s = cell_ontology.summary(adata, column)
+    except cell_ontology.TermError as exc:
+        raise ExportError(str(exc))
+    out = {"column": column, "complete": s["complete"], "written": False, "missing": s["missing"],
+           "n_labels": s["n_labels"], "n_mapped": s["n_mapped"],
+           "n_cells_unlabelled": s["n_cells_unlabelled"]}
+    ids = cell_ontology.term_ids(adata, column) if s["complete"] else None
+    if ids is not None:
+        if TERM_COLUMN in obs.columns:
+            notes.append(f"The dataset's own {TERM_COLUMN} was replaced by your Cell Ontology mapping.")
+        obs[TERM_COLUMN] = ids
+        out["written"] = True
+        notes.append(f"{TERM_COLUMN} written from your Cell Ontology mapping of '{column}' "
+                     f"({s['n_labels']} labels).")
+    return out
 
 
 def looks_counts_raw(adata) -> bool:
@@ -602,7 +638,17 @@ def readiness(p: Plan, species: str | None = None, title: str | None = None,
                            f"Not an NCBITaxon term: {org}."))
     else:
         items.append(_item("organism_ontology_term_id", org_label, "ok", str(org)))
+    ct = p.cell_type_terms
     for key, prefixes, literals, label in _ONTOLOGY_FIELDS:
+        if key == TERM_COLUMN and ct and not ct["written"]:
+            gaps = ct["missing"]
+            detail = (f"Your Cell Ontology mapping of '{ct['column']}' has no term for {len(gaps)} of "
+                      f"{ct['n_labels']} labels: " + ", ".join(gaps[:5]) + (" …" if len(gaps) > 5 else "") + "."
+                      if gaps else f"Your Cell Ontology mapping of '{ct['column']}' does not cover every cell.")
+            if ct["n_cells_unlabelled"]:
+                detail += f" {ct['n_cells_unlabelled']:,} cells have no label."
+            items.append(_item(key, label, "missing", detail))
+            continue
         if key not in obs.columns:
             items.append(_item(key, label, "missing", "Not in the cell metadata."))
             continue
@@ -618,6 +664,9 @@ def readiness(p: Plan, species: str | None = None, title: str | None = None,
             items.append(_item(key, label, "invalid",
                                "Not a term id of the expected kind (several terms: sorted, "
                                f"joined with ' || '): {shown}."))
+        elif key == TERM_COLUMN and ct and ct["written"]:
+            items.append(_item(key, label, "ok", f"From your Cell Ontology mapping of '{ct['column']}' "
+                                                 f"({s.nunique():,} terms)."))
         else:
             items.append(_item(key, label, "ok", f"{s.nunique():,} values."))
     for key, allowed in _LITERAL_FIELDS.items():

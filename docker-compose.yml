@@ -10,7 +10,7 @@ name: scview
 
 services:
   backend:
-    image: ghcr.io/thirtysix/scview-backend:${SCVIEW_VERSION:-0.41.0}
+    image: ghcr.io/thirtysix/scview-backend:${SCVIEW_VERSION:-0.42.0}
     # Back up by itself if it is killed, e.g. out of memory on a small machine.
     restart: on-failure
     # SCVIEW_MEMORY_GB (.env, suggested by the start scripts) caps its memory, so a
@@ -45,7 +45,7 @@ services:
       start_period: 120s
 
   frontend:
-    image: ghcr.io/thirtysix/scview-frontend:${SCVIEW_VERSION:-0.41.0}
+    image: ghcr.io/thirtysix/scview-frontend:${SCVIEW_VERSION:-0.42.0}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -56,7 +56,7 @@ services:
         condition: service_healthy
 
   converter:
-    image: ghcr.io/thirtysix/scview-converter:${SCVIEW_VERSION:-0.41.0}
+    image: ghcr.io/thirtysix/scview-converter:${SCVIEW_VERSION:-0.42.0}
     restart: on-failure
     mem_limit: ${SCVIEW_MEMORY_GB:-0}g
     memswap_limit: ${SCVIEW_MEMORY_GB:-0}g

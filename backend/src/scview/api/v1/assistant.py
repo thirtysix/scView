@@ -31,7 +31,8 @@ from scview.core.assistant import (
 )
 from scview.core.guards import enforce_query_limits
 from scview.core.rag.retrieve import retrieve_context
-from scview.core.rag.router import classify_intent, mentions_app_ui
+from scview.core import results_store, selection_facts
+from scview.core.rag.router import RouteState, classify_intent, mentions_app_ui
 
 logger = logging.getLogger(__name__)
 
@@ -219,15 +220,24 @@ async def _prepare(
     settings: Settings,
     *,
     force_app: bool = False,
+    adaptor=None,
 ) -> dict:
     """Classify intent, then assemble only the knowledge it needs — shared by the
     streaming and non-streaming endpoints. ``force_app`` always includes the
     dataset-library/feature context (used when no dataset is loaded, so the
-    co-pilot can help a newcomer get started). Returns kwargs for answer_query /
+    co-pilot can help a newcomer get started). ``adaptor``: the open dataset, for
+    the routing rules and the selection's facts. Returns kwargs for answer_query /
     stream_answer."""
-    # 1. Classify intent (one cheap call) — what knowledge does this need?
+    # 1. Classify intent (one cheap call) — what knowledge does this need? The app's
+    # state (corpora, results, a selection) decides some routes without the model.
+    state = RouteState(
+        rag_enabled=bool(settings.rag_enabled),
+        has_dataset=adaptor is not None,
+        has_results=adaptor is not None and await asyncio.to_thread(_has_results, adaptor),
+        has_selection=adaptor is not None and selection_facts.present(body.view_context),
+    )
     intent = await classify_intent(
-        query, body.view_context, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL
+        query, body.view_context, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL, state=state,
     )
     chosen = set(intent.sources)
     if force_app or mentions_app_ui(query):
@@ -236,6 +246,17 @@ async def _prepare(
     # 2. RAG retrieval ONLY for the corpora the classifier picked.
     rag_corpora = [c for c in ("tutorials", "literature") if c in chosen]
     extra_context, extra_sources = await retrieve_context(query, settings, rag_corpora)
+
+    # 2b. The selected cells' facts, when the question is about them or they were
+    # just selected (core/selection_facts.py; off the event loop, cached).
+    route = set(chosen)
+    if adaptor is not None and selection_facts.wanted(query, body.view_context):
+        sel_context, sel_sources = await asyncio.to_thread(
+            selection_facts.build, adaptor, body.view_context)
+        if sel_context:
+            route.add("data")
+            extra_context = "\n\n".join(b for b in (sel_context, extra_context) if b)
+            extra_sources = [*sel_sources, *extra_sources]
 
     # 3. App context (dataset library + features) when asked about the app.
     app_context, app_sources = "", []
@@ -251,9 +272,23 @@ async def _prepare(
         view_context=body.view_context,
         include_data_grounding=("data" in chosen),
         data_facets=sorted(getattr(intent, "data_facets", []) or []),
-        route=sorted(chosen),
+        route=sorted(route),
         model=settings.RAG_CHAT_MODEL,
     )
+
+
+def _has_results(adaptor) -> bool:
+    """Whether the dataset holds stored results: kept results, markers or enrichment."""
+    try:
+        did = results_store.dataset_id_of(adaptor)
+        if did and results_store.entries(did, adaptor=adaptor):
+            return True
+        if adaptor.marker_columns():
+            return True
+        return any(str(k).startswith("enrichment__") for k in adaptor.adata.uns)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: results check failed: %s", exc)
+        return False
 
 
 async def _warm_cluster_qc(adaptor, kwargs: dict) -> None:
@@ -293,7 +328,7 @@ async def assistant_chat(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
         query = body.query.strip()
-        kwargs = await _prepare(query, body, dm, settings)
+        kwargs = await _prepare(query, body, dm, settings, adaptor=adaptor)
         await _warm_cluster_qc(adaptor, kwargs)
         return await answer_query(query, adaptor, settings.DEEPINFRA_API_KEY, **kwargs)
     except Exception as exc:
@@ -325,7 +360,7 @@ async def assistant_chat_stream(
 
     async def event_generator():
         try:
-            kwargs = await _prepare(query, body, dm, settings)
+            kwargs = await _prepare(query, body, dm, settings, adaptor=adaptor)
             await _warm_cluster_qc(adaptor, kwargs)
             async for event in stream_answer(
                 query, adaptor, settings.DEEPINFRA_API_KEY, **kwargs

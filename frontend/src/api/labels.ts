@@ -14,6 +14,8 @@ export interface LabelResult {
   created: boolean;
   /** What an undo puts back */
   previous: PreviousValues[];
+  /** The label's Cell Ontology term before this labelling, when it changed (label -> id or null) */
+  previous_terms?: Record<string, string | null>;
 }
 
 export interface UndoLabelResult {
@@ -58,7 +60,7 @@ export function listLabelColumns(datasetId: string): Promise<{ columns: string[]
  */
 export function labelCells(
   datasetId: string,
-  body: { column: string; label: string; indices: number[]; newColumn: boolean },
+  body: { column: string; label: string; indices: number[]; newColumn: boolean; ontologyId?: string | null },
 ): Promise<LabelResult> {
   return call(`/datasets/${datasetId}/labels`, {
     method: "POST",
@@ -67,6 +69,7 @@ export function labelCells(
       label: body.label,
       indices: body.indices,
       new_column: body.newColumn,
+      ontology_id: body.ontologyId ?? null,
     }),
   });
 }
@@ -74,7 +77,13 @@ export function labelCells(
 /** Undo one labelling: give its cells back their previous values. */
 export function undoLabel(
   datasetId: string,
-  body: { column: string; previous: PreviousValues[]; created: boolean },
+  body: {
+    column: string;
+    previous: PreviousValues[];
+    created: boolean;
+    /** The labelling's `previous_terms`, put back with the cells */
+    previous_terms?: Record<string, string | null>;
+  },
 ): Promise<UndoLabelResult> {
   return call(`/datasets/${datasetId}/labels/undo`, { method: "POST", body: JSON.stringify(body) });
 }

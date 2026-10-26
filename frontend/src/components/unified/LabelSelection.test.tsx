@@ -15,6 +15,11 @@ vi.mock("@/api/labels", async (importOriginal) => ({
   undoLabel: api.undoLabel,
 }));
 vi.mock("@/api/datasets", () => ({ getDataset: api.getDataset }));
+const onto = vi.hoisted(() => ({ searchCellTypes: vi.fn() }));
+vi.mock("@/api/ontology", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/ontology")>()),
+  searchCellTypes: onto.searchCellTypes,
+}));
 
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -100,11 +105,56 @@ describe("LabelSelectionControls", () => {
         column: "manual_labels",
         previous: [{ value: "Unassigned", indices: [2, 4, 9] }],
         created: true,
+        previous_terms: {},
       }),
     );
     // The column is gone, so the plot goes back to the clustering.
     await waitFor(() => expect(useSettingsStore.getState().colorBy).toBe("leiden"));
     expect(screen.queryByRole("button", { name: /Undo label/ })).not.toBeInTheDocument();
+  });
+
+  it("attaches a Cell Ontology term picked in the label box, and the undo puts the old term back", async () => {
+    onto.searchCellTypes.mockResolvedValue({
+      query: "nk",
+      version: "v",
+      n_terms: 1,
+      terms: [
+        {
+          id: "CL:0000623", name: "natural killer cell", matched: "NK cell", match: "synonym",
+          definition: "A lymphocyte…", parents: [], url: "",
+        },
+      ],
+    });
+    api.listLabelColumns.mockResolvedValue({ columns: ["mine"], unassigned: "Unassigned" });
+    api.labelCells.mockResolvedValue({
+      column: "mine", label: "NK", n_cells: 3, created: false,
+      previous: [{ value: "Unassigned", indices: [2, 4, 9] }],
+      previous_terms: { NK: "CL:0000576" },
+    });
+    api.getDataset.mockResolvedValue(dataset());
+    api.undoLabel.mockResolvedValue({ column: "mine", n_cells: 3, removed: false });
+    renderControls();
+    fireEvent.click(screen.getByRole("button", { name: /Label selection/ }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Column" })).toHaveValue("mine"));
+    const box = screen.getByRole("combobox", { name: "Label" });
+    fireEvent.change(box, { target: { value: "nk" } });
+    await screen.findByRole("option", { name: /natural killer cell/ });
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(box).toHaveValue("natural killer cell");
+    // the user's own name keeps the term
+    fireEvent.change(box, { target: { value: "NK" } });
+    expect(screen.getByText("CL:0000623")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply label" }));
+    await waitFor(() => expect(api.labelCells).toHaveBeenCalled());
+    expect(api.labelCells.mock.calls[0]![1]).toMatchObject({ label: "NK", ontologyId: "CL:0000623" });
+
+    fireEvent.click(await screen.findByRole("button", { name: /Undo label/ }));
+    await waitFor(() =>
+      expect(api.undoLabel).toHaveBeenCalledWith("ds", expect.objectContaining({
+        previous_terms: { NK: "CL:0000576" },
+      })),
+    );
   });
 
   it("offers the column last labelled into and checks the label before sending", async () => {

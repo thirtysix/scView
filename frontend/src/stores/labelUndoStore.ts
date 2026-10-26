@@ -9,6 +9,8 @@ export interface LabelUndoEntry {
   nCells: number;
   created: boolean;
   previous: PreviousValues[];
+  /** Cell Ontology terms the labelling replaced (label -> id or null) */
+  previousTerms?: Record<string, string | null>;
   /** The dataset's cell count when labelled: a later filter renumbers cells,
    *  and the saved indices would then point at other cells. */
   datasetCells: number;

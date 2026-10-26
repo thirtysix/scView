@@ -1,6 +1,16 @@
 import { useState, useId, type ReactNode } from "react";
 import { Info } from "lucide-react";
 
+/** Focus from the keyboard, not a dialog moving focus to its first control after a
+ *  click (that would pop the tip open, often off the top of the screen). */
+function keyboardFocus(el: Element): boolean {
+  try {
+    return el.matches(":focus-visible");
+  } catch {
+    return true; // no :focus-visible support: keep the tip reachable
+  }
+}
+
 /**
  * Small explanatory popover on an info icon.
  *
@@ -31,7 +41,7 @@ export function InfoTip({
         aria-describedby={open ? id : undefined}
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}
-        onFocus={() => setOpen(true)}
+        onFocus={(e) => setOpen(keyboardFocus(e.currentTarget))}
         onBlur={() => setOpen(false)}
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
         className="inline-flex items-center text-slate-300 transition-colors hover:text-slate-500 focus:text-slate-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 rounded-sm"

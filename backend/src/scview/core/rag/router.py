@@ -20,6 +20,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass
 
 from pydantic import BaseModel
 
@@ -195,12 +198,34 @@ as JSON: {"sources": [...], "data_facets": [...], "reason": "..."}."""
 
 
 async def classify_intent(
-    query: str, view_context: dict | None, api_key: str, model: str
+    query: str, view_context: dict | None, api_key: str, model: str,
+    *, state: RouteState | None = None,
 ) -> Intent:
-    """Classify which knowledge sources a question needs. Falls back to heuristics."""
+    """Classify which knowledge sources a question needs. Falls back to heuristics.
+
+    With ``state`` (what the app has: RAG, a dataset, stored results, a selection),
+    a rule pre-check answers the questions whose route the state decides, without
+    the LLM, and ``apply_rules`` corrects the classifier's choice afterwards; the
+    classifier's answer is cached per question and tab, so the same question gets
+    the same route."""
+    if state is not None:
+        pre = pre_route(query, view_context, state)
+        if pre is not None:
+            return pre
+    intent = await _classify(query, view_context, api_key, model)
+    return apply_rules(intent, query, view_context, state) if state is not None else intent
+
+
+async def _classify(query: str, view_context: dict | None, api_key: str, model: str) -> Intent:
     if not api_key:
         return heuristic_intent(query, view_context)
     panel = (view_context or {}).get("panel") or "unknown"
+    key = (" ".join((query or "").lower().split()), str(panel).lower(), model)
+    with _memo_lock:
+        hit = _memo.get(key)
+        if hit is not None:
+            _memo.move_to_end(key)
+            return hit.model_copy(deep=True)
     try:
         from openai import AsyncOpenAI
 
@@ -222,11 +247,130 @@ async def classify_intent(
         sources = [s for s in data.get("sources", []) if s in SOURCES]
         if sources:
             facets = [f for f in (data.get("data_facets") or []) if f in DATA_FACETS]
-            return Intent(
+            intent = Intent(
                 sources=sources,
                 reason=str(data.get("reason", "llm-classified")),
                 data_facets=facets if "data" in sources else [],
             )
+            with _memo_lock:
+                _memo[key] = intent.model_copy(deep=True)
+                while len(_memo) > _MEMO_KEEP:
+                    _memo.popitem(last=False)
+            return intent
     except Exception as exc:
         logger.warning("intent classify LLM failed (%s); using heuristic", exc)
     return heuristic_intent(query, view_context)
+
+
+# ---------------------------------------------------------------------------
+# Rules the app's state decides (no LLM), and the classifier's cache
+# ---------------------------------------------------------------------------
+
+_MEMO_KEEP = 256
+_memo: OrderedDict[tuple, Intent] = OrderedDict()
+_memo_lock = threading.Lock()
+
+
+def clear_memo() -> None:
+    with _memo_lock:
+        _memo.clear()
+
+
+@dataclass(frozen=True)
+class RouteState:
+    """What the app has when a question comes in."""
+
+    rag_enabled: bool = False    # the literature/tutorials corpora can be searched
+    has_dataset: bool = False    # a dataset is open (its facts can ground the answer)
+    has_results: bool = False    # it holds stored results (markers, DE, enrichment, ...)
+    has_selection: bool = False  # cells are selected (view_context["selection"])
+
+
+# A question about the dataset's cell types, clusters or genes.
+_CELLS_GENES_RE = re.compile(
+    r"\bwhich\s+(?:\w+\s+){0,2}?(?:cell[ -]?types?|clusters?|populations?|groups?|genes?|cells?)\b"
+    r"|\b(?:cell[ -]?types?|clusters?|populations?)\b.*\bgenes?\b"
+    r"|\bgenes?\b.*\b(?:cell[ -]?types?|clusters?|populations?)\b",
+    re.I,
+)
+# ... asking what responds or changes: what the stored comparisons answer.
+_RESPONSE_RE = re.compile(
+    r"\b(?:respond\w*|responses?|affected|induc\w*|up-?regulat\w*|down-?regulat\w*|"
+    r"changes?|changed|differ\w*|react\w*)\b",
+    re.I,
+)
+_RESPONSE_FACETS = ("groups", "markers", "enrichment")
+
+
+def _has_selection(view_context: dict | None, state: RouteState) -> bool:
+    if state.has_selection:
+        return True
+    sel = (view_context or {}).get("selection")
+    return isinstance(sel, dict) and bool(sel.get("n_cells"))
+
+
+def _refers_to_selection(query: str) -> bool:
+    from scview.core.selection_facts import refers_to_selection
+
+    return refers_to_selection(query)
+
+
+def _literature_wanted(query: str, state: RouteState) -> bool:
+    q = query.lower()
+    return state.rag_enabled and any(h in q for h in _LITERATURE_HINTS)
+
+
+def pre_route(query: str, view_context: dict | None, state: RouteState) -> Intent | None:
+    """The route of a question the app's state decides, without the classifier:
+
+    - about the selected cells ("these cells", "my lasso") while cells are selected:
+      the dataset (with the selection's facts), never the literature alone;
+    - which cell types / genes respond or change, on a dataset with stored results:
+      the dataset's groups, markers and enrichment facts, plus the literature when
+      it can be searched and the question is biological.
+
+    None for every other question."""
+    if not state.has_dataset:
+        return None
+    selection = _has_selection(view_context, state) and _refers_to_selection(query)
+    response = state.has_results and bool(_CELLS_GENES_RE.search(query)) and bool(_RESPONSE_RE.search(query))
+    if not (selection or response):
+        return None
+    sources = ["data"] + (["literature"] if _literature_wanted(query, state) else [])
+    facets = set(_infer_facets(query))
+    if response:
+        facets |= set(_RESPONSE_FACETS)
+    if selection and not facets:
+        facets = {"groups"}
+    reason = "rule: about the selected cells" if selection else "rule: what responds, from the stored results"
+    return Intent(sources=sources, reason=reason, data_facets=[f for f in DATA_FACETS if f in facets])
+
+
+def apply_rules(intent: Intent, query: str, view_context: dict | None, state: RouteState) -> Intent:
+    """Correct the classifier's route with what the app has:
+
+    - no corpora to search: never the literature or tutorials (an answer from an
+      empty retrieval cites nothing); the dataset instead, or the app without one;
+    - a question about the dataset's cell types or genes, on a dataset with stored
+      results: always the dataset too, even when the literature is chosen;
+    - a question about the selected cells: always the dataset."""
+    sources = list(intent.sources)
+    facets = list(intent.data_facets)
+    had_data = "data" in sources
+    if not state.rag_enabled:
+        sources = [s for s in sources if s not in CORPORA]
+    about_data = state.has_dataset and (
+        (state.has_results and bool(_CELLS_GENES_RE.search(query)))
+        or (_has_selection(view_context, state) and _refers_to_selection(query))
+    )
+    if about_data and "data" not in sources:
+        sources.append("data")
+    if not sources:
+        sources = ["data"] if state.has_dataset else ["app"]
+    if "data" in sources and not had_data:
+        facets = _infer_facets(query)
+    if "data" not in sources:
+        facets = []
+    if sources == intent.sources and facets == intent.data_facets:
+        return intent
+    return Intent(sources=sources, reason=f"{intent.reason} (adjusted to the app's state)", data_facets=facets)

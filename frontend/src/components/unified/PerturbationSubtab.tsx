@@ -82,6 +82,8 @@ export function PerturbationSubtab() {
       setControl(s.call?.control ?? "");
       setMinUmi(Number(s.call?.params?.min_umi ?? s.defaults.min_umi));
       setMinRatio(Number(s.call?.params?.min_ratio ?? s.defaults.min_ratio));
+      // The control matches the result on show: a saved run's "Within" choice.
+      setSplitBy((s.mixscape ?? s.mixscape_saved)?.split_by ?? "");
       setMapping({});
     } catch (e) {
       setError(errorText(e));

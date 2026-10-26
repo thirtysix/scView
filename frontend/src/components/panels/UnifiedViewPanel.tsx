@@ -37,6 +37,7 @@ import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
 import { CnvSubtab } from "@/components/unified/CnvSubtab";
 import { ClonotypeSubtab } from "@/components/unified/ClonotypeSubtab";
 import { PerturbationSubtab } from "@/components/unified/PerturbationSubtab";
+import { CellOntologyCard } from "@/components/unified/CellOntologyCard";
 import { getProgramUsage, type ProgramUsage } from "@/api/programs";
 import { usageLabel } from "@/lib/programs";
 import { ClusterReference } from "@/components/unified/ClusterReference";
@@ -838,6 +839,7 @@ export function UnifiedViewPanel() {
   // the dataset so the legend, violins and dot plots list the groups that way.
   const [orderBusy, setOrderBusy] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
+  const [ontologyColumn, setOntologyColumn] = useState<string | null>(null);
   const handleOrderChange = useCallback(
     async (change: { order: string[] } | { sort: "natural" | "size" }) => {
       if (!datasetId || !colorBy) return;
@@ -1135,6 +1137,24 @@ export function UnifiedViewPanel() {
                   orderBusy={orderBusy}
                 />
               ) : null}
+              {effectiveColorType !== "continuous" && colorBy && categories && datasetId && (
+                <button
+                  type="button"
+                  onClick={() => setOntologyColumn(colorBy)}
+                  aria-haspopup="dialog"
+                  title="Give this column's labels Cell Ontology terms"
+                  className="mt-1 rounded px-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                >
+                  Cell Ontology…
+                </button>
+              )}
+              {ontologyColumn && datasetId && (
+                <CellOntologyCard
+                  datasetId={datasetId}
+                  column={ontologyColumn}
+                  onClose={() => setOntologyColumn(null)}
+                />
+              )}
               {orderError && (
                 <p role="alert" className="mt-1 max-w-[220px] text-[11px] text-red-600">{orderError}</p>
               )}

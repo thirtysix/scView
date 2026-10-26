@@ -22,6 +22,7 @@ from scview.api.v1 import (
     assistant,
     export,
     export_formats,
+    export_rds,
     ingest,
     integration,
     cells,
@@ -52,6 +53,7 @@ from scview.api.v1 import (
     results,
     ppi,
     perturbation,
+    ontology,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -73,6 +75,7 @@ api_router.include_router(clustering.router, tags=["clustering"])
 api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(export.router, tags=["export"])
 api_router.include_router(export_formats.router, tags=["export"])
+api_router.include_router(export_rds.router, tags=["export"])
 api_router.include_router(ingest.router, tags=["ingest"])
 api_router.include_router(integration.router, tags=["integration"])
 api_router.include_router(normalization.router, tags=["assessment"])
@@ -105,3 +108,4 @@ api_router.include_router(cytokines.router, tags=["activity"])
 api_router.include_router(ppi.router, tags=["ppi"])
 api_router.include_router(results.router, tags=["results"])
 api_router.include_router(perturbation.router, tags=["perturbation"])
+api_router.include_router(ontology.router, tags=["labels"])

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { Loader2, Tag, Undo2 } from "lucide-react";
 import { ApiDetailError, labelCells, listLabelColumns, undoLabel } from "@/api/labels";
+import { CellTypeCombobox, type PickedTerm } from "@/components/common/CellTypeCombobox";
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { columnNameError, labelError, suggestColumnName, UNASSIGNED } from "@/lib/labels";
@@ -64,6 +65,7 @@ export function LabelSelectionControls() {
         column: entry.column,
         previous: entry.previous,
         created: entry.created,
+        previous_terms: entry.previousTerms ?? {},
       });
       useLabelUndoStore.getState().pop(current.id);
       const fresh = await refresh(current.id, entry.column);
@@ -144,6 +146,7 @@ function LabelSelectionForm({ dataset, indices, onClose }: LabelSelectionFormPro
   const [target, setTarget] = useState<string>(NEW);
   const [newName, setNewName] = useState(() => suggestColumnName(existingNames));
   const [label, setLabel] = useState("");
+  const [term, setTerm] = useState<PickedTerm | null>(null);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +187,7 @@ function LabelSelectionForm({ dataset, indices, onClose }: LabelSelectionFormPro
         label: label.trim(),
         indices: Array.from(indices),
         newColumn: isNew,
+        ontologyId: term?.id ?? null,
       });
       useLabelUndoStore.getState().push({
         datasetId: dataset.id,
@@ -192,6 +196,7 @@ function LabelSelectionForm({ dataset, indices, onClose }: LabelSelectionFormPro
         nCells: res.n_cells,
         created: res.created,
         previous: res.previous,
+        previousTerms: res.previous_terms ?? {},
         datasetCells: dataset.n_cells ?? 0,
       });
       await refresh(dataset.id, res.column);
@@ -216,24 +221,16 @@ function LabelSelectionForm({ dataset, indices, onClose }: LabelSelectionFormPro
         Label {formatNumber(indices.size)} selected cell{indices.size === 1 ? "" : "s"}
       </div>
 
-      <label className="block space-y-1">
-        <span className="text-[11px] font-medium text-slate-500">Label</span>
-        <input
-          autoFocus
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          list={knownLabels.length ? "label-selection-known" : undefined}
-          placeholder="e.g. activated T cells"
-          className="w-full rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none"
-        />
-        {knownLabels.length > 0 && (
-          <datalist id="label-selection-known">
-            {knownLabels.map((v) => (
-              <option key={v} value={v} />
-            ))}
-          </datalist>
-        )}
-      </label>
+      <CellTypeCombobox
+        label="Label"
+        autoFocus
+        value={label}
+        onChange={setLabel}
+        term={term}
+        onTermChange={setTerm}
+        knownLabels={knownLabels}
+        placeholder="e.g. activated T cells, or a Cell Ontology term"
+      />
 
       <label className="block space-y-1">
         <span className="text-[11px] font-medium text-slate-500">Column</span>

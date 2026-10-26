@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { InfoTip } from "./InfoTip";
 
@@ -8,12 +8,20 @@ describe("InfoTip", () => {
     const button = screen.getByRole("button", { name: "About tau" });
     expect(screen.queryByRole("tooltip")).toBeNull();
 
+    // keyboard focus (:focus-visible) opens it
+    const visible = vi.spyOn(button, "matches").mockReturnValue(true);
     fireEvent.focus(button);
     expect(screen.getByRole("tooltip")).toHaveTextContent("Tau: 0 even across groups");
     expect(button).toHaveAttribute("aria-expanded", "true");
     expect(button).toHaveAttribute("aria-describedby", screen.getByRole("tooltip").id);
     fireEvent.blur(button);
     expect(screen.queryByRole("tooltip")).toBeNull();
+
+    // a dialog focusing its first control after a click does not
+    visible.mockReturnValue(false);
+    fireEvent.focus(button);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.blur(button);
 
     fireEvent.mouseEnter(button);
     expect(screen.getByRole("tooltip")).toBeInTheDocument();

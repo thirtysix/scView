@@ -104,6 +104,13 @@ describe("PerturbationSubtab", () => {
     expect(refresh).toHaveBeenCalledWith("d1", "perturbation");
   });
 
+  it("shows a saved run's Within choice, so the control matches the result", async () => {
+    const saved = { ...RESULT, split_by: "rep", lda: undefined };
+    api.getPerturbation.mockResolvedValue({ ...BASE, call: CALL, mixscape_saved: saved });
+    render(<PerturbationSubtab />);
+    await waitFor(() => expect(screen.getByLabelText("Split by")).toHaveValue("rep"));
+  });
+
   it("runs Mixscape, shows the per-target table, the posterior and hands a target to DE", async () => {
     api.getPerturbation.mockResolvedValueOnce({ ...BASE, call: CALL }).mockResolvedValue({ ...BASE, call: CALL, mixscape: RESULT });
     api.runMixscape.mockResolvedValue(RESULT);

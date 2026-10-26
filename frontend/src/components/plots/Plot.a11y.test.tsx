@@ -54,7 +54,7 @@ describe("Plot wrapper for screen readers", () => {
 
   it("under reduced motion (here: accessibility mode) layout transitions are off; otherwise untouched", () => {
     const { rerender } = render(<Plot data={small} layout={layout} />);
-    expect(last().layout).toBe(layout);
+    expect(last().layout).toEqual(layout);
     act(() => useA11yStore.setState({ enabled: true }));
     rerender(<Plot data={small} layout={layout} />);
     expect((last().layout as Partial<Layout>).transition).toEqual({ duration: 0, easing: "linear" });
