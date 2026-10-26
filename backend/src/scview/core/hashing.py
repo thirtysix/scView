@@ -699,6 +699,7 @@ def _set_protein(adata, frame: pd.DataFrame) -> None:
     else:  # every antibody was a hashtag: no protein modality left
         adata.obsm.pop(protein.COUNTS_KEY, None)
         adata.obsm.pop(protein.CLR_KEY, None)
+        adata.obsm.pop(protein.DSB_KEY, None)
     if isinstance(info, dict):
         new = dict(info)
         new["names"] = [str(c) for c in frame.columns]

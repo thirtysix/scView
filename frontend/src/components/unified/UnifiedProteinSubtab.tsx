@@ -5,6 +5,7 @@ import { apiFetchBinary } from "@/api/client";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { plotConfig } from "@/lib/plotConfig";
 import { spearman, targetGenes } from "@/lib/protein";
+import { normLabel, proteinLayerFor, type ProteinNorm } from "@/lib/dsb";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
@@ -12,6 +13,7 @@ import { ColorLegend } from "@/components/plots/ColorLegend";
 import type { ResolvedColorScale } from "@/lib/colorScale";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
 import Plot from "@/components/plots/Plot";
+import { ProteinNormalisation } from "./ProteinNormalisation";
 
 interface UnifiedProteinSubtabProps {
   datasetId: string;
@@ -20,8 +22,11 @@ interface UnifiedProteinSubtabProps {
   activeProtein: string | null;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
-  /** The active protein's resolved colour scale (diverging when its CLR has both signs) */
+  /** The active protein's resolved colour scale (diverging when its values have both signs) */
   proteinScale: ResolvedColorScale | null;
+  /** CLR or DSB (DSB only once computed) */
+  proteinNorm?: ProteinNorm;
+  onProteinNormChange?: (norm: ProteinNorm) => void;
 }
 
 /** Points drawn in the protein-vs-RNA scatter (the correlation uses every cell). */
@@ -45,7 +50,10 @@ export function UnifiedProteinSubtab({
   groupByColumn,
   setGroupByColumn,
   proteinScale,
+  proteinNorm = "clr",
+  onProteinNormChange = () => {},
 }: UnifiedProteinSubtabProps) {
+  const layer = proteinLayerFor(protein, proteinNorm) ?? protein.layer;
   const dataset = useDatasetStore((s) => s.currentDataset);
   const expressionLayer = useSettingsStore((s) => s.expressionLayer);
   const targets = useMemo(
@@ -87,9 +95,15 @@ export function UnifiedProteinSubtab({
   return (
     <div className="space-y-3">
       <p className="text-[11px] leading-snug text-slate-500">
-        {targets.length} antibod{targets.length === 1 ? "y" : "ies"} measured with the RNA (CITE-seq),
-        normalised by centred log-ratio per cell. Click one to colour the cells.
+        {targets.length} antibod{targets.length === 1 ? "y" : "ies"} measured with the RNA (CITE-seq).
+        Click one to colour the cells.
       </p>
+      <ProteinNormalisation
+        datasetId={datasetId}
+        protein={protein}
+        norm={proteinNorm}
+        onNormChange={onProteinNormChange}
+      />
       <div className="flex flex-wrap gap-1.5" aria-label="Proteins">
         {targets.map((n) => chip(n, false))}
       </div>
@@ -107,7 +121,7 @@ export function UnifiedProteinSubtab({
           <ColorLegend
             type="continuous"
             scale={proteinScale}
-            label={`${activeProtein} protein (CLR)`}
+            label={`${activeProtein} protein (${normLabel(layer)})`}
           />
         </div>
       )}
@@ -139,7 +153,7 @@ export function UnifiedProteinSubtab({
             kind="heatmap"
             perGroup={0}
             genes={targets}
-            layer={protein.layer}
+            layer={layer}
           />
         </div>
       )}
@@ -147,7 +161,7 @@ export function UnifiedProteinSubtab({
       <ProteinVsRna
         datasetId={datasetId}
         proteins={targets}
-        proteinLayer={protein.layer}
+        proteinLayer={layer}
         rnaLayer={expressionLayer}
         initial={activeProtein && targets.includes(activeProtein) ? activeProtein : targets[0] ?? ""}
       />
@@ -159,7 +173,7 @@ interface Pair {
   protein: string;
   gene: string;
   x: Float32Array; // RNA
-  y: Float32Array; // protein CLR
+  y: Float32Array; // protein (CLR or DSB)
 }
 
 function ProteinVsRna({
@@ -283,7 +297,7 @@ function ProteinVsRna({
               height: 240,
               margin: { t: 8, r: 10, b: 40, l: 46 },
               xaxis: { ...AXIS, title: { text: `${pair.gene} RNA`, font: { size: 11, color: "#64748b" } } },
-              yaxis: { ...AXIS, title: { text: `${pair.protein} protein (CLR)`, font: { size: 11, color: "#64748b" } } },
+              yaxis: { ...AXIS, title: { text: `${pair.protein} protein (${normLabel(proteinLayer)})`, font: { size: 11, color: "#64748b" } } },
               showlegend: false,
               paper_bgcolor: "white",
               plot_bgcolor: "white",
