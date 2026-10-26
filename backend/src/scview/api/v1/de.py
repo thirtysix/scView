@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from scview.dependencies import get_dataset_manager
 from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
-from scview.core import large_mode
+from scview.core import large_mode, selection_facts
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager
@@ -488,8 +488,11 @@ async def differential_expression(
 
     # Seconds on a large dataset: in a worker thread, so the server keeps answering.
     res, size = await asyncio.to_thread(_run)
+    # "cells" names exactly which cells, so the co-pilot can cite this result for
+    # the same selection (core/selection_facts.py).
     compared = {"mode": "selection", "label": body.label, "n_a": n_sel,
-                "n_b": int(adata.n_obs) - n_sel}
+                "n_b": int(adata.n_obs) - n_sel,
+                "cells": selection_facts.selection_hash(mask.nonzero()[0], int(adata.n_obs))}
     return DEResponse(n_selected=n_sel, n_rest=int(adata.n_obs) - n_sel, label=body.label,
                       genes=res.genes, result_id=_remember(dataset_id, res, compared, adaptor),
                       transcriptome_size=size, **res.fields())

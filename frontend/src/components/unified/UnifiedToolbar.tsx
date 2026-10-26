@@ -14,6 +14,7 @@ import { formatNumber, prettyObsLabel, prettyEmbeddingLabel, isRedundantClusterC
 import { LabelSelectionControls } from "@/components/unified/LabelSelection";
 import { CellFilterControl } from "@/components/unified/CellFilter";
 import { GatesControl } from "@/components/unified/GatesControl";
+import { AskSelectionButton } from "@/components/unified/AskSelectionButton";
 import { describeFilter } from "@/lib/cellFilter";
 import { ResolutionSweepControl } from "@/components/unified/ResolutionSweep";
 import { HvgSensitivityControl } from "@/components/unified/HvgSensitivity";
@@ -365,6 +366,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
               by {describeFilter(selectionFilter)}
             </span>
           )}
+          <AskSelectionButton />
           <button onClick={clearSelection} aria-label="Clear selection" className="rounded p-0.5 hover:bg-orange-100">
             <X className="h-3 w-3" />
           </button>
