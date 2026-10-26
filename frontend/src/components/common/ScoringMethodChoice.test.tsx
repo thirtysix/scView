@@ -24,5 +24,17 @@ describe("ScoringMethodChoice", () => {
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent("score_genes (scanpy): the set's mean log expression");
     expect(tip).toHaveTextContent("AUCell (Aibar et al. 2017): genes are ranked within each cell");
+    expect(tip).toHaveTextContent("ssGSEA (Barbie et al. 2009): genes are ranked within each cell");
+    expect(tip).toHaveTextContent("GSVA (Hänzelmann et al. 2013): first places each cell within each gene's");
+  });
+
+  it("lists all four methods", () => {
+    render(<ScoringMethodChoice />);
+    const select = screen.getByRole("combobox", { name: "Gene-set scoring method" });
+    expect(Array.from((select as HTMLSelectElement).options).map((o) => o.textContent)).toEqual([
+      "score_genes", "AUCell", "ssGSEA", "GSVA",
+    ]);
+    fireEvent.change(select, { target: { value: "gsva" } });
+    expect(useScoringMethodStore.getState().method).toBe("gsva");
   });
 });

@@ -108,6 +108,12 @@ describe("parseSession", () => {
   it("keeps a gene-set score's method; an older session has none (score_genes)", () => {
     const overlay = { type: "score", name: "IFN", genes: ["ISG15", "MX1"], method: "aucell" };
     expect(parseSession({ format: "scview-session", version: 1, view: { overlay } }).view!.overlay).toEqual(overlay);
+    for (const method of ["ssgsea", "gsva"]) {
+      const o = { ...overlay, method };
+      expect(parseSession({ format: "scview-session", version: 1, view: { overlay: o } }).view!.overlay).toEqual(o);
+    }
+    expect(() => parseSession({ format: "scview-session", version: 1, view: { overlay: { ...overlay, method: "zscore" } } }))
+      .toThrow(/method/);
     const old = parseSession(json(full)).view!.overlay!;
     expect(old).toEqual({ type: "score", name: "HALLMARK_INTERFERON_ALPHA_RESPONSE", genes: ["ISG15", "IFI6"] });
     expect("method" in old).toBe(false);
@@ -138,7 +144,7 @@ describe("parseSession", () => {
     ["a camera without zoom", { view: { camera: { target: [0, 0] } } }, /view.camera.zoom/],
     ["a camera at infinity", { view: { camera: { target: [0, Infinity], zoom: 1 } } }, /view.camera.target\[1\]/],
     ["an unknown overlay", { view: { overlay: { type: "obs", column: "x" } } }, /view.overlay.type/],
-    ["an unknown scoring method", { view: { overlay: { type: "score", name: "IFN", genes: ["ISG15"], method: "gsva" } } }, /view.overlay.method must be one of/],
+    ["an unknown scoring method", { view: { overlay: { type: "score", name: "IFN", genes: ["ISG15"], method: "zscore" } } }, /view.overlay.method must be one of/],
     ["an unknown activity network", { view: { overlay: { type: "activity", network: "dorothea", source: "STAT1" } } }, /view.overlay.network/],
     ["a negative index", { selection: { n_cells: 10, indices: [1, -1] } }, /selection.indices must hold whole numbers/],
     ["a fractional index", { selection: { n_cells: 10, indices: [1.5] } }, /selection.indices/],

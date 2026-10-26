@@ -398,7 +398,7 @@ function ListDetail({
               className={btn}
               disabled={!ready || present.length === 0 || !!scoringName}
               onClick={() => scoreGenes(present, list.name)}
-              title="Score each cell for these genes together (score_genes or AUCell, as chosen) and colour the plot by it"
+              title="Score each cell for these genes together (with the scoring method chosen) and colour the plot by it"
             >
               {scoringName ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
               Score

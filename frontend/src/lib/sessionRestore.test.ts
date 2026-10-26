@@ -169,6 +169,12 @@ describe("save then open on the same dataset", () => {
       datasetId: "kang",
       overlay: { type: "score", name: "IFN", genes: ["ISG15", "MX1"], method: "aucell" },
     });
+    // GSVA likewise.
+    buildWorkspace("lasso");
+    useUnifiedViewStore.getState().setScatterOverlay({ type: "score", name: "IFN", genes: ["ISG15"], method: "gsva" });
+    const gsvaSession = saveAndReset();
+    await restoreSession(gsvaSession);
+    expect(useUnifiedViewStore.getState().pendingOverlay?.overlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15"], method: "gsva" });
     // score_genes is the default: saved without a method, as before the choice existed.
     buildWorkspace("lasso");
     useUnifiedViewStore.getState().setScatterOverlay({ type: "score", name: "IFN", genes: ["ISG15"] });

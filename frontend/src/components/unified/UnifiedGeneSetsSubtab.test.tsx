@@ -105,4 +105,38 @@ describe("UnifiedGeneSetsSubtab scoring method", () => {
     expect(onScore.mock.calls[2]![4]).toBe("score_genes");
     expect(scoreCalls()).toHaveLength(2);
   });
+
+  it("shows how GSVA scored, and why a score was refused", async () => {
+    let refuse = false;
+    client.apiFetch.mockImplementation((url: string, init?: { body?: string }) => {
+      if (url.includes("/genesets/collections")) {
+        return Promise.resolve({ dataset_id: "ds1", collections: [{ id: "c2", name: "C2", category: "MSigDB", n_sets: 1, available: true }] });
+      }
+      if (url.includes("/genesets/search")) return Promise.resolve({ results: sets(1) });
+      if (url.endsWith("/genesets/score")) {
+        if (refuse) return Promise.reject(new Error("GSVA scores up to 300 million non-zero values in one request"));
+        return Promise.resolve({
+          ...scored(JSON.parse(init!.body!).method), genes_undetected: ["B"],
+          note: "GSVA on the log-normalised X, 13,233 genes that vary; empirical CDF over all 13,836 cells",
+        });
+      }
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+    const onScore = vi.fn();
+    render(<UnifiedGeneSetsSubtab onScoreComplete={onScore} groupByColumn="" setGroupByColumn={vi.fn()} />);
+    fireEvent.click(await screen.findByText("SET_0"));
+    fireEvent.change(screen.getByRole("combobox", { name: "Gene-set scoring method" }), { target: { value: "gsva" } });
+    fireEvent.click(screen.getByRole("button", { name: "Score" }));
+    await waitFor(() => expect(onScore).toHaveBeenCalledTimes(1));
+    expect(onScore.mock.calls[0]![4]).toBe("gsva");
+    expect(screen.getByTestId("score-note")).toHaveTextContent("empirical CDF over all 13,836 cells.");
+    expect(screen.getByText("1 never detected")).toHaveAttribute("title", expect.stringContaining("GSVA leaves them out"));
+    expect(screen.queryByTestId("aucell-note")).toBeNull();
+
+    refuse = true;
+    fireEvent.change(screen.getByRole("combobox", { name: "Gene-set scoring method" }), { target: { value: "ssgsea" } });
+    fireEvent.click(screen.getByRole("button", { name: "Score" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("GSVA scores up to 300 million");
+    expect(screen.queryByTestId("score-note")).toBeNull();
+  });
 });

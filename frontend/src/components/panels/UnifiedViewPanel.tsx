@@ -492,7 +492,7 @@ export function UnifiedViewPanel() {
       const label = scoreLabel(name, method);
       setOverlayValues(scores);
       setOverlayLabel(label);
-      setScatterOverlay(method === "aucell" ? { type: "score", name, genes, activity, method } : { type: "score", name, genes, activity });
+      setScatterOverlay(method && method !== "score_genes" ? { type: "score", name, genes, activity, method } : { type: "score", name, genes, activity });
       if (datasetId) setOverlayDatasetId(datasetId);
 
       // Build violin from scores grouped by the active groupBy column

@@ -8,6 +8,7 @@ import { scoreGeneSet, type ScoreMethod } from "@/api/genesetScore";
 import type { OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
+import { errorMessage } from "@/lib/errorMessage";
 import { ScoreDepthCheck } from "@/components/unified/ScoreDepthCheck";
 import {
   CollectionOptions,
@@ -33,7 +34,8 @@ interface GeneSetSearchResult {
   genes: string[];
 }
 
-/** What the subtab says about the last score: counts, and AUCell's ranking depth. */
+/** What the subtab says about the last score: counts, AUCell's ranking depth, and
+ *  how ssGSEA / GSVA computed it. */
 interface ScoreSummary {
   method: ScoreMethod;
   found: number;
@@ -41,6 +43,7 @@ interface ScoreSummary {
   undetected: number;
   maxRank: number | null;
   shareBelow: number | null;
+  note: string | null;
 }
 
 interface UnifiedGeneSetsSubtabProps {
@@ -72,6 +75,7 @@ export function UnifiedGeneSetsSubtab({
   // Scoring state
   const [isScoring, setIsScoring] = useState(false);
   const [scoreResult, setScoreResult] = useState<ScoreSummary | null>(null);
+  const [scoreError, setScoreError] = useState<string | null>(null);
   const method = useScoringMethodStore((s) => s.method);
 
   const categoricalColumns = useMemo(() => {
@@ -139,6 +143,7 @@ export function UnifiedGeneSetsSubtab({
   const handleSelectGeneSet = useCallback(
     (gs: GeneSetSearchResult) => {
       setSelectedGeneSet(gs);
+      setScoreError(null);
       const cached = scoreCache.current.get(cacheKey(gs, method));
       if (cached) {
         const { scores, ...summary } = cached;
@@ -157,6 +162,7 @@ export function UnifiedGeneSetsSubtab({
     if (!datasetId || !selectedGeneSet || selectedGeneSet.genes.length === 0) return;
     setIsScoring(true);
     setScoreResult(null);
+    setScoreError(null);
     try {
       const response = await scoreGeneSet(datasetId, selectedGeneSet.genes, selectedGeneSet.name, method);
       const scores = new Float32Array(response.scores);
@@ -167,12 +173,14 @@ export function UnifiedGeneSetsSubtab({
         undetected: response.genes_undetected?.length ?? 0,
         maxRank: response.max_rank,
         shareBelow: response.share_below_max_rank,
+        note: response.note ?? null,
       };
       scoreCache.current.set(cacheKey(selectedGeneSet, method), { ...summary, scores });
       setScoreResult(summary);
       onScoreComplete(scores, selectedGeneSet.name, selectedGeneSet.genes, undefined, response.method);
     } catch (err) {
       console.error("Scoring failed:", err);
+      setScoreError(errorMessage(err));
     } finally {
       setIsScoring(false);
     }
@@ -303,7 +311,12 @@ export function UnifiedGeneSetsSubtab({
                   <span className="text-amber-600">{scoreResult.missing} missing</span>
                 )}
                 {scoreResult.undetected > 0 && (
-                  <span className="text-slate-500" title="In the dataset but expressed in no cell: AUCell leaves them out of the set">
+                  <span
+                    className="text-slate-500"
+                    title={scoreResult.method === "gsva"
+                      ? "In the dataset but the same in every cell (mostly never detected): GSVA leaves them out of the set"
+                      : "In the dataset but expressed in no cell: AUCell leaves them out of the set"}
+                  >
                     {scoreResult.undetected} never detected
                   </span>
                 )}
@@ -318,6 +331,12 @@ export function UnifiedGeneSetsSubtab({
                 : "."}
             </p>
           )}
+          {scoreResult?.note && (
+            <p className="mt-1 text-[10px] leading-snug text-slate-500" data-testid="score-note">
+              {scoreResult.note}.
+            </p>
+          )}
+          {scoreError && <p className="mt-1 text-[11px] text-red-600" role="alert">{scoreError}</p>}
           <ScoreDepthCheck key={`${datasetId}::${selectedGeneSet.collection}::${selectedGeneSet.name}`} datasetId={datasetId} genes={selectedGeneSet.genes} />
         </div>
       )}
