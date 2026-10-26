@@ -185,7 +185,8 @@ class Index:
         """Terms for ``q``, best first: the id itself; the same name, exact synonym or
         other synonym; the same words (stop words, plurals and the abbreviation table
         aside: "CD14 Mono", "NK"); a name starting with ``q``; every word of ``q``
-        starting a word of the term (whole words first, then fewest other words)."""
+        starting a word of the term. Within each: whole words first, then fewest other
+        words (``QUALIFIERS`` aside), then the more general term."""
         q = (q or "").strip()
         if not q:
             return []
@@ -372,15 +373,19 @@ def get_index(dest: Path | None = None, *, auto_download: bool | None = None, re
     """The index, fetching ``cl-basic.obo`` first when missing and allowed (call in a
     worker thread). Raises ``OntologyUnavailable`` saying why."""
     dest = dest or mdb.marker_db_dir()
-    idx = loaded(dest)
+
+    def from_disk() -> Index | None:
+        try:
+            return loaded(dest)
+        except (OSError, ValueError) as e:
+            logger.warning("Cell Ontology unreadable: %s", e)
+            return None
+
+    idx = from_disk()
     if idx is not None:
         return idx
     st = mdb.ensure(dest, auto_download=auto_download, retry=retry, client=client, parts=("ontology",))
-    try:
-        idx = loaded(dest)
-    except (OSError, ValueError) as e:
-        logger.warning("Cell Ontology unreadable: %s", e)
-        idx = None
+    idx = from_disk()
     if idx is not None:
         return idx
     if not st["auto_download"]:

@@ -123,12 +123,11 @@ async def set_label_terms(
             dm.evict(dataset_id)  # may hold an edit that was never saved
             logger.error("Saving Cell Ontology terms failed for %s: %s", dataset_id, exc, exc_info=True)
             raise HTTPException(status_code=500, detail=f"Could not save the terms: {exc!s}")
-        if result["previous"]:
-            if backed:
-                dm.evict(dataset_id)
-                await dm.load_dataset(dataset_id)
-            else:
-                dm.saved_in_place(dataset_id, adaptor, output_path)
+        if backed:  # read into memory for the edit: back to the file as the other edits do
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+        elif result["previous"]:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
     return {**result["summary"], "previous": result["previous"], "columns": result["columns"]}
 
 
