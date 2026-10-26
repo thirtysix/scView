@@ -4,7 +4,7 @@ import { formatPct } from "@/lib/deDetection";
 import { formatPValue } from "@/lib/formatting";
 import { sizeCautionForCopilot } from "@/lib/transcriptomeSize";
 import { compositionCautionForCopilot } from "@/lib/deComposition";
-import { hasPValues } from "@/lib/deMethods";
+import { hasPValues, methodLabel } from "@/lib/deMethods";
 
 /** Most-specific first: a donor column beats a per-sample one, which may also
  *  encode the condition (sample = donor x condition still works, unpaired). */
@@ -123,7 +123,7 @@ function describeTest(c: DEComparison, r: DEResponse): string {
   if (r.method === "pseudobulk") {
     const paired = r.design?.includes("+") ? ", paired by donor" : "";
     return (
-      `${c.a} vs ${c.b}${where}, pseudobulk DESeq2 over ${r.n_samples_a} vs ` +
+      `${c.a} vs ${c.b}${where}, ${methodLabel(r.method, r)} over ${r.n_samples_a} vs ` +
       `${r.n_samples_b} donors (column ${r.replicate_key}${paired}; ${cells})`
     );
   }

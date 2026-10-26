@@ -92,6 +92,8 @@ _FACET_HINTS = {
         "cluster", "donor", "condition", "sample", "group", "breakdown", "fraction",
         "ligand", "receptor", "communicat", "signalling", "signaling", "interaction", "sender",
         "receiver", "abundance", "milo", "neighbourhood", "neighborhood",
+        "crispr", "guide", "knockout", "knock-out", "knocked out", "perturb", "mixscape",
+        "pseudobulk", "pseudo-bulk", "voom", "ruv", "differential", "change",
     ),
     "enrichment": ("enrichment", "pathway", "gsea", "go term", "ontology"),
     "qc": (
@@ -174,7 +176,11 @@ cluster", "what steps ran?", "what paper/publication is THIS dataset from?"). Th
 includes results of analyses run in scView on it: where its markers are expressed in \
 other tissues (Human Protein Atlas lookup), cytokine response (CytoSig), protein \
 interaction networks (STRING), copy number / malignant cells (inferCNV-style), e.g. \
-"are the B cell markers specific outside blood?" → data with ["markers"].
+"are the B cell markers specific outside blood?" → data with ["markers"]. \
+Results of comparisons and screens run in scView need ["groups"]: DE between \
+conditions (pseudobulk DESeq2 / limma-voom / RUV, neighbourhood DE (miloDE)), \
+composition and Milo, and CRISPR screens (guide assignment, Mixscape knockouts), \
+e.g. "which knockouts worked?" or "which pseudobulk method did I use?" → data with ["groups"].
 - "tutorials": single-cell METHODS / how-to / parameter / interpretation questions \
 (e.g. "why log-normalize?", "what clustering resolution?").
 - "literature": BIOLOGY / evidence answerable from research abstracts \

@@ -6,6 +6,42 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-10-26
+
+### Added
+- **CRISPR screens**: "CRISPR Guide Capture" features are kept at import as `obsm['guide_counts']`
+  (up to 2,000 guides) instead of being dropped, and Cell Ranger's
+  `crispr_analysis/protospacer_calls_per_cell.csv` is read with the matrix.
+- **Perturbation tab** (Unified View, shown when a dataset has guides): each cell's guide and target from
+  Cell Ranger's calls, guide counts (minimum UMIs + top guide at least 2x the second) or an obs column,
+  with an editable guide → target mapping and the control label (NT, non-targeting, ... detected). Writes
+  `guide_call`, `perturbation`, `n_guides`.
+- **Mixscape** (Papalexi et al. 2021): each target's cells split into KO / NP against the control cells,
+  optionally within a replicate column; per-target KO fraction and DE genes, posterior histogram, LDA view
+  and a one-click DE of KO vs control. On Papalexi 2021 (20,729 cells, 25 targets) it gives the same class
+  as pertpy 1.0.3 for 99.3% of cells (99.65% with exact neighbours). Streams with Cancel.
+- **Neighbourhood DE (miloDE-style)**, Compare > Composition: DE between two conditions inside each
+  neighbourhood of the cell graph (second-order kNN neighbourhoods, miloDE's defaults), donors as
+  replicates, no clustering needed; per gene the number of neighbourhoods where it is DE and its median
+  log2FC, per-neighbourhood log2FC on the embedding, miloDE's overlap-weighted spatial FDR. Neighbourhoods
+  where one condition holds under 10% of the cells are flagged. On Kang it runs in under a second.
+- **Pseudobulk models**: pseudobulk DE can use limma-voom or voomByGroup (a mean-variance trend per group)
+  besides DESeq2; TMM, voom and the moderated t match edgeR 4.10 / limma 3.68 to ~1e-9 on Kang.
+- A variance check plots each group's voom trend and flags a group whose donors vary 2x or more,
+  suggesting voomByGroup.
+- **RUV** option (k = 0-3) adds unwanted-variation factors from empirical control genes (the 1,000 least
+  associated with the condition in a first limma-voom pass) to any pseudobulk model, with a table of how
+  each factor tracks condition, depth, cell count and donor, and a warning when it follows the condition.
+  In a paired design the donor effect is removed from the control genes first, so a factor is not the
+  donor effect again.
+- Mixscape runs (`mixscape`) and neighbourhood DE (`milode`) are kept in History > Results and export as
+  .tsv.gz; stored DE results name the pseudobulk model and RUV k. The co-pilot cites `[result:mixscape]`,
+  `[result:milode]` and `[result:pseudobulk]`.
+
+### Fixed
+- The co-pilot did not see Mixscape, pseudobulk or neighbourhood-DE results for questions like "which
+  knockouts worked?": its router now sends them to the facts that hold them.
+
 ## [0.40.0] - 2026-10-26
 
 ### Added

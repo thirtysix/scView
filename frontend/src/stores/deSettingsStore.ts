@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { DEFAULT_MIN_PCT } from "@/lib/deDetection";
 import type { CellMethod } from "@/lib/deMethods";
+import type { PseudobulkMethod } from "@/api/de";
 
 export type DEMode = "selection" | "groups";
 /** Between groups: a cell-level test (named "wilcoxon" for older sessions;
@@ -26,6 +27,9 @@ export interface DESettings {
   minPct: number;
   /** Which cell-level test: Wilcoxon, Welch t-test or logistic regression */
   cellMethod: CellMethod;
+  /** Pseudobulk: the model and the number of RUV factors */
+  pbMethod: PseudobulkMethod;
+  ruvK: number;
 }
 
 export const DE_DEFAULTS: DESettings = {
@@ -40,6 +44,8 @@ export const DE_DEFAULTS: DESettings = {
   fcThreshold: 1,
   minPct: DEFAULT_MIN_PCT,
   cellMethod: "wilcoxon",
+  pbMethod: "deseq2",
+  ruvK: 0,
 };
 
 interface DESettingsState extends DESettings {

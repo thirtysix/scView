@@ -304,7 +304,7 @@ def test_tenx_h5_cell_ranger_2_layout(tmp_path, data_dir, calls):
 
 
 def test_tenx_h5_cite_seq_split_is_the_same(tmp_path, data_dir, calls):
-    # Antibodies -> obsm protein, CellPlex tags -> obsm hto_counts, guides counted and dropped.
+    # Antibodies -> obsm protein, CellPlex tags -> obsm hto_counts, guides -> obsm guide_counts.
     names, ids, types = _features(30, antibodies=4, tags=2, guides=2)
     X = _counts(200, len(names), seed=5, density=0.3)
     f = _tenx_v3(tmp_path / "cite.h5", X, names, ids, types)
@@ -315,7 +315,9 @@ def test_tenx_h5_cite_seq_split_is_the_same(tmp_path, data_dir, calls):
     assert list(a.obsm["protein_counts"].columns) == ["CD0", "CD1", "CD2", "CD3"]
     np.testing.assert_array_equal(a.obsm["protein_counts"].to_numpy(), X[:, 30:34].toarray())
     assert "hto_counts" in a.obsm
-    assert a.uns["scview_protein"]["other_features"] == {"CRISPR Guide Capture": 2}
+    assert a.uns["scview_protein"]["other_features"] == {}
+    assert list(a.obsm["guide_counts"].columns) == ["guide0", "guide1"]
+    np.testing.assert_array_equal(a.obsm["guide_counts"].to_numpy(), X[:, 36:38].toarray())
 
 
 def test_tenx_h5_block_boundaries(tmp_path, data_dir, calls, monkeypatch):

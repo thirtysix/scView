@@ -28,6 +28,7 @@ from scview.api.v1 import (
     communication,
     composition,
     milo,
+    milode,
     normalization,
     pca,
     planner,
@@ -50,6 +51,7 @@ from scview.api.v1 import (
     cytokines,
     results,
     ppi,
+    perturbation,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -79,6 +81,7 @@ api_router.include_router(cells.router, tags=["cells"])
 api_router.include_router(composition.router, tags=["composition"])
 api_router.include_router(communication.router, tags=["communication"])
 api_router.include_router(milo.router, tags=["composition"])
+api_router.include_router(milode.router, tags=["differential-expression"])
 api_router.include_router(pca.router, tags=["assessment"])
 api_router.include_router(system.router, tags=["system"])
 api_router.include_router(preflight.router, tags=["system"])
@@ -101,3 +104,4 @@ api_router.include_router(offtarget.router, tags=["markers"])
 api_router.include_router(cytokines.router, tags=["activity"])
 api_router.include_router(ppi.router, tags=["ppi"])
 api_router.include_router(results.router, tags=["results"])
+api_router.include_router(perturbation.router, tags=["perturbation"])

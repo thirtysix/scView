@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from scview.core import hashing, protein, provenance, replay_script
+from scview.core import crispr, hashing, protein, provenance, replay_script
 from scview.core.ingestion import feature_split
 
 API = "/api/v1"
@@ -73,7 +73,7 @@ def test_split_matches_the_matrix_and_the_wizard(tmp_path, fmt):
     summary = feature_split.split_h5ad(src, out, original_filename="cite.h5ad")
     assert _sha(src) == before
     assert summary["n_genes"] == 12 and summary["n_antibodies"] == 3 and summary["n_multiplexing_tags"] == 2
-    assert summary["other_features"] == {"CRISPR Guide Capture": 1}
+    assert summary["other_features"] == {} and summary["n_guides"] == 1
 
     b = ad.read_h5ad(out)
     dense = a.X.toarray() if sp.issparse(a.X) else np.asarray(a.X)
@@ -107,6 +107,9 @@ def test_split_matches_the_matrix_and_the_wizard(tmp_path, fmt):
     hto = b.obsm[hashing.HTO_KEY]
     assert list(hto.columns) == CMOS
     np.testing.assert_array_equal(hto.to_numpy(), dense[:, _cols(CMOS)])
+    guides = b.obsm[crispr.GUIDE_KEY]  # CRISPR guides kept as guide counts (core/crispr.py)
+    assert list(guides.columns) == GUIDES
+    np.testing.assert_array_equal(guides.to_numpy(), dense[:, _cols(GUIDES)])
     info = b.uns[protein.UNS_KEY]
     assert list(info["controls"]) == ["Mouse_IgG1_isotype_Ctrl"]
 

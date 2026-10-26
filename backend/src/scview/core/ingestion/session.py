@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
-from scview.core import protein, provenance
+from scview.core import crispr, protein, provenance
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion import streamed
 from scview.core.ingestion.bundling import IngestUnit, SideKind, UnitFormat, build_bundle
@@ -73,8 +73,9 @@ class IngestOptions(BaseModel):
 
 def _seqqc_view(unit: IngestUnit) -> IngestUnit:
     """The unit with only its sequencing-QC side files (metrics, raw matrix): its
-    contig tables are joined to the cells by ``_attach_vdj`` instead."""
-    keep = [f for f in unit.side_files if f.side_kind != SideKind.vdj]
+    contig tables and guide calls are joined to the cells by ``_attach_vdj`` /
+    ``_attach_guide_calls`` instead."""
+    keep = [f for f in unit.side_files if f.side_kind not in (SideKind.vdj, SideKind.crispr)]
     return unit.model_copy(update={"side_files": keep})
 
 
@@ -319,6 +320,7 @@ class IngestSessionManager:
         seq_metrics.attach_from_units(adata, [_seqqc_view(u) for u in loadable], opts.sample_label)
 
         self._attach_vdj(adata, loadable, opts)
+        self._attach_guide_calls(adata, loadable, opts)
 
         dataset_id = uuid.uuid4().hex
         name = opts.name or (loadable[0].label if len(loadable) == 1 else "merged_dataset")
@@ -453,6 +455,19 @@ class IngestSessionManager:
                     # A gzip cut off past the part detection read surfaces only here.
                     raise IngestCommitError(f"The contig table {f.name} could not be attached: {e}") from e
 
+    def _attach_guide_calls(self, adata, loadable, opts: IngestOptions) -> None:
+        """Cell Ranger's protospacer calls uploaded with a unit (``core/crispr.py``),
+        each matched to its own sample's cells in a merge."""
+        merged = len(loadable) > 1
+        for u in loadable:
+            for f in [f for f in u.side_files if f.side_kind == SideKind.crispr]:
+                try:
+                    crispr.attach_calls(adata, f.path, file_name=f.rel_path or f.name,
+                                        sample_column=opts.sample_label if merged else None,
+                                        sample=u.label if merged else None)
+                except (crispr.CrisprError, OSError, EOFError, zlib.error, ValueError) as e:
+                    raise IngestCommitError(f"The guide calls {f.name} could not be attached: {e}") from e
+
     def _load_and_merge(self, loadable, opts: IngestOptions):
         load_opts = {"genes_in_rows": opts.genes_in_rows}
         adatas = {u.label: load_unit(u, load_opts) for u in loadable}
@@ -461,6 +476,7 @@ class IngestSessionManager:
         plan = plan_merge(adatas)
         recon = plan.reconciliation if opts.apply_reconciliation else None
         protein.common_panel(list(adatas.values()))  # CITE-seq: the shared antibodies, or none
+        crispr.common_guides(list(adatas.values()))  # CRISPR guides: all of them, 0 where absent
         merged = merge_units(
             adatas, join=opts.join, sample_label=opts.sample_label, reconciliation=recon
         )

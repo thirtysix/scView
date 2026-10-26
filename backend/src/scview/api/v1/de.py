@@ -80,6 +80,10 @@ class DECompareRequest(_CompareScope):
     # "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key
     # or a detectable donor column, and raw counts); the others are cell-level.
     method: Literal["wilcoxon", "t-test", "logreg", "pseudobulk"] = "wilcoxon"
+    # Pseudobulk only (core/pseudobulk.py): the model, and RUVg unwanted factors
+    # in the design (0 = none). The defaults are DESeq2 without RUV.
+    pb_method: Literal["deseq2", "voom", "voombygroup"] = "deseq2"
+    ruv_k: int = Field(default=0, ge=0, le=3)
     # The cell-level test only: pseudobulk filters genes on their summed counts.
     min_pct: float = _MinPct
     # The label column the composition check uses (core/de_composition.py);
@@ -179,6 +183,13 @@ class DEResponse(BaseModel):
     design: str | None = None
     counts_source: str | None = None
     dropped_samples: list[str] = []
+    # deseq2 | voom | voombygroup, the RUV factors used, each group's voom trend
+    # and variance (flag: suggest voomByGroup), and the RUV factors against the
+    # samples' covariates (core/pseudobulk.py).
+    pb_method: str | None = None
+    ruv_k: int | None = None
+    heteroscedasticity: dict | None = None
+    ruv: dict | None = None
     # /de/compare: the two sides are also different batches (core/confounding.py).
     confounding: dict | None = None
     # /de/compare: the two sides' cluster/state composition (core/de_composition.py).
@@ -659,7 +670,9 @@ async def differential_expression_compare_methods(
 
 
 async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str, adaptor=None):
-    """Donor-aware A vs B: per-donor count sums, DESeq2 Wald test (off the event loop)."""
+    """Donor-aware A vs B: per-donor count sums, DESeq2 Wald test or limma-voom /
+    voomByGroup, optionally with RUV factors (off the event loop)."""
+    from scview.core import pseudobulk
     from scview.core.pseudobulk import PseudobulkError, pseudobulk_de
 
     key = body.replicate_key or _detect_replicate_key(
@@ -684,8 +697,9 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         res = pseudobulk_de(
             sub, mask_a[keep], sub.obs[key],
             label_a=body.group_a, label_b=body.group_b, donor_key=key,
+            method=body.pb_method, ruv_k=body.ruv_k,
         )
-        # DESeq2's size factors normalise library size too.
+        # DESeq2's size factors and voom's TMM factors normalise library size too.
         return res, transcriptome_size.check(sub, mask_a[keep], mask_b[keep])
 
     try:
@@ -699,14 +713,18 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
     genes = [DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa, stat=res.stats.get(g))
              for g, lf, p, pa in res.genes]
+    comparison = _compared(body, res.n_cells_a, res.n_cells_b, key)
+    comparison = {**comparison, **pseudobulk.summary_params(
+        res, de_results.describe({**comparison, "method": "pseudobulk",
+                                  "pb_method": res.method, "ruv_k": res.ruv_k}))}
+    pseudobulk.remember(adaptor, {**comparison, "method": "pseudobulk"})
     return DEResponse(
         n_selected=res.n_cells_a,
         n_rest=res.n_cells_b,
         label=label,
         genes=genes,
         result_id=de_results.remember(
-            dataset_id, genes, method="pseudobulk",
-            comparison=_compared(body, res.n_cells_a, res.n_cells_b, key), adaptor=adaptor,
+            dataset_id, genes, method="pseudobulk", comparison=comparison, adaptor=adaptor,
         ),
         replicate_key=key,
         n_donors_a=res.n_samples_a,
@@ -719,6 +737,10 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         counts_source=res.counts_source,
         dropped_samples=res.dropped_samples,
         transcriptome_size=size,
+        pb_method=res.method,
+        ruv_k=res.ruv_k,
+        heteroscedasticity=res.heteroscedasticity,
+        ruv=res.ruv,
     )
 
 

@@ -115,7 +115,7 @@ def vocab_for(adaptor) -> Vocab:
 
 _CITE_RX = re.compile(r"\[([^\[\]\n]{2,120})\](?!\()")
 _CITE_FAMILIES = ("dataset", "provenance", "preprocessing", "result", "obs", "lit", "doc",
-                  "app", "composition", "milo", "markers", "qc", "groups", "annotation",
+                  "app", "composition", "milo", "milode", "markers", "qc", "groups", "annotation",
                   "celltypes", "enrichment", "communication")
 _LIST_RX = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _TICK_RX = re.compile(r"`([^`]+)`")
@@ -586,6 +586,7 @@ _FAMILY_PREFIX = {
     "markers": "result:markers:", "groups": "result:groups:", "obs": "result:groups:",
     "celltypes": "result:celltypes:", "annotation": "result:celltypes:",
     "composition": "result:composition", "milo": "result:milo", "qc": "result:qc:",
+    "milode": "result:milode",
     "enrichment": "result:enrichment", "communication": "result:communication",
     "merge_check": "result:merge_check",
     "count_split": "result:count_split", "count": "result:count_split",
@@ -603,6 +604,8 @@ _FAMILY_PREFIX = {
     "offtarget": "result:offtarget", "hpa": "result:offtarget",
     "cytokines": "result:cytokines", "cytokine": "result:cytokines", "cytosig": "result:cytokines",
     "ppi": "result:ppi",
+    "pseudobulk": "result:pseudobulk",
+    "mixscape": "result:mixscape", "perturbation": "result:mixscape", "crispr": "result:mixscape",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -630,6 +633,8 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
     last = parts[-1].strip().lower() if len(parts) > 1 else None
     if prefix:
         fam_refs = [r for r in refs if r.lower().startswith(prefix)]
+        if fam == "milo":  # "result:milo" is also the start of "result:milode"
+            fam_refs = [r for r in fam_refs if not r.lower().startswith("result:milode")]
         if last:
             exact = [r for r in fam_refs if r.lower().split(":")[-1] == last]
             if exact:
@@ -640,7 +645,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
             if any_col:
                 return any_col
         if fam_refs and (fam in ("dataset", "provenance", "preprocessing", "markers",
-                                  "composition", "milo", "enrichment", "qc", "communication", "pca",
+                                  "composition", "milo", "milode", "enrichment", "qc", "communication", "pca",
                                   "mito", "qcstates", "embedding", "reliability", "planner",
                                   "seqqc", "hashing", "vdj", "offtarget", "hpa",
                                   "cytokines", "cytokine", "cytosig",

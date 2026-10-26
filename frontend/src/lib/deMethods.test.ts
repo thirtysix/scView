@@ -92,3 +92,11 @@ describe("method agreement", () => {
     expect(rows[2]).toEqual(["only_in_top", "logreg", "PPBP (down)", null, null, null, 2464, 2702, 1]);
   });
 });
+
+describe("methodLabel names the pseudobulk model", () => {
+  it("defaults to DESeq2 and adds the model and RUV k when given", () => {
+    expect(methodLabel("pseudobulk")).toBe("pseudobulk DESeq2");
+    expect(methodLabel("pseudobulk", { pb_method: "voom", ruv_k: 1 })).toBe("pseudobulk limma-voom + RUV k=1");
+    expect(methodLabel("pseudobulk", { pb_method: "voombygroup", ruv_k: 0 })).toBe("pseudobulk voomByGroup");
+  });
+});

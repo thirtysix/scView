@@ -41,6 +41,7 @@ from scview.core import (
     qc_filter,
 )
 from scview.core import ccc_compare
+from scview.core import milode
 from scview.core import mito_by_type
 from scview.core import qc_states
 from scview.core import embedding_reliability
@@ -314,6 +315,22 @@ def _add_vdj(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
         sources.append(ChatSource(kind="result", ref=vdj.TAG, detail=v_detail, evidence="\n".join(v_lines)))
 
 
+def _add_mixscape(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """A CRISPR screen (core/crispr.py, core/mixscape.py): the guide assignment and
+    the last Mixscape run's KO fraction per target."""
+    from scview.core import mixscape
+
+    try:
+        m_lines, m_detail = mixscape.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: Mixscape fact failed: %s", exc)
+        return
+    if m_lines:
+        lines.extend(m_lines)
+        sources.append(ChatSource(kind="result", ref=mixscape.TAG, detail=m_detail or "",
+                                  evidence="\n".join(m_lines[1:])))
+
+
 def _add_cytokines(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last cytokine-response run (core/cytokine_activity.py): top cytokines per group."""
     from scview.core import cytokine_activity
@@ -327,6 +344,21 @@ def _add_cytokines(adaptor, lines: list[str], sources: list[ChatSource]) -> None
         lines.extend(c_lines)
         sources.append(ChatSource(kind="result", ref=cytokine_activity.TAG, detail=c_detail,
                                   evidence="\n".join(c_lines[1:])))
+
+
+def _add_pseudobulk(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last pseudobulk DE run (core/pseudobulk.py): method, hits, group variances."""
+    from scview.core import pseudobulk
+
+    try:
+        pb_lines, pb_detail = pseudobulk.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: pseudobulk fact failed: %s", exc)
+        return
+    if pb_lines:
+        lines.extend(pb_lines)
+        sources.append(ChatSource(kind="result", ref=pseudobulk.TAG, detail=pb_detail,
+                                  evidence="\n".join(pb_lines[1:])))
 
 
 def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -576,6 +608,14 @@ def build_grounding_context(
                                           evidence="\n".join(milo_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: milo grounding failed: %s", exc)
+        try:
+            mde_lines, mde_detail = milode.grounding_lines(adaptor)
+            lines.extend(mde_lines)
+            if mde_detail:
+                sources.append(ChatSource(kind="result", ref="result:milode", detail=mde_detail,
+                                          evidence="\n".join(mde_lines[1:])))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("assistant: milode grounding failed: %s", exc)
         # The last merge check: which neighbouring clusters held-out counts can't tell apart.
         try:
             merge_lines, merge_detail = merge_check.grounding_lines(adaptor, adata.obs)
@@ -587,7 +627,9 @@ def build_grounding_context(
             logger.debug("assistant: merge-check grounding failed: %s", exc)
         _add_study_planner(adaptor, lines, sources)
         _add_vdj(adaptor, lines, sources)
+        _add_mixscape(adaptor, lines, sources)
         _add_cytokines(adaptor, lines, sources)
+        _add_pseudobulk(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).

@@ -104,12 +104,14 @@ const KIND_LABELS: Record<string, string> = {
   ccc_compare: "L-R change",
   composition: "Composition",
   milo: "Milo",
+  milode: "Neighbourhood DE",
   merge_check: "Merge check",
   count_split: "Count split",
   cytokine: "Cytokines",
   offtarget: "Off-target",
   ppi: "Protein interactions",
   planner: "Study planner",
+  mixscape: "Mixscape",
 };
 
 export function kindLabel(kind: string): string {

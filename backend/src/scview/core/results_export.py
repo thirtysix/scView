@@ -103,6 +103,18 @@ def _milo(entry: dict, r: Any) -> pd.DataFrame:
     return df
 
 
+def _milode(entry: dict, r: Any) -> pd.DataFrame:
+    """One row per tested (neighbourhood, gene), as miloDE's de_stat table."""
+    nh, g = np.nonzero(np.isfinite(r.pval))
+    df = pd.DataFrame({"gene": np.asarray(r.genes)[g], "nhood": nh,
+                       "index_cell": np.asarray(r.index_cells)[nh],
+                       "logFC": r.log_fc[nh, g], "pval": r.pval[nh, g],
+                       "spatial_fdr": r.spatial_fdr[nh, g], "fdr_within_nhood": r.within_fdr()[nh, g]})
+    if r.labels is not None:
+        df["label"] = np.asarray(r.labels)[nh]
+    return df
+
+
 def _cytokine(entry: dict, value: dict) -> pd.DataFrame:
     r = value["result"]
     rows = []
@@ -110,6 +122,13 @@ def _cytokine(entry: dict, value: dict) -> pd.DataFrame:
         for j, c in enumerate(r["cytokines"]):
             rows.append({"group": g, "cytokine": c, "z": r["z"][i][j], "pval": r["p"][i][j], "coef": r["coef"][i][j]})
     return pd.DataFrame(rows)
+
+
+def _mixscape(r: Any) -> pd.DataFrame:
+    keys = ("target", "n_cells", "n_ko", "n_np", "ko_fraction", "n_de_genes", "rounds")
+    return pd.DataFrame([{**{k: t.get(k) for k in keys},
+                          "top_de_genes": ", ".join(g["gene"] for g in t.get("top_de_genes") or []),
+                          "note": t.get("note", "")} for t in r.targets])
 
 
 def _longest_records(value: Any) -> pd.DataFrame | None:
@@ -138,11 +157,12 @@ def _longest_records(value: Any) -> pd.DataFrame | None:
 
 READERS = {
     "markers": _markers, "de": _de, "enrichment": _enrichment, "ccc": _ccc, "ccc_compare": _ccc,
-    "composition": _composition, "milo": _milo, "cytokine": _cytokine,
+    "composition": _composition, "milo": _milo, "milode": _milode, "cytokine": _cytokine,
     "offtarget": lambda e, v: _records(v["genes"]),
     "merge_check": lambda e, v: _records(v["pairs"]),
     "count_split": lambda e, v: _records(v["groups"]),
     "ppi": lambda e, v: _records(v),
+    "mixscape": lambda e, r: _mixscape(r),
 }
 
 
