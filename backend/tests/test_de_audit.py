@@ -343,3 +343,10 @@ async def test_a_large_dataset_is_refused(client, tmp_data_dir):
     r = await client.post("/api/v1/datasets/big/de/audit",
                           json={"split_by": "condition", "group_a": "stim", "group_b": "ctrl"})
     assert r.status_code == 422 and "DE audit" in r.json()["detail"]
+
+
+def test_questions_about_the_audit_reach_its_fact():
+    from scview.core.rag import router
+
+    assert "groups" in router._infer_facets("Are these DE genes false positives from pseudoreplication?")
+    assert router.named_result_facets("What did the DE audit say?") == ["groups"]
