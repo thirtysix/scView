@@ -62,7 +62,8 @@ export interface GroupCentroid {
  * limits the cells to those drawn (a sample, or one split panel's), null = all
  * cells. Cells with non-finite coordinates are skipped.
  *
- * The anchor is the mean of the group's cells in its densest window: the drawn
+ * The anchor is the group's cell nearest the mean of its cells in its densest
+ * window (so it always sits on the group, even a scattered one): the drawn
  * cells are binned on a square grid over their bounds (64 bins along the
  * longest axis in 2D, 24 in 3D), each group's counts are box-blurred, and the
  * peak wins (a tie goes to the bin nearest the group's mean). Three passes over
@@ -170,10 +171,30 @@ export function groupCentroids(
     for (let d = 0; d < stride; d++) winSums[c * stride + d] = winSums[c * stride + d]! + positions[i * stride + d]!;
   }
 
+  // Pass 4: snap to the group's cell nearest that mean. A scattered group's window can
+  // hold a few cells far apart, whose mean is empty space (a label floating off the group).
+  const means = new Float64Array(k * stride);
+  for (let c = 0; c < k; c++)
+    for (let d = 0; d < stride; d++) means[c * stride + d] = winSums[c * stride + d]! / winCounts[c]!;
+  const nearest = new Int32Array(k).fill(-1);
+  const nearestDist = new Float64Array(k).fill(Infinity);
+  for (let s = 0; s < n; s++) {
+    const c = group[s]!;
+    if (c < 0) continue;
+    const i = cellAt(s);
+    let dist = 0;
+    for (let d = 0; d < stride; d++) dist += (positions[i * stride + d]! - means[c * stride + d]!) ** 2;
+    if (dist < nearestDist[c]!) {
+      nearestDist[c] = dist;
+      nearest[c] = i;
+    }
+  }
+
   const out: GroupCentroid[] = [];
   for (let c = 0; c < k; c++) {
     if (counts[c] === 0) continue;
-    const position = Array.from({ length: stride }, (_, d) => winSums[c * stride + d]! / winCounts[c]!);
+    const i = nearest[c]!;
+    const position = Array.from({ length: stride }, (_, d) => positions[i * stride + d]!);
     out.push({ code: c, label: labels[c]!, position, count: counts[c]! });
   }
   return out;

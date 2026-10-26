@@ -39,8 +39,21 @@ describe("groupCentroids", () => {
     const c = groupCentroids(positions, 2, codes, labels);
     expect(c).toEqual([
       { code: 0, label: "B", position: [1, 1], count: 4 },
-      { code: 1, label: "NK", position: [11, 1], count: 2 },
+      { code: 1, label: "NK", position: [10, 0], count: 2 }, // on a cell, not between the two
     ]);
+  });
+
+  it("puts a scattered group's label on one of its cells, not in the space between them", () => {
+    // 6 cells far apart (a small Leiden cluster strewn over the plot), with a big group elsewhere
+    const xy = [0, 0, 60, 0, 0, 60, 60, 60, 30, 0, 0, 30];
+    const code = [0, 0, 0, 0, 0, 0];
+    for (let a = 0; a < 10; a++) for (let b = 0; b < 10; b++) {
+      xy.push(100 + a, 100 + b);
+      code.push(1);
+    }
+    const [scattered] = groupCentroids(Float32Array.from(xy), 2, Int32Array.from(code), ["12", "big"]);
+    const cells = Array.from({ length: 6 }, (_, i) => `${xy[2 * i]},${xy[2 * i + 1]}`);
+    expect(cells).toContain(scattered!.position.join(","));
   });
 
   it("labels a scattered group where most of its cells are, not at its median", () => {
