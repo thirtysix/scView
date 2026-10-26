@@ -155,16 +155,17 @@ def test_too_little_to_rank():
         gsva.prepare(np.ones((300, 5)))
 
 
-def test_note_warns_when_the_set_is_mostly_zero():
-    # On sparse single-cell data GSVA's scores bunch together (Kang's interferon set:
-    # -0.75 to -0.56): the note says so when most of the set's values are 0.
+def test_note_warns_when_the_matrix_is_mostly_zero():
+    # On sparse single-cell data GSVA's scores bunch together (Kang, 95% zeros: the
+    # interferon set scores -0.75 to -0.56); the note says so from 90% zeros.
     rng = np.random.default_rng(7)
     n, p = 400, 60
     C = rng.poisson(2.0, size=(n, p)).astype(np.float64)
-    C[:, :10] *= rng.random((n, 10)) < 0.1  # the set: 90% zeros
-    a = ad.AnnData(X=sp.csr_matrix(np.log1p(C)))
-    a.var_names = [f"G{i}" for i in range(p)]
-    sparse_note = gsva.score_set(a, [f"G{i}" for i in range(10)]).note
-    assert "scores bunch together" in sparse_note and "ssGSEA or AUCell" in sparse_note
-    dense_note = gsva.score_set(a, [f"G{i}" for i in range(20, 30)]).note
-    assert "bunch together" not in dense_note
+    genes = [f"G{i}" for i in range(p)]
+    dense = ad.AnnData(X=sp.csr_matrix(np.log1p(C)))
+    dense.var_names = genes
+    assert "bunch together" not in gsva.score_set(dense, genes[:10]).note
+    sparse = ad.AnnData(X=sp.csr_matrix(np.log1p(C * (rng.random((n, p)) < 0.06))))
+    sparse.var_names = genes
+    note = gsva.score_set(sparse, genes[:10]).note
+    assert "scores bunch together" in note and "ssGSEA or AUCell" in note

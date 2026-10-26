@@ -29,9 +29,9 @@ export function ScoringMethodHelp() {
         own spread over all cells, then walks the set as ssGSEA does; about -1 to +1. A gene that
         is high everywhere does not dominate, so it suits sets of commonly expressed genes and
         comparing cells against the rest of the dataset; the score changes when cells are added or
-        removed. It was made for bulk data: when most of a set&apos;s genes are 0 in most cells, as
-        in sparse single-cell data, the scores bunch together (the note says so); compare cells by
-        rank then, or use ssGSEA or AUCell. About 2 s per set on 14,000 cells. ssGSEA and GSVA
+        removed. It was made for bulk data: on sparse single-cell data (90% or more of the values 0)
+        the scores bunch together (the note says so); compare cells by rank then, or use ssGSEA or
+        AUCell. About 2 s per set on 14,000 cells. ssGSEA and GSVA
         match R&apos;s GSVA package and refuse datasets above 300 million non-zero values.
       </span>
       <span className="mt-1 block">
