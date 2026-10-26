@@ -11,6 +11,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { listDatasets, getDataset } from "@/api/datasets";
 import { apiFetch } from "@/api/client";
+import { errorMessage } from "@/lib/errorMessage";
 import { getPalette } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -255,7 +256,7 @@ function CompositionCompare() {
         setPropsA(a);
         setPropsB(b);
       })
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => !cancelled && setError(errorMessage(e)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;

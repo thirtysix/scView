@@ -108,6 +108,6 @@ describe("DeCompositionNote", () => {
     unmount();
     fetchDEComposition.mockRejectedValue(new Error("API error 404: Column 'x' not found."));
     renderNote();
-    await waitFor(() => expect(screen.getByText(/Composition check failed: API error 404/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Composition check failed: Column 'x' not found/)).toBeInTheDocument());
   });
 });

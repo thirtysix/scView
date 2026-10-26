@@ -35,6 +35,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 /**
  * "Variable genes" in the Unified View toolbar: a floating panel that re-clusters
@@ -126,7 +127,7 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
         setChoices((i.default_settings ?? []).map((setting) => ({ setting, checked: true })));
       })
       .catch((e) => {
-        if (!cancelled) setInfoError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setInfoError(errorMessage(e));
       });
     return () => {
       cancelled = true;
@@ -225,7 +226,7 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
       store.setScatterOverlay({ type: "score", name: label });
       store.setOverlayDatasetId(datasetId);
     } catch (e) {
-      setError(`Could not colour the plot: ${e instanceof Error ? e.message : String(e)}`);
+      setError(`Could not colour the plot: ${errorMessage(e)}`);
     }
   };
 

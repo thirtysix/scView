@@ -19,6 +19,7 @@ import { isCategoricalDtype } from "@/lib/obsColumns";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 // The filter being edited: conditions carry a uid so rows keep their own input
 // state when one above them is removed.
@@ -160,7 +161,7 @@ export function CellFilterPanel({ dataset, onClose }: CellFilterPanelProps) {
         .catch((e: unknown) => {
           if (ctrl.signal.aborted) return;
           setCount(null);
-          setError(e instanceof Error ? e.message : String(e));
+          setError(errorMessage(e));
         })
         .finally(() => {
           if (!ctrl.signal.aborted) setCounting(false);
@@ -187,7 +188,7 @@ export function CellFilterPanel({ dataset, onClose }: CellFilterPanelProps) {
       else store.setSelection(cells, filter);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setSelecting(false);
     }

@@ -11,6 +11,7 @@ import {
   type MarkerDbVerdict,
 } from "@/api/annotation";
 import { formatDate, formatPValue, prettyObsLabel } from "@/lib/formatting";
+import { errorMessage } from "@/lib/errorMessage";
 
 const ROWS = 12; // more behind "show all"
 export const DOWNLOAD_POLL_MS = 2000;
@@ -36,7 +37,7 @@ const VERDICT_TITLE: Record<MarkerDbVerdict, string> = {
 
 /** The server's reason from an apiFetch error ("API error 503: {detail}"). */
 function errorText(e: unknown): string {
-  const body = (e instanceof Error ? e.message : String(e)).replace(/^API error \d+: /, "");
+  const body = (errorMessage(e)).replace(/^API error \d+: /, "");
   try {
     return String(JSON.parse(body).detail ?? body);
   } catch {

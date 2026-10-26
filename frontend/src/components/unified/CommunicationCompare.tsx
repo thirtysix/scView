@@ -37,6 +37,7 @@ import { formatPValue, prettyObsLabel } from "@/lib/formatting";
 import { plotConfig } from "@/lib/plotConfig";
 import { useCommunicationStore } from "@/stores/communicationStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   datasetId: string;
@@ -136,7 +137,7 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
       setPicked(null);
       setDonors(null);
     } catch (e) {
-      if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      if (!ctrl.signal.aborted) setError(errorMessage(e));
     } finally {
       setRunning(false);
       abortRef.current = null;
@@ -160,7 +161,7 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
         if (!cancelled) setDonors(d);
       })
       .catch((e) => {
-        if (!cancelled) setDonorError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setDonorError(errorMessage(e));
       });
     return () => {
       cancelled = true;

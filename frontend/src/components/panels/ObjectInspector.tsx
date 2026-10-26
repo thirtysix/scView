@@ -12,6 +12,7 @@ import {
   unsLabel,
   valuesKind,
 } from "@/lib/objectStructure";
+import { errorMessage } from "@/lib/errorMessage";
 
 const MODE_LABEL: Record<DatasetStructure["mode"], string> = {
   memory: "in memory",
@@ -128,7 +129,7 @@ export function ObjectInspector({ datasetId, refreshKey = 0 }: { datasetId: stri
         if (!cancelled) setData(d && typeof d.n_obs === "number" && Array.isArray(d.flags) ? d : null);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(errorMessage(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

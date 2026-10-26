@@ -33,6 +33,7 @@ import { useGeneGridStore } from "@/stores/geneGridStore";
 import { useGeneListsStorageStatus, useGeneListsStore, type GeneList } from "@/stores/geneListsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   /** A gene chip click: the gene's overlay + violin (UnifiedViewPanel.handleGeneClick) */
@@ -498,7 +499,7 @@ function GeneListEnrichment({
       setData(res);
       setRanOn(genes);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -626,7 +627,7 @@ function SaveAsCollection({ list, allLists }: { list: GeneList; allLists: GeneLi
     } catch (e) {
       setMessage({
         ok: false,
-        text: e instanceof Error ? e.message : String(e),
+        text: errorMessage(e),
         problems: e instanceof GeneSetUploadError ? e.problems : undefined,
       });
     } finally {

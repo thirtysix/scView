@@ -18,6 +18,7 @@ import { prettyEmbeddingLabel } from "@/lib/formatting";
 import { bestSilhouette, formatResolutions, parseResolutions } from "@/lib/resolutionSweep";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 /**
  * "Resolutions" in the Unified View toolbar: a floating panel that clusters the
@@ -78,7 +79,7 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
         setText(formatResolutions(i.default_resolutions));
       })
       .catch((e) => {
-        if (!cancelled) setInfoError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setInfoError(errorMessage(e));
       });
     return () => {
       cancelled = true;

@@ -22,9 +22,10 @@ import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useCnvRunStore } from "@/stores/cnvRunStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 function errorText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  return errorMessage(e);
 }
 
 /**

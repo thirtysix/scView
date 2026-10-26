@@ -25,6 +25,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useObsRevisionStore } from "@/stores/obsRevisionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const ROWS = 8; // more behind "show all"
 const NUM = "whitespace-nowrap pl-2 text-right align-top"; // a number column of the label table
@@ -38,7 +39,7 @@ const FLAG_STYLES: { key: keyof ConfidenceResult["counts"]; label: string; class
 
 /** The server's reason from an apiFetch error ("API error 400: {detail}"). */
 function errorText(e: unknown): string {
-  const body = (e instanceof Error ? e.message : String(e)).replace(/^API error \d+: /, "");
+  const body = (errorMessage(e)).replace(/^API error \d+: /, "");
   try {
     return String(JSON.parse(body).detail ?? body);
   } catch {

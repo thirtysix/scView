@@ -30,6 +30,7 @@ import {
 import { GATES_MAX_CHARS, selectGate, useGatesStorageStatus, useGatesStore } from "@/stores/gatesStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 type Form = "save" | "combine" | "label" | null;
 
@@ -547,7 +548,7 @@ function CountsExport({ dataset, gates, evals }: { dataset: DatasetInfo; gates: 
       const { headers, rows } = gateCountsTable(gates, evals, nCells, sample);
       downloadCsv(`${exportFilename(dataset.name, "gates")}.csv`, headers, rows);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }

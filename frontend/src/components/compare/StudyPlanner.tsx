@@ -42,6 +42,7 @@ import {
   shareText,
 } from "@/lib/studyPlanner";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   datasetId: string;
@@ -168,7 +169,7 @@ export function StudyPlanner({ datasetId, info }: Props) {
       .catch((e) => {
         if (cancelled) return;
         setPilot(null);
-        setPilotError(e instanceof Error ? e.message : String(e));
+        setPilotError(errorMessage(e));
       });
     return () => {
       cancelled = true;
@@ -233,7 +234,7 @@ export function StudyPlanner({ datasetId, info }: Props) {
     job
       .catch((e) => {
         if (ctrl.signal.aborted) return;
-        setRunError(e instanceof Error ? e.message : String(e));
+        setRunError(errorMessage(e));
       })
       .finally(() => {
         if (abort.current === ctrl) {

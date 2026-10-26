@@ -5,6 +5,7 @@ import { CapNote, Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
 import { balancedText, compositionRule, flaggedGroups, formatPoints, formatShare } from "@/lib/deComposition";
 import { prettyObsLabel } from "@/lib/formatting";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** Flagged groups listed in the note; the table has every group. */
 const SHOWN_FLAGGED = 4;
@@ -61,7 +62,7 @@ export function DeCompositionNote({
       .catch((e: unknown) => {
         if (ctl.signal.aborted) return;
         setData(null);
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorMessage(e));
       })
       .finally(() => {
         if (!ctl.signal.aborted) setLoading(false);

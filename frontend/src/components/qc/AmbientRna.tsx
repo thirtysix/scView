@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, Info, Loader2 } from "lucide-react";
 import { getAmbient, type AmbientResponse } from "@/api/ambient";
 import { isLargeRefusal } from "@/api/client";
+import { errorMessage } from "@/lib/errorMessage";
 import { InfoTip } from "@/components/common/InfoTip";
 import { Caption } from "@/components/common/Caption";
 import { pct, rhoStatusText, rhoText } from "@/lib/ambient";
@@ -40,7 +41,7 @@ export function AmbientRna({
     setError(null);
     getAmbient(datasetId)
       .then((d) => !cancelled && setData(d))
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => !cancelled && setError(errorMessage(e)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;

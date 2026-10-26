@@ -15,6 +15,7 @@ import {
 } from "@/api/exportFormats";
 import { InfoTip } from "@/components/common/InfoTip";
 import { formatBytes } from "@/lib/formatting";
+import { errorMessage } from "@/lib/errorMessage";
 
 const TITLES: Record<ExportFormat, string> = {
   cellxgene: "CELLxGENE file (.h5ad)",
@@ -75,7 +76,7 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
           (name) => i.embeddings.find((e) => e.export_name === name)?.key ?? name));
         if (format === "vitessce") setColumns((cur) => cur ?? i.obs_columns);
       })
-      .catch((e: unknown) => live && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => live && setError(errorMessage(e)));
     return () => {
       live = false;
     };
@@ -96,7 +97,7 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
       downloadUrl(exportFileUrl(datasetId, built.file), built.filename);
       onClose();
     } catch (e) {
-      if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      if (!ctrl.signal.aborted) setError(errorMessage(e));
     } finally {
       setProgress(null);
       abort.current = null;

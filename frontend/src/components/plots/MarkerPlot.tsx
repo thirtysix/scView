@@ -5,6 +5,7 @@ import { AlertCircle, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { apiFetch } from "@/api/client";
+import { errorMessage } from "@/lib/errorMessage";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { missingGenes } from "@/lib/geneList";
 import { getGroupDistances, type GroupDistances } from "@/api/clustering";
@@ -175,7 +176,7 @@ export function MarkerPlot({
     for (const p of picked) qs.append("genes", p.gene);
     apiFetch<ByGroup>(`/datasets/${datasetId}/expression/by-group?${qs}`)
       .then((d) => { if (!cancelled) setData(d); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
+      .catch((e) => { if (!cancelled) setError(errorMessage(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [datasetId, groupby, picked, layer, revision]); // revision: a saved category order or label move

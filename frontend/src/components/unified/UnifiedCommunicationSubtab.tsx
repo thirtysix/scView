@@ -30,6 +30,7 @@ import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { RequestError } from "@/components/common/RequestError";
 import { CommunicationCompare } from "@/components/unified/CommunicationCompare";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   /** The Unified View's group-by column: the default sender / receiver groups */
@@ -119,7 +120,7 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
         if (!cancelled) setOptions(o);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(errorMessage(e));
       });
     return () => {
       cancelled = true;
@@ -152,7 +153,7 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
       setTarget("");
       setQuery("");
     } catch (e) {
-      if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      if (!ctrl.signal.aborted) setError(errorMessage(e));
     } finally {
       setRunning(false);
       abortRef.current = null;

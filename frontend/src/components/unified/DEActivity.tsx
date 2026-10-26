@@ -14,6 +14,7 @@ import { activityLabel, deProfile } from "@/lib/activity";
 import { downloadCsv } from "@/lib/csv";
 import { formatPct } from "@/lib/deDetection";
 import { formatPValue } from "@/lib/formatting";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   datasetId: string;
@@ -54,7 +55,7 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
         const res = await getDEActivity(datasetId, n, profile.genes, profile.stats, result.result_id);
         setData((d) => ({ ...d, [n]: res }));
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorMessage(e));
       } finally {
         setLoading(false);
       }
@@ -74,7 +75,7 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
       const res = await getActivityCells(datasetId, network, source);
       onScore(new Float32Array(res.scores), activityLabel(network, source), undefined, { network, source });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setColouring(null);
     }

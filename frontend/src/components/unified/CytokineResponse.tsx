@@ -8,6 +8,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { getCytokineActivity, type CytokineRequest, type CytokineResult } from "@/api/cytokines";
 import { comparisonText, cytokineHeatmap } from "@/lib/cytokines";
 import { plotConfig } from "@/lib/plotConfig";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   groupByColumn: string;
@@ -84,7 +85,7 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
       setResult(await getCytokineActivity(datasetId, body));
     } catch (e) {
       setResult(null);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

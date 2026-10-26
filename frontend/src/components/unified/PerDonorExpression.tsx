@@ -8,6 +8,7 @@ import { conditionColumns, suggestConditionColumn } from "@/lib/composition";
 import { replicateColumns } from "@/lib/de";
 import { prettyObsLabel } from "@/lib/formatting";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Props {
   datasetId: string;
@@ -71,7 +72,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
       .catch((e) => {
         if (cancelled) return;
         setResult(null);
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorMessage(e));
       })
       .finally(() => !cancelled && setLoading(false));
     return () => {

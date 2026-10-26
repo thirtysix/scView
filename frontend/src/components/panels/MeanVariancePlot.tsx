@@ -7,6 +7,7 @@ import { getMeanVariance, type MeanVariance } from "@/api/normalization";
 import { meanVarianceTraces, splitGenes, type BeforeMode } from "@/lib/meanVariance";
 import { NORMALIZATION_LABELS } from "@/lib/pipelineParams";
 import { plotConfig } from "@/lib/plotConfig";
+import { errorMessage } from "@/lib/errorMessage";
 
 const FILL_STYLE = { width: "100%", height: "100%" } as const;
 
@@ -47,7 +48,7 @@ export function MeanVariancePlot({ datasetId, refreshKey = 0 }: { datasetId: str
     try {
       setData(await getMeanVariance(datasetId));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

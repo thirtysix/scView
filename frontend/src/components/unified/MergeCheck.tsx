@@ -16,6 +16,7 @@ import { formatDuration } from "@/lib/hvgSensitivity";
 import { clustersAfter, defaultSelection, describePair, pairKey } from "@/lib/mergeCheck";
 import { formatResolutions } from "@/lib/resolutionSweep";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const THRESHOLDS = [5, 10, 20, 30];
 const EVIDENCE_ORDER = { held_out: 0, together: 1, untested: 2 } as const;
@@ -68,7 +69,7 @@ export function MergeCheck({
     setResult(null); // it was for the clustering checked before
     getMergeCheckInfo(datasetId, request)
       .then((i) => !cancelled && setInfo(i))
-      .catch((e) => !cancelled && setInfo({ available: false, reason: e instanceof Error ? e.message : String(e) } as MergeCheckInfo));
+      .catch((e) => !cancelled && setInfo({ available: false, reason: errorMessage(e) } as MergeCheckInfo));
     return () => {
       cancelled = true;
     };

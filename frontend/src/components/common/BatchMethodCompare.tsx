@@ -12,6 +12,7 @@ import {
 } from "@/api/batchCompare";
 import { Caption } from "./Caption";
 import { InfoTip } from "./InfoTip";
+import { errorMessage } from "@/lib/errorMessage";
 
 function pct(x: number | null | undefined): string {
   return x == null ? "–" : `${Math.round(x * 100)}%`;
@@ -57,7 +58,7 @@ export function BatchMethodCompare({
     let cancelled = false;
     getCompareInfo(datasetId, batchKey, labelColumn)
       .then((i) => !cancelled && setInfo(i))
-      .catch((e) => !cancelled && setInfoError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => !cancelled && setInfoError(errorMessage(e)));
     return () => {
       cancelled = true;
     };
@@ -94,7 +95,7 @@ export function BatchMethodCompare({
         ctrl.signal,
       );
     } catch (e) {
-      if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      if (!ctrl.signal.aborted) setError(errorMessage(e));
     } finally {
       setRunning(false);
       setCurrent(null);

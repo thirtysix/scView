@@ -15,6 +15,7 @@ import { CellTypeCombobox, TermChip } from "@/components/common/CellTypeCombobox
 import { DialogBox } from "@/components/common/DialogBox";
 import { InfoTip } from "@/components/common/InfoTip";
 import { prettyObsLabel } from "@/lib/formatting";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface CellOntologyCardProps {
   datasetId: string;
@@ -45,7 +46,7 @@ export function CellOntologyCard({ datasetId, column, onClose }: CellOntologyCar
     setSuggestions(null);
     getLabelTerms(datasetId, column)
       .then((r) => !cancelled && setData(r))
-      .catch((e: unknown) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => !cancelled && setError(errorMessage(e)));
     return () => {
       cancelled = true;
     };
@@ -65,7 +66,7 @@ export function CellOntologyCard({ datasetId, column, onClose }: CellOntologyCar
           return next;
         });
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorMessage(e));
       } finally {
         setBusy(null);
       }
@@ -85,7 +86,7 @@ export function CellOntologyCard({ datasetId, column, onClose }: CellOntologyCar
       }
       setSuggestions(out);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setSuggesting(false);
     }
@@ -98,7 +99,7 @@ export function CellOntologyCard({ datasetId, column, onClose }: CellOntologyCar
       setData(await clearLabelTerms(datasetId, column));
       setConfirmClear(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(null);
     }

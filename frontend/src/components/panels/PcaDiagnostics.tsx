@@ -4,6 +4,7 @@ import Plot from "@/components/plots/Plot";
 import { Panel } from "@/components/common/Panel";
 import { InfoTip } from "@/components/common/InfoTip";
 import { apiFetchBinary } from "@/api/client";
+import { errorMessage } from "@/lib/errorMessage";
 import { getPcaDiagnostics, type PcaDiagnostics as Result } from "@/api/pca";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { elbowLayout, elbowTraces, fmtPct, loadingLayout, loadingTraces, pcLabel } from "@/lib/pcaDiagnostics";
@@ -104,7 +105,7 @@ export function PcaDiagnostics({ datasetId, refreshKey = 0 }: { datasetId: strin
         if (!cancelled) setData(d);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(errorMessage(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -125,7 +126,7 @@ export function PcaDiagnostics({ datasetId, refreshKey = 0 }: { datasetId: strin
     try {
       await showGeneOnScatter(datasetId, gene);
     } catch (e) {
-      setError(`Could not colour the scatter: ${e instanceof Error ? e.message : String(e)}`);
+      setError(`Could not colour the scatter: ${errorMessage(e)}`);
     } finally {
       setBusyGene(null);
     }
