@@ -209,6 +209,8 @@ def fetch_mouse(dest: Path, client: httpx.Client | None = None) -> tuple[list[st
         _mouse_state.update(state="failed" if errors else "idle",
                             error=next(iter(errors.values()), ""))
         logger.info("Mouse MSigDB download: %d downloaded, %d failed", len(done), len(errors))
+        if errors:
+            logger.warning("Mouse MSigDB download failed (%s): %s", ", ".join(errors), next(iter(errors.values())))
         return done, errors
 
 

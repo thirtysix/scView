@@ -93,7 +93,7 @@ def warning(species: str | None, collections: Iterable[str] = (), *, human_libra
         from scview.core import orthologs
 
         named = ", ".join(short_label(c) for c in other)
-        return (f"{named} {'is' if len(other) == 1 else 'are'} human gene sets, mapped to mouse genes "
+        return (f"{named} {'is a human collection' if len(other) == 1 else 'are human collections'}, mapped to mouse genes "
                 f"through {orthologs.describe()}. A human gene with no mouse ortholog is left out. "
                 "The mouse MSigDB collections (MH, M2, M5, M8) need no mapping.")
     if species == "mouse" and (other or human_library):
