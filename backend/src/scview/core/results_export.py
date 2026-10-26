@@ -112,6 +112,13 @@ def _cytokine(entry: dict, value: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _mixscape(r: Any) -> pd.DataFrame:
+    keys = ("target", "n_cells", "n_ko", "n_np", "ko_fraction", "n_de_genes", "rounds")
+    return pd.DataFrame([{**{k: t.get(k) for k in keys},
+                          "top_de_genes": ", ".join(g["gene"] for g in t.get("top_de_genes") or []),
+                          "note": t.get("note", "")} for t in r.targets])
+
+
 def _longest_records(value: Any) -> pd.DataFrame | None:
     """The longest list of records in a result (a fallback for kinds without a reader)."""
     best: list | None = None
@@ -143,6 +150,7 @@ READERS = {
     "merge_check": lambda e, v: _records(v["pairs"]),
     "count_split": lambda e, v: _records(v["groups"]),
     "ppi": lambda e, v: _records(v),
+    "mixscape": lambda e, r: _mixscape(r),
 }
 
 
