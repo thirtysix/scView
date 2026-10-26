@@ -51,6 +51,8 @@ class FormatOptions(BaseModel):
     columns: list[str] | None = None  # obs columns; None: all (CELLxGENE) / labels (Vitessce)
     include_raw: bool = False  # CELLxGENE: raw counts as .raw
     genes: str = "all"  # Vitessce: all | variable
+    # CELLxGENE: a label column whose Cell Ontology mapping writes cell_type_ontology_term_id
+    cell_type_terms: str | None = None
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -63,7 +65,8 @@ def _check_format(fmt: str) -> None:
 
 
 def _cx_options(o: FormatOptions) -> cx.Options:
-    return cx.Options(embeddings=o.embeddings, columns=o.columns, include_raw=o.include_raw)
+    return cx.Options(embeddings=o.embeddings, columns=o.columns, include_raw=o.include_raw,
+                      cell_type_terms=o.cell_type_terms or None)
 
 
 def _download_name(dm: DatasetManager, dataset_id: str, fmt: str) -> str:
@@ -77,6 +80,21 @@ def _plan(adaptor, fmt: str, o: FormatOptions):
     if fmt == "cellxgene":
         return cx.plan(adaptor, _cx_options(o))
     return vx.plan(adaptor, _cx_options(o), genes=o.genes)
+
+
+def _ontology_columns(adata) -> list[dict[str, Any]]:
+    """Label columns with a Cell Ontology mapping, for the 'cell type terms from' choice."""
+    from scview.core import cell_ontology
+
+    out = []
+    for c in cell_ontology.mapped_columns(adata):
+        try:
+            s = cell_ontology.summary(adata, c)
+        except cell_ontology.TermError:
+            continue
+        out.append({"column": c, "complete": s["complete"], "n_labels": s["n_labels"],
+                    "n_mapped": s["n_mapped"], "missing": s["missing"][:10]})
+    return out
 
 
 def _summary(adaptor, fmt: str, o: FormatOptions, name: str) -> dict[str, Any]:
@@ -106,6 +124,8 @@ def _summary(adaptor, fmt: str, o: FormatOptions, name: str) -> dict[str, Any]:
             "renamed": p.renamed,
             "readiness": cx.readiness(p, species=detect_species(adata).species, title=name,
                                      uns=dict(adata.uns)),
+            "cell_type_terms": p.cell_type_terms,
+            "ontology_columns": _ontology_columns(adata),
         })
     else:
         out.update({

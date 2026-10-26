@@ -1,0 +1,389 @@
+format-version: 1.2
+data-version: cl/releases/2026-06-08/cl-basic.owl
+
+[Term]
+id: CL:0000000
+name: cell
+def: "A material entity of anatomical origin (part of or deriving from an organism) that has as its parts a maximally connected cell compartment surrounded by a plasma membrane." [CARO:mah]
+
+[Term]
+id: CL:0000038
+name: erythroid progenitor cell
+def: "A progenitor cell committed to the erythroid lineage." [GOC:add, ISBN:0721601464]
+synonym: "BFU-E" RELATED OMO:0003000 []
+synonym: "blast forming unit erythroid" RELATED []
+synonym: "burst forming unit erythroid" RELATED []
+synonym: "CFU-E" RELATED OMO:0003000 []
+synonym: "colony forming unit erythroid" RELATED []
+synonym: "erythroid stem cell" RELATED []
+is_a: CL:0000764 ! erythroid lineage cell
+is_a: CL:0000839 {is_inferred="true"} ! myeloid lineage restricted progenitor cell
+
+[Term]
+id: CL:0000084
+name: T cell
+def: "A type of lymphocyte whose defining characteristic is the expression of a T cell receptor complex." [GOC:add, GOC:tfm, ISBN:0781735149]
+synonym: "immature T cell" RELATED []
+synonym: "mature T cell" RELATED []
+synonym: "T lymphocyte" EXACT []
+synonym: "T-cell" EXACT []
+synonym: "T-lymphocyte" EXACT []
+is_a: CL:0000542 {is_inferred="true"} ! lymphocyte
+
+[Term]
+id: CL:0000232
+name: erythrocyte
+def: "A red blood cell. In mammals, mature erythrocytes are biconcave disks containing hemoglobin whose function is to transport oxygen." [GOC:tfm, MESH:D004912]
+synonym: "RBC" EXACT []
+synonym: "red blood cell" EXACT []
+is_a: CL:0000081 ! blood cell
+is_a: CL:0000329 ! oxygen accumulating cell
+is_a: CL:0000764 {is_inferred="true"} ! erythroid lineage cell
+
+[Term]
+id: CL:0000233
+name: platelet
+def: "A non-nucleated disk-shaped cell formed by extrusion from megakaryocytes, found in the blood of all mammals, and mainly involved in blood coagulation." [GOC:add, GOC:dsd, GOC:tfm, http://en.wikipedia.org/wiki/Platelet, MESH:D001792, PMID:11110672, PMID:16987572, PMID:17204662, PMID:17479180, PMID:20414831]
+synonym: "anucleate thrombocyte" EXACT []
+synonym: "blood platelet" EXACT []
+synonym: "enucleate thrombocyte" EXACT []
+is_a: CL:0000081 ! blood cell
+is_a: CL:0000225 ! anucleate cell
+is_a: CL:0000458 ! serotonin secreting cell
+is_a: CL:0000763 {is_inferred="true"} ! myeloid cell
+
+[Term]
+id: CL:0000235
+name: macrophage
+def: "A mononuclear phagocyte present in variety of tissues, typically differentiated from monocytes, capable of phagocytosing a variety of extracellular particulate material, including immune complexes, microorganisms, and dead cells." [GO_REF:0000031, GOC:add, GOC:tfm, PMID:16213494, PMID:1919437]
+synonym: "histiocyte" EXACT []
+is_a: CL:0000113 ! mononuclear phagocyte
+is_a: CL:0000145 ! professional antigen presenting cell
+is_a: CL:0000766 {is_inferred="true"} ! myeloid leukocyte
+
+[Term]
+id: CL:0000236
+name: B cell
+def: "A lymphocyte of B lineage that is capable of B cell mediated immunity." [GO_REF:0000031, GOC:add, GOC:tfm, ISBN:0781735149]
+synonym: "B lymphocyte" EXACT []
+synonym: "B-cell" EXACT []
+synonym: "B-lymphocyte" EXACT []
+is_a: CL:0000945 {is_inferred="true"} ! lymphocyte of B lineage
+
+[Term]
+id: CL:0000451
+name: dendritic cell
+def: "A cell of hematopoietic origin, typically resident in particular tissues, specialized in the uptake, processing, and transport of antigens to lymph nodes for the purpose of stimulating an immune response via T cell activation. These cells are lineage negative (CD3-negative, CD19-negative, CD34-negative, and CD56-negative)." [GOC:add, ISBN:0781735149]
+synonym: "interdigitating cell" RELATED []
+synonym: "veiled cell" RELATED []
+is_a: CL:0000113 ! mononuclear phagocyte
+is_a: CL:0000145 ! professional antigen presenting cell
+
+[Term]
+id: CL:0000542
+name: lymphocyte
+def: "A lymphocyte is a leukocyte commonly found in the blood and lymph that has the characteristics of a large nucleus, a neutral staining cytoplasm, and prominent heterochromatin." [GOC:add, ISBN:0683073696, ISBN:0781735149]
+is_a: CL:0000842 ! mononuclear leukocyte
+
+[Term]
+id: CL:0000556
+name: megakaryocyte
+def: "A large hematopoietic cell (50 to 100 micron) with a lobated nucleus. Once mature, this cell undergoes multiple rounds of endomitosis and cytoplasmic restructuring to allow platelet formation and release." [http://en.wikipedia.org/wiki/Megakaryocyte, ISBN:0721601464, MESH:D008533, PMID:31043076]
+synonym: "megacaryocyte" EXACT []
+synonym: "megalocaryocyte" EXACT []
+synonym: "megalokaryocyte" EXACT []
+is_a: CL:0000763 {is_inferred="true"} ! myeloid cell
+
+[Term]
+id: CL:0000576
+name: monocyte
+def: "Myeloid mononuclear recirculating leukocyte that can act as a precursor of tissue macrophages, osteoclasts and some populations of tissue dendritic cells." [GO_REF:0000031, MESH:D009000]
+is_a: CL:0000113 ! mononuclear phagocyte
+is_a: CL:0000766 {is_inferred="true"} ! myeloid leukocyte
+is_a: CL:0011026 ! progenitor cell
+
+[Term]
+id: CL:0000623
+name: natural killer cell
+def: "A lymphocyte that can spontaneously kill a variety of target cells without prior antigenic activation via germline encoded activation receptors and also regulate immune responses via cytokine release and direct contact with other cells." [GOC:add, ISBN:0781735149, PMID:15771571]
+synonym: "large granular lymphocyte" BROAD []
+synonym: "NK cell" EXACT []
+synonym: "null cell" BROAD []
+is_a: CL:0001067 ! group 1 innate lymphoid cell
+
+[Term]
+id: CL:0000624
+name: CD4-positive, alpha-beta T cell
+def: "A mature alpha-beta T cell that expresses an alpha-beta T cell receptor and the CD4 coreceptor." [GOC:add, ISBN:0781735149]
+synonym: "CD4-positive, alpha-beta T lymphocyte" EXACT []
+synonym: "CD4-positive, alpha-beta T-cell" EXACT []
+synonym: "CD4-positive, alpha-beta T-lymphocyte" EXACT []
+is_a: CL:0000791 {is_inferred="true"} ! mature alpha-beta T cell
+
+[Term]
+id: CL:0000625
+name: CD8-positive, alpha-beta T cell
+def: "A T cell expressing an alpha-beta T cell receptor and the CD8 coreceptor." [GOC:add, GOC:tfm, ISBN:0781735149]
+synonym: "CD8-positive, alpha-beta T lymphocyte" EXACT []
+synonym: "CD8-positive, alpha-beta T-cell" EXACT []
+synonym: "CD8-positive, alpha-beta T-lymphocyte" EXACT []
+is_a: CL:0000791 {is_inferred="true"} ! mature alpha-beta T cell
+
+[Term]
+id: CL:0000738
+name: leukocyte
+def: "An achromatic cell of the myeloid or lymphoid lineages capable of ameboid movement, found in blood or other tissue." [GOC:add, GOC:tfm, ISBN:978-0-323-05290-0]
+synonym: "immune cell" RELATED []
+synonym: "leucocyte" EXACT []
+synonym: "WBC" EXACT OMO:0003000 [PMID:40794848]
+synonym: "white blood cell" EXACT []
+is_a: CL:0000219 ! motile cell
+is_a: CL:0000255 ! eukaryotic cell
+is_a: CL:0000988 {is_inferred="true"} ! hematopoietic cell
+is_a: CL:0002242 ! nucleate cell
+
+[Term]
+id: CL:0000763
+name: myeloid cell
+def: "A cell of the monocyte, granulocyte, mast cell, megakaryocyte, or erythroid lineage." [GOC:add]
+is_a: CL:0000255 ! eukaryotic cell
+is_a: CL:0000988 {is_inferred="true"} ! hematopoietic cell
+
+[Term]
+id: CL:0000764
+name: erythroid lineage cell
+def: "A immature or mature cell in the lineage leading to and including erythrocytes." [GOC:add, GOC:tfm]
+synonym: "erythropoietic cell" EXACT []
+is_a: CL:0000763 ! myeloid cell
+
+[Term]
+id: CL:0000766
+name: myeloid leukocyte
+def: "A cell of the monocyte, granulocyte, or mast cell lineage." [GOC:add]
+is_a: CL:0000738 {is_inferred="true"} ! leukocyte
+is_a: CL:0000763 ! myeloid cell
+
+[Term]
+id: CL:0000784
+name: plasmacytoid dendritic cell
+def: "A dendritic cell type of distinct morphology, localization, and surface marker expression (CD123-positive) from other dendritic cell types and associated with early stage immune responses, particularly the release of physiologically abundant amounts of type I interferons in response to infection." [GOC:add, GOC:dsd, PMCID:PMC2118448, PMCID:PMC538703, PMID:15549123, PMID:17332250, PMID:17850486, PMID:20304825]
+synonym: "DC2" EXACT []
+synonym: "interferon-producing cell" EXACT []
+synonym: "IPC" EXACT []
+synonym: "lymphoid dendritic cell" EXACT []
+synonym: "pDC" EXACT []
+synonym: "plasmacytoid monocyte" EXACT []
+synonym: "plasmacytoid T cell" EXACT []
+synonym: "T-associated plasma cell" EXACT []
+synonym: "type 2 DC" EXACT []
+is_a: CL:0000451 {is_inferred="true"} ! dendritic cell
+
+[Term]
+id: CL:0000785
+name: mature B cell
+def: "A B cell that is mature, having left the bone marrow. Initially, these cells are IgM-positive and IgD-positive, and they can be activated by antigen." [GOC:add, GOC:dsd, ISBN:0781735149]
+synonym: "mature B lymphocyte" EXACT []
+synonym: "mature B-cell" EXACT []
+synonym: "mature B-lymphocyte" EXACT []
+is_a: CL:0000145 ! professional antigen presenting cell
+is_a: CL:0001201 {is_inferred="true"} ! B cell, CD19-positive
+
+[Term]
+id: CL:0000795
+name: CD8-positive, alpha-beta regulatory T cell
+def: "A CD8-positive, alpha-beta T cell that regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release." [GOC:add, GOC:tfm, ISBN:0781735149]
+synonym: "CD8+ regulatory T cell" EXACT []
+synonym: "CD8+ T(reg)" EXACT []
+synonym: "CD8+ Treg" EXACT []
+synonym: "CD8-positive T(reg)" EXACT []
+synonym: "CD8-positive Treg" EXACT []
+synonym: "CD8-positive, alpha-beta regulatory T lymphocyte" EXACT []
+synonym: "CD8-positive, alpha-beta regulatory T-cell" EXACT []
+synonym: "CD8-positive, alpha-beta regulatory T-lymphocyte" EXACT []
+synonym: "CD8-positive, alpha-beta Treg" EXACT []
+synonym: "suppressor T cell" BROAD []
+synonym: "suppressor T lymphocyte" BROAD []
+synonym: "suppressor T-cell" BROAD []
+synonym: "suppressor T-lymphocyte" BROAD []
+is_a: CL:0000625 {is_inferred="true"} ! CD8-positive, alpha-beta T cell
+is_a: CL:0000815 ! regulatory T cell
+
+[Term]
+id: CL:0000815
+name: regulatory T cell
+def: "A T cell which regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release." [GO_REF:0000031, GOC:add]
+synonym: "regulatory T lymphocyte" EXACT []
+synonym: "regulatory T-cell" EXACT []
+synonym: "regulatory T-lymphocyte" EXACT []
+synonym: "suppressor T cell" BROAD []
+synonym: "suppressor T lymphocyte" BROAD []
+synonym: "suppressor T-cell" BROAD []
+synonym: "suppressor T-lymphocyte" BROAD []
+synonym: "Treg" EXACT []
+is_a: CL:0002419 {is_inferred="true"} ! mature T cell
+
+[Term]
+id: CL:0000825
+name: pro-NK cell
+def: "A lymphoid progenitor cell that is committed to the natural killer cell lineage, expressing CD122 (IL-15) receptor, but lacking many of the phenotypic characteristics of later stages of natural killer cell development such as expression of NK activating and inhibitory molecules. In human this cell has the phenotype CD34-positive, CD45RA-positive, CD10-positive, CD117-negative, and CD161 negative." [GO_REF:0000031, GOC:add, GOC:pam, PMID:11532393, PMID:12457618, PMID:15032583, PMID:15766674]
+synonym: "natural killer cell progenitor" EXACT []
+synonym: "NKP" EXACT [PMID:12457618, PMID:15032583, PMID:15766674]
+synonym: "null cell" RELATED [PMID:11532393]
+synonym: "preNK cell" RELATED [PMID:11532393]
+synonym: "pro-natural killer cell" EXACT []
+is_a: CL:0000838 {is_inferred="true"} ! lymphoid lineage restricted progenitor cell
+
+[Term]
+id: CL:0000860
+name: classical monocyte
+def: "A monocyte that responds rapidly to microbial stimuli by secreting cytokines and antimicrobial factors and which is characterized by high expression of CCR2 in both rodents and humans, negative for the lineage markers CD3, CD19, and CD20, and of larger size than non-classical monocytes." [GO_REF:0000031, GOC:add, PMID:16322748, PMID:18303997, PMID:20628149, PMID:20870168]
+synonym: "inflammatory monocyte" EXACT []
+is_a: CL:0000576 {is_inferred="true"} ! monocyte
+
+[Term]
+id: CL:0000875
+name: non-classical monocyte
+def: "A type of monocyte characterized by low expression of CCR2, low responsiveness to monocyte chemoattractant CCL2/MCP1, low phagocytic activity, and decrease size relative to classical monocytes, but increased co-stimulatory activity. May also play a role in tissue repair." [GO_REF:0000031, GOC:add, PMID:16322748, PMID:18303997, PMID:20628149, PMID:20870168]
+synonym: "patrolling monocyte" EXACT []
+synonym: "resident monocyte" EXACT []
+is_a: CL:0000576 {is_inferred="true"} ! monocyte
+
+[Term]
+id: CL:0000895
+name: naive thymus-derived CD4-positive, alpha-beta T cell
+def: "An antigen inexperienced CD4-positive, alpha-beta T cell with the phenotype CCR7-positive, CD127-positive and CD62L-positive. This cell type develops in the thymus. This cell type is also described as being CD25-negative, CD62L-high, and CD44-low." [GO_REF:0000031, GOC:add, GOC:tfm, http://www.immgen.org/index_content.html, PMID:19100699, PMID:22343568]
+synonym: "naive CD4+ T cell" BROAD [PMID:22343568]
+synonym: "naive thymus-derived CD4-positive, alpha-beta T lymphocyte" EXACT []
+synonym: "naive thymus-derived CD4-positive, alpha-beta T-cell" EXACT []
+synonym: "naive thymus-derived CD4-positive, alpha-beta T-lymphocyte" EXACT []
+synonym: "T.4Nve.Sp" EXACT []
+synonym: "Th0" EXACT [GOC:tfm]
+is_a: CL:0000624 {is_inferred="true"} ! CD4-positive, alpha-beta T cell
+is_a: CL:0000898 ! naive T cell
+
+[Term]
+id: CL:0000896
+name: activated CD4-positive, alpha-beta T cell
+def: "A recently activated CD4-positive, alpha-beta T cell with the phenotype CD69-positive, CD62L-negative, CD127-negative, and CD25-positive." [GO_REF:0000031, GOC:add, GOC:pam]
+synonym: "activated CD4-positive, alpha-beta T lymphocyte" EXACT []
+synonym: "activated CD4-positive, alpha-beta T-cell" EXACT []
+synonym: "activated CD4-positive, alpha-beta T-lymphocyte" EXACT []
+is_a: CL:0000624 {is_inferred="true"} ! CD4-positive, alpha-beta T cell
+
+[Term]
+id: CL:0000897
+name: CD4-positive, alpha-beta memory T cell
+def: "A CD4-positive, alpha-beta T cell that has differentiated into a memory T cell." [GOC:add, http://www.immgen.org/index_content.html, ISBN:0781735149]
+synonym: "CD4-positive, alpha-beta memory T lymphocyte" EXACT []
+synonym: "CD4-positive, alpha-beta memory T-cell" EXACT []
+synonym: "CD4-positive, alpha-beta memory T-lymphocyte" EXACT []
+synonym: "T4.Mem.Sp" RELATED []
+is_a: CL:0000624 ! CD4-positive, alpha-beta T cell
+is_a: CL:0000813 ! memory T cell
+
+[Term]
+id: CL:0000898
+name: naive T cell
+def: "Mature T cell not yet exposed to antigen with the phenotype CCR7-positive, CD45RA-positive, and CD127-positive. This cell type is also described as being CD25-negative, CD62L-high and CD44-low." [GO_REF:0000031, GOC:add, GOC:pam, GOC:tfm, PMID:19100699]
+synonym: "naive T lymphocyte" EXACT []
+synonym: "naive T-cell" EXACT []
+synonym: "naive T-lymphocyte" EXACT []
+is_a: CL:0002419 {is_inferred="true"} ! mature T cell
+
+[Term]
+id: CL:0000904
+name: central memory CD4-positive, alpha-beta T cell
+def: "CD4-positive, alpha-beta memory T cell with the phenotype CCR7-positive, CD127-positive, CD45RA-negative, CD45RO-positive, and CD25-negative." [GO_REF:0000031, GOC:add, GOC:pam, PMID:22343568]
+synonym: "central CD4-positive, alpha-beta memory T cell" EXACT []
+synonym: "central CD4-positive, alpha-beta memory T lymphocyte" EXACT []
+synonym: "central CD4-positive, alpha-beta memory T-cell" EXACT []
+synonym: "central CD4-positive, alpha-beta memory T-lymphocyte" EXACT []
+synonym: "central memory CD4+ T cell" BROAD [PMID:22343568]
+synonym: "central memory CD4-positive, alpha-beta T lymphocyte" EXACT []
+synonym: "central memory CD4-positive, alpha-beta T-cell" EXACT []
+synonym: "central memory CD4-positive, alpha-beta T-lymphocyte" EXACT []
+is_a: CL:0001204 {is_inferred="true"} ! CD4-positive, alpha-beta memory T cell, CD45RO-positive
+
+[Term]
+id: CL:0000906
+name: activated CD8-positive, alpha-beta T cell
+def: "A CD8-positive, alpha-beta T cell with the phenotype CD69-positive, CD62L-negative, CD127-negative, CD25-positive, and CCR7-negative." [GO_REF:0000031, GOC:add, GOC:pam, GOC:tfm]
+synonym: "activated CD8-positive, alpha-beta T lymphocyte" EXACT []
+synonym: "activated CD8-positive, alpha-beta T-cell" EXACT []
+synonym: "activated CD8-positive, alpha-beta T-lymphocyte" EXACT []
+is_a: CL:0000625 {is_inferred="true"} ! CD8-positive, alpha-beta T cell
+
+[Term]
+id: CL:0000909
+name: CD8-positive, alpha-beta memory T cell
+def: "A CD8-positive, alpha-beta T cell that has differentiated into a memory T cell." [GOC:add, PMID:20146720]
+synonym: "CD8-positive, alpha-beta memory T lymphocyte" EXACT []
+synonym: "CD8-positive, alpha-beta memory T-cell" EXACT []
+synonym: "CD8-positive, alpha-beta memory T-lymphocyte" EXACT []
+synonym: "T.8Mem.Sp" RELATED []
+is_a: CL:0000625 ! CD8-positive, alpha-beta T cell
+is_a: CL:0000813 ! memory T cell
+
+[Term]
+id: CL:0000931
+name: activated type II NK T cell
+def: "A type II NK T cell that has been recently activated, secretes interferon-gamma and interleukin-4, and has the phenotype CD69-positive and downregulated NK markers." [GO_REF:0000031, GOC:add, GOC:pam, GOC:tfm, PMID:17964217]
+synonym: "activated type II NK T lymphocyte" EXACT []
+synonym: "activated type II NK T-cell" EXACT []
+synonym: "activated type II NK T-lymphocyte" EXACT []
+synonym: "activated type II NKT cell" EXACT []
+is_a: CL:0000922 {is_inferred="true"} ! type II NK T cell
+
+[Term]
+id: CL:0000945
+name: lymphocyte of B lineage
+def: "A lymphocyte of B lineage with the commitment to express an immunoglobulin complex." [GO_REF:0000031, GOC:add, GOC:rhs, GOC:tfm, ISBN:0781735149]
+is_a: CL:0000542 {is_inferred="true"} ! lymphocyte
+
+[Term]
+id: CL:0000969
+name: regulatory B cell
+def: "A mature B cell that has the phenotype CD1d-positive and expresses interleukin-10. This cell type has been associated with suppression of chronic inflammatory responses and T cell responses." [GO_REF:0000031, GOC:dsd, GOC:msz, GOC:tfm, MESH:D060151, PMID:11869683, PMID:18482568, PMID:20224569, PMID:20809522]
+synonym: "B(reg)" EXACT []
+synonym: "B10 cell" EXACT []
+synonym: "Breg" EXACT []
+synonym: "regulatory B lymphocyte" EXACT []
+synonym: "regulatory B-cell" EXACT []
+synonym: "regulatory B-lymphocyte" EXACT []
+is_a: CL:0000785 {is_inferred="true"} ! mature B cell
+
+[Term]
+id: CL:0001054
+name: CD14-positive monocyte
+def: "A monocyte that expresses CD14 and is negative for the lineage markers CD3, CD19, and CD20." [GOC:add, PMID:22343568]
+synonym: "monocyte" NARROW [PMID:22343568]
+is_a: CL:0000576 ! monocyte
+
+[Term]
+id: CL:0002057
+name: CD14-positive, CD16-negative classical monocyte
+def: "A classical monocyte that is CD14-positive, CD16-negative, CD64-positive, CD163-positive." [GOC:add, GOC:tfm, PMID:15615263, PMID:1706877, PMID:19689341, PMID:22343568]
+synonym: "CD16- monocyte" EXACT [PMID:22343568]
+synonym: "CD16-negative monocyte" EXACT []
+is_a: CL:0000860 {is_inferred="true"} ! classical monocyte
+is_a: CL:0001054 ! CD14-positive monocyte
+
+[Term]
+id: CL:0002396
+name: CD14-low, CD16-positive monocyte
+def: "A patrolling monocyte that is CD14-low and CD16-positive." [GOC:tfm, PMID:20870168]
+synonym: "non-classical monocyte, human" EXACT []
+is_a: CL:0000875 {is_inferred="true"} ! non-classical monocyte
+is_a: CL:0001054 ! CD14-positive monocyte
+
+[Term]
+id: CL:0002397
+name: CD14-positive, CD16-positive monocyte
+def: "A CD14-positive monocyte that is also CD16-positive and CCR2-negative." [GOC:tfm, PMID:20628149, PMID:21937707, PMID:22343568]
+synonym: "CD16+ monocyte" EXACT [PMID:22343568]
+is_a: CL:0001054 ! CD14-positive monocyte
+
+[Term]
+id: CL:0000999
+name: obsolete monocyte thing
+is_obsolete: true
