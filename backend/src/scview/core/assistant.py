@@ -329,6 +329,21 @@ def _add_cytokines(adaptor, lines: list[str], sources: list[ChatSource]) -> None
                                   evidence="\n".join(c_lines[1:])))
 
 
+def _add_pseudobulk(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last pseudobulk DE run (core/pseudobulk.py): method, hits, group variances."""
+    from scview.core import pseudobulk
+
+    try:
+        pb_lines, pb_detail = pseudobulk.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: pseudobulk fact failed: %s", exc)
+        return
+    if pb_lines:
+        lines.extend(pb_lines)
+        sources.append(ChatSource(kind="result", ref=pseudobulk.TAG, detail=pb_detail,
+                                  evidence="\n".join(pb_lines[1:])))
+
+
 def _add_layout_stability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Which group relations in the plot hold across other seeds and neighbour counts
     (core/layout_stability.py), only once a layout check has run for this dataset."""
@@ -588,6 +603,7 @@ def build_grounding_context(
         _add_study_planner(adaptor, lines, sources)
         _add_vdj(adaptor, lines, sources)
         _add_cytokines(adaptor, lines, sources)
+        _add_pseudobulk(adaptor, lines, sources)
 
     # 4a-bis. Cell-type annotations: cluster -> cell type. Compact and high-value for
     # "what is this cluster?", so it's always included (not facet-gated).

@@ -22,6 +22,8 @@ import { DETranscriptomeSize } from "@/components/unified/DETranscriptomeSize";
 import { DEMethodsAgreement } from "@/components/unified/DEMethodsAgreement";
 import { DeCompositionNote } from "@/components/unified/DeCompositionNote";
 import { DeOverlap } from "@/components/unified/DeOverlap";
+import { PseudobulkDiagnostics, PseudobulkModelRows } from "@/components/unified/PseudobulkDiagnostics";
+import { describePbModel, pbMethodLabel } from "@/lib/pseudobulk";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { CapNote } from "@/components/common/Caption";
 import { downloadCsv } from "@/lib/csv";
@@ -117,6 +119,8 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const replicateKey = useDESettingsStore((s) => s.replicateKey);
   const minPct = useDESettingsStore((s) => s.minPct);
   const cellMethod = useDESettingsStore((s) => s.cellMethod);
+  const pbMethod = useDESettingsStore((s) => s.pbMethod);
+  const ruvK = useDESettingsStore((s) => s.ruvK);
   const update = useDESettingsStore((s) => s.update);
   const setMode = (m: Mode) => update({ mode: m });
   const setFcThreshold = (v: number) => update({ fcThreshold: v });
@@ -211,7 +215,12 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
         group_b: groupB,
         ...(scoped ? { within_column: withinCol, within_value: withinVal } : {}),
         ...(test === "pseudobulk"
-          ? { method: "pseudobulk", replicate_key: replicateKey }
+          ? {
+              method: "pseudobulk",
+              replicate_key: replicateKey,
+              ...(pbMethod !== "deseq2" ? { pb_method: pbMethod } : {}),
+              ...(ruvK ? { ruv_k: ruvK } : {}),
+            }
           : { min_pct: minPct, ...(cellMethod !== "wilcoxon" ? { method: cellMethod } : {}) }),
         ...(compositionBy ? { composition_by: compositionBy } : {}),
       });
@@ -229,7 +238,8 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey, minPct, cellMethod, compositionBy]);
+  }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey, pbMethod, ruvK, minPct,
+      cellMethod, compositionBy]);
 
   // The current comparison under every cell-level test, and their agreement.
   const runMethods = useCallback(async () => {
@@ -507,12 +517,21 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                       ))}
                     </select>
                   </div>
+                  <PseudobulkModelRows
+                    pbMethod={pbMethod}
+                    ruvK={ruvK}
+                    onChange={update}
+                    selectCls={selectCls}
+                  />
                   <p className="text-[10px] leading-snug text-slate-500">
-                    Sums each donor&apos;s raw counts per group and tests donors, not cells, with
-                    DESeq2, so p-values allow for donor-to-donor variation. Needs raw counts and at
-                    least 2 donors per group with 10+ cells each.
-                    {loading && " Fitting one model per gene can take up to a minute."}
+                    Sums each donor&apos;s raw counts per group and tests donors, not cells, with{" "}
+                    {pbMethodLabel(pbMethod)}, so p-values allow for donor-to-donor variation. Needs raw
+                    counts and at least 2 donors per group with 10+ cells each.
+                    {loading && pbMethod === "deseq2" && " Fitting one model per gene can take up to a minute."}
                   </p>
+                  {result?.method === "pseudobulk" && (
+                    <PseudobulkDiagnostics hetero={result.heteroscedasticity} ruv={result.ruv} />
+                  )}
                 </>
               )}
               <div className="flex items-center justify-between gap-2">
@@ -680,7 +699,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             )}
             {result.method === "pseudobulk" ? (
               <span className="mt-0.5 block">
-                Pseudobulk DESeq2 (Wald test, design <code>{result.design}</code>): donors (
+                {describePbModel(result)}: donors (
                 <code>{result.replicate_key}</code>) {result.label.split(" (")[0]}{" "}
                 {result.n_samples_a}, {refLabel} {result.n_samples_b}; counts summed from{" "}
                 <code>{result.counts_source}</code>; {result.n_genes_tested?.toLocaleString()} genes

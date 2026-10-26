@@ -37,6 +37,12 @@ export interface DEResponse {
   design?: string | null;
   counts_source?: string | null;
   dropped_samples?: string[];
+  /** Pseudobulk: the model, RUV factors used, each group's voom trend and
+   *  variance, and the RUV factors against the samples (absent from older servers). */
+  pb_method?: PseudobulkMethod | null;
+  ruv_k?: number | null;
+  heteroscedasticity?: PseudobulkHetero | null;
+  ruv?: PseudobulkRuv | null;
   /** /de/compare: the two sides are also different batches (datasets, runs). */
   confounding?: DEConfounding | null;
   /** /de/compare: each side's share of every cluster/state (absent from older servers). */
@@ -52,6 +58,49 @@ export interface DEResponse {
   detection?: number[] | null;
   /** The two sides' RNA content; null when the dataset holds no raw counts. */
   transcriptome_size?: TranscriptomeSize | null;
+}
+
+/** The pseudobulk model (backend core/pseudobulk.py): DESeq2, limma-voom, or
+ *  voomByGroup (a mean-variance trend per group). */
+export type PseudobulkMethod = "deseq2" | "voom" | "voombygroup";
+
+/** One group's voom trend (sqrt SD against mean log2 count) and variance. */
+export interface PseudobulkHeteroGroup {
+  group: string;
+  n_samples: number;
+  /** Median residual variance of log2 CPM, better-expressed half of the genes. */
+  median_variance: number;
+  /** [mean log2 count, sqrt SD] points along the trend. */
+  trend: [number, number][];
+}
+
+/** Do the two groups' samples vary alike? `flag`: one varies `threshold`-fold more. */
+export interface PseudobulkHetero {
+  groups: PseudobulkHeteroGroup[];
+  ratio: number | null;
+  higher: string;
+  flag: boolean;
+  threshold: number;
+  message: string;
+}
+
+export interface PseudobulkRuvFactor {
+  name: string;
+  r_condition: number | null;
+  r_log_depth: number | null;
+  r_n_cells: number | null;
+  /** Share of the factor's variance between donors (paired designs only). */
+  r2_donor: number | null;
+}
+
+/** The RUV factors added to the design and how they line up with the samples. */
+export interface PseudobulkRuv {
+  k: number;
+  n_controls: number;
+  control_source: string;
+  factors: PseudobulkRuvFactor[];
+  samples: { donor: string; group: string; n_cells: number; log10_depth: number; W: number[] }[];
+  warning: string | null;
 }
 
 /** Median raw total counts per cell of the two sides (backend core/transcriptome_size.py). */
@@ -150,6 +199,9 @@ export interface DECompareRequest {
   /** "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key);
    *  the others are cell-level tests (Wilcoxon when absent). */
   method?: DEMethod;
+  /** Pseudobulk only: the model (DESeq2 when absent) and RUV factors (0-3). */
+  pb_method?: PseudobulkMethod;
+  ruv_k?: number;
   /** Cell-level: test only genes detected in this fraction of either group's cells. */
   min_pct?: number;
   /** The label column the composition check uses (the active clustering when absent). */

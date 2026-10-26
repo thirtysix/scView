@@ -603,6 +603,7 @@ _FAMILY_PREFIX = {
     "offtarget": "result:offtarget", "hpa": "result:offtarget",
     "cytokines": "result:cytokines", "cytokine": "result:cytokines", "cytosig": "result:cytokines",
     "ppi": "result:ppi",
+    "pseudobulk": "result:pseudobulk",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 

@@ -33,6 +33,8 @@ SCORE_METRICS = {"wilcoxon": "wilcoxon_score", "t-test": "t_score", "logreg": "l
 # How a label names each test.
 METHOD_NAMES = {"wilcoxon": "Wilcoxon", "t-test": "t-test", "logreg": "logistic regression",
                 "pseudobulk": "pseudobulk DESeq2"}
+# A pseudobulk result's model (comparison["pb_method"]; absent = DESeq2).
+PB_METHOD_NAMES = {"deseq2": "DESeq2", "voom": "limma-voom", "voombygroup": "voomByGroup"}
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,9 @@ def describe(comparison: dict[str, Any]) -> str:
     rest (t-test)", "CD14 Mono: STIM vs CTRL (Wilcoxon)", "All cells: STIM vs
     CTRL (pseudobulk DESeq2)"."""
     method = METHOD_NAMES.get(comparison.get("method", "wilcoxon"), str(comparison.get("method")))
+    pb = PB_METHOD_NAMES.get(comparison.get("pb_method") or "")
+    if comparison.get("method") == "pseudobulk" and pb:  # core/pseudobulk.py options
+        method = f"pseudobulk {pb}" + (f" + RUV k={comparison['ruv_k']}" if comparison.get("ruv_k") else "")
     if comparison.get("mode") == "selection":
         n = comparison.get("n_a")
         size = f" ({n:,} cells)" if isinstance(n, int) else ""
