@@ -137,7 +137,7 @@ _STAT_BEFORE_RX = re.compile(
 _UNIT_AFTER_RX = re.compile(
     r"^\s*\)?\s*(genes?\s*(?:/|per)\s*cell|counts?\s*(?:/|per)\s*cell|UMIs?\s*(?:/|per)\s*cell|"
     r"% mito|mito|doublets?|cell types?|cells?|clusters?|groups?|types?|donors?|samples?|"
-    r"conditions?|categories|batches|populations?|PCs|neighbou?rs|genes)\b", re.I)
+    r"conditions?|categories|batches|populations?|PCs|neighbou?rs|genes|targets?)\b", re.I)
 _APPROX_RX = re.compile(r"(?:~|≈|\babout|\bapproximately|\bapprox\.?|\broughly|\baround|\bnearly|"
                         r"\balmost|\bsome)\s*$", re.I)
 _BOUND_RX = re.compile(r"(?:\bover|\bmore than|\bless than|\bfewer than|\bunder|\bat least|\bat most|"
@@ -146,7 +146,7 @@ _RATIO_AFTER_RX = re.compile(r"^\s*(?:×|x\b|-?fold\b|times\b)", re.I)
 _STAT_CANON = {"q": "fdr", "padj": "fdr", "p-value": "p", "ρ": "rho", "log2fc": "lfc",
                "logfc": "lfc"}
 _COUNT_NOUNS = ("cluster", "group", "type", "donor", "sample", "condition", "categor",
-                "batch", "population")
+                "batch", "population", "target")
 _STRONG_UNITS = frozenset({"genes/cell", "counts/cell", "mito", "doublets"})
 _POPULATION_RX = re.compile(
     r"(?:\+|-|hi\b|lo\b|high\b|low\b)|\s+(?:mono\w*|T\b|B\b|NK\b|cells?\b|macrophage\w*|DCs?\b|"
@@ -460,6 +460,8 @@ def _anchor(pos: int, end: int, sc: Scan, allowed: set[str]) -> str | None:
             gap, d = sc.text[gend:pos], pos - gend
         else:
             gap, d = sc.text[end:gpos], gpos - end + 0.5
+            if "(" in gap:  # "15 targets (ATF2, ...)": the number counts the list
+                continue
         if re.search(r"[,;)]", gap):
             d += 1000
         if dist is None or d < dist:
@@ -575,6 +577,35 @@ def _check_atoms(sc: Scan, ev: Evidence, *, second: bool = False) -> _Outcome:
             out.missing_at[n.pos] = n.raw
     out.lines = used
     return out
+
+
+_FUNCTION_WORDS = frozenset((
+    "a an the and or but nor of in on at to for by with from as into than then so is are was "
+    "were be been being has have had it its this that these those which who whom whose also "
+    "both each all any here there their they them we our you your i e g ie eg vs via per while "
+    "where when what how not no").split())
+_WORD_RX = re.compile(r"[A-Za-z][A-Za-z'\-]*")
+
+
+def _genes_only_and_says_more(sc: Scan, o: _Outcome) -> bool:
+    """A sentence matched on gene symbols alone, with no number, that asserts more
+    than which genes go with which group ("the response is broad and strong in every
+    cluster, with IFNG second"): sharing a gene with the fact does not support it.
+    A gene list with a few words around it ("B is marked by CD79A and MS4A1") is
+    still checked by its genes."""
+    if any(n.pos in o.found_at for n in sc.nums):
+        return False
+    genes = [(p, name) for p, name in sc.genes if p in o.found_at]
+    if not genes:
+        return False
+    buf = list(sc.text)
+    spans = [(p, p + len(name)) for p, name in sc.genes]
+    spans += [(p, sc.group_ends.get(p, p + len(name))) for p, name in sc.groups]
+    for a, b in spans:
+        _mask(buf, a, b)
+    words = [w for w in _WORD_RX.findall("".join(buf).replace("\x00", " "))
+             if w.lower() not in _FUNCTION_WORDS]
+    return len(words) > 2 * len(genes) + 4
 
 
 # ---------------------------------------------------------------------------
@@ -772,6 +803,7 @@ def check_answer(answer: str, sources: list, context: str, vocab: Vocab) -> list
             if set(o.missing_at) <= o2.found_at:
                 o.found += [re.sub(r" \(for .*\)$", "", o.missing_at[p]) for p in sorted(o.missing_at)]
                 o.hard_found += len(o.missing_at)
+                o.found_at |= set(o.missing_at)
                 o.missing, o.missing_at, elsewhere = [], {}, True
         notes = []
         if unknown:
@@ -786,6 +818,9 @@ def check_answer(answer: str, sources: list, context: str, vocab: Vocab) -> list
             verdict, reason = "refuted", "; ".join(o.conflicts[:2]) + "."
         elif o.hard_found and not o.missing and qualifier:
             verdict, reason = "uncertain", f"{found} match, but the {qualifier} needs a reading."
+        elif o.hard_found and not o.missing and _genes_only_and_says_more(sc, o):
+            verdict, reason = "uncertain", (f"{found} {'is' if len(o.found) == 1 else 'are'} in the "
+                                            "fact, but the sentence says more than that; needs a reading.")
         elif o.hard_found and not o.missing:
             verdict, reason = "supported", (f"Matches the facts, though not the one cited: {found}."
                                             if elsewhere else f"Matches the cited fact: {found}.")
