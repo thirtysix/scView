@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-26
+
 ### Added
 - **DE audit** (DE tab, "Audit this result"): reruns the cell-level test with the condition shuffled
   across whole donors (each shuffled side keeps the same mix of real donors) and runs pseudobulk on the
