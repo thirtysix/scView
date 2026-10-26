@@ -116,7 +116,7 @@ def vocab_for(adaptor) -> Vocab:
 _CITE_RX = re.compile(r"\[([^\[\]\n]{2,120})\](?!\()")
 _CITE_FAMILIES = ("dataset", "provenance", "preprocessing", "result", "obs", "lit", "doc",
                   "app", "composition", "milo", "milode", "markers", "qc", "groups", "annotation",
-                  "celltypes", "enrichment", "communication")
+                  "celltypes", "enrichment", "communication", "selection", "sel")
 _LIST_RX = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _TICK_RX = re.compile(r"`([^`]+)`")
 _GENE_TOKEN_RX = re.compile(r"(?<![\w\-.])[A-Za-z0-9][A-Za-z0-9\-.]*[A-Za-z0-9](?![\w\-])")
@@ -606,6 +606,7 @@ _FAMILY_PREFIX = {
     "ppi": "result:ppi",
     "pseudobulk": "result:pseudobulk",
     "mixscape": "result:mixscape", "perturbation": "result:mixscape", "crispr": "result:mixscape",
+    "selection": "result:selection", "sel": "result:selection",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -649,7 +650,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "mito", "qcstates", "embedding", "reliability", "planner",
                                   "seqqc", "hashing", "vdj", "offtarget", "hpa",
                                   "cytokines", "cytokine", "cytosig",
-                                  "clonotypes", "clonotype", "ppi", "cnv")
+                                  "clonotypes", "clonotype", "ppi", "cnv", "selection", "sel")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]
