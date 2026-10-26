@@ -59,6 +59,7 @@ class SideKind(str, Enum):
     metrics = "metrics"  # Cell Ranger metrics_summary.csv (core/seq_metrics.py)
     raw = "raw"  # the raw (unfiltered) matrix: a .h5 or MEX parts (core/seq_metrics.py)
     vdj = "vdj"  # a TCR/BCR contig table, joined to the unit's cells (core/vdj.py)
+    crispr = "crispr"  # Cell Ranger's guide calls per cell, joined to the unit's cells (core/crispr.py)
 
 
 # A 10x MEX unit needs exactly one of each of these.
@@ -77,6 +78,7 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.tenx_barcodes: (None, FileRole.barcodes),
     FileKind.tenx_features: (None, FileRole.features),
     FileKind.vdj_contigs: (None, FileRole.side),
+    FileKind.crispr_calls: (None, FileRole.side),
     FileKind.unknown: (None, FileRole.unknown),
 }
 
@@ -214,6 +216,7 @@ def bundle_from_detections(
 
     side_files: list[BundleFile] = []
     vdj_files: list[BundleFile] = []
+    crispr_files: list[BundleFile] = []
 
     for path, det in detected:
         if _is_side_file(det):
@@ -235,6 +238,8 @@ def bundle_from_detections(
             vdj_files.append(bf.model_copy(update={
                 "side_kind": SideKind.vdj,
                 "receptor": det.details.get("receptor") or _vdj_dir_arm(bf) or _vdj_arm(path.name)}))
+        elif det.kind == FileKind.crispr_calls:
+            crispr_files.append(bf.model_copy(update={"side_kind": SideKind.crispr}))
         else:
             unknown_files.append(bf)
 
@@ -262,6 +267,7 @@ def bundle_from_detections(
         )
 
     bundle_issues.extend(_attach_vdj_files(units, vdj_files))
+    bundle_issues.extend(_attach_crispr_files(units, crispr_files))
     _unique_labels(units)
     if skipped:
         bundle_issues.insert(0, skipped_sentence(skipped))
@@ -290,7 +296,7 @@ _GENERIC_DIRS = {
 }
 # Folders that hold one sample's matrix / contigs, below that sample's own folder.
 _CONTAINER_DIRS = {
-    "count", "filtered_feature_bc_matrix", "raw_feature_bc_matrix",
+    "count", "filtered_feature_bc_matrix", "raw_feature_bc_matrix", "crispr_analysis",
     "sample_filtered_feature_bc_matrix", "sample_raw_feature_bc_matrix",
     "filtered_gene_bc_matrices", "raw_gene_bc_matrices", "vdj_t", "vdj_b", "vdj_t_gd",
 }
@@ -339,7 +345,7 @@ def _drop_tree_extras(detected, rel, skipped: list[dict]):
     keep, contigs = [], {}
     for p, det in detected:
         d = _dirs(rels[p])
-        if not d:
+        if not d or det.kind == FileKind.crispr_calls:  # guide calls: kept from crispr_analysis/
             keep.append((p, det))
         elif _is_analysis(d):
             skipped.append({"path": rels[p], "reason": ANALYSIS})
@@ -756,6 +762,27 @@ def _attach_vdj_files(units: list[IngestUnit], vdj_files: list[BundleFile]) -> l
             issues.append(f"Could not tell which sample the contig table {bf.name} belongs to; give it "
                           "the sample's filename prefix, or attach it after import in Unified View > "
                           "Clonotypes.")
+            continue
+        unit.side_files.append(bf)
+    return issues
+
+
+def _attach_crispr_files(units: list[IngestUnit], files: list[BundleFile]) -> list[str]:
+    """Add Cell Ranger's guide calls (``crispr_analysis/protospacer_calls_per_cell.csv``)
+    to the unit of their sample folder, else the only unit. Returns bundle issues."""
+    if not files:
+        return []
+    loadable = [u for u in units if u.format != UnitFormat.unknown]
+    issues: list[str] = []
+    for bf in files:
+        root = _sample_root(bf.rel_path)
+        unit = _only_in_root(loadable, f"{root}|") or (loadable[0] if len(loadable) == 1 else None)
+        if unit is None:
+            issues.append(f"Could not tell which sample the guide calls {bf.rel_path or bf.name} belong to: "
+                          "upload them in the sample's Cell Ranger folder, or with one sample at a time.")
+            continue
+        if any(f.side_kind == SideKind.crispr for f in unit.side_files):
+            issues.append(f"{bf.name}: sample {unit.label} already has guide calls; this file was not attached.")
             continue
         unit.side_files.append(bf)
     return issues

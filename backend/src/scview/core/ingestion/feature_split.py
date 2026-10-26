@@ -6,8 +6,8 @@ tags ("Multiplexing Capture") sit beside the genes and enter the variable genes,
 the normalisation and the marker lists. The import wizard takes them out at load
 (``core/protein.py`` ``split_features``); this does the same for the plain upload,
 with the same rules: genes stay in X, antibodies go to ``obsm["protein_counts"]`` +
-``obsm["protein_clr"]``, CellPlex tags to ``obsm["hto_counts"]``, other types
-(CRISPR guides, custom) are counted and dropped.
+``obsm["protein_clr"]``, CellPlex tags to ``obsm["hto_counts"]``, CRISPR guides to
+``obsm["guide_counts"]``, other types (custom) are counted and dropped.
 
 Where and how: at upload, from the stored original (which stays byte-identical
 and read-only) into ``ingested/{id}/``, the layer the dataset is read from (before
@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 from anndata.io import read_elem, write_elem
 
-from scview.core import hashing, protein, provenance
+from scview.core import crispr, hashing, protein, provenance
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +81,11 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
     genes = types == protein.GENE_TYPE
     is_ab = types == protein.ANTIBODY_TYPE
     is_cmo = types == hashing.CMO_TYPE
+    is_guide = types == crispr.GUIDE_TYPE
     take_ab = is_ab if 0 < is_ab.sum() <= protein.MAX_PROTEINS else np.zeros_like(is_ab)
     take_cmo = is_cmo if 0 < is_cmo.sum() <= hashing.MAX_TAGS else np.zeros_like(is_cmo)
-    other = pd.Series(types[~genes & ~is_ab & ~is_cmo]).value_counts()
+    take_guide = is_guide if 0 < is_guide.sum() <= crispr.MAX_GUIDES else np.zeros_like(is_guide)
+    other = pd.Series(types[~genes & ~is_ab & ~is_cmo & ~take_guide]).value_counts()
 
     with h5py.File(src, "r") as fi, h5py.File(dst, "w") as fo:
         for k, v in fi.attrs.items():
@@ -93,7 +95,7 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
         extracted: list[np.ndarray] = []
         for key in fi.keys():
             if key == "X":
-                extracted = _subset_matrix(fi["X"], fo, "X", genes, [take_ab, take_cmo])
+                extracted = _subset_matrix(fi["X"], fo, "X", genes, [take_ab, take_cmo, take_guide])
             elif key == "layers":
                 g = _group_like(fi["layers"], fo, "layers")
                 for name in fi["layers"].keys():
@@ -116,7 +118,7 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
         holder = ad.AnnData(obs=pd.DataFrame(index=obs_names),
                             var=pd.DataFrame(index=pd.Index(var.index[genes].astype(str))))
         uns = fi.get("uns")
-        for key in (protein.UNS_KEY, hashing.UNS_KEY, provenance.UNS_KEY):
+        for key in (protein.UNS_KEY, hashing.UNS_KEY, crispr.UNS_KEY, provenance.UNS_KEY):
             if isinstance(uns, h5py.Group) and key in uns:
                 holder.uns[key] = read_elem(uns[key])
         split = protein.ProteinSplit()
@@ -124,6 +126,7 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
         names = [str(v) for v in var.index]
         if not extracted:  # no X to take them from
             take_ab, take_cmo = np.zeros_like(take_ab), np.zeros_like(take_cmo)
+            take_guide = np.zeros_like(take_guide)
         if take_ab.any():
             protein.attach(holder, extracted[0], [n for n, t in zip(names, take_ab) if t], split)
         elif split.other_features or is_ab.any():
@@ -131,12 +134,15 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
         if take_cmo.any():
             hashing.attach_counts(holder, extracted[1], [n for n, t in zip(names, take_cmo) if t],
                                   hashing.CMO_TYPE)
+        if take_guide.any():
+            crispr.attach_counts(holder, extracted[2], [n for n, t in zip(names, take_guide) if t])
         summary = {
             "n_genes": int(genes.sum()),
             "n_antibodies": int(take_ab.sum()),
             "n_multiplexing_tags": int(take_cmo.sum()),
+            "n_guides": int(take_guide.sum()),
             "other_features": split.other_features,
-            "location": "obsm protein_counts / protein_clr, hto_counts",
+            "location": "obsm protein_counts / protein_clr, hto_counts, guide_counts",
         }
         if is_ab.sum() > protein.MAX_PROTEINS:
             summary["note"] = f"{int(is_ab.sum())} antibody features: more than a panel, dropped from X"

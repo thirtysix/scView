@@ -151,6 +151,22 @@ def guide_counts_frame(adata) -> pd.DataFrame | None:
     return None
 
 
+def common_guides(adatas: list) -> None:
+    """For a merge: every sample's guide counts on the union of the guides (0 where a
+    sample has no such guide, or no guides at all), so none is lost in the join."""
+    frames = [a.obsm.get(GUIDE_KEY) for a in adatas]
+    if not any(isinstance(f, pd.DataFrame) for f in frames):
+        return
+    union = list(dict.fromkeys(str(c) for f in frames if isinstance(f, pd.DataFrame) for c in f.columns))
+    if len(union) > MAX_GUIDES:
+        for a in adatas:
+            a.obsm.pop(GUIDE_KEY, None)
+        return
+    for a, f in zip(adatas, frames):
+        base = f if isinstance(f, pd.DataFrame) else pd.DataFrame(index=a.obs_names)
+        a.obsm[GUIDE_KEY] = base.reindex(columns=union, fill_value=0).astype(np.float32)
+
+
 # ---------------------------------------------------------------------------
 # Cell Ranger protospacer calls (a side file of the import)
 # ---------------------------------------------------------------------------
