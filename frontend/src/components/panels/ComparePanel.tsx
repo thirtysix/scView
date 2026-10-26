@@ -9,6 +9,7 @@ import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
+import { useOnScreenStore } from "@/stores/onScreenStore";
 import { listDatasets, getDataset } from "@/api/datasets";
 import { apiFetch } from "@/api/client";
 import { getPalette } from "@/lib/colors";
@@ -58,6 +59,12 @@ const TABS: { id: CompareTab; label: string }[] = [
  * composition comparison of two. */
 export function ComparePanel() {
   const [tab, setTab] = useState<CompareTab>("joint");
+  // The co-pilot's view context names the open tab (stores/onScreenStore.ts)
+  const setOnScreenTab = useOnScreenStore((s) => s.setCompareTab);
+  useEffect(() => {
+    setOnScreenTab(tab);
+  }, [tab, setOnScreenTab]);
+  useEffect(() => () => setOnScreenTab(null), [setOnScreenTab]);
   return (
     <div className="space-y-5">
       <Header />

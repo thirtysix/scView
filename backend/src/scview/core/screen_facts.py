@@ -37,10 +37,8 @@ SUBTAB_NAMES = {
     "programs": "Programs", "cnv": "Copy number", "clonotypes": "Clonotypes",
     "perturbation": "Perturbation",
 }
-COMPARE_TABS = {
-    "joint": "Joint embedding", "composition": "Composition", "milo": "Neighbourhoods (Milo)",
-    "milode": "Neighbourhood DE (miloDE)", "planner": "Study planner",
-}
+# The Compare panel's tabs (frontend ComparePanel.tsx); Milo and miloDE sit under Composition.
+COMPARE_TABS = {"joint": "Joint embedding", "composition": "Composition", "planner": "Plan a study"}
 
 
 def _screen(vc: dict | None) -> dict:
