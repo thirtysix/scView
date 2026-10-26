@@ -139,3 +139,13 @@ def test_cancel_stops_between_steps():
     with pytest.raises(mixscape.MixscapeCancelled):
         for _ in mixscape.iter_mixscape(a, pl, stop=stop):
             pass
+
+
+def test_screen_and_de_questions_route_to_the_groups_facet():
+    # The Mixscape, pseudobulk and neighbourhood-DE facts sit under the "groups" facet.
+    from scview.core.rag.router import heuristic_intent
+
+    for q in ("Which knockouts worked?", "did the CRISPR screen work?",
+              "which pseudobulk method did I use?", "which genes change in only part of the monocytes?"):
+        intent = heuristic_intent(q)
+        assert "data" in intent.sources and "groups" in intent.data_facets, q

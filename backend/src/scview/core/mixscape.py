@@ -647,8 +647,8 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
         return (["\n## CRISPR screen", *lines], detail or None) if lines else ([], None)
     s = r.summary()
     ranked = sorted(r.targets, key=lambda t: -t["ko_fraction"])
-    per = ", ".join(f"{t['target']} {t['ko_fraction']:.0%} of {t['n_cells']:,} ({t['n_de_genes']} DE genes)"
-                    for t in ranked[:12])
+    per = "; ".join(f"{t['target']}: {t['n_ko']:,} of {t['n_cells']:,} cells KO ({t['ko_fraction']:.0%}), "
+                    f"{t['n_de_genes']} DE genes" for t in ranked[:12])
     none = [t["target"] for t in r.targets if t["n_ko"] == 0]
     mdetail = (f"{r.n_targets} targets vs {r.n_control:,} '{r.control}' cells: {s['n_ko']:,} of "
                f"{s['n_target_cells']:,} target cells KO ({s['ko_fraction']:.0%}), "
