@@ -7,8 +7,10 @@ import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 
-from scview.core import results_store, uns_history
+from scview.core import results_export, results_store, uns_history
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.dependencies import get_dataset_manager
@@ -104,3 +106,79 @@ async def restore_result(dataset_id: str, result_id: str,
     # It is the current result now (in the h5ad); the one it replaced took its place here.
     await asyncio.to_thread(results_store.delete, dataset_id, result_id)
     return {"restored": result_id, "kind": entry["kind"], "key": entry["key"], "uns_keys": keys}
+
+
+class PinBody(BaseModel):
+    pinned: bool = True
+
+
+@router.post("/datasets/{dataset_id}/results/{result_id}/pin")
+async def pin_result(dataset_id: str, result_id: str, body: PinBody,
+                     dm: DatasetManager = Depends(get_dataset_manager)) -> dict:
+    """Pin a stored result (kept until deleted, never dropped by retention), or unpin it."""
+    _known(dm, dataset_id)
+    if not await asyncio.to_thread(results_store.set_pinned, dataset_id, result_id, body.pinned):
+        raise HTTPException(status_code=404, detail="No such stored result.")
+    return {"id": result_id, "pinned": body.pinned}
+
+
+async def _entry_value(dm: DatasetManager, dataset_id: str, result_id: str):
+    _known(dm, dataset_id)
+    rows = await asyncio.to_thread(results_store.entries, dataset_id, None, dm.get_dataset(dataset_id))
+    e = next((e for e in rows if e["id"] == result_id), None)
+    got = await asyncio.to_thread(results_store.load, dataset_id, result_id) if e else None
+    if e is None or got is None:
+        raise HTTPException(status_code=404, detail="No such stored result.")
+    return e, got[1]
+
+
+@router.get("/datasets/{dataset_id}/results/{result_id}/table.tsv.gz")
+async def result_table(dataset_id: str, result_id: str,
+                       dm: DatasetManager = Depends(get_dataset_manager)) -> Response:
+    """The result as one tab-separated table, gzipped (header + rows; the parameters are
+    in the results zip's manifest)."""
+    e, value = await _entry_value(dm, dataset_id, result_id)
+
+    def _run() -> bytes | None:
+        df = results_export.table(e, value)
+        return None if df is None else results_export.tsv_gz(df)
+
+    body = await asyncio.to_thread(_run)
+    if body is None:
+        raise HTTPException(status_code=404, detail="This result holds no table to export.")
+    name = f"{results_export.file_stem(e)}.tsv.gz"
+    return Response(body, media_type="application/gzip", headers={
+        "Content-Disposition": f'attachment; filename="{name}"', "Content-Encoding": "identity"})
+
+
+@router.get("/datasets/{dataset_id}/results.zip")
+async def results_zip(dataset_id: str, dm: DatasetManager = Depends(get_dataset_manager)) -> FileResponse:
+    """Every stored result as ``results/{label}.tsv.gz`` plus ``manifest.json`` (parameters,
+    scView version, created, fingerprint, stale flag of each)."""
+    _known(dm, dataset_id)
+    out = dm.data_dir / "cache" / dataset_id / "results.zip"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(results_export.results_zip, dataset_id, out, dm.get_dataset(dataset_id))
+    return FileResponse(out, media_type="application/zip", filename=f"scview_results_{dataset_id[:8]}.zip",
+                        headers={"Content-Encoding": "identity"})
+
+
+@router.get("/datasets/{dataset_id}/results/{result_id}/compare")
+async def compare_with_current(dataset_id: str, result_id: str,
+                               n: int = Query(default=50, ge=5, le=500),
+                               dm: DatasetManager = Depends(get_dataset_manager)) -> dict:
+    """An earlier markers result against the column's current markers (top ``n`` genes
+    shared per group), or an earlier enrichment against the group's current one
+    (significant terms shared)."""
+    e, value = await _entry_value(dm, dataset_id, result_id)
+    if e["kind"] not in uns_history.KINDS:
+        raise HTTPException(status_code=400, detail="Only markers and enrichment compare with a current result.")
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    current = adaptor.adata.uns.get(value["uns_key"]) if adaptor is not None else None
+    if current is None:
+        raise HTTPException(status_code=404, detail="There is no current result to compare with.")
+    if e["kind"] == "markers":
+        out = await asyncio.to_thread(results_export.compare_markers, value["value"], current, n)
+    else:
+        out = await asyncio.to_thread(results_export.compare_enrichment, value["value"], current, min(n, 50))
+    return {"id": result_id, "kind": e["kind"], "key": e["key"], "stale": e["stale"], **out}

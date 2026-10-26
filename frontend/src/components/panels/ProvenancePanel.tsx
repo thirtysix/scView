@@ -19,6 +19,7 @@ import {
 import { getDataset } from "@/api/datasets";
 import { keptRerunParams, lastRunText, paramText } from "@/lib/provenanceParams";
 import { RecipeViewer } from "@/components/panels/RecipeViewer";
+import { ResultsList } from "@/components/panels/ResultsList";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 
@@ -240,6 +241,9 @@ export function ProvenancePanel() {
         // Keyed on the step count: a re-run adds steps, and the recipe is fetched again.
         <RecipeViewer key={`${dataset.id}:${history.length}`} datasetId={dataset.id} />
       )}
+
+      {/* Keyed on the step count too: a re-run can archive markers and mark results stale. */}
+      <ResultsList key={`results:${dataset.id}:${history.length}`} datasetId={dataset.id} />
 
       {history.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-white p-4">

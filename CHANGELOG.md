@@ -29,6 +29,17 @@ All notable changes to scView are documented here. The format is based on
 - `POST /datasets/{id}/results/{rid}/restore` makes an earlier markers or enrichment result current again
   (the one it replaces is kept); refused (409) for a stale one, whose groups no longer exist. Restored
   markers drop the column's enrichment (computed from other markers; also kept).
+- **Stored results list** (History, below "Reproduce this analysis"; results store phase 3): every stored
+  result with its kind, when, size and badges (earlier = superseded, pinned, "earlier data" = stale), a
+  kind filter, and per row: download as `.tsv.gz`, pin (kept until deleted) / unpin, delete (with a
+  confirm), and for earlier markers and enrichment "compare with current" (top 50 genes shared per group;
+  significant terms shared) and "make current again".
+- **Exports**: one result as `.tsv.gz` (header + rows, 6 significant digits, p-values `%.3e`), all results
+  as a zip with `manifest.json` (parameters, version, fingerprint, stale flag), and "Dataset + stored
+  results (.zip)" in the Download menu (the h5ad beside a `results/` folder). The plain h5ad download is
+  unchanged. `GET /datasets/{id}/results/{rid}/table.tsv.gz`, `GET /datasets/{id}/results.zip`,
+  `GET /datasets/{id}/export/h5ad?with_results=true`, `POST /datasets/{id}/results/{rid}/pin`,
+  `GET /datasets/{id}/results/{rid}/compare`.
 
 ### Fixed
 - Enrichment overlap genes are listed sorted: their order came from gseapy's sets and changed between

@@ -4,6 +4,7 @@ keep their results in it."""
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -340,7 +341,7 @@ async def test_restore_api(client, dataset_manager):
     assert enrichment_key("leiden", "0") not in adaptor.adata.uns  # computed from other markers
     rows = (await client.get(f"/api/v1/datasets/{did}/results")).json()["results"]
     assert {(e["kind"], e["label"]) for e in rows} == {("markers", "Markers of 'leiden' (wilcoxon)"),
-                                                        ("enrichment", "Enrichment of 'leiden' 0")}
+                                                        ("enrichment", "Enrichment of 'leiden' = 0")}
     dataset_manager.evict(did)  # from disk: the restore was saved
     adaptor = await dataset_manager.get_or_load_dataset(did)
     assert adaptor.adata.uns[markers_key("leiden")]["params"]["method"] == "t-test"
@@ -355,3 +356,127 @@ async def test_restore_api(client, dataset_manager):
     write_derived(adata, adaptor.h5ad_path, adaptor.h5ad_path, before)
     r = await client.post(f"/api/v1/datasets/{did}/results/{wil['id']}/restore")
     assert r.status_code == 409 and "earlier groups" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: exports, pin, compare (core/results_export.py)
+# ---------------------------------------------------------------------------
+
+def _tsv(data: bytes) -> pd.DataFrame:
+    import gzip
+    import io
+    return pd.read_csv(io.StringIO(gzip.decompress(data).decode()), sep="\t")
+
+
+def test_tsv_formats_p_values_and_floats():
+    from scview.core import results_export as rx
+    df = pd.DataFrame({"gene": ["A", "B"], "logfoldchange": np.array([0.1, 2.5], dtype=np.float32),
+                       "pval_adj": [1e-300, np.nan]})
+    text = __import__("gzip").decompress(rx.tsv_gz(df)).decode().splitlines()
+    assert text[0] == "gene\tlogfoldchange\tpval_adj"
+    assert text[1] == "A\t0.1\t1.000e-300" and text[2] == "B\t2.5\t"  # no float32 noise, NaN empty
+
+
+def test_tables_per_kind(tmp_path):
+    from scview.core import results_export as rx
+    a = _clustered()
+    m = _markers(a, "t-test")
+    t = rx.table({"kind": "markers"}, {"uns_key": "k", "value": m})
+    assert list(t.columns[:4]) == ["group", "rank", "gene", "scores"] and len(t) == 3 * 30
+    assert t[t.group == "0"].gene.iloc[0] in {f"g{j}" for j in range(5)}
+
+    genes = [_Gene("CD14", 2.0, 1e-200, 1e-198, 30.5)]
+    rid = de_results.remember("ds8", genes, comparison={"mode": "groups", "group_a": "a", "group_b": "b"})
+    t = rx.table({"kind": "de"}, de_results.recall("ds8", rid))
+    assert list(t.columns) == ["gene", "logfoldchange", "pval", "pval_adj", "stat"]
+
+    t = rx.table({"kind": "enrichment"}, {"value": '[{"term": "T1", "adjusted_pvalue": 0.01, "genes": ["A", "B"]}]'})
+    assert t.genes.iloc[0] == "A;B"
+
+    obs = _obs(T2_SAMPLES, T2)
+    t = rx.table({"kind": "composition"}, composition.composition_test(obs, "cond", "donor", "group"))
+    assert "group" in t.columns and len(t) == 5 and {"props_A", "props_B"} <= set(t.columns)
+
+    t = rx.table({"kind": "cytokine"}, {"result": {"groups": ["g1"], "cytokines": ["IFN1", "IL6"],
+                                                    "z": [[3.0, 0.1]], "p": [[0.001, 0.9]], "coef": [[1, 0]]}})
+    assert list(t.cytokine) == ["IFN1", "IL6"]
+    t = rx.table({"kind": "planner"}, {"kind": "de", "needed": [{"log2fc": 1, "donors_needed": 4}] * 3})
+    assert len(t) == 3  # fallback: the longest list of records
+    assert rx.table({"kind": "x"}, {"a": 1}) is None
+
+
+def test_results_zip_and_manifest(tmp_path):
+    import zipfile
+    from scview.core import results_export as rx
+    _stored("ds9", "ppi", [{"label": "q", "n_links": 3}], label="Protein interactions")
+    _stored("ds9", "x", {"a": 1}, label="no table")
+    out = tmp_path / "r.zip"
+    assert rx.results_zip("ds9", out) == 2
+    with zipfile.ZipFile(out) as z:
+        manifest = json.loads(z.read("manifest.json"))
+        files = [r["file"] for r in manifest["results"]]
+        assert sum(f is not None for f in files) == 1
+        member = next(f for f in files if f)
+        assert member.startswith("results/Protein interactions_") and _tsv(z.read(member)).n_links[0] == 3
+
+
+def test_pinned_survives_retention(tmp_path):
+    first = _stored("ds10", "markers", {"i": 0}, key="leiden")[0]
+    assert results_store.set_pinned("ds10", first["id"], True)
+    for i in range(1, 7):
+        _stored("ds10", "markers", {"i": i}, key="leiden")
+    rows = results_store.entries("ds10")
+    assert first["id"] in {e["id"] for e in rows}
+    assert next(e for e in rows if e["id"] == first["id"])["status"] == "pinned"
+    assert results_store.set_pinned("ds10", first["id"], False)
+    assert first["id"] not in {e["id"] for e in results_store.entries("ds10")}  # the oldest: let go
+    assert results_store.set_pinned("ds10", "nope", True) is False
+
+
+def test_compare_markers_and_enrichment():
+    from scview.core import results_export as rx
+    a = _clustered()
+    old = dict(_markers(a, "t-test"))
+    cur = dict(_markers(a, "wilcoxon"))
+    out = rx.compare_markers(old, cur, n=5)
+    g0 = next(g for g in out["groups"] if g["group"] == "0")
+    assert out["earlier"]["method"] == "t-test" and out["current"]["method"] == "wilcoxon"
+    assert g0["shared"] >= 4  # both find the planted g0..g4
+    e = rx.compare_enrichment('[{"term": "A", "adjusted_pvalue": 0.01}, {"term": "B", "adjusted_pvalue": 0.02}]',
+                              '[{"term": "A", "adjusted_pvalue": 0.001}, {"term": "C", "adjusted_pvalue": 0.5}]')
+    assert e["shared"] == 1 and e["only_earlier"] == ["B"] and e["n_sig_current"] == 1
+
+
+@pytest.mark.asyncio
+async def test_phase3_api(client, dataset_manager):
+    import zipfile
+    from scview.core.uns_keys import markers_key
+    from tests.test_hvg_sensitivity import _register
+
+    a = _clustered()
+    _markers(a, "t-test")
+    did = _register(dataset_manager, a, "p3")
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    _markers(adaptor.adata, "wilcoxon")
+    dataset_manager.persist_uns(did, adaptor, [markers_key("leiden")])
+    results_store.flush()
+    [old] = (await client.get(f"/api/v1/datasets/{did}/results")).json()["results"]
+
+    r = await client.get(f"/api/v1/datasets/{did}/results/{old['id']}/table.tsv.gz")
+    assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+    assert len(_tsv(r.content)) == 90
+    r = await client.get(f"/api/v1/datasets/{did}/results/{old['id']}/compare?n=5")
+    assert r.status_code == 200 and r.json()["earlier"]["method"] == "t-test"
+    r = await client.post(f"/api/v1/datasets/{did}/results/{old['id']}/pin", json={"pinned": True})
+    assert r.status_code == 200
+    rows = (await client.get(f"/api/v1/datasets/{did}/results")).json()["results"]
+    assert rows[0]["status"] == "pinned"
+
+    r = await client.get(f"/api/v1/datasets/{did}/results.zip")
+    with zipfile.ZipFile(__import__("io").BytesIO(r.content)) as z:
+        assert "manifest.json" in z.namelist() and len(z.namelist()) == 2
+    r = await client.get(f"/api/v1/datasets/{did}/export/h5ad?with_results=true")
+    assert r.status_code == 200
+    with zipfile.ZipFile(__import__("io").BytesIO(r.content)) as z:
+        names = z.namelist()
+        assert any(n.endswith(".h5ad") for n in names) and "manifest.json" in names

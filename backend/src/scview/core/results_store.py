@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 KEEP_SUPERSEDED = 3
 KEEP_PER_KIND = 20
-MAX_BYTES = 200 * 1024**2
+MAX_BYTES = 200_000_000  # "200 MB" as the UI shows sizes (decimal units)
 INDEX = "index.json"
 RESULT = "result.json.gz"
 FORMAT = 1
@@ -551,6 +551,23 @@ def latest(adaptor: Any, kind: str, key: str | None = None, *, current_only: boo
         if got is not None:
             return got[1]
     return None
+
+
+def set_pinned(dataset_id: str, result_id: str, pinned: bool) -> bool:
+    """Pin a result (never dropped by retention) or let it go back to the usual
+    rules; whether it exists."""
+    def _run() -> bool:
+        with _lock:
+            current = _read_index(dataset_id)
+            e = next((e for e in current if e["id"] == result_id), None)
+            if e is None:
+                return False
+            e["status"] = "pinned" if pinned else ("superseded" if e.get("archived") else "primary")
+            _write_index(dataset_id, _retain(dataset_id, current))
+            return True
+    if not _safe(dataset_id) or not _safe(result_id):
+        return False
+    return _writer.submit(_run).result()
 
 
 def delete(dataset_id: str, result_id: str) -> bool:

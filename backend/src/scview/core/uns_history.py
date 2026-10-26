@@ -119,7 +119,7 @@ def _archive(dataset_id: str, key: str, seen: _Seen) -> None:
         group = group_of(key)
         results_store.keep(dataset_id, "enrichment",
                            {"uns_key": key, "value": seen.value, "meta_key": meta_of(key), "meta": seen.meta},
-                           key=f"{col}|{group}", label=f"Enrichment of '{col}' {group}",
+                           key=f"{col}|{group}", label=f"Enrichment of '{col}' = {group}",
                            computed_on=seen.computed_on, archived=True)
 
 
