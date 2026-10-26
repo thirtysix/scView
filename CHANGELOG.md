@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-10-26
+
 ### Added
 - **CRISPR screens**: "CRISPR Guide Capture" features are kept at import as `obsm['guide_counts']`
   (up to 2,000 guides) instead of being dropped, and Cell Ranger's
