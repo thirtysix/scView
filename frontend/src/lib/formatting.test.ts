@@ -18,7 +18,8 @@ describe("formatNumber", () => {
 
 describe("formatPValue", () => {
   it("uses scientific notation for tiny values, fixed otherwise", () => {
-    expect(formatPValue(0)).toBe("0.00e+0");
+    expect(formatPValue(0)).toBe("< 1e-300");
+    expect(formatPValue(1e-310)).toBe("1.00e-310");
     expect(formatPValue(1e-9)).toBe("1.00e-9");
     expect(formatPValue(0.0123)).toBe("0.0123");
   });

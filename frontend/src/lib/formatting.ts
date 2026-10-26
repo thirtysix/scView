@@ -4,7 +4,10 @@ export function formatNumber(n: number): string {
   return n.toString();
 }
 
+/** A p-value for a table. 0 means below what a float holds (scanpy's p-values
+ *  underflow past ~1e-308), so it reads "< 1e-300", never "0.00e+0". */
 export function formatPValue(p: number): string {
+  if (p === 0) return "< 1e-300";
   if (p < 0.001) return p.toExponential(2);
   return p.toFixed(4);
 }
