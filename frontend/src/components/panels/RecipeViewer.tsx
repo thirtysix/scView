@@ -6,10 +6,7 @@ import { downloadRecipeFile, type RecipeFile } from "@/api/export";
 import { paramText } from "@/lib/provenanceParams";
 import { REPLAY_LABELS, replayCounts, replayStatus } from "@/lib/replayStatus";
 import { useViewStore } from "@/stores/viewStore";
-
-function prettyStep(step: string): string {
-  return step.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-}
+import { stepLabel } from "@/lib/stepLabel";
 
 function fmtTime(iso?: string | null): string {
   if (!iso) return "time not recorded";
@@ -148,7 +145,7 @@ function RecipeRow({ index, step }: { index: number; step: RecipeStep }) {
       <span className="w-5 shrink-0 text-right tabular-nums text-slate-400">{index}</span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="font-medium text-slate-800">{prettyStep(step.step)}</span>
+          <span className="font-medium text-slate-800">{stepLabel(step.step)}</span>
           <span className={`rounded px-1.5 py-0.5 ${meta.cls}`} title={meta.help}>
             {meta.label}
           </span>
