@@ -310,6 +310,26 @@ async def marker_db_status(
     return await asyncio.to_thread(_read)
 
 
+class MarkerDbDownloadRequest(BaseModel):
+    retry: bool = False
+
+
+@router.post("/datasets/{dataset_id}/annotation/marker-db/download")
+async def marker_db_download(
+    dataset_id: str,
+    body: MarkerDbDownloadRequest | None = None,
+    dm: DatasetManager = Depends(get_dataset_manager),
+    settings: Settings = Depends(get_settings_dep),
+):
+    """Start fetching the missing marker databases in the background and return the
+    status at once; poll ``/status`` until ``state`` is no longer "downloading"."""
+    await _adaptor(dm, dataset_id)
+    return await asyncio.to_thread(
+        mdb.start_download, _marker_db_dest(settings), auto_download=settings.MARKER_DB_AUTO_DOWNLOAD,
+        retry=bool(body and body.retry),
+    )
+
+
 @router.post("/datasets/{dataset_id}/annotation/marker-db/check")
 async def marker_db_check(
     dataset_id: str,

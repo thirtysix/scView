@@ -13,6 +13,7 @@ were measured on the downloaded databases and are in the batch-8 report.
 
 from __future__ import annotations
 
+import time
 import dataclasses
 import gzip
 import hashlib
@@ -393,6 +394,16 @@ def _cells(seed: int = 0, extra: dict[str, list[str]] | None = None) -> ad.AnnDa
     return a
 
 
+def test_an_overlap_likely_by_chance_is_weak_support(installed, monkeypatch):
+    # one shared gene out of 40 database markers (p ~0.07 on Kang) read "supported"; now an overlap
+    # needs p < SUPPORT_P to count as support
+    monkeypatch.setattr(mdb, "SUPPORT_P", 1e-30)
+    res = mdb.check(_cells(), "lab", "human", mdb.load(installed))
+    b = {r["label"]: r for r in res["labels"]}["B"]
+    assert b["verdict"] == "weak" and b["verdict_text"] == "weak support" and b["overlap"]
+    assert res["verdict_counts"]["weak"] == 1 and res["verdict_counts"]["supported"] == 0
+
+
 def test_markers_are_computed_without_touching_the_dataset():
     a = _cells()
     out = mdb._markers_for(a, "lab")
@@ -422,7 +433,8 @@ def test_check_gives_each_label_its_verdict_and_suggestions(installed):
     assert by["Zorblax"]["suggestions"][0]["cell_type"] == "T cells"
     # "Rare cell" has 3 database genes: too few to judge, whatever the overlap
     assert by["Rare cell"]["verdict"] == "too_few" and by["Rare cell"]["n_db_genes"] == 3
-    assert res["verdict_counts"] == {"supported": 1, "no_support": 1, "too_few": 1, "not_in_db": 1, "no_markers": 0}
+    assert res["verdict_counts"] == {"supported": 1, "weak": 0, "no_support": 1, "too_few": 1, "not_in_db": 1,
+                                     "no_markers": 0}
     assert all(len(r["suggestions"]) <= 3 for r in res["labels"])
     assert [s["label"] for s in res["sources"]] == ["PanglaoDB", "CellMarker 2.0", "ACT"] and res["ontology"]
     assert res["verdict_sources"] == ["PanglaoDB", "CellMarker 2.0", "ACT"]
@@ -597,3 +609,24 @@ async def test_status_and_check_endpoints(client, dataset_manager, test_settings
     assert {s["name"] for s in st["sources"] if s["downloaded"]} == {"panglao", "cellmarker2", "act"}
     r = await client.post(f"{API}/datasets/{did}/annotation/marker-db/check", json={"column": "nope"})
     assert r.status_code == 404
+
+
+def test_start_download_returns_at_once_and_reports_downloading(tmp_path, monkeypatch):
+    import threading
+
+    gate, seen = threading.Event(), []
+
+    def slow_ensure(dest, **kw):
+        seen.append(kw)
+        gate.wait(5)
+
+    monkeypatch.setattr(mdb, "ensure", slow_ensure)
+    st = mdb.start_download(tmp_path, auto_download=True, retry=True)
+    assert st["state"] == "downloading"
+    assert mdb.start_download(tmp_path, auto_download=True)["state"] == "downloading"  # joined, not repeated
+    gate.set()
+    for _ in range(100):
+        if not mdb._busy.is_set():
+            break
+        time.sleep(0.02)
+    assert not mdb._busy.is_set() and len(seen) == 1 and seen[0]["retry"] is True

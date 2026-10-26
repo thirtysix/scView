@@ -349,7 +349,7 @@ export interface MarkerDbStatus {
   dataset_species?: "human" | "mouse" | "unknown";
 }
 
-export type MarkerDbVerdict = "supported" | "no_support" | "too_few" | "not_in_db" | "no_markers";
+export type MarkerDbVerdict = "supported" | "weak" | "no_support" | "too_few" | "not_in_db" | "no_markers";
 
 export interface MarkerDbType {
   cell_type: string;
@@ -406,6 +406,14 @@ export interface MarkerDbResult {
 
 export function getMarkerDbStatus(datasetId: string): Promise<MarkerDbStatus> {
   return apiFetch(`/datasets/${datasetId}/annotation/marker-db/status`);
+}
+
+/** Start fetching missing marker databases in the background; returns the status at once. */
+export function startMarkerDbDownload(datasetId: string, retry = false): Promise<MarkerDbStatus> {
+  return apiFetch(`/datasets/${datasetId}/annotation/marker-db/download`, {
+    method: "POST",
+    body: JSON.stringify({ retry }),
+  });
 }
 
 /** Check `column`'s labels against the marker databases (downloaded on first use). Changes nothing. */

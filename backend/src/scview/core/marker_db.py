@@ -81,6 +81,7 @@ FAILURE_COOLDOWN = 600  # seconds before a failed source is tried again without 
 TOP_DB = 50  # a label's database set: its 50 best-evidenced measured genes
 N_MARKERS = 25  # a group's markers
 MIN_DB_GENES = 5  # fewer measured database genes than this: abstain
+SUPPORT_P = 0.05  # an overlap this likely by chance (often one shared gene) is "weak", not "supported"
 N_SUGGEST = 3
 MAX_GROUPS = 100
 # Mito, ribosomal (incl. RPLP0-2 and RPSA), immunoglobulin / TCR V segments and unnamed genes
@@ -88,6 +89,7 @@ SKIP_GENE = re.compile(r"^(MT-|RP[LS]\d|RPLP\d|RPSA$|IG[HKL]V|TR[ABDG]V|ENSG)", 
 
 VERDICT_TEXT = {
     "supported": "supported",
+    "weak": "weak support",
     "no_support": "no database support",
     "too_few": "too few database markers",
     "not_in_db": "not in database",
@@ -99,7 +101,8 @@ NOTE = (
     "best-evidenced database markers measured here are compared with the group's top 25 "
     "marker genes (detected in at least 20% of its cells, adjusted p < 0.05, sorted by "
     "log fold change, mitochondrial and ribosomal genes left out) with a hypergeometric "
-    "test against the measured genes. \"No database support\" means none of them is among the top 25: a "
+    "test against the measured genes. \"Supported\" needs that test's p < 0.05; a smaller overlap "
+    "(often one shared gene) is \"weak support\". \"No database support\" means none of them is among the top 25: a "
     "reason to look, not proof the label is wrong. Activation states, fine subtypes of one "
     "lineage (CD4 naive vs memory, CD8 T vs NK) and progenitors fail with every database."
 )
@@ -765,6 +768,29 @@ def ensure(
     return status(dest, auto_download=auto)
 
 
+def start_download(dest: Path, *, auto_download: bool | None = None, retry: bool = False) -> dict:
+    """Fetch whatever is missing in a background thread and return ``status`` at once.
+
+    The first download takes minutes (CellMarker 3.0 alone is ~70 MB), longer than
+    the proxy waits for one response, so the UI starts it here and polls ``status``
+    instead of holding a check request open. A fetch already running is joined, not
+    repeated (``ensure`` holds the lock)."""
+    auto = auto_download_enabled() if auto_download is None else auto_download
+    if not _busy.is_set():
+        _busy.set()  # "downloading" from the first poll on; ensure() sets it again under the lock
+
+        def _run():
+            try:
+                ensure(dest, auto_download=auto, retry=retry)
+            except Exception as e:  # pragma: no cover - ensure records per-source failures itself
+                logger.warning("Marker database download failed: %s", e)
+            finally:
+                _busy.clear()
+
+        threading.Thread(target=_run, name="marker-db-download", daemon=True).start()
+    return status(dest, auto_download=auto)
+
+
 def _ensure_locked(dest: Path, names: list[str], auto: bool, retry: bool, client) -> None:
     m = read_manifest(dest)
     sources, failures = m.setdefault("sources", {}), m.setdefault("failures", {})
@@ -1159,7 +1185,12 @@ def _label_row(sc_: Scorer, sc_suggest: Scorer, label: str, markers: list[str]) 
         best = sc_._type(matched[i], Q, s[i], k[i], n[i])
         row.update(db_type=best["cell_type"], sources=best["sources"], p=best["p"], overlap=best["overlap"],
                    n_db_genes=best["n_db_genes"], cl_id=best["cl_id"])
-        row["verdict"] = "too_few" if n[i] < MIN_DB_GENES else "supported" if k[i] > 0 else "no_support"
+        if n[i] < MIN_DB_GENES:
+            row["verdict"] = "too_few"
+        elif k[i] == 0:
+            row["verdict"] = "no_support"
+        else:
+            row["verdict"] = "supported" if best["p"] < SUPPORT_P else "weak"
     row["verdict_text"] = VERDICT_TEXT[row["verdict"]]
     return row
 
