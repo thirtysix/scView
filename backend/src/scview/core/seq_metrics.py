@@ -53,7 +53,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from scview.core import ambient
+from scview.core import ambient, dsb
 from scview.core.ingestion.detection import looks_like_metrics
 
 logger = logging.getLogger(__name__)
@@ -793,6 +793,7 @@ def build_record(
     this sample; ``cells_source`` "ingest" = the uploaded filtered matrix (Cell Ranger's
     call), "dataset" = the dataset's cells when attached later (after any filtering)."""
     notes: list[str] = []
+    cells = list(cells)
     rec: dict[str, Any] = {
         "sample": str(sample), "column": column, "cells_source": cells_source,
         "attached_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -829,6 +830,7 @@ def build_record(
             notes.append(f"The raw matrix could not be read: {e}")
         if rec["knee"] is not None:
             _add_soup(rec, h5, mex, notes)
+            _add_dsb_background(rec, h5, mex, cells, notes)
     return rec
 
 
@@ -856,6 +858,22 @@ def _add_soup(rec: dict, h5: Path | None, mex: tuple[Path, Path, Path] | None,
     rec["_soup"] = soup
 
 
+def _add_dsb_background(rec: dict, h5: Path | None, mex: tuple[Path, Path, Path] | None,
+                        cells: list[str], notes: list[str]) -> None:
+    """The antibodies' background in the raw matrix's empty droplets, for DSB
+    (``core/dsb.py``): a summary in the record, the binned sums under ``_dsb`` until
+    ``store`` moves them to ``uns[dsb.UNS_BACKGROUND]``. Nothing without antibodies."""
+    try:
+        bg = dsb.background_for_files(h5, mex, cells)
+    except (OSError, KeyError, ValueError) as e:
+        notes.append(f"The antibodies' empty-droplet background could not be read: {e}")
+        return
+    if bg is None:
+        return
+    rec["dsb"] = dsb.background_summary(bg)
+    rec["_dsb"] = bg
+
+
 def read(adata) -> dict | None:
     """The stored ``{"version", "samples": {label: record}}``, or None."""
     raw = getattr(adata, "uns", {}).get(UNS_KEY)
@@ -876,16 +894,24 @@ def store(adata, records: list[dict]) -> None:
     data = read(adata) or {"version": VERSION, "samples": {}}
     samples = dict(data.get("samples") or {})
     soups: dict[str, dict] = {}
+    backgrounds: dict[str, dict] = {}
     for rec in records:
         soup = rec.pop("_soup", None)
         if soup is not None:
             soups[rec["sample"]] = soup
         elif rec.get("knee") is not None:  # a new raw matrix without a soup replaces one
             ambient.remove_soup(adata, rec["sample"])
+        bg = rec.pop("_dsb", None)
+        if bg is not None:
+            backgrounds[rec["sample"]] = bg
+        elif rec.get("knee") is not None:
+            dsb.remove_background(adata, rec["sample"])
         samples[rec["sample"]] = rec
     adata.uns[UNS_KEY] = json.dumps({"version": VERSION, "samples": samples})
     if soups:  # the profiles beside it (``core/ambient.py``)
         ambient.store_soups(adata, soups)
+    if backgrounds:  # the antibodies' empty droplets (``core/dsb.py``)
+        dsb.store_backgrounds(adata, backgrounds)
 
 
 def summary_sentence(rec: dict, flags: list[dict]) -> str:
@@ -1032,6 +1058,7 @@ def remove(adata, sample: str) -> bool:
         return False
     samples = {k: v for k, v in data["samples"].items() if k != sample}
     ambient.remove_soup(adata, sample)
+    dsb.remove_background(adata, sample)
     if samples:
         adata.uns[UNS_KEY] = json.dumps({"version": VERSION, "samples": samples})
     else:

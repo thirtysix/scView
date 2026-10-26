@@ -217,7 +217,8 @@ def _has_mt_genes(adata) -> bool:
 
 
 # Layer key -> obsm key of the protein modality (core/protein.py).
-PROTEIN_LAYERS = {"protein": protein.CLR_KEY, "protein_counts": protein.COUNTS_KEY}
+PROTEIN_LAYERS = {"protein": protein.CLR_KEY, "protein_counts": protein.COUNTS_KEY,
+                  "protein_dsb": protein.DSB_KEY}
 
 class AnnDataAdaptor:
     """Provides read-only access to a single h5ad file.
@@ -512,11 +513,18 @@ class AnnDataAdaptor:
     # Expression layers
     # ------------------------------------------------------------------
 
+    def _protein_layer(self, layer: str) -> bool:
+        """Whether ``layer`` is a protein layer this dataset has (``protein_dsb`` only
+        once DSB was computed, ``core/dsb.py``)."""
+        return (layer in PROTEIN_LAYERS and protein.has_protein(self.adata)
+                and PROTEIN_LAYERS[layer] in self.adata.obsm)
+
     def _var_names_for_layer(self, layer: str) -> list[str]:
         """Return gene names for a given expression layer key. The protein
-        modality (CITE-seq) is read as two more layers: ``protein`` (CLR) and
-        ``protein_counts``, with the protein names as its genes."""
-        if layer in PROTEIN_LAYERS and protein.has_protein(self.adata):
+        modality (CITE-seq) is read as more layers: ``protein`` (CLR),
+        ``protein_counts`` and, once computed, ``protein_dsb``, with the protein
+        names as its genes."""
+        if self._protein_layer(layer):
             return protein.protein_names(self.adata)
         if layer == "raw":
             if self.adata.raw is not None:
@@ -533,7 +541,7 @@ class AnnDataAdaptor:
 
     def _get_matrix_for_layer(self, layer: str):
         """Return the expression matrix for a given layer key."""
-        if layer in PROTEIN_LAYERS and protein.has_protein(self.adata):
+        if self._protein_layer(layer):
             return self.adata.obsm[PROTEIN_LAYERS[layer]].to_numpy(dtype=np.float32)
         if layer == "raw":
             if self.adata.raw is not None:
@@ -594,12 +602,20 @@ class AnnDataAdaptor:
         names = protein.protein_names(self.adata)
         if not names:
             return None
+        from scview.core import dsb
+
+        rec = dsb.read_record(self.adata)
         return {
             "names": names,
             "controls": [n for n in names if protein.is_control(n)],
             "layer": "protein",
             "counts_layer": "protein_counts",
             "normalisation": "CLR per cell",
+            # DSB (core/dsb.py), once computed: its layer and how it was made
+            "dsb_layer": "protein_dsb" if rec is not None else None,
+            "dsb": None if rec is None else {
+                "mode": rec["mode"], "isotypes": rec["isotypes"], "n_droplets": rec["n_droplets"],
+                "denoise": rec["denoise"], "method": rec["method"]},
         }
 
     def default_expression_layer(self) -> str:
@@ -781,7 +797,7 @@ class AnnDataAdaptor:
         """The layer's fixed colour range for marker plots, cached per matrix."""
         source = (
             self.adata.obsm[PROTEIN_LAYERS[layer]]
-            if layer in PROTEIN_LAYERS and protein.has_protein(self.adata)
+            if self._protein_layer(layer)
             else self._get_matrix_for_layer(layer)
         )
         # A backed X is a new object at each access: its key is the file, not the object.

@@ -27,7 +27,7 @@ router = APIRouter()
 
 # Entries a save can change: the tag counts, and the protein modality the
 # confirmed hashtags leave (its CLR is made again without them).
-_OBSM_KEYS = (hashing.HTO_KEY, protein.COUNTS_KEY, protein.CLR_KEY)
+_OBSM_KEYS = (hashing.HTO_KEY, protein.COUNTS_KEY, protein.CLR_KEY, protein.DSB_KEY)
 
 
 class DemuxRequest(BaseModel):

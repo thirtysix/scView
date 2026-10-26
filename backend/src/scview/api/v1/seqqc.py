@@ -24,7 +24,7 @@ from anndata.io import write_elem
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from scview.config import Settings
-from scview.core import ambient, seq_metrics
+from scview.core import ambient, dsb, seq_metrics
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, save_edit, uns_snapshot
 from scview.dependencies import get_dataset_manager, get_settings_dep
@@ -157,7 +157,8 @@ async def _edit(dataset_id: str, dm: DatasetManager, edit) -> dict | None:
                 save_edit(adaptor, work, output_path, before)
             else:
                 _save_uns_entry(adaptor.h5ad_path, output_path,
-                                {k: work.uns.get(k) for k in (seq_metrics.UNS_KEY, ambient.UNS_SOUP)})
+                                {k: work.uns.get(k) for k in (seq_metrics.UNS_KEY, ambient.UNS_SOUP,
+                                                              dsb.UNS_BACKGROUND)})
             return seq_metrics.payload(work)
 
         try:

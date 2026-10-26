@@ -990,6 +990,74 @@ _HELPERS["label_transfer"] = _label_transfer_helper()
 _HELPER_ORDER += ("label_transfer",)
 
 
+def _dsb_helper() -> str:
+    """core/dsb.py's empty-droplet reading and DSB maths (numpy, pandas, h5py only), copied
+    so the script normalises the antibodies as scView did; the antibody counts are read
+    again from the input, the empty droplets from each sample's raw matrix."""
+    import inspect
+
+    from scview.core import dsb
+
+    lines = ["import math", "import os", "", "import h5py", ""]
+    lines += [f"{name} = {_lit(getattr(dsb, name))}" for name in dsb.REPLAY_CONSTANTS]
+    for obj in dsb.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def raw_paths(files):
+    """A sample's raw matrix files (one .h5, or the MEX matrix, barcodes, features)."""
+    paths = []
+    for name in files:
+        for folder in (".", os.path.dirname(os.path.abspath(INPUT))):
+            path = os.path.join(folder, name)
+            if os.path.exists(path):
+                paths.append(path)
+                break
+        else:
+            sys.exit(f"Raw matrix {name} not found: put it beside this script or the input file.")
+    return paths
+
+
+def input_cells():
+    """The input's cells (excluded from the empty droplets, as scView excluded the dataset's)."""
+    p = str(INPUT)
+    if p.endswith(".h5ad"):
+        return list(ad.read_h5ad(p, backed="r").obs_names.astype(str))
+    return list(read_input(p).obs_names.astype(str))
+
+
+def protein_counts_for(adata, proteins, features):
+    """The cells' antibody counts (cells x proteins, in the recorded order), read again from
+    the input: an .h5ad's protein table in obsm or its antibody features in X, or a 10x
+    file's Antibody Capture features (read_input keeps genes only)."""
+    p = str(INPUT)
+    if p.endswith(".h5ad"):
+        full = ad.read_h5ad(p, backed="r")
+        rows = full.obs_names.get_indexer(adata.obs_names)
+        for key in ("protein_counts", "protein_expression", "protein", "adt", "ADT"):
+            table = full.obsm[key] if key in full.obsm else None
+            if isinstance(table, pd.DataFrame) and all(n in table.columns for n in proteins):
+                return table[proteins].to_numpy(dtype=np.float64)[rows]
+        full = full.to_memory()
+    elif p.endswith(".h5"):
+        full = sc.read_10x_h5(p, gex_only=False)
+    else:
+        full = sc.read_10x_mtx(p, var_names="gene_symbols", gex_only=False)
+    if "feature_types" not in full.var.columns:
+        sys.exit("The input has no antibody counts to normalise.")
+    ab = full[:, full.var["feature_types"].astype(str).eq("Antibody Capture").to_numpy()]
+    names = [str(n) for n in ab.var_names]
+    cols = [names.index(f) for f in features]
+    X = ab.X[:, cols]
+    X = X.toarray() if sp.issparse(X) else np.asarray(X)
+    return X[ab.obs_names.get_indexer(adata.obs_names)].astype(np.float64)
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["dsb"] = _dsb_helper()
+_HELPER_ORDER += ("dsb",)
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -1989,6 +2057,62 @@ def _merge_clusters(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+def _protein_dsb(p: dict, ctx: _Ctx) -> Snippet:
+    """DSB values of the antibodies (core/dsb.py): the counts read again from the input,
+    the empty droplets from each sample's raw matrix (by the file names recorded)."""
+    mode = p.get("mode")
+    proteins, features = p.get("proteins"), p.get("features")
+    if mode not in ("empty_droplets", "model_negative") or not proteins or not features:
+        return Snippet(NOT_REPLAYABLE, ["# DSB protein normalisation: the run is not recorded. Recorded:",
+                                        *_param_comment(p)], "DSB settings not recorded")
+    samples = p.get("samples") or []
+    if mode == "empty_droplets" and not all(isinstance(s, dict) and s.get("raw_files") for s in samples):
+        return Snippet(NOT_REPLAYABLE, ["# DSB protein normalisation: the raw matrices are not recorded, "
+                                        "so the empty droplets can't be read again. Recorded:",
+                                        *_param_comment(p)], "raw matrices not recorded")
+    _need(ctx, "dsb")
+    settings = {"mode": mode, "denoise": bool(p.get("denoise", True)),
+                "isotypes": [str(i) for i in p.get("isotypes") or []],
+                "rna_window": p.get("rna_window"), "prot_window": p.get("prot_window"),
+                "proteins": [str(x) for x in proteins], "features": [str(x) for x in features],
+                "samples": [{"sample": str(s.get("sample")), "column": s.get("column"),
+                             "raw_files": [str(f) for f in s.get("raw_files") or []],
+                             "n_droplets": s.get("n_droplets")} for s in samples]}
+    how = ("empty droplets of each sample's raw matrix" if mode == "empty_droplets"
+           else "the cells themselves (dsb ModelNegativeADTnorm: no empty droplets)")
+    return Snippet(EXACT, [
+        "# DSB protein normalisation (Mule et al. 2022; dsb 2.0.1's method, core/dsb.py): the",
+        f"# antibody counts against the background in {how},",
+        "# then the per-cell technical component (isotypes + background mean) regressed out.",
+        f"DSB = {_lit(settings)}",
+        *_block('''
+counts = protein_counts_for(adata, DSB["proteins"], DSB["features"])
+iso = [DSB["proteins"].index(i) for i in DSB["isotypes"]]
+if DSB["mode"] == "empty_droplets":
+    norm = np.full(counts.shape, np.nan)
+    cells = input_cells()
+    for s in DSB["samples"]:
+        files = raw_paths(s["raw_files"])
+        bg = (background_from_h5(files[0], cells) if len(files) == 1
+              else background_from_mex(*files, cells=cells))
+        n, mean, sd = window_stats(bg, DSB["rna_window"], DSB["prot_window"])
+        if n != s["n_droplets"]:
+            print(f"note: {n:,} empty droplets in the window for {s['sample']}; scView used {s['n_droplets']:,}")
+        order = [list(bg["features"]).index(f) for f in DSB["features"]]
+        rows = (np.flatnonzero(adata.obs[s["column"]].astype(str).to_numpy() == s["sample"])
+                if s["column"] else np.arange(adata.n_obs))
+        norm[rows] = step1_empty(counts[rows], mean[order], sd[order])
+else:
+    norm = step1_model_negative(counts)[0]
+if DSB["denoise"]:
+    norm = step2(norm, iso)[0]
+adata.obsm["protein_dsb"] = pd.DataFrame(norm.astype(np.float32), index=adata.obs_names,
+                                         columns=DSB["proteins"])
+del counts, norm
+'''),
+    ])
+
+
 def _qc_state_label(p: dict, ctx: _Ctx) -> Snippet:
     out = str(p.get("output") or "")
     return Snippet(NOT_REPLAYABLE, [
@@ -2332,6 +2456,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "doublet_threshold": _doublet_threshold,
     "annotation_crosscheck": _annotation_crosscheck,
     "merge_clusters": _merge_clusters,
+    "protein_dsb": _protein_dsb,
     "qc_state_label": _qc_state_label,
     "mito_refilter": _mito_refilter,
     "gene_programs": _gene_programs,

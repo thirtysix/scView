@@ -54,6 +54,7 @@ from scview.api.v1 import (
     ppi,
     perturbation,
     ontology,
+    dsb,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -109,3 +110,4 @@ api_router.include_router(ppi.router, tags=["ppi"])
 api_router.include_router(results.router, tags=["results"])
 api_router.include_router(perturbation.router, tags=["perturbation"])
 api_router.include_router(ontology.router, tags=["labels"])
+api_router.include_router(dsb.router, tags=["protein"])
