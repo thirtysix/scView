@@ -149,7 +149,7 @@ async def test_depth_check_matches_scipy(client, dataset_manager):
     assert max(abs(sg_w), abs(au_w)) >= max(abs(body["methods"][m][other]["within"]) for m in ("score_genes", "aucell"))
     assert body["sentence"].startswith(f"score_genes {aucell.verdict(sg_w)} on this data ")
     assert f"(rho {sg_w:.2f} with {aucell.METRIC_TEXT[lead]}, within half groups)" in body["sentence"]
-    assert f"AUCell {aucell.verdict(au_w)} (rho {au_w:.2f})." in body["sentence"]
+    assert f"AUCell {aucell.verdict(au_w)} (rho {au_w:.2f}); ssGSEA " in body["sentence"]
 
 
 async def test_depth_check_defaults_to_the_active_clustering(client, dataset_manager):

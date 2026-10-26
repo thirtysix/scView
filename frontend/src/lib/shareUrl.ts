@@ -10,6 +10,7 @@
  * same file another id), and restores it with `restoreSession`.
  */
 import { getDataset, listDatasets } from "@/api/datasets";
+import { methodLabel } from "@/api/genesetScore";
 import type { DatasetInfo } from "@/api/types";
 import { describeFilter } from "@/lib/cellFilter";
 import { PANEL_LABELS, type UnifiedSubtab } from "@/lib/constants";
@@ -303,7 +304,7 @@ export function describeSharedView(session: SessionFile): string[] {
   }
   const o = v.overlay;
   if (o?.type === "expression") out.push(`the ${o.gene} ${o.layer ? "protein" : "expression"} overlay`);
-  else if (o?.type === "score") out.push(`the gene-set score overlay “${o.name}”${o.method === "aucell" ? " (AUCell)" : ""} (${count(o.genes.length)} genes)`);
+  else if (o?.type === "score") out.push(`the gene-set score overlay “${o.name}”${o.method && o.method !== "score_genes" ? ` (${methodLabel(o.method)})` : ""} (${count(o.genes.length)} genes)`);
   else if (o?.type === "activity") out.push(`the ${o.source} activity overlay (${o.network === "collectri" ? "CollecTRI" : "PROGENy"})`);
   else if (o?.type === "reliability") out.push(`the plot reliability overlay (${prettyEmbeddingLabel(o.embedding)})`);
   else if (o?.type === "program") out.push(`the gene program P${o.index} usage overlay`);

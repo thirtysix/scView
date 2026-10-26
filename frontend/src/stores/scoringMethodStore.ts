@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-import type { ScoreMethod } from "@/api/genesetScore";
+import { isScoreMethod, type ScoreMethod } from "@/api/genesetScore";
 
 // Never throws: blocked storage leaves the choice working for this page.
 const storage: StateStorage = {
@@ -16,7 +16,7 @@ const storage: StateStorage = {
 };
 
 /**
- * The gene-set scoring method the user picked (score_genes or AUCell), shared by
+ * The gene-set scoring method the user picked (score_genes, AUCell, ssGSEA or GSVA), shared by
  * every scoring control and kept in localStorage: it is the user's choice, not a
  * dataset's. A score already on the plot keeps the method it was computed with.
  */
@@ -38,7 +38,7 @@ export const useScoringMethodStore = create<ScoringMethodState>()(
       // Anything but a known method (an edited or future value) falls back to the default.
       merge: (persisted, current) => {
         const m = (persisted as { method?: unknown } | null)?.method;
-        return { ...current, method: m === "aucell" || m === "score_genes" ? m : current.method };
+        return { ...current, method: isScoreMethod(m) ? m : current.method };
       },
     },
   ),

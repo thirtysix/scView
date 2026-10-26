@@ -61,7 +61,7 @@ export type SessionOverlay =
   // layer: a protein (CITE-seq) is read from the protein layer
   | { type: "expression"; gene: string; layer?: string }
   // method: how the set was scored; absent (and in older sessions) = score_genes
-  | { type: "score"; name: string; genes: string[]; method?: "score_genes" | "aucell" }
+  | { type: "score"; name: string; genes: string[]; method?: "score_genes" | "aucell" | "ssgsea" | "gsva" }
   // A TF or pathway's per-cell activity (Activity subtab), computed again on open.
   | { type: "activity"; network: "collectri" | "progeny"; source: string }
   // Plot reliability (neighbour preservation) of an embedding, computed again on open;
@@ -303,7 +303,7 @@ function parseOverlay(x: unknown, where: string): SessionOverlay {
       name: text(o.name, `${where}.name`, { empty: false, max: 1024 }),
       genes: texts(o.genes, `${where}.genes`, 1, MAX_GENES),
     };
-    if (o.method !== undefined) out.method = oneOf(o.method, ["score_genes", "aucell"] as const, `${where}.method`);
+    if (o.method !== undefined) out.method = oneOf(o.method, ["score_genes", "aucell", "ssgsea", "gsva"] as const, `${where}.method`);
     return out;
   }
   if (o.type === "activity") {
