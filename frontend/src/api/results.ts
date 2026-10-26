@@ -110,6 +110,7 @@ const KIND_LABELS: Record<string, string> = {
   offtarget: "Off-target",
   ppi: "Protein interactions",
   planner: "Study planner",
+  mixscape: "Mixscape",
 };
 
 export function kindLabel(kind: string): string {
