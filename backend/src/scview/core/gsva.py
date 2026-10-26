@@ -59,6 +59,7 @@ from scview.core.object_cache import ObjectCache
 from scview.core.ssgsea import csr_block
 
 KCDF_MIN_CELLS = 200  # GSVA's kcdfNoneMinSampleSize: the kernel below, the ECDF from here
+ZERO_CAUTION = 0.75  # share of 0 values among the set's genes above which the note warns
 REF_CELLS = 20_000  # cells in the ECDF's reference: exact up to this many cells
 _STEPS = 1024  # sampled reference: levels per cell step, so estimated levels rarely tie
 TAU = 1.0  # the walk's weight exponent (the paper's)
@@ -431,6 +432,13 @@ def score_set(adata, gene_set: list[str]):
     else:
         how = f"empirical CDF over all {prep.n_cells:,} cells"
     note = f"GSVA on the {prep.source}, {prep.p:,} genes that vary; {how}"
+    idx = np.asarray(m.idx, dtype=np.int64)
+    zero_share = 1.0 - float(prep.nnz[idx].sum()) / max(prep.n_cells * idx.size, 1)
+    if zero_share >= ZERO_CAUTION:
+        # GSVA was made for bulk data: a gene that is 0 in a cell sits at its zero
+        # share, so with mostly-zero genes the walks differ little between cells.
+        note += (f"; {zero_share:.0%} of the set's values are 0, so scores bunch together: compare "
+                 "cells by rank, or use ssGSEA or AUCell for sparse data")
     if undefined:
         note += f"; {undefined:,} cells with no defined walk score 0"
     return ssgsea.SetScores(scores=scores, match=m, source=prep.source, note=note)
