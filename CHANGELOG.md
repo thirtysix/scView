@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-26
+
 ### Added
 - **Download as Seurat or SingleCellExperiment (.rds)**, built by the R converter: counts and
   log-normalised layers kept sparse (scaled values never go into `data`), cell metadata with factor levels
