@@ -6,6 +6,13 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **Dark theme: split and Compare panel titles** (CTRL / STIM, or the compared colourings) were
+  near-black on the dark plot background. Titles and frames now take the plot background's colours.
+- **Dragging the Unified View split was slow once results were open**: every pointer move resized and
+  re-rendered the open plots (one drag took 79 s with DE results on screen). The drag now moves a guide
+  line and the columns resize once, on release.
+
 ## [0.45.0] - 2026-10-27
 
 ### Added
