@@ -23,6 +23,7 @@ import type { DonorPoint } from "@/lib/donorPlot";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { errorMessage } from "@/lib/errorMessage";
+import { usePrefillSample } from "@/hooks/usePrefillSample";
 
 interface Props {
   datasetId: string;
@@ -31,6 +32,8 @@ interface Props {
   /** Pre-selected columns (e.g. a joint dataset's 'dataset' and cluster columns). */
   defaultCondition?: string | null;
   defaultGroup?: string | null;
+  /** A sample (replicate) column to start with; the detected one otherwise. */
+  defaultSample?: string | null;
 }
 
 const selectCls = "rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700";
@@ -43,7 +46,7 @@ const fmtPct = (v: number) => `${v.toFixed(1)}%`;
  * propeller-style test (POST /composition/test), its table, CSV and a per-sample
  * plot, and a warning against reading cell-level counts as a test.
  */
-export function CompositionTest({ datasetId, info, defaultCondition, defaultGroup }: Props) {
+export function CompositionTest({ datasetId, info, defaultCondition, defaultGroup, defaultSample }: Props) {
   const paletteName = useSettingsStore((s) => s.categoricalPalette);
   const askCopilot = useViewStore((s) => s.askCopilot);
 
@@ -116,6 +119,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
     setReference("");
     setSampleKey("");
   }, [conditionKey, conditionValues]);
+  usePrefillSample(defaultSample, conditionKey, sampleOptions, setSampleKey);
 
   // Whether the samples pair up depends on the columns: back to auto.
   useEffect(() => setPairing("auto"), [conditionKey, sampleKey]);

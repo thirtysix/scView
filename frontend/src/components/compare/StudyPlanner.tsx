@@ -43,10 +43,16 @@ import {
 } from "@/lib/studyPlanner";
 import { useViewStore } from "@/stores/viewStore";
 import { errorMessage } from "@/lib/errorMessage";
+import { pickOffered, usePrefillSample } from "@/hooks/usePrefillSample";
 
 interface Props {
   datasetId: string;
   info?: DatasetInfo | null;
+  /** Columns to start with (the co-pilot's open_compare_tab); the usual defaults
+   *  for any the pickers do not offer. */
+  defaultCondition?: string | null;
+  defaultGroup?: string | null;
+  defaultSample?: string | null;
 }
 
 type Mode = "composition" | "de";
@@ -65,7 +71,7 @@ const TARGETS = [0.5, 0.8, 0.9];
  * type's share with the app's composition test, or pseudobulk DE in one type, by
  * donors per group and cells per donor, with the assumptions spelled out.
  */
-export function StudyPlanner({ datasetId, info }: Props) {
+export function StudyPlanner({ datasetId, info, defaultCondition, defaultGroup, defaultSample }: Props) {
   const askCopilot = useViewStore((s) => s.askCopilot);
   const [fetched, setFetched] = useState<DatasetInfo | null>(null);
   const dataset = info ?? fetched;
@@ -132,15 +138,17 @@ export function StudyPlanner({ datasetId, info }: Props) {
   // Defaults once the columns are known.
   useEffect(() => {
     if (!cols.length) return;
-    const g = groupOptions[0] ?? "";
+    const g = pickOffered(defaultGroup, groupOptions, groupOptions[0] ?? "");
     setGroupKey(g);
-    setConditionKey(suggestConditionColumn(conditionColumns(cols, [g])));
-  }, [cols, groupOptions]);
+    const conds = conditionColumns(cols, [g]);
+    setConditionKey(pickOffered(defaultCondition, conds.map((c) => c.name), suggestConditionColumn(conds)));
+  }, [cols, groupOptions, defaultCondition, defaultGroup]);
   useEffect(() => {
     setReference("");
     setSampleKey("");
     setDesign("auto");
   }, [conditionKey]);
+  usePrefillSample(defaultSample, conditionKey, sampleOptions, setSampleKey);
 
   const pilotReq = useMemo<PilotRequest | null>(() => {
     if (!groupKey) return null;
