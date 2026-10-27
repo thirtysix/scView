@@ -127,6 +127,8 @@ export function drawThumbnail(
     height: number;
     outline?: ReadonlySet<number> | null;
     pointSize?: number;
+    /** Canvas fill: the scatter background (#1e293b on a dark one, as EmbeddingScatter) */
+    background?: string;
   },
 ): { drawn: number; outlined: number } {
   const { thumb, codes, colorOf, width, height, outline } = opts;
@@ -134,7 +136,7 @@ export function drawThumbnail(
   const half = size / 2;
   const at = fitBox(thumb.x, thumb.y, width, height);
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = opts.background ?? "#ffffff";
   ctx.fillRect(0, 0, width, height);
   const codeOf = (i: number) => (codes ? Number(codes[thumb.cells[i]!] ?? -1) : -1);
   const n = thumb.cells.length;

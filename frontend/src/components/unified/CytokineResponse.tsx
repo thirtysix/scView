@@ -213,8 +213,15 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
                 ]}
                 layout={{
                   autosize: true,
-                  margin: { l: 70, r: 6, t: 4, b: 90 },
-                  xaxis: { type: "category", tickangle: -45, tickfont: { size: 9 }, automargin: true },
+                  // A tall heatmap names its columns on top too, where they are in view.
+                  margin: { l: 70, r: 6, t: heat.y.length > 20 ? 90 : 4, b: heat.y.length > 20 ? 6 : 90 },
+                  xaxis: {
+                    type: "category",
+                    tickangle: -45,
+                    tickfont: { size: 9 },
+                    automargin: true,
+                    side: heat.y.length > 20 ? "top" : "bottom",
+                  },
                   yaxis: { type: "category", tickfont: { size: 9 }, automargin: true },
                 }}
                 config={plotConfig("cytokine_response_heatmap")}
