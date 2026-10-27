@@ -24,6 +24,7 @@ from scview.core.assistant import (
     MethodsResponse,
     answer_query,
     build_app_context,
+    build_feature_context,
     build_insight,
     polish_insight,
     stream_answer,
@@ -262,6 +263,8 @@ async def _prepare(
     app_context, app_sources = "", []
     if "app" in chosen:
         app_context, app_sources = build_app_context(dm.list_datasets(), body.view_context)
+    elif "data" in chosen:  # the compact feature list only: real paths, no library
+        app_context, app_sources = build_feature_context()
 
     return dict(
         history=body.history,

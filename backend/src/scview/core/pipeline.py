@@ -1615,6 +1615,31 @@ _MARKER_SETS: dict[str, list[str]] = {
     "CD4+ T cell": ["CD4", "IL7R"],
     "CD8+ T cell": ["CD8A", "CD8B", "GZMK"],
     "B cell": ["CD79A", "CD79B", "MS4A1", "CD19"],
+    "Plasma cell": ["MZB1", "IGHG1", "TNFRSF17", "SDC1"],
+    "NK cell": ["NKG7", "GNLY", "KLRD1", "NCAM1"],
+    "Monocyte": ["CD14", "LYZ", "S100A8", "S100A9", "FCN1"],
+    "CD16+ monocyte": ["FCGR3A", "MS4A7", "LST1", "CDKN1C"],
+    "Macrophage": ["C1QA", "C1QB", "C1QC", "APOE", "MARCO"],
+    "Dendritic cell": ["FCER1A", "CD1C", "CLEC10A", "CLEC9A"],
+    "Plasmacytoid dendritic cell": ["LILRA4", "CLEC4C", "IL3RA", "LAMP5"],
+    "Megakaryocyte": ["PPBP", "PF4", "ITGA2B"],
+    "Erythrocyte": ["HBB", "HBA1", "HBA2", "GYPA"],
+    "Epithelial cell": ["EPCAM", "KRT8", "KRT18"],
+    "Fibroblast": ["COL1A1", "DCN", "LUM", "PDGFRB"],
+    "Endothelial cell": ["PECAM1", "VWF", "CLDN5"],
+}
+# Version 2 (v0.45.0) added pDC and CD16+ monocyte sets: on Kang, pDC were called
+# "Plasma cell" (JCHAIN, MZB1) and CD16 monocytes "Macrophage" (C1QA/B, CD68).
+# Runs recorded before then replay with the sets they used.
+MARKER_SETS_VERSION = 2
+
+
+# The sets before version 2, for replaying older runs.
+_MARKER_SETS_V1: dict[str, list[str]] = {
+    "T cell": ["CD3D", "CD3E", "CD3G", "TRAC"],
+    "CD4+ T cell": ["CD4", "IL7R"],
+    "CD8+ T cell": ["CD8A", "CD8B", "GZMK"],
+    "B cell": ["CD79A", "CD79B", "MS4A1", "CD19"],
     "Plasma cell": ["MZB1", "IGHG1", "JCHAIN", "XBP1"],
     "NK cell": ["NKG7", "GNLY", "KLRD1", "NCAM1"],
     "Monocyte": ["CD14", "LYZ", "S100A8", "S100A9", "FCN1"],
@@ -1676,7 +1701,7 @@ def _annotate_marker_score(
     else:
         mapping = _marker_set_mapping(adata, groupby)
         info = {"marker_source": "built-in", "n_types": len(_MARKER_SETS),
-                "chosen": builtin}
+                "chosen": builtin, "marker_sets_version": MARKER_SETS_VERSION}
     adata.obs[target] = (
         adata.obs[groupby].astype(str).map(lambda g: mapping.get(g, "Unknown")).astype("category")
     )

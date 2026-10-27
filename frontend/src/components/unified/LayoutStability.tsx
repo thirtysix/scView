@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { createPortal } from "react-dom";
+import { useScatterBackground } from "@/lib/theme";
 import { useQuery } from "@tanstack/react-query";
 import { LayoutGrid, Loader2, X } from "lucide-react";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
@@ -643,6 +644,7 @@ function Thumbnail({
   footer?: ReactNode;
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
+  const background = useScatterBackground() === "dark" ? "#1e293b" : "#ffffff";
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas || !thumb) return;
@@ -652,8 +654,8 @@ function Thumbnail({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    drawThumbnail(ctx, { thumb, codes, colorOf, width: THUMB_PX, height: THUMB_PX, outline });
-  }, [thumb, codes, colorOf, outline]);
+    drawThumbnail(ctx, { thumb, codes, colorOf, width: THUMB_PX, height: THUMB_PX, outline, background });
+  }, [thumb, codes, colorOf, outline, background]);
 
   return (
     <figure

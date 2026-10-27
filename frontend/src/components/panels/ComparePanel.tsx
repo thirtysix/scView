@@ -10,12 +10,15 @@ import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useOnScreenStore } from "@/stores/onScreenStore";
+import { useComparePrefillStore, type ComparePrefill, type CompareTarget } from "@/stores/comparePrefillStore";
 import { listDatasets, getDataset } from "@/api/datasets";
 import { apiFetch } from "@/api/client";
 import { errorMessage } from "@/lib/errorMessage";
 import { getPalette } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { prettyObsLabel } from "@/lib/formatting";
+import { rankGroupingColumns, rankOptionsFor, type RankedGrouping } from "@/lib/obsColumns";
+import { suggestColumnPair } from "@/lib/compareColumns";
 import type { DatasetInfo } from "@/api/types";
 import { TabList, TabPanel } from "@/components/common/TabList";
 
@@ -25,16 +28,34 @@ interface SummaryRaw {
 }
 
 /** Categorical obs columns usable as a comparison grouping (cell type, cluster…). */
-function categoricalCols(ds: DatasetInfo | null): string[] {
-  if (!ds) return [];
-  return ds.obs_columns
-    .filter(
-      (c) =>
-        (c.dtype === "category" || c.dtype === "object" || c.dtype === "bool") &&
-        c.n_unique >= 2 &&
-        c.n_unique <= 100,
-    )
-    .map((c) => c.name);
+function rankedCols(ds: DatasetInfo | null): RankedGrouping[] {
+  return ds ? rankGroupingColumns(ds.obs_columns ?? [], rankOptionsFor(ds)) : [];
+}
+
+function ColumnSelect({ label, value, options, onChange }: {
+  label: string;
+  value: string;
+  options: readonly string[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-medium text-slate-500">{label}</label>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700"
+      >
+        {options.length === 0 && <option value="">(no categorical column)</option>}
+        {options.map((c) => (
+          <option key={c} value={c}>
+            {prettyObsLabel(c)}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 async function fetchProportions(datasetId: string, column: string): Promise<Record<string, number>> {
@@ -56,10 +77,33 @@ const TABS: { id: CompareTab; label: string }[] = [
   { id: "planner", label: "Plan a study" },
 ];
 
+/** The tab a co-pilot target opens (Milo and miloDE are modes of Composition). */
+const TAB_OF: Record<CompareTarget, CompareTab> = {
+  composition: "composition", milo: "composition", milode: "composition", joint: "joint", planner: "planner",
+};
+const MODE_OF: Partial<Record<CompareTarget, CompositionMode>> = { milo: "milo", milode: "milode" };
+
+/** A co-pilot request not applied yet opens its tab, once (a later visit opens as usual). */
+function useFreshPrefill(): ComparePrefill | null {
+  const prefill = useComparePrefillStore((s) => s.prefill);
+  const applied = useComparePrefillStore((s) => s.applied);
+  return prefill && prefill.nonce !== applied ? prefill : null;
+}
+
 /** Multi-dataset analysis: a joint embedding across datasets, or a side-by-side
  * composition comparison of two. */
 export function ComparePanel() {
-  const [tab, setTab] = useState<CompareTab>("joint");
+  const fresh = useFreshPrefill();
+  const [tab, setTab] = useState<CompareTab>(fresh ? TAB_OF[fresh.tab] : "joint");
+  // The columns the co-pilot asked for, handed to the tab it opened (remounted per request).
+  const [prefill, setPrefill] = useState<ComparePrefill | null>(fresh);
+  const markApplied = useComparePrefillStore((s) => s.markApplied);
+  useEffect(() => {
+    if (!fresh) return;
+    setTab(TAB_OF[fresh.tab]);
+    setPrefill(fresh);
+    markApplied(fresh.nonce);
+  }, [fresh, markApplied]);
   // The co-pilot's view context names the open tab (stores/onScreenStore.ts)
   const setOnScreenTab = useOnScreenStore((s) => s.setCompareTab);
   useEffect(() => {
@@ -83,14 +127,20 @@ export function ComparePanel() {
         }
       />
       <TabPanel idPrefix="compare" id={tab}>
-        {tab === "joint" ? <JointEmbedding /> : tab === "planner" ? <PlannerTab /> : <CompositionTab />}
+        {tab === "joint" ? (
+          <JointEmbedding />
+        ) : tab === "planner" ? (
+          <PlannerTab key={prefill?.nonce ?? 0} prefill={prefill} />
+        ) : (
+          <CompositionTab key={prefill?.nonce ?? 0} prefill={prefill} />
+        )}
       </TabPanel>
     </div>
   );
 }
 
 /** How many donors would a follow-up need, from the open dataset's own variability. */
-function PlannerTab() {
+function PlannerTab({ prefill }: { prefill: ComparePrefill | null }) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   if (!dataset) {
     return (
@@ -108,7 +158,14 @@ function PlannerTab() {
         variability and running the app&apos;s own tests on them. More donors, not more cells, is what
         usually buys power.
       </p>
-      <StudyPlanner key={dataset.id} datasetId={dataset.id} info={dataset} />
+      <StudyPlanner
+        key={dataset.id}
+        datasetId={dataset.id}
+        info={dataset}
+        defaultCondition={prefill?.condition}
+        defaultGroup={prefill?.group}
+        defaultSample={prefill?.sample}
+      />
     </div>
   );
 }
@@ -125,8 +182,13 @@ const WHICH_TEST =
 /** Composition: a replicate-aware test between conditions of the open dataset
  *  (by group, or by neighbourhood with Milo), or two datasets side by side
  *  (descriptive). */
-function CompositionTab() {
-  const [mode, setMode] = useState<CompositionMode>("conditions");
+function CompositionTab({ prefill }: { prefill: ComparePrefill | null }) {
+  const [mode, setMode] = useState<CompositionMode>((prefill && MODE_OF[prefill.tab]) || "conditions");
+  const asked = {
+    defaultCondition: prefill?.condition,
+    defaultGroup: prefill?.group,
+    defaultSample: prefill?.sample,
+  };
   const dataset = useDatasetStore((s) => s.currentDataset);
   return (
     <div className="space-y-4">
@@ -179,9 +241,9 @@ function CompositionTab() {
           {mode === "milode" ? (
             <MiloDETest key={dataset.id} datasetId={dataset.id} info={dataset} />
           ) : mode === "milo" ? (
-            <MiloTest key={dataset.id} datasetId={dataset.id} info={dataset} />
+            <MiloTest key={dataset.id} datasetId={dataset.id} info={dataset} {...asked} />
           ) : (
-            <CompositionTest key={dataset.id} datasetId={dataset.id} info={dataset} />
+            <CompositionTest key={dataset.id} datasetId={dataset.id} info={dataset} {...asked} />
           )}
         </>
       ) : (
@@ -207,6 +269,7 @@ function CompositionCompare() {
   const [datasetB, setDatasetB] = useState<DatasetInfo | null>(null);
   const [datasetBId, setDatasetBId] = useState<string>("");
   const [column, setColumn] = useState<string>("");
+  const [columnB, setColumnB] = useState<string>("");
   const [propsA, setPropsA] = useState<Record<string, number> | null>(null);
   const [propsB, setPropsB] = useState<Record<string, number> | null>(null);
   const [loading, setLoading] = useState(false);
@@ -234,22 +297,24 @@ function CompositionCompare() {
     };
   }, [datasetBId]);
 
-  // Columns categorical in BOTH datasets.
-  const sharedColumns = useMemo(() => {
-    const a = new Set(categoricalCols(datasetA));
-    return categoricalCols(datasetB).filter((c) => a.has(c));
-  }, [datasetA, datasetB]);
+  // Each dataset's groupings, best first; the two columns need not share a name
+  // (label transfer writes <prefix>_transfer into the query).
+  const rankedA = useMemo(() => rankedCols(datasetA), [datasetA]);
+  const rankedB = useMemo(() => rankedCols(datasetB), [datasetB]);
+  const columnsA = useMemo(() => rankedA.map((g) => g.name), [rankedA]);
+  const columnsB = useMemo(() => rankedB.map((g) => g.name), [rankedB]);
 
-  // Default the comparison column once both datasets are known.
+  // Default the pair once both datasets are known: the columns whose labels overlap most.
   useEffect(() => {
-    if (column && sharedColumns.includes(column)) return;
-    const preferred = sharedColumns.find((c) => /cell.?type/i.test(c)) ?? sharedColumns[0] ?? "";
-    setColumn(preferred);
-  }, [sharedColumns, column]);
+    if (column && columnsA.includes(column) && columnB && columnsB.includes(columnB)) return;
+    const [a, b] = suggestColumnPair(rankedA, rankedB, datasetA?.obs_columns ?? [], datasetB?.obs_columns ?? []);
+    setColumn(a);
+    setColumnB(b);
+  }, [rankedA, rankedB, columnsA, columnsB, column, columnB, datasetA, datasetB]);
 
   // Fetch both compositions whenever the pair + column are set.
   useEffect(() => {
-    if (!datasetA?.id || !datasetBId || !column) {
+    if (!datasetA?.id || !datasetBId || !column || !columnB) {
       setPropsA(null);
       setPropsB(null);
       return;
@@ -257,7 +322,7 @@ function CompositionCompare() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    Promise.all([fetchProportions(datasetA.id, column), fetchProportions(datasetBId, column)])
+    Promise.all([fetchProportions(datasetA.id, column), fetchProportions(datasetBId, columnB)])
       .then(([a, b]) => {
         if (cancelled) return;
         setPropsA(a);
@@ -268,7 +333,7 @@ function CompositionCompare() {
     return () => {
       cancelled = true;
     };
-  }, [datasetA?.id, datasetBId, column]);
+  }, [datasetA?.id, datasetBId, column, columnB]);
 
   // Union of categories, ordered by combined abundance.
   const categories = useMemo(() => {
@@ -284,11 +349,12 @@ function CompositionCompare() {
       .map((c) => `${c}: ${(propsA?.[c] ?? 0).toFixed(0)}% vs ${(propsB?.[c] ?? 0).toFixed(0)}%`)
       .join("; ");
     askCopilot(
-      `Compare the ${column} composition of "${datasetA.name}" (A) vs "${datasetB.name}" (B): ${top}. ` +
+      `Compare the ${column} composition of "${datasetA.name}" (A) vs the ${columnB} composition of ` +
+        `"${datasetB.name}" (B): ${top}. ` +
         `Each dataset is one sample here, so these differences are descriptive, not tested. ` +
         `What are the most notable differences and what might explain them?`,
     );
-  }, [categories, datasetA, datasetB, propsA, propsB, column, askCopilot]);
+  }, [categories, datasetA, datasetB, propsA, propsB, column, columnB, askCopilot]);
 
   const otherDatasets = allDatasets.filter((d) => d.id !== datasetA?.id);
 
@@ -331,22 +397,10 @@ function CompositionCompare() {
           </select>
         </div>
         {datasetBId && (
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-500">Compare by</label>
-            <select
-              aria-label="Compare by"
-              value={column}
-              onChange={(e) => setColumn(e.target.value)}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700"
-            >
-              {sharedColumns.length === 0 && <option value="">(no shared categorical column)</option>}
-              {sharedColumns.map((c) => (
-                <option key={c} value={c}>
-                  {prettyObsLabel(c)}
-                </option>
-              ))}
-            </select>
-          </div>
+          <>
+            <ColumnSelect label="Column in A" value={column} options={columnsA} onChange={setColumn} />
+            <ColumnSelect label="Column in B" value={columnB} options={columnsB} onChange={setColumnB} />
+          </>
         )}
         {categories.length > 0 && (
           <button
@@ -372,10 +426,10 @@ function CompositionCompare() {
         </div>
       )}
 
-      {!loading && datasetB && sharedColumns.length === 0 && (
+      {!loading && datasetB && (columnsA.length === 0 || columnsB.length === 0) && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center text-sm text-amber-700">
-          These two datasets share no categorical column (e.g. <code>cell_type</code>). Annotate cell
-          types in both to compare them.
+          {columnsA.length === 0 ? "Dataset A" : "Dataset B"} has no column to group cells by (e.g.{" "}
+          <code>cell_type</code>). Annotate cell types to compare them.
         </div>
       )}
 

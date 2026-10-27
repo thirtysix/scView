@@ -76,7 +76,7 @@ def test_mutating_actions_are_confirm_gated_with_advisory_and_estimate():
     [c] = _coerce_actions('[{"type":"cluster","resolution":1.0}]', **ctx)
     assert c.type == "cluster" and c.requires_confirm and c.step == "clustering"
     assert c.params["clustering_resolution"] == 1.0
-    assert "scview_leiden_r1.0" in c.advisory and c.estimate
+    assert "scview_leiden_r1" in c.advisory and c.estimate
 
 
 def test_pipeline_step_actions_are_confirm_gated():

@@ -1752,8 +1752,6 @@ def _groupby_code(p: dict, ctx: _Ctx) -> list[str]:
 
 
 def _cell_type_annotation(p: dict, ctx: _Ctx) -> Snippet:
-    from scview.core.pipeline import _MARKER_SETS
-
     _need(ctx, "markers_key")
     method = (p.get("annotation_method") or "llm").lower()
     target = str(p.get("annotation_target") or "cell_type")
@@ -1826,7 +1824,7 @@ adata.obs[{_lit(target + "_confidence")}] = np.asarray(pred.probability_matrix.m
             '    lambda g: mapping.get(g, "Unknown")).astype("category")',
         ]
     elif method == "marker_score":
-        sets = {k: list(v) for k, v in _MARKER_SETS.items()}
+        sets = {k: list(v) for k, v in _builtin_marker_sets(p, ctx, target).items()}
         code += _block(f'''
 MARKER_SETS = {_lit(sets)}
 upper = {{str(g).upper(): str(g) for g in adata.var_names}}
@@ -1857,6 +1855,19 @@ def _marker_db_mapping(p: dict, ctx: _Ctx, target: str) -> dict[str, str] | None
     from_db = p.get("marker_source") == "database" or (
         hasattr(source, "get") and source.get("marker_source") == "database")
     return _uns_mapping(ctx.adata, f"{target}_markerscore_mapping") if from_db else None
+
+
+def _builtin_marker_sets(p: dict, ctx: _Ctx, target: str) -> dict[str, list[str]]:
+    """The built-in marker sets the run used: runs recorded before the version 2 sets
+    (pDC, CD16+ monocyte) carry no version and replay with the old ones."""
+    from scview.core.pipeline import _MARKER_SETS, _MARKER_SETS_V1
+
+    source = getattr(ctx.adata, "uns", {}).get(f"{target}_markerscore_source") if ctx.adata is not None else None
+    version = p.get("marker_sets_version") or (source.get("marker_sets_version") if hasattr(source, "get") else None)
+    try:
+        return _MARKER_SETS if int(version) >= 2 else _MARKER_SETS_V1
+    except (TypeError, ValueError):
+        return _MARKER_SETS_V1
 
 
 def _uns_mapping(adata, key: str) -> dict[str, str] | None:

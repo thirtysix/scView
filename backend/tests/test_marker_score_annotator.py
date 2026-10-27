@@ -74,3 +74,70 @@ def test_annotator_uses_panglao_and_curated_cellmarker3(monkeypatch, installed_c
     assert a.uns["ms_markerscore_mapping"] == {"0": "B cells", "1": "NK cells", "2": "T cells", "3": "Unknown"}
     assert out["databases"] == ["PanglaoDB", "CellMarker 3.0 (curated)"] and out["cellmarker"] == "CellMarker 3.0"
     assert a.uns["ms_markerscore_source"]["cellmarker"] == "CellMarker 3.0"
+
+
+def _immune_cells():
+    """Four clusters shaped like Kang's pDC, plasma, CD16 and CD14 monocytes: each
+    expresses its own markers, and pDC also JCHAIN / MZB1 (as on Kang)."""
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+
+    genes = ["LILRA4", "CLEC4C", "IL3RA", "LAMP5", "JCHAIN", "MZB1", "IGHG1", "TNFRSF17", "SDC1",
+             "FCGR3A", "MS4A7", "LST1", "CDKN1C", "C1QA", "C1QB", "CD68", "CD14", "LYZ", "S100A8",
+             "S100A9", "FCN1"] + [f"G{i}" for i in range(60)]
+    own = {"pDC": ["LILRA4", "CLEC4C", "IL3RA", "LAMP5", "JCHAIN", "MZB1"],
+           "plasma": ["MZB1", "IGHG1", "TNFRSF17", "SDC1", "JCHAIN"],
+           "cd16": ["FCGR3A", "MS4A7", "LST1", "CDKN1C", "C1QA", "C1QB", "CD68", "LYZ"],
+           "cd14": ["CD14", "LYZ", "S100A8", "S100A9", "FCN1", "CD68"]}
+    rng = np.random.default_rng(0)
+    rows, labels = [], []
+    for lab, markers in own.items():
+        block = rng.poisson(0.2, size=(40, len(genes))).astype(float)
+        for g in markers:
+            block[:, genes.index(g)] += rng.poisson(6, size=40)
+        rows.append(block)
+        labels += [lab] * 40
+    a = ad.AnnData(np.log1p(np.vstack(rows)), var=pd.DataFrame(index=genes))
+    a.obs["lab"] = pd.Categorical(labels)
+    return a
+
+
+def test_built_in_sets_name_pdc_and_cd16_monocytes():
+    from scview.core.pipeline import MARKER_SETS_VERSION, PipelineParams, _annotate_marker_score
+
+    a = _immune_cells()
+    info = _annotate_marker_score(a, PipelineParams(annotation_marker_sets="builtin"), "lab", "ms")
+    assert a.uns["ms_markerscore_mapping"] == {
+        "cd14": "Monocyte", "cd16": "CD16+ monocyte", "pDC": "Plasmacytoid dendritic cell",
+        "plasma": "Plasma cell"}
+    assert info["marker_sets_version"] == MARKER_SETS_VERSION == 2
+
+
+def test_replay_uses_the_marker_sets_the_run_recorded():
+    from scview.core.replay_script import _builtin_marker_sets, _Ctx
+
+    a = _cells()
+    old = _builtin_marker_sets({}, _Ctx(adata=a), "ms")
+    assert "Plasmacytoid dendritic cell" not in old and "JCHAIN" in old["Plasma cell"]
+    a.uns["ms_markerscore_source"] = {"marker_source": "built-in", "marker_sets_version": 2}
+    assert "Plasmacytoid dendritic cell" in _builtin_marker_sets({}, _Ctx(adata=a), "ms")
+    assert "CD16+ monocyte" in _builtin_marker_sets({"marker_sets_version": 2}, _Ctx(adata=None), "ms")
+
+
+def test_app_annotation_columns_name_how_each_column_was_made():
+    import pandas as pd
+
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+    from scview.core.celltypist_fit import record_run
+
+    a = _cells()
+    for col in ("ms", "llm_type", "ct"):
+        a.obs[col] = pd.Categorical(["x"] * a.n_obs)
+    a.uns["ms_markerscore_mapping"] = {"0": "B cell"}
+    a.uns["llm_type_llm_mapping"] = {"0": "B cell"}
+    a.uns["gone_markerscore_mapping"] = {"0": "B cell"}  # its column was deleted
+    record_run(a, "ct", {"model": "Immune_All_Low.pkl"})
+    adaptor = AnnDataAdaptor.__new__(AnnDataAdaptor)
+    adaptor._adata = a
+    assert adaptor.app_annotation_columns() == {"ct": "celltypist", "llm_type": "llm", "ms": "marker_score"}

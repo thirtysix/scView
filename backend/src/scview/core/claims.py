@@ -34,6 +34,7 @@ MAX_CLAIM_CHARS = 400
 MAX_EVIDENCE_CHARS = 1200
 _MAX_CLAIMS = 40
 _EVIDENCE_LINES = 6
+_ENTITY_LINES = 16  # an uncertain claim's lines that name its groups, genes or cluster ids
 
 
 class Claim(BaseModel):
@@ -137,7 +138,8 @@ _STAT_BEFORE_RX = re.compile(
 _UNIT_AFTER_RX = re.compile(
     r"^\s*\)?\s*(genes?\s*(?:/|per)\s*cell|counts?\s*(?:/|per)\s*cell|UMIs?\s*(?:/|per)\s*cell|"
     r"% mito|mito|doublets?|cell types?|cells?|clusters?|groups?|types?|donors?|samples?|"
-    r"conditions?|categories|batches|populations?|PCs|neighbou?rs|genes|targets?)\b", re.I)
+    r"conditions?|categories|batches|populations?|PCs|neighbou?rs|genes|targets?|labels?|levels?|"
+    r"values?)\b", re.I)
 _APPROX_RX = re.compile(r"(?:~|≈|\babout|\bapproximately|\bapprox\.?|\broughly|\baround|\bnearly|"
                         r"\balmost|\bsome)\s*$", re.I)
 _BOUND_RX = re.compile(r"(?:\bover|\bmore than|\bless than|\bfewer than|\bunder|\bat least|\bat most|"
@@ -146,7 +148,7 @@ _RATIO_AFTER_RX = re.compile(r"^\s*(?:×|x\b|-?fold\b|times\b)", re.I)
 _STAT_CANON = {"q": "fdr", "padj": "fdr", "p-value": "p", "ρ": "rho", "log2fc": "lfc",
                "logfc": "lfc"}
 _COUNT_NOUNS = ("cluster", "group", "type", "donor", "sample", "condition", "categor",
-                "batch", "population", "target")
+                "batch", "population", "target", "label", "level", "value")
 _STRONG_UNITS = frozenset({"genes/cell", "counts/cell", "mito", "doublets"})
 _POPULATION_RX = re.compile(
     r"(?:\+|-|hi\b|lo\b|high\b|low\b)|\s+(?:mono\w*|T\b|B\b|NK\b|cells?\b|macrophage\w*|DCs?\b|"
@@ -759,9 +761,19 @@ def split_claims(answer: str) -> list[tuple[str, list[str], bool]]:
 # ---------------------------------------------------------------------------
 
 
-def _snippet(lines: list[str]) -> str:
-    text = "\n".join(lines[:_EVIDENCE_LINES])
+def _snippet(lines: list[str], max_lines: int = _EVIDENCE_LINES) -> str:
+    text = "\n".join(lines[:max_lines])
     return text if len(text) <= MAX_EVIDENCE_CHARS else text[:MAX_EVIDENCE_CHARS] + "…"
+
+
+def _entity_lines(sc: Scan, ev: Evidence) -> list[str]:
+    """The fact lines that name one of the claim's groups, genes or cluster ids, in
+    the fact's order: what the judge needs for an uncertain claim, where the head of
+    a long fact may not reach them ("clusters 1, 2, 6 and 7" vs clusters 0-5)."""
+    names = {g for _, g in sc.groups} | {n.raw for n in sc.nums if n.raw.isdigit()}
+    genes = {g for _, g in sc.genes}
+    return [ln.raw for ln in ev.lines
+            if names & {g for _, g in ln.scan.groups} or genes & {g for _, g in ln.scan.genes}]
 
 
 def check_answer(answer: str, sources: list, context: str, vocab: Vocab) -> list[Claim]:
@@ -836,9 +848,14 @@ def check_answer(answer: str, sources: list, context: str, vocab: Vocab) -> list
         else:
             verdict, reason = "uncertain", "No numbers or genes to match; needs a reading."
         lines = o.lines or [ln.raw for ln in ev.lines][: _EVIDENCE_LINES if resolved else 0]
+        max_lines = _EVIDENCE_LINES
+        if verdict == "uncertain" and resolved:  # what the judge reads: the lines about it
+            named = [ln for ln in _entity_lines(sc, ev) if ln not in o.lines]
+            if named:
+                lines, max_lines = [*o.lines, *named], _ENTITY_LINES
         claims.append(Claim(
             id=len(claims), text=text[:MAX_CLAIM_CHARS], cites=cites, refs=resolved,
-            verdict=verdict, reason=" ".join([reason, *notes]), evidence=_snippet(lines),
+            verdict=verdict, reason=" ".join([reason, *notes]), evidence=_snippet(lines, max_lines),
         ))
         if len(claims) >= _MAX_CLAIMS:
             break

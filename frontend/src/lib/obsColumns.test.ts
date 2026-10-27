@@ -123,3 +123,37 @@ describe("defaultColorBy", () => {
     expect(defaultColorBy(ds(cols))).toBe("cell_type");
   });
 });
+
+describe("author labels before the app's annotations", () => {
+  const named = (name: string, values: string[]): ObsColumnInfo => ({
+    name,
+    dtype: "category",
+    n_unique: values.length,
+    values,
+  });
+  const kang = [
+    named("stim", ["CTRL", "STIM"]),
+    named("cluster", ["B", "CD14 Mono", "CD16 Mono", "NK", "pDC"]),
+    named("scview_leiden_r0.5", ["0", "1", "2", "3"]),
+    named("cell_type", ["B cell", "Monocyte", "Plasma cell"]),
+  ];
+
+  it("files a 'cluster' column of names under cell types, not numbered clusterings", () => {
+    const ranked = rankGroupingColumns(kang, { nCells: 13836, activeClustering: "scview_leiden_r0.5" });
+    expect(ranked.find((r) => r.name === "cluster")?.kind).toBe("cell type");
+    expect(ranked.find((r) => r.name === "scview_leiden_r0.5")?.kind).toBe("clustering");
+  });
+
+  it("puts the app's marker-score column after the author's labels", () => {
+    const ranked = rankGroupingColumns([...kang.slice(0, 1), kang[3]!, ...kang.slice(1, 3)], {
+      nCells: 13836,
+      appColumns: { cell_type: "marker_score" },
+    }).map((r) => r.name);
+    expect(ranked.slice(0, 2)).toEqual(["cluster", "cell_type"]);
+  });
+
+  it("keeps a numbered merge or subcluster column a clustering", () => {
+    const cols = [named("cluster_merged", ["0", "1+2"]), named("cluster_sub", ["3,0", "3,1"])];
+    expect(rankGroupingColumns(cols).map((r) => r.kind)).toEqual(["clustering", "clustering"]);
+  });
+});

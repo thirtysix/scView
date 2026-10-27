@@ -831,6 +831,20 @@ class AnnDataAdaptor:
         """The hand-label columns (uns ``scview_user_annotations``) still in obs."""
         return user_columns(self.adata)
 
+    def app_annotation_columns(self) -> dict[str, str]:
+        """Cell-type columns scView's annotator wrote, and how (celltypist | llm |
+        marker_score), so pickers can put an author's own labels first."""
+        from scview.core import celltypist_fit
+
+        uns, obs = self.adata.uns, self.adata.obs.columns
+        out = {c: "celltypist" for c in celltypist_fit.run_columns(self.adata)}
+        for suffix, method in (("_llm_mapping", "llm"), ("_markerscore_mapping", "marker_score")):
+            for key in uns:
+                col = str(key)[: -len(suffix)] if str(key).endswith(suffix) else None
+                if col and col in obs:
+                    out.setdefault(col, method)
+        return out
+
     # ------------------------------------------------------------------
     # Marker genes
     # ------------------------------------------------------------------

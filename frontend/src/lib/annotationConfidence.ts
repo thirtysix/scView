@@ -1,7 +1,7 @@
 /** Helpers for the annotation confidence card (backend core/annotation_confidence.py). */
 import type { ConfidenceLabelRow, ConfidenceResult } from "@/api/annotation";
 import type { DatasetInfo } from "@/api/types";
-import { rankGroupingColumns } from "@/lib/obsColumns";
+import { rankGroupingColumns, rankOptionsFor } from "@/lib/obsColumns";
 import { pct } from "@/lib/qcThresholds";
 
 /** Every column the check writes starts with this. */
@@ -26,11 +26,7 @@ type DatasetColumns = Pick<DatasetInfo, "obs_columns" | "n_cells" | "active_clus
 export function confidenceColumns(dataset: DatasetColumns | null): { name: string; kind: string }[] {
   if (!dataset) return [];
   const bools = new Set((dataset.obs_columns ?? []).filter((c) => c.dtype === "bool").map((c) => c.name));
-  return rankGroupingColumns(dataset.obs_columns ?? [], {
-    nCells: dataset.n_cells,
-    activeClustering: dataset.active_clustering,
-    userColumns: dataset.user_annotation_columns,
-  }).filter((c) => !isConfidenceOutput(c.name) && !bools.has(c.name));
+  return rankGroupingColumns(dataset.obs_columns ?? [], rankOptionsFor(dataset)).filter((c) => !isConfidenceOutput(c.name) && !bools.has(c.name));
 }
 
 /** The column the card opens on: the best cell-type or hand-label column, else the best grouping. */

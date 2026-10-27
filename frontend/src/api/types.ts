@@ -19,6 +19,8 @@ export interface DatasetInfo {
   active_clustering?: string;
   /** Hand-label columns made in the app (uns scview_user_annotations) */
   user_annotation_columns?: string[];
+  /** Cell-type columns the app's annotator wrote: column -> celltypist | llm | marker_score */
+  app_annotation_columns?: Record<string, string>;
   expression_layers?: ExpressionLayerInfo[];
   default_expression_layer?: string;
   /** CITE-seq antibodies (protein modality), or null/absent without them */

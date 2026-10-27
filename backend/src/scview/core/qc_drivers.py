@@ -58,7 +58,8 @@ class Driver(BaseModel):
     pc: int  # 1-based
     r: float
     r_within: float | None = None  # inside clusters (cluster means removed)
-    pc_share: float  # the PC's share of the variance in the space used
+    pc_share: float  # the PC's share of the variance: of ``share_of``
+    share_of: str = ""  # "the total variance" (PCA's variance_ratio) or "the variance in the N PCs"
     inside_clusters: bool = False
     reason: str = ""
 
@@ -92,7 +93,7 @@ def _centre(values: np.ndarray, codes: np.ndarray, n_groups: int) -> np.ndarray:
 
 def _reason(d: Driver) -> str:
     head = (f"{d.label} correlates with PC{d.pc} (r = {d.r:.2f}; PC{d.pc} carries "
-            f"{d.pc_share:.0%} of the variance)")
+            f"{_pct(d.pc_share)} of {d.share_of or 'the variance'})")
     rw = "n/a" if d.r_within is None else f"{d.r_within:.2f}"
     if d.inside_clusters:
         head += f", and inside clusters too (r = {rw})"
@@ -113,11 +114,19 @@ def _reason(d: Driver) -> str:
             "ribosomal share). A concern only if it is what splits one cell type.")
 
 
+def _pct(share: float) -> str:
+    """2.9%: one decimal, as the PCA facts word it."""
+    return f"{100 * share:.1f}%"
+
+
 def check(rep: str | None, X, labels: np.ndarray, scores: dict[str, np.ndarray],
-          masks: dict[str, np.ndarray] | None = None) -> DriverCheck:
+          masks: dict[str, np.ndarray] | None = None,
+          variance_ratio: np.ndarray | None = None) -> DriverCheck:
     """Correlate each score with the leading PCs of ``X`` (cells x PCs, the space
     named ``rep``), over all cells and inside clusters (``labels``). ``masks``
-    limit a score to some cells (haemoglobin: non-erythroid cells)."""
+    limit a score to some cells (haemoglobin: non-erythroid cells).
+    ``variance_ratio``: each PC's share of the total variance (the PCA's own),
+    used for a PC's share when given; else the share is of the PCs in ``X``."""
     if X is None:
         return DriverCheck()
     X = np.asarray(X)
@@ -127,6 +136,12 @@ def check(rep: str | None, X, labels: np.ndarray, scores: dict[str, np.ndarray],
     var = X.var(axis=0, dtype=np.float64)
     total = float(var.sum())
     k = min(LEADING_PCS, X.shape[1])
+    if variance_ratio is not None and len(variance_ratio) >= k:
+        shares = np.asarray(variance_ratio, dtype=np.float64)
+        share_of = "the total variance"
+    else:
+        shares = var / total if total > 0 else np.zeros_like(var)
+        share_of = f"the variance in the {X.shape[1]} PCs"
     keep = np.arange(n)
     if n > MAX_CELLS:
         keep = np.sort(np.random.default_rng(SEED).choice(n, size=MAX_CELLS, replace=False))
@@ -157,7 +172,7 @@ def check(rep: str | None, X, labels: np.ndarray, scores: dict[str, np.ndarray],
         d = Driver(
             score=key, label=LABELS[key], pc=j + 1, r=round(float(r[j]), 2),
             r_within=round(r_w, 2) if np.isfinite(r_w) else None,
-            pc_share=round(float(var[j]) / total, 3) if total > 0 else 0.0,
+            pc_share=round(float(shares[j]), 4), share_of=share_of,
             inside_clusters=bool(np.isfinite(r_w) and abs(r_w) >= WITHIN_R),
         )
         d.reason = _reason(d)
@@ -172,4 +187,16 @@ def for_adata(adata, labels: np.ndarray, scores: dict[str, np.ndarray],
     from scview.core.resolution_sweep import _representation  # PCA or Harmony, n_pcs used
 
     rep, X = _representation(adata)
-    return check(rep, X, labels, scores, masks)
+    return check(rep, X, labels, scores, masks, _variance_ratio(adata, rep))
+
+
+def _variance_ratio(adata, rep: str | None) -> np.ndarray | None:
+    """The PCA's own share of the total variance per PC, for ``X_pca`` (what the
+    PCA diagnostics show); None for a corrected space or a PCA without it."""
+    if rep != "X_pca":
+        return None
+    uns = adata.uns.get("pca") if "pca" in adata.uns else None
+    vr = uns.get("variance_ratio") if isinstance(uns, dict) else None
+    if vr is None or len(vr) != adata.obsm["X_pca"].shape[1]:
+        return None
+    return np.asarray(vr, dtype=np.float64)

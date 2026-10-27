@@ -466,3 +466,36 @@ def test_grounding_drops_a_result_whose_groups_changed():
     renamed["group"] = renamed["group"].cat.rename_categories({"g0": "T cells"})
     lines, detail = comp.grounding_lines(a, renamed)
     assert detail is None and not any("last run" in x for x in lines)
+
+
+async def test_grounding_walks_back_to_the_newest_valid_tested_run(dataset_manager):
+    """The newest run on a column that is gone, or one that was not tested, does not
+    hide an earlier valid test: the fact uses that one and says which run it is."""
+    import dataclasses
+
+    from scview.core import results_store
+
+    obs = _obs(T2_SAMPLES, T2)
+    _dataset(Path(dataset_manager.data_dir), obs)
+    a = await dataset_manager.get_or_load_dataset("ds")
+    good = composition_test(a.adata.obs, "cond", "donor", "group")
+    comp.remember(a, good)
+    gone = dataclasses.replace(good, group_key="leiden_old")  # a column since removed
+    comp.remember(a, gone)
+    results_store.flush()
+    lines, detail = comp.grounding_lines(a, a.adata.obs)
+    text = "\n".join(lines)
+    assert detail and "of 5 groups" in detail and "(run: 'group' by 'cond')" in detail
+    assert "Composition test (earlier run" in text
+    assert "newest run ('leiden_old' by 'cond') is not used: its columns or groups changed" in text
+    # reloaded (nothing in memory): the stored runs are walked the same way
+    comp._last.clear()
+    assert comp.grounding_lines(a, a.adata.obs)[1] == detail
+    # a newer untested run on the same columns: the tested one is still used
+    comp.remember(a, dataclasses.replace(good, tested=False, n_significant=0))
+    results_store.flush()
+    lines, detail2 = comp.grounding_lines(a, a.adata.obs)
+    assert detail2 == detail and any("is not used: not tested" in x for x in lines)
+    # the cluster report asks for a run on its own column
+    assert comp._last_result(a, a.adata.obs, group_key="group") is not None
+    assert comp._last_result(a, a.adata.obs, group_key="cond") is None
