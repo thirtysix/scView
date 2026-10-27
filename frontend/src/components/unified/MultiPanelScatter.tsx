@@ -39,7 +39,7 @@ import {
   splitViewId,
 } from "@/lib/splitView";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useScatterBackground } from "@/lib/theme";
+import { LIGHT_SLATE, useScatterBackground } from "@/lib/theme";
 import { GridLasso, type GridLassoResult } from "@/components/unified/GridLasso";
 
 /**
@@ -421,6 +421,11 @@ export function MultiPanelScatter({
 
   const dark = background === "dark";
   const bgColor = dark ? "#1e293b" : "#ffffff";
+  // Titles and frames sit on the plot background, which has its own fixed colour: slate classes
+  // would follow the app theme instead (dark theme remaps slate-100 to a dark surface).
+  const chrome = dark
+    ? { title: LIGHT_SLATE[100], subtitle: LIGHT_SLATE[400], frame: LIGHT_SLATE[600] }
+    : { title: LIGHT_SLATE[700], subtitle: LIGHT_SLATE[500], frame: LIGHT_SLATE[200] };
 
   return (
     <div
@@ -501,14 +506,15 @@ export function MultiPanelScatter({
                     }}
                     title={`${p.title}: ${p.subtitle}`}
                   >
-                    <span className={`truncate font-semibold ${dark ? "text-slate-100" : "text-slate-700"}`}>
+                    <span className="truncate font-semibold" style={{ color: chrome.title }}>
                       {p.title}
                     </span>
-                    <span className={`flex-shrink-0 ${dark ? "text-slate-400" : "text-slate-500"}`}>{p.subtitle}</span>
+                    <span className="flex-shrink-0" style={{ color: chrome.subtitle }}>{p.subtitle}</span>
                   </div>
                   <div
-                    className={`absolute rounded border ${dark ? "border-slate-600" : "border-slate-200"}`}
+                    className="absolute rounded border"
                     style={{
+                      borderColor: chrome.frame,
                       left: cell.view.x,
                       top: cell.view.y,
                       width: cell.view.width,
