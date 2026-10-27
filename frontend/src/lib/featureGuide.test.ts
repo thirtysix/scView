@@ -22,7 +22,7 @@ function sources(dir: string): string[] {
 function guidePaths(): string[] {
   const py = readFileSync(GUIDE, "utf8");
   const body = py.slice(py.indexOf("FEATURES:"), py.indexOf("\n)\n", py.indexOf("FEATURES:")));
-  return [...body.matchAll(/^ {4}\("([^"]+)",/gm)].map((m) => m[1]);
+  return [...body.matchAll(/^ {4}\("([^"]+)",/gm)].map((m) => m[1] ?? "");
 }
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
