@@ -565,8 +565,8 @@ def _composition(ctx: dict) -> dict:
             paired = {**design, "n_donors": n_donors,
                       "every_donor": bool(design["paired"] and design["n_pairs"] == n_donors)}
     stored = None
-    r = composition._last_result(adaptor, obs)
-    if r is not None and r.group_key == column:
+    r = composition._last_result(adaptor, obs, group_key=column)
+    if r is not None:
         g = next((x for x in r.groups if x.group == value), None)
         if g is not None:
             stored = {"condition_key": r.condition_key, "sample_key": r.sample_key,
