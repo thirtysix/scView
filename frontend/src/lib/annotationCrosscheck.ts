@@ -8,7 +8,7 @@ import type {
 } from "@/api/annotation";
 import type { DatasetInfo } from "@/api/types";
 import { isConfidenceOutput } from "@/lib/annotationConfidence";
-import { rankGroupingColumns, type RankedGrouping } from "@/lib/obsColumns";
+import { rankGroupingColumns, rankOptionsFor, type RankedGrouping } from "@/lib/obsColumns";
 import { pct } from "@/lib/qcThresholds";
 
 export const MAX_CROSSCHECK_COLUMNS = 6;
@@ -22,11 +22,7 @@ type DatasetColumns = Pick<DatasetInfo, "obs_columns" | "n_cells" | "active_clus
 export function crosscheckColumns(dataset: DatasetColumns | null): RankedGrouping[] {
   if (!dataset) return [];
   const bools = new Set((dataset.obs_columns ?? []).filter((c) => c.dtype === "bool").map((c) => c.name));
-  return rankGroupingColumns(dataset.obs_columns ?? [], {
-    nCells: dataset.n_cells,
-    activeClustering: dataset.active_clustering,
-    userColumns: dataset.user_annotation_columns,
-  }).filter((c) => !isConfidenceOutput(c.name) && !bools.has(c.name));
+  return rankGroupingColumns(dataset.obs_columns ?? [], rankOptionsFor(dataset)).filter((c) => !isConfidenceOutput(c.name) && !bools.has(c.name));
 }
 
 /**

@@ -18,7 +18,7 @@ import {
 import { downloadCsv } from "@/lib/csv";
 import { replicateColumns } from "@/lib/de";
 import { formatPValue, prettyObsLabel } from "@/lib/formatting";
-import { rankGroupingColumns } from "@/lib/obsColumns";
+import { rankGroupingColumns, rankOptionsFor } from "@/lib/obsColumns";
 import type { DonorPoint } from "@/lib/donorPlot";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -75,11 +75,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
   const cols = useMemo(() => dataset?.obs_columns ?? [], [dataset]);
   const groupOptions = useMemo(
     () =>
-      rankGroupingColumns(cols, {
-        nCells: dataset?.n_cells,
-        activeClustering: dataset?.active_clustering,
-        userColumns: dataset?.user_annotation_columns,
-      }).map((g) => g.name),
+      rankGroupingColumns(cols, rankOptionsFor(dataset)).map((g) => g.name),
     [cols, dataset],
   );
   const conditionOptions = useMemo(() => conditionColumns(cols, [groupKey]), [cols, groupKey]);

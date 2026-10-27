@@ -9,7 +9,7 @@ import { downloadCsv } from "@/lib/csv";
 import { replicateColumns } from "@/lib/de";
 import { prettyObsLabel } from "@/lib/formatting";
 import { describeMilo, miloCsv, miloQuestion, nhoodRows, pickLayout, shifted } from "@/lib/milo";
-import { isCategoricalDtype, rankGroupingColumns } from "@/lib/obsColumns";
+import { isCategoricalDtype, rankGroupingColumns, rankOptionsFor } from "@/lib/obsColumns";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -72,11 +72,7 @@ export function MiloTest({ datasetId, info }: Props) {
   const cols = useMemo(() => dataset?.obs_columns ?? [], [dataset]);
   const labelOptions = useMemo(
     () =>
-      rankGroupingColumns(cols, {
-        nCells: dataset?.n_cells,
-        activeClustering: dataset?.active_clustering,
-        userColumns: dataset?.user_annotation_columns,
-      }).map((g) => g.name),
+      rankGroupingColumns(cols, rankOptionsFor(dataset)).map((g) => g.name),
     [cols, dataset],
   );
   const conditionOptions = useMemo(() => conditionColumns(cols, [labelKey]), [cols, labelKey]);

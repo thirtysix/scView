@@ -18,7 +18,7 @@ import { PowerCurves } from "@/components/compare/StudyPlannerPlot";
 import { conditionColumns, suggestConditionColumn } from "@/lib/composition";
 import { replicateColumns } from "@/lib/de";
 import { prettyObsLabel } from "@/lib/formatting";
-import { rankGroupingColumns } from "@/lib/obsColumns";
+import { rankGroupingColumns, rankOptionsFor } from "@/lib/obsColumns";
 import {
   DEFAULT_CELLS,
   DEFAULT_DONORS,
@@ -110,11 +110,7 @@ export function StudyPlanner({ datasetId, info }: Props) {
   const groupOptions = useMemo(
     () =>
       plannerGroupOrder(
-        rankGroupingColumns(cols, {
-          nCells: dataset?.n_cells,
-          activeClustering: dataset?.active_clustering,
-          userColumns: dataset?.user_annotation_columns,
-        }).map((g) => g.name),
+        rankGroupingColumns(cols, rankOptionsFor(dataset)).map((g) => g.name),
         cols,
       ),
     [cols, dataset],
