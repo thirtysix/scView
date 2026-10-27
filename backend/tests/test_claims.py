@@ -454,3 +454,11 @@ def test_answers_carry_a_ledger_and_sources_hide_evidence(monkeypatch, tmp_path)
     events = asyncio.run(collect())
     assert all("evidence" not in s for s in events[0]["sources"])
     assert events[-1]["type"] == "done" and events[-1]["claims"][0]["verdict"] == "refuted"
+
+
+def test_a_count_of_labels_before_an_example_group_does_not_refute():
+    # Live on Kang (b26): "cluster (13 labels, e.g. CD14 Mono, ...)" read 13 as CD14 Mono's cells.
+    c = one("The cell groupings cluster (13 labels, e.g. CD14 Mono, CD4 Naive T, B, NK) are what you'd "
+            "compare [result:groups:cluster].")
+    assert c.verdict != "refuted", c.reason
+    assert one("CD14 Mono has 3,100 cells [result:groups:cluster].").verdict == "refuted"

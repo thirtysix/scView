@@ -138,7 +138,8 @@ _STAT_BEFORE_RX = re.compile(
 _UNIT_AFTER_RX = re.compile(
     r"^\s*\)?\s*(genes?\s*(?:/|per)\s*cell|counts?\s*(?:/|per)\s*cell|UMIs?\s*(?:/|per)\s*cell|"
     r"% mito|mito|doublets?|cell types?|cells?|clusters?|groups?|types?|donors?|samples?|"
-    r"conditions?|categories|batches|populations?|PCs|neighbou?rs|genes|targets?)\b", re.I)
+    r"conditions?|categories|batches|populations?|PCs|neighbou?rs|genes|targets?|labels?|levels?|"
+    r"values?)\b", re.I)
 _APPROX_RX = re.compile(r"(?:~|≈|\babout|\bapproximately|\bapprox\.?|\broughly|\baround|\bnearly|"
                         r"\balmost|\bsome)\s*$", re.I)
 _BOUND_RX = re.compile(r"(?:\bover|\bmore than|\bless than|\bfewer than|\bunder|\bat least|\bat most|"
@@ -147,7 +148,7 @@ _RATIO_AFTER_RX = re.compile(r"^\s*(?:×|x\b|-?fold\b|times\b)", re.I)
 _STAT_CANON = {"q": "fdr", "padj": "fdr", "p-value": "p", "ρ": "rho", "log2fc": "lfc",
                "logfc": "lfc"}
 _COUNT_NOUNS = ("cluster", "group", "type", "donor", "sample", "condition", "categor",
-                "batch", "population", "target")
+                "batch", "population", "target", "label", "level", "value")
 _STRONG_UNITS = frozenset({"genes/cell", "counts/cell", "mito", "doublets"})
 _POPULATION_RX = re.compile(
     r"(?:\+|-|hi\b|lo\b|high\b|low\b)|\s+(?:mono\w*|T\b|B\b|NK\b|cells?\b|macrophage\w*|DCs?\b|"
