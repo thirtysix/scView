@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.45.1] - 2026-10-27
+
 ### Fixed
 - **Dark theme: split and Compare panel titles** (CTRL / STIM, or the compared colourings) were
   near-black on the dark plot background. Titles and frames now take the plot background's colours.
