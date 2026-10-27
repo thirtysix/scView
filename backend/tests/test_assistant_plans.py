@@ -99,11 +99,11 @@ def test_recluster_markers_enrichment_becomes_one_ordered_plan_bound_to_the_new_
     assert plan.type == "run_plan" and plan.requires_confirm
     assert [s.type for s in plan.steps] == ["cluster", "compute_markers", "run_enrichment"]
     clus, mk, enr = plan.steps
-    assert clus.column == "scview_leiden_r1.0" and clus.from_step is None
+    assert clus.column == "scview_leiden_r1" and clus.from_step is None
     # Both later steps work on the NEW clustering (step 0), resolved by the UI after it runs
     assert (mk.column, mk.from_step, mk.params) == (
-        "scview_leiden_r1.0", 0, {"marker_columns": ["scview_leiden_r1.0"]})
-    assert (enr.column, enr.from_step, enr.value) == ("scview_leiden_r1.0", 0, "3")
+        "scview_leiden_r1", 0, {"marker_columns": ["scview_leiden_r1"]})
+    assert (enr.column, enr.from_step, enr.value) == ("scview_leiden_r1", 0, "3")
     assert "3 steps" in plan.label and plan.advisory == ""
 
 

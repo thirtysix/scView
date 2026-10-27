@@ -1652,7 +1652,9 @@ def _coerce_items(
                 res = float(it.get("resolution") or 0.5)
             except Exception:
                 res = 0.5
-            scol = f"scview_leiden_r{res}"
+            # The browser sends 1.0 as 1 and the run names its column from that number
+            # (pipeline: scview_leiden_r1), so name it the same way here.
+            scol = f"scview_leiden_r{int(res) if res.is_integer() else res}"
             adv = (f"Overwrites the existing '{scol}' column."
                    if scol in cols else f"Adds a new clustering column '{scol}'.")
             made = (len(out), scol)
