@@ -123,6 +123,22 @@ def test_named_results_add_their_facet_to_a_classified_route(q, facet):
     assert facet in out.data_facets and "qc" in out.data_facets
 
 
+@pytest.mark.parametrize("q", [
+    "Which cytokines are the monocytes responding to?",
+    "What does the ligand-receptor analysis show?",
+    "Is there cell-cell communication between T cells and monocytes?",
+])
+def test_named_result_adds_the_dataset_to_a_literature_only_route(q):
+    lit_only = Intent(sources=["literature"], reason="llm", data_facets=[])
+    st = RouteState(rag_enabled=True, has_dataset=True, has_results=True)
+    out = apply_rules(lit_only, q, None, st)
+    assert "data" in out.sources and "literature" in out.sources
+    assert out.data_facets == ["groups"]
+    # no stored results: the classifier's route stands
+    bare = RouteState(rag_enabled=True, has_dataset=True)
+    assert apply_rules(lit_only, q, None, bare) is lit_only
+
+
 def test_all_facets_stay_all():
     picked = Intent(sources=["data"], reason="llm", data_facets=[])
     out = apply_rules(picked, "Summarise the cytokine run", None, RouteState(has_dataset=True))
