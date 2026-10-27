@@ -673,34 +673,88 @@ _CAUTION = (
 )
 
 
-def _last_result(adaptor, obs: pd.DataFrame) -> CompositionResult | None:
-    r = results_store.remembered(_last, _last_lock, adaptor, "composition")
-    if r is None or any(k and k not in obs.columns
-                        for k in (r.condition_key, r.sample_key, r.group_key)):
-        return None
-    if set(_order(obs[r.group_key])) != {g.group for g in r.groups}:
-        return None  # groups renamed or re-clustered since
-    return r
+# How many stored runs the co-pilot looks through for one that still fits.
+_MAX_RUNS = 12
+
+
+def _runs(adaptor):
+    """The dataset's composition runs, newest first: the one remembered in memory,
+    then the stored ones computed on the data it holds now."""
+    try:
+        with _last_lock:
+            mem = _last.get(adaptor)
+    except TypeError:  # not weak-referenceable (a test double)
+        return
+    if mem is not None:
+        yield mem
+    did = results_store.dataset_id_of(adaptor)
+    if not did:
+        return
+    for e in results_store.entries(did, "composition", adaptor=adaptor)[:_MAX_RUNS]:
+        if e.get("stale"):
+            continue
+        got = results_store.load(did, e["id"])
+        if got is not None and isinstance(got[1], CompositionResult):
+            yield got[1]
+
+
+def _fits(r: CompositionResult, obs: pd.DataFrame) -> bool:
+    """Whether a run's columns and groups are still the dataset's."""
+    if any(k and k not in obs.columns for k in (r.condition_key, r.sample_key, r.group_key)):
+        return False
+    return set(_order(obs[r.group_key])) == {g.group for g in r.groups}  # not renamed / re-clustered
+
+
+def _pick(adaptor, obs: pd.DataFrame, group_key: str | None = None
+          ) -> tuple[CompositionResult | None, CompositionResult | None]:
+    """The newest run that still fits and was tested (else the newest that fits),
+    and the newest run when it is not that one (its columns changed, or it was not
+    tested). ``group_key``: only runs on that column."""
+    newest = untested = None
+    for r in _runs(adaptor):
+        if group_key is not None and r.group_key != group_key:
+            continue
+        newest = newest or r
+        if not _fits(r, obs):
+            continue
+        if r.tested:
+            return r, (newest if newest is not r else None)
+        untested = untested or r
+    return untested, (newest if newest is not untested else None)
+
+
+def _last_result(adaptor, obs: pd.DataFrame, group_key: str | None = None) -> CompositionResult | None:
+    return _pick(adaptor, obs, group_key)[0]
+
+
+def _run_name(r: CompositionResult) -> str:
+    return f"'{r.group_key}' by '{r.condition_key}'"
 
 
 def grounding_lines(adaptor, obs: pd.DataFrame) -> tuple[list[str], str | None]:
-    """For the co-pilot: the last test's summary (and a citable detail line for
-    it), plus the caution on cell-level tests wherever conditions exist."""
-    r = _last_result(adaptor, obs)
+    """For the co-pilot: the newest valid test's summary (and a citable detail line
+    for it), plus the caution on cell-level tests wherever conditions exist."""
+    r, newer = _pick(adaptor, obs)
     if r is None:
         return ([f"\n## Composition between conditions\n{_CAUTION}"]
                 if condition_columns(obs) else []), None
+    which = "last run" if newer is None else "earlier run"
+    skipped = []
+    if newer is not None:
+        why = "not tested" if _fits(newer, obs) else "its columns or groups changed since"
+        skipped = [f"- The newest run ({_run_name(newer)}) is not used: {why}."]
     vs = " vs ".join(reversed(r.conditions)) if len(r.conditions) == 2 else ", ".join(r.conditions)
     head = f"{vs} by '{r.group_key}'"
+    run = f" (run: {_run_name(r)})"
     if not r.tested:
-        detail = f"{head}: proportions only, not tested. " + " ".join(r.warnings)
-        return ["\n## Composition test (last run)", f"- {detail} [result:composition]",
-                _CAUTION], detail
+        detail = f"{head}: proportions only, not tested{run}. " + " ".join(r.warnings)
+        return [f"\n## Composition test ({which})", f"- {detail} [result:composition]",
+                *skipped, _CAUTION], detail
     reps = ", ".join(f"{k} {n}" for k, n in r.n_samples.items())
     detail = (f"{head}, samples from '{r.sample_key}' ({reps}; {r.design}), {r.test}: "
-              f"{r.n_significant} of {len(r.groups)} groups at FDR < {FDR}")
-    lines = ["\n## Composition test (last run; samples as replicates, propeller-style)",
-             f"- {detail} [result:composition]."]
+              f"{r.n_significant} of {len(r.groups)} groups at FDR < {FDR}{run}")
+    lines = [f"\n## Composition test ({which}; samples as replicates, propeller-style)",
+             f"- {detail} [result:composition].", *skipped]
     for g in sorted(r.groups, key=lambda g: (g.fdr is None, g.fdr or 1.0))[:5]:
         shares = " -> ".join("n/a" if g.props[k] is None else f"{g.props[k] * 100:.1f}%"
                              for k in r.conditions)

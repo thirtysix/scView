@@ -361,6 +361,37 @@ def test_judge_parses_verdicts_and_keeps_unknown_ids_uncertain(monkeypatch):
     assert "Claim 0" in client.sent["messages"][1]["content"]
 
 
+KANG_TYPES = ["CD4 Naive T", "CD14 Mono", "CD14 Mono", "B", "CD8 T", "NK", "FCGR3A Mono",
+              "CD14 Mono", "DC", "pDC", "Eryth", "Mk", "B Activated"]
+
+
+def test_the_judge_reads_the_fact_lines_the_claim_names(monkeypatch):
+    """Capture 2026-10-26: "Monocyte clusters are 1, 2, 6 and 7" (true) was refuted
+    because the judge saw only the first 6 lines of the cited fact (clusters 0-5).
+    The rules leave it uncertain; the judge now gets the lines about clusters 1, 2,
+    6 and 7, whatever their place in the fact."""
+    ev = "\n".join(f"- cluster **{i}** = {t}" for i, t in enumerate(KANG_TYPES))
+    src = _src("result:celltypes:cell_type", ev)
+    vocab = Vocab(genes=GENES, groups=sorted(set(KANG_TYPES) | {"CTRL", "STIM"}),
+                  numeric_groups=frozenset(str(i) for i in range(len(KANG_TYPES))))
+    (c,) = check_answer("Monocyte clusters are 1, 2, 6 and 7 [result:celltypes:cell_type].",
+                        [src], ev, vocab)
+    assert c.verdict == "uncertain" and c.refs == ["result:celltypes:cell_type"]
+    assert c.evidence.splitlines() == [
+        "- cluster **1** = CD14 Mono", "- cluster **2** = CD14 Mono",
+        "- cluster **6** = FCGR3A Mono", "- cluster **7** = CD14 Mono"]
+    # the judge's request carries those lines (a claim's evidence is capped in size)
+    client = _FakeClient('[{"id": 0, "verdict": "supported", "reason": "listed"}]')
+    _patch_openai(monkeypatch, client)
+    asyncio.run(claims.judge_claims([c.model_dump()], "k", "m", "u"))
+    sent = client.sent["messages"][1]["content"]
+    assert "cluster **6** = FCGR3A Mono" in sent and "cluster **7** = CD14 Mono" in sent
+    # a claim naming many groups keeps its evidence small
+    many = ", ".join(str(i) for i in range(13))
+    (c,) = check_answer(f"The clusters are {many} [result:celltypes:cell_type].", [src], ev, vocab)
+    assert len(c.evidence) <= claims.MAX_EVIDENCE_CHARS + 1 and len(c.evidence.splitlines()) <= 16
+
+
 def test_judge_survives_garbage(monkeypatch):
     _patch_openai(monkeypatch, _FakeClient("no json [here"))
     got = asyncio.run(claims.judge_claims([{"id": 3, "text": "t", "evidence": "e"}], "k", "m", "u"))
