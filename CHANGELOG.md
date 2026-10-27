@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-10-27
+
 ### Added
 - **Co-pilot plans**: a request with several steps ("re-cluster at resolution 1, then compute markers
   and run enrichment for cluster 3") becomes one numbered checklist with one Run plan button. Steps run
