@@ -325,3 +325,25 @@ def test_screen_tag_resolves_in_the_ledger():
 
     assert resolve_tag("result:screen", ["result:screen", "result:groups:stim"]) == ["result:screen"]
     assert resolve_tag("screen", ["result:screen"]) == ["result:screen"]
+
+
+@pytest.mark.parametrize("q", [
+    "What pathways are enriched in the monocyte cluster?",
+    "Summarise the quality control that was done",
+    "How many donors are there, and is this a paired design?",
+    "What is cluster 3?",
+    "Is my data good enough to publish?",
+])
+def test_a_question_about_the_open_dataset_keeps_the_dataset(q):
+    lit_only = Intent(sources=["literature"], reason="llm", data_facets=[])
+    out = apply_rules(lit_only, q, None, RouteState(rag_enabled=True, has_dataset=True))
+    assert "data" in out.sources and "literature" in out.sources
+
+
+@pytest.mark.parametrize("q", [
+    "What does interferon beta do to monocytes?",
+    "How do NK cells kill infected cells?",
+])
+def test_a_general_biology_question_stays_with_the_literature(q):
+    lit_only = Intent(sources=["literature"], reason="llm", data_facets=[])
+    assert apply_rules(lit_only, q, None, RouteState(rag_enabled=True, has_dataset=True)) is lit_only

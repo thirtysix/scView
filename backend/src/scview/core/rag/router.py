@@ -361,6 +361,15 @@ _CELLS_GENES_RE = re.compile(
     r"|\bgenes?\b.*\b(?:cell[ -]?types?|clusters?|populations?)\b",
     re.I,
 )
+# A question that points at the open dataset itself: "my data", "this dataset", "the
+# monocyte cluster", "cluster 3", "how many donors", "the QC that was done".
+_THIS_DATASET_RE = re.compile(
+    r"\b(?:this|my|our|the)\s+(?:data(?:set)?|samples?|donors?|experiment)\b"
+    r"|\b(?:the|this|my)\s+(?:[\w+-]+\s+){1,2}(?:clusters?|cell[ -]?types?|populations?)\b"
+    r"|\bclusters?\s+\d+\b|\bhow\s+many\s+(?:cells?|donors?|samples?|clusters?|genes?)\b"
+    r"|\b(?:was|were)\s+(?:done|run|applied|used|filtered|removed)\b",
+    re.I,
+)
 # ... asking what responds or changes: what the stored comparisons answer.
 _RESPONSE_RE = re.compile(
     r"\b(?:respond\w*|responses?|affected|induc\w*|up-?regulat\w*|down-?regulat\w*|"
@@ -491,6 +500,8 @@ def apply_rules(intent: Intent, query: str, view_context: dict | None, state: Ro
     - a question about the dataset's cell types or genes, on a dataset with stored
       results: always the dataset too, even when the literature is chosen;
     - a question about the selected cells: always the dataset;
+    - a question pointing at the open dataset ("my data", "the monocyte cluster",
+      "cluster 3", "the QC that was done"): always the dataset;
     - a question naming a stored result (cytokine response, miloDE, pseudobulk,
       CRISPR, programs, communication): the dataset too, on a dataset with stored
       results, and the facet that holds it, whatever else the classifier picked."""
@@ -503,6 +514,7 @@ def apply_rules(intent: Intent, query: str, view_context: dict | None, state: Ro
     about_data = state.has_dataset and (
         (state.has_results and (bool(_CELLS_GENES_RE.search(query)) or bool(named)))
         or (_has_selection(view_context, state) and _refers_to_selection(query))
+        or bool(_THIS_DATASET_RE.search(query or ""))
     )
     if about_data and "data" not in sources:
         sources.append("data")
