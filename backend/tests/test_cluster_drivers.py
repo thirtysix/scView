@@ -332,6 +332,24 @@ def test_cluster_qc_reports_drivers_in_the_clustering_space():
     assert "Technical" not in "\n".join(grounding_block(bare)[0])
 
 
+def test_a_driver_s_pc_share_is_the_pca_s_own_share_of_the_total():
+    """PC1's share agrees with the PCA facts (uns['pca']['variance_ratio'], of the
+    total variance), not its share of the stored PCs' variance (22% vs 2.9%)."""
+    from scview.core import pca_diagnostics
+
+    a = _with_pca(_blood(), depth_axis=True)
+    a.uns["pca"] = {"variance_ratio": np.r_[0.0294, np.full(14, 0.01)]}
+    (d,) = cluster_qc(a).drivers
+    assert d.pc == 1 and d.pc_share == pytest.approx(0.0294)
+    assert "PC1 carries 2.9% of the total variance" in d.reason
+    _, detail = pca_diagnostics.grounding_lines(a)
+    assert detail.startswith("15 PCs: PC1 2.9%;") and "of the total variance" in detail
+    # no variance_ratio (a PCA from elsewhere, or a corrected space): of the PCs looked at
+    del a.uns["pca"]
+    (d,) = cluster_qc(a).drivers
+    assert 0.2 < d.pc_share < 1 and "of the variance in the 15 PCs" in d.reason
+
+
 # ---------------------------------------------------------------------------
 # QC report, endpoint, routing
 # ---------------------------------------------------------------------------
