@@ -6,6 +6,48 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Co-pilot plans**: a request with several steps ("re-cluster at resolution 1, then compute markers
+  and run enrichment for cluster 3") becomes one numbered checklist with one Run plan button. Steps run
+  in order; after each, a rule checks its result (the new clustering exists, markers exist, the group
+  has enrichment) before the next starts. A failed check stops the plan and names the step and why;
+  "Cancel after this step" stops it cleanly. Steps that use a re-cluster's result pick up the column
+  it really wrote. On Kang the 3-step plan above finished in 40 s. No extra model call: the same
+  single request that reads actions returns the steps.
+- **Co-pilot actions in Compare and DE**: "open the composition test with condition stim, groups
+  cluster and samples Donor" opens Compare > Composition with those pickers set (also Milo,
+  miloDE, Joint embedding, Plan a study); "set up DE between STIM and CTRL in stim" fills DE >
+  Between groups. Columns and groups are checked against the dataset; nothing runs until you click.
+
+### Changed
+- **Built-in marker sets** (offline marker-score annotator) gain plasmacytoid DC and CD16+ monocyte
+  sets; JCHAIN left Plasma cell, CD68 left Macrophage, LILRA4 left Dendritic cell. On Kang, pDC were
+  called "Plasma cell" and CD16 monocytes "Macrophage"; now 103 of 106 pDC and 940 of 974 CD16 Mono get
+  their own label. Runs recorded before replay with the sets they used.
+- **Author labels first**: pickers rank a dataset's own cell types before scView's annotations
+  (CellTypist and the LLM next, marker scoring last), and a column called "cluster" whose labels are
+  names counts as cell types. Kang now opens coloured by its author cell types, and Composition, Milo
+  and the study planner default to them.
+- **Compare two datasets**: a column per dataset, defaulting to the pair whose labels overlap most, so
+  label transfer's `<prefix>_transfer` column compares with the reference's cell types.
+- Co-pilot: an up-to-date feature guide with each feature's real path (a test checks every path
+  against the interface's labels), sent in short form (about 350 tokens) with dataset answers too, so
+  the co-pilot no longer denies features it has or invents menus.
+- Co-pilot routing: a question naming a stored result (cytokine response, ligand-receptor) or pointing
+  at the open dataset ("the monocyte cluster", "cluster 3", "the QC that was done") always uses the
+  dataset's facts, even when the question classifier picks the literature.
+- Co-pilot composition fact uses the newest stored run that still fits the data and was tested, and
+  names its columns; one invalid run no longer hides earlier valid ones.
+
+### Fixed
+- QC driver facts gave a PC's share of the variance in the kept PCs (PC1 22% on Kang) while the PCA
+  card gave the share of the total (2.9%); both now give the total.
+- Claims check: the model judges a claim against the fact lines that name its clusters, groups or genes
+  (a correct "Monocyte clusters are 1, 2, 6 and 7" was refuted because the judge saw clusters 0-5
+  only); "13 labels, e.g. CD14 Mono" no longer reads as CD14 Mono having 13 cells.
+- Layout-stability thumbnails follow the dark scatter background; tall cytokine heatmaps label their
+  columns on top, where they are in view.
+
 ## [0.44.0] - 2026-10-26
 
 ### Added
