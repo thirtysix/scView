@@ -17,7 +17,7 @@ import { errorMessage } from "@/lib/errorMessage";
 import { getPalette } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { prettyObsLabel } from "@/lib/formatting";
-import { rankGroupingColumns, rankOptionsFor } from "@/lib/obsColumns";
+import { rankGroupingColumns, rankOptionsFor, type RankedGrouping } from "@/lib/obsColumns";
 import { suggestColumnPair } from "@/lib/compareColumns";
 import type { DatasetInfo } from "@/api/types";
 import { TabList, TabPanel } from "@/components/common/TabList";
@@ -28,8 +28,8 @@ interface SummaryRaw {
 }
 
 /** Categorical obs columns usable as a comparison grouping (cell type, cluster…). */
-function rankedCols(ds: DatasetInfo | null): string[] {
-  return ds ? rankGroupingColumns(ds.obs_columns ?? [], rankOptionsFor(ds)).map((g) => g.name) : [];
+function rankedCols(ds: DatasetInfo | null): RankedGrouping[] {
+  return ds ? rankGroupingColumns(ds.obs_columns ?? [], rankOptionsFor(ds)) : [];
 }
 
 function ColumnSelect({ label, value, options, onChange }: {
@@ -299,16 +299,18 @@ function CompositionCompare() {
 
   // Each dataset's groupings, best first; the two columns need not share a name
   // (label transfer writes <prefix>_transfer into the query).
-  const columnsA = useMemo(() => rankedCols(datasetA), [datasetA]);
-  const columnsB = useMemo(() => rankedCols(datasetB), [datasetB]);
+  const rankedA = useMemo(() => rankedCols(datasetA), [datasetA]);
+  const rankedB = useMemo(() => rankedCols(datasetB), [datasetB]);
+  const columnsA = useMemo(() => rankedA.map((g) => g.name), [rankedA]);
+  const columnsB = useMemo(() => rankedB.map((g) => g.name), [rankedB]);
 
   // Default the pair once both datasets are known: the columns whose labels overlap most.
   useEffect(() => {
     if (column && columnsA.includes(column) && columnB && columnsB.includes(columnB)) return;
-    const [a, b] = suggestColumnPair(columnsA, columnsB, datasetA?.obs_columns ?? [], datasetB?.obs_columns ?? []);
+    const [a, b] = suggestColumnPair(rankedA, rankedB, datasetA?.obs_columns ?? [], datasetB?.obs_columns ?? []);
     setColumn(a);
     setColumnB(b);
-  }, [columnsA, columnsB, column, columnB, datasetA, datasetB]);
+  }, [rankedA, rankedB, columnsA, columnsB, column, columnB, datasetA, datasetB]);
 
   // Fetch both compositions whenever the pair + column are set.
   useEffect(() => {
