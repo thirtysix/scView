@@ -14,10 +14,16 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
 import { errorMessage } from "@/lib/errorMessage";
+import { pickOffered, usePrefillSample } from "@/hooks/usePrefillSample";
 
 interface Props {
   datasetId: string;
   info?: DatasetInfo | null;
+  /** Columns to start with (the co-pilot's open_compare_tab); the usual defaults
+   *  for any the pickers do not offer. */
+  defaultCondition?: string | null;
+  defaultGroup?: string | null;
+  defaultSample?: string | null;
 }
 
 const selectCls = "rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700";
@@ -31,7 +37,7 @@ const PROPS = [0.05, 0.1, 0.2] as const;
  * estimate), a streamed run, a beeswarm by label and the neighbourhood graph,
  * CSV, and selecting a neighbourhood's cells on the scatter.
  */
-export function MiloTest({ datasetId, info }: Props) {
+export function MiloTest({ datasetId, info, defaultCondition, defaultGroup, defaultSample }: Props) {
   const askCopilot = useViewStore((s) => s.askCopilot);
   const setPanel = useViewStore((s) => s.setPanel);
   const setSelection = useSelectionStore((s) => s.setSelection);
@@ -99,10 +105,11 @@ export function MiloTest({ datasetId, info }: Props) {
   // Defaults once the columns are known.
   useEffect(() => {
     if (!cols.length) return;
-    const label = labelOptions[0] ?? "";
+    const label = pickOffered(defaultGroup, labelOptions, labelOptions[0] ?? "");
     setLabelKey(label);
-    setConditionKey(suggestConditionColumn(conditionColumns(cols, [label])));
-  }, [cols, labelOptions]);
+    const conds = conditionColumns(cols, [label]);
+    setConditionKey(pickOffered(defaultCondition, conds.map((c) => c.name), suggestConditionColumn(conds)));
+  }, [cols, labelOptions, defaultCondition, defaultGroup]);
 
   // A new condition column: its first two values, the first as reference.
   useEffect(() => {
@@ -112,6 +119,7 @@ export function MiloTest({ datasetId, info }: Props) {
     setCovariate("");
     setPairing("auto");
   }, [conditionKey, conditionValues]);
+  usePrefillSample(defaultSample, conditionKey, sampleOptions, setSampleKey);
 
   const request = useMemo<MiloRequest | null>(() => {
     if (!conditionKey) return null;

@@ -93,7 +93,9 @@ class AssistantAction(BaseModel):
     Safe, reversible view/navigation actions: set_color_by, highlight_cluster,
     open_panel, set_embedding, set_subtab, set_groupby, clear_highlight,
     clear_overlay, show_gene, show_marker_plot, open_de_selection (the DE tab set
-    to selection vs rest; the user clicks Run).
+    to selection vs rest; the user clicks Run), open_compare_tab (a Compare tab with
+    its columns pre-filled) and open_de_compare (DE between two groups, pre-filled).
+    run_plan carries ordered ``steps`` the user confirms once.
     """
 
     type: str                    # one of the allow-listed action types
@@ -111,6 +113,18 @@ class AssistantAction(BaseModel):
     params: dict = Field(default_factory=dict)  # PipelineParams overrides for the step
     advisory: str = ""           # overwrite / destructive note for the user
     estimate: str = ""           # rough processing-time estimate
+    # Compare tab (open_compare_tab) and its pre-filled columns; DE between groups
+    # (open_de_compare: ``column`` + the two groups):
+    tab: str | None = None
+    condition: str | None = None
+    sample: str | None = None
+    group_a: str | None = None
+    group_b: str | None = None
+    # A multi-step plan (run_plan): the ordered steps, run one at a time in the UI.
+    steps: list["AssistantAction"] = Field(default_factory=list)
+    # A plan step whose ``column`` is the one an earlier step makes (that step's index):
+    # the UI binds it to the real column once that step has run.
+    from_step: int | None = None
 
 
 class ChatResponse(BaseModel):
@@ -1453,6 +1467,16 @@ _SUBTABS = {
     "protein": "Protein", "activity": "Activity", "genelists": "Gene lists",
     "communication": "Communication", "report": "Report",
 }
+# Compare panel tabs (frontend ComparePanel.tsx: joint | composition | planner, with
+# Milo and miloDE as modes of Composition).
+_COMPARE_TABS = {
+    "composition": "Composition", "milo": "Neighbourhoods (Milo)",
+    "milode": "Neighbourhood DE (miloDE)", "joint": "Joint embedding", "planner": "Plan a study",
+}
+_COMPARE_PREFILL = {"composition", "milo", "planner"}  # tabs with condition/group/sample pickers
+MAX_PLAN_STEPS = 6
+# A plan step naming the column a re-cluster earlier in the plan makes ("the new clusters").
+_NEW_COLUMN_RE = re.compile(r"leiden|cluster|new", re.I)
 # "Can you show ..." / "can I see ..." / "please open ...": a request phrased as a question.
 _POLITE = r"(?:(?:can|could|would|will) you\s+|(?:can|could|may) i\s+|please\s+)(?:please\s+)?"
 _POLITE_RE = re.compile(r"^\s*" + _POLITE, re.I)
@@ -1460,7 +1484,7 @@ _COMMAND_RE = re.compile(
     r"^\s*(?:" + _POLITE + r")?"
     r"(colou?r|show|highlight|select|go to|open|switch|navigate|display|set|view|take me|"
     r"clear|hide|reset|remove|group|jump|focus|overlay|annotate|label|re-?cluster|cluster|run|"
-    r"compute|detect|find|score|enrich|plot|draw|see|get)\b",
+    r"compute|detect|find|score|enrich|plot|draw|see|get|compare)\b",
     re.I,
 )
 
@@ -1488,33 +1512,57 @@ def _estimate(step: str, n_cells: int, method: str | None = None) -> str:
     return ""
 
 
-def _coerce_actions(
-    raw: str, *, columns: list[str], embeddings: list[str], genes_upper: dict[str, str],
-    n_cells: int = 0, active_clustering: str = "",
-) -> list[AssistantAction]:
-    """Parse + strictly validate the model's JSON action array against the allow-list.
+def _name(v) -> str:
+    """A column/tab name from the model's JSON: a string, else "" (never a list or dict)."""
+    return v.strip() if isinstance(v, str) else ""
 
-    Every field is checked against the real dataset (columns/embeddings/genes/panels);
-    anything off the allow-list is dropped, so the model can't drive arbitrary state."""
-    m = re.search(r"\[.*\]", raw, re.S)
-    if not m:
-        return []
-    try:
-        items = json.loads(m.group(0))
-    except Exception:
-        return []
+
+def _match_value(v, values: list[str]) -> str | None:
+    """The category ``v`` names, exactly or ignoring case; None when it is not one."""
+    s = str(v).strip() if isinstance(v, (str, int, float)) and not isinstance(v, bool) else ""
+    if not s:
+        return None
+    if s in values:
+        return s
+    return next((x for x in values if x.lower() == s.lower()), None)
+
+
+def _coerce_items(
+    items: list, *, columns: list[str], embeddings: list[str], genes_upper: dict[str, str],
+    n_cells: int, active_clustering: str, values: dict[str, list[str]],
+) -> tuple[list[AssistantAction], int]:
+    """Validate the model's action objects in order; returns them and how many were dropped.
+
+    A step after a re-cluster in the same list may name the column that re-cluster makes
+    (or none): it is bound to that step (``from_step``) and the UI resolves it once that
+    step has run, since the column does not exist yet."""
     cols, embs = set(columns), set(embeddings)
     out: list[AssistantAction] = []
-    for it in items if isinstance(items, list) else []:
+    dropped = 0
+    made: tuple[int, str] | None = None  # (step index, column) of the latest re-cluster
+
+    def bind(raw) -> tuple[str, int | None] | None:
+        name = _name(raw)
+        if name in cols:
+            return name, None
+        if made is not None and (not name or name == made[1] or _NEW_COLUMN_RE.search(name)):
+            return made[1], made[0]
+        return None
+
+    for it in items:
+        n_before = len(out)
         if not isinstance(it, dict):
+            dropped += 1
             continue
         t = str(it.get("type", "")).strip()
-        if t == "set_color_by" and it.get("column") in cols:
-            c = str(it["column"])
-            out.append(AssistantAction(type=t, column=c, label=f"Colored the plot by {c}."))
-        elif t == "highlight_cluster" and it.get("column") in cols and it.get("value"):
-            c, v = str(it["column"]), str(it["value"])
-            out.append(AssistantAction(type=t, column=c, value=v, label=f"Highlighted {v} in {c}."))
+        if t == "set_color_by" and (b := bind(it.get("column"))):
+            c, src = b
+            out.append(AssistantAction(type=t, column=c, from_step=src,
+                                       label=f"Colored the plot by {c}."))
+        elif t == "highlight_cluster" and it.get("value") and (b := bind(it.get("column"))):
+            (c, src), v = b, str(it["value"])
+            out.append(AssistantAction(type=t, column=c, value=v, from_step=src,
+                                       label=f"Highlighted {v} in {c}."))
         elif t == "open_panel" and str(it.get("panel", "")) in _PANELS:
             p = str(it["panel"])
             out.append(AssistantAction(type=t, panel=p, label=f"Opened {_PANELS[p]}."))
@@ -1525,9 +1573,9 @@ def _coerce_actions(
         elif t == "set_subtab" and str(it.get("subtab", "")) in _SUBTABS:
             s = str(it["subtab"])
             out.append(AssistantAction(type=t, subtab=s, label=f"Opened the {_SUBTABS[s]} tab."))
-        elif t == "set_groupby" and it.get("column") in cols:
-            c = str(it["column"])
-            out.append(AssistantAction(type=t, column=c, label=f"Grouped by {c}."))
+        elif t == "set_groupby" and (b := bind(it.get("column"))):
+            c, src = b
+            out.append(AssistantAction(type=t, column=c, from_step=src, label=f"Grouped by {c}."))
         elif t == "clear_highlight":
             out.append(AssistantAction(type=t, label="Cleared the highlight."))
         elif t == "clear_overlay":
@@ -1546,6 +1594,38 @@ def _coerce_actions(
                 type=t, plot=plot,
                 label=f"Opened the marker gene {name} in Marker Genes.",
             ))
+        elif t == "open_compare_tab" and (tab := _name(it.get("tab")).lower()) in _COMPARE_TABS:
+            pre = {}
+            if tab in _COMPARE_PREFILL:
+                pre = {f: _name(it.get(k)) for k, f in
+                       (("condition", "condition"), ("group", "column"), ("sample", "sample"))}
+                pre = {f: v for f, v in pre.items() if v in cols}
+                if pre.get("column") and pre.get("column") == pre.get("condition"):
+                    del pre["column"]  # one column cannot be both
+            said = ", ".join(f"{k} {pre[f]}" for k, f in
+                             (("condition", "condition"), ("groups", "column"), ("samples", "sample"))
+                             if f in pre)
+            out.append(AssistantAction(
+                type=t, panel="compare", tab=tab, **pre,
+                label=f"Opened Compare > {_COMPARE_TABS[tab]}" + (f" ({said})" if said else "") + ".",
+            ))
+        elif t == "open_de_compare" and (b := bind(it.get("column"))):
+            (c, src), a, z = b, it.get("group_a"), it.get("group_b")
+            if src is None:  # an existing column: both groups must be its categories
+                vals = values.get(c) or []
+                named_b = z not in (None, "")
+                a, z = _match_value(a, vals), _match_value(z, vals)
+                if a and not named_b and len(vals) == 2:  # "STIM vs the other one"
+                    z = next(v for v in vals if v != a)
+                ok = 2 <= len(vals) <= 50 and a and z and a != z
+            else:  # the column a re-cluster makes: checked once it exists
+                a, z = _match_value(a, [str(a)]), _match_value(z, [str(z)])
+                ok = a and z and a != z
+            if ok:
+                out.append(AssistantAction(
+                    type=t, subtab="de", column=c, group_a=a, group_b=z, from_step=src,
+                    label=f"Opened DE between groups: {a} vs {z} in {c}. Click Run there to compute it.",
+                ))
         elif t == "annotate_cell_types":
             method = str(it.get("method") or "llm").lower()
             if method not in ("llm", "celltypist"):
@@ -1575,8 +1655,9 @@ def _coerce_actions(
             scol = f"scview_leiden_r{res}"
             adv = (f"Overwrites the existing '{scol}' column."
                    if scol in cols else f"Adds a new clustering column '{scol}'.")
+            made = (len(out), scol)
             out.append(AssistantAction(
-                type=t, step="clustering",
+                type=t, step="clustering", column=scol,
                 params={"clustering_method": "leiden", "clustering_resolution": res},
                 requires_confirm=True, advisory=adv, estimate=_estimate("clustering", n_cells),
                 label=f"Re-cluster (Leiden, resolution {res}).",
@@ -1588,72 +1669,136 @@ def _coerce_actions(
                 estimate=_estimate("doublet_detection", n_cells),
                 label="Detect doublets (Scrublet).",
             ))
-        elif t == "compute_markers":
-            gb = str(it.get("groupby") or "")
-            if gb not in cols:
-                gb = active_clustering if active_clustering in cols else ""
+        elif t in ("compute_markers", "run_enrichment"):
+            b = bind(it.get("groupby"))
+            gb, src = b if b else (active_clustering if active_clustering in cols else "", None)
+            if t == "compute_markers":
+                out.append(AssistantAction(
+                    type=t, step="marker_genes", column=gb or None, from_step=src,
+                    params=({"marker_columns": [gb]} if gb else {}), requires_confirm=True,
+                    advisory=f"Computes marker genes for '{gb or 'the active clustering'}'.",
+                    estimate=_estimate("marker_genes", n_cells),
+                    label="Compute marker genes" + (f" for {gb}" if gb else "") + ".",
+                ))
+                continue
+            # One group ("enrichment for cluster 3"): all groups are computed, that one shown.
+            raw = it.get("group") or it.get("value")
+            grp = (_match_value(raw, values.get(gb) or []) if src is None
+                   else _match_value(raw, [str(raw)]))
             out.append(AssistantAction(
-                type=t, step="marker_genes", params=({"marker_columns": [gb]} if gb else {}),
-                requires_confirm=True,
-                advisory=f"Computes marker genes for '{gb or 'the active clustering'}'.",
-                estimate=_estimate("marker_genes", n_cells),
-                label="Compute marker genes" + (f" for {gb}" if gb else "") + ".",
-            ))
-        elif t == "run_enrichment":
-            gb = str(it.get("groupby") or "")
-            if gb not in cols:
-                gb = active_clustering if active_clustering in cols else ""
-            out.append(AssistantAction(
-                type=t, step="enrichment", params=({"enrichment_columns": [gb]} if gb else {}),
+                type=t, step="enrichment", column=gb or None, value=grp, from_step=src,
+                params=({"enrichment_columns": [gb]} if gb else {}),
                 requires_confirm=True,
                 advisory=f"Computes MSigDB pathway enrichment for '{gb or 'the active clustering'}' "
                          "(needs marker genes).",
                 estimate=_estimate("enrichment", n_cells),
-                label="Run pathway enrichment" + (f" for {gb}" if gb else "") + ".",
+                label="Run pathway enrichment" + (f" for {gb}" if gb else "")
+                      + (f", showing {grp}" if grp else "") + ".",
             ))
-    return out[:4]
+        if len(out) == n_before:
+            dropped += 1
+    return out, dropped
+
+
+def _as_plan(actions: list[AssistantAction], dropped: int) -> list[AssistantAction]:
+    """Several steps with at least one run among them become ONE ordered plan the user
+    confirms once (run one at a time in the UI, each checked before the next); view-only
+    commands stay separate actions, as before."""
+    if len(actions) < 2 or not any(a.requires_confirm for a in actions):
+        return actions[:4]
+    steps = actions[:MAX_PLAN_STEPS]
+    notes = []
+    if len(actions) > MAX_PLAN_STEPS:
+        notes.append(f"Only the first {MAX_PLAN_STEPS} steps are kept.")
+    if dropped:
+        notes.append(f"{dropped} step{'s' if dropped > 1 else ''} I could not map "
+                     f"{'were' if dropped > 1 else 'was'} left out.")
+    return [AssistantAction(
+        type="run_plan", requires_confirm=True, steps=steps, advisory=" ".join(notes),
+        label=f"A plan of {len(steps)} steps. Check it, then click Run plan.",
+    )]
+
+
+def _coerce_actions(
+    raw: str, *, columns: list[str], embeddings: list[str], genes_upper: dict[str, str],
+    n_cells: int = 0, active_clustering: str = "", values: dict[str, list[str]] | None = None,
+) -> list[AssistantAction]:
+    """Parse + strictly validate the model's JSON action array against the allow-list.
+
+    Every field is checked against the real dataset (columns/embeddings/genes/panels and,
+    for DE between groups, the column's categories); anything off the allow-list is
+    dropped, so the model can't drive arbitrary state."""
+    m = re.search(r"\[.*\]", raw, re.S)
+    if not m:
+        return []
+    try:
+        items = json.loads(m.group(0))
+    except Exception:
+        return []
+    if not isinstance(items, list):
+        return []
+    actions, dropped = _coerce_items(
+        items, columns=columns, embeddings=embeddings, genes_upper=genes_upper,
+        n_cells=n_cells, active_clustering=active_clustering, values=values or {},
+    )
+    return _as_plan(actions, dropped)
+
+
+# "re-cluster at resolution 1" / "recluster with res=0.8"
+_RECLUSTER_RE = re.compile(r"\bre-?cluster")
+_RESOLUTION_RE = re.compile(r"\bres(?:olution)?\s*(?:of\s+|=\s*|:\s*)?(\d+(?:\.\d+)?)")
+_ENRICH_GROUP_RE = re.compile(r"enrich\w*\s+(?:for|of|in|on)\s+(?:cluster|group)\s+([\w.+-]+)")
 
 
 def _deterministic_actions(
     query: str, *, columns: list[str], embeddings: list[str], genes_upper: dict[str, str],
-    n_cells: int, active_clustering: str
+    n_cells: int, active_clustering: str, values: dict[str, list[str]] | None = None,
 ) -> list[AssistantAction]:
-    """Regex fallback for unambiguous single-step commands the LLM sometimes drops
-    (e.g. 'detect doublets', 'clear highlight'). Built as dicts and passed through the
-    same strict allow-list validation, so this can't introduce off-list actions."""
+    """Regex fallback for unambiguous commands the LLM sometimes drops (e.g. 'detect
+    doublets', 'clear highlight'), in the order the message names them. Built as dicts
+    and passed through the same strict allow-list validation, so this can't introduce
+    off-list actions."""
     q = (query or "").lower()
-    dicts: list[dict] = []
+    found: list[tuple[int, dict]] = []
+    if (m := _RECLUSTER_RE.search(q)):
+        res = _RESOLUTION_RE.search(q, m.end())
+        found.append((m.start(), {"type": "cluster", **({"resolution": res.group(1)} if res else {})}))
     if "doublet" in q:
-        dicts.append({"type": "detect_doublets"})
+        found.append((q.find("doublet"), {"type": "detect_doublets"}))
     if "highlight" in q and any(w in q for w in ("clear", "remove", "hide", "reset")):
-        dicts.append({"type": "clear_highlight"})
+        found.append((q.find("highlight"), {"type": "clear_highlight"}))
     if "overlay" in q and any(w in q for w in ("clear", "remove", "hide")):
-        dicts.append({"type": "clear_overlay"})
+        found.append((q.find("overlay"), {"type": "clear_overlay"}))
     if "annotate" in q:
-        dicts.append({"type": "annotate_cell_types"})
+        found.append((q.find("annotate"), {"type": "annotate_cell_types"}))
     if "enrich" in q:
-        dicts.append({"type": "run_enrichment"})
+        grp = _ENRICH_GROUP_RE.search(q)
+        found.append((q.find("enrich"), {"type": "run_enrichment",
+                                         **({"group": grp.group(1)} if grp else {})}))
     plot = re.search(r"heat ?map|dot ?plot", q)
     if plot:
-        dicts.append({"type": "show_marker_plot",
-                      "plot": "dotplot" if plot.group(0).startswith("dot") else "heatmap"})
+        found.append((plot.start(), {"type": "show_marker_plot",
+                                     "plot": "dotplot" if plot.group(0).startswith("dot") else "heatmap"}))
     elif "marker" in q:
-        dicts.append({"type": "compute_markers"})
-    if re.search(r"\b3-?d\b", q):
-        dicts.append({"type": "set_embedding", "embedding": "X_umap_3d"})
-    if not dicts:
+        found.append((q.find("marker"), {"type": "compute_markers"}))
+    if (d3 := re.search(r"\b3-?d\b", q)):
+        found.append((d3.start(), {"type": "set_embedding", "embedding": "X_umap_3d"}))
+    if not found:
         return []
     return _coerce_actions(
-        json.dumps(dicts), columns=columns, embeddings=embeddings, genes_upper=genes_upper,
-        n_cells=n_cells, active_clustering=active_clustering,
+        json.dumps([d for _, d in sorted(found, key=lambda f: f[0])]), columns=columns,
+        embeddings=embeddings, genes_upper=genes_upper, n_cells=n_cells,
+        active_clustering=active_clustering, values=values,
     )
 
 
 async def extract_actions(
     query: str, view_context: dict | None, columns: list[str], embeddings: list[str],
-    genes_upper: dict[str, str], n_cells: int, active_clustering: str, api_key: str, model: str
+    genes_upper: dict[str, str], n_cells: int, active_clustering: str, api_key: str, model: str,
+    values: dict[str, list[str]] | None = None,
 ) -> list[AssistantAction]:
-    """Map a UI command to allow-listed structured actions (one focused LLM call)."""
+    """Map a UI command to allow-listed structured actions (one focused LLM call). A
+    multi-step request comes back from the same call as an ordered list (a plan)."""
     panels = ", ".join(f"{k} ({v})" for k, v in _PANELS.items())
     cols = ", ".join(columns[:40]) or "(none)"
     embs = ", ".join(embeddings) or "(none)"
@@ -1676,7 +1821,13 @@ async def extract_actions(
         "- cluster {type, resolution?}: re-run Leiden clustering at a resolution.\n"
         "- detect_doublets {type}: run doublet detection / find doublets / flag doublet cells.\n"
         "- compute_markers {type, groupby?}: compute marker genes per group.\n"
-        "- run_enrichment {type, groupby?}: compute MSigDB pathway enrichment per group.\n"
+        "- run_enrichment {type, groupby?, group?}: compute MSigDB pathway enrichment per group "
+        "(group: the one to show).\n"
+        "- open_compare_tab {type, tab, condition?, group?, sample?}: open a Compare tab "
+        "(composition|milo|milode|joint|planner) with its columns set.\n"
+        "- open_de_compare {type, column, group_a, group_b}: set up DE between two groups.\n"
+        f"Several steps: list them in the order asked (at most {MAX_PLAN_STEPS}); a step on a "
+        "re-cluster's result leaves its column out.\n"
         f"Valid obs columns: {cols}.\n"
         f"Valid embeddings (obsm key): {embs}.\n"
         f"Valid panels (id): {panels}.\n"
@@ -1694,12 +1845,12 @@ async def extract_actions(
             **chat_extra(model),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
-            max_tokens=300,
+            max_tokens=400,
         )
         actions = _coerce_actions(
             resp.choices[0].message.content or "",
             columns=columns, embeddings=embeddings, genes_upper=genes_upper, n_cells=n_cells,
-            active_clustering=active_clustering,
+            active_clustering=active_clustering, values=values,
         )
     except Exception as exc:  # pragma: no cover - network/LLM failure
         logger.debug("action extraction failed: %s", exc)
@@ -1711,7 +1862,7 @@ async def extract_actions(
     if not actions:
         actions = _deterministic_actions(
             query, columns=columns, embeddings=embeddings, genes_upper=genes_upper,
-            n_cells=n_cells, active_clustering=active_clustering,
+            n_cells=n_cells, active_clustering=active_clustering, values=values,
         )
         if _POLITE_RE.match(query or ""):
             actions = [a for a in actions if a.type == "show_marker_plot"]
@@ -1748,9 +1899,11 @@ async def _maybe_actions(query, adaptor, api_key, view_context, model) -> list[A
     if _DE_SELECTION_RE.search(query or ""):
         return [de_selection_action(view_context)]
     try:
-        cols = [c["name"] for c in adaptor.obs_columns_info()]
+        info = adaptor.obs_columns_info()
+        cols = [c["name"] for c in info]
+        values = {c["name"]: c["values"] for c in info if c.get("values")}
     except Exception:
-        cols = []
+        cols, values = [], {}
     try:
         embs = [e["name"] for e in adaptor.available_embeddings()]
     except Exception:
@@ -1771,10 +1924,10 @@ async def _maybe_actions(query, adaptor, api_key, view_context, model) -> list[A
         # No LLM configured: deterministic matcher only (unambiguous commands).
         return _deterministic_actions(
             query, columns=cols, embeddings=embs, genes_upper=genes_upper,
-            n_cells=nc, active_clustering=active,
+            n_cells=nc, active_clustering=active, values=values,
         )
     return await extract_actions(
-        query, view_context, cols, embs, genes_upper, nc, active, api_key, model
+        query, view_context, cols, embs, genes_upper, nc, active, api_key, model, values=values
     )
 
 

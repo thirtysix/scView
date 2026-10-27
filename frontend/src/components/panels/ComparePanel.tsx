@@ -10,6 +10,7 @@ import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { useOnScreenStore } from "@/stores/onScreenStore";
+import { useComparePrefillStore, type ComparePrefill, type CompareTarget } from "@/stores/comparePrefillStore";
 import { listDatasets, getDataset } from "@/api/datasets";
 import { apiFetch } from "@/api/client";
 import { errorMessage } from "@/lib/errorMessage";
@@ -76,10 +77,33 @@ const TABS: { id: CompareTab; label: string }[] = [
   { id: "planner", label: "Plan a study" },
 ];
 
+/** The tab a co-pilot target opens (Milo and miloDE are modes of Composition). */
+const TAB_OF: Record<CompareTarget, CompareTab> = {
+  composition: "composition", milo: "composition", milode: "composition", joint: "joint", planner: "planner",
+};
+const MODE_OF: Partial<Record<CompareTarget, CompositionMode>> = { milo: "milo", milode: "milode" };
+
+/** A co-pilot request not applied yet opens its tab, once (a later visit opens as usual). */
+function useFreshPrefill(): ComparePrefill | null {
+  const prefill = useComparePrefillStore((s) => s.prefill);
+  const applied = useComparePrefillStore((s) => s.applied);
+  return prefill && prefill.nonce !== applied ? prefill : null;
+}
+
 /** Multi-dataset analysis: a joint embedding across datasets, or a side-by-side
  * composition comparison of two. */
 export function ComparePanel() {
-  const [tab, setTab] = useState<CompareTab>("joint");
+  const fresh = useFreshPrefill();
+  const [tab, setTab] = useState<CompareTab>(fresh ? TAB_OF[fresh.tab] : "joint");
+  // The columns the co-pilot asked for, handed to the tab it opened (remounted per request).
+  const [prefill, setPrefill] = useState<ComparePrefill | null>(fresh);
+  const markApplied = useComparePrefillStore((s) => s.markApplied);
+  useEffect(() => {
+    if (!fresh) return;
+    setTab(TAB_OF[fresh.tab]);
+    setPrefill(fresh);
+    markApplied(fresh.nonce);
+  }, [fresh, markApplied]);
   // The co-pilot's view context names the open tab (stores/onScreenStore.ts)
   const setOnScreenTab = useOnScreenStore((s) => s.setCompareTab);
   useEffect(() => {
@@ -103,14 +127,20 @@ export function ComparePanel() {
         }
       />
       <TabPanel idPrefix="compare" id={tab}>
-        {tab === "joint" ? <JointEmbedding /> : tab === "planner" ? <PlannerTab /> : <CompositionTab />}
+        {tab === "joint" ? (
+          <JointEmbedding />
+        ) : tab === "planner" ? (
+          <PlannerTab key={prefill?.nonce ?? 0} prefill={prefill} />
+        ) : (
+          <CompositionTab key={prefill?.nonce ?? 0} prefill={prefill} />
+        )}
       </TabPanel>
     </div>
   );
 }
 
 /** How many donors would a follow-up need, from the open dataset's own variability. */
-function PlannerTab() {
+function PlannerTab({ prefill }: { prefill: ComparePrefill | null }) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   if (!dataset) {
     return (
@@ -128,7 +158,14 @@ function PlannerTab() {
         variability and running the app&apos;s own tests on them. More donors, not more cells, is what
         usually buys power.
       </p>
-      <StudyPlanner key={dataset.id} datasetId={dataset.id} info={dataset} />
+      <StudyPlanner
+        key={dataset.id}
+        datasetId={dataset.id}
+        info={dataset}
+        defaultCondition={prefill?.condition}
+        defaultGroup={prefill?.group}
+        defaultSample={prefill?.sample}
+      />
     </div>
   );
 }
@@ -145,8 +182,13 @@ const WHICH_TEST =
 /** Composition: a replicate-aware test between conditions of the open dataset
  *  (by group, or by neighbourhood with Milo), or two datasets side by side
  *  (descriptive). */
-function CompositionTab() {
-  const [mode, setMode] = useState<CompositionMode>("conditions");
+function CompositionTab({ prefill }: { prefill: ComparePrefill | null }) {
+  const [mode, setMode] = useState<CompositionMode>((prefill && MODE_OF[prefill.tab]) || "conditions");
+  const asked = {
+    defaultCondition: prefill?.condition,
+    defaultGroup: prefill?.group,
+    defaultSample: prefill?.sample,
+  };
   const dataset = useDatasetStore((s) => s.currentDataset);
   return (
     <div className="space-y-4">
@@ -199,9 +241,9 @@ function CompositionTab() {
           {mode === "milode" ? (
             <MiloDETest key={dataset.id} datasetId={dataset.id} info={dataset} />
           ) : mode === "milo" ? (
-            <MiloTest key={dataset.id} datasetId={dataset.id} info={dataset} />
+            <MiloTest key={dataset.id} datasetId={dataset.id} info={dataset} {...asked} />
           ) : (
-            <CompositionTest key={dataset.id} datasetId={dataset.id} info={dataset} />
+            <CompositionTest key={dataset.id} datasetId={dataset.id} info={dataset} {...asked} />
           )}
         </>
       ) : (

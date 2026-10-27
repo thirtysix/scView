@@ -9,7 +9,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
-import { PANEL_LABELS, type PanelId, type UnifiedSubtab } from "@/lib/constants";
+import { PANEL_LABELS } from "@/lib/constants";
 import {
   assistantChat,
   assistantChatStream,
@@ -29,7 +29,18 @@ import { selectionContext } from "@/lib/copilotSelection";
 import { screenContext } from "@/lib/copilotView";
 import { useOnScreenStore } from "@/stores/onScreenStore";
 import { useCopilotSelectionStore } from "@/stores/copilotSelectionStore";
-import { useDESettingsStore } from "@/stores/deSettingsStore";
+import { applyViewAction } from "@/lib/copilotActions";
+import {
+  fetchEnrichmentGroups,
+  newPlanTurn,
+  planId,
+  planRuns,
+  runPlan,
+  runStepStreamed,
+  settleInterrupted,
+  type PlanTurn,
+} from "@/lib/copilotPlan";
+import { PlanCard } from "@/components/assistant/PlanCard";
 import { ClaimsLedger, mergeVerdicts, toCheck } from "@/components/assistant/ClaimsLedger";
 
 interface Turn {
@@ -40,6 +51,7 @@ interface Turn {
   route?: string[];
   followups?: string[];
   pendingAction?: AssistantAction; // a confirm-gated mutating action awaiting the user
+  plan?: PlanTurn; // a multi-step plan: a checklist with one Run plan confirm
   model?: string; // which LLM produced this answer (trust/transparency)
   feedback?: "up" | "down"; // the user's per-answer rating
   claims?: Claim[]; // the claims ledger: checkable sentences and their verdicts
@@ -91,6 +103,22 @@ const threadKey = (datasetId: string | null) => `scview.chat.v1.${datasetId ?? "
 // Two chats can be mounted at once (the drawer and the AI Co-pilot panel). They
 // share one saved thread per dataset; this event tells the other one to reload it.
 const THREAD_EVENT = "scview-copilot-thread";
+
+/** Write a running plan's progress into the saved thread and tell the mounted chats,
+ *  so it shows (and is kept) even when the chat that started it was closed. */
+function patchStoredPlan(key: string, turn: number, fn: (p: PlanTurn) => PlanTurn) {
+  try {
+    const raw = localStorage.getItem(key);
+    const saved = raw ? (JSON.parse(raw) as Turn[]) : [];
+    const t = saved[turn];
+    if (!t?.plan) return;
+    saved[turn] = { ...t, plan: fn(t.plan) };
+    localStorage.setItem(key, JSON.stringify(saved));
+    window.dispatchEvent(new CustomEvent(THREAD_EVENT, { detail: { key, source: "plan" } }));
+  } catch {
+    /* storage unavailable: the chat that runs the plan still shows it */
+  }
+}
 
 /** `surface` says where this chat is mounted: a question queued by "ask about
  *  this" is answered once, by the panel when it is open, else by the drawer. */
@@ -328,6 +356,15 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
   const executeActions = useCallback((actions?: AssistantAction[]) => {
     if (!actions?.length) return;
     for (const a of actions) {
+      if (a.type === "run_plan") {
+        // Several steps: one numbered checklist, confirmed once (runPlanAt).
+        if (a.steps?.length) {
+          setTurns((prev) =>
+            prev.map((t, i) => (i === prev.length - 1 ? { ...t, plan: newPlanTurn(a) } : t)),
+          );
+        }
+        continue;
+      }
       if (a.requires_confirm) {
         // Mutating action: don't run it — surface a Confirm card on the turn.
         setTurns((prev) =>
@@ -335,43 +372,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
         );
         continue;
       }
-      if (a.type === "set_color_by" && a.column) {
-        useSettingsStore.getState().setColorBy(a.column);
-        useSelectionStore.getState().setHighlight(null);
-        useViewStore.getState().setPanel("unified");
-      } else if (a.type === "highlight_cluster" && a.column && a.value) {
-        useSettingsStore.getState().setColorBy(a.column);
-        useSelectionStore.getState().setHighlight({ column: a.column, value: a.value });
-        useViewStore.getState().setPanel("unified");
-      } else if (a.type === "open_panel" && a.panel) {
-        useViewStore.getState().setPanel(a.panel as PanelId);
-      } else if (a.type === "set_embedding" && a.embedding) {
-        useSettingsStore.getState().setEmbedding(a.embedding);
-        useViewStore.getState().setPanel("unified");
-      } else if (a.type === "set_subtab" && a.subtab) {
-        useUnifiedViewStore
-          .getState()
-          .setActiveSubtab(a.subtab as UnifiedSubtab);
-        useViewStore.getState().setPanel("unified");
-      } else if (a.type === "set_groupby" && a.column) {
-        useUnifiedViewStore.getState().setGroupByColumn(a.column);
-        useViewStore.getState().setPanel("unified");
-      } else if (a.type === "clear_highlight") {
-        useSelectionStore.getState().setHighlight(null);
-      } else if (a.type === "clear_overlay") {
-        useUnifiedViewStore.getState().clearOverlayState();
-      } else if (a.type === "show_gene" && a.gene) {
-        useViewStore.getState().setPendingGene(a.gene);
-        useViewStore.getState().setPanel("expression");
-      } else if (a.type === "open_de_selection") {
-        // DE pre-set to selection vs rest; the user clicks Run there.
-        useDESettingsStore.getState().update({ mode: "selection" });
-        useUnifiedViewStore.getState().setActiveSubtab("de");
-        useViewStore.getState().setPanel("unified");
-      } else if (a.type === "show_marker_plot") {
-        useViewStore.getState().setMarkerView(a.plot === "dotplot" ? "dotplot" : "heatmap");
-        useViewStore.getState().setPanel("markers");
-      }
+      applyViewAction(a);
     }
   }, []);
 
@@ -418,6 +419,54 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
     },
     [datasetId],
   );
+
+  // Run a plan's steps one at a time (lib/copilotPlan.ts): each run is awaited and checked
+  // before the next; a failed check stops it; Cancel stops after the current step.
+  const runPlanAt = useCallback(
+    async (turn: number) => {
+      const plan = turns[turn]?.plan;
+      if (!datasetId || !plan || plan.status !== "ready" || planRuns.any()) return;
+      const id = planId(key, turn);
+      const run = planRuns.start(id);
+      const update = (fn: (p: PlanTurn) => PlanTurn) => {
+        setTurns((prev) => prev.map((t, i) => (i === turn && t.plan ? { ...t, plan: fn(t.plan) } : t)));
+        patchStoredPlan(key, turn, fn);
+      };
+      try {
+        localStorage.setItem(key, JSON.stringify(turns));
+      } catch {
+        /* non-fatal */
+      }
+      update((p) => ({ ...p, status: "running", message: undefined }));
+      const sameDataset = () => useDatasetStore.getState().currentDatasetId === datasetId;
+      try {
+        const res = await runPlan(
+          plan.steps,
+          {
+            runStep: (step, params) => runStepStreamed(datasetId, step, params),
+            getDataset: () => getDataset(datasetId),
+            enrichmentGroups: (col) => fetchEnrichmentGroups(datasetId, col),
+            applyView: (a) => sameDataset() && applyViewAction(a),
+            onDataset: (d) => sameDataset() && useDatasetStore.getState().setCurrentDataset(d),
+          },
+          {
+            onStep: (i, st) =>
+              update((p) => ({ ...p, stepStatus: p.stepStatus.map((s, j) => (j === i ? st : s)) })),
+            // Another dataset opened: the rest of the plan is not for it.
+            isCancelled: () => run.cancel || !sameDataset(),
+          },
+        );
+        update((p) => ({ ...p, status: res.status, message: res.message }));
+      } finally {
+        planRuns.end(id);
+      }
+    },
+    [datasetId, key, turns],
+  );
+
+  const setPlanAt = useCallback((turn: number, plan: PlanTurn | undefined) => {
+    setTurns((prev) => prev.map((t, i) => (i === turn ? { ...t, plan } : t)));
+  }, []);
 
   const cancelPendingAction = useCallback(() => {
     setTurns((prev) =>
@@ -595,6 +644,19 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
                   </div>
                 </div>
               )}
+              {t.role === "assistant" && t.plan && (
+                <PlanCard
+                  plan={
+                    t.plan.status === "running" && !planRuns.isActive(planId(key, i))
+                      ? settleInterrupted(t.plan)
+                      : t.plan
+                  }
+                  canRun={!!datasetId && !confirming && !planRuns.any()}
+                  onRun={() => runPlanAt(i)}
+                  onStop={() => planRuns.stop(planId(key, i))}
+                  onDismiss={() => setPlanAt(i, undefined)}
+                />
+              )}
               {t.role === "assistant" && t.route && t.route.length > 0 && (
                 <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
                   <span>via</span>
@@ -643,6 +705,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
                 t.content &&
                 t.grounded !== false &&
                 !t.pendingAction &&
+                t.plan?.status !== "ready" &&
                 (i !== turns.length - 1 || !busy) && (
                   <div className="mt-2 flex items-center gap-2 border-t border-dashed pt-1.5 text-[10px] text-muted-foreground">
                     <span className="flex items-center gap-1">

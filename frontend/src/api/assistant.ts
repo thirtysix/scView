@@ -72,7 +72,10 @@ export interface AssistantAction {
     | "detect_doublets"
     | "compute_markers"
     | "run_enrichment"
-    | "open_de_selection";
+    | "open_de_selection"
+    | "open_compare_tab"
+    | "open_de_compare"
+    | "run_plan";
   column?: string;
   value?: string;
   panel?: string;
@@ -87,6 +90,17 @@ export interface AssistantAction {
   params?: Record<string, unknown>;
   advisory?: string;
   estimate?: string;
+  /** open_compare_tab: the Compare tab and its pre-filled columns (`column` = the groups) */
+  tab?: "composition" | "milo" | "milode" | "joint" | "planner";
+  condition?: string | null;
+  sample?: string | null;
+  /** open_de_compare: the two groups of `column` */
+  group_a?: string | null;
+  group_b?: string | null;
+  /** run_plan: the ordered steps, run one at a time (lib/copilotPlan.ts) */
+  steps?: AssistantAction[];
+  /** A plan step whose `column` is made by an earlier step (its index): bound once it ran */
+  from_step?: number | null;
 }
 
 /** Run pipeline step(s) on a dataset (used when the user confirms a mutating action). */
