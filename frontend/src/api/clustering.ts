@@ -110,6 +110,7 @@ export async function runSweep(
  * POST `body` to a server-sent-events endpoint and hand each event to `onEvent`
  * as it arrives. Rejects with the server's reason, on an `error` event, or when
  * the stream ends before `complete`; aborting `signal` stops reading.
+ * `onComplete` gets the `complete` event's data (a pipeline run's result).
  */
 export async function streamEvents(
   path: string,
@@ -117,6 +118,7 @@ export async function streamEvents(
   onEvent: (event: string, data: unknown) => void,
   what: string,
   signal?: AbortSignal,
+  onComplete?: (data: unknown) => void,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -152,8 +154,10 @@ export async function streamEvents(
       } else if (line.startsWith("data: ") && event) {
         const data = JSON.parse(line.slice(6));
         if (event === "error") throw new Error(String(data.error));
-        if (event === "complete") complete = true;
-        else onEvent(event, data);
+        if (event === "complete") {
+          complete = true;
+          onComplete?.(data);
+        } else onEvent(event, data);
         event = "";
       }
     }
