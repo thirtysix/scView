@@ -263,8 +263,11 @@ export function UnifiedViewPanel() {
   }, [restoreCamera, setPendingCamera]);
 
   // --- Resizable split pane ---
+  // The drag moves a guide line only and resizes on release: resizing on every move re-renders
+  // the open plots each time (~1.8 s per move with DE results open, FINDINGS 22).
   const [splitFraction, setSplitFraction] = useState(0.6); // left panel fraction (0.3–0.8)
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const splitGuideRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -272,18 +275,25 @@ export function UnifiedViewPanel() {
     isDraggingRef.current = true;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
+    let fraction: number | null = null;
 
     const onMove = (ev: MouseEvent) => {
       if (!isDraggingRef.current || !splitContainerRef.current) return;
       const rect = splitContainerRef.current.getBoundingClientRect();
-      const fraction = (ev.clientX - rect.left) / rect.width;
-      setSplitFraction(Math.min(0.8, Math.max(0.3, fraction)));
+      fraction = Math.min(0.8, Math.max(0.3, (ev.clientX - rect.left) / rect.width));
+      const guide = splitGuideRef.current;
+      if (guide) {
+        guide.style.left = `${fraction * 100}%`;
+        guide.style.display = "block";
+      }
     };
 
     const onUp = () => {
       isDraggingRef.current = false;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      if (splitGuideRef.current) splitGuideRef.current.style.display = "none";
+      if (fraction !== null) setSplitFraction(fraction);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
@@ -976,7 +986,15 @@ export function UnifiedViewPanel() {
       )}
 
       {/* Main area: left column (toolbar + scatter + distribution) | right panel */}
-      <div ref={splitContainerRef} className="flex min-h-0 flex-1">
+      <div ref={splitContainerRef} className="relative flex min-h-0 flex-1">
+        {/* Where the split lands while dragging (see handleDragStart) */}
+        <div
+          ref={splitGuideRef}
+          data-testid="split-guide"
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 z-40 w-1 rounded-full bg-primary/70"
+          style={{ display: "none" }}
+        />
         {/* Left column — UMAP width: toolbar, scatter, and distribution stacked */}
         <div className="flex min-w-0 flex-col gap-2" style={{ width: `${splitFraction * 100}%` }}>
           <UnifiedToolbar numCells={numCells} groupSelect={groupSelect} />
