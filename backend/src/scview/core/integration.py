@@ -30,7 +30,7 @@ import pandas as pd
 import scipy.sparse as sp
 from pydantic import BaseModel, Field
 
-from scview.core import protein, provenance
+from scview.core import protein, provenance, spatial
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.session import _make_readonly, _safe_name
 from scview.core.pipeline import PipelineParams, looks_like_counts, run_pipeline_streamed
@@ -217,6 +217,16 @@ def build_unit(
     unit = ad.AnnData(X=counts.X, obs=obs, var=var)
     if protein.has_protein(adata):  # CITE-seq counts ride along (same cells, same order)
         unit.obsm[protein.COUNTS_KEY] = adata.obsm[protein.COUNTS_KEY].set_axis(obs.index)
+    if spatial.has_spatial(adata):  # tissue coordinates and images ride along (merge_units keeps them)
+        spatial.adopt(adata)
+        unit.obsm[spatial.KEY] = np.asarray(adata.obsm[spatial.KEY], dtype=np.float64)
+        unit.obs[spatial.LIBRARY_COLUMN] = adata.obs[spatial.LIBRARY_COLUMN].to_numpy()
+        unit.obs[spatial.LIBRARY_COLUMN] = unit.obs[spatial.LIBRARY_COLUMN].astype(
+            pd.CategoricalDtype(adata.obs[spatial.LIBRARY_COLUMN].cat.categories))
+        for col in ("array_row", "array_col"):
+            if col in adata.obs.columns:
+                unit.obs[col] = adata.obs[col].to_numpy()
+        unit.uns[spatial.KEY] = dict(adata.uns[spatial.KEY])
     return Unit(dataset_id, name, label, unit, counts.source)
 
 

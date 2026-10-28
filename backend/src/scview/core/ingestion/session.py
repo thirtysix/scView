@@ -73,9 +73,10 @@ class IngestOptions(BaseModel):
 
 def _seqqc_view(unit: IngestUnit) -> IngestUnit:
     """The unit with only its sequencing-QC side files (metrics, raw matrix): its
-    contig tables and guide calls are joined to the cells by ``_attach_vdj`` /
-    ``_attach_guide_calls`` instead."""
-    keep = [f for f in unit.side_files if f.side_kind not in (SideKind.vdj, SideKind.crispr)]
+    contig tables, guide calls and spatial files are joined to the cells by
+    ``_attach_vdj`` / ``_attach_guide_calls`` / ``_attach_spatial`` instead."""
+    keep = [f for f in unit.side_files
+            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial)]
     return unit.model_copy(update={"side_files": keep})
 
 
@@ -313,7 +314,12 @@ class IngestSessionManager:
         except IngestLoadError as e:
             part.unlink(missing_ok=True)
             raise IngestCommitError(str(e)) from e
-        self._record_ingest_provenance(adata, loadable, opts)
+        try:
+            spatial_params = self._attach_spatial(adata, loadable, opts)
+        except IngestCommitError:
+            part.unlink(missing_ok=True)
+            raise
+        self._record_ingest_provenance(adata, loadable, opts, spatial_params)
         # Cell Ranger metrics / raw matrices that came with a sample (never raises).
         from scview.core import seq_metrics
 
@@ -397,7 +403,8 @@ class IngestSessionManager:
 
     # -- internals --------------------------------------------------------
 
-    def _record_ingest_provenance(self, adata, loadable, opts: IngestOptions) -> None:
+    def _record_ingest_provenance(self, adata, loadable, opts: IngestOptions,
+                                  spatial_params: dict | None = None) -> None:
         """Write the source block + an ingest history entry. Never raises."""
         try:
             if len(loadable) > 1:
@@ -432,6 +439,7 @@ class IngestSessionManager:
                     "formats": sorted({u.format.value for u in loadable}),
                     "genes_in_rows": opts.genes_in_rows,
                     **_protein_params(adata),
+                    **({"spatial": spatial_params} if spatial_params else {}),
                 },
             )
         except Exception as e:  # provenance must never block ingest
@@ -454,6 +462,34 @@ class IngestSessionManager:
                 except (vdj.VdjError, OSError, EOFError, zlib.error, ValueError) as e:
                     # A gzip cut off past the part detection read surfaces only here.
                     raise IngestCommitError(f"The contig table {f.name} could not be attached: {e}") from e
+
+    def _attach_spatial(self, adata, loadable, opts: IngestOptions) -> dict | None:
+        """Space Ranger spatial files uploaded with a unit (``core/spatial.py``): each
+        sample's spots placed on its own cells, one library per sample (its label).
+        Returns the summary for the ingest history entry (None without spatial files)."""
+        from scview.core import spatial
+
+        with_files = [u for u in loadable
+                      if any(f.side_kind == SideKind.spatial for f in u.side_files)]
+        if not with_files:
+            return None
+        if len(with_files) < len(loadable):
+            without = ", ".join(u.label for u in loadable if u not in with_files)
+            raise IngestCommitError(
+                f"Only some samples came with Space Ranger spatial files ({without} did not). "
+                "Upload the spatial samples together without the others, or add each sample's "
+                "spatial folder.")
+        merged = len(loadable) > 1
+        for u in with_files:
+            parts = [(f.spatial_part or "", f.path, f.rel_path or f.name)
+                     for f in u.side_files if f.side_kind == SideKind.spatial]
+            try:
+                sr = spatial.read_spaceranger(parts)
+                spatial.attach(adata, sr, u.label, sample_column=opts.sample_label if merged else None,
+                               sample=u.label if merged else None, label=u.label)
+            except (spatial.SpatialError, OSError, EOFError, zlib.error) as e:
+                raise IngestCommitError(f"The spatial files of {u.label} could not be used: {e}") from e
+        return spatial.finish(adata)
 
     def _attach_guide_calls(self, adata, loadable, opts: IngestOptions) -> None:
         """Cell Ranger's protospacer calls uploaded with a unit (``core/crispr.py``),
