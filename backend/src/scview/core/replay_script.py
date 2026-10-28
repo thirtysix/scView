@@ -2186,6 +2186,15 @@ def _qc_state_label(p: dict, ctx: _Ctx) -> Snippet:
     ], "scView's own QC state check")
 
 
+def _gwas_traits(p: dict, ctx: _Ctx) -> Snippet:
+    return Snippet(NOT_REPLAYABLE, [
+        "# scView's GWAS trait links (each group's markers against the GWAS Catalog",
+        f"# {comment_text(p.get('release'), 20)} release) read the data and add nothing to it: not replayed.",
+        "# Recorded:",
+        *_param_comment(p),
+    ], "a lookup against the GWAS Catalog; adds no data")
+
+
 def _doublet_threshold(p: dict, ctx: _Ctx) -> Snippet:
     t = p.get("threshold")
     if t == "scrublet":
@@ -2565,6 +2574,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "merge_clusters": _merge_clusters,
     "protein_dsb": _protein_dsb,
     "qc_state_label": _qc_state_label,
+    "gwas_traits": _gwas_traits,
     "mito_refilter": _mito_refilter,
     "gene_programs": _gene_programs,
     "cnv": _cnv,

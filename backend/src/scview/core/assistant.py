@@ -1431,6 +1431,22 @@ def _add_label_term(adaptor, view_context: dict | None, blocks: list[str], sourc
                                   detail=detail, evidence=lines[-1]))
 
 
+def _add_gwas_traits(adaptor, view_context: dict | None, blocks: list[str], sources: list[ChatSource]) -> None:
+    """The highlighted group's top GWAS trait links (core/gwas_catalog.py), once run on its column."""
+    from scview.core import gwas_catalog
+
+    hl = (view_context or {}).get("highlighted")
+    try:
+        lines, detail = gwas_catalog.grounding_lines(adaptor, hl)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: GWAS trait fact failed: %s", exc)
+        return
+    if lines:
+        blocks.append("\n".join(lines))
+        sources.append(ChatSource(kind="result", ref=f"{gwas_catalog.TAG}:{hl['column']}:{hl['value']}",
+                                  detail=detail, evidence="\n".join(lines[1:])))
+
+
 def _assemble(
     adaptor,
     *,
@@ -1453,6 +1469,7 @@ def _assemble(
         blocks.append(data_context)
         sources.extend(data_sources)
         _add_label_term(adaptor, view_context, blocks, sources)
+        _add_gwas_traits(adaptor, view_context, blocks, sources)
         _add_screen_facts(adaptor, view_context, blocks, sources)
     if app_context:
         blocks.insert(0, app_context)
@@ -1499,7 +1516,7 @@ _SUBTABS = {
     "genesets": "Gene Sets", "enrichment": "Enrichment", "de": "DE",
     "protein": "Protein", "activity": "Activity", "genelists": "Gene lists",
     "communication": "Communication", "report": "Report",
-    "spatial": "Spatial genes",
+    "spatial": "Spatial genes", "traits": "Traits",
 }
 # Compare panel tabs (frontend ComparePanel.tsx: joint | composition | planner, with
 # Milo and miloDE as modes of Composition).
