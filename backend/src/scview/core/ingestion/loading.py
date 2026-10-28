@@ -53,12 +53,14 @@ def load_unit(unit: IngestUnit, options: dict | None = None) -> ad.AnnData:
         UnitFormat.loom: _load_loom,
         UnitFormat.zarr: _load_zarr,
         UnitFormat.dense_table: _load_dense,
+        UnitFormat.h5seurat: _load_h5seurat,
     }
     loader = loaders.get(unit.format)
     if loader is None:
         if unit.format == UnitFormat.seurat:
             raise IngestLoadError(
-                "Seurat .rds files are converted by the R converter service, not this loader."
+                "Seurat .rds files are converted by the R converter service (at commit), "
+                "not this loader."
             )
         raise IngestLoadError(f"No loader for unit format '{unit.format}'.")
 
@@ -123,6 +125,15 @@ def _load_loom(unit: IngestUnit, options: dict) -> ad.AnnData:
 
 def _load_zarr(unit: IngestUnit, options: dict) -> ad.AnnData:
     return ad.read_zarr(_single(unit))
+
+
+def _load_h5seurat(unit: IngestUnit, options: dict) -> ad.AnnData:
+    from scview.core.ingestion import h5seurat
+
+    try:
+        return h5seurat.read(_single(unit))
+    except h5seurat.H5SeuratError as e:
+        raise IngestLoadError(str(e)) from e
 
 
 def _load_dense(unit: IngestUnit, options: dict) -> ad.AnnData:
