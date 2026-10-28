@@ -157,14 +157,14 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
   if (!dataset || !datasetId) return <div className="text-xs text-slate-400">No dataset loaded.</div>;
 
   const selectCls =
-    "w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200";
+    "w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700";
   const toDownload = (asmStatus?.files ?? []).filter((f) => !f.downloaded).reduce((s, f) => s + f.bytes, 0);
   const minutes = Math.max(1, Math.round((asmStatus?.estimate_seconds ?? 120) / 60));
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-1.5">
-        <h3 className="text-xs font-medium text-slate-700 dark:text-slate-200">Upstream TF candidates (promoter motifs)</h3>
+        <h3 className="text-xs font-medium text-slate-700">Upstream TF candidates (promoter motifs)</h3>
         <InfoTip label="About upstream TF candidates" width={320}>
           For each group, the transcription factor motifs (JASPAR 2024) found in more of its
           marker genes&apos; promoters (1 kb upstream of the start) than in the other measured
@@ -174,14 +174,14 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
       </div>
 
       {status && !asm && (
-        <p className="text-[11px] text-amber-700 dark:text-amber-400">
+        <p className="text-[11px] text-amber-700">
           The species of this dataset&apos;s genes is unknown: promoter motifs need human or mouse gene symbols.
         </p>
       )}
 
       {status && asmStatus && !prepared && (
-        <div className="space-y-2 rounded border border-slate-200 p-2 dark:border-slate-700">
-          <p className="text-[11px] text-slate-600 dark:text-slate-300">
+        <div className="space-y-2 rounded border border-slate-200 p-2">
+          <p className="text-[11px] text-slate-600">
             First, a table of motif hits in every gene&apos;s promoter is built for {asmStatus.label}: a
             one-off {toDownload > 0 ? `download of ${(toDownload / 1e6).toFixed(0)} MB and ` : ""}scan of
             about {minutes} min, kept for later runs.
@@ -205,7 +205,7 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
           </button>
           {preparing && progress && (
             <div className="space-y-1" data-testid="tf-motif-progress">
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">{progress.message}</p>
+              <p className="text-[11px] text-slate-500">{progress.message}</p>
               {progress.total ? (
                 <progress
                   className="h-1.5 w-full"
@@ -221,7 +221,7 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
 
       {prepared && (
         <div className="flex items-end gap-2">
-          <label className="flex-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+          <label className="flex-1 text-[11px] font-medium text-slate-500">
             Groups
             <select value={column} onChange={(e) => setGroupByColumn(e.target.value)} className={`mt-1 ${selectCls}`}>
               <option value="">Choose a column</option>
@@ -253,7 +253,7 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
       {result && (
         <div className="space-y-2">
           <div className="flex items-end gap-2">
-            <label className="flex-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            <label className="flex-1 text-[11px] font-medium text-slate-500">
               Group ({prettyObsLabel(result.column)}{result.column !== column ? ", the last run" : ""})
               <select value={group} onChange={(e) => setGroup(e.target.value)} className={`mt-1 ${selectCls}`}>
                 {result.groups.map((g) => (
@@ -266,7 +266,7 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
             <button
               type="button"
               onClick={() => downloadCsv(`tf_motif_candidates_${result.column}`, TF_CSV_HEADERS, tfCsvRows(result))}
-              className="flex items-center gap-1 rounded border border-slate-200 px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+              className="flex items-center gap-1 rounded border border-slate-200 px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
             >
               <Download className="h-3.5 w-3.5" /> CSV
             </button>
@@ -285,17 +285,17 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
                 Motifs in {current.group}&apos;s marker promoters vs all measured genes&apos;, lowest p first; {current.n_significant} with
                 padj &lt; 0.05.
               </Caption>
-              {current.note && <p className="text-[11px] text-amber-700 dark:text-amber-400">{current.note}</p>}
+              {current.note && <p className="text-[11px] text-amber-700">{current.note}</p>}
               <CapNote
                 shown={shown.length}
                 total={current.n_reported}
                 by={sort === "padj" ? "adjusted p" : sort === "odds_ratio" ? "odds ratio" : "overlap"}
                 rest={current.n_reported > current.rows.length ? `the server keeps the ${current.rows.length} lowest p; the CSV has those` : "the CSV has all"}
               />
-              <div className="max-h-80 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
+              <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
                 <table className="w-full text-xs" data-testid="tf-motif-table">
-                  <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
-                    <tr className="border-b border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300">
+                  <thead className="sticky top-0 bg-slate-50">
+                    <tr className="border-b border-slate-200 text-slate-600">
                       <th className="px-2 py-1.5 text-left font-medium" title="The motif's TF name in JASPAR (a dimer names two); click a row to colour the cells by the TF">
                         TF (motif)
                       </th>
@@ -319,26 +319,26 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
                       <tr
                         key={r.motif_id}
                         onClick={() => colourBy(r)}
-                        className="cursor-pointer border-b border-slate-50 hover:bg-blue-50 dark:border-slate-800 dark:hover:bg-slate-700"
+                        className="cursor-pointer border-b border-slate-50 hover:bg-blue-50"
                       >
-                        <td className="px-2 py-1.5 text-slate-800 dark:text-slate-100" title={`${r.motif_id}; overlap: ${r.overlap.join(", ")}${r.n_overlap > r.overlap.length ? ", …" : ""}`}>
+                        <td className="px-2 py-1.5 text-slate-800" title={`${r.motif_id}; overlap: ${r.overlap.join(", ")}${r.n_overlap > r.overlap.length ? ", …" : ""}`}>
                           <span className="font-mono font-medium">{r.motif}</span>{" "}
                           <span className="text-[10px] text-slate-400">{r.motif_id}</span>
                           {r.gc_rich && (
-                            <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] text-amber-800 dark:bg-amber-900 dark:text-amber-200" title="GC-rich motif: CpG-island promoters carry it often, so it is enriched more easily">
+                            <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] text-amber-800" title="GC-rich motif: CpG-island promoters carry it often, so it is enriched more easily">
                               GC-rich
                             </span>
                           )}
                           {colouring === r.motif_id && <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />}
                         </td>
-                        <td className="px-1 py-1.5 text-right tabular-nums text-slate-600 dark:text-slate-300" title={`p = ${formatP(r.p)}`}>
+                        <td className="px-1 py-1.5 text-right tabular-nums text-slate-600" title={`p = ${formatP(r.p)}`}>
                           {formatP(r.padj)}
                         </td>
-                        <td className="px-1 py-1.5 text-right tabular-nums text-slate-600 dark:text-slate-300">{r.odds_ratio.toFixed(1)}</td>
-                        <td className="px-1 py-1.5 text-right tabular-nums text-slate-600 dark:text-slate-300" title={`K = ${r.K.toLocaleString()} of N = ${r.N.toLocaleString()} genes have it`}>
+                        <td className="px-1 py-1.5 text-right tabular-nums text-slate-600">{r.odds_ratio.toFixed(1)}</td>
+                        <td className="px-1 py-1.5 text-right tabular-nums text-slate-600" title={`K = ${r.K.toLocaleString()} of N = ${r.N.toLocaleString()} genes have it`}>
                           {r.k}/{r.n}
                         </td>
-                        <td className="px-1 py-1.5 text-slate-600 dark:text-slate-300">
+                        <td className="px-1 py-1.5 text-slate-600">
                           {r.tf_expressed ? (
                             <span className={r.tf_expressed.expressed ? "" : "text-slate-400"}>
                               {r.tf_expressed.gene} {Math.round(r.tf_expressed.pct * 100)}%
@@ -348,7 +348,7 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
                             <span className="text-slate-400" title="The TF's gene is not measured in this dataset">not measured</span>
                           )}
                         </td>
-                        <td className="px-1 py-1.5 text-center text-slate-600 dark:text-slate-300">
+                        <td className="px-1 py-1.5 text-center text-slate-600">
                           {r.activity_agrees === null ? "" : r.activity_agrees ? "yes" : "no"}
                         </td>
                       </tr>
@@ -368,9 +368,9 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
           )}
 
           {!result.activity.available && result.activity.hint && (
-            <p className="text-[11px] text-slate-500 dark:text-slate-400" data-testid="tf-activity-hint">{result.activity.hint}</p>
+            <p className="text-[11px] text-slate-500" data-testid="tf-activity-hint">{result.activity.hint}</p>
           )}
-          <p className="text-[11px] leading-snug text-amber-700 dark:text-amber-400" data-testid="tf-motif-caveats">
+          <p className="text-[11px] leading-snug text-amber-700" data-testid="tf-motif-caveats">
             {result.caveats}
           </p>
           <p className="text-[10px] leading-snug text-slate-400">

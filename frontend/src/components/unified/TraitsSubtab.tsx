@@ -87,8 +87,8 @@ function Citation({ release, attribution }: { release: string; attribution?: str
 /** One gene's traits in the catalog, with PubMed ids and link-outs. */
 function GeneTraitsCard({ gene, data, loading }: { gene: string; data: GeneTraits | null; loading: boolean }) {
   return (
-    <div className="space-y-1.5 rounded-lg border border-slate-200 p-2 dark:border-slate-700" data-testid="gene-traits">
-      <div className="text-xs font-medium text-slate-700 dark:text-slate-200">
+    <div className="space-y-1.5 rounded-lg border border-slate-200 p-2" data-testid="gene-traits">
+      <div className="text-xs font-medium text-slate-700">
         GWAS traits mapped to {gene}
         {data?.via_ortholog && data.query !== data.gene ? ` (human ${data.gene})` : ""}
       </div>
@@ -100,8 +100,8 @@ function GeneTraitsCard({ gene, data, loading }: { gene: string; data: GeneTrait
           <CapNote shown={data.shown} total={data.n_traits} by="p" />
           <div className="max-h-56 overflow-auto">
             <table className="w-full text-[11px]">
-              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
-                <tr className="text-left text-slate-600 dark:text-slate-300">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr className="text-left text-slate-600">
                   <th className="px-1.5 py-1" title="EFO trait the catalog maps the association to">Trait</th>
                   <th className="px-1.5 py-1" title="The trait's parent term in the catalog's grouping">Parent term</th>
                   <th className="px-1.5 py-1 text-right" title="Smallest p of an association mapped to this gene">p</th>
@@ -111,8 +111,8 @@ function GeneTraitsCard({ gene, data, loading }: { gene: string; data: GeneTrait
               </thead>
               <tbody>
                 {data.traits.map((t) => (
-                  <tr key={t.uri} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="px-1.5 py-0.5 text-slate-700 dark:text-slate-200">
+                  <tr key={t.uri} className="border-t border-slate-100">
+                    <td className="px-1.5 py-0.5 text-slate-700">
                       <a href={efoUrl(t.uri)} target="_blank" rel="noopener noreferrer" className="hover:underline">
                         {t.trait}
                       </a>
@@ -273,7 +273,7 @@ export function TraitsSubtab({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-200">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
         GWAS trait links
         <InfoTip label="About GWAS trait links" width={320}>
           For each group, its marker genes are compared with the genes the GWAS Catalog maps near variants associated
@@ -284,7 +284,7 @@ export function TraitsSubtab({
 
       {caveat && (
         <p
-          className="rounded border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+          className="rounded border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900"
           data-testid="gwas-caveat"
         >
           {caveat}
@@ -293,8 +293,8 @@ export function TraitsSubtab({
       {release && <Citation release={release} attribution={result?.attribution ?? status?.attribution} />}
 
       {status && !status.downloaded && (
-        <div className="space-y-1.5 rounded-lg border border-slate-200 p-2.5 text-xs dark:border-slate-700">
-          <p className="text-slate-600 dark:text-slate-300">
+        <div className="space-y-1.5 rounded-lg border border-slate-200 p-2.5 text-xs">
+          <p className="text-slate-600">
             The GWAS Catalog ({status.release} release) is not downloaded yet: about {status.download_mb} MB from
             ftp.ebi.ac.uk, once. Preparing it takes about a minute.
             {!status.auto_download && !status.raw_present &&
@@ -325,7 +325,7 @@ export function TraitsSubtab({
               <select
                 value={column}
                 onChange={(e) => setGroupByColumn(e.target.value)}
-                className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
               >
                 {groupColumns.map((c) => (
                   <option key={c.name} value={c.name}>
@@ -334,7 +334,7 @@ export function TraitsSubtab({
                 ))}
               </select>
             </label>
-            <label className="flex items-center gap-1 pb-1 text-[11px] text-slate-600 dark:text-slate-300">
+            <label className="flex items-center gap-1 pb-1 text-[11px] text-slate-600">
               <input
                 type="checkbox"
                 checked={includeMeasurements}
@@ -386,7 +386,7 @@ export function TraitsSubtab({
                 setGroup(e.target.value);
                 setTrait(null);
               }}
-              className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+              className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
             >
               {result.groups.map((g) => (
                 <option key={g.group} value={g.group}>
@@ -415,10 +415,10 @@ export function TraitsSubtab({
           {rows.length === 0 ? (
             <p className="text-[11px] text-slate-500">No trait&apos;s genes overlap this group&apos;s markers in {result.min_loci} or more loci.</p>
           ) : (
-            <div className="max-h-96 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <div className="max-h-96 overflow-auto rounded-lg border border-slate-200">
               <table className="w-full text-[11px]">
-                <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
-                  <tr className="border-b border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300">
+                <thead className="sticky top-0 bg-slate-50">
+                  <tr className="border-b border-slate-200 text-slate-600">
                     <th className="px-2 py-1 text-left" title="EFO trait; click to list the overlap genes">Trait</th>
                     <th className="px-2 py-1 text-left" title="The trait's parent term in the catalog's grouping">Parent term</th>
                     <th className="px-2 py-1 text-right" title="Overlap genes / trait genes in the background">Genes</th>
@@ -440,7 +440,7 @@ export function TraitsSubtab({
                   {rows.map((r) => (
                     <tr
                       key={r.uri}
-                      className={`border-b border-slate-100 dark:border-slate-800 ${r.uri === trait ? "bg-primary/10" : ""}`}
+                      className={`border-b border-slate-100 ${r.uri === trait ? "bg-primary/10" : ""}`}
                     >
                       <td className="px-2 py-0.5">
                         <button
@@ -454,23 +454,23 @@ export function TraitsSubtab({
                         </button>
                       </td>
                       <td className="px-2 py-0.5 text-slate-500">{r.parent || "–"}</td>
-                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-200">
+                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700">
                         {r.n_overlap} / {r.n_trait_genes}
                         <span className="block max-w-[9rem] truncate text-[10px] text-slate-500" title={r.dataset_genes.join(", ")}>
                           {r.dataset_genes.slice(0, 4).join(", ")}
                           {r.dataset_genes.length > 4 ? ", …" : ""}
                         </span>
                       </td>
-                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-200">{r.n_loci}</td>
-                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-200">{r.odds_ratio.toFixed(1)}</td>
-                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-200">{formatPValue(r.p)}</td>
+                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700">{r.n_loci}</td>
+                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700">{r.odds_ratio.toFixed(1)}</td>
+                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700">{formatPValue(r.p)}</td>
                       <td
-                        className="px-2 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-200"
+                        className="px-2 py-0.5 text-right tabular-nums text-slate-700"
                         title={`${r.n_draws.toLocaleString()} random gene sets`}
                       >
                         {r.p_empirical <= 1 / (r.n_draws + 1) ? `< ${(1 / r.n_draws).toPrecision(1)}` : formatPValue(r.p_empirical)}
                       </td>
-                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-200">{formatPValue(r.p_adj)}</td>
+                      <td className="px-2 py-0.5 text-right tabular-nums text-slate-700">{formatPValue(r.p_adj)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -479,8 +479,8 @@ export function TraitsSubtab({
           )}
 
           {selected && (
-            <div className="space-y-1 rounded-lg border border-slate-200 p-2 dark:border-slate-700" data-testid="trait-genes">
-              <div className="text-xs font-medium text-slate-700 dark:text-slate-200">
+            <div className="space-y-1 rounded-lg border border-slate-200 p-2" data-testid="trait-genes">
+              <div className="text-xs font-medium text-slate-700">
                 {selected.trait}: {selected.n_overlap} overlap gene{selected.n_overlap === 1 ? "" : "s"} in {selected.n_loci} loci
               </div>
               <div className="flex flex-wrap gap-1">
@@ -495,7 +495,7 @@ export function TraitsSubtab({
                       className={`rounded border px-1.5 py-0.5 text-[11px] ${
                         dg === activeGene
                           ? "border-primary bg-primary/10 text-primary"
-                          : "border-slate-300 text-slate-700 hover:border-primary dark:border-slate-600 dark:text-slate-200"
+                          : "border-slate-300 text-slate-700 hover:border-primary"
                       }`}
                       title={`Colour the plot by ${dg} and list its GWAS traits`}
                     >
