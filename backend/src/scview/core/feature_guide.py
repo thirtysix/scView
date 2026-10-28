@@ -61,6 +61,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
+    ("Unified View > Enrichment > Diagram", "Reactome",
+     "a Reactome row's pathway diagram coloured by a DE result's fold changes (also on the DE tab's "
+     "enrichment); KEGG and WikiPathways rows link out"),
     ("Unified View > DE", "", "selection vs rest or between groups; cell-level and pseudobulk tests"),
     ("Unified View > DE > Audit this result", "donor shuffle", "donor-shuffle check of a DE result"),
     ("Unified View > Activity > TFs (CollecTRI)", "", "transcription factor activity"),
