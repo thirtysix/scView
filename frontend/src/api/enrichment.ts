@@ -11,6 +11,10 @@ export interface EnrichmentResult {
   collection: string;
   /** Set for a custom collection: its name, "(deleted)" once it is gone. */
   collection_name?: string;
+  /** MSigDB's exactSource: R-HSA-/R-MMU- (Reactome), WP... (WikiPathways), N... (KEGG Medicus); "" when none. */
+  source_id?: string;
+  /** MSigDB's externalDetailsURL for the set's source. */
+  source_url?: string;
 }
 
 export interface GeneListEnrichmentRequest {
@@ -101,6 +105,9 @@ export interface GseaTerm {
   leading_edge: string[];
   collection: string;
   collection_name?: string;
+  /** As EnrichmentResult. */
+  source_id?: string;
+  source_url?: string;
 }
 
 export interface GseaSide {

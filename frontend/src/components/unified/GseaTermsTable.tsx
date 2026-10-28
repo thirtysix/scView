@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp, ArrowUpDown, Loader2, Sparkles } from "lucide-react";
 import { collectionLabel } from "@/api/genesets";
+import { PathwaySourceAction } from "@/components/unified/PathwaySourceAction";
 import type { GseaTerm } from "@/api/enrichment";
 import { formatPermP, type GseaSortDir, type GseaSortField } from "@/lib/gsea";
 
@@ -14,6 +15,8 @@ interface Props {
   onTermClick: (r: GseaTerm) => void;
   onAsk: (r: GseaTerm) => void;
   scoringTerm: string | null;
+  /** A Reactome row's "Diagram" button (KEGG / WikiPathways rows get an outbound link). */
+  onDiagram?: (r: GseaTerm) => void;
   className?: string;
 }
 
@@ -30,6 +33,7 @@ export function GseaTermsTable({
   onTermClick,
   onAsk,
   scoringTerm,
+  onDiagram,
   className = "max-h-72",
 }: Props) {
   const sortIcon = (field: GseaSortField) => {
@@ -91,6 +95,11 @@ export function GseaTermsTable({
                   <div className="flex items-center gap-1.5">
                     {isScoring && <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-blue-500" />}
                     <div className="min-w-0 flex-1 truncate font-medium text-slate-800">{r.term}</div>
+                    <PathwaySourceAction
+                      sourceId={r.source_id}
+                      sourceUrl={r.source_url}
+                      onDiagram={onDiagram ? () => onDiagram(r) : undefined}
+                    />
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

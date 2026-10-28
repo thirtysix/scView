@@ -14,6 +14,7 @@ import { InfoTip } from "@/components/common/InfoTip";
 import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
 import { GseaResults } from "@/components/unified/GseaResults";
+import { PathwayDiagramPanel, type OpenPathway } from "@/components/unified/PathwayDiagramPanel";
 import { useEnrichmentSort } from "@/hooks/useEnrichmentSort";
 import { useGeneSetScoring, type OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
 import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
@@ -79,6 +80,20 @@ export function UnifiedEnrichmentSubtab({
   const [gsea, setGsea] = useState<GseaResponse | null>(null);
   const [isRunningGsea, setIsRunningGsea] = useState(false);
   const [gseaError, setGseaError] = useState<string | null>(null);
+
+  // A Reactome row's diagram, coloured by the group's markers (what both tables came from).
+  const [openPathway, setOpenPathway] = useState<OpenPathway | null>(null);
+  const openDiagram = useCallback(
+    (r: { term: string; source_id?: string }) => {
+      if (!r.source_id) return;
+      setOpenPathway({
+        stId: r.source_id,
+        term: r.term,
+        source: groupByColumn && selectedGroup ? { kind: "markers", column: groupByColumn, group: selectedGroup } : null,
+      });
+    },
+    [groupByColumn, selectedGroup],
+  );
 
   const categoricalColumns = useMemo(() => {
     if (!dataset) return [];
@@ -159,6 +174,7 @@ export function UnifiedEnrichmentSubtab({
     setComputeError(null);
     setGsea(null);
     setGseaError(null);
+    setOpenPathway(null);
   }, [selectedGroup]);
 
   const buildNetwork = useCallback(
@@ -523,6 +539,7 @@ export function UnifiedEnrichmentSubtab({
           onTermClick={handleTermClick}
           onAsk={askAboutTerm}
           scoringTerm={scoringTerm}
+          onDiagram={openDiagram}
         />
         </div>
 
@@ -572,8 +589,18 @@ export function UnifiedEnrichmentSubtab({
             onTermClick={(r) => scoreGenes(r.leading_edge, r.term)}
             onAsk={askAboutGseaTerm}
             scoringTerm={scoringTerm}
+            onDiagram={openDiagram}
           />
         </div>
+      )}
+
+      {openPathway && datasetId && (
+        <PathwayDiagramPanel
+          datasetId={datasetId}
+          datasetName={dataset?.name}
+          open={openPathway}
+          onClose={() => setOpenPathway(null)}
+        />
       )}
 
       {results.length === 0 && !isComputing && !computeError && (

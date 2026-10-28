@@ -24,13 +24,15 @@ interface Props {
   onTermClick: (r: GseaTerm) => void;
   onAsk: (r: GseaTerm, side: Side) => void;
   scoringTerm: string | null;
+  /** A Reactome row's "Diagram" button. */
+  onDiagram?: (r: GseaTerm) => void;
 }
 
 /**
  * A GSEA run: how it was made, the two directions (positive / negative NES) one at
  * a time, each as a terms table, and both as CSV.
  */
-export function GseaResults({ data, labels, csvName, onTermClick, onAsk, scoringTerm }: Props) {
+export function GseaResults({ data, labels, csvName, onTermClick, onAsk, scoringTerm, onDiagram }: Props) {
   const [side, setSide] = useState<Side>("up");
   const [sort, setSort] = useState<{ field: GseaSortField; dir: GseaSortDir }>({ field: "fdr", dir: "asc" });
 
@@ -104,6 +106,7 @@ export function GseaResults({ data, labels, csvName, onTermClick, onAsk, scoring
             onTermClick={onTermClick}
             onAsk={(r) => onAsk(r, side)}
             scoringTerm={scoringTerm}
+            onDiagram={onDiagram}
           />
         </>
       )}

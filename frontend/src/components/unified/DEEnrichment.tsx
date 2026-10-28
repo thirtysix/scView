@@ -14,6 +14,7 @@ import { InfoTip } from "@/components/common/InfoTip";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
 import { GseaResults } from "@/components/unified/GseaResults";
+import { PathwayDiagramPanel, type OpenPathway } from "@/components/unified/PathwayDiagramPanel";
 import { useEnrichmentSort } from "@/hooks/useEnrichmentSort";
 import { useGeneSetScoring, type OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
 import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
@@ -75,6 +76,19 @@ export function DEEnrichment({
   const [gsea, setGsea] = useState<GseaResponse | null>(null);
   const [gseaLoading, setGseaLoading] = useState(false);
   const [gseaError, setGseaError] = useState<string | null>(null);
+  // A Reactome row's diagram, coloured by this DE result.
+  const [openPathway, setOpenPathway] = useState<OpenPathway | null>(null);
+  const openDiagram = useCallback(
+    (r: { term: string; source_id?: string }) => {
+      if (!r.source_id) return;
+      setOpenPathway({
+        stId: r.source_id,
+        term: r.term,
+        source: result.result_id ? { kind: "de", id: result.result_id } : null,
+      });
+    },
+    [result],
+  );
 
   const query = useMemo(
     () => deEnrichmentQuery(result, pThreshold, fcThreshold),
@@ -88,6 +102,7 @@ export function DEEnrichment({
     setError(null);
     setGsea(null);
     setGseaError(null);
+    setOpenPathway(null);
   }, [result]);
 
   const run = useCallback(async () => {
@@ -353,6 +368,7 @@ export function DEEnrichment({
                 onTermClick={(r) => scoreGenes(r.genes, r.term)}
                 onAsk={askAboutTerm}
                 scoringTerm={scoringName}
+                onDiagram={openDiagram}
                 className="max-h-72"
               />
             </>
@@ -373,8 +389,13 @@ export function DEEnrichment({
             onTermClick={(r) => scoreGenes(r.leading_edge, r.term)}
             onAsk={askAboutGseaTerm}
             scoringTerm={scoringName}
+            onDiagram={openDiagram}
           />
         </div>
+      )}
+
+      {openPathway && (
+        <PathwayDiagramPanel datasetId={datasetId} open={openPathway} onClose={() => setOpenPathway(null)} />
       )}
     </div>
   );
