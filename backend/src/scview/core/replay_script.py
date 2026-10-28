@@ -2100,6 +2100,15 @@ def _annotation_crosscheck(p: dict, ctx: _Ctx) -> Snippet:
     ], "scView's own cross-check")
 
 
+def _bulk_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
+    return Snippet(NOT_REPLAYABLE, [
+        "# Bulk deconvolution (scView's MuSiC-style weighted NNLS) needs the uploaded bulk file and",
+        "# only adds a result; it is not replayed. Deconvolution > Download reference exports this",
+        "# dataset as a reference for MuSiC, BayesPrism or CIBERSORTx. Recorded:",
+        *_param_comment(p),
+    ], "needs the bulk file")
+
+
 def _merge_clusters(p: dict, ctx: _Ctx) -> Snippet:
     column, target, mapping = p.get("column"), p.get("target"), p.get("mapping")
     if not column or not target or not isinstance(mapping, dict):
@@ -2576,6 +2585,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "vdj_clonotypes": _vdj_clonotypes,
     "vdj_remove": _vdj_remove,
     "spatial_autocorr": _spatial_autocorr,
+    "bulk_deconvolution": _bulk_deconvolution,
     "run_errors": _run_errors,
     "doublet_detection_skipped": _step_skipped,
 }
