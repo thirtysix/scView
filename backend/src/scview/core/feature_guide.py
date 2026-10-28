@@ -49,6 +49,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
     ("Unified View", "", "linked scatter (UMAP/tSNE/PCA) with analysis tabs beside it"),
+    ("Unified View > Embedding > Tissue", "spatial",
+     "spots or cells on the tissue image (Visium); Section, Image on/off; colours, lasso as on UMAP"),
     ("Unified View > Markers", "", "marker table per group"),
     ("Unified View > Expression", "", "gene overlay, several genes, gene vs gene"),
     ("Unified View > Protein", "CITE-seq, CLR or DSB", "CITE-seq proteins; CLR or DSB normalisation"),

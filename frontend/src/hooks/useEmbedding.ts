@@ -4,6 +4,7 @@ import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
+import { SPATIAL_EMBEDDING } from "@/api/spatial";
 
 import ArrowWorker from "@/workers/arrowDecoder.worker?worker";
 
@@ -45,6 +46,9 @@ export function useEmbedding() {
   const ready = useEmbeddingReady(datasetId, embedding);
 
   const workerRef = useRef<Worker | null>(null);
+  // The embedding the buffer was asked for (it arrives with the same render).
+  const embeddingRef = useRef(embedding);
+  embeddingRef.current = embedding;
 
   const [embeddingData, setEmbeddingData] = useState<EmbeddingData>({
     positions: null,
@@ -80,7 +84,7 @@ export function useEmbedding() {
 
   // Decode callback — sends the buffer to the worker
   const decode = useCallback(
-    (buffer: ArrayBuffer) => {
+    (buffer: ArrayBuffer, embeddingName: string) => {
       const worker = workerRef.current;
       if (!worker) return;
 
@@ -118,10 +122,13 @@ export function useEmbedding() {
               positions[i * 3 + 2] = zData[i]!;
             }
           } else {
+            // Tissue coordinates grow downwards like the image: drawn as (x, -y)
+            // (lib/spatial.ts), so the section reads the right way up.
+            const ySign = embeddingName === SPATIAL_EMBEDDING ? -1 : 1;
             positions = new Float32Array(numRows * 2);
             for (let i = 0; i < numRows; i++) {
               positions[i * 2] = xData[i]!;
-              positions[i * 2 + 1] = yData[i]!;
+              positions[i * 2 + 1] = ySign * yData[i]!;
             }
           }
         }
@@ -168,7 +175,7 @@ export function useEmbedding() {
     if (arrowBuffer) {
       // We need to copy the buffer because React Query may cache the original
       const copy = arrowBuffer.slice(0);
-      decode(copy);
+      decode(copy, embeddingRef.current);
     }
   }, [arrowBuffer, decode]);
 

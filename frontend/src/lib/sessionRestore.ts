@@ -21,6 +21,7 @@ import {
   type SessionView,
 } from "@/lib/session";
 import { COMPARE_MIN_COLUMNS, compareColumnOptions, splitColumnOptions } from "@/lib/splitView";
+import { listedEmbeddings } from "@/lib/spatial";
 import { resetViewForDataset, useDatasetStore } from "@/stores/datasetStore";
 import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
@@ -341,7 +342,7 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
   const split = useSplitViewStore.getState();
 
   if (v.embedding) {
-    if (d.available_embeddings.includes(v.embedding)) settings.setEmbedding(v.embedding);
+    if (listedEmbeddings(d).includes(v.embedding)) settings.setEmbedding(v.embedding);
     else notes.push(`Embedding ${prettyEmbeddingLabel(v.embedding)}: not in this dataset.`);
   }
   if (v.expression_layer) {

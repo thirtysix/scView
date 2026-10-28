@@ -129,6 +129,7 @@ export function embeddingAxisLabels(
   dims?: readonly [number, number],
   nDims?: number,
 ): [string, string] {
+  if (embedding === "spatial") return ["x (pixels)", "y (pixels)"];
   const key = (embedding ?? "").replace(/^X_/, "").toLowerCase();
   if (key.startsWith("pca")) {
     const ok = dims && dims[0] !== dims[1] && (nDims === undefined || Math.max(...dims) < nDims);

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { DeckGL, type DeckGLRef } from "@deck.gl/react";
 import { OrthographicView, OrbitView, type Layer } from "@deck.gl/core";
-import { ScatterplotLayer, PointCloudLayer } from "@deck.gl/layers";
+import { BitmapLayer, ScatterplotLayer, PointCloudLayer } from "@deck.gl/layers";
 import { mapCategoryToColor, mapValueToColor, type AnyColormapName } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { RotateCcw, AlertTriangle } from "lucide-react";
@@ -37,6 +37,21 @@ import { EmbeddingCaveat } from "@/components/plots/EmbeddingCaveat";
 import { useScatterKeyboard } from "@/components/plots/ScatterKeyboard";
 import { scatterAriaLabel } from "@/lib/scatterKeyboard";
 import { useReducedMotion } from "@/lib/reducedMotion";
+import type { SpatialLibrary } from "@/api/types";
+import { spatialImageUrl } from "@/api/spatial";
+import { imageBounds, imageResFor, spotRadius, wantsHires } from "@/lib/spatial";
+
+/** The tissue plot (positions are the tissue world, lib/spatial.ts): one
+ *  section's H&E image under its spots, spots drawn at their real size. */
+export interface TissueMode {
+  datasetId: string;
+  library: SpatialLibrary;
+  showImage: boolean;
+  /** 0..1 */
+  imageOpacity: number;
+  /** What one point is (spatial.unit): captions say "spots" for Visium */
+  unit: "spot" | "cell";
+}
 
 interface EmbeddingScatterProps {
   positions: Float32Array | null;
@@ -109,6 +124,9 @@ interface EmbeddingScatterProps {
   /** The cells of a keyboard rectangle selection (focus the plot, press S);
    *  without it the plot still pans and zooms by keyboard */
   onKeyboardSelect?: (indices: Set<number>) => void;
+  /** Draw as the tissue plot: the image under the points, cells with no
+   *  position (other sections) left out, spots in world units */
+  tissue?: TissueMode | null;
 }
 
 function computeInitialViewState3D(
@@ -188,6 +206,7 @@ export function EmbeddingScatter({
   axisLabels = null,
   exportTitle,
   onKeyboardSelect,
+  tissue = null,
 }: EmbeddingScatterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<DeckGLRef>(null);
@@ -303,6 +322,11 @@ export function EmbeddingScatter({
 
   const stride = dimensions === 3 ? 3 : 2;
   const totalCells = positions ? positions.length / stride : 0;
+  const tissueMode = tissue != null && dimensions !== 3;
+  const unit = tissueMode ? tissue.unit : "cell";
+  const Unit = unit === "spot" ? "Spot" : "Cell";
+  // Visium spots in full-res pixels (world units); null = screen pixels like the scatter
+  const spotR = tissueMode ? spotRadius(tissue.library, pointSize) : null;
 
   const categoricalPalette = useSettingsStore((s) => s.categoricalPalette);
   const continuousColormap = useSettingsStore((s) => s.continuousColormap);
@@ -391,7 +415,12 @@ export function EmbeddingScatter({
   // after it; the same for every colouring. A selection is drawn over the rest.
   // Slot s draws cell indexMap[s]: picking maps back through it (lib/drawOrder.ts).
   const shuffled = useMemo(() => shuffledOrder(sample ?? totalCells), [sample, totalCells]);
-  const indexMap = useMemo(() => selectedLast(shuffled, selectedIndices), [shuffled, selectedIndices]);
+  const indexMap = useMemo(() => {
+    const order = selectedLast(shuffled, selectedIndices);
+    // The tissue plot leaves out the cells of other sections (no position).
+    if (!tissueMode || !positions) return order;
+    return order.filter((c) => Number.isFinite(positions[c * 2]!) && Number.isFinite(positions[c * 2 + 1]!));
+  }, [shuffled, selectedIndices, tissueMode, positions]);
   const renderPositions = useMemo(
     () => (positions && totalCells > 0 ? gatherByOrder(positions, indexMap, stride) : null),
     [positions, totalCells, indexMap, stride],
@@ -568,20 +597,49 @@ export function EmbeddingScatter({
             getFillColor: { value: renderColors, size: 4 },
           },
         },
-        getRadius: pointSize,
-        radiusUnits: "pixels" as const,
+        getRadius: spotR ?? pointSize,
+        radiusUnits: spotR != null ? ("common" as const) : ("pixels" as const),
         radiusMinPixels: 0.5,
-        radiusMaxPixels: 20,
+        radiusMaxPixels: spotR != null ? Number.MAX_SAFE_INTEGER : 20,
         pickable: true,
         autoHighlight: true,
         highlightColor: [255, 255, 0, 180],
         updateTriggers: {
           getFillColor: [renderColors],
-          getRadius: [pointSize],
+          getRadius: [pointSize, spotR],
         },
       }),
     ];
-  }, [renderCount, renderPositions, renderColors, pointSize, dimensions]);
+  }, [renderCount, renderPositions, renderColors, pointSize, dimensions, spotR]);
+
+  // The tissue image: lowres from the start, hires once the camera zooms in
+  // beyond the fit and past the lowres pixels (then kept, for this section).
+  // The fit itself never loads it (nor the frames before the plot is measured).
+  const tissueKey = tissueMode ? `${tissue.datasetId}:${tissue.library.id}` : null;
+  const tissueImages = tissueMode ? tissue.library.images : null;
+  const [hiresKey, setHiresKey] = useState<string | null>(null);
+  const zoomNow = typeof viewState?.zoom === "number" ? viewState.zoom : null;
+  const fitZoom = typeof initialViewState?.zoom === "number" ? initialViewState.zoom : null;
+  useEffect(() => {
+    if (!tissueKey || !tissueImages || zoomNow == null || fitZoom == null || fittedRef.current) return;
+    if (zoomNow > fitZoom + 1e-3 && wantsHires(zoomNow, tissueImages)) setHiresKey(tissueKey);
+  }, [tissueKey, tissueImages, zoomNow, fitZoom]);
+  const hires = tissueKey != null && hiresKey === tissueKey;
+  const imageLayers = useMemo(() => {
+    if (!tissueMode || !tissue.showImage) return [];
+    const { datasetId, library, imageOpacity } = tissue;
+    const res = imageResFor(library.images, hires);
+    if (!res) return [];
+    return [
+      new BitmapLayer({
+        id: "tissue-image",
+        image: spatialImageUrl(datasetId, library.id, res),
+        bounds: imageBounds(library.images[res]!),
+        opacity: imageOpacity,
+        pickable: false,
+      }),
+    ];
+  }, [tissueMode, tissue, hires]);
   const views = useMemo(
     () =>
       dimensions === 3
@@ -612,8 +670,8 @@ export function EmbeddingScatter({
     [placedLabels, background, highlightCategory],
   );
   const layers = useMemo(
-    () => [...pointLayers, ...labelLayers, ...(overlayLayers ?? [])],
-    [pointLayers, labelLayers, overlayLayers],
+    () => [...imageLayers, ...pointLayers, ...labelLayers, ...(overlayLayers ?? [])],
+    [imageLayers, pointLayers, labelLayers, overlayLayers],
   );
 
   // One-off high-resolution redraw on click; see downloadDeckPng.
@@ -625,10 +683,10 @@ export function EmbeddingScatter({
       colormap: continuousColormap,
       filename: exportFilename(useDatasetStore.getState().currentDataset?.name, exportName),
       note: isSampled
-        ? `Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} cells (sampled)`
+        ? `Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`
         : undefined,
     });
-  }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells]);
+  }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells, unit]);
 
   // SVG / PDF: the drawn points projected with the camera shown, in their draw
   // order and colours, the labels where they are on screen (lib/scatterSvg.ts).
@@ -647,7 +705,13 @@ export function EmbeddingScatter({
         panels: [
           {
             view: { x: 0, y: 0, width: view.width, height: view.height },
-            sets: [{ ...projected, radius: pointRadius(pointSize, stride) }],
+            sets: [
+              {
+                ...projected,
+                // a spot's world radius at the camera shown
+                radius: spotR != null ? spotR * 2 ** Number(viewState.zoom ?? 0) : pointRadius(pointSize, stride),
+              },
+            ],
             labels: placedLabels ? svgLabels(placedLabels, view.project, highlightCategory) : [],
           },
         ],
@@ -656,7 +720,7 @@ export function EmbeddingScatter({
         title: exportTitle ?? [plotName, legendTitle].filter(Boolean).join(", coloured by "),
         axes: dimensions === 3 ? null : (axisLabels ?? embeddingAxisLabels(embedding)),
         notes: isSampled
-          ? [`Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} cells (sampled)`]
+          ? [`Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`]
           : [],
         mode,
         rasterize: canvasRasterizer,
@@ -666,7 +730,7 @@ export function EmbeddingScatter({
     [
       viewState, renderPositions, renderColors, views, containerSize.width, containerSize.height, stride,
       pointSize, placedLabels, highlightCategory, exportLegend, continuousColormap, exportTitle, embedding,
-      dimensions, axisLabels, isSampled, renderCount, totalCells, exportName,
+      dimensions, axisLabels, isSampled, renderCount, totalCells, exportName, spotR, unit,
     ],
   );
 
@@ -767,7 +831,13 @@ export function EmbeddingScatter({
           nPoints={renderCount}
           onPng={downloadPng}
           onFigure={downloadFigure}
-          figureNote={overlayLayers?.length ? "Without the graph drawn over the points (the PNG has it)." : undefined}
+          figureNote={
+            overlayLayers?.length
+              ? "Without the graph drawn over the points (the PNG has it)."
+              : imageLayers.length
+                ? "Without the tissue image (the PNG has it)."
+                : undefined
+          }
           className="absolute right-3 top-12 z-10 rounded-md border border-slate-300 bg-white/90 p-0.5 shadow-sm"
         />
       )}
@@ -775,7 +845,7 @@ export function EmbeddingScatter({
       {/* Sampling indicator */}
       {!minimal && isSampled && (
         <div className="absolute left-3 top-3 z-10 rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[10px] text-slate-500">
-          Showing {(renderCount / 1000).toFixed(0)}K of {(totalCells / 1000).toFixed(0)}K cells (sampled)
+          Showing {(renderCount / 1000).toFixed(0)}K of {(totalCells / 1000).toFixed(0)}K {unit}s (sampled)
         </div>
       )}
 
@@ -799,7 +869,7 @@ export function EmbeddingScatter({
           >
             {line && <HoverLineRow line={line} />}
             <div className={line ? "text-[11px] text-slate-400" : "font-medium text-slate-700"}>
-              Cell {tooltip.index.toLocaleString()}
+              {Unit} {tooltip.index.toLocaleString()}
             </div>
           </div>
         );
