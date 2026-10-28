@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # Fetch the HGNC HCOP human-mouse ortholog table into DATA_DIR/networks on first
     # use, to map human resources to mouse datasets (core/orthologs.py).
     ORTHOLOGS_AUTO_DOWNLOAD: bool = True
+    # Fetch JASPAR 2024 motifs and UCSC promoter sequences into DATA_DIR/tf_motifs on
+    # first use, for upstream TF candidates (core/tf_motifs.py).
+    TF_MOTIFS_AUTO_DOWNLOAD: bool = True
     # Import public datasets from CELLxGENE Discover (core/public_import.py). Unset:
     # on in private mode, off in public mode (the server would download for anyone).
     PUBLIC_IMPORT_ENABLED: bool | None = None

@@ -113,6 +113,7 @@ def dataset_id_of(adaptor: Any) -> str | None:
 ADDITIVE_STEPS = frozenset({
     "spatial_autocorr", "gene_programs", "pseudotime", "paga", "cnv", "label_transfer",
     "annotation_crosscheck", "annotation_confidence", "annotation_confidence_unknown", "qc_state_label",
+    "tf_motif_enrichment",
 })
 
 

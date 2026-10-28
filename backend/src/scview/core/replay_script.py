@@ -2459,6 +2459,13 @@ def _step_skipped(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, [f"# {step} was skipped: {reason}."])
 
 
+def _tf_motif_enrichment(p: dict, ctx: _Ctx) -> Snippet:
+    """Upstream TF candidates (core/tf_motifs.py): a result only, the data are unchanged; it
+    needs scView's promoter motif table, so it is not computed again here."""
+    return Snippet(NOT_REPLAYABLE, ["# Upstream TF candidates (promoter motifs): a result only, the data are "
+                                    "unchanged. Recorded:", *_param_comment(p)], "result only")
+
+
 def _run_errors(p: dict, ctx: _Ctx) -> Snippet:
     """A run that finished with errors (core/step_failures.py): which steps failed and were
     skipped (not in the history, so not replayed), and the earlier results it removed as
@@ -2576,6 +2583,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "vdj_clonotypes": _vdj_clonotypes,
     "vdj_remove": _vdj_remove,
     "spatial_autocorr": _spatial_autocorr,
+    "tf_motif_enrichment": _tf_motif_enrichment,
     "run_errors": _run_errors,
     "doublet_detection_skipped": _step_skipped,
 }
