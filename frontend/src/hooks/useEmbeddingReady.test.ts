@@ -14,4 +14,12 @@ describe("embeddingReady", () => {
     expect(embeddingReady(null, "a", "X_pca")).toBe(false);
     expect(embeddingReady(ds, "a", "")).toBe(false);
   });
+
+  it("counts the tissue plot as listed only on a dataset with spatial data", () => {
+    const spatial = { ...ds, spatial: { unit: "spot", libraries: [] } } as unknown as DatasetInfo;
+    expect(embeddingReady(spatial, "a", "spatial")).toBe(true);
+    // "spatial" kept from the last dataset: no request on one without it.
+    expect(embeddingReady(ds, "a", "spatial")).toBe(false);
+    expect(embeddingReady({ ...ds, spatial: null } as DatasetInfo, "a", "spatial")).toBe(false);
+  });
 });

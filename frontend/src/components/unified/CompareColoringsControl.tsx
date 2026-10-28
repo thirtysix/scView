@@ -17,7 +17,7 @@ import { useSplitViewStore } from "@/stores/splitViewStore";
  * hand labels...) to see the same embedding coloured by each, side by side.
  * Sits next to "Split"; one grid at a time.
  */
-export function CompareColoringsControl() {
+export function CompareColoringsControl({ disabledReason = null }: { disabledReason?: string | null } = {}) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const colorBy = useSettingsStore((s) => s.colorBy);
   const compareColumns = useSplitViewStore((s) => s.compareColumns);
@@ -70,11 +70,13 @@ export function CompareColoringsControl() {
     <div ref={ref} className="relative flex items-center">
       <button
         onClick={toggleOpen}
-        disabled={options.length < COMPARE_MIN_COLUMNS}
+        disabled={options.length < COMPARE_MIN_COLUMNS || !!disabledReason}
         aria-expanded={open}
         aria-haspopup="dialog"
         title={
-          options.length < COMPARE_MIN_COLUMNS
+          disabledReason
+            ? disabledReason
+            : options.length < COMPARE_MIN_COLUMNS
             ? "Needs two or more grouping columns"
             : `Show the plot coloured by ${COMPARE_MIN_COLUMNS}–${COMPARE_MAX_COLUMNS} columns side by side`
         }

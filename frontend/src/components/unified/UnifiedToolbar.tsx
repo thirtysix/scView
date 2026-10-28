@@ -22,6 +22,8 @@ import { PcPairChooser } from "@/components/unified/PcPairChooser";
 import { EmbeddingReliabilityControl } from "@/components/unified/EmbeddingReliability";
 import { LayoutStabilityControl } from "@/components/unified/LayoutStability";
 import { SelectByGroupControl, type GroupSelectSource } from "@/components/unified/SelectByGroup";
+import { TissueControls } from "@/components/unified/TissueControls";
+import { listedEmbeddings, TISSUE_GRID_REASON, tissueSpatial, unitWord } from "@/lib/spatial";
 
 interface UnifiedToolbarProps {
   onResetView?: () => void;
@@ -65,7 +67,9 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
   const selectionFilter = useSelectionStore((s) => s.selectionFilter);
   const gridActive = useSplitViewStore(isGridActive);
 
-  const availableEmbeddings = dataset?.available_embeddings ?? [];
+  // The real embeddings, then "Tissue" (obsm spatial) when the dataset has spatial data
+  const availableEmbeddings = listedEmbeddings(dataset);
+  const tissue = tissueSpatial(embedding, dataset);
   const nCells = dataset?.n_cells ?? 0;
   const allObsNames = (dataset?.obs_columns ?? []).map((c) => c.name);
 
@@ -112,6 +116,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
         </select>
         <PcPairChooser />
       </div>
+      {tissue && <TissueControls spatial={tissue} />}
 
       <div className="h-4 w-px bg-slate-200" />
 
@@ -141,8 +146,8 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       <div className="h-4 w-px bg-slate-200" />
 
       {/* Split by: one plot per value of a column; or compare colourings side by side */}
-      <SplitByControl />
-      <CompareColoringsControl />
+      <SplitByControl disabledReason={tissue ? TISSUE_GRID_REASON : null} />
+      <CompareColoringsControl disabledReason={tissue ? TISSUE_GRID_REASON : null} />
 
       {/* Expression layer (units for overlay + violin) */}
       {(dataset?.expression_layers?.length ?? 0) > 0 && (
@@ -339,7 +344,13 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       <button
         onClick={() => setSelectionMode(selectionMode === "lasso" ? "none" : "lasso")}
         aria-pressed={selectionMode === "lasso"}
-        title={gridActive ? "Lasso selection (L): draw in any panel; every panel shows the selection" : "Lasso selection (L). On a 3D embedding it selects every cell under the outline, at any depth; turn the lasso off to rotate"}
+        title={
+          tissue
+            ? `Lasso selection (L): the ${unitWord(tissue)} inside the outline, in this section`
+            : gridActive
+              ? "Lasso selection (L): draw in any panel; every panel shows the selection"
+              : "Lasso selection (L). On a 3D embedding it selects every cell under the outline, at any depth; turn the lasso off to rotate"
+        }
         className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
           selectionMode === "lasso"
             ? "bg-orange-50 text-orange-700 ring-1 ring-orange-300"
@@ -375,8 +386,9 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       <LabelSelectionControls />
       <ResolutionSweepControl />
       <HvgSensitivityControl />
-      <EmbeddingReliabilityControl />
-      <LayoutStabilityControl />
+      {/* UMAP checks: not for the tissue, whose positions are measured */}
+      {!tissue && <EmbeddingReliabilityControl />}
+      {!tissue && <LayoutStabilityControl />}
 
       {/* Spacer */}
       <div className="flex-1" />
@@ -384,7 +396,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       {/* Cell count */}
       {numCells > 0 && (
         <span className="text-[11px] text-slate-400">
-          {formatNumber(numCells)} cells
+          {formatNumber(numCells)} {unitWord(tissue ?? dataset?.spatial)}
         </span>
       )}
 

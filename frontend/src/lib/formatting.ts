@@ -101,8 +101,10 @@ export function isRedundantClusterCol(name: string, allNames: string[]): boolean
  *  - X_umap               -> "UMAP"
  *  - X_umap_uncorrected   -> "UMAP (uncorrected)"
  *  - X_pca_harmony        -> "PCA (HARMONY)"
+ *  - spatial              -> "Tissue" (obsm spatial: the tissue plot)
  */
 export function prettyEmbeddingLabel(name: string): string {
+  if (name === "spatial") return "Tissue";
   const [base = "", ...rest] = name.replace(/^X_/, "").split("_");
   const suffix = rest.filter((r) => r.toLowerCase() !== "3d").join(" ");
   if (!suffix) return base.toUpperCase();
