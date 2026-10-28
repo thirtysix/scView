@@ -35,6 +35,15 @@ All notable changes to scView are documented here. The format is based on
   "Not applicable" and History and the replay script show the skip.
 - Seurat objects whose genes are in a Spatial assay (Visium) now convert.
 
+## [0.45.2] - 2026-10-28
+
+### Fixed
+- **Clustering, UMAP and marker genes failed on datasets over 8,192 cells in v0.45.1.** Its images were
+  built with pynndescent 0.7.0 (released the day before), whose neighbour graphs scanpy 1.11.5 cannot read
+  ("'csr_array' object has no attribute 'getnnz'"), so the neighbours step failed and the steps after it
+  were skipped. pynndescent is now kept below 0.7, and a test builds a graph over 9,000 cells. v0.45.0
+  and earlier are not affected.
+
 ## [0.45.1] - 2026-10-27
 
 ### Fixed
