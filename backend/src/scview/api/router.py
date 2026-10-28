@@ -56,6 +56,7 @@ from scview.api.v1 import (
     ontology,
     dsb,
     spatial,
+    spatial_autocorr,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -113,3 +114,4 @@ api_router.include_router(perturbation.router, tags=["perturbation"])
 api_router.include_router(ontology.router, tags=["labels"])
 api_router.include_router(dsb.router, tags=["protein"])
 api_router.include_router(spatial.router, tags=["spatial"])
+api_router.include_router(spatial_autocorr.router, tags=["spatial"])

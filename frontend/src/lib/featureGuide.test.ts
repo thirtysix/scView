@@ -40,6 +40,7 @@ describe("co-pilot feature guide", () => {
   it("lists the features", () => {
     expect(paths.length).toBeGreaterThan(40);
     expect(paths).toContain("Unified View > Activity > Cytokine response");
+    expect(paths).toContain("Unified View > Spatial genes");
   });
 
   it("names only labels the UI shows", () => {
