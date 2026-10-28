@@ -2111,7 +2111,15 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
     f = next((x for x in unit.files if x.role.value == "matrix"), None) if fmt == "mex" else unit.files[0]
     if f is None:
         return Header("unknown", note="The matrix file of this 10x sample is missing.")
-    return read_header(f.path, fmt, genes_in_rows)
+    h = read_header(f.path, fmt, genes_in_rows)
+    spatial_parts = [(x.spatial_part or "", x.path) for x in getattr(unit, "side_files", [])
+                     if getattr(x, "spatial_part", None)]
+    if spatial_parts:  # Space Ranger's tissue images (uint8 RGB in uns) and the coordinates
+        from scview.core import spatial
+
+        h.uns_bytes += spatial.side_bytes(spatial_parts)
+        h.obsm_bytes += 16 * int(h.n_cells or 0)
+    return h
 
 
 def _load_lead(h: Header, est: LoadEstimate) -> str:

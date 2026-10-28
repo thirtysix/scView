@@ -49,7 +49,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from scview.core import crispr, hashing, protein
+from scview.core import crispr, hashing, protein, spatial
 from scview.core.ingestion import feature_split as fs
 from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 from scview.core.ingestion.detection import legacy_tenx_genomes
@@ -470,6 +470,7 @@ def _plan_split(su: StreamedUnit) -> None:
     hashing.MAX_TAGS) are taken out as columns, other types are counted. Without a
     mixed ``feature_types`` an obsm protein matrix of another tool is adopted."""
     meta = su.meta
+    spatial.adopt(meta)  # as load_unit does
     types = meta.var.get("feature_types")
     if types is None or not (types.astype(str) == protein.GENE_TYPE).any() or \
             (types.astype(str) == protein.GENE_TYPE).all():

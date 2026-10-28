@@ -28,7 +28,7 @@ import anndata as ad
 import pandas as pd
 import scanpy as sc
 
-from scview.core import protein
+from scview.core import protein, spatial
 from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,7 @@ def load_unit(unit: IngestUnit, options: dict | None = None) -> ad.AnnData:
     adata.obs_names_make_unique()
     # CITE-seq antibodies (and other non-gene features) out of the gene matrix.
     adata, _ = protein.split_features(adata)
+    spatial.adopt(adata)  # an .h5ad with obsm spatial / X_spatial: library_id, uns layout
     return adata
 
 

@@ -27,6 +27,8 @@ import anndata as ad
 import numpy as np
 from pydantic import BaseModel, Field
 
+from scview.core import spatial
+
 logger = logging.getLogger(__name__)
 
 # Ensembl gene ids (human ENSG, mouse ENSMUSG, other species ENS<sp>G).
@@ -265,6 +267,8 @@ def merge_units(
         work, join=join.value, label=sample_label, index_unique=":", fill_value=0
     )
     merged.obs[sample_label] = merged.obs[sample_label].astype("category")
+    # concat drops uns: each sample's spatial libraries (and their images) are kept.
+    spatial.after_merge(work, merged, sample_label)
     return merged
 
 

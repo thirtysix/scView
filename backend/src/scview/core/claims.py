@@ -646,6 +646,7 @@ _FAMILY_PREFIX = {
     "selection": "result:selection", "sel": "result:selection",
     "screen": "result:screen",
     "labels": "result:labels:",
+    "tissue": "result:tissue",  # spatial data (core/spatial.py)
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -691,7 +692,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "cytokines", "cytokine", "cytosig",
                                   "activity", "deaudit", "audit",
                                   "clonotypes", "clonotype", "ppi", "cnv", "ontology",
-                                  "selection", "sel", "screen", "labels")
+                                  "selection", "sel", "screen", "labels", "tissue")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]

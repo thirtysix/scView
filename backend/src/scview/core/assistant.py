@@ -450,6 +450,21 @@ def _add_seqqc(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(sq_lines[1:])))
 
 
+def _add_spatial(adata, lines: list[str], sources: list[ChatSource]) -> None:
+    """Spatial data (core/spatial.py): technology, sections, spots or cells, images."""
+    from scview.core import spatial
+
+    try:
+        sp_lines, sp_detail = spatial.grounding_lines(adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: spatial fact failed: %s", exc)
+        return
+    if sp_lines:
+        lines.extend(sp_lines)
+        sources.append(ChatSource(kind="result", ref=spatial.TAG, detail=sp_detail,
+                                  evidence="\n".join(sp_lines)))
+
+
 def _add_hashing(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The cell hashing call (core/hashing.py): singlets / doublets / negatives and
     the samples, once demultiplexed (or the tags found, before)."""
@@ -554,6 +569,7 @@ def build_grounding_context(
                f"{', '.join(embeddings) or 'none'}",
         evidence="\n".join(lines[1:]),
     ))
+    _add_spatial(adata, lines, sources)
 
     # --- 1b. Dataset identity / source (so "what's the paper?" can be answered) ---
     ident: list[str] = []

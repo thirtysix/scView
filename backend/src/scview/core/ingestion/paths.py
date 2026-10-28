@@ -71,11 +71,16 @@ ALIGNMENTS = "read alignments (scView starts from the count matrix)"
 REPORT = "Cell Ranger's HTML report"
 LOUPE = "Loupe Browser files"
 MOLECULES = "per-molecule read information, not a count matrix"
+SPATIAL_EXTRA = "Space Ranger alignment images and tables, not used by scView"
 
 _JUNK_NAMES = {
     ".ds_store": SYSTEM, "thumbs.db": SYSTEM, "desktop.ini": SYSTEM,
     "web_summary.html": REPORT, "molecule_info.h5": MOLECULES,
     "sample_molecule_info.h5": MOLECULES,
+    "aligned_fiducials.jpg": SPATIAL_EXTRA, "detected_tissue_image.jpg": SPATIAL_EXTRA,
+    "aligned_tissue_image.jpg": SPATIAL_EXTRA, "cytassist_image.tiff": SPATIAL_EXTRA,
+    "spatial_enrichment.csv": SPATIAL_EXTRA, "barcode_fluorescence_intensity.csv": SPATIAL_EXTRA,
+    "fiducial_positions_list.txt": SPATIAL_EXTRA, "probe_set.csv": "the probe set of the run, not data",
 }
 _JUNK_SUFFIXES = (
     (".bam", ALIGNMENTS), (".bai", ALIGNMENTS), (".bam.bai", ALIGNMENTS), (".csi", ALIGNMENTS),

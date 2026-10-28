@@ -21,8 +21,10 @@ IMPORTING = (
     "allows it). Supported formats: AnnData .h5ad; 10x Genomics MTX (matrix.mtx + barcodes.tsv + "
     "features/genes.tsv, optionally .gz) and 10x HDF5 (.h5); .loom; .zarr; dense CSV/TSV "
     "(optionally .gz); Seurat, SingleCellExperiment or SummarizedExperiment .rds "
-    "(converted to .h5ad by the R converter service); and "
-    "nf-core/scrnaseq mtx_conversions outputs (*.h5ad). A guided flow bundles multi-file "
+    "(converted to .h5ad by the R converter service); "
+    "nf-core/scrnaseq mtx_conversions outputs (*.h5ad); and Visium spatial data: Space Ranger's "
+    "filtered matrix with its spatial/ folder (or spatial.tar.gz; drop the whole outs/ folder), "
+    "or an .h5ad with obsm['spatial'] (Visium HD and Xenium bundles are not read yet). A guided flow bundles multi-file "
     "inputs (e.g. the three 10x MTX files) and can merge several samples into one dataset. "
     "Each imported dataset then appears in the Data-tab library to open or manage."
 )
