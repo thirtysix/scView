@@ -115,6 +115,7 @@ ADDITIVE_STEPS = frozenset({
     "annotation_crosscheck", "annotation_confidence", "annotation_confidence_unknown", "qc_state_label",
     "tf_motif_enrichment",
     "gwas_traits",
+    "bulk_deconvolution",
 })
 
 

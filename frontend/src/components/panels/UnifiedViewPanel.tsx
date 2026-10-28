@@ -35,6 +35,7 @@ import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSub
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
 import { SpatialGenesSubtab } from "@/components/unified/SpatialGenesSubtab";
 import { TraitsSubtab } from "@/components/unified/TraitsSubtab";
+import { DeconvolutionSubtab } from "@/components/unified/DeconvolutionSubtab";
 import { ReportSubtab } from "@/components/report/ReportSubtab";
 import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
 import { CnvSubtab } from "@/components/unified/CnvSubtab";
@@ -93,6 +94,7 @@ const SUBTABS = [
   { id: "perturbation" as const, label: "Perturbation" },
   { id: "spatial" as const, label: "Spatial genes" },
   { id: "traits" as const, label: "Traits" },
+  { id: "deconvolution" as const, label: "Deconvolution" },
 ] as const;
 
 interface ViolinResponse {
@@ -1493,6 +1495,7 @@ export function UnifiedViewPanel() {
                 setGroupByColumn={setGroupByColumn}
               />
             )}
+            {activeSubtab === "deconvolution" && <DeconvolutionSubtab />}
           </TabPanel>
         </div>
       </div>

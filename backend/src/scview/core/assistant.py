@@ -239,6 +239,22 @@ def _add_spatial_genes(adaptor, lines: list[str], sources: list[ChatSource]) -> 
                                   evidence="\n".join(sv_lines[1:])))
 
 
+def _add_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last bulk deconvolution (core/deconvolution.py): the largest cell fraction per
+    bulk sample, only once one has run on this dataset."""
+    from scview.core import deconvolution
+
+    try:
+        dc_lines, dc_detail = deconvolution.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: deconvolution failed: %s", exc)
+        return
+    if dc_lines:
+        lines.extend(dc_lines)
+        sources.append(ChatSource(kind="result", ref=deconvolution.TAG, detail=dc_detail,
+                                  evidence="\n".join(dc_lines[1:])))
+
+
 def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved gene programs (core/gene_programs.py): k, the stable ones with their
     top genes and best enriched term, only once a run has been saved."""
@@ -829,6 +845,7 @@ def build_grounding_context(
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
+        _add_deconvolution(adaptor, lines, sources)
         _add_cnv(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)

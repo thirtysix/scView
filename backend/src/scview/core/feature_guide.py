@@ -85,6 +85,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "spatially variable genes (Moran's I) on Visium spots or imaging cells; click a gene to colour the tissue"),
     ("Unified View > Traits", "GWAS",
      "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
+    ("Unified View > Deconvolution", "bulk RNA-seq",
+     "cell-type fractions of uploaded bulk RNA-seq samples, this dataset as the reference; self-check, "
+     "reference download for MuSiC / CIBERSORTx"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),
