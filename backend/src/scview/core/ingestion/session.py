@@ -685,8 +685,13 @@ class IngestSessionManager:
             return json.load(fh)
 
     def _write_session(self, sid: str, data: dict[str, Any]) -> None:
-        with open(self._session_file(sid), "w") as fh:
+        # Written aside and renamed: a commit records the .rds it converts while GET
+        # state reads the file, which must never see half of it.
+        path = self._session_file(sid)
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        with open(tmp, "w") as fh:
             json.dump(data, fh, indent=2)
+        tmp.replace(path)
 
     def _created_at(self, sid: str) -> datetime | None:
         raw = self._read_session(sid).get("created_at")
