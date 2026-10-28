@@ -48,6 +48,9 @@ class DeconvOptions(BaseModel):
     # None: detect the donors; "": no donor column
     donor_column: str | None = Field(default=None, max_length=256)
     method: Literal["auto", "weighted", "nnls"] = "auto"
+    # Only the cells with cells_column = cells_value (one condition) form the reference.
+    cells_column: str | None = Field(default=None, max_length=256)
+    cells_value: str | None = Field(default=None, max_length=512)
 
 
 class CheckRequest(DeconvOptions):
@@ -69,6 +72,9 @@ def result_body(r: dc.Result) -> dict[str, Any]:
         by_sample[row.sample]["cell"][row.cell_type] = _num(row.cell_fraction)
         by_sample[row.sample]["rna"][row.cell_type] = _num(row.rna_fraction)
     fit = {row.sample: row for row in r.fit.itertuples(index=False)}
+    flagged: dict[str, list[str]] = {}
+    for f in r.flags:
+        flagged.setdefault(f["sample"], []).append(f["cell_type"])
     samples = []
     for s in r.samples:
         f = fit.get(s)
@@ -77,6 +83,7 @@ def result_body(r: dc.Result) -> dict[str, Any]:
             "r2": _num(f.r2) if f is not None else None, "residual": _num(f.residual) if f is not None else None,
             "genes": int(f.genes) if f is not None else 0, "iterations": int(f.iterations) if f is not None else 0,
             "converged": bool(f.converged) if f is not None else False,
+            "flagged": flagged.get(s, []),
         })
     return {
         "result_id": r.id, "method": r.method, "method_name": dc.METHOD_NAMES[r.method],
@@ -89,6 +96,9 @@ def result_body(r: dc.Result) -> dict[str, Any]:
         "gene_share": _num(r.gene_share), "n_genes_used": r.n_genes_used, "marker_source": r.marker_source,
         "id_kind": r.id_kind, "input_kind": r.input_kind, "warnings": r.warnings, "notes": r.notes,
         "elapsed_seconds": r.elapsed_seconds, "created_at": r.created_at,
+        "reference_cells": r.reference_cells, "type_share": [_num(x) for x in r.type_share],
+        "flags": [{**f, "fraction": _num(f["fraction"]), "reference_share": _num(f["reference_share"])}
+                  for f in r.flags],
     }
 
 
@@ -118,6 +128,7 @@ def check_body(c: dc.CheckResult) -> dict[str, Any]:
         "points": points, "points_capped": capped,
         "n_points": {str(m): int(n) for m, n in pts.groupby("method", sort=False).size().items()}, "notes": c.notes,
         "elapsed_seconds": c.elapsed_seconds, "created_at": c.created_at,
+        "reference_cells": c.reference_cells,
     }
 
 
@@ -191,7 +202,8 @@ async def deconvolution_defaults(dataset_id: str, dm: DatasetManager = Depends(g
         return {"celltype_column": ct, "donor_column": donor, "donor_reason": reason, "n_donors": n_donors,
                 "min_donors_weighted": dc.MIN_DONORS_WEIGHTED, "min_donors_check": dc.MIN_DONORS_CHECK,
                 "check_seconds_per_donor": round(dc.check_estimate_seconds(1), 2),
-                "max_bulk_mb": dc.MAX_BULK_BYTES // (1024 * 1024), "max_samples": dc.MAX_BULK_SAMPLES}
+                "max_bulk_mb": dc.MAX_BULK_BYTES // (1024 * 1024), "max_samples": dc.MAX_BULK_SAMPLES,
+                "reference_columns": dc.reference_columns(adata, exclude=(ct, donor))}
 
     return await asyncio.to_thread(_run)
 
@@ -226,7 +238,7 @@ async def run_deconvolution(
         def _run() -> dc.Result:
             r = dc.run(adata, path.read_bytes(), name, celltype_column=opts.celltype_column,
                        donor_column=opts.donor_column, method=opts.method, dataset_id=dataset_id, sha256=sha,
-                       stored_file=path.name)
+                       stored_file=path.name, cells_column=opts.cells_column or None, cells_value=opts.cells_value)
             before = uns_snapshot(adata)
             dc.record(adata, r)
             save_edit(adaptor, adata, output_path, before)
@@ -278,7 +290,7 @@ async def run_check(dataset_id: str, body: CheckRequest, dm: DatasetManager = De
     stop = threading.Event()
     gen = dc.iter_check(adata, celltype_column=body.celltype_column, donor_column=body.donor_column,
                         method=body.method, n_mixtures=body.n_mixtures, seed=body.seed, dataset_id=dataset_id,
-                        stop=stop.is_set)
+                        stop=stop.is_set, cells_column=body.cells_column or None, cells_value=body.cells_value)
     try:  # the first event (the reference built, the donors counted) before the stream starts
         first = await asyncio.to_thread(next, gen, _DONE)
     except dc.DeconvolutionError as e:
@@ -334,12 +346,14 @@ async def reference_zip(
     dataset_id: str,
     celltype_column: str | None = Query(default=None, max_length=256),
     donor_column: str | None = Query(default=None, max_length=256),
+    cells_column: str | None = Query(default=None, max_length=256),
+    cells_value: str | None = Query(default=None, max_length=512),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The reference as files for MuSiC, BayesPrism, CIBERSORTx and others, streamed."""
     adata = (await _adaptor(dm, dataset_id)).adata
     gen = dc.iter_reference_zip(adata, celltype_column=celltype_column or None, donor_column=donor_column,
-                                dataset_id=dataset_id)
+                                dataset_id=dataset_id, cells_column=cells_column or None, cells_value=cells_value)
     try:
         first = await asyncio.to_thread(next, gen, b"")
     except dc.DeconvolutionError as e:

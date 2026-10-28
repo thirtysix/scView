@@ -16,7 +16,7 @@ import {
   type DeconvResult,
 } from "@/api/deconvolution";
 import { categoryColor, rgbCss } from "@/lib/categoryColors";
-import { pct, stackedBarTraces, type FractionKind } from "@/lib/deconvolution";
+import { cellsKey, parseCellsKey, pct, stackedBarTraces, type FractionKind } from "@/lib/deconvolution";
 import { errorMessage } from "@/lib/errorMessage";
 import { prettyObsLabel } from "@/lib/formatting";
 import { isGroupingColumn } from "@/lib/obsColumns";
@@ -25,7 +25,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const SELECT =
-  "rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200";
+  "rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700";
 const TABLE_LIMIT = 200; // bulk samples in the table; the CSV has all
 const AUTO_DONOR = "__auto__";
 
@@ -45,6 +45,7 @@ export function DeconvolutionSubtab() {
   const [celltype, setCelltype] = useState("");
   const [donor, setDonor] = useState(AUTO_DONOR);
   const [method, setMethod] = useState<DeconvMethod>("auto");
+  const [cells, setCells] = useState(""); // cellsKey(column, value), "" = all cells
   const [file, setFile] = useState<File | null>(null);
   const [kind, setKind] = useState<FractionKind>("cell");
   const [running, setRunning] = useState(false);
@@ -66,6 +67,7 @@ export function DeconvolutionSubtab() {
         setResult(r);
         setCelltype(r?.celltype_column ?? d.celltype_column ?? "");
         setDonor(r ? (r.donor_column ?? "") : AUTO_DONOR);
+        setCells(r?.reference_cells ? cellsKey(r.reference_cells.column, r.reference_cells.value) : "");
       })
       .catch((e) => !cancelled && setError(errorMessage(e)))
       .finally(() => !cancelled && setLoading(false));
@@ -92,8 +94,9 @@ export function DeconvolutionSubtab() {
   if (!dataset || !datasetId) return <div className="text-xs text-slate-400">No dataset loaded.</div>;
 
   const donorOption = donor === AUTO_DONOR ? null : donor;
-  const options = { celltype_column: celltype || null, donor_column: donorOption, method };
+  const options = { celltype_column: celltype || null, donor_column: donorOption, method, ...parseCellsKey(cells) };
   const donorColumn = donor === AUTO_DONOR ? (defaults?.donor_column ?? null) : donor || null;
+  const refColumns = (defaults?.reference_columns ?? []).filter((c) => c.column !== celltype && c.column !== donorColumn);
   const nDonors = donorColumn
     ? (dataset.obs_columns.find((c) => c.name === donorColumn)?.n_unique ?? defaults?.n_donors ?? 0)
     : 0;
@@ -115,7 +118,7 @@ export function DeconvolutionSubtab() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-200">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
         Bulk deconvolution
         <InfoTip label="About bulk deconvolution" width={300}>
           A bulk RNA-seq sample is a mixture of cells. With this dataset&apos;s cell types as the reference, each
@@ -173,7 +176,29 @@ export function DeconvolutionSubtab() {
             <option value="nnls">NNLS on markers</option>
           </select>
         </div>
+        {refColumns.length > 0 && (
+          <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+            Reference cells
+            <select value={cells} onChange={(e) => setCells(e.target.value)} className={SELECT}>
+              <option value="">All cells</option>
+              {refColumns.map((c) => (
+                <optgroup key={c.column} label={prettyObsLabel(c.column)}>
+                  {c.values.map((v) => (
+                    <option key={v.value} value={cellsKey(c.column, v.value)}>
+                      {c.column} = {v.value} ({v.n_cells.toLocaleString()} cells)
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
+      {refColumns.length > 0 && (
+        <p className="text-[11px] text-slate-500" data-testid="cells-hint">
+          Your cells come from several conditions; pick the one that matches your bulk samples.
+        </p>
+      )}
 
       <div className="space-y-1 text-xs">
         <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
@@ -182,7 +207,7 @@ export function DeconvolutionSubtab() {
             type="file"
             accept=".tsv,.csv,.txt,.gct,.gz,.tab"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            className="text-xs text-slate-700 file:mr-2 file:rounded file:border file:border-slate-300 file:bg-white file:px-2 file:py-0.5 file:text-xs dark:text-slate-200 dark:file:border-slate-600 dark:file:bg-slate-800 dark:file:text-slate-200"
+            className="text-xs text-slate-700 file:mr-2 file:rounded file:border file:border-slate-300 file:bg-white file:px-2 file:py-0.5 file:text-xs"
           />
         </label>
         <p className="text-[11px] text-slate-500">
@@ -215,12 +240,15 @@ export function DeconvolutionSubtab() {
             {result.filename}: {result.method_name}, reference {prettyObsLabel(result.celltype_column)} (
             {result.n_reference_cells.toLocaleString()} cells
             {result.n_reference_donors ? `, ${result.n_reference_donors} donors in ${prettyObsLabel(result.donor_column)}` : ""}
+            {result.reference_cells
+              ? ` with ${result.reference_cells.column} = ${result.reference_cells.value}`
+              : ""}
             ), {result.n_genes_used.toLocaleString()} genes; {pct(result.gene_share, 0)} of this dataset&apos;s genes
             were in the file.
           </Caption>
           {result.method_reason !== "requested" && <p className="text-[11px] text-slate-500">{result.method_reason}</p>}
           {result.warnings.map((w) => (
-            <p key={w} className="text-[11px] text-amber-700 dark:text-amber-400">
+            <p key={w} className="text-[11px] text-amber-700">
               {w}
             </p>
           ))}
@@ -240,7 +268,7 @@ export function DeconvolutionSubtab() {
                 className={`rounded px-2 py-0.5 ${
                   kind === k
                     ? "bg-primary/10 font-medium text-primary"
-                    : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                    : "text-slate-500 hover:text-slate-700"
                 }`}
               >
                 {k === "cell" ? "Cell fractions" : "RNA fractions"}
@@ -280,10 +308,10 @@ export function DeconvolutionSubtab() {
               useResizeHandler
             />
           </div>
-          <div className="max-h-80 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
+          <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full text-[11px]" aria-label="Estimated fractions">
-              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
-                <tr className="border-b border-slate-200 text-left text-slate-600 dark:border-slate-700 dark:text-slate-300">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr className="border-b border-slate-200 text-left text-slate-600">
                   <th className="px-2 py-1 font-medium">Sample</th>
                   {result.types.map((t) => (
                     <th key={t} className="px-1 py-1 text-right font-medium" title={`${kind === "cell" ? "Cell" : "RNA"} fraction of ${t}`}>
@@ -299,13 +327,24 @@ export function DeconvolutionSubtab() {
                 {samples.map((s) => {
                   const fr = kind === "cell" ? s.cell_fractions : s.rna_fractions;
                   return (
-                    <tr key={s.sample} className="border-b border-slate-100 dark:border-slate-800">
-                      <td className="px-2 py-0.5 font-medium text-slate-700 dark:text-slate-200">{s.sample}</td>
-                      {result.types.map((t) => (
-                        <td key={t} className="px-1 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-200">
-                          {pct(fr[t])}
-                        </td>
-                      ))}
+                    <tr key={s.sample} className="border-b border-slate-100">
+                      <td className="px-2 py-0.5 font-medium text-slate-700">{s.sample}</td>
+                      {result.types.map((t) => {
+                        const doubtful = (s.flagged ?? []).includes(t);
+                        return (
+                          <td
+                            key={t}
+                            className={`px-1 py-0.5 text-right tabular-nums ${
+                              doubtful ? "bg-amber-50 font-medium text-amber-700" : "text-slate-700"
+                            }`}
+                            title={doubtful ? `${t} is far above its share of the reference cells: doubtful` : undefined}
+                            data-flagged={doubtful || undefined}
+                          >
+                            {pct(fr[t])}
+                            {doubtful ? " !" : ""}
+                          </td>
+                        );
+                      })}
                       <td
                         className="px-1 py-0.5 text-right tabular-nums text-slate-500"
                         title={s.converged ? `${s.iterations} rounds` : "did not settle; the last estimate is shown"}
@@ -333,7 +372,7 @@ export function DeconvolutionSubtab() {
       </p>
 
       <DeconvolutionCheck
-        key={`${datasetId}|${celltype}|${donor}|${method}`}
+        key={`${datasetId}|${celltype}|${donor}|${method}|${cells}`}
         datasetId={datasetId}
         options={options}
         nDonors={nDonors}
@@ -344,9 +383,9 @@ export function DeconvolutionSubtab() {
 
       <div className="space-y-1">
         <a
-          href={referenceZipUrl(datasetId, celltype || null, donorOption)}
+          href={referenceZipUrl(datasetId, options)}
           download
-          className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+          className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
         >
           <Download className="h-3 w-3" /> Download reference
         </a>

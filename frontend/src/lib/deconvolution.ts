@@ -3,20 +3,44 @@ import type { DeconvCheck, DeconvResult } from "@/api/deconvolution";
 
 export type FractionKind = "cell" | "rna";
 
-/** One bar trace per cell type, stacked: each bulk sample's fractions (in %). */
+/** One bar trace per cell type, stacked: each bulk sample's fractions (in %). A flagged
+ *  segment (far above the type's share of the reference cells) is hatched. */
 export function stackedBarTraces(result: DeconvResult, kind: FractionKind, colorOf: (type: string) => string): Data[] {
   const x = result.samples.map((s) => s.sample);
-  return result.types.map((t) => ({
-    type: "bar" as const,
-    name: t,
-    x,
-    y: result.samples.map((s) => {
-      const v = (kind === "cell" ? s.cell_fractions : s.rna_fractions)[t];
-      return v == null ? null : v * 100;
-    }),
-    marker: { color: colorOf(t) },
-    hovertemplate: `%{x}<br>${t}: %{y:.1f}%<extra></extra>`,
-  }));
+  return result.types.map((t) => {
+    const flagged = result.samples.map((s) => (s.flagged ?? []).includes(t));
+    return {
+      type: "bar" as const,
+      name: t,
+      x,
+      y: result.samples.map((s) => {
+        const v = (kind === "cell" ? s.cell_fractions : s.rna_fractions)[t];
+        return v == null ? null : v * 100;
+      }),
+      marker: {
+        color: colorOf(t),
+        // Plotly takes one shape per bar; the typings only know a single one.
+        ...(flagged.some(Boolean) ? { pattern: { shape: flagged.map((f) => (f ? "/" : "")) as unknown as "/" } } : {}),
+      },
+      customdata: flagged.map((f) => (f ? " (doubtful: far above its share of the reference cells)" : "")),
+      hovertemplate: `%{x}<br>${t}: %{y:.1f}%%{customdata}<extra></extra>`,
+    };
+  });
+}
+
+/** "stim = CTRL" as the select's value, and back. */
+export function cellsKey(column: string, value: string): string {
+  return JSON.stringify([column, value]);
+}
+
+export function parseCellsKey(key: string): { cells_column: string | null; cells_value: string | null } {
+  if (!key) return { cells_column: null, cells_value: null };
+  try {
+    const [column, value] = JSON.parse(key) as [string, string];
+    return { cells_column: column, cells_value: value };
+  } catch {
+    return { cells_column: null, cells_value: null };
+  }
 }
 
 /** Truth against estimate of the self-check, one trace per cell type (fractions in %). */
