@@ -8,6 +8,7 @@ const UPPER: Record<string, string> = {
 const NAMED: Record<string, string> = {
   spatial_autocorr: "Spatially variable genes (Moran's I)",
   doublet_detection_skipped: "Doublet detection skipped",
+  gwas_traits: "GWAS trait links",
 };
 
 /** A pipeline step id as a label: words spaced, first letter capital, abbreviations in capitals. */
