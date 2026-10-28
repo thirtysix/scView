@@ -35,6 +35,7 @@ from scview.core import (
     provenance,
     qc_filter,
     scaling,
+    spatial,
     step_failures,
     stress,
     uns_history,
@@ -262,6 +263,24 @@ class StepSkipped(Exception):
     reason is returned in ``PipelineResult.notes``."""
 
 
+class StepNotApplicable(StepSkipped):
+    """A step that does not apply to this kind of data (doublet detection on Visium
+    spots): skipped as StepSkipped is, and also recorded in provenance as
+    ``<step>_skipped`` with the reason, so History and the replay script show it."""
+
+
+def record_skip(adata: ad.AnnData, step: str, err: StepSkipped) -> None:
+    """The provenance entry of a step that does not apply (``StepNotApplicable``); a
+    plain StepSkipped records nothing. Never raises."""
+    if not isinstance(err, StepNotApplicable):
+        return
+    try:
+        provenance.record_step(adata, step=f"{step}_skipped", tool="scview pipeline",
+                               params={"step": step, "reason": str(err)})
+    except Exception as e:  # provenance must never break the pipeline
+        logger.warning("Could not record the skip of %s: %s", step, e)
+
+
 # The large-dataset run's stand-ins for the steps below that read the matrix
 # (core/large_run.py ``LargeBackend``): marker tests from the gene store, gene scores and
 # CellTypist by row blocks, so those steps run unchanged on a copy of the dataset without
@@ -469,6 +488,8 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     gives, without copying the whole dataset); they come from ``layers['counts']`` or
     ``.raw`` when X holds processed values (recorded as ``input``).
     """
+    if spatial.is_spot_data(adata):
+        raise StepNotApplicable(spatial.DOUBLET_SKIP)
     counts, where = _doublet_matrix(adata)
     # A channel column that is not there, or an unknown method, raises DoubletError: the
     # step's error.
@@ -2228,6 +2249,7 @@ def run_pipeline(
         except StepSkipped as e:
             logger.info("Step '%s' skipped: %s", step_name, e)
             result.notes[step_name] = str(e)
+            record_skip(adata, step_name, e)
         except Exception as e:
             if control is not None and control.cancelled:  # e.g. its Leiden child was ended
                 _cancelled_during(result, step_name)
@@ -2345,6 +2367,7 @@ def run_pipeline_streamed(
         except StepSkipped as e:
             logger.info("Step '%s' skipped: %s", step_name, e)
             result.notes[step_name] = str(e)
+            record_skip(adata, step_name, e)
             yield ("step_done", {"step": step_name, "index": idx, "skipped": True,
                                  "note": str(e), "elapsed": round(time.time() - step_t0, 2)})
         except Exception as e:

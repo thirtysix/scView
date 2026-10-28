@@ -21,8 +21,14 @@ IMPORTING = (
     "allows it). Supported formats: AnnData .h5ad; 10x Genomics MTX (matrix.mtx + barcodes.tsv + "
     "features/genes.tsv, optionally .gz) and 10x HDF5 (.h5); .loom; .zarr; dense CSV/TSV "
     "(optionally .gz); Seurat, SingleCellExperiment or SummarizedExperiment .rds "
-    "(converted to .h5ad by the R converter service); and "
-    "nf-core/scrnaseq mtx_conversions outputs (*.h5ad). A guided flow bundles multi-file "
+    "(converted to .h5ad by the R converter service; an .rds dropped with other files is "
+    "converted when the dataset is created and can be merged with them, e.g. with a 10x sample; "
+    "a Seurat Visium object keeps its tissue image and spot positions); Seurat .h5Seurat "
+    "(SeuratDisk; read directly, no R needed: counts, cell metadata, reductions, an ADT assay, "
+    "Visium images); "
+    "nf-core/scrnaseq mtx_conversions outputs (*.h5ad); and Visium spatial data: Space Ranger's "
+    "filtered matrix with its spatial/ folder (or spatial.tar.gz; drop the whole outs/ folder), "
+    "or an .h5ad with obsm['spatial'] (Visium HD and Xenium bundles are not read yet). A guided flow bundles multi-file "
     "inputs (e.g. the three 10x MTX files) and can merge several samples into one dataset. "
     "Each imported dataset then appears in the Data-tab library to open or manage."
 )
@@ -47,6 +53,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
     ("Unified View", "", "linked scatter (UMAP/tSNE/PCA) with analysis tabs beside it"),
+    ("Unified View > Embedding > Tissue", "spatial",
+     "spots or cells on the tissue image (Visium); Section, Image on/off; colours, lasso as on UMAP"),
     ("Unified View > Markers", "", "marker table per group"),
     ("Unified View > Expression", "", "gene overlay, several genes, gene vs gene"),
     ("Unified View > Protein", "CITE-seq, CLR or DSB", "CITE-seq proteins; CLR or DSB normalisation"),
@@ -68,6 +76,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Copy number", "CNV", "inferred copy-number score per cell"),
     ("Unified View > Clonotypes", "TCR/BCR", "TCR/BCR repertoire"),
     ("Unified View > Perturbation", "CRISPR, Mixscape", "CRISPR guide calls, Mixscape"),
+    ("Unified View > Spatial genes", "Moran's I, spatial data only",
+     "spatially variable genes (Moran's I) on Visium spots or imaging cells; click a gene to colour the tissue"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),

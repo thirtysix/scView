@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from scview.api.v1.export import file_stem
 from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
-from scview.core import conversion, crispr, provenance, replay_script, run_manifest
+from scview.core import conversion, crispr, provenance, replay_script, run_manifest, spatial
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import is_locked
 from scview.models.enums import DatasetStatus
@@ -234,6 +234,8 @@ async def get_dataset_info(
         info["default_expression_layer"] = adaptor.default_expression_layer()
         info["protein"] = adaptor.protein_info()
         info["perturbation"] = crispr.available(adaptor.adata)  # a CRISPR screen's guides
+        # Spatial data: libraries, image sizes, bounds (obsm + uns: small, also when large).
+        info["spatial"] = spatial.info(adaptor.adata)
         # A large dataset (matrices on disk): the gene store's state (checked once).
         info["large"] = await asyncio.to_thread(adaptor.large_info)
         # Which cells, in which order: a saved session checks it (hashing a

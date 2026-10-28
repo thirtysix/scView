@@ -12,6 +12,7 @@ from pathlib import Path
 
 import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 import scipy.io
 import scipy.sparse as sp
@@ -175,19 +176,105 @@ async def test_commit_rejects_empty(mgr, dm):
         await mgr.commit(sid, dm)
 
 
-async def test_seurat_among_other_files_is_a_validation_error(mgr, dm):
-    # The UI sends a lone .rds to the converter; mixed with other files it used
-    # to reach load_unit and come back as a 500.
+def _fake_converter(monkeypatch, seen: list, mgr=None, sid=None, fail: str | None = None,
+                    n_obs=5):
+    """trigger_conversion replaced: writes a small h5ad where the converter would (cells
+    named like the .rds's Seurat object), records the call and the session's state."""
+    from scview.core import conversion
+
+    async def fake(rds_path, output_path, converter_url, progress_path=None, transport=None):
+        Path(progress_path).write_text(json.dumps(
+            {"stage": "converting", "source_class": "Seurat", "n_cells": n_obs, "n_genes": 4}))
+        state = mgr.get_state(sid)["converting"] if mgr is not None else None
+        seen.append({"rds": rds_path, "out": output_path, "url": converter_url, "state": state})
+        if fail:
+            raise conversion.ConversionError(fail)
+        a = ad.AnnData(X=sp.csr_matrix(np.arange(n_obs * 4, dtype="float64").reshape(n_obs, 4)))
+        a.obs_names = [f"seurat_{i}" for i in range(n_obs)]
+        a.var_names = [f"GENE{i}" for i in range(4)]
+        a.obs["seurat_clusters"] = pd.Categorical(["0", "1"] * (n_obs // 2) + ["0"] * (n_obs % 2))
+        a.obsm["X_umap"] = np.zeros((n_obs, 2))
+        a.write_h5ad(output_path)
+        return {"status": "ok", "message": "Converted",
+                "report": {"source_class": "Seurat", "detail": "Seurat v5", "kept": [], "skipped": []}}
+
+    monkeypatch.setattr(conversion, "trigger_conversion", fake)
+
+
+async def test_seurat_among_other_files_is_converted_at_commit(data_dir, dm, monkeypatch):
+    from scview.core import provenance
+
+    mgr = IngestSessionManager(data_dir=str(data_dir), converter_url="http://conv:8001")
+    sid = mgr.create_session()
+    _stage_mex(mgr, sid, prefix="tenx_", n_genes=4, n_cells=3)
+    (mgr.files_dir(sid) / "obj.rds").write_bytes(b"\x1f\x8b not really R data")
+    state = mgr.get_state(sid)
+    codes = [i["code"] for i in state["validation"]["issues"]]
+    assert "seurat_converted_at_commit" in codes
+    assert state["validation"]["ok"] is True
+    assert state["converting"] is None
+    assert mgr.merge_plan(sid) is None  # the .rds is read only at commit
+
+    seen: list = []
+    _fake_converter(monkeypatch, seen, mgr, sid)
+    did = await mgr.commit(sid, dm)
+    assert len(seen) == 1 and seen[0]["url"] == "http://conv:8001"
+    assert seen[0]["rds"].endswith("files/obj.rds")
+    # the state names the R object while it converts
+    assert seen[0]["state"]["file"] == "obj.rds" and seen[0]["state"]["of"] == 1
+    assert seen[0]["state"]["progress"]["source_class"] == "Seurat"
+    info = dm.get_dataset_info(did)
+    assert info["n_cells"] == 3 + 5
+    assert info["conversion"]["source_class"] == "Seurat"  # shown on Data Assessment
+    h5 = next((data_dir / "ingested" / did).glob("*.h5ad"))
+    back = ad.read_h5ad(h5)
+    assert set(back.obs["sample"]) == {"tenx", "obj"}
+    p = provenance.read_provenance(back)
+    assert {m["format"] for m in p["source"]["merged_from"]} == {"tenx_mex", "seurat"}
+    ingest = next(h for h in p["history"] if h["step"] == "ingest")
+    assert ingest["params"]["converted"][0]["file"] == "obj.rds"
+    assert ingest["params"]["converted"][0]["source_class"] == "Seurat"
+    # the originals keep the .rds; the session (and its converted copy) is gone
+    assert (data_dir / "uploads" / did / "obj.rds").is_file()
+    assert not (data_dir / "ingest" / sid).exists()
+
+
+async def test_lone_seurat_in_a_session_is_converted(mgr, dm, data_dir, monkeypatch):
+    from scview.core import provenance
+
+    sid = mgr.create_session()
+    (mgr.files_dir(sid) / "pbmc.rds").write_bytes(b"RDX3")
+    seen: list = []
+    _fake_converter(monkeypatch, seen)
+    did = await mgr.commit(sid, dm)
+    back = ad.read_h5ad(next((data_dir / "ingested" / did).glob("*.h5ad")))
+    assert back.n_obs == 5 and "X_umap" in back.obsm
+    src = provenance.read_provenance(back)["source"]
+    assert src["format"] == "seurat" and src["original_filename"] == "pbmc.rds"
+
+
+async def test_conversion_failure_is_a_commit_error(mgr, dm, monkeypatch):
     sid = mgr.create_session()
     _stage_h5ad(mgr, sid, "a.h5ad")
-    _stage_h5ad(mgr, sid, "b.h5ad")
-    (mgr.files_dir(sid) / "obj.rds").write_bytes(b"\x1f\x8b not really R data")
-    codes = [i["code"] for i in mgr.get_state(sid)["validation"]["issues"]]
-    assert "seurat_needs_converter" in codes
-    assert mgr.get_state(sid)["validation"]["ok"] is False
-    assert mgr.merge_plan(sid) is not None  # the two h5ad files still get a plan
-    with pytest.raises(IngestCommitError, match="converted separately"):
+    (mgr.files_dir(sid) / "obj.rds").write_bytes(b"RDX3")
+    seen: list = []
+    _fake_converter(monkeypatch, seen, fail="This file holds a list object, which scView "
+                    "cannot convert.")
+    with pytest.raises(IngestCommitError, match="obj.rds could not be converted: This file holds"):
         await mgr.commit(sid, dm)
+    assert mgr.get_state(sid)["converting"] is None  # cleared; the session stays to retry
+
+
+async def test_invalid_session_converts_nothing(mgr, dm, monkeypatch):
+    sid = mgr.create_session()
+    dense = np.array([[1, 0], [0, 2], [3, 4]])
+    scipy.io.mmwrite(str(mgr.files_dir(sid) / "matrix.mtx"), sp.csr_matrix(dense))
+    (mgr.files_dir(sid) / "obj.rds").write_bytes(b"RDX3")
+    seen: list = []
+    _fake_converter(monkeypatch, seen)
+    with pytest.raises(IngestCommitError):
+        await mgr.commit(sid, dm)
+    assert seen == []
 
 
 async def test_unreadable_file_is_a_commit_error(mgr, dm):

@@ -17,6 +17,7 @@ import {
   createIngestSession,
   discardIngestSession,
   filePath,
+  getIngestState,
   getMergePlan,
   seqQcSideFiles,
   setIngestOptions,
@@ -37,7 +38,7 @@ import { PublicImport } from "@/components/panels/PublicImport";
 import { PreflightIngestNotes } from "@/components/common/PreflightNote";
 import { SequencingQcSideFiles } from "@/components/qc/SequencingQcSideFiles";
 import { ClonotypeUnitFiles } from "@/components/unified/ClonotypeUnitFiles";
-import { conversionNote, isRFile } from "@/lib/conversion";
+import { commitConversionNote, conversionNote, isRFile } from "@/lib/conversion";
 import { itemsFromDrop, itemsFromFiles, skippedNote, splitJunk, type UploadItem } from "@/lib/ingestUpload";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
@@ -47,7 +48,8 @@ const FORMAT_LABELS: Record<UnitFormat, string> = {
   loom: "Loom (.loom)",
   zarr: "Zarr store",
   dense_table: "Expression table (CSV/TSV)",
-  seurat: "R object (.rds: Seurat, SingleCellExperiment)",
+  seurat: "R object (.rds: Seurat, SingleCellExperiment), converted when the dataset is created",
+  h5seurat: "Seurat (.h5Seurat)",
   unknown: "Unrecognised",
 };
 
@@ -82,6 +84,8 @@ export function DataPanel() {
   const [busy, setBusy] = useState(false);
   const [busyNote, setBusyNote] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
+  // While a commit converts the session's .rds files: which one, and the converter's stage.
+  const [commitNote, setCommitNote] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Files of a picked/dropped folder that were not sent (BAM, Loupe, report), in one sentence.
@@ -213,6 +217,22 @@ export function DataPanel() {
     if (!sessionId) return;
     setCommitting(true);
     setError(null);
+    // .rds files are converted first: follow the converter's stages meanwhile.
+    const hasR = state?.bundle.units.some((u) => u.format === "seurat") ?? false;
+    let polling = hasR;
+    const follow = async () => {
+      while (polling) {
+        await new Promise((r) => setTimeout(r, 2000));
+        if (!polling) break;
+        try {
+          const s = await getIngestState(sessionId);
+          if (polling) setCommitNote(commitConversionNote(s.converting));
+        } catch {
+          /* the session is gone once the dataset is saved */
+        }
+      }
+    };
+    if (hasR) void follow();
     try {
       await setIngestOptions(sessionId, options);
       const { dataset_id } = await commitIngestSession(sessionId);
@@ -227,9 +247,11 @@ export function DataPanel() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not create the dataset.");
     } finally {
+      polling = false;
+      setCommitNote(null);
       setCommitting(false);
     }
-  }, [sessionId, options, setCurrentDataset, setAvailableDatasets, setPanel]);
+  }, [sessionId, state, options, setCurrentDataset, setAvailableDatasets, setPanel]);
 
   const bundle = state?.bundle;
   const validation = state?.validation;
@@ -246,8 +268,9 @@ export function DataPanel() {
           <code className="mx-1 rounded bg-slate-100 px-1">matrix / barcodes / features</code>
           files), a CellRanger <code className="rounded bg-slate-100 px-1">.h5</code>, an
           AnnData <code className="rounded bg-slate-100 px-1">.h5ad</code>, a Seurat or
-          SingleCellExperiment <code className="rounded bg-slate-100 px-1">.rds</code>, an expression table, or
-          several samples to merge — or reopen one of your datasets below.
+          SingleCellExperiment <code className="rounded bg-slate-100 px-1">.rds</code>, a Seurat{" "}
+          <code className="rounded bg-slate-100 px-1">.h5Seurat</code>, an expression table, or
+          several samples to merge (an .rds among them too) — or reopen one of your datasets below.
         </p>
       </div>
 
@@ -292,8 +315,8 @@ export function DataPanel() {
           )}
         </div>
         <p className="mt-2 text-xs text-slate-400">
-          .h5ad · Seurat / SingleCellExperiment .rds · 10x (matrix/barcodes/features or .h5) · loom · CSV/TSV ·
-          multiple samples to merge
+          .h5ad · Seurat / SingleCellExperiment .rds · Seurat .h5Seurat · 10x (matrix/barcodes/features or
+          .h5) · Visium (Space Ranger outs/) · loom · CSV/TSV · multiple samples to merge
         </p>
         <input
           ref={fileInput}
@@ -424,6 +447,11 @@ export function DataPanel() {
               <RotateCcw className="h-4 w-4" /> Start over
             </button>
           </div>
+          {committing && commitNote && (
+            <p className="text-xs text-slate-500" role="status">
+              {commitNote}
+            </p>
+          )}
           {!validation?.ok && (
             <p className="text-xs text-amber-600">
               Resolve the issues above before creating the dataset.

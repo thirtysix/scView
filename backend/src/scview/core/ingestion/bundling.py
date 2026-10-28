@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field
 
+from scview.core import spatial
 from scview.core.ingestion.detection import DetectionResult, FileKind, detect_file
 from scview.core.ingestion.paths import junk_reason, skipped_sentence
 
@@ -38,7 +39,8 @@ class UnitFormat(str, Enum):
     loom = "loom"
     zarr = "zarr"
     dense_table = "dense_table"
-    seurat = "seurat"
+    seurat = "seurat"  # an R object: converted by the R converter at commit (session.py)
+    h5seurat = "h5seurat"  # SeuratDisk .h5Seurat, read natively (h5seurat.py)
     unknown = "unknown"
 
 
@@ -60,6 +62,7 @@ class SideKind(str, Enum):
     raw = "raw"  # the raw (unfiltered) matrix: a .h5 or MEX parts (core/seq_metrics.py)
     vdj = "vdj"  # a TCR/BCR contig table, joined to the unit's cells (core/vdj.py)
     crispr = "crispr"  # Cell Ranger's guide calls per cell, joined to the unit's cells (core/crispr.py)
+    spatial = "spatial"  # a Space Ranger spatial file (positions, scale factors, images; core/spatial.py)
 
 
 # A 10x MEX unit needs exactly one of each of these.
@@ -74,11 +77,13 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.zarr_dir: (UnitFormat.zarr, FileRole.data),
     FileKind.dense_table: (UnitFormat.dense_table, FileRole.data),
     FileKind.seurat_rds: (UnitFormat.seurat, FileRole.data),
+    FileKind.h5seurat: (UnitFormat.h5seurat, FileRole.data),
     FileKind.mtx_matrix: (None, FileRole.matrix),
     FileKind.tenx_barcodes: (None, FileRole.barcodes),
     FileKind.tenx_features: (None, FileRole.features),
     FileKind.vdj_contigs: (None, FileRole.side),
     FileKind.crispr_calls: (None, FileRole.side),
+    FileKind.spatial: (None, FileRole.side),
     FileKind.unknown: (None, FileRole.unknown),
 }
 
@@ -103,6 +108,8 @@ class BundleFile(BaseModel):
     confidence: float = 0.0
     side_kind: SideKind | None = None  # a side file's kind (role == side)
     receptor: str | None = None  # contig tables: "T", "B" or "T+B" (their chains, else the name)
+    # Space Ranger spatial files: positions | scalefactors | hires | lowres | archive.
+    spatial_part: str | None = None
     # The path inside the uploaded folder (``outs/raw_feature_bc_matrix/barcodes.tsv.gz``);
     # the name alone for a plain upload.
     rel_path: str = ""
@@ -138,6 +145,8 @@ class Bundle(BaseModel):
     complete: bool = False  # every (non-unknown) unit is complete
     issues: list[str] = Field(default_factory=list)
     skipped: list[SkippedFile] = Field(default_factory=list)  # also one sentence in issues
+    # A spatial format scView does not read yet (Visium HD, Xenium): an error at validation.
+    unsupported: str | None = None
 
 
 # nf-core/scrnaseq's mtx_conversions/ emits "<sample>_{raw,filtered,cellbender_filter}_matrix.h5ad"
@@ -217,6 +226,8 @@ def bundle_from_detections(
     side_files: list[BundleFile] = []
     vdj_files: list[BundleFile] = []
     crispr_files: list[BundleFile] = []
+    spatial_files: list[BundleFile] = []
+    hd = False
 
     for path, det in detected:
         if _is_side_file(det):
@@ -240,6 +251,10 @@ def bundle_from_detections(
                 "receptor": det.details.get("receptor") or _vdj_dir_arm(bf) or _vdj_arm(path.name)}))
         elif det.kind == FileKind.crispr_calls:
             crispr_files.append(bf.model_copy(update={"side_kind": SideKind.crispr}))
+        elif det.kind == FileKind.spatial:
+            hd = hd or bool(det.details.get("hd"))
+            spatial_files.append(bf.model_copy(update={
+                "side_kind": SideKind.spatial, "spatial_part": det.details.get("part")}))
         else:
             unknown_files.append(bf)
 
@@ -268,6 +283,8 @@ def bundle_from_detections(
 
     bundle_issues.extend(_attach_vdj_files(units, vdj_files))
     bundle_issues.extend(_attach_crispr_files(units, crispr_files))
+    bundle_issues.extend(_attach_spatial_files(units, spatial_files))
+    unsupported = spatial.HD_MESSAGE if hd else spatial.unsupported([rel(p) for p, _ in detected])
     _unique_labels(units)
     if skipped:
         bundle_issues.insert(0, skipped_sentence(skipped))
@@ -279,6 +296,7 @@ def bundle_from_detections(
         complete=bool(loadable) and all(u.complete for u in loadable),
         issues=bundle_issues,
         skipped=[SkippedFile(**s) for s in skipped],
+        unsupported=unsupported,
     )
 
 
@@ -292,13 +310,14 @@ _GENERIC_DIRS = {
     "outs", "count", "counts", "multi", "per_sample_outs", "matrix", "gex", "gene_expression",
     "filtered_feature_bc_matrix", "raw_feature_bc_matrix", "sample_filtered_feature_bc_matrix",
     "sample_raw_feature_bc_matrix", "filtered_gene_bc_matrices", "raw_gene_bc_matrices",
-    "vdj_t", "vdj_b", "vdj_t_gd", "vdj",
+    "vdj_t", "vdj_b", "vdj_t_gd", "vdj", "spatial",
 }
 # Folders that hold one sample's matrix / contigs, below that sample's own folder.
 _CONTAINER_DIRS = {
     "count", "filtered_feature_bc_matrix", "raw_feature_bc_matrix", "crispr_analysis",
     "sample_filtered_feature_bc_matrix", "sample_raw_feature_bc_matrix",
     "filtered_gene_bc_matrices", "raw_gene_bc_matrices", "vdj_t", "vdj_b", "vdj_t_gd",
+    "spatial",  # Space Ranger's spatial/ folder: positions, scale factors, images
 }
 _GENOME_PARENTS = {"filtered_gene_bc_matrices", "raw_gene_bc_matrices"}  # Cell Ranger 2: <dir>/GRCh38/
 _VDJ_DIRS = {"vdj_t": "T", "vdj_t_gd": "T", "vdj_b": "B"}
@@ -331,6 +350,7 @@ def _drop_tree_extras(detected, rel, skipped: list[dict]):
     rels = {p: rel(p) for p, _ in detected}
     has_per_sample = any("per_sample_outs" in _dirs(r) for r in rels.values())
     matrix_kinds = {FileKind.tenx_h5, FileKind.anndata_h5ad, FileKind.loom, FileKind.mtx_matrix,
+                    FileKind.h5seurat,
                     FileKind.dense_table}
     matrix_dirs = {_dirs(rels[p]) for p, det in detected if det.kind in matrix_kinds}
     vdj_dirs = set()
@@ -786,3 +806,58 @@ def _attach_crispr_files(units: list[IngestUnit], files: list[BundleFile]) -> li
             continue
         unit.side_files.append(bf)
     return issues
+
+
+# ---------------------------------------------------------------------------
+# Space Ranger spatial files: side files of a unit
+# ---------------------------------------------------------------------------
+
+
+def _attach_spatial_files(units: list[IngestUnit], files: list[BundleFile]) -> list[str]:
+    """Add each sample's spatial files (``spatial/`` loose or as an archive) to the unit
+    of the same sample: the same folder and name prefix (``X_spatial.tar.gz`` beside
+    ``X_filtered_feature_bc_matrix.h5``), else the only unit of its folder, else the only
+    unit. A part a unit already has is not attached twice. Returns bundle issues."""
+    if not files:
+        return []
+    loadable = [u for u in units if u.format != UnitFormat.unknown]
+    if not loadable:
+        return ["Space Ranger spatial files (tissue positions, scale factors, images) need the "
+                "sample's matrix (filtered_feature_bc_matrix.h5 or its folder): add it."]
+    by_key: dict[str, IngestUnit] = {}
+    for u in loadable:
+        by_key.setdefault(_unit_key(u), u)
+    issues: list[str] = []
+    for bf in sorted(files, key=lambda f: (f.spatial_part != spatial.ARCHIVE, f.rel_path or f.name)):
+        key = f"{_sample_root(bf.rel_path)}|{spatial.name_key(bf.name)}"
+        unit = (by_key.get(key) or _only_in_root(loadable, key)
+                or (loadable[0] if len(loadable) == 1 else None))
+        if unit is None:
+            issues.append(f"Could not tell which sample the spatial file {bf.rel_path or bf.name} belongs "
+                          "to: give it the sample's file name prefix, or upload each Space Ranger "
+                          "folder (outs/) whole.")
+            continue
+        have = {f.spatial_part for f in unit.side_files if f.side_kind == SideKind.spatial}
+        if spatial.ARCHIVE in have:
+            have |= set(spatial.PARTS)
+        if bf.spatial_part in have:
+            issues.append(f"{bf.name}: sample {unit.label} already has its {bf.spatial_part} "
+                          "spatial file; this one was not attached.")
+            continue
+        unit.side_files.append(bf)
+        _spatial_label(unit)
+    return issues
+
+
+def _spatial_label(unit: IngestUnit) -> None:
+    """A spatial sample uploaded as plain files is named by its Space Ranger prefix
+    (``V1_Lymph_Node_filtered_feature_bc_matrix.h5`` -> ``V1_Lymph_Node``): the label is
+    its section's library id."""
+    if unit.format != UnitFormat.tenx_h5 or not unit.files or _dirs(unit.files[0].rel_path):
+        return
+    name = unit.files[0].name
+    stem = name[:-3] if name.lower().endswith(".h5") else name
+    low, hit = _strip_tenx(stem.lower().removesuffix("_h5"))
+    prefix = stem[:len(low)].rstrip(" _-.") if hit else ""
+    if prefix:
+        unit.label = prefix

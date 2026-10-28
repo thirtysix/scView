@@ -143,6 +143,12 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
                 detail += (f"; cell hashing calls {int(hashing.sum())} doublets, the doublet views' "
                            "primary call (Scrublet is the second opinion)")
             return StepStatus(done=True, confidence="high", details=detail)
+        from scview.core import spatial
+
+        if spatial.is_spot_data(adata):
+            # Nothing to do (not recommended, nor selected as missing): the run skips it too.
+            return StepStatus(done=True, confidence="high", details=f"Not applicable: {spatial.DOUBLET_SKIP}",
+                              caution=f"{spatial.DOUBLET_SKIP}.")
         return StepStatus(
             done=False, confidence="high", details="No doublet annotation found in obs"
         )

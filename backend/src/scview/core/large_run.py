@@ -78,6 +78,7 @@ from scview.core import (
     qc_filter,
     scaling,
     sparse_markers,
+    spatial,
     step_failures,
 )
 from scview.core.pipeline import (
@@ -86,6 +87,7 @@ from scview.core.pipeline import (
     SAVED_STATUSES,
     PipelineParams,
     PipelineResult,
+    StepNotApplicable,
     StepSkipped,
     _cancelled_during,
     _end_status,
@@ -93,6 +95,7 @@ from scview.core.pipeline import (
     _halted,
     _new_outcome,
     _record_errors,
+    record_skip,
     _record_pipeline_step,
     _REGRESS_PEARSON,
     _skip_if_blocked,
@@ -803,6 +806,8 @@ class LargeRun:
     def _doublet_detection(self) -> dict[str, Any]:
         params = self.params
         method = doublets.method_of(params.doublet_method)  # an unknown one fails here
+        if spatial.is_spot_data(self.light):
+            raise StepNotApplicable(spatial.DOUBLET_SKIP)
         # pipeline._doublet_matrix: X unless it holds processed values, then the counts.
         where = None
         m = self.x
@@ -1302,6 +1307,7 @@ def run_streamed(
             except StepSkipped as e:
                 logger.info("Step '%s' skipped: %s", step, e)
                 result.notes[step] = str(e)
+                record_skip(run.light, step, e)
                 yield ("step_done", {"step": step, "index": idx, "skipped": True, "note": str(e),
                                      "elapsed": round(time.time() - step_t0, 2)})
             except Exception as e:  # noqa: BLE001 — the step's error, as in memory

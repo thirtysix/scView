@@ -27,5 +27,6 @@ def get_ingest_session_manager() -> IngestSessionManager:
     global _ingest_session_manager
     if _ingest_session_manager is None:
         settings = get_settings()
-        _ingest_session_manager = IngestSessionManager(data_dir=settings.DATA_DIR)
+        _ingest_session_manager = IngestSessionManager(data_dir=settings.DATA_DIR,
+                                                       converter_url=settings.CONVERTER_URL)
     return _ingest_session_manager

@@ -1058,6 +1058,54 @@ _HELPERS["dsb"] = _dsb_helper()
 _HELPER_ORDER += ("dsb",)
 
 
+def _spatial_autocorr_helper() -> str:
+    """core/spatial_autocorr.py's neighbour graph and Moran's I (numpy, scipy, pandas),
+    copied so the script scores the genes as scView (= squidpy 1.6's defaults) did."""
+    import inspect
+
+    from scview.core import spatial_autocorr as sa
+
+    lines = ["from scipy import stats", "from scipy.spatial import cKDTree", ""]
+    lines += [f"{name} = {_lit(getattr(sa, name))}" for name in sa.REPLAY_CONSTANTS]
+    for obj in sa.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def spatial_genes(adata, names, genes):
+    """Column indices of the genes scored: the variable genes ("hvg"), all, or a list."""
+    names = pd.Index([str(n) for n in names])
+    if genes == "hvg":
+        hv = adata.var["highly_variable"].to_numpy(dtype=bool)
+        idx = names.get_indexer(adata.var_names[hv].astype(str))
+        return np.sort(idx[idx >= 0])
+    if genes == "all":
+        return np.arange(len(names))
+    idx = names.get_indexer(pd.Index([str(g) for g in genes]).unique())
+    return idx[idx >= 0]
+
+
+def spatial_moran(adata, M, names, genes, library_id, grid):
+    """Moran's I per gene on the spots (one section's, or all), as squidpy's
+    uns["moranI"]: genes as the index, I, pval_norm, var_norm, pval_norm_fdr_bh."""
+    libs = (adata.obs["library_id"].astype(str).to_numpy() if "library_id" in adata.obs.columns
+            else np.full(adata.n_obs, ""))
+    rows = np.flatnonzero(libs == str(library_id)) if library_id else np.arange(adata.n_obs)
+    idx = spatial_genes(adata, names, genes)
+    M = M[rows][:, idx]
+    W = spatial_weights(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows], grid)
+    order = spatial_order(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows])
+    table, _ = morans_i(W, M, np.asarray([str(n) for n in names])[idx], order)
+    return pd.DataFrame({"I": table["I"].to_numpy(), "pval_norm": table["pval"].to_numpy(),
+                         "var_norm": table["var_I"].to_numpy(),
+                         "pval_norm_fdr_bh": table["pval_adj"].to_numpy()},
+                        index=pd.Index(table["gene"].astype(str).to_numpy()))
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["spatial_autocorr"] = _spatial_autocorr_helper()
+_HELPER_ORDER += ("spatial_autocorr",)
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -2403,6 +2451,14 @@ def _vdj_remove(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, ["clear(adata)  # every V(D)J column removed"])
 
 
+def _step_skipped(p: dict, ctx: _Ctx) -> Snippet:
+    """A step that does not apply to the data (core/pipeline.py ``StepNotApplicable``:
+    doublet detection on Visium spots): skipped here too, with scView's reason."""
+    step = comment_text(p.get("step") or "this step", 40)
+    reason = comment_text(p.get("reason") or "it does not apply", 160)
+    return Snippet(EXACT, [f"# {step} was skipped: {reason}."])
+
+
 def _run_errors(p: dict, ctx: _Ctx) -> Snippet:
     """A run that finished with errors (core/step_failures.py): which steps failed and were
     skipped (not in the history, so not replayed), and the earlier results it removed as
@@ -2430,6 +2486,46 @@ def _run_errors(p: dict, ctx: _Ctx) -> Snippet:
     if names.get("raw"):
         code.append("adata.raw = None")
     return Snippet(EXACT, code)
+
+
+def _spatial_autocorr(p: dict, ctx: _Ctx) -> Snippet:
+    genes, src, kind = p.get("genes"), str(p.get("matrix_source") or ""), p.get("neighbors")
+    if isinstance(genes, str):
+        genes = p.get("genes_used") if p.get("genes_used") in ("hvg", "all") else genes
+    ok_genes = genes in ("hvg", "all") or (isinstance(genes, list) and genes)
+    layer = src[len("layer:"):] if src.startswith("layer:") else None
+    if src.startswith("log-normalised .raw"):
+        values = ["M, names = adata.raw.X, adata.raw.var_names"]
+    elif src.startswith("log-normalised X"):
+        values = ["M, names = adata.X, adata.var_names"]
+    elif layer:
+        values = [f"M, names = adata.layers[{_lit(layer)}], adata.var_names"]
+    elif src.startswith("shifted log"):
+        _need(ctx, "find_counts")
+        values = ["counts = sp.csr_matrix(find_counts(adata), dtype=np.float64)",
+                  "totals = np.asarray(counts.sum(axis=1)).ravel()",
+                  "M = sp.csr_matrix(sp.diags(np.divide(1e4, totals, out=np.zeros_like(totals), "
+                  "where=totals > 0)) @ counts)",
+                  "M.data = np.log1p(M.data)",
+                  "names = adata.var_names"]
+    else:
+        values = []
+    if not ok_genes or kind not in ("grid", "knn") or not values:
+        return Snippet(NOT_REPLAYABLE, ["# Spatially variable genes: genes, values or neighbours not recorded. "
+                                        "Recorded:", *_param_comment({x: v for x, v in p.items() if x != "genes"})],
+                       "settings not recorded")
+    _need(ctx, "spatial_autocorr")
+    gene_lines = ([f"SPATIAL_GENES = {_lit(genes)}"] if isinstance(genes, str)
+                  else ["SPATIAL_GENES = [", *_packed([repr(str(g)) for g in genes]), "]"])
+    return Snippet(EXACT, [
+        f"# Spatially variable genes: Moran's I per gene ({'Visium grid' if kind == 'grid' else 'kNN'} "
+        f"neighbours, {p.get('n_neighs', 6)} per spot, within each section), = squidpy 1.6's",
+        "# spatial_neighbors + spatial_autocorr defaults; saved where squidpy saves it.",
+        *values,
+        *gene_lines,
+        f"adata.uns[\"moranI\"] = spatial_moran(adata, M, names, SPATIAL_GENES, "
+        f"{_lit(p.get('library_id'))}, grid={_lit(kind == 'grid')})",
+    ])
 
 
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
@@ -2479,7 +2575,9 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "vdj_attach": _vdj_attach,
     "vdj_clonotypes": _vdj_clonotypes,
     "vdj_remove": _vdj_remove,
+    "spatial_autocorr": _spatial_autocorr,
     "run_errors": _run_errors,
+    "doublet_detection_skipped": _step_skipped,
 }
 
 

@@ -16,7 +16,7 @@ import pandas as pd
 
 from scview.core import (
     category_order, expression_range, haemoglobin, large_layout, large_mode, marker_specificity,
-    protein, scaling,
+    protein, scaling, spatial,
 )
 from scview.core import gene_store as gene_store_mod
 from scview.core import uns_history
@@ -86,7 +86,9 @@ def _counts_matrix(adata):
 # obsm entries named like embeddings that are not coordinates: gene-program usages
 # (core/gene_programs.py), one column per program; inferred copy number (core/cnv.py),
 # one column per genomic window.
-NOT_EMBEDDINGS = ("X_nmf_usage", "X_nmf_usage_raw", "X_cnv")
+# obsm keys with an X_ prefix that are not plots of the cells' expression (X_spatial: tissue
+# coordinates, served as obsm "spatial" by name, never in the embedding list).
+NOT_EMBEDDINGS = ("X_nmf_usage", "X_nmf_usage_raw", "X_cnv", "X_spatial")
 
 
 def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
@@ -264,6 +266,9 @@ class AnnDataAdaptor:
                 # Protein counts that came without the CLR (a converted Seurat ADT
                 # assay, totalVI's obsm): normalised here, in memory.
                 protein.adopt_obsm(adata)
+            # Spatial coordinates in scanpy/squidpy's layout (obs and uns are in memory
+            # even when X is backed): library_id, uns["scview_spatial"].
+            spatial.adopt(adata)
             self._large.opened(self.h5ad_path, large)
             # The markers / enrichment as saved, so a re-run's save keeps the old ones.
             uns_history.capture(self, adata)
@@ -295,6 +300,7 @@ class AnnDataAdaptor:
             if getattr(adata, "isbacked", False):
                 mem = adata.to_memory()  # the arrays already in memory are shared, not copied
                 protein.adopt_obsm(mem)  # as an in-memory open does
+                spatial.adopt(mem)
                 self._adata = mem
                 logger.info("Read %s into memory (%d x %d)", self.h5ad_path, mem.n_obs, mem.n_vars)
             return self._adata

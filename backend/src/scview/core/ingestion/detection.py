@@ -24,7 +24,9 @@ from pathlib import Path
 import h5py
 from pydantic import BaseModel, Field
 
+from scview.core import spatial
 from scview.core.crispr import looks_like_calls
+from scview.core.ingestion import h5seurat
 from scview.core.vdj import sniff_contigs
 
 logger = logging.getLogger(__name__)
@@ -64,9 +66,11 @@ class FileKind(str, Enum):
     tenx_features = "tenx_features"
     dense_table = "dense_table"
     seurat_rds = "seurat_rds"
+    h5seurat = "h5seurat"  # SeuratDisk .h5Seurat (read natively: core/ingestion/h5seurat.py)
     tenx_metrics = "tenx_metrics"  # Cell Ranger metrics_summary.csv: a side file, never loaded
     vdj_contigs = "vdj_contigs"  # TCR/BCR contig table: a side file of a unit (core/vdj.py)
     crispr_calls = "crispr_calls"  # Cell Ranger protospacer_calls_per_cell.csv (core/crispr.py)
+    spatial = "spatial"  # a Space Ranger spatial file: a side file of a unit (core/spatial.py)
     unknown = "unknown"
 
 
@@ -83,7 +87,7 @@ class DetectionResult(BaseModel):
 
     kind: FileKind
     confidence: float = 0.0  # 0..1
-    # anndata | 10x | loom | zarr | matrix_market | table | seurat | hdf5
+    # anndata | 10x | loom | zarr | matrix_market | table | seurat | hdf5 (h5Seurat: seurat)
     format_family: str = ""
     reason: str = ""  # human-readable; feeds user messaging / debugging
     details: dict = Field(default_factory=dict)
@@ -111,6 +115,12 @@ def detect_file(path: Path) -> DetectionResult:
 
     head = _read_head(path, 16)
 
+    # Space Ranger's tissue images, parquet positions and spatial/ archives (before the
+    # text peek: a tar.gz decodes as text).
+    part = spatial.sniff_binary(path, head)
+    if part is not None:
+        return _spatial_result(part)
+
     # HDF5 family: h5ad / 10x .h5 / loom all share this magic.
     if head.startswith(_HDF5_MAGIC):
         return _classify_hdf5(path)
@@ -126,8 +136,24 @@ def detect_file(path: Path) -> DetectionResult:
         )
         return _apply_name_hint(result, name)
 
+    part = spatial.sniff_text(text)
+    if part is not None:
+        return _spatial_result(part, gzipped)
     result = _classify_text(text, gzipped)
     return _apply_name_hint(result, name)
+
+
+def _spatial_result(found: dict, gzipped: bool = False) -> DetectionResult:
+    """A Space Ranger spatial file (``found["part"]``: positions, scalefactors, hires,
+    lowres or archive); an archive without positions is unknown."""
+    details = {k: v for k, v in found.items() if k != "reason"}
+    if gzipped:
+        details["gzipped"] = True
+    if found.get("part") is None:
+        return DetectionResult(kind=FileKind.unknown, confidence=0.3, reason=found["reason"],
+                               details=details)
+    return DetectionResult(kind=FileKind.spatial, confidence=0.95, format_family="spaceranger",
+                           reason=found["reason"], details=details)
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +278,17 @@ def _classify_hdf5(path: Path) -> DetectionResult:
                     confidence=0.95,
                     format_family="anndata",
                     reason="AnnData h5ad (obs / var groups)",
+                    details=details,
+                )
+
+            # SeuratDisk's .h5Seurat: version / active.assay attributes, assays/,
+            # meta.data, cell.names (core/ingestion/h5seurat.py).
+            if h5seurat.is_h5seurat(f):
+                return DetectionResult(
+                    kind=FileKind.h5seurat,
+                    confidence=0.95,
+                    format_family="seurat",
+                    reason="Seurat object saved by SeuratDisk (.h5Seurat)",
                     details=details,
                 )
 

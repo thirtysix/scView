@@ -33,6 +33,7 @@ import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { UnifiedActivitySubtab } from "@/components/unified/UnifiedActivitySubtab";
 import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSubtab";
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
+import { SpatialGenesSubtab } from "@/components/unified/SpatialGenesSubtab";
 import { ReportSubtab } from "@/components/report/ReportSubtab";
 import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
 import { CnvSubtab } from "@/components/unified/CnvSubtab";
@@ -68,6 +69,11 @@ import { decodeArrowBuffer } from "@/lib/arrow";
 import { useQueryClient } from "@tanstack/react-query";
 import { densityLegendNote, lastDensityMeta, overlayGene, overlayWord, showDensity } from "@/lib/density";
 import { useDensityFollow } from "@/hooks/useDensityFollow";
+import { useTissuePositions } from "@/hooks/useTissuePositions";
+import { listedEmbeddings, referenceEmbedding, TISSUE_GRID_REASON, tissueSpatial, unitWord } from "@/lib/spatial";
+import { useTissueViewStore } from "@/stores/tissueViewStore";
+import { SPATIAL_EMBEDDING } from "@/api/spatial";
+import type { TissueMode } from "@/components/plots/EmbeddingScatter";
 
 const SUBTABS = [
   { id: "markers" as const, label: "Markers" },
@@ -84,6 +90,7 @@ const SUBTABS = [
   { id: "cnv" as const, label: "Copy number" },
   { id: "clonotypes" as const, label: "Clonotypes" },
   { id: "perturbation" as const, label: "Perturbation" },
+  { id: "spatial" as const, label: "Spatial genes" },
 ] as const;
 
 interface ViolinResponse {
@@ -140,23 +147,62 @@ export function UnifiedViewPanel() {
   const clearOverlayState = useUnifiedViewStore((s) => s.clearOverlayState);
 
   // --- Embedding data (obs-colored) ---
-  const { positions, colors, numCells, colorColumnName, dimensions, isLoading, error } =
-    useEmbedding();
+  const {
+    positions: embeddingPositions,
+    colors,
+    numCells,
+    colorColumnName,
+    dimensions,
+    isLoading,
+    error,
+    embedding: positionsOf,
+  } = useEmbedding();
+  // The tissue plot (Embedding "Tissue"): one section at a time, the others'
+  // cells without a position (lib/spatial.ts); any other embedding as it is.
+  const tissueInfo = tissueSpatial(embedding, dataset);
+  // Until the tissue's own coordinates are in, the last embedding's (kept while
+  // the next loads) are not drawn as tissue: its camera would blow each spot,
+  // drawn in world units, up to thousands of pixels (a freeze on software WebGL).
+  const tissueCoordsIn = !tissueInfo || positionsOf === SPATIAL_EMBEDDING;
+  const { positions, library: tissueLibrary } = useTissuePositions(
+    dataset,
+    embedding,
+    tissueCoordsIn ? embeddingPositions : null,
+  );
+  const showTissueImage = useTissueViewStore((s) => s.showImage);
+  const tissueImageOpacity = useTissueViewStore((s) => s.imageOpacity);
+  const tissue = useMemo<TissueMode | null>(
+    () =>
+      tissueInfo && tissueLibrary && datasetId
+        ? {
+            datasetId,
+            library: tissueLibrary,
+            showImage: showTissueImage,
+            imageOpacity: tissueImageOpacity,
+            unit: tissueInfo.unit,
+          }
+        : null,
+    [tissueInfo, tissueLibrary, datasetId, showTissueImage, tissueImageOpacity],
+  );
+  const units = unitWord(dataset?.spatial);
 
   // A density overlay is computed again when the plot or layer changes.
   useDensityFollow();
 
   // --- Split-by small multiples (SplitScatterGrid covers the single plot,
   // which stays mounted underneath so leaving the split shows it as it was) ---
+  // The grids draw the embedding only: off (kept, with a note) on the tissue.
   const splitBy = useSplitViewStore((s) => s.splitBy);
-  const splitActive = !!(splitBy && datasetId && positions);
+  const splitActive = !!(splitBy && datasetId && positions) && !tissueInfo;
   // ...or the same cells coloured by 2-4 columns side by side (same machinery)
   const compareColumns = useSplitViewStore((s) => s.compareColumns);
-  const compareActive = !!(compareColumns && datasetId && positions);
+  const compareActive = !!(compareColumns && datasetId && positions) && !tissueInfo;
   // ...or several genes side by side / a two-gene blend (the gene grid's own legends)
   const geneGrid = useSplitViewStore((s) => s.geneGrid);
-  const geneGridActive = !!(geneGrid && geneGrid.datasetId === datasetId && positions);
+  const geneGridActive = !!(geneGrid && geneGrid.datasetId === datasetId && positions) && !tissueInfo;
   const gridActive = splitActive || compareActive || geneGridActive;
+  const gridOffOnTissue =
+    !!tissueInfo && !!(splitBy || compareColumns || (geneGrid && geneGrid.datasetId === datasetId));
 
   // --- Overlay loading flag (transient; values/label persist in the store) ---
   const [isLoadingOverlay, setIsLoadingOverlay] = useState(false);
@@ -188,7 +234,7 @@ export function UnifiedViewPanel() {
 
   useEffect(() => {
     if (!dataset) return;
-    const available = dataset.available_embeddings;
+    const available = listedEmbeddings(dataset);
     if (available.length === 0) {
       setEmbedding("");
     } else if (!available.includes(embedding)) {
@@ -235,6 +281,9 @@ export function UnifiedViewPanel() {
 
   // --- The camera the user moved, linking the main plot and the cluster map ---
   const [viewState, setViewState] = useState<Record<string, unknown> | null>(null);
+  // The tissue and the UMAP are different spaces: neither keeps the other's camera.
+  const tissueOn = !!tissueInfo;
+  useEffect(() => setViewState(null), [tissueOn]);
 
   // The main plot's camera, kept in the store for "Save session"; a camera from
   // "Open session" is shown once this dataset and embedding are on screen.
@@ -482,6 +531,7 @@ export function UnifiedViewPanel() {
   useEffect(() => {
     if (activeSubtab === "protein" && dataset && !dataset.protein) setActiveSubtab("markers");
     if (activeSubtab === "perturbation" && dataset && !dataset.perturbation) setActiveSubtab("markers");
+    if (activeSubtab === "spatial" && dataset && !dataset.spatial) setActiveSubtab("markers");
   }, [activeSubtab, dataset, setActiveSubtab]);
 
   // Default the expression layer to the dataset's default; re-default when the
@@ -929,7 +979,7 @@ export function UnifiedViewPanel() {
     );
   }, [overlayLabel, askCopilot]);
 
-  const hasEmbeddings = dataset != null && dataset.available_embeddings.length > 0;
+  const hasEmbeddings = listedEmbeddings(dataset).length > 0;
 
   // "Download PNG" name + legend, shared by the single plot and the split grid
   const scatterExportName = `${prettyEmbeddingLabel(embedding || "embedding")}_${overlayLabel || colorColumnName || colorBy}`;
@@ -1000,7 +1050,7 @@ export function UnifiedViewPanel() {
           <UnifiedToolbar numCells={numCells} groupSelect={groupSelect} />
           <div className="relative min-h-0 flex-1">
             <div className="h-full w-full rounded-xl border border-slate-200 bg-white shadow-sm">
-            {isLoading && !positions ? (
+            {!positions && (isLoading || !!(tissueInfo && embeddingPositions)) ? (
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
               </div>
@@ -1020,7 +1070,7 @@ export function UnifiedViewPanel() {
                 onViewStateChange={setViewState}
                 restoreViewState={restoreCamera}
                 onRestoreViewState={handleCameraRestored}
-                cameraKey={`${datasetId}:${embedding}`}
+                cameraKey={`${datasetId}:${embedding}${tissueLibrary ? `:${tissueLibrary.id}` : ""}`}
                 onCameraChange={handleCameraChange}
                 onHover={handleHover}
                 dimensions={dimensions}
@@ -1033,7 +1083,13 @@ export function UnifiedViewPanel() {
                 embedding={embedding}
                 axisLabels={embeddingAxisLabels(embedding, pcaDims, dataset?.embedding_dimensions?.[embedding])}
                 onKeyboardSelect={gridActive ? undefined : handleSelectionComplete}
+                tissue={tissue}
               />
+            )}
+            {gridOffOnTissue && (
+              <p role="status" className="absolute left-3 top-3 z-10 max-w-[60%] rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[11px] text-slate-600">
+                {TISSUE_GRID_REASON}.
+              </p>
             )}
             {!gridActive && (
               <LassoSelector
@@ -1044,7 +1100,7 @@ export function UnifiedViewPanel() {
                 onSelectionComplete={handleSelectionComplete}
               />
             )}
-            {splitBy && datasetId && positions && (
+            {splitActive && splitBy && datasetId && positions && (
               <SplitScatterGrid
                 datasetId={datasetId}
                 embedding={embedding}
@@ -1065,7 +1121,7 @@ export function UnifiedViewPanel() {
                 onLassoComplete={handleSelectionComplete}
               />
             )}
-            {compareColumns && datasetId && positions && (
+            {compareActive && compareColumns && datasetId && positions && (
               <CompareColoringsGrid
                 datasetId={datasetId}
                 embedding={embedding}
@@ -1217,7 +1273,7 @@ export function UnifiedViewPanel() {
                   </div>
                 )}
                 <div className={`mb-1 ${lines.length > 0 ? "text-[11px] text-slate-400" : "font-semibold text-slate-700"}`}>
-                  Cell {hoveredCell.index.toLocaleString()}
+                  {units === "spots" ? "Spot" : "Cell"} {hoveredCell.index.toLocaleString()}
                 </div>
                 {hoveredCell.metadata ? (() => {
                   const isEmbeddingCol = (key: string) => {
@@ -1284,25 +1340,27 @@ export function UnifiedViewPanel() {
         <div className="flex min-w-[260px] flex-1 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
           {/* Cluster reference map (half width) + summary card — keeps cluster
               layout + key facts visible while the main plot is recoloured. */}
-          {groupByColumn && positions && datasetId && (
+          {/* On the tissue the map keeps the UMAP (its own coordinates, its own
+              camera): a lasso on the section shows there, a chip lights up spots. */}
+          {groupByColumn && (positions || tissueInfo) && datasetId && (
             <div className="flex flex-shrink-0 items-start gap-2 p-2">
               <div className="w-1/2 min-w-0">
                 <ClusterReference
                   datasetId={datasetId}
-                  embedding={embedding}
+                  embedding={tissueInfo ? (referenceEmbedding(dataset) ?? "") : embedding}
                   column={groupByColumn}
-                  positions={positions}
+                  positions={tissueInfo ? null : positions}
                   dimensions={dimensions}
                   categories={
                     dataset?.obs_columns.find((c) => c.name === groupByColumn)?.values ?? []
                   }
-                  viewState={viewState}
-                  onViewStateChange={setViewState}
+                  viewState={tissueInfo ? null : viewState}
+                  onViewStateChange={tissueInfo ? undefined : setViewState}
                 />
               </div>
               <div className="flex w-1/2 min-w-0 flex-col gap-1.5 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-xs">
                 <div className="text-[11px] font-semibold text-slate-600">Summary</div>
-                <InfoRow label="Cells" value={numCells.toLocaleString()} />
+                <InfoRow label={units === "spots" ? "Spots" : "Cells"} value={numCells.toLocaleString()} />
                 <InfoRow label="Grouping" value={prettyObsLabel(groupByColumn)} />
                 <InfoRow
                   label="Groups"
@@ -1325,7 +1383,10 @@ export function UnifiedViewPanel() {
           {/* Tab bar: wraps onto a second row rather than scrolling, so no tab is cut off */}
           <TabList
             tabs={SUBTABS.filter(
-              (tab) => (tab.id !== "protein" || dataset?.protein) && (tab.id !== "perturbation" || dataset?.perturbation),
+              (tab) =>
+                (tab.id !== "protein" || dataset?.protein) &&
+                (tab.id !== "perturbation" || dataset?.perturbation) &&
+                (tab.id !== "spatial" || dataset?.spatial),
             )}
             active={activeSubtab}
             onChange={setActiveSubtab}
@@ -1415,6 +1476,12 @@ export function UnifiedViewPanel() {
             {activeSubtab === "cnv" && <CnvSubtab />}
             {activeSubtab === "clonotypes" && <ClonotypeSubtab groupByColumn={groupByColumn} />}
             {activeSubtab === "perturbation" && <PerturbationSubtab />}
+            {activeSubtab === "spatial" && dataset?.spatial && (
+              <SpatialGenesSubtab
+                onGeneClick={handleGeneClick}
+                activeGene={scatterOverlay?.type === "expression" && !scatterOverlay.layer ? overlayLabel : null}
+              />
+            )}
           </TabPanel>
         </div>
       </div>

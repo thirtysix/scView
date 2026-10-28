@@ -9,7 +9,7 @@ import { SPLIT_MAX_VALUES, splitColumnOptions } from "@/lib/splitView";
  * one scatter per value. Columns with more values are listed disabled, with
  * the reason, so it is clear why e.g. cell type is not offered.
  */
-export function SplitByControl() {
+export function SplitByControl({ disabledReason = null }: { disabledReason?: string | null } = {}) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const splitBy = useSplitViewStore((s) => s.splitBy);
   const setSplitBy = useSplitViewStore((s) => s.setSplitBy);
@@ -36,9 +36,11 @@ export function SplitByControl() {
         aria-label="Split the plot by"
         value={splitBy ?? ""}
         onChange={(e) => setSplitBy(e.target.value || null)}
-        disabled={allowed.length === 0}
+        disabled={allowed.length === 0 || !!disabledReason}
         title={
-          allowed.length === 0
+          disabledReason
+            ? disabledReason
+            : allowed.length === 0
             ? `No column with 2–${SPLIT_MAX_VALUES} values to split by`
             : `One plot per value (2–${SPLIT_MAX_VALUES} values), sharing the camera, colours and colour scale`
         }

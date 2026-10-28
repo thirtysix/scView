@@ -39,6 +39,36 @@ export interface DatasetInfo {
   large?: LargeDatasetInfo | null;
   /** Where a public dataset came from (a CELLxGENE Discover import), to cite it */
   public_source?: PublicSource | null;
+  /** Spatial coordinates (obsm "spatial", tissue images), or null/absent without them */
+  spatial?: SpatialInfo | null;
+}
+
+/** One tissue image of a spatial library (uns spatial[library].images[res]). */
+export interface SpatialImageInfo {
+  width: number;
+  height: number;
+  /** Image pixels per full-resolution pixel (Space Ranger tissue_*_scalef) */
+  scalef: number;
+}
+
+/** One tissue section (a key of uns spatial; a value of obs library_id). */
+export interface SpatialLibrary {
+  id: string;
+  n_obs: number;
+  images: { lowres?: SpatialImageInfo; hires?: SpatialImageInfo };
+  /** Spot diameter in full-resolution pixels (Visium), else null */
+  spot_diameter_fullres: number | null;
+  /** [xmin, ymin, xmax, ymax] of this library's obsm spatial, full-res pixels */
+  bounds: [number, number, number, number];
+}
+
+/** A dataset's spatial data (backend GET /datasets/{id}, batch 27 contract). */
+export interface SpatialInfo {
+  technology: "visium" | "cells";
+  /** What one observation is: a Visium spot holds several cells */
+  unit: "spot" | "cell";
+  library_column: string;
+  libraries: SpatialLibrary[];
 }
 
 /** How a large dataset's on-disk files are (backend AnnDataAdaptor.large_info). */

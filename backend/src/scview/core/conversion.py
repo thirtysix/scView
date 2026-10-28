@@ -100,6 +100,20 @@ async def trigger_conversion(
     return data
 
 
+def complete_spatial(output_path: str | Path) -> None:
+    """A converted Seurat Visium object whose images kept no array grid (VisiumV2, Seurat
+    >= 5.1): the grid recovered from the spot centres and saved in the .h5ad
+    (``core/seurat_spatial.py``), so it opens as Visium spots. Never raises: the file
+    stays as converted when this fails."""
+    from scview.core import seurat_spatial
+
+    try:
+        if seurat_spatial.complete_converted(output_path):
+            logger.info("Visium grid recovered for %s", Path(output_path).name)
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not complete the spatial data of %s", output_path)
+
+
 def read_progress(path: Path) -> dict | None:
     """The converter's latest stage, or None before it wrote one."""
     try:
@@ -153,6 +167,7 @@ async def convert_upload(
         dm.update_dataset_metadata(dataset_id, {"status": "error", "error_message": str(e)})
         return
 
+    await asyncio.to_thread(complete_spatial, output_path)
     protect(output_path)
     report = result.get("report") if isinstance(result.get("report"), dict) else {}
     dm.update_dataset_metadata(dataset_id, {"status": "ready", "conversion": report})

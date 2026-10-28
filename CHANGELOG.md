@@ -6,6 +6,37 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-10-28
+
+### Added
+- **Spatial transcriptomics (10x Visium).** Import Space Ranger output: the `outs/` folder, or the
+  filtered matrix with its `spatial/` folder or `spatial.tar.gz` (Space Ranger 1.x and 2.x position files,
+  and parquet). Each sample becomes a tissue section with its H&E image, spot positions and spot size;
+  several samples merge into one dataset with one section each. Spatial `.h5ad` files from scanpy, squidpy
+  or spatialdata-io (`obsm["spatial"]` or `X_spatial`) open with their sections and images. Visium HD and
+  Xenium bundles are not supported yet and say so.
+- **Tissue view.** Unified View > Embedding > Tissue draws the spots on the tissue image at their real size,
+  with the same colouring, gene overlays, lasso and cluster highlight as the UMAP. A Section chooser shows
+  one section at a time; the image can be hidden or faded, and a sharper image loads when you zoom in. The
+  cluster map beside it keeps the UMAP, so a lasso on the tissue shows there and a cluster chip lights up
+  its spots.
+- **Spatially variable genes.** Unified View > Spatial genes ranks genes by Moran's I on the spots'
+  neighbours (Visium grid or 6 nearest neighbours, never across sections), equal to squidpy's defaults
+  (Moran's I within 4e-13 on the 10x lymph node). All 22,036 genes of the lymph node take about a second.
+  Click a gene to colour the tissue by it; the table downloads as CSV, the run is in History and the
+  replay script, and the co-pilot knows the top genes.
+- **Seurat `.h5Seurat` files** (SeuratDisk) import directly, without R: counts, cell metadata, reductions,
+  an antibody assay as proteins, and Visium images.
+- **A Seurat or SingleCellExperiment `.rds` in the import wizard with other files**: it is converted when
+  the dataset is created, and can be merged with a 10x sample. Seurat Visium objects (`.rds` or
+  `.h5Seurat`) keep their tissue image, spot positions and scale factors and open in the tissue view; the
+  spot grid that Seurat 5.1 objects no longer store is recovered from the spot positions.
+
+### Changed
+- **Doublet detection is skipped on Visium spots** (each spot holds several cells); the assessment says
+  "Not applicable" and History and the replay script show the skip.
+- Seurat objects whose genes are in a Spatial assay (Visium) now convert.
+
 ## [0.45.2] - 2026-10-28
 
 ### Fixed
