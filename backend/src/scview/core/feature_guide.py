@@ -129,9 +129,24 @@ def compact_guide() -> str:
             heads[tab] = f"{tab} ({hint})" if hint else tab
         else:
             items.setdefault(tab, []).append(f"{rest} ({hint})" if hint else rest)
-    lines = [f"- {head}" + (f": {'; '.join(items[tab])}" if tab in items else "")
+    lines = [f"- {head}" + (f": {'; '.join(_shared_parents(items[tab]))}" if tab in items else "")
              for tab, head in heads.items()]
     return "\n".join([*lines, f"- {CLOSING}"])
+
+
+def _shared_parents(entries: list[str]) -> list[str]:
+    """Neighbouring entries under one parent written once: "Activity > TFs; Activity >
+    Pathways" -> "Activity > TFs / Pathways" (keeps the compact guide under its cap)."""
+    out: list[str] = []
+    parent = None
+    for e in entries:
+        head, sep, rest = e.partition(" > ")
+        if sep and head == parent:
+            out[-1] += f" / {rest}"
+        else:
+            out.append(e)
+            parent = head if sep else e.split(" (")[0]
+    return out
 
 
 def full_guide() -> str:
