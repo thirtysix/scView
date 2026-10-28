@@ -59,6 +59,7 @@ from scview.api.v1 import (
     spatial_autocorr,
     pathways,
     tf_motifs,
+    gwas,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -119,3 +120,4 @@ api_router.include_router(spatial.router, tags=["spatial"])
 api_router.include_router(spatial_autocorr.router, tags=["spatial"])
 api_router.include_router(pathways.router, tags=["pathways"])
 api_router.include_router(tf_motifs.router, tags=["activity"])
+api_router.include_router(gwas.router, tags=["gwas"])

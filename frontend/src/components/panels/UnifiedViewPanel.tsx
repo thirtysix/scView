@@ -34,6 +34,7 @@ import { UnifiedActivitySubtab } from "@/components/unified/UnifiedActivitySubta
 import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSubtab";
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
 import { SpatialGenesSubtab } from "@/components/unified/SpatialGenesSubtab";
+import { TraitsSubtab } from "@/components/unified/TraitsSubtab";
 import { ReportSubtab } from "@/components/report/ReportSubtab";
 import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
 import { CnvSubtab } from "@/components/unified/CnvSubtab";
@@ -91,6 +92,7 @@ const SUBTABS = [
   { id: "clonotypes" as const, label: "Clonotypes" },
   { id: "perturbation" as const, label: "Perturbation" },
   { id: "spatial" as const, label: "Spatial genes" },
+  { id: "traits" as const, label: "Traits" },
 ] as const;
 
 interface ViolinResponse {
@@ -1481,6 +1483,14 @@ export function UnifiedViewPanel() {
               <SpatialGenesSubtab
                 onGeneClick={handleGeneClick}
                 activeGene={scatterOverlay?.type === "expression" && !scatterOverlay.layer ? overlayLabel : null}
+              />
+            )}
+            {activeSubtab === "traits" && (
+              <TraitsSubtab
+                onGeneClick={handleGeneClick}
+                activeGene={scatterOverlay?.type === "expression" && !scatterOverlay.layer ? overlayLabel : null}
+                groupByColumn={groupByColumn}
+                setGroupByColumn={setGroupByColumn}
               />
             )}
           </TabPanel>
