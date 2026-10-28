@@ -100,6 +100,7 @@ _FACET_HINTS = {
         "pseudobulk", "pseudo-bulk", "voom", "ruv", "differential", "change",
         "cytokine", "cytosig", "milode",
         "audit", "false positive", "pseudoreplicat", "shuffle",
+        "deconvol", "bulk",
     ),
     "enrichment": ("enrichment", "pathway", "gsea", "go term", "ontology"),
     "qc": (
@@ -132,7 +133,7 @@ _RESULT_FACET_HINTS = {
         "cytokine", "cytosig", "milo", "neighbourhood", "neighborhood", "pseudobulk",
         "pseudo-bulk", "voom", "ruv", "crispr", "guide", "knockout", "knock-out", "knocked out",
         "perturb", "mixscape", "ligand", "receptor", "communicat", "composition", "proportion",
-        "de audit", "donor shuffle",
+        "de audit", "donor shuffle", "deconvol", "bulk",
     ),
     "markers": ("gene program", "programs", "nmf"),
 }

@@ -115,6 +115,7 @@ async def test_a_cut_off_reply_is_used_not_the_heuristic(monkeypatch):
     ("Which knockouts worked in the CRISPR screen?", "groups"),
     ("What do the gene programs mean?", "markers"),
     ("Which ligand-receptor pairs stand out?", "groups"),
+    ("What did the bulk deconvolution find?", "groups"),
 ])
 def test_named_results_add_their_facet_to_a_classified_route(q, facet):
     assert facet in named_result_facets(q)
