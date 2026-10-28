@@ -115,7 +115,8 @@ def check_body(c: dc.CheckResult) -> dict[str, Any]:
         "overall": [{k: (_num(v) if k in ("r", "rmse", "bias") else v) for k, v in o.items()} for o in c.overall],
         "per_type": [{"method": row.method, "cell_type": row.cell_type, "r": _num(row.r), "rmse": _num(row.rmse),
                       "bias": _num(row.bias), "n": int(row.n)} for row in c.per_type.itertuples(index=False)],
-        "points": points, "points_capped": capped, "n_points": int(len(pts)), "notes": c.notes,
+        "points": points, "points_capped": capped,
+        "n_points": {str(m): int(n) for m, n in pts.groupby("method", sort=False).size().items()}, "notes": c.notes,
         "elapsed_seconds": c.elapsed_seconds, "created_at": c.created_at,
     }
 
@@ -189,7 +190,7 @@ async def deconvolution_defaults(dataset_id: str, dm: DatasetManager = Depends(g
         n_donors = int(adata.obs[donor].nunique()) if donor else 0
         return {"celltype_column": ct, "donor_column": donor, "donor_reason": reason, "n_donors": n_donors,
                 "min_donors_weighted": dc.MIN_DONORS_WEIGHTED, "min_donors_check": dc.MIN_DONORS_CHECK,
-                "check_estimate_seconds": round(dc.check_estimate_seconds(n_donors), 1) if n_donors else None,
+                "check_seconds_per_donor": round(dc.check_estimate_seconds(1), 2),
                 "max_bulk_mb": dc.MAX_BULK_BYTES // (1024 * 1024), "max_samples": dc.MAX_BULK_SAMPLES}
 
     return await asyncio.to_thread(_run)
