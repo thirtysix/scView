@@ -275,6 +275,128 @@ def test_not_a_table_and_too_big_are_refused(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# A reference of two conditions (Kang: CTRL bulk against CTRL + STIM cells)
+# ---------------------------------------------------------------------------
+
+CTYPES = ["B", "Mk", "Mono", "T"]  # the reference's (natural) order
+CSIZES = {"B": 1500.0, "T": 1000.0, "Mono": 4000.0, "Mk": 1500.0}
+CTRUTH = {"s1": {"B": 0.4, "T": 0.3, "Mono": 0.28, "Mk": 0.02}, "s2": {"B": 0.2, "T": 0.5, "Mono": 0.28, "Mk": 0.02},
+          "s3": {"B": 0.3, "T": 0.3, "Mono": 0.38, "Mk": 0.02}}
+
+
+def two_conditions(seed: int = 0, n_genes: int = 400, n_ifn: int = 30, fold: float = 60.0, n_donors: int = 4):
+    """STIM raises 30 response genes 60x in B, T and Mono, not in the small, broad Mk type
+    (as interferon in Kang); (AnnData with cell_type, donor, stim; bulk(fractions, seed, cond))."""
+    rng = np.random.default_rng(seed)
+    order = ["B", "T", "Mono", "Mk"]
+    theta = rng.gamma(0.6, 1.0, size=(n_genes, 4))
+    theta /= theta.sum(axis=0)
+    theta[:, 3] = theta[:, :3].mean(axis=1) * np.exp(rng.normal(0, 0.1, n_genes))  # Mk: broad
+    for k in range(3):
+        theta[20 + k * 25:20 + (k + 1) * 25, k] *= 25
+    theta[95:105, 3] *= 3
+    theta /= theta.sum(axis=0)
+    ifn = np.arange(n_genes - n_ifn, n_genes)
+    sizes = np.array([CSIZES[t] for t in order])
+
+    def profile(r, cond):
+        prof = theta * np.exp(r.normal(0, 0.05, size=(n_genes, 1)))
+        if cond == "STIM":
+            prof[np.ix_(ifn, [0, 1, 2])] *= fold
+        return prof / prof.sum(axis=0)
+
+    n_of = {"B": 60, "T": 80, "Mono": 70, "Mk": 6}
+    blocks, ct, donor, stim = [], [], [], []
+    for d in range(n_donors):
+        for cond in ("CTRL", "STIM"):
+            prof = profile(rng, cond)
+            for k, t in enumerate(order):
+                blocks.append(rng.poisson(prof[:, k] * sizes[k], size=(n_of[t], n_genes)))
+                ct += [t] * n_of[t]
+                donor += [f"D{d}"] * n_of[t]
+                stim += [cond] * n_of[t]
+    X = sp.csr_matrix(np.vstack(blocks).astype(np.float32))
+    obs = pd.DataFrame({"cell_type": pd.Categorical(ct), "donor": pd.Categorical(donor),
+                        "stim": pd.Categorical(stim)}, index=[f"c{i}" for i in range(X.shape[0])])
+    obs["orig_ident"] = obs["stim"]  # Kang repeats the condition under another name
+    a = ad.AnnData(X=X, obs=obs, var=pd.DataFrame(index=[f"G{i}" for i in range(n_genes)]))
+
+    def bulk(fr: dict, s: int, cond: str = "CTRL", n_cells: int = 5000) -> np.ndarray:
+        r = np.random.default_rng(s)
+        n_k = np.array([fr[t] for t in order]) * n_cells
+        return r.poisson(profile(r, cond) @ (n_k * sizes)).astype(np.float64)
+
+    return a, bulk, list(a.var_names)
+
+
+def _ctrl_bulk(bulk, names) -> bytes:
+    return _tsv(names, {s: bulk(p, 10 + i) for i, (s, p) in enumerate(CTRUTH.items())})
+
+
+@pytest.mark.parametrize("method", ["weighted", "nnls"])
+def test_condition_mismatch_is_flagged_and_matching_cells_fix_it(method):
+    a, bulk, names = two_conditions()
+    raw = _ctrl_bulk(bulk, names)
+    mixed = dc.run(a, raw, "b.tsv", celltype_column="cell_type", donor_column="donor", method=method)
+    est = mixed.fractions.pivot(index="sample", columns="cell_type", values="cell_fraction")
+    assert (est["Mk"] >= 0.2).all()  # truth 0.02: Mk absorbs the missing response
+    assert {f["cell_type"] for f in mixed.flags} == {"Mk"} and len(mixed.flags) == 3
+    assert mixed.flags[0]["reference_share"] == pytest.approx(6 / 216, abs=1e-6)
+    warn = [w for w in mixed.warnings if w.startswith("Mk is ")]
+    assert len(warn) == 1 and "in 3 of 3 samples but 3% of the reference cells" in warn[0]
+    assert "Try restricting the reference cells" in warn[0]
+    assert mixed.reference_cells is None
+
+    ctrl = dc.run(a, raw, "b.tsv", celltype_column="cell_type", donor_column="donor", method=method,
+                  cells_column="stim", cells_value="CTRL")
+    assert ctrl.reference_cells == {"column": "stim", "value": "CTRL", "n_cells": 4 * 216}
+    assert ctrl.n_reference_cells == 4 * 216 and not ctrl.flags
+    est = ctrl.fractions.pivot(index="sample", columns="cell_type", values="cell_fraction").loc[list(CTRUTH), CTYPES]
+    truth = pd.DataFrame(CTRUTH).T.loc[list(CTRUTH), CTYPES]
+    np.testing.assert_allclose(est.to_numpy(), truth.to_numpy(), atol=0.05)
+
+
+def test_flags_need_both_a_large_fraction_and_a_large_ratio():
+    share = np.array([0.5, 0.02, 0.1])
+    P = np.array([[0.6, 0.15, 0.25], [0.2, 0.3, 0.5]])
+    flags = dc.absorber_flags(["a", "b"], ["X", "Y", "Z"], P, share)
+    # a: X 0.6 is only 1.2x its share, Y 0.15 under 20%; b: Y 0.3 = 15x, Z 0.5 = 5x.
+    assert [(f["sample"], f["cell_type"]) for f in flags] == [("b", "Y"), ("b", "Z")]
+    assert dc.absorber_warnings(flags[:1], 2, restricted=True)[0].startswith("Y is 30% in b but 2% of the reference")
+
+
+def test_reference_columns_offer_the_conditions_once():
+    a, _, _ = two_conditions()
+    cols = dc.reference_columns(a, exclude=("cell_type", "donor"))
+    assert [c["column"] for c in cols] == ["stim"]  # orig_ident repeats it
+    assert {v["value"]: v["n_cells"] for v in cols[0]["values"]} == {"CTRL": 864, "STIM": 864}
+
+
+def test_reference_cells_must_exist():
+    a, _, _ = two_conditions()
+    with pytest.raises(dc.DeconvolutionError, match="No cells have stim = LPS"):
+        dc.build_reference(a, "cell_type", "donor", "stim", "LPS")
+    with pytest.raises(dc.DeconvolutionError, match="not found"):
+        dc.build_reference(a, "cell_type", "donor", "nope", "x")
+    with pytest.raises(dc.DeconvolutionError, match="Pick which value"):
+        dc.build_reference(a, "cell_type", "donor", "stim", "")
+
+
+def test_self_check_and_export_use_the_reference_cells():
+    a, _, _ = two_conditions()
+    c = dc.check(a, celltype_column="cell_type", donor_column="donor", n_mixtures=3, cells_column="stim",
+                 cells_value="CTRL")
+    assert c.reference_cells["value"] == "CTRL"
+    assert any("condition or tissue the reference does not match is not tested" in n for n in c.notes)
+    data = b"".join(dc.iter_reference_zip(a, celltype_column="cell_type", donor_column="donor",
+                                          cells_column="stim", cells_value="CTRL"))
+    z = zipfile.ZipFile(io.BytesIO(data))
+    cells = pd.read_csv(io.BytesIO(z.read("cells.tsv")), sep="\t")
+    assert len(cells) == 864 and set(cells["cell_id"]) == set(a.obs_names[a.obs["stim"] == "CTRL"])
+    assert "with stim = CTRL" in z.read("README.txt").decode()
+
+
+# ---------------------------------------------------------------------------
 # The self-check
 # ---------------------------------------------------------------------------
 
@@ -479,6 +601,43 @@ async def test_api_self_check_stream_and_last(client, dataset_manager):
     assert r.status_code == 422 and "3+ donors" in r.json()["detail"]
     r = await client.post(f"{url}/validate", json={"n_mixtures": 1000})
     assert r.status_code == 422
+
+
+async def test_api_reference_cells_option_flags_and_fact(client, dataset_manager):
+    a, bulk, names = two_conditions()
+    did = _register(dataset_manager, a, "dc6")
+    url = f"{API}/datasets/{did}/deconvolution"
+    d = (await client.get(f"{url}/defaults")).json()
+    assert [c["column"] for c in d["reference_columns"]] == ["stim"]
+    raw = _ctrl_bulk(bulk, names)
+    body = (await client.post(f"{url}/upload", files={"file": ("b.tsv", raw)},
+                              data={"options": json.dumps({"method": "weighted"})})).json()
+    assert body["reference_cells"] is None and all(s["flagged"] == ["Mk"] for s in body["samples"])
+    assert body["flags"][0]["cell_type"] == "Mk" and any(w.startswith("Mk is ") for w in body["warnings"])
+    lines, _ = dc.grounding_lines(await dataset_manager.get_or_load_dataset(did))
+    assert any(ln.startswith("- Doubtful estimates: Mk is ") for ln in lines)
+
+    opts = {"method": "weighted", "cells_column": "stim", "cells_value": "CTRL"}
+    r = await client.post(f"{url}/upload", data={"options": json.dumps(opts)})  # the kept file again
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["reference_cells"] == {"column": "stim", "value": "CTRL", "n_cells": 864}
+    assert not body["flags"] and all(not s["flagged"] for s in body["samples"])
+    assert all(s["cell_fractions"]["Mk"] < 0.06 for s in body["samples"])
+    lines, detail = dc.grounding_lines(await dataset_manager.get_or_load_dataset(did))
+    assert "with stim = CTRL" in detail and any("Reference cells: only those with stim = CTRL" in ln for ln in lines)
+    adata = (await dataset_manager.get_or_load_dataset(did)).adata
+    step = [h for h in provenance.read_provenance(adata)["history"] if h["step"] == dc.STEP][-1]
+    assert step["params"]["reference_cells"] == {"column": "stim", "value": "CTRL"}
+
+    r = await client.post(f"{url}/validate", json={"n_mixtures": 2, "cells_column": "stim", "cells_value": "STIM"})
+    res = dict(_sse(r.text))["result"]
+    assert res["reference_cells"]["value"] == "STIM"
+    r = await client.get(f"{url}/reference.zip", params={"cells_column": "stim", "cells_value": "CTRL"})
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    assert r.status_code == 200 and len(pd.read_csv(io.BytesIO(z.read("cells.tsv")), sep="\t")) == 864
+    r = await client.post(f"{url}/upload", data={"options": json.dumps({"cells_column": "stim", "cells_value": "X"})})
+    assert r.status_code == 422 and "No cells have stim = X" in r.json()["detail"]
 
 
 async def test_api_reference_zip(client, dataset_manager):

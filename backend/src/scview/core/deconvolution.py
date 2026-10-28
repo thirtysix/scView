@@ -86,6 +86,12 @@ TOL = 1e-3
 W_CAP_QUANTILE = 0.99
 SIGMA2_FLOOR_QUANTILE = 0.01
 MARKERS_PER_TYPE = 50
+# A type estimated at >= ABSORB_MIN of a sample and >= ABSORB_RATIO times its share of the
+# reference cells is flagged: on Kang, CTRL bulk against a CTRL+STIM reference came out
+# 60-75% Mk (2% of the cells), the fit using the least interferon-responsive type to absorb
+# the missing response.
+ABSORB_MIN = 0.2
+ABSORB_RATIO = 5.0
 MIN_MARKER_CPM = 10.0  # a fallback marker must reach this in its own type
 
 # The bulk file.
@@ -182,6 +188,13 @@ class Reference:
     cell_type: np.ndarray  # per cell: type code, -1 not in the reference
     cell_donor: np.ndarray  # per cell: donor code, -1 none
     notes: list[str] = field(default_factory=list)
+    cells_filter: dict[str, Any] | None = None  # {"column", "value", "n_cells"}: the reference cells
+
+    @property
+    def type_share(self) -> np.ndarray:
+        """Each type's share of the reference cells."""
+        n = np.bincount(self.group_type, weights=self.group_cells, minlength=len(self.types))
+        return n / max(1.0, float(n.sum()))
 
     @property
     def n_cells(self) -> int:
@@ -217,11 +230,34 @@ def default_donor_column(adata) -> tuple[str | None, str | None]:
     return (col, why) if why == "donor" else (None, None)
 
 
-def build_reference(adata, celltype_column: str | None = None, donor_column: str | None = None) -> Reference:
+def reference_columns(adata, exclude: tuple[str | None, ...] = ()) -> list[dict[str, Any]]:
+    """Condition-like columns (``confounding.condition_columns``) to restrict the reference
+    cells by, with their values; a column that only repeats another (Kang's orig_ident is
+    stim) is left out."""
+    from scview.core.confounding import condition_columns
+
+    obs = adata.obs
+    out, seen = [], set()
+    for col in condition_columns(obs):
+        if col in exclude:
+            continue
+        s = obs[col].astype(str).where(obs[col].notna())
+        key = tuple(pd.factorize(s)[0].tolist())
+        if key in seen:
+            continue
+        seen.add(key)
+        vc = s.value_counts()
+        out.append({"column": col, "values": [{"value": str(v), "n_cells": int(n)} for v, n in vc.items()]})
+    return out
+
+
+def build_reference(adata, celltype_column: str | None = None, donor_column: str | None = None,
+                    cells_column: str | None = None, cells_value: str | None = None) -> Reference:
     """The open dataset's counts summed per donor x cell type.
 
     ``celltype_column`` None: an author cell-type column, else the clustering;
-    ``donor_column`` None detects the donors, "" means none."""
+    ``donor_column`` None detects the donors, "" means none; ``cells_column`` =
+    ``cells_value`` keeps only those cells (one condition, to match the bulk samples)."""
     from scview.core.de_composition import default_column
     from scview.core.pseudobulk import PseudobulkError, raw_counts
 
@@ -250,6 +286,17 @@ def build_reference(adata, celltype_column: str | None = None, donor_column: str
     notes: list[str] = []
     labels = obs[ct]
     lab = labels.astype(str).where(labels.notna()).to_numpy(dtype=object)
+    cells_filter: dict[str, Any] | None = None
+    if cells_column:
+        if cells_column not in obs.columns:
+            raise DeconvolutionError(f"Column '{cells_column}' not found.")
+        if cells_value is None or cells_value == "":
+            raise DeconvolutionError(f"Pick which value of '{cells_column}' the reference cells have.")
+        keep = (obs[cells_column].astype(str) == str(cells_value)).to_numpy() & obs[cells_column].notna().to_numpy()
+        if not keep.any():
+            raise DeconvolutionError(f"No cells have {cells_column} = {cells_value}.")
+        lab = np.where(keep, lab, None)
+        cells_filter = {"column": cells_column, "value": str(cells_value), "n_cells": int(keep.sum())}
     vc = pd.Series(lab).dropna().value_counts()
     small = [str(t) for t, n in vc.items() if n < MIN_TYPE_CELLS]
     types = sorted((str(t) for t, n in vc.items() if n >= MIN_TYPE_CELLS), key=_natural)
@@ -294,7 +341,7 @@ def build_reference(adata, celltype_column: str | None = None, donor_column: str
         group_donor=(used // len(types)).astype(np.int64) if donors else np.full(used.size, -1, dtype=np.int64),
         group_cells=group_cells, totals=P.sum(axis=1), celltype_column=ct, donor_column=donor_column or None,
         donor_reason=reason if donor_column else None, counts_source=source, cell_type=cell_type,
-        cell_donor=cell_donor, notes=notes,
+        cell_donor=cell_donor, notes=notes, cells_filter=cells_filter,
     )
 
 
@@ -782,14 +829,47 @@ class Result:
     elapsed_seconds: float = 0.0
     created_at: float = 0.0
     cells: str = ""
+    reference_cells: dict[str, Any] | None = None  # {"column", "value", "n_cells"}, None: all cells
+    type_share: list[float] = field(default_factory=list)  # each type's share of the reference cells
+    flags: list[dict[str, Any]] = field(default_factory=list)  # sample, cell_type, fraction, reference_share
+
+
+def absorber_flags(samples: list[str], types: list[str], P: np.ndarray, share: np.ndarray) -> list[dict[str, Any]]:
+    """(sample, type) whose estimated cell fraction is >= ABSORB_MIN and >= ABSORB_RATIO times
+    the type's share of the reference cells: likely soaking up a sample-reference difference."""
+    out = []
+    for i, s in enumerate(samples):
+        for k, t in enumerate(types):
+            p = P[i, k]
+            if np.isfinite(p) and p >= ABSORB_MIN and p >= ABSORB_RATIO * share[k]:
+                out.append({"sample": s, "cell_type": t, "fraction": float(p), "reference_share": float(share[k])})
+    return out
+
+
+def absorber_warnings(flags: list[dict[str, Any]], n_samples: int, restricted: bool) -> list[str]:
+    """One sentence per flagged type."""
+    out = []
+    by_type: dict[str, list[dict]] = {}
+    for f in flags:
+        by_type.setdefault(f["cell_type"], []).append(f)
+    for t, fs in by_type.items():
+        lo, hi = min(f["fraction"] for f in fs), max(f["fraction"] for f in fs)
+        span = f"{lo:.0%}" if round(lo, 2) == round(hi, 2) else f"{lo:.0%}-{hi:.0%}"
+        where = f"in {fs[0]['sample']}" if len(fs) == 1 else f"in {len(fs)} of {n_samples} samples"
+        out.append(f"{t} is {span} {where} but {fs[0]['reference_share']:.0%} of the reference cells: the fit may be "
+                   "using it to absorb a difference between the sample and the reference (a condition or tissue "
+                   "the reference does not match)."
+                   + ("" if restricted else " Try restricting the reference cells to the matching condition."))
+    return out
 
 
 def run(adata, raw: bytes, filename: str, *, celltype_column: str | None = None, donor_column: str | None = None,
-        method: str = "auto", dataset_id: str = "", sha256: str = "", stored_file: str = "") -> Result:
+        method: str = "auto", dataset_id: str = "", sha256: str = "", stored_file: str = "",
+        cells_column: str | None = None, cells_value: str | None = None) -> Result:
     t0 = time.perf_counter()
     if method not in METHODS:
         raise DeconvolutionError(f"Unknown method '{method}' (expected one of {', '.join(METHODS)}).")
-    ref = build_reference(adata, celltype_column, donor_column)
+    ref = build_reference(adata, celltype_column, donor_column, cells_column, cells_value)
     sig = signature(ref)
     ran, why = choose_method(method, sig)
     bulk = parse_bulk(raw, filename, ref)
@@ -814,6 +894,9 @@ def run(adata, raw: bytes, filename: str, *, celltype_column: str | None = None,
                      "shared genes.")
     if ran == "weighted" and any(not f.converged for f in fits if np.isfinite(f.p).all()):
         notes.append(f"Some samples did not settle within {MAX_ITER} rounds; their last estimate is shown.")
+    tshare = ref.type_share[sig.type_index]
+    flags = absorber_flags(bulk.samples, sig.types, np.array([f.p for f in fits]), tshare)
+    warnings = [*bulk.warnings, *absorber_warnings(flags, len(bulk.samples), ref.cells_filter is not None)]
     return Result(
         id=uuid.uuid4().hex[:12], dataset_id=dataset_id, celltype_column=ref.celltype_column,
         donor_column=ref.donor_column, donor_reason=ref.donor_reason, method=ran, method_requested=method,
@@ -825,9 +908,10 @@ def run(adata, raw: bytes, filename: str, *, celltype_column: str | None = None,
         fit=pd.DataFrame(fit_rows, columns=["sample", "r2", "residual", "genes", "iterations", "converged"]),
         n_genes_file=bulk.n_rows, n_genes_matched=bulk.n_matched, gene_share=share,
         n_genes_used=int(markers.size if markers is not None else rows.size), marker_source=marker_source,
-        id_kind=bulk.id_kind, input_kind=bulk.input_kind, warnings=bulk.warnings, notes=notes,
+        id_kind=bulk.id_kind, input_kind=bulk.input_kind, warnings=warnings, notes=notes,
         elapsed_seconds=round(time.perf_counter() - t0, 3), created_at=time.time(),
-        cells=results_store.cells_hash(adata),
+        cells=results_store.cells_hash(adata), reference_cells=ref.cells_filter,
+        type_share=[float(x) for x in tshare], flags=flags,
     )
 
 
@@ -840,7 +924,9 @@ def record(adata, r: Result) -> None:
         params={"bulk_file": r.filename, "sha256": r.sha256, "n_samples": len(r.samples), "method": r.method,
                 "method_requested": r.method_requested, "celltype_column": r.celltype_column,
                 "donor_column": r.donor_column, "n_genes_used": r.n_genes_used, "input_kind": r.input_kind,
-                "result_id": r.id},
+                "reference_cells": ({"column": r.reference_cells["column"], "value": r.reference_cells["value"]}
+                                    if r.reference_cells else None),
+                "n_flagged": len(r.flags), "result_id": r.id},
         resources={"seconds": r.elapsed_seconds},
     )
 
@@ -870,6 +956,7 @@ class CheckResult:
     elapsed_seconds: float = 0.0
     created_at: float = 0.0
     cells: str = ""
+    reference_cells: dict[str, Any] | None = None
 
 
 def check_estimate_seconds(n_donors: int, n_mixtures: int = N_MIXTURES) -> float:
@@ -887,7 +974,8 @@ def _metrics(truth: np.ndarray, est: np.ndarray) -> dict[str, Any]:
 
 def iter_check(adata, *, celltype_column: str | None = None, donor_column: str | None = None, method: str = "auto",
                n_mixtures: int = N_MIXTURES, seed: int = 0, dataset_id: str = "",
-               stop: Callable[[], bool] | None = None) -> Iterator[tuple[str, dict[str, Any] | CheckResult]]:
+               stop: Callable[[], bool] | None = None, cells_column: str | None = None,
+               cells_value: str | None = None) -> Iterator[tuple[str, dict[str, Any] | CheckResult]]:
     """Yields ("progress", {...}) per held-out donor, then ("result", CheckResult)."""
     from scview.core.pseudobulk import raw_counts
 
@@ -896,7 +984,7 @@ def iter_check(adata, *, celltype_column: str | None = None, donor_column: str |
         raise DeconvolutionError(f"Mixtures per donor: 1 to {MAX_MIXTURES}.")
     if method not in METHODS:
         raise DeconvolutionError(f"Unknown method '{method}' (expected one of {', '.join(METHODS)}).")
-    ref = build_reference(adata, celltype_column, donor_column)
+    ref = build_reference(adata, celltype_column, donor_column, cells_column, cells_value)
     if len(ref.donors) < MIN_DONORS_CHECK:
         raise DeconvolutionError(
             f"The self-check holds out one donor at a time, so it needs {MIN_DONORS_CHECK}+ donors "
@@ -969,14 +1057,15 @@ def iter_check(adata, *, celltype_column: str | None = None, donor_column: str |
             per_type.append({"method": meth, "cell_type": t,
                              **_metrics(gt["truth"].to_numpy(), gt["estimate"].to_numpy())})
     notes.append("Mixtures are drawn from this dataset's own cells, so this is optimistic: real bulk samples add "
-                 "platform and protocol differences.")
+                 "platform and protocol differences, and a condition or tissue the reference does not match is not "
+                 "tested here.")
     yield "result", CheckResult(
         id=uuid.uuid4().hex[:12], dataset_id=dataset_id, celltype_column=ref.celltype_column,
         donor_column=str(ref.donor_column), methods=[m for m in methods if m in set(pts["method"])],
         n_mixtures=n_mixtures, seed=seed, donors=ref.donors, types=full.types, overall=overall,
         per_type=pd.DataFrame(per_type, columns=["method", "cell_type", "r", "rmse", "bias", "n"]), points=pts,
         notes=notes, elapsed_seconds=round(time.perf_counter() - t0, 3), created_at=time.time(),
-        cells=results_store.cells_hash(adata),
+        cells=results_store.cells_hash(adata), reference_cells=ref.cells_filter,
     )
 
 
@@ -1038,7 +1127,7 @@ def _tsv(df: pd.DataFrame, index: bool = True) -> bytes:
 README = """scView deconvolution reference
 ==============================
 
-From dataset {dataset} ({n_cells:,} cells, {n_types} cell types in '{celltype}', donors in '{donor}').
+From dataset {dataset} ({n_cells:,} cells{subset}, {n_types} cell types in '{celltype}', donors in '{donor}').
 Raw counts ({source}), linear scale. Cell types: {types}.
 
 matrix.mtx.gz, features.tsv.gz, barcodes.tsv.gz
@@ -1062,12 +1151,13 @@ cell_size.tsv
 
 
 def iter_reference_zip(adata, *, celltype_column: str | None = None, donor_column: str | None = None,
-                       dataset_id: str = "", seed: int = 0, block_cells: int = 5000) -> Iterator[bytes]:
+                       dataset_id: str = "", seed: int = 0, block_cells: int = 5000,
+                       cells_column: str | None = None, cells_value: str | None = None) -> Iterator[bytes]:
     """The reference as a zip, streamed in pieces (bounded memory for any number of cells)."""
     from scview.core.de_composition import default_column
     from scview.core.pseudobulk import raw_counts
 
-    ref = build_reference(adata, celltype_column, donor_column)
+    ref = build_reference(adata, celltype_column, donor_column, cells_column, cells_value)
     M, _, _ = raw_counts(adata)
     sink = _Sink()
     zf = zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True)
@@ -1179,7 +1269,8 @@ def iter_reference_zip(adata, *, celltype_column: str | None = None, donor_colum
                          "n_donors": sig.n_donors})
     zf.writestr("cell_size.tsv", _tsv(size, index=False))
     zf.writestr("README.txt", README.format(
-        dataset=dataset_id or "(this dataset)", n_cells=int(cells.size), n_types=len(ref.types),
+        dataset=dataset_id or "(this dataset)", n_cells=int(cells.size),
+        subset=(f" with {ref.cells_filter['column']} = {ref.cells_filter['value']}" if ref.cells_filter else ""), n_types=len(ref.types),
         celltype=ref.celltype_column, donor=ref.donor_column or "(none)", source=ref.counts_source,
         types=", ".join(ref.types), n_cx=int(chosen.size), cx_cap=CIBERSORTX_CELLS, cx_min=CIBERSORTX_MIN_CELLS,
         seed=seed))
@@ -1246,6 +1337,7 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
         return [], None
     detail = (f"Bulk deconvolution of {r.filename}: {len(r.samples)} samples, {METHOD_NAMES[r.method]}, "
               f"reference {r.celltype_column} ({len(r.types)} types, {r.n_reference_cells:,} cells"
+              + (f" with {r.reference_cells['column']} = {r.reference_cells['value']}" if r.reference_cells else "")
               + (f", {r.n_reference_donors} donors" if r.n_reference_donors else "") + ")")
     lines = [f"\n## Bulk deconvolution (last run) [{TAG}]", f"- {detail} [{TAG}]."]
     f = r.fractions.dropna(subset=["cell_fraction"])
@@ -1258,6 +1350,12 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
     if tops:
         lines.append("- Largest estimated cell fraction per sample: " + "; ".join(tops)
                      + (f" (first 20 of {len(r.samples)})" if len(r.samples) > 20 else "") + ".")
+    if r.reference_cells:
+        lines.append(f"- Reference cells: only those with {r.reference_cells['column']} = "
+                     f"{r.reference_cells['value']} ({r.reference_cells['n_cells']:,} cells).")
+    flagged = absorber_warnings(r.flags, len(r.samples), r.reference_cells is not None)
+    if flagged:
+        lines.append("- Doubtful estimates: " + " ".join(flagged))
     if r.input_kind == "tpm":
         lines.append("- The bulk file was TPM, so these are relative values, nearer RNA fractions.")
     lines.append("- Estimates, not counts: a cell type missing from this dataset cannot be found, and the mixing "

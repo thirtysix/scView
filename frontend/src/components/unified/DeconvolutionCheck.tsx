@@ -82,8 +82,8 @@ export function DeconvolutionCheck({
   const time = aboutSeconds(estimateSeconds);
 
   return (
-    <section className="space-y-2 rounded-lg border border-slate-200 p-2 dark:border-slate-700" aria-label="Self-check">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-200">
+    <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Self-check">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
         Self-check
         <InfoTip label="About the self-check" width={300}>
           Each donor is held out in turn. The reference built from the other donors estimates the held-out
@@ -97,7 +97,7 @@ export function DeconvolutionCheck({
           type="button"
           onClick={run}
           disabled={running || tooFew}
-          className="flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+          className="flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
         >
           {running && <Loader2 className="h-3 w-3 animate-spin" />}
           {running ? "Checking…" : check ? "Check again" : "Run self-check"}
@@ -119,13 +119,17 @@ export function DeconvolutionCheck({
           </span>
         )}
       </div>
+      <p className="text-[11px] text-slate-500">
+        It tests samples made like the reference, so it cannot detect a condition or tissue the reference does not
+        match.
+      </p>
       <RequestError message={error} />
 
       {check && (
         <div className="space-y-2">
           <table className="w-full text-[11px]" aria-label="Self-check overall">
             <thead>
-              <tr className="border-b border-slate-200 text-left text-slate-600 dark:border-slate-700 dark:text-slate-300">
+              <tr className="border-b border-slate-200 text-left text-slate-600">
                 <th className="px-1 py-0.5 font-medium">Method</th>
                 <th className="px-1 py-0.5 text-right font-medium" title="Pearson correlation of estimate and truth, all types">r</th>
                 <th className="px-1 py-0.5 text-right font-medium" title="Root mean squared error, in fraction units (0.05 = 5 points)">RMSE</th>
@@ -133,8 +137,8 @@ export function DeconvolutionCheck({
             </thead>
             <tbody>
               {check.overall.map((o) => (
-                <tr key={o.method} className="border-b border-slate-100 dark:border-slate-800">
-                  <td className="px-1 py-0.5 text-slate-700 dark:text-slate-200">{check.method_names[o.method] ?? o.method}</td>
+                <tr key={o.method} className="border-b border-slate-100">
+                  <td className="px-1 py-0.5 text-slate-700">{check.method_names[o.method] ?? o.method}</td>
                   <td className="px-1 py-0.5 text-right tabular-nums">{num(o.r)}</td>
                   <td className="px-1 py-0.5 text-right tabular-nums">{num(o.rmse, 3)}</td>
                 </tr>
@@ -147,7 +151,7 @@ export function DeconvolutionCheck({
               <select
                 value={shownMethod}
                 onChange={(e) => setMethod(e.target.value)}
-                className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700"
               >
                 {check.methods.map((m) => (
                   <option key={m} value={m}>
@@ -157,10 +161,10 @@ export function DeconvolutionCheck({
               </select>
             </label>
           )}
-          <div className="max-h-56 overflow-auto rounded border border-slate-200 dark:border-slate-700">
+          <div className="max-h-56 overflow-auto rounded border border-slate-200">
             <table className="w-full text-[11px]" aria-label="Self-check per cell type">
-              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
-                <tr className="border-b border-slate-200 text-left text-slate-600 dark:border-slate-700 dark:text-slate-300">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr className="border-b border-slate-200 text-left text-slate-600">
                   <th className="px-1 py-0.5 font-medium">Cell type</th>
                   <th className="px-1 py-0.5 text-right font-medium" title="Pearson correlation of estimate and truth">r</th>
                   <th className="px-1 py-0.5 text-right font-medium" title="Root mean squared error, in fraction units">RMSE</th>
@@ -169,8 +173,8 @@ export function DeconvolutionCheck({
               </thead>
               <tbody>
                 {perType.map((p) => (
-                  <tr key={p.cell_type} className="border-b border-slate-100 dark:border-slate-800">
-                    <td className="px-1 py-0.5 text-slate-700 dark:text-slate-200">{p.cell_type}</td>
+                  <tr key={p.cell_type} className="border-b border-slate-100">
+                    <td className="px-1 py-0.5 text-slate-700">{p.cell_type}</td>
                     <td className="px-1 py-0.5 text-right tabular-nums">{num(p.r)}</td>
                     <td className="px-1 py-0.5 text-right tabular-nums">{num(p.rmse, 3)}</td>
                     <td className="px-1 py-0.5 text-right tabular-nums">{num(p.bias, 3)}</td>

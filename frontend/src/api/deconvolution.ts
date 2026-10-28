@@ -12,6 +12,28 @@ export interface DeconvOptions {
   /** null: detect the donors; "": no donor column */
   donor_column?: string | null;
   method?: DeconvMethod;
+  /** Only cells with cells_column = cells_value (one condition) form the reference */
+  cells_column?: string | null;
+  cells_value?: string | null;
+}
+
+export interface ReferenceCells {
+  column: string;
+  value: string;
+  n_cells: number;
+}
+
+export interface ReferenceColumn {
+  column: string;
+  values: { value: string; n_cells: number }[];
+}
+
+/** A type estimated far above its share of the reference cells in one sample */
+export interface DeconvFlag {
+  sample: string;
+  cell_type: string;
+  fraction: number | null;
+  reference_share: number | null;
 }
 
 export interface DeconvDefaults {
@@ -25,6 +47,8 @@ export interface DeconvDefaults {
   check_seconds_per_donor: number;
   max_bulk_mb: number;
   max_samples: number;
+  /** Condition-like columns to restrict the reference cells by */
+  reference_columns: ReferenceColumn[];
 }
 
 export interface DeconvSample {
@@ -36,6 +60,8 @@ export interface DeconvSample {
   genes: number;
   iterations: number;
   converged: boolean;
+  /** Types flagged in this sample (see DeconvResult.flags) */
+  flagged: string[];
 }
 
 export interface DeconvResult {
@@ -70,6 +96,10 @@ export interface DeconvResult {
   notes: string[];
   elapsed_seconds: number;
   created_at: number;
+  reference_cells: ReferenceCells | null;
+  /** Each type's share of the reference cells */
+  type_share: (number | null)[];
+  flags: DeconvFlag[];
 }
 
 export interface CheckMetric {
@@ -99,6 +129,7 @@ export interface DeconvCheck {
   notes: string[];
   elapsed_seconds: number;
   created_at: number;
+  reference_cells: ReferenceCells | null;
 }
 
 export interface CheckProgress {
@@ -165,10 +196,14 @@ export function deconvolutionCsvUrl(datasetId: string, resultId: string): string
   return `${API_BASE}/datasets/${datasetId}/deconvolution/${resultId}.csv`;
 }
 
-export function referenceZipUrl(datasetId: string, celltypeColumn?: string | null, donorColumn?: string | null): string {
+export function referenceZipUrl(datasetId: string, options: DeconvOptions = {}): string {
   const q = new URLSearchParams();
-  if (celltypeColumn) q.set("celltype_column", celltypeColumn);
-  if (donorColumn != null) q.set("donor_column", donorColumn);
+  if (options.celltype_column) q.set("celltype_column", options.celltype_column);
+  if (options.donor_column != null) q.set("donor_column", options.donor_column);
+  if (options.cells_column && options.cells_value != null) {
+    q.set("cells_column", options.cells_column);
+    q.set("cells_value", options.cells_value);
+  }
   const s = q.toString();
   return `${API_BASE}/datasets/${datasetId}/deconvolution/reference.zip${s ? `?${s}` : ""}`;
 }

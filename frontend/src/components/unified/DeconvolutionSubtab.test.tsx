@@ -24,7 +24,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { DeconvolutionSubtab } from "./DeconvolutionSubtab";
-import { checkScatterTraces, stackedBarTraces, topType } from "@/lib/deconvolution";
+import { cellsKey, checkScatterTraces, parseCellsKey, stackedBarTraces, topType } from "@/lib/deconvolution";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 function setDataset() {
@@ -42,12 +42,16 @@ function setDataset() {
 
 const DEFAULTS: DeconvDefaults = {
   celltype_column: "cell_type", donor_column: "donor", donor_reason: "donor", n_donors: 4, min_donors_weighted: 2,
-  min_donors_check: 3, check_seconds_per_donor: 3.06, max_bulk_mb: 100, max_samples: 1000,
+  min_donors_check: 3, check_seconds_per_donor: 3.06, max_bulk_mb: 100, max_samples: 1000, reference_columns: [],
+};
+const WITH_CONDITIONS: DeconvDefaults = {
+  ...DEFAULTS,
+  reference_columns: [{ column: "stim", values: [{ value: "STIM", n_cells: 520 }, { value: "CTRL", n_cells: 480 }] }],
 };
 
-const sample = (name: string, b: number, r2 = 0.95, converged = true) => ({
+const sample = (name: string, b: number, r2 = 0.95, converged = true, flagged: string[] = []) => ({
   sample: name, cell_fractions: { B: b, T: 1 - b }, rna_fractions: { B: b * 1.5 / (b * 1.5 + (1 - b)), T: 0 },
-  r2, residual: 0.2, genes: 1800, iterations: 6, converged,
+  r2, residual: 0.2, genes: 1800, iterations: 6, converged, flagged,
 });
 const RESULT: DeconvResult = {
   result_id: "r1", method: "weighted", method_name: "MuSiC-style weighted NNLS", method_requested: "auto",
@@ -57,7 +61,13 @@ const RESULT: DeconvResult = {
   n_samples: 2, samples: [sample("s1", 0.4), sample("s2", 0.7, 0.81, false)], n_genes_file: 20000,
   n_genes_matched: 1900, gene_share: 0.95, n_genes_used: 1800, marker_source: null, id_kind: "symbol",
   input_kind: "tpm", warnings: ["These look like TPM: the estimates are relative."], notes: [], elapsed_seconds: 0.3,
-  created_at: 0,
+  created_at: 0, reference_cells: null, type_share: [0.1, 0.9], flags: [],
+};
+const FLAGGED: DeconvResult = {
+  ...RESULT,
+  samples: [sample("s1", 0.6, 0.86, true, ["B"]), sample("s2", 0.1)],
+  flags: [{ sample: "s1", cell_type: "B", fraction: 0.6, reference_share: 0.1 }],
+  warnings: ["B is 60% in s1 but 10% of the reference cells: the fit may be using it to absorb a difference."],
 };
 const CHECK: DeconvCheck = {
   result_id: "c1", celltype_column: "cell_type", donor_column: "donor", methods: ["weighted", "nnls"],
@@ -75,7 +85,7 @@ const CHECK: DeconvCheck = {
     nnls: { type: [0, 1], truth: [0.2, 0.8], estimate: [0.3, 0.7], pseudobulk: [true, true] },
   },
   points_capped: false, n_points: { weighted: 3, nnls: 2 }, notes: ["Mixtures are drawn from this dataset's own cells."],
-  elapsed_seconds: 12, created_at: 0,
+  elapsed_seconds: 12, created_at: 0, reference_cells: null,
 };
 
 beforeEach(() => {
@@ -100,7 +110,7 @@ describe("DeconvolutionSubtab", () => {
     fireEvent.click(run);
     await screen.findByTestId("deconv-result");
     expect(api.runDeconvolution).toHaveBeenCalledWith("d1", file, {
-      celltype_column: "cell_type", donor_column: "donor", method: "nnls",
+      celltype_column: "cell_type", donor_column: "donor", method: "nnls", cells_column: null, cells_value: null,
     });
     expect(screen.getByTestId("bars")).toHaveTextContent("B:40,70|T:60,30");
     expect(screen.getByText(/n = 2 bulk samples; 2 cell types/)).toBeInTheDocument();
@@ -112,6 +122,61 @@ describe("DeconvolutionSubtab", () => {
     expect(screen.getByRole("link", { name: /CSV/ })).toHaveAttribute("href", expect.stringContaining("/deconvolution/r1.csv"));
     // The button now offers a re-run on the kept file.
     expect(screen.getByRole("button", { name: "Run again on bulk.tsv" })).toBeEnabled();
+  });
+
+  it("offers the conditions as reference cells and sends the choice to the run, check and export", async () => {
+    setDataset();
+    api.getDeconvolutionDefaults.mockResolvedValue(WITH_CONDITIONS);
+    api.runDeconvolution.mockResolvedValue({
+      ...RESULT, reference_cells: { column: "stim", value: "CTRL", n_cells: 480 },
+    });
+    api.runDeconvolutionCheck.mockResolvedValue(CHECK);
+    render(<DeconvolutionSubtab />);
+    expect(await screen.findByTestId("cells-hint")).toHaveTextContent(
+      "Your cells come from several conditions; pick the one that matches your bulk samples.");
+    const select = screen.getByLabelText("Reference cells");
+    expect(within(select).getByRole("option", { name: "stim = CTRL (480 cells)" })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: JSON.stringify(["stim", "CTRL"]) } });
+    fireEvent.change(screen.getByLabelText("Bulk expression file"), { target: { files: [new File(["x"], "b.tsv")] } });
+    fireEvent.click(screen.getByRole("button", { name: "Deconvolve" }));
+    await screen.findByTestId("deconv-result");
+    expect(api.runDeconvolution).toHaveBeenCalledWith("d1", expect.any(File), {
+      celltype_column: "cell_type", donor_column: null, method: "auto", cells_column: "stim", cells_value: "CTRL",
+    });
+    expect(screen.getByText(/1,000 cells, 4 donors in .*with stim = CTRL/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Download reference/ }).getAttribute("href")).toContain(
+      "cells_column=stim&cells_value=CTRL");
+    fireEvent.click(screen.getByRole("button", { name: "Run self-check" }));
+    await waitFor(() => expect(api.runDeconvolutionCheck).toHaveBeenCalledWith(
+      "d1", expect.objectContaining({ cells_column: "stim", cells_value: "CTRL" }), expect.anything()));
+  });
+
+  it("restores the reference cells of the last run, and offers none without a condition column", async () => {
+    setDataset();
+    api.getDeconvolutionDefaults.mockResolvedValue(WITH_CONDITIONS);
+    api.getDeconvolution.mockResolvedValue({ ...RESULT, reference_cells: { column: "stim", value: "STIM", n_cells: 520 } });
+    const { unmount } = render(<DeconvolutionSubtab />);
+    await screen.findByTestId("deconv-result");
+    expect(screen.getByLabelText("Reference cells")).toHaveValue(JSON.stringify(["stim", "STIM"]));
+    unmount();
+    api.getDeconvolutionDefaults.mockResolvedValue(DEFAULTS);
+    api.getDeconvolution.mockResolvedValue(null);
+    render(<DeconvolutionSubtab />);
+    await waitFor(() => expect(screen.getByLabelText("Cell types")).toHaveValue("cell_type"));
+    expect(screen.queryByLabelText("Reference cells")).toBeNull();
+    expect(screen.queryByTestId("cells-hint")).toBeNull();
+  });
+
+  it("marks a type far above its share of the reference cells", async () => {
+    setDataset();
+    api.getDeconvolution.mockResolvedValue(FLAGGED);
+    render(<DeconvolutionSubtab />);
+    await screen.findByTestId("deconv-result");
+    expect(screen.getByText(/B is 60% in s1 but 10% of the reference cells/)).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Estimated fractions" });
+    const flagged = within(table).getAllByRole("cell").filter((c) => c.getAttribute("data-flagged"));
+    expect(flagged.map((c) => c.textContent)).toEqual(["60.0% !"]);
+    expect(flagged[0]).toHaveAttribute("title", expect.stringContaining("doubtful"));
   });
 
   it("restores the last run and switches to RNA fractions", async () => {
@@ -150,7 +215,8 @@ describe("DeconvolutionSubtab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run self-check" }));
     expect(await screen.findByTestId("check-progress")).toHaveTextContent("2 of 4 donors held out");
     expect(api.runDeconvolutionCheck).toHaveBeenCalledWith(
-      "d1", { celltype_column: "cell_type", donor_column: null, method: "auto" }, expect.anything());
+      "d1", { celltype_column: "cell_type", donor_column: null, method: "auto", cells_column: null, cells_value: null },
+      expect.anything());
     finish(CHECK);
     const overall = await screen.findByRole("table", { name: "Self-check overall" });
     expect(within(overall).getAllByRole("row")[1]).toHaveTextContent("MuSiC-style weighted NNLS0.970.031");
@@ -177,6 +243,7 @@ describe("DeconvolutionSubtab", () => {
     const link = screen.getByRole("link", { name: /Download reference/ });
     expect(link.getAttribute("href")).toMatch(/\/datasets\/d1\/deconvolution\/reference\.zip\?celltype_column=cell_type&donor_column=$/);
     expect(screen.getByTestId("deconv-caveats")).toHaveTextContent("Cell types absent from this dataset cannot be found");
+    expect(screen.getByText(/cannot detect a condition or tissue the reference does not\s+match/)).toBeInTheDocument();
   });
 });
 
@@ -186,6 +253,19 @@ describe("deconvolution helpers", () => {
     expect(t.map((x) => x.name)).toEqual(["B", "T"]);
     expect(t[0]!.x).toEqual(["s1", "s2"]);
     expect(t[0]!.y[0]).toBeCloseTo(40);
+  });
+
+  it("hatches the flagged segments only", () => {
+    type T = { marker: { pattern?: { shape: string[] } }; customdata: string[] };
+    const [b, t] = stackedBarTraces(FLAGGED, "cell", () => "red") as unknown as T[];
+    expect(b!.marker.pattern?.shape).toEqual(["/", ""]);
+    expect(b!.customdata[0]).toContain("doubtful");
+    expect(t!.marker.pattern).toBeUndefined();
+  });
+
+  it("round-trips the reference-cells choice", () => {
+    expect(parseCellsKey(cellsKey("stim", "CTRL"))).toEqual({ cells_column: "stim", cells_value: "CTRL" });
+    expect(parseCellsKey("")).toEqual({ cells_column: null, cells_value: null });
   });
 
   it("scatters truth against estimate per type and adds the identity line", () => {
