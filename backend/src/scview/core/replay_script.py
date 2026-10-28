@@ -2403,6 +2403,14 @@ def _vdj_remove(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, ["clear(adata)  # every V(D)J column removed"])
 
 
+def _step_skipped(p: dict, ctx: _Ctx) -> Snippet:
+    """A step that does not apply to the data (core/pipeline.py ``StepNotApplicable``:
+    doublet detection on Visium spots): skipped here too, with scView's reason."""
+    step = comment_text(p.get("step") or "this step", 40)
+    reason = comment_text(p.get("reason") or "it does not apply", 160)
+    return Snippet(EXACT, [f"# {step} was skipped: {reason}."])
+
+
 def _run_errors(p: dict, ctx: _Ctx) -> Snippet:
     """A run that finished with errors (core/step_failures.py): which steps failed and were
     skipped (not in the history, so not replayed), and the earlier results it removed as
@@ -2480,6 +2488,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "vdj_clonotypes": _vdj_clonotypes,
     "vdj_remove": _vdj_remove,
     "run_errors": _run_errors,
+    "doublet_detection_skipped": _step_skipped,
 }
 
 

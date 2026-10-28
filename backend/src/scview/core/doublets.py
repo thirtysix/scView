@@ -689,6 +689,10 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
     n = int(adata.n_obs)
     if SCORE not in adata.obs.columns:
         out: dict = {"available": False, "n_cells": n, "suggestion": suggestion}
+        from scview.core import spatial
+
+        if spatial.is_spot_data(adata):  # Visium spots: no doublet step to suggest
+            out["not_applicable"] = spatial.DOUBLET_SKIP
         if CLASSIFIER_CALL in adata.obs.columns:  # the classifier ran alone
             ch, _ = _grouping(adata, column, classifier_record(adata))
             out.update(classifier=_classifier_summary(adata, ch, n_bins), methods=None,
