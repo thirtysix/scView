@@ -20,6 +20,11 @@ import { ClusterReportButton } from "@/components/report/ReportButtons";
  * rest) so you can see exactly which cells a colour change refers to. The
  * highlight is the shared one (selection store): a cluster clicked here also
  * opens in the Markers subtab, and one clicked in the main legend shows here.
+ * Without a highlight it shows the selection (a lasso on the main plot).
+ *
+ * `positions` null: the map draws its own embedding's coordinates (from the
+ * same fetch as the cluster codes). The tissue plot uses this, so the map
+ * keeps showing the UMAP while the main plot shows the section.
  */
 export function ClusterReference({
   datasetId,
@@ -37,7 +42,8 @@ export function ClusterReference({
   positions: Float32Array | null;
   dimensions: 2 | 3;
   categories: string[];
-  /** Linked camera from the main plot (so the two rotate/pan together). */
+  /** Linked camera from the main plot (so the two rotate/pan together); leave
+   *  it out when the main plot shows another space (the tissue). */
   viewState?: Record<string, unknown> | null;
   onViewStateChange?: (vs: Record<string, unknown>) => void;
 }) {
@@ -45,6 +51,9 @@ export function ClusterReference({
   const background = useScatterBackground();
   const slots = useCategorySlots(column);
   const [clusterValues, setClusterValues] = useState<Int32Array | null>(null);
+  const [own, setOwn] = useState<{ positions: Float32Array; dimensions: 2 | 3 } | null>(null);
+  const lassoed = useSelectionStore((s) => s.selectedCellIndices);
+  const needOwn = positions == null;
   const revision = useObsRevision(datasetId, column); // refetch after hand labels
   const ready = useEmbeddingReady(datasetId, embedding);
   const highlightedGroup = useSelectionStore((s) => s.highlightedGroup);
@@ -67,6 +76,7 @@ export function ClusterReference({
   useEffect(() => {
     if (!ready || !column) {
       setClusterValues(null);
+      setOwn(null);
       return;
     }
     let cancelled = false;
@@ -77,23 +87,28 @@ export function ClusterReference({
         const v = decoded[column];
         // Force Int32Array so EmbeddingScatter treats it as categorical.
         if (v) setClusterValues(new Int32Array(v as ArrayLike<number>));
+        setOwn(needOwn ? ownPositions(decoded) : null);
       })
       .catch(() => {
-        if (!cancelled) setClusterValues(null);
+        if (!cancelled) {
+          setClusterValues(null);
+          setOwn(null);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [ready, datasetId, embedding, column, revision]);
+  }, [ready, datasetId, embedding, column, revision, needOwn]);
 
   const selectedIndices = useMemo(() => {
-    if (highlight == null || !clusterValues) return null;
+    if (highlight == null) return lassoed && lassoed.size > 0 ? lassoed : null;
+    if (!clusterValues) return null;
     const s = new Set<number>();
     for (let i = 0; i < clusterValues.length; i++) {
       if (clusterValues[i] === highlight) s.add(i);
     }
     return s;
-  }, [highlight, clusterValues]);
+  }, [highlight, clusterValues, lassoed]);
 
   // Clicking a point selects that cell's cluster — same as clicking its legend
   // chip (toggle off if already highlighted; click empty space to clear).
@@ -110,7 +125,9 @@ export function ClusterReference({
     [clusterValues, highlight, setHighlight],
   );
 
-  if (!positions || !clusterValues) return null;
+  const shownPositions = positions ?? own?.positions ?? null;
+  const shownDimensions = positions ? dimensions : (own?.dimensions ?? 2);
+  if (!shownPositions || !clusterValues) return null;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white">
@@ -125,11 +142,11 @@ export function ClusterReference({
       </div>
       <div className="h-40">
         <EmbeddingScatter
-          positions={positions}
+          positions={shownPositions}
           colorValues={clusterValues}
           colorType="categorical"
           categorySlots={slots}
-          dimensions={dimensions}
+          dimensions={shownDimensions}
           pointSize={1.5}
           selectedIndices={selectedIndices}
           externalViewState={viewState}
@@ -164,4 +181,20 @@ export function ClusterReference({
       </div>
     </div>
   );
+}
+
+/** The embedding's own x, y (and z) from a decoded embedding fetch, interleaved. */
+function ownPositions(
+  decoded: Record<string, Float32Array | Int32Array | Uint8Array>,
+): { positions: Float32Array; dimensions: 2 | 3 } | null {
+  const { x, y, z } = decoded;
+  if (!x || !y) return null;
+  const stride = z ? 3 : 2;
+  const out = new Float32Array(x.length * stride);
+  for (let i = 0; i < x.length; i++) {
+    out[i * stride] = x[i]!;
+    out[i * stride + 1] = y[i]!;
+    if (z) out[i * stride + 2] = z[i]!;
+  }
+  return { positions: out, dimensions: stride };
 }
