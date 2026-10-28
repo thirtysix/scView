@@ -1431,6 +1431,22 @@ def _add_label_term(adaptor, view_context: dict | None, blocks: list[str], sourc
                                   detail=detail, evidence=lines[-1]))
 
 
+def _add_tf_motifs(adaptor, view_context: dict | None, blocks: list[str], sources: list[ChatSource]) -> None:
+    """The last upstream TF candidates run (core/tf_motifs.py), for the highlighted group
+    when it is one of the run's."""
+    from scview.core import tf_motifs
+
+    try:
+        lines, detail = tf_motifs.grounding_lines(adaptor, (view_context or {}).get("highlighted"))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: TF motif grounding failed: %s", exc)
+        return
+    if lines:
+        blocks.append("\n".join(lines))
+        sources.append(ChatSource(kind="result", ref=tf_motifs.TAG, detail=detail or "",
+                                  evidence="\n".join(lines[1:])))
+
+
 def _assemble(
     adaptor,
     *,
@@ -1453,6 +1469,7 @@ def _assemble(
         blocks.append(data_context)
         sources.extend(data_sources)
         _add_label_term(adaptor, view_context, blocks, sources)
+        _add_tf_motifs(adaptor, view_context, blocks, sources)
         _add_screen_facts(adaptor, view_context, blocks, sources)
     if app_context:
         blocks.insert(0, app_context)

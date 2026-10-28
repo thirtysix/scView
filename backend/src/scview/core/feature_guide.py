@@ -69,6 +69,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Activity > TFs (CollecTRI)", "", "transcription factor activity"),
     ("Unified View > Activity > Pathways (PROGENy)", "", "pathway activity"),
     ("Unified View > Activity > Cytokine response", "CytoSig", "CytoSig cytokine response per group"),
+    ("Unified View > Activity > Upstream TF candidates", "motifs",
+     "TFs whose JASPAR motifs are enriched in each group's marker promoters (candidates)"),
     ("Unified View > Gene lists", "", "saved gene lists"),
     ("Unified View > Communication > One run", "ligand-receptor, LIANA",
      "ligand-receptor scores between groups (LIANA consensus)"),

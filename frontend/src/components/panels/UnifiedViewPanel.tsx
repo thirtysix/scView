@@ -1452,6 +1452,7 @@ export function UnifiedViewPanel() {
             {activeSubtab === "activity" && (
               <UnifiedActivitySubtab
                 onScore={handleScoreComplete}
+                onGeneClick={handleGeneClick}
                 groupByColumn={groupByColumn}
                 setGroupByColumn={setGroupByColumn}
               />
