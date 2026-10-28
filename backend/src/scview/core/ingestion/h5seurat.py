@@ -11,8 +11,9 @@ attributes ``version``, ``active.assay``, ``project``; groups ``assays/<assay>/`
 (cells x dims) R matrix as (dims, cells).
 
 The result is what the R converter makes of the same object (``converter/convert.R``,
-so the rest of scView cannot tell the two apart): X the active assay's ``counts``
-(its ``data`` when counts are empty), var the gene names only, obs the meta.data,
+so the rest of scView cannot tell the two apart): X the RNA assay's ``counts`` (a
+Visium object's Spatial assay; its ``data`` when counts are empty; compressed rows,
+where convert.R writes compressed columns), var the gene names only, obs the meta.data,
 obsm ``X_<reduction>``, a CITE-seq assay (ADT, Protein...) as obsm
 ``protein_counts`` (cells x proteins; ``core/protein.py`` adds the CLR). Graphs,
 scale.data, commands and tools are left out. Visium images become obsm/uns
@@ -110,17 +111,18 @@ def read(path: str | Path) -> ad.AnnData:
 
 
 def _main_assay(f: h5py.File) -> str:
-    """The active assay; when that is an antibody assay, RNA (or Spatial) instead, as the
-    genes go in X and the antibodies beside them."""
+    """RNA, as convert.R (an SCT or integrated default assay holds corrected values), else
+    Spatial (a Visium object), else the active assay unless it is antibodies, else the
+    first that is not."""
     assays = list(f["assays"].keys())
     if not assays:
         raise H5SeuratError("The .h5Seurat file holds no assay.")
-    active = _attr(f, "active.assay")
-    if active in assays and active not in ADT_ASSAYS:
-        return active
     for name in ("RNA", "Spatial"):
         if name in assays:
             return name
+    active = _attr(f, "active.assay")
+    if active in assays and active not in ADT_ASSAYS:
+        return active
     return next((a for a in assays if a not in ADT_ASSAYS), assays[0])
 
 

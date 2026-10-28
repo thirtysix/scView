@@ -182,7 +182,7 @@ def attach(adata, slices: list[SeuratSlice]) -> dict | None:
             ("spot_diameter_fullres", "spot"), ("fiducial_diameter_fullres", "fiducial"))
             if _finite(sf.get(src))}
         img = as_uint8_image(s.image)
-        meta = {"source": SOURCE, "spaceranger_version": None, "seurat_image_class": s.image_class}
+        meta = {"source": SOURCE, "seurat_image_class": s.image_class}
         if s.grid_inferred:
             meta["array_grid"] = GRID_INFERRED
         uns[s.name] = {"images": {"lowres": img} if img is not None and
