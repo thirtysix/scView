@@ -448,6 +448,17 @@ def test_download_checks_sha256_and_reports_progress(tmp_path, monkeypatch):
     assert not (other / gc.ASSOC_NAME).exists() and not list(other.glob("*.part"))
 
 
+def test_a_download_in_progress_does_not_block_load(tmp_path):
+    import threading
+
+    out: list = []
+    with gc._prepare_lock:  # as while a download runs
+        t = threading.Thread(target=lambda: out.append(pytest.raises(gc.GwasUnavailable, gc.load, tmp_path)))
+        t.start()
+        t.join(timeout=5)
+    assert out and not t.is_alive()
+
+
 def test_auto_download_flag(monkeypatch):
     monkeypatch.delenv("GWAS_AUTO_DOWNLOAD", raising=False)
     assert gc.auto_download()

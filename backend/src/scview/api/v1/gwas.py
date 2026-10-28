@@ -99,9 +99,10 @@ async def gwas_download(settings: Settings = Depends(get_settings_dep)):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def _catalog(settings: Settings) -> gc.Catalog:
+async def _catalog(settings: Settings) -> gc.Catalog:
+    """The built catalog (read from disk off the event loop the first time), or 409."""
     try:
-        return gc.load(_dest(settings))
+        return await asyncio.to_thread(gc.load, _dest(settings))
     except gc.GwasUnavailable as e:
         raise HTTPException(status_code=409, detail=str(e))
 
@@ -114,7 +115,7 @@ async def gwas_gene(symbol: str, species: str = "", settings: Settings = Depends
         raise HTTPException(status_code=422, detail="Gene symbol too long.")
     if species not in ("", "human", "mouse"):
         raise HTTPException(status_code=422, detail="species must be human or mouse.")
-    cat = _catalog(settings)
+    cat = await _catalog(settings)
 
     def _run() -> dict | None:
         names = [symbol]
@@ -148,7 +149,7 @@ async def gwas_clusters(
     settings: Settings = Depends(get_settings_dep),
 ):
     """The trait overlap of each group's markers; a History step, kept for GET."""
-    cat = _catalog(settings)
+    cat = await _catalog(settings)
     async with dataset_edit(dataset_id) as held:
         adaptor = await dm.get_or_load_dataset(dataset_id)
         if adaptor is None:

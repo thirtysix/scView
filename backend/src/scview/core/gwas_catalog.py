@@ -599,7 +599,8 @@ def prepare(dest: Path, *, allow_download: bool = True, client: httpx.Client | N
     return cat
 
 
-_lock = threading.Lock()
+_lock = threading.Lock()  # the loaded cache (held briefly)
+_prepare_lock = threading.Lock()  # one download / build at a time (held for minutes)
 _loaded: dict[str, tuple[float, Catalog]] = {}
 
 
@@ -609,7 +610,7 @@ def ensure(dest: Path, *, allow_download: bool | None = None, client: httpx.Clie
     downloaded when allowed). Raises ``GwasUnavailable`` saying what to do."""
     allow = auto_download() if allow_download is None else allow_download
     path = cache_path(dest)
-    with _lock:
+    with _prepare_lock:  # never _lock: a status or load request must not wait on a download
         if not path.is_file():
             try:
                 dest.mkdir(parents=True, exist_ok=True)
@@ -624,6 +625,7 @@ def ensure(dest: Path, *, allow_download: bool | None = None, client: httpx.Clie
                 raise GwasUnavailable(
                     f"Fetching or reading the GWAS Catalog failed ({e}). scView fetches it once from "
                     "ftp.ebi.ac.uk; check the internet connection and try again.") from e
+    with _lock:
         return _load_locked(dest)
 
 
