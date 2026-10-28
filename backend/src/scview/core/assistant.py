@@ -223,6 +223,22 @@ def _add_study_planner(adaptor, lines: list[str], sources: list[ChatSource]) -> 
                                   evidence="\n".join(sp_lines[1:])))
 
 
+def _add_spatial_genes(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last spatially variable genes run (core/spatial_autocorr.py, Moran's I),
+    only once one has run on this dataset."""
+    from scview.core import spatial_autocorr
+
+    try:
+        sv_lines, sv_detail = spatial_autocorr.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: spatial genes failed: %s", exc)
+        return
+    if sv_lines:
+        lines.extend(sv_lines)
+        sources.append(ChatSource(kind="result", ref=spatial_autocorr.TAG, detail=sv_detail,
+                                  evidence="\n".join(sv_lines[1:])))
+
+
 def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved gene programs (core/gene_programs.py): k, the stable ones with their
     top genes and best enriched term, only once a run has been saved."""
@@ -796,6 +812,7 @@ def build_grounding_context(
         _add_layout_stability(adaptor, lines, sources)
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
+        _add_spatial_genes(adaptor, lines, sources)
         _add_cnv(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)
@@ -1466,6 +1483,7 @@ _SUBTABS = {
     "genesets": "Gene Sets", "enrichment": "Enrichment", "de": "DE",
     "protein": "Protein", "activity": "Activity", "genelists": "Gene lists",
     "communication": "Communication", "report": "Report",
+    "spatial": "Spatial genes",
 }
 # Compare panel tabs (frontend ComparePanel.tsx: joint | composition | planner, with
 # Milo and miloDE as modes of Composition).

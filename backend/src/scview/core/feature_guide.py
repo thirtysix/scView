@@ -68,6 +68,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Copy number", "CNV", "inferred copy-number score per cell"),
     ("Unified View > Clonotypes", "TCR/BCR", "TCR/BCR repertoire"),
     ("Unified View > Perturbation", "CRISPR, Mixscape", "CRISPR guide calls, Mixscape"),
+    ("Unified View > Spatial genes", "Moran's I, spatial data only",
+     "spatially variable genes (Moran's I) on Visium spots or imaging cells; click a gene to colour the tissue"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),

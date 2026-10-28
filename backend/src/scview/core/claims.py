@@ -645,6 +645,8 @@ _FAMILY_PREFIX = {
     "ontology": "result:ontology",
     "selection": "result:selection", "sel": "result:selection",
     "screen": "result:screen",
+    "spatial_genes": "result:spatial_genes", "spatial": "result:spatial_genes",
+    "moran": "result:spatial_genes",
     "labels": "result:labels:",
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
@@ -691,7 +693,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "cytokines", "cytokine", "cytosig",
                                   "activity", "deaudit", "audit",
                                   "clonotypes", "clonotype", "ppi", "cnv", "ontology",
-                                  "selection", "sel", "screen", "labels")
+                                  "selection", "sel", "screen", "labels", "spatial", "moran")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]
