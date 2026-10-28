@@ -101,6 +101,9 @@ def check_fixture(name: str, exp: dict, res: dict, out: Path) -> None:
     for key in exp.get("uns_metadata", []):
         assert key in a.uns["r_metadata"], (key, list(a.uns["r_metadata"]))
 
+    if "spatial" in exp:
+        check_spatial(a, exp["spatial"], res)
+
     report = a.uns.get("scview_conversion")
     if exp.get("source_class") == "Seurat":
         assert report is None  # the Seurat output is the original one, untouched
@@ -119,6 +122,32 @@ def check_fixture(name: str, exp: dict, res: dict, out: Path) -> None:
         assert part in skipped, f"skipped lacks {part!r}: {skipped}"
     if "object_name" in exp:
         assert report["object_name"] == exp["object_name"]
+
+
+def check_spatial(a, exp: dict, res: dict) -> None:
+    """A Seurat Visium object: obsm spatial (x = Space Ranger's pxl_col_in_fullres, y =
+    pxl_row_in_fullres), library_id, the grid (VisiumV1 only), the low-res image and its
+    scale factor, in uns spatial (scView's contract, scanpy's layout)."""
+    xy = pd.DataFrame({"x": exp["x"], "y": exp["y"]}, index=exp["barcodes"]).loc[a.obs_names]
+    np.testing.assert_allclose(np.asarray(a.obsm["spatial"]), xy.to_numpy())
+    assert list(a.obs["library_id"].cat.categories) == [exp["library"]]
+    if exp.get("grid"):
+        grid = pd.DataFrame(exp["grid"], index=exp["barcodes"]).loc[a.obs_names]
+        assert list(a.obs["array_row"]) == list(grid["row"])
+        assert list(a.obs["array_col"]) == list(grid["col"])
+    else:
+        assert "array_row" not in a.obs  # VisiumV2 keeps none: the backend recovers it
+    entry = a.uns["spatial"][exp["library"]]
+    img = entry["images"]["lowres"]
+    assert img.dtype == np.uint8 and list(img.shape) == exp["image_shape"], (img.dtype, img.shape)
+    _close(float(entry["scalefactors"]["tissue_lowres_scalef"]), exp["lowres"], "lowres scalef")
+    _close(float(entry["scalefactors"]["spot_diameter_fullres"]), exp["spot"], "spot diameter")
+    assert entry["metadata"]["source"] == "seurat"
+    # every spot on the image it is drawn on
+    px = np.asarray(a.obsm["spatial"]) * float(entry["scalefactors"]["tissue_lowres_scalef"])
+    assert (px[:, 0] < img.shape[1]).all() and (px[:, 1] < img.shape[0]).all()
+    kept = " | ".join(map(str, res["report"]["kept"]))
+    assert "tissue positions and image of slice1" in kept, kept
 
 
 def main(out: Path) -> int:

@@ -39,7 +39,8 @@ class UnitFormat(str, Enum):
     loom = "loom"
     zarr = "zarr"
     dense_table = "dense_table"
-    seurat = "seurat"
+    seurat = "seurat"  # an R object: converted by the R converter at commit (session.py)
+    h5seurat = "h5seurat"  # SeuratDisk .h5Seurat, read natively (h5seurat.py)
     unknown = "unknown"
 
 
@@ -76,6 +77,7 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.zarr_dir: (UnitFormat.zarr, FileRole.data),
     FileKind.dense_table: (UnitFormat.dense_table, FileRole.data),
     FileKind.seurat_rds: (UnitFormat.seurat, FileRole.data),
+    FileKind.h5seurat: (UnitFormat.h5seurat, FileRole.data),
     FileKind.mtx_matrix: (None, FileRole.matrix),
     FileKind.tenx_barcodes: (None, FileRole.barcodes),
     FileKind.tenx_features: (None, FileRole.features),
@@ -348,6 +350,7 @@ def _drop_tree_extras(detected, rel, skipped: list[dict]):
     rels = {p: rel(p) for p, _ in detected}
     has_per_sample = any("per_sample_outs" in _dirs(r) for r in rels.values())
     matrix_kinds = {FileKind.tenx_h5, FileKind.anndata_h5ad, FileKind.loom, FileKind.mtx_matrix,
+                    FileKind.h5seurat,
                     FileKind.dense_table}
     matrix_dirs = {_dirs(rels[p]) for p, det in detected if det.kind in matrix_kinds}
     vdj_dirs = set()

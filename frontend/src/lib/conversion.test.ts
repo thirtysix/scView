@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { ConversionReport } from "@/api/types";
-import { conversionHeadline, conversionNote, isRFile, objectPhrase } from "./conversion";
+import { commitConversionNote, conversionHeadline, conversionNote, isRFile, objectPhrase } from "./conversion";
+
+describe("commitConversionNote", () => {
+  it("names the file, which of how many, and the converter's stage", () => {
+    expect(commitConversionNote(null)).toBeNull();
+    expect(commitConversionNote({ file: "obj.rds", index: 1, of: 1, progress: null }))
+      .toBe("obj.rds: Reading the R file… a large object takes a few minutes.");
+    expect(commitConversionNote({
+      file: "b/sce.rds", index: 2, of: 3,
+      progress: { stage: "converting", message: "Converting a Seurat object", source_class: "Seurat" },
+    })).toBe("b/sce.rds (2 of 3): Converting a Seurat object…");
+  });
+});
 
 describe("isRFile", () => {
   it("takes .rds and .RData in any case, nothing else", () => {

@@ -282,5 +282,25 @@ if (requireNamespace("SeuratObject", quietly = TRUE)) {
   )
 }
 
+# ---- 12. Seurat Visium objects (VisiumV1, VisiumV2) -------------------------
+# Made with Seurat 5.1.0 (not in this image) by backend/tests/fixtures/h5seurat/
+# make_fixtures.R: 60 spots of 10x's V1_Human_Lymph_Node, the low-res image at every
+# 10th pixel. The expected positions are Space Ranger's own (visium_positions.csv).
+file_arg <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))
+fixtures <- file.path(dirname(normalizePath(file_arg)), "fixtures")
+pos <- read.csv(file.path(fixtures, "visium_positions.csv"))
+for (v in c("visium_v1", "visium_v2")) {
+  file.copy(file.path(fixtures, paste0(v, ".rds")), file.path(out, paste0(v, ".rds")), overwrite = TRUE)
+  expected[[v]] <- list(
+    n_obs = 60, n_vars = 120, x_format = "csc_matrix",
+    x_sum = sum(attr(readRDS(file.path(out, paste0(v, ".rds"))), "meta.data")$nCount_Spatial),
+    layers = structure(list(), names = character(0)), source_class = "Seurat",
+    spatial = list(barcodes = pos$barcode, x = pos$imagecol, y = pos$imagerow,
+                   library = "slice1", image_shape = c(60, 58, 3),
+                   lowres = 0.051033426 / 10, spot = 89.48996643177776,
+                   grid = if (v == "visium_v1") list(row = pos$row, col = pos$col) else NULL)
+  )
+}
+
 writeLines(jsonlite::toJSON(expected, auto_unbox = TRUE, digits = NA), file.path(out, "expected.json"))
 cat(sprintf("[fixtures] %d fixtures in %s\n", length(expected), out))

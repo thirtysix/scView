@@ -70,19 +70,21 @@ def _validate_unit(unit: IngestUnit) -> list[IngestIssue]:
         issues.extend(_validate_mex(unit))
     issues.extend(_validate_spatial(unit))
     if unit.format == UnitFormat.seurat:
-        # The UI sends a lone .rds to the R converter; mixed with other files it
-        # lands here, where no loader can read it.
+        # Converted by the R converter at commit (session._convert_r_units), then read as
+        # the .h5ad it becomes: nothing of it can be read before, merge plan included.
+        name = unit.files[0].name if unit.files else unit.label
         issues.append(
             IngestIssue(
-                severity=IssueSeverity.error,
-                code="seurat_needs_converter",
+                severity=IssueSeverity.info,
+                code="seurat_converted_at_commit",
                 message=(
-                    "R .rds files (Seurat, SingleCellExperiment) are converted separately, "
-                    "so they can't be combined with other files in one upload."
+                    f"{name} is an R object (Seurat, SingleCellExperiment). The R converter "
+                    "turns it into a dataset when you create it, which takes a few minutes "
+                    "for a large object."
                 ),
                 suggestion=(
-                    "Remove the .rds file here, then add it on its own: it is converted "
-                    "and becomes its own dataset."
+                    "Its cells and genes are read only then, so the merge plan here leaves "
+                    "it out."
                 ),
                 unit_label=unit.label,
             )

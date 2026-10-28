@@ -9,6 +9,10 @@ copies the originals (read-only) into ``uploads/{dataset_id}/``, writes the
 ``metadata.json`` sidecar, and registers the result through the DatasetManager
 so it appears in the picker like any other dataset.
 
+R objects (.rds / .RData) staged with other files are converted at commit by the R
+converter service (``core/conversion.py``), one after another, then read as the .h5ad
+files they become; ``get_state`` names the one converting meanwhile.
+
 Abandoned sessions are removed by :meth:`sweep_expired` (24 h TTL). See
 ``docs/INGESTION_ENGINE.md`` §5.
 """
@@ -29,11 +33,18 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
-from scview.core import crispr, protein, provenance
+from scview.core import conversion, crispr, protein, provenance
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion import streamed
-from scview.core.ingestion.bundling import IngestUnit, SideKind, UnitFormat, build_bundle
-from scview.core.ingestion.detection import is_store_dir
+from scview.core.ingestion.bundling import (
+    BundleFile,
+    FileRole,
+    IngestUnit,
+    SideKind,
+    UnitFormat,
+    build_bundle,
+)
+from scview.core.ingestion.detection import FileKind, is_store_dir
 from scview.core.ingestion.loading import IngestLoadError, load_unit
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.validation import IssueSeverity, validate_bundle
@@ -56,6 +67,8 @@ class StagingConflict(RuntimeError):
 
 # Uploads land under this name first and move into place once the whole request is in.
 PARTIAL_PREFIX = ".scview-partial-"
+# The .h5ad files a commit converts the session's R objects to: <session>/converted/.
+CONVERTED_DIR = "converted"
 
 
 class IngestOptions(BaseModel):
@@ -105,9 +118,10 @@ class StagedPaths(list):
 class IngestSessionManager:
     """Manage ingest staging sessions and commit them into datasets."""
 
-    def __init__(self, data_dir: str) -> None:
+    def __init__(self, data_dir: str, converter_url: str | None = None) -> None:
         self.data_dir = Path(data_dir)
         self.ingest_dir = self.data_dir / "ingest"
+        self.converter_url = converter_url
 
     # -- session lifecycle ------------------------------------------------
 
@@ -244,7 +258,26 @@ class IngestSessionManager:
             "bundle": bundle.model_dump(mode="json"),
             "validation": report.model_dump(mode="json"),
             "options": self.get_options(sid).model_dump(mode="json"),
+            "converting": self._converting(sid),
         }
+
+    def _converting(self, sid: str) -> dict | None:
+        """The R object a commit is converting now: its file, which of how many, and the
+        converter's latest stage (``progress``); None when none is."""
+        now = self._read_session(sid).get("converting")
+        if not isinstance(now, dict):
+            return None
+        out = {k: v for k, v in now.items() if k != "progress_path"}
+        out["progress"] = conversion.read_progress(Path(now.get("progress_path") or ""))
+        return out
+
+    def _set_converting(self, sid: str, value: dict | None) -> None:
+        data = self._read_session(sid)
+        if value is None:
+            data.pop("converting", None)
+        else:
+            data["converting"] = value
+        self._write_session(sid, data)
 
     def merge_plan(self, sid: str) -> MergePlan | None:
         """Load the units and analyse a multi-sample merge (heavier — reads data)."""
@@ -282,9 +315,12 @@ class IngestSessionManager:
         if not files:
             raise IngestCommitError("No files have been uploaded to this session.")
 
+        # R objects first, each through the R converter: minutes for a large one, an
+        # HTTP call that leaves the event loop free.
+        converted = await self._convert_r_units(sid)
         # Reading, merging and writing the files takes seconds to minutes: in a
         # worker thread, so the server keeps answering meanwhile.
-        dataset_id = await asyncio.to_thread(self._build_dataset, sid)
+        dataset_id = await asyncio.to_thread(self._build_dataset, sid, converted)
         self.discard(sid)  # saved: the staged files are no longer needed
         from scview.core.dataset_manager import DatasetMemoryError
 
@@ -295,15 +331,57 @@ class IngestSessionManager:
             logger.warning("Ingested dataset %s not opened: %s", dataset_id, e)
         return dataset_id
 
-    def _build_dataset(self, sid: str) -> str:
-        """Validate, load, merge and save the staged files as a new dataset."""
-        bundle = self._bundle(sid)
-        report = validate_bundle(bundle)
-        if not report.ok:
-            errs = [i.message for i in report.issues if i.severity == IssueSeverity.error]
-            raise IngestCommitError(errs[0] if errs else "The uploaded files didn't validate.")
+    async def _convert_r_units(self, sid: str) -> dict[str, dict]:
+        """Convert each R object of the session to an .h5ad with the R converter, one at
+        a time: ``{unit label: {"path", "file", "report"}}`` ({} without R objects). A
+        session that does not validate is refused first, so nothing is converted for it."""
+        bundle = await asyncio.to_thread(self._bundle, sid)
+        _raise_if_invalid(bundle)
+        r_units = [u for u in bundle.units if u.format == UnitFormat.seurat and u.files]
+        if not r_units:
+            return {}
+        url = self.converter_url
+        if not url:
+            from scview.config import get_settings
 
-        loadable = [u for u in bundle.units if u.format != UnitFormat.unknown]
+            url = get_settings().CONVERTER_URL
+        out_dir = self._session_dir(sid) / CONVERTED_DIR
+        out_dir.mkdir(parents=True, exist_ok=True)
+        converted: dict[str, dict] = {}
+        try:
+            for i, u in enumerate(r_units, 1):
+                src = u.files[0]
+                shown = src.rel_path or src.name
+                out = out_dir / f"{i:02d}_{_safe_name(u.label)}.h5ad"
+                progress = out_dir / f"{i:02d}_{conversion.PROGRESS_FILE}"
+                self._set_converting(sid, {"label": u.label, "file": shown, "index": i,
+                                           "of": len(r_units), "progress_path": str(progress)})
+                try:
+                    result = await conversion.trigger_conversion(
+                        src.path, str(out), url, progress_path=str(progress))
+                except conversion.ConversionError as e:
+                    raise IngestCommitError(f"{src.name} could not be converted: {e}") from e
+                if not out.is_file():
+                    raise IngestCommitError(f"{src.name} could not be converted: the R converter "
+                                            "wrote no .h5ad file.")
+                await asyncio.to_thread(conversion.complete_spatial, out)
+                report = result.get("report")
+                converted[u.label] = {"path": str(out), "file": shown,
+                                      "report": report if isinstance(report, dict) else {}}
+                logger.info("Converted %s of session %s (%d of %d)", shown, sid, i, len(r_units))
+        finally:
+            self._set_converting(sid, None)
+        return converted
+
+    def _build_dataset(self, sid: str, converted: dict[str, dict] | None = None) -> str:
+        """Validate, load, merge and save the staged files as a new dataset; R objects
+        are read from the .h5ad files ``_convert_r_units`` made of them (``converted``)."""
+        converted = converted or {}
+        bundle = self._bundle(sid)
+        _raise_if_invalid(bundle)
+
+        loadable = [_as_converted(u, converted) for u in bundle.units
+                    if u.format != UnitFormat.unknown]
         if not loadable:
             raise IngestCommitError("No recognisable single-cell dataset was found.")
 
@@ -319,7 +397,7 @@ class IngestSessionManager:
         except IngestCommitError:
             part.unlink(missing_ok=True)
             raise
-        self._record_ingest_provenance(adata, loadable, opts, spatial_params)
+        self._record_ingest_provenance(adata, loadable, opts, spatial_params, converted)
         # Cell Ranger metrics / raw matrices that came with a sample (never raises).
         from scview.core import seq_metrics
 
@@ -334,8 +412,11 @@ class IngestSessionManager:
         skip = {s.path for s in bundle.skipped}
         root = self.files_dir(sid)
         originals = [p for p in self.staged_paths(sid) if _rel_to(p, root) not in skip]
+        # One R object: its report of what was kept shows on Data Assessment, as for a lone .rds.
+        report = next(iter(converted.values()))["report"] if len(converted) == 1 else None
         try:
-            self._persist_dataset(dataset_id, name, adata, originals, root, matrices=matrices)
+            self._persist_dataset(dataset_id, name, adata, originals, root, matrices=matrices,
+                                  conversion_report=report)
         finally:
             part.unlink(missing_ok=True)
         logger.info("Committed ingest session %s as dataset %s (%s)%s", sid, dataset_id, name,
@@ -404,8 +485,19 @@ class IngestSessionManager:
     # -- internals --------------------------------------------------------
 
     def _record_ingest_provenance(self, adata, loadable, opts: IngestOptions,
-                                  spatial_params: dict | None = None) -> None:
-        """Write the source block + an ingest history entry. Never raises."""
+                                  spatial_params: dict | None = None,
+                                  converted: dict[str, dict] | None = None) -> None:
+        """Write the source block + an ingest history entry. Never raises. A converted R
+        object is recorded as the file it came from (format "seurat")."""
+        converted = converted or {}
+
+        def fmt_of(u) -> str:
+            return UnitFormat.seurat.value if u.label in converted else u.format.value
+
+        def names_of(u) -> str:
+            c = converted.get(u.label)
+            return Path(c["file"]).name if c else ", ".join(f.name for f in u.files)
+
         try:
             if len(loadable) > 1:
                 provenance.init_source(
@@ -414,7 +506,7 @@ class IngestSessionManager:
                     original_filename=", ".join(u.label for u in loadable),
                     fmt="merged",
                     merged_from=[
-                        {"sample": u.label, "format": u.format.value, "n_files": len(u.files)}
+                        {"sample": u.label, "format": fmt_of(u), "n_files": len(u.files)}
                         for u in loadable
                     ],
                     merge={
@@ -428,17 +520,19 @@ class IngestSessionManager:
                 provenance.init_source(
                     adata,
                     origin="ingested",
-                    original_filename=", ".join(f.name for f in u.files),
-                    fmt=u.format.value,
+                    original_filename=names_of(u),
+                    fmt=fmt_of(u),
                 )
             provenance.record_step(
                 adata,
                 step="ingest",
                 tool="scview.ingestion",
                 params={
-                    "formats": sorted({u.format.value for u in loadable}),
+                    "formats": sorted({fmt_of(u) for u in loadable}),
                     "genes_in_rows": opts.genes_in_rows,
                     **_protein_params(adata),
+                    **({"converted": [_converted_entry(lab, c) for lab, c in converted.items()]}
+                       if converted else {}),
                     **({"spatial": spatial_params} if spatial_params else {}),
                 },
             )
@@ -520,7 +614,8 @@ class IngestSessionManager:
         return merged
 
     def _persist_dataset(self, dataset_id: str, name: str, adata, originals: list[Path],
-                         root: Path | None = None, matrices: Path | None = None) -> None:
+                         root: Path | None = None, matrices: Path | None = None,
+                         conversion_report: dict | None = None) -> None:
         """``matrices``: the h5 a streamed ingest wrote the matrices to
         (``streamed.ingest``); ``adata`` is then the dataset without them."""
         # Originals → uploads/{id}/ (read-only), the untouched source, in the folders
@@ -569,6 +664,8 @@ class IngestSessionManager:
             "obs_columns": [],
             "source": "ingested",
         }
+        if conversion_report:
+            meta["conversion"] = conversion_report
         with open(up / "metadata.json", "w") as fh:
             json.dump(meta, fh, indent=2)
 
@@ -588,8 +685,13 @@ class IngestSessionManager:
             return json.load(fh)
 
     def _write_session(self, sid: str, data: dict[str, Any]) -> None:
-        with open(self._session_file(sid), "w") as fh:
+        # Written aside and renamed: a commit records the .rds it converts while GET
+        # state reads the file, which must never see half of it.
+        path = self._session_file(sid)
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        with open(tmp, "w") as fh:
             json.dump(data, fh, indent=2)
+        tmp.replace(path)
 
     def _created_at(self, sid: str) -> datetime | None:
         raw = self._read_session(sid).get("created_at")
@@ -597,6 +699,36 @@ class IngestSessionManager:
             return datetime.fromisoformat(raw) if raw else None
         except (TypeError, ValueError):
             return None
+
+
+def _raise_if_invalid(bundle) -> None:
+    report = validate_bundle(bundle)
+    if not report.ok:
+        errs = [i.message for i in report.issues if i.severity == IssueSeverity.error]
+        raise IngestCommitError(errs[0] if errs else "The uploaded files didn't validate.")
+
+
+def _as_converted(unit: IngestUnit, converted: dict[str, dict]) -> IngestUnit:
+    """An R object's unit as the .h5ad the converter made of it; other units as they are."""
+    if unit.format != UnitFormat.seurat:
+        return unit
+    c = converted.get(unit.label)
+    if c is None:
+        raise IngestCommitError(f"{unit.label} is an R object that was not converted.")
+    path = Path(c["path"])
+    return unit.model_copy(update={"format": UnitFormat.anndata, "files": [BundleFile(
+        path=str(path), name=path.name, kind=FileKind.anndata_h5ad, role=FileRole.data,
+        confidence=1.0, rel_path=path.name)]})
+
+
+def _converted_entry(label: str, c: dict) -> dict:
+    """An R object's line in the ingest history entry: its file and what it held."""
+    report = c.get("report") or {}
+    entry = {"sample": label, "file": c.get("file"), "tool": "scView R converter"}
+    for key in ("source_class", "detail"):
+        if report.get(key):
+            entry[key] = report[key]
+    return entry
 
 
 def _link_or_copy(src: Path, dest: Path) -> None:

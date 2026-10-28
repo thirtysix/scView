@@ -143,7 +143,7 @@ class Matrix:
 class Header:
     """A data file's shape and contents, read from its metadata only."""
 
-    format: str  # h5ad | 10x_h5 | mex | loom | zarr | table | rds | unknown
+    format: str  # h5ad | 10x_h5 | mex | loom | zarr | table | rds | h5seurat | unknown
     n_cells: int | None = None
     n_genes: int | None = None
     matrices: list[Matrix] = field(default_factory=list)  # X first
@@ -535,6 +535,35 @@ def _read_rds(path: Path) -> Header:
     return h
 
 
+def _read_h5seurat(path: Path) -> Header:
+    """SeuratDisk's .h5Seurat: X is the active assay's counts (core/ingestion/h5seurat.py),
+    read as float64 compressed rows; the reductions go in obsm."""
+    import h5py
+
+    from scview.core.ingestion import h5seurat
+
+    h = Header("h5seurat")
+    s = h5seurat.summary(path)
+    h.n_cells, h.n_genes = s["n_cells"], s["n_genes"]
+    with h5py.File(path, "r") as f:
+        node = h5seurat.matrix_node(f["assays"][s["assay"]])
+        if isinstance(node, h5py.Group):
+            data, idx = node["data"], node["indices"]
+            h.matrices.append(Matrix("X", h.n_cells, h.n_genes, True, int(data.shape[0]),
+                                     data.dtype.name, idx.dtype.name))
+        else:
+            h.matrices.append(Matrix("X", h.n_cells, h.n_genes, False, h.n_cells * h.n_genes,
+                                     node.dtype.name))
+        for name in s["reductions"]:
+            emb = f["reductions"][name].get("cell.embeddings")
+            if emb is not None and emb.ndim == 2:
+                k = int(min(emb.shape))
+                h.obsm[f"X_{name}"] = [h.n_cells, k]
+                h.obsm_bytes += h.n_cells * k * 8
+        h.obs_columns = len(f["meta.data"].attrs.get("colnames", []))
+    return h
+
+
 def sniff_format(path: Path) -> str:
     """The header reader for a path: by content, then name."""
     path = Path(path)
@@ -560,6 +589,8 @@ def sniff_format(path: Path) -> str:
                     return "loom"
                 if {"obs", "var"} <= keys:
                     return "h5ad"
+                if {"assays", "meta.data", "cell.names"} <= keys and "active.assay" in f.attrs:
+                    return "h5seurat"
                 if any(isinstance(f[k], h5py.Group) and "shape" in f[k] for k in keys):
                     return "10x_h5"  # CellRanger v2: one group per genome
         except (OSError, KeyError, RuntimeError):
@@ -578,7 +609,7 @@ def sniff_format(path: Path) -> str:
 
 _READERS = {
     "h5ad": _read_h5ad, "10x_h5": _read_10x_h5, "mex": _read_mex, "loom": _read_loom,
-    "zarr": _read_zarr, "rds": _read_rds,
+    "zarr": _read_zarr, "rds": _read_rds, "h5seurat": _read_h5seurat,
 }
 
 
@@ -698,6 +729,7 @@ LOAD_FIXED = 20 * MiB
 # and the index arrays widened on the way in). Measured on the formats listed.
 READ_BYTES_PER_VALUE = {
     "h5ad": 0.0, "zarr": 0.0, "10x_h5": 8.0, "mex": 46.0, "loom": 8.0, "table": 28.0,
+    "h5seurat": 8.0,
 }
 # Saving an ingested dataset (gzip h5ad): transient per byte of its matrices.
 WRITE_FRACTION = 0.1
@@ -2100,7 +2132,8 @@ def make_verdict(*, need: int, peak: int, stage: str, seconds: tuple[float, floa
 # ---------------------------------------------------------------------------
 
 _UNIT_FORMATS = {"tenx_mex": "mex", "tenx_h5": "10x_h5", "anndata": "h5ad", "loom": "loom",
-                 "zarr": "zarr", "dense_table": "table", "seurat": "rds"}
+                 "zarr": "zarr", "dense_table": "table", "seurat": "rds",
+                 "h5seurat": "h5seurat"}
 
 
 def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
