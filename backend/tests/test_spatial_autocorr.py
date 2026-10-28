@@ -202,6 +202,19 @@ async def test_api_run_then_get_csv_and_saved(client, dataset_manager, squidpy_r
     ds = (await client.get(f"{API}/datasets/{did}")).json()
     assert "moranI" not in ds["available_embeddings"]
 
+    # A later step (labels, a kept layout) leaves it; other spots (filtered) do not.
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    provenance.record_step(adaptor.adata, step="label_cells", tool="test", params={})
+    sa._last.clear()
+    assert sa.last(adaptor).id == body["result_id"]
+
+    class _Filtered:
+        adata = adaptor.adata[:-5].copy()
+        h5ad_path = adaptor.h5ad_path
+
+    sa._last.clear()
+    assert sa.last(_Filtered()) is None
+
 
 async def test_api_refuses_without_spatial_and_bad_section(client, dataset_manager):
     did = _register(dataset_manager, ad.AnnData(np.ones((20, 4), dtype=np.float32)), "sp2")

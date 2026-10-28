@@ -244,6 +244,7 @@ class Result:
     unit: str = "spot"
     elapsed_seconds: float = 0.0
     created_at: float = 0.0
+    cells: str = ""  # results_store.cells_hash of the dataset it ran on
 
 
 def has_spatial(adata) -> bool:
@@ -362,6 +363,7 @@ def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str 
         libraries=[str(x) for x in pd.unique(libs[rows])], genes_choice=choice, matrix_source=source,
         table=table, n_constant=n_constant, notes=notes, unit=unit,
         elapsed_seconds=round(time.time() - t0, 2), created_at=time.time(),
+        cells=results_store.cells_hash(adata),
     )
 
 
@@ -410,7 +412,19 @@ def remember(adaptor, r: Result) -> None:
 
 
 def last(adaptor) -> Result | None:
-    return results_store.remembered(_last, _lock, adaptor, KIND)
+    """The last run, while the dataset holds the same spots: a step recorded since
+    (labels, a kept layout) does not hide it, filtering or a re-import does."""
+    try:
+        cells = results_store.cells_hash(adaptor.adata)
+        r = results_store.remembered(_last, _lock, adaptor, KIND)
+        if r is None:
+            r = results_store.latest(adaptor, KIND, current_only=False)
+            if r is not None and r.cells == cells:
+                with _lock:
+                    _last.setdefault(adaptor, r)
+    except Exception:  # a test double, an unreadable result
+        return None
+    return r if r is not None and r.cells == cells else None
 
 
 def summary_counts(r: Result) -> dict[str, int]:
