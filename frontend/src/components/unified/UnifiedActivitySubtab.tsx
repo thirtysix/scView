@@ -17,12 +17,15 @@ import { activityLabel, filterRows, heatmapData, sourceRows } from "@/lib/activi
 import { plotConfig } from "@/lib/plotConfig";
 import { RequestError } from "@/components/common/RequestError";
 import { CytokineResponse } from "./CytokineResponse";
+import { TfMotifCandidates } from "./TfMotifCandidates";
 
 interface Props {
   /** Colour the embedding by one source's per-cell activity. */
   onScore: (scores: Float32Array, name: string, genes?: string[], activity?: ActivityRef) => void;
   groupByColumn: string;
   setGroupByColumn: (col: string) => void;
+  /** Colour the embedding by a gene's expression (upstream TF candidates). */
+  onGeneClick?: (gene: string) => void;
 }
 
 const TOP_CHOICES = [10, 20, 40] as const;
@@ -41,7 +44,7 @@ const LIST_LIMIT = 200;
  * backend (ULM t-values on log-normalised expression); the first use of a network
  * downloads it.
  */
-export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn }: Props) {
+export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn, onGeneClick }: Props) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const [network, setNetwork] = useState<ActivityNetwork>("progeny");
@@ -53,6 +56,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
   const [colouring, setColouring] = useState<string | null>(null);
   const [shown, setShown] = useState<string | null>(null);
   const [cytokines, setCytokines] = useState(false);
+  const [motifs, setMotifs] = useState(false);
 
   const groupColumns = useMemo(() => {
     if (!dataset) return [];
@@ -68,7 +72,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
   const groupby = groupColumns.some((c) => c.name === groupByColumn) ? groupByColumn : "";
 
   useEffect(() => {
-    if (!datasetId || cytokines) return;
+    if (!datasetId || cytokines || motifs) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -88,7 +92,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
     return () => {
       cancelled = true;
     };
-  }, [datasetId, network, groupby, cytokines]);
+  }, [datasetId, network, groupby, cytokines, motifs]);
 
   const colourBy = useCallback(
     async (source: string) => {
@@ -124,11 +128,12 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
           key={n}
           onClick={() => {
             setCytokines(false);
+            setMotifs(false);
             setNetwork(n);
             setQuery("");
           }}
           className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-            !cytokines && network === n ? "bg-primary text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
+            !cytokines && !motifs && network === n ? "bg-primary text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
           }`}
         >
           {NETWORK_LABELS[n].long}
@@ -136,12 +141,27 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
       ))}
       <button
         type="button"
-        onClick={() => setCytokines(true)}
+        onClick={() => {
+          setCytokines(true);
+          setMotifs(false);
+        }}
         className={`rounded-md px-2.5 py-1 text-xs font-medium ${
           cytokines ? "bg-primary text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
         }`}
       >
         Cytokine response
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setMotifs(true);
+          setCytokines(false);
+        }}
+        className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+          motifs ? "bg-primary text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
+        }`}
+      >
+        Upstream TF candidates
       </button>
       <InfoTip label="About TF and pathway activity" align="right">
         Each cell gets one score per transcription factor (CollecTRI) or pathway (PROGENy): the
@@ -151,6 +171,19 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
       </InfoTip>
     </div>
   );
+  if (motifs) {
+    return (
+      <div className="space-y-3">
+        {tabs}
+        <TfMotifCandidates
+          groupByColumn={groupByColumn}
+          setGroupByColumn={setGroupByColumn}
+          onScore={onScore}
+          onGeneClick={onGeneClick}
+        />
+      </div>
+    );
+  }
   if (cytokines) {
     return (
       <div className="space-y-3">
