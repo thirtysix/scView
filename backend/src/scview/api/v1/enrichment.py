@@ -124,6 +124,10 @@ class EnrichmentResult(BaseModel):
     collection_deleted: bool = False
     # The MSigDB collection's species (human | mouse); empty for a custom one.
     species: str = ""
+    # The set's source: MSigDB's exactSource (R-HSA-/R-MMU- Reactome, WP... WikiPathways,
+    # N... KEGG Medicus) and externalDetailsURL; empty when the set has none.
+    source_id: str = ""
+    source_url: str = ""
 
 
 class EnrichmentResponse(BaseModel):
@@ -228,6 +232,8 @@ class GseaTerm(BaseModel):
     collection_name: str = ""
     collection_deleted: bool = False
     species: str = ""
+    source_id: str = ""  # as EnrichmentResult
+    source_url: str = ""
 
 
 class GseaSide(BaseModel):
@@ -557,7 +563,7 @@ def _compute_local(
                 cached = json.loads(cached)
             normalized = [_normalize_gseapy_record(r) for r in cached] if cached else []
             # A custom collection deleted since then is shown as deleted.
-            results = [EnrichmentResult(**r) for r in label_records(normalized, store)]
+            results = [EnrichmentResult(**r) for r in label_records(normalized, store, loader)]
             return EnrichmentResponse(
                 group=body.group,
                 groupby=col,
@@ -611,7 +617,7 @@ def _compute_local(
             group=body.group,
             groupby=col,
             n_genes_used=len(top_genes),
-            results=[EnrichmentResult(**r) for r in label_records(all_results, store)],
+            results=[EnrichmentResult(**r) for r in label_records(all_results, store, loader)],
             source="msigdb_local",
             warning=warning,
             collections=collections,
@@ -855,7 +861,7 @@ def _compute_gene_lists(
             n_excluded_ribo_mito=len(query) - len(kept),
             n_terms=len(records),
             n_significant=sum(r.get("adjusted_pvalue", 1.0) < 0.05 for r in records),
-            results=[EnrichmentResult(**r) for r in label_records(top, store)],
+            results=[EnrichmentResult(**r) for r in label_records(top, store, loader)],
         )
 
     try:
@@ -1014,7 +1020,7 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
         return GseaSide(
             n_terms=len(records),
             n_significant=sum(r["fdr"] < gsea.SIGNIFICANT_FDR for r in records),
-            results=[GseaTerm(**r) for r in label_records(top, store)],
+            results=[GseaTerm(**r) for r in label_records(top, store, loader)],
         )
 
     return GseaResponse(

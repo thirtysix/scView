@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -256,6 +257,24 @@ class MSigDBLoader:
                 result[set_name] = genes
         return result
 
+    def get_sources(self, collection_id: str) -> dict[str, tuple[str, str]]:
+        """{SET_NAME: (source id, details URL)} from each set's ``exactSource`` and
+        ``externalDetailsURL`` (R-HSA-/R-MMU- for Reactome, WP... for WikiPathways,
+        N... for KEGG Medicus). Sets without them, or with a URL that is not http(s),
+        get empty strings; the GMT form never has them."""
+        data = self._load_collection(collection_id)
+        if not data:
+            return {}
+        out: dict[str, tuple[str, str]] = {}
+        for set_name, set_data in data.items():
+            if not isinstance(set_data, dict):
+                continue
+            sid = _clean_source_id(set_data.get("exactSource"))
+            url = _clean_url(set_data.get("externalDetailsURL"))
+            if sid or url:
+                out[set_name] = (sid, url)
+        return out
+
     def get_multiple_collections_as_dict(
         self, collection_ids: list[str]
     ) -> dict[str, list[str]]:
@@ -372,6 +391,25 @@ class MSigDBLoader:
         if exact.exists():
             return exact
         return None
+
+
+_SOURCE_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
+
+def _clean_source_id(value) -> str:
+    """A set's source id when it looks like one (letters, digits, - _ . :), else ""."""
+    v = str(value or "").strip()
+    return v if _SOURCE_ID.match(v) else ""
+
+
+def _clean_url(value) -> str:
+    """The first http(s) URL of a details field (MSigDB lists several comma-separated
+    for a few sets), else ""."""
+    for part in str(value or "").split(","):
+        v = part.strip()
+        if re.match(r"^https?://[^\s<>\"']{1,500}$", v):
+            return v
+    return ""
 
 
 # Singleton accessor
