@@ -117,3 +117,25 @@ describe("Unified View keyboard selection", () => {
     expect(screen.getByRole("tab", { name: "Expression" })).toHaveFocus();
   });
 });
+
+describe("Unified View split pane", () => {
+  it("a drag moves the guide only; the columns resize once, on release", () => {
+    const { container } = renderPanel();
+    const split = screen.getByTestId("split-guide").parentElement!;
+    vi.spyOn(split, "getBoundingClientRect").mockReturnValue({ left: 0, width: 1000 } as DOMRect);
+    const left = () => split.children[1] as HTMLElement;
+    const guide = screen.getByTestId("split-guide");
+    expect(left().style.width).toBe("60%");
+
+    fireEvent.mouseDown(container.querySelector(".cursor-col-resize")!);
+    fireEvent.mouseMove(window, { clientX: 450 });
+    fireEvent.mouseMove(window, { clientX: 400 });
+    expect(guide.style.display).toBe("block");
+    expect(guide.style.left).toBe("40%");
+    expect(left().style.width).toBe("60%");
+
+    fireEvent.mouseUp(window);
+    expect(guide.style.display).toBe("none");
+    expect(left().style.width).toBe("40%");
+  });
+});

@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 // jsdom has no WebGL: capture what the grid hands deck.gl instead.
 const { deckProps, fetchEmbeddingBinary } = vi.hoisted(() => ({
@@ -150,6 +151,16 @@ describe("SplitScatterGrid", () => {
     // One camera: every view gets the same state object.
     const vs = props.viewState as Record<string, unknown>;
     expect(vs["split-0"]).toBe(vs["split-1"]);
+  });
+
+  it("panel titles take the plot background's colours, not the app theme's (dark slate-100 is a surface)", async () => {
+    useSettingsStore.setState({ plotBackground: "dark", plotBackgroundChosen: true });
+    renderGrid();
+    await screen.findByTestId("deck");
+    expect(screen.getByText("CTRL")).toHaveStyle({ color: "#f1f5f9" });
+    act(() => useSettingsStore.setState({ plotBackground: "white" }));
+    expect(screen.getByText("CTRL")).toHaveStyle({ color: "#334155" });
+    useSettingsStore.setState({ plotBackgroundChosen: false });
   });
 
   it("notes in its header that a UMAP's cluster gaps aren't distances", async () => {

@@ -164,7 +164,7 @@ export const DARK_SLATE: Record<number, string> = {
   900: "#f1f5f9",
   950: "#f8fafc",
 };
-const LIGHT_SLATE: Record<number, string> = {
+export const LIGHT_SLATE: Record<number, string> = {
   50: "#f8fafc",
   100: "#f1f5f9",
   200: "#e2e8f0",
