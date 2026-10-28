@@ -1030,7 +1030,7 @@ export function UnifiedViewPanel() {
           <UnifiedToolbar numCells={numCells} groupSelect={groupSelect} />
           <div className="relative min-h-0 flex-1">
             <div className="h-full w-full rounded-xl border border-slate-200 bg-white shadow-sm">
-            {isLoading && !positions ? (
+            {!positions && (isLoading || !!(tissueInfo && embeddingPositions)) ? (
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
               </div>
