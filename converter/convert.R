@@ -57,8 +57,11 @@ convert_rds_to_h5ad <- function(input_path, output_path, progress_path = NULL) {
     )
     result$report <- list(
       source_class = "Seurat", detail = paste("Seurat", version_info),
-      object_name = loaded$name %||% "", kept = list(), skipped = list()
+      object_name = loaded$name %||% "", kept = as.list(result$kept %||% character(0)),
+      skipped = as.list(result$skipped %||% character(0))
     )
+    result$kept <- NULL
+    result$skipped <- NULL
     return(finish(progress, result))
   }
 
@@ -283,10 +286,13 @@ manual_convert <- function(obj, output_path, version_info) {
   # ---- expression matrix ---------------------------------------------------
   cat("[convert] Extracting expression matrix ...\n")
 
+  # RNA as before; a Visium object's genes are in its Spatial assay.
+  main_assay <- seurat_main_assay(obj)
+
   # SeuratObject >= 5.0.0 uses `layer` instead of the defunct `slot` argument
   counts <- tryCatch(
     {
-      SeuratObject::GetAssayData(obj, assay = "RNA", layer = "counts")
+      SeuratObject::GetAssayData(obj, assay = main_assay, layer = "counts")
     },
     error = function(e) {
       cat(sprintf("[convert] Could not get counts: %s\n", conditionMessage(e)))
@@ -297,7 +303,7 @@ manual_convert <- function(obj, output_path, version_info) {
   if (is.null(counts)) {
     # Try data layer as fallback
     counts <- tryCatch(
-      SeuratObject::GetAssayData(obj, assay = "RNA", layer = "data"),
+      SeuratObject::GetAssayData(obj, assay = main_assay, layer = "data"),
       error = function(e) NULL
     )
   }
@@ -360,7 +366,7 @@ manual_convert <- function(obj, output_path, version_info) {
   # CLR itself; a panel is small, so it goes over as a dense table.
   protein_df <- NULL
   assays <- tryCatch(SeuratObject::Assays(obj), error = function(e) character(0))
-  adt_name <- intersect(c("ADT", "Protein", "protein", "adt", "CITE", "Antibody"), assays)[1]
+  adt_name <- setdiff(intersect(ADT_ASSAYS, assays), main_assay)[1]
   if (!is.na(adt_name)) {
     adt <- tryCatch(
       SeuratObject::GetAssayData(obj, assay = adt_name, layer = "counts"),
@@ -371,6 +377,13 @@ manual_convert <- function(obj, output_path, version_info) {
       protein_df <- as.data.frame(as.matrix(Matrix::t(adt)))
       cat(sprintf("[convert]   added %s assay: %d proteins\n", adt_name, ncol(protein_df)))
     }
+  }
+
+  # ---- spatial: Visium images (VisiumV1, VisiumV2) ---------------------------
+  tissue <- tryCatch(seurat_images(obj, colnames(counts), np),
+                     error = function(e) list(skipped = paste0("tissue images: ", conditionMessage(e))))
+  if (!is.null(tissue$obs)) {
+    for (col in names(tissue$obs)) obs_df[[col]] <- tissue$obs[[col]]
   }
 
   # ---- build AnnData object ------------------------------------------------
@@ -391,6 +404,13 @@ manual_convert <- function(obj, output_path, version_info) {
   if (!is.null(protein_df)) {
     adata$obsm["protein_counts"] <- r_to_py(protein_df)
   }
+  if (!is.null(tissue$xy)) {
+    adata$obsm["spatial"] <- np$asarray(tissue$xy, dtype = "float64")
+    # py_set_item on the Python uns (adata$uns comes back as an R list; `[<-` takes a
+    # one-element R list for its element, the slice's dict)
+    reticulate::py_set_item(reticulate::py_get_attr(adata, "uns"), "spatial",
+                            reticulate::r_to_py(tissue$uns))
+  }
 
   # ---- write ---------------------------------------------------------------
   cat(sprintf("[convert] Writing h5ad to %s ...\n", output_path))
@@ -399,9 +419,130 @@ manual_convert <- function(obj, output_path, version_info) {
   if (file.exists(output_path)) {
     return(list(
       success = TRUE,
-      message = paste0("Converted via manual extraction (", version_info, ")")
+      message = paste0("Converted via manual extraction (", version_info, ")"),
+      kept = tissue$kept, skipped = tissue$skipped
     ))
   } else {
     return(list(success = FALSE, error = "h5ad file was not created"))
   }
+}
+
+# ---------------------------------------------------------------------------
+# Assay choice and Visium images (Seurat)
+# ---------------------------------------------------------------------------
+
+# A CITE-seq antibody assay's names, in order of preference.
+ADT_ASSAYS <- c("ADT", "Protein", "protein", "adt", "CITE", "Antibody")
+
+#' The assay whose genes go in X: RNA (as before), else Spatial (a Visium object),
+#' else the default assay, else the first that is not antibodies.
+seurat_main_assay <- function(obj) {
+  assays <- tryCatch(SeuratObject::Assays(obj), error = function(e) character(0))
+  for (a in c("RNA", "Spatial")) if (a %in% assays) return(a)
+  active <- tryCatch(SeuratObject::DefaultAssay(obj), error = function(e) NA_character_)
+  if (!is.na(active) && active %in% assays && !(active %in% ADT_ASSAYS)) return(active)
+  rest <- setdiff(assays, ADT_ASSAYS)
+  if (length(rest) > 0) rest[1] else "RNA"
+}
+
+#' The tissue positions and images of a Seurat object's slices, in scView's layout
+#' (scanpy's): list(xy, obs, uns, kept, skipped), or NULL without images.
+#'   VisiumV1 (Seurat 3.2 - 5.0): @coordinates holds row / col (the array grid) and
+#'     imagerow / imagecol in FULL-resolution pixels (Space Ranger's
+#'     pxl_row_in_fullres / pxl_col_in_fullres; Seurat multiplies them by the lowres
+#'     scale factor only to plot).
+#'   VisiumV2 (Seurat >= 5.1): @boundaries$centroids holds x = imagerow, y = imagecol,
+#'     full-res too (checked against tissue_positions_list.csv with Seurat 5.1.0); no
+#'     array grid (the backend recovers it from the centres).
+#'   Another FOV (Xenium, CosMx via Seurat): its centroids as they are (x, y), no image.
+#' xy is (imagecol, imagerow): x across, y down. Seurat keeps one image, the low-res
+#' one it places spots with (scale.factors$lowres), stored as uns images "lowres".
+#' Slots are read with attr(): the Seurat package (where VisiumV1 / V2 are defined) is
+#' not installed here, only SeuratObject.
+seurat_images <- function(obj, cells, np) {
+  images <- tryCatch(obj@images, error = function(e) list())
+  if (length(images) == 0) return(NULL)
+  n <- length(cells)
+  xy <- matrix(NA_real_, n, 2)
+  lib <- rep(NA_character_, n)
+  arow <- rep(NA_integer_, n)
+  acol <- rep(NA_integer_, n)
+  all_grid <- TRUE
+  uns <- list(); kept <- character(0); skipped <- character(0)
+
+  for (name in names(images)) {
+    img <- images[[name]]
+    cls <- class(img)[1]
+    coords <- attr(img, "coordinates")
+    g_row <- NULL; g_col <- NULL
+    if (is.data.frame(coords) && all(c("imagerow", "imagecol") %in% names(coords))) {
+      spots <- rownames(coords)
+      x <- as.numeric(coords$imagecol); y <- as.numeric(coords$imagerow)
+      if (all(c("row", "col") %in% names(coords))) {
+        g_row <- as.integer(coords$row); g_col <- as.integer(coords$col)
+      }
+    } else {
+      cent <- tryCatch(attr(img, "boundaries")$centroids, error = function(e) NULL)
+      m <- if (!is.null(cent)) attr(cent, "coords") else NULL
+      if (is.null(m) || ncol(m) < 2) {
+        skipped <- c(skipped, sprintf("image %s (%s): no spot positions scView reads", name, cls))
+        next
+      }
+      spots <- attr(cent, "cells")
+      if (cls == "VisiumV2") {
+        x <- as.numeric(m[, 2]); y <- as.numeric(m[, 1])
+      } else {
+        x <- as.numeric(m[, 1]); y <- as.numeric(m[, 2])
+      }
+    }
+    idx <- match(spots, cells)
+    ok <- !is.na(idx)
+    xy[idx[ok], 1] <- x[ok]
+    xy[idx[ok], 2] <- y[ok]
+    lib[idx[ok]] <- name
+    if (is.null(g_row)) {
+      all_grid <- FALSE
+    } else {
+      arow[idx[ok]] <- g_row[ok]
+      acol[idx[ok]] <- g_col[ok]
+    }
+
+    visium <- cls %in% c("VisiumV1", "VisiumV2")
+    sf <- if (visium) unclass(attr(img, "scale.factors")) else list()
+    num <- function(v) if (length(v) == 1 && is.finite(as.numeric(v))) as.numeric(v) else NULL
+    scalefactors <- Filter(Negate(is.null), list(
+      tissue_lowres_scalef = num(sf$lowres), tissue_hires_scalef = num(sf$hires),
+      spot_diameter_fullres = num(sf$spot), fiducial_diameter_fullres = num(sf$fiducial)))
+    image <- if (visium) attr(img, "image") else NULL
+    imgs <- reticulate::dict()
+    if (!is.null(image) && length(dim(image)) == 3 && dim(image)[3] >= 3 &&
+        !is.null(scalefactors$tissue_lowres_scalef)) {
+      v <- if (max(image, na.rm = TRUE) <= 1) image * 255 else image
+      v <- array(as.integer(round(pmin(pmax(v, 0), 255))), dim = dim(image))
+      # a NumPy uint8 array that stays one (not converted back to an R integer array)
+      npc <- reticulate::import("numpy", convert = FALSE)
+      imgs <- reticulate::dict(lowres = npc$asarray(reticulate::r_to_py(v[, , 1:3, drop = FALSE]),
+                                                    dtype = "uint8"))
+    }
+    uns[[name]] <- list(
+      images = imgs,
+      scalefactors = if (length(scalefactors)) scalefactors else reticulate::dict(),
+      metadata = list(source = "seurat", seurat_image_class = cls)
+    )
+    kept <- c(kept, sprintf("tissue positions%s of %s (%s, %d spots)",
+                            if (length(imgs)) " and image" else "", name, cls, sum(ok)))
+  }
+
+  if (length(uns) == 0) return(list(skipped = skipped))
+  if (any(is.na(lib))) {
+    return(list(skipped = c(skipped, sprintf(
+      "tissue positions: %d of %d cells are in none of the images, so they were left out",
+      sum(is.na(lib)), n))))
+  }
+  obs <- data.frame(library_id = factor(lib, levels = names(uns)), row.names = cells)
+  if (all_grid) {
+    obs$array_row <- arow
+    obs$array_col <- acol
+  }
+  list(xy = xy, obs = obs, uns = uns, kept = kept, skipped = skipped)
 }

@@ -332,6 +332,28 @@ def test_complete_converted_adds_the_grid(tmp_path):
     assert seurat_spatial.complete_converted(p) is False  # done once
 
 
+def test_converter_output_of_a_visium_v2_object_opens_as_spots(tmp_path, positions):
+    """visium_v2_converted.h5ad: what convert.R wrote for visium_v2.rds (converter image
+    0.45.1 + this branch's convert.R); the backend adds the grid it lacks."""
+    import shutil
+
+    from scview.core import conversion
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+
+    p = tmp_path / "v2.h5ad"
+    shutil.copy(FIX / "visium_v2_converted.h5ad", p)
+    raw = ad.read_h5ad(p)
+    assert "array_row" not in raw.obs
+    assert np.allclose(raw.obsm["spatial"],
+                       positions.loc[raw.obs_names, ["imagecol", "imagerow"]].to_numpy())
+    conversion.complete_spatial(p)
+    a = AnnDataAdaptor(str(p)).adata
+    assert spatial.info(a)["unit"] == "spot"
+    d = a.obs["array_row"].to_numpy() - positions.loc[a.obs_names, "row"].to_numpy()
+    assert len(np.unique(d)) == 1
+    assert spatial.image_png(a, "slice1", "lowres").startswith(b"\x89PNG")
+
+
 def test_complete_converted_leaves_other_files_alone(tmp_path):
     p = tmp_path / "plain.h5ad"
     ad.AnnData(X=np.ones((4, 2))).write_h5ad(p)
@@ -375,6 +397,20 @@ async def test_commit_h5seurat_alone_and_merged(data_dir):
     assert mgr.merge_plan(sid) is not None
     did = await mgr.commit(sid, dm)
     assert dm.get_dataset_info(did)["n_cells"] == 160
+
+
+async def test_commit_visium_h5seurat_opens_as_spots(data_dir):
+    import shutil
+
+    mgr = IngestSessionManager(data_dir=str(data_dir))
+    dm = DatasetManager(data_dir=str(data_dir))
+    sid = mgr.create_session()
+    shutil.copy(V2, mgr.files_dir(sid) / "brain.h5Seurat")
+    did = await mgr.commit(sid, dm)
+    adata = dm.get_dataset(did).adata  # saved as .h5ad and opened again
+    info = spatial.info(adata)
+    assert info["unit"] == "spot" and info["libraries"][0]["n_obs"] == 60
+    assert info["libraries"][0]["images"]["lowres"]["height"] == 60
 
 
 def test_unit_format_value():
