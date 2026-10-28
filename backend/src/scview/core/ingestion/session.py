@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
-from scview.core import conversion, crispr, protein, provenance
+from scview.core import conversion, crispr, protein, provenance, spatial
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion import streamed
 from scview.core.ingestion.bundling import (
@@ -523,10 +523,14 @@ class IngestSessionManager:
                     original_filename=names_of(u),
                     fmt=fmt_of(u),
                 )
+            dropped = adata.uns.pop(spatial.DROPPED_KEY, None)
             provenance.record_step(
                 adata,
                 step="ingest",
                 tool="scview.ingestion",
+                note=(f"Tissue positions of {', '.join(map(str, dropped))} were left out: the other "
+                      "samples have none, so most merged cells would have no position."
+                      if dropped is not None and len(dropped) else None),
                 params={
                     "formats": sorted({fmt_of(u) for u in loadable}),
                     "genes_in_rows": opts.genes_in_rows,

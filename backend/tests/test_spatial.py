@@ -354,6 +354,7 @@ def test_merge_units_keeps_libraries_of_spatial_h5ads():
     del plain.obsm["spatial"]
     m2 = merge_units({"a": _squidpy_like(), "b": plain}, sample_label="sample")
     assert "spatial" not in m2.obsm and "spatial" not in m2.uns
+    assert m2.uns[spatial.DROPPED_KEY] == ["a"]  # for the ingest step's History note
 
 
 def test_filtering_keeps_coordinates_with_their_cells():

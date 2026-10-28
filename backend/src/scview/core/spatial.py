@@ -586,6 +586,11 @@ def _column_of(obs: pd.DataFrame, keys: list[str]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+# Samples whose positions a merge left out (only some samples were spatial), for the
+# ingest step's note; removed from uns when the note is written.
+DROPPED_KEY = "scview_spatial_dropped"
+
+
 def after_merge(parts: Mapping, merged, sample_label: str) -> None:
     """Spatial data across a merge of ``parts`` (label -> AnnData) into ``merged``:
     ``ad.concat`` drops uns. When every part is spatial, each library becomes
@@ -597,8 +602,10 @@ def after_merge(parts: Mapping, merged, sample_label: str) -> None:
         return
     if not all(flags.values()):
         merged.obsm.pop(KEY, None)
-        logger.info("Spatial coordinates dropped from the merge: only %s have them",
-                    ", ".join(k for k, v in flags.items() if v))
+        kept_out = [str(k) for k, v in flags.items() if v]
+        # Picked up into the ingest step's History note (ingestion/session.py).
+        merged.uns[DROPPED_KEY] = kept_out
+        logger.info("Spatial coordinates dropped from the merge: only %s have them", ", ".join(kept_out))
         return
     labels = merged.obs[sample_label].astype(str).to_numpy()
     libs = np.empty(merged.n_obs, dtype=object)
