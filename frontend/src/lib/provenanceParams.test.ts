@@ -84,4 +84,21 @@ describe("paramText", () => {
     expect(text.startsWith('extra={"a":"xxx')).toBe(true);
     expect(text.length).toBeLessThanOrEqual(86);
   });
+
+  it("summarises the ingest step's tissue positions and R conversions", () => {
+    expect(paramText("spatial", {
+      source: "spaceranger", spaceranger_version: null, technology: "visium", unit: "spot",
+      libraries: { LN: 4035, brain: 2310 }, images: { LN: ["hires", "lowres"], brain: ["lowres"] },
+    })).toBe("Visium: 2 sections (LN 4,035 spots, brain 2,310 spots), images hires, lowres");
+    expect(paramText("spatial", { technology: "cells", unit: "cell", libraries: { s1: 1 }, images: { s1: [] } }))
+      .toBe("tissue positions: 1 section (s1 1 cell), no image");
+    expect(paramText("converted", [
+      { sample: "a", file: "a.rds", tool: "scView R converter", source_class: "Seurat" },
+      { sample: "b", file: "b.rds", tool: "scView R converter" },
+    ])).toBe("converted from R: a.rds (Seurat), b.rds");
+  });
+
+  it("never shows [object Object] for a list of objects", () => {
+    expect(paramText("rows", [{ a: 1 }])).toBe('rows=[{"a":1}]');
+  });
 });

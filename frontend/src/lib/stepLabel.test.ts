@@ -9,4 +9,9 @@ describe("stepLabel", () => {
     expect(stepLabel("umap_3d")).toBe("UMAP 3d");
     expect(stepLabel("tsne")).toBe("t-SNE");
   });
+
+  it("names the spatial steps in words", () => {
+    expect(stepLabel("spatial_autocorr")).toBe("Spatially variable genes (Moran's I)");
+    expect(stepLabel("doublet_detection_skipped")).toBe("Doublet detection skipped");
+  });
 });

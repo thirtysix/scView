@@ -60,6 +60,38 @@ function channelsText(rows: ChannelRun[], who = "Scrublet"): string {
   );
 }
 
+interface SpatialIngest {
+  technology?: string;
+  unit?: string;
+  libraries?: Record<string, number>;
+  images?: Record<string, string[]>;
+}
+
+/** The ingest step's tissue positions: "Visium: 2 sections (LN 4,035 spots, brain 2,310 spots), images hires, lowres". */
+function spatialText(v: SpatialIngest): string {
+  const libs = Object.entries(v.libraries ?? {});
+  const unit = v.unit === "spot" ? "spot" : "cell";
+  const each = libs.map(([lib, n]) => `${lib} ${n.toLocaleString()} ${unit}${n === 1 ? "" : "s"}`).join(", ");
+  const images = [...new Set(Object.values(v.images ?? {}).flat())].sort();
+  return (
+    `${v.technology === "visium" ? "Visium" : "tissue positions"}: ${libs.length} section${libs.length === 1 ? "" : "s"}` +
+    (each ? ` (${each})` : "") + (images.length ? `, images ${images.join(", ")}` : ", no image")
+  );
+}
+
+interface ConvertedEntry {
+  sample?: string;
+  file?: string;
+  source_class?: string;
+}
+
+/** The ingest step's R objects: "converted from R: a.rds (Seurat), b.rds". */
+function convertedText(rows: ConvertedEntry[]): string {
+  return `converted from R: ${rows
+    .map((r) => `${r.file ?? r.sample ?? "file"}${r.source_class ? ` (${r.source_class})` : ""}`)
+    .join(", ")}`;
+}
+
 /** A recorded step param as the History panel's chip shows it: lists joined (a long
  *  one cut to its first items and count), the filtering step's per-sample thresholds
  *  (an object per sample) and the doublet step's channels summarised, any other object
@@ -76,6 +108,10 @@ export function paramText(key: string, value: unknown): string {
   const cls = key === "classifier" && value && typeof value === "object" ? (value as { channels?: unknown }).channels : null;
   if (Array.isArray(cls) && cls.length && typeof cls[0] === "object") return channelsText(cls as ChannelRun[], "Classifier");
   if (key === "umap_3d") return umap3dText(value);
+  if (key === "spatial" && value && typeof value === "object" && !Array.isArray(value))
+    return spatialText(value as SpatialIngest);
+  if (key === "converted" && Array.isArray(value) && value.length && typeof value[0] === "object")
+    return convertedText(value as ConvertedEntry[]);
   if (key === "regress_out") return regressOutText(value);
   const batch = batchParamText(key, value);
   if (batch !== null) return batch;
@@ -91,6 +127,10 @@ export function paramText(key: string, value: unknown): string {
   // A long list (the gene programs step records its 2,000 genes): the first few and the count.
   if (Array.isArray(value) && value.length > LIST_SHOWN)
     return `${key}=${value.slice(0, LIST_SHOWN).join(", ")}, ... (${value.length.toLocaleString()})`;
+  if (Array.isArray(value) && value.some((x) => x && typeof x === "object")) {
+    const json = JSON.stringify(value);
+    return `${key}=${json.length > 80 ? `${json.slice(0, 77)}...` : json}`;
+  }
   if (Array.isArray(value)) return `${key}=${value.join(", ")}`;
   if (value && typeof value === "object") {
     const v = value as { column?: string | null; samples?: unknown[] };
