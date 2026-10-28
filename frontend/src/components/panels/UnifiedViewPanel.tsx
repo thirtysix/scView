@@ -72,6 +72,7 @@ import { useDensityFollow } from "@/hooks/useDensityFollow";
 import { useTissuePositions } from "@/hooks/useTissuePositions";
 import { listedEmbeddings, referenceEmbedding, TISSUE_GRID_REASON, tissueSpatial, unitWord } from "@/lib/spatial";
 import { useTissueViewStore } from "@/stores/tissueViewStore";
+import { SPATIAL_EMBEDDING } from "@/api/spatial";
 import type { TissueMode } from "@/components/plots/EmbeddingScatter";
 
 const SUBTABS = [
@@ -146,12 +147,28 @@ export function UnifiedViewPanel() {
   const clearOverlayState = useUnifiedViewStore((s) => s.clearOverlayState);
 
   // --- Embedding data (obs-colored) ---
-  const { positions: embeddingPositions, colors, numCells, colorColumnName, dimensions, isLoading, error } =
-    useEmbedding();
+  const {
+    positions: embeddingPositions,
+    colors,
+    numCells,
+    colorColumnName,
+    dimensions,
+    isLoading,
+    error,
+    embedding: positionsOf,
+  } = useEmbedding();
   // The tissue plot (Embedding "Tissue"): one section at a time, the others'
   // cells without a position (lib/spatial.ts); any other embedding as it is.
   const tissueInfo = tissueSpatial(embedding, dataset);
-  const { positions, library: tissueLibrary } = useTissuePositions(dataset, embedding, embeddingPositions);
+  // Until the tissue's own coordinates are in, the last embedding's (kept while
+  // the next loads) are not drawn as tissue: its camera would blow each spot,
+  // drawn in world units, up to thousands of pixels (a freeze on software WebGL).
+  const tissueCoordsIn = !tissueInfo || positionsOf === SPATIAL_EMBEDDING;
+  const { positions, library: tissueLibrary } = useTissuePositions(
+    dataset,
+    embedding,
+    tissueCoordsIn ? embeddingPositions : null,
+  );
   const showTissueImage = useTissueViewStore((s) => s.showImage);
   const tissueImageOpacity = useTissueViewStore((s) => s.imageOpacity);
   const tissue = useMemo<TissueMode | null>(

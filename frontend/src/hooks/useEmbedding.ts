@@ -14,6 +14,8 @@ interface EmbeddingData {
   numCells: number;
   colorColumnName: string | null;
   dimensions: 2 | 3;
+  /** The embedding these positions are of: the last one kept while the next loads */
+  embedding: string | null;
 }
 
 interface WorkerSuccessMessage {
@@ -56,6 +58,7 @@ export function useEmbedding() {
     numCells: 0,
     colorColumnName: null,
     dimensions: 2,
+    embedding: null,
   });
   const [decodeError, setDecodeError] = useState<string | null>(null);
   const [isDecoding, setIsDecoding] = useState(false);
@@ -159,6 +162,7 @@ export function useEmbedding() {
           numCells: numRows,
           colorColumnName: colorColName,
           dimensions: is3D ? 3 : 2,
+          embedding: embeddingName,
         }));
       };
 
@@ -185,6 +189,7 @@ export function useEmbedding() {
     numCells: embeddingData.numCells,
     colorColumnName: embeddingData.colorColumnName,
     dimensions: embeddingData.dimensions,
+    embedding: embeddingData.embedding,
     isLoading: isFetching || isDecoding,
     error: fetchError ? String(fetchError) : decodeError,
   };

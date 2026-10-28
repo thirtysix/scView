@@ -19,6 +19,7 @@ const { embedding, scatterProps, refProps, splitProps, stub } = vi.hoisted(() =>
       dimensions: 2 as 2 | 3,
       isLoading: false,
       error: null as string | null,
+      embedding: "spatial" as string | null,
     },
   },
   scatterProps: { current: null as Record<string, unknown> | null },
@@ -95,6 +96,7 @@ beforeEach(() => {
   useUnifiedViewStore.setState({ groupByColumn: "leiden" });
   useSplitViewStore.setState({ splitBy: null, compareColumns: null, geneGrid: null });
   scatterProps.current = refProps.current = splitProps.current = null;
+  embedding.current.embedding = "spatial";
 });
 
 describe("Unified View on the tissue", () => {
@@ -129,6 +131,16 @@ describe("Unified View on the tissue", () => {
     renderPanel();
     expect(splitProps.current).toBeNull();
     expect(screen.getByRole("status")).toHaveTextContent(/not the tissue/);
+  });
+
+  it("draws no tissue until the tissue coordinates are in (not the UMAP's, kept while they load)", () => {
+    embedding.current.embedding = "X_umap";
+    embedding.current.isLoading = true;
+    renderPanel();
+    expect(scatterProps.current).toBeNull();
+    embedding.current.isLoading = false;
+    renderPanel();
+    expect(scatterProps.current).toBeNull();
   });
 
   it("switches to the UMAP on a dataset without spatial data", () => {

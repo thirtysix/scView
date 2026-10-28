@@ -54,6 +54,7 @@ describe("useEmbedding on the tissue", () => {
     await waitFor(() => expect(result.current.positions).not.toBeNull());
     expect(fetchEmbeddingBinary).toHaveBeenCalledWith("vis", "spatial", undefined, undefined);
     expect(Array.from(result.current.positions!)).toEqual([1, -10, 2, -20]);
+    expect(result.current.embedding).toBe("spatial"); // what the positions are of
   });
 
   it("keeps a UMAP's y as it is", async () => {
