@@ -1,3 +1,4 @@
+import { prettyObsLabel } from "@/lib/formatting";
 import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { InfoTip } from "@/components/common/InfoTip";
@@ -226,7 +227,7 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
               <option value="">Choose a column</option>
               {groupColumns.map((c) => (
                 <option key={c.name} value={c.name}>
-                  {c.name} ({c.n_unique})
+                  {prettyObsLabel(c.name)} ({c.n_unique})
                 </option>
               ))}
             </select>
@@ -253,7 +254,7 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
         <div className="space-y-2">
           <div className="flex items-end gap-2">
             <label className="flex-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              Group ({result.column})
+              Group ({prettyObsLabel(result.column)}{result.column !== column ? ", the last run" : ""})
               <select value={group} onChange={(e) => setGroup(e.target.value)} className={`mt-1 ${selectCls}`}>
                 {result.groups.map((g) => (
                   <option key={g.group} value={g.group}>

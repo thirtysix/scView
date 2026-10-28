@@ -353,7 +353,7 @@ export function TraitsSubtab({
               className="flex items-center gap-1 rounded bg-primary px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
               {running && <Loader2 className="h-3 w-3 animate-spin" />}
-              {running ? "Computing…" : result ? "Run again" : "Find trait links"}
+              {running ? "Computing…" : result?.column === column ? "Run again" : "Find trait links"}
             </button>
           </div>
           {estimate >= LONG_SECONDS && (
