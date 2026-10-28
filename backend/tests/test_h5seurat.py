@@ -415,3 +415,9 @@ async def test_commit_visium_h5seurat_opens_as_spots(data_dir):
 
 def test_unit_format_value():
     assert IngestUnit(label="x", format=UnitFormat.h5seurat).format.value == "h5seurat"
+
+
+def test_feature_guide_names_the_formats():
+    from scview.core.feature_guide import IMPORTING
+
+    assert ".h5Seurat" in IMPORTING and "converted when the dataset is created" in IMPORTING

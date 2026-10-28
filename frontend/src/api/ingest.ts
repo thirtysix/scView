@@ -1,5 +1,6 @@
 import { API_BASE } from "@/lib/constants";
 import type { UploadItem } from "@/lib/ingestUpload";
+import type { ConversionProgress } from "./types";
 import { apiFetch, readError } from "./client";
 
 // --- Types (mirror backend scview.core.ingestion models) ------------------
@@ -16,6 +17,7 @@ export type UnitFormat =
   | "zarr"
   | "dense_table"
   | "seurat"
+  | "h5seurat"
   | "unknown";
 
 export interface BundleFile {
@@ -100,6 +102,17 @@ export interface IngestState {
   bundle: Bundle;
   validation: ValidationReport;
   options: IngestOptions;
+  /** The R object a commit is converting now (absent from older backends). */
+  converting?: IngestConverting | null;
+}
+
+/** An .rds of the session being converted at commit: which file, which of how many. */
+export interface IngestConverting {
+  label: string;
+  file: string;
+  index: number;
+  of: number;
+  progress: ConversionProgress | null;
 }
 
 export interface VarReset {

@@ -31,6 +31,18 @@ export function conversionNote(progress?: ConversionProgress | null): string {
   return `Converting ${what}${size(progress.n_cells, progress.n_genes)}${stage}…`;
 }
 
+/**
+ * The busy line while the import wizard converts an .rds it was given with other files:
+ * "obj.rds (1 of 2): Converting a Seurat object (…)…". Null when none is converting.
+ */
+export function commitConversionNote(
+  converting?: { file: string; index: number; of: number; progress: ConversionProgress | null } | null
+): string | null {
+  if (!converting) return null;
+  const which = converting.of > 1 ? ` (${converting.index} of ${converting.of})` : "";
+  return `${converting.file}${which}: ${conversionNote(converting.progress)}`;
+}
+
 /** "Converted from a SingleCellExperiment (object sce in the .RData file): 13,836 cells × 14,053 genes." */
 export function conversionHeadline(report: ConversionReport): string {
   const parts = [report.detail, report.object_name ? `object ${report.object_name} in the .RData file` : null]
