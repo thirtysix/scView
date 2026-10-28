@@ -39,6 +39,30 @@ export interface DatasetInfo {
   large?: LargeDatasetInfo | null;
   /** Where a public dataset came from (a CELLxGENE Discover import), to cite it */
   public_source?: PublicSource | null;
+  /** Spot / cell positions (obsm["spatial"]) and tissue images, or null without them */
+  spatial?: SpatialInfo | null;
+}
+
+/** One tissue image of a section (backend contract: SpatialInfo.libraries[].images). */
+export interface SpatialImageInfo {
+  width: number;
+  height: number;
+  scalef: number;
+}
+
+/** A dataset's spatial data (batch 27 contract). */
+export interface SpatialInfo {
+  technology: "visium" | "cells";
+  unit: "spot" | "cell";
+  library_column: "library_id";
+  libraries: {
+    id: string;
+    n_obs: number;
+    images: { lowres?: SpatialImageInfo; hires?: SpatialImageInfo };
+    spot_diameter_fullres: number | null;
+    /** [xmin, ymin, xmax, ymax] of this library's obsm["spatial"] */
+    bounds: [number, number, number, number];
+  }[];
 }
 
 /** How a large dataset's on-disk files are (backend AnnDataAdaptor.large_info). */
