@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-10-28
+
 ### Added
 - **Spatial transcriptomics (10x Visium).** Import Space Ranger output: the `outs/` folder, or the
   filtered matrix with its `spatial/` folder or `spatial.tar.gz` (Space Ranger 1.x and 2.x position files,
