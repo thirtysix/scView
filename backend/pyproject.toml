@@ -1,6 +1,6 @@
 [project]
 name = "scview"
-version = "0.45.1"
+version = "0.45.2"
 description = "Single-cell RNA-seq browser-based visualization tool"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,6 +10,9 @@ dependencies = [
     # "Tcm/Naive helper T cells" still write (as pts columns).
     "anndata>=0.11.0,<0.13",
     "scanpy>=1.10.0",
+    # 0.7.0 returns scipy csr_array kNN graphs; scanpy 1.11.5 calls .getnnz on them, so
+    # neighbours (and clustering, UMAP, markers) failed on every dataset over 8,192 cells.
+    "pynndescent>=0.5.12,<0.7",
     "scipy>=1.14.0",
     "numpy>=1.26.0",
     "pandas>=2.2.0",
