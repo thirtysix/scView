@@ -195,6 +195,8 @@ export interface GateCheck {
   columns?: { column: string; score_column: string };
   replaces?: boolean;
   sample_column?: string | null;
+  /** A large dataset: applying reads its counts file once (backend lg.large_estimate) */
+  large?: { seconds: number; peak_bytes: number; note: string } | null;
 }
 
 export function checkLearnedGate(datasetId: string, gateId: string): Promise<GateCheck> {

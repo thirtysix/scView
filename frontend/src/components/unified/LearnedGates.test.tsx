@@ -138,6 +138,15 @@ describe("LearnedGateForm", () => {
     expect(screen.queryByRole("alert")).toBeNull(); // a cancelled run is not an error
   });
 
+  it("says a large dataset's cells are read from its counts file", async () => {
+    api.trainLearnedGate.mockImplementation(() => new Promise(() => {}));
+    const large = { ...dataset, large: { matrices_on_disk: true, gene_store: "ready", counts: true } } as DatasetInfo;
+    render(<LearnedGateForm dataset={large} onCancel={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Train" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("counts from the counts file (large dataset: up to 30,000 cells, about 10 s)");
+  });
+
   it("shows the server's refusal", async () => {
     api.trainLearnedGate.mockRejectedValue(new Error("The selection has 3 cells; a learned gate needs at least 20"));
     render(<LearnedGateForm dataset={dataset} onCancel={vi.fn()} />);
@@ -196,6 +205,16 @@ describe("LearnedGatesLibrary", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Apply…" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Only 1 of the gate's 3 genes");
     expect(screen.getByRole("button", { name: "Apply to this dataset" })).toBeDisabled();
+  });
+
+  it("says how long applying takes on a large dataset", async () => {
+    api.listLearnedGates.mockResolvedValue({ gates: [SUMMARY], score_note: "", max_file_bytes: 1 });
+    const note = "Large dataset: applying reads its counts file once (1,300,000 cells), about 2 min.";
+    api.checkLearnedGate.mockResolvedValue({ ...CHECK, large: { seconds: 120, peak_bytes: 1, note } });
+    render(<LearnedGatesLibrary dataset={dataset} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Apply…" }));
+    expect(await screen.findByTestId("learned-gate-large-note")).toHaveTextContent(note);
+    expect(screen.getByRole("button", { name: "Apply to this dataset" })).toBeEnabled();
   });
 
   it("exports, deletes and imports gate files", async () => {
