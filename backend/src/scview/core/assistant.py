@@ -255,6 +255,22 @@ def _add_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]) -> 
                                   evidence="\n".join(dc_lines[1:])))
 
 
+def _add_learned_gate(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last learned gate applied to this dataset (core/learned_gate.py): cells in,
+    per-sample shares, the gate's fit, only once one has been applied."""
+    from scview.core import learned_gate
+
+    try:
+        lg_lines, lg_detail = learned_gate.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: learned gate failed: %s", exc)
+        return
+    if lg_lines:
+        lines.extend(lg_lines)
+        sources.append(ChatSource(kind="result", ref=learned_gate.TAG, detail=lg_detail,
+                                  evidence="\n".join(lg_lines[1:])))
+
+
 def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved gene programs (core/gene_programs.py): k, the stable ones with their
     top genes and best enriched term, only once a run has been saved."""
@@ -846,6 +862,7 @@ def build_grounding_context(
         _add_programs(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_deconvolution(adaptor, lines, sources)
+        _add_learned_gate(adaptor, lines, sources)
         _add_cnv(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)
