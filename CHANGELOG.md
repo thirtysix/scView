@@ -6,6 +6,20 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- **Learned gates separate neighbouring types better.** Candidate genes are now also ranked against the
+  unselected cells most like the selection. Against all the other cells, fold change mostly picks genes that
+  split lineages, so a gate for a subset (naive vs memory CD4 T) lost to its neighbours. Out-of-fold F1 rose
+  on 20 of 23 cell types (Kang control cells, paul15) and fell by more than 0.01 on none. A gate trained on
+  Kang CTRL CD4 Naive T and applied to the stimulated cells went from precision 0.73 to 0.81 (recall 0.92 to
+  0.94), CD8 T from 0.77 to 0.85 (recall 0.77 to 0.76). Training time is unchanged.
+
+### Fixed
+- Violin, stacked violin and WNN box plots grouped by cluster numbers labelled only every other cluster:
+  Plotly read the numbers as a numeric axis. Group axes are now always categories.
+- Opening Deconvolution, Spot composition, Traits, Upstream TF candidates or Spatial genes on a dataset with
+  no result yet no longer logs a 404 in the browser console.
+
 ## [0.48.0] - 2026-10-29
 
 ### Added
