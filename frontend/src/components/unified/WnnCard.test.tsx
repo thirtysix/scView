@@ -86,6 +86,13 @@ describe("WNN card", () => {
       await new Promise<void>((r) => (release = r));
       return SAVED;
     });
+    // Before the run the dataset has no WNN columns or layouts; after it, the card refreshes it.
+    useDatasetStore.setState({
+      currentDataset: dataset({
+        obs_columns: [{ name: "cell_type", dtype: "category", n_unique: 2, values: ["pDC", "CD4 T"] }],
+        available_embeddings: ["X_umap"],
+      } as Partial<DatasetInfo>),
+    });
     renderCard();
     expect(await screen.findByTestId("wnn-plan")).toHaveTextContent(
       "6 proteins (1 isotype control left out), 5 protein PCs, 50 RNA PCs (PCA); about 40 s.");

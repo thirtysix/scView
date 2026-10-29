@@ -511,7 +511,8 @@ def plan(adata, protein_pcs: int | None = None, resolution: float | None = None)
     return WnnPlan(n_cells=int(adata.n_obs), proteins=used, controls=controls, rep=rep, d_rna=d_r,
                    d_protein=d_p, batch_key=batch_key, n_zero_protein=n_zero,
                    k_protein_umap=min(k_umap, adata.n_obs - 1),
-                   min_dist=float(emb.get("umap_min_dist", DEFAULT_MIN_DIST)), resolution=res,
+                   min_dist=float(emb["umap_min_dist"] if emb.get("umap_min_dist") is not None
+                                  else DEFAULT_MIN_DIST), resolution=res,
                    n_iterations=leiden.recorded_iterations(adata),
                    exact=adata.n_obs <= EXACT_MAX_CELLS, warnings=warnings, notes=notes)
 

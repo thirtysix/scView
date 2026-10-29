@@ -71,13 +71,17 @@ export function WnnCard({ datasetId, groupByColumn }: { datasetId: string; group
     };
   }, [datasetId, groupby, run.version]);
 
-  // A run saved new columns and embeddings: the dataset's listing must show them.
-  const seen = useRef(run.version);
+  // A saved run's columns and embeddings the dataset's listing does not show yet (the
+  // run just finished, here or while the tab was closed): refresh it, once per run.
+  const listed = !!dataset?.obs_columns.some((c) => c.name === WNN_CLUSTERS) &&
+    !!dataset?.available_embeddings?.includes("X_umap_wnn");
+  const refreshed = useRef<string | null>(null);
   useEffect(() => {
-    if (run.version === seen.current) return;
-    seen.current = run.version;
-    if (run.datasetId === datasetId) void refreshDataset(datasetId, WNN_CLUSTERS).catch(() => undefined);
-  }, [run.version, run.datasetId, datasetId, refreshDataset]);
+    const id = info?.available && !info.stale ? info.run_id ?? null : null;
+    if (!id || listed || refreshed.current === id) return;
+    refreshed.current = id;
+    void refreshDataset(datasetId, WNN_CLUSTERS).catch(() => undefined);
+  }, [info, listed, datasetId, refreshDataset]);
 
   // The RNA weight by group, for the box plot (and the violin under the scatter).
   const available = !!info?.available;
