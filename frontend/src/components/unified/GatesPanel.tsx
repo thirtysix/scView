@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Combine, Download, Eye, Loader2, Pencil, Plus, Tags, Trash2, X } from "lucide-react";
+import { Combine, Download, Eye, Library, Loader2, Pencil, Plus, Sparkles, Tags, Trash2, X } from "lucide-react";
 import { obsColumnValues } from "@/api/gates";
 import type { DatasetInfo } from "@/api/types";
 import { Caption } from "@/components/common/Caption";
@@ -7,6 +7,8 @@ import { InfoTip } from "@/components/common/InfoTip";
 import { GatesCombineForm } from "@/components/unified/GatesCombineForm";
 import { GatesLabelColumn } from "@/components/unified/GatesLabelColumn";
 import { GatesSaveForm } from "@/components/unified/GatesSaveForm";
+import { LearnedGateForm } from "@/components/unified/LearnedGateForm";
+import { LearnedGatesLibrary } from "@/components/unified/LearnedGatesLibrary";
 import { useGates, useResolveFilterGates } from "@/hooks/useGates";
 import { getPalette } from "@/lib/colors";
 import { downloadCsv } from "@/lib/csv";
@@ -32,7 +34,7 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { errorMessage } from "@/lib/errorMessage";
 
-type Form = "save" | "combine" | "label" | null;
+type Form = "save" | "combine" | "label" | "learn" | "library" | null;
 
 const btn =
   "flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40";
@@ -150,6 +152,29 @@ export function GatesPanel({ dataset, onClose }: { dataset: DatasetInfo; onClose
           <Tags className="h-3 w-3" />
           Label column…
         </button>
+        <button
+          className={btn}
+          onClick={() => toggleForm("learn")}
+          disabled={!hasSelection}
+          aria-expanded={form === "learn"}
+          title={
+            hasSelection
+              ? "Train a learned gate: a small model of the genes that set the selected cells apart, which carries to other datasets"
+              : "Select cells first (lasso, a legend click or Filter)"
+          }
+        >
+          <Sparkles className="h-3 w-3" />
+          Learn gate…
+        </button>
+        <button
+          className={btn}
+          onClick={() => toggleForm("library")}
+          aria-expanded={form === "library"}
+          title="Learned gates trained here or imported: apply one to this dataset, export or import a file"
+        >
+          <Library className="h-3 w-3" />
+          Learned gates
+        </button>
         <CountsExport dataset={dataset} gates={gates} evals={evals} />
         <div className="flex-1" />
         <button
@@ -220,6 +245,14 @@ export function GatesPanel({ dataset, onClose }: { dataset: DatasetInfo; onClose
       {form === "label" && (
         <GatesLabelColumn dataset={dataset} gates={gates} evals={evals} onDone={done} onCancel={() => setForm(null)} />
       )}
+      {form === "learn" && (
+        <LearnedGateForm
+          dataset={dataset}
+          onCancel={() => setForm(null)}
+          onSaved={(name) => setMessage(`Learned gate “${name}” is in the library (Learned gates).`)}
+        />
+      )}
+      {form === "library" && <LearnedGatesLibrary dataset={dataset} onClose={() => setForm(null)} />}
       {message && (
         <p role="status" className="text-[11px] text-slate-600">
           {message}
