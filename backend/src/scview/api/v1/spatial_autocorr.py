@@ -106,11 +106,15 @@ async def run_autocorr(
 
 
 @router.get("/datasets/{dataset_id}/spatial/autocorr")
-async def last_autocorr(dataset_id: str, dm: DatasetManager = Depends(get_dataset_manager)):
-    """The last run on this dataset, or 404."""
+async def last_autocorr(dataset_id: str, allow_empty: bool = False,
+                        dm: DatasetManager = Depends(get_dataset_manager)):
+    """The last run on this dataset, or 404; with ``allow_empty`` null instead (the panel asks on open,
+    and a 404 is a console error in the browser)."""
     adaptor = await _adaptor(dm, dataset_id)
     r = sa.last(adaptor)
     if r is None:
+        if allow_empty:
+            return None
         raise HTTPException(status_code=404, detail="No spatially variable genes computed for this dataset yet.")
     return result_body(r)
 

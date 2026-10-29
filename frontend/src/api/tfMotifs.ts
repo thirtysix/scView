@@ -133,10 +133,10 @@ export function runTfMotifs(datasetId: string, body: { column: string; n_markers
   });
 }
 
-/** The last run on the dataset, or null when none has run (404). */
+/** The last run on the dataset, or null when none has run (allow_empty, so no 404). */
 export async function getLastTfMotifs(datasetId: string): Promise<TfMotifResult | null> {
   try {
-    return await apiFetch<TfMotifResult>(`/datasets/${datasetId}/tf-motifs`);
+    return await apiFetch<TfMotifResult | null>(`/datasets/${datasetId}/tf-motifs?allow_empty=true`);
   } catch (e) {
     if (e instanceof Error && /API error 404/.test(e.message)) return null;
     throw e;

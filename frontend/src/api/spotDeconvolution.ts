@@ -137,8 +137,9 @@ export function getSpotShare(datasetId: string, type: string, kind: ShareKind): 
   return apiFetch(`${base(datasetId)}/share?${q}`);
 }
 
-export function getSpotCheck(datasetId: string): Promise<SpotCheck> {
-  return apiFetch(`${base(datasetId)}/check`);
+/** The last self-check, or null when none has run (allow_empty: no 404 in the console). */
+export function getSpotCheck(datasetId: string): Promise<SpotCheck | null> {
+  return apiFetch(`${base(datasetId)}/check?allow_empty=true`);
 }
 
 interface StreamHandlers {

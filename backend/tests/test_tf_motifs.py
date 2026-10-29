@@ -476,6 +476,8 @@ async def test_api_not_prepared_then_run_and_get(client, dataset_manager, test_s
     assert {a["assembly"] for a in st["assemblies"]} == {"hg38", "mm10", "mm39"}
     assert "JASPAR 2024" in st["citation"] and "candidate" in st["caveats"]
     assert (await client.get(f"{API}/datasets/{did}/tf-motifs")).status_code == 404
+    got = await client.get(f"{API}/datasets/{did}/tf-motifs", params={"allow_empty": True})
+    assert got.status_code == 200 and got.json() is None
 
     r = await client.post(f"{API}/datasets/{did}/tf-motifs/run", json={"column": "cluster"})
     assert r.status_code == 409 and "Prepare" in r.json()["detail"]

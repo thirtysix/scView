@@ -501,6 +501,8 @@ async def test_api_not_downloaded_then_download_run_get(client, dataset_manager,
     assert st["downloaded"] and st["n_traits"] == 29
 
     assert (await client.get(f"{API}/datasets/{did}/gwas/clusters")).status_code == 404
+    got = await client.get(f"{API}/datasets/{did}/gwas/clusters", params={"allow_empty": True})
+    assert got.status_code == 200 and got.json() is None
     r = await client.post(f"{API}/datasets/{did}/gwas/clusters", json={"column": "nope", "species": "human"})
     assert r.status_code == 422 and "nope" in r.json()["detail"]
     r = await client.post(f"{API}/datasets/{did}/gwas/clusters",

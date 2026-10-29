@@ -119,11 +119,11 @@ function is404(e: unknown): boolean {
   return e instanceof Error && /API error 404/.test(e.message);
 }
 
-/** The last run on the dataset (on `column`), or null when none has run (404). */
+/** The last run on the dataset (on `column`), or null when none has run (allow_empty, so no 404). */
 export async function getGwasClusters(datasetId: string, column?: string): Promise<GwasResult | null> {
-  const q = column ? `?column=${encodeURIComponent(column)}` : "";
+  const q = `?allow_empty=true${column ? `&column=${encodeURIComponent(column)}` : ""}`;
   try {
-    return await apiFetch<GwasResult>(`/datasets/${datasetId}/gwas/clusters${q}`);
+    return await apiFetch<GwasResult | null>(`/datasets/${datasetId}/gwas/clusters${q}`);
   } catch (e) {
     if (is404(e)) return null;
     throw e;

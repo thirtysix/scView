@@ -189,13 +189,16 @@ async def gwas_clusters(
 
 
 @router.get("/datasets/{dataset_id}/gwas/clusters")
-async def last_gwas_clusters(dataset_id: str, column: str | None = None,
+async def last_gwas_clusters(dataset_id: str, column: str | None = None, allow_empty: bool = False,
                              dm: DatasetManager = Depends(get_dataset_manager)):
-    """The last run on this dataset (on ``column``, when given), or 404."""
+    """The last run on this dataset (on ``column``, when given), or 404; with ``allow_empty`` null instead (the panel asks on open,
+    and a 404 is a console error in the browser)."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     r = gc.last(adaptor, column)
     if r is None:
+        if allow_empty:
+            return None
         raise HTTPException(status_code=404, detail="No GWAS trait links computed for this dataset yet.")
     return r

@@ -584,6 +584,9 @@ async def test_api_self_check_stream_and_last(client, dataset_manager):
     did = _register(dataset_manager, a, "dc3")
     url = f"{API}/datasets/{did}/deconvolution"
     assert (await client.get(f"{url}/check")).status_code == 404
+    for path in ("", "/check"):  # the panel asks on open: null, not a 404 in the console
+        got = await client.get(f"{url}{path}", params={"allow_empty": True})
+        assert got.status_code == 200 and got.json() is None
     r = await client.post(f"{url}/validate", json={"n_mixtures": 5, "seed": 3})
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
     events = _sse(r.text)

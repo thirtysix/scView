@@ -148,9 +148,9 @@ async function orNull<T>(p: Promise<T>): Promise<T | null> {
   }
 }
 
-/** The last run on the dataset, or null when none has run. */
+/** The last run on the dataset, or null when none has run (allow_empty: no 404 in the console). */
 export function getDeconvolution(datasetId: string): Promise<DeconvResult | null> {
-  return orNull(apiFetch<DeconvResult>(`/datasets/${datasetId}/deconvolution`));
+  return orNull(apiFetch<DeconvResult | null>(`/datasets/${datasetId}/deconvolution?allow_empty=true`));
 }
 
 export function getDeconvolutionDefaults(datasetId: string): Promise<DeconvDefaults> {
@@ -168,7 +168,7 @@ export async function runDeconvolution(datasetId: string, file: File | null, opt
 }
 
 export function getDeconvolutionCheck(datasetId: string): Promise<DeconvCheck | null> {
-  return orNull(apiFetch<DeconvCheck>(`/datasets/${datasetId}/deconvolution/check`));
+  return orNull(apiFetch<DeconvCheck | null>(`/datasets/${datasetId}/deconvolution/check?allow_empty=true`));
 }
 
 /** The leave-one-donor-out self-check, streamed; resolves with its result. */

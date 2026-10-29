@@ -258,19 +258,27 @@ async def run_deconvolution(
 
 
 @router.get("/datasets/{dataset_id}/deconvolution")
-async def last_deconvolution(dataset_id: str, dm: DatasetManager = Depends(get_dataset_manager)):
-    """The last run on this dataset, or 404."""
+async def last_deconvolution(dataset_id: str, allow_empty: bool = False,
+                             dm: DatasetManager = Depends(get_dataset_manager)):
+    """The last run on this dataset, or 404; with ``allow_empty`` null instead (the panel asks on open,
+    and a 404 is a console error in the browser)."""
     r = dc.last(await _adaptor(dm, dataset_id))
     if r is None:
+        if allow_empty:
+            return None
         raise HTTPException(status_code=404, detail="No bulk deconvolution on this dataset yet.")
     return result_body(r)
 
 
 @router.get("/datasets/{dataset_id}/deconvolution/check")
-async def last_check(dataset_id: str, dm: DatasetManager = Depends(get_dataset_manager)):
-    """The last self-check on this dataset, or 404."""
+async def last_check(dataset_id: str, allow_empty: bool = False,
+                     dm: DatasetManager = Depends(get_dataset_manager)):
+    """The last self-check on this dataset, or 404; with ``allow_empty`` null instead (the panel asks on open,
+    and a 404 is a console error in the browser)."""
     c = dc.last_check(await _adaptor(dm, dataset_id))
     if c is None:
+        if allow_empty:
+            return None
         raise HTTPException(status_code=404, detail="No deconvolution self-check on this dataset yet.")
     return check_body(c)
 
