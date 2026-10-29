@@ -121,6 +121,10 @@ async def test_self_check_streams_and_is_kept(client, dataset_manager, monkeypat
     monkeypatch.setattr(sd, "CHECK_SPOTS", 80)
     monkeypatch.setattr(sd, "CHECK_DEPTHS", (5000,))
     ref, did = _pair(dataset_manager, "c")
+    url = f"{API}/datasets/{did}/spot-deconvolution/check"
+    assert (await client.get(url)).status_code == 404
+    got = await client.get(url, params={"allow_empty": True})
+    assert got.status_code == 200 and got.json() is None
     events = await _post(client, did, "check-stream", reference_id=ref, celltype_column="cell_type")
     assert events[-2][0] == "result" and events[-1][0] == "complete", events[-1]
     res = events[-2][1]

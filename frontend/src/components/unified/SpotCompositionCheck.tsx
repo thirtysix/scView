@@ -34,7 +34,7 @@ export function SpotCompositionCheck({
     setCheck(null);
     getSpotCheck(datasetId)
       .then((c) => live && setCheck(c))
-      .catch(() => {}); // none yet: 404
+      .catch(() => {}); // null when none yet
     return () => {
       live = false;
       abort.current?.abort();

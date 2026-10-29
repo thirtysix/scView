@@ -44,10 +44,10 @@ export interface MoranRunBody {
   layer?: string | null;
 }
 
-/** The last run on the dataset, or null when none has run (404). */
+/** The last run on the dataset, or null when none has run (allow_empty, so no 404). */
 export async function getSpatialAutocorr(datasetId: string): Promise<MoranResult | null> {
   try {
-    return await apiFetch<MoranResult>(`/datasets/${datasetId}/spatial/autocorr`);
+    return await apiFetch<MoranResult | null>(`/datasets/${datasetId}/spatial/autocorr?allow_empty=true`);
   } catch (e) {
     if (e instanceof Error && /API error 404/.test(e.message)) return null;
     throw e;

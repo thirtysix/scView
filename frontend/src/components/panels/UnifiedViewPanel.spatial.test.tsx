@@ -110,7 +110,7 @@ beforeEach(() => {
   apiFetch.mockReset();
   apiFetchBinary.mockReset();
   apiFetch.mockImplementation(async (path: string) =>
-    path.endsWith("/spatial/autocorr")
+    path.split("?")[0]!.endsWith("/spatial/autocorr")
       ? {
           result_id: "r1", method: "moran", n_obs: 3, n_genes: 1, neighbors: { kind: "grid", k: 6 }, libraries: ["LN"],
           genes: "all", matrix_source: "log-normalised X", unit: "spot", n_constant: 0, notes: [], rows_shown: 1,

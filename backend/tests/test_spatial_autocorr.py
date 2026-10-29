@@ -172,6 +172,8 @@ def _register(dm, a: ad.AnnData, did: str) -> str:
 async def test_api_run_then_get_csv_and_saved(client, dataset_manager, squidpy_ref):
     did = _register(dataset_manager, synthetic.visium(), "sp1")
     assert (await client.get(f"{API}/datasets/{did}/spatial/autocorr")).status_code == 404
+    got = await client.get(f"{API}/datasets/{did}/spatial/autocorr", params={"allow_empty": True})
+    assert got.status_code == 200 and got.json() is None
     r = await client.post(f"{API}/datasets/{did}/spatial/autocorr", json={"genes": "hvg"})
     assert r.status_code == 200, r.text
     body = r.json()

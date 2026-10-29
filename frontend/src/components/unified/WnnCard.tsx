@@ -277,7 +277,10 @@ function WeightBoxes({ violin, column }: { violin: Record<string, number[]>; col
         margin: { t: 6, r: 10, b: 32, l: 110 },
         xaxis: { range: [0, 1], title: { text: "RNA weight", font: { size: 11, color: "#64748b" } },
                  tickfont: { size: 10, color: "#64748b" }, gridcolor: "#f1f5f9", zeroline: false },
-        yaxis: { tickfont: { size: 10, color: "#64748b" }, autorange: "reversed" as const },
+        // Category, every group named: cluster numbers ("0", "1", ...) made it a numeric axis
+        // that labelled every other row.
+        yaxis: { type: "category" as const, tickmode: "array" as const, tickvals: groups, ticktext: groups,
+                 tickfont: { size: 10, color: "#64748b" }, autorange: "reversed" as const, automargin: true },
         showlegend: false,
         paper_bgcolor: "white",
         plot_bgcolor: "white",

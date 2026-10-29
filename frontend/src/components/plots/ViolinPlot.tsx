@@ -119,6 +119,8 @@ export function ViolinPlot({
           }
         : undefined,
       xaxis: {
+        // Category: cluster numbers as trace names would make plotly draw a numeric axis.
+        type: "category" as const,
         title: xLabel ? { text: xLabel, font: { size: 12, color: "#64748b" } } : undefined,
         tickfont: { size: 11, color: "#64748b" },
         automargin: true,
