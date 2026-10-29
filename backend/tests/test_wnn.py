@@ -364,6 +364,27 @@ def test_the_replay_helpers_compute_the_same_weights(ran):
     np.testing.assert_allclose(out["rna_weight"], res.rna_weight, rtol=1e-6)
 
 
+def test_the_copilot_context_carries_the_fact_and_the_guide_the_card(ran, tmp_path):
+    from scview.core import feature_guide
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+    from scview.core.assistant import build_grounding_context
+    from scview.core.claims import resolve_tag
+
+    a0, p, inp, events = ran
+    a = a0.copy()
+    a.obs["cell_type"] = a.obs["group"]
+    wnn.save(a, inp, events[-1]["result"])
+    a.write_h5ad(tmp_path / "d.h5ad")
+    text, sources = build_grounding_context(AnnDataAdaptor(str(tmp_path / "d.h5ad")))
+    assert f"[{wnn.TAG}]" in text and "## Joint RNA + protein (WNN)" in text
+    refs = [s.ref for s in sources]
+    assert wnn.TAG in refs and resolve_tag("wnn", refs) == [wnn.TAG]
+    fact = next(s for s in sources if s.ref == wnn.TAG)
+    assert "g0 RNA" in fact.evidence and "not quality scores" in fact.evidence
+    assert "Protein (CITE-seq, CLR or DSB) / Joint RNA + protein (WNN)" in feature_guide.compact_guide()
+    assert "Unified View > Protein > Joint RNA + protein (WNN): Seurat's weighted" in feature_guide.full_guide()
+
+
 # ---------------------------------------------------------------------------
 # Replay: the script computes the same result
 # ---------------------------------------------------------------------------
