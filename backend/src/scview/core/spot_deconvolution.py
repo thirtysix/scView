@@ -50,6 +50,7 @@ import time
 import uuid
 import weakref
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -119,6 +120,15 @@ SECONDS_PER_REF_CELL = 2.5e-4
 SECONDS_PER_SPOT_TYPE2 = 1.2e-5
 NEED_FIXED = 400 * 1024 * 1024
 NEED_COUNTS_COPIES = 2.5
+# A large side (core/large_mode.py) is never read whole: one pass over its counts by row
+# blocks (the reference's self-check a second), each block (MAX_READ_BYTES / 32 values,
+# float32 + int64 index) held about LARGE_BLOCK_COPIES times; the reference's profiles
+# (types x all its genes, float64, twice); the self-check's drawn cells' rows. Seconds
+# per stored value of the reading (gzip counts, 2 CPUs; measured on the lymphoid atlas as
+# a large dataset, 93M values: 26 s to prepare the fit, 32 s the self-check's two passes).
+LARGE_BLOCK_COPIES = 2.0
+LARGE_SECONDS_PER_VALUE = 2e-7
+LARGE_CHECK_FACTOR = 1.5
 
 NOTE = ("Shares are fractions of each spot's RNA (or, estimated, of its cells), not counts. A cell type "
         "missing from the reference is given to its nearest type, so its spots look like that type. The "
@@ -563,11 +573,99 @@ def _row_sums(M) -> np.ndarray:
     return np.asarray(M.sum(axis=1), dtype=np.float64).ravel()
 
 
+# A large dataset's counts (core/large_mode.py: the counts sidecar, read by row blocks,
+# never whole) give the same inputs in one pass each.
+
+
+def _on_disk(M) -> bool:
+    """Whether ``M`` is a large dataset's counts on disk (``OnDiskMatrix``: row reads only)."""
+    return hasattr(M, "row_blocks")
+
+
+def _profiles_by_blocks(M, codes: np.ndarray, n_types: int, rows: np.ndarray | None = None):
+    """``sd_profiles`` of on-disk counts in one pass by row blocks: (cell totals, mu, S,
+    n, and the rows at the sorted positions ``rows`` as a CSR, or None). Each block adds
+    its cells' ``X_c / n_c`` per type and mu is divided by the type's cells at the end:
+    sd_profiles' mu up to the order of the additions (relative ~1e-15); the totals, S,
+    n and the rows are exact."""
+    totals = np.zeros(M.shape[0])
+    sums = np.zeros((n_types, M.shape[1]))
+    picked = []
+    for start, block in M.row_blocks():
+        block = sp.csr_matrix(block)
+        stop = start + block.shape[0]
+        t = _row_sums(block)
+        totals[start:stop] = t
+        c = codes[start:stop]
+        ok = (c >= 0) & (t > 0)
+        if ok.any():
+            W = sp.csr_matrix((1.0 / t[ok], (c[ok], np.flatnonzero(ok))), shape=(n_types, block.shape[0]))
+            sums += (W @ block).toarray()
+        if rows is not None:
+            a, b = np.searchsorted(rows, [start, stop])
+            if b > a:
+                picked.append(block[rows[a:b] - start])
+    ok = (codes >= 0) & (totals > 0)
+    n = np.bincount(codes[ok], minlength=n_types).astype(np.float64)
+    mu = sums / np.maximum(n, 1)[:, None]
+    S = np.bincount(codes[ok], weights=totals[ok], minlength=n_types) / np.maximum(n, 1)
+    R = None
+    if rows is not None:
+        R = sp.vstack(picked, format="csr") if picked else sp.csr_matrix((0, M.shape[1]), dtype=M.dtype)
+    return totals, mu, S, n.astype(np.int64), R
+
+
+def _columns_by_blocks(M, cols: np.ndarray) -> tuple[sp.csr_matrix, np.ndarray]:
+    """(``M[:, cols]`` as a float32 CSR, each row's total over every gene) of on-disk
+    counts in one pass by row blocks: what the in-memory path takes, exactly."""
+    parts, totals = [], np.zeros(M.shape[0])
+    for start, block in M.row_blocks():
+        block = sp.csr_matrix(block)
+        totals[start:start + block.shape[0]] = _row_sums(block)
+        parts.append(sp.csr_matrix(block[:, cols], dtype=np.float32))
+    return sp.csr_matrix(sp.vstack(parts, format="csr"), dtype=np.float32), totals
+
+
+@contextmanager
+def large_reference(path: str):
+    """A large reference (core/large_mode.py) opened for one run: an AnnData of its obs
+    and var alone (nothing else is read) and its counts sidecar (``OnDiskMatrix``, row
+    reads only, checked against those cells and genes), closed afterwards. Its own
+    handles, not the cached dataset's: closing that (evicted for room) would close its
+    sidecar in the middle of the pass, and its graphs and embeddings are not needed."""
+    import anndata as ad
+    import h5py
+    from anndata.io import read_elem
+
+    from scview.core import large_layout, large_mode
+
+    with h5py.File(path, "r") as f:
+        obs, var = read_elem(f["obs"]), read_elem(f["var"])
+        uns = {large_layout.KEY: read_elem(f["uns"][large_layout.KEY])}
+    try:
+        counts = large_layout.counts_path(path, uns)
+    except large_layout.LargeLayoutError as e:
+        raise SpotDeconvolutionError(f"The reference's counts cannot be read: {e}") from None
+    why = large_layout.counts_mismatch(counts, obs.index, var.index)
+    if why is not None:
+        raise SpotDeconvolutionError(f"The reference's counts file cannot be used ({why}): spot composition "
+                                     "compares counts, never log values.")
+    handle, M = large_mode.open_matrix(counts, large_layout.COUNTS_KEY, threading.RLock(), "the reference's counts")
+    try:
+        names = var.copy()
+        names.index = pd.Index(var.index.astype(str))
+        yield ad.AnnData(obs=obs, var=var), (M, names, "the counts file")
+    finally:
+        handle.close()
+
+
 def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_fallback: list[str],
             spot_fallback: list[str], cluster_column: str | None, check: bool = False,
-            seed: int = SEED) -> Prepared:
+            seed: int = SEED, ref_counts: tuple[Any, pd.DataFrame, str] | None = None) -> Prepared:
     """Check the two datasets and copy out what a run (or, ``check``, the self-check)
-    needs: the reference's profiles on the shared genes, the spots' counts."""
+    needs: the reference's profiles on the shared genes, the spots' counts.
+    ``ref_counts``: the reference's (counts, var, source) when already open
+    (``large_reference``)."""
     from scview.core import label_transfer as lt
     from scview.core import spatial
     from scview.core.deconvolution import _excluded
@@ -589,7 +687,8 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
     if len(types) > MAX_TYPES:
         raise SpotDeconvolutionError(f"'{celltype_column}' has {len(types)} types with {MIN_TYPE_CELLS}+ cells "
                                      f"(at most {MAX_TYPES}): pick a coarser cell-type column.")
-    RM, rvar, rsource = counts_with_var(ref, ref_fallback, "The reference")
+    RM, rvar, rsource = (ref_counts if ref_counts is not None
+                         else counts_with_var(ref, ref_fallback, "The reference"))
     SM, svar, ssource = counts_with_var(spots, spot_fallback, "This dataset")
     # Duplicate names (symbols): the first of each, on both sides; versions off Ensembl ids.
     rkey, skey = _strip_versions(rvar), _strip_versions(svar)
@@ -614,17 +713,24 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
     ref_names = [str(g) for g in rvar.index[rpos]]
     codes_s = pd.Categorical(labels.astype(str).where(labels.notna(), None).to_numpy(), categories=types).codes
     codes = np.asarray(codes_s, dtype=np.int64)
-    totals = _row_sums(RM)
+    if _on_disk(RM):  # a large reference: totals and profiles in one pass over its counts
+        totals, mu_full, S, n, _ = _profiles_by_blocks(RM, codes, len(types))
+    else:
+        totals = _row_sums(RM)
     codes = np.where(totals > 0, codes, -1)
     if int((codes >= 0).sum()) < MIN_REFERENCE_CELLS:
         raise SpotDeconvolutionError(f"Only {int((codes >= 0).sum())} reference cells have a type with counts; "
                                      f"a reference needs at least {MIN_REFERENCE_CELLS}.")
-    mu_full, S, n = sd_profiles(RM, totals, codes, len(types))
+    if not _on_disk(RM):
+        mu_full, S, n = sd_profiles(RM, totals, codes, len(types))
     mu = mu_full[:, rpos]
     keep = np.fromiter((not (_excluded(g) or _excluded(r)) for g, r in zip(shared, ref_names, strict=True)), bool,
                        len(shared))
-    Y = sp.csr_matrix(SM[:, spos] if sp.issparse(SM) else np.asarray(SM)[:, spos], dtype=np.float32)
-    N = _row_sums(SM)
+    if _on_disk(SM):  # large spots: the shared genes and the totals in one pass over their counts
+        Y, N = _columns_by_blocks(SM, spos)
+    else:
+        Y = sp.csr_matrix(SM[:, spos] if sp.issparse(SM) else np.asarray(SM)[:, spos], dtype=np.float32)
+        N = _row_sums(SM)
     clusters = None
     if cluster_column and cluster_column in spots.obs.columns:
         clusters = spots.obs[cluster_column].astype(str).copy()
@@ -652,9 +758,17 @@ NOT_SPOTS = ("Spot composition needs Visium spots (several cells each): this dat
 # ---------------------------------------------------------------------------
 
 
-def estimate_seconds(n_ref: int, n_spots: int, n_types: int, method: str = "rctd") -> float:
-    """Wall time at 2 CPUs: reading the reference, then the fit (types^2 per spot dominate)."""
-    secs = SECONDS_FIXED + SECONDS_PER_REF_CELL * n_ref
+def estimate_seconds(n_ref: int, n_spots: int, n_types: int, method: str = "rctd", *,
+                     ref_values: int = 0, spot_values: int = 0, check: bool = False) -> float:
+    """Wall time at 2 CPUs: reading the reference, then the fit (types^2 per spot dominate).
+    ``ref_values`` / ``spot_values``: the stored values of a large side's counts, read by
+    row blocks (a large reference's second pass for the self-check), instead of the
+    reference read in."""
+    if ref_values:
+        secs = SECONDS_FIXED + LARGE_SECONDS_PER_VALUE * ref_values * (LARGE_CHECK_FACTOR if check else 1)
+    else:
+        secs = SECONDS_FIXED + SECONDS_PER_REF_CELL * n_ref
+    secs += LARGE_SECONDS_PER_VALUE * spot_values
     if method == "rctd":
         secs += SECONDS_PER_SPOT_TYPE2 * n_spots * max(n_types, 2) ** 2
     else:
@@ -662,14 +776,41 @@ def estimate_seconds(n_ref: int, n_spots: int, n_types: int, method: str = "rctd
     return round(secs, 1)
 
 
-def need_bytes(ref_header, spot_header, ref_open: bool) -> int:
+def _large_pass_bytes(h) -> int:
+    """One block of a pass over a large dataset's counts (``OnDiskMatrix.row_blocks``)."""
+    from scview.core import large_mode
+
+    values = min(stored_values(h), large_mode.MAX_READ_BYTES // 32)
+    return int(LARGE_BLOCK_COPIES * values * 12)
+
+
+def stored_values(h) -> int:
+    x = h.x
+    return int(x.nnz) if x is not None else 0
+
+
+def need_bytes(ref_header, spot_header, ref_open: bool, check: bool = False) -> int:
     """Peak memory beyond the open datasets: the reference read from its file (unless open),
-    a copy of each dataset's counts, the likelihood table and the dense blocks."""
+    a copy of each dataset's counts, the likelihood table and the dense blocks. A large
+    side (``Header.large``) is read by row blocks instead: the reference's obs and var,
+    one block, its profiles and (``check``) the drawn cells' rows; the spots' shared genes
+    (about their counts, held twice while stacked) and one block."""
     from scview.core import preflight
 
-    need = 0 if ref_open else preflight.estimate_load(ref_header, ingest=False).peak_bytes
-    for h in (ref_header, spot_header):
-        need += NEED_COUNTS_COPIES * preflight._lt_counts_bytes(h)
+    need = 0
+    if ref_header.large:
+        n, m = ref_header.n_cells or 0, ref_header.n_genes or 0
+        need += preflight._frames_bytes(ref_header) + _large_pass_bytes(ref_header) + 2 * MAX_TYPES * m * 8
+        if check:
+            drawn = min(n, CHECK_SPOTS * CHECK_CELLS[1])
+            need += 2 * 12 * stored_values(ref_header) * drawn // max(n, 1)
+    else:
+        need += 0 if ref_open else preflight.estimate_load(ref_header, ingest=False).peak_bytes
+        need += NEED_COUNTS_COPIES * preflight._lt_counts_bytes(ref_header)
+    if spot_header.large:
+        need += _large_pass_bytes(spot_header) + 2 * preflight._lt_counts_bytes(spot_header)
+    else:
+        need += NEED_COUNTS_COPIES * preflight._lt_counts_bytes(spot_header)
     return int(need + NEED_FIXED)
 
 
@@ -859,7 +1000,6 @@ def _synthetic(RM, totals, codes, n_types, rpos, seed) -> dict[str, Any]:
         half = idx.size // 2
         a_codes[idx[:half]] = k
         b_cells.append(idx[half:])
-    mu_a, S_a, n_a = sd_profiles(RM, totals, a_codes, n_types)
     n_cells = rng.integers(CHECK_CELLS[0], CHECK_CELLS[1] + 1, size=CHECK_SPOTS)
     rows, cols, truth_rna, truth_cells = [], [], np.zeros((CHECK_SPOTS, n_types)), np.zeros((CHECK_SPOTS, n_types))
     for i in range(CHECK_SPOTS):
@@ -872,7 +1012,15 @@ def _synthetic(RM, totals, codes, n_types, rpos, seed) -> dict[str, Any]:
             truth_rna[i, k] += totals[picked].sum()
             truth_cells[i, k] += picked.size
     A = sp.csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(CHECK_SPOTS, RM.shape[0]))
-    summed = sp.csr_matrix(A @ RM, dtype=np.float64)
+    if _on_disk(RM):
+        # A large reference: half A's profiles and the drawn cells' rows in one more pass.
+        # A's columns cut to the drawn cells (same order), so the product is A @ RM's.
+        used = np.unique(np.asarray(cols, dtype=np.int64))
+        _t, mu_a, S_a, n_a, R = _profiles_by_blocks(RM, a_codes, n_types, rows=used)
+        summed = sp.csr_matrix(A[:, used] @ R, dtype=np.float64)
+    else:
+        mu_a, S_a, n_a = sd_profiles(RM, totals, a_codes, n_types)
+        summed = sp.csr_matrix(A @ RM, dtype=np.float64)
     summed.data = np.round(summed.data)
     depth_sets = []
     for depth in CHECK_DEPTHS:
