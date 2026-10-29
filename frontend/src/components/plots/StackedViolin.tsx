@@ -126,6 +126,8 @@ export function StackedViolin({
     return {
       ...axes,
       xaxis: {
+        // Category: cluster numbers as trace names would make plotly draw a numeric axis.
+        type: "category" as const,
         anchor: yId(n - 1),
         tickfont: { size: 10, color: "#475569" },
         tickangle: groups.length > 6 ? -45 : 0,
