@@ -302,6 +302,7 @@ function CheckPanel({
           {report.replaces ? ", replacing the columns this gate wrote before" : ""}.
         </p>
       )}
+      {report.large && report.ok && <Caption testId="learned-gate-large-note">{report.large.note}</Caption>}
       <div className="flex gap-2">
         <button
           onClick={onApply}
