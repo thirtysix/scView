@@ -6,6 +6,28 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Learned gates, WNN and spot composition work on large datasets.** These three refused large datasets
+  until now. Each gives the in-memory answer on the same data, and none reads a whole matrix into memory.
+  - Learned gates read only the training cells from the counts file to train (up to 30,000 cells, about
+    10 s at any dataset size). Applying a gate reads the counts file once for its genes; the apply check
+    says how long that takes (about 2 min at 1.3M cells). Train, check and apply give identical results.
+  - Spot composition takes a large single-cell atlas as its reference. The atlas's counts are read from
+    disk in blocks, in one pass (two for the self-check). On the lymphoid atlas (73,000 cells) against the
+    lymph node section, peak memory was 1.1 GB, against 2.8 GB with the atlas in memory, with the same
+    dominant type in every spot. A large spot dataset works too, and its result is written into it in place.
+  - WNN saves its graph, UMAPs and clusters into a large dataset in place. The run estimate now scales with
+    the number of cells. Memory is reserved before the run starts. When Leiden to convergence would make a
+    run very long, the card suggests clustering with fast Leiden first.
+
+### Changed
+- WNN looks up each cell's 200 candidate neighbours a block at a time from one index, instead of holding
+  them for every cell at once. On 300,000 cells this stage peaked at 1.4 GB, down from 4.4 GB, in the same
+  time. Above 4,096 cells the candidates now come from index queries, as in Seurat, instead of the index's
+  own neighbour graph. On pbmc10k CITE-seq the RNA weights correlate at r 0.99994 with v0.49.0.
+- A learned gate apply that would be refused (too few of the gate's genes, a column the gate does not own)
+  is refused before any values are read.
+
 ## [0.49.0] - 2026-10-29
 
 ### Changed
