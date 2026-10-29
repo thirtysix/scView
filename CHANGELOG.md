@@ -6,6 +6,16 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- **Run time estimates no longer shrink with more CPUs.** They were measured at 2 CPUs and scaled down for
+  more, but a benchmark of every step at 2, 4 and 8 CPUs (same files, 100k and 250k cells) found the times
+  within about 15% of each other. On an 8-CPU machine the estimates were therefore about half the real time:
+  a 1.3M-cell run came in at the top of its range, and its import (7.8 min) above it ("1 to 6 min"). Re-scored
+  on 8 benchmark runs, no step over a minute now runs past its range (10 did before).
+- **While a step runs, its minute note gives the estimate**: "Clustering: 12 min so far (estimate: roughly 4
+  to 16 min)". A step past its estimate says so, and that it is still working; times over an hour read as
+  "1 h 5 min".
+
 ## [0.47.0] - 2026-10-29
 
 ### Added
