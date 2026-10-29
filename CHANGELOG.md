@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-10-29
+
 ### Added
 - **Learned gates, WNN and spot composition work on large datasets.** These three refused large datasets
   until now. Each gives the in-memory answer on the same data, and none reads a whole matrix into memory.
