@@ -1962,10 +1962,14 @@ def cpu_quota(cgroup: Path = Path("/sys/fs/cgroup")) -> float:
 
 
 def _cpu_factor(cpus: float | None) -> float:
-    """Time relative to the 2-CPU calibration: most steps use one or two cores, so
-    more CPUs help little (square root, at most 2x faster) and fewer slow it down."""
+    """Time relative to the 2-CPU calibration: fewer CPUs slow it down (square root);
+    more do not speed it up. Measured 2026-10-29 on the 0.45.2 image, the same 100k and
+    250k brain files: every step's time at 2, 4 and 8 CPUs within about 15% of each other
+    (gzip reads, numba and Leiden use one or two cores), so the square-root speed-up this
+    once gave 8 CPUs (0.5x) put 1.3M runs at the top of their range and imports past it
+    (research/out-of-core/NOTES.md)."""
     c = cpu_quota() if cpus is None else cpus
-    return float(np.clip((CALIBRATION_CPUS / max(c, 0.1)) ** 0.5, 0.5, 4.0))
+    return float(np.clip((CALIBRATION_CPUS / max(c, 0.1)) ** 0.5, 1.0, 4.0))
 
 
 @dataclass
@@ -2439,6 +2443,17 @@ def _would_chunk(requested: str, need: int, avail: Available, cached: Cached,
     return True, (f"In memory the run needs {_about(max(0, need))} more at its peak, more "
                   f"than scView can give it with its working reserve, so it runs in "
                   "large-dataset mode: the matrices stay on disk, read in blocks.")
+
+
+def step_times(dm, dataset_id: str, steps: list[str], params, chunked: bool) -> dict[str, tuple[float, float]]:
+    """Each step's (low, high) seconds as the run's preflight note showed them, in the mode
+    the run was given (``chunked``): what the run watchdog's minute notes compare against."""
+    import dataclasses
+
+    overrides = dataclasses.asdict(params) if dataclasses.is_dataclass(params) else dict(vars(params))
+    overrides["chunked"] = "on" if chunked else "off"
+    out = dataset_preflight(dm, dataset_id, list(steps), overrides)
+    return {e["step"]: (float(e["seconds"][0]), float(e["seconds"][1])) for e in out["steps"]}
 
 
 def _chunked_preflight(h: Header, steps: list[str], params, held: int, avail: Available,

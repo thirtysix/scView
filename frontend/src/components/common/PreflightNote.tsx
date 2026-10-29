@@ -54,7 +54,8 @@ function Breakdown({ verdict }: { verdict: PreflightVerdict }) {
         {Math.round(v.error_band * 100)}% of the measured peak.
       </span>
       <span className="block">
-        Time is rough: measured with 2 CPUs and scaled to the CPUs scView has. In a virtual machine
+        Time is rough: measured with 2 CPUs (more CPUs barely speed the steps up; fewer slow them
+        down). In a virtual machine
         (Docker Desktop or Podman on Windows) steps can take much longer: a Windows test VM ran about
         10 times slower than its host.
       </span>

@@ -451,8 +451,9 @@ def test_cpu_quota(tmp_path):
     assert pf.cpu_quota(tmp_path) == 2.0
     (tmp_path / "cpu.max").write_text("max 100000\n")
     assert pf.cpu_quota(tmp_path) >= 1.0
-    # fewer CPUs than the calibration: slower; more: faster, by less than the ratio
-    assert pf._cpu_factor(1) > 1 > pf._cpu_factor(8) >= 0.5
+    # fewer CPUs than the calibration: slower; more: no faster (measured 2, 4, 8 CPUs)
+    assert pf._cpu_factor(1) > 1
+    assert pf._cpu_factor(2) == pf._cpu_factor(4) == pf._cpu_factor(8) == pf._cpu_factor(64) == 1.0
 
 
 # --- endpoints --------------------------------------------------------------------------------

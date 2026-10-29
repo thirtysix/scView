@@ -140,6 +140,23 @@ def test_slow_step_event_every_60_seconds_of_one_step():
     assert later == [250, 300]
 
 
+def test_slow_step_event_carries_the_step_estimate_when_the_run_has_one():
+    clock = FakeClock()
+    wd, events = _watchdog(FakeMemory(1.0), clock)
+    wd.expected = {"clustering": (240.0, 960.0)}
+    wd.step_started("clustering")
+    clock.t += 60
+    wd.sample()
+    wd.step_finished("clustering")
+    wd.step_started("embeddings")  # no estimate for it: the plain note
+    clock.t += 60
+    wd.sample()
+    slow = [e for e in events if e["kind"] == "slow_step"]
+    assert slow[0]["expected_s"] == [240.0, 960.0]
+    assert slow[0]["expected_text"] == "roughly 4 to 16 min"
+    assert "expected_s" not in slow[1] and "expected_text" not in slow[1]
+
+
 def test_a_new_step_starts_its_own_clock():
     clock = FakeClock()
     wd, events = _watchdog(FakeMemory(1.0), clock)
@@ -305,6 +322,36 @@ async def test_streamed_run_yields_watchdog_events_and_stops_the_sampler(tmp_pat
     assert got[-1][1]["resources"]["peak_gb"] == 7.4
     assert not control.watchdog.running
     assert active_run(did) is None
+
+
+async def test_a_planned_run_gives_its_minute_notes_the_step_estimates(tmp_path, monkeypatch):
+    did = _register(tmp_path)
+    dm = DatasetManager(str(tmp_path))
+    steps = ["normalization", "log_transform", "pca"]
+    control = RunControl(RunWatchdog(read=FakeMemory(1.0), interval=0.01, slow_every=0.05),
+                         plan=(steps, pipeline.PipelineParams()))
+    real_pca = pipeline._STEP_RUNNERS["pca"]
+    release = threading.Event()
+
+    def slow_pca(adata, params):
+        release.wait(5)
+        return real_pca(adata, params)
+
+    monkeypatch.setitem(pipeline._STEP_RUNNERS, "pca", slow_pca)
+
+    def events(adaptor):
+        return pipeline.run_pipeline_streamed(adaptor.adata, steps, control=control)
+
+    got = []
+    async for kind, data in iterate_exclusive(dm, did, events, control):
+        got.append((kind, data))
+        if kind == "watchdog" and data["kind"] == "slow_step" and data["step"] == "pca":
+            release.set()
+    assert set(control.watchdog.expected) >= set(steps)
+    slow = [d for k, d in got if k == "watchdog" and d["kind"] == "slow_step" and d["step"] == "pca"]
+    lo, hi = slow[0]["expected_s"]
+    assert 0 < lo < hi and slow[0]["expected_text"]
+    assert got[-1][0] == "complete"
 
 
 async def test_the_sampler_stops_when_the_run_fails(tmp_path, monkeypatch):
