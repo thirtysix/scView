@@ -15,6 +15,7 @@ from __future__ import annotations
 import gzip
 import logging
 import zlib
+from collections.abc import Collection
 from enum import Enum
 from pathlib import Path
 
@@ -44,16 +45,20 @@ class ValidationReport(BaseModel):
     ok: bool = True  # False if any error-severity issue is present
 
 
-def validate_bundle(bundle: Bundle) -> ValidationReport:
-    """Validate every unit in a bundle and collect issues."""
+def validate_bundle(bundle: Bundle, converted: Collection[str] = ()) -> ValidationReport:
+    """Validate every unit in a bundle and collect issues. ``converted``: the labels of
+    R objects the session converted ahead of commit (``session.start_conversion``)."""
     issues: list[IngestIssue] = []
     if bundle.unsupported:
         issues.append(IngestIssue(
             severity=IssueSeverity.error, code="spatial_unsupported", message=bundle.unsupported,
             suggestion="Export the data to an .h5ad with obsm['spatial'] (spatialdata-io, squidpy) "
                        "and upload that file."))
+    others = sum(u.format != UnitFormat.unknown for u in bundle.units) > 1
     for unit in bundle.units:
         issues.extend(_validate_unit(unit))
+        if unit.format == UnitFormat.seurat:
+            issues.append(_r_object_note(unit, unit.label in converted, others))
     ok = not any(i.severity == IssueSeverity.error for i in issues)
     return ValidationReport(issues=issues, ok=ok)
 
@@ -69,27 +74,27 @@ def _validate_unit(unit: IngestUnit) -> list[IngestIssue]:
     if unit.format == UnitFormat.tenx_mex:
         issues.extend(_validate_mex(unit))
     issues.extend(_validate_spatial(unit))
-    if unit.format == UnitFormat.seurat:
-        # Converted by the R converter at commit (session._convert_r_units), then read as
-        # the .h5ad it becomes: nothing of it can be read before, merge plan included.
-        name = unit.files[0].name if unit.files else unit.label
-        issues.append(
-            IngestIssue(
-                severity=IssueSeverity.info,
-                code="seurat_converted_at_commit",
-                message=(
-                    f"{name} is an R object (Seurat, SingleCellExperiment). The R converter "
-                    "turns it into a dataset when you create it, which takes a few minutes "
-                    "for a large object."
-                ),
-                suggestion=(
-                    "Its cells and genes are read only then, so the merge plan here leaves "
-                    "it out."
-                ),
-                unit_label=unit.label,
-            )
-        )
     return issues
+
+
+def _r_object_note(unit: IngestUnit, converted: bool, others: bool) -> IngestIssue:
+    """An R object is read as the .h5ad the R converter makes of it (session
+    ``_convert_r_units``): at commit, or before on request, and only then is it in the
+    merge plan. ``others``: the upload has other samples to merge it with."""
+    name = unit.files[0].name if unit.files else unit.label
+    if converted:
+        return IngestIssue(
+            severity=IssueSeverity.info, code="seurat_converted",
+            message=f"{name} is an R object (Seurat, SingleCellExperiment), converted already.",
+            suggestion="The merge plan includes it." if others else "",
+            unit_label=unit.label)
+    return IngestIssue(
+        severity=IssueSeverity.info, code="seurat_converted_at_commit",
+        message=(f"{name} is an R object (Seurat, SingleCellExperiment). The R converter turns it "
+                 "into a dataset when you create it, which takes a few minutes for a large object."),
+        suggestion=("Its cells and genes are read only then, so the merge plan here leaves it out: "
+                    "convert it now to include it." if others else ""),
+        unit_label=unit.label)
 
 
 def _validate_spatial(unit: IngestUnit) -> list[IngestIssue]:

@@ -19,6 +19,7 @@ from scview.config import Settings
 from scview.core.dataset_manager import DatasetManager
 from scview.core.ingestion.paths import UploadPathError, flat_name, junk_reason, safe_relative_path
 from scview.core.ingestion.session import (
+    ConversionBusy,
     IngestCommitError,
     IngestOptions,
     IngestSessionManager,
@@ -153,6 +154,25 @@ async def set_options(
     return mgr.get_state(sid)
 
 
+@router.post("/ingest/session/{sid}/convert", status_code=202)
+async def convert_session(
+    sid: str, mgr: IngestSessionManager = Depends(get_ingest_session_manager)
+):
+    """Convert the session's R objects (.rds / .RData) now, in the background, so the
+    merge plan includes them before commit: the state follows it (``converting``,
+    ``conversion_running``, ``converted``, ``conversion_error``). 409 while a conversion
+    or commit of the session runs; 400 without an R object or for files that do not
+    validate."""
+    _require(mgr, sid)
+    try:
+        mgr.start_conversion(sid)
+    except ConversionBusy as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except IngestCommitError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return mgr.get_state(sid)
+
+
 @router.post("/ingest/session/{sid}/commit")
 async def commit_session(
     sid: str,
@@ -162,6 +182,8 @@ async def commit_session(
     _require(mgr, sid)
     try:
         dataset_id = await mgr.commit(sid, dm)
+    except ConversionBusy as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except IngestCommitError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"dataset_id": dataset_id}
