@@ -1106,6 +1106,32 @@ _HELPERS["spatial_autocorr"] = _spatial_autocorr_helper()
 _HELPER_ORDER += ("spatial_autocorr",)
 
 
+def _wnn_helper() -> str:
+    """core/wnn.py's WNN code (numpy, scipy, pynndescent, umap-learn: Seurat's
+    FindMultiModalNeighbors), copied so the script weights the modalities as scView did;
+    the antibody counts are read again from the input (the DSB helper's reader)."""
+    import inspect
+
+    from scview.core import wnn
+
+    lines = [f"{name} = {_lit(getattr(wnn, name))}" for name in wnn.REPLAY_CONSTANTS]
+    for obj in wnn.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def wnn_clr(counts):
+    """Centred log-ratio per cell over the whole panel (Seurat's CLR, margin = 2), float32."""
+    x = np.asarray(counts, dtype=np.float64)
+    denom = np.exp(np.log1p(x).sum(axis=1, keepdims=True) / x.shape[1])
+    return np.log1p(x / denom).astype(np.float32)
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["wnn"] = _wnn_helper()
+_HELPER_ORDER += ("wnn",)
+_HELPER_NEEDS["wnn"] = ("dsb",)  # protein_counts_for
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -2318,6 +2344,66 @@ def _keep_layout(p: dict, ctx: _Ctx) -> Snippet:
         f"adata.uns.pop({_lit(str(key))}, None)",
     ])
 
+_WNN_CODE = '''
+counts = protein_counts_for(adata, WNN["panel"], WNN["features"])
+clr = wnn_clr(counts)[:, [WNN["panel"].index(x) for x in WNN["proteins"]]]
+pcs = protein_pcs(scale_proteins(clr, SCALE_MAX), WNN["n_pcs_protein"])
+if WNN["batch_key"]:
+    pcs = harmony(pcs, adata.obs, WNN["batch_key"])
+pcs = np.asarray(pcs, dtype=np.float32)
+rna = np.asarray(adata.obsm[WNN["rep"]])[:, :WNN["n_pcs_rna"]].astype(np.float32)
+out = wnn_neighbors(rna, pcs, WNN["k"], WNN["knn_range"], WNN["exact_max_cells"])
+conn, dists = wnn_graphs(out["idx"], out["dist"])
+adata.obs["wnn_rna_weight"] = out["rna_weight"].astype(np.float32)
+adata.obs["wnn_protein_weight"] = out["protein_weight"].astype(np.float32)
+adata.obsm["protein_pca"] = pcs
+adata.obsp["wnn_connectivities"] = conn.copy()  # umap-learn trims the graph it is given
+adata.obsp["wnn_distances"] = dists
+adata.uns["wnn"] = {"connectivities_key": "wnn_connectivities", "distances_key": "wnn_distances",
+                    "params": {"method": "umap", "n_neighbors": WNN["k"] + 1, "use_rep": WNN["rep"],
+                               "n_pcs": WNN["n_pcs_rna"], "metric": "euclidean", "random_state": 0}}
+sc.tl.umap(adata, neighbors_key="wnn", key_added="X_umap_wnn", min_dist=WNN["min_dist"], random_state=0)
+adata.obsp["wnn_connectivities"] = conn
+sc.pp.neighbors(adata, n_neighbors=WNN["k_protein_umap"], use_rep="protein_pca", key_added="protein",
+                random_state=0)
+sc.tl.umap(adata, neighbors_key="protein", key_added="X_umap_protein", min_dist=WNN["min_dist"],
+           random_state=0)
+for k in ("protein_connectivities", "protein_distances"):
+    adata.obsp.pop(k, None)
+for k in ("protein", "X_umap_wnn", "X_umap_protein"):
+    adata.uns.pop(k, None)
+'''
+
+
+def _wnn(p: dict, ctx: _Ctx) -> Snippet:
+    """WNN joint RNA + protein neighbours (core/wnn.py): weights, the WNN graph under its
+    own key, the WNN and protein UMAPs, Leiden on the WNN graph."""
+    need = ("proteins", "panel", "features", "rep", "n_pcs_rna", "n_pcs_protein")
+    if any(not p.get(x) for x in need) or len(p["panel"]) != len(p["features"]):
+        return Snippet(NOT_REPLAYABLE, ["# WNN: the panel or the PCs are not recorded. Recorded:",
+                                        *_param_comment(p)], "panel or PCs not recorded")
+    _need(ctx, "wnn")
+    if p.get("batch_key"):
+        _need(ctx, "harmony")
+    keys = ("proteins", "panel", "features", "rep", "n_pcs_rna", "n_pcs_protein", "batch_key", "k",
+            "knn_range", "k_protein_umap", "min_dist", "resolution", "n_iterations", "exact_max_cells")
+    settings = {x: p.get(x) for x in keys}
+    for x, default in (("k", 20), ("knn_range", 200), ("exact_max_cells", 4096), ("k_protein_umap", 15),
+                       ("min_dist", 0.5), ("resolution", 1.0)):
+        settings[x] = settings[x] if settings[x] is not None else default
+    n_iter = p.get("n_iterations")
+    passes = f", n_iterations={_lit(n_iter)}" if n_iter not in (None, -1) else ""
+    return Snippet(EXACT, [
+        "# WNN (Hao et al. 2021; Seurat's FindMultiModalNeighbors, core/wnn.py): per-cell RNA and",
+        "# protein weights and a joint 20-NN graph, kept under its own key ('wnn'). Above",
+        "# exact_max_cells cells the neighbour search is pynndescent's (seeded, approximate).",
+        f"WNN = {_lit(settings)}",
+        *_block(_WNN_CODE),
+        'sc.tl.leiden(adata, resolution=WNN["resolution"], key_added="wnn_leiden", neighbors_key="wnn", '
+        f'flavor="leidenalg"{passes})',
+    ])
+
+
 def _label_transfer(p: dict, ctx: _Ctx) -> Snippet:
     from scview.core import label_transfer as lt
 
@@ -2604,6 +2690,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "spatial_autocorr": _spatial_autocorr,
     "tf_motif_enrichment": _tf_motif_enrichment,
     "bulk_deconvolution": _bulk_deconvolution,
+    "wnn": _wnn,
     "run_errors": _run_errors,
     "doublet_detection_skipped": _step_skipped,
 }

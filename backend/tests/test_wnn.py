@@ -362,3 +362,51 @@ def test_the_replay_helpers_compute_the_same_weights(ran):
     res = events[-1]["result"]
     out = wnn.wnn_neighbors(inp.rna, res.protein_pca)
     np.testing.assert_allclose(out["rna_weight"], res.rna_weight, rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Replay: the script computes the same result
+# ---------------------------------------------------------------------------
+
+
+def test_the_replay_helper_names_are_its_own():
+    from scview.core import replay_script
+
+    others = "\n".join(v for k, v in replay_script._HELPERS.items() if k != "wnn")
+    for obj in wnn.REPLAY_CODE:
+        assert f"def {obj.__name__}(" not in others, obj.__name__
+    assert "def wnn_clr(" not in others
+
+
+def test_the_replay_script_repeats_the_run(tmp_path):
+    import subprocess
+    import sys
+
+    from scview.core import replay_script
+
+    src = tmp_path / "input.h5ad"
+    _cite(n_per=40).write_h5ad(src)
+    out = ad.read_h5ad(src)
+    inp = wnn.prepare(out, wnn.plan(out, resolution=0.7))
+    wnn.save(out, inp, wnn.run(inp))
+    assert [d["status"] for d in replay_script.describe(out)] == ["exact"]
+    script, dst = tmp_path / "replay.py", tmp_path / "replayed.h5ad"
+    script.write_text(replay_script.build_script(out, dataset_id="t", dataset_name="test"))
+    proc = subprocess.run([sys.executable, str(script), str(src), str(dst)],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    b = ad.read_h5ad(dst)[out.obs_names]
+    np.testing.assert_allclose(b.obs[wnn.OBS_RNA].to_numpy(), out.obs[wnn.OBS_RNA].to_numpy(), rtol=1e-6)
+    assert b.obs[wnn.OBS_CLUSTERS].astype(str).tolist() == out.obs[wnn.OBS_CLUSTERS].astype(str).tolist()
+    np.testing.assert_allclose(b.obsm[wnn.OBSM_WNN], out.obsm[wnn.OBSM_WNN], atol=1e-4)
+    np.testing.assert_allclose(b.obsm[wnn.OBSM_PROTEIN], out.obsm[wnn.OBSM_PROTEIN], atol=1e-4)
+    assert (b.obsp[wnn.DIST_KEY] != out.obsp[wnn.DIST_KEY]).nnz == 0
+
+
+def test_an_unrecorded_run_is_not_replayed():
+    from scview.core import replay_script
+
+    a = _cite(n_per=20)
+    provenance.record_step(a, step="wnn", tool="scview.wnn", params={"proteins": ["P0"]})
+    assert [d["status"] for d in replay_script.describe(a)] == ["not_replayable"]
+    compile(replay_script.build_script(a), "replay.py", "exec")

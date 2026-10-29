@@ -620,7 +620,7 @@ def iter_wnn(inp: WnnInputs, stop: Callable[[], bool] = lambda: False) -> Iterat
     conn, distances = wnn_graphs(result["idx"], result["dist"])
     n = inp.rna.shape[0]
     holder = ad.AnnData(obs=pd.DataFrame(index=[str(i) for i in range(n)]))
-    holder.obsm["X_pca"] = inp.rna
+    holder.obsm[p.rep] = inp.rna  # its first d_rna columns: what the UMAP reads for components
     holder.obsm[OBSM_PCA] = pca
     holder.obsp[CONN_KEY] = conn.copy()  # umap-learn trims the graph it is given in place
     holder.obsp[DIST_KEY] = distances
@@ -655,7 +655,7 @@ def run(inp: WnnInputs) -> WnnResult:
 def graph_uns(p: WnnPlan) -> dict[str, Any]:
     """uns["wnn"] as scanpy's neighbours step writes it (sc.tl.umap reads the params)."""
     return {"connectivities_key": CONN_KEY, "distances_key": DIST_KEY,
-            "params": {"method": "umap", "n_neighbors": p.k + 1, "use_rep": "X_pca", "n_pcs": p.d_rna,
+            "params": {"method": "umap", "n_neighbors": p.k + 1, "use_rep": p.rep, "n_pcs": p.d_rna,
                        "metric": "euclidean", "random_state": SEED, "wnn": True}}
 
 
