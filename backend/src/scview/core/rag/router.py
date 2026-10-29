@@ -133,8 +133,8 @@ _RESULT_FACET_HINTS = {
         "cytokine", "cytosig", "milo", "neighbourhood", "neighborhood", "pseudobulk",
         "pseudo-bulk", "voom", "ruv", "crispr", "guide", "knockout", "knock-out", "knocked out",
         "perturb", "mixscape", "ligand", "receptor", "communicat", "composition", "proportion",
-        "de audit", "donor shuffle", "deconvol", "bulk", "spot composition", "cell types in spots",
-        "cell types in the spots", "spot deconv",
+        "de audit", "donor shuffle", "deconvol", "bulk", "spot composition", "spots", "spot deconv",
+        "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
     ),
     "markers": ("gene program", "programs", "nmf"),
 }

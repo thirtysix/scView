@@ -116,6 +116,9 @@ async def test_a_cut_off_reply_is_used_not_the_heuristic(monkeypatch):
     ("What do the gene programs mean?", "markers"),
     ("Which ligand-receptor pairs stand out?", "groups"),
     ("What did the bulk deconvolution find?", "groups"),
+    ("Which cell types are in the spots of this section?", "groups"),
+    ("Which modality drives the clusters most, RNA or protein, per the WNN result?", "groups"),
+    ("How many cells are in the learned gate I applied?", "groups"),
 ])
 def test_named_results_add_their_facet_to_a_classified_route(q, facet):
     assert facet in named_result_facets(q)
