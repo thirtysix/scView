@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-10-29
+
 ### Added
 - **Joint RNA + protein (WNN)** (Unified View > Protein): Seurat's weighted nearest neighbours for CITE-seq
   data. Each cell gets an RNA and a protein weight, and the two modalities are joined in one graph that gives
