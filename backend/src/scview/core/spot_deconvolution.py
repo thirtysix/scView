@@ -24,8 +24,10 @@ spacexr is GPL-3, so no code is taken from it or its ports):
   of a count given ``t = ln m`` is tabulated (Gauss-Hermite, ``GH_NODES`` nodes, ``t``
   on a ``T_STEP`` grid) with its first two derivatives (exact: the posterior mean and
   variance of the rate). Newton steps with an NNLS box step on the PSD-floored
-  Hessian, halved until the likelihood rises. ``s_e`` is chosen on ``SE_SPOTS`` seeded
-  spots from ``SE_GRID``. Counts above ``Y_MAX`` are clipped (counted in the notes).
+  Hessian (the Poisson information where it has no curvature), halved until the
+  likelihood rises. ``s_e`` is chosen on ``SE_SPOTS`` seeded spots from ``SE_GRID``
+  (their fits on a ``SEARCH_T_STEP`` table, scored exactly). Counts above ``Y_MAX`` are
+  clipped (counted in the notes).
   The paper's heavy-tailed (Cauchy-Gaussian) noise term is NOT in this version.
 - ``nnls``: ``w = nnls(mu'^T, Y_i / N_i)`` per spot on the fit genes, the baseline
   the benchmarks keep (Sang-aram 2024, Spotless) and the Newton fit's start.
@@ -79,9 +81,11 @@ MAX_TYPES = 50
 MIN_REFERENCE_CELLS = 50
 MIN_SPOT_UMI = 100
 MIN_SHARED_GENES = 500  # shared by name before any selection: below this the check warns
-PLATFORM_MIN_MU = 1.25e-4  # the paper: 0.0625 counts per 500
+# Tuned on V1_Human_Lymph_Node x the cell2location lymphoid atlas toward the paper's "about
+# 3,000" fit genes: RCTD's own 1.25e-4 / 2e-4 kept 2,952 / 1,595 of its 9,941 usable genes.
+PLATFORM_MIN_MU = 6.25e-5
 PLATFORM_MIN_LFC = 0.5
-FIT_MIN_MU = 2e-4
+FIT_MIN_MU = 1e-4
 FIT_MIN_LFC = 0.75
 MIN_FIT_GENES = 200  # fewer: the platform set is fitted
 MIN_GENES = 50  # fewer: refused
@@ -89,6 +93,7 @@ GN_ROUNDS = 20
 SG2_FLOOR = 1e-4
 GH_NODES = 80
 T_MIN, T_MAX, T_STEP = -12.0, 11.0, 0.01
+SEARCH_T_STEP = 0.05  # the noise-level search's coarser table (5x quicker; it only ranks s_e values)
 Y_MAX = 1000
 SE_GRID = tuple(round(0.1 * i, 1) for i in range(1, 16))
 SE_START = 0.8
@@ -116,14 +121,14 @@ NEED_FIXED = 400 * 1024 * 1024
 NEED_COUNTS_COPIES = 2.5
 
 NOTE = ("Shares are fractions of each spot's RNA (or, estimated, of its cells), not counts. A cell type "
-        "missing from the reference is given to its nearest type: a low top share hints at one. The "
+        "missing from the reference is given to its nearest type, so its spots look like that type. The "
         "platform correction assumes one effect shared by every type, so single-nucleus references and "
         "probe-based (FFPE) sections differ most.")
 
 REPLAY_CONSTANTS = ("MIN_SPOT_UMI", "PLATFORM_MIN_MU", "PLATFORM_MIN_LFC", "FIT_MIN_MU", "FIT_MIN_LFC",
                     "MIN_FIT_GENES", "MIN_GENES", "GN_ROUNDS", "SG2_FLOOR", "GH_NODES", "T_MIN", "T_MAX",
                     "T_STEP", "Y_MAX", "SE_GRID", "SE_START", "SE_SPOTS", "SE_ROUNDS", "MAX_ITER", "TOL",
-                    "BLOCK", "HESS_BLOCK", "EIG_FLOOR", "TABLE_ROWS")
+                    "BLOCK", "HESS_BLOCK", "EIG_FLOOR", "TABLE_ROWS", "SEARCH_T_STEP")
 
 
 class SpotDeconvolutionError(RuntimeError):
@@ -180,7 +185,7 @@ def sd_platform_effect(mu, ysum, ntot):
     s = ysum[ok] / ntot
     b = nnls(A, s, maxiter=50 * A.shape[1])[0]
     for _ in range(GN_ROUNDS):
-        m = np.maximum(A @ b, 1e-300)
+        m = np.maximum(A @ b, 0.01 * s)  # a gene the fit leaves near 0 weighs at most 100x its own
         b = nnls(A / m[:, None], s / m, maxiter=50 * A.shape[1])[0]
     m = A @ b
     pos = m > 0
@@ -200,32 +205,36 @@ def sd_gh(s_e):
     return np.sqrt(2.0) * s_e * x, np.log(w / np.sqrt(np.pi))
 
 
-def sd_t_grid():
-    return T_MIN + T_STEP * np.arange(int(round((T_MAX - T_MIN) / T_STEP)) + 1)
+def sd_t_grid(step=T_STEP):
+    return T_MIN + step * np.arange(int(round((T_MAX - T_MIN) / step)) + 1)
 
 
-def sd_table(s_e, yvals):
+def sd_table(s_e, yvals, step=T_STEP):
     """For each count in ``yvals`` (sorted, unique) and each t on the grid: l(y, t) =
     ln E_eps Pois(y; e^(t + eps)), and its first and second derivatives in t (the
     posterior rate's mean and variance: l_t = y - E[lam], l_tt = Var[lam] - E[lam]).
     Shape (3, counts, grid)."""
-    t = sd_t_grid()
+    t = sd_t_grid(step)
     eps, logw = sd_gh(s_e)
     te = t[:, None] + eps[None, :]
     lam = np.exp(te)
+    lam2 = lam * lam
     out = np.empty((3, len(yvals), t.size))
     for start in range(0, len(yvals), TABLE_ROWS):
-        y = np.asarray(yvals[start:start + TABLE_ROWS], dtype=np.float64)[:, None, None]
-        lp = y * te[None] - lam[None] - gammaln(y + 1) + logw[None, None, :]
+        y = np.asarray(yvals[start:start + TABLE_ROWS], dtype=np.float64)
+        lp = y[:, None, None] * te[None]
+        lp -= lam[None]
+        lp += logw[None, None, :]
         mx = lp.max(axis=2, keepdims=True)
-        p = np.exp(lp - mx)
-        z = p.sum(axis=2, keepdims=True)
-        out[0, start:start + y.shape[0]] = (mx + np.log(z))[..., 0]
-        p /= z
-        el = (p * lam[None]).sum(axis=2)
-        var = (p * (lam[None] - el[..., None]) ** 2).sum(axis=2)
-        out[1, start:start + y.shape[0]] = y[..., 0] - el
-        out[2, start:start + y.shape[0]] = var - el
+        lp -= mx
+        np.exp(lp, out=lp)  # the posterior weights, unnormalised
+        z = lp.sum(axis=2)
+        el = np.einsum("ktn,tn->kt", lp, lam) / z
+        el2 = np.einsum("ktn,tn->kt", lp, lam2) / z
+        rows = slice(start, start + y.size)
+        out[0, rows] = mx[..., 0] + np.log(z) - gammaln(y + 1)[:, None]
+        out[1, rows] = y[:, None] - el
+        out[2, rows] = np.maximum(el2 - el * el, 0.0) - el
     return out
 
 
@@ -246,7 +255,7 @@ def sd_lookup(tab, rows, t, which):
     """Table values (``which``: 0 = l, 1 = l_t, 2 = l_tt) at counts' table rows and t,
     linear in t; t outside the grid is clipped."""
     n_t = tab.shape[2]
-    f = (np.clip(t, T_MIN, T_MAX) - T_MIN) / T_STEP
+    f = (np.clip(t, T_MIN, T_MAX) - T_MIN) / ((T_MAX - T_MIN) / (n_t - 1))
     i0 = np.minimum(f.astype(np.int64), n_t - 2)
     f = f - i0
     pos = rows * n_t + i0
@@ -348,21 +357,27 @@ def sd_rows_for(Y):
 def sd_choose_sigma(mus, Y, N, W0, libs):
     """s_e for the spots given (dense counts Y, clipped; their sections ``libs``): fit
     them at s, score the fits at every value of SE_GRID, move to the best; at most
-    SE_ROUNDS rounds. ``mus``: profiles per section."""
+    SE_ROUNDS rounds. ``mus``: profiles per section. Fits and scores use SEARCH_T_STEP
+    tables, built once per value."""
     s = SE_START
     yvals, rowmap = sd_rows_for(Y)
     rows = rowmap[Y]
+    tables = {}
+
+    def table(v):
+        if v not in tables:
+            tables[v] = sd_table(v, yvals, SEARCH_T_STEP)
+        return tables[v]
+
     for _ in range(SE_ROUNDS):
-        tab = sd_table(s, yvals)
-        ys, ts = [], []
+        tab = table(s)
+        fits = []
         for lib in np.unique(libs):
             idx = np.flatnonzero(libs == lib)
             W, _, _ = sd_fit_spots(mus[lib], Y[idx], rows[idx], N[idx], W0[idx], tab)
             m = np.maximum(N[idx, None] * (W @ mus[lib]), math.exp(T_MIN))
-            ys.append(Y[idx].ravel())
-            ts.append(np.clip(np.log(m), T_MIN, T_MAX).ravel())
-        y, t = np.concatenate(ys), np.concatenate(ts)
-        scores = [float(sd_loglik_direct(y, t, v).sum()) for v in SE_GRID]
+            fits.append((rows[idx], np.log(m)))
+        scores = [sum(float(sd_lookup(table(v), r, t, (0,))[0].sum()) for r, t in fits) for v in SE_GRID]
         best = SE_GRID[int(np.argmax(scores))]
         if math.isclose(best, s):
             break
