@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-10-29
+
 ### Changed
 - **Run time estimates no longer shrink with more CPUs.** They were measured at 2 CPUs and scaled down for
   more, but a benchmark of every step at 2, 4 and 8 CPUs (same files, 100k and 250k cells) found the times
