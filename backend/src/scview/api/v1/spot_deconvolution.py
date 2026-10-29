@@ -2,7 +2,7 @@
 the cell types of a reference dataset.
 
 ``GET /datasets/{id}/spot-deconvolution`` gives the methods, whether the dataset can be
-fitted (``reason`` when not: no spots, large mode), the saved run and whether one is
+fitted (``reason`` when not: no spots), the saved run and whether one is
 working; ``GET .../reference/{ref}`` reads a candidate reference's label columns, cells
 per type (fewer than 25 flagged), species and shared genes from its file (obs and var
 only) with a memory and time estimate; ``POST .../run-stream`` fits the spots and saves
@@ -14,6 +14,9 @@ cells (SSE, saves nothing); ``GET .../check`` the last check.
 Both streamed runs copy what they need out of the two datasets first (in a worker
 thread), then fit in blocks of spots, each in a worker thread; only the final save
 holds the dataset's edit lock. A client that goes away stops the run after its block.
+A large dataset on either side (core/large_mode.py) is read by row blocks from its
+counts sidecar, never whole, and a large spot dataset's result is written into its h5ad
+in place.
 """
 
 from __future__ import annotations
@@ -30,10 +33,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from scview.core import large_mode, preflight, working_copy
+from scview.core import large_mode, preflight
 from scview.core import spot_deconvolution as sd
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.run_watchdog import RunWatchdog
 from scview.core.sse import keepalive
 from scview.dependencies import get_dataset_manager
@@ -46,7 +49,6 @@ _DONE = object()
 _running: set[str] = set()  # spot datasets with a run or check streaming: one at a time each
 
 _WHAT = "Spot composition"
-_WHY = "it reads every spot's and every reference cell's counts into memory"
 
 
 class RunRequest(BaseModel):
@@ -75,8 +77,6 @@ async def _adaptor(dm: DatasetManager, dataset_id: str):
 def _reason(adata) -> str | None:
     from scview.core import spatial
 
-    if large_mode.is_large(adata):
-        return str(large_mode.LargeDatasetError(_WHAT, _WHY))
     if not spatial.is_spot_data(adata):
         return sd.NOT_SPOTS
     return None
@@ -101,12 +101,18 @@ def _read_frames(path: str):
     return read(path)
 
 
-def _estimate(ref_path: str, ref_open: bool, spots_adata, n_types: int, method: str) -> dict[str, Any]:
+def _estimate(ref_path: str, ref_open: bool, spot_adaptor, n_types: int, method: str,
+              check: bool = False) -> dict[str, Any]:
     ref_h = preflight.read_header(ref_path, "h5ad")
-    spot_h = preflight.header_from_adata(spots_adata)
-    secs = sd.estimate_seconds(ref_h.n_cells or 0, spots_adata.n_obs, n_types, method)
-    return {"peak_bytes": sd.need_bytes(ref_h, spot_h, ref_open), "seconds": secs,
-            "seconds_range": [round(secs * 0.5, 1), round(secs * 2, 1)], "note": sd.estimate_note(secs)}
+    # A large dataset's header comes from its file: its X is on disk, never in the adaptor.
+    spot_h = (preflight.read_header(spot_adaptor.h5ad_path, "h5ad") if spot_adaptor.is_large
+              else preflight.header_from_adata(spot_adaptor.adata))
+    large = sum(sd.stored_values(h) for h in (ref_h, spot_h) if h.large)
+    secs = sd.estimate_seconds(ref_h.n_cells or 0, spot_adaptor.adata.n_obs, n_types, method,
+                               large_values=large, check=check)
+    return {"peak_bytes": sd.need_bytes(ref_h, spot_h, ref_open, check=check), "seconds": secs,
+            "seconds_range": [round(secs * 0.5, 1), round(secs * 2, 1)], "note": sd.estimate_note(secs),
+            "large_reference": bool(ref_h.large)}
 
 
 def _spot_genes(adata) -> set[str]:
@@ -150,13 +156,12 @@ async def reference_info(
     paths = dm.h5ad_candidates(reference_id)
     if not paths:
         raise HTTPException(status_code=404, detail="Reference dataset not found.")
-    spots = (await _adaptor(dm, dataset_id)).adata
+    spot_adaptor = await _adaptor(dm, dataset_id)
+    spots = spot_adaptor.adata
     cached = dm.get_dataset(reference_id)
 
     def work() -> dict[str, Any]:
-        if large_mode.file_is_large(paths[0]):
-            return {"ok": False, "reason": str(large_mode.LargeDatasetError(_WHAT, _WHY))}
-        obs, var, _umap = _read_frames(paths[0])
+        obs, var, _umap = _read_frames(paths[0])  # obs and var only: a large reference's too
         skel = ad.AnnData(obs=obs, var=var)
         columns = lt.label_columns(skel)
         col = celltype_column or _guess_column(obs, columns)
@@ -181,7 +186,7 @@ async def reference_info(
                       for t in [*types, *small]] if vc is not None else [],
             "n_small": len(small), "species": ref_species, "dataset_species": spot_species,
             "shared_genes_by_name": shared, "min_shared_genes": sd.MIN_SHARED_GENES,
-            "estimate": _estimate(paths[0], cached is not None, spots, len(types), method),
+            "estimate": _estimate(paths[0], cached is not None, spot_adaptor, len(types), method),
         }
 
     try:
@@ -191,7 +196,7 @@ async def reference_info(
         raise HTTPException(status_code=422, detail=f"Could not read the reference: {e}")
 
 
-async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method: str):
+async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method: str, check: bool = False):
     """Shared refusals of both streams; the estimate, the reference's info and paths."""
     if reference_id == dataset_id:
         raise HTTPException(status_code=400, detail="Pick another dataset as the reference.")
@@ -200,18 +205,15 @@ async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method:
     paths = dm.h5ad_candidates(reference_id)
     if not paths:
         raise HTTPException(status_code=404, detail="Reference dataset not found.")
-    if large_mode.file_is_large(paths[0]):
-        raise large_mode.LargeDatasetError(f"{_WHAT} from this reference", _WHY)
     await dm.wait_until_idle(reference_id)  # a pipeline run on it finishes first
     adaptor = await _adaptor(dm, dataset_id)
-    large_mode.check(adaptor, _WHAT, _WHY)
     reason = _reason(adaptor.adata)
     if reason:
         raise HTTPException(status_code=422, detail=reason)
-    est = await asyncio.to_thread(_estimate, paths[0], dm.get_dataset(reference_id) is not None, adaptor.adata,
-                                  20, method)
-    # Room for the reference's copy: other datasets closed first (least recently used),
-    # a 507 when it cannot fit even then.
+    est = await asyncio.to_thread(_estimate, paths[0], dm.get_dataset(reference_id) is not None, adaptor,
+                                  20, method, check)
+    # Room for the reference's copy (a large one's block pass): other datasets closed
+    # first (least recently used), a 507 when it cannot fit even then.
     await dm.reserve(dataset_id, est["peak_bytes"], what=_WHAT)
     info = dm.get_dataset_info(reference_id) or {}
     ref_info = {"id": reference_id, "name": str(info.get("name") or reference_id), "path": paths[0],
@@ -222,17 +224,21 @@ async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method:
 def _preparer(dm: DatasetManager, dataset_id: str, reference_id: str, paths: list[str], column: str,
               ref_info: dict, cluster_column: str | None, check: bool, seed: int = sd.SEED):
     def prepare(spot_adaptor) -> sd.Prepared:
+        spots = spot_adaptor.adata
+        if getattr(spots, "isbacked", False) and not spot_adaptor.is_large:
+            spots = spots.to_memory()  # a large one's counts are read by row blocks
+        kw = {"celltype_column": column, "ref_info": ref_info, "ref_fallback": paths[1:],
+              "spot_fallback": dm.h5ad_candidates(dataset_id)[1:], "cluster_column": cluster_column,
+              "check": check, "seed": seed}
+        if large_mode.file_is_large(paths[0]):  # its obs, var and counts sidecar, never read whole
+            with sd.large_reference(paths[0]) as (ref, counts):
+                return sd.prepare(ref, spots, ref_counts=counts, **kw)
         cached = dm.get_dataset(reference_id)
         if cached is not None and not getattr(cached.adata, "isbacked", False):
             ref = cached.adata
         else:
             ref = ad.read_h5ad(paths[0])  # read directly: opening it in the cache could close this one
-        spots = spot_adaptor.adata
-        if getattr(spots, "isbacked", False):
-            spots = spots.to_memory()
-        return sd.prepare(ref, spots, celltype_column=column, ref_info=ref_info, ref_fallback=paths[1:],
-                          spot_fallback=dm.h5ad_candidates(dataset_id)[1:], cluster_column=cluster_column,
-                          check=check, seed=seed)
+        return sd.prepare(ref, spots, **kw)
     return prepare
 
 
@@ -245,13 +251,13 @@ async def _save(dm: DatasetManager, dataset_id: str, p: sd.Prepared, out: dict, 
             raise sd.SpotDeconvolutionError("This dataset's spots changed while the fit ran (a pipeline run or a "
                                             "filter); nothing was saved. Run it again.", 409)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await working_copy.make_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor)  # a large dataset: written in place
 
         def work() -> dict[str, Any]:
-            data = working_copy.in_memory(adaptor)
+            data = editable(adaptor)
             before = uns_snapshot(data)
             result = sd.save(data, p, out, summary, resources=resources)
-            write_derived(data, output_path, adaptor.h5ad_path, before, obsm_keys=(sd.OBSM_RNA, sd.OBSM_CELLS))
+            save_edit(adaptor, data, output_path, before, obsm_keys=(sd.OBSM_RNA, sd.OBSM_CELLS))
             return result
 
         try:
@@ -382,7 +388,7 @@ async def run_check(dataset_id: str, body: CheckRequest, dm: DatasetManager = De
     """Score both methods on synthetic spots drawn from held-out reference cells (SSE:
     ``progress`` per method and depth, ``result``, ``complete``). Saves nothing in the
     dataset; the check is kept in the results store."""
-    adaptor, paths, est, ref_info = await _setup(dm, dataset_id, body.reference_id, "rctd")
+    adaptor, paths, est, ref_info = await _setup(dm, dataset_id, body.reference_id, "rctd", check=True)
     prepare = _preparer(dm, dataset_id, body.reference_id, paths, body.celltype_column, ref_info, None,
                         check=True, seed=body.seed)
     del adaptor
