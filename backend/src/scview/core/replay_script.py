@@ -990,6 +990,23 @@ _HELPERS["label_transfer"] = _label_transfer_helper()
 _HELPER_ORDER += ("label_transfer",)
 
 
+def _learned_gate_helper() -> str:
+    """core/learned_gate.py's scoring code (numpy, scipy, pandas), copied so the script
+    scores the cells as scView did; the gate itself is written inline at its step."""
+    import inspect
+
+    from scview.core import learned_gate
+
+    lines: list[str] = []
+    for obj in learned_gate.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines).strip("\n") + "\n"
+
+
+_HELPERS["learned_gate"] = _learned_gate_helper()
+_HELPER_ORDER += ("learned_gate",)
+
+
 def _dsb_helper() -> str:
     """core/dsb.py's empty-droplet reading and DSB maths (numpy, pandas, h5py only), copied
     so the script normalises the antibodies as scView did; the antibody counts are read
@@ -2376,6 +2393,50 @@ def _label_transfer(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(status, code, "; ".join(notes)[:200] if notes else "")
 
 
+def _learned_gate_train(p: dict, ctx: _Ctx) -> Snippet:
+    return Snippet(RECORDED, [
+        f"# Learned gate {comment_text(p.get('name'), 80)} trained on {comment_text(p.get('n_selected'), 20)} "
+        "selected cells: it adds nothing to the data.",
+        "# The gate is written inline wherever a learned gate apply step follows. Recorded:",
+        *_param_comment(p),
+    ], "training only adds a gate to the library")
+
+
+def _learned_gate_apply(p: dict, ctx: _Ctx) -> Snippet:
+    from scview.core import learned_gate as lg
+
+    gate, targets = p.get("gate"), p.get("target_genes")
+    col, score_col = p.get("column"), p.get("score_column")
+    try:
+        parsed = lg.parse_gate(gate) if isinstance(gate, dict) else None
+    except lg.LearnedGateError:
+        parsed = None
+    ok = (parsed is not None and isinstance(targets, list) and len(targets) == len(parsed.genes)
+          and isinstance(col, str) and col and isinstance(score_col, str) and score_col)
+    if not ok:
+        return Snippet(NOT_REPLAYABLE, ["# Learned gate: its model or columns are not recorded. Recorded:",
+                                        *_param_comment({k: v for k, v in p.items() if k != "gate"})],
+                       "gate not recorded")
+    _need(ctx, "learned_gate")
+    model = {k: gate[k] for k in ("name", "genes", "coef", "intercept", "mean", "std", "clip", "threshold")}
+    here = [t if isinstance(t, str) else None for t in targets]
+    return Snippet(EXACT, [
+        f"# Learned gate {comment_text(parsed.name, 80)} (an L1 logistic regression on "
+        f"{len(parsed.genes)} genes): score = the class-balanced",
+        "# model probability, in = score >= threshold. A gene this dataset lacks takes the training mean.",
+        f"# Genes found {comment_text(p.get('via') or 'by name', 120)}.",
+        "# NOTE: scView read counts from the dataset or its source files; this reads them (or",
+        "# log-normalised values) from the data at this point.",
+        f"LEARNED_GATE = {_lit(model)}",
+        f"GATE_GENES_HERE = {_lit(here)}",
+        'gate_X = lg_expression(adata, [g if g is not None else "" for g in GATE_GENES_HERE])',
+        "gate_score, gate_in = lg_apply(gate_X, LEARNED_GATE)",
+        f'adata.obs[{_lit(col)}] = pd.Categorical(np.where(gate_in, "in", "out"), categories=["in", "out"])',
+        f"adata.obs[{_lit(score_col)}] = gate_score",
+        "del gate_X, gate_score, gate_in",
+    ])
+
+
 def _sample_code(column: object, mapping: object) -> list[str] | None:
     if not isinstance(column, str) or not column or not isinstance(mapping, dict) \
             or not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
@@ -2604,6 +2665,8 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "spatial_autocorr": _spatial_autocorr,
     "tf_motif_enrichment": _tf_motif_enrichment,
     "bulk_deconvolution": _bulk_deconvolution,
+    "learned_gate_train": _learned_gate_train,
+    "learned_gate_apply": _learned_gate_apply,
     "run_errors": _run_errors,
     "doublet_detection_skipped": _step_skipped,
 }

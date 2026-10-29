@@ -96,6 +96,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Plot reliability", "", "colour cells by how well the plot keeps their neighbours"),
     ("Unified View > Layouts", "UMAP stability", "alternative UMAPs: which structure is stable"),
     ("Unified View > Filter", "", "select cells by gene and metadata conditions"),
+    ("Unified View > Gates > Learned gates", "from a selection",
+     "Learn gate... trains a small model (L1 logistic regression) on the selected cells against the other cells "
+     "of their samples; the library exports, imports and applies it to any dataset (in/out column + gate score)"),
     ("Observations", "", "cell metadata and group composition"),
     ("Gene Expression", "", "gene expression plots"),
     ("Gene Sets & Enrichment", "", "gene sets and enrichment on a full page"),

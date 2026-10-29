@@ -61,6 +61,7 @@ from scview.api.v1 import (
     tf_motifs,
     gwas,
     deconvolution,
+    learned_gates,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -123,3 +124,4 @@ api_router.include_router(pathways.router, tags=["pathways"])
 api_router.include_router(tf_motifs.router, tags=["activity"])
 api_router.include_router(gwas.router, tags=["gwas"])
 api_router.include_router(deconvolution.router, tags=["deconvolution"])
+api_router.include_router(learned_gates.router, tags=["gates"])
