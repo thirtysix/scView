@@ -15,7 +15,16 @@ export type WatchdogEvent =
       limited: boolean;
       step: string | null;
     }
-  | { type: "watchdog"; kind: "slow_step"; step: string; elapsed_s: number };
+  | {
+      type: "watchdog";
+      kind: "slow_step";
+      step: string;
+      elapsed_s: number;
+      /** The step's preflight time range in seconds, and in words ("roughly 4 to 16 min"):
+       *  missing when the run had no estimate (an older backend, or no plan). */
+      expected_s?: [number, number];
+      expected_text?: string;
+    };
 
 /** How a run ended: every step ran; a step failed (the steps that need it were skipped, the
  *  others ran, and it was saved); stopped by the pre-step check; or cancelled. */
@@ -81,8 +90,18 @@ export function watchdogMessage(e: WatchdogEvent, label: (step: string) => strin
       "Cancel keeps the dataset as it was."
     );
   }
-  const minutes = Math.max(1, Math.floor(e.elapsed_s / 60));
-  return `${label(e.step)}: ${minutes} min so far.`;
+  const sofar = `${label(e.step)}: ${elapsedText(e.elapsed_s)} so far`;
+  if (!e.expected_s || !e.expected_text) return `${sofar}.`;
+  if (e.elapsed_s <= e.expected_s[1]) return `${sofar} (estimate: ${e.expected_text}).`;
+  return `${sofar}, longer than its estimate (${e.expected_text}). It is still working; Cancel stops the run without saving.`;
+}
+
+/** Whole minutes, as hours and minutes from an hour on: "3 min", "1 h 5 min". */
+function elapsedText(seconds: number): string {
+  const minutes = Math.max(1, Math.floor(seconds / 60));
+  if (minutes < 60) return `${minutes} min`;
+  const m = minutes % 60;
+  return `${Math.floor(minutes / 60)} h${m ? ` ${m} min` : ""}`;
 }
 
 export { clearedText };

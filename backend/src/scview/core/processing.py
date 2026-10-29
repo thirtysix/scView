@@ -118,6 +118,11 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
             large = await asyncio.to_thread(large_run.large_info, path) is not None
             control.mode = large_run.ModeChoice(large, "auto", f"No estimate ({e}).")
         logger.info("Run on %s: %s", dataset_id, control.mode.reason)
+        try:  # each step's estimated time, for the minute notes while it runs
+            control.watchdog.expected = await asyncio.to_thread(
+                preflight.step_times, dm, dataset_id, steps, params, control.mode.chunked)
+        except Exception as e:  # never block a run on the estimate itself
+            logger.warning("No step times for %s: %s", dataset_id, e)
         if control.mode.chunked:
             why = large_run.refused(steps, params)  # a step this mode does not run: before anything
             if why is not None:

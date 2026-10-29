@@ -2441,6 +2441,17 @@ def _would_chunk(requested: str, need: int, avail: Available, cached: Cached,
                   "large-dataset mode: the matrices stay on disk, read in blocks.")
 
 
+def step_times(dm, dataset_id: str, steps: list[str], params, chunked: bool) -> dict[str, tuple[float, float]]:
+    """Each step's (low, high) seconds as the run's preflight note showed them, in the mode
+    the run was given (``chunked``): what the run watchdog's minute notes compare against."""
+    import dataclasses
+
+    overrides = dataclasses.asdict(params) if dataclasses.is_dataclass(params) else dict(vars(params))
+    overrides["chunked"] = "on" if chunked else "off"
+    out = dataset_preflight(dm, dataset_id, list(steps), overrides)
+    return {e["step"]: (float(e["seconds"][0]), float(e["seconds"][1])) for e in out["steps"]}
+
+
 def _chunked_preflight(h: Header, steps: list[str], params, held: int, avail: Available,
                        cached: Cached, plan, *, large: bool, disk_folder: Path) -> dict:
     """The large-dataset estimate, its verdict (memory and disk) and the in-memory steps."""

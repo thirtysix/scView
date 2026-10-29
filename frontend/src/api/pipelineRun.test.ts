@@ -38,6 +38,21 @@ describe("watchdogMessage", () => {
     const slow = (s: number): WatchdogEvent => ({ type: "watchdog", kind: "slow_step", step: "doublet_detection", elapsed_s: s });
     expect(watchdogMessage(slow(185), label)).toBe("Doublet Detection: 3 min so far.");
     expect(watchdogMessage(slow(60), label)).toBe("Doublet Detection: 1 min so far.");
+    expect(watchdogMessage(slow(3900), label)).toBe("Doublet Detection: 1 h 5 min so far.");
+    expect(watchdogMessage(slow(7200), label)).toBe("Doublet Detection: 2 h so far.");
+  });
+
+  it("puts the minutes against the step's estimate, and says plainly when it is past it", () => {
+    const slow = (s: number): WatchdogEvent => ({
+      type: "watchdog", kind: "slow_step", step: "doublet_detection", elapsed_s: s,
+      expected_s: [240, 960], expected_text: "roughly 4 to 16 min",
+    });
+    expect(watchdogMessage(slow(300), label)).toBe("Doublet Detection: 5 min so far (estimate: roughly 4 to 16 min).");
+    expect(watchdogMessage(slow(960), label)).toBe("Doublet Detection: 16 min so far (estimate: roughly 4 to 16 min).");
+    expect(watchdogMessage(slow(1020), label)).toBe(
+      "Doublet Detection: 17 min so far, longer than its estimate (roughly 4 to 16 min). " +
+        "It is still working; Cancel stops the run without saving.",
+    );
   });
 });
 

@@ -8,7 +8,10 @@ run's stream:
 
 - ``kind: "memory"`` when use first crosses 80% and again at 90% of the limit
   (each once, and again only after use has dropped ``REARM_MARGIN`` below it);
-- ``kind: "slow_step"`` every ``SLOW_STEP_SECONDS`` one step keeps running.
+- ``kind: "slow_step"`` every ``SLOW_STEP_SECONDS`` one step keeps running, with the
+  step's preflight time range (``expected_s``, ``expected_text``) when the run has one
+  (``expected``, set by ``core/processing.py``), so the page can say whether the step is
+  still inside its estimate or past it.
 
 "Use" is the container's memory minus its inactive file cache (what ``docker
 stats`` shows): the kernel drops that cache before it kills anything, and
@@ -111,6 +114,8 @@ class RunWatchdog:
         self._step_peak: int | None = None
         self._next_slow = self._slow_every
         self.steps: dict[str, dict[str, Any]] = {}  # step -> elapsed_s, peak_gb
+        # step -> (low, high) seconds the preflight estimated for it (core/processing.py)
+        self.expected: dict[str, tuple[float, float]] = {}
         self.events: list[dict[str, Any]] = []  # every warning sent, for the result
 
     # -- sampling ---------------------------------------------------------
@@ -139,13 +144,23 @@ class RunWatchdog:
             if self._step is not None:
                 elapsed = now - self._step_t0
                 if elapsed >= self._next_slow:
-                    out.append({"type": "watchdog", "kind": "slow_step", "step": self._step,
-                                "elapsed_s": int(round(elapsed))})
+                    out.append(self._slow_event(elapsed))
                     while self._next_slow <= elapsed:
                         self._next_slow += self._slow_every
             self.events.extend(out)
         for event in out:
             self._send(event)
+
+    def _slow_event(self, elapsed: float) -> dict[str, Any]:
+        event = {"type": "watchdog", "kind": "slow_step", "step": self._step,
+                 "elapsed_s": int(round(elapsed))}
+        rng = self.expected.get(self._step)
+        if rng is not None:
+            from scview.core.preflight import time_text
+
+            event["expected_s"] = [float(rng[0]), float(rng[1])]
+            event["expected_text"] = time_text(rng)
+        return event
 
     def _memory_events(self, mem: Memory) -> list[dict[str, Any]]:
         share = mem.used / mem.limit
