@@ -188,7 +188,12 @@ def values(adata: ad.AnnData, name: str, normalised: bool = True) -> np.ndarray:
 def common_panel(adatas: list[ad.AnnData]) -> list[str]:
     """For a merge: keep the proteins every dataset measured (counts only; the
     CLR is made again on the merged panel) and drop the modality from all of
-    them when one has none. Returns the shared panel ([] when dropped)."""
+    them when one has none. Returns the shared panel ([] when dropped). A saved
+    WNN result (core/wnn.py) was made on other cells and another panel: dropped."""
+    from scview.core import wnn
+
+    for a in adatas:
+        wnn.drop(a)
     if not adatas or not all(COUNTS_KEY in a.obsm for a in adatas):
         for a in adatas:
             for key in (COUNTS_KEY, CLR_KEY, DSB_KEY):

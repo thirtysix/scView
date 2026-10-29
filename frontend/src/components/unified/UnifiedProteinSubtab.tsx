@@ -14,6 +14,7 @@ import type { ResolvedColorScale } from "@/lib/colorScale";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
 import Plot from "@/components/plots/Plot";
 import { ProteinNormalisation } from "./ProteinNormalisation";
+import { WnnCard } from "./WnnCard";
 
 interface UnifiedProteinSubtabProps {
   datasetId: string;
@@ -165,6 +166,8 @@ export function UnifiedProteinSubtab({
         rnaLayer={expressionLayer}
         initial={activeProtein && targets.includes(activeProtein) ? activeProtein : targets[0] ?? ""}
       />
+
+      <WnnCard datasetId={datasetId} groupByColumn={groupByColumn} />
     </div>
   );
 }

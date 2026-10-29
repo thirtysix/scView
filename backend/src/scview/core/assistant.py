@@ -287,6 +287,22 @@ def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(gp_lines[1:])))
 
 
+def _add_wnn(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved WNN run (core/wnn.py): mean RNA / protein weight per label group, only
+    once a run is saved and while it still fits the cells."""
+    from scview.core import wnn
+
+    try:
+        w_lines, w_detail = wnn.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: WNN failed: %s", exc)
+        return
+    if w_lines:
+        lines.extend(w_lines)
+        sources.append(ChatSource(kind="result", ref=wnn.TAG, detail=w_detail,
+                                  evidence="\n".join(w_lines[1:])))
+
+
 def _add_cnv(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved copy-number inference (core/cnv.py): reference, high-score groups,
     high CNV clusters with their gained / lost chromosomes, once run."""
@@ -860,6 +876,7 @@ def build_grounding_context(
         _add_layout_stability(adaptor, lines, sources)
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
+        _add_wnn(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_deconvolution(adaptor, lines, sources)
         _add_learned_gate(adaptor, lines, sources)

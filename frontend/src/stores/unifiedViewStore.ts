@@ -21,6 +21,8 @@ type ScatterOverlay =
       activity?: { network: "collectri" | "progeny"; source: string };
       reliability?: ReliabilityRef;
       method?: ScoreMethod;
+      // share: a 0-1 share drawn on a fixed scale (the WNN RNA weight, components/unified/WnnCard.tsx)
+      share?: boolean;
     }
   // One gene program's per-cell usage share (Programs subtab; 1-based index, P1..Pk)
   | { type: "program"; index: number; name: string }

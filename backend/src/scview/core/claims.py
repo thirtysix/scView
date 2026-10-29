@@ -655,6 +655,7 @@ _FAMILY_PREFIX = {
     "labels": "result:labels:",
     "tissue": "result:tissue",  # spatial data (core/spatial.py)
     "gwas": "result:gwas", "traits": "result:gwas",  # GWAS trait links (core/gwas_catalog.py)
+    "wnn": "result:wnn",  # joint RNA + protein weights (core/wnn.py)
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 

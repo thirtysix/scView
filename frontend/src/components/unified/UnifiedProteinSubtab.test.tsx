@@ -27,6 +27,10 @@ vi.mock("@/components/common/GeneSearch", () => ({
     <button onClick={() => onSelect("MS4A1")}>pick MS4A1</button>
   ),
 }));
+// The WNN card has its own tests (WnnCard.test.tsx).
+vi.mock("./WnnCard", () => ({
+  WnnCard: ({ groupByColumn }: { groupByColumn: string }) => <div data-testid="wnn-card">{groupByColumn}</div>,
+}));
 
 import { UnifiedProteinSubtab } from "./UnifiedProteinSubtab";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -83,6 +87,8 @@ describe("UnifiedProteinSubtab", () => {
     expect(screen.getByRole("button", { name: "IgG1_control" }).title).toMatch(/isotype control/);
     // The heatmap reads the protein layer, controls left out.
     expect(screen.getByTestId("marker-plot").textContent).toBe("heatmap:protein:CD3,CD19");
+    // The WNN card sits on the tab, grouped like the heatmap.
+    expect(screen.getByTestId("wnn-card")).toBeTruthy();
   });
 
   it("sets the clicked protein against the gene of its target", async () => {
