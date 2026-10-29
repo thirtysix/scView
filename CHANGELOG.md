@@ -6,6 +6,42 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Joint RNA + protein (WNN)** (Unified View > Protein): Seurat's weighted nearest neighbours for CITE-seq
+  data. Each cell gets an RNA and a protein weight, and the two modalities are joined in one graph that gives
+  a WNN UMAP, a protein UMAP (both in the Embedding menu) and WNN clusters (`wnn_leiden`). The RNA, protein and
+  WNN layouts are drawn side by side; Colour by RNA weight uses a fixed 0-1 scale, with a violin and a box plot
+  by group. Isotype controls are left out; fewer than 5 proteins is refused. Given the same neighbours, the
+  weights match Seurat 5.1 to within 1e-8. On a 10x PBMC CITE-seq set (7,281 cells, 14 proteins) it takes
+  about 40 s; RNA weight is highest in pDC, platelets and dendritic cells, which the antibody panel has no
+  markers for.
+- **Spot composition** (Unified View > Spot composition, Visium only): split each spot into the cell types of
+  another dataset in the library, with an RCTD-style Poisson-lognormal fit and a per-section platform-effect
+  correction, or an NNLS baseline. Click a type to colour the tissue by its share (fixed 0-100%), colour by
+  the dominant type, or read a type x cluster heatmap; shares are of each spot's RNA, or estimated cells. A
+  self-check scores both methods on synthetic spots from held-out reference cells. On a 10x lymph node
+  section against a lymphoid atlas (73k cells, 33 types) a run takes about 1.5 min; on the self-check the fit
+  has RMSE 0.056 against NNLS's 0.086.
+- **Learned gates** (Unified View > Gates > Learned gates): train a small model on a selection (L1 logistic
+  regression on log-normalised genes; the other cells come from the selection's own samples and conditions,
+  so a CTRL selection does not learn the interferon response), with out-of-fold AUROC, precision, recall and
+  F1, the genes for and against, and Select disagreements to review where model and selection differ. Saved
+  gates can be exported, imported, checked on any dataset (genes found, one-to-one orthologs between human
+  and mouse, shift and interferon warnings) and applied as an in/out column and a gate score with per-sample
+  counts. A Kang CTRL B-cell gate found STIM B cells with precision 0.95 and recall 0.87.
+- **Convert an R object before creating the dataset** (Data): an .rds dropped with other samples can be
+  converted with Convert now, so the merge plan shows its gene and cell overlap; creating the dataset then
+  reuses that conversion (a file that changed since is converted again).
+
+### Changed
+- The bulk deconvolution over-share flag compares an estimate with the type's largest share in one donor
+  (donors with at least 50 cells), not its share of all reference cells: on Kang, NNLS on a matched CTRL
+  reference no longer flags CD8 T cells, which one donor has at 12%.
+
+### Fixed
+- Dark theme: the selection chip, Ask about this selection and the Spatial genes tab no longer show light text
+  on light backgrounds.
+
 ## [0.47.1] - 2026-10-29
 
 ### Changed
