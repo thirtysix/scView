@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-10-29
+
 ### Changed
 - **Learned gates separate neighbouring types better.** Candidate genes are now also ranked against the
   unselected cells most like the selection. Against all the other cells, fold change mostly picks genes that
