@@ -255,6 +255,22 @@ def _add_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]) -> 
                                   evidence="\n".join(dc_lines[1:])))
 
 
+def _add_spot_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved spot composition (core/spot_deconvolution.py): dominant types and each
+    section's shares, only once a run has been saved on this dataset."""
+    from scview.core import spot_deconvolution
+
+    try:
+        sd_lines, sd_detail = spot_deconvolution.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: spot composition failed: %s", exc)
+        return
+    if sd_lines:
+        lines.extend(sd_lines)
+        sources.append(ChatSource(kind="result", ref=spot_deconvolution.TAG, detail=sd_detail,
+                                  evidence="\n".join(sd_lines[1:])))
+
+
 def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved gene programs (core/gene_programs.py): k, the stable ones with their
     top genes and best enriched term, only once a run has been saved."""
@@ -846,6 +862,7 @@ def build_grounding_context(
         _add_programs(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_deconvolution(adaptor, lines, sources)
+        _add_spot_deconvolution(adaptor, lines, sources)
         _add_cnv(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)

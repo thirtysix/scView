@@ -116,6 +116,7 @@ ADDITIVE_STEPS = frozenset({
     "tf_motif_enrichment",
     "gwas_traits",
     "bulk_deconvolution",
+    "spot_deconvolution",
 })
 
 
