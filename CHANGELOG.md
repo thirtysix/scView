@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-10-29
+
 ### Added
 - **Bulk deconvolution** (Unified View > Deconvolution): estimate the cell-type fractions of your bulk RNA-seq
   samples with the open dataset as the reference: MuSiC-style weighted NNLS across donors, or NNLS on marker
