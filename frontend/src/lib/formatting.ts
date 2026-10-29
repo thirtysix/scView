@@ -108,5 +108,7 @@ export function prettyEmbeddingLabel(name: string): string {
   const [base = "", ...rest] = name.replace(/^X_/, "").split("_");
   const suffix = rest.filter((r) => r.toLowerCase() !== "3d").join(" ");
   if (!suffix) return base.toUpperCase();
-  return `${base.toUpperCase()} (${suffix === "uncorrected" ? suffix : suffix.toUpperCase()})`;
+  // Words stay words ("UMAP (protein)", the WNN card's protein layout); tool names in capitals.
+  const word = suffix === "uncorrected" || suffix === "protein";
+  return `${base.toUpperCase()} (${word ? suffix : suffix.toUpperCase()})`;
 }

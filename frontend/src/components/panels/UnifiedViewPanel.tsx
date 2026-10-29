@@ -419,7 +419,8 @@ export function UnifiedViewPanel() {
   );
   // Plot reliability is a share (0-1): a fixed range, never clipped to the data.
   const reliability = scatterOverlay?.type === "score" ? scatterOverlay.reliability : undefined;
-  const fixedShare = !!reliability;
+  // The WNN RNA weight is one too.
+  const fixedShare = !!reliability || (scatterOverlay?.type === "score" && !!scatterOverlay.share);
   const colorScale = useMemo(
     () =>
       fixedShare
