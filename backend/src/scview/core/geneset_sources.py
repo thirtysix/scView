@@ -38,6 +38,8 @@ class ResolvedGeneSets:
     msigdb_unavailable: bool = False
     # MSigDB ids written for another species than the dataset's (genes_for_species ran)
     cross_species: list[str] = field(default_factory=list)
+    # term -> (source id, details URL) from MSigDB's exactSource / externalDetailsURL
+    term_source: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 def genes_for_species(
@@ -104,6 +106,8 @@ def resolve_gene_sets(
                 out.msigdb_unavailable = True
                 continue
             sets = msigdb_loader.get_collection_as_dict(cid)
+            get_sources = getattr(msigdb_loader, "get_sources", None)
+            sources = get_sources(cid) if get_sources else {}
             label = cid
             set_species = collection_species(cid)
             if species in ("human", "mouse") and set_species and set_species != species:
@@ -121,6 +125,8 @@ def resolve_gene_sets(
             out.term_collection[key] = cid
             if custom:
                 out.custom_terms.add(key)
+            elif term in sources:
+                out.term_source[key] = sources[term]
     return out
 
 
@@ -177,23 +183,35 @@ def tag_records(records: list[dict], resolved: ResolvedGeneSets) -> list[dict]:
         rec["species"] = collection_species(cid) or ""
         if cid in resolved.custom_names:
             rec["collection_name"] = resolved.custom_names[cid]
+        sid, url = resolved.term_source.get(rec.get("term", ""), ("", ""))
+        rec["source_id"], rec["source_url"] = sid, url
     return records
 
 
-def label_records(records: list[dict], custom_store: CustomGeneSetStore | None) -> list[dict]:
+def label_records(
+    records: list[dict], custom_store: CustomGeneSetStore | None, msigdb_loader: Any = None
+) -> list[dict]:
     """Copies of result records with custom collections labelled as they are now.
 
     A renamed collection shows its new name; a deleted one keeps the name it
     had when the result was computed, marked "(deleted)", so a cached result
-    never silently points at nothing.
+    never silently points at nothing. With ``msigdb_loader``, an MSigDB record
+    cached before records carried their source (R-HSA-..., WP..., N...) gets it.
     """
     out = []
     names: dict[str, str | None] = {}
+    sources: dict[str, dict[str, tuple[str, str]]] = {}
     for rec in records:
         cid = rec.get("collection", "")
         if not is_custom_id(cid):
             if "species" not in rec and collection_species(cid):  # cached before species
                 rec = {**rec, "species": collection_species(cid)}
+            if "source_id" not in rec and msigdb_loader is not None and collection_species(cid):
+                if cid not in sources:
+                    get_sources = getattr(msigdb_loader, "get_sources", None)
+                    sources[cid] = get_sources(cid) if get_sources else {}
+                sid, url = sources[cid].get(rec.get("term", ""), ("", ""))
+                rec = {**rec, "source_id": sid, "source_url": url}
             out.append(rec)
             continue
         if cid not in names:

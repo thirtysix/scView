@@ -61,11 +61,16 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
+    ("Unified View > Enrichment > Diagram", "Reactome",
+     "a Reactome row's pathway diagram coloured by a DE result's fold changes (also on the DE tab's "
+     "enrichment); KEGG and WikiPathways rows link out"),
     ("Unified View > DE", "", "selection vs rest or between groups; cell-level and pseudobulk tests"),
     ("Unified View > DE > Audit this result", "donor shuffle", "donor-shuffle check of a DE result"),
     ("Unified View > Activity > TFs (CollecTRI)", "", "transcription factor activity"),
     ("Unified View > Activity > Pathways (PROGENy)", "", "pathway activity"),
     ("Unified View > Activity > Cytokine response", "CytoSig", "CytoSig cytokine response per group"),
+    ("Unified View > Activity > Upstream TF candidates", "motifs",
+     "TFs whose JASPAR motifs are enriched in each group's marker promoters (candidates)"),
     ("Unified View > Gene lists", "", "saved gene lists"),
     ("Unified View > Communication > One run", "ligand-receptor, LIANA",
      "ligand-receptor scores between groups (LIANA consensus)"),
@@ -78,6 +83,11 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Perturbation", "CRISPR, Mixscape", "CRISPR guide calls, Mixscape"),
     ("Unified View > Spatial genes", "Moran's I, spatial data only",
      "spatially variable genes (Moran's I) on Visium spots or imaging cells; click a gene to colour the tissue"),
+    ("Unified View > Traits", "GWAS",
+     "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
+    ("Unified View > Deconvolution", "bulk RNA-seq",
+     "cell-type fractions of uploaded bulk RNA-seq samples, this dataset as the reference; self-check, "
+     "reference download for MuSiC / CIBERSORTx"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),
@@ -119,9 +129,24 @@ def compact_guide() -> str:
             heads[tab] = f"{tab} ({hint})" if hint else tab
         else:
             items.setdefault(tab, []).append(f"{rest} ({hint})" if hint else rest)
-    lines = [f"- {head}" + (f": {'; '.join(items[tab])}" if tab in items else "")
+    lines = [f"- {head}" + (f": {'; '.join(_shared_parents(items[tab]))}" if tab in items else "")
              for tab, head in heads.items()]
     return "\n".join([*lines, f"- {CLOSING}"])
+
+
+def _shared_parents(entries: list[str]) -> list[str]:
+    """Neighbouring entries under one parent written once: "Activity > TFs; Activity >
+    Pathways" -> "Activity > TFs / Pathways" (keeps the compact guide under its cap)."""
+    out: list[str] = []
+    parent = None
+    for e in entries:
+        head, sep, rest = e.partition(" > ")
+        if sep and head == parent:
+            out[-1] += f" / {rest}"
+        else:
+            out.append(e)
+            parent = head if sep else e.split(" (")[0]
+    return out
 
 
 def full_guide() -> str:

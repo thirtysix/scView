@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp, ArrowUpDown, Loader2, Sparkles } from "lucide-react";
 import { collectionLabel } from "@/api/genesets";
+import { PathwaySourceAction } from "@/components/unified/PathwaySourceAction";
 import type { EnrichmentResult } from "@/api/enrichment";
 import { formatPValue } from "@/lib/formatting";
 import type { EnrichmentSortField, SortDir } from "@/lib/enrichment";
@@ -15,6 +16,8 @@ interface Props {
   onAsk: (r: EnrichmentResult) => void;
   /** The term being scored, if any (its row spins, the others dim). */
   scoringTerm: string | null;
+  /** A Reactome row's "Diagram" button (KEGG / WikiPathways rows get an outbound link). */
+  onDiagram?: (r: EnrichmentResult) => void;
   /** Classes for the scroll container (height cap). */
   className?: string;
 }
@@ -31,6 +34,7 @@ export function EnrichmentTermsTable({
   onTermClick,
   onAsk,
   scoringTerm,
+  onDiagram,
   className = "max-h-[calc(100vh-500px)]",
 }: Props) {
   const sortIcon = (field: EnrichmentSortField) => {
@@ -84,6 +88,11 @@ export function EnrichmentTermsTable({
                   <div className="flex items-center gap-1.5">
                     {isScoring && <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-blue-500" />}
                     <div className="min-w-0 flex-1 truncate font-medium text-slate-800">{r.term}</div>
+                    <PathwaySourceAction
+                      sourceId={r.source_id}
+                      sourceUrl={r.source_url}
+                      onDiagram={onDiagram ? () => onDiagram(r) : undefined}
+                    />
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

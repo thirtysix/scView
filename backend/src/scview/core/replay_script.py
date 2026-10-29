@@ -2100,6 +2100,15 @@ def _annotation_crosscheck(p: dict, ctx: _Ctx) -> Snippet:
     ], "scView's own cross-check")
 
 
+def _bulk_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
+    return Snippet(NOT_REPLAYABLE, [
+        "# Bulk deconvolution (scView's MuSiC-style weighted NNLS) needs the uploaded bulk file and",
+        "# only adds a result; it is not replayed. Deconvolution > Download reference exports this",
+        "# dataset as a reference for MuSiC, BayesPrism or CIBERSORTx. Recorded:",
+        *_param_comment(p),
+    ], "needs the bulk file")
+
+
 def _merge_clusters(p: dict, ctx: _Ctx) -> Snippet:
     column, target, mapping = p.get("column"), p.get("target"), p.get("mapping")
     if not column or not target or not isinstance(mapping, dict):
@@ -2184,6 +2193,15 @@ def _qc_state_label(p: dict, ctx: _Ctx) -> Snippet:
         "# Recorded:",
         *_param_comment(p),
     ], "scView's own QC state check")
+
+
+def _gwas_traits(p: dict, ctx: _Ctx) -> Snippet:
+    return Snippet(NOT_REPLAYABLE, [
+        "# scView's GWAS trait links (each group's markers against the GWAS Catalog",
+        f"# {comment_text(p.get('release'), 20)} release) read the data and add nothing to it: not replayed.",
+        "# Recorded:",
+        *_param_comment(p),
+    ], "a lookup against the GWAS Catalog; adds no data")
 
 
 def _doublet_threshold(p: dict, ctx: _Ctx) -> Snippet:
@@ -2459,6 +2477,13 @@ def _step_skipped(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, [f"# {step} was skipped: {reason}."])
 
 
+def _tf_motif_enrichment(p: dict, ctx: _Ctx) -> Snippet:
+    """Upstream TF candidates (core/tf_motifs.py): a result only, the data are unchanged; it
+    needs scView's promoter motif table, so it is not computed again here."""
+    return Snippet(NOT_REPLAYABLE, ["# Upstream TF candidates (promoter motifs): a result only, the data are "
+                                    "unchanged. Recorded:", *_param_comment(p)], "result only")
+
+
 def _run_errors(p: dict, ctx: _Ctx) -> Snippet:
     """A run that finished with errors (core/step_failures.py): which steps failed and were
     skipped (not in the history, so not replayed), and the earlier results it removed as
@@ -2565,6 +2590,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "merge_clusters": _merge_clusters,
     "protein_dsb": _protein_dsb,
     "qc_state_label": _qc_state_label,
+    "gwas_traits": _gwas_traits,
     "mito_refilter": _mito_refilter,
     "gene_programs": _gene_programs,
     "cnv": _cnv,
@@ -2576,6 +2602,8 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "vdj_clonotypes": _vdj_clonotypes,
     "vdj_remove": _vdj_remove,
     "spatial_autocorr": _spatial_autocorr,
+    "tf_motif_enrichment": _tf_motif_enrichment,
+    "bulk_deconvolution": _bulk_deconvolution,
     "run_errors": _run_errors,
     "doublet_detection_skipped": _step_skipped,
 }

@@ -7,8 +7,10 @@ import { apiFetch, readError } from "./client";
 
 export type FileRole = "matrix" | "barcodes" | "features" | "data" | "side" | "unknown";
 /** What a side file is: Cell Ranger metrics, the raw matrix (sequencing QC), a TCR/BCR contig
- *  table, or Cell Ranger's CRISPR guide calls. */
-export type SideKind = "metrics" | "raw" | "vdj" | "crispr";
+ *  table, Cell Ranger's CRISPR guide calls, or a Space Ranger spatial file. */
+export type SideKind = "metrics" | "raw" | "vdj" | "crispr" | "spatial";
+/** Which Space Ranger spatial file (core/spatial.py PARTS). */
+export type SpatialPart = "positions" | "scalefactors" | "hires" | "lowres" | "archive";
 export type UnitFormat =
   | "tenx_mex"
   | "tenx_h5"
@@ -28,6 +30,8 @@ export interface BundleFile {
   confidence: number;
   /** Side files only (absent from older backends). */
   side_kind?: SideKind | null;
+  /** Space Ranger spatial files only. */
+  spatial_part?: SpatialPart | null;
   /** Contig tables: "T", "B" or "T+B", from their chains (else the file name). */
   receptor?: string | null;
   /** The path inside an uploaded folder; the name for a plain upload (absent from older backends). */

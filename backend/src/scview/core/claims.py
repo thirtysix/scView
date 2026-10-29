@@ -647,8 +647,12 @@ _FAMILY_PREFIX = {
     "screen": "result:screen",
     "spatial_genes": "result:spatial_genes", "spatial": "result:spatial_genes",
     "moran": "result:spatial_genes",
+    "tfmotifs": "result:tfmotifs", "tfmotif": "result:tfmotifs", "motifs": "result:tfmotifs",
+    "motif": "result:tfmotifs",
+    "deconvolution": "result:deconvolution", "deconv": "result:deconvolution",
     "labels": "result:labels:",
     "tissue": "result:tissue",  # spatial data (core/spatial.py)
+    "gwas": "result:gwas", "traits": "result:gwas",  # GWAS trait links (core/gwas_catalog.py)
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -694,7 +698,10 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "cytokines", "cytokine", "cytosig",
                                   "activity", "deaudit", "audit",
                                   "clonotypes", "clonotype", "ppi", "cnv", "ontology",
-                                  "selection", "sel", "screen", "labels", "tissue", "spatial", "moran")
+                                  "selection", "sel", "screen", "labels", "tissue", "spatial", "moran",
+                                  "tfmotifs", "tfmotif", "motifs", "motif",
+                                  "gwas", "traits",
+                                  "deconvolution", "deconv")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]

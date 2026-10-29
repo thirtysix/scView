@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { GeneLinkOuts } from "@/components/unified/GeneLinkOuts";
 import type { GeneReport, ReportSection } from "@/api/report";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { rgbCss } from "@/lib/categoryColors";
@@ -275,7 +276,12 @@ export function GeneSectionBody({ section, report, onGene, onGroup }: {
     case "markers":
       return <MarkerBody d={d} column={column} onGroup={onGroup} />;
     case "databases":
-      return <DatabasesBody d={d} />;
+      return (
+        <>
+          <DatabasesBody d={d} />
+          <GeneLinkOuts gene={report.gene} className="mt-1.5" />
+        </>
+      );
     case "per_donor":
       return <PerDonorBody d={d} column={column} onGroup={onGroup} />;
     case "coexpression":

@@ -1,8 +1,17 @@
 import { FileText } from "lucide-react";
 import { filePath, type BundleFile } from "@/api/ingest";
 
+const SPATIAL_PART: Record<string, string> = {
+  positions: "spot positions",
+  scalefactors: "image scale factors",
+  hires: "high-resolution tissue image",
+  lowres: "low-resolution tissue image",
+  archive: "Space Ranger spatial folder",
+};
+
 /** What a side file is, from its detected kind. */
-export function sideFileRole(f: Pick<BundleFile, "kind">): string {
+export function sideFileRole(f: Pick<BundleFile, "kind" | "side_kind" | "spatial_part">): string {
+  if (f.side_kind === "spatial") return SPATIAL_PART[f.spatial_part ?? ""] ?? "Space Ranger spatial file";
   if (f.kind === "tenx_metrics") return "Cell Ranger metrics";
   if (f.kind === "tenx_h5") return "raw (unfiltered) matrix";
   return "raw matrix part";
@@ -20,7 +29,11 @@ export function SequencingQcSideFiles({ files }: { files?: BundleFile[] }) {
         <li
           key={f.path}
           className="flex items-center gap-1.5 text-slate-500"
-          title="Read for the Sequencing QC card on Data Assessment (metrics, flags and the barcode-rank plot); not loaded as cells."
+          title={
+            f.side_kind === "spatial"
+              ? "Places the spots on the tissue image (Unified View tissue plot); not loaded as cells."
+              : "Read for the Sequencing QC card on Data Assessment (metrics, flags and the barcode-rank plot); not loaded as cells."
+          }
         >
           <FileText className="h-3 w-3 text-sky-600" />
           <span className="break-all text-slate-600">{filePath(f)}</span>

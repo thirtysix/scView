@@ -152,6 +152,27 @@ def test_stale_when_cells_or_recipe_change(tmp_path):
     assert results_store.entries("ds2")[0]["stale"] is None  # no adaptor: unknown
 
 
+def test_a_step_that_only_adds_a_result_leaves_others_current(tmp_path):
+    a = FakeAdaptor(tmp_path, "ds2b", _adata())
+    results_store.keep(a, "test", {"v": 1}).result()
+    provenance.record_step(a.adata, step="spatial_autocorr", tool="scview.spatial_autocorr")
+    provenance.record_step(a.adata, step="gene_programs", tool="scview.gene_programs")
+    assert results_store.entries("ds2b", adaptor=a)[0]["stale"] is False
+    provenance.record_step(a.adata, step="clustering", tool="scanpy")
+    assert results_store.entries("ds2b", adaptor=a)[0]["stale"] is True
+
+
+def test_an_entry_from_before_data_steps_still_counts_every_step(tmp_path):
+    a = FakeAdaptor(tmp_path, "ds2c", _adata())
+    fp = results_store.fingerprint(a)
+    old = {k: v for k, v in fp.items() if k != "n_data_steps"}
+    assert results_store._is_stale(old, fp) is False
+    provenance.record_step(a.adata, step="spatial_autocorr", tool="scview.spatial_autocorr")
+    now = results_store.fingerprint(a)
+    assert results_store._is_stale(old, now) is True  # written by an older version: every step counts
+    assert results_store._is_stale(fp, now) is False
+
+
 def test_delete_and_delete_dataset(tmp_path):
     [e] = _stored("ds1", "test", {"v": 1})
     assert results_store.delete("ds1", e["id"]) is True

@@ -20,8 +20,9 @@ scview's own modules. Floats narrow to float32 except p-value columns (DE p goes
 below float32's 1.2e-38), integers to the smallest type that holds them.
 
 Each entry records a fingerprint of the data it was computed on (the cells, in
-order, and the recipe's step count): a result whose fingerprint no longer
-matches is ``stale`` and is not given to the co-pilot as a current fact.
+order, and the recipe's step count, leaving out ``ADDITIVE_STEPS``): a result whose
+fingerprint no longer matches is ``stale`` and is not given to the co-pilot as a
+current fact.
 
 Retention: per (kind, key) the newest is ``primary`` and older ones
 ``superseded``, of which the last ``KEEP_SUPERSEDED`` are kept; at most
@@ -107,15 +108,35 @@ def dataset_id_of(adaptor: Any) -> str | None:
     return None
 
 
+# Recorded steps that only add a result or a new column (Moran's I, programs, a
+# pseudotime, a label column): earlier results were computed on data they leave alone.
+ADDITIVE_STEPS = frozenset({
+    "spatial_autocorr", "gene_programs", "pseudotime", "paga", "cnv", "label_transfer",
+    "annotation_crosscheck", "annotation_confidence", "annotation_confidence_unknown", "qc_state_label",
+    "tf_motif_enrichment",
+    "gwas_traits",
+    "bulk_deconvolution",
+})
+
+
 def fingerprint(adaptor: Any) -> dict[str, Any] | None:
-    """The cells (in order) and the recipe's step count the adaptor holds now."""
+    """The cells (in order) and the recipe's step count the adaptor holds now:
+    ``n_steps`` every step, ``n_data_steps`` without ``ADDITIVE_STEPS``."""
     try:
         from scview.core import provenance
         adata = adaptor.adata
-        return {"n_cells": int(adata.n_obs), "cells": adaptor.cells_fingerprint(),
-                "n_steps": len(provenance.read_provenance(adata).get("history") or [])}
+        history = provenance.read_provenance(adata).get("history") or []
+        return {"n_cells": int(adata.n_obs), "cells": adaptor.cells_fingerprint(), "n_steps": len(history),
+                "n_data_steps": sum(1 for h in history if h.get("step") not in ADDITIVE_STEPS)}
     except Exception:  # a test double, or no data
         return None
+
+
+def _is_stale(stored: dict[str, Any], now: dict[str, Any]) -> bool:
+    """A stored fingerprint against the current one. Entries written before
+    ``n_data_steps`` existed still compare every step."""
+    keys = set(stored) - {"n_steps"} if "n_data_steps" in stored else set(stored)
+    return any(stored.get(k) != now.get(k) for k in keys)
 
 
 def safe_id(value: str | None) -> bool:
@@ -512,7 +533,7 @@ def entries(dataset_id: str, kind: str | None = None, adaptor: Any = None) -> li
     for e in out:
         fp = e.get("fingerprint")
         now = _current_fingerprint(adaptor, fp, cache) if adaptor is not None and fp else None
-        e["stale"] = None if now is None else fp != now
+        e["stale"] = None if now is None else _is_stale(fp, now)
     return sorted(out, key=lambda e: e["created_at"], reverse=True)
 
 

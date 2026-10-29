@@ -32,6 +32,7 @@ const ALIGNMENTS = "read alignments (scView starts from the count matrix)";
 const REPORT = "Cell Ranger's HTML report";
 const LOUPE = "Loupe Browser files";
 const MOLECULES = "per-molecule read information, not a count matrix";
+const SPATIAL_EXTRA = "Space Ranger alignment images and tables, not used by scView";
 
 const JUNK_NAMES: Record<string, string> = {
   ".ds_store": SYSTEM,
@@ -40,10 +41,19 @@ const JUNK_NAMES: Record<string, string> = {
   "web_summary.html": REPORT,
   "molecule_info.h5": MOLECULES,
   "sample_molecule_info.h5": MOLECULES,
+  "aligned_fiducials.jpg": SPATIAL_EXTRA,
+  "detected_tissue_image.jpg": SPATIAL_EXTRA,
+  "aligned_tissue_image.jpg": SPATIAL_EXTRA,
+  "cytassist_image.tiff": SPATIAL_EXTRA,
+  "spatial_enrichment.csv": SPATIAL_EXTRA,
+  "barcode_fluorescence_intensity.csv": SPATIAL_EXTRA,
+  "fiducial_positions_list.txt": SPATIAL_EXTRA,
+  "probe_set.csv": "the probe set of the run, not data",
 };
 const JUNK_SUFFIXES: [string, string][] = [
   [".bam", ALIGNMENTS],
   [".bai", ALIGNMENTS],
+  [".bam.bai", ALIGNMENTS],
   [".csi", ALIGNMENTS],
   [".cram", ALIGNMENTS],
   [".crai", ALIGNMENTS],

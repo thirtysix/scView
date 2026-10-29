@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { itemsFromDrop, itemsFromFiles, junkReason, relativePath, skippedNote, splitJunk } from "./ingestUpload";
 
 /** A File as a folder pick gives it: with its path inside the chosen folder. */
@@ -69,5 +71,17 @@ describe("folder upload helpers", () => {
     // Plain files dropped (no folder): their names, from dataTransfer.files.
     const plain = await itemsFromDrop({ files: [new File(["x"], "a.h5ad")] as unknown as FileList });
     expect(plain.map((i) => i.path)).toEqual(["a.h5ad"]);
+  });
+
+  it("skips the same names as the server (core/ingestion/paths.py)", () => {
+    const py = readFileSync(resolve(__dirname, "../../../backend/src/scview/core/ingestion/paths.py"), "utf8");
+    const block = (start: string) => py.slice(py.indexOf(start), py.indexOf("\n}", py.indexOf(start)) + 2);
+    const names = [...block("_JUNK_NAMES = {").matchAll(/"([^"]+)":/g)].map((m) => m[1]!);
+    const suffixes = [...py.slice(py.indexOf("_JUNK_SUFFIXES = (")).split("\n)\n")[0]!.matchAll(/\("([^"]+)",/g)]
+      .map((m) => m[1]!);
+    expect(names.length).toBeGreaterThan(10);
+    expect(suffixes.length).toBeGreaterThan(5);
+    for (const n of names) expect(junkReason(`outs/spatial/${n}`), n).not.toBeNull();
+    for (const x of suffixes) expect(junkReason(`outs/file${x}`), x).not.toBeNull();
   });
 });

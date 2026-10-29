@@ -240,6 +240,28 @@ def human_to_mouse(symbols: Iterable[str], *, table: pd.DataFrame | None = None,
     return {str(s): list(m.get(str(s), [])) for s in symbols}
 
 
+def mouse_to_human(symbols: Iterable[str], *, table: pd.DataFrame | None = None,
+                   min_evidence: int = MIN_EVIDENCE, one_to_many: int = ONE_TO_MANY) -> dict[str, list[str]]:
+    """Every mouse symbol given -> its human orthologs ([] when none passes the cuts):
+    the same rules the other way round (a mouse gene with more than ``one_to_many``
+    human rows is dropped)."""
+    t = _table(table)
+    key = ("m2h", id(t), len(t), min_evidence, one_to_many)
+    hit = _maps.get(key)
+    if hit is not None and hit[0] is t:
+        m = hit[1]
+    else:
+        kept = t[t["evidence"] >= min_evidence]
+        m = {}
+        for mouse, humans in kept.groupby("mouse", sort=False)["human"]:
+            if len(humans) <= one_to_many:
+                m[str(mouse)] = list(dict.fromkeys(humans))
+        if len(_maps) > 8:
+            _maps.clear()
+        _maps[key] = (t, m)
+    return {str(s): list(m.get(str(s), [])) for s in symbols}
+
+
 def _translations(values: Iterable[str], m: dict[str, list[str]]) -> pd.DataFrame:
     """(original, translated) rows: every combination of the subunits' orthologs."""
     rows = []

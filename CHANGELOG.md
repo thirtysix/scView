@@ -6,6 +6,43 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-10-29
+
+### Added
+- **Bulk deconvolution** (Unified View > Deconvolution): estimate the cell-type fractions of your bulk RNA-seq
+  samples with the open dataset as the reference: MuSiC-style weighted NNLS across donors, or NNLS on marker
+  genes. Bulk files are TSV, CSV or GCT (and .gz), genes in rows or columns, symbols or Ensembl IDs; log values
+  are refused and TPM is flagged as relative. **Reference cells** restricts the reference to one condition
+  (e.g. stim = CTRL): a reference that mixes conditions gave untreated Kang samples 50-60% megakaryocytes
+  (true 2%), and 2.4% once restricted. An estimate at least 20% and 5x its share of the reference cells is
+  flagged. A self-check holds each donor out in turn (r, RMSE and bias per cell type; about 20 s on Kang), and
+  Download reference writes the dataset for MuSiC, BayesPrism and CIBERSORTx.
+- **GWAS trait links** (Unified View > Traits): GWAS Catalog traits linked to each group's marker genes
+  (hypergeometric p, BH-adjusted, plus an empirical p from random gene sets matched on how many traits each gene
+  has; overlap counted in loci), with the caveat that a hit is a lead, not a causal gene. One gene's traits with
+  PubMed ids and GWAS Catalog / Open Targets / GTEx links, also in the gene report. Release 2026-10-22,
+  downloaded once (about 93 MB, sha256-pinned) or placed by hand; `GWAS_AUTO_DOWNLOAD=false` turns fetching off.
+  Mouse genes map to human through HCOP orthologs.
+- **Reactome pathway diagrams** (Enrichment > Diagram): Reactome rows in ORA and GSEA results (Enrichment and
+  DE tabs) open the pathway's diagram coloured by a DE result's or a group's log fold change; a complex or set
+  shows the mean of its measured genes and "k of n changed". A pathway without its own diagram opens in its
+  nearest ancestor's, outlined; an overview lists its sub-pathways. Diagrams are fetched on first use (release
+  98, cached; only the pathway id is sent), `REACTOME_AUTO_DOWNLOAD=false` turns that off. SVG/PNG downloads
+  carry the legend and the Reactome CC BY 4.0 attribution. KEGG and WikiPathways rows link out.
+- **Upstream TF candidates** (Activity > Upstream TF candidates): JASPAR 2024 motifs enriched in each group's
+  marker-gene promoters (UCSC 1 kb upstream; hypergeometric, BH per group), with whether the TF is expressed and
+  whether CollecTRI activity agrees. The motif table is built once per genome (hg38, mm10, mm39) in about a
+  minute; `TF_MOTIFS_AUTO_DOWNLOAD=false` turns fetching off. GC-rich motifs are flagged, and results say
+  "candidate".
+
+### Fixed
+- History: spatial steps named in words; an import's tissue positions and R conversions shown as readable
+  chips (a list of R conversions showed as "[object Object]").
+- Folder uploads skip Space Ranger's alignment images and tables before sending, as the server does.
+- The import wizard names Space Ranger spatial files by what they hold, not "raw matrix part".
+- A step that only adds a result (Moran's I, gene programs, pseudotime, label columns and the new analyses) no
+  longer marks other stored results as stale.
+
 ## [0.46.0] - 2026-10-28
 
 ### Added

@@ -239,6 +239,22 @@ def _add_spatial_genes(adaptor, lines: list[str], sources: list[ChatSource]) -> 
                                   evidence="\n".join(sv_lines[1:])))
 
 
+def _add_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last bulk deconvolution (core/deconvolution.py): the largest cell fraction per
+    bulk sample, only once one has run on this dataset."""
+    from scview.core import deconvolution
+
+    try:
+        dc_lines, dc_detail = deconvolution.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: deconvolution failed: %s", exc)
+        return
+    if dc_lines:
+        lines.extend(dc_lines)
+        sources.append(ChatSource(kind="result", ref=deconvolution.TAG, detail=dc_detail,
+                                  evidence="\n".join(dc_lines[1:])))
+
+
 def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved gene programs (core/gene_programs.py): k, the stable ones with their
     top genes and best enriched term, only once a run has been saved."""
@@ -829,6 +845,7 @@ def build_grounding_context(
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
+        _add_deconvolution(adaptor, lines, sources)
         _add_cnv(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)
@@ -1431,6 +1448,38 @@ def _add_label_term(adaptor, view_context: dict | None, blocks: list[str], sourc
                                   detail=detail, evidence=lines[-1]))
 
 
+def _add_tf_motifs(adaptor, view_context: dict | None, blocks: list[str], sources: list[ChatSource]) -> None:
+    """The last upstream TF candidates run (core/tf_motifs.py), for the highlighted group
+    when it is one of the run's."""
+    from scview.core import tf_motifs
+
+    try:
+        lines, detail = tf_motifs.grounding_lines(adaptor, (view_context or {}).get("highlighted"))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: TF motif grounding failed: %s", exc)
+        return
+    if lines:
+        blocks.append("\n".join(lines))
+        sources.append(ChatSource(kind="result", ref=tf_motifs.TAG, detail=detail or "",
+                                  evidence="\n".join(lines[1:])))
+
+
+def _add_gwas_traits(adaptor, view_context: dict | None, blocks: list[str], sources: list[ChatSource]) -> None:
+    """The highlighted group's top GWAS trait links (core/gwas_catalog.py), once run on its column."""
+    from scview.core import gwas_catalog
+
+    hl = (view_context or {}).get("highlighted")
+    try:
+        lines, detail = gwas_catalog.grounding_lines(adaptor, hl)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: GWAS trait fact failed: %s", exc)
+        return
+    if lines:
+        blocks.append("\n".join(lines))
+        sources.append(ChatSource(kind="result", ref=f"{gwas_catalog.TAG}:{hl['column']}:{hl['value']}",
+                                  detail=detail, evidence="\n".join(lines[1:])))
+
+
 def _assemble(
     adaptor,
     *,
@@ -1453,6 +1502,8 @@ def _assemble(
         blocks.append(data_context)
         sources.extend(data_sources)
         _add_label_term(adaptor, view_context, blocks, sources)
+        _add_tf_motifs(adaptor, view_context, blocks, sources)
+        _add_gwas_traits(adaptor, view_context, blocks, sources)
         _add_screen_facts(adaptor, view_context, blocks, sources)
     if app_context:
         blocks.insert(0, app_context)
@@ -1499,7 +1550,7 @@ _SUBTABS = {
     "genesets": "Gene Sets", "enrichment": "Enrichment", "de": "DE",
     "protein": "Protein", "activity": "Activity", "genelists": "Gene lists",
     "communication": "Communication", "report": "Report",
-    "spatial": "Spatial genes",
+    "spatial": "Spatial genes", "traits": "Traits",
 }
 # Compare panel tabs (frontend ComparePanel.tsx: joint | composition | planner, with
 # Milo and miloDE as modes of Composition).
