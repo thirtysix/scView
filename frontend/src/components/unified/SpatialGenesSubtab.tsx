@@ -115,7 +115,7 @@ export function SpatialGenesSubtab({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-200">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
         Spatially variable genes
         <InfoTip label="About Moran's I" width={300}>
           Moran&apos;s I asks whether neighbouring {units} have similar values of a gene: 1 means neighbours are
@@ -130,7 +130,7 @@ export function SpatialGenesSubtab({
           <select
             value={genes}
             onChange={(e) => setGenes(e.target.value as "hvg" | "all")}
-            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
           >
             <option value="hvg">Variable genes</option>
             <option value="all">All genes</option>
@@ -142,7 +142,7 @@ export function SpatialGenesSubtab({
             <select
               value={library}
               onChange={(e) => setLibrary(e.target.value)}
-              className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+              className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
             >
               <option value="">All sections</option>
               {libs.map((l) => (
@@ -189,7 +189,7 @@ export function SpatialGenesSubtab({
             {result.n_significant.toLocaleString()} spatially variable (I &gt; 0, adjusted p &lt; {PADJ}).
           </Caption>
           {result.notes.map((n) => (
-            <p key={n} className="text-[11px] text-amber-700 dark:text-amber-400">
+            <p key={n} className="text-[11px] text-amber-700">
               {n}
             </p>
           ))}
@@ -213,10 +213,10 @@ export function SpatialGenesSubtab({
               <Download className="h-3 w-3" /> CSV
             </a>
           </div>
-          <div className="max-h-96 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
+          <div className="max-h-96 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full text-[11px]">
-              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
-                <tr className="border-b border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr className="border-b border-slate-200 text-slate-600">
                   {COLUMNS.map((c) => (
                     <SortableTh
                       key={c.key}
@@ -235,7 +235,7 @@ export function SpatialGenesSubtab({
                 {rows.map((r) => (
                   <tr
                     key={r.gene}
-                    className={`border-b border-slate-100 dark:border-slate-800 ${
+                    className={`border-b border-slate-100 ${
                       r.gene === activeGene ? "bg-primary/10" : ""
                     }`}
                   >
@@ -249,10 +249,10 @@ export function SpatialGenesSubtab({
                         {r.gene}
                       </button>
                     </td>
-                    <td className="px-2 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-200">
+                    <td className="px-2 py-0.5 text-right tabular-nums text-slate-700">
                       {r.I == null ? "–" : r.I.toFixed(3)}
                     </td>
-                    <td className="px-2 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-200">
+                    <td className="px-2 py-0.5 text-right tabular-nums text-slate-700">
                       {r.pval_adj == null ? "–" : formatPValue(r.pval_adj)}
                     </td>
                   </tr>

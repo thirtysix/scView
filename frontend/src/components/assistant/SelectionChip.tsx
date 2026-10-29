@@ -44,7 +44,7 @@ export function SelectionChip({ onAsk, busy }: { onAsk: (q: string) => void; bus
     <div className="space-y-1.5 px-3 pt-2">
       <div className="flex items-center gap-1.5 text-xs">
         <span
-          className="inline-flex items-center gap-1 rounded-full bg-orange-50 py-0.5 pl-2 pr-0.5 text-orange-700 ring-1 ring-orange-200 dark:bg-orange-950 dark:text-orange-200 dark:ring-orange-800"
+          className="inline-flex items-center gap-1 rounded-full bg-orange-50 py-0.5 pl-2 pr-0.5 text-orange-700 ring-1 ring-orange-200"
           title={`The co-pilot gets these cells' facts with your next question (${describeSource(selectionSource())})`}
         >
           <Lasso className="h-3 w-3" aria-hidden="true" />
@@ -53,7 +53,7 @@ export function SelectionChip({ onAsk, busy }: { onAsk: (q: string) => void; bus
             type="button"
             onClick={() => exclude(cells)}
             aria-label="Leave the selection out of the co-pilot's context"
-            className="rounded-full p-0.5 hover:bg-orange-100 dark:hover:bg-orange-900"
+            className="rounded-full p-0.5 hover:bg-orange-100"
           >
             <X className="h-3 w-3" />
           </button>

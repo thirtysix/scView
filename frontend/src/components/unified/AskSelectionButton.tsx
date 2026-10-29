@@ -20,7 +20,7 @@ export function AskSelectionButton() {
       onClick={open}
       aria-label="Ask the co-pilot about this selection"
       title="Ask the co-pilot about this selection"
-      className="flex items-center gap-0.5 rounded px-1 py-0.5 text-orange-700 hover:bg-orange-100 dark:text-orange-300 dark:hover:bg-orange-900"
+      className="flex items-center gap-0.5 rounded px-1 py-0.5 text-orange-700 hover:bg-orange-100"
     >
       <Sparkles className="h-3 w-3" aria-hidden="true" />
       Ask
