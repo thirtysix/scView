@@ -293,6 +293,31 @@ class OnDiskMatrix(_CSRDataset):
             yield start, self[start:stop]
             start = stop
 
+    def take_rows(self, rows: np.ndarray, max_values: int | None = None):
+        """The rows at ``rows`` (sorted ascending positions) as one scipy CSR, read in as
+        few guarded reads as hold ``max_values`` values each (default the read cap): a
+        sample of cells larger than one read, never the rows between them."""
+        import scipy.sparse as sp
+
+        limit = max(1, max_values or MAX_READ_BYTES // 8)
+        rows = np.asarray(rows, dtype=np.int64)
+        with self._guard.lock:
+            self._fresh()
+            self._row_values(0)  # the row pointer, cached
+            indptr = self._guard.indptr
+        ends = np.cumsum(indptr[rows + 1] - indptr[rows])
+        parts, start = [], 0
+        while start < rows.size:
+            done = int(ends[start - 1]) if start else 0
+            stop = min(max(int(np.searchsorted(ends, done + limit, side="right")), start + 1), rows.size)
+            mask = np.zeros(self.shape[0], dtype=bool)  # a mask: anndata reads runs of rows as slices
+            mask[rows[start:stop]] = True
+            parts.append(sp.csr_matrix(self[mask]))
+            start = stop
+        if not parts:
+            return sp.csr_matrix((0, self.shape[1]), dtype=self.dtype)
+        return parts[0] if len(parts) == 1 else sp.vstack(parts, format="csr")
+
 
 class _GuardedFileManager(AnnDataFileManager):
     """A large dataset's backing-file manager: X comes back as an ``OnDiskMatrix``,

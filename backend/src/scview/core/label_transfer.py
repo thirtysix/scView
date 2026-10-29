@@ -413,6 +413,36 @@ def expression_of(adata, fallback_paths: list[str]) -> tuple[sp.csr_matrix, pd.D
                              "and the dataset's source files): mapping compares log-normalised values.", 422)
 
 
+# Where a large dataset's values come from (``lognorm_rows`` / ``lognorm_columns``).
+LARGE_SOURCE = "counts (the counts file), log-normalised here"
+
+
+def lognorm_rows(M, rows: np.ndarray, target_sum=TARGET_SUM) -> sp.csr_matrix:
+    """``lt_lognorm(M)[rows]`` of a large dataset's counts on disk (``OnDiskMatrix``),
+    reading only ``rows`` (sorted), a capped read at a time. A cell's total is over its
+    own row, so the values are the whole matrix's bitwise."""
+    return lt_lognorm(M.take_rows(rows), target_sum)
+
+
+def lognorm_columns(M, cols: np.ndarray, target_sum=TARGET_SUM) -> sp.csr_matrix:
+    """``lt_lognorm(M)[:, cols]`` of a large dataset's counts on disk, every cell, in one
+    pass by row blocks (the counts are cell-major: a gene needs every row): each block's
+    totals over all its genes, then the columns scaled and logged as ``lt_lognorm`` does
+    (the same float32 operations per value, so bitwise)."""
+    cols = np.asarray(cols, dtype=np.int64)
+    parts = []
+    for _start, block in M.row_blocks():
+        X = sp.csr_matrix(block, dtype=np.float32)
+        totals = np.asarray(X.sum(axis=1), dtype=np.float64).ravel()
+        scale = np.divide(target_sum, totals, out=np.zeros_like(totals), where=totals > 0)
+        sub = sp.csr_matrix(sp.diags(scale.astype(np.float32)) @ X[:, cols])
+        np.log1p(sub.data, out=sub.data)
+        parts.append(sub)
+    if not parts:
+        return sp.csr_matrix((M.shape[0], cols.size), dtype=np.float32)
+    return parts[0] if len(parts) == 1 else sp.vstack(parts, format="csr")
+
+
 REPLAY_CONSTANTS = ()
 REPLAY_CODE = (lt_lognorm, lt_variable_genes, lt_scale_fit, lt_scale, lt_space, lt_neighbours, lt_weights,
                lt_vote, lt_place, lt_celltypist, lt_novelty, lt_map, lt_expression)
