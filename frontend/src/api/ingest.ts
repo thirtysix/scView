@@ -108,6 +108,12 @@ export interface IngestState {
   options: IngestOptions;
   /** The R object a commit is converting now (absent from older backends). */
   converting?: IngestConverting | null;
+  /** R objects converted ahead of commit ("Convert now"), so the merge plan includes them. */
+  converted?: { label: string; file: string }[];
+  /** A conversion or commit of the session is running now. */
+  conversion_running?: boolean;
+  /** Why the last "Convert now" failed (null after a new try). */
+  conversion_error?: string | null;
 }
 
 /** An .rds of the session being converted at commit: which file, which of how many. */
@@ -207,6 +213,14 @@ export async function setIngestOptions(
     method: "POST",
     body: JSON.stringify(options),
   });
+}
+
+/** Convert the session's R objects now, in the background (follow it with getIngestState:
+ * `conversion_running`, `converting`); the merge plan includes them once converted. */
+export async function convertIngestSession(sid: string): Promise<IngestState> {
+  const res = await fetch(`${API_BASE}/ingest/session/${sid}/convert`, { method: "POST" });
+  if (!res.ok) throw new Error(detailOf(await readError(res)) || `Conversion error ${res.status}.`);
+  return (await res.json()) as IngestState;
 }
 
 export async function commitIngestSession(sid: string): Promise<{ dataset_id: string }> {
