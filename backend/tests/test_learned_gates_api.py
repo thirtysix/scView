@@ -106,7 +106,7 @@ async def test_train_save_list_check_apply(client, dataset_manager):
     assert resolve_tag("result:learned_gate", [lg.TAG]) == [lg.TAG]
     from scview.core import feature_guide
 
-    assert "Gates > Learned gates (from a selection)" in feature_guide.compact_guide()
+    assert "Gates > Learned gates" in feature_guide.compact_guide()
     # applying again replaces the gate's own columns
     r = await client.post(f"{API}/datasets/{other}/learned-gates/{gate['id']}/apply")
     assert r.status_code == 200 and r.json()["replaced"]
