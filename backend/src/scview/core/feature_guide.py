@@ -88,6 +88,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Deconvolution", "bulk RNA-seq",
      "cell-type fractions of uploaded bulk RNA-seq samples, this dataset as the reference; self-check, "
      "reference download for MuSiC / CIBERSORTx"),
+    ("Unified View > Spot composition", "Visium, RCTD-style",
+     "each spot's cell-type shares from another library dataset as the reference; tissue overlay per type, "
+     "dominant type, self-check"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),

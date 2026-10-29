@@ -36,6 +36,7 @@ import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunic
 import { SpatialGenesSubtab } from "@/components/unified/SpatialGenesSubtab";
 import { TraitsSubtab } from "@/components/unified/TraitsSubtab";
 import { DeconvolutionSubtab } from "@/components/unified/DeconvolutionSubtab";
+import { SpotCompositionSubtab } from "@/components/unified/SpotCompositionSubtab";
 import { ReportSubtab } from "@/components/report/ReportSubtab";
 import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
 import { CnvSubtab } from "@/components/unified/CnvSubtab";
@@ -95,6 +96,7 @@ const SUBTABS = [
   { id: "spatial" as const, label: "Spatial genes" },
   { id: "traits" as const, label: "Traits" },
   { id: "deconvolution" as const, label: "Deconvolution" },
+  { id: "spotcomp" as const, label: "Spot composition" },
 ] as const;
 
 interface ViolinResponse {
@@ -419,7 +421,8 @@ export function UnifiedViewPanel() {
   );
   // Plot reliability is a share (0-1): a fixed range, never clipped to the data.
   const reliability = scatterOverlay?.type === "score" ? scatterOverlay.reliability : undefined;
-  const fixedShare = !!reliability;
+  // A spot's share of a reference type too: fixed, so types compare (Spot composition).
+  const fixedShare = !!reliability || (scatterOverlay?.type === "score" && !!scatterOverlay.spotShare);
   const colorScale = useMemo(
     () =>
       fixedShare
@@ -1390,7 +1393,8 @@ export function UnifiedViewPanel() {
               (tab) =>
                 (tab.id !== "protein" || dataset?.protein) &&
                 (tab.id !== "perturbation" || dataset?.perturbation) &&
-                (tab.id !== "spatial" || dataset?.spatial),
+                (tab.id !== "spatial" || dataset?.spatial) &&
+                (tab.id !== "spotcomp" || dataset?.spatial?.unit === "spot"),
             )}
             active={activeSubtab}
             onChange={setActiveSubtab}
@@ -1496,6 +1500,7 @@ export function UnifiedViewPanel() {
               />
             )}
             {activeSubtab === "deconvolution" && <DeconvolutionSubtab />}
+            {activeSubtab === "spotcomp" && dataset?.spatial?.unit === "spot" && <SpotCompositionSubtab />}
           </TabPanel>
         </div>
       </div>

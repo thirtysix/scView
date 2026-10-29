@@ -21,6 +21,8 @@ type ScatterOverlay =
       activity?: { network: "collectri" | "progeny"; source: string };
       reliability?: ReliabilityRef;
       method?: ScoreMethod;
+      // One reference type's share per spot (Spot composition subtab; a fixed 0-1 scale)
+      spotShare?: { type: string; kind: "rna" | "cell" };
     }
   // One gene program's per-cell usage share (Programs subtab; 1-based index, P1..Pk)
   | { type: "program"; index: number; name: string }

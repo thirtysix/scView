@@ -10,6 +10,7 @@ const NAMED: Record<string, string> = {
   doublet_detection_skipped: "Doublet detection skipped",
   tf_motif_enrichment: "Upstream TF candidates (promoter motifs)",
   gwas_traits: "GWAS trait links",
+  spot_deconvolution: "Spot composition (cell types per spot)",
 };
 
 /** A pipeline step id as a label: words spaced, first letter capital, abbreviations in capitals. */
