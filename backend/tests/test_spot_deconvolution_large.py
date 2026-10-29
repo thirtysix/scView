@@ -189,10 +189,14 @@ def test_the_estimate_of_a_large_side_counts_a_block_not_the_matrix():
     big_spots = sd.need_bytes(ref, header(True, 40_000, 40_000 * 5000), ref_open=True)
     assert big_spots < sd.need_bytes(ref, header(False, 40_000, 40_000 * 5000), ref_open=True)
     # Seconds: a pass over the stored values (two for the check), not cells read in.
-    secs = sd.estimate_seconds(10**6, 3000, 20, large_values=atlas)
+    secs = sd.estimate_seconds(10**6, 3000, 20, ref_values=atlas)
     assert secs == pytest.approx(sd.SECONDS_FIXED + sd.LARGE_SECONDS_PER_VALUE * atlas
                                  + sd.SECONDS_PER_SPOT_TYPE2 * 3000 * 400, abs=0.1)
-    assert sd.estimate_seconds(10**6, 3000, 20, large_values=atlas, check=True) > secs
+    assert sd.estimate_seconds(10**6, 3000, 20, ref_values=atlas, check=True) > secs
+    # Large spots beside a reference in memory: the reference still read in, the spots passed.
+    mem = sd.estimate_seconds(10**5, 3000, 20)
+    assert sd.estimate_seconds(10**5, 3000, 20, spot_values=10**8) == pytest.approx(
+        mem + sd.LARGE_SECONDS_PER_VALUE * 10**8, abs=0.1)
 
 
 # ---------------------------------------------------------------------------

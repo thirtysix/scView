@@ -107,9 +107,9 @@ def _estimate(ref_path: str, ref_open: bool, spot_adaptor, n_types: int, method:
     # A large dataset's header comes from its file: its X is on disk, never in the adaptor.
     spot_h = (preflight.read_header(spot_adaptor.h5ad_path, "h5ad") if spot_adaptor.is_large
               else preflight.header_from_adata(spot_adaptor.adata))
-    large = sum(sd.stored_values(h) for h in (ref_h, spot_h) if h.large)
     secs = sd.estimate_seconds(ref_h.n_cells or 0, spot_adaptor.adata.n_obs, n_types, method,
-                               large_values=large, check=check)
+                               ref_values=sd.stored_values(ref_h) if ref_h.large else 0,
+                               spot_values=sd.stored_values(spot_h) if spot_h.large else 0, check=check)
     return {"peak_bytes": sd.need_bytes(ref_h, spot_h, ref_open, check=check), "seconds": secs,
             "seconds_range": [round(secs * 0.5, 1), round(secs * 2, 1)], "note": sd.estimate_note(secs),
             "large_reference": bool(ref_h.large)}

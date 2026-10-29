@@ -124,9 +124,11 @@ NEED_COUNTS_COPIES = 2.5
 # blocks (the reference's self-check a second), each block (MAX_READ_BYTES / 32 values,
 # float32 + int64 index) held about LARGE_BLOCK_COPIES times; the reference's profiles
 # (types x all its genes, float64, twice); the self-check's drawn cells' rows. Seconds
-# per stored value of a pass (gzip counts, 2 CPUs).
+# per stored value of the reading (gzip counts, 2 CPUs; measured on the lymphoid atlas as
+# a large dataset, 93M values: 26 s to prepare the fit, 32 s the self-check's two passes).
 LARGE_BLOCK_COPIES = 2.0
-LARGE_SECONDS_PER_VALUE = 3.5e-8
+LARGE_SECONDS_PER_VALUE = 2e-7
+LARGE_CHECK_FACTOR = 1.5
 
 NOTE = ("Shares are fractions of each spot's RNA (or, estimated, of its cells), not counts. A cell type "
         "missing from the reference is given to its nearest type, so its spots look like that type. The "
@@ -757,14 +759,16 @@ NOT_SPOTS = ("Spot composition needs Visium spots (several cells each): this dat
 
 
 def estimate_seconds(n_ref: int, n_spots: int, n_types: int, method: str = "rctd", *,
-                     large_values: int = 0, check: bool = False) -> float:
+                     ref_values: int = 0, spot_values: int = 0, check: bool = False) -> float:
     """Wall time at 2 CPUs: reading the reference, then the fit (types^2 per spot dominate).
-    ``large_values``: the stored values of the large sides' counts, read by row blocks
-    (the reference twice for the self-check) instead of the reference read in."""
-    if large_values:
-        secs = SECONDS_FIXED + LARGE_SECONDS_PER_VALUE * large_values * (2 if check else 1)
+    ``ref_values`` / ``spot_values``: the stored values of a large side's counts, read by
+    row blocks (a large reference's second pass for the self-check), instead of the
+    reference read in."""
+    if ref_values:
+        secs = SECONDS_FIXED + LARGE_SECONDS_PER_VALUE * ref_values * (LARGE_CHECK_FACTOR if check else 1)
     else:
         secs = SECONDS_FIXED + SECONDS_PER_REF_CELL * n_ref
+    secs += LARGE_SECONDS_PER_VALUE * spot_values
     if method == "rctd":
         secs += SECONDS_PER_SPOT_TYPE2 * n_spots * max(n_types, 2) ** 2
     else:
