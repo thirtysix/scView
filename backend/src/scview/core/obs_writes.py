@@ -152,6 +152,7 @@ def write_derived(
     source_path: str | None = None,
     uns_before: dict[str, int] | None = None,
     obsm_keys: tuple[str, ...] | list[str] | None = (),
+    obsp_keys: tuple[str, ...] | list[str] | None = (),
 ) -> None:
     """Write ``adata`` to its derived file: beside it first, then swapped in, so a
     failed write leaves the old file and a backed dataset reading it intact.
@@ -161,7 +162,8 @@ def write_derived(
     copied and just obs plus the replaced or removed uns entries are rewritten:
     a full write re-compresses the whole matrix (8 s on a 14k-cell dense file,
     against 0.1 s). Edits must replace an uns entry, not mutate it in place.
-    ``obsm_keys``: obsm entries the edit set or removed, rewritten the same way.
+    ``obsm_keys``: obsm entries the edit set or removed, rewritten the same way;
+    ``obsp_keys`` the same for obsp (a graph, core/wnn.py).
     """
     from scview.core import uns_history
 
@@ -204,6 +206,13 @@ def write_derived(
                         del f["obsm"][key]
                     if key in adata.obsm:
                         write_elem(f["obsm"], key, adata.obsm[key])
+                if obsp_keys and "obsp" not in f:
+                    write_elem(f, "obsp", {})
+                for key in obsp_keys or ():
+                    if key in f["obsp"]:
+                        del f["obsp"][key]
+                    if key in adata.obsp:
+                        write_elem(f["obsp"], key, adata.obsp[key])
         except Exception:
             os.remove(partial)
             raise

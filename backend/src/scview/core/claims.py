@@ -650,9 +650,13 @@ _FAMILY_PREFIX = {
     "tfmotifs": "result:tfmotifs", "tfmotif": "result:tfmotifs", "motifs": "result:tfmotifs",
     "motif": "result:tfmotifs",
     "deconvolution": "result:deconvolution", "deconv": "result:deconvolution",
+    # learned gates (core/learned_gate.py); "learned_gate" splits to "learned"
+    "lgate": "result:lgate", "learnedgate": "result:lgate", "learned": "result:lgate",
+    "spotdeconv": "result:spotdeconv",  # spot composition (core/spot_deconvolution.py)
     "labels": "result:labels:",
     "tissue": "result:tissue",  # spatial data (core/spatial.py)
     "gwas": "result:gwas", "traits": "result:gwas",  # GWAS trait links (core/gwas_catalog.py)
+    "wnn": "result:wnn",  # joint RNA + protein weights (core/wnn.py)
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -701,7 +705,8 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "selection", "sel", "screen", "labels", "tissue", "spatial", "moran",
                                   "tfmotifs", "tfmotif", "motifs", "motif",
                                   "gwas", "traits",
-                                  "deconvolution", "deconv")
+                                  "deconvolution", "deconv",
+                                  "lgate", "learnedgate", "learned", "spotdeconv")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]

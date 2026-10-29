@@ -22,7 +22,9 @@ IMPORTING = (
     "features/genes.tsv, optionally .gz) and 10x HDF5 (.h5); .loom; .zarr; dense CSV/TSV "
     "(optionally .gz); Seurat, SingleCellExperiment or SummarizedExperiment .rds "
     "(converted to .h5ad by the R converter service; an .rds dropped with other files is "
-    "converted when the dataset is created and can be merged with them, e.g. with a 10x sample; "
+    "converted when the dataset is created and can be merged with them, e.g. with a 10x sample "
+    "(Convert now in the wizard converts it first, so the merge plan shows its gene and cell "
+    "overlap); "
     "a Seurat Visium object keeps its tissue image and spot positions); Seurat .h5Seurat "
     "(SeuratDisk; read directly, no R needed: counts, cell metadata, reductions, an ADT assay, "
     "Visium images); "
@@ -58,6 +60,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Markers", "", "marker table per group"),
     ("Unified View > Expression", "", "gene overlay, several genes, gene vs gene"),
     ("Unified View > Protein", "CITE-seq, CLR or DSB", "CITE-seq proteins; CLR or DSB normalisation"),
+    ("Unified View > Protein > Joint RNA + protein (WNN)", "",
+     "Seurat's weighted nearest neighbours: per-cell RNA / protein weights, a joint graph, WNN and "
+     "protein UMAPs (in the embedding menu), WNN clusters"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
@@ -88,12 +93,18 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Deconvolution", "bulk RNA-seq",
      "cell-type fractions of uploaded bulk RNA-seq samples, this dataset as the reference; self-check, "
      "reference download for MuSiC / CIBERSORTx"),
+    ("Unified View > Spot composition", "Visium, RCTD",
+     "each spot's cell-type shares from another library dataset as the reference; tissue overlay per type, "
+     "dominant type, self-check"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),
     ("Unified View > Plot reliability", "", "colour cells by how well the plot keeps their neighbours"),
     ("Unified View > Layouts", "UMAP stability", "alternative UMAPs: which structure is stable"),
     ("Unified View > Filter", "", "select cells by gene and metadata conditions"),
+    ("Unified View > Gates > Learned gates", "",
+     "Learn gate... trains a small model (L1 logistic regression) on the selected cells against the other cells "
+     "of their samples; the library exports, imports and applies it to any dataset (in/out column + gate score)"),
     ("Observations", "", "cell metadata and group composition"),
     ("Gene Expression", "", "gene expression plots"),
     ("Gene Sets & Enrichment", "", "gene sets and enrichment on a full page"),

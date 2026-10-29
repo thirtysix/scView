@@ -8,12 +8,14 @@ import {
   Globe,
   Info,
   Loader2,
+  RefreshCw,
   RotateCcw,
   Sparkles,
 } from "lucide-react";
 
 import {
   commitIngestSession,
+  convertIngestSession,
   createIngestSession,
   discardIngestSession,
   filePath,
@@ -86,6 +88,12 @@ export function DataPanel() {
   const [committing, setCommitting] = useState(false);
   // While a commit converts the session's .rds files: which one, and the converter's stage.
   const [commitNote, setCommitNote] = useState<string | null>(null);
+  // "Convert now": the session's .rds files converted before commit, for the merge plan.
+  const [converting, setConverting] = useState(false);
+  const [convertNote, setConvertNote] = useState<string | null>(null);
+  // The session being shown: a conversion stops following one the user started over from.
+  const liveSession = useRef<string | null>(null);
+  liveSession.current = sessionId;
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Files of a picked/dropped folder that were not sent (BAM, Loupe, report), in one sentence.
@@ -145,6 +153,17 @@ export function DataPanel() {
     [setAvailableDatasets, setCurrentDataset, setPanel]
   );
 
+  // The merge plan for the session's samples (an .rds among them once converted).
+  const refreshMergePlan = useCallback(async (sid: string, next: IngestState) => {
+    if (next.bundle.is_merge) {
+      const plan = await getMergePlan(sid);
+      setMergePlan(plan.is_merge === false ? null : plan);
+      setOptions((o) => ({ ...o, join: plan.recommended_join ?? o.join }));
+    } else {
+      setMergePlan(null);
+    }
+  }, []);
+
   const addFiles = useCallback(
     async (picked: UploadItem[]) => {
       if (picked.length === 0) return;
@@ -169,21 +188,43 @@ export function DataPanel() {
         }
         const next = await uploadIngestFiles(sid, keep);
         setState(next);
-        if (next.bundle.is_merge) {
-          const plan = await getMergePlan(sid);
-          setMergePlan(plan.is_merge === false ? null : plan);
-          setOptions((o) => ({ ...o, join: plan.recommended_join ?? o.join }));
-        } else {
-          setMergePlan(null);
-        }
+        await refreshMergePlan(sid, next);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to add files.");
       } finally {
         setBusy(false);
       }
     },
-    [sessionId, handleRObject]
+    [sessionId, handleRObject, refreshMergePlan]
   );
+
+  // Convert the session's R objects now (minutes for a large one), following the
+  // converter's stages; the merge plan is fetched again once they are in.
+  const convertNow = useCallback(async () => {
+    const sid = sessionId;
+    if (!sid) return;
+    setConverting(true);
+    setError(null);
+    try {
+      let s = await convertIngestSession(sid);
+      setState(s);
+      while (s.conversion_running && liveSession.current === sid) {
+        await new Promise((r) => setTimeout(r, 2000));
+        s = await getIngestState(sid);
+        setConvertNote(commitConversionNote(s.converting));
+      }
+      if (liveSession.current !== sid) return;
+      setState(s);
+      await refreshMergePlan(sid, s);
+    } catch (e) {
+      if (liveSession.current === sid) {
+        setError(e instanceof Error ? e.message : "The R object could not be converted.");
+      }
+    } finally {
+      setConverting(false);
+      setConvertNote(null);
+    }
+  }, [sessionId, refreshMergePlan]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -257,7 +298,12 @@ export function DataPanel() {
   const validation = state?.validation;
   const hasDense = bundle?.units.some((u) => u.format === "dense_table") ?? false;
   const loadable = bundle?.units.filter((u) => u.format !== "unknown") ?? [];
-  const canCommit = !!validation?.ok && loadable.length > 0 && !committing && !busy;
+  const canCommit = !!validation?.ok && loadable.length > 0 && !committing && !busy && !converting;
+  // An .rds among other samples, not converted yet: "Convert now" puts it in the merge plan.
+  const convertedLabels = new Set((state?.converted ?? []).map((c) => c.label));
+  const rUnits = loadable.filter((u) => u.format === "seurat");
+  const unconverted = rUnits.filter((u) => !convertedLabels.has(u.label));
+  const offerConvert = !!sessionId && unconverted.length > 0 && loadable.length > rUnits.length;
 
   return (
     <div className="space-y-6">
@@ -370,7 +416,7 @@ export function DataPanel() {
             Detected {bundle.units.length === 1 ? "sample" : `${bundle.units.length} samples`}
           </h3>
           {bundle.units.map((u) => (
-            <UnitCard key={u.label} unit={u} />
+            <UnitCard key={u.label} unit={u} converted={convertedLabels.has(u.label)} />
           ))}
           {bundle.issues.map((msg, i) => (
             <div key={i} className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
@@ -386,6 +432,37 @@ export function DataPanel() {
           {validation.issues.map((issue, i) => (
             <IssueCard key={i} issue={issue} />
           ))}
+        </div>
+      )}
+
+      {offerConvert && (
+        <div className="space-y-1 rounded-lg border border-slate-200 bg-white p-3" data-testid="convert-now">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={convertNow}
+              disabled={converting || committing || busy || !validation?.ok}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {converting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {converting ? "Converting…" : "Convert now"}
+            </button>
+            {converting ? (
+              <p className="text-xs text-slate-500" role="status">
+                {convertNote ?? "Starting the R converter…"}
+              </p>
+            ) : (
+              <p className="text-xs text-slate-500">
+                Converts {unconverted.length === 1 ? "the R object" : `the ${unconverted.length} R objects`} here
+                (minutes for a large one); the merge plan then includes{" "}
+                {unconverted.length === 1 ? "it" : "them"}.
+              </p>
+            )}
+          </div>
+          {!converting && state?.conversion_error && (
+            <p className="text-xs text-red-700" role="alert">
+              {state.conversion_error}
+            </p>
+          )}
         </div>
       )}
 
@@ -468,7 +545,7 @@ export function DataPanel() {
 
 // --- Sub-components --------------------------------------------------------
 
-function UnitCard({ unit }: { unit: IngestUnit }) {
+function UnitCard({ unit, converted = false }: { unit: IngestUnit; converted?: boolean }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3">
       <div className="flex items-center gap-2">
@@ -479,7 +556,7 @@ function UnitCard({ unit }: { unit: IngestUnit }) {
         )}
         <span className="text-sm font-medium text-slate-800">{unit.label}</span>
         <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
-          {FORMAT_LABELS[unit.format]}
+          {converted ? "R object (.rds: Seurat, SingleCellExperiment), converted" : FORMAT_LABELS[unit.format]}
         </span>
       </div>
       {unit.format !== "tenx_mex" && unit.files[0]?.rel_path?.includes("/") && (

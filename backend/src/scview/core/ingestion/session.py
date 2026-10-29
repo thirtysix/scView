@@ -9,9 +9,12 @@ copies the originals (read-only) into ``uploads/{dataset_id}/``, writes the
 ``metadata.json`` sidecar, and registers the result through the DatasetManager
 so it appears in the picker like any other dataset.
 
-R objects (.rds / .RData) staged with other files are converted at commit by the R
-converter service (``core/conversion.py``), one after another, then read as the .h5ad
-files they become; ``get_state`` names the one converting meanwhile.
+R objects (.rds / .RData) staged with other files are converted by the R converter
+service (``core/conversion.py``), one after another, then read as the .h5ad files they
+become; ``get_state`` names the one converting meanwhile. That happens at commit, or
+before it on request (``start_conversion``) so the merge plan can include them: each
+finished conversion is recorded in session.json with the source's size and mtime, and
+counts only while the staged file still matches.
 
 Abandoned sessions are removed by :meth:`sweep_expired` (24 h TTL). See
 ``docs/INGESTION_ENGINE.md`` §5.
@@ -63,6 +66,10 @@ class IngestCommitError(RuntimeError):
 
 class StagingConflict(RuntimeError):
     """An upload would put a file where another one is staged; nothing was staged."""
+
+
+class ConversionBusy(RuntimeError):
+    """The session's R objects are being converted (or it is being committed) now."""
 
 
 # Uploads land under this name first and move into place once the whole request is in.
@@ -122,6 +129,10 @@ class IngestSessionManager:
         self.data_dir = Path(data_dir)
         self.ingest_dir = self.data_dir / "ingest"
         self.converter_url = converter_url
+        # Sessions converting or committing now (one uvicorn worker: in memory), and the
+        # background conversions ``start_conversion`` runs, kept referenced until they end.
+        self._busy: set[str] = set()
+        self._tasks: dict[str, asyncio.Task] = {}
 
     # -- session lifecycle ------------------------------------------------
 
@@ -140,6 +151,9 @@ class IngestSessionManager:
     def discard(self, sid: str) -> bool:
         if not is_safe_id(sid):
             return False
+        task = self._tasks.pop(sid, None)
+        if task is not None and not task.done():
+            task.cancel()  # its files go with the session
         d = self._session_dir(sid)
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
@@ -252,20 +266,28 @@ class IngestSessionManager:
     def get_state(self, sid: str) -> dict[str, Any]:
         """Cheap state: detection + bundle + validation (no full data read)."""
         bundle = self._bundle(sid)
-        report = validate_bundle(bundle)
+        data = self._read_session(sid)
+        done = _valid_conversions(bundle, data)
+        report = validate_bundle(bundle, converted=set(done))
         return {
             "session_id": sid,
             "bundle": bundle.model_dump(mode="json"),
             "validation": report.model_dump(mode="json"),
             "options": self.get_options(sid).model_dump(mode="json"),
             "converting": self._converting(sid),
+            # R objects converted ahead of commit (still matching their staged file), whether
+            # a conversion or commit runs now, and why the last "Convert now" failed.
+            "converted": [{"label": lab, "file": c.get("file")} for lab, c in done.items()],
+            "conversion_running": sid in self._busy,
+            "conversion_error": data.get("conversion_error"),
         }
 
     def _converting(self, sid: str) -> dict | None:
-        """The R object a commit is converting now: its file, which of how many, and the
-        converter's latest stage (``progress``); None when none is."""
+        """The R object being converted now: its file, which of how many, and the
+        converter's latest stage (``progress``); None when none is (a record left behind
+        by a restart included)."""
         now = self._read_session(sid).get("converting")
-        if not isinstance(now, dict):
+        if not isinstance(now, dict) or sid not in self._busy:
             return None
         out = {k: v for k, v in now.items() if k != "progress_path"}
         out["progress"] = conversion.read_progress(Path(now.get("progress_path") or ""))
@@ -280,11 +302,14 @@ class IngestSessionManager:
         self._write_session(sid, data)
 
     def merge_plan(self, sid: str) -> MergePlan | None:
-        """Load the units and analyse a multi-sample merge (heavier — reads data)."""
+        """Load the units and analyse a multi-sample merge (heavier — reads data). An R
+        object is in it once converted (``start_conversion``), as the .h5ad it became."""
         bundle = self._bundle(sid)
+        done = _valid_conversions(bundle, self._read_session(sid))
         loadable = [
-            u for u in bundle.units
-            if u.format not in (UnitFormat.unknown, UnitFormat.seurat) and u.complete
+            _as_converted(u, done) for u in bundle.units
+            if u.format != UnitFormat.unknown and u.complete
+            and (u.format != UnitFormat.seurat or u.label in done)
         ]
         if len(loadable) < 2:
             return None
@@ -314,13 +339,20 @@ class IngestSessionManager:
         files = self.staged_paths(sid)
         if not files:
             raise IngestCommitError("No files have been uploaded to this session.")
+        if sid in self._busy:
+            raise ConversionBusy("This upload is being converted or saved already: wait for it "
+                                 "to finish.")
 
-        # R objects first, each through the R converter: minutes for a large one, an
-        # HTTP call that leaves the event loop free.
-        converted = await self._convert_r_units(sid)
-        # Reading, merging and writing the files takes seconds to minutes: in a
-        # worker thread, so the server keeps answering meanwhile.
-        dataset_id = await asyncio.to_thread(self._build_dataset, sid, converted)
+        self._busy.add(sid)
+        try:
+            # R objects first, each through the R converter (minutes for a large one, an
+            # HTTP call that leaves the event loop free); one converted before is reused.
+            converted = await self._convert_r_units(sid)
+            # Reading, merging and writing the files takes seconds to minutes: in a
+            # worker thread, so the server keeps answering meanwhile.
+            dataset_id = await asyncio.to_thread(self._build_dataset, sid, converted)
+        finally:
+            self._busy.discard(sid)
         self.discard(sid)  # saved: the staged files are no longer needed
         from scview.core.dataset_manager import DatasetMemoryError
 
@@ -331,15 +363,75 @@ class IngestSessionManager:
             logger.warning("Ingested dataset %s not opened: %s", dataset_id, e)
         return dataset_id
 
+    def start_conversion(self, sid: str) -> bool:
+        """Convert the session's R objects now, in the background, so the merge plan can
+        include them before commit; False when each one is converted already. Raises
+        ConversionBusy while a conversion or commit runs, IngestCommitError for a session
+        without R objects or one that does not validate. A failed conversion is recorded
+        in the session (``conversion_error`` in the state), never raised."""
+        if sid in self._busy:
+            raise ConversionBusy("The R objects of this upload are being converted already.")
+        bundle = self._bundle(sid)
+        _raise_if_invalid(bundle)
+        r_units = [u for u in bundle.units if u.format == UnitFormat.seurat and u.files]
+        if not r_units:
+            raise IngestCommitError("This upload has no R object (.rds / .RData) to convert.")
+        data = self._read_session(sid)
+        if data.pop("conversion_error", None) is not None:
+            self._write_session(sid, data)
+        if len(_valid_conversions(bundle, data)) == len(r_units):
+            return False
+        self._busy.add(sid)
+        self._tasks[sid] = asyncio.get_running_loop().create_task(self._convert_in_background(sid))
+        return True
+
+    async def _convert_in_background(self, sid: str) -> None:
+        try:
+            await self._convert_r_units(sid)
+        except IngestCommitError as e:
+            self._record_conversion_error(sid, str(e))
+        except Exception as e:  # noqa: BLE001 - shown in the wizard, never lost in a task
+            if self.exists(sid):
+                logger.exception("Converting the R objects of session %s failed", sid)
+                self._record_conversion_error(sid, f"The R object could not be converted: {e}")
+        finally:
+            self._busy.discard(sid)
+            if self._tasks.get(sid) is asyncio.current_task():
+                self._tasks.pop(sid, None)
+
+    def _record_conversion_error(self, sid: str, message: str) -> None:
+        if not self.exists(sid):
+            return  # discarded meanwhile
+        data = self._read_session(sid)
+        data["conversion_error"] = message
+        self._write_session(sid, data)
+
+    def _record_conversion(self, sid: str, rel: str, entry: dict | None) -> None:
+        """Remember (or, with None, forget) the conversion of the R object staged at ``rel``."""
+        data = self._read_session(sid)
+        done = data.get("conversions") if isinstance(data.get("conversions"), dict) else {}
+        if entry is None:
+            done.pop(rel, None)
+        else:
+            done[rel] = entry
+        data["conversions"] = done
+        self._write_session(sid, data)
+
     async def _convert_r_units(self, sid: str) -> dict[str, dict]:
         """Convert each R object of the session to an .h5ad with the R converter, one at
-        a time: ``{unit label: {"path", "file", "report"}}`` ({} without R objects). A
-        session that does not validate is refused first, so nothing is converted for it."""
+        a time: ``{unit label: {"path", "file", "report", ...}}`` ({} without R objects).
+        One converted before (still matching its staged file) is reused, each new one
+        recorded as it finishes. A session that does not validate is refused first, so
+        nothing is converted for it."""
         bundle = await asyncio.to_thread(self._bundle, sid)
         _raise_if_invalid(bundle)
         r_units = [u for u in bundle.units if u.format == UnitFormat.seurat and u.files]
         if not r_units:
             return {}
+        converted = _valid_conversions(bundle, self._read_session(sid))
+        todo = [u for u in r_units if u.label not in converted]
+        if not todo:
+            return converted
         url = self.converter_url
         if not url:
             from scview.config import get_settings
@@ -347,15 +439,19 @@ class IngestSessionManager:
             url = get_settings().CONVERTER_URL
         out_dir = self._session_dir(sid) / CONVERTED_DIR
         out_dir.mkdir(parents=True, exist_ok=True)
-        converted: dict[str, dict] = {}
         try:
-            for i, u in enumerate(r_units, 1):
+            for i, u in enumerate(todo, 1):
                 src = u.files[0]
                 shown = src.rel_path or src.name
-                out = out_dir / f"{i:02d}_{_safe_name(u.label)}.h5ad"
-                progress = out_dir / f"{i:02d}_{conversion.PROGRESS_FILE}"
+                # Named by the staged path: never the name of another object's conversion.
+                stem = f"{_safe_name(u.label)}_{zlib.crc32(shown.encode()):08x}"
+                out = out_dir / f"{stem}.h5ad"
+                progress = out_dir / f"{stem}_{conversion.PROGRESS_FILE}"
+                self._record_conversion(sid, shown, None)  # one of a file since changed
+                out.unlink(missing_ok=True)
+                st = Path(src.path).stat()  # before: a file changed meanwhile no longer matches
                 self._set_converting(sid, {"label": u.label, "file": shown, "index": i,
-                                           "of": len(r_units), "progress_path": str(progress)})
+                                           "of": len(todo), "progress_path": str(progress)})
                 try:
                     result = await conversion.trigger_conversion(
                         src.path, str(out), url, progress_path=str(progress))
@@ -366,11 +462,15 @@ class IngestSessionManager:
                                             "wrote no .h5ad file.")
                 await asyncio.to_thread(conversion.complete_spatial, out)
                 report = result.get("report")
-                converted[u.label] = {"path": str(out), "file": shown,
-                                      "report": report if isinstance(report, dict) else {}}
-                logger.info("Converted %s of session %s (%d of %d)", shown, sid, i, len(r_units))
+                entry = {"path": str(out), "file": shown,
+                         "report": report if isinstance(report, dict) else {},
+                         "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+                self._record_conversion(sid, shown, entry)
+                converted[u.label] = entry
+                logger.info("Converted %s of session %s (%d of %d)", shown, sid, i, len(todo))
         finally:
-            self._set_converting(sid, None)
+            if self.exists(sid):
+                self._set_converting(sid, None)
         return converted
 
     def _build_dataset(self, sid: str, converted: dict[str, dict] | None = None) -> str:
@@ -710,6 +810,30 @@ def _raise_if_invalid(bundle) -> None:
     if not report.ok:
         errs = [i.message for i in report.issues if i.severity == IssueSeverity.error]
         raise IngestCommitError(errs[0] if errs else "The uploaded files didn't validate.")
+
+
+def _valid_conversions(bundle, data: dict) -> dict[str, dict]:
+    """``{unit label: conversion}`` for the R objects converted before whose staged file
+    is still the one converted (same size and mtime) and whose .h5ad is there: a file
+    staged again with other content, or removed, has none."""
+    recorded = data.get("conversions")
+    if not isinstance(recorded, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for u in bundle.units:
+        if u.format != UnitFormat.seurat or not u.files:
+            continue
+        src = u.files[0]
+        c = recorded.get(src.rel_path or src.name)
+        if not isinstance(c, dict) or not Path(str(c.get("path", ""))).is_file():
+            continue
+        try:
+            st = Path(src.path).stat()
+        except OSError:
+            continue
+        if st.st_size == c.get("size") and st.st_mtime_ns == c.get("mtime_ns"):
+            out[u.label] = c
+    return out
 
 
 def _as_converted(unit: IngestUnit, converted: dict[str, dict]) -> IngestUnit:

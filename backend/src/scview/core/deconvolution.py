@@ -86,12 +86,14 @@ TOL = 1e-3
 W_CAP_QUANTILE = 0.99
 SIGMA2_FLOOR_QUANTILE = 0.01
 MARKERS_PER_TYPE = 50
-# A type estimated at >= ABSORB_MIN of a sample and >= ABSORB_RATIO times its share of the
-# reference cells is flagged: on Kang, CTRL bulk against a CTRL+STIM reference came out
-# 60-75% Mk (2% of the cells), the fit using the least interferon-responsive type to absorb
-# the missing response.
+# A type estimated at >= ABSORB_MIN of a sample and >= ABSORB_RATIO times its largest share in
+# any one reference donor is flagged: on Kang, CTRL bulk against a CTRL+STIM reference came out
+# 60-75% Mk (2% of the cells, 3% at most), the fit using the least interferon-responsive type to
+# absorb the missing response. Against the pooled share alone, NNLS on a matched CTRL reference
+# flagged CD8 T (5% pooled) in 2 samples, though one donor has 12%: donors differ that much.
 ABSORB_MIN = 0.2
 ABSORB_RATIO = 5.0
+ABSORB_DONOR_CELLS = 50
 MIN_MARKER_CPM = 10.0  # a fallback marker must reach this in its own type
 
 # The bulk file.
@@ -195,6 +197,19 @@ class Reference:
         """Each type's share of the reference cells."""
         n = np.bincount(self.group_type, weights=self.group_cells, minlength=len(self.types))
         return n / max(1.0, float(n.sum()))
+
+    @property
+    def type_share_max(self) -> np.ndarray:
+        """Each type's largest share of one donor's reference cells, over donors with at least
+        ABSORB_DONOR_CELLS (a 5-cell donor's 40% says nothing); the pooled share without them."""
+        if not self.donors:
+            return self.type_share
+        n = np.zeros((len(self.donors), len(self.types)))
+        np.add.at(n, (self.group_donor, self.group_type), self.group_cells)
+        n = n[n.sum(axis=1) >= ABSORB_DONOR_CELLS]
+        if not len(n):
+            return self.type_share
+        return np.maximum(self.type_share, (n / n.sum(axis=1, keepdims=True)).max(axis=0))
 
     @property
     def n_cells(self) -> int:
@@ -834,14 +849,17 @@ class Result:
     flags: list[dict[str, Any]] = field(default_factory=list)  # sample, cell_type, fraction, reference_share
 
 
-def absorber_flags(samples: list[str], types: list[str], P: np.ndarray, share: np.ndarray) -> list[dict[str, Any]]:
+def absorber_flags(samples: list[str], types: list[str], P: np.ndarray, share: np.ndarray,
+                   share_max: np.ndarray | None = None) -> list[dict[str, Any]]:
     """(sample, type) whose estimated cell fraction is >= ABSORB_MIN and >= ABSORB_RATIO times
-    the type's share of the reference cells: likely soaking up a sample-reference difference."""
+    the type's largest share in one reference donor (``share_max``, default the pooled
+    ``share``): likely soaking up a sample-reference difference."""
+    base = share if share_max is None else share_max
     out = []
     for i, s in enumerate(samples):
         for k, t in enumerate(types):
             p = P[i, k]
-            if np.isfinite(p) and p >= ABSORB_MIN and p >= ABSORB_RATIO * share[k]:
+            if np.isfinite(p) and p >= ABSORB_MIN and p >= ABSORB_RATIO * base[k]:
                 out.append({"sample": s, "cell_type": t, "fraction": float(p), "reference_share": float(share[k])})
     return out
 
@@ -895,7 +913,8 @@ def run(adata, raw: bytes, filename: str, *, celltype_column: str | None = None,
     if ran == "weighted" and any(not f.converged for f in fits if np.isfinite(f.p).all()):
         notes.append(f"Some samples did not settle within {MAX_ITER} rounds; their last estimate is shown.")
     tshare = ref.type_share[sig.type_index]
-    flags = absorber_flags(bulk.samples, sig.types, np.array([f.p for f in fits]), tshare)
+    flags = absorber_flags(bulk.samples, sig.types, np.array([f.p for f in fits]), tshare,
+                           ref.type_share_max[sig.type_index])
     warnings = [*bulk.warnings, *absorber_warnings(flags, len(bulk.samples), ref.cells_filter is not None)]
     return Result(
         id=uuid.uuid4().hex[:12], dataset_id=dataset_id, celltype_column=ref.celltype_column,

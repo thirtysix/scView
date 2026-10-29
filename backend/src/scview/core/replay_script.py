@@ -990,6 +990,23 @@ _HELPERS["label_transfer"] = _label_transfer_helper()
 _HELPER_ORDER += ("label_transfer",)
 
 
+def _learned_gate_helper() -> str:
+    """core/learned_gate.py's scoring code (numpy, scipy, pandas), copied so the script
+    scores the cells as scView did; the gate itself is written inline at its step."""
+    import inspect
+
+    from scview.core import learned_gate
+
+    lines: list[str] = []
+    for obj in learned_gate.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines).strip("\n") + "\n"
+
+
+_HELPERS["learned_gate"] = _learned_gate_helper()
+_HELPER_ORDER += ("learned_gate",)
+
+
 def _dsb_helper() -> str:
     """core/dsb.py's empty-droplet reading and DSB maths (numpy, pandas, h5py only), copied
     so the script normalises the antibodies as scView did; the antibody counts are read
@@ -1104,6 +1121,117 @@ def spatial_moran(adata, M, names, genes, library_id, grid):
 
 _HELPERS["spatial_autocorr"] = _spatial_autocorr_helper()
 _HELPER_ORDER += ("spatial_autocorr",)
+
+
+def _wnn_helper() -> str:
+    """core/wnn.py's WNN code (numpy, scipy, pynndescent, umap-learn: Seurat's
+    FindMultiModalNeighbors), copied so the script weights the modalities as scView did;
+    the antibody counts are read again from the input (the DSB helper's reader)."""
+    import inspect
+
+    from scview.core import wnn
+
+    lines = [f"{name} = {_lit(getattr(wnn, name))}" for name in wnn.REPLAY_CONSTANTS]
+    for obj in wnn.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def wnn_clr(counts):
+    """Centred log-ratio per cell over the whole panel (Seurat's CLR, margin = 2), float32."""
+    x = np.asarray(counts, dtype=np.float64)
+    denom = np.exp(np.log1p(x).sum(axis=1, keepdims=True) / x.shape[1])
+    return np.log1p(x / denom).astype(np.float32)
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+def _spot_deconvolution_helper() -> str:
+    """core/spot_deconvolution.py's model (numpy, scipy, pandas), copied so the script fits
+    the spots as scView did; the reference is read from its file beside the script or input."""
+    import inspect
+
+    from scview.core import spot_deconvolution as sd
+
+    lines = ["import math", "import os", "", "from scipy.optimize import nnls", "from scipy.special import gammaln", ""]
+    lines += [f"{name} = {_lit(getattr(sd, name))}" for name in sd.REPLAY_CONSTANTS]
+    for obj in sd.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def spot_reference_file(name):
+    """The reference dataset's file by name: in the working directory, else beside the input."""
+    for folder in (".", os.path.dirname(os.path.abspath(INPUT))):
+        path = os.path.join(folder, name)
+        if os.path.exists(path):
+            return path
+    sys.exit(f"Reference file {name} not found: export the reference dataset from scView as .h5ad, "
+             "name it so and put it beside this script or the input file.")
+
+
+def spot_counts(adata):
+    """Raw counts and their gene names, as scView looks: layers['counts'], .raw, then X."""
+    if "counts" in adata.layers and looks_like_counts(adata.layers["counts"]):
+        return adata.layers["counts"], adata.var_names
+    if adata.raw is not None and looks_like_counts(adata.raw.X):
+        return adata.raw.X, adata.raw.var_names
+    if looks_like_counts(adata.X):
+        return adata.X, adata.var_names
+    sys.exit("No raw counts (layers['counts'], .raw or X): spot composition fits counts.")
+
+
+def first_positions(names, wanted):
+    first = {}
+    for i, g in enumerate(map(str, names)):
+        first.setdefault(g, i)
+    missing = [g for g in wanted if g not in first]
+    if missing:
+        sys.exit(f"{len(missing)} of the recorded genes are missing, e.g. {missing[:3]}")
+    return np.asarray([first[g] for g in wanted], dtype=np.int64)
+
+
+def spot_composition(adata, ref, label, types, genes, ref_genes, fit_genes, s_e, method):
+    """Each spot's shares of the reference's types on the recorded genes, written where
+    scView writes them (obsm spot_deconv / spot_deconv_cells, obs spot_deconv_top(_share))."""
+    RM, rnames = spot_counts(ref)
+    SM, snames = spot_counts(adata)
+    labels = ref.obs[label]
+    codes = np.asarray(pd.Categorical(labels.astype(str).where(labels.notna(), None).to_numpy(),
+                                      categories=types).codes, dtype=np.int64)
+    totals = np.asarray(RM.sum(axis=1), dtype=np.float64).ravel()
+    codes = np.where(totals > 0, codes, -1)
+    mu, S, _ = sd_profiles(RM, totals, codes, len(types))
+    mu = mu[:, first_positions(rnames, ref_genes)]
+    spos = first_positions(snames, genes)
+    Y = sp.csr_matrix(SM[:, spos] if sp.issparse(SM) else np.asarray(SM)[:, spos], dtype=np.float32)
+    N = np.asarray(SM.sum(axis=1), dtype=np.float64).ravel()
+    if "library_id" in adata.obs.columns:
+        lib = adata.obs["library_id"]
+        libs = lib.astype(str).where(lib.notna(), "section1").to_numpy(dtype=object).astype(str)
+    else:
+        libs = np.full(adata.n_obs, "section1", dtype=object).astype(str)
+    out = None
+    for event, data in sd_iter_deconvolve(mu, S, Y, N, libs, method, np.ones(len(genes), dtype=bool),
+                                          genes=(np.arange(len(genes)), np.asarray(fit_genes)), s_e=s_e):
+        if event == "fitted":
+            out = data
+    beta, fitted = out["beta"], out["fitted"]
+    top_idx = np.where(fitted, np.nanargmax(np.where(np.isfinite(beta), beta, -1.0), axis=1), -1)
+    top = np.where(fitted, np.asarray(types, dtype=object)[np.maximum(top_idx, 0)], "low counts").astype(str)
+    adata.obsm["spot_deconv"] = beta.astype(np.float32)
+    adata.obsm["spot_deconv_cells"] = out["cells"].astype(np.float32)
+    present = [t for t in types if (top == t).any()]
+    low = ["low counts"] if (top == "low counts").any() else []
+    adata.obs["spot_deconv_top"] = pd.Categorical(top, categories=present + low)
+    adata.obs["spot_deconv_top_share"] = np.where(
+        fitted, beta[np.arange(beta.shape[0]), np.maximum(top_idx, 0)], np.nan).astype(np.float32)
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["wnn"] = _wnn_helper()
+_HELPER_ORDER += ("wnn",)
+_HELPER_NEEDS["wnn"] = ("dsb",)  # protein_counts_for
+_HELPERS["spot_deconvolution"] = _spot_deconvolution_helper()
+_HELPER_ORDER += ("spot_deconvolution",)
+_HELPER_NEEDS["spot_deconvolution"] = ("looks_like_counts",)
 
 
 def _need(ctx: _Ctx, *names: str) -> None:
@@ -2109,6 +2237,49 @@ def _bulk_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
     ], "needs the bulk file")
 
 
+def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
+    """Spot composition (core/spot_deconvolution.py) on the recorded genes, noise level and
+    types; the reference read from its file (scView read it from the library)."""
+    from scview.core import spot_deconvolution as sd
+
+    genes, ref_genes, fit, types = p.get("genes"), p.get("ref_genes"), p.get("fit_genes"), p.get("types")
+    label, ref_file, method, s_e = p.get("celltype_column"), p.get("reference_file"), p.get("method"), p.get("s_e")
+    ok = (isinstance(genes, list) and genes and isinstance(ref_genes, list) and len(ref_genes) == len(genes)
+          and isinstance(fit, list) and fit and all(isinstance(i, int) and 0 <= i < len(genes) for i in fit)
+          and isinstance(types, list) and len(types) >= 2 and isinstance(label, str) and label
+          and isinstance(ref_file, str) and ref_file and method in sd.METHODS
+          and (method == "nnls" or isinstance(s_e, (int, float))))
+    if not ok:
+        return Snippet(NOT_REPLAYABLE, ["# Spot composition: its genes, reference file or settings are not "
+                                        "recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items()
+                                                         if x not in ("genes", "ref_genes", "fit_genes")})],
+                       "settings not recorded")
+    _need(ctx, "spot_deconvolution")
+    status, notes = EXACT, []  # the recorded names are each file's own, also after a re-indexing
+    for who, src in (("reference", p.get("reference_source")), ("spots", p.get("spot_source"))):
+        if src and src not in ("layers['counts']", ".raw", "X"):
+            status = APPROXIMATE
+            notes.append(f"scView read the {who}' counts from {comment_text(src, 60)}; here from the file's own.")
+    return Snippet(status, [
+        f"# Spot composition from {comment_text(p.get('reference'), 80)} (its column {comment_text(label, 60)}), "
+        f"{comment_text(sd.METHOD_NAMES.get(method, method), 60)}.",
+        *[f"# NOTE: {n}" for n in notes],
+        "SPOT_GENES = [",
+        *_packed([repr(str(g)) for g in genes]),
+        "]",
+        "SPOT_REF_GENES = [",
+        *_packed([repr(str(g)) for g in ref_genes]),
+        "]",
+        f"SPOT_FIT = {_lit([int(i) for i in fit])}",
+        f"SPOT_TYPES = {_lit([str(t) for t in types])}",
+        f"ref = read_input(spot_reference_file({_lit(ref_file)}))",
+        f"spot_composition(adata, ref, {_lit(label)}, SPOT_TYPES, SPOT_GENES, SPOT_REF_GENES, SPOT_FIT, "
+        f"{_lit(s_e)}, {_lit(method)})",
+        "del ref",
+    ], "; ".join(notes)[:200] if notes else "")
+
+
 def _merge_clusters(p: dict, ctx: _Ctx) -> Snippet:
     column, target, mapping = p.get("column"), p.get("target"), p.get("mapping")
     if not column or not target or not isinstance(mapping, dict):
@@ -2318,6 +2489,66 @@ def _keep_layout(p: dict, ctx: _Ctx) -> Snippet:
         f"adata.uns.pop({_lit(str(key))}, None)",
     ])
 
+_WNN_CODE = '''
+counts = protein_counts_for(adata, WNN["panel"], WNN["features"])
+clr = wnn_clr(counts)[:, [WNN["panel"].index(x) for x in WNN["proteins"]]]
+pcs = protein_pcs(scale_proteins(clr, SCALE_MAX), WNN["n_pcs_protein"])
+if WNN["batch_key"]:
+    pcs = harmony(pcs, adata.obs, WNN["batch_key"])
+pcs = np.asarray(pcs, dtype=np.float32)
+rna = np.asarray(adata.obsm[WNN["rep"]])[:, :WNN["n_pcs_rna"]].astype(np.float32)
+out = wnn_neighbors(rna, pcs, WNN["k"], WNN["knn_range"], WNN["exact_max_cells"])
+conn, dists = wnn_graphs(out["idx"], out["dist"])
+adata.obs["wnn_rna_weight"] = out["rna_weight"].astype(np.float32)
+adata.obs["wnn_protein_weight"] = out["protein_weight"].astype(np.float32)
+adata.obsm["protein_pca"] = pcs
+adata.obsp["wnn_connectivities"] = conn.copy()  # umap-learn trims the graph it is given
+adata.obsp["wnn_distances"] = dists
+adata.uns["wnn"] = {"connectivities_key": "wnn_connectivities", "distances_key": "wnn_distances",
+                    "params": {"method": "umap", "n_neighbors": WNN["k"] + 1, "use_rep": WNN["rep"],
+                               "n_pcs": WNN["n_pcs_rna"], "metric": "euclidean", "random_state": 0}}
+sc.tl.umap(adata, neighbors_key="wnn", key_added="X_umap_wnn", min_dist=WNN["min_dist"], random_state=0)
+adata.obsp["wnn_connectivities"] = conn
+sc.pp.neighbors(adata, n_neighbors=WNN["k_protein_umap"], use_rep="protein_pca", key_added="protein",
+                random_state=0)
+sc.tl.umap(adata, neighbors_key="protein", key_added="X_umap_protein", min_dist=WNN["min_dist"],
+           random_state=0)
+for k in ("protein_connectivities", "protein_distances"):
+    adata.obsp.pop(k, None)
+for k in ("protein", "X_umap_wnn", "X_umap_protein"):
+    adata.uns.pop(k, None)
+'''
+
+
+def _wnn(p: dict, ctx: _Ctx) -> Snippet:
+    """WNN joint RNA + protein neighbours (core/wnn.py): weights, the WNN graph under its
+    own key, the WNN and protein UMAPs, Leiden on the WNN graph."""
+    need = ("proteins", "panel", "features", "rep", "n_pcs_rna", "n_pcs_protein")
+    if any(not p.get(x) for x in need) or len(p["panel"]) != len(p["features"]):
+        return Snippet(NOT_REPLAYABLE, ["# WNN: the panel or the PCs are not recorded. Recorded:",
+                                        *_param_comment(p)], "panel or PCs not recorded")
+    _need(ctx, "wnn")
+    if p.get("batch_key"):
+        _need(ctx, "harmony")
+    keys = ("proteins", "panel", "features", "rep", "n_pcs_rna", "n_pcs_protein", "batch_key", "k",
+            "knn_range", "k_protein_umap", "min_dist", "resolution", "n_iterations", "exact_max_cells")
+    settings = {x: p.get(x) for x in keys}
+    for x, default in (("k", 20), ("knn_range", 200), ("exact_max_cells", 4096), ("k_protein_umap", 15),
+                       ("min_dist", 0.5), ("resolution", 1.0)):
+        settings[x] = settings[x] if settings[x] is not None else default
+    n_iter = p.get("n_iterations")
+    passes = f", n_iterations={_lit(n_iter)}" if n_iter not in (None, -1) else ""
+    return Snippet(EXACT, [
+        "# WNN (Hao et al. 2021; Seurat's FindMultiModalNeighbors, core/wnn.py): per-cell RNA and",
+        "# protein weights and a joint 20-NN graph, kept under its own key ('wnn'). Above",
+        "# exact_max_cells cells the neighbour search is pynndescent's (seeded, approximate).",
+        f"WNN = {_lit(settings)}",
+        *_block(_WNN_CODE),
+        'sc.tl.leiden(adata, resolution=WNN["resolution"], key_added="wnn_leiden", neighbors_key="wnn", '
+        f'flavor="leidenalg"{passes})',
+    ])
+
+
 def _label_transfer(p: dict, ctx: _Ctx) -> Snippet:
     from scview.core import label_transfer as lt
 
@@ -2374,6 +2605,50 @@ def _label_transfer(p: dict, ctx: _Ctx) -> Snippet:
         "del ref, ref_log, query_log",
     ]
     return Snippet(status, code, "; ".join(notes)[:200] if notes else "")
+
+
+def _learned_gate_train(p: dict, ctx: _Ctx) -> Snippet:
+    return Snippet(RECORDED, [
+        f"# Learned gate {comment_text(p.get('name'), 80)} trained on {comment_text(p.get('n_selected'), 20)} "
+        "selected cells: it adds nothing to the data.",
+        "# The gate is written inline wherever a learned gate apply step follows. Recorded:",
+        *_param_comment(p),
+    ], "training only adds a gate to the library")
+
+
+def _learned_gate_apply(p: dict, ctx: _Ctx) -> Snippet:
+    from scview.core import learned_gate as lg
+
+    gate, targets = p.get("gate"), p.get("target_genes")
+    col, score_col = p.get("column"), p.get("score_column")
+    try:
+        parsed = lg.parse_gate(gate) if isinstance(gate, dict) else None
+    except lg.LearnedGateError:
+        parsed = None
+    ok = (parsed is not None and isinstance(targets, list) and len(targets) == len(parsed.genes)
+          and isinstance(col, str) and col and isinstance(score_col, str) and score_col)
+    if not ok:
+        return Snippet(NOT_REPLAYABLE, ["# Learned gate: its model or columns are not recorded. Recorded:",
+                                        *_param_comment({k: v for k, v in p.items() if k != "gate"})],
+                       "gate not recorded")
+    _need(ctx, "learned_gate")
+    model = {k: gate[k] for k in ("name", "genes", "coef", "intercept", "mean", "std", "clip", "threshold")}
+    here = [t if isinstance(t, str) else None for t in targets]
+    return Snippet(EXACT, [
+        f"# Learned gate {comment_text(parsed.name, 80)} (an L1 logistic regression on "
+        f"{len(parsed.genes)} genes): score = the class-balanced",
+        "# model probability, in = score >= threshold. A gene this dataset lacks takes the training mean.",
+        f"# Genes found {comment_text(p.get('via') or 'by name', 120)}.",
+        "# NOTE: scView read counts from the dataset or its source files; this reads them (or",
+        "# log-normalised values) from the data at this point.",
+        f"LEARNED_GATE = {_lit(model)}",
+        f"GATE_GENES_HERE = {_lit(here)}",
+        'gate_X = lg_expression(adata, [g if g is not None else "" for g in GATE_GENES_HERE])',
+        "gate_score, gate_in = lg_apply(gate_X, LEARNED_GATE)",
+        f'adata.obs[{_lit(col)}] = pd.Categorical(np.where(gate_in, "in", "out"), categories=["in", "out"])',
+        f"adata.obs[{_lit(score_col)}] = gate_score",
+        "del gate_X, gate_score, gate_in",
+    ])
 
 
 def _sample_code(column: object, mapping: object) -> list[str] | None:
@@ -2604,6 +2879,10 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "spatial_autocorr": _spatial_autocorr,
     "tf_motif_enrichment": _tf_motif_enrichment,
     "bulk_deconvolution": _bulk_deconvolution,
+    "learned_gate_train": _learned_gate_train,
+    "learned_gate_apply": _learned_gate_apply,
+    "wnn": _wnn,
+    "spot_deconvolution": _spot_deconvolution,
     "run_errors": _run_errors,
     "doublet_detection_skipped": _step_skipped,
 }

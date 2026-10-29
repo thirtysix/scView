@@ -650,3 +650,27 @@ async def test_api_reference_zip(client, dataset_manager):
     assert "cibersortx_reference.txt" in z.namelist() and z.testzip() is None
     r = await client.get(f"{API}/datasets/{did}/deconvolution/reference.zip", params={"celltype_column": "zz"})
     assert r.status_code == 422
+
+
+def test_flags_use_the_largest_share_in_one_donor():
+    # Kang CTRL: CD8 T is 5% of the pooled cells but 12% in one donor; NNLS on a matched
+    # reference put it near 30% in two samples. 5x the pooled share flagged it, 5x 12% does not.
+    share = np.array([0.05, 0.02])
+    share_max = np.array([0.12, 0.03])
+    P = np.array([[0.3, 0.1], [0.1, 0.4]])
+    assert [(f["sample"], f["cell_type"]) for f in dc.absorber_flags(["a", "b"], ["CD8", "Mk"], P, share)] == [
+        ("a", "CD8"), ("b", "Mk")]
+    flags = dc.absorber_flags(["a", "b"], ["CD8", "Mk"], P, share, share_max)
+    assert [(f["sample"], f["cell_type"]) for f in flags] == [("b", "Mk")]
+    assert flags[0]["reference_share"] == pytest.approx(0.02)
+
+
+def test_largest_donor_share_skips_small_donors():
+    ref = dc.Reference(
+        genes=np.array(["G0"]), gene_ids=None, usable=np.array([True]), types=["A", "B"], donors=["d0", "d1", "d2"],
+        P=np.ones((5, 1)), group_type=np.array([0, 1, 0, 1, 0]), group_donor=np.array([0, 0, 1, 1, 2]),
+        group_cells=np.array([90.0, 10.0, 80.0, 20.0, 5.0]), totals=np.ones(5), celltype_column="t",
+        donor_column="d", donor_reason=None, counts_source="X", cell_type=np.zeros(1, dtype=int),
+        cell_donor=np.zeros(1, dtype=int))
+    # d2 (5 cells, all A) is left out: A at most 90% (d0), B at most 20% (d1).
+    np.testing.assert_allclose(ref.type_share_max, [0.9, 0.2])
