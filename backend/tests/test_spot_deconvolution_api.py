@@ -130,3 +130,19 @@ async def test_self_check_streams_and_is_kept(client, dataset_manager, monkeypat
     # Nothing saved in the dataset.
     adata = (await dataset_manager.get_or_load_dataset(did)).adata
     assert sd.OBSM_RNA not in adata.obsm
+
+
+def test_the_guessed_column_is_one_the_fit_accepts():
+    import pandas as pd
+
+    from scview.api.v1.spot_deconvolution import _guess_column
+    from scview.core import spot_deconvolution as sd
+
+    n_fine = sd.MAX_TYPES + 4  # a lymphoid atlas: 'PrelimCellType' 54 types, 'Subset' 34
+    fine = [f"t{i}" for i in range(n_fine) for _ in range(sd.MIN_TYPE_CELLS)]
+    coarse = [f"c{i % 4}" for i in range(len(fine))]
+    obs = pd.DataFrame({"Donor": [f"d{i % 3}" for i in range(len(fine))], "PrelimCellType": fine, "Subset": coarse})
+    cols = [{"column": c, "n_labels": int(obs[c].nunique())} for c in obs.columns]
+    assert _guess_column(obs, cols) == "Subset"
+    assert _guess_column(obs[["Donor", "PrelimCellType"]], cols[:2]) == "PrelimCellType"  # refused later, named so
+    assert _guess_column(obs[["Donor"]], cols[:1]) == "Donor"

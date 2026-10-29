@@ -114,6 +114,23 @@ def _spot_genes(adata) -> set[str]:
     return set(map(str, names))
 
 
+_TYPE_WORDS = ("cell_type", "celltype", "subset", "annot", "label")
+
+
+def _guess_column(obs, columns: list[dict[str, Any]]) -> str | None:
+    """The reference's cell-type column: the first named like one whose types with
+    MIN_TYPE_CELLS+ cells number 2 to MAX_TYPES (a lymphoid atlas's 'PrelimCellType' has
+    54, its 'Subset' 34), else the first named like one, else the first label column."""
+    named = [c["column"] for c in columns if any(k in c["column"].lower() for k in _TYPE_WORDS)]
+    for col in named:
+        types, _small, _vc = sd.type_counts(obs[col].astype(object).where(obs[col].notna(), None))
+        if 2 <= len(types) <= sd.MAX_TYPES:
+            return col
+    if named:
+        return named[0]
+    return columns[0]["column"] if columns else None
+
+
 @router.get("/datasets/{dataset_id}/spot-deconvolution/reference/{reference_id}")
 async def reference_info(
     dataset_id: str,
@@ -142,10 +159,7 @@ async def reference_info(
         obs, var, _umap = _read_frames(paths[0])
         skel = ad.AnnData(obs=obs, var=var)
         columns = lt.label_columns(skel)
-        col = celltype_column or next((c["column"] for c in columns
-                                       if any(k in c["column"].lower() for k in ("cell_type", "celltype", "subset",
-                                                                                 "annot", "label"))),
-                                      columns[0]["column"] if columns else None)
+        col = celltype_column or _guess_column(obs, columns)
         types, small, vc = ([], [], None)
         if col is not None:
             if col not in obs.columns:
@@ -153,7 +167,8 @@ async def reference_info(
             types, small, vc = sd.type_counts(obs[col].astype(object).where(obs[col].notna(), None))
         ref_species = detect_species(skel).species
         spot_species = detect_species(spots).species
-        shared = sum(1 for g in var.index.astype(str) if g in _spot_genes(spots))
+        spot_genes = _spot_genes(spots)
+        shared = sum(1 for g in var.index.astype(str) if g in spot_genes)
         refusal = lt.check_species(ref_species, spot_species)
         if refusal is None and col is not None and len(types) < 2:
             refusal = f"'{col}' has fewer than 2 types with {sd.MIN_TYPE_CELLS}+ cells."
