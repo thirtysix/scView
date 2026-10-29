@@ -25,11 +25,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from scview.core import large_mode
 from scview.core import wnn
-from scview.core import working_copy
 from scview.core.dataset_manager import DatasetManager
-from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
+from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.run_watchdog import RunControl, RunWatchdog
 from scview.core.sse import keepalive
 from scview.dependencies import get_dataset_manager
@@ -42,11 +40,6 @@ _DONE = object()
 _running: set[str] = set()  # datasets with a run streaming: one at a time each
 
 _WHAT = "WNN (joint RNA + protein neighbours)"
-_WHY = "it writes a neighbour graph of every cell into the dataset"
-# What a run holds beyond the dataset (both modalities' 200 candidates per cell, the
-# neighbour index, two UMAPs): pbmc10k (7,798 cells) peaked 0.9 GB over the loaded dataset.
-_BASE_BYTES = 500 * 1024**2
-_BYTES_PER_CELL = 20_000
 
 
 class RunRequest(BaseModel):
@@ -84,10 +77,7 @@ async def get_wnn(
     adata = adaptor.adata
 
     def work() -> dict[str, Any]:
-        if large_mode.is_large(adata):
-            runnable = {"ok": False, "reason": str(large_mode.LargeDatasetError(_WHAT, _WHY)), "plan": None}
-        else:
-            runnable = wnn.runnable(adata)
+        runnable = wnn.runnable(adata)  # obs and obsm only: a large dataset's X stays on disk
         return {**wnn.summary(adata, groupby or None, adaptor.cells_fingerprint()), "runnable": runnable,
                 "defaults": _defaults(), "n_cells_total": int(adata.n_obs)}
 
@@ -128,21 +118,21 @@ async def get_wnn_weights(
 
 async def _save(dm: DatasetManager, dataset_id: str, inp: wnn.WnnInputs, res: wnn.WnnResult,
                 resources: dict, fingerprint: str) -> dict[str, Any]:
-    """Store the result in the dataset under its edit lock and save it."""
+    """Store the result in the dataset under its edit lock and save it (a large dataset's
+    obs, obsm, obsp and uns written into its h5ad in place, X untouched)."""
     async with dataset_edit(dataset_id) as held:
         adaptor = await _adaptor(dm, dataset_id)
         if adaptor.cells_fingerprint() != fingerprint:
             raise wnn.WnnError("The dataset's cells changed while WNN ran (a pipeline run or a filter); "
                                "nothing was saved. Run it again.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await working_copy.make_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor)
 
         def work() -> dict[str, Any]:
-            data = working_copy.in_memory(adaptor)
+            data = editable(adaptor)
             before = uns_snapshot(data)
             out = wnn.save(data, inp, res, resources=resources, cells_fingerprint=fingerprint)
-            write_derived(data, output_path, adaptor.h5ad_path, before, obsm_keys=wnn.OBSM_KEYS,
-                          obsp_keys=wnn.OBSP_KEYS)
+            save_edit(adaptor, data, output_path, before, obsm_keys=wnn.OBSM_KEYS, obsp_keys=wnn.OBSP_KEYS)
             return out
 
         try:
@@ -168,7 +158,6 @@ async def run_wnn(
     ``stage`` as each stage starts, ``watchdog`` memory warnings, ``result`` (the saved
     summary), then ``complete``, or ``error``. Saved only when the run reaches its end."""
     adaptor = await _adaptor(dm, dataset_id)
-    large_mode.check(adaptor, _WHAT, _WHY)
     if dataset_id in _running:
         raise HTTPException(status_code=409, detail="WNN is already running on this dataset.")
     adata = adaptor.adata
@@ -178,7 +167,9 @@ async def run_wnn(
     except wnn.WnnError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
-    await dm.free_memory_for(_BASE_BYTES + _BYTES_PER_CELL * plan.n_cells, keep=dataset_id)
+    # What the run holds beyond the dataset (wnn.estimate_bytes): other datasets are closed
+    # for it, and a 507 says so before it starts when even that is not enough.
+    await dm.reserve(dataset_id, wnn.estimate_bytes(plan.n_cells, plan.d_rna, plan.d_protein), what=_WHAT)
     del adata, adaptor  # the run needs only its copies
 
     async def events():

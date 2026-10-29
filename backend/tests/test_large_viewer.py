@@ -229,6 +229,27 @@ def test_edits_are_written_in_place(large, twin):
     back.file.close()
 
 
+def test_a_graph_is_written_in_place_and_removed(large, twin):
+    path = large.h5ad_path
+    with h5py.File(path, "r") as f:
+        x_before = f["X"]["data"].id.get_offset()
+    adata = large.adata
+    n = adata.n_obs
+    graph = sp.random(n, n, density=0.01, format="csr", dtype=np.float32, random_state=0)
+    adata.obsp["mine_connectivities"] = graph
+    large.write_in_place(obs=False, obsp_keys=["mine_connectivities"])
+    back = ad.read_h5ad(path, backed="r")
+    assert (back.obsp["mine_connectivities"] != graph).nnz == 0 and large_layout.is_large(back)
+    back.file.close()
+    with h5py.File(path, "r") as f:
+        assert f["X"]["data"].id.get_offset() == x_before
+    assert np.array_equal(large.adata.X[:3].toarray(), twin.adata.X[:3].toarray())
+    del adata.obsp["mine_connectivities"]
+    large.write_in_place(obs=False, obsp_keys=["mine_connectivities"])
+    with h5py.File(path, "r") as f:
+        assert "mine_connectivities" not in f["obsp"]
+
+
 def test_a_read_waits_for_an_in_place_write(large, monkeypatch):
     started, release = threading.Event(), threading.Event()
     real = large_mode._replace

@@ -10,7 +10,10 @@ runs it (Seurat 5, R/clustering.R ``FindModalityWeights`` / ``MultiModalNN`` /
 ``PredictAssay``, src/snn.cpp ``SNN_SmallestNonzero_Dist`` / ``ComputeSNN``;
 Seurat is MIT-licensed, Copyright (c) 2021 Seurat authors), written in numpy with
 pynndescent in place of Annoy (both approximate; exact neighbours up to
-``EXACT_MAX_CELLS`` cells).
+``EXACT_MAX_CELLS`` cells). As Seurat queries its Annoy index, each cell's candidates
+are queried from one index built over every cell, a block of cells at a time, so a
+run holds a few k-wide arrays per cell, never every cell's 200 candidates: it runs on
+a large dataset (only obsm is read) as on one in memory, with the same result.
 
 Inputs. RNA: the PCs the dataset's neighbour graph was built on (``X_pca``, or
 ``X_pca_harmony`` after Harmony), as many as that graph used. Protein: the CLR
@@ -115,12 +118,17 @@ STAGES = (
     ("leiden", "WNN clusters (Leiden)"),
 )
 
-# Measured at 2 CPUs on 10x pbmc10k CITE-seq (7,798 cells, 14 proteins, 50 RNA PCs): 42.6 s a
-# run (RNA / protein neighbours, bandwidths, joint neighbours ~10 s, two UMAPs ~9 s each,
-# Leiden 4 s), 79 s for the first run after a start (numba compiles pynndescent); peak
-# 0.9 GB over the loaded dataset.
+# Measured at 2 CPUs on 10x pbmc10k CITE-seq (7,798 cells, 14 proteins, 50 RNA PCs): 79 s for
+# the first run after a start (numba compiles pynndescent), 23-43 s after (neighbour stages
+# ~6 s, two UMAPs ~7-8 s each, Leiden 3 s). The neighbour stages on 300,000 synthetic cells
+# (50 RNA PCs, 13 protein PCs): 650 s, 1.38 GB over the start (100,000 cells: 0.62 GB); the
+# v0.49.0 code, which held every cell's 200 candidates, took 647 s and 4.40 GB.
 FIRST_RUN_SECONDS = 35.0
-_SECONDS_PER_CELL = 5.5e-3
+_SECONDS_PER_CELL = 2.2e-3  # neighbour stages (both searches, bandwidths, joint neighbours)
+_PROTEIN_GRAPH_SECONDS_PER_CELL = 3e-4  # the protein UMAP's 15-NN graph (preflight's neighbours)
+BASE_BYTES = 500 * 1024**2  # numba, umap-learn and pynndescent loaded and compiled
+_KEPT_BYTES_PER_CELL = 2_000  # k-wide neighbour arrays, the graph twice (one for the UMAP), layouts
+_KNN_BYTES_PER_CELL = 1_500  # the neighbour stages' blocks and indexes beyond what is kept
 
 
 class WnnError(ValueError):
@@ -162,11 +170,11 @@ def protein_pcs(Z, n_pcs):
     return (U[:, :n_pcs] * S[:n_pcs]) * signs[:n_pcs]
 
 
-def _self_first(idx, dist):
-    """Each row's own cell in column 0 at distance 0 (exact duplicates can put another
-    cell first), the others after it in their order."""
+def _self_first(idx, dist, first=0):
+    """Each row's own cell (rows ``first``, ``first`` + 1, ...) in column 0 at distance 0
+    (exact duplicates can put another cell first), the others after it in their order."""
     n = idx.shape[0]
-    rows = np.arange(n)[:, None]
+    rows = np.arange(first, first + n)[:, None]
     is_self = idx == rows
     has = is_self.any(axis=1)
     order = np.argsort(~is_self, axis=1, kind="stable")
@@ -178,33 +186,58 @@ def _self_first(idx, dist):
     return idx.astype(np.int64), dist.astype(np.float64)
 
 
-def knn(X, k, exact_max=4096, seed=0, chunk=512):
-    """Each cell's ``k`` nearest cells (Euclidean), itself first: exact up to
-    ``exact_max`` cells, else pynndescent (umap-learn's settings)."""
+def knn_index(X, exact_max=4096, seed=0, n_neighbors=30):
+    """What ``knn_query`` searches, built once over every cell: the rows themselves up to
+    ``exact_max`` cells (exact neighbours), else a pynndescent index (umap-learn's tree
+    and iteration settings, a ``n_neighbors`` graph; the queries ask for more)."""
     X = np.ascontiguousarray(X, dtype=np.float32)
     n = X.shape[0]
-    k = min(k, n)
     if n <= exact_max:
         X64 = X.astype(np.float64)
-        sq = (X64 * X64).sum(axis=1)
-        idx = np.empty((n, k), dtype=np.int64)
-        dist = np.empty((n, k), dtype=np.float64)
-        for s in range(0, n, chunk):
-            e = min(n, s + chunk)
+        return {"n": n, "X": X, "X64": X64, "sq": (X64 * X64).sum(axis=1), "nnd": None}
+    from pynndescent import NNDescent
+
+    index = NNDescent(X, n_neighbors=min(n_neighbors, n - 1), metric="euclidean", random_state=seed,
+                      n_trees=min(64, 5 + int(round(n ** 0.5 / 20.0))),
+                      n_iters=max(5, int(round(np.log2(n)))), max_candidates=60,
+                      low_memory=True, verbose=False, compressed=False)
+    index.prepare()
+    return {"n": n, "X": X, "nnd": index}
+
+
+def knn_query(index, start, stop, k, chunk=512, epsilon=0.1):
+    """Cells ``start:stop``'s ``k`` nearest cells (Euclidean), each itself first, from
+    ``knn_index``. A pynndescent search draws random starting points from one stream per
+    call, so a cell's neighbours depend on which cells share its call: callers query in
+    fixed blocks (``wnn_steps``' ``block``), and the same block gives the same answer.
+    Exact distances come from matrix products of ``chunk`` rows, whose last bits depend
+    on the product's shape: blocks that are multiples of ``chunk`` give the bits of one
+    query of every cell."""
+    n = index["n"]
+    k = min(k, n)
+    if index["nnd"] is None:
+        X64, sq = index["X64"], index["sq"]
+        idx = np.empty((stop - start, k), dtype=np.int64)
+        dist = np.empty((stop - start, k), dtype=np.float64)
+        for s in range(start, stop, chunk):
+            e = min(stop, s + chunk)
             d2 = np.maximum(sq[s:e, None] + sq[None, :] - 2 * X64[s:e] @ X64.T, 0)
             d2[np.arange(e - s), np.arange(s, e)] = -1.0  # the cell itself first
             o = np.argsort(d2, axis=1, kind="stable")[:, :k]
-            idx[s:e] = o
-            dist[s:e] = np.sqrt(np.maximum(np.take_along_axis(d2, o, axis=1), 0))
+            idx[s - start:e - start] = o
+            dist[s - start:e - start] = np.sqrt(np.maximum(np.take_along_axis(d2, o, axis=1), 0))
     else:
-        from pynndescent import NNDescent
+        idx, dist = index["nnd"].query(index["X"][start:stop], k=k, epsilon=epsilon)
+    return _self_first(np.asarray(idx), np.asarray(dist), start)
 
-        index = NNDescent(X, n_neighbors=k, metric="euclidean", random_state=seed,
-                          n_trees=min(64, 5 + int(round(n ** 0.5 / 20.0))),
-                          n_iters=max(5, int(round(np.log2(n)))), max_candidates=60,
-                          low_memory=True, verbose=False, compressed=False)
-        idx, dist = index.neighbor_graph
-    return _self_first(np.asarray(idx), np.asarray(dist))
+
+def knn(X, k, exact_max=4096, seed=0, block=4096):
+    """Each cell's ``k`` nearest cells (Euclidean), itself first: exact up to
+    ``exact_max`` cells, else pynndescent, queried ``block`` cells at a time."""
+    index = knn_index(X, exact_max, seed)
+    n = index["n"]
+    parts = [knn_query(index, s, min(n, s + block), k) for s in range(0, n, block)]
+    return np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
 
 
 def _row_dist(X, rows, cols):
@@ -213,54 +246,72 @@ def _row_dist(X, rows, cols):
     return np.sqrt((d * d).sum(axis=-1))
 
 
-def snn_bandwidth(X, nn, nearest, k=20, chunk=2000):
+def snn_bandwidth(X, nn, nearest, k=20, chunk=128, max_values=1 << 21):
     """Seurat's kernel width per cell (``ComputeSNN`` with no pruning, then
     ``SNN_SmallestNonzero_Dist``). ``nn``: the k-NN sets with the cell itself
-    (cells x k); ``nearest``: each cell's distance to its nearest other cell."""
+    (cells x k); ``nearest``: each cell's distance to its nearest other cell.
+    ``chunk`` cells' shared-neighbour rows at a time, laid out ``max_values`` at most:
+    a hub cell (in many k-NN sets) shares neighbours with thousands of cells. Each
+    cell's width is its own row's arithmetic, the same at any chunk."""
     n, kk = nn.shape
     A = sp.csr_matrix((np.ones(n * kk, dtype=np.float32), nn.ravel(), np.arange(0, n * kk + 1, kk)),
                       shape=(n, n))
     At = A.T.tocsr()
     sigma = np.empty(n, dtype=np.float64)
-    for s in range(0, n, chunk):
-        e = min(n, s + chunk)
-        S = (A[s:e] @ At).tocsr()
-        S.sort_indices()  # ascending cell index: the order Seurat's ties keep
-        counts = np.diff(S.indptr)
-        width = int(counts.max())
-        m = e - s
-        at = np.repeat(np.arange(m), counts)
-        pos = np.arange(S.nnz) - S.indptr[:-1][at]
-        vals = np.full((m, width), np.inf)
-        cols = np.zeros((m, width), dtype=np.int64)
-        vals[at, pos] = S.data / (2.0 * kk - S.data)
-        cols[at, pos] = S.indices
-        order = np.argsort(vals, axis=1, kind="stable")
-        vals = np.take_along_axis(vals, order, axis=1)
-        cols = np.take_along_axis(cols, order, axis=1)
-        n_i = np.minimum(k, counts)
-        cut = vals[np.arange(m), n_i - 1]
-        keep = (np.arange(width)[None, :] < n_i[:, None]) | (vals == cut[:, None])
-        rr, cc = np.nonzero(keep)
-        d = _row_dist(X, rr + s, cols[rr, cc])
-        c = nearest[rr + s]
-        d = np.where(c > 0, np.maximum(d - c, 0), d)
-        far = np.full((m, width), -np.inf)
-        far[rr, cc] = d
-        far = -np.sort(-far, axis=1)  # largest first
-        top = np.where(np.arange(width)[None, :] < n_i[:, None], far, 0.0)
-        sigma[s:e] = top.sum(axis=1) / n_i
+    for s0 in range(0, n, chunk):
+        S0 = (A[s0:min(n, s0 + chunk)] @ At).tocsr()
+        S0.sort_indices()  # ascending cell index: the order Seurat's ties keep
+        counts0 = np.diff(S0.indptr)
+        b = 0
+        while b < S0.shape[0]:
+            # rows b:b2, as many as fit max_values at their widest
+            widest = np.maximum.accumulate(np.maximum(counts0[b:], k))
+            b2 = b + max(1, int(np.searchsorted(widest * np.arange(1, widest.size + 1), max_values,
+                                                side="right")))
+            S, counts, s = S0[b:b2], counts0[b:b2], s0 + b
+            m = b2 - b
+            width = max(int(counts.max()), k)
+            at = np.repeat(np.arange(m), counts)
+            pos = np.arange(S.nnz) - S.indptr[:-1][at]
+            vals = np.full((m, width), np.inf)
+            cols = np.zeros((m, width), dtype=np.int64)
+            vals[at, pos] = S.data / (2.0 * kk - S.data)
+            cols[at, pos] = S.indices
+            order = np.argsort(vals, axis=1, kind="stable")
+            vals = np.take_along_axis(vals, order, axis=1)
+            cols = np.take_along_axis(cols, order, axis=1)
+            del order
+            n_i = np.minimum(k, counts)
+            cut = vals[np.arange(m), n_i - 1]
+            keep = (np.arange(width)[None, :] < n_i[:, None]) | (vals == cut[:, None])
+            rr, cc = np.nonzero(keep)
+            d = _row_dist(X, rr + s, cols[rr, cc])
+            c = nearest[rr + s]
+            d = np.where(c > 0, np.maximum(d - c, 0), d)
+            far = np.full((m, width), -np.inf)
+            far[rr, cc] = d
+            far = -np.sort(-far, axis=1)[:, :k]  # the k largest first
+            top = np.where(np.arange(k)[None, :] < n_i[:, None], far, 0.0)
+            sigma[s:s + m] = top.sum(axis=1) / n_i
+            b = b2
     return sigma
 
 
-def modality_scores(X, own, other, nearest, sigma, eps=1e-4, max_score=200.0):
+def modality_scores(X, own, other, nearest, sigma, eps=1e-4, max_score=200.0, chunk=4096):
     """One modality's score S: how much better its own neighbours (``own``, cells x
     k, itself first) predict a cell in its coordinates ``X`` than the other
-    modality's neighbours (``other``) do."""
-    within = X[own[:, 1:]].mean(axis=1)
-    cross = X[other[:, 1:]].mean(axis=1)
-    d_within = np.maximum(np.sqrt(((X - within) ** 2).sum(axis=1)) - nearest, 0)
-    d_cross = np.maximum(np.sqrt(((X - cross) ** 2).sum(axis=1)) - nearest, 0)
+    modality's neighbours (``other``) do. ``chunk`` cells at a time (each cell's
+    score is its own row's arithmetic: the same at any chunk)."""
+    n = X.shape[0]
+    d_within = np.empty(n, dtype=np.float64)
+    d_cross = np.empty(n, dtype=np.float64)
+    for s in range(0, n, chunk):
+        e = min(n, s + chunk)
+        x = X[s:e]
+        within = X[own[s:e, 1:]].mean(axis=1)
+        cross = X[other[s:e, 1:]].mean(axis=1)
+        d_within[s:e] = np.maximum(np.sqrt(((x - within) ** 2).sum(axis=1)) - nearest[s:e], 0)
+        d_cross[s:e] = np.maximum(np.sqrt(((x - cross) ** 2).sum(axis=1)) - nearest[s:e], 0)
     s = np.maximum(sigma, np.finfo(np.float32).eps)
     return np.clip(np.exp(-d_within / s) / (np.exp(-d_cross / s) + eps), 0, max_score)
 
@@ -271,17 +322,18 @@ def modality_weights(score_rna, score_protein):
     return w_rna, 1.0 - w_rna
 
 
-def joint_knn(Xs, cands, nearests, sigmas, weights, k=20, chunk=500):
+def joint_knn(Xs, cands, nearests, sigmas, weights, k=20, chunk=128, first=0):
     """Seurat's ``MultiModalNN``: per cell, the ``k`` most similar of the union of
-    each modality's candidates (cells x K, itself first), by the weighted sum of the
-    modalities' affinities. Returns (indices, distances), cells x k, itself excluded."""
+    each modality's candidates (cells x K, itself first; the rows of cells ``first``,
+    ``first`` + 1, ...), by the weighted sum of the modalities' affinities. Returns
+    (indices, distances), those cells x k, itself excluded."""
     n = cands[0].shape[0]
     C_all = np.concatenate([c[:, 1:] for c in cands], axis=1)
     out_idx = np.empty((n, k), dtype=np.int64)
     out_sim = np.empty((n, k), dtype=np.float64)
     for s in range(0, n, chunk):
         e = min(n, s + chunk)
-        rows = np.arange(s, e)
+        rows = np.arange(first + s, first + e)
         C = C_all[s:e]
         o = np.argsort(C, axis=1, kind="stable")
         sorted_c = np.take_along_axis(C, o, axis=1)
@@ -319,29 +371,57 @@ def wnn_graphs(idx, dist):
     return conn.tocsr(), distances
 
 
-def wnn_steps(rna, prot, k=20, knn_range=200, exact_max=4096, sd_scale=1.0):
+def _first_neighbours(index, K, k, block):
+    """Every cell's ``k`` nearest (itself first) and its distance to the nearest other
+    cell, from the ``K`` candidates queried ``block`` cells at a time; the candidates
+    themselves are not kept (``joint_knn`` asks for them again, block by block)."""
+    n = index["n"]
+    nn = np.empty((n, k), dtype=np.int64)
+    nearest = np.empty(n, dtype=np.float64)
+    for s in range(0, n, block):
+        e = min(n, s + block)
+        idx, dist = knn_query(index, s, e, K)
+        nn[s:e], nearest[s:e] = idx[:, :k], dist[:, 1]
+    return nn, nearest
+
+
+def wnn_steps(rna, prot, k=20, knn_range=200, exact_max=4096, sd_scale=1.0, block=4096):
     """Seurat's FindMultiModalNeighbors on two embeddings (cells x PCs, not yet
     L2-normalised), as a generator: yields each stage's name before it runs and
-    returns a dict (weights, the joint neighbours idx / dist, sigma, scores)."""
+    returns a dict (weights, the joint neighbours idx / dist, sigma, scores).
+
+    Memory stays at a few k-wide arrays per cell: each modality's ``knn_range``
+    candidates are queried ``block`` cells at a time, twice (the first ``k`` and the
+    nearest distance for the bandwidths and weights, then all of them for the joint
+    neighbours); the same block gives the same candidates both times. ``block`` is a
+    multiple of ``knn_query``'s 512-row chunk: exact neighbours are then bit for bit
+    those of one query of every cell."""
     n = rna.shape[0]
     K = min(knn_range, n)
     k = min(k, n - 1)
     Xr, Xp = l2_rows(rna), l2_rows(prot)
     yield "knn_rna"
-    nn_r, d_r = knn(Xr, K, exact_max)
+    ix_r = knn_index(Xr, exact_max)
+    nn_r, c_r = _first_neighbours(ix_r, K, k, block)
     yield "knn_protein"
-    nn_p, d_p = knn(Xp, K, exact_max)
-    c_r, c_p = d_r[:, 1], d_p[:, 1]
-    del d_r, d_p
+    ix_p = knn_index(Xp, exact_max)
+    nn_p, c_p = _first_neighbours(ix_p, K, k, block)
     yield "bandwidth"
-    sig_r = snn_bandwidth(Xr, nn_r[:, :k], c_r, k) * sd_scale
-    sig_p = snn_bandwidth(Xp, nn_p[:, :k], c_p, k) * sd_scale
+    sig_r = snn_bandwidth(Xr, nn_r, c_r, k) * sd_scale
+    sig_p = snn_bandwidth(Xp, nn_p, c_p, k) * sd_scale
     yield "weights"
-    s_r = modality_scores(Xr, nn_r[:, :k], nn_p[:, :k], c_r, sig_r)
-    s_p = modality_scores(Xp, nn_p[:, :k], nn_r[:, :k], c_p, sig_p)
+    s_r = modality_scores(Xr, nn_r, nn_p, c_r, sig_r)
+    s_p = modality_scores(Xp, nn_p, nn_r, c_p, sig_p)
     w_r, w_p = modality_weights(s_r, s_p)
+    del nn_r, nn_p
     yield "joint_knn"
-    idx, dist = joint_knn((Xr, Xp), (nn_r, nn_p), (c_r, c_p), (sig_r, sig_p), (w_r, w_p), k)
+    idx = np.empty((n, k), dtype=np.int64)
+    dist = np.empty((n, k), dtype=np.float64)
+    for s in range(0, n, block):
+        e = min(n, s + block)
+        cands = (knn_query(ix_r, s, e, K)[0], knn_query(ix_p, s, e, K)[0])
+        idx[s:e], dist[s:e] = joint_knn((Xr, Xp), cands, (c_r, c_p), (sig_r, sig_p), (w_r, w_p), k,
+                                        first=s)
     return {"rna_weight": w_r, "protein_weight": w_p, "idx": idx, "dist": dist,
             "sigma_rna": sig_r, "sigma_protein": sig_p, "score_rna": s_r, "score_protein": s_p,
             "nearest_rna": c_r, "nearest_protein": c_p}
@@ -358,8 +438,9 @@ def wnn_neighbors(rna, prot, k=20, knn_range=200, exact_max=4096, sd_scale=1.0):
 
 
 REPLAY_CONSTANTS = ("K_NN", "KNN_RANGE", "SCALE_MAX", "EXACT_MAX_CELLS")
-REPLAY_CODE = (l2_rows, scale_proteins, protein_pcs, _self_first, knn, _row_dist, snn_bandwidth,
-               modality_scores, modality_weights, joint_knn, wnn_graphs, wnn_steps, wnn_neighbors)
+REPLAY_CODE = (l2_rows, scale_proteins, protein_pcs, _self_first, knn_index, knn_query, knn, _row_dist,
+               snn_bandwidth, modality_scores, modality_weights, joint_knn, wnn_graphs, _first_neighbours,
+               wnn_steps, wnn_neighbors)
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +534,18 @@ class WnnPlan:
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
+    def warning_for_leiden(self) -> str | None:
+        """When Leiden to convergence (as the dataset's own clustering ran) is most of
+        a long run: what it costs, and that fast Leiden would shorten it."""
+        from scview.core import preflight
+
+        secs = preflight.leiden_seconds(self.n_cells, self.n_iterations)
+        if self.n_iterations != -1 or secs <= preflight.leiden_offer_seconds():
+            return None
+        return (f"Leiden on the WNN graph runs until it converges, as this dataset's clustering did: about "
+                f"{secs / 60:,.0f} min of the estimate. Clustering the dataset with fast Leiden first makes "
+                "WNN use it too.")
+
     def to_dict(self) -> dict[str, Any]:
         return {"n_cells": self.n_cells, "proteins": list(self.proteins), "controls": list(self.controls),
                 "n_proteins": len(self.proteins), "rep": self.rep, "d_rna": self.d_rna,
@@ -461,13 +554,35 @@ class WnnPlan:
                 "k_protein_umap": self.k_protein_umap, "min_dist": self.min_dist,
                 "resolution": self.resolution, "n_iterations": self.n_iterations, "exact": self.exact,
                 "warnings": list(self.warnings), "notes": list(self.notes),
-                "estimate_seconds": estimate_seconds(self.n_cells)}
+                "estimate_seconds": estimate_seconds(self.n_cells, self.n_iterations),
+                "estimate_bytes": estimate_bytes(self.n_cells, self.d_rna, self.d_protein)}
 
 
-def estimate_seconds(n_cells: int) -> float:
-    """A run's time at 2 CPUs (both kNN searches, bandwidths, joint neighbours, two
-    UMAPs, Leiden), plus numba's first compile."""
-    return round(FIRST_RUN_SECONDS + _SECONDS_PER_CELL * n_cells, 0)
+def estimate_seconds(n_cells: int, n_iterations: int = -1) -> float:
+    """A run's time at 2 CPUs, plus numba's first compile: the neighbour stages (per
+    cell), the two UMAPs and the protein graph as the pipeline's estimates have them
+    (``core/preflight.py``: 500 epochs up to 10,000 cells, 200 above), and Leiden with
+    the passes the dataset's clustering used."""
+    from scview.core import preflight
+
+    n = max(0, int(n_cells))
+    return round(FIRST_RUN_SECONDS + _SECONDS_PER_CELL * n + 2 * preflight.umap_seconds(n, three_d=False)
+                 + _PROTEIN_GRAPH_SECONDS_PER_CELL * n + preflight.leiden_seconds(n, n_iterations), 0)
+
+
+def estimate_bytes(n_cells: int, d_rna: int = 50, d_protein: int = MAX_PROTEIN_PCS) -> int:
+    """What a run holds beyond the loaded dataset at its peak: the libraries, what it
+    keeps for every cell (its input copies, the k-wide neighbour arrays, the graph, the
+    layouts), and the largest of its stages beyond that: the neighbour stages, a UMAP
+    (the pipeline's model, ``core/preflight.py``) or the Leiden child (likewise)."""
+    from scview.core import preflight
+
+    n = max(0, int(n_cells))
+    kept = n * (_KEPT_BYTES_PER_CELL + 28 * (int(d_rna) + int(d_protein)))
+    size = max(1.0, n / 88_640)
+    umap = n * preflight.UMAP_BYTES_PER_CELL * size ** preflight.UMAP_MEMORY_EXPONENT
+    leiden = 60 * 1024**2 + n * 9_000  # preflight's clustering step: the child and its graph
+    return int(BASE_BYTES + kept + max(_KNN_BYTES_PER_CELL * n, umap, leiden))
 
 
 def plan(adata, protein_pcs: int | None = None, resolution: float | None = None) -> WnnPlan:
@@ -508,13 +623,17 @@ def plan(adata, protein_pcs: int | None = None, resolution: float | None = None)
     res = DEFAULT_RESOLUTION if resolution is None else float(resolution)
     if not 0 < res <= 10:
         raise WnnError("Resolution must be above 0 and at most 10.")
-    return WnnPlan(n_cells=int(adata.n_obs), proteins=used, controls=controls, rep=rep, d_rna=d_r,
-                   d_protein=d_p, batch_key=batch_key, n_zero_protein=n_zero,
-                   k_protein_umap=min(k_umap, adata.n_obs - 1),
-                   min_dist=float(emb["umap_min_dist"] if emb.get("umap_min_dist") is not None
-                                  else DEFAULT_MIN_DIST), resolution=res,
-                   n_iterations=leiden.recorded_iterations(adata),
-                   exact=adata.n_obs <= EXACT_MAX_CELLS, warnings=warnings, notes=notes)
+    out = WnnPlan(n_cells=int(adata.n_obs), proteins=used, controls=controls, rep=rep, d_rna=d_r,
+                  d_protein=d_p, batch_key=batch_key, n_zero_protein=n_zero,
+                  k_protein_umap=min(k_umap, adata.n_obs - 1),
+                  min_dist=float(emb["umap_min_dist"] if emb.get("umap_min_dist") is not None
+                                 else DEFAULT_MIN_DIST), resolution=res,
+                  n_iterations=leiden.recorded_iterations(adata),
+                  exact=adata.n_obs <= EXACT_MAX_CELLS, warnings=warnings, notes=notes)
+    slow = out.warning_for_leiden()
+    if slow:
+        out.warnings.append(slow)
+    return out
 
 
 @dataclass
@@ -712,7 +831,7 @@ def save(adata, inp: WnnInputs, res: WnnResult, *, resources: dict | None = None
     adata.uns[GRAPH_KEY] = graph_uns(p)
     info = {
         "version": VERSION, "run_id": f"{created}|{adata.n_obs}", "created_at": created,
-        "plan": {k: v for k, v in p.to_dict().items() if k != "estimate_seconds"},
+        "plan": {k: v for k, v in p.to_dict().items() if k not in ("estimate_seconds", "estimate_bytes")},
         "cells_fingerprint": cells_fingerprint, "inputs_fingerprint": inp.fingerprint,
         "n_clusters": int(len(res.clusters.categories)),
         "mean_rna_weight": round(float(np.mean(res.rna_weight)), 4),
