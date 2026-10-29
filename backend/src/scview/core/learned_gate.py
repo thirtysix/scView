@@ -20,7 +20,11 @@ scaler fitted on the training cells, values clipped at +-10, a logistic regressi
   validation compares with.
 - Candidates: up to 200 genes up and 100 down by log2 fold change, detected in >= 10%
   of the higher group, without ribosomal, mitochondrial and haemoglobin genes and, by
-  default, the cell-cycle (Tirosh 2016) and dissociation-stress genes.
+  default, the cell-cycle (Tirosh 2016) and dissociation-stress genes; then as many again
+  against the NEAR negatives (the 20% scoring highest on those genes' up-minus-down mean).
+  Against all negatives the fold change ranks the genes that split lineages, so a subset
+  (naive vs memory CD4 T) loses to its neighbours: the near pool raised out-of-fold F1 on
+  20 of 23 types (Kang CTRL, paul15), CD4 Naive T .81 -> .85, and lowered none by > .01.
 - Model: ``LogisticRegression`` with an L1 penalty (liblinear), class-balanced, over a
   grid of 6 C values, 5-fold cross-validation (folds grouped by sample when there are
   >= 3); the sparsest C within one standard error of the best out-of-fold log-loss; at
@@ -81,6 +85,7 @@ MAX_NEG = 20_000
 SEED = 0
 N_UP = 200
 N_DOWN = 100
+NEAR_SHARE = 0.2  # of the negatives: the near pool the second candidate ranking uses
 MIN_DETECT = 0.10
 C_GRID = (0.003, 0.01, 0.03, 0.1, 0.3, 1.0)
 N_FOLDS = 5
@@ -531,17 +536,44 @@ def _col_stats(M: sp.csr_matrix) -> tuple[np.ndarray, np.ndarray]:
     return mean, detect
 
 
-def candidates(X: sp.csr_matrix, pos: np.ndarray, neg: np.ndarray, excl: np.ndarray,
-               n_up: int = N_UP, n_down: int = N_DOWN, min_detect: float = MIN_DETECT) -> dict[str, np.ndarray]:
-    """Candidate genes (column positions, up then down) by log2 fold change of the
-    means (as scanpy computes it), detected in >= ``min_detect`` of the higher group."""
-    mp, dp = _col_stats(X[pos])
-    mn, dn = _col_stats(X[neg])
-    fc = np.log2((np.expm1(mp) + 1e-9) / (np.expm1(mn) + 1e-9))
+def _ranked(fc: np.ndarray, dp: np.ndarray, dn: np.ndarray, excl: np.ndarray, n_up: int, n_down: int,
+            min_detect: float) -> tuple[np.ndarray, np.ndarray]:
     up = np.flatnonzero((fc > 0) & (dp >= min_detect) & ~excl)
     up = up[np.argsort(-fc[up], kind="stable")][:n_up]
     down = np.flatnonzero((fc < 0) & (dn >= min_detect) & ~excl)
     down = down[np.argsort(fc[down], kind="stable")][:n_down]
+    return up, down
+
+
+def _log2fc(m_in: np.ndarray, m_out: np.ndarray) -> np.ndarray:
+    return np.log2((np.expm1(m_in) + 1e-9) / (np.expm1(m_out) + 1e-9))
+
+
+def candidates(X: sp.csr_matrix, pos: np.ndarray, neg: np.ndarray, excl: np.ndarray,
+               n_up: int = N_UP, n_down: int = N_DOWN, min_detect: float = MIN_DETECT,
+               near_share: float = NEAR_SHARE) -> dict[str, np.ndarray]:
+    """Candidate genes (column positions, up then down) by log2 fold change of the
+    means (as scanpy computes it), detected in >= ``min_detect`` of the higher group:
+    against all negatives, then the genes not yet in from the same ranking against the
+    near negatives (``near_share`` of them, highest on the first genes' up-minus-down
+    mean). The stats are against all negatives."""
+    mp, dp = _col_stats(X[pos])
+    Xn = X[neg]
+    mn, dn = _col_stats(Xn)
+    fc = _log2fc(mp, mn)
+    up, down = _ranked(fc, dp, dn, excl, n_up, n_down, min_detect)
+    n_near = min(neg.size, max(MIN_LABEL_CELLS, int(near_share * neg.size)))
+    if near_share > 0 and (up.size or down.size) and n_near < neg.size:
+        s = np.zeros(neg.size)
+        if up.size:
+            s += np.asarray(Xn[:, up].mean(axis=1)).ravel()
+        if down.size:
+            s -= np.asarray(Xn[:, down].mean(axis=1)).ravel()
+        near = np.argsort(-s, kind="stable")[:n_near]
+        mq, dq = _col_stats(Xn[near])
+        up2, down2 = _ranked(_log2fc(mp, mq), dp, dq, excl, n_up, n_down, min_detect)
+        up = np.concatenate([up, up2[~np.isin(up2, up)]])
+        down = np.concatenate([down, down2[~np.isin(down2, down) & ~np.isin(down2, up)]])
     cols = np.concatenate([up, down]).astype(np.int64)
     return {"cols": cols, "fc": fc, "mean_in": mp, "mean_out": mn, "pct_in": dp, "pct_out": dn,
             "n_up": np.int64(up.size), "n_down": np.int64(down.size)}
