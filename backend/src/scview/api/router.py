@@ -63,6 +63,7 @@ from scview.api.v1 import (
     deconvolution,
     learned_gates,
     wnn,
+    spot_deconvolution,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -127,3 +128,4 @@ api_router.include_router(gwas.router, tags=["gwas"])
 api_router.include_router(deconvolution.router, tags=["deconvolution"])
 api_router.include_router(learned_gates.router, tags=["gates"])
 api_router.include_router(wnn.router, tags=["protein"])
+api_router.include_router(spot_deconvolution.router, tags=["spatial"])
