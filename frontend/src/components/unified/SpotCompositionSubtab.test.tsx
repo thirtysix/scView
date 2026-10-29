@@ -162,6 +162,18 @@ describe("SpotCompositionSubtab", () => {
     expect(screen.getByRole("button", { name: /Fit spots/ })).toBeDisabled();
   });
 
+  it("says when a large reference is read from disk, and only then", async () => {
+    const { unmount } = render(<SpotCompositionSubtab />);
+    await pickReference();
+    expect(screen.queryByTestId("spot-large-reference")).toBeNull();
+    unmount();
+    api.checkSpotReference.mockResolvedValue({ ...CHECK, estimate: { ...CHECK.estimate!, large_reference: true } });
+    render(<SpotCompositionSubtab />);
+    await pickReference();
+    expect(screen.getByTestId("spot-large-reference").textContent).toContain("read from disk in blocks of cells");
+    expect(screen.getByRole("button", { name: /Fit spots/ })).toBeEnabled();
+  });
+
   it("shows a run error in words", async () => {
     api.runSpotDeconvolution.mockRejectedValue(new Error('API error 422: {"detail": "No raw counts."}'));
     render(<SpotCompositionSubtab />);
