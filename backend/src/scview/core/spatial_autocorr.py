@@ -76,10 +76,12 @@ FACT_PADJ = 0.05
 # float32, sorted into blocks by spatial_order): 5,184 spots x 2,000 genes 0.1 s, x 20,000
 # genes 1.3 s; 20,736 x 20,000 4.8 s.
 SECONDS_PER_VALUE = 1.3e-8
+# A large dataset, from its gene store (sparse blocks of genes): 393,491 bins x 18,821 genes, 17 s.
+LARGE_SECONDS_PER_VALUE = 2.3e-9
 LONG_SECONDS = 4.0  # the UI says how long above this
 GENE_BLOCK = 64  # genes read at a time from a large dataset's gene store
 NEED_PER_OBS = 400  # KD-tree, its query's distances and indices, W and W + W'
-NEED_LARGE_BLOCK = 512 * 2**20  # a block of genes and W times it
+NEED_LARGE_BLOCK = 256 * 2**20  # a block of genes and W times it (8 um bins, all genes: 350 MB in all)
 
 REPLAY_CONSTANTS = ("N_NEIGHS", "GRID_SWAY", "BLOCK_BYTES")
 
@@ -363,8 +365,9 @@ def select_genes(adata, names, choice) -> tuple[np.ndarray, str, list[str]]:
     return np.arange(len(names)), "all", notes
 
 
-def estimate_seconds(n_obs: int, n_genes: int) -> float:
-    return round(max(0.2, SECONDS_PER_VALUE * n_obs * n_genes), 1)
+def estimate_seconds(n_obs: int, n_genes: int, large: bool = False) -> float:
+    rate = LARGE_SECONDS_PER_VALUE if large else SECONDS_PER_VALUE
+    return round(max(0.2, rate * n_obs * n_genes), 1)
 
 
 def need_bytes(adaptor) -> int:

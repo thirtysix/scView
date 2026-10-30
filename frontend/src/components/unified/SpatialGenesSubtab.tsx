@@ -99,7 +99,7 @@ export function SpatialGenesSubtab({
   const units = unitWord(spatial);
   const libs = spatial.libraries;
   const nObs = library ? (libs.find((l) => l.id === library)?.n_obs ?? 0) : (dataset.n_cells ?? 0);
-  const allSeconds = estimateSeconds(nObs, dataset.n_genes ?? 0);
+  const allSeconds = estimateSeconds(nObs, dataset.n_genes ?? 0, !!dataset.large);
 
   const run = () => {
     setRunning(true);

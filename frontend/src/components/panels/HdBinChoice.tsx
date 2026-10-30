@@ -3,8 +3,10 @@ import { formatBytes, hdDefaultBin, type HdBinOption } from "@/lib/ingestUpload"
 
 /** What a bin size is good for, measured on a mouse brain section (batch 32). */
 function binNote(um: number): string {
-  if (um === 16) return "2 to 4 cells a bin; the fast path, processed in minutes";
-  if (um === 8) return "about one cell a bin; a processing run takes much longer, mostly its UMAP";
+  if (um === 16) return "2 to 4 cells a bin, clusters follow the anatomy; the fast path, a full run takes about 10 min on 2 CPUs";
+  if (um === 8) {
+    return "about one cell a bin and few counts, so clusters are noisier; a full run takes an hour or more on 2 CPUs (Leiden), about 12 min with Leiden at 2 iterations";
+  }
   return "";
 }
 

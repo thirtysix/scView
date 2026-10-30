@@ -118,6 +118,9 @@ CHECK_ALPHA = 0.5
 SECONDS_FIXED = 8.0
 SECONDS_PER_REF_CELL = 2.5e-4
 SECONDS_PER_SPOT_TYPE2 = 1.2e-5
+# Bins hold few counts and settle faster, and the near-empty ones are not fitted. Measured on
+# one core with 13 types: 16 um (98,896 bins) 84 s, 8 um (393,491 bins, 278,322 fitted) 266 s.
+SECONDS_PER_BIN_TYPE2 = 5.5e-6
 NEED_FIXED = 400 * 1024 * 1024
 NEED_COUNTS_COPIES = 2.5
 # A large side (core/large_mode.py) is never read whole: one pass over its counts by row
@@ -760,7 +763,7 @@ NOT_SPOTS = ("Spot composition needs Visium spots or Visium HD bins: this datase
 
 
 def estimate_seconds(n_ref: int, n_spots: int, n_types: int, method: str = "rctd", *,
-                     ref_values: int = 0, spot_values: int = 0, check: bool = False) -> float:
+                     ref_values: int = 0, spot_values: int = 0, check: bool = False, bins: bool = False) -> float:
     """Wall time at 2 CPUs: reading the reference, then the fit (types^2 per spot dominate).
     ``ref_values`` / ``spot_values``: the stored values of a large side's counts, read by
     row blocks (a large reference's second pass for the self-check), instead of the
@@ -771,7 +774,8 @@ def estimate_seconds(n_ref: int, n_spots: int, n_types: int, method: str = "rctd
         secs = SECONDS_FIXED + SECONDS_PER_REF_CELL * n_ref
     secs += LARGE_SECONDS_PER_VALUE * spot_values
     if method == "rctd":
-        secs += SECONDS_PER_SPOT_TYPE2 * n_spots * max(n_types, 2) ** 2
+        per = SECONDS_PER_BIN_TYPE2 if bins else SECONDS_PER_SPOT_TYPE2
+        secs += per * n_spots * max(n_types, 2) ** 2
     else:
         secs += 2e-3 * n_spots
     return round(secs, 1)

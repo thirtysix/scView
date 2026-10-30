@@ -87,7 +87,7 @@ export function spatialAutocorrCsvUrl(datasetId: string, resultId: string): stri
   return `${API_BASE}/datasets/${datasetId}/spatial/autocorr/${resultId}.csv`;
 }
 
-/** Seconds a run takes on 2 cores (backend spatial_autocorr.SECONDS_PER_VALUE). */
-export function estimateSeconds(nObs: number, nGenes: number): number {
-  return Math.max(0.2, 1.3e-8 * nObs * nGenes);
+/** Seconds a run takes on 2 cores (backend spatial_autocorr.SECONDS_PER_VALUE, LARGE_SECONDS_PER_VALUE). */
+export function estimateSeconds(nObs: number, nGenes: number, large = false): number {
+  return Math.max(0.2, (large ? 2.3e-9 : 1.3e-8) * nObs * nGenes);
 }

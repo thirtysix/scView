@@ -446,6 +446,11 @@ async def test_api_moran_stream_counts_genes_and_gives_the_result(client, datase
     assert _events(bad.text)[-1][0] == "error" and "nope" in _events(bad.text)[-1][1]["error"]
 
 
+def test_moran_estimates_for_a_large_dataset():
+    assert sa.estimate_seconds(393_491, 18_821, large=True) == pytest.approx(17, abs=1)
+    assert sa.estimate_seconds(98_896, 2_000) == pytest.approx(2.6, abs=1)
+
+
 def test_moran_stops_when_its_progress_says_so():
     a = _grid()
     W = sa.spatial_weights(a.obsm["spatial"], a.obs["library_id"].astype(str).to_numpy(), True, 4)
@@ -549,6 +554,8 @@ def test_spot_composition_accepts_bins_and_its_refusal_names_them():
     from scview.core import spot_deconvolution as sd
 
     assert "Visium HD bins" in sd.NOT_SPOTS and spatial.is_spot_data(_grid())
+    # Measured: 8 um, 393,491 bins, 13 types, 291 s on one core (a Visium spot's rate would say 823 s).
+    assert sd.estimate_seconds(3250, 393_491, 13, bins=True) < 450 < sd.estimate_seconds(3250, 393_491, 13)
 
 
 def test_guide_and_router_know_bins():
