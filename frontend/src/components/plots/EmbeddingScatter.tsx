@@ -50,7 +50,7 @@ export interface TissueMode {
   /** 0..1 */
   imageOpacity: number;
   /** What one point is (spatial.unit): captions say "spots" for Visium */
-  unit: "spot" | "cell";
+  unit: "spot" | "bin" | "cell";
 }
 
 interface EmbeddingScatterProps {
@@ -324,7 +324,7 @@ export function EmbeddingScatter({
   const totalCells = positions ? positions.length / stride : 0;
   const tissueMode = tissue != null && dimensions !== 3;
   const unit = tissueMode ? tissue.unit : "cell";
-  const Unit = unit === "spot" ? "Spot" : "Cell";
+  const Unit = unit === "spot" ? "Spot" : unit === "bin" ? "Bin" : "Cell";
   // Visium spots in full-res pixels (world units); null = screen pixels like the scatter
   const spotR = tissueMode ? spotRadius(tissue.library, pointSize) : null;
 

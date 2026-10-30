@@ -33,6 +33,7 @@ import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { UnifiedActivitySubtab } from "@/components/unified/UnifiedActivitySubtab";
 import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSubtab";
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
+import { SpatialDomainsSubtab } from "@/components/unified/SpatialDomainsSubtab";
 import { SpatialGenesSubtab } from "@/components/unified/SpatialGenesSubtab";
 import { TraitsSubtab } from "@/components/unified/TraitsSubtab";
 import { DeconvolutionSubtab } from "@/components/unified/DeconvolutionSubtab";
@@ -94,6 +95,7 @@ const SUBTABS = [
   { id: "clonotypes" as const, label: "Clonotypes" },
   { id: "perturbation" as const, label: "Perturbation" },
   { id: "spatial" as const, label: "Spatial genes" },
+  { id: "domains" as const, label: "Domains" },
   { id: "traits" as const, label: "Traits" },
   { id: "deconvolution" as const, label: "Deconvolution" },
   { id: "spotcomp" as const, label: "Spot composition" },
@@ -539,7 +541,7 @@ export function UnifiedViewPanel() {
   useEffect(() => {
     if (activeSubtab === "protein" && dataset && !dataset.protein) setActiveSubtab("markers");
     if (activeSubtab === "perturbation" && dataset && !dataset.perturbation) setActiveSubtab("markers");
-    if (activeSubtab === "spatial" && dataset && !dataset.spatial) setActiveSubtab("markers");
+    if ((activeSubtab === "spatial" || activeSubtab === "domains") && dataset && !dataset.spatial) setActiveSubtab("markers");
   }, [activeSubtab, dataset, setActiveSubtab]);
 
   // Default the expression layer to the dataset's default; re-default when the
@@ -1394,7 +1396,7 @@ export function UnifiedViewPanel() {
               (tab) =>
                 (tab.id !== "protein" || dataset?.protein) &&
                 (tab.id !== "perturbation" || dataset?.perturbation) &&
-                (tab.id !== "spatial" || dataset?.spatial) &&
+                ((tab.id !== "spatial" && tab.id !== "domains") || dataset?.spatial) &&
                 (tab.id !== "spotcomp" || dataset?.spatial?.unit === "spot"),
             )}
             active={activeSubtab}
@@ -1491,6 +1493,9 @@ export function UnifiedViewPanel() {
                 onGeneClick={handleGeneClick}
                 activeGene={scatterOverlay?.type === "expression" && !scatterOverlay.layer ? overlayLabel : null}
               />
+            )}
+            {activeSubtab === "domains" && dataset?.spatial && (
+              <SpatialDomainsSubtab groupByColumn={groupByColumn} setGroupByColumn={setGroupByColumn} />
             )}
             {activeSubtab === "traits" && (
               <TraitsSubtab
