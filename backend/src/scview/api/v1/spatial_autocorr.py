@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from scview.core import large_mode, results_store
+from scview.core import results_store
 from scview.core import spatial_autocorr as sa
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, save_edit, uns_snapshot
@@ -76,7 +76,6 @@ async def run_autocorr(
     """Moran's I for the chosen genes; saved with the dataset and kept for GET."""
     async with dataset_edit(dataset_id) as held:
         adaptor = await _adaptor(dm, dataset_id)
-        large_mode.check(adaptor, "Spatially variable genes", large_mode.WHOLE_MATRIX)
         adata = adaptor.adata
         if not sa.has_spatial(adata):
             raise HTTPException(status_code=422, detail=NO_SPATIAL)

@@ -600,7 +600,8 @@ def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> No
 
     try:
         fact, detail = qc_filter.grounding_lines(
-            adaptor.adata, adaptor.qc_per_cell(), qc_filter.Thresholds.from_params(PipelineParams()))
+            adaptor.adata, *reversed(qc_filter.bin_rules(
+                adaptor.adata, qc_filter.Thresholds.from_params(PipelineParams()), adaptor.qc_per_cell())))
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("assistant: QC removal audit failed: %s", exc)
         return

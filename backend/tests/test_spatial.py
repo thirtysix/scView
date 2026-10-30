@@ -157,25 +157,13 @@ def test_missing_positions_is_an_error_and_missing_scalefactors_a_warning(tmp_pa
     assert not rep.ok and any(i.code == "spatial_no_positions" for i in rep.issues)
 
 
-def test_visium_hd_and_xenium_are_refused_with_a_sentence(tmp_path):
-    hd = tmp_path / "hd" / "outs" / "binned_outputs" / "square_008um"
-    _h5(hd / "filtered_feature_bc_matrix.h5")
-    rep = validate_bundle(build_bundle(_files(tmp_path / "hd"), root=tmp_path / "hd"))
-    assert not rep.ok and any(i.code == "spatial_unsupported" and "Visium HD" in i.message for i in rep.issues)
+def test_xenium_is_refused_with_a_sentence(tmp_path):
     xe = tmp_path / "xe"
     _h5(xe / "cell_feature_matrix.h5")
     (xe / "experiment.xenium").write_text('{"run_name": "x"}')
     (xe / "transcripts.csv.gz").write_bytes(b"")
     rep = validate_bundle(build_bundle(_files(xe), root=xe))
     assert not rep.ok and any("Xenium" in i.message for i in rep.issues)
-
-
-def test_hd_barcodes_in_positions_are_refused(tmp_path):
-    p = tmp_path / "tissue_positions.csv"
-    p.write_text("barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres\n"
-                 "s_008um_00000_00001-1,1,0,1,5,5\n")
-    with pytest.raises(spatial.SpatialError, match="Visium HD"):
-        spatial.read_spaceranger([("positions", str(p), p.name)])
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +384,7 @@ def _hd_like():
 def test_bin_size_makes_visium_hd_bins_which_count_as_spot_data():
     a = _hd_like()
     assert spatial.adopt(a) is True
-    assert a.uns["scview_spatial"] == {"technology": "visium_hd", "unit": "bin"}
+    assert a.uns["scview_spatial"] == {"technology": "visium_hd", "unit": "bin", "bin_size_um": 8.0}
     assert spatial.is_spot_data(a) is True
     assert spatial.info(a)["unit"] == "bin"
     assert spatial.grounding_lines(a)[1].startswith("Visium HD")

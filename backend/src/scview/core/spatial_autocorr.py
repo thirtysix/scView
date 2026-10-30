@@ -6,11 +6,13 @@ importing squidpy (source read: squidpy/gr/_build.py, _ppatterns.py, BSD-3; and
 scanpy/metrics/_morans_i.py):
 
 - Neighbours, one graph per ``obs["library_id"]`` (block-diagonal: never across
-  sections). ``grid`` (Visium: ``uns["scview_spatial"]["technology"] == "visium"``,
+  sections). ``grid`` (Visium or Visium HD: ``uns["scview_spatial"]["technology"]``,
   or, with no such record, squidpy's own rule: ``uns["spatial"]`` exists): each
-  spot's 6 nearest spots (Euclidean on ``obsm["spatial"]``), kept when nearer than
-  1.3 x the median of those distances in its section, so an edge spot keeps its
-  fewer real neighbours. ``knn`` otherwise: the 6 nearest, no cut. Directed, as
+  spot's 6 nearest spots (Visium's hexagons; a Visium HD bin's 4 nearest, the bins it
+  shares a side with: squidpy's ``coord_type="grid", n_neighs=4``; Euclidean on
+  ``obsm["spatial"]``), kept when nearer than 1.3 x the median of those distances in
+  its section, so an edge spot keeps its fewer real neighbours. ``knn`` otherwise: the
+  6 nearest, no cut. Directed, as
   squidpy builds it (j among i's nearest, not necessarily i among j's). A spot
   matches itself out as sklearn's ``kneighbors()`` does (with duplicates at one
   position, the first hit is dropped when the spot itself is not among them).
@@ -18,7 +20,9 @@ scanpy/metrics/_morans_i.py):
   a zero row and still counts in n and the mean, as in squidpy.
 - I = n / S0 * sum_ij w_ij z_i z_j / sum_i z_i^2, z = x - mean over all analysed
   spots (sections pooled). Computed from per-gene sums in row blocks, so neither
-  the matrix nor a gene block is ever made dense whole.
+  the matrix nor a gene block is ever made dense whole. A large dataset (``core/
+  large_mode.py``) gives the same sums from the gene store, a block of genes at a time
+  (``moran_sums_by_genes``), equal to a relative 1e-9 (the additions come in another order).
 - p under the normality assumption (``n_perms=None``): E[I] = -1/(n-1), Var[I] =
   (n^2 S1 - n S2 + 3 S0^2) / ((n-1)(n+1) S0^2) - E[I]^2; one-tailed
   (``two_tailed=False``) in the direction of z. squidpy computes ``1 - cdf(z)``,
@@ -50,7 +54,7 @@ import scipy.sparse as sp
 from scipy import stats
 from scipy.spatial import cKDTree
 
-from scview.core import results_store
+from scview.core import large_mode, results_store
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +65,7 @@ STEP = "spatial_autocorr"
 LIBRARY_COLUMN = "library_id"
 
 N_NEIGHS = 6
+HD_NEIGHS = 4  # a square grid: the bins sharing a side
 GRID_SWAY = 1.3  # squidpy: "there's a small amount of sway" in a grid's spacing
 BLOCK_BYTES = 64_000_000  # per row block of W @ X (dense values)
 GENE_CHOICES = ("hvg", "all")
@@ -72,6 +77,7 @@ FACT_PADJ = 0.05
 # genes 1.3 s; 20,736 x 20,000 4.8 s.
 SECONDS_PER_VALUE = 1.3e-8
 LONG_SECONDS = 4.0  # the UI says how long above this
+GENE_BLOCK = 64  # genes read at a time from a large dataset's gene store
 
 REPLAY_CONSTANTS = ("N_NEIGHS", "GRID_SWAY", "BLOCK_BYTES")
 
@@ -194,11 +200,12 @@ def spatial_order(coords, libraries):
     return np.lexsort((coords[:, 0], coords[:, 1], np.asarray(libraries).astype(str)))
 
 
-def morans_i(W, M, genes, order=None):
-    """Moran's I per gene with squidpy's analytic p-values, sorted by I (highest
-    first); constant genes are left out. Returns (table, number of constant genes)."""
-    n = M.shape[0]
-    xwx, s, ss, xr, xc, constant = moran_sums(W, M, order)
+def moran_table(W, sums, genes):
+    """Moran's I per gene from ``moran_sums``'s sums, with squidpy's analytic p-values,
+    sorted by I (highest first); constant genes are left out. Returns (table, number of
+    constant genes)."""
+    n = W.shape[0]
+    xwx, s, ss, xr, xc, constant = sums
     s0, s1, s2 = weight_moments(W)
     mean = s / n
     num = xwx - mean * xr - mean * xc + mean * mean * s0
@@ -218,7 +225,33 @@ def morans_i(W, M, genes, order=None):
     return table, int(constant.sum())
 
 
-REPLAY_CODE = (knn_edges, spatial_weights, weight_moments, moran_sums, bh_adjust, spatial_order, morans_i)
+def morans_i(W, M, genes, order=None):
+    """Moran's I per gene of a matrix read by rows (``moran_table``)."""
+    return moran_table(W, moran_sums(W, M, order), genes)
+
+
+REPLAY_CODE = (knn_edges, spatial_weights, weight_moments, moran_sums, bh_adjust, spatial_order, moran_table,
+               morans_i)
+
+
+def moran_sums_by_genes(W, read, n_genes, block=GENE_BLOCK):
+    """``moran_sums`` of a matrix read a block of genes at a time: ``read(a, b)`` gives genes
+    a..b as a sparse spots x genes matrix (a large dataset's gene store). Stays sparse."""
+    W = sp.csr_matrix(W)
+    r = np.asarray(W.sum(axis=1)).ravel()
+    c = np.asarray(W.sum(axis=0)).ravel()
+    xwx, s, ss, xr, xc = (np.zeros(n_genes) for _ in range(5))
+    constant = np.zeros(n_genes, dtype=bool)
+    for a in range(0, n_genes, block):
+        b = min(a + block, n_genes)
+        B = sp.csc_matrix(read(a, b), dtype=np.float64)
+        xwx[a:b] = np.asarray(B.multiply(W @ B).sum(axis=0)).ravel()
+        s[a:b] = np.asarray(B.sum(axis=0)).ravel()
+        ss[a:b] = np.asarray(B.multiply(B).sum(axis=0)).ravel()
+        xr[a:b] = r @ B
+        xc[a:b] = c @ B
+        constant[a:b] = B.max(axis=0).toarray().ravel() == B.min(axis=0).toarray().ravel()
+    return xwx, s, ss, xr, xc, constant
 
 
 # ---------------------------------------------------------------------------
@@ -256,16 +289,22 @@ def has_spatial(adata) -> bool:
 
 
 def is_grid(adata) -> bool:
-    """Visium's grid (squidpy coord_type "grid"), else generic kNN."""
+    """Visium's or Visium HD's grid (squidpy coord_type "grid"), else generic kNN."""
     info = adata.uns.get("scview_spatial")
     if isinstance(info, dict) and info.get("technology"):
-        return str(info["technology"]) == "visium"
+        return str(info["technology"]) in ("visium", "visium_hd")
     return "spatial" in adata.uns
+
+
+def neighbours_of(adata) -> int:
+    """Each point's neighbours: 4 on Visium HD's square grid, else 6."""
+    info = adata.uns.get("scview_spatial")
+    return HD_NEIGHS if isinstance(info, dict) and info.get("technology") == "visium_hd" else N_NEIGHS
 
 
 def unit_of(adata) -> str:
     info = adata.uns.get("scview_spatial")
-    if isinstance(info, dict) and info.get("unit") in ("spot", "cell"):
+    if isinstance(info, dict) and info.get("unit") in ("spot", "bin", "cell"):
         return str(info["unit"])
     return "spot" if is_grid(adata) else "cell"
 
@@ -323,6 +362,11 @@ def estimate_seconds(n_obs: int, n_genes: int) -> float:
     return round(max(0.2, SECONDS_PER_VALUE * n_obs * n_genes), 1)
 
 
+def _large_values(adata):
+    """A large dataset's log-normalised X (read from its gene store) and gene names."""
+    return adata.X, adata.var_names, "log-normalised X"
+
+
 def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str | None = None,
         dataset_id: str = "") -> Result:
     """Moran's I for the chosen genes on all sections (or one)."""
@@ -340,17 +384,31 @@ def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str 
     coords = np.asarray(adata.obsm["spatial"])[rows, :2]
     if not np.isfinite(coords).all():
         raise SpatialAutocorrError("Some spatial coordinates are missing (NaN).")
-    M, names, source = values_matrix(adata, layer)
+    large = large_mode.is_large(adata)
+    if large and layer:
+        raise SpatialAutocorrError("A large dataset's layers stay on disk: run this on its expression values.")
+    M, names, source = _large_values(adata) if large else values_matrix(adata, layer)
     idx, choice, notes = select_genes(adata, names, genes)
-    if len(rows) < adata.n_obs:
-        M = M[rows]
-    if len(idx) < M.shape[1]:
-        M = M[:, idx]
+    if not large:
+        if len(rows) < adata.n_obs:
+            M = M[rows]
+        if len(idx) < M.shape[1]:
+            M = M[:, idx]
     grid = is_grid(adata)
-    W = spatial_weights(coords, libs[rows], grid)
+    k = neighbours_of(adata)
+    W = spatial_weights(coords, libs[rows], grid, k)
     if W.nnz == 0:
         raise SpatialAutocorrError(f"No {unit_of(adata)} has a neighbour: the positions are too far apart.")
-    table, n_constant = morans_i(W, M, np.asarray(names)[idx], spatial_order(coords, libs[rows]))
+    if large:
+        whole = len(rows) == adata.n_obs
+
+        def read(a, b):
+            block = M.columns(idx[a:b])
+            return block if whole else block[rows]
+
+        table, n_constant = moran_table(W, moran_sums_by_genes(W, read, len(idx)), np.asarray(names)[idx])
+    else:
+        table, n_constant = morans_i(W, M, np.asarray(names)[idx], spatial_order(coords, libs[rows]))
     if n_constant:
         notes.append(f"{n_constant:,} gene(s) with the same value in every spot were left out.")
     isolated = int((np.diff(W.indptr) == 0).sum())
@@ -359,7 +417,7 @@ def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str 
         notes.append(f"{isolated:,} {unit}(s) have no neighbour within reach; they count in the mean only.")
     return Result(
         id=uuid.uuid4().hex[:12], dataset_id=dataset_id, n_obs=int(len(rows)), n_genes=int(len(table)),
-        neighbors={"kind": "grid" if grid else "knn", "k": N_NEIGHS},
+        neighbors={"kind": "grid" if grid else "knn", "k": k},
         libraries=[str(x) for x in pd.unique(libs[rows])], genes_choice=choice, matrix_source=source,
         table=table, n_constant=n_constant, notes=notes, unit=unit,
         elapsed_seconds=round(time.time() - t0, 2), created_at=time.time(),
@@ -385,7 +443,7 @@ def record(adata, r: Result, genes: Any, library_id: str | None, layer: str | No
         adata, step=STEP, tool="scview.spatial_autocorr (= squidpy 1.6 spatial_neighbors + spatial_autocorr)",
         params={"genes": genes if isinstance(genes, str) else [str(g) for g in genes],
                 "genes_used": r.genes_choice, "library_id": library_id, "layer": layer,
-                "matrix_source": r.matrix_source, "neighbors": r.neighbors["kind"], "n_neighs": N_NEIGHS,
+                "matrix_source": r.matrix_source, "neighbors": r.neighbors["kind"], "n_neighs": r.neighbors["k"],
                 "n_obs": r.n_obs, "n_genes": r.n_genes, "n_constant": r.n_constant},
         resources={"seconds": r.elapsed_seconds},
     )

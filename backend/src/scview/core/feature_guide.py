@@ -30,7 +30,9 @@ IMPORTING = (
     "Visium images); "
     "nf-core/scrnaseq mtx_conversions outputs (*.h5ad); and Visium spatial data: Space Ranger's "
     "filtered matrix with its spatial/ folder (or spatial.tar.gz; drop the whole outs/ folder), "
-    "or an .h5ad with obsm['spatial'] (Visium HD and Xenium bundles are not read yet). A guided flow bundles multi-file "
+    "Visium HD's binned_outputs folder or one square_NNNum folder (8 or 16 um bins, one dataset per bin "
+    "size; 2 um, its .tar.gz and segmented_outputs are refused), "
+    "or an .h5ad with obsm['spatial'] (Xenium bundles are not read yet). A guided flow bundles multi-file "
     "inputs (e.g. the three 10x MTX files) and can merge several samples into one dataset. "
     "Each imported dataset then appears in the Data-tab library to open or manage."
 )
@@ -56,7 +58,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
     ("Unified View", "", "linked scatter (UMAP/tSNE/PCA) with analysis tabs beside it"),
     ("Unified View > Embedding > Tissue", "spatial",
-     "spots or cells on the tissue image (Visium); Section, Image on/off; colours, lasso as on UMAP"),
+     "spots, bins or cells on the tissue image (Visium, Visium HD); Section, Image on/off; colours, lasso as on UMAP"),
     ("Unified View > Markers", "", "marker table per group"),
     ("Unified View > Expression", "", "gene overlay, several genes, gene vs gene"),
     ("Unified View > Protein", "CITE-seq, CLR or DSB", "CITE-seq proteins; CLR or DSB normalisation"),
@@ -87,15 +89,16 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Clonotypes", "TCR/BCR", "TCR/BCR repertoire"),
     ("Unified View > Perturbation", "CRISPR, Mixscape", "CRISPR guide calls, Mixscape"),
     ("Unified View > Spatial genes", "Moran's I",
-     "spatially variable genes (Moran's I) on Visium spots or imaging cells; click a gene to colour the tissue"),
+     "spatially variable genes (Moran's I) on Visium spots, Visium HD bins or imaging cells; click a gene to colour the "
+     "tissue"),
     ("Unified View > Traits", "GWAS",
      "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
     ("Unified View > Deconvolution", "bulk RNA-seq",
      "cell-type fractions of uploaded bulk RNA-seq samples, this dataset as the reference; self-check, "
      "reference download for MuSiC / CIBERSORTx"),
     ("Unified View > Spot composition", "Visium, RCTD",
-     "each spot's cell-type shares from another library dataset as the reference; tissue overlay per type, "
-     "dominant type, self-check"),
+     "each spot's or Visium HD bin's cell-type shares from another library dataset as the reference; tissue overlay "
+     "per type, dominant type, self-check"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),

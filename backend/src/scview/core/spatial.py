@@ -17,8 +17,14 @@ Storage follows scanpy / squidpy, so their h5ad files open as they are:
 
 A Visium sample is its filtered matrix plus the ``spatial/`` folder (loose files or
 ``spatial.tar.gz``): the ingest bundler attaches those as side files of the matrix
-(``SideKind.spatial``) and ``session._attach_spatial`` reads them here. Visium HD and
-Xenium bundles are refused with a sentence, not read.
+(``SideKind.spatial``) and ``session._attach_spatial`` reads them here.
+
+A Visium HD run is read one bin size at a time, each its own dataset: the
+``filtered_feature_bc_matrix.h5`` and ``spatial/`` of one ``square_NNNum/`` folder
+(``HD_DIR_RE``), the same files as a Visium sample with parquet positions and a
+``bin_size_um`` scale factor. ``spot_diameter_fullres`` is then the bin's side in full-res
+pixels. Its 2 um bins, ``binned_outputs.tar.gz`` and ``segmented_outputs/`` (Space Ranger
+4) are refused with a sentence, as Xenium bundles are.
 """
 
 from __future__ import annotations
@@ -55,10 +61,19 @@ TECHNOLOGY_NAMES = {"visium": "Visium", "visium_hd": "Visium HD", "xenium": "Xen
                     "cells": "imaging-based or other (cell coordinates)"}
 SPOT_UNITS = ("spot", "bin")
 
-DOUBLET_SKIP = "Visium spots hold several cells, so doublet detection does not apply"
-HD_MESSAGE = ("Visium HD (binned outputs) is not supported yet. scView reads standard Visium "
-              "(Space Ranger's filtered matrix with its spatial folder) and .h5ad files with "
-              "obsm['spatial'].")
+DOUBLET_SKIP = ("Spots and bins are positions on a capture grid, not single cells, so doublet "
+                "detection does not apply")
+HD_DEFAULT_BIN_UM = 8  # the bin size read when a run's folder holds several
+HD_MIN_BIN_UM = 8  # finer bins are refused: 6.3M at 2 um on a mouse brain section
+HD_TOO_FINE = ("The {um} um bins of a Visium HD run are millions of observations (6.3 million on a "
+               "mouse brain section), far past the 1.3 million cells scView has been tested on: use "
+               "the square_008um or square_016um folder instead.")
+HD_ARCHIVE = ("{name} is a Visium HD binned_outputs archive, which scView does not read: unpack it "
+              "and drop the binned_outputs folder (or one square_NNNum folder) instead.")
+HD_SEGMENTED = ("Space Ranger 4's segmented_outputs (cell segmentation) is not read yet: upload the "
+                "run's binned_outputs folder instead, which reads as 8 or 16 um bins.")
+HD_MIXED_SIZES = ("These Visium HD samples have different bin sizes ({sizes} um): upload samples of "
+                  "one bin size together, or each on its own.")
 XENIUM_MESSAGE = ("Xenium output bundles are not supported yet. scView reads Visium (Space Ranger's "
                   "filtered matrix with its spatial folder), or an .h5ad with obsm['spatial'] "
                   "(for example one written by spatialdata-io or squidpy).")
@@ -69,7 +84,9 @@ _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _GZIP_MAGIC = b"\x1f\x8b"
 _PARQUET_MAGIC = b"PAR1"
 _BARCODE_RE = re.compile(r"^[ACGTN]{6,}([-.]\d+)?$", re.IGNORECASE)
-_HD_BARCODE_RE = re.compile(r"^s_\d{3}um_")
+_HD_BARCODE_RE = re.compile(r"^s_(\d{3})um_")
+HD_DIR_RE = re.compile(r"^square_(\d{3})um$", re.IGNORECASE)
+_HD_ARCHIVE_RE = re.compile(r"binned_outputs\.(tar\.gz|tgz|tar)$", re.IGNORECASE)
 _INT_RE = re.compile(r"^-?\d+$")
 _MAX_MEMBER_BYTES = 512 * 1024**2  # one file of a spatial archive
 
@@ -94,6 +111,8 @@ def sniff_binary(path: Path, head: bytes) -> dict | None:
     """``{"part", "reason"}`` for a tissue image, a parquet positions file or an archive of
     a spatial folder; None for anything else. ``head``: the file's first bytes."""
     name = path.name.lower()
+    if _HD_ARCHIVE_RE.search(name):  # gigabytes: never walked through
+        return {"part": None, "hd_archive": True, "reason": "a Visium HD binned_outputs archive"}
     if head.startswith(_GZIP_MAGIC):
         try:
             with gzip.open(path, "rb") as fh:
@@ -109,13 +128,16 @@ def sniff_binary(path: Path, head: bytes) -> dict | None:
         return None
     if inner.startswith(_PARQUET_MAGIC) and "tissue_positions" in name:
         out = {"part": POSITIONS, "reason": "Space Ranger tissue positions (parquet)"}
-        if _parquet_is_hd(path):
-            out["hd"] = True
+        um = _parquet_bin_um(path)
+        if um is not None:
+            out["hd_bin_um"] = um
         return out
     if len(inner) >= 262 and inner[257:262] == b"ustar":
         members = _archive_parts(path)
         if members is None:
             return None
+        if members.get(_HD_MEMBER):
+            return {"part": None, "hd_archive": True, "reason": "a Visium HD binned_outputs archive"}
         if POSITIONS not in members:
             return {"part": None, "reason": "an archive without Space Ranger tissue positions"}
         return {"part": ARCHIVE, "members": sorted(members),
@@ -172,20 +194,63 @@ def name_key(name: str) -> str:
 _XENIUM_NAMES = {"experiment.xenium", "transcripts.parquet", "transcripts.csv.gz", "cells.parquet",
                  "cell_boundaries.parquet", "nucleus_boundaries.parquet", "transcripts.zarr.zip",
                  "cells.zarr.zip", "cell_feature_matrix.zarr.zip"}
-_HD_DIR_RE = re.compile(r"^square_\d{3}um$", re.IGNORECASE)
 
 
 def unsupported(rels: list[str]) -> str | None:
-    """The sentence for an upload of a spatial format scView does not read yet (Visium
-    HD binned outputs, a Xenium bundle), from its file paths; None otherwise."""
+    """The sentence for an upload of a spatial format scView does not read (a Xenium
+    bundle, Visium HD's binned_outputs as an archive, its segmented_outputs alone, its 2 um
+    bins), from its file paths; None otherwise."""
     names = {PurePosixPath(r).name.lower() for r in rels}
     if "experiment.xenium" in names or len(names & _XENIUM_NAMES) >= 2:
         return XENIUM_MESSAGE
     for r in rels:
-        dirs = [d.lower() for d in PurePosixPath(r).parent.parts]
-        if "binned_outputs" in dirs or any(_HD_DIR_RE.match(d) for d in dirs):
-            return HD_MESSAGE
+        if _HD_ARCHIVE_RE.search(r):
+            return HD_ARCHIVE.format(name=PurePosixPath(r).name)
+    if any(hd_folder(r) for r in rels):
+        for um in hd_chosen_bins(rels).values():
+            if um < HD_MIN_BIN_UM:
+                return too_fine(um)
+        return None
+    if any("segmented_outputs" in (d.lower() for d in PurePosixPath(r).parent.parts) for r in rels):
+        return HD_SEGMENTED
     return None
+
+
+def too_fine(um: int) -> str:
+    return HD_TOO_FINE.format(um=um)
+
+
+def hd_folder(rel: str) -> tuple[str, int] | None:
+    """(the run's folder, bin size) of a file inside a ``square_NNNum/`` folder: its path
+    above that folder, without ``binned_outputs``. None for any other file."""
+    parts = PurePosixPath(rel).parent.parts
+    for i, d in enumerate(parts):
+        m = HD_DIR_RE.match(d)
+        if m:
+            run = list(parts[:i])
+            if run and run[-1].lower() == "binned_outputs":
+                run.pop()
+            return "/".join(run), int(m.group(1))
+    return None
+
+
+def hd_pick_bin(sizes) -> int:
+    """The bin size read when a run's folder holds several: 8 um, else the finest that is
+    not refused, else the finest (which is then refused)."""
+    sizes = sorted(sizes)
+    if HD_DEFAULT_BIN_UM in sizes:
+        return HD_DEFAULT_BIN_UM
+    return next((um for um in sizes if um >= HD_MIN_BIN_UM), sizes[0])
+
+
+def hd_chosen_bins(rels) -> dict[str, int]:
+    """Each Visium HD run of these paths -> the one bin size read (one dataset per bin size)."""
+    sizes: dict[str, set[int]] = {}
+    for r in rels:
+        hit = hd_folder(r)
+        if hit:
+            sizes.setdefault(hit[0], set()).add(hit[1])
+    return {run: hd_pick_bin(s) for run, s in sizes.items()}
 
 
 def _read(path: Path, n: int) -> bytes:
@@ -209,13 +274,18 @@ def _part_of(name: str) -> str | None:
     return None
 
 
+_HD_MEMBER = "hd"  # in ``_archive_parts``: the archive holds a Visium HD run's binned outputs
+
+
 def _archive_parts(path: Path) -> dict[str, str] | None:
     """part -> member name of a tar(.gz) archive's spatial files; None when it is no
-    readable archive."""
+    readable archive. One holding Visium HD's binned outputs stops at its first such member."""
     try:
         with tarfile.open(path, "r:*") as tf:
             out: dict[str, str] = {}
             for m in tf:
+                if hd_folder(m.name) or "binned_outputs" in PurePosixPath(m.name).parts:
+                    return {_HD_MEMBER: m.name}
                 part = _part_of(m.name) if m.isfile() else None
                 if part and (part not in out or m.name.endswith("tissue_positions.csv")):
                     out[part] = m.name
@@ -224,16 +294,30 @@ def _archive_parts(path: Path) -> dict[str, str] | None:
         return None
 
 
-def _parquet_is_hd(path: Path) -> bool:
+def _parquet_bin_um(path: Path) -> int | None:
+    """The bin size in a Visium HD parquet's barcodes (``s_008um_00301_00321-1``), else None."""
     try:
         import pyarrow.parquet as pq
 
         batch = next(pq.ParquetFile(path).iter_batches(batch_size=5, columns=["barcode"]), None)
     except Exception:  # noqa: BLE001 - not readable: the load says so
-        return False
+        return None
     if batch is None:
-        return False
-    return any(_HD_BARCODE_RE.match(str(b)) for b in batch.column(0).to_pylist())
+        return None
+    return next((um for um in map(barcode_bin_um, batch.column(0).to_pylist()) if um is not None), None)
+
+
+def is_hd_positions(path) -> bool:
+    """Whether a positions file names Visium HD bins (a parquet of them; other layouts: no)."""
+    return _read(Path(path), 4) == _PARQUET_MAGIC and _parquet_bin_um(Path(path)) is not None
+
+
+def barcode_bin_um(barcode) -> int | None:
+    """The bin size a Visium HD barcode names, else None."""
+    if isinstance(barcode, bytes):
+        barcode = barcode.decode("utf-8", errors="replace")
+    m = _HD_BARCODE_RE.match(str(barcode))
+    return int(m.group(1)) if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +400,7 @@ def _read_archive(path: Path, shown: str) -> dict[str, tuple[bytes, str]]:
 def _read_positions(raw: bytes, name: str) -> tuple[pd.DataFrame, str]:
     if raw.startswith(_PARQUET_MAGIC):
         try:
-            df = pd.read_parquet(io.BytesIO(raw))
+            df = _in_tissue_parquet(raw)
         except Exception as e:  # noqa: BLE001 - pyarrow's own errors
             raise SpatialError(f"{name} could not be read as parquet: {e}") from e
         layout = "parquet (Space Ranger 3.x)"
@@ -337,8 +421,6 @@ def _read_positions(raw: bytes, name: str) -> tuple[pd.DataFrame, str]:
         raise SpatialError(f"{name} lacks the column(s) {', '.join(missing)} of a Space Ranger "
                            "tissue positions file.")
     df["barcode"] = df["barcode"].astype(str)
-    if df["barcode"].head(20).map(lambda b: bool(_HD_BARCODE_RE.match(b))).any():
-        raise SpatialError(HD_MESSAGE)
     for c in _POS_COLS[1:]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     if df[_POS_COLS[1:]].isna().any().any():
@@ -349,6 +431,21 @@ def _read_positions(raw: bytes, name: str) -> tuple[pd.DataFrame, str]:
     if df["barcode"].duplicated().any():
         raise SpatialError(f"{name} lists a barcode more than once.")
     return df.set_index("barcode")[_POS_COLS[2:]], layout
+
+
+def _in_tissue_parquet(raw: bytes) -> pd.DataFrame:
+    """A parquet positions file's in-tissue rows. Visium HD lists every bin of the slide,
+    most out of the tissue (11.2M rows at 2 um): they are dropped in Arrow, before any
+    per-row Python object is made."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(io.BytesIO(raw))
+    table = table.rename_columns([str(c).strip().lower() for c in table.column_names])
+    if "in_tissue" in table.column_names and pa.types.is_integer(table["in_tissue"].type):
+        table = table.filter(pc.equal(table["in_tissue"], 1))
+    return table.to_pandas()
 
 
 def read_png(raw: bytes, name: str = "image") -> np.ndarray:
@@ -455,10 +552,20 @@ def attach(adata, sr: SpaceRanger, library_id: str, *, sample_column: str | None
     meta.update({f"{p}_file": f for p, f in sr.files.items() if p != POSITIONS})
     uns = adata.uns.get(KEY)
     uns = dict(uns) if isinstance(uns, Mapping) else {}
-    uns[library_id] = {"images": dict(sr.images), "scalefactors": dict(sr.scalefactors),
+    uns[library_id] = {"images": dict(sr.images), "scalefactors": _with_bin_side(sr.scalefactors),
                        "metadata": meta}
     adata.uns[KEY] = uns
     return int(rows.sum())
+
+
+def _with_bin_side(sf: Mapping) -> dict:
+    """Scale factors, with ``spot_diameter_fullres`` = the bin's side in pixels when a
+    Visium HD file gives the bin size and the pixel size but no diameter."""
+    out = dict(sf)
+    um, per_px = out.get("bin_size_um"), out.get("microns_per_pixel")
+    if um and per_px and not out.get("spot_diameter_fullres"):
+        out["spot_diameter_fullres"] = float(um) / float(per_px)
+    return out
 
 
 def finish(adata) -> dict:
@@ -467,7 +574,10 @@ def finish(adata) -> dict:
     obs = adata.obs
     libs = [str(k) for k in adata.uns[KEY].keys()]
     obs[LIBRARY_COLUMN] = pd.Categorical(obs[LIBRARY_COLUMN].astype(object), categories=libs)
-    tech = technology(adata)
+    sizes = _bin_sizes(adata)
+    if len(sizes) > 1:
+        raise SpatialError(HD_MIXED_SIZES.format(sizes=", ".join(f"{s:g}" for s in sizes)))
+    tech = {**technology(adata), **_bin_record(adata)}
     adata.uns[INFO_KEY] = {**_recorded(adata), **tech}
     counts = obs[LIBRARY_COLUMN].value_counts()
     return {"source": "spaceranger", "spaceranger_version": None, **tech,
@@ -512,6 +622,27 @@ def _bin_size(entry) -> float | None:
     except (TypeError, ValueError, IndexError):
         return None
     return v if v is not None and np.isfinite(v) and v > 0 else None
+
+
+def _bin_sizes(adata) -> list[float]:
+    uns = adata.uns.get(KEY)
+    if not isinstance(uns, Mapping):
+        return []
+    found = {_bin_size(uns.get(lib)) for lib in _libraries(adata)}
+    return sorted(s for s in found if s is not None)
+
+
+def bin_size_um(adata) -> float | None:
+    """The dataset's Visium HD bin size in microns, None for any other data (or when a
+    file holds several)."""
+    sizes = _bin_sizes(adata)
+    return sizes[0] if len(sizes) == 1 and technology(adata)["technology"] == "visium_hd" else None
+
+
+def _bin_record(adata) -> dict:
+    """``bin_size_um`` for ``uns["scview_spatial"]``, empty for other data."""
+    um = bin_size_um(adata)
+    return {"bin_size_um": um} if um is not None else {}
 
 
 def _spot_diameter(entry) -> float | None:
@@ -596,7 +727,7 @@ def adopt(adata) -> bool:
             new[lib] = {"images": {}, "scalefactors": {}, "metadata": {"source": "h5ad"}}
         adata.uns[KEY] = new
         changed = True
-    tech = technology(adata)
+    tech = {**technology(adata), **_bin_record(adata)}
     recorded = _recorded(adata)
     if any(recorded.get(k) != v for k, v in tech.items()):
         adata.uns[INFO_KEY] = {**recorded, **tech}
@@ -666,7 +797,7 @@ def after_merge(parts: Mapping, merged, sample_label: str) -> None:
     recorded = {str(_recorded(a).get("technology")) for a in parts.values()}
     if len(recorded) == 1:
         merged.uns[INFO_KEY] = {"technology": recorded.pop()}
-    merged.uns[INFO_KEY] = technology(merged)
+    merged.uns[INFO_KEY] = {**technology(merged), **_bin_record(merged)}
 
 
 # ---------------------------------------------------------------------------
@@ -696,7 +827,7 @@ def info(adata) -> dict | None:
         entry = uns.get(lib) if isinstance(uns.get(lib), Mapping) else {}
         out.append({"id": lib, "n_obs": int(rows.sum()), "images": _image_info(entry),
                     "spot_diameter_fullres": _spot_diameter(entry), "bounds": bounds})
-    return {**tech, "library_column": LIBRARY_COLUMN, "libraries": out}
+    return {**tech, **_bin_record(adata), "library_column": LIBRARY_COLUMN, "libraries": out}
 
 
 def _image_info(entry: Mapping) -> dict:
@@ -795,6 +926,8 @@ def grounding_lines(adata) -> tuple[list[str], str]:
     unit = sp["unit"]
     n = sum(lib["n_obs"] for lib in libs)
     tech = TECHNOLOGY_NAMES[sp["technology"]]
+    if sp.get("bin_size_um"):
+        tech += f", {sp['bin_size_um']:g} um bins"
     sections = f"{len(libs)} section{'s' if len(libs) != 1 else ''}"
     per = ", ".join(f"{lib['id']} {lib['n_obs']:,}" for lib in libs[:8])
     images = sorted({res for lib in libs for res in lib["images"]})
@@ -803,5 +936,8 @@ def grounding_lines(adata) -> tuple[list[str], str]:
     if unit == "spot":
         line += (" Each Visium spot holds several cells, so values are per spot, not per cell, and "
                  "doublet detection does not apply.")
+    elif unit == "bin":
+        line += (" A bin is a square of the capture grid, not a segmented cell (about one cell at 8 um, "
+                 "2 to 4 at 16 um), so values are per bin and doublet detection does not apply.")
     line += f" [{TAG}]"
     return [line], f"{tech}, {sections}, {n:,} {unit}s"

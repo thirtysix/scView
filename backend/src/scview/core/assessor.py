@@ -185,7 +185,15 @@ def _check_filtering(adata: Any) -> StepStatus:
     """Heuristic: if QC columns exist and have no very low values, filtering was likely applied."""
     try:
         obs_cols = set(adata.obs.columns)
+        from scview.core import qc_filter, spatial
 
+        if spatial.has_spatial(adata) and spatial.technology(adata)["unit"] == "bin":
+            # Few genes are what a bin has: the heuristic below would never call one filtered.
+            if qc_filter.recorded_filtering(adata) is not None:
+                return StepStatus(done=True, confidence="high", details="Bins filtered (see History)")
+            return StepStatus(done=False, confidence="medium",
+                              details="Not filtered yet. A bin is a square of the capture grid, so few "
+                                      "genes per bin are expected; filtering removes the near-empty ones")
         if "n_genes_by_counts" in obs_cols:
             min_genes = int(adata.obs["n_genes_by_counts"].min())
             if min_genes >= 200:

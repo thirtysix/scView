@@ -1100,7 +1100,7 @@ def spatial_genes(adata, names, genes):
     return idx[idx >= 0]
 
 
-def spatial_moran(adata, M, names, genes, library_id, grid):
+def spatial_moran(adata, M, names, genes, library_id, grid, n_neighs=N_NEIGHS):
     """Moran's I per gene on the spots (one section's, or all), as squidpy's
     uns["moranI"]: genes as the index, I, pval_norm, var_norm, pval_norm_fdr_bh."""
     libs = (adata.obs["library_id"].astype(str).to_numpy() if "library_id" in adata.obs.columns
@@ -1108,7 +1108,7 @@ def spatial_moran(adata, M, names, genes, library_id, grid):
     rows = np.flatnonzero(libs == str(library_id)) if library_id else np.arange(adata.n_obs)
     idx = spatial_genes(adata, names, genes)
     M = M[rows][:, idx]
-    W = spatial_weights(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows], grid)
+    W = spatial_weights(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows], grid, n_neighs)
     order = spatial_order(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows])
     table, _ = morans_i(W, M, np.asarray([str(n) for n in names])[idx], order)
     return pd.DataFrame({"I": table["I"].to_numpy(), "pval_norm": table["pval"].to_numpy(),
@@ -2818,13 +2818,13 @@ def _spatial_autocorr(p: dict, ctx: _Ctx) -> Snippet:
     gene_lines = ([f"SPATIAL_GENES = {_lit(genes)}"] if isinstance(genes, str)
                   else ["SPATIAL_GENES = [", *_packed([repr(str(g)) for g in genes]), "]"])
     return Snippet(EXACT, [
-        f"# Spatially variable genes: Moran's I per gene ({'Visium grid' if kind == 'grid' else 'kNN'} "
+        f"# Spatially variable genes: Moran's I per gene ({'capture grid' if kind == 'grid' else 'kNN'} "
         f"neighbours, {p.get('n_neighs', 6)} per spot, within each section), = squidpy 1.6's",
         "# spatial_neighbors + spatial_autocorr defaults; saved where squidpy saves it.",
         *values,
         *gene_lines,
         f"adata.uns[\"moranI\"] = spatial_moran(adata, M, names, SPATIAL_GENES, "
-        f"{_lit(p.get('library_id'))}, grid={_lit(kind == 'grid')})",
+        f"{_lit(p.get('library_id'))}, grid={_lit(kind == 'grid')}, n_neighs={_lit(p.get('n_neighs', 6))})",
     ])
 
 

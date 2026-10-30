@@ -134,6 +134,7 @@ _RESULT_FACET_HINTS = {
         "pseudo-bulk", "voom", "ruv", "crispr", "guide", "knockout", "knock-out", "knocked out",
         "perturb", "mixscape", "ligand", "receptor", "communicat", "composition", "proportion",
         "de audit", "donor shuffle", "deconvol", "bulk", "spot composition", "spots", "spot deconv",
+        "visium hd", " bins", "bin composition", "um bin", "µm bin",
         "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
     ),
     "markers": ("gene program", "programs", "nmf"),

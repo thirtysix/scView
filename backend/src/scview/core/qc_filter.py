@@ -98,7 +98,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 import numpy as np
@@ -206,6 +206,38 @@ class Thresholds:
         for name, k in checks:
             if not (math.isfinite(k) and k > 0):
                 raise ValueError(f"The {name} must be a positive number, not {k}.")
+
+
+# Visium HD bins are squares of the capture grid, not cells: few genes and a high % mito say
+# what the tissue is there, not that a cell is broken. Measured on the mouse brain sample
+# (16 um; 8 um in brackets): the % mito outlier rule removes 13.0% (11.8%) of the bins, in solid
+# pieces of the hippocampal molecular layers and cortical layer 1, neuropil rich in
+# mitochondria; even the 20% ceiling alone cuts 1.6% (2.5%) from the same places; a fixed 200
+# genes removes 10% (64%), the white matter tracts first. So on bins % mito is off unless asked
+# for (``PipelineParams.qc_bin_mito``), and fixed mode's defaults are min_counts 1, no min_genes.
+BIN_MIN_COUNTS = 1.0
+_FIXED_DEFAULT_MIN_GENES = 200.0
+BIN_NOTE = ("A bin is a square of the capture grid, not a cell, so % mito is not used here: it would cut "
+            "out mitochondria-rich tissue (on a mouse brain, 13% of the 16 um bins, the hippocampal "
+            "molecular layers and cortical layer 1). Tick \"Apply % mito to bins\" to use it anyway.")
+
+
+def bin_rules(adata, t: Thresholds, cells: dict, params=None) -> tuple[Thresholds, dict]:
+    """The thresholds and QC table to judge ``adata`` by: as given, unless it is Visium HD
+    bins (comment above). There the % mito rule is off (as when a dataset has no MT- genes)
+    unless ``params.qc_bin_mito``; fixed mode left at the run's default of 200 genes (with no
+    other genes or counts cut-off) becomes min_counts 1. Other fixed cut-offs stand."""
+    from scview.core import spatial
+
+    if not spatial.has_spatial(adata) or spatial.technology(adata)["unit"] != "bin":
+        return t, cells
+    if (t.mode == "fixed" and t.min_genes == _FIXED_DEFAULT_MIN_GENES and t.max_genes == 0
+            and t.min_counts == 0):
+        t = replace(t, min_genes=0.0, min_counts=BIN_MIN_COUNTS)
+    if not getattr(params, "qc_bin_mito", False):
+        t = replace(t, max_pct_mt=None)
+        cells = {**cells, "has_mt": False}
+    return t, cells
 
 
 @dataclass

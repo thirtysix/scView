@@ -1111,6 +1111,8 @@ class LargeRun:
             return None
         from scview.core import preflight
 
+        if spatial.is_spot_data(self.light):  # the step is skipped, so it costs nothing
+            return preflight.DoubletPlan([])
         try:
             ch = doublets.channels(self.light, self.params.doublet_channel_key or None)
             return preflight.DoubletPlan([int(k) for k in ch.sizes])
