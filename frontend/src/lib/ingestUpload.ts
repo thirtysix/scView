@@ -192,7 +192,7 @@ export function skippedNote(skipped: SkippedUpload[]): string | null {
 // The same rules as the backend's spatial.py (hd_folder, hd_pick_bin, unsupported),
 // applied before anything is sent: a 2 um matrix, or a whole archive, is never uploaded.
 
-export const HD_DEFAULT_BIN_UM = 8;
+export const HD_DEFAULT_BIN_UM = 16;
 const HD_MIN_BIN_UM = 8;
 const HD_ARCHIVE = /binned_outputs\.(tar\.gz|tgz|tar)$/i;
 // Bins on a whole Visium HD capture area: 3,350 x 3,350 at 2 um.

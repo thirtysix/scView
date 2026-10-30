@@ -63,7 +63,7 @@ SPOT_UNITS = ("spot", "bin")
 
 DOUBLET_SKIP = ("Spots and bins are positions on a capture grid, not single cells, so doublet "
                 "detection does not apply")
-HD_DEFAULT_BIN_UM = 8  # the bin size read when a run's folder holds several
+HD_DEFAULT_BIN_UM = 16  # read when a run's folder holds several: 8 um clusters are noisy, its Leiden takes hours
 HD_MIN_BIN_UM = 8  # finer bins are refused: 6.3M at 2 um on a mouse brain section
 HD_TOO_FINE = ("The {um} um bins of a Visium HD run are millions of observations (6.3 million on a "
                "mouse brain section), far past the 1.3 million cells scView has been tested on: use "
@@ -230,7 +230,7 @@ def hd_folder(rel: str) -> tuple[str, int] | None:
 
 
 def hd_pick_bin(sizes) -> int:
-    """The bin size read when a run's folder holds several: 8 um, else the finest that is
+    """The bin size read when a run's folder holds several: 16 um, else the finest that is
     not refused, else the finest (which is then refused)."""
     sizes = sorted(sizes)
     if HD_DEFAULT_BIN_UM in sizes:

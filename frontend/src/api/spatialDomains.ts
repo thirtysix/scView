@@ -125,6 +125,7 @@ export interface DomainsInfo {
   n_obs: number;
   /** A name no column holds yet, for the k asked about */
   free_column: string;
+  free_suggested_column: string;
   free_niche_column: string;
   niches_allowed: { ok: boolean; reason: string | null; note: string | null };
   estimates: { enrichment_seconds: number; enrichment_bytes: number };

@@ -204,7 +204,7 @@ describe("Visium HD folders", () => {
     ]);
     expect(options[2]!.maxBins).toBe(175_352);
     expect(hdDefaultBin(options)).toBe(HD_DEFAULT_BIN_UM);
-    expect(hdDefaultBin(options.filter((o) => o.um !== 8))).toBe(16);
+    expect(hdDefaultBin(options.filter((o) => o.um !== 16))).toBe(8);
     expect(hdBinOptions([f("pbmc/outs/filtered_feature_bc_matrix.h5")])).toEqual([]);
   });
 

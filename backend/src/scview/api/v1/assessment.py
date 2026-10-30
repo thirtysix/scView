@@ -271,7 +271,7 @@ async def get_filter_preview(
     doublet_source: str | None = None,
     drop_hash_negatives: bool | None = None,
     counts_floor: float | None = None,
-    bin_mito: bool = False,
+    grid_mito: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The cells the filtering step's thresholds would remove (core/qc_filter.py):
@@ -308,17 +308,17 @@ async def get_filter_preview(
         if value is not None:
             setattr(params, key, value)
             params.explicit = (*params.explicit, key)
-    params.qc_bin_mito = bool(bin_mito)
+    params.qc_grid_mito = bool(grid_mito)
     # A targeted panel's counts floor, as its run applies it (core/targeted_panel.py).
     params = targeted_panel.for_run(adaptor.adata, params)
     thresholds = qc_filter.Thresholds.from_params(params)
 
     def _run() -> dict:
-        t, cells = qc_filter.bin_rules(adaptor.adata, thresholds, adaptor.qc_per_cell(), params)
+        t, cells = qc_filter.grid_rules(adaptor.adata, thresholds, adaptor.qc_per_cell(), params)
         out = qc_filter.preview(adaptor.adata, cells, t, sample_column or None, cluster_column or None,
                                 label_column or None, condition_column or None)
         if t.max_pct_mt is None and thresholds.max_pct_mt is not None:
-            out["bin_note"] = qc_filter.BIN_NOTE
+            out["grid_note"] = qc_filter.grid_note(spatial.technology(adaptor.adata)["unit"])
         return out
 
     try:

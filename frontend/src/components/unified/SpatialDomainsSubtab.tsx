@@ -142,7 +142,8 @@ export function SpatialDomainsSubtab({
   const curve: StabilityCurve | null = (live && run.curve) || domains?.scan || null;
 
   const startDomains = (asked: number | null) => {
-    const body = { k: asked, n_hops: hops, n_pcs: pcs, column: name, overwrite: replace };
+    const column = asked === null && !nameEdited ? (info?.free_suggested_column ?? name) : name;
+    const body = { k: asked, n_hops: hops, n_pcs: pcs, column, overwrite: replace };
     void run
       .start(datasetId, "domains", "Finding domains", (h) => runDomains(datasetId, body, h), (r: DomainsResult) => r.column ?? null)
       .then((r) => {

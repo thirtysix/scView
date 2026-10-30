@@ -268,6 +268,7 @@ def test_a_run_never_overwrites_without_the_users_choice():
     with pytest.raises(sd.ColumnInUse, match="not a domain result"):
         sd.plan_domains(a, k=4, column="stripe", overwrite=True)
     assert sd.free_column(a, sd.DOMAIN_COLUMN, 4) == "spatial_domain_k4"
+    assert sd.free_suggested_column(a) == "spatial_domain_suggested"
     other = sd.prepare_domains(a, sd.plan_domains(a, k=4, column="spatial_domain_k4"))
     summary = sd.save_domains(a, other, sd.run_domains(other))
     assert summary["column"] == "spatial_domain_k4" and summary["columns"] == ["spatial_domain", "spatial_domain_k4"]

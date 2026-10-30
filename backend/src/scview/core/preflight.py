@@ -2169,8 +2169,8 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
 
         h.uns_bytes += spatial.side_bytes(spatial_parts)
         h.obsm_bytes += 16 * int(h.n_cells or 0)
-        if any(part == spatial.POSITIONS and spatial.is_hd_positions(path) for part, path in spatial_parts):
-            h.unit = "bin"
+        hd = any(part == spatial.POSITIONS and spatial.is_hd_positions(path) for part, path in spatial_parts)
+        h.unit = "bin" if hd else "spot"
     if xen:
         _xenium_header(h, unit)
     return h

@@ -56,6 +56,7 @@ const INFO: DomainsInfo = {
   defaults: { k: 7, n_hops: 3, n_pcs: 10, k_min: 2, k_max: 15, repeats: 5, max_fit_obs: 50000, n_perms: 1000, k_window: 20, n_niches: 8, domain_column: "spatial_domain", niche_column: "spatial_niche" },
   n_obs: 1000,
   free_column: "spatial_domain",
+  free_suggested_column: "spatial_domain_suggested",
   free_niche_column: "spatial_niche",
   niches_allowed: { ok: false, reason: "Composition niches need one label per cell, and a Visium spot mixes several cells.", note: null },
   estimates: { enrichment_seconds: 30, enrichment_bytes: 1000 },
@@ -125,6 +126,7 @@ describe("SpatialDomainsSubtab", () => {
     await screen.findByTestId("domains-plan");
     fireEvent.click(screen.getByRole("button", { name: "Suggest k" }));
     await waitFor(() => expect(api.runDomains.mock.calls[0]![1].k).toBeNull());
+    expect(api.runDomains.mock.calls[0]![1].column).toBe("spatial_domain_suggested");
     const figure = await screen.findByTestId("stability-curve");
     expect(figure).toHaveTextContent("Suggested k = 3, the highest local peak");
   });

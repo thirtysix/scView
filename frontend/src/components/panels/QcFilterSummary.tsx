@@ -295,9 +295,9 @@ export function QcFilterSummary({
       <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="qc-loss-summary">
         {header}
         {mode === "mad" && <MadControls thresholds={thresholds} preview={preview} onChange={onChange} />}
-        {preview.bin_note && (
-          <p className="text-[11px] leading-relaxed text-slate-600" data-testid="qc-bin-note">
-            {preview.bin_note}
+        {preview.grid_note && (
+          <p className="text-[11px] leading-relaxed text-slate-600" data-testid="qc-grid-note">
+            {preview.grid_note}
           </p>
         )}
         <MitoModeControl

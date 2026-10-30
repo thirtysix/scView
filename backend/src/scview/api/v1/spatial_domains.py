@@ -115,6 +115,7 @@ async def get_domains(
         return {
             "runnable": runnable, "defaults": _defaults(), "n_obs": int(adata.n_obs),
             "free_column": sd.free_column(adata, sd.DOMAIN_COLUMN, k),
+            "free_suggested_column": sd.free_suggested_column(adata),
             "free_niche_column": sd.free_column(adata, sd.NICHE_COLUMN, sd.DEFAULT_NICHES),
             "niches_allowed": sd.niches_allowed(adata) if positions else {"ok": False, "reason": None, "note": None},
             "estimates": {"enrichment_seconds": sd.enrichment_seconds(

@@ -133,7 +133,7 @@ def test_junk_in_a_bin_folder_is_listed_with_a_reason(tmp_path):
     assert "Skipped" in b.issues[0]
 
 
-def test_one_bin_size_of_a_run_default_8_um(tmp_path):
+def test_one_bin_size_of_a_run_default_16_um(tmp_path):
     root = tmp_path / "run" / "outs" / "binned_outputs"
     for um in (2, 8, 16):
         _bin_folder(root / f"square_{um:03d}um", um)
@@ -143,8 +143,8 @@ def test_one_bin_size_of_a_run_default_8_um(tmp_path):
     b = build_bundle(_files(tmp_path / "run"), root=tmp_path / "run")
     assert b.unsupported is None and len(b.units) == 1
     u = b.units[0]
-    assert u.label == "visium_hd_8um"
-    assert all("square_008um" in f.rel_path for f in u.files + u.side_files)
+    assert u.label == "visium_hd_16um"
+    assert all("square_016um" in f.rel_path for f in u.files + u.side_files)
     assert any("another bin size" in s.reason and "square_002um" in s.path for s in b.skipped)
     assert any("rest of the Space Ranger" in s.reason and "segmented" in s.path for s in b.skipped)
 
@@ -496,9 +496,9 @@ def test_mito_rules_are_off_on_bins_until_asked_for():
     as_cells = qc_filter.removed_by(per_cell_qc(a), t)
     assert as_cells["max_pct_mt"][layer].mean() > 0.9  # the rule as it is for cells cuts the layer out
     _, keep, _, found = filter_judgement(a, PipelineParams())
-    assert keep[layer].mean() > 0.99 and found["max_pct_mt"] is None and found["qc_bin_mito"] is False
-    _, keep, _, found = filter_judgement(a, PipelineParams(qc_bin_mito=True))
-    assert not keep[layer].any() and found["qc_bin_mito"] is True
+    assert keep[layer].mean() > 0.99 and found["max_pct_mt"] is None and found["qc_grid_mito"] is False
+    _, keep, _, found = filter_judgement(a, PipelineParams(qc_grid_mito=True))
+    assert not keep[layer].any() and found["qc_grid_mito"] is True
 
 
 def test_fixed_defaults_on_bins_and_a_choice_stands():
@@ -508,10 +508,10 @@ def test_fixed_defaults_on_bins_and_a_choice_stands():
     a, _ = _bins_for_qc()
     cells = per_cell_qc(a)
     fixed = PipelineParams(qc_threshold_mode="fixed")
-    t, c = qc_filter.bin_rules(a, qc_filter.Thresholds.from_params(fixed), cells, fixed)
+    t, c = qc_filter.grid_rules(a, qc_filter.Thresholds.from_params(fixed), cells, fixed)
     assert (t.min_genes, t.min_counts, t.max_pct_mt) == (0.0, 1.0, None) and c["has_mt"] is False
     chosen = PipelineParams(qc_threshold_mode="fixed", min_genes=50, min_counts=1)
-    t, _ = qc_filter.bin_rules(a, qc_filter.Thresholds.from_params(chosen), cells, chosen)
+    t, _ = qc_filter.grid_rules(a, qc_filter.Thresholds.from_params(chosen), cells, chosen)
     assert (t.min_genes, t.min_counts) == (50.0, 1.0)
 
 
@@ -525,8 +525,15 @@ def test_cells_and_spots_keep_their_rules():
     assert spatial.technology(a)["unit"] == "spot"
     cells = per_cell_qc(a)
     p = PipelineParams(qc_threshold_mode="fixed")
-    t, c = qc_filter.bin_rules(a, qc_filter.Thresholds.from_params(p), cells, p)
+    t, c = qc_filter.grid_rules(a, qc_filter.Thresholds.from_params(p), cells, p)
+    assert (t.min_genes, t.max_pct_mt) == (200.0, None) and c["has_mt"] is False  # spots: % mito off
+    p = PipelineParams(qc_threshold_mode="fixed", qc_grid_mito=True)
+    t, c = qc_filter.grid_rules(a, qc_filter.Thresholds.from_params(p), cells, p)
     assert (t.min_genes, t.max_pct_mt) == (200.0, 20.0) and c is cells
+    a.obsm.pop("spatial")
+    p = PipelineParams(qc_threshold_mode="fixed")
+    t, c = qc_filter.grid_rules(a, qc_filter.Thresholds.from_params(p), cells, p)
+    assert (t.min_genes, t.max_pct_mt) == (200.0, 20.0) and c is cells  # cells
 
 
 async def test_filter_preview_says_why_mito_is_off_on_bins(client, dataset_manager):
@@ -535,9 +542,9 @@ async def test_filter_preview_says_why_mito_is_off_on_bins(client, dataset_manag
     a, layer = _bins_for_qc()
     did = _register(dataset_manager, a, "hdqc")
     body = (await client.get(f"{API}/datasets/{did}/qc/filter-preview")).json()
-    assert body["n_removed"] < 5 and body["has_mt"] is False and "capture grid" in body["bin_note"]
-    body = (await client.get(f"{API}/datasets/{did}/qc/filter-preview", params={"bin_mito": True})).json()
-    assert body["n_removed"] >= layer.sum() * 0.9 and "bin_note" not in body
+    assert body["n_removed"] < 5 and body["has_mt"] is False and "capture grid" in body["grid_note"]
+    body = (await client.get(f"{API}/datasets/{did}/qc/filter-preview", params={"grid_mito": True})).json()
+    assert body["n_removed"] >= layer.sum() * 0.9 and "grid_note" not in body
 
 
 def test_assessor_wording_for_bins():

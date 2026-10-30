@@ -363,7 +363,7 @@ export interface FilterThresholds {
   /** Per type: never stricter than the global rule (a type's bound = max(own, global)). */
   qc_mito_type_floor?: boolean;
   /** Visium HD bins: apply the % mito rules (off by default: they cut tissue out) */
-  qc_bin_mito?: boolean;
+  qc_grid_mito?: boolean;
   /** Whose doublets "drop doublets" drops; "auto" = cell hashing when run, else Scrublet. */
   qc_doublet_source?: DoubletSource;
   /** Also drop cell hashing's negatives (no tag above background). */
@@ -537,7 +537,7 @@ export interface RemovalAuditColumns {
 /** What the thresholds would remove (backend core/qc_filter.py). */
 export interface FilterPreview {
   /** Visium HD bins, when the % mito rule is off for them: why */
-  bin_note?: string;
+  grid_note?: string;
   n_cells: number;
   n_removed: number;
   n_kept: number;
@@ -608,7 +608,7 @@ export async function getFilterPreview(
     q.set("mito_mode", "per_type");
     if (t.qc_mito_type_column) q.set("mito_type_column", t.qc_mito_type_column);
     if (t.qc_mito_type_floor) q.set("mito_type_floor", "true");
-    if (t.qc_bin_mito) q.set("bin_mito", "true");
+    if (t.qc_grid_mito) q.set("grid_mito", "true");
   }
   if (t.qc_doublet_source && t.qc_doublet_source !== "auto") q.set("doublet_source", t.qc_doublet_source);
   if (t.drop_hash_negatives) q.set("drop_hash_negatives", "true");

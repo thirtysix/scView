@@ -1,3 +1,4 @@
+import { unitTitle, unitWord } from "@/lib/spatial";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { formatNumber } from "@/lib/formatting";
 import { DatasetDownloadMenu } from "@/components/common/DatasetDownloadMenu";
@@ -31,7 +32,7 @@ export function Header() {
             </h1>
             <div className="flex gap-3 text-xs text-slate-500">
               {currentDataset.n_cells != null && (
-                <span title="Cells (rows of obs) in the dataset as stored">{formatNumber(currentDataset.n_cells)} cells</span>
+                <span title={`${unitTitle(currentDataset.spatial)} (rows of obs) in the dataset as stored`}>{formatNumber(currentDataset.n_cells)} {unitWord(currentDataset.spatial)}</span>
               )}
               {currentDataset.n_genes != null && (
                 <span title="Genes (rows of var) in the dataset's expression matrix">{formatNumber(currentDataset.n_genes)} genes</span>

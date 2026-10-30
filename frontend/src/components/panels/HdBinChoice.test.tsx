@@ -10,17 +10,17 @@ const OPTIONS: HdBinOption[] = [
 ];
 
 describe("HdBinChoice", () => {
-  it("starts on 8 um, cannot choose 2 um and calls 16 um the fast path", () => {
+  it("starts on 16 um, cannot choose 2 um, and 8 um can be chosen", () => {
     const onChoose = vi.fn();
     render(<HdBinChoice options={OPTIONS} onChoose={onChoose} onCancel={vi.fn()} />);
     const [two, eight, sixteen] = screen.getAllByRole("radio") as HTMLInputElement[];
     expect(two!.disabled).toBe(true);
-    expect(eight!.checked).toBe(true);
-    expect(screen.getByText(/the fast path/)).toBeTruthy();
+    expect(sixteen!.checked).toBe(true);
+    expect(screen.getByText(/clusters follow the anatomy/)).toBeTruthy();
     expect(screen.getByText(/at most 701,406 bins/)).toBeTruthy();
-    fireEvent.click(sixteen!);
-    fireEvent.click(screen.getByRole("button", { name: /Upload 16 µm bins/ }));
-    expect(onChoose).toHaveBeenCalledWith(16);
+    fireEvent.click(eight!);
+    fireEvent.click(screen.getByRole("button", { name: /Upload 8 µm bins/ }));
+    expect(onChoose).toHaveBeenCalledWith(8);
   });
 
   it("cancels", () => {

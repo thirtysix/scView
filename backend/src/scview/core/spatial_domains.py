@@ -492,6 +492,18 @@ def free_column(adata, base: str, k: int) -> str:
     return name
 
 
+def free_suggested_column(adata) -> str:
+    """The name Suggest k offers: its k is not known yet, so not ``base_k<k>``."""
+    if DOMAIN_COLUMN not in adata.obs.columns:
+        return DOMAIN_COLUMN
+    name = f"{DOMAIN_COLUMN}_suggested"
+    n = 2
+    while name in adata.obs.columns:
+        name = f"{DOMAIN_COLUMN}_suggested_{n}"
+        n += 1
+    return name
+
+
 def _load(adata, key: str) -> dict[str, Any]:
     """A JSON result block of uns: ``{"latest", "runs"}``, empty when absent or unreadable."""
     raw = adata.uns.get(key) if key in adata.uns else None

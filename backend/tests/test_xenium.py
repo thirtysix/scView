@@ -237,8 +237,8 @@ def test_a_zipped_outs_folder_is_one_sentence(tmp_path):
     assert build_bundle([other]).unsupported is None
 
 
-def test_visium_hd_stays_refused():
-    assert "Visium HD" in spatial.unsupported(["x/binned_outputs/square_008um/matrix.h5"])
+def test_xenium_and_hd_folders_are_not_refused():
+    assert spatial.unsupported(["x/binned_outputs/square_008um/matrix.h5"]) is None
     assert spatial.unsupported(["x/experiment.xenium"]) is None
 
 
