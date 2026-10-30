@@ -228,6 +228,8 @@ interface ParamConfig {
   placeholder?: string;
   /** Shown for a targeted panel only. */
   panelOnly?: boolean;
+  /** Shown for Visium HD bins only */
+  binsOnly?: boolean;
 }
 
 const QC_MODE_OPTION_LABELS: Record<string, string> = {
@@ -299,6 +301,14 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
     { param: "min_cells", label: "Min cells/gene", type: "number", min: 0, max: 100, step: 1, default: 3 },
     { param: "max_pct_mt", label: "Max % mito (ceiling in MAD mode)", type: "number", min: 0, max: 100, step: 1, default: 20 },
     { param: "drop_doublets", label: "Drop predicted doublets", type: "boolean", default: false },
+    {
+      param: "qc_bin_mito",
+      label: "Apply % mito to bins",
+      type: "boolean",
+      default: false,
+      binsOnly: true,
+      help: "Off: a bin is a square of the capture grid, and a high % mito marks mitochondria-rich tissue (hippocampal molecular layers, cortical layer 1), not a broken cell.",
+    },
   ],
   ambient_correction: [
     {
@@ -412,15 +422,22 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
 export function filterThresholds(
   set: Record<string, unknown> | undefined,
   panelDefaults?: Record<string, number | null> | null,
+  bins = false,
 ): FilterThresholds {
+  const binMito = bins && Boolean(set?.qc_bin_mito);
   const value = (param: string) =>
-    set?.[param] ?? panelDefaults?.[param] ?? STEP_PARAMS.filtering!.find((pc) => pc.param === param)!.default;
+    set?.[param] ??
+    panelDefaults?.[param] ??
+    (bins ? BIN_DEFAULTS[param] : undefined) ??
+    STEP_PARAMS.filtering!.find((pc) => pc.param === param)!.default;
   return {
     min_genes: Number(value("min_genes")),
     max_genes: Number(value("max_genes")),
     min_counts: Number(value("min_counts")),
-    max_pct_mt: Number(value("max_pct_mt")),
+    // On bins the rule is off (100 = no line on the plot) until "Apply % mito to bins".
+    max_pct_mt: bins && !binMito ? 100 : Number(value("max_pct_mt")),
     drop_doublets: Boolean(value("drop_doublets")),
+    ...(binMito ? { qc_bin_mito: true } : {}),
     qc_threshold_mode: value("qc_threshold_mode") === "fixed" ? "fixed" : "mad",
     qc_mad_k: Number(value("qc_mad_k")),
     qc_mad_k_mt: Number(value("qc_mad_k_mt")),
@@ -436,6 +453,9 @@ export function filterThresholds(
     drop_hash_negatives: Boolean(set?.drop_hash_negatives),
   };
 }
+
+/** Fixed mode's defaults on Visium HD bins (backend qc_filter.bin_rules): few genes are what a bin has. */
+const BIN_DEFAULTS: Record<string, number> = { min_genes: 0, min_counts: 1 };
 
 /** Fixed cut-offs among an AI suggestion's filtering params mean the fixed mode,
  *  unless it names a mode: in MAD mode they would do nothing. */
@@ -638,7 +658,11 @@ export function DataAssessmentPanel() {
 
   // The QC histograms set the filtering step's thresholds: one state, two places.
   const panelDefaults = state?.targeted_panel?.defaults;
-  const filterValues = useMemo(() => filterThresholds(stepParams.filtering, panelDefaults), [stepParams.filtering, panelDefaults]);
+  const binData = dataset?.spatial?.unit === "bin";
+  const filterValues = useMemo(
+    () => filterThresholds(stepParams.filtering, panelDefaults, binData),
+    [stepParams.filtering, panelDefaults, binData],
+  );
   const setFilter = useCallback(
     (patch: Partial<FilterThresholds>) =>
       setStepParams((prev) => ({ ...prev, filtering: { ...prev.filtering, ...patch } })),
@@ -1565,15 +1589,18 @@ export function DataAssessmentPanel() {
                               Parameters
                             </p>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                              {STEP_PARAMS[step.key]!.filter((pc) => !pc.panelOnly || state.targeted_panel).map((pc) => {
+                              {STEP_PARAMS[step.key]!.filter((pc) => (!pc.panelOnly || state.targeted_panel) && (!pc.binsOnly || binData)).map((pc) => {
                                 // Per channel, no one number stands for the default: the input stays empty.
                                 const suggested =
                                   pc.dynamicDefault === "suggested_doublet_rate" && !doubletRate?.per_channel
                                     ? doubletRate?.rate
                                     : undefined;
-                                const currentVal = stepParams[step.key]?.[pc.param] ?? suggested ?? panelDefaults?.[pc.param] ?? pc.default;
-                                // A filtering param of the other threshold mode: shown, not used.
-                                const unused = pc.mode !== undefined && pc.mode !== filterValues.qc_threshold_mode;
+                                const binDefault = binData && step.key === "filtering" ? BIN_DEFAULTS[pc.param] : undefined;
+                                const currentVal = stepParams[step.key]?.[pc.param] ?? suggested ?? panelDefaults?.[pc.param] ?? binDefault ?? pc.default;
+                                // A filtering param of the other threshold mode, or % mito on bins: shown, not used.
+                                const unused =
+                                  (pc.mode !== undefined && pc.mode !== filterValues.qc_threshold_mode) ||
+                                  (binData && (pc.param === "max_pct_mt" || pc.param === "qc_mad_k_mt") && !filterValues.qc_bin_mito);
                                 const resolvedOptions =
                                   pc.dynamicOptions === "categorical_obs_columns"
                                     ? augmentedCategoricalOptions

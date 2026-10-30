@@ -241,6 +241,9 @@ def _classify_hdf5(path: Path) -> DetectionResult:
                     raw = _raw_tenx_h5(path, f["matrix"])
                     if raw:
                         details["raw_matrix"] = raw
+                    um = _first_barcode_bin_um(f["matrix"])
+                    if um is not None:
+                        details["hd_bin_um"] = um
                     return DetectionResult(
                         kind=FileKind.tenx_h5,
                         confidence=0.95,
@@ -312,6 +315,14 @@ def _classify_hdf5(path: Path) -> DetectionResult:
         return DetectionResult(
             kind=FileKind.unknown, confidence=0.0, reason=f"Could not open as HDF5: {e}"
         )
+
+
+def _first_barcode_bin_um(matrix: h5py.Group) -> int | None:
+    """The bin size of a Visium HD matrix, from its first barcode; None for any other."""
+    try:
+        return spatial.barcode_bin_um(matrix["barcodes"][0])
+    except (KeyError, IndexError, ValueError, OSError):
+        return None
 
 
 def _classify_text(text: str, gzipped: bool) -> DetectionResult:

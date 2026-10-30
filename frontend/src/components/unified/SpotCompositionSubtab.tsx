@@ -13,6 +13,7 @@ import {
 } from "@/api/spotDeconvolution";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { unitWord } from "@/lib/spatial";
 import { SpotCompositionCheck } from "@/components/unified/SpotCompositionCheck";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { errorMessage } from "@/lib/errorMessage";
@@ -23,6 +24,7 @@ import {
   shareFill,
   shareLabel,
   shareText,
+  binCaveat,
   SPOT_METHOD_LABELS,
   toOverlayValues,
   typeRows,
@@ -163,15 +165,19 @@ export function SpotCompositionSubtab() {
   const small = check?.types?.filter((t) => t.small) ?? [];
   const nTypes = (check?.types?.length ?? 0) - small.length;
   const shownRows = showAll ? rows : rows.slice(0, TYPE_LIMIT);
+  const spatial = dataset?.spatial;
+  const unit = unitWord(spatial, false);
+  const units = unitWord(spatial);
+  const bins = spatial?.unit === "bin";
 
   return (
     <div className="space-y-3 text-xs" data-testid="spot-composition">
       <div className="flex items-center gap-1.5 font-medium text-slate-700">
         Spot composition
         <InfoTip label="About spot composition" width={320}>
-          Each Visium spot holds several cells. This estimates which cell types make up each spot, from the profiles of
-          an annotated single-cell dataset in your library (the reference): a fit of the spot&apos;s counts as a mix of
-          those profiles, as RCTD does.
+          {bins ? "A Visium HD bin is a square of the capture grid, which can hold parts of several cells." : "Each Visium spot holds several cells."}{" "}
+          This estimates which cell types make up each {unit}, from the profiles of an annotated single-cell dataset in
+          your library (the reference): a fit of the {unit}&apos;s counts as a mix of those profiles, as RCTD does.
         </InfoTip>
       </div>
       {!info.available ? (
@@ -276,7 +282,7 @@ export function SpotCompositionSubtab() {
               disabled={running || !refId || !column || !check?.ok}
               onClick={run}
             >
-              {running ? <Loader2 className="inline h-3 w-3 animate-spin" /> : null} Fit spots
+              {running ? <Loader2 className="inline h-3 w-3 animate-spin" /> : null} Fit {units}
             </button>
             {running && (
               <>
@@ -297,7 +303,7 @@ export function SpotCompositionSubtab() {
         <div className="space-y-2" data-testid="spot-composition-result">
           <p className="text-slate-700">
             {result.types.length} types from <b>{result.reference.name}</b> ({result.celltype_column}),{" "}
-            {result.method_name}; {result.n_fitted.toLocaleString()} of {result.n_spots.toLocaleString()} spots fitted on{" "}
+            {result.method_name}; {result.n_fitted.toLocaleString()} of {result.n_spots.toLocaleString()} {units} fitted on{" "}
             {result.n_genes.toLocaleString()} genes
             {result.s_e != null && `; spot noise ${result.s_e.toFixed(1)}`}
             {result.libraries.some((l) => l.s_g != null) &&
@@ -333,8 +339,8 @@ export function SpotCompositionSubtab() {
               <tr className="text-left text-slate-500">
                 <th title="Reference cell type; click to colour the tissue by its share">Type</th>
                 <th className="text-right" title="Mean share over the fitted spots">Mean</th>
-                <th className="text-right" title="Largest share in one spot">Max</th>
-                <th className="text-right" title="Spots where this type has the largest RNA share">Top in</th>
+                <th className="text-right" title={`Largest share in one ${unit}`}>Max</th>
+                <th className="text-right" title={`${units} where this type has the largest RNA share`}>Top in</th>
               </tr>
             </thead>
             <tbody>
@@ -356,8 +362,8 @@ export function SpotCompositionSubtab() {
               ))}
             </tbody>
           </table>
-          <Caption n={{ value: result.n_fitted, unit: "spots" }}>
-            {kind === "rna" ? "Share of each spot's RNA" : "Estimated share of each spot's cells"} per reference type.
+          <Caption n={{ value: result.n_fitted, unit: units }}>
+            {kind === "rna" ? `Share of each ${unit}'s RNA` : `Estimated share of each ${unit}'s cells`} per reference type.
             {rows.length > TYPE_LIMIT && !showAll && ` Top ${TYPE_LIMIT} of ${rows.length} by mean share.`}
           </Caption>
           {rows.length > TYPE_LIMIT && (
@@ -418,12 +424,13 @@ export function SpotCompositionSubtab() {
           )}
           <div className="rounded bg-amber-50 p-2 text-amber-800" data-testid="spot-caveats">
             <p>
-              Shares are estimates of each spot&apos;s RNA (or cells), not counts. A cell type missing from the
-              reference is given to its nearest type, so its spots look like that type: use a reference that covers the
+              Shares are estimates of each {unit}&apos;s RNA (or cells), not counts. A cell type missing from the
+              reference is given to its nearest type, so its {units} look like that type: use a reference that covers the
               tissue. The platform correction
               assumes one effect for all types, so a single-nucleus reference or a probe-based (FFPE) section fits
               least well. The reference must be the same species.
             </p>
+            {bins && <p className="mt-1" data-testid="spot-bin-caveat">{binCaveat(spatial?.bin_size_um)}</p>}
           </div>
         </div>
       )}

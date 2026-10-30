@@ -101,6 +101,12 @@ def _read_frames(path: str):
     return read(path)
 
 
+def _is_bins(adata) -> bool:
+    from scview.core import spatial
+
+    return spatial.has_spatial(adata) and spatial.technology(adata)["unit"] == "bin"
+
+
 def _estimate(ref_path: str, ref_open: bool, spot_adaptor, n_types: int, method: str,
               check: bool = False) -> dict[str, Any]:
     ref_h = preflight.read_header(ref_path, "h5ad")
@@ -109,7 +115,8 @@ def _estimate(ref_path: str, ref_open: bool, spot_adaptor, n_types: int, method:
               else preflight.header_from_adata(spot_adaptor.adata))
     secs = sd.estimate_seconds(ref_h.n_cells or 0, spot_adaptor.adata.n_obs, n_types, method,
                                ref_values=sd.stored_values(ref_h) if ref_h.large else 0,
-                               spot_values=sd.stored_values(spot_h) if spot_h.large else 0, check=check)
+                               spot_values=sd.stored_values(spot_h) if spot_h.large else 0, check=check,
+                               bins=_is_bins(spot_adaptor.adata))
     return {"peak_bytes": sd.need_bytes(ref_h, spot_h, ref_open, check=check), "seconds": secs,
             "seconds_range": [round(secs * 0.5, 1), round(secs * 2, 1)], "note": sd.estimate_note(secs),
             "large_reference": bool(ref_h.large)}

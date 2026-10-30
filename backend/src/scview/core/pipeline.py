@@ -92,6 +92,8 @@ class PipelineParams:
     qc_counts_floor: float = 0.0
     # Used only when % mito can be measured (MT- genes); a ceiling in MAD mode.
     max_pct_mt: float = 20.0
+    # Visium HD bins: % mito rules are off, they cut tissue out (qc_filter.bin_rules); opt-in.
+    qc_bin_mito: bool = False
     # "global": the rule above for every cell; "per_type": each cell type's own bound
     # (median + qc_mad_k_mt MADs) instead, for types that can have one (core/qc_filter.py).
     qc_mito_mode: str = "global"
@@ -568,6 +570,7 @@ def filter_judgement(adata: ad.AnnData, params: PipelineParams):
     t = qc_filter.Thresholds.from_params(params)
     samples = qc_filter.samples_of(adata, params.qc_sample_column or None)
     cells = per_cell_qc(adata)
+    t, cells = qc_filter.bin_rules(adata, t, cells, params)
     removed, bounds, types = qc_filter.judge_types(adata, cells, t, samples)
     keep = qc_filter.keep_mask(removed, n_before)
     record = qc_filter.removal_record(adata, cells, removed, ~keep, t, samples.column, types=types)
@@ -581,6 +584,10 @@ def filter_judgement(adata: ad.AnnData, params: PipelineParams):
         found["qc_counts_floor"] = t.counts_floor
         if t.mode == "fixed":
             found["min_counts"] = t.min_counts
+    if spatial.has_spatial(adata) and spatial.technology(adata)["unit"] == "bin":  # what was applied
+        found.update(max_pct_mt=t.max_pct_mt, qc_bin_mito=bool(params.qc_bin_mito))
+        if t.mode == "fixed":
+            found.update(min_genes=t.min_genes, max_genes=t.max_genes, min_counts=t.min_counts)
     if bounds is not None:
         found["qc_thresholds"] = bounds.to_dict(~keep)
     if t.mito_mode == "per_type":  # a global run records what it always did

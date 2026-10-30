@@ -259,9 +259,11 @@ export function SpatialDomainsSubtab({
           <div className="space-y-0.5 text-[11px] leading-snug text-slate-500" data-testid="domains-plan">
             <p>{planText({ ...plan, k })}</p>
             <p>{scanText(plan)}</p>
-            {plan.notes.map((n) => (
-              <p key={n}>{n}</p>
-            ))}
+            {plan.notes
+              .filter((n) => !domains?.notes?.includes(n))
+              .map((n) => (
+                <p key={n}>{n}</p>
+              ))}
           </div>
         )}
         <RunStatus kind="domains" />

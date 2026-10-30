@@ -166,6 +166,7 @@ class Header:
     has_clusters: bool = False
     estimated: bool = False  # cells / genes estimated from a sample (text tables)
     guess: bool = False  # nothing in the file could be read (RDS): sizes are a guess
+    unit: str = "cell"  # what one row is, for the sentence about it: "bin" for Visium HD
     note: str = ""  # what the numbers rest on, when not read exactly
     seconds: float = 0.0
 
@@ -1117,9 +1118,11 @@ def doublet_plan(adata, params=None) -> DoubletPlan | None:
     """The doublet step's channels on a live AnnData (in memory), and Scrublet's variable
     genes counted on up to ``DBL_HVG_SAMPLE`` evenly spaced cells of the largest channel
     (its own selection, ``scrublet_lean.n_variable_genes``). None when they can't be read."""
-    from scview.core import doublets, scrublet_lean
+    from scview.core import doublets, scrublet_lean, spatial
     from scview.core.pipeline import StepSkipped, _doublet_matrix
 
+    if spatial.is_spot_data(adata):  # spots and bins: the step is skipped, so it costs nothing
+        return DoubletPlan([])
     try:
         ch = doublets.channels(adata, _p(params, "doublet_channel_key", "") or None)
     except doublets.DoubletError:
@@ -2166,6 +2169,8 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
 
         h.uns_bytes += spatial.side_bytes(spatial_parts)
         h.obsm_bytes += 16 * int(h.n_cells or 0)
+        if any(part == spatial.POSITIONS and spatial.is_hd_positions(path) for part, path in spatial_parts):
+            h.unit = "bin"
     if xen:
         _xenium_header(h, unit)
     return h
@@ -2189,7 +2194,7 @@ def _xenium_header(h: Header, unit) -> None:
 
 
 def _load_lead(h: Header, est: LoadEstimate) -> str:
-    shape = (f"{h.n_cells:,} cells x {h.n_genes:,} genes"
+    shape = (f"{h.n_cells:,} {h.unit}s x {h.n_genes:,} genes"
              + (" (estimated)" if h.estimated else "") if h.n_cells and h.n_genes else "")
     head = f"{shape}: " if shape else ""
     if h.guess:
@@ -2325,6 +2330,9 @@ def _file_doublet_plan(path, params=None) -> DoubletPlan | None:
 
         with h5py.File(path, "r") as f:
             obs = ad.io.read_elem(f["obs"])
+            unit = f.get("uns/scview_spatial/unit")
+            if unit is not None and _s(unit[()]) in ("spot", "bin"):  # the step is skipped
+                return DoubletPlan([])
         ch = doublets.channels(ad.AnnData(obs=obs), _p(params, "doublet_channel_key", "") or None)
         return DoubletPlan([int(k) for k in ch.sizes])
     except Exception:  # noqa: BLE001 — an estimate never fails a request: one channel then

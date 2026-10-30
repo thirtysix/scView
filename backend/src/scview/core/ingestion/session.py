@@ -691,7 +691,10 @@ class IngestSessionManager:
                                sample=u.label if merged else None, label=u.label)
             except (spatial.SpatialError, OSError, EOFError, zlib.error) as e:
                 raise IngestCommitError(f"The spatial files of {u.label} could not be used: {e}") from e
-        return spatial.finish(adata)
+        try:
+            return spatial.finish(adata)
+        except spatial.SpatialError as e:
+            raise IngestCommitError(str(e)) from e
 
     def _attach_guide_calls(self, adata, loadable, opts: IngestOptions) -> None:
         """Cell Ranger's protospacer calls uploaded with a unit (``core/crispr.py``),

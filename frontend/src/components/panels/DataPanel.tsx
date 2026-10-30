@@ -41,7 +41,19 @@ import { PreflightIngestNotes } from "@/components/common/PreflightNote";
 import { SequencingQcSideFiles } from "@/components/qc/SequencingQcSideFiles";
 import { ClonotypeUnitFiles } from "@/components/unified/ClonotypeUnitFiles";
 import { commitConversionNote, conversionNote, isRFile } from "@/lib/conversion";
-import { itemsFromDrop, itemsFromFiles, skippedNote, splitJunk, type UploadItem } from "@/lib/ingestUpload";
+import {
+  hdBinOptions,
+  hdDefaultBin,
+  hdRefusal,
+  itemsFromDrop,
+  itemsFromFiles,
+  keepHdBin,
+  skippedNote,
+  splitJunk,
+  type HdBinOption,
+  type UploadItem,
+} from "@/lib/ingestUpload";
+import { HdBinChoice } from "@/components/panels/HdBinChoice";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
   tenx_mex: "10x MEX (matrix + barcodes + features)",
@@ -99,6 +111,8 @@ export function DataPanel() {
   const [error, setError] = useState<string | null>(null);
   // Files of a picked/dropped folder that were not sent (BAM, Loupe, report), in one sentence.
   const [notSent, setNotSent] = useState<string | null>(null);
+  // A Visium HD folder with several bin sizes, waiting for the user's choice.
+  const [hdPick, setHdPick] = useState<{ items: UploadItem[]; options: HdBinOption[] } | null>(null);
 
   // CELLxGENE Discover import: offered when the server allows it (PUBLIC_IMPORT_ENABLED).
   const [publicEnabled, setPublicEnabled] = useState(false);
@@ -166,7 +180,7 @@ export function DataPanel() {
   }, []);
 
   const addFiles = useCallback(
-    async (picked: UploadItem[]) => {
+    async (picked: UploadItem[], hdBin?: number) => {
       if (picked.length === 0) return;
       // A single R file → the converter path.
       if (picked.length === 1) {
@@ -176,8 +190,21 @@ export function DataPanel() {
           return;
         }
       }
-      const { keep, skipped } = splitJunk(picked);
-      setNotSent(skippedNote(skipped));
+      const refusal = hdRefusal(picked);
+      if (refusal) {
+        setNotSent(null);
+        setError(refusal);
+        return;
+      }
+      const options = hdBinOptions(picked);
+      if (options.length > 1 && hdBin == null) {
+        setHdPick({ items: picked, options });
+        return;
+      }
+      const um = hdBin ?? hdDefaultBin(options);
+      const one = um != null ? keepHdBin(picked, um) : { keep: picked, skipped: [] };
+      const { keep, skipped } = splitJunk(one.keep);
+      setNotSent(skippedNote([...one.skipped, ...skipped]));
       if (keep.length === 0) return;
       setBusy(true);
       setError(null);
@@ -253,6 +280,7 @@ export function DataPanel() {
     setOptions(DEFAULT_OPTIONS);
     setError(null);
     setNotSent(null);
+    setHdPick(null);
   }, [sessionId]);
 
   const commit = useCallback(async () => {
@@ -363,7 +391,7 @@ export function DataPanel() {
         </div>
         <p className="mt-2 text-xs text-slate-400">
           .h5ad · Seurat / SingleCellExperiment .rds · Seurat .h5Seurat · 10x (matrix/barcodes/features or
-          .h5) · Visium (Space Ranger outs/) · loom · CSV/TSV · multiple samples to merge
+          .h5) · Visium and Visium HD (Space Ranger outs/) · Xenium (output folder) · loom · CSV/TSV · multiple samples to merge
         </p>
         <input
           ref={fileInput}
@@ -403,6 +431,18 @@ export function DataPanel() {
       )}
 
       {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+
+      {hdPick && (
+        <HdBinChoice
+          options={hdPick.options}
+          onCancel={() => setHdPick(null)}
+          onChoose={(um) => {
+            const { items } = hdPick;
+            setHdPick(null);
+            void addFiles(items, um);
+          }}
+        />
+      )}
 
       {notSent && (
         <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500" data-testid="not-sent">

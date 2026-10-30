@@ -35,6 +35,10 @@ const MOLECULES = "per-molecule read information, not a count matrix";
 const SPATIAL_EXTRA = "Space Ranger alignment images and tables, not used by scView";
 const XENIUM_EXTRA = "Xenium transcripts, boundaries, stains and Explorer files, not used by scView";
 const XENIUM_ZIP = "a zipped Xenium output folder is not read: unzip it and drop the folder instead";
+const HD_RAW = "the raw matrix, every bin of the slide and most of them empty: the filtered one is read";
+const HD_COPY = "the same matrix as filtered_feature_bc_matrix.h5, which is read";
+const HD_ANALYSIS = "Space Ranger's own analysis (clustering, PCA, UMAP, DE): scView computes these itself";
+const HD_OTHER = "a Space Ranger output scView does not read";
 
 const JUNK_NAMES: Record<string, string> = {
   ".ds_store": SYSTEM,
@@ -60,6 +64,8 @@ const JUNK_NAMES: Record<string, string> = {
   "nucleus_boundaries.csv.gz": XENIUM_EXTRA,
   "analysis_summary.html": XENIUM_EXTRA,
   "gene_panel.json": XENIUM_EXTRA,
+  "raw_probe_bc_matrix.h5": "the raw per-probe matrix, not used by scView",
+  "feature_slice.h5": "Space Ranger's per-gene slide images, not used by scView",
 };
 const JUNK_SUFFIXES: [string, string][] = [
   [".bam", ALIGNMENTS],
@@ -73,6 +79,33 @@ const JUNK_SUFFIXES: [string, string][] = [
   [".zarr.zip", XENIUM_EXTRA],
 ];
 
+const HD_DIR = /^square_(\d{3})um$/i;
+const HD_SPATIAL = new Set([
+  "tissue_positions.parquet",
+  "tissue_positions.csv",
+  "scalefactors_json.json",
+  "tissue_hires_image.png",
+  "tissue_lowres_image.png",
+]);
+
+/**
+ * Inside a Visium HD square_NNNum/ folder only the filtered .h5 and four files of
+ * spatial/ are read: why any other is left out; null to keep it or outside such a folder.
+ */
+function hdJunk(path: string): string | null {
+  const parts = path.toLowerCase().split(/[\\/]/);
+  const at = parts.slice(0, -1).findIndex((p) => HD_DIR.test(p));
+  if (at < 0) return null;
+  const dirs = parts.slice(at + 1, -1);
+  const name = parts[parts.length - 1]!;
+  if (dirs.length === 0 && name.endsWith("filtered_feature_bc_matrix.h5")) return null;
+  if (dirs.length === 1 && dirs[0] === "spatial" && HD_SPATIAL.has(name)) return null;
+  if (dirs.includes("analysis")) return HD_ANALYSIS;
+  if (name.includes("raw") || dirs.some((d) => d.includes("raw"))) return HD_RAW;
+  if (dirs.some((d) => d.includes("filtered_feature_bc_matrix"))) return HD_COPY;
+  return HD_OTHER;
+}
+
 /** Why a file of a folder is not uploaded, or null to upload it. */
 export function junkReason(path: string): string | null {
   const name = (path.split(/[\\/]/).pop() ?? path).toLowerCase();
@@ -80,7 +113,7 @@ export function junkReason(path: string): string | null {
   if (name.startsWith("._")) return SYSTEM;
   for (const [suffix, reason] of JUNK_SUFFIXES) if (name.endsWith(suffix)) return reason;
   if (name.endsWith(".zip") && name.includes("xenium")) return XENIUM_ZIP; // 10 GB; the server would refuse it
-  return null;
+  return hdJunk(path);
 }
 
 /** The morphology images of a Xenium folder, in the order they are preferred (`core/xenium.py`). */
@@ -153,6 +186,104 @@ export function skippedNote(skipped: SkippedUpload[]): string | null {
   const total = skipped.reduce((a, s) => a + s.bytes, 0);
   const n = skipped.length;
   return `Not uploaded: ${n} file${n === 1 ? "" : "s"} scView does not read, ${formatBytes(total)}: ${parts.join("; ")}.`;
+}
+
+// --- Visium HD: one bin size of a run ----------------------------------------
+// The same rules as the backend's spatial.py (hd_folder, hd_pick_bin, unsupported),
+// applied before anything is sent: a 2 um matrix, or a whole archive, is never uploaded.
+
+export const HD_DEFAULT_BIN_UM = 8;
+const HD_MIN_BIN_UM = 8;
+const HD_ARCHIVE = /binned_outputs\.(tar\.gz|tgz|tar)$/i;
+// Bins on a whole Visium HD capture area: 3,350 x 3,350 at 2 um.
+const HD_AREA_UM = 6700;
+
+export interface HdBinOption {
+  um: number;
+  /** Size of the bin folder's filtered matrix */
+  matrixBytes: number;
+  /** Bins on the whole capture area: the most there can be, whatever the tissue covers */
+  maxBins: number;
+  /** Too many bins to read: offered as a reason, not a choice */
+  refused: boolean;
+}
+
+/** The run's folder (above square_NNNum/, without binned_outputs) and bin size of a path in such a folder. */
+export function hdFolder(path: string): { run: string; um: number } | null {
+  const dirs = path.split(/[\\/]/).slice(0, -1);
+  const at = dirs.findIndex((d) => HD_DIR.test(d));
+  if (at < 0) return null;
+  const run = dirs.slice(0, at);
+  if (run[run.length - 1]?.toLowerCase() === "binned_outputs") run.pop();
+  return { run: run.join("/"), um: parseInt(HD_DIR.exec(dirs[at]!)![1]!, 10) };
+}
+
+/** The bin sizes in these files, finest first; empty for anything but a Visium HD run's folder. */
+export function hdBinOptions(items: UploadItem[]): HdBinOption[] {
+  const sizes = new Map<number, number>();
+  for (const it of items) {
+    const hit = hdFolder(it.path);
+    if (!hit) continue;
+    const isMatrix = (it.path.split(/[\\/]/).pop() ?? "").toLowerCase().endsWith("filtered_feature_bc_matrix.h5");
+    sizes.set(hit.um, (sizes.get(hit.um) ?? 0) + (isMatrix && !hdJunk(it.path) ? it.file.size : 0));
+  }
+  return [...sizes]
+    .sort(([a], [b]) => a - b)
+    .map(([um, matrixBytes]) => ({
+      um,
+      matrixBytes,
+      maxBins: Math.round((HD_AREA_UM / um) ** 2),
+      refused: um < HD_MIN_BIN_UM,
+    }));
+}
+
+/** The size offered first: 8 um, else the finest that can be read. */
+export function hdDefaultBin(options: HdBinOption[]): number | null {
+  const usable = options.filter((o) => !o.refused);
+  return (usable.find((o) => o.um === HD_DEFAULT_BIN_UM) ?? usable[0])?.um ?? null;
+}
+
+/** The sentence for files that are not uploaded at all, or null: the server's own refusals, said first. */
+export function hdRefusal(items: UploadItem[]): string | null {
+  const archive = items.find((it) => HD_ARCHIVE.test(it.path));
+  if (archive) {
+    const name = archive.path.split(/[\\/]/).pop() ?? archive.path;
+    return `${name} is a Visium HD binned_outputs archive, which scView does not read: unpack it and drop the binned_outputs folder (or one square_NNNum folder) instead.`;
+  }
+  const options = hdBinOptions(items);
+  if (options.length > 0 && hdDefaultBin(options) == null) {
+    return `The ${options[0]!.um} um bins of a Visium HD run are millions of observations (6.3 million on a mouse brain section), far past the 1.3 million cells scView has been tested on: use the square_008um or square_016um folder instead.`;
+  }
+  if (options.length === 0 && items.some((it) => it.path.toLowerCase().split(/[\\/]/).slice(0, -1).includes("segmented_outputs"))) {
+    return "Space Ranger 4's segmented_outputs (cell segmentation) is not read yet: upload the run's binned_outputs folder instead, which reads as 8 or 16 um bins.";
+  }
+  return null;
+}
+
+/** One bin size of each run: the rest of the run's folder goes in `skipped`, with why. */
+export function keepHdBin(items: UploadItem[], um: number): { keep: UploadItem[]; skipped: SkippedUpload[] } {
+  const runs = new Set(items.map((it) => hdFolder(it.path)?.run).filter((r): r is string => !!r));
+  const keep: UploadItem[] = [];
+  const skipped: SkippedUpload[] = [];
+  for (const it of items) {
+    const hit = hdFolder(it.path);
+    if (hit) {
+      if (hit.um === um) keep.push(it);
+      else
+        skipped.push({
+          path: it.path,
+          reason: `another bin size of the run: one dataset per bin size, the ${um} um bins are read`,
+          bytes: it.file.size,
+        });
+    } else if ([...runs].some((r) => it.path.startsWith(`${r}/`))) {
+      skipped.push({
+        path: it.path,
+        reason: "the rest of the Space Ranger output folder, not part of the bins read",
+        bytes: it.file.size,
+      });
+    } else keep.push(it);
+  }
+  return { keep, skipped };
 }
 
 // --- Drag and drop of folders ------------------------------------------------

@@ -167,6 +167,11 @@ describe("filterThresholds", () => {
       qc_doublet_source: "either", drop_hash_negatives: true,
     });
     expect(filterThresholds({ qc_doublet_source: "nonsense" }).qc_doublet_source).toBe("auto");
+    // Visium HD bins: no min genes, min counts 1, % mito off until asked for; a choice stands.
+    expect(filterThresholds(undefined, null, true)).toMatchObject({ min_genes: 0, min_counts: 1, max_pct_mt: 100 });
+    expect(filterThresholds({ min_genes: 50 }, null, true).min_genes).toBe(50);
+    expect(filterThresholds({ qc_bin_mito: true, max_pct_mt: 30 }, null, true)).toMatchObject({ max_pct_mt: 30, qc_bin_mito: true });
+    expect(filterThresholds({ qc_bin_mito: true })).not.toHaveProperty("qc_bin_mito");
   });
 });
 

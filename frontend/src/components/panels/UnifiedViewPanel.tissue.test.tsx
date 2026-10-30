@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useTissueViewStore } from "@/stores/tissueViewStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 
@@ -141,6 +142,24 @@ describe("Unified View on the tissue", () => {
     embedding.current.isLoading = false;
     renderPanel();
     expect(scatterProps.current).toBeNull();
+  });
+
+  it("opens a spatial dataset on its tissue plot once; a choice of UMAP then stands", () => {
+    useTissueViewStore.setState({ openedOn: null });
+    useSettingsStore.setState({ embedding: "X_umap" });
+    renderPanel();
+    expect(useSettingsStore.getState().embedding).toBe("spatial");
+    useSettingsStore.setState({ embedding: "X_umap" });
+    renderPanel();
+    expect(useSettingsStore.getState().embedding).toBe("X_umap");
+  });
+
+  it("does not open a dataset without spatial data on the tissue", () => {
+    useTissueViewStore.setState({ openedOn: null });
+    useDatasetStore.setState({ currentDataset: { ...DATASET, spatial: null } });
+    useSettingsStore.setState({ embedding: "X_umap" });
+    renderPanel();
+    expect(useSettingsStore.getState().embedding).toBe("X_umap");
   });
 
   it("switches to the UMAP on a dataset without spatial data", () => {

@@ -21,7 +21,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from scview.core import spatial
 from scview.core.ingestion.bundling import Bundle, FileRole, IngestUnit, SideKind, UnitFormat
 
 logger = logging.getLogger(__name__)
@@ -52,10 +51,7 @@ def validate_bundle(bundle: Bundle, converted: Collection[str] = ()) -> Validati
     issues: list[IngestIssue] = []
     if bundle.unsupported:
         issues.append(IngestIssue(
-            severity=IssueSeverity.error, code="spatial_unsupported", message=bundle.unsupported,
-            suggestion=("" if bundle.unsupported == spatial.XENIUM_MESSAGE else
-                        "Export the data to an .h5ad with obsm['spatial'] (spatialdata-io, squidpy) "
-                        "and upload that file.")))
+            severity=IssueSeverity.error, code="spatial_unsupported", message=bundle.unsupported))
     others = sum(u.format != UnitFormat.unknown for u in bundle.units) > 1
     for unit in bundle.units:
         issues.extend(_validate_unit(unit))

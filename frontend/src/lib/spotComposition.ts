@@ -1,6 +1,15 @@
 /** Helpers for the Spot composition subtab (backend core/spot_deconvolution.py). */
 import type { ShareKind, SpotSummary } from "@/api/spotDeconvolution";
 
+/** How to read shares of a Visium HD bin: few cells and few counts in each. */
+export function binCaveat(um: number | undefined): string {
+  if (um != null && um <= 8) {
+    return `At ${um} µm a bin holds about one cell and few counts: read the dominant type of a bin; its fractions are noisy.`;
+  }
+  if (um != null && um <= 16) return `At ${um} µm a bin holds about 2 to 4 cells, so its fractions mean more than at 8 µm.`;
+  return "A bin holds few cells and few counts: read its dominant type before its fractions.";
+}
+
 export const SPOT_METHOD_LABELS = {
   rctd: "RCTD-style (Poisson-lognormal)",
   nnls: "NNLS (baseline)",
