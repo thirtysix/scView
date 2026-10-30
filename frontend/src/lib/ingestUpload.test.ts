@@ -226,6 +226,8 @@ describe("Visium HD folders", () => {
 
   it("refuses what is not read before anything is sent", () => {
     expect(hdRefusal([f("Visium_HD_Mouse_Brain_binned_outputs.tar.gz")])).toMatch(/unpack it/);
+    expect(hdRefusal([f("Xenium_FFPE_Rep1_outs.zip")])).toMatch(/not read: unzip it/);
+    expect(hdRefusal([f("spots.zip")])).toBeNull();
     expect(hdRefusal(bins("binned_outputs/", 2))).toMatch(/use the square_008um or square_016um/);
     expect(hdRefusal([...bins("", 2), ...bins("", 16)])).toBeNull();
     expect(hdRefusal([f("outs/segmented_outputs/cell_segmentations.geojson")])).toMatch(/segmented_outputs/);

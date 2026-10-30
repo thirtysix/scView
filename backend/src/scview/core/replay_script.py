@@ -2777,7 +2777,7 @@ def _vdj_remove(p: dict, ctx: _Ctx) -> Snippet:
 
 def _step_skipped(p: dict, ctx: _Ctx) -> Snippet:
     """A step that does not apply to the data (core/pipeline.py ``StepNotApplicable``:
-    doublet detection on Visium spots): skipped here too, with scView's reason."""
+    doublet detection on Visium spots, cell cycle on a panel): skipped here too, with scView's reason."""
     step = comment_text(p.get("step") or "this step", 40)
     reason = comment_text(p.get("reason") or "it does not apply", 160)
     return Snippet(EXACT, [f"# {step} was skipped: {reason}."])
@@ -2984,7 +2984,6 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "nhood_enrichment": _nhood_enrichment,
     "spatial_niches": _spatial_niches,
     "run_errors": _run_errors,
-    "doublet_detection_skipped": _step_skipped,
 }
 
 
@@ -2993,7 +2992,8 @@ def _snippet(step: dict, ctx: _Ctx) -> Snippet:
     cannot be written from its record, gets a placeholder comment."""
     name = str(step.get("step") or "")
     params = step.get("params") if isinstance(step.get("params"), dict) else {}
-    fn = _STEP_CODE.get(name)
+    # Any step that does not apply is recorded as <step>_skipped (core/pipeline.py ``record_skip``).
+    fn = _step_skipped if name.endswith("_skipped") else _STEP_CODE.get(name)
     if fn is None:
         return Snippet(UNKNOWN, ["# This scView version has no code for this step type; it is",
                                  "# not replayed. Recorded:", *_param_comment(params)],
@@ -3120,7 +3120,8 @@ def build_script(adata, *, dataset_id: str = "", dataset_name: str = "",
         "# Here: " + ", ".join(f"{n} {s}" for s, n in counts.items() if n) + "."
         if steps else "# No steps are recorded for this dataset.",
         "# PCA, UMAP, Harmony and the neighbour graph are seeded, but thread count and BLAS",
-        "# can move their last digits, and with them a few cells' clusters.",
+        "# can move their last digits, and with them a few cells' clusters; in tissue without",
+        "# sharp clusters, as a cortex section, the number of Leiden clusters can change.",
     ]
     n_chunked = sum(1 for h in steps if (h.get("params") or {}).get("chunked") is True)
     if n_chunked:

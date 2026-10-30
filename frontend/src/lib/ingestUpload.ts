@@ -245,6 +245,8 @@ export function hdDefaultBin(options: HdBinOption[]): number | null {
 
 /** The sentence for files that are not uploaded at all, or null: the server's own refusals, said first. */
 export function hdRefusal(items: UploadItem[]): string | null {
+  const zipped = items.find((it) => /xenium[^\\/]*\.zip$/i.test(it.path));
+  if (zipped) return `${zipped.path.split(/[\\/]/).pop()}: ${XENIUM_ZIP}.`; // said before the size limit
   const archive = items.find((it) => HD_ARCHIVE.test(it.path));
   if (archive) {
     const name = archive.path.split(/[\\/]/).pop() ?? archive.path;
