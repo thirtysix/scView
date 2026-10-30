@@ -307,6 +307,19 @@ def test_a_chosen_k_keeps_the_curve_of_the_same_inputs_only():
     assert sd.save_domains(a, r, sd.run_domains(r))["scan"] is None
 
 
+def test_estimates_stay_within_a_fifth_of_the_real_slides():
+    # Measured at 2 CPUs (batch 32 report): k = 8, 10 PCs, 3 hops, 50,000 fitted.
+    xenium = sd.graph_seconds(164_000, 3) + sd.fit_seconds(164_000, 8, 40)
+    hd16 = sd.graph_seconds(98_917, 3, 4) + sd.fit_seconds(98_917, 8, 40)
+    assert xenium == pytest.approx(11.0, rel=0.2) and hd16 == pytest.approx(8.2, rel=0.2)
+    assert sd.scan_seconds(164_000, 40, 2, 15, 5) == pytest.approx(675, rel=0.2)
+    assert sd.scan_seconds(3_639, 40, 2, 15, 5) == pytest.approx(53, rel=0.2)
+    assert sd.enrichment_seconds(164_000) == pytest.approx(9.7, rel=0.2)
+    assert sd.domain_bytes(164_000, 40, 8, 3) / 1024**3 == pytest.approx(0.25, rel=0.2)
+    assert sd.domain_bytes(400_000, 40, 8, 3) / 1024**3 == pytest.approx(0.59, rel=0.2)
+    assert sd.domain_bytes(399_424, 40, 8, 3, 4) / 1024**3 == pytest.approx(0.40, rel=0.2)
+
+
 def test_estimates_grow_and_the_sample_caps_the_fit():
     assert sd.fit_seconds(40_000, 7, 40) > sd.fit_seconds(20_000, 7, 40)
     assert sd.scan_seconds(1_000_000, 40, 2, 15, 5) == sd.scan_seconds(sd.MAX_FIT_OBS, 40, 2, 15, 5)

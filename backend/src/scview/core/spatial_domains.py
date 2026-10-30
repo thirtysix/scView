@@ -352,35 +352,44 @@ REPLAY_CODE = (delaunay_edges, spatial_graph, aggregate_neighbors, seeded_sample
 # What a run needs
 # ---------------------------------------------------------------------------
 
-# Measured at 2 CPUs; see each number's source in the batch 32 report. One EM iteration costs
-# about _GMM_SECONDS x n x k x dims^2, a fit about _GMM_ITERATIONS of them with its k-means
-# start, and predicting the rows beyond the fitted ones one iteration's worth over them.
+# Measured at 2 CPUs on real slides: Xenium breast (164,000 cells) and Visium HD 16 um (98,917
+# bins), k = 8, 10 PCs, 3 hops: fit 9.2 s and 6.6 s on 50,000; DLPFC (3,639 spots): 0.47 s a fit,
+# 53 s for the default scan. A fit is about _GMM_SECONDS x n x k x dims^2 x _GMM_ITERATIONS with
+# its k-means start (easy synthetic data converges up to 5 times sooner); predicting costs
+# _PREDICT_SECONDS x n x k x dims^2. Graphs and permutations also on 100,000 and 400,000
+# synthetic observations.
 _GMM_SECONDS = 1.0e-9
-_GMM_ITERATIONS = 25
+_GMM_ITERATIONS = 12
 _GMM_FLOOR = 0.05
-_GRAPH_SECONDS_PER_OBS = 1.2e-5
-_RING_SECONDS_PER_OBS = 6e-6  # per hop, on top of the vectors' cost below
-_RING_SECONDS_PER_VALUE = 2e-9  # per obs x dim
-_PERM_SECONDS_PER_LINK = 1.6e-8  # one permutation, per directed link of the graph
-_PERM_SECONDS_PER_OBS = 2.5e-8  # one permutation's shuffle, per observation
-_LINKS_PER_OBS = 6
-_WINDOW_SECONDS_PER_VALUE = 4e-8  # the tree and its queries, per obs x window size
-_KMEANS_SECONDS_PER_VALUE = 3.5e-9  # per obs x labels x niches x start
-BASE_BYTES = 150 * 1024**2  # allocator slack, sklearn's workspace
-_RING_BYTES_PER_OBS = 900  # three hops' sparse rings per observation, freed after the features
-_GRAPH_BYTES_PER_OBS = 250
+_PREDICT_SECONDS = 1.0e-10
+_GRAPH_SECONDS_PER_OBS = 1.1e-5  # Delaunay and its long links
+_GRID_SECONDS_PER_OBS = 4e-6  # the capture grid's kNN
+_RING_SECONDS_PER_OBS = 2e-6  # per hop, Delaunay's rings; a grid's are smaller
+_GRID_RING_SECONDS_PER_OBS = 5e-7
+_PERM_SECONDS_PER_LINK = 9e-9  # one permutation, per directed link of the graph
+_DELAUNAY_LINKS = 6  # links per observation of a Delaunay graph
+_WINDOW_SECONDS_PER_VALUE = 1.8e-7  # the tree and its queries, per obs x window size
+_KMEANS_SECONDS_PER_VALUE = 5e-9  # per obs x labels x niches x start
+# Peak RSS over the start: Delaunay 0.15 GB at 100,000, 0.25 at 164,000 (Xenium), 0.59 at 400,000;
+# grid 0.10 at 98,917 (HD 16 um), 0.40 at 399,424.
+BASE_BYTES = 20 * 1024**2  # allocator slack, sklearn's workspace
+_RING_BYTES_PER_OBS = 950  # three hops' sparse rings per observation, freed after the features
+_GRAPH_BYTES_PER_OBS = 400  # Delaunay's triangles, the links both ways
+_GRID_BYTES_PER_OBS = 850  # a grid's kNN arrays, the links both ways and its smaller rings
 
 
 def fit_seconds(n_obs: int, k: int, dims: int) -> float:
     """One mixture fit and the prediction of the rows beyond the fitted ones."""
     fitted = min(n_obs, MAX_FIT_OBS)
-    one = _GMM_SECONDS * k * dims * dims
-    return one * fitted * _GMM_ITERATIONS + one * max(0, n_obs - fitted) + _GMM_FLOOR
+    cost = k * dims * dims
+    return _GMM_SECONDS * _GMM_ITERATIONS * cost * fitted + _PREDICT_SECONDS * cost * max(0, n_obs - fitted) + _GMM_FLOOR
 
 
-def graph_seconds(n_obs: int, dims: int, n_hops: int) -> float:
-    return (_GRAPH_SECONDS_PER_OBS * n_obs + _RING_SECONDS_PER_OBS * n_obs * n_hops
-            + _RING_SECONDS_PER_VALUE * n_obs * dims)
+def graph_seconds(n_obs: int, n_hops: int, grid: int | None = None) -> float:
+    """The graph and the rings of neighbours."""
+    if grid:
+        return n_obs * (_GRID_SECONDS_PER_OBS + _GRID_RING_SECONDS_PER_OBS * n_hops)
+    return n_obs * (_GRAPH_SECONDS_PER_OBS + _RING_SECONDS_PER_OBS * n_hops)
 
 
 def scan_seconds(n_obs: int, dims: int, k_min: int, k_max: int, repeats: int) -> float:
@@ -389,21 +398,22 @@ def scan_seconds(n_obs: int, dims: int, k_min: int, k_max: int, repeats: int) ->
     return float(sum(fit_seconds(fitted, k, dims) for k in range(max(2, k_min - 1), k_max + 2)) * repeats)
 
 
-def domain_bytes(n_obs: int, dims: int, k: int, n_hops: int) -> int:
+def domain_bytes(n_obs: int, dims: int, k: int, n_hops: int, grid: int | None = None) -> int:
     """What a run holds beyond the dataset: its copies, the features, the rings, the fit."""
     fitted = min(n_obs, MAX_FIT_OBS)
     features = 4 * n_obs * dims
     fit = 8 * fitted * (2 * k + dims) + 8 * k * dims * dims * 2
-    return int(BASE_BYTES + features + fit + n_obs * (_GRAPH_BYTES_PER_OBS + _RING_BYTES_PER_OBS * n_hops / 3))
+    graph = _GRID_BYTES_PER_OBS if grid else _GRAPH_BYTES_PER_OBS + _RING_BYTES_PER_OBS * n_hops / 3
+    return int(BASE_BYTES + features + fit + n_obs * graph)
 
 
-def enrichment_seconds(n_obs: int, n_perms: int = N_PERMS) -> float:
-    per_perm = _PERM_SECONDS_PER_LINK * _LINKS_PER_OBS * n_obs + _PERM_SECONDS_PER_OBS * n_obs
-    return round(_GRAPH_SECONDS_PER_OBS * n_obs + per_perm * n_perms + 0.1, 1)
+def enrichment_seconds(n_obs: int, n_perms: int = N_PERMS, grid: int | None = None) -> float:
+    links = (grid or _DELAUNAY_LINKS) * n_obs
+    return round(graph_seconds(n_obs, 0, grid) + _PERM_SECONDS_PER_LINK * links * n_perms + 0.1, 1)
 
 
 def enrichment_bytes(n_obs: int) -> int:
-    return int(BASE_BYTES + n_obs * (_GRAPH_BYTES_PER_OBS + 16 * _LINKS_PER_OBS + 24))
+    return int(BASE_BYTES + 220 * n_obs)  # the links' row and column numbers, two label arrays
 
 
 def niche_seconds(n_obs: int, n_labels: int, k_window: int, n_niches: int) -> float:
@@ -632,9 +642,9 @@ def plan_domains(adata, *, k: int | None = DEFAULT_K, n_hops: int = DEFAULT_HOPS
         n_pcs_available=width, n_hops=int(n_hops), dims=dims, k=int(k) if k is not None else None, k_min=int(k_min),
         k_max=int(k_max), repeats=int(repeats), seed=int(seed), column=column, overwrite=bool(overwrite), n_fit=fitted,
         grid=grid, graph=_graph_text(grid), notes=notes,
-        estimate_seconds=round(graph_seconds(n, dims, int(n_hops)) + fit_seconds(n, k_used, dims), 1),
+        estimate_seconds=round(graph_seconds(n, int(n_hops), grid) + fit_seconds(n, k_used, dims), 1),
         estimate_scan_seconds=round(scan_seconds(n, dims, int(k_min), int(k_max), int(repeats)), 1),
-        estimate_bytes=domain_bytes(n, dims, k_used if k is not None else int(k_max) + 1, int(n_hops)),
+        estimate_bytes=domain_bytes(n, dims, k_used if k is not None else int(k_max) + 1, int(n_hops), grid),
     )
 
 
@@ -941,7 +951,7 @@ def plan_enrichment(adata, column: str, n_perms: int = N_PERMS, seed: int = SEED
         notes.append(f"{adata.n_obs - n_labelled:,} {unit}(s) without a label are left out.")
     return EnrichmentPlan(n_obs=int(adata.n_obs), n_labelled=n_labelled, unit=unit, column=column, labels=labels,
                           n_perms=int(n_perms), seed=int(seed), grid=grid, graph=_graph_text(grid), notes=notes,
-                          estimate_seconds=enrichment_seconds(n_labelled, int(n_perms)),
+                          estimate_seconds=enrichment_seconds(n_labelled, int(n_perms), grid),
                           estimate_bytes=enrichment_bytes(int(adata.n_obs)))
 
 

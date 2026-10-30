@@ -117,7 +117,8 @@ async def get_domains(
             "free_column": sd.free_column(adata, sd.DOMAIN_COLUMN, k),
             "free_niche_column": sd.free_column(adata, sd.NICHE_COLUMN, sd.DEFAULT_NICHES),
             "niches_allowed": sd.niches_allowed(adata) if positions else {"ok": False, "reason": None, "note": None},
-            "estimates": {"enrichment_seconds": sd.enrichment_seconds(int(adata.n_obs)),
+            "estimates": {"enrichment_seconds": sd.enrichment_seconds(
+                              int(adata.n_obs), grid=sd.grid_neighbours(adata) if positions else None),
                           "enrichment_bytes": sd.enrichment_bytes(int(adata.n_obs))},
             "domains": sd.domains_summary(adata, fp),
             "niches": sd.niches_summary(adata, fp),
