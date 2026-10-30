@@ -136,6 +136,7 @@ _RESULT_FACET_HINTS = {
         "perturb", "mixscape", "ligand", "receptor", "communicat", "composition", "proportion",
         "de audit", "donor shuffle", "deconvol", "bulk", "spot composition", "spots", "spot deconv",
         "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
+        "spatial domain", "domains", "niche", "nhood", "stability scan",
     ),
     "markers": ("gene program", "programs", "nmf"),
     "qc": ("targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts",

@@ -14,6 +14,9 @@ const NAMED: Record<string, string> = {
   learned_gate_apply: "Learned gate applied",
   wnn: "Joint RNA + protein (WNN)",
   spot_deconvolution: "Spot composition (cell types per spot)",
+  spatial_domains: "Spatial domains",
+  spatial_niches: "Composition niches",
+  nhood_enrichment: "Neighbourhood enrichment",
 };
 
 /** A pipeline step id as a label: words spaced, first letter capital, abbreviations in capitals. */

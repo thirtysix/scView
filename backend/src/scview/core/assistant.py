@@ -239,6 +239,26 @@ def _add_spatial_genes(adaptor, lines: list[str], sources: list[ChatSource]) -> 
                                   evidence="\n".join(sv_lines[1:])))
 
 
+def _add_spatial_domains(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved spatial domains, niches and neighbourhood enrichment
+    (core/spatial_domains.py): k, per-domain counts, stability; only when they fit."""
+    from scview.core import spatial_domains
+
+    try:
+        adata = adaptor.adata
+        if spatial_domains.has_spatial(adata):
+            sd_lines, sd_detail = spatial_domains.grounding_lines(adata)
+        else:
+            sd_lines, sd_detail = [], ""
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: spatial domains failed: %s", exc)
+        return
+    if sd_lines:
+        lines.extend(sd_lines)
+        sources.append(ChatSource(kind="result", ref=spatial_domains.TAG, detail=sd_detail,
+                                  evidence="\n".join(sd_lines[1:])))
+
+
 def _add_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last bulk deconvolution (core/deconvolution.py): the largest cell fraction per
     bulk sample, only once one has run on this dataset."""
@@ -894,6 +914,7 @@ def build_grounding_context(
         _add_programs(adaptor, lines, sources)
         _add_wnn(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
+        _add_spatial_domains(adaptor, lines, sources)
         _add_deconvolution(adaptor, lines, sources)
         _add_learned_gate(adaptor, lines, sources)
         _add_spot_deconvolution(adaptor, lines, sources)

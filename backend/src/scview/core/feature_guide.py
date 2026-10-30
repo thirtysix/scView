@@ -89,6 +89,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Perturbation", "CRISPR, Mixscape", "CRISPR guide calls, Mixscape"),
     ("Unified View > Spatial genes", "Moran's I",
      "spatially variable genes (Moran's I) on Visium spots or imaging cells; click a gene to colour the tissue"),
+    ("Unified View > Domains", "niches",
+     "spatial domains (clustering that sees each spot's or cell's neighbours; k chosen or suggested by stability), "
+     "neighbourhood enrichment between labels, composition niches; colours the tissue"),
     ("Unified View > Traits", "GWAS",
      "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
     ("Unified View > Deconvolution", "bulk RNA-seq",

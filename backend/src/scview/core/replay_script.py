@@ -1234,6 +1234,32 @@ _HELPER_ORDER += ("spot_deconvolution",)
 _HELPER_NEEDS["spot_deconvolution"] = ("looks_like_counts",)
 
 
+def _spatial_domains_helper() -> str:
+    """core/spatial_domains.py's graph, features, mixture, enrichment and niches (numpy,
+    scipy, pandas, sklearn), copied so the script finds them as scView did."""
+    import inspect
+
+    from scview.core import spatial_domains as sd
+
+    lines = ["from scipy.spatial import Delaunay, QhullError", "from sklearn.cluster import KMeans",
+             "from sklearn.mixture import GaussianMixture"]
+    for obj in sd.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def spatial_sections(adata):
+    """Each observation's section (the whole dataset as one when none is recorded)."""
+    if "library_id" in adata.obs.columns:
+        return adata.obs["library_id"].astype(str).to_numpy()
+    return np.full(adata.n_obs, "", dtype=object)
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["spatial_domains"] = _spatial_domains_helper()
+_HELPER_ORDER += ("spatial_domains",)
+_HELPER_NEEDS["spatial_domains"] = ("spatial_autocorr",)  # knn_edges
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -2833,6 +2859,72 @@ def _spatial_autocorr(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+def _spatial_domains(p: dict, ctx: _Ctx) -> Snippet:
+    """Spatial domains (core/spatial_domains.py) at the k the run ended on; no scan: the
+    stability curve only advised on k."""
+    column, k, rep, n_pcs, n_hops, seed = (p.get(x) for x in ("column", "k", "rep", "n_pcs", "n_hops", "seed"))
+    grid = p.get("grid_neighbours")
+    if (not isinstance(column, str) or not isinstance(k, int) or not isinstance(rep, str) or not isinstance(n_pcs, int)
+            or not isinstance(n_hops, int) or not isinstance(seed, int)):
+        return Snippet(NOT_REPLAYABLE, ["# Spatial domains: settings not recorded. Recorded:", *_param_comment(p)],
+                       "settings not recorded")
+    _need(ctx, "spatial_domains")
+    return Snippet(EXACT, [
+        f"# Spatial domains (CellCharter's method, Varrone et al. 2024): k = {k} on the first {n_pcs} components of "
+        f"{comment_text(rep, 40)}, {n_hops} hops.",
+        f"adj = spatial_graph(np.asarray(adata.obsm[\"spatial\"])[:, :2], spatial_sections(adata), {_lit(grid)})",
+        f"features = aggregate_neighbors(adj, np.asarray(adata.obsm[{_lit(rep)}])[:, :{n_pcs}], {n_hops})",
+        f"domains, _ = fit_domains(features, {k}, {seed})",
+        f"adata.obs[{_lit(column)}] = pd.Categorical.from_codes(domains, categories=[str(i) for i in range({k})])",
+    ])
+
+
+def _nhood_enrichment(p: dict, ctx: _Ctx) -> Snippet:
+    """Neighbourhood enrichment (core/spatial_domains.py, = squidpy's), saved where squidpy saves it."""
+    from scview.core.spatial_domains import squidpy_key
+
+    column, labels, n_perms, seed = (p.get(x) for x in ("column", "labels", "n_perms", "seed"))
+    if (not isinstance(column, str) or not isinstance(labels, list) or len(labels) < 2 or not isinstance(n_perms, int)
+            or not isinstance(seed, int)):
+        return Snippet(NOT_REPLAYABLE, ["# Neighbourhood enrichment: settings not recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items() if x != "labels"})],
+                       "settings not recorded")
+    _need(ctx, "spatial_domains")
+    return Snippet(EXACT, [
+        f"# Neighbourhood enrichment of {comment_text(column, 60)}, {n_perms} permutations (= squidpy's "
+        "nhood_enrichment); the same seed gives the same z here.",
+        f"codes = pd.Categorical(adata.obs[{_lit(column)}].astype(str), categories={_lit([str(x) for x in labels])}).codes",
+        "keep = codes >= 0",
+        f"adj = spatial_graph(np.asarray(adata.obsm[\"spatial\"])[:, :2], spatial_sections(adata), {_lit(p.get('grid_neighbours'))})",
+        f"z, count = nhood_enrichment(adj[keep][:, keep], codes[keep], {len(labels)}, spatial_sections(adata)[keep], "
+        f"{n_perms}, {seed})",
+        f"adata.uns[{_lit(squidpy_key(column))}] = {{\"zscore\": z, \"count\": count}}",
+    ])
+
+
+def _spatial_niches(p: dict, ctx: _Ctx) -> Snippet:
+    """Composition niches (core/spatial_domains.py; Schurch et al. 2020)."""
+    column, label, labels, window, n, seed = (p.get(x) for x in ("column", "label_column", "labels", "k_window",
+                                                                 "n_niches", "seed"))
+    if (not isinstance(column, str) or not isinstance(label, str) or not isinstance(labels, list) or len(labels) < 2
+            or not isinstance(window, int) or not isinstance(n, int) or not isinstance(seed, int)):
+        return Snippet(NOT_REPLAYABLE, ["# Composition niches: settings not recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items() if x != "labels"})],
+                       "settings not recorded")
+    _need(ctx, "spatial_domains")
+    return Snippet(EXACT, [
+        f"# Composition niches (Schurch et al. 2020): k-means on the {comment_text(label, 60)} fractions among each "
+        f"observation's {window} nearest, {n} niches.",
+        f"codes = pd.Categorical(adata.obs[{_lit(label)}].astype(str), categories={_lit([str(x) for x in labels])}).codes",
+        "keep = codes >= 0",
+        f"fractions = window_fractions(np.asarray(adata.obsm[\"spatial\"])[:, :2][keep], codes[keep], {len(labels)}, "
+        f"spatial_sections(adata)[keep], {window})",
+        "niches = np.full(adata.n_obs, -1, dtype=np.int32)",
+        f"niches[keep] = fit_niches(fractions, {n}, {seed})",
+        f"adata.obs[{_lit(column)}] = pd.Categorical.from_codes(niches, categories=[str(i) for i in range({n})])",
+    ])
+
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -2888,6 +2980,9 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "learned_gate_apply": _learned_gate_apply,
     "wnn": _wnn,
     "spot_deconvolution": _spot_deconvolution,
+    "spatial_domains": _spatial_domains,
+    "nhood_enrichment": _nhood_enrichment,
+    "spatial_niches": _spatial_niches,
     "run_errors": _run_errors,
     "doublet_detection_skipped": _step_skipped,
 }
