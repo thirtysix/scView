@@ -594,13 +594,15 @@ class TrainInput:
     warnings: list[str] = field(default_factory=list)
 
 
-def prepare(adata, cells: Any, *, expression: Callable[[Any], tuple[Any, pd.DataFrame, str]],
+def prepare(adata, cells: Any, *, expression: Callable[[Any, np.ndarray], tuple[Any, pd.DataFrame, str]],
             sample_column: str | None = None, condition_column: str | None = None,
             exclude_cc_stress: bool = True, negatives: str = "own_samples") -> TrainInput:
     """Decode the selection, pick the negatives and the candidate genes, and copy out the
     training matrix. ``sample_column`` / ``condition_column``: None picks one, "" none.
-    ``expression(adata)`` gives the log-normalised matrix, its var and where it came from
-    (``label_transfer.expression_of``)."""
+    ``expression(adata, rows)`` gives the log-normalised values of the training cells
+    (``rows``, sorted positions; a large dataset reads only those) or of every cell
+    (``label_transfer.expression_of``), their var and where they came from. The cells
+    are picked before any value is read."""
     from scview.core.selection_facts import decode_cells, selection_hash
     from scview.core.species import detect_species
 
@@ -647,23 +649,25 @@ def prepare(adata, cells: Any, *, expression: Callable[[Any], tuple[Any, pd.Data
     rng = np.random.default_rng(SEED)
     pos = _subsample(np.flatnonzero(in_sel), keys, MAX_POS, rng)
     neg = _subsample(np.flatnonzero(pool), keys, MAX_NEG, rng)
-    X, var, source = expression(adata)
-    X = sp.csr_matrix(X)
-    if X.shape[0] != n_obs:
-        raise LearnedGateError("The expression matrix does not match the cells.", 500)
-    names = pd.Index(var.index.astype(str))
-    species = detect_species(adata).species
-    excl = excluded_genes(names, species, exclude_cc_stress)
-    cand = candidates(X, pos, neg, excl)
-    cols = cand["cols"]
-    if cols.size < 2:
-        raise LearnedGateError("No gene differs between the selection and the cells around it (detected in "
-                               f">= {MIN_DETECT:.0%} of either): there is nothing to learn the gate from.")
     rows = np.concatenate([pos, neg])
     order = np.argsort(rows, kind="stable")
     rows = rows[order]
     y = np.concatenate([np.ones(pos.size, np.int8), np.zeros(neg.size, np.int8)])[order]
-    Xt = X[rows][:, cols].toarray().astype(np.float32)
+    X, var, source = expression(adata, rows)
+    X = sp.csr_matrix(X)
+    if X.shape[0] == n_obs:
+        X = X[rows]  # the same rows as a reader of the rows alone gives
+    elif X.shape[0] != rows.size:
+        raise LearnedGateError("The expression matrix does not match the cells.", 500)
+    names = pd.Index(var.index.astype(str))
+    species = detect_species(adata).species
+    excl = excluded_genes(names, species, exclude_cc_stress)
+    cand = candidates(X, np.searchsorted(rows, pos), np.searchsorted(rows, neg), excl)
+    cols = cand["cols"]
+    if cols.size < 2:
+        raise LearnedGateError("No gene differs between the selection and the cells around it (detected in "
+                               f">= {MIN_DETECT:.0%} of either): there is nothing to learn the gate from.")
+    Xt = X[:, cols].toarray().astype(np.float32)
     gene_ids = None
     for c in ("gene_ids", "gene_id", "ensembl_id"):
         if c in var.columns:
@@ -1051,13 +1055,20 @@ def gate_dict(gate: LearnedGate) -> dict[str, Any]:
     return json.loads(gate.model_dump_json())
 
 
-def score_cells(gate: LearnedGate, X: sp.csr_matrix, names: pd.Index, gm: GeneMap) -> tuple[np.ndarray, np.ndarray]:
-    """The gate on a log-normalised matrix (cells x ``names``): score and in/out."""
-    pos = names.get_indexer([t if t is not None else "\0missing" for t in gm.target])
+def target_positions(gm: GeneMap, names: pd.Index) -> np.ndarray:
+    """Per gate gene, its column in a matrix of ``names`` (-1: missing)."""
+    return names.get_indexer([t if t is not None else "\0missing" for t in gm.target])
+
+
+def score_cells(gate: LearnedGate, X: Any, names: pd.Index, gm: GeneMap) -> tuple[np.ndarray, np.ndarray]:
+    """The gate on a log-normalised matrix (cells x ``names``): score and in/out. ``X`` can
+    also be a callable with a ``shape`` giving the matrix's columns at some positions (a
+    large dataset's, from one pass over its counts: ``label_transfer.lognorm_columns``)."""
+    pos = target_positions(gm, names)
     out = np.full((X.shape[0], len(gate.genes)), np.nan, dtype=np.float32)
     have = np.flatnonzero(pos >= 0)
     if have.size:
-        out[:, have] = sp.csr_matrix(X)[:, pos[have]].toarray()
+        out[:, have] = (X(pos[have]) if callable(X) else sp.csr_matrix(X)[:, pos[have]]).toarray()
     return lg_apply(out, gate_dict(gate))
 
 
@@ -1076,28 +1087,84 @@ def _natural(s: str) -> list:
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
 
 
-def apply(adata, gate: LearnedGate, *, X: sp.csr_matrix, var: pd.DataFrame, source: str,
-          dataset_id: str | None, sample_column: str | None = None, ortholog_table: pd.DataFrame | None = None,
-          isg_genes: set[str] | None = None) -> dict[str, Any]:
-    """Score every cell and write obs ``gate_<slug>`` ("in"/"out") and ``gate_<slug>_score``,
-    record the step, and return the result (counts, per sample, coverage, warnings).
-    ``X``/``var``: the dataset's log-normalised values (``label_transfer.expression_of``)."""
-    from scview.core import provenance
-    from scview.core.obs_writes import forget_column_results
+# A large dataset (core/large_mode.py) is read from its counts file (gzip CSR, cell-major):
+# applying reads every stored value once (``label_transfer.lognorm_columns``), training the
+# rows of its cells (``lognorm_rows``, a few capped reads). Measured on 2 cores, 200k cells
+# x 1,935 values: the pass 4.4e-8 s a value (17 s), 30k training rows 8.4 s, 1.9 GB.
+# The gene store's X is not used: scanpy's normalize_total rounds 11% of values 1-2 ulp
+# away from lt_lognorm (Kang), which can move a cell across the threshold.
+LARGE_SECONDS_PER_VALUE = 4.5e-8  # a pass: decompress, float32, totals, the gate's columns
+LARGE_SECONDS_PER_ROW = 2e-4  # a training row read on its own (a chunk decompressed for it)
+LARGE_READ_BYTES_PER_VALUE = 48  # a training sample: read, stacked, log-normalised, split
+LARGE_APPLY_BYTES_PER_VALUE = 40  # per cell x gate gene: the values, the scaled copy, float64
+N_CANDIDATES = N_UP + N_DOWN  # per ranking; the near negatives add as many again at most
 
+
+def large_estimate(counts, *, train: bool = False) -> dict[str, Any]:
+    """What applying a gate to (or with ``train`` training one on) a large dataset reads
+    from its counts file (an ``OnDiskMatrix``): seconds, peak bytes, and a note for the UI."""
+    from scview.core import large_mode
+
+    n_cells = int(counts.shape[0])
+    n_values = int(counts.group["indptr"][-1])
+    per_cell = n_values / max(n_cells, 1)
+    block = large_mode.MAX_READ_BYTES // 32 * LARGE_READ_BYTES_PER_VALUE
+    if train:
+        rows = min(n_cells, MAX_POS + MAX_NEG)
+        seconds = rows * LARGE_SECONDS_PER_ROW + rows * per_cell * LARGE_SECONDS_PER_VALUE
+        peak = int(rows * per_cell * LARGE_READ_BYTES_PER_VALUE + rows * 2 * N_CANDIDATES * 4 * 3)
+        what = f"training reads the counts of up to {rows:,} cells from its counts file"
+    else:
+        seconds = n_values * LARGE_SECONDS_PER_VALUE
+        peak = int(block + n_cells * MAX_GENES * LARGE_APPLY_BYTES_PER_VALUE)
+        what = f"applying reads its counts file once ({n_cells:,} cells)"
+    wait = f"about {max(1, round(seconds / 60))} min" if seconds >= 90 else f"about {max(1, round(seconds))} s"
+    return {"seconds": round(seconds, 1), "peak_bytes": peak, "note": f"Large dataset: {what}, {wait}."}
+
+
+def _applicable(gate: LearnedGate, adata, var: pd.DataFrame, *, dataset_id: str | None = None,
+                ortholog_table: pd.DataFrame | None = None,
+                isg_genes: set[str] | None = None) -> tuple[dict[str, Any], GeneMap]:
+    """``check`` and the gene map, raising ``LearnedGateError`` when ``apply`` would refuse
+    (too few genes, or its columns taken by a column no learned gate wrote)."""
     rep = check(gate, adata, dataset_id=dataset_id, ortholog_table=ortholog_table, isg_genes=isg_genes,
                 target_var=var)
     if not rep["ok"]:
         raise LearnedGateError(rep["refusal"] or "The gate cannot be applied here.")
-    gm = map_genes(gate, var, rep["species"], ortholog_table)
-    names = pd.Index(var.index.astype(str))
-    score, inside = score_cells(gate, X, names, gm)
+    record = adata.uns.get(UNS_KEY) or {}
     col, score_col = column_names(gate.name)
-    record = dict(adata.uns.get(UNS_KEY) or {})
     for c in (col, score_col):
         if c in adata.obs.columns and col not in record:
             raise LearnedGateError(f"This dataset already has a column '{c}' that no learned gate wrote; "
                                    "rename the gate (or the column) first.", 409)
+    return rep, map_genes(gate, var, rep["species"], ortholog_table)
+
+
+def columns_read(gate: LearnedGate, adata, var: pd.DataFrame, **kw: Any) -> np.ndarray:
+    """The columns of ``var`` that ``apply`` reads (the gate's genes found here), or
+    ``LearnedGateError`` as ``apply`` raises it: a large dataset reads them from its counts
+    before the edit lock is taken."""
+    _rep, gm = _applicable(gate, adata, var, **kw)
+    pos = target_positions(gm, pd.Index(var.index.astype(str)))
+    return pos[pos >= 0]
+
+
+def apply(adata, gate: LearnedGate, *, X: Any, var: pd.DataFrame, source: str,
+          dataset_id: str | None, sample_column: str | None = None, ortholog_table: pd.DataFrame | None = None,
+          isg_genes: set[str] | None = None) -> dict[str, Any]:
+    """Score every cell and write obs ``gate_<slug>`` ("in"/"out") and ``gate_<slug>_score``,
+    record the step, and return the result (counts, per sample, coverage, warnings).
+    ``X``/``var``: the dataset's log-normalised values (``label_transfer.expression_of``), or
+    a callable giving their columns (``score_cells``)."""
+    from scview.core import provenance
+    from scview.core.obs_writes import forget_column_results
+
+    rep, gm = _applicable(gate, adata, var, dataset_id=dataset_id, ortholog_table=ortholog_table,
+                          isg_genes=isg_genes)
+    names = pd.Index(var.index.astype(str))
+    score, inside = score_cells(gate, X, names, gm)
+    col, score_col = column_names(gate.name)
+    record = dict(adata.uns.get(UNS_KEY) or {})
     replaced = col in record
     if replaced:
         forget_column_results(adata, col)

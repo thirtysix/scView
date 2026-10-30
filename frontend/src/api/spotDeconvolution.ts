@@ -86,7 +86,14 @@ export interface SpotReferenceCheck {
   dataset_species?: string;
   shared_genes_by_name?: number;
   min_shared_genes?: number;
-  estimate?: { peak_bytes: number; seconds: number; seconds_range: [number, number]; note: string };
+  estimate?: {
+    peak_bytes: number;
+    seconds: number;
+    seconds_range: [number, number];
+    note: string;
+    // A large dataset (matrices on disk): its counts are read from disk in one pass.
+    large_reference?: boolean;
+  };
 }
 
 export interface SpotCheckRun {

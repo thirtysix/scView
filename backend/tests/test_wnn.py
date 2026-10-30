@@ -145,6 +145,122 @@ def test_bandwidth_scores_and_joint_neighbours_match_seurat_s_loops():
     np.testing.assert_allclose(dist, ref_dist, rtol=1e-10, atol=1e-12)
 
 
+def _two_modalities(n=420, seed=5):
+    rng = np.random.default_rng(seed)
+    g = rng.integers(0, 6, n)
+    rna = rng.normal(scale=3.0, size=(6, 12))[g] + rng.normal(size=(n, 12))
+    prot = rng.normal(scale=3.0, size=(3, 5))[g // 2] + rng.normal(size=(n, 5))
+    return rna, prot
+
+
+def test_the_stages_in_chunks_give_the_unchunked_answer_bit_for_bit():
+    # Every stage that runs block by block (candidates, scores, joint neighbours) gives what
+    # one block of every cell gives: ==, not a tolerance.
+    rna, prot = _two_modalities(1100)
+    n, K, k = rna.shape[0], 60, 20
+    R, P = wnn.l2_rows(rna), wnn.l2_rows(prot)
+    ix_r, ix_p = wnn.knn_index(R), wnn.knn_index(P)
+    whole_r = wnn.knn_query(ix_r, 0, n, K)
+    whole_p = wnn.knn_query(ix_p, 0, n, K)
+    parts = [wnn.knn_query(ix_r, s, min(n, s + 512), K) for s in range(0, n, 512)]
+    assert np.array_equal(np.concatenate([p[0] for p in parts]), whole_r[0])
+    assert np.array_equal(np.concatenate([p[1] for p in parts]), whole_r[1])
+    assert (whole_r[0][:, 0] == np.arange(n)).all()
+
+    nn_r, c_r = wnn._first_neighbours(ix_r, K, k, 512)
+    nn_p, c_p = wnn._first_neighbours(ix_p, K, k, 10**6)
+    assert np.array_equal(nn_r, whole_r[0][:, :k]) and np.array_equal(c_r, whole_r[1][:, 1])
+    sig_r, sig_p = wnn.snn_bandwidth(R, nn_r, c_r, k), wnn.snn_bandwidth(P, nn_p, c_p, k)
+    # A few rows at a time (a hub's row alone), or every cell at once: the same bits.
+    assert np.array_equal(wnn.snn_bandwidth(R, nn_r, c_r, k, chunk=7, max_values=64), sig_r)
+    assert np.array_equal(wnn.snn_bandwidth(R, nn_r, c_r, k, chunk=n, max_values=1 << 40), sig_r)
+    s_one = wnn.modality_scores(R, nn_r, nn_p, c_r, sig_r, chunk=10**6)
+    assert np.array_equal(wnn.modality_scores(R, nn_r, nn_p, c_r, sig_r, chunk=37), s_one)
+    w_r, w_p = wnn.modality_weights(s_one, wnn.modality_scores(P, nn_p, nn_r, c_p, sig_p))
+
+    args = ((R, P), (c_r, c_p), (sig_r, sig_p), (w_r, w_p))
+    one = wnn.joint_knn(args[0], (whole_r[0], whole_p[0]), *args[1:], k)
+    blocks = [wnn.joint_knn(args[0], (whole_r[0][s:s + 100], whole_p[0][s:s + 100]), *args[1:], k, first=s)
+              for s in range(0, n, 100)]
+    assert np.array_equal(np.concatenate([b[0] for b in blocks]), one[0])
+    assert np.array_equal(np.concatenate([b[1] for b in blocks]), one[1])
+
+    # The whole method: blocks of 512 cells against one block of every cell.
+    a = wnn.wnn_neighbors(rna, prot, k, K)
+    steps = wnn.wnn_steps(rna, prot, k, K, block=512)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            b = done.value
+            break
+    assert a.keys() == b.keys()
+    for key in a:
+        assert np.array_equal(a[key], b[key]), key
+    assert np.array_equal(a["idx"], one[0]) and np.array_equal(a["dist"], one[1])
+
+
+def test_the_chunked_method_is_the_one_cell_matrix_method_it_replaced():
+    # The v0.49.0 code held every cell's candidates and computed the scores and joint
+    # neighbours over all cells at once; with exact neighbours the chunked code is that.
+    rna, prot = _two_modalities(300, seed=8)
+    K, k = 50, 20
+    R, P = wnn.l2_rows(rna), wnn.l2_rows(prot)
+    nn_r, d_r = wnn.knn(R, K)
+    nn_p, d_p = wnn.knn(P, K)
+    c_r, c_p = d_r[:, 1], d_p[:, 1]
+    sig_r = wnn.snn_bandwidth(R, nn_r[:, :k], c_r, k)
+    sig_p = wnn.snn_bandwidth(P, nn_p[:, :k], c_p, k)
+
+    def scores(X, own, other, c, s):  # the old one-shot form
+        within, cross = X[own[:, 1:]].mean(axis=1), X[other[:, 1:]].mean(axis=1)
+        dw = np.maximum(np.sqrt(((X - within) ** 2).sum(axis=1)) - c, 0)
+        dc = np.maximum(np.sqrt(((X - cross) ** 2).sum(axis=1)) - c, 0)
+        s = np.maximum(s, np.finfo(np.float32).eps)
+        return np.clip(np.exp(-dw / s) / (np.exp(-dc / s) + 1e-4), 0, 200.0)
+
+    s_r = scores(R, nn_r[:, :k], nn_p[:, :k], c_r, sig_r)
+    s_p = scores(P, nn_p[:, :k], nn_r[:, :k], c_p, sig_p)
+    w_r, w_p = wnn.modality_weights(s_r, s_p)
+    idx, dist = wnn.joint_knn((R, P), (nn_r, nn_p), (c_r, c_p), (sig_r, sig_p), (w_r, w_p), k)
+    out = wnn.wnn_neighbors(rna, prot, k, K)
+    assert np.array_equal(out["score_rna"], s_r) and np.array_equal(out["rna_weight"], w_r)
+    assert np.array_equal(out["idx"], idx) and np.array_equal(out["dist"], dist)
+
+
+def test_pynndescent_queries_repeat_block_by_block():
+    # Above exact_max cells the candidates come from one pynndescent index queried in
+    # fixed blocks: a block queried again (the joint stage asks a second time) gives the
+    # same neighbours, and a second index built with the same seed the same again.
+    rna, prot = _two_modalities(900, seed=2)
+    R = wnn.l2_rows(rna)
+    ix = wnn.knn_index(R, exact_max=0)
+    assert ix["nnd"] is not None
+    first = [wnn.knn_query(ix, s, min(900, s + 256), 60) for s in range(0, 900, 256)]
+    again = [wnn.knn_query(ix, s, min(900, s + 256), 60) for s in range(0, 900, 256)]
+    for (i1, d1), (i2, d2) in zip(first, again):
+        assert np.array_equal(i1, i2) and np.array_equal(d1, d2)
+    idx = np.concatenate([f[0] for f in first])
+    assert (idx[:, 0] == np.arange(900)).all()
+    exact, _ = wnn.knn(R, 60)
+    recall = np.mean([len(set(a) & set(b)) / 60 for a, b in zip(idx, exact)])
+    assert recall > 0.98, recall
+    a = wnn.wnn_neighbors(rna, prot, 20, 60, exact_max=0)
+    steps = wnn.wnn_steps(rna, prot, 20, 60, exact_max=0, block=256)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            b = done.value
+            break
+    a2 = wnn.wnn_neighbors(rna, prot, 20, 60, exact_max=0)
+    for key in a:
+        assert np.array_equal(a[key], a2[key]), key  # the same seed, the same run
+    # Other block boundaries draw other random starting points: the answers are close, and
+    # the run always uses the same boundaries (``block``), so it is the same run.
+    assert np.mean(a["idx"] == b["idx"]) > 0.95
+
+
 def test_a_tiny_case_by_hand():
     # Three cells on a line (1D, not normalised): 0 at 0, 1 at 1, 2 at 3. k = 2.
     X = np.array([[0.0], [1.0], [3.0]])
@@ -252,6 +368,28 @@ def test_the_plan_drops_controls_and_counts_cells_without_antibodies(ran):
     assert any("Only 8 proteins" in w for w in p.warnings)
     d = p.to_dict()
     assert d["estimate_seconds"] > 0 and d["n_proteins"] == 8
+    assert d["estimate_bytes"] == wnn.estimate_bytes(p.n_cells, 10, 7)
+
+
+def test_the_estimates_grow_with_the_cells_and_name_a_slow_leiden():
+    from dataclasses import replace
+
+    from scview.core import preflight
+
+    # pbmc10k measured 79 s for a first run; 1.3M cells: two UMAPs and Leiden dominate.
+    assert 60 < wnn.estimate_seconds(7_798) < 100
+    big, fast = wnn.estimate_seconds(1_300_000, -1), wnn.estimate_seconds(1_300_000, 2)
+    assert big - fast == pytest.approx(preflight.leiden_seconds(1_300_000, -1)
+                                       - preflight.leiden_seconds(1_300_000, 2), abs=1)
+    assert fast > 2 * preflight.umap_seconds(1_300_000, three_d=False)
+    # Memory: the libraries plus a per-cell share; never the 200 candidates of every cell.
+    small, large = wnn.estimate_bytes(7_798), wnn.estimate_bytes(1_300_000)
+    assert small < 1.0 * 2**30 and large < 30 * 2**30 and large > 100 * small / 20
+    p = wnn.plan(_cite(n_per=20))
+    assert p.warning_for_leiden() is None  # 80 cells
+    slow = replace(p, n_cells=1_300_000, n_iterations=-1)
+    assert "until it converges" in slow.warning_for_leiden()
+    assert replace(slow, n_iterations=2).warning_for_leiden() is None
 
 
 def test_too_few_proteins_or_no_protein_is_refused():
@@ -312,6 +450,7 @@ def test_save_stores_everything_and_a_later_change_makes_it_stale(ran):
     assert step["params"]["panel"] == p.proteins + CONTROLS
     info = json.loads(a.uns[wnn.UNS_KEY])
     assert info["plan"]["d_protein"] == 7 and "Hao et al. 2021" in info["method"]
+    assert "estimate_seconds" not in info["plan"] and "estimate_bytes" not in info["plan"]
 
     s = wnn.summary(a, "group", cells_fingerprint="fp")
     assert [r["group"] for r in s["by_group"]["rows"]] == ["g0", "g1", "g2", "g3"]

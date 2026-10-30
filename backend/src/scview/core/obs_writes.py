@@ -124,10 +124,12 @@ def editable(adaptor):
 
 
 def save_edit(adaptor, adata, output_path: str, uns_before: dict[str, int] | None = None,
-              obsm_keys: tuple[str, ...] | list[str] | None = ()) -> None:
-    """Save an obs / uns (/ obsm) edit of ``editable(adaptor)``: ``write_derived``, or for
-    a large dataset its obs, the uns entries the edit replaced or removed and
-    ``obsm_keys`` written into its derived h5ad in place, X neither read nor copied."""
+              obsm_keys: tuple[str, ...] | list[str] | None = (),
+              obsp_keys: tuple[str, ...] | list[str] | None = ()) -> None:
+    """Save an obs / uns (/ obsm / obsp) edit of ``editable(adaptor)``: ``write_derived``,
+    or for a large dataset its obs, the uns entries the edit replaced or removed,
+    ``obsm_keys`` and ``obsp_keys`` written into its derived h5ad in place, X neither
+    read nor copied."""
     if getattr(adaptor, "is_large", False):
         from scview.core import large_mode
         from scview.core.dataset_manager import large_derived
@@ -135,9 +137,9 @@ def save_edit(adaptor, adata, output_path: str, uns_before: dict[str, int] | Non
         large_derived(adaptor, output_path)
         changed, removed = large_mode.changed_uns(adata, uns_before)
         adaptor.write_in_place(obs=True, uns_keys=changed, uns_removed=removed,
-                               obsm_keys=list(obsm_keys or ()))
+                               obsm_keys=list(obsm_keys or ()), obsp_keys=list(obsp_keys or ()))
         return
-    write_derived(adata, output_path, adaptor.h5ad_path, uns_before, obsm_keys)
+    write_derived(adata, output_path, adaptor.h5ad_path, uns_before, obsm_keys, obsp_keys)
 
 
 def uns_snapshot(adata) -> dict[str, int]:

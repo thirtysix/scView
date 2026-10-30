@@ -250,6 +250,12 @@ export function SpotCompositionSubtab() {
                 {check.estimate &&
                   ` Needs ${aboutGb(check.estimate.peak_bytes)}, ${check.estimate.note} (${check.estimate.seconds_range[0]}-${check.estimate.seconds_range[1]} s).`}
               </p>
+              {check.estimate?.large_reference && (
+                <p data-testid="spot-large-reference">
+                  The reference is a large dataset: its counts are read from disk in blocks of cells, one pass (two for
+                  the self-check), never all at once.
+                </p>
+              )}
               {small.length > 0 && (
                 <p className="text-amber-700">
                   Left out (fewer than {info.min_type_cells} cells): {small.map((t) => `${t.type} (${t.n_cells})`).join(", ")}.

@@ -12,6 +12,10 @@ takes one, ``DELETE /learned-gates/{gid}`` removes it.
 coverage and warnings without writing; ``.../apply`` writes obs ``gate_<name>`` (in /
 out) and ``gate_<name>_score`` under the dataset's edit lock.
 
+A large dataset (core/large_mode.py) is read from its counts file: training reads the
+training cells' rows only, applying the gate's genes for every cell in one pass by row
+blocks (before the edit lock is taken); both give the values the dataset in memory gives.
+
 A client that goes away (the Cancel button) stops training after the fit it is on.
 """
 
@@ -48,7 +52,6 @@ _drafts: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _MAX_DRAFTS = 16
 
 _WHAT = "Learned gates"
-_WHY = "they read every cell's values into memory"
 
 
 class TrainRequest(BaseModel):
@@ -84,12 +87,39 @@ def _http(e: lg.LearnedGateError) -> HTTPException:
 def _expression(fallback: list[str]):
     from scview.core.label_transfer import LabelTransferError, expression_of
 
-    def get(adata):
+    def get(adata, rows=None):  # every cell's values: prepare takes the rows it needs
         try:
             return expression_of(adata, fallback)
         except LabelTransferError as e:
             raise lg.LearnedGateError(str(e).replace("mapping compares", "a learned gate reads"), 422) from e
     return get
+
+
+def _large_rows(counts):
+    """A large dataset's values of the training cells alone, from its counts file."""
+    from scview.core.label_transfer import LARGE_SOURCE, lognorm_rows
+
+    def get(adata, rows):
+        return lognorm_rows(counts, rows), adata.var.copy(), LARGE_SOURCE
+    return get
+
+
+class _LargeColumns:
+    """A large dataset's log-normalised values at some columns, every cell
+    (``label_transfer.lognorm_columns``: one pass over its counts), kept once read so the
+    pass runs before the edit lock is taken and the edit reuses it."""
+
+    def __init__(self, adata, counts) -> None:
+        self.adata, self.counts, self.shape = adata, counts, counts.shape
+        self._read: dict[tuple[int, ...], Any] = {}
+
+    def __call__(self, cols):
+        from scview.core.label_transfer import lognorm_columns
+
+        key = tuple(int(c) for c in cols)
+        if key not in self._read:
+            self._read[key] = lognorm_columns(self.counts, cols)
+        return self._read[key]
 
 
 def _isg_genes(settings: Settings, species: str) -> set[str] | None:
@@ -137,12 +167,17 @@ async def train_stream(
     if dataset_id in _running:
         raise HTTPException(status_code=409, detail="A learned gate is already training on this dataset.")
     adaptor = await _adaptor(dm, dataset_id)
-    large_mode.check(adaptor, _WHAT, _WHY)
     adata = adaptor.adata
-    expression = _expression(dm.h5ad_candidates(dataset_id)[1:])
+    large = large_mode.is_large(adaptor)
+    if large:
+        counts = adaptor.counts_matrix(_WHAT)
+        await dm.reserve(dataset_id, lg.large_estimate(counts, train=True)["peak_bytes"], what=_WHAT)
+        expression = _large_rows(counts)
+    else:
+        expression = _expression(dm.h5ad_candidates(dataset_id)[1:])
 
     def prep(src) -> lg.TrainInput:
-        data = src.to_memory() if getattr(src, "isbacked", False) else src
+        data = src.to_memory() if getattr(src, "isbacked", False) and not large else src
         return lg.prepare(data, body.cells, expression=expression, sample_column=body.sample_column,
                           condition_column=body.condition_column, exclude_cc_stress=body.exclude_cc_stress,
                           negatives=body.negatives)
@@ -367,7 +402,12 @@ async def check_gate(
     gate = await asyncio.to_thread(_load, dm, gate_id)
     adaptor = await _adaptor(dm, dataset_id)
     adata = adaptor.adata
-    reason = str(large_mode.LargeDatasetError(_WHAT, _WHY)) if large_mode.is_large(adata) else None
+    counts, unreadable = None, None
+    if large_mode.is_large(adaptor):
+        try:
+            counts = adaptor.counts_matrix(_WHAT)
+        except large_mode.LargeDatasetError as e:  # no counts file: reported, not raised
+            unreadable = str(e)
 
     def work() -> dict[str, Any]:
         rep = lg.check(gate, adata, dataset_id=dataset_id, isg_genes=_isg_genes(settings, gate.species))
@@ -377,9 +417,11 @@ async def check_gate(
         if col and col in adata.obs.columns and col not in record:
             rep["ok"] = False
             rep["refusal"] = f"This dataset already has a column '{col}' that no learned gate wrote; rename the gate."
-        if reason:
+        if unreadable:
             rep["ok"] = False
-            rep["refusal"] = reason
+            rep["refusal"] = unreadable
+        if counts is not None:
+            rep["large"] = lg.large_estimate(counts)
         rep["sample_column"] = lg.pick_sample_column(adata.obs)
         rep["gate"] = lg.summary(gate)
         return rep
@@ -400,15 +442,36 @@ async def apply_gate(
     the results store for the co-pilot."""
     gate = await asyncio.to_thread(_load, dm, gate_id)
     adaptor = await _adaptor(dm, dataset_id)
-    large_mode.check(adaptor, _WHAT, _WHY)
     body = body or ApplyRequest()
     if body.sample_column and body.sample_column not in adaptor.adata.obs.columns:
         raise HTTPException(status_code=404, detail=f"No column '{body.sample_column}' in this dataset.")
     expression = _expression(dm.h5ad_candidates(dataset_id)[1:])
     isg = await asyncio.to_thread(_isg_genes, settings, gate.species)
+    read: _LargeColumns | None = None
+    if large_mode.is_large(adaptor):
+        # The pass over the counts runs here, outside the edit lock (it can take minutes);
+        # the edit reuses it unless the dataset was reloaded meanwhile.
+        counts = adaptor.counts_matrix(_WHAT)
+        await dm.reserve(dataset_id, lg.large_estimate(counts)["peak_bytes"], what=_WHAT)
+        read = _LargeColumns(adaptor.adata, counts)
+
+        def warm() -> None:
+            read(lg.columns_read(gate, read.adata, read.adata.var, dataset_id=dataset_id, isg_genes=isg))
+
+        try:
+            await asyncio.to_thread(warm)
+        except lg.LearnedGateError as e:
+            raise _http(e)
 
     def edit(adata) -> dict[str, Any]:
-        X, var, source = expression(adata)
+        if large_mode.is_large(adata):
+            from scview.core.label_transfer import LARGE_SOURCE
+
+            cols = read if read is not None and read.adata is adata else \
+                _LargeColumns(adata, large_mode.counts_of(adata))
+            X, var, source = cols, adata.var, LARGE_SOURCE
+        else:
+            X, var, source = expression(adata)
         return lg.apply(adata, gate, X=X, var=var, source=source, dataset_id=dataset_id,
                         sample_column=body.sample_column, isg_genes=isg)
 

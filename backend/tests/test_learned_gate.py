@@ -43,7 +43,7 @@ def _cells(seed: int = 0, per: int = 40, stim_factor: float = 10.0, prefix: str 
     return a
 
 
-def _expr(a):
+def _expr(a, rows=None):  # every cell's values: prepare takes the training rows
     return lt_lognorm(a.X), a.var.copy(), "counts"
 
 

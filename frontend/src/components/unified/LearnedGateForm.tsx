@@ -39,13 +39,18 @@ export function LearnedGateForm({
   const abort = useRef<AbortController | null>(null);
   const nSel = selected?.size ?? 0;
   const nameProblem = name.trim() ? null : "Give the gate a name";
+  const large = !!dataset.large?.matrices_on_disk;
 
   const run = async () => {
     if (!selected || nameProblem) return;
     setRunning(true);
     setError(null);
     setResult(null);
-    setProgress("Reading the cells' values");
+    setProgress(
+      large
+        ? "Reading the cells' counts from the counts file (large dataset: up to 30,000 cells, about 10 s)"
+        : "Reading the cells' values",
+    );
     abort.current = new AbortController();
     try {
       const r = await trainLearnedGate(
@@ -138,7 +143,7 @@ export function LearnedGateForm({
             <button
               onClick={() => void run()}
               disabled={!selected || nSel === 0 || !!nameProblem}
-              title={nameProblem ?? "Train the gate (about 10-30 s)"}
+              title={nameProblem ?? `Train the gate (about ${large ? "20-40" : "10-30"} s)`}
               className="rounded bg-blue-600 px-2 py-0.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               Train
