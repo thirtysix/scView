@@ -80,10 +80,13 @@ def get_background_genes(
     genes the DE test considered). Falls back to the measured var_names, which
     for a raw-backed AnnData is what scanpy ranks by default (``use_raw=True``).
     Returns None when neither is recoverable, in which case callers should leave
-    gseapy's default alone rather than pass a wrong universe.
+    gseapy's default alone rather than pass a wrong universe. A targeted panel's
+    background is every gene of the panel (``core/targeted_panel.py``).
     """
+    from scview.core import spatial
+
     uns = getattr(adata, "uns", {})
-    markers_key = resolve_markers_key(uns, column)
+    markers_key = None if spatial.targeted_panel(adata) else resolve_markers_key(uns, column)
 
     if markers_key is not None:
         try:

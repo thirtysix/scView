@@ -10,6 +10,60 @@ function picked(path: string, size = 3): File {
   return f;
 }
 
+describe("Xenium output folders", () => {
+  const outs = [
+    "run/outs/experiment.xenium",
+    "run/outs/cell_feature_matrix.h5",
+    "run/outs/cells.parquet",
+    "run/outs/metrics_summary.csv",
+    "run/outs/morphology_focus.ome.tif",
+  ];
+  const heavy = [
+    "run/outs/transcripts.parquet",
+    "run/outs/transcripts.csv.gz",
+    "run/outs/transcripts.zarr.zip",
+    "run/outs/morphology.ome.tif",
+    "run/outs/morphology_mip.ome.tif",
+    "run/outs/cell_boundaries.parquet",
+    "run/outs/nucleus_boundaries.csv.gz",
+    "run/outs/cells.zarr.zip",
+    "run/outs/analysis_summary.html",
+    "run/outs/gene_panel.json",
+    "run/outs/analysis/clustering/clusters.csv",
+    "run/outs/aux_outputs/overlay.ome.tif",
+  ];
+
+  it("sends the few files a run needs and leaves out the heavy ones, with their reason", () => {
+    const { keep, skipped } = splitJunk(itemsFromFiles([...outs, ...heavy].map((p) => picked(p))));
+    expect(keep.map((i) => i.path)).toEqual(outs);
+    expect(skipped.map((s) => s.path)).toEqual(heavy);
+    expect(skipped.every((s) => s.reason.includes("Xenium"))).toBe(true);
+  });
+
+  it("keeps the first stain of XOA 2+ and the mip image when there is no focus image", () => {
+    const paths = [
+      "o/experiment.xenium",
+      "o/morphology_focus/morphology_focus_0000.ome.tif",
+      "o/morphology_focus/morphology_focus_0001.ome.tif",
+      "o/morphology_mip.ome.tif",
+    ];
+    const { keep } = splitJunk(itemsFromFiles(paths.map((p) => picked(p))));
+    expect(keep.map((i) => i.path)).toEqual(paths.slice(0, 2));
+    const mip = splitJunk(itemsFromFiles(["o/experiment.xenium", "o/morphology_mip.ome.tif"].map((p) => picked(p))));
+    expect(mip.keep).toHaveLength(2);
+  });
+
+  it("leaves a folder called analysis alone unless a Xenium run holds it", () => {
+    const paths = ["analysis/pbmc/filtered_feature_bc_matrix.h5", "analysis/notes.ome.tif"];
+    expect(splitJunk(itemsFromFiles(paths.map((p) => picked(p)))).keep).toHaveLength(2);
+  });
+
+  it("never sends a zipped run", () => {
+    expect(junkReason("Xenium_FFPE_Human_Breast_Cancer_Rep1_outs.zip")).toContain("drop the folder");
+    expect(junkReason("samples.zip")).toBeNull();
+  });
+});
+
 describe("folder upload helpers", () => {
   it("takes each file's path inside the folder, else its name", () => {
     expect(relativePath(picked("pbmc/outs/raw_feature_bc_matrix/barcodes.tsv.gz"))).toBe(

@@ -103,6 +103,11 @@ def _build_user_message(
     lines.append(f"- Cells: {dataset_summary.get('n_cells', 'unknown')}")
     lines.append(f"- Genes: {dataset_summary.get('n_genes', 'unknown')}")
 
+    panel = dataset_summary.get("targeted_panel")
+    if panel:
+        lines.append(f"- Targeted panel of {panel} genes: do not suggest doublet detection, cell-cycle or "
+                     "stress scoring, a target_sum (the run normalises to the cells' median total counts), "
+                     "min_genes, or variable genes for a panel of up to 2000 genes (all are used)")
     species = dataset_summary.get("species", None)
     if species:
         lines.append(f"- Species: {species}")
@@ -287,6 +292,28 @@ def _is_step_done(state: dict[str, Any], step: str) -> bool:
             "medium",
         )
     return False
+
+
+_PANEL_NOT_SUGGESTED = ("doublet_detection", "ambient_correction", "cell_cycle", "dissociation_stress")
+
+
+def _for_panel(suggestions: list[LLMSuggestion], n_genes: int) -> list[LLMSuggestion]:
+    """The suggestions for a targeted panel (core/targeted_panel.py): none of the steps that
+    do not apply, and none of the parameters its own defaults replace, since a suggestion
+    the user applies counts as theirs."""
+    from scview.core.targeted_panel import ALL_GENES_MAX
+
+    out = []
+    for s in suggestions:
+        if s.step in _PANEL_NOT_SUGGESTED or (s.step == "highly_variable_genes" and n_genes <= ALL_GENES_MAX):
+            continue
+        s.suggested_params = {k: v for k, v in s.suggested_params.items()
+                              if k not in ("target_sum", "min_genes", "n_top_genes", "n_comps")}
+        if s.step == "normalization":
+            s.reasoning = ("Data does not appear to be normalized. On a targeted panel the run "
+                           "normalises to the cells' median total counts.")
+        out.append(s)
+    return out
 
 
 def get_rule_based_suggestions(
@@ -555,6 +582,9 @@ def get_rule_based_suggestions(
             )
         )
 
+    panel = dataset_summary.get("targeted_panel")
+    if panel:
+        suggestions = _for_panel(suggestions, int(panel))
     return AdvisorResponse(
         suggestions=suggestions,
         raw_response="Rule-based suggestions (no LLM API call)",

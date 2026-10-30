@@ -30,7 +30,8 @@ IMPORTING = (
     "Visium images); "
     "nf-core/scrnaseq mtx_conversions outputs (*.h5ad); and Visium spatial data: Space Ranger's "
     "filtered matrix with its spatial/ folder (or spatial.tar.gz; drop the whole outs/ folder), "
-    "or an .h5ad with obsm['spatial'] (Visium HD and Xenium bundles are not read yet). A guided flow bundles multi-file "
+    "or an .h5ad with obsm['spatial'] (Visium HD bundles are not read yet); Xenium: drop the output folder "
+    "(not its .zip), only the needed files are sent. A guided flow bundles multi-file "
     "inputs (e.g. the three 10x MTX files) and can merge several samples into one dataset. "
     "Each imported dataset then appears in the Data-tab library to open or manage."
 )

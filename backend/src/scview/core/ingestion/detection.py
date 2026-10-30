@@ -24,7 +24,7 @@ from pathlib import Path
 import h5py
 from pydantic import BaseModel, Field
 
-from scview.core import spatial
+from scview.core import spatial, xenium
 from scview.core.crispr import looks_like_calls
 from scview.core.ingestion import h5seurat
 from scview.core.vdj import sniff_contigs
@@ -71,6 +71,7 @@ class FileKind(str, Enum):
     vdj_contigs = "vdj_contigs"  # TCR/BCR contig table: a side file of a unit (core/vdj.py)
     crispr_calls = "crispr_calls"  # Cell Ranger protospacer_calls_per_cell.csv (core/crispr.py)
     spatial = "spatial"  # a Space Ranger spatial file: a side file of a unit (core/spatial.py)
+    xenium = "xenium"  # a file of a Xenium output folder (core/xenium.py)
     unknown = "unknown"
 
 
@@ -114,6 +115,13 @@ def detect_file(path: Path) -> DetectionResult:
         )
 
     head = _read_head(path, 16)
+
+    found = xenium.sniff(path, head)
+    if found is not None:
+        details = {k: v for k, v in found.items() if k != "reason"}
+        return DetectionResult(kind=FileKind.unknown if found.get("zip") else FileKind.xenium,
+                               confidence=0.95, format_family=xenium.TECHNOLOGY,
+                               reason=found["reason"], details=details)
 
     # Space Ranger's tissue images, parquet positions and spatial/ archives (before the
     # text peek: a tar.gz decodes as text).

@@ -56,6 +56,7 @@ def test_cell_coordinates_are_not_spots():
     a = _squidpy_like(key="X_spatial", lib=None)
     del a.obs["array_row"]
     spatial.adopt(a)
+    a.uns["scview_spatial"]["targeted_panel"] = False  # few genes here: no panel (test_targeted_panel.py)
     assert not spatial.is_spot_data(a)
     assert not assess_preprocessing(a).doublet_detection.done
     assert "not_applicable" not in doublets.summary(a)

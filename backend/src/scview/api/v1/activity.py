@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import activity, activity_nets, de_results, large_mode, orthologs
+from scview.core import activity, activity_nets, de_results, large_mode, orthologs, targeted_panel
 from scview.core.dataset_manager import DatasetManager
 from scview.core.object_cache import ObjectCache
 from scview.core.species import detect_species
@@ -175,6 +175,7 @@ async def activity_summary(
             "species": species, "matrix_source": source, "n_cells": int(adata.n_obs),
             "n_genes_measured": net.n_features, "sources": net.sources,
             "n_targets": net.n_targets.tolist(), "groupby": groupby or None,
+            "panel_caution": targeted_panel.enrichment_caution(adata),
         }
         if groupby:
             groups, codes = _group_codes(adata.obs[groupby])

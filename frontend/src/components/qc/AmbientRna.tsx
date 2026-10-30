@@ -74,7 +74,7 @@ export function AmbientRna({
         <p className={`text-xs ${isLargeRefusal(error) ? "text-slate-500" : "text-red-600"}`}>{error}</p>
       )}
 
-      {data && !data.available && (
+      {data && !data.available && !data.not_applicable && (
         <p className="flex items-start gap-1.5 text-xs text-slate-600" data-testid="ambient-no-raw">
           <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
           <span>
@@ -162,7 +162,8 @@ export function AmbientRna({
         </p>
       ) : (
         step &&
-        data && (
+        data &&
+        !data.not_applicable && (
           <label
             className={`flex items-start gap-1.5 text-xs ${data.available ? "text-slate-600" : "text-slate-400"}`}
             title={data.available ? help.correction : "Needs each sample's raw matrix (the soup) attached."}

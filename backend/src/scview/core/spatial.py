@@ -17,8 +17,8 @@ Storage follows scanpy / squidpy, so their h5ad files open as they are:
 
 A Visium sample is its filtered matrix plus the ``spatial/`` folder (loose files or
 ``spatial.tar.gz``): the ingest bundler attaches those as side files of the matrix
-(``SideKind.spatial``) and ``session._attach_spatial`` reads them here. Visium HD and
-Xenium bundles are refused with a sentence, not read.
+(``SideKind.spatial``) and ``session._attach_spatial`` reads them here. Visium HD is refused
+with a sentence, not read. A Xenium output folder is read by ``core/xenium.py``.
 """
 
 from __future__ import annotations
@@ -56,12 +56,15 @@ TECHNOLOGY_NAMES = {"visium": "Visium", "visium_hd": "Visium HD", "xenium": "Xen
 SPOT_UNITS = ("spot", "bin")
 
 DOUBLET_SKIP = "Visium spots hold several cells, so doublet detection does not apply"
+# A spatial dataset of cells with no more genes than this is a panel (CosMx, MERSCOPE, an
+# h5ad written by spatialdata-io): the commercial imaging panels go up to about 6,000 genes.
+PANEL_MAX_GENES = 6000
 HD_MESSAGE = ("Visium HD (binned outputs) is not supported yet. scView reads standard Visium "
               "(Space Ranger's filtered matrix with its spatial folder) and .h5ad files with "
               "obsm['spatial'].")
-XENIUM_MESSAGE = ("Xenium output bundles are not supported yet. scView reads Visium (Space Ranger's "
-                  "filtered matrix with its spatial folder), or an .h5ad with obsm['spatial'] "
-                  "(for example one written by spatialdata-io or squidpy).")
+XENIUM_MESSAGE = ("A zipped Xenium output folder is not read (the transcripts in it alone are "
+                  "gigabytes): unzip it and drop the folder instead; only the files scView needs "
+                  "are uploaded.")
 
 _POS_COLS = ["barcode", "in_tissue", "array_row", "array_col", "pxl_row_in_fullres",
              "pxl_col_in_fullres"]
@@ -169,18 +172,12 @@ def name_key(name: str) -> str:
     return s.strip(" _-.")
 
 
-_XENIUM_NAMES = {"experiment.xenium", "transcripts.parquet", "transcripts.csv.gz", "cells.parquet",
-                 "cell_boundaries.parquet", "nucleus_boundaries.parquet", "transcripts.zarr.zip",
-                 "cells.zarr.zip", "cell_feature_matrix.zarr.zip"}
 _HD_DIR_RE = re.compile(r"^square_\d{3}um$", re.IGNORECASE)
 
 
 def unsupported(rels: list[str]) -> str | None:
     """The sentence for an upload of a spatial format scView does not read yet (Visium
-    HD binned outputs, a Xenium bundle), from its file paths; None otherwise."""
-    names = {PurePosixPath(r).name.lower() for r in rels}
-    if "experiment.xenium" in names or len(names & _XENIUM_NAMES) >= 2:
-        return XENIUM_MESSAGE
+    HD binned outputs), from its file paths; None otherwise."""
     for r in rels:
         dirs = [d.lower() for d in PurePosixPath(r).parent.parts]
         if "binned_outputs" in dirs or any(_HD_DIR_RE.match(d) for d in dirs):
@@ -785,9 +782,21 @@ def is_spot_data(adata) -> bool:
     return has_spatial(adata) and technology(adata)["unit"] in SPOT_UNITS
 
 
+def targeted_panel(adata) -> bool:
+    """Whether the genes are a targeted panel (core/targeted_panel.py): the flag an import
+    recorded, else spatial cells with at most ``PANEL_MAX_GENES`` genes measured."""
+    recorded = _recorded(adata)
+    if "targeted_panel" in recorded:
+        return bool(np.asarray(recorded["targeted_panel"]).ravel()[0])
+    if not has_spatial(adata) or technology(adata)["technology"] != "cells":
+        return False
+    raw = getattr(adata, "raw", None)
+    return max(adata.n_vars, raw.n_vars if raw is not None else 0) <= PANEL_MAX_GENES
+
+
 def grounding_lines(adata) -> tuple[list[str], str]:
     """The co-pilot's fact about the spatial data: technology, sections, spots or cells,
-    images. ``(lines, detail)``; empty without spatial data."""
+    images, a targeted panel's size. ``(lines, detail)``; empty without spatial data."""
     sp = info(adata)
     if sp is None:
         return [], ""
@@ -803,5 +812,12 @@ def grounding_lines(adata) -> tuple[list[str], str]:
     if unit == "spot":
         line += (" Each Visium spot holds several cells, so values are per spot, not per cell, and "
                  "doublet detection does not apply.")
+    panel = ""
+    if targeted_panel(adata):
+        from scview.core import targeted_panel as tp
+
+        panel = f"targeted panel of {tp.n_genes(adata):,} genes"
+        line += (f" A {panel}: normalised to the cells' median total counts, doublet detection does "
+                 "not apply, and enrichment is against the panel's genes only.")
     line += f" [{TAG}]"
-    return [line], f"{tech}, {sections}, {n:,} {unit}s"
+    return [line], f"{tech}, {sections}, {n:,} {unit}s" + (f", {panel}" if panel else "")

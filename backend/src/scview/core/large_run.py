@@ -80,9 +80,11 @@ from scview.core import (
     sparse_markers,
     spatial,
     step_failures,
+    targeted_panel,
 )
 from scview.core.pipeline import (
     ALL_STEPS,
+    ALL_GENES_RECORD,
     HVG_FLAVORS,
     SAVED_STATUSES,
     PipelineParams,
@@ -263,6 +265,8 @@ def in_memory_need(adaptor, steps: list[str], params) -> tuple[int, int]:
     if not getattr(adata, "isbacked", False):
         run = preflight.run_need(adata, steps, params)
         return copy + run, run
+    if preflight._skips_doublets(adata):
+        steps = [s for s in steps if s != "doublet_detection"]
     plan = (preflight._file_doublet_plan(adaptor.h5ad_path, params)
             if "doublet_detection" in steps else None)
     est = preflight.estimate_run(preflight.in_memory_header(adata), steps=steps, params=params,
@@ -808,6 +812,8 @@ class LargeRun:
         method = doublets.method_of(params.doublet_method)  # an unknown one fails here
         if spatial.is_spot_data(self.light):
             raise StepNotApplicable(spatial.DOUBLET_SKIP)
+        if spatial.targeted_panel(self.light):
+            raise StepNotApplicable(targeted_panel.DOUBLET_SKIP)
         # pipeline._doublet_matrix: X unless it holds processed values, then the counts.
         where = None
         m = self.x
@@ -854,7 +860,7 @@ class LargeRun:
         logger.info("Filtering (%s): %d -> %d cells", t.mode, n_before, light.n_obs)
         return found
 
-    def _normalization(self) -> None:
+    def _normalization(self) -> dict[str, Any] | None:
         normalization.check_method(self.params.normalization_method)
         if self.layer is None:
             if self.raw is None or _holds_counts(self.x):
@@ -863,10 +869,15 @@ class LargeRun:
                 self._keep_raw_counts()
         x = self.x
         self._label = "Normalisation"
-        X = chunked.normalize_total(x.X, target_sum=self.params.target_sum)
+        target, found = self.params.target_sum, None
+        if self.params.target_sum_median:  # as pipeline._run_normalization
+            target = float(chunked.normalize_target(x.X)) or 1.0
+            found = {"target_sum": target, "target_sum_rule": "median total counts (targeted panel)"}
+        X = chunked.normalize_total(x.X, target_sum=target)
         self.x = replace(x, X=X, kind="normalized", stored=None)
         scaling.drop_plan(self.light)
-        logger.info("Normalized to target sum %.0f", self.params.target_sum)
+        logger.info("Normalized to target sum %.0f", target)
+        return found
 
     def _log_transform(self) -> None:
         x = self.x
@@ -888,6 +899,10 @@ class LargeRun:
         batch_key = params.hvg_batch_key or None
         if batch_key and batch_key not in light.obs.columns:
             raise ValueError(f"HVG batch key '{batch_key}' not found in obs columns.")
+        if params.hvg_all_genes:  # as pipeline._run_hvg
+            light.var["highly_variable"] = True
+            logger.info("All %d genes kept (no variable-gene selection)", light.n_vars)
+            return dict(ALL_GENES_RECORD, n_top_genes=int(light.n_vars))
         self.write_matrices()
         n_top = min(params.n_top_genes, light.n_vars)
         self._label = "Variable genes"
@@ -1076,6 +1091,8 @@ class LargeRun:
 
         avail = preflight.available_memory()
         if not avail.limited or avail.available_bytes is None or avail.limit_bytes is None:
+            return None
+        if step == "doublet_detection" and preflight._skips_doublets(self.light):
             return None
         write = not self._written and step in preflight._CHUNKED_READS_X
         need = preflight.chunked_step_peak(step, self.shape_for_estimate(), self.params,
@@ -1276,6 +1293,7 @@ def run_streamed(
     run = LargeRun(path, output_path, params, control)
     try:
         run.open()
+        params = run.params = targeted_panel.for_run(run.light, params)
         why = _plan_check(run, ordered) or _disk_check(run, ordered)
         if why is not None:
             _halted(result, ("stopped", why))

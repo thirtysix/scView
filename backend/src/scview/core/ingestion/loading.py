@@ -28,7 +28,7 @@ import anndata as ad
 import pandas as pd
 import scanpy as sc
 
-from scview.core import protein, spatial
+from scview.core import protein, spatial, xenium
 from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ def load_unit(unit: IngestUnit, options: dict | None = None) -> ad.AnnData:
         UnitFormat.zarr: _load_zarr,
         UnitFormat.dense_table: _load_dense,
         UnitFormat.h5seurat: _load_h5seurat,
+        UnitFormat.xenium: _load_xenium,
     }
     loader = loaders.get(unit.format)
     if loader is None:
@@ -133,6 +134,25 @@ def _load_h5seurat(unit: IngestUnit, options: dict) -> ad.AnnData:
     try:
         return h5seurat.read(_single(unit))
     except h5seurat.H5SeuratError as e:
+        raise IngestLoadError(str(e)) from e
+
+
+def _load_xenium(unit: IngestUnit, options: dict) -> ad.AnnData:
+    """The matrix as Cell Ranger's (every feature type, the controls leave X at the split
+    after loading), with the bundle's cells, coordinates, panel and image."""
+    mex = any(f.role == FileRole.matrix for f in unit.files)
+    adata = _load_mex(unit, options) if mex else _load_tenx_h5(unit, options)
+    attach_xenium(adata, unit)
+    return adata
+
+
+def attach_xenium(adata: ad.AnnData, unit: IngestUnit) -> None:
+    """``xenium.attach`` from a unit's side files; IngestLoadError carries its sentence."""
+    files = {f.spatial_part: (f.path, f.rel_path or f.name) for f in unit.side_files if f.spatial_part}
+    matrix = next((f.rel_path or f.name for f in unit.files), xenium.H5_NAME)
+    try:
+        xenium.attach(adata, files, unit.label, matrix)
+    except xenium.XeniumError as e:
         raise IngestLoadError(str(e)) from e
 
 

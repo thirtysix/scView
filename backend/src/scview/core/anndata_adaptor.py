@@ -163,6 +163,10 @@ def per_cell_qc(adata, ribo: bool = False, counts=None) -> dict:
         return None
 
     out = {k: _first(names) for k, names in _QC_OBS_NAMES.items()}
+    if "transcript_counts" in obs.columns and "n_genes_by_counts" not in obs.columns:
+        # Xenium's total_counts also holds its controls, which left X; the QC metrics step
+        # replaces it with the genes' total, which is this column.
+        out["total_counts"] = _first(("transcript_counts",))
     need = [k for k in ("total_counts", "n_genes", "pct_mt") if out[k] is None]
     # Ribosomal, haemoglobin and MALAT1 % are a bonus: worked out in the pass the
     # core metrics need, or, when ``ribo`` asks for them, in a pass of their own if the
@@ -486,7 +490,7 @@ class AnnDataAdaptor:
         # the plot set grows as the user runs more steps.
         for name in ("doublet_score", "doublet_score_classifier", "S_score", "G2M_score",
                      "dissociation_stress_score",
-                     "pct_counts_ribo", "pct_counts_hb"):
+                     "pct_counts_ribo", "pct_counts_hb", "pct_control"):
             col = _col(name)
             if col is not None:
                 metrics[name] = self._qc_summary(col, n_bins)

@@ -50,7 +50,7 @@ export interface TissueMode {
   /** 0..1 */
   imageOpacity: number;
   /** What one point is (spatial.unit): captions say "spots" for Visium */
-  unit: "spot" | "cell";
+  unit: "spot" | "bin" | "cell";
 }
 
 interface EmbeddingScatterProps {

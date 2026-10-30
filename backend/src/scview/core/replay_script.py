@@ -1605,8 +1605,10 @@ del original, groups, corrected
 def _normalization(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "keep_raw_counts")
     target = p.get("target_sum", 1e4)
+    rule = p.get("target_sum_rule")
+    note = f"# target_sum: {comment_text(rule, 80)} of the cells scView normalised\n" if rule else ""
     return Snippet(EXACT, _block(f'''
-if "counts" not in adata.layers:
+{note}if "counts" not in adata.layers:
     if adata.raw is None or looks_like_counts(adata.X):
         adata.layers["counts"] = adata.X.copy()
     else:
@@ -1620,6 +1622,9 @@ def _log_transform(p: dict, ctx: _Ctx) -> Snippet:
 
 
 def _hvg(p: dict, ctx: _Ctx) -> Snippet:
+    if p.get("hvg_flavor") == "all_genes":
+        return Snippet(EXACT, ["# A targeted panel: every gene is used, no variable-gene selection.",
+                               'adata.var["highly_variable"] = True'])
     n = p.get("n_top_genes", 2000)
     batch = p.get("hvg_batch_key") or None
     if "pearson_residuals" in (p.get("normalization_method"), p.get("hvg_flavor")):

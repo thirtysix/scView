@@ -223,6 +223,11 @@ def compute(adata, column: str, cells: dict, reason: str = "requested") -> tuple
     if len(names) > MAX_GROUPS:
         raise QcStatesError(f"'{column}' has {len(names)} groups; the QC state check takes at most "
                             f"{MAX_GROUPS}. Pick a cell-type or cluster column.")
+    if cells.get("pct_ribo") is None:
+        from scview.core import spatial, targeted_panel
+
+        if spatial.targeted_panel(adata):
+            raise QcStatesError(targeted_panel.NO_RIBO_NOTE)
     f = features(cells)
     has_mt = f["has_mt"]
     cond_col, cond_kind = _condition(adata, column)

@@ -52,6 +52,7 @@ const FORMAT_LABELS: Record<UnitFormat, string> = {
   dense_table: "Expression table (CSV/TSV)",
   seurat: "R object (.rds: Seurat, SingleCellExperiment), converted when the dataset is created",
   h5seurat: "Seurat (.h5Seurat)",
+  xenium: "Xenium output folder",
   unknown: "Unrecognised",
 };
 

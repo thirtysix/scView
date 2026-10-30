@@ -31,6 +31,7 @@ import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
+import { TargetedPanelNote, type TargetedPanelInfo } from "@/components/qc/TargetedPanelNote";
 import { DoubletMethodInfo } from "@/components/qc/DoubletMethodInfo";
 import { DOUBLET_METHOD_LABELS, DOUBLET_METHODS } from "@/lib/doubletMethods";
 import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLeiden";
@@ -118,6 +119,8 @@ interface SpeciesCall {
 /** The assessment response: the step entries plus facts that are not steps. */
 interface AssessmentResponse extends PreprocessingState {
   species?: SpeciesCall;
+  /** A targeted panel's path (Xenium, CosMx, MERSCOPE); null for any other dataset. */
+  targeted_panel?: TargetedPanelInfo | null;
   /** How scView last normalised it for HVG/PCA ("log" | "pearson_residuals"); null if never. */
   normalization_method?: string | null;
   /** How scView last filtered it ("fixed" for runs before MAD mode); null if never. */
@@ -223,6 +226,8 @@ interface ParamConfig {
   mode?: QcThresholdMode;
   /** Shown in an empty number input. */
   placeholder?: string;
+  /** Shown for a targeted panel only. */
+  panelOnly?: boolean;
 }
 
 const QC_MODE_OPTION_LABELS: Record<string, string> = {
@@ -277,6 +282,17 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
       help: "Above the median + k MADs: mostly doublets, but it also trims large cell types (DCs, erythrocytes).",
     },
     { param: "qc_sample_column", label: "Samples", type: "select", options: [], default: "", mode: "mad" },
+    {
+      param: "qc_counts_floor",
+      label: "Min counts/cell floor",
+      type: "number",
+      min: 0,
+      max: 1000,
+      step: 1,
+      default: 0,
+      mode: "mad",
+      panelOnly: true,
+    },
     { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200, mode: "fixed" },
     { param: "max_genes", label: "Max genes/cell (0 = off)", type: "number", min: 0, max: 20000, step: 100, default: 0, mode: "fixed" },
     { param: "min_counts", label: "Min counts/cell (0 = off)", type: "number", min: 0, max: 100000, step: 100, default: 0, mode: "fixed" },
@@ -393,9 +409,12 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
 
 /** The filtering step's cell thresholds: the step's params as set, else their defaults.
  *  The QC histograms set the same params, so either place changes both. */
-export function filterThresholds(set: Record<string, unknown> | undefined): FilterThresholds {
+export function filterThresholds(
+  set: Record<string, unknown> | undefined,
+  panelDefaults?: Record<string, number | null> | null,
+): FilterThresholds {
   const value = (param: string) =>
-    set?.[param] ?? STEP_PARAMS.filtering!.find((pc) => pc.param === param)!.default;
+    set?.[param] ?? panelDefaults?.[param] ?? STEP_PARAMS.filtering!.find((pc) => pc.param === param)!.default;
   return {
     min_genes: Number(value("min_genes")),
     max_genes: Number(value("max_genes")),
@@ -407,6 +426,8 @@ export function filterThresholds(set: Record<string, unknown> | undefined): Filt
     qc_mad_k_mt: Number(value("qc_mad_k_mt")),
     qc_mad_upper: Boolean(value("qc_mad_upper")),
     qc_sample_column: String(value("qc_sample_column") ?? ""),
+    // Only a floor the user set is sent: a panel's own default is the backend's.
+    qc_counts_floor: set?.qc_counts_floor != null ? Number(set.qc_counts_floor) : undefined,
     qc_mito_mode: set?.qc_mito_mode === "per_type" ? "per_type" : "global",
     qc_mito_type_column: String(set?.qc_mito_type_column ?? ""),
     qc_mito_type_floor: Boolean(set?.qc_mito_type_floor ?? false),
@@ -616,7 +637,8 @@ export function DataAssessmentPanel() {
   }, [datasetId, qcRefreshKey, doubletChannel]);
 
   // The QC histograms set the filtering step's thresholds: one state, two places.
-  const filterValues = useMemo(() => filterThresholds(stepParams.filtering), [stepParams.filtering]);
+  const panelDefaults = state?.targeted_panel?.defaults;
+  const filterValues = useMemo(() => filterThresholds(stepParams.filtering, panelDefaults), [stepParams.filtering, panelDefaults]);
   const setFilter = useCallback(
     (patch: Partial<FilterThresholds>) =>
       setStepParams((prev) => ({ ...prev, filtering: { ...prev.filtering, ...patch } })),
@@ -1184,6 +1206,7 @@ export function DataAssessmentPanel() {
               </div>
             )}
             <SpeciesNote call={state.species} />
+            <TargetedPanelNote info={state.targeted_panel} />
           </div>
 
           {/* "Explain this data": written QC report from the assessment facts */}
@@ -1542,13 +1565,13 @@ export function DataAssessmentPanel() {
                               Parameters
                             </p>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                              {STEP_PARAMS[step.key]!.map((pc) => {
+                              {STEP_PARAMS[step.key]!.filter((pc) => !pc.panelOnly || state.targeted_panel).map((pc) => {
                                 // Per channel, no one number stands for the default: the input stays empty.
                                 const suggested =
                                   pc.dynamicDefault === "suggested_doublet_rate" && !doubletRate?.per_channel
                                     ? doubletRate?.rate
                                     : undefined;
-                                const currentVal = stepParams[step.key]?.[pc.param] ?? suggested ?? pc.default;
+                                const currentVal = stepParams[step.key]?.[pc.param] ?? suggested ?? panelDefaults?.[pc.param] ?? pc.default;
                                 // A filtering param of the other threshold mode: shown, not used.
                                 const unused = pc.mode !== undefined && pc.mode !== filterValues.qc_threshold_mode;
                                 const resolvedOptions =
