@@ -236,7 +236,11 @@ export function UnifiedViewPanel() {
     const dsId = dataset?.id ?? null;
     if (numCells > 0 && dsId && autoAdjustedRef.current !== dsId) {
       autoAdjustedRef.current = dsId;
-      if (numCells > 100_000) {
+      if (dataset?.spatial?.unit === "bin") {
+        // Tissue view: radius 0.75 of a bin's side, past its corners, so the tissue reads solid.
+        setPointSize(3);
+        setOpacity(0.8);
+      } else if (numCells > 100_000) {
         setPointSize(1);
         setOpacity(0.5);
       } else if (numCells > 50_000) {
