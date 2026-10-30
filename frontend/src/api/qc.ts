@@ -608,8 +608,8 @@ export async function getFilterPreview(
     q.set("mito_mode", "per_type");
     if (t.qc_mito_type_column) q.set("mito_type_column", t.qc_mito_type_column);
     if (t.qc_mito_type_floor) q.set("mito_type_floor", "true");
-    if (t.qc_grid_mito) q.set("grid_mito", "true");
   }
+  if (t.qc_grid_mito) q.set("grid_mito", "true");
   if (t.qc_doublet_source && t.qc_doublet_source !== "auto") q.set("doublet_source", t.qc_doublet_source);
   if (t.drop_hash_negatives) q.set("drop_hash_negatives", "true");
   if (columns.label_column) q.set("label_column", columns.label_column);

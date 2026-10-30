@@ -273,4 +273,18 @@ describe("QcFilterSummary in MAD mode", () => {
     fireEvent.change(screen.getByLabelText("Columns column for the removal audit"), { target: { value: "Donor" } });
     await waitFor(() => expect(getFilterPreview).toHaveBeenLastCalledWith("d1", T, { condition_column: "Donor" }));
   });
+
+  it("does not call % mito unmeasurable when the rule is off on bins, and counts bins", async () => {
+    useDatasetStore.setState({ currentDataset: { obs_columns: [], spatial: { unit: "bin", libraries: [] } } as unknown as DatasetInfo });
+    getFilterPreview.mockResolvedValue({
+      ...preview(0),
+      has_mt: false,
+      grid_note: "A bin is a square of the capture grid, not a cell, so % mito is not used here.",
+    });
+    render(<QcFilterSummary datasetId="d" thresholds={T} onChange={vi.fn()} />);
+    expect(await screen.findByTestId("qc-grid-note")).toBeTruthy();
+    expect(screen.queryByText(/can't be measured/)).toBeNull();
+    expect(screen.getByText("Bins these thresholds remove")).toBeTruthy();
+    expect(screen.getByText(/of \d[\d,]* bins/)).toBeTruthy();
+  });
 });
