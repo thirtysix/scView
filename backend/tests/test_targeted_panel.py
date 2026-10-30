@@ -388,6 +388,8 @@ def test_the_qc_report_has_no_200_gene_concern():
     words = json.dumps([x.model_dump() if hasattr(x, "model_dump") else str(x)
                         for x in [*f.overview, *f.quality, *f.concerns, *f.next_steps]], default=str)
     assert "200 genes" not in words and "Targeted panel of 40 genes" in words
+    assert "Run doublet detection" not in words and tp.DOUBLET_SKIP in words
+    assert "as expected" in words and "can't be inferred" not in words
 
 
 # ---------------------------------------------------------------------------

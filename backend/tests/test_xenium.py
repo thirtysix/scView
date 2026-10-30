@@ -388,6 +388,22 @@ def test_several_bundles_are_merged_with_libraries_from_region_or_folder(tmp_pat
     assert sorted(a.uns["spatial"]) == ["Replicate 1", "b"]
 
 
+def test_merge_plan_and_session_preflight_see_genes_only(tmp_path):
+    mgr = IngestSessionManager(str(tmp_path / "data"))
+    sid = mgr.create_session()
+    for name, seed in (("a", 1), ("b", 2)):
+        _bundle(mgr.files_dir(sid) / name / "outs", experiment={**EXPERIMENT, "region_name": name}, seed=seed)
+    plan = mgr.merge_plan(sid)
+    assert plan is not None and plan.intersection == N_GENES and plan.est_cells == 2 * N_CELLS
+
+    class NothingOpen:
+        def cached_ids(self):
+            return []
+
+    out = preflight.session_preflight(mgr, sid, NothingOpen())
+    assert [u["header"]["n_genes"] for u in out["units"]] == [N_GENES, N_GENES]
+
+
 def test_a_commit_of_an_incomplete_bundle_says_what_is_missing(tmp_path):
     _bundle(tmp_path / "src" / "outs")
     (tmp_path / "src" / "outs" / "cells.parquet").unlink()

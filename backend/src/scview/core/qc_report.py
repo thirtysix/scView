@@ -249,6 +249,8 @@ def build_facts(adaptor) -> QCFacts:
                         "channels, so its expected rates are a guess.")
         text = "; ".join(bits)
         f.quality.append(_fact("qc:doublets", text[:1].upper() + text[1:] + "."))
+    elif state.doublet_detection.details.startswith("Not applicable"):  # spots, a targeted panel
+        f.quality.append(_fact("qc:doublets", state.doublet_detection.details + "."))
     else:
         f.quality.append(_fact("qc:doublets", "Doublet detection has not been run: no doublet "
                                               "calls or scores in the data."))
@@ -312,7 +314,8 @@ def build_facts(adaptor) -> QCFacts:
         sex = None
     if sex is not None:
         line, sex_concerns = sex_check.report_lines(sex)
-        f.overview.append(_fact("qc:sex", line))
+        if not (panel and "can't be inferred" in line):  # a panel simply has no XIST or Y genes
+            f.overview.append(_fact("qc:sex", line))
         for text in sex_concerns[:2]:
             concern("qc:sex", text)
         if any(c["kind"] == "confounded" for c in sex["confounding"]):
