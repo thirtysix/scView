@@ -23,7 +23,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field
 
-from scview.core import spatial
+from scview.core import spatial, xenium
 from scview.core.ingestion.detection import DetectionResult, FileKind, detect_file
 from scview.core.ingestion.paths import junk_reason, skipped_sentence
 
@@ -41,6 +41,7 @@ class UnitFormat(str, Enum):
     dense_table = "dense_table"
     seurat = "seurat"  # an R object: converted by the R converter at commit (session.py)
     h5seurat = "h5seurat"  # SeuratDisk .h5Seurat, read natively (h5seurat.py)
+    xenium = "xenium"  # a Xenium output folder: its matrix + side files (core/xenium.py)
     unknown = "unknown"
 
 
@@ -63,6 +64,7 @@ class SideKind(str, Enum):
     vdj = "vdj"  # a TCR/BCR contig table, joined to the unit's cells (core/vdj.py)
     crispr = "crispr"  # Cell Ranger's guide calls per cell, joined to the unit's cells (core/crispr.py)
     spatial = "spatial"  # a Space Ranger spatial file (positions, scale factors, images; core/spatial.py)
+    xenium = "xenium"  # experiment.xenium, cell table, image, its metrics (core/xenium.py)
 
 
 # A 10x MEX unit needs exactly one of each of these.
@@ -84,6 +86,7 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.vdj_contigs: (None, FileRole.side),
     FileKind.crispr_calls: (None, FileRole.side),
     FileKind.spatial: (None, FileRole.side),
+    FileKind.xenium: (None, FileRole.side),
     FileKind.unknown: (None, FileRole.unknown),
 }
 
@@ -108,7 +111,8 @@ class BundleFile(BaseModel):
     confidence: float = 0.0
     side_kind: SideKind | None = None  # a side file's kind (role == side)
     receptor: str | None = None  # contig tables: "T", "B" or "T+B" (their chains, else the name)
-    # Space Ranger spatial files: positions | scalefactors | hires | lowres | archive.
+    # Space Ranger spatial files: positions | scalefactors | hires | lowres | archive;
+    # a Xenium bundle's side files: experiment | cells | image | metrics.
     spatial_part: str | None = None
     # The path inside the uploaded folder (``outs/raw_feature_bc_matrix/barcodes.tsv.gz``);
     # the name alone for a plain upload.
@@ -145,7 +149,8 @@ class Bundle(BaseModel):
     complete: bool = False  # every (non-unknown) unit is complete
     issues: list[str] = Field(default_factory=list)
     skipped: list[SkippedFile] = Field(default_factory=list)  # also one sentence in issues
-    # A spatial format scView does not read yet (Visium HD, Xenium): an error at validation.
+    # A spatial upload scView does not read (a Xenium .zip, Visium HD's 2 um bins, its archive,
+    # its segmented outputs): an error at validation.
     unsupported: str | None = None
 
 
@@ -187,8 +192,9 @@ def build_bundle(
     rels = {p: _rel(p, root) for p in paths}
     skipped = list(skipped or [])
     detected = []
+    extras = xenium.skip_reasons(list(rels.values()))
     for p in paths:
-        reason = junk_reason(rels[p])
+        reason = junk_reason(rels[p]) or extras.get(rels[p])
         if reason:
             skipped.append({"path": rels[p], "reason": reason})
             continue
@@ -218,6 +224,12 @@ def bundle_from_detections(
     def rel(p: Path) -> str:
         return rels.get(p) or p.name
 
+    zipped = any(det.details.get("zip") for _, det in detected)
+    detected, xenium_units = _take_xenium(detected, rel, skipped)
+    refusal = spatial.unsupported([rel(p) for p, _ in detected])
+    if zipped:
+        refusal = refusal or spatial.XENIUM_MESSAGE
+    detected = _select_hd_bins(detected, rel, skipped)
     detected = _drop_tree_extras(detected, rel, skipped)
     single_files: list[BundleFile] = []
     mex_parts: list[tuple[Path, BundleFile]] = []
@@ -227,9 +239,9 @@ def bundle_from_detections(
     vdj_files: list[BundleFile] = []
     crispr_files: list[BundleFile] = []
     spatial_files: list[BundleFile] = []
-    hd = False
 
     for path, det in detected:
+        refusal = refusal or _hd_refusal(path, det)
         if _is_side_file(det):
             kind = SideKind.metrics if det.kind == FileKind.tenx_metrics else SideKind.raw
             side_files.append(BundleFile(path=str(path), name=path.name, kind=det.kind,
@@ -252,13 +264,12 @@ def bundle_from_detections(
         elif det.kind == FileKind.crispr_calls:
             crispr_files.append(bf.model_copy(update={"side_kind": SideKind.crispr}))
         elif det.kind == FileKind.spatial:
-            hd = hd or bool(det.details.get("hd"))
             spatial_files.append(bf.model_copy(update={
                 "side_kind": SideKind.spatial, "spatial_part": det.details.get("part")}))
         else:
             unknown_files.append(bf)
 
-    units: list[IngestUnit] = []
+    units: list[IngestUnit] = list(xenium_units)
     for bf in single_files:
         fmt, _ = _KIND_MAP[bf.kind]
         units.append(
@@ -284,7 +295,6 @@ def bundle_from_detections(
     bundle_issues.extend(_attach_vdj_files(units, vdj_files))
     bundle_issues.extend(_attach_crispr_files(units, crispr_files))
     bundle_issues.extend(_attach_spatial_files(units, spatial_files))
-    unsupported = spatial.HD_MESSAGE if hd else spatial.unsupported([rel(p) for p, _ in detected])
     _unique_labels(units)
     if skipped:
         bundle_issues.insert(0, skipped_sentence(skipped))
@@ -296,8 +306,93 @@ def bundle_from_detections(
         complete=bool(loadable) and all(u.complete for u in loadable),
         issues=bundle_issues,
         skipped=[SkippedFile(**s) for s in skipped],
-        unsupported=unsupported,
+        unsupported=refusal,
     )
+
+
+def _hd_refusal(path: Path, det: DetectionResult) -> str | None:
+    """A Visium HD file whose content (not its folder) says it cannot be read: an archive
+    of the binned outputs, or bins finer than ``HD_MIN_BIN_UM``."""
+    if det.details.get("hd_archive"):
+        return spatial.HD_ARCHIVE.format(name=path.name)
+    um = det.details.get("hd_bin_um")
+    return spatial.too_fine(um) if um is not None and um < spatial.HD_MIN_BIN_UM else None
+
+
+def _select_hd_bins(detected, rel, skipped: list[dict]):
+    """Visium HD: one bin size of each run is read (``spatial.hd_chosen_bins``; the wizard
+    sends only the one the user chose). The run's other bin sizes and the rest of its output
+    folder (``outs/spatial``, ``segmented_outputs``...) are recorded in ``skipped``."""
+    chosen = spatial.hd_chosen_bins(rel(p) for p, _ in detected)
+    if not chosen:
+        return detected
+    prefixes = [run + "/" for run in chosen if run]
+    keep = []
+    for p, det in detected:
+        hit = spatial.hd_folder(rel(p))
+        if hit is not None:
+            um = chosen[hit[0]]
+            if hit[1] == um or um < spatial.HD_MIN_BIN_UM:
+                keep.append((p, det))
+            else:
+                skipped.append({"path": rel(p), "reason": f"another bin size of the run: one dataset "
+                                f"per bin size, the {um} um bins are read"})
+        elif any(rel(p).startswith(pre) for pre in prefixes):
+            skipped.append({"path": rel(p), "reason": "the rest of the Space Ranger output folder, "
+                            "not part of the bins read"})
+        else:
+            keep.append((p, det))
+    return keep
+
+
+# ---------------------------------------------------------------------------
+# Xenium output folders: one unit each (core/xenium.py)
+# ---------------------------------------------------------------------------
+
+
+def _take_xenium(detected, rel, skipped: list[dict]):
+    """The Xenium bundles among the files, each one unit, and the files left for the rest
+    of the bundler. Taken before anything else looks at them: their matrix is no sample of
+    its own, and their ``metrics_summary.csv`` is not Cell Ranger's."""
+    by_rel = {rel(p): (p, det) for p, det in detected}
+    parts = {r: det.details["part"] for r, (_, det) in by_rel.items()
+             if det.kind == FileKind.xenium and det.details.get("part")}
+    groups = xenium.groups(list(by_rel), parts)
+    if not groups:
+        return detected, []
+    taken: set[str] = set()
+    units = []
+    for g in groups:
+        taken |= g.taken()
+        skipped.extend({"path": path, "reason": reason} for path, reason in g.skipped)
+        units.append(_xenium_unit(g, by_rel))
+    return [(p, det) for p, det in detected if rel(p) not in taken], units
+
+
+def _xenium_unit(g: xenium.Group, by_rel: dict) -> IngestUnit:
+    def bf(path: str, **kw) -> BundleFile:
+        p, det = by_rel[path]
+        return BundleFile(path=str(p), name=p.name, kind=det.kind, confidence=det.confidence,
+                          rel_path=path, **kw)
+
+    if g.h5:
+        files = [bf(g.h5, role=FileRole.data)]
+    else:
+        files = sorted((bf(path, role=FileRole(role)) for role, path in g.mex.items()),
+                       key=lambda f: f.role.value)
+    side = [bf(path, role=FileRole.side, side_kind=SideKind.xenium, spatial_part=part)
+            for part, path in ((xenium.PART_EXPERIMENT, g.experiment), (xenium.PART_CELLS, g.cells),
+                               (xenium.PART_IMAGE, g.image), (xenium.PART_METRICS, g.metrics)) if path]
+    label = xenium.region_name(by_rel[g.experiment][0]) if g.experiment else ""
+    label = label or _dir_label(f"{g.root}/x" if g.root else "x") or "xenium"
+    missing = g.missing()
+    issues = []
+    if missing:
+        where = f" in {g.root}" if g.root else ""
+        issues.append(f"This Xenium output{where} is missing {' and '.join(missing)}: upload the run's "
+                      "folder (outs/) whole.")
+    return IngestUnit(label=label, format=UnitFormat.xenium, files=files, side_files=side,
+                      complete=not missing, issues=issues)
 
 
 # ---------------------------------------------------------------------------
@@ -427,8 +522,13 @@ def _sample_root(rel: str) -> str:
 def _single_label(bf: BundleFile) -> str:
     """A single-file unit's label: from its name, as always; in a folder, a Cell Ranger
     name (``filtered_feature_bc_matrix.h5``) gives its sample prefix, else the sample
-    folder, else "sample"."""
+    folder, else "sample". A Visium HD bin folder: the run's folder and the bin size
+    (``Mouse_Brain_8um``, ``visium_hd_16um``)."""
     stem = Path(bf.name).stem
+    hd = spatial.hd_folder(bf.rel_path)
+    if hd is not None:
+        run = next((d for d in reversed(PurePosixPath(hd[0]).parts) if d.lower() not in _GENERIC_DIRS), None)
+        return f"{run or 'visium_hd'}_{hd[1]}um"
     if not _dirs(bf.rel_path) or not _strip_tenx(stem.lower().removesuffix("_h5"))[1]:
         return _clean_unit_label(stem)
     return sample_key(bf.name) or _dir_label(bf.rel_path) or "sample"

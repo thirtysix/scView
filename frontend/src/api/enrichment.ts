@@ -51,6 +51,8 @@ export interface GeneListEnrichmentResponse {
   source: string;
   /** Set when the (human) gene sets may not fit the dataset, e.g. a mouse dataset. */
   warning?: string;
+  /** A targeted panel's caution: its genes are the background and bias the result. */
+  panel_caution?: string | null;
 }
 
 /**
@@ -137,6 +139,8 @@ export interface GseaResponse {
   column?: string;
   group?: string;
   warning?: string;
+  /** A targeted panel's caution: its genes are the background and bias the result. */
+  panel_caution?: string | null;
   /** A stored DE result's detection prefilter: only the genes it tested are ranked. */
   de_min_pct?: number | null;
   de_n_genes_skipped?: number | null;

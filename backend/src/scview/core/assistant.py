@@ -239,6 +239,26 @@ def _add_spatial_genes(adaptor, lines: list[str], sources: list[ChatSource]) -> 
                                   evidence="\n".join(sv_lines[1:])))
 
 
+def _add_spatial_domains(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved spatial domains, niches and neighbourhood enrichment
+    (core/spatial_domains.py): k, per-domain counts, stability; only when they fit."""
+    from scview.core import spatial_domains
+
+    try:
+        adata = adaptor.adata
+        if spatial_domains.has_spatial(adata):
+            sd_lines, sd_detail = spatial_domains.grounding_lines(adata)
+        else:
+            sd_lines, sd_detail = [], ""
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: spatial domains failed: %s", exc)
+        return
+    if sd_lines:
+        lines.extend(sd_lines)
+        sources.append(ChatSource(kind="result", ref=spatial_domains.TAG, detail=sd_detail,
+                                  evidence="\n".join(sd_lines[1:])))
+
+
 def _add_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last bulk deconvolution (core/deconvolution.py): the largest cell fraction per
     bulk sample, only once one has run on this dataset."""
@@ -600,7 +620,8 @@ def _qc_removal_fact(adaptor, lines: list[str], sources: list[ChatSource]) -> No
 
     try:
         fact, detail = qc_filter.grounding_lines(
-            adaptor.adata, adaptor.qc_per_cell(), qc_filter.Thresholds.from_params(PipelineParams()))
+            adaptor.adata, *reversed(qc_filter.grid_rules(
+                adaptor.adata, qc_filter.Thresholds.from_params(PipelineParams()), adaptor.qc_per_cell())))
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("assistant: QC removal audit failed: %s", exc)
         return
@@ -894,6 +915,7 @@ def build_grounding_context(
         _add_programs(adaptor, lines, sources)
         _add_wnn(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
+        _add_spatial_domains(adaptor, lines, sources)
         _add_deconvolution(adaptor, lines, sources)
         _add_learned_gate(adaptor, lines, sources)
         _add_spot_deconvolution(adaptor, lines, sources)
@@ -1089,12 +1111,15 @@ def build_insight(adaptor) -> DatasetInsight:
     No LLM call: cheap, reproducible, and safe to run on every load. Picks the
     single most useful nudge by walking the preprocessing state in pipeline order
     (un-normalized → doublets → batch split → cluster → annotate → done)."""
+    from scview.core import spatial
+
     adata = adaptor.adata
     n = int(adata.n_obs)
+    unit = spatial.technology(adata)["unit"] if spatial.has_spatial(adata) else "cell"
     try:
         state = assess_preprocessing(adata)
     except Exception:  # pragma: no cover - defensive
-        return DatasetInsight(insight=f"{n:,} cells loaded.")
+        return DatasetInsight(insight=f"{n:,} {unit}s loaded.")
 
     obs = adata.obs
 
@@ -1102,7 +1127,7 @@ def build_insight(adaptor) -> DatasetInsight:
     if not state.normalization.done or not state.log_transform.done:
         return DatasetInsight(
             insight=(
-                f"This looks like {n:,} cells of raw counts — start with "
+                f"This looks like {n:,} {unit}s of raw counts — start with "
                 "normalization and a log-transform so the downstream steps are valid."
             ),
             question="How should I preprocess this dataset?",
@@ -1137,7 +1162,7 @@ def build_insight(adaptor) -> DatasetInsight:
             med = float(np.nanmedian(obs[col].to_numpy(dtype="float64")))
         except Exception:  # pragma: no cover
             break
-        if med >= 15:
+        if med >= 15 and unit == "cell":  # on spots and bins it marks tissue (qc_filter.grid_rules)
             return DatasetInsight(
                 insight=(
                     f"Median mitochondrial content is high (~{med:.0f}% per cell) — that "

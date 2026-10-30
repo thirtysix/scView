@@ -61,10 +61,14 @@ const METRIC_LABELS: Record<string, string> = {
   pct_counts_ribo: "% Ribosomal",
   pct_counts_hb: "% Hemoglobin",
   pct_malat1: "% MALAT1",
+  pct_control: "% Control counts",
 };
 
 /** What a histogram measures, on hover of its title (only where the label needs it). */
 export const METRIC_HELP: Record<string, string> = {
+  pct_control:
+    "Share of each cell's counts that are no genes: negative-control probes, blank and other control codewords. " +
+    "Xenium's own measure of background; a high share points at the run, not at the cell.",
   pct_malat1:
     "Share of each cell's counts from MALAT1, an RNA kept in the nucleus. Cells with very little may be fragments " +
     "or cytoplasm that lost its nucleus; in single-nucleus data, cytoplasmic debris (Montserrat-Ayuso & " +

@@ -27,6 +27,8 @@ export interface ActivitySummary {
   groups?: string[];
   group_sizes?: number[];
   mean?: number[][];
+  /** A targeted panel's caution (backend core/targeted_panel.py). */
+  panel_caution?: string | null;
   /** Mouse only: the human network was mapped to mouse through HCOP orthologs. */
   orthologs?: ActivityOrthologs;
   elapsed_seconds: number;

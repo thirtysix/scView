@@ -96,7 +96,7 @@ def _seqqc_view(unit: IngestUnit) -> IngestUnit:
     contig tables, guide calls and spatial files are joined to the cells by
     ``_attach_vdj`` / ``_attach_guide_calls`` / ``_attach_spatial`` instead."""
     keep = [f for f in unit.side_files
-            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial)]
+            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial, SideKind.xenium)]
     return unit.model_copy(update={"side_files": keep})
 
 
@@ -670,6 +670,10 @@ class IngestSessionManager:
         with_files = [u for u in loadable
                       if any(f.side_kind == SideKind.spatial for f in u.side_files)]
         if not with_files:
+            if any(u.format == UnitFormat.xenium for u in loadable) and spatial.has_spatial(adata):
+                from scview.core import xenium
+
+                return xenium.summary(adata)
             return None
         if len(with_files) < len(loadable):
             without = ", ".join(u.label for u in loadable if u not in with_files)
@@ -687,7 +691,10 @@ class IngestSessionManager:
                                sample=u.label if merged else None, label=u.label)
             except (spatial.SpatialError, OSError, EOFError, zlib.error) as e:
                 raise IngestCommitError(f"The spatial files of {u.label} could not be used: {e}") from e
-        return spatial.finish(adata)
+        try:
+            return spatial.finish(adata)
+        except spatial.SpatialError as e:
+            raise IngestCommitError(str(e)) from e
 
     def _attach_guide_calls(self, adata, loadable, opts: IngestOptions) -> None:
         """Cell Ranger's protospacer calls uploaded with a unit (``core/crispr.py``),

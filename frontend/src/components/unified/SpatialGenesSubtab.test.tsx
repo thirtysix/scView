@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { MoranResult } from "@/api/spatialAutocorr";
 import type { DatasetInfo, SpatialInfo } from "@/api/types";
 
@@ -54,7 +54,7 @@ describe("SpatialGenesSubtab", () => {
     fireEvent.change(screen.getByLabelText("Section"), { target: { value: "B" } });
     fireEvent.click(screen.getByRole("button", { name: "Find spatial genes" }));
     await screen.findByText("CCL21");
-    expect(api.runSpatialAutocorr).toHaveBeenCalledWith("d1", { genes: "all", library_id: "B" });
+    expect(api.runSpatialAutocorr).toHaveBeenCalledWith("d1", { genes: "all", library_id: "B" }, expect.any(Function));
     expect(screen.getByText(/in section B/)).toBeInTheDocument();
     expect(screen.getByText(/n = 400 spots; 3 genes/)).toBeInTheDocument();
     expect(screen.getByText(/no neighbour within reach/)).toBeInTheDocument();
@@ -101,10 +101,32 @@ describe("SpatialGenesSubtab", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("No spots in section");
   });
 
+  it("counts the genes done while a large dataset's run streams", async () => {
+    setDataset(SPATIAL);
+    let finish: (r: unknown) => void = () => {};
+    api.runSpatialAutocorr.mockImplementation((_d: string, _b: unknown, onProgress: (p: unknown) => void) => {
+      onProgress({ done: 64, total: 2000 });
+      return new Promise((ok) => {
+        finish = ok;
+      });
+    });
+    render(<SpatialGenesSubtab onGeneClick={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Find spatial genes" }));
+    expect(await screen.findByText(/Computing… 64 of 2,000 genes/)).toBeTruthy();
+    await act(async () => finish(RESULT));
+  });
+
+  it("says bins on Visium HD, each compared with the 4 sharing a side", async () => {
+    setDataset({ technology: "visium_hd", unit: "bin", bin_size_um: 8, library_column: "library_id", libraries: [lib("A", 1000)] });
+    render(<SpatialGenesSubtab onGeneClick={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /About Moran/ }));
+    expect((await screen.findAllByText(/4 nearest bins \(those sharing a side\)/)).length).toBeGreaterThan(0);
+  });
+
   it("is empty without spatial data and asks the server nothing", () => {
     setDataset(null);
     render(<SpatialGenesSubtab onGeneClick={vi.fn()} />);
-    expect(screen.getByText(/no spot or cell positions/)).toBeInTheDocument();
+    expect(screen.getByText(/no spot, bin or cell positions/)).toBeInTheDocument();
     expect(api.getSpatialAutocorr).not.toHaveBeenCalled();
   });
 

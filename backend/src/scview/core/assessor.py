@@ -13,7 +13,7 @@ import numpy as np
 from pydantic import BaseModel
 from scipy import sparse
 
-from scview.core import provenance
+from scview.core import provenance, targeted_panel
 from scview.core.cell_cycle import near_zero_phase_calls, phase_caution
 from scview.core.stress import SCORE_COLUMN
 from scview.core.uns_keys import enrichment_column, markers_column
@@ -149,6 +149,9 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
             # Nothing to do (not recommended, nor selected as missing): the run skips it too.
             return StepStatus(done=True, confidence="high", details=f"Not applicable: {spatial.DOUBLET_SKIP}",
                               caution=f"{spatial.DOUBLET_SKIP}.")
+        if spatial.targeted_panel(adata):
+            return StepStatus(done=True, confidence="high",
+                              details=f"Not applicable: {targeted_panel.DOUBLET_SKIP}")
         return StepStatus(
             done=False, confidence="high", details="No doublet annotation found in obs"
         )
@@ -161,8 +164,11 @@ def _check_ambient_correction(adata: Any) -> StepStatus:
     """Corrected for ambient RNA: the original counts are kept beside the corrected ones
     (``core/ambient.py``). Not read from provenance: a reset to counts undoes it."""
     try:
-        from scview.core import ambient
+        from scview.core import ambient, spatial
 
+        if spatial.targeted_panel(adata):
+            return StepStatus(done=True, confidence="high",
+                              details=f"Not applicable: {targeted_panel.AMBIENT_SKIP}")
         if ambient.ORIGINAL_LAYER in getattr(adata, "layers", {}):
             rec = ambient.correction_record(adata) or {}
             rhos = ", ".join(f"{s.get('sample')}: {float(s.get('rho', 0)):.1%}"
@@ -185,7 +191,15 @@ def _check_filtering(adata: Any) -> StepStatus:
     """Heuristic: if QC columns exist and have no very low values, filtering was likely applied."""
     try:
         obs_cols = set(adata.obs.columns)
+        from scview.core import qc_filter, spatial
 
+        if spatial.has_spatial(adata) and spatial.technology(adata)["unit"] == "bin":
+            # Few genes are what a bin has: the heuristic below would never call one filtered.
+            if qc_filter.recorded_filtering(adata) is not None:
+                return StepStatus(done=True, confidence="high", details="Bins filtered (see History)")
+            return StepStatus(done=False, confidence="medium",
+                              details="Not filtered yet. A bin is a square of the capture grid, so few "
+                                      "genes per bin are expected; filtering removes the near-empty ones")
         if "n_genes_by_counts" in obs_cols:
             min_genes = int(adata.obs["n_genes_by_counts"].min())
             if min_genes >= 200:
@@ -859,12 +873,14 @@ def _check_cell_cycle(adata: Any) -> StepStatus:
                 confidence="medium",
                 details="Found 'phase' column but no S_score/G2M_score",
             )
-        else:
-            return StepStatus(
-                done=False,
-                confidence="high",
-                details="No cell cycle scores (S_score, G2M_score) found in obs",
-            )
+        why = targeted_panel.cell_cycle_skip(adata)
+        if why:
+            return StepStatus(done=True, confidence="high", details=f"Not applicable: {why}")
+        return StepStatus(
+            done=False,
+            confidence="high",
+            details="No cell cycle scores (S_score, G2M_score) found in obs",
+        )
     except Exception as exc:
         logger.warning("Error checking cell cycle: %s", exc)
         return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
@@ -874,6 +890,9 @@ def _check_dissociation_stress(adata: Any) -> StepStatus:
     """Check for the per-cell dissociation-stress score in obs."""
     if SCORE_COLUMN in adata.obs.columns:
         return StepStatus(done=True, confidence="high", details=f"Found {SCORE_COLUMN} in obs")
+    why = targeted_panel.stress_skip(adata)
+    if why:
+        return StepStatus(done=True, confidence="high", details=f"Not applicable: {why}")
     return StepStatus(
         done=False, confidence="high", details="No dissociation-stress score in obs"
     )

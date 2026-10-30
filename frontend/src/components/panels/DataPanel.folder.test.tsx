@@ -104,6 +104,55 @@ describe("DataPanel: a folder", () => {
     expect(screen.getByTestId("not-sent")).toHaveTextContent("web_summary.html (Cell Ranger's HTML report)");
   });
 
+  const hdFiles = (um: string) => [
+    picked(`binned_outputs/square_${um}um/filtered_feature_bc_matrix.h5`),
+    picked(`binned_outputs/square_${um}um/raw_feature_bc_matrix.h5`),
+    picked(`binned_outputs/square_${um}um/spatial/tissue_positions.parquet`),
+    picked(`binned_outputs/square_${um}um/spatial/scalefactors_json.json`),
+  ];
+
+  it("asks which bin size of a Visium HD folder, then sends only that one's files", async () => {
+    render(<DataPanel />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("folder-input"), {
+        target: { files: [...hdFiles("002"), ...hdFiles("008"), ...hdFiles("016")] },
+      });
+    });
+    expect(uploadIngestFiles).not.toHaveBeenCalled();
+    expect(screen.getByTestId("hd-bin-choice")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("radio")[2]!);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Upload 16 µm bins/ }));
+    });
+    expect(screen.queryByTestId("hd-bin-choice")).toBeNull();
+    const sent = uploadIngestFiles.mock.calls[0]![1] as { path: string }[];
+    expect(sent.map((i) => i.path)).toEqual([
+      "binned_outputs/square_016um/filtered_feature_bc_matrix.h5",
+      "binned_outputs/square_016um/spatial/tissue_positions.parquet",
+      "binned_outputs/square_016um/spatial/scalefactors_json.json",
+    ]);
+    expect(screen.getByTestId("not-sent")).toHaveTextContent(/another bin size of the run/);
+    expect(screen.getByTestId("not-sent")).toHaveTextContent(/raw matrix/);
+  });
+
+  it("sends one bin folder without asking, and refuses a 2 um one or an archive with a sentence", async () => {
+    render(<DataPanel />);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("folder-input"), { target: { files: hdFiles("002") } });
+    });
+    expect(uploadIngestFiles).not.toHaveBeenCalled();
+    expect(screen.getByText(/use the square_008um or square_016um folder/)).toBeTruthy();
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("folder-input"), { target: { files: [picked("binned_outputs.tar.gz")] } });
+    });
+    expect(uploadIngestFiles).not.toHaveBeenCalled();
+    expect(screen.getByText(/unpack it and drop the binned_outputs folder/)).toBeTruthy();
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("folder-input"), { target: { files: hdFiles("008") } });
+    });
+    expect((uploadIngestFiles.mock.calls[0]![1] as unknown[]).length).toBe(3);
+  });
+
   it("shows the file's folder path on a single-file sample", async () => {
     uploadIngestFiles.mockResolvedValue({
       ...STATE,

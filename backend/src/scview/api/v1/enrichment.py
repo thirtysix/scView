@@ -35,6 +35,7 @@ from scview.core.geneset_sources import (
     tag_records,
 )
 from scview.core.msigdb_loader import defaults_for, get_msigdb_loader
+from scview.core.targeted_panel import enrichment_caution
 from scview.core.ora_background import (
     cache_is_current,
     get_background_genes,
@@ -140,6 +141,7 @@ class EnrichmentResponse(BaseModel):
     source: str  # "gseapy" | "precomputed" | "marker_list" | "msigdb_local"
     # Set when the gene sets (human symbols) may not fit the dataset's species.
     warning: str = ""
+    panel_caution: str | None = None  # a targeted panel biases enrichment (core/targeted_panel.py)
     # The collections used, and the dataset's species (human | mouse | unknown).
     collections: list[str] = []
     species: str = ""
@@ -185,6 +187,7 @@ class GeneListEnrichmentResponse(BaseModel):
     source: str = "msigdb_local"
     warning: str = ""  # e.g. a mouse dataset against human gene sets
     species: str = ""  # the dataset's
+    panel_caution: str | None = None
 
 
 class GseaGene(BaseModel):
@@ -243,6 +246,7 @@ class GseaSide(BaseModel):
 
 
 class GseaResponse(BaseModel):
+    panel_caution: str | None = None
     rank_metric: str  # wilcoxon_score | signed_log10_p | marker_score
     rank_metric_label: str
     n_genes_ranked: int
@@ -573,6 +577,7 @@ def _compute_local(
                 warning=warning,
                 collections=collections,
                 species=species,
+                panel_caution=enrichment_caution(adaptor.adata),
             )
 
     # Existence check. n_genes must be passed through: get_markers defaults to 100,
@@ -622,6 +627,7 @@ def _compute_local(
             warning=warning,
             collections=collections,
             species=species,
+            panel_caution=enrichment_caution(adaptor.adata),
         )
 
     except ImportError:
@@ -701,6 +707,7 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
                 results=results,
                 source="precomputed",
                 warning=warning,
+                panel_caution=enrichment_caution(adaptor.adata),
             )
 
     # Existence check; see compute-local above for the query/background split.
@@ -758,6 +765,7 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
             results=[EnrichmentResult(**r) for r in results],
             source="gseapy",
             warning=warning,
+            panel_caution=enrichment_caution(adaptor.adata),
         )
 
     except ImportError:
@@ -796,6 +804,7 @@ def _compute(dataset_id: str, adaptor, body: EnrichmentComputeRequest) -> Enrich
             results=marker_results,
             source="marker_list",
             warning=warning,
+            panel_caution=enrichment_caution(adaptor.adata),
         )
 
     except Exception as e:
@@ -882,6 +891,7 @@ def _compute_gene_lists(
         down=down,
         warning=ms.warning(species, collections),
         species=species,
+        panel_caution=enrichment_caution(adaptor.adata),
     )
 
 
@@ -1024,6 +1034,7 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
         )
 
     return GseaResponse(
+        panel_caution=enrichment_caution(adaptor.adata),
         rank_metric=ranking.metric,
         rank_metric_label=gsea.RANK_LABELS[ranking.metric],
         n_genes_ranked=len(ranking.genes),

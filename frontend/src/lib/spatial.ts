@@ -30,10 +30,21 @@ export function referenceEmbedding(dataset: DatasetInfo | null | undefined): str
   return ["X_umap", "X_tsne", "X_pca"].find((e) => real.includes(e)) ?? real[0] ?? null;
 }
 
-/** "spot" / "spots" for Visium, "cell" / "cells" otherwise. */
+/** "spot" / "bin" (plural too) for Visium / Visium HD, "cell" / "cells" otherwise. */
 export function unitWord(spatial: SpatialInfo | null | undefined, plural = true): string {
-  const w = spatial?.unit === "spot" ? "spot" : "cell";
+  const w = spatial?.unit ?? "cell";
   return plural ? `${w}s` : w;
+}
+
+/** "Spot" / "Bin" / "Cell" (plural too), for a label or a table header. */
+export function unitTitle(spatial: SpatialInfo | null | undefined, plural = true): string {
+  const w = unitWord(spatial, plural);
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+/** Spots and bins: capture-grid positions, not single cells (Spot composition applies). */
+export function isGridUnit(spatial: SpatialInfo | null | undefined): boolean {
+  return spatial?.unit === "spot" || spatial?.unit === "bin";
 }
 
 /** The section shown: `wanted` when the dataset has it, else the first. */
@@ -101,8 +112,9 @@ export function imageResFor(images: SpatialLibrary["images"], hires: boolean): S
 
 /**
  * A spot's radius in world units (full-res pixels): half the Visium spot
- * diameter at the default point size 2, scaled by the size control; null
- * without a known diameter (cells are drawn in screen pixels, like the scatter).
+ * diameter, or half a Visium HD bin's side (its spot_diameter_fullres), at the
+ * default point size 2, scaled by the size control; null without a known
+ * diameter (cells are drawn in screen pixels, like the scatter).
  */
 export function spotRadius(library: SpatialLibrary | null, pointSize: number): number | null {
   const d = library?.spot_diameter_fullres;

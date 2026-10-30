@@ -81,6 +81,10 @@ reviewer can audit. scView closes both gaps:
 - **Forgiving multi-format ingestion.** h5ad, 10x MEX/HDF5, loom, zarr, dense CSV, Seurat `.rds`,
   and nf-core/scrnaseq outputs, via a guided "Add Data" flow. Human or mouse is detected from the
   gene names, and cell-cycle scoring works on both.
+- **Spatial data on its own terms.** Visium (Space Ranger `outs/`), Visium HD (`binned_outputs/`, 16 or
+  8 um bins) and Xenium output folders open on the tissue image. Find spatially variable genes (Moran's I),
+  spatial domains (CellCharter's method), neighbourhood enrichment and composition niches, with the QC
+  rules adapted: no % mito cut on spots and bins, panel settings on targeted panels.
 - **Unified, linked, server-backed exploration.** A Kana-style single screen: scatter plus tabbed
   Markers/Expression/Gene Sets/Enrichment/DE plus violin, scaling to ~200k cells via a FastAPI
   backend, Apache Arrow, and deck.gl. Lasso (or click) a population for a **volcano of differential
@@ -415,7 +419,8 @@ on the same Linux laptop.
 ### First steps
 1. Open the app and use **Add Data** (the **Data** tab).
 2. Drop in a dataset: `.h5ad`, a 10x matrix (MEX or HDF5), `.loom`, `.zarr`, a dense `.csv`, a
-   Seurat `.rds`, or an nf-core/scrnaseq output. *(No data handy? Download 10x Genomics' 1k PBMC
+   Seurat `.rds`, an nf-core/scrnaseq output, or a Visium, Visium HD or Xenium output folder.
+   *(No data handy? Download 10x Genomics' 1k PBMC
    sample,
    [`pbmc_1k_v3_filtered_feature_bc_matrix.h5`](https://cf.10xgenomics.com/samples/cell-exp/3.0.0/pbmc_1k_v3/pbmc_1k_v3_filtered_feature_bc_matrix.h5)
    (5 MB), and drop it in as it is.)*

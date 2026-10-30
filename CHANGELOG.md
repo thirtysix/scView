@@ -6,6 +6,63 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-10-30
+
+### Added
+- **Xenium output folders import directly.** Choose the folder: only the files scView needs are sent (about
+  30 MB plus the 655 MB DAPI image on a breast cancer section), and cells sit on the image in microns. A
+  zipped run (10 GB) is refused, with what to do instead.
+- **Targeted panels get their own settings** (Xenium, and any spatial cell dataset of up to 6,000 genes;
+  anything you set wins). Target sum is the median cell's counts, every gene counts as variable up to 2,000
+  genes, the QC floor is 10 counts per cell, and there is no doublet or ambient step. Cell-cycle and stress
+  scores are skipped with a sentence when under half of their genes are on the panel. Species comes from the
+  panel's organism. Enrichment, GSEA and activity use the panel as their background and say how to read that.
+  Control-probe share joins the QC metrics. On 167,780 cells x 313 genes the default run took 8 min (4 CPUs)
+  and gave 15 clusters that match the expected breast types.
+- **Visium HD.** Choose `binned_outputs/` or a `square_NNNum/` folder and pick a bin size: 16 um by default,
+  8 um offered. A dataset holds one bin size. 2 um, the `.tar.gz` and `segmented_outputs` are refused with a
+  sentence. Bins are drawn at their real width, all of them at any "Max" setting, and read as solid tissue
+  (393,491 bins: 60 fps idle, about 22 fps while zooming in a headless browser). On a mouse brain section the
+  default run takes 10-17 min on 16 um bins and 3.5 GB; 8 um bins need Leiden with 2 iterations to finish in
+  time (10 min in an 8 GB limit), and read noisier.
+- **Moran's I on large datasets and bins.** Variable genes in 4 s at 393,491 bins, all 18,821 genes in 17 s,
+  from the gene store. Bins use the 4-neighbour grid. Against squidpy 1.6.5 on 16 um bins and 2,000 genes:
+  Pearson 1.0, same top 200.
+- **Spot composition accepts bins**, with a note on how to read a bin's fractions at its size. Bins under
+  100 counts are not fitted, which is 29% of the bins at 8 um.
+- **Spatial domains** (Unified View > Domains): stretches of tissue that look alike and have alike
+  surroundings, by CellCharter's method (Varrone et al. 2024) on every technology and on large datasets. Choose
+  k, or let Suggest k show a stability curve (about 11 min on a large section, with Cancel). Colour the tissue,
+  Find markers, a name of your choosing, replay script, co-pilot facts. On human cortex section 151673, ARI to
+  the manual layers at k = 7 over 10 seeds is 0.305 +- 0.043, against 0.202 +- 0.010 for the same model without
+  space and about 0.22 for Leiden at about 7 clusters. CellCharter 0.3.7 itself gave 0.341 +- 0.054 on one
+  input, and the two tools agree as closely as seeds of either one. Absolute ARI moves 0.28-0.40 with small
+  input changes; the gain over no space held in every variant (0.09-0.17). Suggest k does not recover the 7
+  layers on this section.
+- **Neighbourhood enrichment** of any label column, = squidpy's `nhood_enrichment` (Pearson of z 0.9997 on
+  Xenium, 0.9993 on the cortex section, counts identical). **Composition niches** (Schurch et al. 2020) on
+  cells and 8 um bins, with a note on bins; refused on Visium spots and 16 um bins, where each position mixes cells.
+
+### Changed
+- **% mito is off by default on spots and bins, standard Visium included: this changes results for existing
+  Visium users.** A spot or bin is a position on a capture grid, and a high % mito marks mitochondria-rich
+  tissue. The old default removed 40% of layer 3 and 37% of layer 1 on the cortex section (20.7% of all spots,
+  0.6% of white matter), 19% of a lymph node section, and 13% of 16 um bins on a mouse brain. It did not change
+  domain accuracy beyond noise. Tick "Apply % mito to spots and bins" to keep the old rule; the filter preview
+  says which applies. Fixed mode on bins defaults to min counts 1, and the high-mito nudge is gone there.
+- Spatial datasets open on the tissue plot, and the header, insight, preflight and filter preview say spots or
+  bins instead of cells.
+
+### Fixed
+- The replay script says any skipped step was skipped. It called cell-cycle and stress skips "unknown".
+
+### Known limits
+- Opening a second large dataset while a run is clustering can run the backend out of memory (8 um clustering
+  plus opening 16 um at 8 GB). The run alone fits. Let a large run finish first.
+- Xenium in large mode: Leiden agrees with the in-memory result at ARI 0.946, not exactly.
+- The Leiden time estimate uses the number of cells only: 16 um bins took 811 s against an estimate of 122-489 s.
+- Not yet read: Xenium cell polygons and transcripts, Space Ranger 4 segmentation.
+
 ## [0.50.0] - 2026-10-29
 
 ### Added

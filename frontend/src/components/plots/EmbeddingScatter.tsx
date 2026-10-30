@@ -49,8 +49,8 @@ export interface TissueMode {
   showImage: boolean;
   /** 0..1 */
   imageOpacity: number;
-  /** What one point is (spatial.unit): captions say "spots" for Visium */
-  unit: "spot" | "cell";
+  /** What one point is (spatial.unit): captions say "spots" for Visium, "bins" for Visium HD */
+  unit: "spot" | "bin" | "cell";
 }
 
 interface EmbeddingScatterProps {
@@ -324,8 +324,8 @@ export function EmbeddingScatter({
   const totalCells = positions ? positions.length / stride : 0;
   const tissueMode = tissue != null && dimensions !== 3;
   const unit = tissueMode ? tissue.unit : "cell";
-  const Unit = unit === "spot" ? "Spot" : "Cell";
-  // Visium spots in full-res pixels (world units); null = screen pixels like the scatter
+  const Unit = unit.charAt(0).toUpperCase() + unit.slice(1);
+  // Visium spots and Visium HD bins in full-res pixels (world units); null = screen pixels like the scatter
   const spotR = tissueMode ? spotRadius(tissue.library, pointSize) : null;
 
   const categoricalPalette = useSettingsStore((s) => s.categoricalPalette);
@@ -409,7 +409,9 @@ export function EmbeddingScatter({
   }, [colorValues, colorType, colorScale, categorySlots, opacity, selectedIndices, totalCells, dimToGray, categoricalPalette, continuousColormap]);
 
   // The cells drawn: all of them, or a seeded sample (sorted) over maxRenderedCells...
-  const sample = useMemo(() => sampleCellIndices(totalCells, maxRenderedCells), [totalCells, maxRenderedCells]);
+  // Bins are drawn all of them on the tissue plot: a sample would leave holes in the tissue.
+  const renderCap = tissueMode && tissue.unit === "bin" ? Number.MAX_SAFE_INTEGER : maxRenderedCells;
+  const sample = useMemo(() => sampleCellIndices(totalCells, renderCap), [totalCells, renderCap]);
   const isSampled = sample !== null;
   // ...in a seeded random order, so no group covers another just by being stored
   // after it; the same for every colouring. A selection is drawn over the rest.

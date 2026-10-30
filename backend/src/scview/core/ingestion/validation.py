@@ -51,9 +51,7 @@ def validate_bundle(bundle: Bundle, converted: Collection[str] = ()) -> Validati
     issues: list[IngestIssue] = []
     if bundle.unsupported:
         issues.append(IngestIssue(
-            severity=IssueSeverity.error, code="spatial_unsupported", message=bundle.unsupported,
-            suggestion="Export the data to an .h5ad with obsm['spatial'] (spatialdata-io, squidpy) "
-                       "and upload that file."))
+            severity=IssueSeverity.error, code="spatial_unsupported", message=bundle.unsupported))
     others = sum(u.format != UnitFormat.unknown for u in bundle.units) > 1
     for unit in bundle.units:
         issues.extend(_validate_unit(unit))
@@ -73,6 +71,9 @@ def _validate_unit(unit: IngestUnit) -> list[IngestIssue]:
     issues.extend(_check_gzip_integrity(unit))
     if unit.format == UnitFormat.tenx_mex:
         issues.extend(_validate_mex(unit))
+    if unit.format == UnitFormat.xenium:
+        issues.extend(IngestIssue(severity=IssueSeverity.error, code="xenium_incomplete", message=text,
+                                  unit_label=unit.label) for text in unit.issues)
     issues.extend(_validate_spatial(unit))
     return issues
 

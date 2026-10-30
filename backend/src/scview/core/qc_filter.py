@@ -98,7 +98,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 import numpy as np
@@ -159,6 +159,9 @@ class Thresholds:
     mad_k: float = MAD_K
     mad_k_mt: float = MAD_K_MT
     mad_upper: bool = False  # MAD mode: also cut counts / genes above median + k MADs
+    # MAD mode: never below this many counts, whatever a sample's bound (a targeted panel,
+    # core/targeted_panel.py). Fixed mode folds it into min_counts.
+    counts_floor: float = 0.0
     # "per_type": each cell type's own % mito bound (median + mad_k_mt MADs) instead
     # of the global rule (module docstring); "global": the rule above for every cell.
     mito_mode: str = "global"
@@ -174,13 +177,17 @@ class Thresholds:
     def from_params(cls, params) -> Thresholds:
         """From the pipeline's PipelineParams (or anything with the same fields)."""
         mt = getattr(params, "max_pct_mt", None)
+        mode = str(getattr(params, "qc_threshold_mode", "fixed") or "fixed")
+        floor = float(getattr(params, "qc_counts_floor", 0) or 0)
+        min_counts = float(getattr(params, "min_counts", 0) or 0)
         return cls(
             min_genes=float(getattr(params, "min_genes", 0) or 0),
             max_genes=float(getattr(params, "max_genes", 0) or 0),
-            min_counts=float(getattr(params, "min_counts", 0) or 0),
+            min_counts=max(min_counts, floor) if mode == "fixed" else min_counts,
+            counts_floor=floor,
             max_pct_mt=None if mt is None else float(mt),
             drop_doublets=bool(getattr(params, "drop_doublets", False)),
-            mode=str(getattr(params, "qc_threshold_mode", "fixed") or "fixed"),
+            mode=mode,
             mad_k=float(getattr(params, "qc_mad_k", MAD_K)),
             mad_k_mt=float(getattr(params, "qc_mad_k_mt", MAD_K_MT)),
             mad_upper=bool(getattr(params, "qc_mad_upper", False)),
@@ -206,6 +213,46 @@ class Thresholds:
         for name, k in checks:
             if not (math.isfinite(k) and k > 0):
                 raise ValueError(f"The {name} must be a positive number, not {k}.")
+
+
+# Spots and bins are positions on a capture grid, not cells: few genes and a high % mito say what
+# the tissue is there, not that a cell is broken. Measured with the % mito outlier rule and its
+# 20% ceiling: human cortex (DLPFC 151673, Visium) loses 20.7% of its spots, 40% of layer 3 and 37%
+# of layer 1 against 0.6% of white matter, a human lymph node 19% (median mito 1%, so a small
+# spread); a mouse brain (Visium HD, 16 um; 8 um in brackets) 13.0% (11.8%) of the bins, in solid
+# pieces of the hippocampal molecular layers and cortical layer 1, neuropil rich in mitochondria.
+# So on the grid % mito is off unless asked for (``PipelineParams.qc_grid_mito``). A fixed 200 genes
+# removes 10% (64%) of the bins, the white matter tracts first, so fixed mode's defaults on bins
+# are min_counts 1, no min_genes.
+BIN_MIN_COUNTS = 1.0
+_FIXED_DEFAULT_MIN_GENES = 200.0
+
+
+def grid_note(unit: str) -> str:
+    example = ("on a human cortex section, 40% of the spots of layer 3 and 37% of layer 1"
+               if unit == "spot" else
+               "on a mouse brain, 13% of the 16 um bins, the hippocampal molecular layers and cortical layer 1")
+    what = "A spot holds several cells" if unit == "spot" else "A bin is a square of the capture grid, not a cell"
+    return (f"{what}, so % mito is not used here: it would cut out mitochondria-rich tissue ({example}). "
+            "Tick \"Apply % mito to spots and bins\" to use it anyway.")
+
+
+def grid_rules(adata, t: Thresholds, cells: dict, params=None) -> tuple[Thresholds, dict]:
+    """The thresholds and QC table to judge ``adata`` by: as given, unless it is spots or bins
+    (comment above). There the % mito rule is off (as when a dataset has no MT- genes) unless
+    ``params.qc_grid_mito``; on bins, fixed mode left at the run's default of 200 genes (with
+    no other genes or counts cut-off) becomes min_counts 1. Other fixed cut-offs stand."""
+    from scview.core import spatial
+
+    if not spatial.has_spatial(adata) or spatial.technology(adata)["unit"] not in ("spot", "bin"):
+        return t, cells
+    if (spatial.technology(adata)["unit"] == "bin" and t.mode == "fixed"
+            and t.min_genes == _FIXED_DEFAULT_MIN_GENES and t.max_genes == 0 and t.min_counts == 0):
+        t = replace(t, min_genes=0.0, min_counts=BIN_MIN_COUNTS)
+    if not getattr(params, "qc_grid_mito", False):
+        t = replace(t, max_pct_mt=None)
+        cells = {**cells, "has_mt": False}
+    return t, cells
 
 
 @dataclass
@@ -265,6 +312,7 @@ class MadBounds:
             "k": self.t.mad_k,
             "k_mt": self.t.mad_k_mt,
             "upper": self.t.mad_upper,
+            **({"counts_floor": self.t.counts_floor} if self.t.counts_floor > 0 else {}),
             "ceiling_pct_mt": self.t.max_pct_mt if "pct_mt" in self.hi else None,
             "min_sample_cells": MIN_SAMPLE_CELLS,
             "samples": groups,
@@ -304,6 +352,8 @@ def _bounds(stats: dict[str, tuple[float, float]], t: Thresholds, ceiling: float
         on = key not in skipped
         out[below] = max(0.0, math.expm1(med - t.mad_k * mad)) if on else None
         out[above] = math.expm1(med + t.mad_k * mad) if on and t.mad_upper else None
+    if t.counts_floor > 0:
+        out["min_counts"] = max(out["min_counts"] or 0.0, t.counts_floor)
     mt = None
     if "pct_mt" in stats:
         med, mad = stats["pct_mt"]
@@ -332,8 +382,8 @@ def _reusable(recorded: dict | None, t: Thresholds, column: str | None,
         return None  # not a record this code wrote: work them out afresh
     # Records from before the upper bounds were opt-in had them on.
     same = (rec.get("k"), rec.get("k_mt"), bool(rec.get("upper", True)), rec.get("ceiling_pct_mt"),
-            rec.get("column"))
-    return rec if same == (t.mad_k, t.mad_k_mt, t.mad_upper, ceiling, column) else None
+            rec.get("column"), float(rec.get("counts_floor") or 0))
+    return rec if same == (t.mad_k, t.mad_k_mt, t.mad_upper, ceiling, column, t.counts_floor) else None
 
 
 def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,

@@ -46,6 +46,7 @@ _DATA_HINTS = (
     "outside blood", "other tissues", "elsewhere in the body", "protein atlas", "hpa",
     "copy number", "cnv", "malignant", "protein network", "interaction network",
     "cytokine response",
+    "targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts", "control probe",
 )
 _METHODS_HINTS = (
     "how do i", "how to", "why ", "should i", "what does", "parameter", "resolution",
@@ -134,9 +135,14 @@ _RESULT_FACET_HINTS = {
         "pseudo-bulk", "voom", "ruv", "crispr", "guide", "knockout", "knock-out", "knocked out",
         "perturb", "mixscape", "ligand", "receptor", "communicat", "composition", "proportion",
         "de audit", "donor shuffle", "deconvol", "bulk", "spot composition", "spots", "spot deconv",
+        "visium hd", " bins", "bin composition", "um bin", "µm bin",
         "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
+        "spatial domain", "domains", "niche", "nhood", "stability scan", "neighbourhood enrichment",
+        "neighborhood enrichment", "next to each other", "side by side", "adjacent", "colocal", "co-local",
     ),
     "markers": ("gene program", "programs", "nmf"),
+    "qc": ("targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts",
+           "control probe"),
 }
 
 

@@ -10,6 +10,9 @@ interface TissueViewState {
   showImage: boolean;
   /** 0..1 */
   imageOpacity: number;
+  /** The dataset last opened in Unified View: a spatial one opens on its tissue plot, once */
+  openedOn: string | null;
+  setOpenedOn: (datasetId: string | null) => void;
   setLibrary: (library: string | null) => void;
   setShowImage: (show: boolean) => void;
   setImageOpacity: (opacity: number) => void;
@@ -19,6 +22,8 @@ export const useTissueViewStore = create<TissueViewState>((set) => ({
   library: null,
   showImage: true,
   imageOpacity: 1,
+  openedOn: null,
+  setOpenedOn: (openedOn) => set({ openedOn }),
   setLibrary: (library) => set({ library }),
   setShowImage: (showImage) => set({ showImage }),
   setImageOpacity: (imageOpacity) => set({ imageOpacity: Math.min(1, Math.max(0, imageOpacity)) }),

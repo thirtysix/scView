@@ -21,7 +21,7 @@ from scview.core import (
     cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
 from scview.core import large_mode, large_run, leiden
-from scview.core import batch_methods, qc_states, scaling
+from scview.core import batch_methods, qc_states, scaling, spatial, targeted_panel
 from scview.core.obs_writes import (
     dataset_edit, edit_room, editable, save_edit, uns_snapshot,
 )
@@ -81,6 +81,7 @@ async def get_assessment(
         filtered = qc_filter.recorded_filtering(adata)
         return {**assess_preprocessing(adata).model_dump(),
                 "species": detect_species(adata).model_dump(),
+                "targeted_panel": targeted_panel.assessment(adata),
                 "normalization_method": recorded_normalization_method(adata),
                 # Re-filtering keeps the mode the dataset was filtered with (fixed
                 # before MAD existed); None: never filtered by scView.
@@ -269,6 +270,8 @@ async def get_filter_preview(
     condition_column: str = "",
     doublet_source: str | None = None,
     drop_hash_negatives: bool | None = None,
+    counts_floor: float | None = None,
+    grid_mito: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The cells the filtering step's thresholds would remove (core/qc_filter.py):
@@ -300,15 +303,23 @@ async def get_filter_preview(
                        ("qc_mad_upper", mad_upper), ("qc_mito_mode", mito_mode),
                        ("qc_mito_type_column", mito_type_column or None),
                        ("qc_mito_type_floor", mito_type_floor),
-                       ("qc_doublet_source", doublet_source), ("drop_hash_negatives", drop_hash_negatives)):
+                       ("qc_doublet_source", doublet_source), ("drop_hash_negatives", drop_hash_negatives),
+                       ("qc_counts_floor", counts_floor)):
         if value is not None:
             setattr(params, key, value)
+            params.explicit = (*params.explicit, key)
+    params.qc_grid_mito = bool(grid_mito)
+    # A targeted panel's counts floor, as its run applies it (core/targeted_panel.py).
+    params = targeted_panel.for_run(adaptor.adata, params)
     thresholds = qc_filter.Thresholds.from_params(params)
 
     def _run() -> dict:
-        return qc_filter.preview(adaptor.adata, adaptor.qc_per_cell(), thresholds,
-                                 sample_column or None, cluster_column or None,
-                                 label_column or None, condition_column or None)
+        t, cells = qc_filter.grid_rules(adaptor.adata, thresholds, adaptor.qc_per_cell(), params)
+        out = qc_filter.preview(adaptor.adata, cells, t, sample_column or None, cluster_column or None,
+                                label_column or None, condition_column or None)
+        if t.max_pct_mt is None and thresholds.max_pct_mt is not None:
+            out["grid_note"] = qc_filter.grid_note(spatial.technology(adaptor.adata)["unit"])
+        return out
 
     try:
         # Per-cell metrics may need a pass over the counts the first time: off the loop.
@@ -417,6 +428,7 @@ def _run_params(raw: dict[str, Any] | None) -> PipelineParams:
     for key, value in (raw or {}).items():
         if hasattr(params, key):
             setattr(params, key, value)
+    params.explicit = tuple(k for k in (raw or {}) if k != "explicit" and hasattr(params, k))
     try:
         params.chunked = check_chunked(params.chunked)
         params.leiden_iterations = leiden.check_iterations(params.leiden_iterations)
@@ -544,6 +556,8 @@ async def suggest_improvements(
     species = detect_species(adaptor.adata).species
     if species != "unknown":
         dataset_summary["species"] = species
+    if spatial.targeted_panel(adaptor.adata):
+        dataset_summary["targeted_panel"] = targeted_panel.n_genes(adaptor.adata)
 
     try:
         # Try LLM suggestions if API key is configured

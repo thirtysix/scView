@@ -64,9 +64,11 @@ export interface SpatialLibrary {
 
 /** A dataset's spatial data (backend GET /datasets/{id}, batch 27 contract). */
 export interface SpatialInfo {
-  technology: "visium" | "cells";
-  /** What one observation is: a Visium spot holds several cells */
-  unit: "spot" | "cell";
+  technology: "visium" | "visium_hd" | "xenium" | "cells";
+  /** What one observation is: a Visium spot holds several cells, a Visium HD bin is a grid square */
+  unit: "spot" | "bin" | "cell";
+  /** Visium HD only: the side of a bin in microns */
+  bin_size_um?: number;
   library_column: string;
   libraries: SpatialLibrary[];
 }

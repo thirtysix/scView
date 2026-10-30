@@ -28,7 +28,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 from scview.core.replicates import donor_candidates, pick_donor
-from scview.core import cluster_qc, doublet_source, doublets, seq_metrics, sex_check
+from scview.core import cluster_qc, doublet_source, doublets, seq_metrics, sex_check, spatial, targeted_panel
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
 from scview.core.assistant import DEEPINFRA_BASE_URL, DEFAULT_MODEL, ChatSource
@@ -162,15 +162,27 @@ def build_facts(adaptor) -> QCFacts:
         f.overview.append(_fact("qc:design", design))
 
     # --- Quality: per-cell distributions ---
+    panel = spatial.targeted_panel(adata)
+    if panel:
+        f.overview.append(_fact("qc:panel", f"Targeted panel of {_n(targeted_panel.n_genes(adata))} genes: "
+                                            "low genes per cell are expected, and the run uses the panel's "
+                                            "own settings."))
+        control = targeted_panel.control_summary(adata.obs)
+        if control:
+            f.quality.append(_fact("qc:control", (
+                f"Control counts per cell: median {control['median_pct']:.2f}%; "
+                f"{control['share_above']:.1%} of cells above {control['above_pct']:g}%.")))
+            if control["flag"]:
+                concern("qc:control", control["flag"])
     genes = _dist(cells.get("n_genes"))
     if genes:
         low = float(np.mean(np.asarray(cells["n_genes"]) < 200))
         f.quality.append(_fact("qc:genes", (
             f"Genes per cell: median {_n(genes['median'])} (middle half {_n(genes['q1'])}-"
-            f"{_n(genes['q3'])}; range {_n(genes['min'])}-{_n(genes['max'])}); "
-            f"{low:.1%} of cells have fewer than 200 genes."
-        )))
-        if low >= 0.01 and not state.filtering.done:
+            f"{_n(genes['q3'])}; range {_n(genes['min'])}-{_n(genes['max'])})"
+            + (". " if panel else f"; {low:.1%} of cells have fewer than 200 genes.")
+        ).rstrip()))
+        if low >= 0.01 and not state.filtering.done and not panel:
             concern("qc:genes", f"{low:.1%} of cells have fewer than 200 genes and filtering "
                                 "doesn't look applied.")
             step("qc:genes", "Filter cells with fewer than 200 genes (Filtering step, min genes).")
@@ -197,8 +209,8 @@ def build_facts(adaptor) -> QCFacts:
             step("qc:mito", "Filter out high-mito cells (Filtering step, max % mito; the "
                             "default is 20%).")
     elif genes:
-        f.quality.append(_fact("qc:mito", "No mitochondrial (MT-) genes found, so % mito "
-                                          "can't be measured."))
+        f.quality.append(_fact("qc:mito", targeted_panel.NO_MITO_NOTE if panel else
+                               "No mitochondrial (MT-) genes found, so % mito can't be measured."))
     ribo = _dist(cells.get("pct_ribo"))
     if ribo:
         f.quality.append(_fact("qc:ribo", (
@@ -237,6 +249,8 @@ def build_facts(adaptor) -> QCFacts:
                         "channels, so its expected rates are a guess.")
         text = "; ".join(bits)
         f.quality.append(_fact("qc:doublets", text[:1].upper() + text[1:] + "."))
+    elif state.doublet_detection.details.startswith("Not applicable"):  # spots, a targeted panel
+        f.quality.append(_fact("qc:doublets", state.doublet_detection.details + "."))
     else:
         f.quality.append(_fact("qc:doublets", "Doublet detection has not been run: no doublet "
                                               "calls or scores in the data."))
@@ -300,7 +314,8 @@ def build_facts(adaptor) -> QCFacts:
         sex = None
     if sex is not None:
         line, sex_concerns = sex_check.report_lines(sex)
-        f.overview.append(_fact("qc:sex", line))
+        if not (panel and "can't be inferred" in line):  # a panel simply has no XIST or Y genes
+            f.overview.append(_fact("qc:sex", line))
         for text in sex_concerns[:2]:
             concern("qc:sex", text)
         if any(c["kind"] == "confounded" for c in sex["confounding"]):

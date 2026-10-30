@@ -268,6 +268,12 @@ class OnDiskMatrix(_CSRDataset):
         block = sp.csr_matrix(source(pos, cells))
         return block[0] if isinstance(row, (int, np.integer)) else block
 
+    def columns(self, positions: np.ndarray):
+        """The genes at ``positions`` over every cell, as a sparse CSR, from the gene store (at
+        most ``MAX_COLUMNS``; ``[:, positions]`` takes a whole-gene list for the whole matrix)."""
+        n_cells, n_genes = self.shape
+        return self._columns(slice(None), np.asarray(positions), n_cells, n_genes)
+
     def to_memory(self):
         raise LargeDatasetError(
             f"Reading {self._guard.label} into memory",

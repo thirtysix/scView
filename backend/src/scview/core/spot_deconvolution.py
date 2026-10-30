@@ -118,6 +118,9 @@ CHECK_ALPHA = 0.5
 SECONDS_FIXED = 8.0
 SECONDS_PER_REF_CELL = 2.5e-4
 SECONDS_PER_SPOT_TYPE2 = 1.2e-5
+# Bins hold few counts and settle faster, and the near-empty ones are not fitted. Measured on
+# one core with 13 types: 16 um (98,896 bins) 84 s, 8 um (393,491 bins, 278,322 fitted) 266 s.
+SECONDS_PER_BIN_TYPE2 = 5.5e-6
 NEED_FIXED = 400 * 1024 * 1024
 NEED_COUNTS_COPIES = 2.5
 # A large side (core/large_mode.py) is never read whole: one pass over its counts by row
@@ -130,7 +133,7 @@ LARGE_BLOCK_COPIES = 2.0
 LARGE_SECONDS_PER_VALUE = 2e-7
 LARGE_CHECK_FACTOR = 1.5
 
-NOTE = ("Shares are fractions of each spot's RNA (or, estimated, of its cells), not counts. A cell type "
+NOTE = ("Shares are fractions of each spot's or bin's RNA (or, estimated, of its cells), not counts. A cell type "
         "missing from the reference is given to its nearest type, so its spots look like that type. The "
         "platform correction assumes one effect shared by every type, so single-nucleus references and "
         "probe-based (FFPE) sections differ most.")
@@ -743,12 +746,13 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
         cluster_column=cluster_column if clusters is not None else None, small_types=small,
         info={**ref_info, "celltype_column": celltype_column, "reference_source": rsource, "spot_source": ssource,
               "renamed": match.renamed, "n_ref_genes": match.n_ref, "n_spot_genes": match.n_query,
+              "unit": spatial.technology(spots)["unit"] if spatial.has_spatial(spots) else "spot",
               "n_reference_cells": int((codes >= 0).sum())},
         check=synth,
     )
 
 
-NOT_SPOTS = ("Spot composition needs Visium spots (several cells each): this dataset has no spot grid. "
+NOT_SPOTS = ("Spot composition needs Visium spots or Visium HD bins: this dataset has no capture grid. "
              "Imaging-based data already resolves single cells: label them from a reference instead "
              "(Data Assessment > Label from a reference dataset).")
 
@@ -759,7 +763,7 @@ NOT_SPOTS = ("Spot composition needs Visium spots (several cells each): this dat
 
 
 def estimate_seconds(n_ref: int, n_spots: int, n_types: int, method: str = "rctd", *,
-                     ref_values: int = 0, spot_values: int = 0, check: bool = False) -> float:
+                     ref_values: int = 0, spot_values: int = 0, check: bool = False, bins: bool = False) -> float:
     """Wall time at 2 CPUs: reading the reference, then the fit (types^2 per spot dominate).
     ``ref_values`` / ``spot_values``: the stored values of a large side's counts, read by
     row blocks (a large reference's second pass for the self-check), instead of the
@@ -770,7 +774,8 @@ def estimate_seconds(n_ref: int, n_spots: int, n_types: int, method: str = "rctd
         secs = SECONDS_FIXED + SECONDS_PER_REF_CELL * n_ref
     secs += LARGE_SECONDS_PER_VALUE * spot_values
     if method == "rctd":
-        secs += SECONDS_PER_SPOT_TYPE2 * n_spots * max(n_types, 2) ** 2
+        per = SECONDS_PER_BIN_TYPE2 if bins else SECONDS_PER_SPOT_TYPE2
+        secs += per * n_spots * max(n_types, 2) ** 2
     else:
         secs += 2e-3 * n_spots
     return round(secs, 1)
@@ -886,10 +891,11 @@ def summarize(p: Prepared, out: dict[str, Any], *, method: str) -> dict[str, Any
         notes.insert(0, f"Left out of the reference (fewer than {MIN_TYPE_CELLS} cells): "
                      + ", ".join(p.small_types[:10]) + (" ..." if len(p.small_types) > 10 else "") + ".")
     n_skipped = int((~fitted).sum())
+    unit = p.info.get("unit", "spot")
     if n_skipped:
-        notes.append(f"{n_skipped:,} spots with fewer than {MIN_SPOT_UMI} counts were not fitted (\"{LOW_COUNTS}\").")
+        notes.append(f"{n_skipped:,} {unit}s with fewer than {MIN_SPOT_UMI} counts were not fitted (\"{LOW_COUNTS}\").")
     if n_unconv:
-        notes.append(f"{n_unconv:,} spots did not settle within {MAX_ITER} rounds; their last estimate is kept.")
+        notes.append(f"{n_unconv:,} {unit}s did not settle within {MAX_ITER} rounds; their last estimate is kept.")
     if p.info.get("renamed"):
         notes.append(f"Genes were matched after re-indexing {p.info['renamed']}.")
     stats_rna, stats_cells = _share_stats(rna, p.types), _share_stats(cells, p.types)

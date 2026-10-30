@@ -33,6 +33,7 @@ import { UnifiedDESubtab } from "@/components/unified/UnifiedDESubtab";
 import { UnifiedActivitySubtab } from "@/components/unified/UnifiedActivitySubtab";
 import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSubtab";
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
+import { SpatialDomainsSubtab } from "@/components/unified/SpatialDomainsSubtab";
 import { SpatialGenesSubtab } from "@/components/unified/SpatialGenesSubtab";
 import { TraitsSubtab } from "@/components/unified/TraitsSubtab";
 import { DeconvolutionSubtab } from "@/components/unified/DeconvolutionSubtab";
@@ -73,7 +74,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { densityLegendNote, lastDensityMeta, overlayGene, overlayWord, showDensity } from "@/lib/density";
 import { useDensityFollow } from "@/hooks/useDensityFollow";
 import { useTissuePositions } from "@/hooks/useTissuePositions";
-import { listedEmbeddings, referenceEmbedding, TISSUE_GRID_REASON, tissueSpatial, unitWord } from "@/lib/spatial";
+import {
+  isGridUnit,
+  listedEmbeddings,
+  referenceEmbedding,
+  TISSUE_GRID_REASON,
+  tissueSpatial,
+  unitTitle,
+} from "@/lib/spatial";
 import { useTissueViewStore } from "@/stores/tissueViewStore";
 import { SPATIAL_EMBEDDING } from "@/api/spatial";
 import type { TissueMode } from "@/components/plots/EmbeddingScatter";
@@ -94,6 +102,7 @@ const SUBTABS = [
   { id: "clonotypes" as const, label: "Clonotypes" },
   { id: "perturbation" as const, label: "Perturbation" },
   { id: "spatial" as const, label: "Spatial genes" },
+  { id: "domains" as const, label: "Domains" },
   { id: "traits" as const, label: "Traits" },
   { id: "deconvolution" as const, label: "Deconvolution" },
   { id: "spotcomp" as const, label: "Spot composition" },
@@ -190,7 +199,6 @@ export function UnifiedViewPanel() {
         : null,
     [tissueInfo, tissueLibrary, datasetId, showTissueImage, tissueImageOpacity],
   );
-  const units = unitWord(dataset?.spatial);
 
   // A density overlay is computed again when the plot or layer changes.
   useDensityFollow();
@@ -228,7 +236,11 @@ export function UnifiedViewPanel() {
     const dsId = dataset?.id ?? null;
     if (numCells > 0 && dsId && autoAdjustedRef.current !== dsId) {
       autoAdjustedRef.current = dsId;
-      if (numCells > 100_000) {
+      if (dataset?.spatial?.unit === "bin") {
+        // Tissue view: radius 0.75 of a bin's side, past its corners, so the tissue reads solid.
+        setPointSize(3);
+        setOpacity(0.8);
+      } else if (numCells > 100_000) {
         setPointSize(1);
         setOpacity(0.5);
       } else if (numCells > 50_000) {
@@ -237,6 +249,16 @@ export function UnifiedViewPanel() {
       }
     }
   }, [numCells, dataset, setPointSize, setOpacity]);
+
+  // A spatial dataset opens on its tissue plot, its primary view (once: a choice of UMAP
+  // stands for as long as the dataset stays open; lib/sessionRestore.ts sets a saved view).
+  const tissueOpenedOn = useTissueViewStore((s) => s.openedOn);
+  const setTissueOpenedOn = useTissueViewStore((s) => s.setOpenedOn);
+  useEffect(() => {
+    if (!dataset || dataset.id !== datasetId || tissueOpenedOn === datasetId) return;
+    setTissueOpenedOn(datasetId);
+    if (dataset.spatial) setEmbedding(SPATIAL_EMBEDDING);
+  }, [dataset, datasetId, tissueOpenedOn, setTissueOpenedOn, setEmbedding]);
 
   useEffect(() => {
     if (!dataset) return;
@@ -539,7 +561,7 @@ export function UnifiedViewPanel() {
   useEffect(() => {
     if (activeSubtab === "protein" && dataset && !dataset.protein) setActiveSubtab("markers");
     if (activeSubtab === "perturbation" && dataset && !dataset.perturbation) setActiveSubtab("markers");
-    if (activeSubtab === "spatial" && dataset && !dataset.spatial) setActiveSubtab("markers");
+    if ((activeSubtab === "spatial" || activeSubtab === "domains") && dataset && !dataset.spatial) setActiveSubtab("markers");
   }, [activeSubtab, dataset, setActiveSubtab]);
 
   // Default the expression layer to the dataset's default; re-default when the
@@ -1281,7 +1303,7 @@ export function UnifiedViewPanel() {
                   </div>
                 )}
                 <div className={`mb-1 ${lines.length > 0 ? "text-[11px] text-slate-400" : "font-semibold text-slate-700"}`}>
-                  {units === "spots" ? "Spot" : "Cell"} {hoveredCell.index.toLocaleString()}
+                  {unitTitle(dataset?.spatial, false)} {hoveredCell.index.toLocaleString()}
                 </div>
                 {hoveredCell.metadata ? (() => {
                   const isEmbeddingCol = (key: string) => {
@@ -1368,7 +1390,7 @@ export function UnifiedViewPanel() {
               </div>
               <div className="flex w-1/2 min-w-0 flex-col gap-1.5 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-xs">
                 <div className="text-[11px] font-semibold text-slate-600">Summary</div>
-                <InfoRow label={units === "spots" ? "Spots" : "Cells"} value={numCells.toLocaleString()} />
+                <InfoRow label={unitTitle(dataset?.spatial)} value={numCells.toLocaleString()} />
                 <InfoRow label="Grouping" value={prettyObsLabel(groupByColumn)} />
                 <InfoRow
                   label="Groups"
@@ -1394,8 +1416,8 @@ export function UnifiedViewPanel() {
               (tab) =>
                 (tab.id !== "protein" || dataset?.protein) &&
                 (tab.id !== "perturbation" || dataset?.perturbation) &&
-                (tab.id !== "spatial" || dataset?.spatial) &&
-                (tab.id !== "spotcomp" || dataset?.spatial?.unit === "spot"),
+                ((tab.id !== "spatial" && tab.id !== "domains") || dataset?.spatial) &&
+                (tab.id !== "spotcomp" || isGridUnit(dataset?.spatial)),
             )}
             active={activeSubtab}
             onChange={setActiveSubtab}
@@ -1492,6 +1514,9 @@ export function UnifiedViewPanel() {
                 activeGene={scatterOverlay?.type === "expression" && !scatterOverlay.layer ? overlayLabel : null}
               />
             )}
+            {activeSubtab === "domains" && dataset?.spatial && (
+              <SpatialDomainsSubtab groupByColumn={groupByColumn} setGroupByColumn={setGroupByColumn} />
+            )}
             {activeSubtab === "traits" && (
               <TraitsSubtab
                 onGeneClick={handleGeneClick}
@@ -1501,7 +1526,7 @@ export function UnifiedViewPanel() {
               />
             )}
             {activeSubtab === "deconvolution" && <DeconvolutionSubtab />}
-            {activeSubtab === "spotcomp" && dataset?.spatial?.unit === "spot" && <SpotCompositionSubtab />}
+            {activeSubtab === "spotcomp" && isGridUnit(dataset?.spatial) && <SpotCompositionSubtab />}
           </TabPanel>
         </div>
       </div>

@@ -1100,7 +1100,7 @@ def spatial_genes(adata, names, genes):
     return idx[idx >= 0]
 
 
-def spatial_moran(adata, M, names, genes, library_id, grid):
+def spatial_moran(adata, M, names, genes, library_id, grid, n_neighs=N_NEIGHS):
     """Moran's I per gene on the spots (one section's, or all), as squidpy's
     uns["moranI"]: genes as the index, I, pval_norm, var_norm, pval_norm_fdr_bh."""
     libs = (adata.obs["library_id"].astype(str).to_numpy() if "library_id" in adata.obs.columns
@@ -1108,7 +1108,7 @@ def spatial_moran(adata, M, names, genes, library_id, grid):
     rows = np.flatnonzero(libs == str(library_id)) if library_id else np.arange(adata.n_obs)
     idx = spatial_genes(adata, names, genes)
     M = M[rows][:, idx]
-    W = spatial_weights(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows], grid)
+    W = spatial_weights(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows], grid, n_neighs)
     order = spatial_order(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows])
     table, _ = morans_i(W, M, np.asarray([str(n) for n in names])[idx], order)
     return pd.DataFrame({"I": table["I"].to_numpy(), "pval_norm": table["pval"].to_numpy(),
@@ -1232,6 +1232,32 @@ _HELPER_NEEDS["wnn"] = ("dsb",)  # protein_counts_for
 _HELPERS["spot_deconvolution"] = _spot_deconvolution_helper()
 _HELPER_ORDER += ("spot_deconvolution",)
 _HELPER_NEEDS["spot_deconvolution"] = ("looks_like_counts",)
+
+
+def _spatial_domains_helper() -> str:
+    """core/spatial_domains.py's graph, features, mixture, enrichment and niches (numpy,
+    scipy, pandas, sklearn), copied so the script finds them as scView did."""
+    import inspect
+
+    from scview.core import spatial_domains as sd
+
+    lines = ["from scipy.spatial import Delaunay, QhullError", "from sklearn.cluster import KMeans",
+             "from sklearn.mixture import GaussianMixture"]
+    for obj in sd.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def spatial_sections(adata):
+    """Each observation's section (the whole dataset as one when none is recorded)."""
+    if "library_id" in adata.obs.columns:
+        return adata.obs["library_id"].astype(str).to_numpy()
+    return np.full(adata.n_obs, "", dtype=object)
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["spatial_domains"] = _spatial_domains_helper()
+_HELPER_ORDER += ("spatial_domains",)
+_HELPER_NEEDS["spatial_domains"] = ("spatial_autocorr",)  # knn_edges
 
 
 def _need(ctx: _Ctx, *names: str) -> None:
@@ -1605,8 +1631,10 @@ del original, groups, corrected
 def _normalization(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "keep_raw_counts")
     target = p.get("target_sum", 1e4)
+    rule = p.get("target_sum_rule")
+    note = f"# target_sum: {comment_text(rule, 80)} of the cells scView normalised\n" if rule else ""
     return Snippet(EXACT, _block(f'''
-if "counts" not in adata.layers:
+{note}if "counts" not in adata.layers:
     if adata.raw is None or looks_like_counts(adata.X):
         adata.layers["counts"] = adata.X.copy()
     else:
@@ -1620,6 +1648,9 @@ def _log_transform(p: dict, ctx: _Ctx) -> Snippet:
 
 
 def _hvg(p: dict, ctx: _Ctx) -> Snippet:
+    if p.get("hvg_flavor") == "all_genes":
+        return Snippet(EXACT, ["# A targeted panel: every gene is used, no variable-gene selection.",
+                               'adata.var["highly_variable"] = True'])
     n = p.get("n_top_genes", 2000)
     batch = p.get("hvg_batch_key") or None
     if "pearson_residuals" in (p.get("normalization_method"), p.get("hvg_flavor")):
@@ -2746,7 +2777,7 @@ def _vdj_remove(p: dict, ctx: _Ctx) -> Snippet:
 
 def _step_skipped(p: dict, ctx: _Ctx) -> Snippet:
     """A step that does not apply to the data (core/pipeline.py ``StepNotApplicable``:
-    doublet detection on Visium spots): skipped here too, with scView's reason."""
+    doublet detection on Visium spots, cell cycle on a panel): skipped here too, with scView's reason."""
     step = comment_text(p.get("step") or "this step", 40)
     reason = comment_text(p.get("reason") or "it does not apply", 160)
     return Snippet(EXACT, [f"# {step} was skipped: {reason}."])
@@ -2818,13 +2849,79 @@ def _spatial_autocorr(p: dict, ctx: _Ctx) -> Snippet:
     gene_lines = ([f"SPATIAL_GENES = {_lit(genes)}"] if isinstance(genes, str)
                   else ["SPATIAL_GENES = [", *_packed([repr(str(g)) for g in genes]), "]"])
     return Snippet(EXACT, [
-        f"# Spatially variable genes: Moran's I per gene ({'Visium grid' if kind == 'grid' else 'kNN'} "
+        f"# Spatially variable genes: Moran's I per gene ({'capture grid' if kind == 'grid' else 'kNN'} "
         f"neighbours, {p.get('n_neighs', 6)} per spot, within each section), = squidpy 1.6's",
         "# spatial_neighbors + spatial_autocorr defaults; saved where squidpy saves it.",
         *values,
         *gene_lines,
         f"adata.uns[\"moranI\"] = spatial_moran(adata, M, names, SPATIAL_GENES, "
-        f"{_lit(p.get('library_id'))}, grid={_lit(kind == 'grid')})",
+        f"{_lit(p.get('library_id'))}, grid={_lit(kind == 'grid')}, n_neighs={_lit(p.get('n_neighs', 6))})",
+    ])
+
+
+def _spatial_domains(p: dict, ctx: _Ctx) -> Snippet:
+    """Spatial domains (core/spatial_domains.py) at the k the run ended on; no scan: the
+    stability curve only advised on k."""
+    column, k, rep, n_pcs, n_hops, seed = (p.get(x) for x in ("column", "k", "rep", "n_pcs", "n_hops", "seed"))
+    grid = p.get("grid_neighbours")
+    if (not isinstance(column, str) or not isinstance(k, int) or not isinstance(rep, str) or not isinstance(n_pcs, int)
+            or not isinstance(n_hops, int) or not isinstance(seed, int)):
+        return Snippet(NOT_REPLAYABLE, ["# Spatial domains: settings not recorded. Recorded:", *_param_comment(p)],
+                       "settings not recorded")
+    _need(ctx, "spatial_domains")
+    return Snippet(EXACT, [
+        f"# Spatial domains (CellCharter's method, Varrone et al. 2024): k = {k} on the first {n_pcs} components of "
+        f"{comment_text(rep, 40)}, {n_hops} hops.",
+        f"adj = spatial_graph(np.asarray(adata.obsm[\"spatial\"])[:, :2], spatial_sections(adata), {_lit(grid)})",
+        f"features = aggregate_neighbors(adj, np.asarray(adata.obsm[{_lit(rep)}])[:, :{n_pcs}], {n_hops})",
+        f"domains, _ = fit_domains(features, {k}, {seed})",
+        f"adata.obs[{_lit(column)}] = pd.Categorical.from_codes(domains, categories=[str(i) for i in range({k})])",
+    ])
+
+
+def _nhood_enrichment(p: dict, ctx: _Ctx) -> Snippet:
+    """Neighbourhood enrichment (core/spatial_domains.py, = squidpy's), saved where squidpy saves it."""
+    from scview.core.spatial_domains import squidpy_key
+
+    column, labels, n_perms, seed = (p.get(x) for x in ("column", "labels", "n_perms", "seed"))
+    if (not isinstance(column, str) or not isinstance(labels, list) or len(labels) < 2 or not isinstance(n_perms, int)
+            or not isinstance(seed, int)):
+        return Snippet(NOT_REPLAYABLE, ["# Neighbourhood enrichment: settings not recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items() if x != "labels"})],
+                       "settings not recorded")
+    _need(ctx, "spatial_domains")
+    return Snippet(EXACT, [
+        f"# Neighbourhood enrichment of {comment_text(column, 60)}, {n_perms} permutations (= squidpy's "
+        "nhood_enrichment); the same seed gives the same z here.",
+        f"codes = pd.Categorical(adata.obs[{_lit(column)}].astype(str), categories={_lit([str(x) for x in labels])}).codes",
+        "keep = codes >= 0",
+        f"adj = spatial_graph(np.asarray(adata.obsm[\"spatial\"])[:, :2], spatial_sections(adata), {_lit(p.get('grid_neighbours'))})",
+        f"z, count = nhood_enrichment(adj[keep][:, keep], codes[keep], {len(labels)}, spatial_sections(adata)[keep], "
+        f"{n_perms}, {seed})",
+        f"adata.uns[{_lit(squidpy_key(column))}] = {{\"zscore\": z, \"count\": count}}",
+    ])
+
+
+def _spatial_niches(p: dict, ctx: _Ctx) -> Snippet:
+    """Composition niches (core/spatial_domains.py; Schurch et al. 2020)."""
+    column, label, labels, window, n, seed = (p.get(x) for x in ("column", "label_column", "labels", "k_window",
+                                                                 "n_niches", "seed"))
+    if (not isinstance(column, str) or not isinstance(label, str) or not isinstance(labels, list) or len(labels) < 2
+            or not isinstance(window, int) or not isinstance(n, int) or not isinstance(seed, int)):
+        return Snippet(NOT_REPLAYABLE, ["# Composition niches: settings not recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items() if x != "labels"})],
+                       "settings not recorded")
+    _need(ctx, "spatial_domains")
+    return Snippet(EXACT, [
+        f"# Composition niches (Schurch et al. 2020): k-means on the {comment_text(label, 60)} fractions among each "
+        f"observation's {window} nearest, {n} niches.",
+        f"codes = pd.Categorical(adata.obs[{_lit(label)}].astype(str), categories={_lit([str(x) for x in labels])}).codes",
+        "keep = codes >= 0",
+        f"fractions = window_fractions(np.asarray(adata.obsm[\"spatial\"])[:, :2][keep], codes[keep], {len(labels)}, "
+        f"spatial_sections(adata)[keep], {window})",
+        "niches = np.full(adata.n_obs, -1, dtype=np.int32)",
+        f"niches[keep] = fit_niches(fractions, {n}, {seed})",
+        f"adata.obs[{_lit(column)}] = pd.Categorical.from_codes(niches, categories=[str(i) for i in range({n})])",
     ])
 
 
@@ -2883,8 +2980,10 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "learned_gate_apply": _learned_gate_apply,
     "wnn": _wnn,
     "spot_deconvolution": _spot_deconvolution,
+    "spatial_domains": _spatial_domains,
+    "nhood_enrichment": _nhood_enrichment,
+    "spatial_niches": _spatial_niches,
     "run_errors": _run_errors,
-    "doublet_detection_skipped": _step_skipped,
 }
 
 
@@ -2893,7 +2992,8 @@ def _snippet(step: dict, ctx: _Ctx) -> Snippet:
     cannot be written from its record, gets a placeholder comment."""
     name = str(step.get("step") or "")
     params = step.get("params") if isinstance(step.get("params"), dict) else {}
-    fn = _STEP_CODE.get(name)
+    # Any step that does not apply is recorded as <step>_skipped (core/pipeline.py ``record_skip``).
+    fn = _step_skipped if name.endswith("_skipped") else _STEP_CODE.get(name)
     if fn is None:
         return Snippet(UNKNOWN, ["# This scView version has no code for this step type; it is",
                                  "# not replayed. Recorded:", *_param_comment(params)],
@@ -3020,7 +3120,8 @@ def build_script(adata, *, dataset_id: str = "", dataset_name: str = "",
         "# Here: " + ", ".join(f"{n} {s}" for s, n in counts.items() if n) + "."
         if steps else "# No steps are recorded for this dataset.",
         "# PCA, UMAP, Harmony and the neighbour graph are seeded, but thread count and BLAS",
-        "# can move their last digits, and with them a few cells' clusters.",
+        "# can move their last digits, and with them a few cells' clusters; in tissue without",
+        "# sharp clusters, as a cortex section, the number of Leiden clusters can change.",
     ]
     n_chunked = sum(1 for h in steps if (h.get("params") or {}).get("chunked") is True)
     if n_chunked:

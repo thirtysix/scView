@@ -693,6 +693,10 @@ def summary(adata, threshold: float | None = None, column: str | None = None,
 
         if spatial.is_spot_data(adata):  # Visium spots: no doublet step to suggest
             out["not_applicable"] = spatial.DOUBLET_SKIP
+        elif spatial.targeted_panel(adata):
+            from scview.core.targeted_panel import DOUBLET_SKIP
+
+            out["not_applicable"] = DOUBLET_SKIP
         if CLASSIFIER_CALL in adata.obs.columns:  # the classifier ran alone
             ch, _ = _grouping(adata, column, classifier_record(adata))
             out.update(classifier=_classifier_summary(adata, ch, n_bins), methods=None,

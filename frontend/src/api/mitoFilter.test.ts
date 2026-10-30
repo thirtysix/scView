@@ -17,6 +17,15 @@ afterEach(() => vi.unstubAllGlobals());
 const T: FilterThresholds = { min_genes: 200, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: false };
 
 describe("mito filter API", () => {
+  it("sends the spots-and-bins opt-in in either % mito mode", async () => {
+    const fetchSpy = vi.fn<(url: string) => Promise<Response>>(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    await getFilterPreview("d1", T);
+    expect(String(fetchSpy.mock.calls[0]![0])).not.toContain("grid_mito");
+    await getFilterPreview("d1", { ...T, qc_grid_mito: true });
+    expect(new URL(String(fetchSpy.mock.calls[1]![0]), "http://x").searchParams.get("grid_mito")).toBe("true");
+  });
+
   it("asks the filter preview for per-type bounds only when they are chosen", async () => {
     const fetchSpy = vi.fn<(url: string) => Promise<Response>>(async () => new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);

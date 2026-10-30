@@ -11,6 +11,7 @@ import {
 import { useDatasetStore } from "@/stores/datasetStore";
 import { qcGroupOptions } from "@/lib/qcGroups";
 import { bound, pct, thresholdMode } from "@/lib/qcThresholds";
+import { unitTitle, unitWord } from "@/lib/spatial";
 import { SampleQcTable } from "@/components/panels/SampleQcTable";
 import { useSexCheck } from "@/components/panels/SampleSexCheck";
 import { RemovalAudit } from "@/components/qc/RemovalAudit";
@@ -235,6 +236,7 @@ export function QcFilterSummary({
   const key = JSON.stringify(thresholds);
   const columnsKey = JSON.stringify(auditColumns);
   const mode = thresholdMode(thresholds);
+  const spatial = useDatasetStore((s) => s.currentDataset?.spatial);
   // Each sample's sex from expression, for the per-sample table: asked once the
   // samples are known, and again only when they change (not per threshold).
   const sex = useSexCheck(datasetId, preview?.samples?.column ?? null, refreshKey, preview !== null);
@@ -263,7 +265,7 @@ export function QcFilterSummary({
 
   const header = (
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <h4 className="text-xs font-semibold text-slate-700">Cells these thresholds remove</h4>
+      <h4 className="text-xs font-semibold text-slate-700">{unitTitle(spatial)} these thresholds remove</h4>
       <span className="flex items-center gap-2">
         {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
         {onChange && <ModeSwitch mode={mode} onChange={(m) => onChange({ qc_threshold_mode: m })} />}
@@ -295,13 +297,21 @@ export function QcFilterSummary({
       <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="qc-loss-summary">
         {header}
         {mode === "mad" && <MadControls thresholds={thresholds} preview={preview} onChange={onChange} />}
-        <MitoModeControl
-          datasetId={datasetId}
-          values={thresholds}
-          onChange={onChange}
-          hasMt={preview.has_mt}
-          table={preview.mito_types ?? null}
-        />
+        {preview.grid_note && (
+          <p className="text-[11px] leading-relaxed text-slate-600" data-testid="qc-grid-note">
+            {preview.grid_note}
+          </p>
+        )}
+        {/* grid_note: the rule is off on spots and bins (has_mt false), the % mito itself is measured. */}
+        {!preview.grid_note && (
+          <MitoModeControl
+            datasetId={datasetId}
+            values={thresholds}
+            onChange={onChange}
+            hasMt={preview.has_mt}
+            table={preview.mito_types ?? null}
+          />
+        )}
         {error && (
           <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
             {error}
@@ -309,7 +319,7 @@ export function QcFilterSummary({
         )}
         <p className="text-[11px] text-slate-700">
           <span className="font-semibold">
-            {preview.n_removed.toLocaleString()} of {preview.n_cells.toLocaleString()} cells (
+            {preview.n_removed.toLocaleString()} of {preview.n_cells.toLocaleString()} {unitWord(spatial)} (
             {pct(preview.fraction_removed)})
           </span>
           {parts.length > 0 ? `; each threshold on its own: ${parts.join(", ")}` : ": no threshold is on"}.
@@ -343,7 +353,7 @@ export function QcFilterSummary({
         {preview.clusters && <LossTable title="Per cluster" grouping={preview.clusters} />}
         {onChange && <DoubletFilterControl preview={preview} thresholds={thresholds} onChange={onChange} />}
         <p className="text-[11px] text-slate-400">
-          {preview.has_mt ? "" : "% mito can't be measured here, so no mito threshold applies. "}
+          {preview.has_mt || preview.grid_note ? "" : "% mito can't be measured here, so no mito threshold applies. "}
           {mode === "mad" ? "The fixed genes and counts cut-offs are not used in MAD mode. " : ""}
           These are the Cell/Gene Filtering step&apos;s parameters: they apply when that step runs (tick it,
           or Reprocess from Scratch).

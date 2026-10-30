@@ -346,6 +346,8 @@ export interface FilterThresholds {
   max_pct_mt: number;
   drop_doublets: boolean;
   qc_threshold_mode?: QcThresholdMode;
+  /** Never below this many counts per cell, whatever the mode (a targeted panel's is 10). */
+  qc_counts_floor?: number;
   /** MADs below the median for counts and genes (log scale); above too with `qc_mad_upper`. */
   qc_mad_k?: number;
   /** MADs above the median for % mito. */
@@ -360,6 +362,8 @@ export interface FilterThresholds {
   qc_mito_type_column?: string;
   /** Per type: never stricter than the global rule (a type's bound = max(own, global)). */
   qc_mito_type_floor?: boolean;
+  /** Visium HD bins: apply the % mito rules (off by default: they cut tissue out) */
+  qc_grid_mito?: boolean;
   /** Whose doublets "drop doublets" drops; "auto" = cell hashing when run, else Scrublet. */
   qc_doublet_source?: DoubletSource;
   /** Also drop cell hashing's negatives (no tag above background). */
@@ -532,6 +536,8 @@ export interface RemovalAuditColumns {
 
 /** What the thresholds would remove (backend core/qc_filter.py). */
 export interface FilterPreview {
+  /** Visium HD bins, when the % mito rule is off for them: why */
+  grid_note?: string;
   n_cells: number;
   n_removed: number;
   n_kept: number;
@@ -593,6 +599,7 @@ export async function getFilterPreview(
     drop_doublets: String(t.drop_doublets),
     mode: thresholdMode(t),
   });
+  if (t.qc_counts_floor !== undefined) q.set("counts_floor", String(t.qc_counts_floor));
   if (t.qc_mad_k !== undefined) q.set("mad_k", String(t.qc_mad_k));
   if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
   if (t.qc_mad_upper !== undefined) q.set("mad_upper", String(t.qc_mad_upper));
@@ -602,6 +609,7 @@ export async function getFilterPreview(
     if (t.qc_mito_type_column) q.set("mito_type_column", t.qc_mito_type_column);
     if (t.qc_mito_type_floor) q.set("mito_type_floor", "true");
   }
+  if (t.qc_grid_mito) q.set("grid_mito", "true");
   if (t.qc_doublet_source && t.qc_doublet_source !== "auto") q.set("doublet_source", t.qc_doublet_source);
   if (t.drop_hash_negatives) q.set("drop_hash_negatives", "true");
   if (columns.label_column) q.set("label_column", columns.label_column);

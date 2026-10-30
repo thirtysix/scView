@@ -30,6 +30,16 @@ def test_doublet_step_is_skipped_on_spots_and_recorded():
     assert f"# doublet_detection was skipped: {spatial.DOUBLET_SKIP}." in script
 
 
+def test_any_step_skipped_is_said_so_in_the_replay_script():
+    a = _squidpy_like(n=30)
+    spatial.adopt(a)
+    provenance.record_step(a, step="cell_cycle_skipped", tool="scview pipeline",
+                           params={"step": "cell_cycle", "reason": "Only 3 of the 97 genes"})
+    script = replay_script.build_script(a)
+    assert "# cell_cycle was skipped: Only 3 of the 97 genes." in script
+    assert "no code for this step type" not in script
+
+
 def test_streamed_run_reports_the_skip():
     from scview.core.pipeline import run_pipeline_streamed
 
@@ -56,6 +66,7 @@ def test_cell_coordinates_are_not_spots():
     a = _squidpy_like(key="X_spatial", lib=None)
     del a.obs["array_row"]
     spatial.adopt(a)
+    a.uns["scview_spatial"]["targeted_panel"] = False  # few genes here: no panel (test_targeted_panel.py)
     assert not spatial.is_spot_data(a)
     assert not assess_preprocessing(a).doublet_detection.done
     assert "not_applicable" not in doublets.summary(a)

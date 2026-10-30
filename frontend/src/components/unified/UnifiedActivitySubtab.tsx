@@ -3,7 +3,7 @@ import { Loader2, Search } from "lucide-react";
 import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import { InfoTip } from "@/components/common/InfoTip";
-import { CapNote } from "@/components/common/Caption";
+import { CapNote, Caption } from "@/components/common/Caption";
 import { useDatasetStore } from "@/stores/datasetStore";
 import {
   getActivityCells,
@@ -351,6 +351,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
               </table>
             </div>
           </div>
+          {summary.panel_caution && <Caption testId="panel-caution">{summary.panel_caution}</Caption>}
           {summary.orthologs && (
             <p className="text-[11px] text-amber-700">
               Mouse dataset: {summary.label} is human, so it was mapped to mouse through{" "}

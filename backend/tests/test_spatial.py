@@ -157,25 +157,6 @@ def test_missing_positions_is_an_error_and_missing_scalefactors_a_warning(tmp_pa
     assert not rep.ok and any(i.code == "spatial_no_positions" for i in rep.issues)
 
 
-def test_visium_hd_and_xenium_are_refused_with_a_sentence(tmp_path):
-    hd = tmp_path / "hd" / "outs" / "binned_outputs" / "square_008um"
-    _h5(hd / "filtered_feature_bc_matrix.h5")
-    rep = validate_bundle(build_bundle(_files(tmp_path / "hd"), root=tmp_path / "hd"))
-    assert not rep.ok and any(i.code == "spatial_unsupported" and "Visium HD" in i.message for i in rep.issues)
-    xe = tmp_path / "xe"
-    _h5(xe / "cell_feature_matrix.h5")
-    (xe / "experiment.xenium").write_text('{"run_name": "x"}')
-    (xe / "transcripts.csv.gz").write_bytes(b"")
-    rep = validate_bundle(build_bundle(_files(xe), root=xe))
-    assert not rep.ok and any("Xenium" in i.message for i in rep.issues)
-
-
-def test_hd_barcodes_in_positions_are_refused(tmp_path):
-    p = tmp_path / "tissue_positions.csv"
-    p.write_text("barcode,in_tissue,array_row,array_col,pxl_row_in_fullres,pxl_col_in_fullres\n"
-                 "s_008um_00000_00001-1,1,0,1,5,5\n")
-    with pytest.raises(spatial.SpatialError, match="Visium HD"):
-        spatial.read_spaceranger([("positions", str(p), p.name)])
 
 
 # ---------------------------------------------------------------------------
@@ -381,3 +362,50 @@ def test_integration_unit_carries_spatial():
     spatial.adopt(a)
     u = build_unit(a, dataset_id="d", name="n", label="L", fallback_paths=[])
     assert u.adata.obsm["spatial"].shape == (12, 2) and "V1_LN" in u.adata.uns["spatial"]
+
+
+def _hd_like():
+    a = ad.AnnData(np.ones((3, 2), dtype=np.float32))
+    a.obsm["spatial"] = np.arange(6, dtype=np.float64).reshape(3, 2)
+    a.obs["array_row"] = [0, 0, 1]
+    a.obs["array_col"] = [0, 1, 0]
+    a.uns["spatial"] = {"s1": {"images": {}, "metadata": {}, "scalefactors": {
+        "spot_diameter_fullres": 29.2, "bin_size_um": 8.0}}}
+    return a
+
+
+def test_bin_size_makes_visium_hd_bins_which_count_as_spot_data():
+    a = _hd_like()
+    assert spatial.adopt(a) is True
+    assert a.uns["scview_spatial"] == {"technology": "visium_hd", "unit": "bin", "bin_size_um": 8.0}
+    assert spatial.is_spot_data(a) is True
+    assert spatial.info(a)["unit"] == "bin"
+    assert spatial.grounding_lines(a)[1].startswith("Visium HD")
+
+
+def test_recorded_xenium_and_its_own_keys_survive_adopt_and_merge():
+    def xenium():
+        a = ad.AnnData(np.ones((2, 2), dtype=np.float32))
+        a.obsm["spatial"] = np.arange(4, dtype=np.float64).reshape(2, 2)
+        a.uns["scview_spatial"] = {"technology": "xenium", "unit": "cell", "panel": "p"}
+        return a
+
+    a = xenium()
+    spatial.adopt(a)
+    assert a.uns["scview_spatial"] == {"technology": "xenium", "unit": "cell", "panel": "p"}
+    assert spatial.is_spot_data(a) is False
+    parts = {"A": xenium(), "B": xenium()}
+    merged = ad.concat(parts, label="sample", index_unique=":")
+    spatial.after_merge(parts, merged, "sample")
+    assert merged.uns["scview_spatial"] == {"technology": "xenium", "unit": "cell"}
+
+
+def test_plain_visium_and_cells_stay_as_they_were():
+    a = _hd_like()
+    del a.uns["spatial"]["s1"]["scalefactors"]["bin_size_um"]
+    spatial.adopt(a)
+    assert a.uns["scview_spatial"] == {"technology": "visium", "unit": "spot"}
+    b = ad.AnnData(np.ones((2, 2), dtype=np.float32))
+    b.obsm["spatial"] = np.arange(4, dtype=np.float64).reshape(2, 2)
+    spatial.adopt(b)
+    assert b.uns["scview_spatial"] == {"technology": "cells", "unit": "cell"}
