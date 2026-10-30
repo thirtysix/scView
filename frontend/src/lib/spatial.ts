@@ -47,11 +47,6 @@ export function isGridUnit(spatial: SpatialInfo | null | undefined): boolean {
   return spatial?.unit === "spot" || spatial?.unit === "bin";
 }
 
-/** "Visium HD, 8 µm bins" for a caption; the technology's name is not needed for others. */
-export function hdBinLabel(spatial: SpatialInfo | null | undefined): string | null {
-  return spatial?.bin_size_um ? `Visium HD, ${spatial.bin_size_um} µm bins` : null;
-}
-
 /** The section shown: `wanted` when the dataset has it, else the first. */
 export function activeLibrary(spatial: SpatialInfo, wanted: string | null | undefined): SpatialLibrary | null {
   return spatial.libraries.find((l) => l.id === wanted) ?? spatial.libraries[0] ?? null;

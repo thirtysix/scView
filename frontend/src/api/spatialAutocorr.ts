@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import { API_BASE } from "@/lib/constants";
+import { streamEvents } from "./clustering";
 
 // --- Spatially variable genes: Moran's I per gene (backend core/spatial_autocorr.py,
 // api/v1/spatial_autocorr.py) ---
@@ -54,8 +55,32 @@ export async function getSpatialAutocorr(datasetId: string): Promise<MoranResult
   }
 }
 
-export function runSpatialAutocorr(datasetId: string, body: MoranRunBody): Promise<MoranResult> {
-  return apiFetch(`/datasets/${datasetId}/spatial/autocorr`, { method: "POST", body: JSON.stringify(body) });
+export interface MoranProgress {
+  done: number;
+  total: number;
+}
+
+/**
+ * Run it as a stream (POST .../spatial/autocorr/run-stream): all genes on a large dataset take
+ * many minutes, past what a proxy waits for a silent response. Resolves with the saved result.
+ */
+export async function runSpatialAutocorr(
+  datasetId: string,
+  body: MoranRunBody,
+  onProgress?: (p: MoranProgress) => void,
+): Promise<MoranResult> {
+  const out: { result?: MoranResult } = {};
+  await streamEvents(
+    `/datasets/${datasetId}/spatial/autocorr/run-stream`,
+    body,
+    (event, data) => {
+      if (event === "progress") onProgress?.(data as MoranProgress);
+      else if (event === "result") out.result = data as MoranResult;
+    },
+    "Spatially variable genes",
+  );
+  if (!out.result) throw new Error("Spatially variable genes: the run ended without a result.");
+  return out.result;
 }
 
 export function spatialAutocorrCsvUrl(datasetId: string, resultId: string): string {

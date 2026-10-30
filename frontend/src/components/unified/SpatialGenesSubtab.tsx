@@ -9,6 +9,7 @@ import {
   getSpatialAutocorr,
   runSpatialAutocorr,
   spatialAutocorrCsvUrl,
+  type MoranProgress,
   type MoranResult,
   type MoranRow,
 } from "@/api/spatialAutocorr";
@@ -64,6 +65,7 @@ export function SpatialGenesSubtab({
   const [genes, setGenes] = useState<"hvg" | "all">("hvg");
   const [library, setLibrary] = useState("");
   const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<MoranProgress | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "I", dir: "desc" });
@@ -102,7 +104,8 @@ export function SpatialGenesSubtab({
   const run = () => {
     setRunning(true);
     setError(null);
-    runSpatialAutocorr(datasetId, { genes, library_id: library || null })
+    setProgress(null);
+    runSpatialAutocorr(datasetId, { genes, library_id: library || null }, setProgress)
       .then(setResult)
       .catch((e) => setError(errorMessage(e)))
       .finally(() => setRunning(false));
@@ -162,7 +165,13 @@ export function SpatialGenesSubtab({
           className="flex items-center gap-1 rounded bg-primary px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           {running && <Loader2 className="h-3 w-3 animate-spin" />}
-          {running ? "Computing…" : result ? "Run again" : "Find spatial genes"}
+          {running
+            ? progress
+              ? `Computing… ${progress.done.toLocaleString()} of ${progress.total.toLocaleString()} genes`
+              : "Computing…"
+            : result
+              ? "Run again"
+              : "Find spatial genes"}
         </button>
       </div>
       {genes === "all" && allSeconds >= LONG_SECONDS && (

@@ -78,6 +78,8 @@ FACT_PADJ = 0.05
 SECONDS_PER_VALUE = 1.3e-8
 LONG_SECONDS = 4.0  # the UI says how long above this
 GENE_BLOCK = 64  # genes read at a time from a large dataset's gene store
+NEED_PER_OBS = 400  # KD-tree, its query's distances and indices, W and W + W'
+NEED_LARGE_BLOCK = 512 * 2**20  # a block of genes and W times it
 
 REPLAY_CONSTANTS = ("N_NEIGHS", "GRID_SWAY", "BLOCK_BYTES")
 
@@ -234,9 +236,10 @@ REPLAY_CODE = (knn_edges, spatial_weights, weight_moments, moran_sums, bh_adjust
                morans_i)
 
 
-def moran_sums_by_genes(W, read, n_genes, block=GENE_BLOCK):
+def moran_sums_by_genes(W, read, n_genes, block=GENE_BLOCK, progress=None):
     """``moran_sums`` of a matrix read a block of genes at a time: ``read(a, b)`` gives genes
-    a..b as a sparse spots x genes matrix (a large dataset's gene store). Stays sparse."""
+    a..b as a sparse spots x genes matrix (a large dataset's gene store). Stays sparse.
+    ``progress(done, total)`` after each block (it may raise to stop the run)."""
     W = sp.csr_matrix(W)
     r = np.asarray(W.sum(axis=1)).ravel()
     c = np.asarray(W.sum(axis=0)).ravel()
@@ -251,6 +254,8 @@ def moran_sums_by_genes(W, read, n_genes, block=GENE_BLOCK):
         xr[a:b] = r @ B
         xc[a:b] = c @ B
         constant[a:b] = B.max(axis=0).toarray().ravel() == B.min(axis=0).toarray().ravel()
+        if progress is not None:
+            progress(b, n_genes)
     return xwx, s, ss, xr, xc, constant
 
 
@@ -362,14 +367,27 @@ def estimate_seconds(n_obs: int, n_genes: int) -> float:
     return round(max(0.2, SECONDS_PER_VALUE * n_obs * n_genes), 1)
 
 
+def need_bytes(adaptor) -> int:
+    """Memory a run holds beyond the open dataset: the neighbour search and the weights, and a
+    block of genes (a large dataset) or the chosen genes' copy and a block of rows."""
+    adata = adaptor.adata
+    n = int(adata.n_obs)
+    if large_mode.is_large(adaptor):
+        return NEED_PER_OBS * n + NEED_LARGE_BLOCK
+    x = adata.raw.X if adata.raw is not None else adata.X
+    nnz = int(getattr(x, "nnz", 0) or 0)
+    return NEED_PER_OBS * n + 3 * BLOCK_BYTES + 12 * nnz // 4
+
+
 def _large_values(adata):
     """A large dataset's log-normalised X (read from its gene store) and gene names."""
     return adata.X, adata.var_names, "log-normalised X"
 
 
 def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str | None = None,
-        dataset_id: str = "") -> Result:
-    """Moran's I for the chosen genes on all sections (or one)."""
+        dataset_id: str = "", progress=None) -> Result:
+    """Moran's I for the chosen genes on all sections (or one). ``progress(done, total)``: genes
+    done, for a large dataset's blocks of genes (a run in memory takes seconds)."""
     if not has_spatial(adata):
         raise SpatialAutocorrError("This dataset has no spatial coordinates (obsm['spatial']).")
     t0 = time.time()
@@ -406,7 +424,8 @@ def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str 
             block = M.columns(idx[a:b])
             return block if whole else block[rows]
 
-        table, n_constant = moran_table(W, moran_sums_by_genes(W, read, len(idx)), np.asarray(names)[idx])
+        table, n_constant = moran_table(W, moran_sums_by_genes(W, read, len(idx), progress=progress),
+                                       np.asarray(names)[idx])
     else:
         table, n_constant = morans_i(W, M, np.asarray(names)[idx], spatial_order(coords, libs[rows]))
     if n_constant:

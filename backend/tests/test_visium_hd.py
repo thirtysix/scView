@@ -430,6 +430,37 @@ async def test_api_moran_on_a_large_dataset_saves_in_place(client, dataset_manag
     assert adaptor.is_large and adaptor.h5ad_path == str(h5ad) and "moranI" in adaptor.adata.uns
 
 
+async def test_api_moran_stream_counts_genes_and_gives_the_result(client, dataset_manager, tmp_data_dir):
+    from tests.large_fixture import register
+    from tests.test_hvg_sensitivity import _events
+
+    a = _grid()
+    a.X = sp.csr_matrix(np.random.default_rng(1).poisson(1 + a.X.toarray()), dtype=np.float32)
+    register(tmp_data_dir, "hdstream", a)
+    r = await client.post(f"{API}/datasets/hdstream/spatial/autocorr/run-stream", json={"genes": ["smooth", "noise"]})
+    assert r.status_code == 200, r.text
+    events = _events(r.text)
+    assert [e for e, _ in events] == ["progress", "result", "complete"] and events[0][1] == {"done": 2, "total": 2}
+    assert events[-2][1]["n_genes"] == 2 and events[-2][1]["unit"] == "bin"
+    bad = await client.post(f"{API}/datasets/hdstream/spatial/autocorr/run-stream", json={"library_id": "nope"})
+    assert _events(bad.text)[-1][0] == "error" and "nope" in _events(bad.text)[-1][1]["error"]
+
+
+def test_moran_stops_when_its_progress_says_so():
+    a = _grid()
+    W = sa.spatial_weights(a.obsm["spatial"], a.obs["library_id"].astype(str).to_numpy(), True, 4)
+    M = sp.csr_matrix(a.X, dtype=np.float64)
+    seen = []
+
+    def progress(done, total):
+        seen.append((done, total))
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        sa.moran_sums_by_genes(W, lambda x, y: M[:, x:y], 3, block=1, progress=progress)
+    assert seen == [(1, 3)]
+
+
 # ---------------------------------------------------------------------------
 # QC: bins are not cells
 # ---------------------------------------------------------------------------
