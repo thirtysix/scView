@@ -24,7 +24,7 @@ export interface MoranResult {
   /** The genes actually tested: "hvg" falls back to "all" without variable genes */
   genes: "hvg" | "all" | "list";
   matrix_source: string;
-  unit: "spot" | "cell";
+  unit: "spot" | "bin" | "cell";
   n_constant: number;
   notes: string[];
   /** Rows sent (highest I first); the CSV has every gene */

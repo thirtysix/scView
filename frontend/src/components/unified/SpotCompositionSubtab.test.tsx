@@ -19,7 +19,7 @@ const refresh = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock("@/hooks/useDatasetRefresh", () => ({ useDatasetRefresh: () => refresh }));
 
 import { SpotCompositionSubtab } from "./SpotCompositionSubtab";
-import { fmtShare, heatmapLayout, shareFill, shareLabel, toOverlayValues, typeRows } from "@/lib/spotComposition";
+import { binCaveat, fmtShare, heatmapLayout, shareFill, shareLabel, toOverlayValues, typeRows } from "@/lib/spotComposition";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
@@ -147,6 +147,17 @@ describe("SpotCompositionSubtab", () => {
     s = useUnifiedViewStore.getState();
     expect(s.scatterOverlay).toBeNull();
     expect(useSettingsStore.getState().colorBy).toBe("spot_deconv_top");
+  });
+
+  it("says bins on Visium HD, and how to read a bin's shares at its size", async () => {
+    const bins = ds("d1", { ...SPATIAL, technology: "visium_hd", unit: "bin", bin_size_um: 8 });
+    useDatasetStore.setState({ currentDatasetId: "d1", currentDataset: bins, availableDatasets: [bins, ds("ref")] });
+    api.getSpotDeconvolution.mockResolvedValue({ ...INFO, saved: null });
+    render(<SpotCompositionSubtab />);
+    fireEvent.click(await screen.findByRole("button", { name: "About spot composition" }));
+    expect((await screen.findAllByText(/A Visium HD bin is a square of the capture grid/)).length).toBeGreaterThan(0);
+    expect(binCaveat(8)).toMatch(/dominant type/);
+    expect(binCaveat(16)).toMatch(/2 to 4 cells/);
   });
 
   it("explains a dataset it cannot fit and a refused reference", async () => {

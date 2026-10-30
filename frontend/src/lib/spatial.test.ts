@@ -4,12 +4,14 @@ import {
   activeLibrary,
   imageBounds,
   imageResFor,
+  isGridUnit,
   listedEmbeddings,
   maskToLibrary,
   referenceEmbedding,
   spotRadius,
   tissueSpatial,
   tissueWorld,
+  unitTitle,
   unitWord,
   wantsHires,
 } from "./spatial";
@@ -109,5 +111,24 @@ describe("tissue plot helpers", () => {
 
   it("turns image coordinates (y down) into the plot's world (y up)", () => {
     expect(Array.from(tissueWorld(Float32Array.from([10, 20, 30, 40])))).toEqual([10, -20, 30, -40]);
+  });
+});
+
+describe("Visium HD bins", () => {
+  const hd = { technology: "visium_hd", unit: "bin", bin_size_um: 8, library_column: "library_id", libraries: [] } as SpatialInfo;
+
+  it("says bins, and counts as a capture grid", () => {
+    expect(unitWord(hd)).toBe("bins");
+    expect(unitWord(hd, false)).toBe("bin");
+    expect(unitTitle(hd)).toBe("Bins");
+    expect(unitTitle(hd, false)).toBe("Bin");
+    expect(unitTitle(null)).toBe("Cells");
+    expect(isGridUnit(hd)).toBe(true);
+    expect(isGridUnit({ ...hd, unit: "cell" })).toBe(false);
+  });
+
+  it("draws a bin half its side wide at point size 2", () => {
+    const lib = { id: "a", n_obs: 1, images: {}, spot_diameter_fullres: 29.2, bounds: [0, 0, 1, 1] } as SpatialLibrary;
+    expect(spotRadius(lib, 2)).toBeCloseTo(14.6);
   });
 });

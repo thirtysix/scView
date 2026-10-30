@@ -9,6 +9,7 @@ import { cellsMatching } from "@/api/cells";
 import { getDataset } from "@/api/datasets";
 import type { DatasetInfo } from "@/api/types";
 import { describeFilter } from "@/lib/cellFilter";
+import { useTissueViewStore } from "@/stores/tissueViewStore";
 import { fromSessionGate, gateDependencies, toSessionGate, validateGates, type Gate } from "@/lib/gates";
 import { formatNumber, prettyEmbeddingLabel, prettyObsLabel } from "@/lib/formatting";
 import {
@@ -342,7 +343,10 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
   const split = useSplitViewStore.getState();
 
   if (v.embedding) {
-    if (listedEmbeddings(d).includes(v.embedding)) settings.setEmbedding(v.embedding);
+    if (listedEmbeddings(d).includes(v.embedding)) {
+      settings.setEmbedding(v.embedding);
+      useTissueViewStore.getState().setOpenedOn(d.id); // the saved view stands, not the tissue default
+    }
     else notes.push(`Embedding ${prettyEmbeddingLabel(v.embedding)}: not in this dataset.`);
   }
   if (v.expression_layer) {

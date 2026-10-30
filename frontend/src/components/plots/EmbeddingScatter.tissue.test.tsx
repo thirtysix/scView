@@ -128,6 +128,45 @@ describe("EmbeddingScatter tissue mode", () => {
     expect(pts.radiusMaxPixels).toBeGreaterThan(1e6);
   });
 
+  it("draws every Visium HD bin at half its side, past the sampling cap, and names bins", async () => {
+    render(
+      <EmbeddingScatter
+        positions={positions}
+        colorValues={Int32Array.from([0, 1, 0])}
+        colorType="categorical"
+        categories={["A", "B"]}
+        pointSize={2}
+        embedding="spatial"
+        maxRenderedCells={1}
+        tissue={tissue({ unit: "bin", library: { ...LIB, spot_diameter_fullres: 29.2 } })}
+      />,
+    );
+    await screen.findByTestId("deck");
+    const dots = layer("embedding-scatter")!;
+    expect(dots.props.getRadius).toBeCloseTo(14.6);
+    expect(dots.props.radiusUnits).toBe("common");
+    // The two with a position in this section: never sampled down to the cap of 1.
+    expect((dots.props.data as { length: number }).length).toBe(2);
+    expect(screen.queryByText(/sampled/)).toBeNull();
+  });
+
+  it("still samples cells over the cap", async () => {
+    render(
+      <EmbeddingScatter
+        positions={Float32Array.from([1, 1, 2, 2, 3, 3])}
+        colorValues={Int32Array.from([0, 1, 0])}
+        colorType="categorical"
+        categories={["A", "B"]}
+        pointSize={2}
+        embedding="spatial"
+        maxRenderedCells={1}
+        tissue={tissue({ unit: "spot" })}
+      />,
+    );
+    await screen.findByTestId("deck");
+    expect((layer("embedding-scatter")!.props.data as { length: number }).length).toBe(1);
+  });
+
   it("draws cells in screen pixels when the spot size is unknown", async () => {
     renderTissue(tissue({ library: { ...LIB, spot_diameter_fullres: null }, unit: "cell" }), 3);
     await screen.findByTestId("deck");

@@ -101,10 +101,17 @@ describe("SpatialGenesSubtab", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("No spots in section");
   });
 
+  it("says bins on Visium HD, each compared with the 4 sharing a side", async () => {
+    setDataset({ technology: "visium_hd", unit: "bin", bin_size_um: 8, library_column: "library_id", libraries: [lib("A", 1000)] });
+    render(<SpatialGenesSubtab onGeneClick={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /About Moran/ }));
+    expect((await screen.findAllByText(/4 nearest bins \(those sharing a side\)/)).length).toBeGreaterThan(0);
+  });
+
   it("is empty without spatial data and asks the server nothing", () => {
     setDataset(null);
     render(<SpatialGenesSubtab onGeneClick={vi.fn()} />);
-    expect(screen.getByText(/no spot or cell positions/)).toBeInTheDocument();
+    expect(screen.getByText(/no spot, bin or cell positions/)).toBeInTheDocument();
     expect(api.getSpatialAutocorr).not.toHaveBeenCalled();
   });
 

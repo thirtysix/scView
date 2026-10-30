@@ -67,6 +67,8 @@ export interface SpatialInfo {
   technology: "visium" | "visium_hd" | "xenium" | "cells";
   /** What one observation is: a Visium spot holds several cells, a Visium HD bin is a grid square */
   unit: "spot" | "bin" | "cell";
+  /** Visium HD only: the side of a bin in microns */
+  bin_size_um?: number;
   library_column: string;
   libraries: SpatialLibrary[];
 }

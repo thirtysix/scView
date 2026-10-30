@@ -14,6 +14,7 @@ import {
 } from "@/api/spatialAutocorr";
 import { errorMessage } from "@/lib/errorMessage";
 import { formatPValue } from "@/lib/formatting";
+import { unitWord } from "@/lib/spatial";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 const TABLE_LIMIT = 200;
@@ -90,10 +91,10 @@ export function SpatialGenesSubtab({
 
   if (!dataset || !datasetId) return <div className="text-xs text-slate-400">No dataset loaded.</div>;
   if (!spatial) {
-    return <div className="text-xs text-slate-400">This dataset has no spot or cell positions.</div>;
+    return <div className="text-xs text-slate-400">This dataset has no spot, bin or cell positions.</div>;
   }
 
-  const units = spatial.unit === "spot" ? "spots" : "cells";
+  const units = unitWord(spatial);
   const libs = spatial.libraries;
   const nObs = library ? (libs.find((l) => l.id === library)?.n_obs ?? 0) : (dataset.n_cells ?? 0);
   const allSeconds = estimateSeconds(nObs, dataset.n_genes ?? 0);
@@ -110,7 +111,7 @@ export function SpatialGenesSubtab({
   const onSort = (key: SortKey) =>
     setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "gene" ? "asc" : key === "I" ? "desc" : "asc" }));
 
-  const resultUnits = result?.unit === "cell" ? "cells" : "spots";
+  const resultUnits = `${result?.unit ?? "spot"}s`;
   const sortLabel = COLUMNS.find((c) => c.key === sort.key)?.label ?? sort.key;
 
   return (
@@ -120,7 +121,8 @@ export function SpatialGenesSubtab({
         <InfoTip label="About Moran's I" width={300}>
           Moran&apos;s I asks whether neighbouring {units} have similar values of a gene: 1 means neighbours are
           alike, about 0 means the pattern is random, and below 0 means neighbours differ. Each {spatial.unit}{" "}
-          is compared with its 6 nearest {units} in the same section.
+          is compared with its {spatial.unit === "bin" ? "4 nearest bins (those sharing a side)" : `6 nearest ${units}`} in
+          the same section.
         </InfoTip>
       </div>
 

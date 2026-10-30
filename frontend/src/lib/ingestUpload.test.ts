@@ -1,7 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { itemsFromDrop, itemsFromFiles, junkReason, relativePath, skippedNote, splitJunk } from "./ingestUpload";
+import {
+  HD_DEFAULT_BIN_UM,
+  hdBinOptions,
+  hdDefaultBin,
+  hdRefusal,
+  itemsFromDrop,
+  itemsFromFiles,
+  junkReason,
+  keepHdBin,
+  relativePath,
+  skippedNote,
+  splitJunk,
+  type UploadItem,
+} from "./ingestUpload";
 
 /** A File as a folder pick gives it: with its path inside the chosen folder. */
 function picked(path: string, size = 3): File {
@@ -83,5 +96,93 @@ describe("folder upload helpers", () => {
     expect(suffixes.length).toBeGreaterThan(5);
     for (const n of names) expect(junkReason(`outs/spatial/${n}`), n).not.toBeNull();
     for (const x of suffixes) expect(junkReason(`outs/file${x}`), x).not.toBeNull();
+  });
+});
+
+describe("Visium HD folders", () => {
+  const f = (path: string, size = 10): UploadItem => ({ file: new File([new Uint8Array(size)], path.split("/").pop()!), path });
+  const bins = (run: string, um: number, size = 10) => {
+    const d = `${run}square_${String(um).padStart(3, "0")}um`;
+    return [
+      f(`${d}/filtered_feature_bc_matrix.h5`, size),
+      f(`${d}/raw_feature_bc_matrix.h5`, 999),
+      f(`${d}/raw_probe_bc_matrix.h5`, 999),
+      f(`${d}/filtered_feature_bc_matrix/matrix.mtx.gz`),
+      f(`${d}/analysis/pca/components.csv`),
+      f(`${d}/cloupe.cloupe`),
+      f(`${d}/spatial/tissue_positions.parquet`),
+      f(`${d}/spatial/scalefactors_json.json`),
+      f(`${d}/spatial/tissue_hires_image.png`),
+      f(`${d}/spatial/tissue_lowres_image.png`),
+      f(`${d}/spatial/aligned_tissue_image.jpg`),
+      f(`${d}/spatial/detected_tissue_image.jpg`),
+      f(`${d}/spatial/cytassist_image.tiff`),
+    ];
+  };
+
+  it("leaves everything out of a bin folder but its filtered matrix and four spatial files", () => {
+    const { keep, skipped } = splitJunk(bins("", 8));
+    expect(keep.map((k) => k.path).sort()).toEqual([
+      "square_008um/filtered_feature_bc_matrix.h5",
+      "square_008um/spatial/scalefactors_json.json",
+      "square_008um/spatial/tissue_hires_image.png",
+      "square_008um/spatial/tissue_lowres_image.png",
+      "square_008um/spatial/tissue_positions.parquet",
+    ]);
+    expect(skipped).toHaveLength(8);
+    expect(skipped.every((s) => s.reason.length > 0)).toBe(true);
+  });
+
+  it("keeps a Cell Ranger raw matrix, which is not junk outside a bin folder", () => {
+    expect(junkReason("pbmc/outs/raw_feature_bc_matrix.h5")).toBeNull();
+  });
+
+  it("offers the bin sizes of a folder, finest first, 8 um first choice, 2 um refused", () => {
+    const options = hdBinOptions([
+      ...bins("run/outs/binned_outputs/", 2, 181),
+      ...bins("run/outs/binned_outputs/", 8, 112),
+      ...bins("run/outs/binned_outputs/", 16, 90),
+    ]);
+    expect(options.map((o) => [o.um, o.matrixBytes, o.refused])).toEqual([
+      [2, 181, true],
+      [8, 112, false],
+      [16, 90, false],
+    ]);
+    expect(options[2]!.maxBins).toBe(175_352);
+    expect(hdDefaultBin(options)).toBe(HD_DEFAULT_BIN_UM);
+    expect(hdDefaultBin(options.filter((o) => o.um !== 8))).toBe(16);
+    expect(hdBinOptions([f("pbmc/outs/filtered_feature_bc_matrix.h5")])).toEqual([]);
+  });
+
+  it("sends one bin size, and says why the rest of the run is left out", () => {
+    const items = [
+      ...bins("run/outs/binned_outputs/", 2),
+      ...bins("run/outs/binned_outputs/", 8),
+      f("run/outs/segmented_outputs/cell_segmentations.geojson"),
+      f("run/outs/web_summary.html"),
+      f("other/filtered_feature_bc_matrix.h5"),
+    ];
+    const { keep, skipped } = keepHdBin(items, 8);
+    expect(keep.some((k) => k.path.includes("square_002um"))).toBe(false);
+    expect(keep.some((k) => k.path.includes("segmented"))).toBe(false);
+    expect(keep.some((k) => k.path === "other/filtered_feature_bc_matrix.h5")).toBe(true);
+    expect(skipped.find((s) => s.path.includes("square_002um"))!.reason).toMatch(/another bin size/);
+    expect(skipped.find((s) => s.path.includes("segmented"))!.reason).toMatch(/rest of the Space Ranger/);
+  });
+
+  it("refuses what is not read before anything is sent", () => {
+    expect(hdRefusal([f("Visium_HD_Mouse_Brain_binned_outputs.tar.gz")])).toMatch(/unpack it/);
+    expect(hdRefusal(bins("binned_outputs/", 2))).toMatch(/use the square_008um or square_016um/);
+    expect(hdRefusal([...bins("", 2), ...bins("", 16)])).toBeNull();
+    expect(hdRefusal([f("outs/segmented_outputs/cell_segmentations.geojson")])).toMatch(/segmented_outputs/);
+    expect(hdRefusal([...bins("outs/binned_outputs/", 8), f("outs/segmented_outputs/x.geojson")])).toBeNull();
+    expect(hdRefusal([f("pbmc/filtered_feature_bc_matrix.h5")])).toBeNull();
+  });
+
+  it("the refusals say the same as the backend's", () => {
+    const py = readFileSync(resolve(__dirname, "../../../backend/src/scview/core/spatial.py"), "utf8").replace(/"\n\s+"/g, "");
+    expect(py).toContain("is a Visium HD binned_outputs archive, which scView does not read: unpack it and drop the binned_outputs folder (or one square_NNNum folder) instead.");
+    expect(py).toContain("Space Ranger 4's segmented_outputs (cell segmentation) is not read yet: upload the run's binned_outputs folder instead, which reads as 8 or 16 um bins.");
+    expect(py).toContain("are millions of observations (6.3 million on a mouse brain section), far past the 1.3 million cells scView has been tested on: use the square_008um or square_016um folder instead.");
   });
 });

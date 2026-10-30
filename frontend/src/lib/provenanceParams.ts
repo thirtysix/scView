@@ -70,11 +70,11 @@ interface SpatialIngest {
 /** The ingest step's tissue positions: "Visium: 2 sections (LN 4,035 spots, brain 2,310 spots), images hires, lowres". */
 function spatialText(v: SpatialIngest): string {
   const libs = Object.entries(v.libraries ?? {});
-  const unit = v.unit === "spot" ? "spot" : "cell";
+  const unit = v.unit === "spot" || v.unit === "bin" ? v.unit : "cell";
   const each = libs.map(([lib, n]) => `${lib} ${n.toLocaleString()} ${unit}${n === 1 ? "" : "s"}`).join(", ");
   const images = [...new Set(Object.values(v.images ?? {}).flat())].sort();
   return (
-    `${v.technology === "visium" ? "Visium" : "tissue positions"}: ${libs.length} section${libs.length === 1 ? "" : "s"}` +
+    `${v.technology === "visium" ? "Visium" : v.technology === "visium_hd" ? "Visium HD" : "tissue positions"}: ${libs.length} section${libs.length === 1 ? "" : "s"}` +
     (each ? ` (${each})` : "") + (images.length ? `, images ${images.join(", ")}` : ", no image")
   );
 }
