@@ -46,6 +46,7 @@ _DATA_HINTS = (
     "outside blood", "other tissues", "elsewhere in the body", "protein atlas", "hpa",
     "copy number", "cnv", "malignant", "protein network", "interaction network",
     "cytokine response",
+    "targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts", "control probe",
 )
 _METHODS_HINTS = (
     "how do i", "how to", "why ", "should i", "what does", "parameter", "resolution",
@@ -137,6 +138,8 @@ _RESULT_FACET_HINTS = {
         "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
     ),
     "markers": ("gene program", "programs", "nmf"),
+    "qc": ("targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts",
+           "control probe"),
 }
 
 

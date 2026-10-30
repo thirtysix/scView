@@ -36,6 +36,8 @@ export interface GeneSetScoreResponse {
   max_score: number;
   genes_found: string[];
   genes_missing: string[];
+  /** A targeted panel's caution (backend core/targeted_panel.py). */
+  panel_caution?: string | null;
   method: ScoreMethod;
   /** AUCell: top genes per cell counted; null for score_genes */
   max_rank: number | null;

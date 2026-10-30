@@ -7,6 +7,7 @@ import type { CollectionChoice } from "@/api/genesets";
 import { scoreGeneSet, type ScoreMethod } from "@/api/genesetScore";
 import type { OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
+import { Caption } from "@/components/common/Caption";
 import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
 import { errorMessage } from "@/lib/errorMessage";
 import { ScoreDepthCheck } from "@/components/unified/ScoreDepthCheck";
@@ -44,6 +45,7 @@ interface ScoreSummary {
   maxRank: number | null;
   shareBelow: number | null;
   note: string | null;
+  panelCaution?: string | null;
 }
 
 interface UnifiedGeneSetsSubtabProps {
@@ -174,6 +176,7 @@ export function UnifiedGeneSetsSubtab({
         maxRank: response.max_rank,
         shareBelow: response.share_below_max_rank,
         note: response.note ?? null,
+        panelCaution: response.panel_caution ?? null,
       };
       scoreCache.current.set(cacheKey(selectedGeneSet, method), { ...summary, scores });
       setScoreResult(summary);
@@ -323,6 +326,9 @@ export function UnifiedGeneSetsSubtab({
               </span>
             )}
           </div>
+          {scoreResult?.panelCaution && (
+            <Caption className="mt-1" testId="panel-caution">{scoreResult.panelCaution}</Caption>
+          )}
           {scoreResult?.method === "aucell" && scoreResult.maxRank != null && (
             <p className="mt-1 text-[10px] leading-snug text-slate-500" data-testid="aucell-note">
               AUCell over each cell&apos;s top {scoreResult.maxRank.toLocaleString()} genes (5% of those detected)

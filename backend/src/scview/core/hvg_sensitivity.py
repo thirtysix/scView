@@ -262,6 +262,9 @@ def recorded(adata, reference: str | None = None) -> Recorded:
     method, resolution = _method_resolution(adata, reference, history, notes)
 
     hvg = _last_params(history, "highly_variable_genes") or {}
+    if hvg.get("hvg_flavor") == "all_genes":
+        raise SensitivityError("This targeted panel keeps all its genes, so there is no variable-gene "
+                               "setting to test. Choose variable genes in the run to compare settings.")
     norm = _last_params(history, "normalization") or {}
     if (hvg.get("normalization_method") or norm.get("normalization_method")) == "pearson_residuals":
         flavor = "pearson_residuals"

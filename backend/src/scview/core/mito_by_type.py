@@ -246,7 +246,10 @@ def mito_by_type(adata, column: str | None = None, cells: dict | Callable[[], di
     labelled = codes >= 0
     base = dict(column=column, reason=reason, n_cells=n, n_labelled=int(labelled.sum()))
     if not qc_filter._mito_measurable(cells):
-        return MitoByType(**base, measurable=False, note=NOT_MEASURABLE)
+        from scview.core import spatial, targeted_panel
+
+        return MitoByType(**base, measurable=False,
+                          note=targeted_panel.NO_MITO_NOTE if spatial.targeted_panel(adata) else NOT_MEASURABLE)
 
     cut, source, _ = _ceiling(adata, ceiling)
     mt = np.asarray(cells["pct_mt"], dtype=np.float64)

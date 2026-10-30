@@ -38,6 +38,7 @@ from scview.core import (
     spatial,
     step_failures,
     stress,
+    targeted_panel,
     uns_history,
 )
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
@@ -86,6 +87,9 @@ class PipelineParams:
     max_genes: int = 0
     min_counts: int = 0
     min_cells: int = 3
+    # Keep cells with at least this many counts in both modes (a targeted panel's default
+    # is 10, core/targeted_panel.py; 0 = none).
+    qc_counts_floor: float = 0.0
     # Used only when % mito can be measured (MT- genes); a ceiling in MAD mode.
     max_pct_mt: float = 20.0
     # "global": the rule above for every cell; "per_type": each cell type's own bound
@@ -119,11 +123,14 @@ class PipelineParams:
     # selection and PCA only; .raw stays log-normalised (see core/normalization.py).
     normalization_method: str = "log"
     target_sum: float = 1e4
+    # target_sum = the cells' median total counts instead (a targeted panel's default)
+    target_sum_median: bool = False
 
     # HVG
     n_top_genes: int = 2000
     hvg_flavor: str = "seurat"
     hvg_batch_key: str = ""  # obs column for batch-aware HVG selection (empty = pooled)
+    hvg_all_genes: bool = False  # no selection: every gene (a small targeted panel's default)
 
     # Scaling: numeric obs columns regressed out of the variable genes before their
     # z-scores (sc.pp.regress_out; empty = off). S_score / G2M_score / cc_difference
@@ -182,6 +189,10 @@ class PipelineParams:
     # disk, in row blocks, when the run would not fit the memory budget in memory; "on"
     # always, "off" never.
     chunked: str = "auto"
+
+    # The parameters the user set (a request body's keys): a targeted panel's defaults
+    # (core/targeted_panel.py) never replace these.
+    explicit: tuple[str, ...] = ()
 
 
 CHUNKED_MODES: tuple[str, ...] = ("auto", "on", "off")
@@ -490,6 +501,8 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     """
     if spatial.is_spot_data(adata):
         raise StepNotApplicable(spatial.DOUBLET_SKIP)
+    if spatial.targeted_panel(adata):
+        raise StepNotApplicable(targeted_panel.DOUBLET_SKIP)
     counts, where = _doublet_matrix(adata)
     # A channel column that is not there, or an unknown method, raises DoubletError: the
     # step's error.
@@ -507,6 +520,8 @@ def _run_ambient_correction(adata: ad.AnnData, params: PipelineParams) -> dict[s
     attached raw matrix gave. X holds the corrected counts the rest of the run uses; the
     originals stay in ``layers['counts_uncorrected']`` (reset to counts restores them).
     An AmbientError (no raw matrix, no counts, no estimate) is the step's error."""
+    if spatial.targeted_panel(adata):
+        raise StepNotApplicable(targeted_panel.AMBIENT_SKIP)
     rho = params.ambient_rho
     return ambient.run_correction(adata, None if rho is None or rho == "" else float(rho))
 
@@ -562,6 +577,10 @@ def filter_judgement(adata: ad.AnnData, params: PipelineParams):
     used = (("min_genes", "max_genes", "min_counts") if t.mode == "fixed"
             else ("qc_mad_k", "qc_mad_k_mt", "qc_mad_upper", "qc_sample_column"))
     found: dict[str, Any] = {k: getattr(params, k) for k in used}
+    if t.counts_floor > 0:  # within each sample's bound in MAD mode, min_counts in fixed
+        found["qc_counts_floor"] = t.counts_floor
+        if t.mode == "fixed":
+            found["min_counts"] = t.min_counts
     if bounds is not None:
         found["qc_thresholds"] = bounds.to_dict(~keep)
     if t.mito_mode == "per_type":  # a global run records what it always did
@@ -695,11 +714,13 @@ def _keep_raw_counts(adata: ad.AnnData) -> None:
     logger.info("Kept raw counts from adata.raw in layers['counts']")
 
 
-def _run_normalization(adata: ad.AnnData, params: PipelineParams) -> None:
+def _run_normalization(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
     """Normalize to target sum per cell, store raw counts.
 
     Under both normalisation methods: with Pearson residuals, this shifted log
-    still becomes .raw, which markers, DE and the scores read."""
+    still becomes .raw, which markers, DE and the scores read. With
+    ``target_sum_median`` (a targeted panel) the target is the cells' median total
+    counts, recorded as the step's target_sum."""
     normalization.check_method(params.normalization_method)  # fail before any work
     # Save raw counts before normalization
     if "counts" not in adata.layers:
@@ -707,9 +728,15 @@ def _run_normalization(adata: ad.AnnData, params: PipelineParams) -> None:
             adata.layers["counts"] = adata.X.copy()
         else:
             _keep_raw_counts(adata)
-    sc.pp.normalize_total(adata, target_sum=params.target_sum)
+    target = params.target_sum
+    found = None
+    if params.target_sum_median:
+        target = targeted_panel.median_total(np.asarray(adata.X.sum(axis=1)).ravel(), sp.issparse(adata.X))
+        found = {"target_sum": target, "target_sum_rule": "median total counts (targeted panel)"}
+    sc.pp.normalize_total(adata, target_sum=target)
     scaling.drop_plan(adata)  # X changed: a scaling plan's statistics no longer hold
-    logger.info("Normalized to target sum %.0f", params.target_sum)
+    logger.info("Normalized to target sum %.0f", target)
+    return found
 
 
 def _run_log_transform(adata: ad.AnnData, params: PipelineParams) -> None:
@@ -718,6 +745,9 @@ def _run_log_transform(adata: ad.AnnData, params: PipelineParams) -> None:
     scaling.drop_plan(adata)
     logger.info("Applied log1p transformation")
 
+
+# What the variable-genes step records when it keeps every gene (a small targeted panel).
+ALL_GENES_RECORD = {"hvg_flavor": "all_genes", "hvg_rule": "every gene of a targeted panel"}
 
 # Flavours offered in the UI. `seurat_v3` ranks the raw counts (loess via scikit-misc).
 HVG_FLAVORS: tuple[str, ...] = ("seurat", "cell_ranger", "seurat_v3")
@@ -790,6 +820,10 @@ def _run_hvg(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None
         raise ValueError(
             f"Unsupported HVG flavor '{params.hvg_flavor}'; choose from {', '.join(HVG_FLAVORS)}."
         )
+    if params.hvg_all_genes:
+        adata.var["highly_variable"] = True
+        logger.info("All %d genes kept (no variable-gene selection)", adata.n_vars)
+        return dict(ALL_GENES_RECORD, n_top_genes=int(adata.n_vars))
     # A batch key ranks genes by how many batches call them variable, so a gene
     # that only differs *between* batches isn't picked as biology.
     batch_key = params.hvg_batch_key or None
@@ -855,7 +889,10 @@ def regress_covariates(adata: ad.AnnData, params: PipelineParams, keys: list[str
     gives the same later), and ``cc_difference`` = S - G2M. Returns what to record."""
     if not set(keys) & set(scaling.CELL_CYCLE_COVARIATES):
         return {}
-    found = _run_cell_cycle(adata, params)
+    try:
+        found = _run_cell_cycle(adata, params)
+    except StepNotApplicable as e:  # the user asked for it: the scaling step fails, not skips
+        raise ValueError(f"Regressing out the cell cycle needs its scores. {e}.") from e
     if scaling.CC_DIFFERENCE in keys:
         adata.obs[scaling.CC_DIFFERENCE] = (adata.obs["S_score"].to_numpy(dtype=np.float64)
                                             - adata.obs["G2M_score"].to_numpy(dtype=np.float64))
@@ -1315,7 +1352,11 @@ def _lognorm_scoring_names(adata: ad.AnnData, what: str) -> tuple[bool, list[str
 
 
 def _run_cell_cycle(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
-    """Score cell cycle phases (Tirosh 2016 genes), for human or mouse gene names."""
+    """Score cell cycle phases (Tirosh 2016 genes), for human or mouse gene names. A targeted
+    panel with under half of the list has no score worth writing (``StepNotApplicable``)."""
+    why = targeted_panel.cell_cycle_skip(adata)
+    if why:
+        raise StepNotApplicable(why)
     try:
         species = detect_species(adata).species
         # The dataset's own spelling: scanpy drops a gene whose name differs only
@@ -1356,6 +1397,9 @@ def _run_dissociation_stress(adata: ad.AnnData, params: PipelineParams) -> dict[
 
     On log-normalised expression: ``.raw`` after scaling, else X. Skipped, not
     failed, when too few signature genes are present."""
+    why = targeted_panel.stress_skip(adata)
+    if why:
+        raise StepNotApplicable(why)
     use_raw, names = _lognorm_scoring_names(adata, "The dissociation-stress score")
     genes = stress.signature_genes(names)
     if len(genes) < stress.MIN_GENES:
@@ -1561,7 +1605,7 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
 
     hint = params.annotation_tissue.strip()
     listing = "\n".join(f"{g}: {', '.join(genes)}" for g, genes in marker_map.items())
-    prompt = _annotation_prompt(listing, hint)
+    prompt = _annotation_prompt(listing, hint, targeted_panel.prompt_line(adata))
     client = OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
     resp = client.chat.completions.create(
         model=model,
@@ -1587,7 +1631,7 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     )
 
 
-def _annotation_prompt(listing: str, tissue_hint: str = "") -> str:
+def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = "") -> str:
     """The marker-based annotation prompt.
 
     The tissue comes first, from every cluster together (or the user's hint), so
@@ -1601,7 +1645,8 @@ def _annotation_prompt(listing: str, tissue_hint: str = "") -> str:
         "as the first line, 'tissue: <tissue>'."
     )
     return (
-        "You are an expert in single-cell RNA-seq. " + tissue + " Then, for each cluster, "
+        "You are an expert in single-cell RNA-seq. " + (panel_line + " " if panel_line else "")
+        + tissue + " Then, for each cluster, "
         "identify the most likely cell type from its top marker genes, naming cells as they "
         "occur in that tissue: in blood, CD14/LYZ/S100A8 cells are monocytes, not macrophages. "
         "Decide by lineage-defining genes when markers overlap: CD3D/CD3E/CD8A mean T cells "
@@ -2202,6 +2247,7 @@ def run_pipeline(
     """
     if params is None:
         params = PipelineParams()
+    params = targeted_panel.for_run(adata, params)
 
     # Fix common pandas conflict: obs.index.name clashes with a column name.
     # This happens when e.g. index is named 'cell_id' and a 'cell_id' column
@@ -2282,6 +2328,7 @@ def run_pipeline_streamed(
     """
     if params is None:
         params = PipelineParams()
+    params = targeted_panel.for_run(adata, params)
 
     widen_half(adata)
     if adata.obs.index.name is not None and adata.obs.index.name in adata.obs.columns:

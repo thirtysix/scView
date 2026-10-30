@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import aucell, gsva, msigdb_species, ssgsea, working_copy
+from scview.core import aucell, gsva, msigdb_species, ssgsea, targeted_panel, working_copy
 from scview.core import large_mode
 from scview.core.custom_genesets import get_custom_store, is_custom_id
 from scview.core.dataset_manager import DatasetManager
@@ -68,6 +68,7 @@ class GeneSetScoreResponse(BaseModel):
     genes_found: list[str]
     genes_missing: list[str]
     method: ScoreMethod = "score_genes"
+    panel_caution: str | None = None  # a targeted panel biases enrichment (core/targeted_panel.py)
     # AUCell only: the top genes per cell counted, the matrix ranked, the set's genes
     # the dataset has but no cell expresses (left out, as decoupler does), and the share
     # of cells detecting fewer genes than max_rank (their lowest counted ranks are ties
@@ -365,6 +366,7 @@ async def score_genesets(
                 genes_found=m.found,
                 genes_missing=m.missing,
                 method="aucell",
+                panel_caution=targeted_panel.enrichment_caution(adata),
                 max_rank=rk.max_rank,
                 source=rk.source,
                 genes_undetected=m.undetected,
@@ -388,6 +390,7 @@ async def score_genesets(
                 genes_found=r.match.found,
                 genes_missing=r.match.missing,
                 method=body.method,
+                panel_caution=targeted_panel.enrichment_caution(adata),
                 source=r.source,
                 genes_undetected=r.match.undetected,
                 note=r.note,
@@ -419,6 +422,7 @@ async def score_genesets(
             genes_found=used,
             genes_missing=missing,
             source=source,
+            panel_caution=targeted_panel.enrichment_caution(adata),
         )
 
     return await _in_thread(_score, dataset_id)

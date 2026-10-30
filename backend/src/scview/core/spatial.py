@@ -56,6 +56,9 @@ TECHNOLOGY_NAMES = {"visium": "Visium", "visium_hd": "Visium HD", "xenium": "Xen
 SPOT_UNITS = ("spot", "bin")
 
 DOUBLET_SKIP = "Visium spots hold several cells, so doublet detection does not apply"
+# A spatial dataset of cells with no more genes than this is a panel (CosMx, MERSCOPE, an
+# h5ad written by spatialdata-io): the commercial imaging panels go up to about 6,000 genes.
+PANEL_MAX_GENES = 6000
 HD_MESSAGE = ("Visium HD (binned outputs) is not supported yet. scView reads standard Visium "
               "(Space Ranger's filtered matrix with its spatial folder) and .h5ad files with "
               "obsm['spatial'].")
@@ -779,9 +782,21 @@ def is_spot_data(adata) -> bool:
     return has_spatial(adata) and technology(adata)["unit"] in SPOT_UNITS
 
 
+def targeted_panel(adata) -> bool:
+    """Whether the genes are a targeted panel (core/targeted_panel.py): the flag an import
+    recorded, else spatial cells with at most ``PANEL_MAX_GENES`` genes measured."""
+    recorded = _recorded(adata)
+    if "targeted_panel" in recorded:
+        return bool(np.asarray(recorded["targeted_panel"]).ravel()[0])
+    if not has_spatial(adata) or technology(adata)["technology"] != "cells":
+        return False
+    raw = getattr(adata, "raw", None)
+    return max(adata.n_vars, raw.n_vars if raw is not None else 0) <= PANEL_MAX_GENES
+
+
 def grounding_lines(adata) -> tuple[list[str], str]:
     """The co-pilot's fact about the spatial data: technology, sections, spots or cells,
-    images. ``(lines, detail)``; empty without spatial data."""
+    images, a targeted panel's size. ``(lines, detail)``; empty without spatial data."""
     sp = info(adata)
     if sp is None:
         return [], ""
@@ -797,5 +812,12 @@ def grounding_lines(adata) -> tuple[list[str], str]:
     if unit == "spot":
         line += (" Each Visium spot holds several cells, so values are per spot, not per cell, and "
                  "doublet detection does not apply.")
+    panel = ""
+    if targeted_panel(adata):
+        from scview.core import targeted_panel as tp
+
+        panel = f"targeted panel of {tp.n_genes(adata):,} genes"
+        line += (f" A {panel}: normalised to the cells' median total counts, doublet detection does "
+                 "not apply, and enrichment is against the panel's genes only.")
     line += f" [{TAG}]"
-    return [line], f"{tech}, {sections}, {n:,} {unit}s"
+    return [line], f"{tech}, {sections}, {n:,} {unit}s" + (f", {panel}" if panel else "")

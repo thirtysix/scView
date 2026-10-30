@@ -134,3 +134,27 @@ describe("AmbientRna card", () => {
     expect(note.className).toContain("text-slate-500");
   });
 });
+
+describe("AmbientRna on a targeted panel", () => {
+  beforeEach(() => getAmbient.mockReset());
+
+  it("says it does not apply, with no raw-matrix advice and no step to tick", async () => {
+    getAmbient.mockResolvedValue(
+      response({
+        available: false,
+        samples: [],
+        not_applicable: true,
+        notes: ["Ambient RNA correction does not apply to a targeted panel."],
+      }),
+    );
+    render(
+      <AmbientRna
+        datasetId="d"
+        step={{ selected: false, onSelectedChange: () => {}, rho: null }}
+      />,
+    );
+    expect(await screen.findByText(/does not apply to a targeted panel/)).toBeInTheDocument();
+    expect(screen.queryByTestId("ambient-no-raw")).toBeNull();
+    expect(screen.queryByTestId("ambient-step-toggle")).toBeNull();
+  });
+});

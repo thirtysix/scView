@@ -38,7 +38,16 @@ import pandas as pd
 from pydantic import BaseModel
 
 from scview.core import ambient as ambient_rna
-from scview.core import cell_cycle, doublet_source, haemoglobin, marker_selection, qc_drivers, stress
+from scview.core import (
+    cell_cycle,
+    doublet_source,
+    haemoglobin,
+    marker_selection,
+    qc_drivers,
+    spatial,
+    stress,
+    targeted_panel,
+)
 from scview.core.anndata_adaptor import per_cell_qc
 
 logger = logging.getLogger(__name__)
@@ -426,7 +435,7 @@ def cluster_qc(
             "" if len(order) >= MIN_GROUPS
             else f"Only {len(order)} groups: too few to say which stands out; only size is flagged.",
             "" if cells.get("has_mt", True)
-            else NO_MT_NOTE,
+            else targeted_panel.NO_MITO_NOTE if spatial.targeted_panel(adata) else NO_MT_NOTE,
             "" if malat1_median is None or malat1_median >= MALAT1_MIN_MEDIAN_PCT
             else _malat1_floor_note(malat1_median),
             "" if not unchecked

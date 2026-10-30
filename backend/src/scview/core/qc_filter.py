@@ -159,6 +159,9 @@ class Thresholds:
     mad_k: float = MAD_K
     mad_k_mt: float = MAD_K_MT
     mad_upper: bool = False  # MAD mode: also cut counts / genes above median + k MADs
+    # MAD mode: never below this many counts, whatever a sample's bound (a targeted panel,
+    # core/targeted_panel.py). Fixed mode folds it into min_counts.
+    counts_floor: float = 0.0
     # "per_type": each cell type's own % mito bound (median + mad_k_mt MADs) instead
     # of the global rule (module docstring); "global": the rule above for every cell.
     mito_mode: str = "global"
@@ -174,13 +177,17 @@ class Thresholds:
     def from_params(cls, params) -> Thresholds:
         """From the pipeline's PipelineParams (or anything with the same fields)."""
         mt = getattr(params, "max_pct_mt", None)
+        mode = str(getattr(params, "qc_threshold_mode", "fixed") or "fixed")
+        floor = float(getattr(params, "qc_counts_floor", 0) or 0)
+        min_counts = float(getattr(params, "min_counts", 0) or 0)
         return cls(
             min_genes=float(getattr(params, "min_genes", 0) or 0),
             max_genes=float(getattr(params, "max_genes", 0) or 0),
-            min_counts=float(getattr(params, "min_counts", 0) or 0),
+            min_counts=max(min_counts, floor) if mode == "fixed" else min_counts,
+            counts_floor=floor,
             max_pct_mt=None if mt is None else float(mt),
             drop_doublets=bool(getattr(params, "drop_doublets", False)),
-            mode=str(getattr(params, "qc_threshold_mode", "fixed") or "fixed"),
+            mode=mode,
             mad_k=float(getattr(params, "qc_mad_k", MAD_K)),
             mad_k_mt=float(getattr(params, "qc_mad_k_mt", MAD_K_MT)),
             mad_upper=bool(getattr(params, "qc_mad_upper", False)),
@@ -265,6 +272,7 @@ class MadBounds:
             "k": self.t.mad_k,
             "k_mt": self.t.mad_k_mt,
             "upper": self.t.mad_upper,
+            **({"counts_floor": self.t.counts_floor} if self.t.counts_floor > 0 else {}),
             "ceiling_pct_mt": self.t.max_pct_mt if "pct_mt" in self.hi else None,
             "min_sample_cells": MIN_SAMPLE_CELLS,
             "samples": groups,
@@ -304,6 +312,8 @@ def _bounds(stats: dict[str, tuple[float, float]], t: Thresholds, ceiling: float
         on = key not in skipped
         out[below] = max(0.0, math.expm1(med - t.mad_k * mad)) if on else None
         out[above] = math.expm1(med + t.mad_k * mad) if on and t.mad_upper else None
+    if t.counts_floor > 0:
+        out["min_counts"] = max(out["min_counts"] or 0.0, t.counts_floor)
     mt = None
     if "pct_mt" in stats:
         med, mad = stats["pct_mt"]
@@ -332,8 +342,8 @@ def _reusable(recorded: dict | None, t: Thresholds, column: str | None,
         return None  # not a record this code wrote: work them out afresh
     # Records from before the upper bounds were opt-in had them on.
     same = (rec.get("k"), rec.get("k_mt"), bool(rec.get("upper", True)), rec.get("ceiling_pct_mt"),
-            rec.get("column"))
-    return rec if same == (t.mad_k, t.mad_k_mt, t.mad_upper, ceiling, column) else None
+            rec.get("column"), float(rec.get("counts_floor") or 0))
+    return rec if same == (t.mad_k, t.mad_k_mt, t.mad_upper, ceiling, column, t.counts_floor) else None
 
 
 def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,

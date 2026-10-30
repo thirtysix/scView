@@ -1665,12 +1665,19 @@ def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
     return int(t)
 
 
+def _skips_doublets(adata) -> bool:
+    """A targeted panel's run skips the doublet step (core/targeted_panel.py): it costs nothing."""
+    from scview.core import spatial
+
+    return spatial.targeted_panel(adata)
+
+
 def step_peak_for(adata, step: str, params=None) -> int:
     """``estimate_step_peak`` for a live AnnData (in memory, not backed): its X,
     layers and .raw as they are (and for doublet detection its channels,
     ``doublet_plan``), e.g. from a hook before each pipeline step."""
     model = _STEP_MODELS.get(step)
-    if model is None:
+    if model is None or (step == "doublet_detection" and _skips_doublets(adata)):
         return 0
     st = _State.from_header(header_from_adata(adata))
     if model is _step_doublet:
@@ -2299,6 +2306,8 @@ def in_memory_header(adata) -> Header:
 def run_need(adata, steps: list[str], params=None) -> int:
     """Memory a run of ``steps`` needs beyond what the dataset holds in memory (a backed
     one: once read in, which the run makes room for separately)."""
+    if _skips_doublets(adata):
+        steps = [s for s in steps if s != "doublet_detection"]
     plan = doublet_plan(adata, params) if "doublet_detection" in steps else None
     est = estimate_run(in_memory_header(adata), steps=steps, params=params, warm=process_warm(),
                        doublets=plan)
@@ -2322,6 +2331,28 @@ def _file_doublet_plan(path, params=None) -> DoubletPlan | None:
         return None
 
 
+def _panel_size(adaptor, files: list) -> int | None:
+    """The genes of a targeted panel (core/targeted_panel.py), from the open dataset or its
+    file's recorded flag; None for any other dataset."""
+    from scview.core import spatial, targeted_panel
+
+    try:
+        if adaptor is not None:
+            a = adaptor.adata
+            return targeted_panel.n_genes(a) if spatial.targeted_panel(a) else None
+        if files:
+            import h5py
+
+            with h5py.File(files[0], "r") as f:
+                node = f.get(f"uns/{spatial.INFO_KEY}/targeted_panel")
+                if node is None or not bool(node[()]):
+                    return None
+                return int(f[f"uns/{spatial.INFO_KEY}/n_panel_genes"][()])
+    except (OSError, KeyError, ValueError, RuntimeError):
+        return None
+    return None
+
+
 def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | None = None) -> dict:
     """The run estimate for ``steps`` on a dataset, with its verdict. The shape comes
     from the cached dataset, else from the header of its file (never loaded here).
@@ -2341,8 +2372,21 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
     in_memory = adaptor is not None
     h = None
     plan = None
-    dbl = "doublet_detection" in steps
     files = dm.h5ad_candidates(dataset_id)
+    # A targeted panel's run: no doublet step, and every gene of a small panel is "variable".
+    panel = _panel_size(adaptor, files)
+    if panel is not None:
+        from scview.core import targeted_panel
+
+        steps = [s for s in steps if s != "doublet_detection"]
+        given = overrides or {}
+        used = targeted_panel.defaults(panel, given.get("explicit") or
+                                       [k for k, v in given.items() if v is not None])
+        if used.get("hvg_all_genes"):
+            params.n_top_genes = panel
+        if "n_comps" in used:
+            params.n_comps = used["n_comps"]
+    dbl = "doublet_detection" in steps
     # Not while a run changes it in a worker thread: its file says what it was.
     if in_memory and not dm.is_busy(dataset_id):
         a = adaptor.adata

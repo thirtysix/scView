@@ -346,6 +346,8 @@ export interface FilterThresholds {
   max_pct_mt: number;
   drop_doublets: boolean;
   qc_threshold_mode?: QcThresholdMode;
+  /** Never below this many counts per cell, whatever the mode (a targeted panel's is 10). */
+  qc_counts_floor?: number;
   /** MADs below the median for counts and genes (log scale); above too with `qc_mad_upper`. */
   qc_mad_k?: number;
   /** MADs above the median for % mito. */
@@ -593,6 +595,7 @@ export async function getFilterPreview(
     drop_doublets: String(t.drop_doublets),
     mode: thresholdMode(t),
   });
+  if (t.qc_counts_floor !== undefined) q.set("counts_floor", String(t.qc_counts_floor));
   if (t.qc_mad_k !== undefined) q.set("mad_k", String(t.qc_mad_k));
   if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
   if (t.qc_mad_upper !== undefined) q.set("mad_upper", String(t.qc_mad_upper));

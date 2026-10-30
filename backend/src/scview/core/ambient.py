@@ -800,9 +800,14 @@ def diagnose(adata, column: str | None = None) -> dict:
     """The Ambient RNA card's answer: per sample its soup (top genes), rho and notes; the
     ambient-looking markers per group of ``column`` (default: the active clustering);
     whether the counts were corrected."""
-    from scview.core import cluster_qc
+    from scview.core import cluster_qc, spatial, targeted_panel
     from scview.core.species import detect_species
 
+    if spatial.targeted_panel(adata):
+        return {"available": False, "approximate": False, "column": None, "counts_from": None, "samples": [],
+                "markers": {"column": None, "approximate": False, "groups": {}, "n_flagged": 0},
+                "hb_note": None, "notes": [f"{targeted_panel.AMBIENT_SKIP}."], "not_applicable": True,
+                "correction": None, "help": HELP, "method": "", "url": SOUPX_URL}
     if column and column not in adata.obs.columns:
         raise AmbientError(f"Column '{column}' not found.")
     column = column or cluster_qc.default_grouping(adata)

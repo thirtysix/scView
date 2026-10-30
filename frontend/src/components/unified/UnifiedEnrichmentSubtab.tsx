@@ -10,6 +10,7 @@ import { collectionLabel } from "@/api/genesets";
 import { runGsea, type EnrichmentResult, type GseaResponse, type GseaTerm } from "@/api/enrichment";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { downloadCsv } from "@/lib/csv";
+import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
 import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
@@ -31,6 +32,8 @@ interface EnrichmentResponse {
   source: string;
   /** Set when the (human) gene sets may not fit the dataset, e.g. a mouse dataset. */
   warning?: string;
+  /** A targeted panel's caution (backend core/targeted_panel.py). */
+  panel_caution?: string | null;
 }
 
 interface UnifiedEnrichmentSubtabProps {
@@ -67,6 +70,7 @@ export function UnifiedEnrichmentSubtab({
   const [isComputing, setIsComputing] = useState(false);
   const [computeError, setComputeError] = useState<string | null>(null);
   const [warning, setWarning] = useState("");
+  const [panelCaution, setPanelCaution] = useState<string | null>(null);
 
   // Programs: the same enrichment, collapsed by gene overlap into clusters.
   const [network, setNetwork] = useState<EnrichmentNetworkResponse | null>(null);
@@ -244,6 +248,7 @@ export function UnifiedEnrichmentSubtab({
       if (groupRef.current !== selectedGroup) return;
       setResults(data.results ?? []);
       setWarning(data.warning ?? "");
+      setPanelCaution(data.panel_caution ?? null);
       void buildNetwork(resolution);
     } catch (err) {
       setComputeError(err instanceof Error ? err.message : String(err));
@@ -263,7 +268,10 @@ export function UnifiedEnrichmentSubtab({
         collections: Array.from(selectedCollections),
         exclude_ribo_mito: excludeRiboMito,
       });
-      if (groupRef.current === selectedGroup) setGsea(data);
+      if (groupRef.current === selectedGroup) {
+        setGsea(data);
+        setPanelCaution(data.panel_caution ?? null);
+      }
     } catch (err) {
       setGseaError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -507,6 +515,7 @@ export function UnifiedEnrichmentSubtab({
           {warning}
         </div>
       )}
+      {panelCaution && <Caption testId="panel-caution">{panelCaution}</Caption>}
 
       {/* Terms and programs, side by side: the same result read two ways.
           Container query, not a viewport breakpoint: this subtab lives in a ~650px

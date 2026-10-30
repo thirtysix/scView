@@ -14,7 +14,7 @@ when they know it. The call reads gene names only, never expression:
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Literal
 
 import numpy as np
@@ -41,7 +41,7 @@ class SpeciesCall(BaseModel):
     """The species call and the evidence it rests on, in one plain sentence."""
 
     species: Species = "unknown"
-    method: Literal["ensembl", "symbol_case", "mito_prefix", "none"] = "none"
+    method: Literal["ensembl", "symbol_case", "mito_prefix", "recorded", "none"] = "none"
     evidence: str = ""
 
 
@@ -143,8 +143,21 @@ def _from_symbols(names) -> SpeciesCall:
     return SpeciesCall(evidence=f"{why} No Ensembl gene ids; {mito_text}.")
 
 
+def _recorded_organism(adata) -> SpeciesCall | None:
+    info = getattr(adata, "uns", {}).get("scview_spatial")
+    organism = info.get("organism") if isinstance(info, Mapping) else None
+    if organism not in ("human", "mouse"):
+        return None
+    return SpeciesCall(species=organism, method="recorded",
+                       evidence=f"The panel's organism in experiment.xenium: {organism}.")
+
+
 def detect_species(adata) -> SpeciesCall:
-    """Human, mouse or unknown, from the dataset's gene ids and names."""
+    """Human, mouse or unknown: what an import recorded (a Xenium panel's ``panel_organism``),
+    else from the dataset's gene ids and names."""
+    recorded = _recorded_organism(adata)
+    if recorded is not None:
+        return recorded
     names = adata.var_names
     raw = getattr(adata, "raw", None)
     if raw is not None and len(raw.var_names) > len(names):
