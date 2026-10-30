@@ -55,6 +55,7 @@ from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 from scview.core.ingestion.detection import legacy_tenx_genomes
 from scview.core.ingestion.loading import (
     IngestLoadError,
+    attach_xenium,
     _path_for_role,
     _single,
     _stage_features,
@@ -63,7 +64,7 @@ from scview.core.ingestion.loading import (
 
 logger = logging.getLogger(__name__)
 
-STREAMABLE = (UnitFormat.tenx_h5, UnitFormat.tenx_mex, UnitFormat.anndata)
+STREAMABLE = (UnitFormat.tenx_h5, UnitFormat.tenx_mex, UnitFormat.anndata, UnitFormat.xenium)
 MODES = ("auto", "on", "off")
 BLOCK_NNZ = fs.BLOCK_NNZ  # stored values read and written per block
 MEX_CHUNK_LINES = 2_000_000  # matrix.mtx lines parsed per chunk
@@ -326,7 +327,7 @@ def open_unit(unit: IngestUnit, workdir: Path) -> StreamedUnit:
         raise IngestLoadError(
             f"Unit '{unit.label}' is not complete; resolve validation issues before loading.")
     openers = {UnitFormat.tenx_h5: _open_tenx_h5, UnitFormat.tenx_mex: _open_mex,
-               UnitFormat.anndata: _open_h5ad}
+               UnitFormat.anndata: _open_h5ad, UnitFormat.xenium: _open_xenium}
     opener = openers.get(unit.format)
     if opener is None:
         raise StreamUnsupported(f"{unit.format.value} files are read into memory whole")
@@ -404,6 +405,15 @@ def _open_tenx_h5(unit: IngestUnit, workdir: Path):
     # (without it, and without X, it numbers the rows); a length that differs raises.
     meta = ad.AnnData(obs=obs, var=var, shape=(n_rows, n_cols))
     return meta, _H5Rows(path, group, n_rows, n_cols, to_float=True), None, []
+
+
+def _open_xenium(unit: IngestUnit, workdir: Path):
+    """A Xenium matrix as Cell Ranger's, with the bundle's cells, coordinates, panel and
+    image: ``loading._load_xenium`` without the matrix. X keeps the matrix's row order."""
+    mex = any(f.role == FileRole.matrix for f in unit.files)
+    meta, rows, h5ad, extra = (_open_mex if mex else _open_tenx_h5)(unit, workdir)
+    attach_xenium(meta, unit)
+    return meta, rows, h5ad, extra
 
 
 def _open_mex(unit: IngestUnit, workdir: Path):

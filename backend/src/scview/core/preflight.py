@@ -2137,7 +2137,7 @@ def make_verdict(*, need: int, peak: int, stage: str, seconds: tuple[float, floa
 
 _UNIT_FORMATS = {"tenx_mex": "mex", "tenx_h5": "10x_h5", "anndata": "h5ad", "loom": "loom",
                  "zarr": "zarr", "dense_table": "table", "seurat": "rds",
-                 "h5seurat": "h5seurat"}
+                 "h5seurat": "h5seurat", "xenium": "10x_h5"}
 
 
 def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
@@ -2145,6 +2145,9 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
     fmt = _UNIT_FORMATS.get(unit.format.value, None)
     if fmt is None or not unit.files:
         return Header("unknown", note="The file is not a format scView reads.")
+    xen = unit.format.value == "xenium"
+    if xen and any(x.role.value == "matrix" for x in unit.files):
+        fmt = "mex"  # its cell_feature_matrix/ folder
     f = next((x for x in unit.files if x.role.value == "matrix"), None) if fmt == "mex" else unit.files[0]
     if f is None:
         return Header("unknown", note="The matrix file of this 10x sample is missing.")
@@ -2156,7 +2159,26 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
 
         h.uns_bytes += spatial.side_bytes(spatial_parts)
         h.obsm_bytes += 16 * int(h.n_cells or 0)
+    if xen:
+        _xenium_header(h, unit)
     return h
+
+
+def _xenium_header(h: Header, unit) -> None:
+    """A Xenium matrix counts its control features too: only the genes stay in X. The
+    cell table's columns and the images (core/xenium.py) are read along with it."""
+    from scview.core import xenium
+
+    features = next((x.path for x in unit.files if x.role.value == "features"), None)
+    genes = xenium.n_gene_features(None if features else unit.files[0].path, features)
+    if genes:
+        h.n_genes = genes
+        if h.x is not None:
+            h.x.n_genes = genes
+    h.obs_columns += xenium.CELL_TABLE_COLUMNS
+    for x in unit.side_files:
+        if x.spatial_part == xenium.PART_IMAGE:
+            h.uns_bytes += xenium.image_bytes(x.path)
 
 
 def _load_lead(h: Header, est: LoadEstimate) -> str:

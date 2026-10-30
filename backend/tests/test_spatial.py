@@ -157,17 +157,11 @@ def test_missing_positions_is_an_error_and_missing_scalefactors_a_warning(tmp_pa
     assert not rep.ok and any(i.code == "spatial_no_positions" for i in rep.issues)
 
 
-def test_visium_hd_and_xenium_are_refused_with_a_sentence(tmp_path):
+def test_visium_hd_is_refused_with_a_sentence(tmp_path):
     hd = tmp_path / "hd" / "outs" / "binned_outputs" / "square_008um"
     _h5(hd / "filtered_feature_bc_matrix.h5")
     rep = validate_bundle(build_bundle(_files(tmp_path / "hd"), root=tmp_path / "hd"))
     assert not rep.ok and any(i.code == "spatial_unsupported" and "Visium HD" in i.message for i in rep.issues)
-    xe = tmp_path / "xe"
-    _h5(xe / "cell_feature_matrix.h5")
-    (xe / "experiment.xenium").write_text('{"run_name": "x"}')
-    (xe / "transcripts.csv.gz").write_bytes(b"")
-    rep = validate_bundle(build_bundle(_files(xe), root=xe))
-    assert not rep.ok and any("Xenium" in i.message for i in rep.issues)
 
 
 def test_hd_barcodes_in_positions_are_refused(tmp_path):

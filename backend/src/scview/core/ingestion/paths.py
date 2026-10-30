@@ -72,6 +72,7 @@ REPORT = "Cell Ranger's HTML report"
 LOUPE = "Loupe Browser files"
 MOLECULES = "per-molecule read information, not a count matrix"
 SPATIAL_EXTRA = "Space Ranger alignment images and tables, not used by scView"
+XENIUM_EXTRA = "Xenium transcripts, boundaries, stains and Explorer files, not used by scView"
 
 _JUNK_NAMES = {
     ".ds_store": SYSTEM, "thumbs.db": SYSTEM, "desktop.ini": SYSTEM,
@@ -81,10 +82,16 @@ _JUNK_NAMES = {
     "aligned_tissue_image.jpg": SPATIAL_EXTRA, "cytassist_image.tiff": SPATIAL_EXTRA,
     "spatial_enrichment.csv": SPATIAL_EXTRA, "barcode_fluorescence_intensity.csv": SPATIAL_EXTRA,
     "fiducial_positions_list.txt": SPATIAL_EXTRA, "probe_set.csv": "the probe set of the run, not data",
+    "transcripts.parquet": XENIUM_EXTRA, "transcripts.csv.gz": XENIUM_EXTRA,
+    "morphology.ome.tif": XENIUM_EXTRA, "cell_boundaries.parquet": XENIUM_EXTRA,
+    "cell_boundaries.csv.gz": XENIUM_EXTRA, "nucleus_boundaries.parquet": XENIUM_EXTRA,
+    "nucleus_boundaries.csv.gz": XENIUM_EXTRA, "analysis_summary.html": XENIUM_EXTRA,
+    "gene_panel.json": XENIUM_EXTRA,
 }
 _JUNK_SUFFIXES = (
     (".bam", ALIGNMENTS), (".bai", ALIGNMENTS), (".bam.bai", ALIGNMENTS), (".csi", ALIGNMENTS),
     (".cram", ALIGNMENTS), (".crai", ALIGNMENTS), (".cloupe", LOUPE), (".vloupe", LOUPE),
+    (".zarr.zip", XENIUM_EXTRA),
 )
 
 

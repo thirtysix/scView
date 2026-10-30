@@ -17,8 +17,8 @@ Storage follows scanpy / squidpy, so their h5ad files open as they are:
 
 A Visium sample is its filtered matrix plus the ``spatial/`` folder (loose files or
 ``spatial.tar.gz``): the ingest bundler attaches those as side files of the matrix
-(``SideKind.spatial``) and ``session._attach_spatial`` reads them here. Visium HD and
-Xenium bundles are refused with a sentence, not read.
+(``SideKind.spatial``) and ``session._attach_spatial`` reads them here. Visium HD is refused
+with a sentence, not read. A Xenium output folder is read by ``core/xenium.py``.
 """
 
 from __future__ import annotations
@@ -59,9 +59,9 @@ DOUBLET_SKIP = "Visium spots hold several cells, so doublet detection does not a
 HD_MESSAGE = ("Visium HD (binned outputs) is not supported yet. scView reads standard Visium "
               "(Space Ranger's filtered matrix with its spatial folder) and .h5ad files with "
               "obsm['spatial'].")
-XENIUM_MESSAGE = ("Xenium output bundles are not supported yet. scView reads Visium (Space Ranger's "
-                  "filtered matrix with its spatial folder), or an .h5ad with obsm['spatial'] "
-                  "(for example one written by spatialdata-io or squidpy).")
+XENIUM_MESSAGE = ("A zipped Xenium output folder is not read (the transcripts in it alone are "
+                  "gigabytes): unzip it and drop the folder instead; only the files scView needs "
+                  "are uploaded.")
 
 _POS_COLS = ["barcode", "in_tissue", "array_row", "array_col", "pxl_row_in_fullres",
              "pxl_col_in_fullres"]
@@ -169,18 +169,12 @@ def name_key(name: str) -> str:
     return s.strip(" _-.")
 
 
-_XENIUM_NAMES = {"experiment.xenium", "transcripts.parquet", "transcripts.csv.gz", "cells.parquet",
-                 "cell_boundaries.parquet", "nucleus_boundaries.parquet", "transcripts.zarr.zip",
-                 "cells.zarr.zip", "cell_feature_matrix.zarr.zip"}
 _HD_DIR_RE = re.compile(r"^square_\d{3}um$", re.IGNORECASE)
 
 
 def unsupported(rels: list[str]) -> str | None:
     """The sentence for an upload of a spatial format scView does not read yet (Visium
-    HD binned outputs, a Xenium bundle), from its file paths; None otherwise."""
-    names = {PurePosixPath(r).name.lower() for r in rels}
-    if "experiment.xenium" in names or len(names & _XENIUM_NAMES) >= 2:
-        return XENIUM_MESSAGE
+    HD binned outputs), from its file paths; None otherwise."""
     for r in rels:
         dirs = [d.lower() for d in PurePosixPath(r).parent.parts]
         if "binned_outputs" in dirs or any(_HD_DIR_RE.match(d) for d in dirs):

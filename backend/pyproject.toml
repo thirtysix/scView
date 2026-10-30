@@ -27,6 +27,7 @@ dependencies = [
     "harmonypy>=0.0.10",
     "scikit-misc>=0.5.3",  # loess for the seurat_v3 HVG flavour; 0.5.3 is the first with linux aarch64 wheels
     "scikit-image>=0.22.0",  # Scrublet auto-threshold (sc.pp.scrublet doublet detection)
+    "tifffile>=2023.1.23",  # Xenium morphology images (comes with scikit-image; tiles decoded with Pillow)
     "openai>=1.50.0",
     "openpyxl>=3.1.0",
     "loompy>=3.0.7",

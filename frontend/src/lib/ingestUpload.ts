@@ -33,6 +33,8 @@ const REPORT = "Cell Ranger's HTML report";
 const LOUPE = "Loupe Browser files";
 const MOLECULES = "per-molecule read information, not a count matrix";
 const SPATIAL_EXTRA = "Space Ranger alignment images and tables, not used by scView";
+const XENIUM_EXTRA = "Xenium transcripts, boundaries, stains and Explorer files, not used by scView";
+const XENIUM_ZIP = "a zipped Xenium output folder is not read: unzip it and drop the folder instead";
 
 const JUNK_NAMES: Record<string, string> = {
   ".ds_store": SYSTEM,
@@ -49,6 +51,15 @@ const JUNK_NAMES: Record<string, string> = {
   "barcode_fluorescence_intensity.csv": SPATIAL_EXTRA,
   "fiducial_positions_list.txt": SPATIAL_EXTRA,
   "probe_set.csv": "the probe set of the run, not data",
+  "transcripts.parquet": XENIUM_EXTRA,
+  "transcripts.csv.gz": XENIUM_EXTRA,
+  "morphology.ome.tif": XENIUM_EXTRA,
+  "cell_boundaries.parquet": XENIUM_EXTRA,
+  "cell_boundaries.csv.gz": XENIUM_EXTRA,
+  "nucleus_boundaries.parquet": XENIUM_EXTRA,
+  "nucleus_boundaries.csv.gz": XENIUM_EXTRA,
+  "analysis_summary.html": XENIUM_EXTRA,
+  "gene_panel.json": XENIUM_EXTRA,
 };
 const JUNK_SUFFIXES: [string, string][] = [
   [".bam", ALIGNMENTS],
@@ -59,6 +70,7 @@ const JUNK_SUFFIXES: [string, string][] = [
   [".crai", ALIGNMENTS],
   [".cloupe", LOUPE],
   [".vloupe", LOUPE],
+  [".zarr.zip", XENIUM_EXTRA],
 ];
 
 /** Why a file of a folder is not uploaded, or null to upload it. */
@@ -67,15 +79,54 @@ export function junkReason(path: string): string | null {
   if (name in JUNK_NAMES) return JUNK_NAMES[name]!;
   if (name.startsWith("._")) return SYSTEM;
   for (const [suffix, reason] of JUNK_SUFFIXES) if (name.endsWith(suffix)) return reason;
+  if (name.endsWith(".zip") && name.includes("xenium")) return XENIUM_ZIP; // 10 GB; the server would refuse it
   return null;
+}
+
+/** The morphology images of a Xenium folder, in the order they are preferred (`core/xenium.py`). */
+const XENIUM_IMAGES = [
+  "morphology_focus.ome.tif",
+  "morphology_focus/morphology_focus_0000.ome.tif",
+  "morphology_mip.ome.tif",
+];
+const XENIUM_MARK = "experiment.xenium";
+
+/**
+ * Files of a Xenium output folder (one holding an experiment.xenium) that are never read: its
+ * own analysis, auxiliary outputs and every image but the one used, a few GB of stains. By
+ * folder, not by name: "analysis/" is any user's folder name elsewhere.
+ */
+function xeniumExtras(paths: string[]): Set<string> {
+  const split = (p: string) => p.replace(/\\/g, "/");
+  const roots = paths
+    .map(split)
+    .filter((p) => p.toLowerCase().endsWith(`/${XENIUM_MARK}`))
+    .map((p) => p.slice(0, -XENIUM_MARK.length));
+  const out = new Set<string>();
+  if (roots.length === 0) return out;
+  const low = new Set(paths.map((p) => split(p).toLowerCase()));
+  for (const raw of paths) {
+    const p = split(raw);
+    const root = roots.find((r) => p.startsWith(r));
+    if (!root) continue;
+    const inner = p.slice(root.length).toLowerCase();
+    const top = inner.split("/")[0];
+    if (top === "analysis" || top === "aux_outputs") out.add(raw);
+    else if (inner.endsWith(".ome.tif")) {
+      const best = XENIUM_IMAGES.find((img) => low.has(`${root}${img}`.toLowerCase()));
+      if (inner !== best) out.add(raw);
+    }
+  }
+  return out;
 }
 
 /** The files to send, and the ones left out (with why and their size). */
 export function splitJunk(items: UploadItem[]): { keep: UploadItem[]; skipped: SkippedUpload[] } {
   const keep: UploadItem[] = [];
   const skipped: SkippedUpload[] = [];
+  const extras = xeniumExtras(items.map((it) => it.path));
   for (const it of items) {
-    const reason = junkReason(it.path);
+    const reason = junkReason(it.path) ?? (extras.has(it.path) ? XENIUM_EXTRA : null);
     if (reason) skipped.push({ path: it.path, reason, bytes: it.file.size });
     else keep.push(it);
   }

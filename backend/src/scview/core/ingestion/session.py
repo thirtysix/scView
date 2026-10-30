@@ -96,7 +96,7 @@ def _seqqc_view(unit: IngestUnit) -> IngestUnit:
     contig tables, guide calls and spatial files are joined to the cells by
     ``_attach_vdj`` / ``_attach_guide_calls`` / ``_attach_spatial`` instead."""
     keep = [f for f in unit.side_files
-            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial)]
+            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial, SideKind.xenium)]
     return unit.model_copy(update={"side_files": keep})
 
 
@@ -670,6 +670,10 @@ class IngestSessionManager:
         with_files = [u for u in loadable
                       if any(f.side_kind == SideKind.spatial for f in u.side_files)]
         if not with_files:
+            if any(u.format == UnitFormat.xenium for u in loadable) and spatial.has_spatial(adata):
+                from scview.core import xenium
+
+                return xenium.summary(adata)
             return None
         if len(with_files) < len(loadable):
             without = ", ".join(u.label for u in loadable if u not in with_files)

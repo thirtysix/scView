@@ -27,7 +27,7 @@ import anndata as ad
 import numpy as np
 from pydantic import BaseModel, Field
 
-from scview.core import spatial
+from scview.core import spatial, xenium
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +269,7 @@ def merge_units(
     merged.obs[sample_label] = merged.obs[sample_label].astype("category")
     # concat drops uns: each sample's spatial libraries (and their images) are kept.
     spatial.after_merge(work, merged, sample_label)
+    xenium.after_merge(work, merged)
     return merged
 
 
