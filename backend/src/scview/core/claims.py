@@ -647,6 +647,10 @@ _FAMILY_PREFIX = {
     "screen": "result:screen",
     "spatial_genes": "result:spatial_genes", "spatial": "result:spatial_genes",
     "moran": "result:spatial_genes",
+    # spatial domains and niches (core/spatial_domains.py); "spatial_domains" is matched
+    # whole in resolve_tag, as "spatial" alone means the Moran's I fact
+    "domains": "result:spatial_domains", "domain": "result:spatial_domains", "niches": "result:spatial_domains",
+    "niche": "result:spatial_domains", "nhood": "result:spatial_domains",
     "tfmotifs": "result:tfmotifs", "tfmotif": "result:tfmotifs", "motifs": "result:tfmotifs",
     "motif": "result:tfmotifs",
     "deconvolution": "result:deconvolution", "deconv": "result:deconvolution",
@@ -677,6 +681,8 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
     if parts[0].lower() == "result" and len(parts) > 1:
         parts = parts[1:]
     fam = re.split(r"[\s_]", parts[0].lower())[0]
+    if parts[0].lower().startswith(("spatial_domain", "spatial_niche", "spatial domain", "spatial niche")):
+        fam = "domains"
     prefix = _FAMILY_PREFIX.get(fam)
     if fam in ("lit", "doc"):
         # PMIDs and URLs are exact or nothing.
@@ -706,7 +712,8 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "tfmotifs", "tfmotif", "motifs", "motif",
                                   "gwas", "traits",
                                   "deconvolution", "deconv",
-                                  "lgate", "learnedgate", "learned", "spotdeconv")
+                                  "lgate", "learnedgate", "learned", "spotdeconv",
+                                  "domains", "domain", "niches", "niche", "nhood")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]
