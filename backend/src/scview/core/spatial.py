@@ -11,7 +11,9 @@ Storage follows scanpy / squidpy, so their h5ad files open as they are:
   An image pixel (r, c) at a resolution sits at full-res (c / scalef, r / scalef).
 * ``obs["library_id"]``: categorical, its categories the keys of ``uns["spatial"]``;
   ``obs["array_row"]`` / ``obs["array_col"]``: the Visium grid, when known.
-* ``uns["scview_spatial"]``: ``{"technology": "visium" | "cells", "unit": "spot" | "cell"}``.
+* ``uns["scview_spatial"]``: ``{"technology", "unit"}`` from ``TECHNOLOGIES``, plus any
+  technology's own keys. A Xenium dataset's coordinates are microns, not pixels, so its
+  scale factors are image pixels per micron; the rule above still places its images.
 
 A Visium sample is its filtered matrix plus the ``spatial/`` folder (loose files or
 ``spatial.tar.gz``): the ingest bundler attaches those as side files of the matrix
@@ -46,6 +48,12 @@ INFO_KEY = "scview_spatial"
 DEFAULT_LIBRARY = "section1"
 RESOLUTIONS = ("hires", "lowres")
 TAG = "result:tissue"  # the co-pilot's fact (claims.py family "tissue")
+# technology -> what one observation is. Several cells share a spot, and a bin is a square
+# of the capture grid that need not match a cell: both count as spot data.
+TECHNOLOGIES = {"visium": "spot", "visium_hd": "bin", "xenium": "cell", "cells": "cell"}
+TECHNOLOGY_NAMES = {"visium": "Visium", "visium_hd": "Visium HD", "xenium": "Xenium",
+                    "cells": "imaging-based or other (cell coordinates)"}
+SPOT_UNITS = ("spot", "bin")
 
 DOUBLET_SKIP = "Visium spots hold several cells, so doublet detection does not apply"
 HD_MESSAGE = ("Visium HD (binned outputs) is not supported yet. scView reads standard Visium "
@@ -460,7 +468,7 @@ def finish(adata) -> dict:
     libs = [str(k) for k in adata.uns[KEY].keys()]
     obs[LIBRARY_COLUMN] = pd.Categorical(obs[LIBRARY_COLUMN].astype(object), categories=libs)
     tech = technology(adata)
-    adata.uns[INFO_KEY] = tech
+    adata.uns[INFO_KEY] = {**_recorded(adata), **tech}
     counts = obs[LIBRARY_COLUMN].value_counts()
     return {"source": "spaceranger", "spaceranger_version": None, **tech,
             "libraries": {lib: int(counts.get(lib, 0)) for lib in libs},
@@ -468,15 +476,42 @@ def finish(adata) -> dict:
 
 
 def technology(adata) -> dict:
-    """``{"technology", "unit"}``: Visium spots when the grid (array_row, array_col) and
-    every library's spot diameter are known, else cells."""
+    """``{"technology", "unit"}``: Xenium when an import recorded it; Visium HD bins when
+    the scale factors give a bin size; Visium spots when the grid (array_row, array_col)
+    and every library's spot diameter are known; else cells."""
+    if _recorded(adata).get("technology") == "xenium":
+        return _tech("xenium")
     obs = adata.obs
     uns = adata.uns.get(KEY)
     libs = _libraries(adata)
-    visium = ("array_row" in obs.columns and "array_col" in obs.columns and bool(libs)
-              and isinstance(uns, Mapping)
-              and all(_spot_diameter(uns.get(lib)) is not None for lib in libs))
-    return {"technology": "visium", "unit": "spot"} if visium else {"technology": "cells", "unit": "cell"}
+    grid = ("array_row" in obs.columns and "array_col" in obs.columns and bool(libs)
+            and isinstance(uns, Mapping)
+            and all(_spot_diameter(uns.get(lib)) is not None for lib in libs))
+    if not grid:
+        return _tech("cells")
+    hd = any(_bin_size(uns.get(lib)) is not None for lib in libs)
+    return _tech("visium_hd" if hd else "visium")
+
+
+def _tech(name: str) -> dict:
+    return {"technology": name, "unit": TECHNOLOGIES[name]}
+
+
+def _recorded(adata) -> dict:
+    """``uns["scview_spatial"]`` as a plain dict, empty when there is none."""
+    rec = adata.uns.get(INFO_KEY) if hasattr(adata, "uns") else None
+    return dict(rec) if isinstance(rec, Mapping) else {}
+
+
+def _bin_size(entry) -> float | None:
+    """Visium HD's ``bin_size_um`` scale factor; None for anything else."""
+    sf = entry.get("scalefactors") if isinstance(entry, Mapping) else None
+    v = sf.get("bin_size_um") if isinstance(sf, Mapping) else None
+    try:
+        v = float(np.asarray(v).ravel()[0]) if v is not None else None
+    except (TypeError, ValueError, IndexError):
+        return None
+    return v if v is not None and np.isfinite(v) and v > 0 else None
 
 
 def _spot_diameter(entry) -> float | None:
@@ -562,8 +597,9 @@ def adopt(adata) -> bool:
         adata.uns[KEY] = new
         changed = True
     tech = technology(adata)
-    if dict(adata.uns.get(INFO_KEY) or {}) != tech:
-        adata.uns[INFO_KEY] = tech
+    recorded = _recorded(adata)
+    if any(recorded.get(k) != v for k, v in tech.items()):
+        adata.uns[INFO_KEY] = {**recorded, **tech}
         changed = True
     return changed
 
@@ -626,6 +662,10 @@ def after_merge(parts: Mapping, merged, sample_label: str) -> None:
     merged.obsm[KEY] = np.asarray(merged.obsm[KEY], dtype=np.float64)
     merged.obs[LIBRARY_COLUMN] = pd.Categorical(libs, categories=list(uns))
     merged.uns[KEY] = uns
+    # ad.concat dropped uns: a recorded technology survives when every part shares it.
+    recorded = {str(_recorded(a).get("technology")) for a in parts.values()}
+    if len(recorded) == 1:
+        merged.uns[INFO_KEY] = {"technology": recorded.pop()}
     merged.uns[INFO_KEY] = technology(merged)
 
 
@@ -738,11 +778,11 @@ def encode_png(img: np.ndarray) -> bytes:
 
 
 def is_spot_data(adata) -> bool:
-    """Whether the observations are Visium spots (several cells each)."""
-    recorded = adata.uns.get(INFO_KEY) if hasattr(adata, "uns") else None
-    if isinstance(recorded, Mapping) and recorded.get("unit"):
-        return str(recorded.get("unit")) == "spot"
-    return has_spatial(adata) and technology(adata)["unit"] == "spot"
+    """Whether the observations are capture spots or bins, not cells."""
+    recorded = _recorded(adata)
+    if recorded.get("unit"):
+        return str(recorded.get("unit")) in SPOT_UNITS
+    return has_spatial(adata) and technology(adata)["unit"] in SPOT_UNITS
 
 
 def grounding_lines(adata) -> tuple[list[str], str]:
@@ -754,7 +794,7 @@ def grounding_lines(adata) -> tuple[list[str], str]:
     libs = sp["libraries"]
     unit = sp["unit"]
     n = sum(lib["n_obs"] for lib in libs)
-    tech = "Visium" if sp["technology"] == "visium" else "imaging-based or other (cell coordinates)"
+    tech = TECHNOLOGY_NAMES[sp["technology"]]
     sections = f"{len(libs)} section{'s' if len(libs) != 1 else ''}"
     per = ", ".join(f"{lib['id']} {lib['n_obs']:,}" for lib in libs[:8])
     images = sorted({res for lib in libs for res in lib["images"]})

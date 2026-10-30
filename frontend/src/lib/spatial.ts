@@ -30,9 +30,9 @@ export function referenceEmbedding(dataset: DatasetInfo | null | undefined): str
   return ["X_umap", "X_tsne", "X_pca"].find((e) => real.includes(e)) ?? real[0] ?? null;
 }
 
-/** "spot" / "spots" for Visium, "cell" / "cells" otherwise. */
+/** "spot" / "bin" (plural too) for Visium / Visium HD, "cell" / "cells" otherwise. */
 export function unitWord(spatial: SpatialInfo | null | undefined, plural = true): string {
-  const w = spatial?.unit === "spot" ? "spot" : "cell";
+  const w = spatial?.unit ?? "cell";
   return plural ? `${w}s` : w;
 }
 

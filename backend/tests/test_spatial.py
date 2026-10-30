@@ -381,3 +381,50 @@ def test_integration_unit_carries_spatial():
     spatial.adopt(a)
     u = build_unit(a, dataset_id="d", name="n", label="L", fallback_paths=[])
     assert u.adata.obsm["spatial"].shape == (12, 2) and "V1_LN" in u.adata.uns["spatial"]
+
+
+def _hd_like():
+    a = ad.AnnData(np.ones((3, 2), dtype=np.float32))
+    a.obsm["spatial"] = np.arange(6, dtype=np.float64).reshape(3, 2)
+    a.obs["array_row"] = [0, 0, 1]
+    a.obs["array_col"] = [0, 1, 0]
+    a.uns["spatial"] = {"s1": {"images": {}, "metadata": {}, "scalefactors": {
+        "spot_diameter_fullres": 29.2, "bin_size_um": 8.0}}}
+    return a
+
+
+def test_bin_size_makes_visium_hd_bins_which_count_as_spot_data():
+    a = _hd_like()
+    assert spatial.adopt(a) is True
+    assert a.uns["scview_spatial"] == {"technology": "visium_hd", "unit": "bin"}
+    assert spatial.is_spot_data(a) is True
+    assert spatial.info(a)["unit"] == "bin"
+    assert spatial.grounding_lines(a)[1].startswith("Visium HD")
+
+
+def test_recorded_xenium_and_its_own_keys_survive_adopt_and_merge():
+    def xenium():
+        a = ad.AnnData(np.ones((2, 2), dtype=np.float32))
+        a.obsm["spatial"] = np.arange(4, dtype=np.float64).reshape(2, 2)
+        a.uns["scview_spatial"] = {"technology": "xenium", "unit": "cell", "panel": "p"}
+        return a
+
+    a = xenium()
+    spatial.adopt(a)
+    assert a.uns["scview_spatial"] == {"technology": "xenium", "unit": "cell", "panel": "p"}
+    assert spatial.is_spot_data(a) is False
+    parts = {"A": xenium(), "B": xenium()}
+    merged = ad.concat(parts, label="sample", index_unique=":")
+    spatial.after_merge(parts, merged, "sample")
+    assert merged.uns["scview_spatial"] == {"technology": "xenium", "unit": "cell"}
+
+
+def test_plain_visium_and_cells_stay_as_they_were():
+    a = _hd_like()
+    del a.uns["spatial"]["s1"]["scalefactors"]["bin_size_um"]
+    spatial.adopt(a)
+    assert a.uns["scview_spatial"] == {"technology": "visium", "unit": "spot"}
+    b = ad.AnnData(np.ones((2, 2), dtype=np.float32))
+    b.obsm["spatial"] = np.arange(4, dtype=np.float64).reshape(2, 2)
+    spatial.adopt(b)
+    assert b.uns["scview_spatial"] == {"technology": "cells", "unit": "cell"}
