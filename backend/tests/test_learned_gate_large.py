@@ -150,6 +150,7 @@ async def test_train_check_apply_equal_the_dataset_in_memory(client, both, datas
             assert gb[k] == gs[k], k  # the same training matrix, so the same fit
     rb, rs = big["result"]["report"], small["result"]["report"]
     rb.pop("expression"), rs.pop("expression")
+    rb.pop("seconds", None), rs.pop("seconds", None)  # wall clock, not a result
     assert rb == rs
 
     gid = gs["id"]
