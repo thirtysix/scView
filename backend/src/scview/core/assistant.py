@@ -340,6 +340,22 @@ def _add_spot_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]
                                   evidence="\n".join(sd_lines[1:])))
 
 
+def _add_velocity(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved RNA velocity run (core/velocity.py): model, genes, confidence, per group and
+    its warnings, only once a run has been saved on this dataset."""
+    from scview.core import velocity
+
+    try:
+        vel_lines, vel_detail = velocity.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: velocity failed: %s", exc)
+        return
+    if vel_lines:
+        lines.extend(vel_lines)
+        sources.append(ChatSource(kind="result", ref=velocity.TAG, detail=vel_detail,
+                                  evidence="\n".join(vel_lines[1:])))
+
+
 def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved gene programs (core/gene_programs.py): k, the stable ones with their
     top genes and best enriched term, only once a run has been saved."""
@@ -958,6 +974,7 @@ def build_grounding_context(
         _add_deconvolution(adaptor, lines, sources)
         _add_learned_gate(adaptor, lines, sources)
         _add_spot_deconvolution(adaptor, lines, sources)
+        _add_velocity(adaptor, lines, sources)
         _add_cnv(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)

@@ -1228,6 +1228,149 @@ def spot_composition(adata, ref, label, types, genes, ref_genes, fit_genes, s_e,
     return "\n".join(lines) + "\n"
 
 
+def _velocity_helper() -> str:
+    """core/velocity.py's method on arrays (numpy, scipy, pandas), copied so the script fits as
+    scView did, with a dense in-memory walk over its steps instead of the block one."""
+    import inspect
+
+    from scview.core import velocity as vel
+
+    lines = ["import gzip", "import os", "import re", "", "import h5py", "import scipy.io", ""]
+    lines += [f"{name} = {_lit(getattr(vel, name))}" for name in vel.REPLAY_CONSTANTS]
+    for obj in vel.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def velocity_file(name):
+    """A velocity file by name: in the working directory, else beside the input."""
+    for folder in (".", os.path.dirname(os.path.abspath(INPUT))):
+        path = os.path.join(folder, name)
+        if os.path.exists(path):
+            return path
+    sys.exit(f"Velocity file {name} not found: scView keeps it in uploads/<dataset id>/velocity/; put it beside "
+             "this script or the input file.")
+
+
+def velocity_read_lines(path):
+    with (gzip.open(path, "rt") if path.endswith(".gz") else open(path)) as fh:
+        return [line.rstrip("\\n").split("\\t") for line in fh if line.strip()]
+
+
+def velocity_counts(files=None):
+    """(cell names, gene names, spliced, unspliced) of the file: the input's layers when no file
+    is named, an .h5ad's or a loom's layers, or a STARsolo folder's matrices."""
+    files = [velocity_file(f) for f in files] if files else [str(INPUT)]
+    if len(files) == 1 and not files[0].endswith(".loom"):
+        src = read_input(files[0])
+        if "spliced" not in src.layers or "unspliced" not in src.layers:
+            sys.exit(f"{files[0]} has no layers spliced and unspliced.")
+        return (list(map(str, src.obs_names)), list(map(str, src.var_names)),
+                sp.csr_matrix(src.layers["spliced"], dtype=np.float32), sp.csr_matrix(src.layers["unspliced"], dtype=np.float32))
+    if len(files) == 1:
+        with h5py.File(files[0], "r") as f:
+            text = lambda v: [x.decode() if isinstance(x, bytes) else str(x) for x in v]
+            return (text(f["col_attrs"]["CellID"][:]), text(f["row_attrs"]["Gene"][:]),
+                    sp.csr_matrix(f["layers"]["spliced"][:].T, dtype=np.float32),
+                    sp.csr_matrix(f["layers"]["unspliced"][:].T, dtype=np.float32))
+    by_end = {re.sub(r"\\.gz$", "", os.path.basename(f)).rsplit("_", 1)[-1]: f for f in files}
+    barcodes = [r[0] for r in velocity_read_lines(by_end["barcodes.tsv"])]
+    genes = [r[1] if len(r) > 1 else r[0] for r in velocity_read_lines(by_end["features.tsv"])]
+    return (barcodes, genes, scipy.io.mmread(by_end["spliced.mtx"]).T.tocsr().astype(np.float32),
+            scipy.io.mmread(by_end["unspliced.mtx"]).T.tocsr().astype(np.float32))
+
+
+def velocity_barcode(name):
+    """The barcode inside a cell name (velocyto's sample:BARCODEx, a dataset's BARCODE-1)."""
+    runs = re.findall(r"[ACGTN]{6,}", str(name))
+    return max(runs, key=len) if runs else str(name)
+
+
+def velocity_run(adata, files, method, n_top_genes, n_neighbors, n_pcs, min_shared_counts=20):
+    """RNA velocity as scVelo 0.3.3 (steady state or stochastic), written where scView writes it:
+    obs velocity_length, velocity_confidence, velocity_unspliced_fraction; obsm velocity_<embedding>;
+    var velocity_gamma, velocity_r2, velocity_gene."""
+    names, genes, S0, U0 = velocity_counts(files)
+    rows = pd.Index(names).get_indexer(adata.obs_names)
+    if (rows < 0).mean() > 0.5:  # other naming: by the barcode inside each name
+        first = {}
+        for i, n in enumerate(names):
+            first.setdefault(velocity_barcode(n), i)
+        rows = np.asarray([first.get(velocity_barcode(n), -1) for n in adata.obs_names])
+    have = np.flatnonzero(rows >= 0)
+    S0, U0 = S0[rows[have]], U0[rows[have]]
+    size_s, size_u = np.asarray(S0.sum(axis=1)).ravel().astype(np.float64), np.asarray(U0.sum(axis=1)).ravel().astype(np.float64)
+    shared = np.asarray((S0.multiply(U0 > 0) + U0.multiply(S0 > 0)).sum(axis=0)).ravel()
+    kept = np.flatnonzero(shared >= min_shared_counts)
+    scale_s = sp.diags(vel_row_scale(size_s).astype(np.float32), format="csr")
+    scale_u = sp.diags(vel_row_scale(size_u).astype(np.float32), format="csr")
+    Sk = scale_s @ S0[:, kept]
+    mean = np.asarray(Sk.sum(axis=0), dtype=np.float64).ravel() / Sk.shape[0]
+    mean_sq = np.asarray(Sk.multiply(Sk).sum(axis=0), dtype=np.float64).ravel() / Sk.shape[0]
+    hvg = kept[vel_select_genes(mean, mean_sq, Sk.shape[0], n_top_genes)]
+    S, U = (scale_s @ S0[:, hvg]).tocsr(), (scale_u @ U0[:, hvg]).tocsr()
+    # The neighbours: adata's when they hold enough and cover the cells, else computed on its PCA.
+    params = (adata.uns.get("neighbors") or {}).get("params") or {}
+    stored_k = int(np.ravel(params.get("n_neighbors", 0))[0])
+    if ("connectivities" in adata.obsp and "distances" in adata.obsp and stored_k >= n_neighbors and have.size == adata.n_obs):
+        conn, dist = sp.csr_matrix(adata.obsp["connectivities"]), sp.csr_matrix(adata.obsp["distances"])
+    else:
+        if "X_pca" in adata.obsm and adata.obsm["X_pca"].shape[1] >= n_pcs:
+            pca = np.asarray(adata.obsm["X_pca"])[have, :n_pcs].astype(np.float32)
+        else:
+            X = S.copy()
+            X.data = np.log1p(X.data)
+            tmp = ad.AnnData(X)
+            sc.pp.pca(tmp, n_comps=min(n_pcs, X.shape[1] - 1, X.shape[0] - 1), svd_solver="arpack", random_state=0)
+            pca = np.asarray(tmp.obsm["X_pca"], dtype=np.float32)
+        tmp = ad.AnnData(sp.csr_matrix((pca.shape[0], 1), dtype=np.float32), obsm={"X_pca": pca})
+        sc.pp.neighbors(tmp, n_neighbors=n_neighbors, n_pcs=min(n_pcs, pca.shape[1]), use_rep="X_pca", random_state=0,
+                        method="umap", metric="euclidean")
+        conn, dist = sp.csr_matrix(tmp.obsp["connectivities"]), sp.csr_matrix(tmp.obsp["distances"])
+        stored_k = n_neighbors
+    W1, W2 = vel_moment_weights(conn, n_neighbors, stored_k), vel_moment_weights(conn)
+    indices = vel_knn_indices(dist)
+    Ms, Mu = np.zeros(S.shape, dtype=np.float32), np.zeros(S.shape, dtype=np.float32)
+    vel_moments(W1, S, Ms)
+    vel_moments(W1, U, Mu)
+    gamma, r2, res_std = vel_quantile_fit(Ms, Mu, PERCENTILE)
+    velocity_genes = vel_velocity_genes(gamma, r2, (Ms > 0).any(axis=0), (Mu > 0).any(axis=0), MIN_R2, MIN_RATIO)
+    v = np.flatnonzero(velocity_genes)
+    if method == "stochastic":
+        Sv, Uv = S[:, v].tocsr(), U[:, v].tocsr()
+        Mss, Mus = np.zeros((S.shape[0], v.size), dtype=np.float32), np.zeros((S.shape[0], v.size), dtype=np.float32)
+        vel_moments(W2, Sv.multiply(Sv).tocsr(), Mss)
+        vel_moments(W2, Sv.multiply(Uv).tocsr(), Mus)
+        gamma[v] = vel_stochastic_gamma(Ms[:, v], Mu[:, v], Mss, Mus, res_std[v], PERCENTILE)
+    X = Ms[:, v]
+    V = Mu[:, v] - gamma[v].astype(np.float32) * X
+    Vt = np.sqrt(np.abs(V)) * np.sign(V) if method == "stochastic" else V.copy()
+    Vt = Vt - np.nanmean(Vt, axis=1, keepdims=True)
+    B = vel_neighbour_sets(indices)
+    graph = sp.vstack([vel_cosine_rows(X, Vt, B, a, min(a + 2048, X.shape[0]), method == "stochastic")
+                       for a in range(0, X.shape[0], 2048)], format="csr")
+    best = np.maximum(np.asarray(graph.max(axis=1).todense()).ravel(), 0)
+    self_prob = vel_self_probability(best)
+    length, confidence = vel_confidence(V, indices)
+    for col, values in (("velocity_length", length), ("velocity_confidence", confidence),
+                        ("velocity_unspliced_fraction", size_u / np.maximum(size_u + size_s, 1))):
+        full = np.full(adata.n_obs, np.nan, dtype=np.float32)
+        full[have] = values
+        adata.obs[col] = full
+    for key in [k for k in adata.obsm.keys() if str(k).startswith("X_") and (adata.obsm[k].shape[1] == 2 or k == "X_pca")]:
+        emb = np.asarray(adata.obsm[key])[have, :2].astype(np.float64)
+        full = np.full((adata.n_obs, 2), np.nan, dtype=np.float32)
+        full[have] = vel_project_rows(graph, np.arange(graph.shape[0]), self_prob, emb, SCALE)
+        adata.obsm["velocity_" + key[2:]] = full
+    index = {genes[i]: j for j, i in enumerate(hvg)}
+    place = [index.get(str(g), -1) for g in adata.var_names]
+    adata.var["velocity_gamma"] = [float(gamma[j]) if j >= 0 else np.nan for j in place]
+    adata.var["velocity_r2"] = [float(r2[j]) if j >= 0 else np.nan for j in place]
+    adata.var["velocity_gene"] = [bool(velocity_genes[j]) if j >= 0 else False for j in place]
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["velocity"] = _velocity_helper()
+_HELPER_ORDER += ("velocity",)
 _HELPERS["wnn"] = _wnn_helper()
 _HELPER_ORDER += ("wnn",)
 _HELPER_NEEDS["wnn"] = ("dsb",)  # protein_counts_for
@@ -2315,6 +2458,27 @@ def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
     ], "; ".join(notes)[:200] if notes else "")
 
 
+def _velocity(p: dict, ctx: _Ctx) -> Snippet:
+    """RNA velocity (core/velocity.py), reading the counts from the original upload's layers or the
+    attached file; scView read them from its store, written from those same files."""
+    from scview.core import velocity as vel
+
+    method = p.get("method")
+    ints = [p.get(k) for k in ("n_top_genes", "n_neighbors", "n_pcs")]
+    if method not in vel.METHODS or not all(isinstance(x, int) and not isinstance(x, bool) for x in ints):
+        return Snippet(NOT_REPLAYABLE, ["# RNA velocity: its settings are not recorded. Recorded:", *_param_comment(p)],
+                       "settings not recorded")
+    files = p.get("source_stored_as") or None
+    _need(ctx, "velocity")
+    return Snippet(EXACT, [
+        f"# RNA velocity, {comment_text(vel.METHOD_NAMES[method], 60)} (ported from scVelo 0.3.3): counts from "
+        + (comment_text(", ".join(p.get("source_files") or files), 120) + " (beside this script or the input)." if files
+           else "the input's layers spliced and unspliced."),
+        f"velocity_run(adata, {_lit(files)}, {_lit(method)}, {ints[0]}, {ints[1]}, {ints[2]}, "
+        f"{_lit(int(p.get('min_shared_counts', vel.MIN_SHARED_COUNTS)))})",
+    ])
+
+
 def _merge_clusters(p: dict, ctx: _Ctx) -> Snippet:
     column, target, mapping = p.get("column"), p.get("target"), p.get("mapping")
     if not column or not target or not isinstance(mapping, dict):
@@ -2984,6 +3148,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "learned_gate_apply": _learned_gate_apply,
     "wnn": _wnn,
     "spot_deconvolution": _spot_deconvolution,
+    "velocity": _velocity,
     "spatial_domains": _spatial_domains,
     "nhood_enrichment": _nhood_enrichment,
     "spatial_niches": _spatial_niches,

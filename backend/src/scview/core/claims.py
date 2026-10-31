@@ -682,6 +682,7 @@ _FAMILY_PREFIX = {
     # learned gates (core/learned_gate.py); "learned_gate" splits to "learned"
     "lgate": "result:lgate", "learnedgate": "result:lgate", "learned": "result:lgate",
     "spotdeconv": "result:spotdeconv",  # spot composition (core/spot_deconvolution.py)
+    "velocity": "result:velocity", "rnavelocity": "result:velocity",  # RNA velocity (core/velocity.py)
     "labels": "result:labels:",
     "tissue": "result:tissue",  # spatial data (core/spatial.py)
     "gwas": "result:gwas", "traits": "result:gwas",  # GWAS trait links (core/gwas_catalog.py)
@@ -737,7 +738,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "tfmotifs", "tfmotif", "motifs", "motif",
                                   "gwas", "traits",
                                   "deconvolution", "deconv",
-                                  "lgate", "learnedgate", "learned", "spotdeconv",
+                                  "lgate", "learnedgate", "learned", "spotdeconv", "velocity", "rnavelocity",
                                   "domains", "domain", "niches", "niche", "nhood")
                          or not last):
             if fam == "dataset":
