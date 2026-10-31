@@ -313,6 +313,43 @@ def test_a_count_before_a_listed_group_is_not_that_groups_number():
     assert one("ATF2 has 500 cells [result:mixscape].", sources=srcs, vocab=vocab).verdict == "refuted"
 
 
+def test_cluster_ids_listed_for_a_label_are_checked_against_the_cited_lines():
+    """Capture 2026-10-26: "Monocyte clusters are 1, 2, 6 and 7" (true) was left to the
+    judge, which refuted it. Each id is now checked by rule: supported when a cited
+    line names both the id and the label; an id under another label is missing (the
+    judge's call), never refuted; ids above 10 no longer collide with a cell count."""
+    ev = ("- **Monocyte** (3,200 cells): clusters 1 (1,500), 2 (900), 6 (500), 7 (300)\n"
+          "- **B** (998 cells): cluster 3 (998)\n"
+          "- **NK** (646 cells): clusters 12 (400), 14 (246)")
+    src = _src("result:labels:cell_type", ev)
+    vocab = Vocab(genes=GENES, groups=["Monocyte", "B", "NK", "CTRL", "STIM"],
+                  numeric_groups=frozenset(str(i) for i in range(15)))
+    tag = "[result:labels:cell_type]"
+    (c,) = check_answer(f"Monocyte clusters are 1, 2, 6 and 7 {tag}.", [src], ev, vocab)
+    assert c.verdict == "supported", c.reason
+    assert "cluster 1 = Monocyte" in c.reason and "cluster 7 = Monocyte" in c.reason
+    (c,) = check_answer(f"Clusters 1, 2, 6 and 7 are monocytes {tag}.", [src], ev, vocab)
+    assert c.verdict == "supported", c.reason
+    # a per-cluster cell-type fact supports the same sentence
+    ev2 = "\n".join(f"- cluster **{i}** = {t}"
+                    for i, t in enumerate(["B", "Monocyte", "Monocyte", "B", "NK", "NK", "Monocyte", "Monocyte"]))
+    src2 = _src("result:celltypes:cell_type", ev2)
+    (c,) = check_answer("Monocyte clusters are 1, 2, 6 and 7 [result:celltypes:cell_type].",
+                        [src2], ev2, vocab)
+    assert c.verdict == "supported", c.reason
+    # an id the fact puts under another label: missing, not refuted
+    (c,) = check_answer(f"Monocyte clusters are 1, 2 and 3 {tag}.", [src], ev, vocab)
+    assert c.verdict == "uncertain" and "cluster 3 (for Monocyte)" in c.reason
+    # ids above 10 are ids, not a count to set against NK's 646 cells
+    (c,) = check_answer(f"NK clusters are 12 and 14 {tag}.", [src], ev, vocab)
+    assert c.verdict == "supported", c.reason
+    (c,) = check_answer(f"NK clusters are 12 and 13 {tag}.", [src], ev, vocab)
+    assert c.verdict == "uncertain" and "cluster 13 (for NK)" in c.reason
+    # a bare list with no label named stays as it was: nothing to check by rule
+    (c,) = check_answer(f"The clusters are 1, 2, 6 and 7 {tag}.", [src], ev, vocab)
+    assert c.verdict == "uncertain"
+
+
 def test_evidence_falls_back_to_detail():
     srcs = [ChatSource(kind="app", ref="app:library", detail="4 dataset(s): a, b, c, d")]
     assert one("There are 4 datasets in the library [app:library].", sources=srcs).verdict == "supported"
