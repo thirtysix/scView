@@ -38,6 +38,9 @@ import { SpatialGenesSubtab } from "@/components/unified/SpatialGenesSubtab";
 import { TraitsSubtab } from "@/components/unified/TraitsSubtab";
 import { DeconvolutionSubtab } from "@/components/unified/DeconvolutionSubtab";
 import { SpotCompositionSubtab } from "@/components/unified/SpotCompositionSubtab";
+import { VelocitySubtab } from "@/components/unified/VelocitySubtab";
+import { useVelocityArrows } from "@/hooks/useVelocityArrows";
+import { isOtherPcPair } from "@/lib/velocityArrows";
 import { ReportSubtab } from "@/components/report/ReportSubtab";
 import { ProgramsSubtab } from "@/components/unified/ProgramsSubtab";
 import { CnvSubtab } from "@/components/unified/CnvSubtab";
@@ -106,6 +109,7 @@ const SUBTABS = [
   { id: "traits" as const, label: "Traits" },
   { id: "deconvolution" as const, label: "Deconvolution" },
   { id: "spotcomp" as const, label: "Spot composition" },
+  { id: "velocity" as const, label: "Velocity" },
 ] as const;
 
 interface ViolinResponse {
@@ -179,6 +183,7 @@ export function UnifiedViewPanel() {
   // the next loads) are not drawn as tissue: its camera would blow each spot,
   // drawn in world units, up to thousands of pixels (a freeze on software WebGL).
   const tissueCoordsIn = !tissueInfo || positionsOf === SPATIAL_EMBEDDING;
+  const velocityLayers = useVelocityArrows(datasetId, embedding, dimensions, isOtherPcPair(embedding, pcaDims), plotBackground);
   const { positions, library: tissueLibrary } = useTissuePositions(
     dataset,
     embedding,
@@ -1114,6 +1119,8 @@ export function UnifiedViewPanel() {
                 axisLabels={embeddingAxisLabels(embedding, pcaDims, dataset?.embedding_dimensions?.[embedding])}
                 onKeyboardSelect={gridActive ? undefined : handleSelectionComplete}
                 tissue={tissue}
+                overlayLayers={velocityLayers.length ? velocityLayers : null}
+                overlayFigureNote={velocityLayers.length ? "Without the velocity arrows (the PNG has them)." : undefined}
               />
             )}
             {gridOffOnTissue && (
@@ -1527,6 +1534,7 @@ export function UnifiedViewPanel() {
             )}
             {activeSubtab === "deconvolution" && <DeconvolutionSubtab />}
             {activeSubtab === "spotcomp" && isGridUnit(dataset?.spatial) && <SpotCompositionSubtab />}
+            {activeSubtab === "velocity" && <VelocitySubtab />}
           </TabPanel>
         </div>
       </div>
