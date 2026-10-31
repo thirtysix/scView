@@ -48,7 +48,6 @@ from scview.core.ingestion.bundling import (
     build_bundle,
 )
 from scview.core.ingestion.detection import FileKind, is_store_dir
-from scview.core import modality_store, velocity_input
 from scview.core.ingestion.loading import IngestLoadError, load_unit
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.validation import IssueSeverity, validate_bundle
