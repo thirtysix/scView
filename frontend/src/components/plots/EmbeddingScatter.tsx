@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { DeckGL, type DeckGLRef } from "@deck.gl/react";
 import { OrthographicView, OrbitView, type Layer } from "@deck.gl/core";
-import { BitmapLayer, ScatterplotLayer, PointCloudLayer } from "@deck.gl/layers";
+import { BitmapLayer, LineLayer, ScatterplotLayer, SolidPolygonLayer, PointCloudLayer } from "@deck.gl/layers";
 import { mapCategoryToColor, mapValueToColor, type AnyColormapName } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { RotateCcw, AlertTriangle } from "lucide-react";
@@ -40,6 +40,19 @@ import { useReducedMotion } from "@/lib/reducedMotion";
 import type { SpatialLibrary } from "@/api/types";
 import { spatialImageUrl } from "@/api/spatial";
 import { imageBounds, imageResFor, spotRadius, wantsHires } from "@/lib/spatial";
+import {
+  MIN_EDGE_PIXELS,
+  hideCovered,
+  meshColors,
+  outlineNote,
+  planOutlines,
+  viewRect,
+  type CellOutlines,
+  type WorldRect,
+} from "@/lib/cellOutlines";
+
+/** After this long without a camera change the view counts as settled (outlines, transcripts). */
+const SETTLE_MS = 120;
 
 /** The tissue plot (positions are the tissue world, lib/spatial.ts): one
  *  section's H&E image under its spots, spots drawn at their real size. */
@@ -51,6 +64,9 @@ export interface TissueMode {
   imageOpacity: number;
   /** What one point is (spatial.unit): captions say "spots" for Visium, "bins" for Visium HD */
   unit: "spot" | "bin" | "cell";
+  /** Segmented shapes to draw for the cells in view, once few enough are (lib/cellOutlines.ts) */
+  outlines?: CellOutlines | null;
+  outlineKind?: "cell" | "nucleus";
 }
 
 interface EmbeddingScatterProps {
@@ -116,6 +132,12 @@ interface EmbeddingScatterProps {
   overlayLayers?: readonly Layer[] | null;
   /** What the SVG / PDF note says of them (default: the PAGA graph's wording) */
   overlayFigureNote?: string;
+  /** A line on the PNG about what the overlay draws */
+  exportNote?: string;
+  /** A second legend on the PNG, for what the overlay draws (the transcript dots' genes) */
+  exportOverlayLegend?: ScatterLegend | null;
+  /** The world rectangle the camera settled on, on the tissue plot */
+  onSettledView?: (rect: WorldRect | null) => void;
   /** The embedding's obsm key: a UMAP or t-SNE gets a note that its cluster
    *  gaps aren't distances, linking to the cluster-distance view */
   embedding?: string | null;
@@ -130,6 +152,11 @@ interface EmbeddingScatterProps {
    *  position (other sections) left out, spots in world units */
   tissue?: TissueMode | null;
 }
+
+const OUTLINE_LAYER = "cell-outlines";
+const EMPTY_STARTS = new Uint32Array(1);
+const EMPTY_XY = new Float32Array(0);
+const EMPTY_RGBA = new Uint8Array(0);
 
 function computeInitialViewState3D(
   positions: Float32Array,
@@ -205,6 +232,9 @@ export function EmbeddingScatter({
   overlayElement = null,
   overlayLayers = null,
   overlayFigureNote,
+  exportNote,
+  exportOverlayLegend = null,
+  onSettledView,
   embedding = null,
   axisLabels = null,
   exportTitle,
@@ -416,6 +446,28 @@ export function EmbeddingScatter({
   const renderCap = tissueMode && tissue.unit === "bin" ? Number.MAX_SAFE_INTEGER : maxRenderedCells;
   const sample = useMemo(() => sampleCellIndices(totalCells, renderCap), [totalCells, renderCap]);
   const isSampled = sample !== null;
+  // The camera once it rests, on the tissue plot: what outlines and transcripts are drawn for.
+  const outlines = tissueMode ? (tissue.outlines ?? null) : null;
+  const wantsSettled = tissueMode && (!!outlines || !!onSettledView);
+  const [settled, setSettled] = useState<WorldRect | null>(null);
+  useEffect(() => {
+    if (!wantsSettled || !viewState) {
+      setSettled(null);
+      return;
+    }
+    const timer = setTimeout(() => setSettled(viewRect(viewState, containerSize.width, containerSize.height)), SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [wantsSettled, viewState, containerSize.width, containerSize.height]);
+  useEffect(() => {
+    onSettledView?.(settled);
+  }, [settled, onSettledView]);
+  const outlinePlan = useMemo(
+    () => (outlines && positions && settled ? planOutlines(outlines, positions, settled) : null),
+    [outlines, positions, settled],
+  );
+  const mesh = outlinePlan?.mesh ?? null;
+  const outlineKind = tissueMode ? (tissue.outlineKind ?? "cell") : "cell";
+
   // ...in a seeded random order, so no group covers another just by being stored
   // after it; the same for every colouring. A selection is drawn over the rest.
   // Slot s draws cell indexMap[s]: picking maps back through it (lib/drawOrder.ts).
@@ -436,6 +488,11 @@ export function EmbeddingScatter({
   );
 
   const renderCount = renderPositions ? renderPositions.length / stride : 0;
+  // A cell drawn as its outline is not also a dot.
+  const pointColors = useMemo(
+    () => (mesh && renderColors ? hideCovered(renderColors, indexMap, mesh.covered) : renderColors),
+    [mesh, renderColors, indexMap],
+  );
 
   // Group labels where most of each group's drawn cells are; a group with no
   // drawn cell (sampled away) gets none. (The draw order does not matter here.)
@@ -537,11 +594,19 @@ export function EmbeddingScatter({
     [onViewStateChange],
   );
 
+  // What a picked object is: a point's slot, or an outline's polygon.
+  const meshCells = mesh?.cells ?? null;
+  const cellOf = useCallback(
+    (info: { index: number; layer?: { id: string } | null }) =>
+      info.layer?.id === OUTLINE_LAYER && meshCells ? meshCells[info.index]! : indexMap ? indexMap[info.index]! : info.index,
+    [meshCells, indexMap],
+  );
+
   const handleHover = useCallback(
-    (info: { index: number; x: number; y: number; picked: boolean }) => {
+    (info: { index: number; x: number; y: number; picked: boolean; layer?: { id: string } | null }) => {
       if (info.picked && info.index >= 0) {
         // Remap sampled index back to original cell index
-        const originalIndex = indexMap ? indexMap[info.index]! : info.index;
+        const originalIndex = cellOf(info);
         setTooltip({ x: info.x, y: info.y, index: originalIndex });
         onHover?.({ index: originalIndex, x: info.x, y: info.y });
       } else {
@@ -549,25 +614,25 @@ export function EmbeddingScatter({
         onHover?.(null);
       }
     },
-    [onHover, indexMap],
+    [onHover, cellOf],
   );
 
   const handleClick = useCallback(
-    (info: { index: number; picked: boolean }) => {
+    (info: { index: number; picked: boolean; layer?: { id: string } | null }) => {
       if (info.picked && info.index >= 0) {
-        const originalIndex = indexMap ? indexMap[info.index]! : info.index;
+        const originalIndex = cellOf(info);
         onClick?.(originalIndex);
       } else {
         onClick?.(null);
       }
     },
-    [onClick, indexMap],
+    [onClick, cellOf],
   );
 
 
   // Binary attribute data path — feeds typed arrays directly to GPU
   const pointLayers = useMemo(() => {
-    if (renderCount === 0 || !renderPositions || !renderColors) return [];
+    if (renderCount === 0 || !renderPositions || !renderColors || !pointColors) return [];
 
     if (dimensions === 3) {
       return [
@@ -599,7 +664,7 @@ export function EmbeddingScatter({
           length: renderCount,
           attributes: {
             getPosition: { value: renderPositions, size: 2 },
-            getFillColor: { value: renderColors, size: 4 },
+            getFillColor: { value: pointColors, size: 4 },
           },
         },
         getRadius: spotR ?? pointSize,
@@ -610,12 +675,86 @@ export function EmbeddingScatter({
         autoHighlight: true,
         highlightColor: [255, 255, 0, 180],
         updateTriggers: {
-          getFillColor: [renderColors],
+          getFillColor: [pointColors],
           getRadius: [pointSize, spotR],
         },
       }),
     ];
-  }, [renderCount, renderPositions, renderColors, pointSize, dimensions, spotR]);
+  }, [renderCount, renderPositions, renderColors, pointColors, pointSize, dimensions, spotR]);
+
+  // The segmented shapes of the cells in view: triangles and edges from lib/cellOutlines.ts, so
+  // deck.gl has nothing to tessellate; each vertex in its cell's colour, as the points are.
+  // With none in view yet the layers exist empty: their shaders compile (400 to 700 ms, once) when
+  // Cells is chosen, not in the middle of a zoom.
+  const outlineLayers = useMemo(() => {
+    if (!outlines) return [];
+    if (!mesh) {
+      return [
+        new SolidPolygonLayer({
+          id: OUTLINE_LAYER,
+          data: {
+            length: 0,
+            startIndices: EMPTY_STARTS,
+            attributes: {
+              getPolygon: { value: EMPTY_XY, size: 2 },
+              getFillColor: { value: EMPTY_RGBA, size: 4 },
+              indices: { value: EMPTY_STARTS, size: 1 },
+            },
+          },
+          _normalize: false,
+          positionFormat: "XY" as const,
+          pickable: true,
+        }),
+        new LineLayer({
+          id: `${OUTLINE_LAYER}-edges`,
+          data: {
+            length: 0,
+            attributes: {
+              getSourcePosition: { value: EMPTY_XY, size: 2, stride: 16, offset: 0 },
+              getTargetPosition: { value: EMPTY_XY, size: 2, stride: 16, offset: 8 },
+            },
+          },
+          pickable: false,
+        }),
+      ];
+    }
+    const fill = new SolidPolygonLayer({
+      id: OUTLINE_LAYER,
+      data: {
+        length: mesh.cells.length,
+        startIndices: mesh.startIndices,
+        attributes: {
+          getPolygon: { value: mesh.positions, size: 2 },
+          getFillColor: { value: meshColors(mesh, colorArray), size: 4 },
+          indices: { value: mesh.indices, size: 1 },
+        },
+      },
+      _normalize: false,
+      positionFormat: "XY" as const,
+      pickable: true,
+      autoHighlight: true,
+      highlightColor: [255, 255, 0, 180],
+    });
+    if (mesh.meanSize * (settled?.scale ?? 0) < MIN_EDGE_PIXELS) return [fill];
+    const stride = 16;
+    return [
+      fill,
+      new LineLayer({
+        id: `${OUTLINE_LAYER}-edges`,
+        data: {
+          length: mesh.edges.length / 4,
+          attributes: {
+            getSourcePosition: { value: mesh.edges, size: 2, stride, offset: 0 },
+            getTargetPosition: { value: mesh.edges, size: 2, stride, offset: 8 },
+          },
+        },
+        getColor: background === "dark" ? [255, 255, 255, 110] : [30, 41, 59, 130],
+        getWidth: 1,
+        widthUnits: "pixels" as const,
+        pickable: false,
+      }),
+    ];
+  }, [outlines, mesh, colorArray, background, settled]);
 
   // The tissue image: lowres from the start, hires once the camera zooms in
   // beyond the fit and past the lowres pixels (then kept, for this section).
@@ -675,8 +814,8 @@ export function EmbeddingScatter({
     [placedLabels, background, highlightCategory],
   );
   const layers = useMemo(
-    () => [...imageLayers, ...pointLayers, ...labelLayers, ...(overlayLayers ?? [])],
-    [imageLayers, pointLayers, labelLayers, overlayLayers],
+    () => [...imageLayers, ...pointLayers, ...outlineLayers, ...labelLayers, ...(overlayLayers ?? [])],
+    [imageLayers, pointLayers, outlineLayers, labelLayers, overlayLayers],
   );
 
   // One-off high-resolution redraw on click; see downloadDeckPng.
@@ -684,14 +823,22 @@ export function EmbeddingScatter({
     const deck = deckRef.current?.deck;
     if (!deck) return;
     downloadDeckPng(deck, {
-      legend: exportLegend,
+      legend: exportOverlayLegend ? [...(exportLegend ? [exportLegend] : []), exportOverlayLegend] : exportLegend,
       colormap: continuousColormap,
       filename: exportFilename(useDatasetStore.getState().currentDataset?.name, exportName),
-      note: isSampled
-        ? `Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`
-        : undefined,
+      note:
+        [
+          mesh && outlinePlan
+            ? outlineNote(outlinePlan, outlineKind)
+            : isSampled
+              ? `Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`
+              : null,
+          exportNote,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined,
     });
-  }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells, unit]);
+  }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells, unit, mesh, outlinePlan, outlineKind, exportNote, exportOverlayLegend]);
 
   // SVG / PDF: the drawn points projected with the camera shown, in their draw
   // order and colours, the labels where they are on screen (lib/scatterSvg.ts).
@@ -839,6 +986,8 @@ export function EmbeddingScatter({
           figureNote={
             overlayLayers?.length
               ? (overlayFigureNote ?? "Without the graph drawn over the points (the PNG has it).")
+              : mesh
+                ? "Points, without the outlines (the PNG has them)."
               : imageLayers.length
                 ? "Without the tissue image (the PNG has it)."
                 : undefined
@@ -848,10 +997,16 @@ export function EmbeddingScatter({
       )}
 
       {/* Sampling indicator */}
-      {!minimal && isSampled && (
+      {!minimal && isSampled && !mesh && (
         <div className="absolute left-3 top-3 z-10 rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[10px] text-slate-500">
           Showing {(renderCount / 1000).toFixed(0)}K of {(totalCells / 1000).toFixed(0)}K {unit}s (sampled)
         </div>
+      )}
+
+      {!minimal && outlinePlan && (
+        <p role="status" data-testid="outline-note" className={`absolute left-3 z-10 max-w-[60%] rounded-md border border-slate-300 bg-white/90 px-2 py-0.5 text-[10px] text-slate-500 ${isSampled && !mesh ? "top-10" : "top-3"}`}>
+          {outlineNote(outlinePlan, outlineKind)}
+        </p>
       )}
 
       {/* UMAP / t-SNE: the gaps between clusters aren't distances */}

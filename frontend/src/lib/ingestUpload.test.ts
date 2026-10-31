@@ -30,6 +30,8 @@ describe("Xenium output folders", () => {
     "run/outs/cells.parquet",
     "run/outs/metrics_summary.csv",
     "run/outs/morphology_focus.ome.tif",
+    "run/outs/cell_boundaries.parquet",
+    "run/outs/nucleus_boundaries.csv.gz",
   ];
   const heavy = [
     "run/outs/transcripts.parquet",
@@ -37,8 +39,6 @@ describe("Xenium output folders", () => {
     "run/outs/transcripts.zarr.zip",
     "run/outs/morphology.ome.tif",
     "run/outs/morphology_mip.ome.tif",
-    "run/outs/cell_boundaries.parquet",
-    "run/outs/nucleus_boundaries.csv.gz",
     "run/outs/cells.zarr.zip",
     "run/outs/analysis_summary.html",
     "run/outs/gene_panel.json",
@@ -51,6 +51,13 @@ describe("Xenium output folders", () => {
     expect(keep.map((i) => i.path)).toEqual(outs);
     expect(skipped.map((s) => s.path)).toEqual(heavy);
     expect(skipped.every((s) => s.reason.includes("Xenium"))).toBe(true);
+  });
+
+  it("sends a boundaries .csv.gz only when there is no parquet of it", () => {
+    const paths = ["o/experiment.xenium", "o/cell_boundaries.parquet", "o/cell_boundaries.csv.gz", "o/nucleus_boundaries.csv.gz"];
+    const { keep, skipped } = splitJunk(itemsFromFiles(paths.map((p) => picked(p))));
+    expect(keep.map((i) => i.path)).toEqual(["o/experiment.xenium", "o/cell_boundaries.parquet", "o/nucleus_boundaries.csv.gz"]);
+    expect(skipped.map((s) => s.reason)).toEqual(["the same outlines as cell_boundaries.parquet, which is read"]);
   });
 
   it("keeps the first stain of XOA 2+ and the mip image when there is no focus image", () => {

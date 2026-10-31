@@ -22,6 +22,7 @@ export const UNIFIED_SUBTABS = [
   "report", "programs", "cnv", "clonotypes", "perturbation", "spatial", "domains", "traits", "deconvolution", "spotcomp",
   "velocity",
   "accessibility",
+  "transcripts",
 ] as const;
 
 export type UnifiedSubtab = (typeof UNIFIED_SUBTABS)[number];

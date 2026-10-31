@@ -1736,7 +1736,7 @@ _SUBTABS = {
     "genesets": "Gene Sets", "enrichment": "Enrichment", "de": "DE",
     "protein": "Protein", "activity": "Activity", "genelists": "Gene lists",
     "communication": "Communication", "report": "Report",
-    "spatial": "Spatial genes", "traits": "Traits",
+    "spatial": "Spatial genes", "transcripts": "Transcripts", "traits": "Traits",
 }
 # Compare panel tabs (frontend ComparePanel.tsx: joint | composition | planner, with
 # Milo and miloDE as modes of Composition).

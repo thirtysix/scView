@@ -18,6 +18,7 @@ import scipy.sparse as sp
 from scview.core import assistant, claims, cell_outlines
 from scview.core import transcripts as tr
 from scview.core.rag import router as rag_router
+from tests import large_fixture
 from tests.test_hvg_sensitivity import _events, _register
 
 API = "/api/v1"
@@ -394,6 +395,34 @@ async def test_removing_the_dataset_removes_its_transcripts(client, dataset_mana
     assert tr.store_dir(dataset_manager.data_dir, did).exists()
     assert dataset_manager.remove_dataset(did)
     assert not tr.store_dir(dataset_manager.data_dir, did).exists()
+
+
+async def test_a_large_dataset_attaches_and_indexes_without_touching_its_h5ad(client, dataset_manager):
+    """Matrices on disk: only obs names and obsm are used, and nothing is saved to the h5ad."""
+    counts = large_fixture.counts_adata(n_cells=40)
+    counts.obsm["spatial"] = np.column_stack((np.linspace(0, 640, 40), np.linspace(0, 640, 40)))
+    counts.obs["library_id"] = pd.Categorical(["r1"] * 40)
+    counts.uns["spatial"] = {"r1": {"images": {}, "scalefactors": {}, "metadata": {}}}
+    counts.uns["scview_spatial"] = {"technology": "xenium", "unit": "cell"}
+    did = "tl"
+    h5ad = large_fixture.register(dataset_manager.data_dir, did, counts)
+    before = Path(h5ad).stat().st_mtime_ns
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.large_info()["matrices_on_disk"] is True
+
+    names = list(map(str, adaptor.adata.obs_names))
+    rows = [(n, float(x + dx), float(y + dy)) for n, (x, y) in zip(names, adaptor.adata.obsm["spatial"])
+            for dx, dy in ((-1, -1), (1, -1), (1, 1))]
+    r = await client.post(f"{API}/datasets/{did}/spatial/outlines", params={"name": "cell_boundaries.parquet"},
+                          content=_bytes(pd.DataFrame(rows, columns=["cell_id", "vertex_x", "vertex_y"])))
+    assert r.status_code == 200, r.text
+    assert r.json()["n_matched"] == 40
+    await _attach(client, did)
+    r = await client.post(f"{API}/datasets/{did}/spatial/transcripts/index-stream")
+    assert _events(r.text)[-1][0] == "complete"
+    info = (await client.get(f"{API}/datasets/{did}")).json()["spatial"]
+    assert info["outlines"] == ["cell"] and info["transcripts"] is True
+    assert Path(h5ad).stat().st_mtime_ns == before
 
 
 def test_the_upload_routes_pass_the_json_body_cap():

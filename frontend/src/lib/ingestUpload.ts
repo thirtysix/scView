@@ -33,7 +33,7 @@ const REPORT = "Cell Ranger's HTML report";
 const LOUPE = "Loupe Browser files";
 const MOLECULES = "per-molecule read information, not a count matrix";
 const SPATIAL_EXTRA = "Space Ranger alignment images and tables, not used by scView";
-const XENIUM_EXTRA = "Xenium transcripts, boundaries, stains and Explorer files, not used by scView";
+const XENIUM_EXTRA = "Xenium transcripts, stains and Explorer files, not read with the folder";
 const XENIUM_ZIP = "a zipped Xenium output folder is not read: unzip it and drop the folder instead";
 const HD_RAW = "the raw matrix, every bin of the slide and most of them empty: the filtered one is read";
 const HD_COPY = "the same matrix as filtered_feature_bc_matrix.h5, which is read";
@@ -58,10 +58,6 @@ const JUNK_NAMES: Record<string, string> = {
   "transcripts.parquet": XENIUM_EXTRA,
   "transcripts.csv.gz": XENIUM_EXTRA,
   "morphology.ome.tif": XENIUM_EXTRA,
-  "cell_boundaries.parquet": XENIUM_EXTRA,
-  "cell_boundaries.csv.gz": XENIUM_EXTRA,
-  "nucleus_boundaries.parquet": XENIUM_EXTRA,
-  "nucleus_boundaries.csv.gz": XENIUM_EXTRA,
   "analysis_summary.html": XENIUM_EXTRA,
   "gene_panel.json": XENIUM_EXTRA,
   "raw_probe_bc_matrix.h5": "the raw per-probe matrix, not used by scView",
@@ -153,13 +149,22 @@ function xeniumExtras(paths: string[]): Set<string> {
   return out;
 }
 
+/** A boundaries .csv.gz beside its .parquet says the same: why it is left out, or null. */
+function boundariesCopy(path: string, all: Set<string>): string | null {
+  const m = /^(.*\/)?(cell_boundaries|nucleus_boundaries)\.csv\.gz$/i.exec(path.replace(/\\/g, "/"));
+  if (!m) return null;
+  const parquet = `${m[1] ?? ""}${m[2]}.parquet`;
+  return all.has(parquet.toLowerCase()) ? `the same outlines as ${m[2]!.toLowerCase()}.parquet, which is read` : null;
+}
+
 /** The files to send, and the ones left out (with why and their size). */
 export function splitJunk(items: UploadItem[]): { keep: UploadItem[]; skipped: SkippedUpload[] } {
   const keep: UploadItem[] = [];
   const skipped: SkippedUpload[] = [];
   const extras = xeniumExtras(items.map((it) => it.path));
+  const all = new Set(items.map((it) => it.path.replace(/\\/g, "/").toLowerCase()));
   for (const it of items) {
-    const reason = junkReason(it.path) ?? (extras.has(it.path) ? XENIUM_EXTRA : null);
+    const reason = junkReason(it.path) ?? (extras.has(it.path) ? XENIUM_EXTRA : null) ?? boundariesCopy(it.path, all);
     if (reason) skipped.push({ path: it.path, reason, bytes: it.file.size });
     else keep.push(it);
   }

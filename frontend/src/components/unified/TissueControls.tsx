@@ -1,7 +1,7 @@
 import type { SpatialInfo } from "@/api/types";
 import { InfoTip } from "@/components/common/InfoTip";
 import { activeLibrary, unitWord } from "@/lib/spatial";
-import { useTissueViewStore } from "@/stores/tissueViewStore";
+import { useTissueViewStore, type TissueDraw } from "@/stores/tissueViewStore";
 
 /**
  * Toolbar controls of the tissue plot (Embedding "Tissue"): which section is
@@ -14,7 +14,15 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
   const setShowImage = useTissueViewStore((s) => s.setShowImage);
   const imageOpacity = useTissueViewStore((s) => s.imageOpacity);
   const setImageOpacity = useTissueViewStore((s) => s.setImageOpacity);
+  const draw = useTissueViewStore((s) => s.draw);
+  const setDraw = useTissueViewStore((s) => s.setDraw);
   const library = activeLibrary(spatial, wanted);
+  const outlines = spatial.outlines ?? [];
+  const drawChoices: [TissueDraw, string][] = [
+    ["points", "Points"],
+    ...(outlines.includes("cell") ? [["cell", "Cells"] as [TissueDraw, string]] : []),
+    ...(outlines.includes("nucleus") ? [["nucleus", "Nuclei"] as [TissueDraw, string]] : []),
+  ];
   const hasImage = !!(library?.images.lowres || library?.images.hires);
   const units = unitWord(spatial);
 
@@ -66,6 +74,23 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
           className="w-14 accent-blue-500"
         />
       )}
+      {outlines.length > 0 && (
+        <div className="flex items-center gap-1" role="group" aria-labelledby="tissue-draw">
+          <span id="tissue-draw" className="text-[11px] font-medium text-slate-500">Draw</span>
+          {drawChoices.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={draw === value}
+              onClick={() => setDraw(value)}
+              title={value === "points" ? `Each ${unitWord(spatial, false)} a dot` : `The segmented ${label.toLowerCase()}, once few enough are in view`}
+              className={`rounded border px-1.5 py-0.5 text-[11px] ${draw === value ? "border-blue-400 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <InfoTip label="About the tissue plot">
         {spatial.unit === "spot"
           ? "Each dot is a Visium spot (55 µm), drawn at its real size on the H&E image; one spot holds several cells. Size 2 is the real spot size."
@@ -73,6 +98,8 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
             ? `Each dot is a Visium HD bin${spatial.bin_size_um ? ` (${spatial.bin_size_um} µm square)` : ""}, as wide as the real bin on the H&E image; a bin is a square of the capture grid, not a segmented cell. Size 2 is the real bin width.`
             : "Each dot is a cell at its position in the section."}{" "}
         Colours, overlays, lasso and labels work as on the UMAP. Zooming in loads the sharper image.
+        {outlines.length > 0 && " Draw: the whole section stays points; the segmented shapes are drawn once few enough cells are in view."}
+        {outlines.length === 0 && spatial.outlines_note && ` ${spatial.outlines_note}`}
       </InfoTip>
     </div>
   );
