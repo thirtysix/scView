@@ -480,16 +480,21 @@ class DatasetManager:
         return plan.in_memory is not None
 
     async def reserve(self, dataset_id: str, need: int, extra: int = 0,
-                      what: str = "Opening this dataset") -> None:
+                      what: str = "Opening this dataset", strict: bool = False) -> None:
         """Make room for ``need`` bytes (and ``extra`` the work needs beyond them) with
         ``free_memory_for``; ``DatasetMemoryError`` (a 507) when even the low end of
         ``need``'s error band is more than what is free with every other dataset closed.
         ``extra`` is room asked for, never a reason to refuse (a run's pre-step check
-        stops a step that cannot fit). Without a container limit nothing is checked."""
+        stops a step that cannot fit). ``strict``: refused unless all of ``need`` fits. A read a
+        request makes in one go has no pre-step check after this one, and its estimate is close
+        (Kang: 207 MiB said, 210 read; admitted on the low end at a 430 MiB limit, it killed the
+        backend). Without a container limit nothing is checked."""
         from scview.core import preflight
 
+        band = 0.0 if strict else preflight.ERROR_BAND
+
         def refused(free: int | None) -> bool:
-            return free is not None and need * (1 - preflight.ERROR_BAND) > free
+            return free is not None and need * (1 - band) > free
 
         def run_refusal(free: int | None, last: bool = False) -> RunMemoryError | None:
             # A run on another dataset holds the room until it ends: said at once,

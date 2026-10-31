@@ -240,6 +240,20 @@ async def test_a_test_that_cannot_fit_is_a_507_naming_the_dataset_and_the_number
     assert dataset_manager._reads == {} and not dataset_manager._reading
 
 
+async def test_a_read_inside_the_error_band_is_refused_though_a_load_would_be_let_in(
+        client, dataset_manager, tmp_data_dir, backed, monkeypatch):
+    """7 GB free, 8 GB asked: the low end (6.4 GB) fits, all of it does not. The real case, Kang at a 430 MiB
+    limit, passed on the low end and the read killed the backend."""
+    _register(Path(tmp_data_dir), "x", _dataset())
+    await dataset_manager.get_or_load_dataset("x")
+    _budget(monkeypatch, limit=8.0, used=1.0)
+    _needs(monkeypatch, 8.0)
+    monkeypatch.setattr("scview.core.dataset_manager.REFUSAL_WAIT_SECONDS", 1)
+    where = next(iter(BODIES))
+    assert (await _post(client, "x", where)).status_code == 507
+    await dataset_manager.reserve("x", int(8.0 * 1024**3))  # a load keeps the low-end rule
+
+
 @pytest.mark.parametrize("where", list(BODIES))
 async def test_a_test_that_fits_runs_and_lets_go(client, dataset_manager, tmp_data_dir, backed, monkeypatch, where):
     _register(Path(tmp_data_dir), "x", _dataset())

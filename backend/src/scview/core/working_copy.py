@@ -172,7 +172,7 @@ async def reading(dm, dataset_id: str, need: int, what: str, also: tuple[str, ..
     ids = (dataset_id, *also)
     guard = dm.hold_read(ids, 0)  # not dropped to make the room
     try:
-        await dm.reserve(dataset_id, need, what=what)
+        await dm.reserve(dataset_id, need, what=what, strict=True)
         release = dm.hold_read(ids, need, what)
     finally:
         guard()
