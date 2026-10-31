@@ -48,6 +48,8 @@ export interface SpotSummary {
   n_skipped: number;
   n_unconverged: number;
   n_clipped: number;
+  /** Spots with fewer counts were not fitted (the run's floor) */
+  min_umi: number;
   cluster_column: string | null;
   /** Mean share per cluster, in the order of `types` */
   clusters: { rna: Record<string, number[]>; cells: Record<string, number[]> };
@@ -63,7 +65,13 @@ export interface SpotInfo {
   method_names: Record<SpotMethod, string>;
   min_type_cells: number;
   max_types: number;
+  /** RCTD's spot default for the count floor */
   min_spot_umi: number;
+  min_umi_range: [number, number];
+  /** The floor a run of this dataset takes unless one is given (smaller on 8 um bins); null when not fittable */
+  min_umi_default: number | null;
+  /** The spots' counts: `below[i]` spots with fewer than i counts for i = 0..limit, and the median */
+  counts: SpotCounts | null;
   min_shared_genes: number;
   available: boolean;
   reason: string | null;
@@ -71,6 +79,22 @@ export interface SpotInfo {
   n_spots: number;
   running: boolean;
   note: string;
+}
+
+export interface SpotCounts {
+  below: number[] | null;
+  limit: number | null;
+  n: number;
+  median: number | null;
+  reason?: string;
+}
+
+/** How many spots a floor leaves out: `{ below, atLeast }`, `atLeast` when the floor is past
+ *  the table's limit (the count is then a lower bound); null without the table. */
+export function spotsBelow(counts: SpotCounts | null | undefined, floor: number): { below: number; atLeast: boolean } | null {
+  if (!counts?.below || counts.limit == null || !Number.isFinite(floor)) return null;
+  const i = Math.max(0, Math.min(Math.floor(floor), counts.limit));
+  return { below: counts.below[i] ?? 0, atLeast: floor > counts.limit };
 }
 
 export interface SpotReferenceCheck {
@@ -174,7 +198,7 @@ async function stream<T>(path: string, body: unknown, what: string, handlers: St
 /** Fit the spots (SSE); resolves with the saved summary. */
 export function runSpotDeconvolution(
   datasetId: string,
-  body: { reference_id: string; celltype_column: string; method: SpotMethod },
+  body: { reference_id: string; celltype_column: string; method: SpotMethod; min_umi?: number },
   handlers: StreamHandlers = {},
 ): Promise<SpotSummary> {
   return stream(`${base(datasetId)}/run-stream`, body, "The spot composition run", handlers);

@@ -8,7 +8,7 @@ import numpy as np
 from scview.core import provenance, results_store
 from scview.core import spot_deconvolution as sd
 from tests.test_hvg_sensitivity import _events, _register
-from tests.test_spot_deconvolution import TYPES, _profiles, _reference, _spots
+from tests.test_spot_deconvolution import TYPES, _profiles, _reference, _spots, _thin_rows
 
 API = "/api/v1"
 
@@ -150,3 +150,42 @@ def test_the_guessed_column_is_one_the_fit_accepts():
     assert _guess_column(obs, cols) == "Subset"
     assert _guess_column(obs[["Donor", "PrelimCellType"]], cols[:2]) == "PrelimCellType"  # refused later, named so
     assert _guess_column(obs[["Donor"]], cols[:1]) == "Donor"
+
+
+async def test_the_floor_is_a_run_parameter_with_its_default_and_counts_in_the_info(client, dataset_manager):
+    prof = _profiles()
+    ref = _reference(prof)
+    spots, _ = _spots(prof, n=60)
+    _thin_rows(spots, range(5))  # about 55 counts: under the spot default of 100
+    rid = _register(dataset_manager, ref, "sreffloor")
+    did = _register(dataset_manager, spots, "spotsfloor")
+    info = (await client.get(f"{API}/datasets/{did}/spot-deconvolution")).json()
+    assert info["min_umi_default"] == sd.MIN_SPOT_UMI and info["min_umi_range"] == [1, 10_000]
+    counts = info["counts"]
+    assert counts["n"] == 60 and counts["below"][100] == 5 and counts["below"][71] == 5 and counts["below"][40] == 0
+    assert counts["median"] > 100 and counts["limit"] == 1000 and len(counts["below"]) == 1001
+
+    res = await _post(client, did, "run-stream", reference_id=rid, celltype_column="cell_type", min_umi=40)
+    assert res[0][1]["min_umi"] == 40
+    body = res[-2][1]
+    assert body["min_umi"] == 40 and body["n_skipped"] == 0 and body["n_fitted"] == 60
+    res = await _post(client, did, "run-stream", reference_id=rid, celltype_column="cell_type", method="nnls")
+    body = res[-2][1]
+    assert body["min_umi"] == 100 and body["n_skipped"] == 5
+    assert any("5 spots with fewer than 100 counts were not fitted" in n for n in body["notes"])
+    for bad in (0, 10_001, "x"):
+        r = await client.post(f"{API}/datasets/{did}/spot-deconvolution/run-stream",
+                              json={"reference_id": rid, "celltype_column": "cell_type", "min_umi": bad})
+        assert r.status_code == 422
+    # Bins of 8 um take the smaller default.
+    bins, _ = _spots(prof, n=20)
+    for lib in bins.uns["spatial"]:
+        bins.uns["spatial"][lib]["scalefactors"]["bin_size_um"] = 8.0
+    bins.uns["scview_spatial"] = {"technology": "visium_hd", "unit": "bin", "bin_size_um": 8.0}
+    bid = _register(dataset_manager, bins, "binsfloor")
+    info = (await client.get(f"{API}/datasets/{bid}/spot-deconvolution")).json()
+    assert info["min_umi_default"] == sd.bin_min_umi(8.0) == 25
+    # A dataset of cells has no default and no counts (it cannot be fitted).
+    cid = _register(dataset_manager, _reference(prof, seed=4), "cellsfloor")
+    info = (await client.get(f"{API}/datasets/{cid}/spot-deconvolution")).json()
+    assert info["available"] is False and info["min_umi_default"] is None and info["counts"] is None

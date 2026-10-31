@@ -32,7 +32,10 @@ spacexr is GPL-3, so no code is taken from it or its ports):
 - ``nnls``: ``w = nnls(mu'^T, Y_i / N_i)`` per spot on the fit genes, the baseline
   the benchmarks keep (Sang-aram 2024, Spotless) and the Newton fit's start.
 
-Spots with fewer than ``MIN_SPOT_UMI`` counts are not fitted (NaN, "low counts").
+Spots with fewer than ``min_umi`` counts are not fitted (NaN, "low counts"): a run
+parameter, by default ``MIN_SPOT_UMI`` (RCTD's spot default) on spots and 16 um bins and
+``BIN_MIN_UMI`` on smaller Visium HD bins (``default_min_umi``; the comment there has the
+measurement).
 Cell shares are ``beta_k / S_k`` renormalised: they assume the reference's cell sizes
 hold in the tissue. The self-check (``iter_check``) draws synthetic spots from a
 held-out half of the reference (Spotless "synthspot": 2-10 cells, Dirichlet(0.5)
@@ -80,7 +83,31 @@ METHOD_NAMES = {"rctd": "RCTD-style Poisson-lognormal fit", "nnls": "NNLS on the
 MIN_TYPE_CELLS = 25
 MAX_TYPES = 50
 MIN_REFERENCE_CELLS = 50
-MIN_SPOT_UMI = 100
+MIN_SPOT_UMI = 100  # RCTD's spot default (spacexr UMI_min): spots, and bins of 16 um and over
+# Visium HD bins under 16 um: the floor scales with the bin's area (``bin_min_umi``: 25 at
+# 8 um), never under BIN_MIN_UMI_LEAST. Measured on the 16 um and 8 um binnings of one
+# mouse brain (batch 33, 2026-10-31): counts per bin, median 667 at 16 um (0.35% of the
+# bins under 100) and 156 at 8 um (29% under 100, 7.6% under 50, 1.4% under 30, 0.25%
+# under 20), so at 100 a quarter of the 8 um tissue was never fitted. The 8 um bins nest
+# four to a 16 um bin (array_row // 2, array_col // 2; every centre inside its parent's
+# square). 3,000 16 um bins fitted at 100 against the 16 um bins' own 14 Leiden clusters
+# (held out), and their 12,000 8 um children at floors 100 / 50 / 30 / 20: each child's
+# shares against its parent's, Pearson over the types (median) / RMSE, by the child's
+# counts: 200+ 0.947 / 0.083, 100-200 0.865 / 0.108, 50-100 0.859 / 0.112, 30-50 0.904 /
+# 0.110, 20-30 0.908 / 0.120 (n 126); the mean of four fitted children against the parent
+# 0.980 / 0.054 at floor 100, 0.976 / 0.056 at 20. Bins of 20-100 counts agree with their
+# parent as bins of 100+ do, so a quarter of the spot floor is right for a quarter of the area.
+BIN_UMI_SCALE_UM = 16.0
+BIN_MIN_UMI_LEAST = 10
+MIN_UMI_RANGE = (1, 10_000)
+
+
+def bin_min_umi(um: float) -> int:
+    """The default count floor for bins of ``um`` microns: ``MIN_SPOT_UMI`` from
+    ``BIN_UMI_SCALE_UM`` up, scaled by the bin's area below it (comment above)."""
+    if um >= BIN_UMI_SCALE_UM:
+        return MIN_SPOT_UMI
+    return max(BIN_MIN_UMI_LEAST, int(round(MIN_SPOT_UMI * (um / BIN_UMI_SCALE_UM) ** 2)))
 MIN_SHARED_GENES = 500  # shared by name before any selection: below this the check warns
 # Tuned on V1_Human_Lymph_Node x the cell2location lymphoid atlas toward the paper's "about
 # 3,000" fit genes: RCTD's own 1.25e-4 / 2e-4 kept 2,952 / 1,595 of its 9,941 usable genes.
@@ -398,11 +425,12 @@ def sd_choose_sigma(mus, Y, N, W0, libs):
     return s
 
 
-def sd_iter_deconvolve(mu_all, S, Y, N, libs, method, keep, genes=None, s_e=None, seed=0):
+def sd_iter_deconvolve(mu_all, S, Y, N, libs, method, keep, genes=None, s_e=None, seed=0, min_umi=MIN_SPOT_UMI):
     """The whole fit as events: ("progress", {...}) per stage and block, then ("fitted",
     {...}). ``mu_all``: types x genes profiles; ``Y``: spots x the same genes (CSR
     counts); ``N``: spot totals (all genes); ``libs``: section per spot; ``keep``: genes
-    allowed; ``genes`` = (platform, fit) positions to use as recorded; ``s_e`` likewise."""
+    allowed; ``genes`` = (platform, fit) positions to use as recorded; ``s_e`` likewise;
+    ``min_umi``: spots with fewer counts are not fitted."""
     notes = []
     Y = sp.csr_matrix(Y)
     if genes is None:
@@ -419,7 +447,7 @@ def sd_iter_deconvolve(mu_all, S, Y, N, libs, method, keep, genes=None, s_e=None
     yield "progress", {"step": "genes", "n_platform": int(plat.size), "n_fit": int(fit.size)}
     in_plat = np.searchsorted(plat, fit)
     Yp = Y[:, plat].tocsr()
-    fitted = N >= MIN_SPOT_UMI
+    fitted = N >= min_umi
     mus, s_g, bulk = {}, {}, {}
     for lib in np.unique(libs):
         rows_l = np.flatnonzero(libs == lib)
@@ -450,7 +478,7 @@ def sd_iter_deconvolve(mu_all, S, Y, N, libs, method, keep, genes=None, s_e=None
             rng = np.random.default_rng(seed)
             picks = np.sort(rng.choice(idx_fit, size=min(SE_SPOTS, idx_fit.size), replace=False))
             if picks.size == 0:
-                raise ValueError(f"No spot has {MIN_SPOT_UMI}+ counts: nothing to fit.")
+                raise ValueError(f"No spot has {min_umi}+ counts: nothing to fit.")
             yield "progress", {"step": "sigma", "n_spots": int(picks.size)}
             Yd = np.minimum(Yf[picks].toarray(), Y_MAX).astype(np.int64)
             s_e = sd_choose_sigma(mus, Yd, N[picks], W0[picks], libs[picks])
@@ -561,6 +589,62 @@ class Prepared:
     small_types: list[str] = field(default_factory=list)
     info: dict[str, Any] = field(default_factory=dict)
     check: dict[str, Any] | None = None  # the self-check's synthetic spots (prepare(check=True))
+    min_umi: int = MIN_SPOT_UMI  # spots with fewer counts are not fitted
+
+
+def default_min_umi(spots) -> int:
+    """The count floor a run of ``spots`` takes when none is given: ``MIN_SPOT_UMI`` on
+    spots, ``bin_min_umi`` of the bin size on Visium HD bins (from the scale factors, else
+    ``uns["scview_spatial"]`` as the import recorded it)."""
+    from scview.core import spatial
+
+    um = spatial.bin_size_um(spots) if spatial.has_spatial(spots) else None
+    if um is None:
+        rec = spatial._recorded(spots).get("bin_size_um")
+        try:
+            um = float(np.asarray(rec).ravel()[0]) if rec is not None else None
+        except (TypeError, ValueError, IndexError):
+            um = None
+    return bin_min_umi(um) if um is not None and np.isfinite(um) and um > 0 else MIN_SPOT_UMI
+
+
+def check_min_umi(value: Any, spots) -> int:
+    """A run's floor: ``value`` as a whole number within ``MIN_UMI_RANGE``, or the default
+    for ``spots`` when None; a SpotDeconvolutionError otherwise."""
+    if value is None:
+        return default_min_umi(spots)
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = -1
+    lo, hi = MIN_UMI_RANGE
+    if isinstance(value, bool) or n != value or not lo <= n <= hi:
+        raise SpotDeconvolutionError(f"The count floor must be a whole number from {lo} to {hi:,}; got {value!r}.")
+    return n
+
+
+def counts_below(adata, fallback_paths: list[str], limit: int = 1000) -> dict[str, Any]:
+    """The per-spot totals for the floor's caption: ``below[i]`` = spots with fewer than
+    ``i`` counts for i = 0..limit (the UI reads the chosen floor's entry), the median and
+    the total. From ``obs["total_counts"]`` (the QC step's) when present, else a row sum
+    of the counts (an on-disk matrix by row blocks)."""
+    obs = adata.obs
+    if "total_counts" in obs.columns:
+        totals = pd.to_numeric(obs["total_counts"], errors="coerce").to_numpy(dtype=np.float64)
+    else:
+        M, _var, _src = counts_with_var(adata, fallback_paths, "This dataset")
+        if _on_disk(M):
+            totals = np.zeros(M.shape[0])
+            for start, block in M.row_blocks():
+                totals[start:start + block.shape[0]] = _row_sums(block)
+        else:
+            totals = _row_sums(M)
+    totals = np.nan_to_num(totals, nan=0.0)
+    clipped = np.minimum(np.floor(totals).astype(np.int64), limit)
+    hist = np.bincount(np.maximum(clipped, 0), minlength=limit + 1)
+    below = np.concatenate([[0], np.cumsum(hist)[:limit]])  # below[i]: totals < i, i <= limit
+    return {"below": below.astype(int).tolist(), "limit": int(limit), "n": int(totals.size),
+            "median": float(np.median(totals)) if totals.size else None}
 
 
 def library_labels(adata) -> np.ndarray:
@@ -664,11 +748,12 @@ def large_reference(path: str):
 
 def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_fallback: list[str],
             spot_fallback: list[str], cluster_column: str | None, check: bool = False,
-            seed: int = SEED, ref_counts: tuple[Any, pd.DataFrame, str] | None = None) -> Prepared:
+            seed: int = SEED, ref_counts: tuple[Any, pd.DataFrame, str] | None = None,
+            min_umi: int | None = None) -> Prepared:
     """Check the two datasets and copy out what a run (or, ``check``, the self-check)
     needs: the reference's profiles on the shared genes, the spots' counts.
     ``ref_counts``: the reference's (counts, var, source) when already open
-    (``large_reference``)."""
+    (``large_reference``). ``min_umi``: the count floor, the unit's default when None."""
     from scview.core import label_transfer as lt
     from scview.core import spatial
     from scview.core.deconvolution import _excluded
@@ -676,6 +761,7 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
 
     if not spatial.is_spot_data(spots):
         raise SpotDeconvolutionError(NOT_SPOTS)
+    floor = check_min_umi(min_umi, spots)
     try:
         labels = lt.check_labels(ref, celltype_column)
     except lt.LabelTransferError as e:
@@ -748,7 +834,7 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
               "renamed": match.renamed, "n_ref_genes": match.n_ref, "n_spot_genes": match.n_query,
               "unit": spatial.technology(spots)["unit"] if spatial.has_spatial(spots) else "spot",
               "n_reference_cells": int((codes >= 0).sum())},
-        check=synth,
+        check=synth, min_umi=floor,
     )
 
 
@@ -825,7 +911,7 @@ def iter_fit(p: Prepared, *, method: str, stop: Callable[[], bool] | None = None
     if method not in METHODS:
         raise SpotDeconvolutionError(f"Unknown method '{method}': one of {', '.join(METHODS)}.")
     t0 = time.monotonic()
-    gen = sd_iter_deconvolve(p.mu, p.S, p.Y, p.N, p.libraries, method, p.keep, seed=seed)
+    gen = sd_iter_deconvolve(p.mu, p.S, p.Y, p.N, p.libraries, method, p.keep, seed=seed, min_umi=p.min_umi)
     messages = {"genes": "Choosing the genes", "platform": "Estimating each section's platform effect",
                 "baseline": "Starting values (NNLS per spot)", "sigma": "Choosing the noise level on 200 spots",
                 "table": "Tabulating the likelihood", "fit": "Fitting the spots"}
@@ -893,7 +979,7 @@ def summarize(p: Prepared, out: dict[str, Any], *, method: str) -> dict[str, Any
     n_skipped = int((~fitted).sum())
     unit = p.info.get("unit", "spot")
     if n_skipped:
-        notes.append(f"{n_skipped:,} {unit}s with fewer than {MIN_SPOT_UMI} counts were not fitted (\"{LOW_COUNTS}\").")
+        notes.append(f"{n_skipped:,} {unit}s with fewer than {p.min_umi} counts were not fitted (\"{LOW_COUNTS}\").")
     if n_unconv:
         notes.append(f"{n_unconv:,} {unit}s did not settle within {MAX_ITER} rounds; their last estimate is kept.")
     if p.info.get("renamed"):
@@ -919,7 +1005,7 @@ def summarize(p: Prepared, out: dict[str, Any], *, method: str) -> dict[str, Any
                       for lib in libs],
         "n_shared_genes": len(p.genes), "n_genes": int(out["fit"].size), "n_platform_genes": int(out["platform"].size),
         "n_spots": int(len(fitted)), "n_fitted": int(fitted.sum()), "n_skipped": n_skipped,
-        "n_unconverged": n_unconv, "n_clipped": int(out["n_clipped"]),
+        "n_unconverged": n_unconv, "n_clipped": int(out["n_clipped"]), "min_umi": int(p.min_umi),
         "cluster_column": p.cluster_column,
         "clusters": {"rna": _cluster_means(rna, p.clusters), "cells": _cluster_means(cells, p.clusters)},
         "columns": {"rna": OBSM_RNA, "cells": OBSM_CELLS, "top": OBS_TOP, "top_share": OBS_TOP_SHARE},
@@ -956,6 +1042,7 @@ def save(adata, p: Prepared, out: dict[str, Any], summary: dict[str, Any], resou
                 "n_genes": summary["n_genes"], "renamed": p.info.get("renamed"),
                 "reference_source": p.info.get("reference_source"), "spot_source": p.info.get("spot_source"),
                 "outputs": list(summary["columns"].values()), "n_skipped": summary["n_skipped"],
+                "min_umi": int(p.min_umi),
             },
             resources=resources,
         )

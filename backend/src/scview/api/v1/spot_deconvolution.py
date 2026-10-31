@@ -55,6 +55,8 @@ class RunRequest(BaseModel):
     reference_id: str = Field(max_length=128)
     celltype_column: str = Field(max_length=256)
     method: Literal["rctd", "nnls"] = "rctd"
+    # Spots with fewer counts are not fitted; None = the unit's default (sd.default_min_umi)
+    min_umi: int | None = Field(default=None, ge=sd.MIN_UMI_RANGE[0], le=sd.MIN_UMI_RANGE[1])
 
 
 class CheckRequest(BaseModel):
@@ -84,14 +86,26 @@ def _reason(adata) -> str | None:
 
 @router.get("/datasets/{dataset_id}/spot-deconvolution")
 async def get_spot_deconvolution(dataset_id: str, dm: DatasetManager = Depends(get_dataset_manager)):
-    """The methods and limits, whether the dataset can be fitted, the saved run, and
-    whether a run is working on it now."""
+    """The methods and limits, whether the dataset can be fitted, the saved run, whether
+    a run is working on it now, and for the count floor its default on this dataset
+    (``min_umi_default``) with the spots' counts (``counts``: ``below[i]`` spots under i
+    counts, the median), so the panel can say how many a floor leaves out."""
     adata = (await _adaptor(dm, dataset_id)).adata
     reason = _reason(adata)
+
+    def details() -> dict[str, Any]:
+        try:
+            counts = sd.counts_below(adata, dm.h5ad_candidates(dataset_id)[1:])
+        except sd.SpotDeconvolutionError as e:  # no counts: the run will say so
+            counts = {"below": None, "limit": None, "n": int(adata.n_obs), "median": None, "reason": str(e)}
+        return {"saved": sd.saved(adata), "min_umi_default": sd.default_min_umi(adata), "counts": counts}
+
+    extra = await asyncio.to_thread(details) if reason is None else {"saved": None, "min_umi_default": None,
+                                                                      "counts": None}
     return {"methods": list(sd.METHODS), "method": "rctd", "method_names": sd.METHOD_NAMES,
             "min_type_cells": sd.MIN_TYPE_CELLS, "max_types": sd.MAX_TYPES, "min_spot_umi": sd.MIN_SPOT_UMI,
-            "min_shared_genes": sd.MIN_SHARED_GENES, "available": reason is None, "reason": reason,
-            "saved": await asyncio.to_thread(sd.saved, adata) if reason is None else None,
+            "min_umi_range": list(sd.MIN_UMI_RANGE), "min_shared_genes": sd.MIN_SHARED_GENES,
+            "available": reason is None, "reason": reason, **extra,
             "n_spots": int(adata.n_obs), "running": dataset_id in _running, "note": sd.NOTE}
 
 
@@ -229,14 +243,15 @@ async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method:
 
 
 def _preparer(dm: DatasetManager, dataset_id: str, reference_id: str, paths: list[str], column: str,
-              ref_info: dict, cluster_column: str | None, check: bool, seed: int = sd.SEED):
+              ref_info: dict, cluster_column: str | None, check: bool, seed: int = sd.SEED,
+              min_umi: int | None = None):
     def prepare(spot_adaptor) -> sd.Prepared:
         spots = spot_adaptor.adata
         if getattr(spots, "isbacked", False) and not spot_adaptor.is_large:
             spots = spots.to_memory()  # a large one's counts are read by row blocks
         kw = {"celltype_column": column, "ref_info": ref_info, "ref_fallback": paths[1:],
               "spot_fallback": dm.h5ad_candidates(dataset_id)[1:], "cluster_column": cluster_column,
-              "check": check, "seed": seed}
+              "check": check, "seed": seed, "min_umi": min_umi}
         if large_mode.file_is_large(paths[0]):  # its obs, var and counts sidecar, never read whole
             with sd.large_reference(paths[0]) as (ref, counts):
                 return sd.prepare(ref, spots, ref_counts=counts, **kw)
@@ -374,7 +389,7 @@ async def run_spot_deconvolution(dataset_id: str, body: RunRequest,
     cluster_column = adaptor.active_clustering_column()
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
     prepare = _preparer(dm, dataset_id, body.reference_id, paths, body.celltype_column, ref_info, cluster_column,
-                        check=False)
+                        check=False, min_umi=body.min_umi)
     del adaptor
 
     async def finish_item(prepared, out, res):
@@ -384,7 +399,8 @@ async def run_spot_deconvolution(dataset_id: str, body: RunRequest,
         return {**await _save(dm, dataset_id, prepared, out, summary, resources, fingerprint), "resources": res}
 
     start = {"reference": ref_info["name"], "reference_id": body.reference_id,
-             "celltype_column": body.celltype_column, "method": body.method, "estimate": est}
+             "celltype_column": body.celltype_column, "method": body.method, "estimate": est,
+             "min_umi": body.min_umi}
     return _stream(dataset_id, _events(dm, dataset_id, start, prepare,
                                        lambda p, stop: sd.iter_fit(p, method=body.method, stop=stop),
                                        finish_item, "Spot composition"))

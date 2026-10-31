@@ -43,8 +43,9 @@ function setDataset() {
 
 const INFO: SpotInfo = {
   methods: ["rctd", "nnls"], method: "rctd", method_names: { rctd: "RCTD-style", nnls: "NNLS" }, min_type_cells: 25,
-  max_types: 50, min_spot_umi: 100, min_shared_genes: 500, available: true, reason: null, saved: null, n_spots: 4,
-  running: false, note: "",
+  max_types: 50, min_spot_umi: 100, min_umi_range: [1, 10000], min_umi_default: 100,
+  counts: { below: [0, 0, ...Array(999).fill(1)], limit: 1000, n: 4, median: 900 }, min_shared_genes: 500,
+  available: true, reason: null, saved: null, n_spots: 4, running: false, note: "",
 };
 const CHECK: SpotReferenceCheck = {
   ok: true, reason: null, n_cells: 1000, n_genes: 2000, label_columns: [{ column: "Subset", n_labels: 3 }],
@@ -66,7 +67,7 @@ const RESULT: SpotSummary = {
   celltype_column: "Subset", sources: { reference: "X", spots: "X", renamed: null }, s_e: 0.4,
   libraries: [{ id: "lib1", n_spots: 4, n_fitted: 4, s_g: 0.62, bulk: [0.3, 0.7] }],
   n_shared_genes: 1900, n_genes: 1200, n_platform_genes: 3000, n_spots: 4, n_fitted: 4, n_skipped: 0, n_unconverged: 0,
-  n_clipped: 0, cluster_column: "leiden",
+  n_clipped: 0, min_umi: 100, cluster_column: "leiden",
   clusters: { rna: { "0": [0.8, 0.2], "1": [0.1, 0.9] }, cells: { "0": [0.7, 0.3], "1": [0.05, 0.95] } },
   columns: { rna: "spot_deconv", cells: "spot_deconv_cells", top: "spot_deconv_top", top_share: "spot_deconv_top_share" },
   seconds: 12, notes: ["Left out of the reference (fewer than 25 cells): Mast."], note: "",
@@ -116,7 +117,7 @@ describe("SpotCompositionSubtab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Fit spots/ }));
     expect(await screen.findByTestId("spot-progress")).toHaveTextContent("Fitting the spots (2/4)");
-    expect(api.runSpotDeconvolution.mock.calls[0]![1]).toEqual({ reference_id: "ref", celltype_column: "Subset", method: "rctd" });
+    expect(api.runSpotDeconvolution.mock.calls[0]![1]).toEqual({ reference_id: "ref", celltype_column: "Subset", method: "rctd", min_umi: 100 });
     finish(RESULT);
     const res = await screen.findByTestId("spot-composition-result");
     expect(refresh).toHaveBeenCalledWith("d1", "spot_deconv_top");
@@ -158,6 +159,41 @@ describe("SpotCompositionSubtab", () => {
     expect((await screen.findAllByText(/A Visium HD bin is a square of the capture grid/)).length).toBeGreaterThan(0);
     expect(binCaveat(8)).toMatch(/dominant type/);
     expect(binCaveat(16)).toMatch(/2 to 4 cells/);
+  });
+
+  it("shows the count floor with how many spots fall below it, and sends the floor with the run", async () => {
+    api.runSpotDeconvolution.mockResolvedValue(RESULT);
+    render(<SpotCompositionSubtab />);
+    await pickReference();
+    const floor = screen.getByLabelText("Count floor") as HTMLInputElement;
+    expect(floor.value).toBe("100");
+    expect(screen.getByTestId("spot-floor-caption")).toHaveTextContent("1 of 4 spots (25.0%) are below it.");
+    fireEvent.change(floor, { target: { value: "1" } });
+    expect(screen.getByTestId("spot-floor-caption")).toHaveTextContent("0 of 4 spots (0.0%) are below it.");
+    fireEvent.change(floor, { target: { value: "2000" } });
+    expect(screen.getByTestId("spot-floor-caption")).toHaveTextContent("At least 1 of 4 spots (25.0%) are below it.");
+    fireEvent.change(floor, { target: { value: "0" } });
+    expect(screen.getByTestId("spot-floor-caption")).toHaveTextContent("whole number from 1 to 10,000");
+    expect(screen.getByRole("button", { name: /Fit spots/ })).toBeDisabled();
+    fireEvent.change(floor, { target: { value: "40" } });
+    fireEvent.click(screen.getByRole("button", { name: /Fit spots/ }));
+    await screen.findByTestId("spot-composition-result");
+    expect(api.runSpotDeconvolution.mock.calls.at(-1)![1]).toEqual({ reference_id: "ref", celltype_column: "Subset", method: "rctd", min_umi: 40 });
+  });
+
+  it("takes the smaller default on 8 um bins, and a saved run's floor", async () => {
+    const bins = ds("d1", { ...SPATIAL, technology: "visium_hd", unit: "bin", bin_size_um: 8 });
+    useDatasetStore.setState({ currentDatasetId: "d1", currentDataset: bins, availableDatasets: [bins, ds("ref")] });
+    api.getSpotDeconvolution.mockResolvedValue({ ...INFO, min_umi_default: 25, saved: null });
+    const { unmount } = render(<SpotCompositionSubtab />);
+    await screen.findByText(/Spot composition/);
+    expect((screen.getByLabelText("Count floor") as HTMLInputElement).value).toBe("25");
+    expect(screen.getByTestId("spot-floor-caption")).toHaveTextContent("1 of 4 bins (25.0%) are below it.");
+    unmount();
+    api.getSpotDeconvolution.mockResolvedValue({ ...INFO, min_umi_default: 25, saved: { ...RESULT, min_umi: 60 } });
+    render(<SpotCompositionSubtab />);
+    await screen.findByTestId("spot-composition-result");
+    expect((screen.getByLabelText("Count floor") as HTMLInputElement).value).toBe("60");
   });
 
   it("explains a dataset it cannot fit and a refused reference", async () => {
