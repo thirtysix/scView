@@ -118,7 +118,7 @@ from scview.core.pipeline import (
     skipped_event,
     subset_lean,
 )
-from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason, default_before_step
+from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason, default_before_step, others_stop
 from scview.core.uns_keys import BATCH_MIXING_KEY, repair_slash_keys
 
 # The h5ad is created with HDF5's free-space manager kept in the file, so the in-place
@@ -1097,9 +1097,12 @@ class LargeRun:
         write = not self._written and step in preflight._CHUNKED_READS_X
         need = preflight.chunked_step_peak(step, self.shape_for_estimate(), self.params,
                                            write=write, doublets=self._doublet_plan(step))
-        if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes:
+        others = self.control.others_growth(avail.used_bytes) if self.control is not None else 0
+        if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes - others:
             return None
         label = step.replace("_", " ")
+        if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes:
+            return others_stop(f"Stopped before {label}: in large-dataset mode it needs", need, avail, others)
         return (f"Stopped before {label}: in large-dataset mode it needs about {need / GB:.1f} GB "
                 f"more at its peak, and scView has {avail.available_bytes / GB:.1f} GB free of its "
                 f"{avail.limit_bytes / GB:.1f} GB limit, so the system would have stopped the "

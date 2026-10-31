@@ -108,6 +108,8 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
     way the run's expected growth is reserved (``_reserve_run``) until it ends. Returns
     the adaptor the work gets."""
     need = None
+    if control is not None:  # its pre-step check counts what the others still grow by
+        control.other_growth = lambda used: dm.outstanding(used, dataset_id)
     if control is not None and control.plan is not None:
         from scview.core import large_run, preflight
 

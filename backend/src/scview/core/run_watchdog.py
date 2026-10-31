@@ -291,9 +291,22 @@ def log_only_stop(step: str, adata: Any) -> str | None:
             f"Nothing was saved: the dataset is as it was before the run.")
 
 
+def others_stop(lead: str, need: int, avail: Any, others: int) -> str:
+    """The stop of a step that fits by itself but not beside what other work still running
+    is expected to grow by (``DatasetManager.outstanding``): that fits again once it ends,
+    so the sentence says to run it again, not to raise the limit."""
+    return (f"{lead} about {need / GB:.1f} GB more at its peak, and of the "
+            f"{avail.available_bytes / GB:.1f} GB scView has free ({avail.limit_bytes / GB:.1f} GB limit) other "
+            f"work still running will take about {others / GB:.1f} GB, so together they would get the backend "
+            "stopped. Nothing was saved: the dataset is as it was before the run. Run it again once that work "
+            "has finished.")
+
+
 def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     """The check every pipeline run makes before each step: stop before a step the
-    preflight estimate says cannot fit in the memory left.
+    preflight estimate says cannot fit in the memory left, which is what is free less
+    what other runs and reads are still expected to grow by (``RunControl.others_growth``):
+    two runs that each pass alone can overrun together.
 
     A step that outgrows the container limit gets the backend killed, which loses
     the whole run; the watchdog's 2 s sampler cannot warn in time (Scrublet on Kang
@@ -322,9 +335,13 @@ def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     if not avail.limited or avail.available_bytes is None or avail.limit_bytes is None:
         return None
     need = preflight.step_peak_for(adata, step, params)
-    if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes:
+    control = current()
+    others = control.others_growth(avail.used_bytes) if control is not None else 0
+    if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes - others:
         return None
     label = step.replace("_", " ")
+    if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes:
+        return others_stop(f"Stopped before {label}: it needs", need, avail, others)
     return (f"Stopped before {label}: it needs about {need / GB:.1f} GB more at its peak, and scView "
             f"has {avail.available_bytes / GB:.1f} GB free of its {avail.limit_bytes / GB:.1f} GB limit, "
             f"so the system would have stopped the backend. Nothing was saved: the dataset is as it "
@@ -359,6 +376,9 @@ class RunControl:
         # In memory or in large-dataset mode (core/large_run.py ModeChoice): chosen by
         # core/processing.py before the run starts; None: not chosen (in memory).
         self.mode: Any = None
+        # Bytes other runs and reads are still expected to grow by, from the bytes used
+        # now (``DatasetManager.outstanding`` without this run): set by core/processing.py.
+        self.other_growth: Callable[[int], int] | None = None
         # Looked up now, so a check plugged into default_before_step applies.
         self.before_step = default_before_step if before_step is _DEFAULT else before_step
         self._cancel = threading.Event()
@@ -369,6 +389,16 @@ class RunControl:
     @property
     def cancelled(self) -> bool:
         return self._cancel.is_set()
+
+    def others_growth(self, used: int | None) -> int:
+        """What other runs and reads are still expected to grow by; 0 when nothing is known."""
+        if self.other_growth is None or used is None:
+            return 0
+        try:
+            return max(0, int(self.other_growth(used)))
+        except Exception:  # noqa: BLE001 — the check goes on without them
+            logger.warning("Could not read the other runs' reservations", exc_info=True)
+            return 0
 
     def cancel(self) -> None:
         """Ask the run to stop at the next step boundary; end a child process now."""
@@ -385,11 +415,14 @@ class RunControl:
             return "cancelled", cancelled_reason("before", step)
         if self.before_step is None:
             return None
+        token = _CURRENT.set(self)  # default_before_step asks it for the other runs' growth
         try:
             message = self.before_step(step, adata, params)
         except Exception:  # noqa: BLE001 — a broken check must not stop a run
             logger.warning("The pre-step check failed before %s; running it", step, exc_info=True)
             return None
+        finally:
+            _CURRENT.reset(token)
         return ("stopped", str(message)) if message else None
 
     @contextlib.contextmanager
