@@ -13,6 +13,21 @@ export async function getDataset(id: string): Promise<DatasetInfo> {
   return apiFetch<DatasetInfo>(`/datasets/${id}`);
 }
 
+/** The server's own sentence from a failed open (its `detail`: a 507 names the run on
+ * another dataset that holds the memory, or says the limit is too low), else the error's
+ * message. */
+export function openFailureMessage(e: unknown): string {
+  const message = e instanceof Error ? e.message : "";
+  const body = message.replace(/^API error \d+: /, "");
+  try {
+    const detail = String(JSON.parse(body).detail ?? "");
+    if (detail) return detail;
+  } catch {
+    /* not JSON: keep the message */
+  }
+  return message || "Could not open this dataset.";
+}
+
 export async function deleteDataset(id: string): Promise<void> {
   await apiFetch(`/datasets/${id}`, { method: "DELETE" });
 }

@@ -703,3 +703,86 @@ async def test_dataset_preflight_reports_the_umap_3d_choice(client, dataset_mana
     assert not body["umap_3d"]["on"] and body["umap_3d"]["offer"]
     r = await client.get(url, params={"steps": "embeddings", "umap_3d": "maybe"})
     assert r.status_code == 422 and "umap_3d" in r.json()["detail"]
+
+
+
+# --- Visium HD bins cluster slower than cells at the same n (batch 33, measured on the laptop) --
+HD16_BINS = 98_896  # the 16 um mouse brain after MAD QC
+# Seconds measured on the pipeline's own graph (preflight.py's comment at LEIDEN_UNIT_FACTOR).
+BIN_FULL = {98_896: 810.5, 90_267: 585.1}
+BIN_FAST = {98_896: 38.2, 393_491: 192.3}
+
+
+def test_bins_take_the_measured_factor_over_the_cells_estimate():
+    full, fast = pf.LEIDEN_UNIT_FACTOR["bin"][-1], pf.LEIDEN_UNIT_FACTOR["bin"][2]
+    assert full > 1.0 and fast >= 1.0
+    for it, measured in ((-1, BIN_FULL), (2, BIN_FAST)):
+        for n, secs in measured.items():
+            est = pf.leiden_seconds(n, it, "bin")
+            assert abs(est / secs - 1) <= 0.1, (n, it, est, secs)
+            assert abs(pf.leiden_seconds(n, it) / secs - 1) > 0.3  # the cells' estimate misses them
+    for n in (HD16_BINS, 393_491, 20_000):
+        assert pf.leiden_seconds(n, -1, "bin") == pytest.approx(full * pf.leiden_seconds(n, -1))
+        assert pf.leiden_seconds(n, 2, "bin") == pytest.approx(fast * pf.leiden_seconds(n, 2))
+        assert pf.leiden_seconds(n, -1, "spot") == pf.leiden_seconds(n, -1, "cell") == pf.leiden_seconds(n, -1)
+    # Through the run estimate (a bin header against a cell header of the same shape), in
+    # memory and in large-dataset mode.
+    n, m = HD16_BINS, 18_825
+    cells = pf.Header("h5ad", n, m, [pf.Matrix("X", n, m, True, 68_000_000, "float32")])
+    bins = pf.Header("h5ad", n, m, [pf.Matrix("X", n, m, True, 68_000_000, "float32")], unit="bin")
+
+    def clustering(h, params=PipelineParams()):
+        est = pf.estimate_run(h, steps=["clustering"], params=params, cpus=2.0)
+        return next(e for e in est.steps if e.step == "clustering").seconds
+
+    assert clustering(bins) == pf._range(full * pf.leiden_seconds(n, -1), 2.0)
+    assert clustering(bins)[0] == pytest.approx(full * clustering(cells)[0], abs=0.3)  # ranges are rounded to 0.1 s
+    assert clustering(bins, PipelineParams(leiden_iterations=2))[0] == \
+        pytest.approx(fast * clustering(cells, PipelineParams(leiden_iterations=2))[0], abs=0.3)
+    sh = pf.ChunkedShape.from_header(bins)
+    assert sh.unit == "bin"
+    assert pf.chunked_step("clustering", sh, PipelineParams())[2] == pytest.approx(full * pf.leiden_seconds(n, -1))
+    assert pf.chunked_step("clustering", pf.ChunkedShape.from_header(cells), PipelineParams())[2] == \
+        pytest.approx(pf.leiden_seconds(n, -1))
+
+
+def test_the_fast_leiden_offer_fires_for_the_16um_bins(monkeypatch):
+    monkeypatch.delenv("SCVIEW_LEIDEN_OFFER_SECONDS", raising=False)
+    steps = ["neighbors", "clustering"]
+    cells, bins = pf.leiden_choice(HD16_BINS, steps, PipelineParams()), pf.leiden_choice(HD16_BINS, steps, PipelineParams(), "bin")
+    assert not cells["offer_fast"] and cells["full_seconds"] < 600  # the same n as cells: no offer
+    assert bins["offer_fast"] and bins["full_seconds"] > 600 and bins["unit"] == "bin"
+    assert bins["full_seconds"] == pytest.approx(pf.LEIDEN_UNIT_FACTOR["bin"][-1] * cells["full_seconds"], abs=0.3)
+    assert bins["fast_seconds"] < bins["offer_seconds"]
+
+
+def test_the_headers_say_bin_for_visium_hd(tmp_path):
+    a = ad.AnnData(X=sp.random(30, 20, density=0.3, format="csr", dtype=np.float32))
+    a.obs_names = [f"s_016um_{i:05d}_00000-1" for i in range(30)]
+    a.var_names = [f"G{j}" for j in range(20)]
+    assert pf.header_from_adata(a).unit == "cell"
+    a.uns["scview_spatial"] = {"technology": "visium_hd", "unit": "bin", "bin_size_um": 16.0}
+    assert pf.header_from_adata(a).unit == "bin"
+    a.write_h5ad(tmp_path / "bins.h5ad")
+    assert pf.read_header(tmp_path / "bins.h5ad", "h5ad").unit == "bin"
+    assert pf._State.from_header(pf.read_header(tmp_path / "bins.h5ad", "h5ad")).unit == "bin"
+    a.uns["scview_spatial"]["unit"] = "spot"
+    assert pf.header_from_adata(a).unit == "spot"
+
+
+def test_the_bin_factor_survives_the_steps_before_clustering():
+    # Live on the 16 um section the preflight's `leiden` summary said 611 s and the step list
+    # 122-489 s: the filtering step (and reset to counts) built a fresh state without the unit.
+    n, m = HD16_BINS, 18_825
+    full = pf.LEIDEN_UNIT_FACTOR["bin"][-1]
+    mats = [pf.Matrix("X", n, m, True, 68_000_000, "float32"), pf.Matrix("layers/counts", n, m, True, 68_000_000, "float32")]
+    cells = pf.Header("h5ad", n, m, mats)
+    bins = pf.Header("h5ad", n, m, mats, unit="bin")
+    steps = ["reset_to_counts", "qc_metrics", "filtering", "normalization", "log_transform",
+             "highly_variable_genes", "scaling", "pca", "neighbors", "clustering"]
+
+    def clustering(h):
+        est = pf.estimate_run(h, steps=steps, params=PipelineParams(), cpus=2.0)
+        return next(e for e in est.steps if e.step == "clustering").seconds[0]
+
+    assert clustering(bins) == pytest.approx(full * clustering(cells), rel=0.01)

@@ -17,8 +17,14 @@ vi.mock("@/api/activity", async (orig) => ({
   getActivitySummary,
 }));
 vi.mock("@/components/plots/Plot", () => ({
-  default: ({ data }: { data: { type: string; y?: string[]; zmin?: number; zmax?: number }[] }) => (
-    <div data-testid="plot">
+  default: ({
+    data,
+    layout,
+  }: {
+    data: { type: string; y?: string[]; zmin?: number; zmax?: number }[];
+    layout: { xaxis?: { side?: string } };
+  }) => (
+    <div data-testid="plot" data-xaxis-side={layout.xaxis?.side}>
       {data.map((t) => `${t.type}:${(t.y ?? []).join(",")}:${t.zmin}..${t.zmax}`).join(";")}
     </div>
   ),
@@ -114,12 +120,30 @@ describe("CytokineResponse", () => {
       mode: "conditions", groupby: "cell_type", condition: "stim", a: "STIM", b: "CTRL",
     });
     expect(screen.getByTestId("plot").textContent).toBe("heatmap:TNFA,IFNG,IFN1:-48.6..48.6");
+    expect(screen.getByTestId("plot").getAttribute("data-xaxis-side")).toBe("bottom");
     expect(screen.getByTestId("cytokine-top").textContent).toContain("IFN1 (z 41.9), IFNG (z 25.5)");
     expect(screen.getByTestId("cytokine-top").textContent).toContain("IFN1 (z 48.6)");
     const caption = screen.getByTestId("cytokine-caption").textContent ?? "";
     expect(caption).toContain("STIM vs CTRL within each cell_type group");
     expect(caption).toContain("n = 2 groups; 4,669 of 4,800 signature genes.");
     expect(screen.getByText(/Left out: pDC/)).toBeTruthy();
+  });
+
+  it("labels a tall heatmap's columns on top, where they are in view", async () => {
+    // Capture 2026-10-26: with 40+ cytokines the column labels sat below the fold.
+    const cytokines = Array.from({ length: 24 }, (_, i) => `CK${i}`);
+    getCytokineActivity.mockResolvedValue({
+      ...RESULT,
+      cytokines,
+      z: [cytokines.map((_, i) => i), cytokines.map((_, i) => -i)],
+      p: [cytokines.map(() => 0.01), cytokines.map(() => 0.01)],
+      coef: [cytokines.map(() => 0.1), cytokines.map(() => 0.1)],
+      top: [],
+    });
+    render(<CytokineResponse groupByColumn="cell_type" setGroupByColumn={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Score cytokine response" }));
+    await waitFor(() => screen.getByTestId("plot"));
+    expect(screen.getByTestId("plot").getAttribute("data-xaxis-side")).toBe("top");
   });
 
   it("needs a group column before scoring groups, and shows a server refusal", async () => {

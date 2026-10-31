@@ -1187,9 +1187,10 @@ def first_positions(names, wanted):
     return np.asarray([first[g] for g in wanted], dtype=np.int64)
 
 
-def spot_composition(adata, ref, label, types, genes, ref_genes, fit_genes, s_e, method):
+def spot_composition(adata, ref, label, types, genes, ref_genes, fit_genes, s_e, method, min_umi=MIN_SPOT_UMI):
     """Each spot's shares of the reference's types on the recorded genes, written where
-    scView writes them (obsm spot_deconv / spot_deconv_cells, obs spot_deconv_top(_share))."""
+    scView writes them (obsm spot_deconv / spot_deconv_cells, obs spot_deconv_top(_share));
+    spots with fewer than min_umi counts are not fitted."""
     RM, rnames = spot_counts(ref)
     SM, snames = spot_counts(adata)
     labels = ref.obs[label]
@@ -1209,7 +1210,8 @@ def spot_composition(adata, ref, label, types, genes, ref_genes, fit_genes, s_e,
         libs = np.full(adata.n_obs, "section1", dtype=object).astype(str)
     out = None
     for event, data in sd_iter_deconvolve(mu, S, Y, N, libs, method, np.ones(len(genes), dtype=bool),
-                                          genes=(np.arange(len(genes)), np.asarray(fit_genes)), s_e=s_e):
+                                          genes=(np.arange(len(genes)), np.asarray(fit_genes)), s_e=s_e,
+                                          min_umi=min_umi):
         if event == "fitted":
             out = data
     beta, fitted = out["beta"], out["fitted"]
@@ -2275,11 +2277,13 @@ def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
 
     genes, ref_genes, fit, types = p.get("genes"), p.get("ref_genes"), p.get("fit_genes"), p.get("types")
     label, ref_file, method, s_e = p.get("celltype_column"), p.get("reference_file"), p.get("method"), p.get("s_e")
+    min_umi = p.get("min_umi", sd.MIN_SPOT_UMI)  # older records: the one floor every run had
     ok = (isinstance(genes, list) and genes and isinstance(ref_genes, list) and len(ref_genes) == len(genes)
           and isinstance(fit, list) and fit and all(isinstance(i, int) and 0 <= i < len(genes) for i in fit)
           and isinstance(types, list) and len(types) >= 2 and isinstance(label, str) and label
           and isinstance(ref_file, str) and ref_file and method in sd.METHODS
-          and (method == "nnls" or isinstance(s_e, (int, float))))
+          and (method == "nnls" or isinstance(s_e, (int, float)))
+          and isinstance(min_umi, (int, float)) and not isinstance(min_umi, bool))
     if not ok:
         return Snippet(NOT_REPLAYABLE, ["# Spot composition: its genes, reference file or settings are not "
                                         "recorded. Recorded:",
@@ -2306,7 +2310,7 @@ def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
         f"SPOT_TYPES = {_lit([str(t) for t in types])}",
         f"ref = read_input(spot_reference_file({_lit(ref_file)}))",
         f"spot_composition(adata, ref, {_lit(label)}, SPOT_TYPES, SPOT_GENES, SPOT_REF_GENES, SPOT_FIT, "
-        f"{_lit(s_e)}, {_lit(method)})",
+        f"{_lit(s_e)}, {_lit(method)}, min_umi={_lit(int(min_umi))})",
         "del ref",
     ], "; ".join(notes)[:200] if notes else "")
 

@@ -1260,17 +1260,26 @@ def _stored_bytes(path: Path, key: str) -> int:
     return int(total)
 
 
-def run_need(path: str | Path, steps: list[str], params=None) -> int:
-    """Memory a large-dataset run of ``steps`` on the h5ad at ``path`` needs at its peak
-    (nothing of the dataset is held when it starts: its cached copy is dropped)."""
+def _run_estimate(path: str | Path, steps: list[str], params=None):
     from scview.core import preflight
 
     h = preflight.read_header(path, "h5ad")
     plan = (preflight._file_doublet_plan(path, params) if "doublet_detection" in steps
             else None)
     large = large_info(path) is not None
-    est = preflight.estimate_chunked_run(h, steps, params, large=large, doublets=plan)
-    return int(est.peak_bytes)
+    return preflight.estimate_chunked_run(h, steps, params, large=large, doublets=plan)
+
+
+def run_need(path: str | Path, steps: list[str], params=None) -> int:
+    """Memory a large-dataset run of ``steps`` on the h5ad at ``path`` needs at its peak
+    (nothing of the dataset is held when it starts: its cached copy is dropped)."""
+    return int(_run_estimate(path, steps, params).peak_bytes)
+
+
+def run_step_needs(path: str | Path, steps: list[str], params=None) -> dict[str, int]:
+    """Per step of a large-dataset run (and its save), the memory it needs at that step's
+    peak; ``run_need`` is the largest of them."""
+    return {e.step: int(e.peak_bytes) for e in _run_estimate(path, steps, params).steps}
 
 
 def run_streamed(

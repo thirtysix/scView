@@ -72,7 +72,7 @@ export function MarkerGenesPanel() {
     [markerGenes, setMarkerGenes],
   );
   const initialFetchDone = useRef(false);
-  const ambient = useAmbientFlags(datasetId, groupbyColumn, markersData);
+  const ambient = useAmbientFlags(datasetId, groupbyColumn, markersData, dataset?.large);
 
   // Categorical columns suitable for marker gene grouping
   const groupbyColumns = useMemo(() => {

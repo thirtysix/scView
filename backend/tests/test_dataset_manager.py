@@ -193,3 +193,142 @@ def test_a_dropped_adaptor_never_reads_its_file_again(tmp_path, monkeypatch):
     monkeypatch.setattr(ad, "read_h5ad", lambda *x, **k: reads.append(x) or first)
     a.close()
     assert a.adata is first and reads == []
+
+
+# --- a running run's expected growth counts as used ------------------------------
+#
+# 8 GB backend: a run on HD 8 um (large mode, estimated peak 5.6 GB) was in clustering
+# when the UI opened HD 16 um; the load was let in on the memory free at that moment
+# and the backend was killed at the run's peak (exit 137). The run alone fits.
+
+
+def test_a_reservation_s_outstanding_growth_shrinks_as_the_run_grows():
+    from scview.core.dataset_manager import RunReservation
+
+    r = RunReservation("a", base_used=3 * GB, need=2 * GB)
+    assert r.outstanding(3 * GB) == 2 * GB  # nothing grown yet
+    assert r.outstanding(4 * GB) == 1 * GB
+    assert r.outstanding(6 * GB) == 0  # past its peak: nothing more expected
+    # The copy dropped for the run freed after the reservation: never more than the need.
+    assert r.outstanding(2 * GB) == 2 * GB
+    # With the steps still to run known, the reservation shrinks to their peak.
+    left = {"gb": 0.5}
+    r = RunReservation("a", 3 * GB, 2 * GB, remaining=lambda: int(left["gb"] * GB))
+    assert r.outstanding(3 * GB) == 0.5 * GB
+    left["gb"] = 9.0  # never more than the whole need
+    assert r.outstanding(3 * GB) == 2 * GB
+    r = RunReservation("a", 3 * GB, 2 * GB, remaining=lambda: 1 / 0)
+    assert r.outstanding(3 * GB) == 2 * GB  # a failing estimate: the whole need
+
+
+async def test_a_load_during_a_run_counts_the_run_s_remaining_peak(dm, monkeypatch):
+    from scview.core.dataset_manager import RunMemoryError
+
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=99, limited=False)
+    await dm.load_dataset("a")
+    # 1 + 1 = 2 GB used of 6: b (1.5 GB -> 1.65 + 1.5 reserve) opens in memory beside a ...
+    _fake_memory(monkeypatch, dm, need_gb=1.5, per_dataset_gb=1.0)
+    assert not (await dm.load_dataset("b")).adata.isbacked
+    assert dm.cached_ids() == ["a", "b"]
+    dm.evict("b")
+    # ... but not while a run on a is expected to grow by 3 GB more: 2 + 3 = 5 used, and
+    # even opened backed (1.5 x 0.8 in the fake) it does not fit in the 1 GB left.
+    dm.mark_busy("a")
+    slept = []
+
+    async def sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr("asyncio.sleep", sleep)
+    assert dm.reserve_run("a", 3 * GB) is not None
+    with pytest.raises(RunMemoryError, match=(
+            r"A run on a needs about 3\.0 GB more at its peak and scView has 4\.0 GB free of its "
+            r"6\.0 GB limit: wait for it to finish, or cancel it, before opening b\.")):
+        await dm.load_dataset("b")
+    assert slept == []  # said at once: the run's memory is not coming back until it ends
+    assert dm.cached_ids() == ["a"]  # the running dataset was not dropped for the load
+    # The run ends: the same load fits again.
+    dm.release_run("a")
+    dm.mark_idle("a")
+    assert not (await dm.load_dataset("b")).adata.isbacked
+    assert dm.cached_ids() == ["a", "b"]
+
+
+async def test_a_load_that_fits_backed_beside_the_run_opens_backed(dm, monkeypatch):
+    # The run's growth leaves 2 GB: not the in-memory open (1.65 + 1.5 reserve), but a
+    # backed one (its matrices on disk) as under any other memory pressure.
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=99, limited=False)
+    await dm.load_dataset("a")
+    _fake_memory(monkeypatch, dm, need_gb=1.5, per_dataset_gb=1.0)
+    dm.mark_busy("a")
+    dm.reserve_run("a", 2 * GB)
+    assert (await dm.load_dataset("b")).adata.isbacked
+    assert dm.cached_ids() == ["a", "b"]
+
+
+async def test_a_load_during_a_run_still_drops_other_cached_datasets(dm, monkeypatch):
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=99, limited=False)
+    await dm.load_dataset("a")
+    await dm.load_dataset("c")
+    _fake_memory(monkeypatch, dm, need_gb=0.4)  # 1 + 2 + 2 = 5 used; the run grows 1 GB more
+    dm.mark_busy("a")
+    dm.reserve_run("a", 1 * GB)
+    await dm.load_dataset("b")  # 0.44 + 1.5 reserve: c goes (3 used + 1 outstanding -> 2 free)
+    assert dm.cached_ids() == ["a", "b"]
+
+
+async def test_a_load_that_would_not_fit_without_the_run_gets_the_limit_message(dm, monkeypatch):
+    from scview.core.dataset_manager import DatasetMemoryError, RunMemoryError
+
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=99, limited=False)
+    await dm.load_dataset("a")
+    _fake_memory(monkeypatch, dm, need_gb=7.0)  # 3 GB free with a, 5 with nothing: 7 x 0.8 > 5
+    monkeypatch.setattr("scview.core.dataset_manager.REFUSAL_WAIT_SECONDS", 0)
+    dm.mark_busy("a")
+    dm.reserve_run("a", 1 * GB)
+    with pytest.raises(DatasetMemoryError, match="Raise SCVIEW_MEMORY_GB") as e:
+        await dm.load_dataset("b")
+    assert not isinstance(e.value, RunMemoryError)  # waiting for the run would not help
+
+
+async def test_a_run_s_own_reservation_never_refuses_its_own_dataset(dm, monkeypatch):
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=99, limited=False)
+    await dm.load_dataset("a")
+    _fake_memory(monkeypatch, dm, need_gb=1.0)  # 3 GB used, 3 free
+    dm.mark_busy("a")
+    dm.reserve_run("a", 2 * GB)
+    assert await dm.free_memory_for(1 * GB, keep="a") == 3 * GB  # its own growth not counted
+    assert await dm.free_memory_for(1 * GB, keep="b") == 1 * GB  # a is busy: not dropped
+    await dm.reserve("a", int(2.5 * GB))  # 2.0 <= 3: not refused
+    assert dm.outstanding(3 * GB) == 2 * GB and dm.outstanding(3 * GB, keep="a") == 0
+
+
+async def test_without_a_container_limit_a_run_s_reservation_changes_nothing(dm, monkeypatch):
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=50, limited=False)
+    await dm.load_dataset("a")
+    dm.mark_busy("a")
+    dm.reserve_run("a", 500 * GB)
+    for did in ("b", "c"):
+        await dm.load_dataset(did)
+    assert dm.cached_ids() == ["a", "b", "c"]
+    assert await dm.free_memory_for(99 * GB, keep="b") is None
+
+
+def test_the_run_refusal_names_the_work_and_the_datasets():
+    from scview.core.dataset_manager import DatasetMemoryError, RunMemoryError
+
+    e = RunMemoryError("b", "HD 16 um", "HD 8 um", int(3.2 * GB), int(1.1 * GB), 8 * GB)
+    assert isinstance(e, DatasetMemoryError) and e.run_name == "HD 8 um"
+    assert str(e) == ("A run on HD 8 um needs about 3.2 GB more at its peak and scView has 1.1 GB "
+                      "free of its 8.0 GB limit: wait for it to finish, or cancel it, before "
+                      "opening HD 16 um.")
+    e = RunMemoryError("b", "Kang", "HD 8 um", GB, GB, 8 * GB, what="Reading this dataset into memory")
+    assert str(e).endswith("before reading Kang into memory.")
+    e = RunMemoryError("b", "Kang", "HD 8 um", GB, GB, 8 * GB, what="Spatial domains")
+    assert str(e).endswith("before spatial domains.")

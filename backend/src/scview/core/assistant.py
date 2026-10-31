@@ -161,6 +161,42 @@ def _uns_str(adata, key: str, limit: int = 600) -> str:
 _ANNO_SUFFIX = "_celltypeAnno"
 
 
+def _annotation_grouping(adata, acol: str) -> str | None:
+    """The cluster column a cell-type annotation column was made from."""
+    if acol.endswith(_ANNO_SUFFIX):
+        return acol[: -len(_ANNO_SUFFIX)]
+    g = adata.uns.get("scview_active_clustering")
+    return str(g) if g else None
+
+
+# A cluster whose cells are at least this share predicted doublets gets a caution beside
+# its label: the annotators name a cluster from its markers alone (pipeline._annotate_llm,
+# _annotate_marker_score) and the default run keeps flagged doublets (drop_doublets off).
+_MOSTLY_DOUBLETS = 0.5
+
+
+def _doublet_shares(adata, acol: str) -> dict[str, float]:
+    """Share of predicted doublets per cluster of the annotation's grouping (the ONE
+    doublet source, core/doublet_source.py); {} without calls."""
+    grouping = _annotation_grouping(adata, acol)
+    if not grouping or grouping not in adata.obs.columns:
+        return {}
+    try:
+        from scview.core import doublet_source
+
+        calls = doublet_source.resolve(adata.obs)
+        if calls is None:
+            return {}
+        import pandas as pd
+
+        share = pd.Series(calls.calls, index=adata.obs.index).groupby(
+            adata.obs[grouping].astype(str), observed=True).mean()
+        return {str(k): float(v) for k, v in share.items()}
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: doublet shares failed: %s", exc)
+        return {}
+
+
 def _celltype_cluster_map(adata, acol: str) -> dict[str, str]:
     """Map cluster -> cell type for a cell-type annotation column, so the co-pilot
     can answer "what is this cluster?". Prefers the recorded per-cluster mapping;
@@ -168,10 +204,7 @@ def _celltype_cluster_map(adata, acol: str) -> dict[str, str]:
     um = adata.uns.get(f"{acol}_llm_mapping")
     if isinstance(um, dict) and um:
         return {str(k): str(v) for k, v in um.items()}
-    if acol.endswith(_ANNO_SUFFIX):
-        grouping = acol[: -len(_ANNO_SUFFIX)]
-    else:
-        grouping = adata.uns.get("scview_active_clustering")
+    grouping = _annotation_grouping(adata, acol)
     if not grouping or grouping not in adata.obs.columns or acol not in adata.obs.columns:
         return {}
     try:
@@ -861,8 +894,14 @@ def build_grounding_context(
         lines.append(f"\n## Cell-type annotation '{acol}' — {src} cluster → cell type "
                      f"[result:celltypes:{acol}]")
         start = len(lines)
+        shares = _doublet_shares(adata, acol)
         for cl, ct in list(mapping.items())[:_MAX_CATEGORICAL_UNIQUE]:
-            lines.append(f"- cluster **{cl}** = {ct}")
+            # A label on a cluster that is mostly predicted doublets carries the caution:
+            # the annotators never see the doublet calls (capture 2026-10-28, joint cluster 9).
+            caution = (f" (caution: {shares[cl]:.0%} of its cells are predicted doublets, "
+                       "so the label may describe two cell types captured together)"
+                       if shares.get(cl, 0.0) >= _MOSTLY_DOUBLETS else "")
+            lines.append(f"- cluster **{cl}** = {ct}{caution}")
         sources.append(ChatSource(
             kind="result", ref=f"result:celltypes:{acol}",
             detail=f"{acol}: " + "; ".join(f"{k}={v}" for k, v in list(mapping.items())[:12]),

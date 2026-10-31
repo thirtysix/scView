@@ -76,7 +76,8 @@ async def compare_info(
         return {"available": False, "reason": str(e), **base}
     return {"available": True, "reason": None, **base, "label_column": label,
             "label_kind": kind or None,
-            "estimate_seconds": round(bc.estimate_seconds(int(adata.n_obs)), 1)}
+            "estimate_seconds": round(bc.estimate_seconds(int(adata.n_obs)), 1),
+            "first_run": not bc.bbknn_warm()}  # the estimate counts BBKNN's compilation
 
 
 @router.post("/datasets/{dataset_id}/batch/compare-stream")

@@ -371,3 +371,88 @@ def test_replay_of_an_unreadable_record_is_a_comment():
     snip = replay_script._spot_deconvolution({"method": "rctd"}, replay_script._Ctx(adata=None))
     assert snip.status == replay_script.NOT_REPLAYABLE
     assert Path(sd.__file__).name == "spot_deconvolution.py"
+
+
+# --- The count floor (batch 33): per unit, a run parameter, in the summary and the replay --
+
+
+def _thin_rows(spots: ad.AnnData, rows: range, total: int = 55) -> None:
+    """Thin each of ``rows`` of the counts to exactly ``total`` counts over all its genes."""
+    X = spots.X.tolil()
+    for i in rows:
+        row = spots.X[i].toarray().ravel()
+        X[i, :] = np.random.default_rng(i).multinomial(total, row / row.sum())
+    spots.X = sp.csr_matrix(X)
+    assert (spots.X[list(rows)].sum(axis=1) == total).all()
+
+
+def _hd_bins(prof: np.ndarray, um: float, n: int = 60) -> ad.AnnData:
+    spots, _ = _spots(prof, n=n)
+    for lib in spots.uns["spatial"]:
+        spots.uns["spatial"][lib]["scalefactors"]["bin_size_um"] = um
+    spots.uns["scview_spatial"] = {"technology": "visium_hd", "unit": "bin", "bin_size_um": um}
+    return spots
+
+
+def test_the_count_floor_defaults_per_unit():
+    prof = _profiles()
+    spots, _ = _spots(prof, n=20)
+    assert sd.default_min_umi(spots) == sd.MIN_SPOT_UMI == 100
+    assert sd.default_min_umi(_hd_bins(prof, 16.0, 20)) == sd.MIN_SPOT_UMI
+    assert sd.default_min_umi(_hd_bins(prof, 8.0, 20)) == sd.bin_min_umi(8.0) == 25
+    assert sd.bin_min_umi(16.0) == sd.bin_min_umi(50.0) == 100 and sd.bin_min_umi(2.0) == sd.BIN_MIN_UMI_LEAST == 10
+    # The recorded bin size alone (a dataset whose scale factors were not kept) decides too.
+    rec = _hd_bins(prof, 8.0, 20)
+    for lib in rec.uns["spatial"]:
+        del rec.uns["spatial"][lib]["scalefactors"]["bin_size_um"]
+    assert sd.default_min_umi(rec) == 25
+    assert sd.check_min_umi(None, rec) == 25 and sd.check_min_umi(250, rec) == 250
+    for bad in (0, 10_001, 2.5, True, "x"):
+        with pytest.raises(sd.SpotDeconvolutionError, match="count floor"):
+            sd.check_min_umi(bad, rec)
+
+
+def test_the_floor_reaches_the_fit_the_summary_the_step_and_the_replay(tmp_path):
+    prof = _profiles()
+    spots, _ = _spots(prof, n=60)
+    _thin_rows(spots, range(5))  # about 55 counts: under the spot default, over a floor of 40
+    ref = _reference(prof)
+    p = _prepare(ref, spots, min_umi=40)
+    assert p.min_umi == 40
+    out = _fit(p, "nnls")
+    assert np.isfinite(out["beta"]).all()
+    s = sd.summarize(p, out, method="nnls")
+    assert s["min_umi"] == 40 and s["n_skipped"] == 0 and not any("were not fitted" in n for n in s["notes"])
+    p = _prepare(ref, spots, min_umi=70)
+    out = _fit(p)
+    assert np.isnan(out["beta"][:5]).all() and np.isfinite(out["beta"][5:]).all()
+    s = sd.summarize(p, out, method="rctd")
+    assert s["min_umi"] == 70 and s["n_skipped"] == 5
+    assert any("5 spots with fewer than 70 counts were not fitted" in n for n in s["notes"])
+    s["reference"]["path"] = str(tmp_path / "reference.h5ad")
+    sd.save(spots, p, out, s)
+    step = provenance.read_provenance(spots)["history"][-1]
+    assert step["params"]["min_umi"] == 70
+    assert sd.saved(spots)["min_umi"] == 70
+    script = replay_script.build_script(spots, dataset_id="t", dataset_name="test")
+    assert "min_umi=70)" in script and "def spot_composition(" in script
+    # An older record (no floor recorded) replays with the one floor every run had.
+    old = dict(step["params"])
+    del old["min_umi"]
+    snip = replay_script._spot_deconvolution(old, replay_script._Ctx(adata=None))
+    assert snip.status == replay_script.EXACT and any("min_umi=100)" in line for line in snip.code)
+
+
+def test_counts_below_for_the_floors_caption():
+    prof = _profiles()
+    spots, _ = _spots(prof, n=40)
+    totals = np.asarray(spots.X.sum(axis=1)).ravel()
+    c = sd.counts_below(spots, [], limit=5000)
+    assert c["n"] == 40 and c["limit"] == 5000 and len(c["below"]) == 5001 and c["median"] == float(np.median(totals))
+    assert c["below"][0] == 0 and c["below"][5000] == int((totals < 5000).sum()) and c["below"][100] == int((totals < 100).sum())
+    # The QC step's totals are read when present (no pass over the matrix).
+    spots.obs["total_counts"] = np.where(np.arange(40) < 7, 10.0, 500.0)
+    c = sd.counts_below(spots, [], limit=1000)
+    assert c["below"][11] == 7 and c["below"][100] == 7 and c["below"][501] == 40 and c["median"] == 500.0
+    # Past the table's limit the last entry stands for "fewer than limit".
+    assert c["below"][1000] == 40

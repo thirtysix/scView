@@ -9,7 +9,10 @@ healthcheck). While a run works on a dataset:
 - it holds the dataset's edit lock (``obs_writes.dataset_lock``), so labels, a
   kept resolution, pseudotime or a second run wait their turn;
 - the dataset is marked busy, so ``DatasetManager.get_or_load_dataset`` makes
-  other requests for it wait instead of reading a half-processed dataset.
+  other requests for it wait instead of reading a half-processed dataset;
+- its estimated peak is reserved (``DatasetManager.reserve_run``), so a load of
+  another dataset counts what the run has still to grow by as used, and is refused
+  (a 507 naming the run) rather than let in on the memory free at that moment.
 
 Both are released, and the cached copy dropped, only when the worker thread has
 stopped, even if the client went away first: the thread can't be interrupted
@@ -86,6 +89,7 @@ async def _claim(dm: DatasetManager, dataset_id: str) -> tuple[AnnDataAdaptor, C
         if released:
             return
         released = True
+        dm.release_run(dataset_id)  # its growth is over, however it ended
         dm.evict(dataset_id)  # steps changed it in place; the file is the truth
         dm.mark_idle(dataset_id)
         lock.release()
@@ -100,7 +104,8 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
     (``working_copy``, a 507 when that cannot fit) and close other open datasets whose
     memory its estimated peak needs (the pre-step check, in the worker thread, can only
     stop the run). In large-dataset mode: the cached copy dropped, room for that mode's
-    peak, and a fresh adaptor of the same file (it reads nothing until asked). Returns
+    peak, and a fresh adaptor of the same file (it reads nothing until asked). Either
+    way the run's expected growth is reserved (``_reserve_run``) until it ends. Returns
     the adaptor the work gets."""
     need = None
     if control is not None and control.plan is not None:
@@ -135,6 +140,8 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
                 logger.warning("No large-run estimate for %s: %s", dataset_id, e)
                 peak = 0
             await dm.free_memory_for(peak, keep=dataset_id)
+            await _reserve_run(dm, dataset_id, control, peak,
+                               lambda: large_run.run_step_needs(path, steps, params))
             return AnnDataAdaptor(path)
         need = control.mode.run_bytes
         if need is None:
@@ -149,7 +156,46 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
         if await asyncio.to_thread(large_run.large_info, path) is not None:
             raise HTTPException(status_code=422, detail=LARGE_REFUSED)
     await working_copy.make_room(dm, dataset_id, adaptor, then=need or 0)
+    if need:
+        from scview.core import preflight
+
+        # The growth from now: a backed dataset read in (``need_bytes`` counts it when
+        # the mode was estimated), then the run's peak over the copy.
+        growth = control.mode.need_bytes
+        if growth is None:
+            try:
+                growth = need + await asyncio.to_thread(working_copy.copy_bytes, adaptor)
+            except Exception:  # noqa: BLE001 - the run's own part then
+                growth = need
+        copy = max(0, growth - need)
+        adata = adaptor.adata
+        await _reserve_run(dm, dataset_id, control, growth, lambda: {
+            s: copy + b for s, b in preflight.run_step_needs(adata, steps, params).items()})
     return adaptor
+
+
+async def _reserve_run(dm: DatasetManager, dataset_id: str, control: RunControl, need: int,
+                       step_needs: Callable[[], dict[str, int]]) -> None:
+    """Reserve the run's expected growth (``need`` bytes from now) with the manager until
+    it ends, so a load of another dataset meanwhile counts it as used. With the per-step
+    needs (``step_needs``, in a worker thread; the whole need when they cannot be
+    estimated) the reservation shrinks to the peak of the steps still to run: the
+    watchdog records each finished step, so this reads nothing from the run's thread."""
+    if need <= 0:
+        return
+    remaining = None
+    try:
+        by_step = await asyncio.to_thread(step_needs)
+    except Exception as e:  # noqa: BLE001 - never block a run on the estimate itself
+        logger.warning("No per-step estimate for the run on %s: %s", dataset_id, e)
+        by_step = {}
+    if by_step:
+        done = control.watchdog.steps  # filled as each step finishes
+
+        def remaining() -> int:
+            return max((b for s, b in by_step.items() if s not in done), default=0)
+
+    dm.reserve_run(dataset_id, need, remaining)
 
 
 def _chunked(control: RunControl | None) -> bool:

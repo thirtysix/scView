@@ -27,6 +27,7 @@ pipeline run with that ``batch_method`` (nothing from the comparison is kept).
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any, Callable, Iterator
 
@@ -182,8 +183,10 @@ def _method_neighbours(method: str, X: np.ndarray, obs: pd.DataFrame, batch_key:
                        query: np.ndarray, k: int, n_neighbors: int) -> np.ndarray:
     batches = obs[batch_key].to_numpy()
     if method == bm.BBKNN:
+        global _bbknn_warm
         within = bm.bbknn_within(n_neighbors, np.unique(batches).size)
         _, conn, _ = bm.bbknn_graph(X, batches, neighbors_within_batch=within)
+        _bbknn_warm = True
         return bm.graph_neighbours(conn, query, k)
     if method == bm.HARMONY:
         Z = bm.harmony_correct(X, obs, batch_key)
@@ -231,7 +234,8 @@ def _simplest(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _pct(x: float | None) -> str:
-    return "n/a" if x is None else f"{x:.0%}"
+    """As the table shows it: rounded half up, like the frontend's Math.round(x * 100)."""
+    return "n/a" if x is None else f"{math.floor(x * 100 + 0.5):.0f}%"
 
 
 def recommend(rows: list[dict[str, Any]], label_column: str | None, kind: str) -> dict[str, Any]:
@@ -271,17 +275,25 @@ def recommend(rows: list[dict[str, Any]], label_column: str | None, kind: str) -
         return {"recommended": pick["method"], "reason": reason, "warnings": warnings,
                 "notes": notes}
     scored = [r for r in mixers if r.get("conservation") is not None]
-    top = max(r["conservation"] for r in scored)
-    tied = [r for r in scored if r["conservation"] >= top - TIE]
+    best = max(scored, key=lambda r: r["conservation"])
+    tied = [r for r in scored if r["conservation"] >= best["conservation"] - TIE]
     pick = _simplest(tied)
     others = ", ".join(r["label"] for r in tied if r is not pick)
-    reason = (f"{pick['label']}: among the methods that mix the batches acceptably (at least "
-              f"{MIX_OK:.0%} of perfect mixing), it keeps {what} together best (neighbours share "
-              f"the label {_pct(pick['conservation'])} of the time)")
-    if others:
-        reason += (f"; {others} came within {TIE:.0%} of that, and "
-                   + ("no correction is simplest" if pick["method"] == NONE
-                      else f"{pick['label']} was the fastest of them"))
+    mixes = (f"among the methods that mix the batches acceptably (at least {MIX_OK:.0%} of "
+             "perfect mixing)")
+    points = f"{TIE * 100:.0f} points"
+    why = ("no correction is simplest" if pick["method"] == NONE
+           else f"{pick['label']} was the fastest of them")
+    if pick is best:
+        reason = (f"{pick['label']}: {mixes}, it keeps {what} together best (neighbours share "
+                  f"the label {_pct(pick['conservation'])} of the time)")
+        if others:
+            reason += f"; {others} came within {points} of that, and {why}"
+    else:
+        # The pick is not the best: say so, with the shown percentages, and why it won.
+        reason = (f"{pick['label']}: {mixes}, it keeps {what} together within {points} of the "
+                  f"best ({_pct(pick['conservation'])} against {best['label']}'s "
+                  f"{_pct(best['conservation'])}: a tie), and {why}")
     reason += "."
     if pick["method"] == NONE:
         reason += " The batches already mix without correction."
@@ -289,14 +301,35 @@ def recommend(rows: list[dict[str, Any]], label_column: str | None, kind: str) -
             "notes": notes}
 
 
-def estimate_seconds(n_cells: int, methods: list[str] | None = None) -> float:
-    """Rough total seconds for the comparison (measured on Kang, 13,836 cells, 2 CPUs;
-    see SECONDS_PER_CELL)."""
-    methods = methods or list(METHODS)
-    return float(sum(SECONDS_FIXED.get(m, 1.0) + SECONDS_PER_CELL.get(m, 1e-4) * n_cells
-                     for m in methods))
+def estimate_seconds(n_cells: int, methods: list[str] | None = None, *,
+                     warm: bool | None = None) -> float:
+    """Rough total seconds for the comparison, scoring included: per method
+    ``SECONDS_AT_SCALE`` x (cells / ``SCALE_CELLS``) ^ ``POWER``, plus ``COMPILE_SECONDS``
+    when BBKNN is among the methods and has not run in this process yet (``warm``:
+    the process's own state unless given). Batches add time the model does not see
+    (Scanorama matches every pair of them): a 40,000-cell subsample of a 23-sample atlas
+    took 97 s against 58 s estimated, so with many batches read it as a lower bound."""
+    methods = [m for m in (methods or METHODS) if m in METHODS]
+    n = max(1, int(n_cells))
+    total = max(OVERHEAD_SECONDS,
+                sum(SECONDS_AT_SCALE[m] * (n / SCALE_CELLS) ** POWER[m] for m in methods))
+    if bm.BBKNN in methods and not (_bbknn_warm if warm is None else warm):
+        total += COMPILE_SECONDS
+    return float(total)
 
 
-# Per method: seconds = fixed + per cell x cells, scoring included (Kang, 2 CPUs).
-SECONDS_FIXED = {NONE: 0.5, bm.HARMONY: 1.0, bm.SCANORAMA: 1.0, bm.BBKNN: 2.0}
-SECONDS_PER_CELL = {NONE: 1e-4, bm.HARMONY: 5e-4, bm.SCANORAMA: 5e-4, bm.BBKNN: 5e-4}
+def bbknn_warm() -> bool:
+    """Whether BBKNN has run in this process (its first run compiles UMAP's code)."""
+    return _bbknn_warm
+
+
+# Per method at SCALE_CELLS (Kang, 13,836 cells, 2 batches, 50 PCs, 2 CPUs, numba warm),
+# scoring included, 2026-10-31: none 0.33 s, Harmony 0.74, Scanorama 5.5, BBKNN 3.0; a
+# 2,700-cell subsample 0.02 / 0.09 / 0.25 / 0.52, which sets the powers. BBKNN's first
+# run in a process compiles UMAP's connectivities: 16.3 s cold against 0.5 s warm.
+SCALE_CELLS = 13_836
+SECONDS_AT_SCALE = {NONE: 0.33, bm.HARMONY: 0.74, bm.SCANORAMA: 5.5, bm.BBKNN: 3.0}
+POWER = {NONE: 1.0, bm.HARMONY: 1.2, bm.SCANORAMA: 1.9, bm.BBKNN: 1.3}
+COMPILE_SECONDS = 16.0
+OVERHEAD_SECONDS = 0.5  # the least a comparison takes (streaming, scoring set-up)
+_bbknn_warm = False  # set once BBKNN has run in this process

@@ -6,6 +6,39 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-10-31
+
+### Changed
+- **A load during a pipeline run counts the run's remaining estimated peak.** Opening another dataset that
+  would not leave the run that room is refused with a sentence naming the run ("A run on X needs about N GB
+  more at its peak ... wait for it to finish, or cancel it, before opening Y") instead of the backend being
+  killed at the run's peak; a smaller open still goes ahead backed. The reservation shrinks as the run's big
+  steps finish. Reading a second dataset into memory for markers, scoring or a PAGA during a run gets the
+  same sentence. Before: on 8 GB, a Visium HD 8 um run plus opening the 16 um section was an OOM kill (exit
+  137); now the 16 um section opens backed and the run finishes (peak 6.5 GB of 8).
+- **Dataset library: an open the server refuses now shows the server's sentence** (it showed nothing before).
+- **Run estimates on Visium HD bins.** Leiden on bins takes 2.5x (full optimisation) and 1.75x (fast Leiden)
+  the time of the same number of cells, measured on a mouse brain (16 um bins: 811 s where 309 s was
+  estimated; 8 um bins with fast Leiden 192 s where 116 was). The fast-Leiden offer now fires for a 16 um
+  section, and the minute notes compare against the new estimate.
+- **Spot composition: the count floor is a run setting**, shown beside Fit with how many bins fall below it.
+  8 um bins default to 25 counts (the 100-count floor scaled by bin area) instead of 100, so 0.7% rather
+  than 29% of a mouse brain's bins stay unfitted: bins of 20-100 counts agree with their 16 um parent bin
+  as bins of 100 or more do (Pearson 0.86-0.91 over types, RMSE 0.11-0.12). Spots and 16 um bins keep 100.
+  The floor is recorded in the summary, the provenance step and the replay script.
+- **Compare methods** (batch correction): when a slower method was within 2 points of the pick, the sentence
+  says so, names the best and uses the table's percentages. The button's time estimate follows measured
+  times (about 10 s on 13,836 cells at 2 CPUs) and counts BBKNN's one-off compilation on the first run only.
+- **Claims check:** a list of cluster ids for a label ("Monocyte clusters are 1, 2, 6 and 7") is checked by
+  rule against the cited labels (supported, or left to the judge; never refuted); plural group names
+  ("monocytes") are recognised.
+- **Co-pilot:** a cell-type label on a cluster that is mostly predicted doublets carries a caution.
+
+### Fixed
+- Marker tables no longer ask for the ambient RNA estimate on a large dataset (it was a 422 in the console on
+  every Unified View open).
+- The preflight step list kept the bin factor through reset to counts and filtering.
+
 ## [0.51.0] - 2026-10-30
 
 ### Added

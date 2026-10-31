@@ -16,7 +16,7 @@ from scview.core import large_mode
 from scview.core import spot_deconvolution as sd
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from tests.large_fixture import make_large
-from tests.test_spot_deconvolution import _fit, _prepare, _profiles, _reference, _spots
+from tests.test_spot_deconvolution import _fit, _prepare, _profiles, _reference, _spots, _thin_rows
 
 MU_RTOL = 1e-12
 SHARE_ATOL = 1e-6
@@ -280,3 +280,28 @@ async def test_a_large_reference_runs_and_checks(client, dataset_manager, tmp_da
     b = await _run(client, did, mref, "check-stream")
     for x, y in zip(a["runs"], b["runs"], strict=True):
         assert x["method"] == y["method"] and x["rmse"] == pytest.approx(y["rmse"], abs=SHARE_ATOL)
+
+
+def test_large_spots_honour_the_floor_as_the_in_memory_path_does(tmp_path, data, small_blocks):
+    ref, spots = data
+    spots = spots.copy()
+    _thin_rows(spots, range(6))  # about 55 counts: under 100, over 40
+    h5ad = make_large(tmp_path / "spots", spots)
+    adaptor = AnnDataAdaptor(str(h5ad))
+    try:
+        assert adaptor.is_large
+        large_100, large_40 = _prepare(ref, adaptor.adata), _prepare(ref, adaptor.adata, min_umi=40)
+        counts = sd.counts_below(adaptor.adata, [])
+        assert len(small_blocks) > 1  # read by row blocks, never whole
+    finally:
+        adaptor.close()
+    mem_100, mem_40 = _prepare(ref, spots), _prepare(ref, spots, min_umi=40)
+    assert large_100.min_umi == mem_100.min_umi == 100 and large_40.min_umi == mem_40.min_umi == 40
+    a, b = _fit(large_100, "nnls"), _fit(mem_100, "nnls")
+    np.testing.assert_array_equal(a["fitted"], b["fitted"])
+    assert not a["fitted"][:6].any() and a["fitted"][6:].all()
+    a, b = _fit(large_40, "nnls"), _fit(mem_40, "nnls")
+    np.testing.assert_array_equal(a["fitted"], b["fitted"])
+    assert a["fitted"].all()
+    assert counts == sd.counts_below(spots, [])
+    assert counts["below"][71] == 6 and counts["below"][100] == 6 and counts["below"][40] == 0
