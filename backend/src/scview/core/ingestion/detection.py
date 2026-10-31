@@ -25,6 +25,7 @@ import h5py
 from pydantic import BaseModel, Field
 
 from scview.core import spatial, xenium
+from scview.core.atac_import import looks_like_barcode_metrics
 from scview.core.crispr import looks_like_calls
 from scview.core.ingestion import h5seurat
 from scview.core.vdj import sniff_contigs
@@ -72,6 +73,8 @@ class FileKind(str, Enum):
     crispr_calls = "crispr_calls"  # Cell Ranger protospacer_calls_per_cell.csv (core/crispr.py)
     spatial = "spatial"  # a Space Ranger spatial file: a side file of a unit (core/spatial.py)
     xenium = "xenium"  # a file of a Xenium output folder (core/xenium.py)
+    h5mu = "h5mu"  # MuData on disk, RNA + ATAC modalities (core/atac_import.py)
+    atac_metrics = "atac_metrics"  # Cell Ranger ARC per_barcode_metrics.csv (core/atac_import.py)
     unknown = "unknown"
 
 
@@ -234,6 +237,17 @@ def _classify_hdf5(path: Path) -> DetectionResult:
             keys = set(f.keys())
             details = {"hdf5_keys": sorted(keys)}
 
+            # MuData: one AnnData per modality under /mod (and obs, var of its own).
+            if "mod" in keys and isinstance(f["mod"], h5py.Group):
+                details["modalities"] = sorted(f["mod"].keys())
+                return DetectionResult(
+                    kind=FileKind.h5mu,
+                    confidence=0.95,
+                    format_family="mudata",
+                    reason="MuData .h5mu (modalities: " + ", ".join(details["modalities"]) + ")",
+                    details=details,
+                )
+
             # 10x CellRanger .h5: a /matrix *group* with CSC arrays + features.
             if "matrix" in keys and isinstance(f["matrix"], h5py.Group):
                 mkeys = set(f["matrix"].keys())
@@ -356,6 +370,14 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
             reason="Cell Ranger metrics summary (metrics_summary.csv)",
             details=details,
         )
+    if looks_like_barcode_metrics(lines[0]):
+        return DetectionResult(
+            kind=FileKind.atac_metrics,
+            confidence=0.95,
+            format_family="10x",
+            reason="Cell Ranger ARC per-barcode metrics (per_barcode_metrics.csv)",
+            details=details,
+        )
     if looks_like_calls(lines[0]):
         return DetectionResult(
             kind=FileKind.crispr_calls,
@@ -423,6 +445,17 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
                 details=details,
             )
 
+    # Cell Ranger ARC's features.tsv: id, name, feature type, chrom, start, end.
+    if delim == "\t" and ncols > 3 and rows and all(
+            len(r) >= 3 and r[2].strip() in _FEATURE_TYPES for r in rows):
+        return DetectionResult(
+            kind=FileKind.tenx_features,
+            confidence=0.9,
+            format_family="10x",
+            reason=f"{ncols}-column features table (id, name, feature type, position)",
+            details=details,
+        )
+
     # Wide delimited grid → dense expression table.
     if ncols > 3:
         return DetectionResult(
@@ -439,6 +472,10 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
         reason="Delimited text that did not match a known layout",
         details=details,
     )
+
+
+_FEATURE_TYPES = {"Gene Expression", "Peaks", "Antibody Capture", "CRISPR Guide Capture",
+                  "Multiplexing Capture", "Custom"}
 
 
 def contig_receptor(lines: list[str]) -> str | None:

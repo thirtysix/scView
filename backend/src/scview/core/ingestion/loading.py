@@ -25,10 +25,11 @@ import tempfile
 from pathlib import Path
 
 import anndata as ad
+import h5py
 import pandas as pd
 import scanpy as sc
 
-from scview.core import protein, spatial, xenium
+from scview.core import atac_import, protein, spatial, xenium
 from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ def load_unit(unit: IngestUnit, options: dict | None = None) -> ad.AnnData:
         UnitFormat.dense_table: _load_dense,
         UnitFormat.h5seurat: _load_h5seurat,
         UnitFormat.xenium: _load_xenium,
+        UnitFormat.h5mu: _load_h5mu,
     }
     loader = loaders.get(unit.format)
     if loader is None:
@@ -83,10 +85,28 @@ def load_unit(unit: IngestUnit, options: dict | None = None) -> ad.AnnData:
 
     adata.var_names_make_unique()
     adata.obs_names_make_unique()
+    _check_peaks(adata, unit)
     # CITE-seq antibodies (and other non-gene features) out of the gene matrix.
     adata, _ = protein.split_features(adata)
     spatial.adopt(adata)  # an .h5ad with obsm spatial / X_spatial: library_id, uns layout
     return adata
+
+
+def _check_peaks(adata: ad.AnnData, unit: IngestUnit) -> None:
+    """Peaks and no genes are refused, never taken as genes. Peaks in a format whose store
+    is not written (loom, zarr) leave a note for the history; the store of the others is
+    written from the file at commit (``session._write_atac``)."""
+    types = adata.var.get("feature_types")
+    if types is None:
+        return
+    name = unit.files[0].name if unit.files else unit.label
+    try:
+        atac_import.refuse_only_peaks(types, name)
+    except atac_import.AtacOnly as e:
+        raise IngestLoadError(str(e)) from e
+    n = int((types.astype(str) == atac_import.PEAKS_TYPE).sum())
+    if n and unit.format.value not in atac_import.STORE_FORMATS:
+        adata.uns[atac_import.LEFT_OUT_KEY] = atac_import.LOOM_OR_ZARR.format(n=n)
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +133,18 @@ def _load_tenx_h5(unit: IngestUnit, options: dict) -> ad.AnnData:
 
 def _load_anndata(unit: IngestUnit, options: dict) -> ad.AnnData:
     return sc.read_h5ad(_single(unit))
+
+
+def _load_h5mu(unit: IngestUnit, options: dict) -> ad.AnnData:
+    """The RNA modality of an .h5mu (MuData on disk), as an .h5ad's table; the peaks are
+    never read here (``core/atac_import.py`` writes their store from the file)."""
+    from anndata.io import read_elem
+
+    with h5py.File(_single(unit), "r") as f:
+        mod = next((m for m in atac_import.RNA_MODS if m in f.get("mod", {})), None)
+        if mod is None:
+            raise IngestLoadError(atac_import.ONLY_PEAKS.format(name=unit.files[0].name))
+        return read_elem(f["mod"][mod])
 
 
 def _load_loom(unit: IngestUnit, options: dict) -> ad.AnnData:

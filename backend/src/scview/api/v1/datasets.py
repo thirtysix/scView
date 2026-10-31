@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,6 +88,9 @@ async def upload_dataset(
     # Protect the user's original upload — never written to again.
     _make_readonly(dest_path)
 
+    # Peaks and no genes: refused, never read as genes (core/atac_import.py).
+    if ext == ".h5ad":
+        await _refuse_only_peaks(upload_dir, dest_path, file.filename)
     # Antibody / hashtag features in X: split off as the import wizard does.
     feature_split = await _split_feature_types(dm, dataset_id, dest_path, file.filename) \
         if ext == ".h5ad" else None
@@ -132,6 +136,19 @@ async def upload_dataset(
     return DatasetUploadResponse(id=dataset_id, name=meta["name"], status=meta["status"])
 
 
+async def _refuse_only_peaks(upload_dir: Path, src: Path, filename: str) -> None:
+    """A 422 (and nothing kept) for an .h5ad with ATAC peaks and no genes."""
+    from scview.core import atac_import
+    from scview.core.ingestion import feature_split
+
+    types = await asyncio.to_thread(feature_split.feature_types, src)
+    try:
+        atac_import.refuse_only_peaks(types, Path(filename).name)
+    except atac_import.AtacOnly as e:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 async def _split_feature_types(dm: DatasetManager, dataset_id: str, src: Path,
                                filename: str) -> dict | None:
     """An .h5ad with antibody (CITE-seq) or CellPlex features in X: write the dataset's
@@ -140,20 +157,24 @@ async def _split_feature_types(dm: DatasetManager, dataset_id: str, src: Path,
     block of rows at a time, in a worker thread. A layout the split cannot stream, or a
     failure, leaves the dataset as uploaded (what every upload did before) and says so
     in the result."""
+    from scview.core import atac_import, modality_store
     from scview.core.ingestion import feature_split
 
     if not await asyncio.to_thread(feature_split.needs_split, src):
         return None
+    atac_store = modality_store.store_path(dm.data_dir, dataset_id, atac_import.STORE)
     out_dir = dm.data_dir / "ingested" / dataset_id
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / src.name
     partial = out_dir / f".{src.name}.partial"
     try:
         summary = await asyncio.to_thread(
-            feature_split.split_h5ad, src, partial, original_filename=Path(filename).name)
+            feature_split.split_h5ad, src, partial, original_filename=Path(filename).name,
+            atac_store=atac_store)
         partial.replace(out)
     except Exception as e:  # never lose the upload over the split
         partial.unlink(missing_ok=True)
+        atac_store.unlink(missing_ok=True)
         if not any(out_dir.iterdir()):
             out_dir.rmdir()
         logger.warning("Feature types of %s not split: %s", filename, e)

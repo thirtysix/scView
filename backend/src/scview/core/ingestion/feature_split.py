@@ -70,11 +70,13 @@ def needs_split(path: Path) -> bool:
     return bool(genes.any()) and not bool(genes.all())
 
 
-def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
+def split_h5ad(src: Path, dst: Path, *, original_filename: str, atac_store: Path | None = None) -> dict:
     """Write ``src`` to ``dst`` with only the gene features in X, layers and ``.raw``
     (when its own ``feature_types`` say which), the antibodies and CellPlex tags in
     obsm, and the split recorded in the provenance (an "ingest" step). Returns what
-    was split. Raises SplitUnsupported for a matrix layout it cannot stream."""
+    was split. Raises SplitUnsupported for a matrix layout it cannot stream.
+    ``atac_store``: where Peaks features are written (``core/atac_import.py``), per-cell
+    totals going to obs; without it they are only left out."""
     types = feature_types(src)
     if types is None:
         raise SplitUnsupported("no var['feature_types']")
@@ -85,7 +87,8 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
     take_ab = is_ab if 0 < is_ab.sum() <= protein.MAX_PROTEINS else np.zeros_like(is_ab)
     take_cmo = is_cmo if 0 < is_cmo.sum() <= hashing.MAX_TAGS else np.zeros_like(is_cmo)
     take_guide = is_guide if 0 < is_guide.sum() <= crispr.MAX_GUIDES else np.zeros_like(is_guide)
-    other = pd.Series(types[~genes & ~is_ab & ~is_cmo & ~take_guide]).value_counts()
+    is_peak = types == protein.PEAKS_TYPE  # to the ATAC store (atac_store), never counted as dropped
+    other = pd.Series(types[~genes & ~is_ab & ~is_cmo & ~take_guide & ~is_peak]).value_counts()
 
     with h5py.File(src, "r") as fi, h5py.File(dst, "w") as fo:
         for k, v in fi.attrs.items():
@@ -123,6 +126,7 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
                 holder.uns[key] = read_elem(uns[key])
         split = protein.ProteinSplit()
         split.other_features = {str(k): int(v) for k, v in other.items()}
+        atac_params = _write_atac(src, atac_store, holder, is_peak, original_filename, fo)
         names = [str(v) for v in var.index]
         if not extracted:  # no X to take them from
             take_ab, take_cmo = np.zeros_like(take_ab), np.zeros_like(take_cmo)
@@ -144,6 +148,8 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
             "other_features": split.other_features,
             "location": "obsm protein_counts / protein_clr, hto_counts, guide_counts",
         }
+        if atac_params:
+            summary["n_peaks"] = int(is_peak.sum())
         if is_ab.sum() > protein.MAX_PROTEINS:
             summary["note"] = f"{int(is_ab.sum())} antibody features: more than a panel, dropped from X"
         provenance.init_source(holder, origin="uploaded", original_filename=original_filename, fmt="h5ad")
@@ -152,6 +158,7 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
             **({"protein": {"n_proteins": split.n_proteins, "controls": split.controls,
                             "normalisation": "CLR per cell (Seurat margin = 2)"}}
                if split.n_proteins else {}),
+            **atac_params,
         })
         obsm = fo["obsm"] if "obsm" in fo else _new_dict(fo, "obsm")
         for key, value in holder.obsm.items():
@@ -164,6 +171,35 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str) -> dict:
                 del uns_out[key]
             write_elem(uns_out, key, value)
     return summary
+
+
+def _write_atac(src: Path, store: Path | None, holder: ad.AnnData, is_peak: np.ndarray, filename: str,
+                fo: h5py.File) -> dict:
+    """The Peaks features into their store; the per-cell totals go straight into the new
+    file's obs (copied as stored). Returns the history entry's ATAC part ({} without peaks)."""
+    if store is None or not is_peak.any():
+        return {}
+    from scview.core import atac_import
+    from scview.core.ingestion.bundling import BundleFile, FileKind, FileRole, IngestUnit, UnitFormat
+
+    unit = IngestUnit(label=Path(filename).stem, format=UnitFormat.anndata, complete=True, files=[BundleFile(
+        path=str(src), name=filename, kind=FileKind.anndata_h5ad, role=FileRole.data, rel_path=filename)])
+    plan = atac_import.plan_unit(unit)
+    if plan is None or plan.rows is None:
+        if plan is not None and plan.note:
+            holder.uns[atac_import.LEFT_OUT_KEY] = plan.note
+        return {}
+    info = atac_import.attach_obs(holder, atac_import.write_store([plan], store))
+    if isinstance(fo["obs"], h5py.Group):
+        order = [str(c) for c in fo["obs"].attrs.get("column-order", [])]
+        for column in (atac_import.OBS_TOTAL, atac_import.OBS_N_PEAKS):
+            if column in fo["obs"]:
+                del fo["obs"][column]
+            write_elem(fo["obs"], column, holder.obs[column].to_numpy())
+            order = [c for c in order if c != column] + [column]
+        fo["obs"].attrs["column-order"] = np.asarray(order, dtype=object)
+    holder.obs = holder.obs.drop(columns=[atac_import.OBS_TOTAL, atac_import.OBS_N_PEAKS])
+    return atac_import.provenance_params(info)
 
 
 # ---------------------------------------------------------------------------

@@ -167,6 +167,8 @@ class Header:
     estimated: bool = False  # cells / genes estimated from a sample (text tables)
     guess: bool = False  # nothing in the file could be read (RDS): sizes are a guess
     unit: str = "cell"  # what one row is, for the sentence about it: "bin" for Visium HD
+    # 10x Multiome peaks, which stay on disk (core/atac_import.py): n_peaks, nnz, store_bytes.
+    atac: dict | None = None
     note: str = ""  # what the numbers rest on, when not read exactly
     seconds: float = 0.0
 
@@ -267,6 +269,7 @@ def _read_h5ad(path: Path) -> Header:
             x = _h5_matrix(f["X"], "X")
             if x is not None:
                 h.matrices.append(x)
+        _h5ad_peaks(f, h)
         if h.x is not None:
             h.n_cells, h.n_genes = h.x.n_cells, h.x.n_genes
         else:  # no X: the cells from the obs index, the genes from var's
@@ -310,6 +313,36 @@ def _read_h5ad(path: Path) -> Header:
     return h
 
 
+def _h5ad_peaks(f, h: Header) -> None:
+    """An .h5ad with Peaks in X: the genes alone stay in it, the peaks go to their store."""
+    import h5py
+
+    var = f.get("var")
+    x = h.x
+    if x is None or not isinstance(var, h5py.Group) or "feature_types" not in var:
+        return
+    try:
+        from anndata.io import read_elem
+
+        is_peak = np.asarray(read_elem(var["feature_types"])).astype(str) == "Peaks"
+    except (KeyError, ValueError, TypeError):
+        return
+    if not is_peak.any():
+        return
+    node = f["X"]
+    if isinstance(node, h5py.Group) and x.sparse and _s(node.attrs.get("encoding-type")) == "csr_matrix":
+        peak_nnz = _peak_values(node["indptr"], node["indices"], is_peak, x.nnz)
+    else:
+        peak_nnz = int(round(x.nnz * is_peak.mean()))
+    h.atac = _atac_header(int(is_peak.sum()), peak_nnz)
+    x.n_genes -= int(is_peak.sum())
+    if x.sparse:
+        x.nnz -= peak_nnz
+        x.nnz_estimated = True
+    else:
+        x.nnz = x.n_cells * x.n_genes
+
+
 def _read_10x_h5(path: Path) -> Header:
     """CellRanger HDF5: genes x cells CSC in /matrix (v3) or /<genome> (v2)."""
     import h5py
@@ -322,11 +355,80 @@ def _read_10x_h5(path: Path) -> Header:
             raise ValueError("no matrix group")
         n_genes, n_cells = (int(x) for x in g["shape"][()][:2])
         nnz = int(g["data"].shape[0])
+        features = g.get("features")
+        if features is not None and "feature_type" in features:
+            is_peak = features["feature_type"][:].astype(str) == "Peaks"
+            if is_peak.any():
+                peak_nnz = _peak_values(g["indptr"], g["indices"], is_peak, nnz)
+                h.atac = _atac_header(int(is_peak.sum()), peak_nnz)
+                n_genes -= int(is_peak.sum())
+                nnz -= peak_nnz
     h.n_cells, h.n_genes = n_cells, n_genes
     # scanpy reads the counts as float32 (cells x genes CSR); scipy's indices are int64
     # once the values outnumber int32 (the 1.3M-cell brain: 2.6e9).
     idx = "int64" if max(nnz, n_genes) > np.iinfo(np.int32).max else "int32"
-    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32", idx))
+    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32", idx, nnz_estimated=h.atac is not None))
+    return h
+
+
+# Cells sampled for the share of a multiome file's values that are peaks. PBMC 10k: header read
+# in 0.09 s, 82.0% against 81.6% counted over its 127.5M values.
+PEAK_SAMPLE_CELLS = 64
+# What the store takes on disk per peak value (lzf; PBMC 10k: 104M values, 0.54 GB).
+ATAC_STORE_BYTES_PER_VALUE = 5.6
+
+
+def _peak_values(indptr, indices, is_peak: np.ndarray, nnz: int) -> int:
+    """Stored values of a by-cell matrix that fall on peaks, from a sample of its cells."""
+    n = indptr.shape[0] - 1
+    cells = np.unique(np.linspace(0, max(0, n - 1), min(n, PEAK_SAMPLE_CELLS)).astype(np.int64))
+    hit = total = 0
+    for c in cells:
+        lo, hi = int(indptr[c]), int(indptr[c + 1])
+        if hi > lo:
+            idx = np.asarray(indices[lo:hi])
+            hit += int(is_peak[idx].sum())
+            total += hi - lo
+    return int(round(nnz * hit / total)) if total else 0
+
+
+def _atac_header(n_peaks: int, peak_nnz: int) -> dict:
+    return {"n_peaks": int(n_peaks), "nnz": int(peak_nnz),
+            "store_bytes": int(peak_nnz * ATAC_STORE_BYTES_PER_VALUE)}
+
+
+def _read_h5mu(path: Path) -> Header:
+    """MuData on disk: the RNA modality as an .h5ad's header, the ATAC one on disk."""
+    import h5py
+
+    h = Header("h5mu")
+    with h5py.File(path, "r") as f:
+        mods = f.get("mod", {})
+        rna = next((m for m in ("rna", "RNA", "gex", "GEX") if m in mods), None)
+        atac = next((m for m in ("atac", "ATAC", "peaks", "Peaks") if m in mods), None)
+        if rna is None:
+            h.note = "This file has no RNA modality."
+            return h
+        g = mods[rna]
+        h.obs_columns = _n_columns(g.get("obs"))
+        h.var_columns = _n_columns(g.get("var"))
+        if "X" in g:
+            x = _h5_matrix(g["X"], "X")
+            if x is not None:
+                h.matrices.append(x)
+                h.n_cells, h.n_genes = x.n_cells, x.n_genes
+        for name in g.get("layers", {}):
+            m = _h5_matrix(g["layers"][name], f"layers/{name}")
+            if m is not None:
+                h.matrices.append(m)
+        for key in g.get("obsm", {}):
+            h.obsm_bytes += _h5_bytes(g["obsm"][key])
+        if "uns" in g:
+            h.uns_bytes = _h5_bytes(g["uns"])
+        if atac is not None and "X" in mods[atac]:
+            m = _h5_matrix(mods[atac]["X"], "X")
+            if m is not None:
+                h.atac = _atac_header(m.n_genes, m.nnz)
     return h
 
 
@@ -587,6 +689,8 @@ def sniff_format(path: Path) -> str:
         try:
             with h5py.File(path, "r") as f:
                 keys = set(f.keys())
+                if "mod" in keys and isinstance(f["mod"], h5py.Group):
+                    return "h5mu"
                 if "matrix" in keys and isinstance(f["matrix"], h5py.Group):
                     return "10x_h5"
                 if {"row_attrs", "col_attrs"} <= keys:
@@ -613,7 +717,7 @@ def sniff_format(path: Path) -> str:
 
 _READERS = {
     "h5ad": _read_h5ad, "10x_h5": _read_10x_h5, "mex": _read_mex, "loom": _read_loom,
-    "zarr": _read_zarr, "rds": _read_rds, "h5seurat": _read_h5seurat,
+    "zarr": _read_zarr, "rds": _read_rds, "h5seurat": _read_h5seurat, "h5mu": _read_h5mu,
 }
 
 
@@ -747,7 +851,7 @@ LOAD_FIXED = 20 * MiB
 # and the index arrays widened on the way in). Measured on the formats listed.
 READ_BYTES_PER_VALUE = {
     "h5ad": 0.0, "zarr": 0.0, "10x_h5": 8.0, "mex": 46.0, "loom": 8.0, "table": 28.0,
-    "h5seurat": 8.0,
+    "h5seurat": 8.0, "h5mu": 0.0,
 }
 # Saving an ingested dataset (gzip h5ad): transient per byte of its matrices.
 WRITE_FRACTION = 0.1
@@ -756,6 +860,7 @@ WRITE_FRACTION = 0.1
 READ_FILE_BPS = {"10x_h5": 60e6, "mex": 12e6, "loom": 30e6, "table": 5e6, "rds": 20e6}
 READ_MEMORY_BPS = 400e6
 WRITE_BPS = 150e6  # gzip h5ad, bytes of matrices per second
+ATAC_IMPORT_SECONDS_PER_VALUE = 2.5e-7  # the peak store's pass over the file (PBMC 10k measured at import)
 
 
 def _frames_bytes(h: Header) -> int:
@@ -828,7 +933,7 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
     breakdown.append(("Cell and gene tables, embeddings, results", other))
     peak, stage = res + read, "reading the file"
     mats = _matrices_bytes(h)
-    secs = (mats / READ_MEMORY_BPS if h.format in ("h5ad", "zarr")
+    secs = (mats / READ_MEMORY_BPS if h.format in ("h5ad", "zarr", "h5mu")
             else h.file_bytes / READ_FILE_BPS.get(h.format, 30e6))
     if ingest:  # saved as a gzip h5ad, then opened
         write = int(mats * WRITE_FRACTION)
@@ -837,6 +942,11 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
         secs += mats / WRITE_BPS + mats / READ_MEMORY_BPS
     if read:
         breakdown.append(("Reading (converting the values)", read))
+    if h.atac:
+        secs += h.atac["nnz"] * ATAC_IMPORT_SECONDS_PER_VALUE
+        notes.append(f"ATAC: {h.atac['n_peaks']:,} peaks ({h.atac['nnz'] / 1e6:,.0f}M values) stay on disk, "
+                     f"about {h.atac['store_bytes'] / GiB:.2f} GB in their own store, written a block of cells "
+                     "at a time; they add nothing to the memory above.")
     if h.backed:
         from scview.core.anndata_adaptor import BACKED_MIN_BYTES
 
@@ -2183,7 +2293,7 @@ def make_verdict(*, need: int, peak: int, stage: str, seconds: tuple[float, floa
 
 _UNIT_FORMATS = {"tenx_mex": "mex", "tenx_h5": "10x_h5", "anndata": "h5ad", "loom": "loom",
                  "zarr": "zarr", "dense_table": "table", "seurat": "rds",
-                 "h5seurat": "h5seurat", "xenium": "10x_h5"}
+                 "h5seurat": "h5seurat", "xenium": "10x_h5", "h5mu": "h5mu"}
 
 
 def read_unit_header(unit, genes_in_rows: bool = True) -> Header:

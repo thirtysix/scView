@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
-from scview.core import conversion, crispr, protein, provenance, spatial
+from scview.core import atac_import, conversion, crispr, modality_store, protein, provenance, spatial
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion import streamed
 from scview.core.ingestion.bundling import (
@@ -96,7 +96,8 @@ def _seqqc_view(unit: IngestUnit) -> IngestUnit:
     contig tables, guide calls and spatial files are joined to the cells by
     ``_attach_vdj`` / ``_attach_guide_calls`` / ``_attach_spatial`` instead."""
     keep = [f for f in unit.side_files
-            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial, SideKind.xenium)]
+            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial, SideKind.xenium,
+                                   SideKind.atac_metrics)]
     return unit.model_copy(update={"side_files": keep})
 
 
@@ -497,7 +498,14 @@ class IngestSessionManager:
         except IngestCommitError:
             part.unlink(missing_ok=True)
             raise
-        self._record_ingest_provenance(adata, loadable, opts, spatial_params, converted)
+        atac_part = self._session_dir(sid) / ".scview-atac.part.h5"
+        try:
+            atac_params = self._write_atac(adata, loadable, opts, atac_part, self._session_dir(sid))
+        except Exception:
+            part.unlink(missing_ok=True)
+            atac_part.unlink(missing_ok=True)
+            raise
+        self._record_ingest_provenance(adata, loadable, opts, spatial_params, converted, atac_params)
         # Cell Ranger metrics / raw matrices that came with a sample (never raises).
         from scview.core import seq_metrics
 
@@ -517,8 +525,13 @@ class IngestSessionManager:
         try:
             self._persist_dataset(dataset_id, name, adata, originals, root, matrices=matrices,
                                   conversion_report=report)
+            if atac_part.exists():
+                dest = modality_store.store_path(self.data_dir, dataset_id, atac_import.STORE)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                atac_part.replace(dest)
         finally:
             part.unlink(missing_ok=True)
+            atac_part.unlink(missing_ok=True)
         logger.info("Committed ingest session %s as dataset %s (%s)%s", sid, dataset_id, name,
                     " in blocks" if matrices is not None else "")
         return dataset_id
@@ -586,7 +599,8 @@ class IngestSessionManager:
 
     def _record_ingest_provenance(self, adata, loadable, opts: IngestOptions,
                                   spatial_params: dict | None = None,
-                                  converted: dict[str, dict] | None = None) -> None:
+                                  converted: dict[str, dict] | None = None,
+                                  atac_params: dict | None = None) -> None:
         """Write the source block + an ingest history entry. Never raises. A converted R
         object is recorded as the file it came from (format "seurat")."""
         converted = converted or {}
@@ -624,13 +638,15 @@ class IngestSessionManager:
                     fmt=fmt_of(u),
                 )
             dropped = adata.uns.pop(spatial.DROPPED_KEY, None)
+            atac_note = adata.uns.pop(atac_import.LEFT_OUT_KEY, None)
+            note = (f"Tissue positions of {', '.join(map(str, dropped))} were left out: the other "
+                    "samples have none, so most merged cells would have no position."
+                    if dropped is not None and len(dropped) else None)
             provenance.record_step(
                 adata,
                 step="ingest",
                 tool="scview.ingestion",
-                note=(f"Tissue positions of {', '.join(map(str, dropped))} were left out: the other "
-                      "samples have none, so most merged cells would have no position."
-                      if dropped is not None and len(dropped) else None),
+                note=" ".join(str(n) for n in (note, atac_note) if n) or None,
                 params={
                     "formats": sorted({fmt_of(u) for u in loadable}),
                     "genes_in_rows": opts.genes_in_rows,
@@ -638,6 +654,7 @@ class IngestSessionManager:
                     **({"converted": [_converted_entry(lab, c) for lab, c in converted.items()]}
                        if converted else {}),
                     **({"spatial": spatial_params} if spatial_params else {}),
+                    **(atac_params or {}),
                 },
             )
         except Exception as e:  # provenance must never block ingest
@@ -695,6 +712,38 @@ class IngestSessionManager:
             return spatial.finish(adata)
         except spatial.SpatialError as e:
             raise IngestCommitError(str(e)) from e
+
+    def _write_atac(self, adata, loadable, opts: IngestOptions, part: Path, workdir: Path) -> dict:
+        """10x Multiome peaks into the ATAC store (``core/atac_import.py``), read from the
+        files a block of cells at a time, whichever way the genes were read; per-cell totals
+        into obs and each sample's per_barcode_metrics.csv joined to its cells. Returns the
+        history entry's ATAC part ({} without ATAC). A merge with no one peak set has none
+        (the upload said so); a file that cannot be read stops the commit with its sentence."""
+        merged = len(loadable) > 1
+        plans = []
+        left_out = atac_import.merge_sentence(loadable)
+        try:
+            if not left_out:
+                plans = [p for p in (atac_import.plan_unit(u, workdir) for u in loadable) if p is not None]
+                notes = [p.note for p in plans if p.note]
+                if notes:
+                    left_out, plans = notes[0], []
+            if left_out:
+                adata.uns[atac_import.LEFT_OUT_KEY] = left_out
+            if not plans:
+                return {}
+            info = atac_import.attach_obs(adata, atac_import.write_store(plans, part, merged=merged))
+        except (atac_import.AtacImportError, OSError, KeyError, ValueError) as e:
+            raise IngestCommitError(f"The ATAC peaks could not be read: {e}") from e
+        for u in loadable:
+            for f in [f for f in u.side_files if f.side_kind == SideKind.atac_metrics]:
+                try:
+                    atac_import.attach_metrics(adata, f.path, sample_column=opts.sample_label if merged else None,
+                                               sample=u.label if merged else None,
+                                               suffix=f":{u.label}" if merged else "")
+                except (atac_import.AtacImportError, OSError, EOFError, zlib.error, ValueError) as e:
+                    raise IngestCommitError(f"The metrics {f.name} could not be attached: {e}") from e
+        return atac_import.provenance_params(info)
 
     def _attach_guide_calls(self, adata, loadable, opts: IngestOptions) -> None:
         """Cell Ranger's protospacer calls uploaded with a unit (``core/crispr.py``),

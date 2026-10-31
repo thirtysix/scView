@@ -57,6 +57,7 @@ def validate_bundle(bundle: Bundle, converted: Collection[str] = ()) -> Validati
         issues.extend(_validate_unit(unit))
         if unit.format == UnitFormat.seurat:
             issues.append(_r_object_note(unit, unit.label in converted, others))
+    issues.extend(_validate_atac(bundle))
     ok = not any(i.severity == IssueSeverity.error for i in issues)
     return ValidationReport(issues=issues, ok=ok)
 
@@ -75,6 +76,25 @@ def _validate_unit(unit: IngestUnit) -> list[IngestIssue]:
         issues.extend(IngestIssue(severity=IssueSeverity.error, code="xenium_incomplete", message=text,
                                   unit_label=unit.label) for text in unit.issues)
     issues.extend(_validate_spatial(unit))
+    return issues
+
+
+def _validate_atac(bundle: Bundle) -> list[IngestIssue]:
+    """ATAC-only data is refused here (never read as genes); a merge that cannot keep its
+    ATAC says so before the commit. Reads feature tables only."""
+    from scview.core import atac_import
+
+    issues: list[IngestIssue] = []
+    loadable = [u for u in bundle.units if u.format != UnitFormat.unknown and u.complete]
+    for unit in loadable:
+        sentence = atac_import.only_peaks_sentence(unit)
+        if sentence:
+            issues.append(IngestIssue(severity=IssueSeverity.error, code="atac_only", message=sentence,
+                                      unit_label=unit.label))
+    if not issues:
+        sentence = atac_import.merge_sentence(loadable)
+        if sentence:
+            issues.append(IngestIssue(severity=IssueSeverity.warn, code="atac_merge_left_out", message=sentence))
     return issues
 
 

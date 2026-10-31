@@ -482,6 +482,13 @@ def _plan_split(su: StreamedUnit) -> None:
     meta = su.meta
     spatial.adopt(meta)  # as load_unit does
     types = meta.var.get("feature_types")
+    if types is not None:
+        from scview.core import atac_import
+
+        try:
+            atac_import.refuse_only_peaks(types, su.label)
+        except atac_import.AtacOnly as e:
+            raise IngestLoadError(str(e)) from e
     if types is None or not (types.astype(str) == protein.GENE_TYPE).any() or \
             (types.astype(str) == protein.GENE_TYPE).all():
         protein.adopt_obsm(meta)
@@ -493,7 +500,8 @@ def _plan_split(su: StreamedUnit) -> None:
     is_guide = (types == crispr.GUIDE_TYPE).to_numpy()
     if not 0 < is_guide.sum() <= crispr.MAX_GUIDES:
         is_guide = np.zeros_like(is_guide)
-    other = types[(types != protein.GENE_TYPE) & (types != protein.ANTIBODY_TYPE) & ~is_cmo & ~is_guide]
+    other = types[(types != protein.GENE_TYPE) & (types != protein.ANTIBODY_TYPE)
+                  & (types != protein.PEAKS_TYPE) & ~is_cmo & ~is_guide]
     split.other_features = {str(k): int(v) for k, v in other.value_counts().items()}
     genes = (types == protein.GENE_TYPE).to_numpy()
     names = meta.var_names
@@ -767,6 +775,16 @@ def in_memory_need(units: list[IngestUnit], genes_in_rows: bool = True) -> int:
     return int(max(max(peaks), 2 * sum(residents)))
 
 
+def _peaks_force_blocks(units: list[IngestUnit]) -> bool:
+    """A multiome matrix read whole holds its peaks too (82% of its values), only to drop
+    them. A merge of .h5ad samples can need more than an X read by rows, so it stays as is."""
+    from scview.core import atac_import
+
+    if len(units) > 1 and any(u.format == UnitFormat.anndata for u in units):
+        return False
+    return any(atac_import.has_peaks(u) for u in units)
+
+
 def choose(units: list[IngestUnit], mode: str = "auto", genes_in_rows: bool = True) -> Choice:
     """Stream when today's in-memory ingest would not fit the memory free with the
     working reserve (``dataset_manager.LOAD_MARGIN`` and ``working_reserve``), or when
@@ -785,6 +803,8 @@ def choose(units: list[IngestUnit], mode: str = "auto", genes_in_rows: bool = Tr
         return Choice(True, "the session's streamed option is on")
     if not streamable:
         return Choice(False, "not a format read in blocks")
+    if _peaks_force_blocks(units):
+        return Choice(True, "ATAC peaks stay out of memory: the genes are read in blocks, without them")
     try:
         need = in_memory_need(units, genes_in_rows)
     except Exception as e:  # noqa: BLE001 - never block an ingest on the estimate
@@ -817,7 +837,7 @@ def streamed_need(units: list[IngestUnit], genes_in_rows: bool = True) -> int:
 
 def disk_need(units: list[IngestUnit]) -> int:
     """Disk a streamed ingest writes: about the size of the files read (gzip either way),
-    at most their matrices uncompressed."""
+    at most their matrices uncompressed; a multiome file's ATAC store on top."""
     from scview.core import preflight
 
     total = 0
@@ -825,4 +845,5 @@ def disk_need(units: list[IngestUnit]) -> int:
         h = preflight.read_unit_header(u)
         mats = sum(m.nbytes for m in h.matrices)
         total += min(int(1.5 * h.file_bytes), mats) if mats else int(1.5 * h.file_bytes)
+        total += int(h.atac["store_bytes"]) if h.atac else 0
     return total
