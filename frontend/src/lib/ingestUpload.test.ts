@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   HD_DEFAULT_BIN_UM,
+  hdSegRuns,
+  keepHdCells,
   hdBinOptions,
   hdDefaultBin,
   hdRefusal,
@@ -235,10 +237,78 @@ describe("Visium HD folders", () => {
     expect(hdRefusal([f("pbmc/filtered_feature_bc_matrix.h5")])).toBeNull();
   });
 
+  it("sends only what a segmented_outputs folder needs, by the backend's rule", () => {
+    const seg = "run/outs/segmented_outputs/";
+    const kept = [
+      "filtered_feature_cell_matrix.h5",
+      "cell_segmentations.geojson",
+      "nucleus_segmentations.geojson",
+      "graphclust_annotated_cell_segmentations.geojson",
+      "spatial/scalefactors_json.json",
+      "spatial/tissue_hires_image.png",
+      "spatial/tissue_lowres_image.png",
+      "filtered_feature_cell_matrix/matrix.mtx.gz",
+    ];
+    const left = [
+      "raw_feature_cell_matrix.h5",
+      "raw_feature_cell_matrix/barcodes.tsv.gz",
+      "graphclust_annotated_nucleus_segmentations.geojson",
+      "analysis/clustering/gene_expression_graphclust/clusters.csv",
+      "spatial/cytassist_image.tiff",
+      "spatial/aligned_fiducials.jpg",
+      "cloupe_cell.cloupe",
+    ];
+    for (const name of kept) expect(junkReason(seg + name), name).toBeNull();
+    for (const name of left) expect(junkReason(seg + name), name).not.toBeNull();
+    const py = readFileSync(resolve(__dirname, "../../../backend/src/scview/core/ingestion/paths.py"), "utf8");
+    for (const name of ["cell_segmentations.geojson", "nucleus_segmentations.geojson", "graphclust_annotated_cell_segmentations.geojson"]) {
+      expect(py).toContain(`"${name}"`);
+    }
+  });
+
+  it("a run with a cell segmentation reads as cells and says how to get bins", () => {
+    const seg = (run: string) => [
+      f(`${run}segmented_outputs/filtered_feature_cell_matrix.h5`),
+      f(`${run}segmented_outputs/cell_segmentations.geojson`),
+      f(`${run}segmented_outputs/spatial/scalefactors_json.json`),
+    ];
+    const items = [...seg("run/outs/"), ...bins("run/outs/binned_outputs/", 16), f("run/outs/metrics_summary.csv"), f("other/x.h5")];
+    expect(hdSegRuns(items)).toEqual(new Set(["run/outs"]));
+    expect(hdRefusal(items)).toBeNull();
+    const { keep, skipped } = keepHdCells(items);
+    expect(keep.map((k) => k.path).sort()).toEqual([...seg("run/outs/").map((k) => k.path), "other/x.h5"].sort());
+    expect(skipped.find((s) => s.path.includes("square_016um"))!.reason).toMatch(/reads as cells; for bins upload binned_outputs/);
+    expect(skipped.find((s) => s.path.includes("metrics_summary"))!.reason).toMatch(/rest of the Space Ranger/);
+    // Its 2 um bins are no refusal when cells are there to read.
+    expect(hdRefusal([...seg("outs/"), ...bins("outs/binned_outputs/", 2)])).toBeNull();
+    // Both folders dropped together, at the top.
+    const top = keepHdCells([...seg(""), ...bins("binned_outputs/", 16)]);
+    expect(top.keep.every((k) => k.path.startsWith("segmented_outputs/"))).toBe(true);
+    const chosen = keepHdBin([...seg(""), ...bins("binned_outputs/", 16)], 16);
+    expect(chosen.keep.every((k) => k.path.includes("square_016um"))).toBe(true);
+  });
+
+  it("the folder's matrix folder is sent only when there is no .h5", () => {
+    const seg = "segmented_outputs/";
+    const mex = [f(`${seg}filtered_feature_cell_matrix/matrix.mtx.gz`), f(`${seg}filtered_feature_cell_matrix/barcodes.tsv.gz`)];
+    const outline = f(`${seg}cell_segmentations.geojson`);
+    expect(keepHdCells([...mex, outline]).keep).toHaveLength(3);
+    const both = keepHdCells([...mex, outline, f(`${seg}filtered_feature_cell_matrix.h5`)]);
+    expect(both.keep).toHaveLength(2);
+    expect(both.skipped[0]!.reason).toMatch(/same matrix/);
+  });
+
+  it("refuses a segmented_outputs archive and a folder without its matrix or outlines", () => {
+    expect(hdRefusal([f("Visium_HD_Mouse_Brain_segmented_outputs.tar.gz")])).toMatch(/segmented_outputs archive/);
+    expect(hdRefusal([f("outs/segmented_outputs/filtered_feature_cell_matrix.h5")])).toMatch(/lacks its/);
+  });
+
   it("the refusals say the same as the backend's", () => {
     const py = readFileSync(resolve(__dirname, "../../../backend/src/scview/core/spatial.py"), "utf8").replace(/"\n\s+"/g, "");
     expect(py).toContain("is a Visium HD binned_outputs archive, which scView does not read: unpack it and drop the binned_outputs folder (or one square_NNNum folder) instead.");
-    expect(py).toContain("Space Ranger 4's segmented_outputs (cell segmentation) is not read yet: upload the run's binned_outputs folder instead, which reads as 8 or 16 um bins.");
+    expect(py).toContain("is a Visium HD segmented_outputs archive, which scView does not read: unpack it and drop the segmented_outputs folder instead.");
+    expect(py).toContain("This Space Ranger segmented_outputs folder lacks its filtered_feature_cell_matrix.h5 (or that folder) or its cell_segmentations.geojson, and a dataset of cells needs both: upload the whole folder.");
+    expect(py).toContain("the run's bins: a run with a cell segmentation reads as cells; for bins upload binned_outputs or one square_NNNum folder alone");
     expect(py).toContain("are millions of observations (6.3 million on a mouse brain section), far past the 1.3 million cells scView has been tested on: use the square_008um or square_016um folder instead.");
   });
 });

@@ -39,6 +39,9 @@ const HD_RAW = "the raw matrix, every bin of the slide and most of them empty: t
 const HD_COPY = "the same matrix as filtered_feature_bc_matrix.h5, which is read";
 const HD_ANALYSIS = "Space Ranger's own analysis (clustering, PCA, UMAP, DE): scView computes these itself";
 const HD_OTHER = "a Space Ranger output scView does not read";
+const SEG_RAW = "the raw matrix, with the cells the run filtered out: the filtered one is read";
+const SEG_COPY = "the same matrix as filtered_feature_cell_matrix.h5, which is read";
+const SEG_BINS = "the run's bins: a run with a cell segmentation reads as cells; for bins upload binned_outputs or one square_NNNum folder alone";
 
 const JUNK_NAMES: Record<string, string> = {
   ".ds_store": SYSTEM,
@@ -106,6 +109,35 @@ function hdJunk(path: string): string | null {
   return HD_OTHER;
 }
 
+const SEG_DIR = "segmented_outputs";
+const SEG_MATRIX = "filtered_feature_cell_matrix";
+const SEG_CELLS = "cell_segmentations.geojson";
+const SEG_FILES = new Set([
+  `${SEG_MATRIX}.h5`,
+  SEG_CELLS,
+  "nucleus_segmentations.geojson",
+  "graphclust_annotated_cell_segmentations.geojson",
+]);
+const SEG_SPATIAL = new Set(["scalefactors_json.json", "tissue_hires_image.png", "tissue_lowres_image.png"]);
+
+/**
+ * Inside a Space Ranger 4 segmented_outputs/ folder only the filtered matrix, the outlines and
+ * three files of spatial/ are read: why any other is left out; null to keep it or outside such a folder.
+ */
+function segJunk(path: string): string | null {
+  const parts = path.toLowerCase().split(/[\\/]/);
+  const at = parts.slice(0, -1).indexOf(SEG_DIR);
+  if (at < 0) return null;
+  const dirs = parts.slice(at + 1, -1);
+  const name = parts[parts.length - 1]!;
+  if (dirs.length === 0 && (SEG_FILES.has(name) || name.endsWith(`${SEG_MATRIX}.h5`))) return null;
+  if (dirs.length === 1 && dirs[0] === "spatial" && SEG_SPATIAL.has(name)) return null;
+  if (dirs.length === 1 && dirs[0] === SEG_MATRIX) return null; // keepHdCells drops it when the .h5 came too
+  if (dirs.includes("analysis")) return HD_ANALYSIS;
+  if (name.includes("raw") || dirs.some((d) => d.includes("raw"))) return SEG_RAW;
+  return HD_OTHER;
+}
+
 /** Why a file of a folder is not uploaded, or null to upload it. */
 export function junkReason(path: string): string | null {
   const name = (path.split(/[\\/]/).pop() ?? path).toLowerCase();
@@ -113,7 +145,7 @@ export function junkReason(path: string): string | null {
   if (name.startsWith("._")) return SYSTEM;
   for (const [suffix, reason] of JUNK_SUFFIXES) if (name.endsWith(suffix)) return reason;
   if (name.endsWith(".zip") && name.includes("xenium")) return XENIUM_ZIP; // 10 GB; the server would refuse it
-  return hdJunk(path);
+  return hdJunk(path) ?? segJunk(path);
 }
 
 /** The morphology images of a Xenium folder, in the order they are preferred (`core/xenium.py`). */
@@ -189,12 +221,13 @@ export function skippedNote(skipped: SkippedUpload[]): string | null {
 }
 
 // --- Visium HD: one bin size of a run ----------------------------------------
-// The same rules as the backend's spatial.py (hd_folder, hd_pick_bin, unsupported),
+// The same rules as the backend's spatial.py (hd_folder, hd_seg_runs, hd_pick_bin, unsupported),
 // applied before anything is sent: a 2 um matrix, or a whole archive, is never uploaded.
 
 export const HD_DEFAULT_BIN_UM = 16;
 const HD_MIN_BIN_UM = 8;
 const HD_ARCHIVE = /binned_outputs\.(tar\.gz|tgz|tar)$/i;
+const HD_SEG_ARCHIVE = /segmented_outputs\.(tar\.gz|tgz|tar)$/i;
 // Bins on a whole Visium HD capture area: 3,350 x 3,350 at 2 um.
 const HD_AREA_UM = 6700;
 
@@ -216,6 +249,28 @@ export function hdFolder(path: string): { run: string; um: number } | null {
   const run = dirs.slice(0, at);
   if (run[run.length - 1]?.toLowerCase() === "binned_outputs") run.pop();
   return { run: run.join("/"), um: parseInt(HD_DIR.exec(dirs[at]!)![1]!, 10) };
+}
+
+/** The run's folder above segmented_outputs/ ("" at the top) of a path inside one, else null. */
+export function hdSegFolder(path: string): string | null {
+  const dirs = path.split(/[\\/]/).slice(0, -1);
+  const at = dirs.findIndex((d) => d.toLowerCase() === SEG_DIR);
+  return at < 0 ? null : dirs.slice(0, at).join("/");
+}
+
+/** The runs that read as cells: a segmented_outputs/ folder with its filtered matrix and cell outlines. */
+export function hdSegRuns(items: UploadItem[]): Set<string> {
+  const matrix = new Set<string>();
+  const outlines = new Set<string>();
+  for (const it of items) {
+    const run = hdSegFolder(it.path);
+    if (run == null) continue;
+    const parts = it.path.toLowerCase().split(/[\\/]/);
+    const name = parts[parts.length - 1]!;
+    if (name === SEG_CELLS) outlines.add(run);
+    else if (name.endsWith(`${SEG_MATRIX}.h5`) || parts[parts.length - 2] === SEG_MATRIX) matrix.add(run);
+  }
+  return new Set([...matrix].filter((run) => outlines.has(run)));
 }
 
 /** The bin sizes in these files, finest first; empty for anything but a Visium HD run's folder. */
@@ -252,12 +307,18 @@ export function hdRefusal(items: UploadItem[]): string | null {
     const name = archive.path.split(/[\\/]/).pop() ?? archive.path;
     return `${name} is a Visium HD binned_outputs archive, which scView does not read: unpack it and drop the binned_outputs folder (or one square_NNNum folder) instead.`;
   }
+  const segArchive = items.find((it) => HD_SEG_ARCHIVE.test(it.path));
+  if (segArchive) {
+    const name = segArchive.path.split(/[\\/]/).pop() ?? segArchive.path;
+    return `${name} is a Visium HD segmented_outputs archive, which scView does not read: unpack it and drop the segmented_outputs folder instead.`;
+  }
   const options = hdBinOptions(items);
-  if (options.length > 0 && hdDefaultBin(options) == null) {
+  const cells = hdSegRuns(items).size > 0;
+  if (options.length > 0 && hdDefaultBin(options) == null && !cells) {
     return `The ${options[0]!.um} um bins of a Visium HD run are millions of observations (6.3 million on a mouse brain section), far past the 1.3 million cells scView has been tested on: use the square_008um or square_016um folder instead.`;
   }
-  if (options.length === 0 && items.some((it) => it.path.toLowerCase().split(/[\\/]/).slice(0, -1).includes("segmented_outputs"))) {
-    return "Space Ranger 4's segmented_outputs (cell segmentation) is not read yet: upload the run's binned_outputs folder instead, which reads as 8 or 16 um bins.";
+  if (options.length === 0 && !cells && items.some((it) => hdSegFolder(it.path) != null)) {
+    return "This Space Ranger segmented_outputs folder lacks its filtered_feature_cell_matrix.h5 (or that folder) or its cell_segmentations.geojson, and a dataset of cells needs both: upload the whole folder.";
   }
   return null;
 }
@@ -269,7 +330,14 @@ export function keepHdBin(items: UploadItem[], um: number): { keep: UploadItem[]
   const skipped: SkippedUpload[] = [];
   for (const it of items) {
     const hit = hdFolder(it.path);
-    if (hit) {
+    const seg = hdSegFolder(it.path);
+    if (seg != null && (seg === "" || runs.has(seg))) {
+      skipped.push({
+        path: it.path,
+        reason: "the rest of the Space Ranger output folder, not part of the bins read",
+        bytes: it.file.size,
+      });
+    } else if (hit) {
       if (hit.um === um) keep.push(it);
       else
         skipped.push({
@@ -283,6 +351,30 @@ export function keepHdBin(items: UploadItem[], um: number): { keep: UploadItem[]
         reason: "the rest of the Space Ranger output folder, not part of the bins read",
         bytes: it.file.size,
       });
+    } else keep.push(it);
+  }
+  return { keep, skipped };
+}
+
+/** A run with a cell segmentation reads as cells: its bins and the rest of its folder go in `skipped`, with why. */
+export function keepHdCells(items: UploadItem[]): { keep: UploadItem[]; skipped: SkippedUpload[] } {
+  const runs = hdSegRuns(items);
+  const paths = new Set(items.map((it) => it.path.toLowerCase().replace(/\\/g, "/")));
+  const keep: UploadItem[] = [];
+  const skipped: SkippedUpload[] = [];
+  const skip = (it: UploadItem, reason: string) => skipped.push({ path: it.path, reason, bytes: it.file.size });
+  for (const it of items) {
+    const seg = hdSegFolder(it.path);
+    const bins = hdFolder(it.path);
+    if (seg != null && runs.has(seg)) {
+      const low = it.path.toLowerCase().replace(/\\/g, "/");
+      const inFolder = low.split("/").slice(-2, -1)[0] === SEG_MATRIX;
+      const twin = low.split("/").slice(0, -2).join("/") + `/${SEG_MATRIX}.h5`;
+      if (inFolder && paths.has(twin)) skip(it, SEG_COPY);
+      else keep.push(it);
+    } else if (bins && runs.has(bins.run)) skip(it, SEG_BINS);
+    else if ([...runs].some((r) => r && it.path.startsWith(`${r}/`))) {
+      skip(it, "the rest of the Space Ranger output folder, not part of the cells read");
     } else keep.push(it);
   }
   return { keep, skipped };

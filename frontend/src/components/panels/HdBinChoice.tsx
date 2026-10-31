@@ -10,30 +10,53 @@ function binNote(um: number): string {
   return "";
 }
 
+/** What the folder is read as: Space Ranger 4's segmented cells, or one bin size. */
+export type HdChoice = number | "cells";
+
 /**
  * A Visium HD folder holds several bin sizes, and each is its own dataset: asked
  * before anything is uploaded (the wizard knows them from the folder names), so the
  * 2 um matrix is never sent. How many bins are in the tissue is only known from the
  * matrix, so the upper bound of the capture area is shown; the estimate after the
- * upload says the real count.
+ * upload says the real count. A run with a cell segmentation (`cells`) offers its cells
+ * first, the default.
  */
 export function HdBinChoice({
   options,
+  cells = false,
   onChoose,
   onCancel,
 }: {
   options: HdBinOption[];
-  onChoose: (um: number) => void;
+  cells?: boolean;
+  onChoose: (choice: HdChoice) => void;
   onCancel: () => void;
 }) {
-  const [um, setUm] = useState<number | null>(hdDefaultBin(options));
+  const [um, setUm] = useState<HdChoice | null>(cells ? "cells" : hdDefaultBin(options));
   return (
     <div className="rounded-lg border border-slate-200 p-3 text-sm" data-testid="hd-bin-choice">
-      <p className="font-medium text-slate-700">Visium HD: which bin size?</p>
+      <p className="font-medium text-slate-700">{cells ? "Visium HD: cells or bins?" : "Visium HD: which bin size?"}</p>
       <p className="mt-0.5 text-xs text-slate-500">
-        One dataset per bin size; only that folder&apos;s files are uploaded.
+        {cells
+          ? "This run has Space Ranger's cell segmentation, so it reads as cells. One dataset per choice; only its files are uploaded."
+          : "One dataset per bin size; only that folder's files are uploaded."}
       </p>
       <div className="mt-2 space-y-1">
+        {cells && (
+          <label className="flex items-baseline gap-2 text-xs text-slate-700">
+            <input
+              type="radio"
+              name="hd-bin"
+              checked={um === "cells"}
+              onChange={() => setUm("cells")}
+              className="accent-blue-500"
+            />
+            <span className="font-medium">Cells</span>
+            <span className="text-slate-500">
+              Space Ranger&apos;s segmentation, with each cell&apos;s outline; counts outside a cell are not in it
+            </span>
+          </label>
+        )}
         {options.map((o) => (
           <label
             key={o.um}
@@ -69,7 +92,7 @@ export function HdBinChoice({
           onClick={() => um != null && onChoose(um)}
           className="rounded bg-primary px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
-          Upload {um != null ? `${um} µm bins` : ""}
+          Upload {um === "cells" ? "cells" : um != null ? `${um} µm bins` : ""}
         </button>
         <button
           type="button"
