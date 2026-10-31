@@ -374,6 +374,7 @@ def _read_10x_h5(path: Path) -> Header:
 # Cells sampled for the share of a multiome file's values that are peaks. PBMC 10k: header read
 # in 0.09 s, 82.0% against 81.6% counted over its 127.5M values.
 PEAK_SAMPLE_CELLS = 64
+MEX_PEAK_SAMPLE = 200_000  # matrix.mtx lines read for it
 # What the store takes on disk per peak value (lzf; PBMC 10k: 104M values, 0.54 GB).
 ATAC_STORE_BYTES_PER_VALUE = 5.6
 
@@ -2308,6 +2309,8 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
     if f is None:
         return Header("unknown", note="The matrix file of this 10x sample is missing.")
     h = read_header(f.path, fmt, genes_in_rows)
+    if fmt == "mex" and not xen:
+        _mex_peaks(h, unit)
     spatial_parts = [(x.spatial_part or "", x.path) for x in getattr(unit, "side_files", [])
                      if getattr(x, "spatial_part", None)]
     if spatial_parts:  # Space Ranger's tissue images (uint8 RGB in uns) and the coordinates
@@ -2320,6 +2323,34 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
     if xen:
         _xenium_header(h, unit)
     return h
+
+
+def _mex_peaks(h: Header, unit) -> None:
+    """A multiome MEX folder: the genes stay in X, the peaks go to their store. The share of
+    values on peaks comes from the matrix's first lines (sorted by cell, as Cell Ranger writes it)."""
+    features = next((x.path for x in unit.files if x.role.value == "features"), None)
+    matrix = next((x.path for x in unit.files if x.role.value == "matrix"), None)
+    x = h.x
+    if features is None or matrix is None or x is None:
+        return
+    import pandas as pd
+
+    try:
+        table = pd.read_csv(features, sep="\t", header=None, usecols=[2], dtype=str, keep_default_na=False)
+        is_peak = table[2].to_numpy(dtype=str) == "Peaks"
+        if not is_peak.any():
+            return
+        head = pd.read_csv(matrix, sep=r"\s+", header=None, comment="%", skiprows=1, usecols=[0], nrows=MEX_PEAK_SAMPLE)
+        rows = head[0].to_numpy(dtype=np.int64) - 1
+        share = float(is_peak[rows[(rows >= 0) & (rows < is_peak.size)]].mean()) if rows.size else float(is_peak.mean())
+    except (OSError, ValueError, KeyError, IndexError, pd.errors.ParserError):
+        return  # the estimate then counts the peaks as genes, on the safe side
+    peak_nnz = int(round(x.nnz * share))
+    h.atac = _atac_header(int(is_peak.sum()), peak_nnz)
+    x.n_genes -= int(is_peak.sum())
+    x.nnz -= peak_nnz
+    x.nnz_estimated = True
+    h.n_genes = x.n_genes
 
 
 def _xenium_header(h: Header, unit) -> None:

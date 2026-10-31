@@ -403,9 +403,10 @@ def estimate_da_bytes(n_peaks: int, n_groups: int) -> int:
 
 
 def estimate_disk_bytes(nnz: int, activity: bool = True) -> int:
-    """Disk a run takes: the TF-IDF spool while the SVD runs (8 B a value), and the gene
-    activity stores, kept (PBMC 10k: 487 + 479 MB for 104M peak values)."""
-    return int(nnz * 8 + (nnz * 9.8 if activity else 0))
+    """Disk a run needs at its peak: the TF-IDF spool while the SVD runs (8 B a value), or with
+    gene activity its two stores, which stay (PBMC 10k: 487 + 479 MB for 104M peak values), and the
+    buckets that turn it by gene (12 B per activity value, 0.9 per peak value), which go."""
+    return int(nnz * 8 if not activity else nnz * (9.8 + 10.8))
 
 
 @dataclass
@@ -440,7 +441,7 @@ def plan(adata, data_dir: str | Path, dataset_id: str, *, n_lsi: int | None = No
 
     with open_store(adata, data_dir, dataset_id) as store:
         cell_rows(store, adata)
-        n_peaks, nnz = store.n_vars, store.nnz(MATRIX)
+        n_peaks, nnz, n_store = store.n_vars, store.nnz(MATRIX), store.n_obs
         genome = store.meta.get("genome")
     if adata.n_obs < MIN_CELLS:
         raise AtacError(f"ATAC analysis needs at least {MIN_CELLS} cells; this dataset has {adata.n_obs}.")
@@ -455,18 +456,13 @@ def plan(adata, data_dir: str | Path, dataset_id: str, *, n_lsi: int | None = No
     res = wnn.DEFAULT_RESOLUTION if resolution is None else float(resolution)
     if not 0 < res <= 10:
         raise AtacError("Resolution must be above 0 and at most 10.")
-    nnz = int(round(nnz * adata.n_obs / max(1, _n_store_cells(data_dir, dataset_id))))
+    nnz = int(round(nnz * adata.n_obs / max(1, n_store)))  # the cells left after filtering
     emb = wnn._last_params(adata, "embeddings") or {}
     return AtacPlan(n_cells=int(adata.n_obs), n_peaks=n_peaks, nnz=nnz, genome=genome, n_lsi=width, dims_to=to,
                     drop_first=drop_first, resolution=res,
                     min_dist=float(emb["umap_min_dist"] if emb.get("umap_min_dist") is not None
                                    else wnn.DEFAULT_MIN_DIST),
                     k=min(K_NN, adata.n_obs - 1), n_iterations=leiden.recorded_iterations(adata), activity=activity)
-
-
-def _n_store_cells(data_dir: str | Path, dataset_id: str) -> int:
-    with ModalityStore(store_path(data_dir, dataset_id)) as s:
-        return s.n_obs
 
 
 # ---------------------------------------------------------------------------
@@ -1135,8 +1131,8 @@ def attach_context(frame: pd.DataFrame, store: ModalityStore, genome: str | None
 
 
 DA_METHOD = ("Wilcoxon rank-sum on TF-IDF, each group vs the rest (no latent covariate), for peaks detected in >= "
-             "{min_pct:.0%} of the group or the rest; BH FDR within each group; log2 fold change of mean "
-             "expm1(TF-IDF) + 1.")
+             "{min_pct:.0%} of the group or the rest, the {max_peaks:,} most detected at most; BH FDR within each "
+             "group; log2 fold change of mean expm1(TF-IDF) + 1.")
 _DA_LAST: dict[str, DaResult] = {}
 
 
@@ -1383,7 +1379,8 @@ def summary(adata, groupby: str | None = None, cells_fingerprint: str | None = N
     if lsi and OBSM_LSI in adata.obsm:
         out["lsi"] = {**lsi, "stale": _stale(lsi, cells_fingerprint)}
         out["lsi"]["clusters_column"] = OBS_CLUSTERS if OBS_CLUSTERS in adata.obs.columns else None
-    if w and OBS_WNN_WEIGHT in adata.obs.columns:
+    # A reset to counts clears the embeddings: the columns left behind are not a result any more.
+    if w and OBS_WNN_WEIGHT in adata.obs.columns and OBSM_WNN in adata.obsm:
         out["wnn"] = {**w, "stale": _stale(w, cells_fingerprint)}
         out["wnn"]["clusters_column"] = OBS_WNN_CLUSTERS if OBS_WNN_CLUSTERS in adata.obs.columns else None
         if groupby:
@@ -1547,7 +1544,7 @@ def grounding_lines(adata, data_dir: str | Path | None = None) -> tuple[list[str
                        (atac_import.OBS_TSS, "median fraction of fragments at TSS")):
         if key in adata.obs.columns:
             lines.append(f"- ATAC {label}: {float(np.nanmedian(adata.obs[key].to_numpy(dtype=np.float64))):,.3g} [{TAG}]")
-    if lsi and OBS_CLUSTERS in adata.obs.columns:
+    if lsi and OBS_CLUSTERS in adata.obs.columns and OBSM_LSI in adata.obsm:
         r = (lsi.get("depth_r") or [0.0])[0]
         kept = "left out" if lsi.get("dropped_first") else "kept"
         dims = lsi.get("dims_used") or [1, 2]
@@ -1559,7 +1556,7 @@ def grounding_lines(adata, data_dir: str | Path | None = None) -> tuple[list[str
         lines.append(f"- ATAC gene activity: {activity.get('n_genes_with_peaks', 0):,} genes have at least one overlapping "
                      f"peak of {activity.get('n_genes', 0):,}; peak-based (body + 2 kb upstream), not fragment-based [{TAG}]")
     w = info.get("wnn") or {}
-    if w and OBS_WNN_WEIGHT in adata.obs.columns:
+    if w and OBS_WNN_WEIGHT in adata.obs.columns and OBSM_WNN in adata.obsm:
         column, _why = label_grouping(adata)
         parts: list[str] = []
         if column:

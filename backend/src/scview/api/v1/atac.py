@@ -512,7 +512,7 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
             result_id = uuid.uuid4().hex[:12]
             kept = atac.DaResult(result_id=result_id, column=body.column, groups=chosen, table=table,
                                  n_tested=item["n_tested"], n_significant=item["n_significant"], params=params,
-                                 method=atac.DA_METHOD.format(min_pct=body.min_pct), cells=cells,
+                                 method=atac.DA_METHOD.format(min_pct=body.min_pct, max_peaks=body.max_peaks), cells=cells,
                                  created_at=datetime.now(timezone.utc).isoformat())
             return {"kept": kept, "note": note}
 

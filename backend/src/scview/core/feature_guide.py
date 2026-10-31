@@ -28,6 +28,9 @@ IMPORTING = (
     "a Seurat Visium object keeps its tissue image and spot positions); Seurat .h5Seurat "
     "(SeuratDisk; read directly, no R needed: counts, cell metadata, reductions, an ADT assay, "
     "Visium images); "
+    "10x Multiome: its .h5 or folder, an .h5ad with Peaks features or an .h5mu (RNA in X, peaks in their own "
+    "file on disk; per_barcode_metrics.csv beside it adds FRiP, TSS and mitochondrial fractions; ATAC-only data "
+    "and a chromatin assay inside a Seurat object are not read); "
     "nf-core/scrnaseq mtx_conversions outputs (*.h5ad); and Visium spatial data: Space Ranger's "
     "filtered matrix with its spatial/ folder (or spatial.tar.gz; drop the whole outs/ folder), "
     "Visium HD's binned_outputs folder or one square_NNNum folder (8 or 16 um bins, one dataset per bin "
@@ -143,6 +146,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
 
 CLOSING = "These are all of scView's tabs and tools; name a feature only by its path here."
 
+# In the full guide only, for now: the compact block is at its cap (tests/test_feature_guide.py).
+FULL_ONLY = ("Unified View > Accessibility",)
+
 
 def compact_guide() -> str:
     """Every feature's path, grouped by tab, with a few words where the label
@@ -150,6 +156,8 @@ def compact_guide() -> str:
     heads: dict[str, str] = {}
     items: dict[str, list[str]] = {}
     for path, hint, _what in FEATURES:
+        if path.startswith(FULL_ONLY):
+            continue
         tab, _, rest = path.partition(" > ")
         heads.setdefault(tab, tab)
         if not rest:

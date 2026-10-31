@@ -305,6 +305,15 @@ def _rna_h5(tmp_path: Path) -> Path:
     return path
 
 
+def test_preflight_of_a_multiome_mex_folder(tmp_path):
+    folder = mf.write_mex(tmp_path / "mex")
+    unit = build_bundle(sorted(folder.iterdir())).units[0]
+    h = preflight.read_unit_header(unit)
+    g, p, *_ = mf.matrices()
+    assert h.n_genes == 4 and h.atac["n_peaks"] == 72
+    assert h.atac["nnz"] == p.nnz and h.matrices[0].nnz == g.nnz  # every line read: a tiny file
+
+
 def test_preflight_reads_h5mu_and_h5ad_headers(tmp_path):
     mu = preflight.read_header(mf.write_h5mu(tmp_path / "x.h5mu"))
     assert mu.format == "h5mu" and mu.n_genes == 4 and mu.atac["n_peaks"] == 72

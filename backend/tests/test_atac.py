@@ -531,6 +531,23 @@ def test_export_writes_cells_by_peaks_for_the_cells_left(world):
     assert other != path and not path.exists()
 
 
+def test_a_reset_to_counts_leaves_no_result_in_the_summary_or_the_facts(world):
+    a = world["adata"]
+    info = atac_import.read_info(a)
+    info["lsi"] = {"depth_r": [-0.8], "dropped_first": True, "dims_used": [2, 30], "n_selected": 70, "n_clusters": 5}
+    info["wnn"] = {"mean_rna_weight": 0.5, "n_clusters": 3}
+    atac_import.write_info(a, info)
+    a.obs[atac.OBS_CLUSTERS] = pd.Categorical(["0"] * a.n_obs)
+    a.obs[atac.OBS_WNN_WEIGHT] = 0.5
+    # The columns stay after a reset; its embeddings do not.
+    assert atac.summary(a)["lsi"] is None and atac.summary(a)["wnn"] is None
+    text = " ".join(atac.grounding_lines(a)[0])
+    assert "ATAC LSI" not in text and "WNN" not in text
+    a.obsm[atac.OBSM_LSI] = np.zeros((a.n_obs, 3), dtype=np.float32)
+    a.obsm[atac.OBSM_WNN] = np.zeros((a.n_obs, 2), dtype=np.float32)
+    assert atac.summary(a)["lsi"]["n_clusters"] == 5 and atac.summary(a)["wnn"]["n_clusters"] == 3
+
+
 def test_grounding_lines_say_nothing_without_atac_and_tag_their_facts(world):
     assert atac.grounding_lines(ad.AnnData(X=np.zeros((2, 2), dtype=np.float32))) == ([], "")
     lines, detail = atac.grounding_lines(world["adata"])
