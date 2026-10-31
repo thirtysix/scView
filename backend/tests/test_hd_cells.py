@@ -520,6 +520,15 @@ def test_cells_are_not_spot_data_so_the_doublet_step_and_spot_composition_follow
     assert _reason(cells) == deconv.NOT_SPOTS and "segmented Visium HD" in deconv.NOT_SPOTS
 
 
+def test_segmented_cells_skip_the_doublet_step_with_their_own_reason(cells):
+    from scview.core import pipeline
+
+    assert spatial.doublet_skip(cells) == spatial.CELLS_DOUBLET_SKIP
+    assert preflight._skips_doublets(cells) is True
+    with pytest.raises(pipeline.StepNotApplicable, match="not droplets"):
+        pipeline._run_doublet_detection(cells, pipeline.PipelineParams())
+
+
 def test_the_copilot_fact_says_what_a_cell_is(cells):
     lines, detail = spatial.grounding_lines(cells)
     assert detail.startswith("Visium HD, Space Ranger cell segmentation")

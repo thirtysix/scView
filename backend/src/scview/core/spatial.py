@@ -64,6 +64,9 @@ SPOT_UNITS = ("spot", "bin")
 
 DOUBLET_SKIP = ("Spots and bins are positions on a capture grid, not single cells, so doublet "
                 "detection does not apply")
+CELLS_DOUBLET_SKIP = ("Segmented Visium HD cells are built from capture bins on a tissue section, not droplets: "
+                      "no two cells share a droplet, and Scrublet's simulated random pairs do not model the signal "
+                      "shared with neighbouring cells, so doublet detection does not apply")
 HD_DEFAULT_BIN_UM = 16  # read when a run's folder holds several: 8 um clusters are noisy, its Leiden takes hours
 HD_MIN_BIN_UM = 8  # finer bins are refused: 6.3M at 2 um on a mouse brain section
 HD_TOO_FINE = ("The {um} um bins of a Visium HD run are millions of observations (6.3 million on a "
@@ -966,6 +969,18 @@ def is_spot_data(adata) -> bool:
     if recorded.get("unit"):
         return str(recorded.get("unit")) in SPOT_UNITS
     return has_spatial(adata) and technology(adata)["unit"] in SPOT_UNITS
+
+
+def doublet_skip(adata) -> str | None:
+    """Why this dataset's observations have no doublets to look for: spots and bins, or Visium HD's
+    segmented cells (unit cell, but no droplets). A targeted panel has its own reason
+    (``targeted_panel.DOUBLET_SKIP``). None for anything else."""
+    if is_spot_data(adata):
+        return DOUBLET_SKIP
+    recorded = _recorded(adata)
+    if recorded.get("technology") == "visium_hd" and recorded.get("unit") == "cell":
+        return CELLS_DOUBLET_SKIP
+    return None
 
 
 def targeted_panel(adata) -> bool:

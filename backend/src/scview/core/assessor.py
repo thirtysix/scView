@@ -145,10 +145,10 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
             return StepStatus(done=True, confidence="high", details=detail)
         from scview.core import spatial
 
-        if spatial.is_spot_data(adata):
+        if reason := spatial.doublet_skip(adata):
             # Nothing to do (not recommended, nor selected as missing): the run skips it too.
-            return StepStatus(done=True, confidence="high", details=f"Not applicable: {spatial.DOUBLET_SKIP}",
-                              caution=f"{spatial.DOUBLET_SKIP}.")
+            return StepStatus(done=True, confidence="high", details=f"Not applicable: {reason}",
+                              caution=f"{reason}.")
         if spatial.targeted_panel(adata):
             return StepStatus(done=True, confidence="high",
                               details=f"Not applicable: {targeted_panel.DOUBLET_SKIP}")

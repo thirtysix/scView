@@ -810,8 +810,8 @@ class LargeRun:
     def _doublet_detection(self) -> dict[str, Any]:
         params = self.params
         method = doublets.method_of(params.doublet_method)  # an unknown one fails here
-        if spatial.is_spot_data(self.light):
-            raise StepNotApplicable(spatial.DOUBLET_SKIP)
+        if reason := spatial.doublet_skip(self.light):
+            raise StepNotApplicable(reason)
         if spatial.targeted_panel(self.light):
             raise StepNotApplicable(targeted_panel.DOUBLET_SKIP)
         # pipeline._doublet_matrix: X unless it holds processed values, then the counts.

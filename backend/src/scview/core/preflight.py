@@ -1823,10 +1823,10 @@ def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
 
 
 def _skips_doublets(adata) -> bool:
-    """A targeted panel's run skips the doublet step (core/targeted_panel.py): it costs nothing."""
+    """A targeted panel's or Visium HD cells' run skips the doublet step: it costs nothing."""
     from scview.core import spatial
 
-    return spatial.targeted_panel(adata)
+    return spatial.targeted_panel(adata) or spatial.doublet_skip(adata) is not None
 
 
 def step_peak_for(adata, step: str, params=None) -> int:
@@ -2535,8 +2535,9 @@ def _file_doublet_plan(path, params=None) -> DoubletPlan | None:
         with h5py.File(path, "r") as f:
             obs = ad.io.read_elem(f["obs"])
             unit = f.get("uns/scview_spatial/unit")
-            if unit is not None and _s(unit[()]) in ("spot", "bin"):  # the step is skipped
-                return DoubletPlan([])
+            tech = f.get("uns/scview_spatial/technology")
+            if unit is not None and (_s(unit[()]) in ("spot", "bin") or (tech is not None and _s(tech[()]) == "visium_hd")):
+                return DoubletPlan([])  # the step is skipped
         ch = doublets.channels(ad.AnnData(obs=obs), _p(params, "doublet_channel_key", "") or None)
         return DoubletPlan([int(k) for k in ch.sizes])
     except Exception:  # noqa: BLE001 — an estimate never fails a request: one channel then

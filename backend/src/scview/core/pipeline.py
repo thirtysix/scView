@@ -501,8 +501,8 @@ def _run_doublet_detection(adata: ad.AnnData, params: PipelineParams) -> dict[st
     gives, without copying the whole dataset); they come from ``layers['counts']`` or
     ``.raw`` when X holds processed values (recorded as ``input``).
     """
-    if spatial.is_spot_data(adata):
-        raise StepNotApplicable(spatial.DOUBLET_SKIP)
+    if reason := spatial.doublet_skip(adata):
+        raise StepNotApplicable(reason)
     if spatial.targeted_panel(adata):
         raise StepNotApplicable(targeted_panel.DOUBLET_SKIP)
     counts, where = _doublet_matrix(adata)
