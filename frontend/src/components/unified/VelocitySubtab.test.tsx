@@ -6,6 +6,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { parseSession } from "@/lib/session";
+import { captureSession } from "@/lib/sessionRestore";
 
 const api = vi.hoisted(() => ({
   attachVelocity: vi.fn(),
@@ -113,6 +114,17 @@ describe("VelocitySubtab", () => {
 });
 
 describe("session file", () => {
+  it("is written only for a dataset with a run", () => {
+    const d = { id: "d1", name: "x", n_cells: 1, n_genes: 1, obs_columns: [] } as unknown as DatasetInfo;
+    useDatasetStore.setState({ currentDatasetId: "d1", currentDataset: d });
+    useUnifiedViewStore.setState({ velocityRun: null });
+    expect(captureSession().view?.velocity_arrows).toBeUndefined();
+    useUnifiedViewStore.setState({ velocityRun: { datasetId: "d1", id: "r" }, velocityArrows: { on: false, scale: 2, density: 1 } });
+    expect(captureSession().view?.velocity_arrows).toEqual({ on: false, scale: 2, density: 1 });
+    useUnifiedViewStore.setState({ velocityRun: { datasetId: "other", id: "r" } });
+    expect(captureSession().view?.velocity_arrows).toBeUndefined();
+  });
+
   const session = (arrows: unknown) => ({ format: "scview-session", version: 1, view: { velocity_arrows: arrows } });
 
   it("keeps the arrows' switch and scale", () => {

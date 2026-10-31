@@ -69,8 +69,9 @@ export function captureSession(now: Date = new Date()): SessionFile {
     highlight: selection.highlightedGroup,
     overlay: null,
     color_clip: unified.colorClip,
-    velocity_arrows: unified.velocityArrows,
   };
+  // Only for a dataset with a velocity run: any other session stays as it was, and opens with no request.
+  if (dataset && unified.velocityRun?.datasetId === dataset.id) view.velocity_arrows = unified.velocityArrows;
   const cam = unified.camera;
   if (dataset && cam && cam.datasetId === dataset.id && cam.embedding === settings.embedding) {
     view.camera = cam.camera;
