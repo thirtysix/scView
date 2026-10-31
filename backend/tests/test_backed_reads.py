@@ -111,6 +111,38 @@ async def test_a_backed_test_is_bitwise_the_in_memory_one(client, dataset_manage
     assert file_read.json().get("transcriptome_size") == mem.json().get("transcriptome_size")
 
 
+def _counts_elsewhere(kind: str) -> ad.AnnData:
+    a = _dataset()
+    counts = a.layers.pop("counts")
+    if kind == "raw":  # counts in .raw beside a log-normalised X
+        a.raw = ad.AnnData(counts, obs=a.obs, var=a.var)
+    elif kind == "x":  # counts alone
+        a.raw = None
+        a.X = counts
+    else:  # X an HVG subset with counts in its layer, .raw counts for every gene
+        a.raw = ad.AnnData(counts, obs=a.obs, var=a.var)
+        a.layers["counts"] = counts
+        a = a[:, a.var_names[:40]].copy()
+    return a
+
+
+@pytest.mark.parametrize("kind", ["raw", "x", "subset"])
+@pytest.mark.parametrize("where", ["/de/compare", "/de/compare#pseudobulk"])
+async def test_a_backed_test_picks_the_same_counts_wherever_they_are(client, dataset_manager, tmp_data_dir, monkeypatch,
+                                                                     kind, where):
+    _register(Path(tmp_data_dir), "x", _counts_elsewhere(kind))
+    mem = await _post(client, "x", where)
+    assert mem.status_code == 200, mem.text
+    dataset_manager.evict("x")
+    monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 0)
+    file_read = await _post(client, "x", where)
+    assert file_read.status_code == 200, file_read.text
+    assert (await dataset_manager.get_or_load_dataset("x")).adata.isbacked
+    assert _rows(file_read) == _rows(mem)
+    assert file_read.json().get("transcriptome_size") == mem.json().get("transcriptome_size")
+    assert mem.json().get("transcriptome_size") is not None
+
+
 async def test_a_backed_test_never_reads_the_whole_object_or_closes_the_file(client, dataset_manager, tmp_data_dir,
                                                                              backed, monkeypatch):
     _register(Path(tmp_data_dir), "x", _dataset())
@@ -515,6 +547,59 @@ async def test_a_refilter_preview_says_what_reading_the_upload_needs(client, dat
     r = await client.get(f"{API}/datasets/x/qc/mito-refilter")
     assert r.status_code == 507, r.text
     assert "Previewing a re-filter of x name from its original upload needs about 100.0 GB" in r.json()["detail"]
+
+
+async def test_a_refilter_run_says_it_as_the_run_error(client, dataset_manager, tmp_data_dir, monkeypatch):
+    from scview.core import mito_refilter
+
+    a = _dataset()
+    a.var_names = [f"MT-{i}" if i < 3 else f"G{i}" for i in range(a.n_vars)]
+    a.obs["pct_counts_mt"] = 1.0
+    _register(Path(tmp_data_dir), "x", a)
+    await dataset_manager.get_or_load_dataset("x")
+    _budget(monkeypatch, limit=8.0, used=1.0)
+    monkeypatch.setattr(mito_refilter, "read_need", lambda *_a: 100 * GB)
+    monkeypatch.setattr("scview.core.dataset_manager.REFUSAL_WAIT_SECONDS", 1)
+    r = await client.post(f"{API}/datasets/x/qc/mito-refilter-stream", json={"column": "grp"})
+    assert r.status_code == 200, r.text
+    assert "event: error" in r.text and "Re-filtering x name from its original upload needs about 100.0 GB" in r.text
+    assert dataset_manager._reads == {} and not dataset_manager._reading
+
+
+AUDIT = {**COMPARE, "replicate_key": "donor", "n_permutations": 2}
+
+
+async def test_an_audit_of_a_backed_dataset_reads_rows_and_holds_until_it_ends(client, dataset_manager, tmp_data_dir,
+                                                                               backed, monkeypatch):
+    a = _dataset()
+    a.obs["donor"] = pd.Categorical([f"d{i % 8}" for i in range(a.n_obs)])
+    a.obs["grp"] = pd.Categorical(["a" if i % 8 < 4 else "b" for i in range(a.n_obs)])
+    _register(Path(tmp_data_dir), "x", a)
+    await dataset_manager.get_or_load_dataset("x")
+    _budget(monkeypatch, limit=8.0, used=1.0)
+    _needs(monkeypatch, 1.0)
+    held = []
+    real = de_api._prepare
+
+    def spy(*args, **kw):
+        held.append(dataset_manager.outstanding(GB))
+        return real(*args, **kw)
+
+    monkeypatch.setattr(de_api, "_prepare", spy)
+
+    def boom(*_a, **_k):
+        raise AssertionError("read the whole object")
+
+    monkeypatch.setattr(ad.AnnData, "to_memory", boom)
+    r = await client.post(f"{API}/datasets/x/de/audit", json=AUDIT)
+    assert r.status_code == 200, r.text
+    assert "event: result" in r.text and "event: error" not in r.text
+    assert held == [2 * GB]  # the test's rows and pseudobulk's together
+    assert dataset_manager._reads == {} and not dataset_manager._reading
+    _needs(monkeypatch, 100.0)
+    monkeypatch.setattr("scview.core.dataset_manager.REFUSAL_WAIT_SECONDS", 1)
+    r = await client.post(f"{API}/datasets/x/de/audit", json=AUDIT)
+    assert r.status_code == 507 and "The DE audit on x name needs about 200.0 GB" in r.json()["detail"]
 
 
 def test_the_refilter_read_is_the_whole_file_whatever_its_size(tmp_path, backed):
