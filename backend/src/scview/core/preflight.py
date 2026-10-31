@@ -2680,6 +2680,63 @@ def cnv_need(n_cells: int, n_genes: int, n_windows: int) -> int:
     return int(result + max(block, clustering) + CNV_FIXED)
 
 
+# RNA velocity (core/velocity.py). Calibrated at 2 CPUs on pancreas and dentate gyrus (scVelo's
+# datasets) and each stacked 8 times over with thinned counts (29,568 and 23,440 cells). Peak growth
+# measured / estimated, GB: pancreas stochastic 0.23 / 0.24, steady 0.21 / 0.21, dentate 0.18 / 0.21,
+# x8 pancreas 1.42 / 1.46, steady 1.15 / 1.19, dentate 1.15 / 1.16. Seconds, first run in a process:
+# 27 / 26, 20 / 26, 17 / 25, 77 / 82, 74 / 82, 75 / 71. Time is the three passes over the store, the
+# moments, fit and graph, and the neighbours when computed (numba compiles their search once per
+# process: about 20 s, left out once this module has done it; a pipeline run may have done it too).
+VELOCITY_FIT_GENES_SHARE = 9800  # fitted genes hold 9,800 / the store's genes of the values at 2,000 genes: 35% of
+# pancreas's 27,998 genes, 70% of dentate gyrus's 13,913 (from their measured peaks)
+VELOCITY_SECOND_SHARE = 0.7  # second moments' stored values over those
+VELOCITY_FIT_COPY_BYTES = 35  # the fit's working arrays, per cell x gene of its block
+VELOCITY_FIXED_BYTES = 70 * 2**20
+VELOCITY_SECONDS_FIXED = 1.0
+VELOCITY_SECONDS_PER_VALUE = 1e-7
+VELOCITY_SECONDS_PER_CELL = 7.5e-4
+VELOCITY_SECONDS_PER_CELL_KNN = 1e-3  # 4,096 cells and more: approximate search; under, exact in about 1 s
+VELOCITY_SECONDS_PER_CELL_PCA = 2.3e-4
+VELOCITY_SECONDS_KNN_COMPILE = 20.0
+
+
+def estimate_velocity(n_dataset: int, n_store: int, nnz_spliced: int, nnz_unspliced: int, *, n_top_genes: int = 2000,
+                      n_neighbors: int = 30, method: str = "stochastic", has_graph: bool = False,
+                      has_pca: bool = False, n_store_genes: int = 28_000) -> dict[str, Any]:
+    """Memory and time of a velocity run, from the store's header. The peak is the fit: S and U on
+    the fitted genes, Ms and Mu dense (each a file past core/velocity.MEMMAP_BYTES, so only pages
+    in use), the weights, one block of genes' working arrays and, stochastic, the second moments."""
+    from scview.core import velocity as vel
+
+    n = min(n_dataset, n_store) if n_store else n_dataset
+    share = n / max(n_store, 1)
+    nnz = (nnz_spliced + nnz_unspliced) * share
+    genes = max(1, n_top_genes)
+
+    def dense(cols: int) -> int:
+        size = n * cols * 4
+        return size if size <= vel.MEMMAP_BYTES else vel.BLOCK_CELLS * cols * 4
+
+    fit_share = min(0.9, VELOCITY_FIT_GENES_SHARE * (genes / 2000) / max(n_store_genes, 1))
+    sparse = int(nnz * fit_share * 12)
+    weights = n * 2 * 2 * n_neighbors * 12
+    block = vel.fit_block_genes(n) * n * VELOCITY_FIT_COPY_BYTES
+    second = int(sparse * VELOCITY_SECOND_SHARE) if method == "stochastic" else 0
+    peak = int(sparse + weights + 2 * dense(genes) + block + second + VELOCITY_FIXED_BYTES)
+    secs = (VELOCITY_SECONDS_FIXED + VELOCITY_SECONDS_PER_VALUE * nnz
+            + VELOCITY_SECONDS_PER_CELL * n * (genes / 2000) ** 0.5 * (n_neighbors / 30) ** 2)
+    compile_secs = 0.0
+    if not has_graph:
+        secs += VELOCITY_SECONDS_PER_CELL_KNN * n if n >= 4096 else 1.0
+        if not vel.knn_compiled():
+            compile_secs = VELOCITY_SECONDS_KNN_COMPILE
+        if not has_pca:
+            secs += VELOCITY_SECONDS_PER_CELL_PCA * n
+    total = secs + compile_secs
+    return {"peak_bytes": peak, "seconds": round(total, 1), "seconds_range": [round(secs * 0.8, 1), round(total * 1.2, 1)],
+            "note": vel.estimate_note(total), "n_cells": int(n), "compile_seconds": compile_secs}
+
+
 def memory_level(need: int, avail: int | None) -> str:
     """fits / tight / wont_fit / unknown, as the run preflight words it."""
     return _level(need, avail)
