@@ -96,7 +96,7 @@ def _seqqc_view(unit: IngestUnit) -> IngestUnit:
     contig tables, guide calls and spatial files are joined to the cells by
     ``_attach_vdj`` / ``_attach_guide_calls`` / ``_attach_spatial`` instead."""
     keep = [f for f in unit.side_files
-            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial, SideKind.xenium)]
+            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial, SideKind.xenium, SideKind.atac)]
     return unit.model_copy(update={"side_files": keep})
 
 
@@ -508,6 +508,11 @@ class IngestSessionManager:
 
         dataset_id = uuid.uuid4().hex
         name = opts.name or (loadable[0].label if len(loadable) == 1 else "merged_dataset")
+        try:
+            self._attach_atac_fragments(dataset_id, adata, loadable)  # moved out of the staged files: not kept twice
+        except IngestCommitError:
+            part.unlink(missing_ok=True)
+            raise
         # The originals, in their folders; not the files the bundle skipped.
         skip = {s.path for s in bundle.skipped}
         root = self.files_dir(sid)
@@ -708,6 +713,26 @@ class IngestSessionManager:
                                         sample=u.label if merged else None)
                 except (crispr.CrisprError, OSError, EOFError, zlib.error, ValueError) as e:
                     raise IngestCommitError(f"The guide calls {f.name} could not be attached: {e}") from e
+
+    def _attach_atac_fragments(self, dataset_id: str, adata, loadable) -> None:
+        """An ATAC fragments file uploaded with the sample (``core/atac_fragments.py``): checked
+        against the cells, then renamed into the dataset's modality folder."""
+        from scview.core import atac_fragments as af
+        from scview.core import fragment_file
+        from scview.core.species import detect_species
+
+        files = [f for u in loadable for f in u.side_files if f.side_kind == SideKind.atac]
+        frag = next((f for f in files if f.spatial_part == "fragments"), None)
+        if frag is None:
+            return
+        index = next((f for f in files if f.spatial_part == "index"), None)
+        species = detect_species(adata).species
+        try:
+            af.attach_side_files(self.data_dir, dataset_id, frag.path, index.path if index else None,
+                                 list(map(str, adata.obs_names)), species=None if species == "unknown" else species,
+                                 name=frag.name)
+        except (af.FragmentsError, fragment_file.FragmentFileError, OSError, EOFError, zlib.error) as e:
+            raise IngestCommitError(f"The fragments file {frag.name} could not be attached: {e}") from e
 
     def _load_and_merge(self, loadable, opts: IngestOptions):
         load_opts = {"genes_in_rows": opts.genes_in_rows}

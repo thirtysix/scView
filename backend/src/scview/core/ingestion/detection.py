@@ -72,6 +72,7 @@ class FileKind(str, Enum):
     crispr_calls = "crispr_calls"  # Cell Ranger protospacer_calls_per_cell.csv (core/crispr.py)
     spatial = "spatial"  # a Space Ranger spatial file: a side file of a unit (core/spatial.py)
     xenium = "xenium"  # a file of a Xenium output folder (core/xenium.py)
+    atac_fragments = "atac_fragments"  # an ATAC fragments file or its .tbi: a side file (core/atac_fragments.py)
     unknown = "unknown"
 
 
@@ -116,6 +117,10 @@ def detect_file(path: Path) -> DetectionResult:
 
     head = _read_head(path, 16)
 
+    found = _atac_fragments(name, head)
+    if found is not None:
+        return found
+
     found = xenium.sniff(path, head)
     if found is not None:
         details = {k: v for k, v in found.items() if k != "reason"}
@@ -149,6 +154,18 @@ def detect_file(path: Path) -> DetectionResult:
         return _spatial_result(part, gzipped)
     result = _classify_text(text, gzipped)
     return _apply_name_hint(result, name)
+
+
+def _atac_fragments(name: str, head: bytes) -> DetectionResult | None:
+    """A fragments file (by its name and gzip magic: BGZF is checked when it is attached) or
+    a tabix index. 2.4 GB of gzip is never peeked at as a text table."""
+    if name.endswith(".tbi"):
+        return DetectionResult(kind=FileKind.atac_fragments, confidence=0.9, format_family="10x",
+                               reason="Tabix index of an ATAC fragments file", details={"part": "index"})
+    if "fragments" in name and name.endswith((".tsv.gz", ".tsv.bgz", ".bgz")) and head.startswith(_GZIP_MAGIC):
+        return DetectionResult(kind=FileKind.atac_fragments, confidence=0.9, format_family="10x",
+                               reason="ATAC fragments file", details={"part": "fragments", "gzipped": True})
+    return None
 
 
 def _spatial_result(found: dict, gzipped: bool = False) -> DetectionResult:

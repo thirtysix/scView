@@ -65,6 +65,7 @@ class SideKind(str, Enum):
     crispr = "crispr"  # Cell Ranger's guide calls per cell, joined to the unit's cells (core/crispr.py)
     spatial = "spatial"  # a Space Ranger spatial file (positions, scale factors, images; core/spatial.py)
     xenium = "xenium"  # experiment.xenium, cell table, image, its metrics (core/xenium.py)
+    atac = "atac"  # an ATAC fragments file and its .tbi (core/atac_fragments.py; part in spatial_part)
 
 
 # A 10x MEX unit needs exactly one of each of these.
@@ -87,6 +88,7 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.crispr_calls: (None, FileRole.side),
     FileKind.spatial: (None, FileRole.side),
     FileKind.xenium: (None, FileRole.side),
+    FileKind.atac_fragments: (None, FileRole.side),
     FileKind.unknown: (None, FileRole.unknown),
 }
 
@@ -239,6 +241,7 @@ def bundle_from_detections(
     vdj_files: list[BundleFile] = []
     crispr_files: list[BundleFile] = []
     spatial_files: list[BundleFile] = []
+    atac_files: list[BundleFile] = []
 
     for path, det in detected:
         refusal = refusal or _hd_refusal(path, det)
@@ -266,6 +269,8 @@ def bundle_from_detections(
         elif det.kind == FileKind.spatial:
             spatial_files.append(bf.model_copy(update={
                 "side_kind": SideKind.spatial, "spatial_part": det.details.get("part")}))
+        elif det.kind == FileKind.atac_fragments:
+            atac_files.append(bf.model_copy(update={"side_kind": SideKind.atac, "spatial_part": det.details.get("part")}))
         else:
             unknown_files.append(bf)
 
@@ -294,6 +299,7 @@ def bundle_from_detections(
 
     bundle_issues.extend(_attach_vdj_files(units, vdj_files))
     bundle_issues.extend(_attach_crispr_files(units, crispr_files))
+    bundle_issues.extend(_attach_atac_files(units, atac_files))
     bundle_issues.extend(_attach_spatial_files(units, spatial_files))
     _unique_labels(units)
     if skipped:
@@ -906,6 +912,30 @@ def _attach_crispr_files(units: list[IngestUnit], files: list[BundleFile]) -> li
             continue
         unit.side_files.append(bf)
     return issues
+
+
+def _attach_atac_files(units: list[IngestUnit], files: list[BundleFile]) -> list[str]:
+    """Add an ATAC fragments file and its .tbi to the only sample. Barcodes of a merge carry no
+    sample here, so with several samples the sentence says to attach them afterwards."""
+    if not files:
+        return []
+    names = ", ".join(f.name for f in files)
+    loadable = [u for u in units if u.format != UnitFormat.unknown]
+    if not loadable:
+        return [f"{names}: ATAC fragments go with the sample's matrix: add it, or attach them to an existing dataset "
+                "in Unified View > Accessibility."]
+    if len(loadable) > 1:
+        return [f"{names}: ATAC fragments can be attached to one sample at a time and were not attached here: import "
+                "each sample alone, or attach them in Unified View > Accessibility."]
+    frags = [f for f in files if f.spatial_part == "fragments"]
+    index = [f for f in files if f.spatial_part == "index"]
+    if len(frags) != 1 or len(index) > 1:
+        return [f"{names}: expected one ATAC fragments file with its .tbi; these were not attached."]
+    loadable[0].side_files.extend([*frags, *index])
+    if not index:
+        return [f"{frags[0].name} came without its tabix index (.tbi), which Cell Ranger ARC writes beside it: "
+                "add the .tbi in Unified View > Accessibility before running the fragment QC."]
+    return []
 
 
 # ---------------------------------------------------------------------------

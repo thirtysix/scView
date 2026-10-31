@@ -1262,6 +1262,32 @@ _HELPER_ORDER += ("spatial_domains",)
 _HELPER_NEEDS["spatial_domains"] = ("spatial_autocorr",)  # knn_edges
 
 
+def _atac_fragments_helper() -> str:
+    """core/atac_fragments.py's QC, in plain pandas: slower than scView's pass, the same numbers."""
+    import inspect
+
+    from scview.core import atac_fragments as af
+
+    lines = ["import os", ""]
+    lines += [f"{name} = {_lit(getattr(af, name))}" for name in af.REPLAY_CONSTANTS]
+    for obj in af.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def fragment_file(name):
+    """A fragments file by name: in the working directory, else beside the input file."""
+    for folder in (".", os.path.dirname(os.path.abspath(INPUT))):
+        path = os.path.join(folder, name)
+        if os.path.exists(path):
+            return path
+    sys.exit(f"Fragments file {name} not found: put it beside this script or the input file.")
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["atac_fragments"] = _atac_fragments_helper()
+_HELPER_ORDER += ("atac_fragments",)
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -2794,6 +2820,28 @@ def _tf_motif_enrichment(p: dict, ctx: _Ctx) -> Snippet:
                                     "unchanged. Recorded:", *_param_comment(p)], "result only")
 
 
+def _atac_fragment_qc(p: dict, ctx: _Ctx) -> Snippet:
+    """ATAC fragment QC (core/atac_fragments.py): TSS positions from the GENCODE release, one
+    pass over the fragments file."""
+    from scview.core import gene_annotation
+
+    name, genome = p.get("file"), p.get("genome")
+    if not isinstance(name, str) or not name or genome not in gene_annotation.RELEASES:
+        return Snippet(NOT_REPLAYABLE, ["# ATAC fragment QC: the file or genome is not recorded. Recorded:",
+                                        *_param_comment(p)], "fragments file or genome not recorded")
+    release = gene_annotation.RELEASES[genome]
+    _need(ctx, "atac_fragments")
+    return Snippet(EXACT, [
+        f"# ATAC fragment QC (= Signac TSSEnrichment fast=TRUE, NucleosomeSignal on the whole file). Fragments: "
+        f"{comment_text(name, 120)}, with TSSs from {comment_text(release.source, 40)}.",
+        f"tss = gencode_tss({_lit(release.url)})",
+        f"atac = fragment_qc(fragment_file({_lit(name)}), list(adata.obs_names.astype(str)), tss)",
+        "adata.obs[\"atac_tss_enrichment\"] = atac[\"tss_enrichment\"]",
+        "adata.obs[\"atac_nucleosome_signal\"] = atac[\"nucleosome_signal\"]",
+        "adata.obs[\"atac_n_fragments\"] = atac[\"n_fragments\"]",
+    ])
+
+
 def _run_errors(p: dict, ctx: _Ctx) -> Snippet:
     """A run that finished with errors (core/step_failures.py): which steps failed and were
     skipped (not in the history, so not replayed), and the earlier results it removed as
@@ -2987,6 +3035,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "spatial_domains": _spatial_domains,
     "nhood_enrichment": _nhood_enrichment,
     "spatial_niches": _spatial_niches,
+    "atac_fragment_qc": _atac_fragment_qc,
     "run_errors": _run_errors,
 }
 

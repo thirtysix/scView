@@ -1,9 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { BundleFile } from "@/api/ingest";
-import { SequencingQcSideFiles } from "./SequencingQcSideFiles";
+import { SequencingQcSideFiles, sideFileRole } from "./SequencingQcSideFiles";
 
 const side = (name: string, kind: string): BundleFile => ({ path: `/x/${name}`, name, kind, role: "side", confidence: 0.95 });
+
+describe("ATAC side files", () => {
+  it("names the fragments file and its index", () => {
+    const f = { kind: "atac_fragments", side_kind: "atac" as const };
+    expect(sideFileRole({ ...f, spatial_part: "fragments" })).toBe("ATAC fragments file");
+    expect(sideFileRole({ ...f, spatial_part: "index" })).toBe("index of the ATAC fragments file");
+  });
+});
 
 describe("SequencingQcSideFiles", () => {
   it("lists each side file with what it is and that it will be attached", () => {

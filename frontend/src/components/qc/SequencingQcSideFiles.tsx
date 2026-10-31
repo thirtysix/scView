@@ -20,6 +20,7 @@ const XENIUM_PART: Record<string, string> = {
 export function sideFileRole(f: Pick<BundleFile, "kind" | "side_kind" | "spatial_part">): string {
   if (f.side_kind === "spatial") return SPATIAL_PART[f.spatial_part ?? ""] ?? "Space Ranger spatial file";
   if (f.side_kind === "xenium") return XENIUM_PART[f.spatial_part ?? ""] ?? "Xenium file";
+  if (f.side_kind === "atac") return f.spatial_part === "index" ? "index of the ATAC fragments file" : "ATAC fragments file";
   if (f.kind === "tenx_metrics") return "Cell Ranger metrics";
   if (f.kind === "tenx_h5") return "raw (unfiltered) matrix";
   return "raw matrix part";
