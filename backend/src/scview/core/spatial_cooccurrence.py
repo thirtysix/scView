@@ -87,8 +87,8 @@ MIN_PAIRS = 30  # pairs at a distance for the co-pilot to quote the score
 _SECONDS_STARTUP = 4.0  # the child's imports and numba's compile
 _SECONDS_PER_PAIR = 2.6e-9  # at 2 threads, per pair within reach in x
 _SECONDS_PER_SPLIT_PAIR = 2.6e-9
-_CHILD_BYTES = 200 * 1024**2  # python, numpy, numba and LLVM in the child
-_BYTES_PER_OBS = 480  # the arrays passed on and sorted, in both processes
+_CHILD_BYTES = 170 * 1024**2  # python, numpy, numba and LLVM in the child
+_BYTES_PER_OBS = 170  # the arrays passed on and sorted, in both processes
 
 
 STAGES = (("pairs", "Counting pairs at each distance"),)

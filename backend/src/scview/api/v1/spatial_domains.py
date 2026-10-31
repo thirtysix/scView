@@ -4,7 +4,9 @@
 the saved domains, niches and enrichment. Three runs stream their progress (SSE) and
 then save into the dataset, each only when it reaches its end:
 ``POST /spatial/domains/run-stream``, ``POST /spatial/niches/run-stream``,
-``POST /spatial/nhood-enrichment/run-stream``.
+``POST /spatial/nhood-enrichment/run-stream``. ``GET /spatial/cooccurrence`` and
+``POST /spatial/cooccurrence/run-stream`` do the same for co-occurrence
+(core/spatial_cooccurrence.py).
 
 A run works on its own copies of the positions, the PCs and the labels, so the dataset
 stays open to other requests meanwhile; only the final save holds its edit lock. No
@@ -76,7 +78,7 @@ class CoOccurrenceRequest(BaseModel):
     max_distance: float | None = Field(default=None, gt=0)  # or evenly from 0 to this, ``interval`` scores
     combine: str = Field(default=cc.SUM, max_length=32)
     seed: int = Field(default=cc.SEED, ge=0, le=2**31 - 1)
-    max_obs: int = Field(default=cc.MAX_FULL_OBS, ge=cc.MIN_FULL_OBS)
+    max_obs: int = Field(default=cc.MAX_FULL_OBS, ge=cc.MIN_FULL_OBS, le=2_000_000)
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -184,7 +186,7 @@ def _stream(dataset_id: str, dm: DatasetManager, what: str, start: dict[str, Any
 
     async def events():
         if dataset_id in _running:  # another request started between the check and here
-            yield _sse("error", {"error": "A spatial domains or niches run is already working on this dataset."})
+            yield _sse("error", {"error": "Another Domains tab run is already working on this dataset: wait for it or cancel it."})
             return
         _running.add(dataset_id)
         stop = threading.Event()
@@ -257,7 +259,7 @@ def _stream(dataset_id: str, dm: DatasetManager, what: str, start: dict[str, Any
 
 def _busy(dataset_id: str) -> None:
     if dataset_id in _running:
-        raise HTTPException(status_code=409, detail="A spatial domains or niches run is already working on this dataset.")
+        raise HTTPException(status_code=409, detail="Another Domains tab run is already working on this dataset: wait for it or cancel it.")
 
 
 @router.post("/datasets/{dataset_id}/spatial/domains/run-stream")

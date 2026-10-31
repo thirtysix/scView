@@ -46,7 +46,7 @@ export function CoOccurrenceCard({
   const start = useSpatialDomainsRunStore((s) => s.start);
 
   const [picked, setPicked] = useState("");
-  const [interval, setInterval] = useState(50);
+  const [nDistances, setNDistances] = useState(50);
   const [upTo, setUpTo] = useState("");
   const [splits, setSplits] = useState(false);
   const [info, setInfo] = useState<CoOccurrenceInfo | null>(null);
@@ -62,13 +62,13 @@ export function CoOccurrenceCard({
     if (!datasetId || !column) return;
     let cancelled = false;
     setError(null);
-    getCoOccurrence(datasetId, { column, interval, combine, max_distance: maxDistance })
+    getCoOccurrence(datasetId, { column, interval: nDistances, combine, max_distance: maxDistance })
       .then((i) => !cancelled && setInfo(i))
       .catch((e) => !cancelled && setError(errorMessage(e)));
     return () => {
       cancelled = true;
     };
-  }, [datasetId, column, interval, combine, maxDistance, version]);
+  }, [datasetId, column, nDistances, combine, maxDistance, version]);
 
   if (!datasetId) return null;
   const plan = info?.plan ?? null;
@@ -82,7 +82,7 @@ export function CoOccurrenceCard({
       datasetId,
       "cooccurrence",
       "Co-occurrence",
-      (h) => runCoOccurrence(datasetId, { cluster_key: column, interval, combine, max_distance: maxDistance }, h),
+      (h) => runCoOccurrence(datasetId, { cluster_key: column, interval: nDistances, combine, max_distance: maxDistance }, h),
       () => null,
     );
   };
@@ -95,7 +95,8 @@ export function CoOccurrenceCard({
           The same statistic as squidpy&apos;s co_occurrence: for labels a and b within a distance, P(b | a) / P(b), both from
           the pairs of observations no further apart than that distance, so each distance includes the shorter ones. Above 1,
           b is near a more often than among all pairs at that range. Pairs are counted within each section, never between
-          sections. It is a description, not a test.
+          sections. On spots or bins that mix cells it speaks about their labels, not about touching cells. It is a
+          description, not a test.
         </InfoTip>
       </div>
       <div className="flex flex-wrap items-end gap-2 text-xs">
@@ -115,10 +116,10 @@ export function CoOccurrenceCard({
             type="number"
             min={2}
             max={200}
-            value={interval}
+            value={nDistances}
             onChange={(e) => {
               const n = Number.parseInt(e.target.value, 10);
-              if (Number.isFinite(n) && n >= 2 && n <= 200) setInterval(n);
+              if (Number.isFinite(n) && n >= 2 && n <= 200) setNDistances(n);
             }}
             className={`${INPUT} w-16`}
           />
@@ -149,11 +150,13 @@ export function CoOccurrenceCard({
       )}
       {info?.reason && <p className="text-[11px] leading-snug text-slate-500">{info.reason}</p>}
       {info?.verdict && <PreflightNote verdict={info.verdict} />}
-      {plan?.notes.map((n) => (
-        <p key={n} className="text-[11px] leading-snug text-slate-500">
-          {n}
-        </p>
-      ))}
+      {plan?.notes
+        .filter((n) => !result?.notes?.includes(n))
+        .map((n) => (
+          <p key={n} className="text-[11px] leading-snug text-slate-500">
+            {n}
+          </p>
+        ))}
       <SpatialRunStatus kind="cooccurrence" />
       <RequestError message={error} />
       {result?.available && <CoOccurrenceResults key={result.column} result={result} />}
@@ -274,6 +277,7 @@ function CoOccurrenceResults({ result }: { result: CoOccurrenceResult }) {
               xgap: 1,
               ygap: 1,
               colorbar: { title: { text: "score", font: { size: 10 } }, thickness: 10 },
+              hoverongaps: false,
               hovertemplate: "%{x} near %{y}<br>score %{z:.2f}<extra></extra>",
               ...(labels.length <= MAX_LABELLED ? { texttemplate: "%{z:.1f}", textfont: { size: 9 } } : {}),
             },

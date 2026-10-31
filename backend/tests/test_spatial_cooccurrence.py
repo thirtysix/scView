@@ -294,9 +294,11 @@ def test_the_estimate_follows_the_reach_in_x():
     n = a.n_obs
     assert near.visited_pairs < far.visited_pairs <= n * (n - 1) // 2
     assert near.estimate_seconds < far.estimate_seconds
-    # Measured at 2 CPUs: Xenium breast 1.1e10 pairs; memory = the child's own peak.
-    assert cc.estimate_seconds(10_970_000_000) == pytest.approx(cc._SECONDS_STARTUP + 10_970_000_000 * cc._SECONDS_PER_PAIR)
-    assert cc.estimate_bytes(166_363, 20, 49) == pytest.approx(269 * 1024**2, rel=0.2)
+    # Measured at 2 CPUs: Xenium breast 1.097e10 pairs in 35.6 s, HD 8 um 6.899e10 in 161.8 s;
+    # memory: Xenium's child 184 MB at its peak plus the server's copies.
+    assert cc.estimate_seconds(10_970_000_000) == pytest.approx(35.6, rel=0.2)
+    assert cc.estimate_seconds(68_990_000_000) == pytest.approx(161.8, rel=0.2)
+    assert cc.estimate_bytes(166_363, 20, 49) == pytest.approx(215 * 1024**2, rel=0.2)
     p = cc.plan_cooccurrence(a, "stripe", combine=cc.SQUIDPY_SPLITS)
     assert p.n_splits == 1  # under squidpy's size limit there are no splits
 
