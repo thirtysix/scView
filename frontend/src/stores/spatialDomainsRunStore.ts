@@ -2,10 +2,10 @@ import { create } from "zustand";
 import { watchdogMessage, type WatchdogEvent } from "@/api/pipelineRun";
 import type { RunHandlers, RunProgress, RunStage, StabilityCurve } from "@/api/spatialDomains";
 
-export type RunKind = "domains" | "enrichment" | "niches";
+export type RunKind = "domains" | "enrichment" | "niches" | "cooccurrence";
 
 /**
- * A spatial domains, enrichment or niches run in flight (Domains subtab). Kept here, not
+ * A spatial domains, enrichment, niches or co-occurrence run in flight (Domains subtab). Kept here, not
  * in the tab, so switching tabs does not abort it; Cancel aborts the stream, which stops
  * the run before its next piece of work without saving.
  */

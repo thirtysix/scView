@@ -55,6 +55,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 from scview.core import cooccurrence_kernel as kernel
 from scview.core import spatial
@@ -79,13 +80,13 @@ MIN_FULL_OBS = 1_000
 SPLITS_ABOVE_OBS = 22_897  # squidpy's automatic n_splits starts above this (n ** 2 * 4 bytes > 2,000 MB)
 SEED = 0
 MAX_THREADS = 4
-VISIUM_SPOT_UM = 55.0
+VISIUM_SPOT_SPACING_UM = 100.0  # 10x: spot centres on the capture grid
 MIN_PAIRS = 30  # pairs at a distance for the co-pilot to quote the score
 
 # Measured on the 0.53.0 image at 2 CPUs (Xenium breast, Visium HD 8 um; see the tests).
 _SECONDS_STARTUP = 4.0  # the child's imports and numba's compile
-_SECONDS_PER_PAIR = 2.3e-9  # at 2 threads, per pair within reach in x
-_SECONDS_PER_SPLIT_PAIR = 2.3e-9
+_SECONDS_PER_PAIR = 2.6e-9  # at 2 threads, per pair within reach in x
+_SECONDS_PER_SPLIT_PAIR = 2.6e-9
 _CHILD_BYTES = 200 * 1024**2  # python, numpy, numba and LLVM in the child
 _BYTES_PER_OBS = 480  # the arrays passed on and sorted, in both processes
 
@@ -110,6 +111,7 @@ class CoOccurrencePlan:
     libraries: list[str]
     distance_unit: str
     um_per_unit: float | None
+    distance_source: str
     scales: dict[str, float] | None
     threads: int
     visited_pairs: int
@@ -153,37 +155,55 @@ def _scale_factor(entry: Any, name: str) -> float | None:
     return v if v is not None and np.isfinite(v) and v > 0 else None
 
 
-def _um_per_unit(entry: Any, tech: str) -> float | None:
-    """Microns per position unit of one library: Space Ranger's ``microns_per_pixel`` where it
-    is given, else from the bin's or the spot's known size in full-resolution pixels."""
+def _grid_spacing(coords: np.ndarray) -> float | None:
+    """The median distance to the nearest other observation (a sample of 5,000 asked)."""
+    if coords.shape[0] < 2:
+        return None
+    step = max(1, coords.shape[0] // 5000)
+    nearest = cKDTree(coords).query(coords[::step], k=2)[0][:, 1]
+    spacing = float(np.median(nearest))
+    return spacing if spacing > 0 else None
+
+
+def _um_per_unit(entry: Any, tech: str, coords: np.ndarray) -> tuple[float | None, str]:
+    """(microns per position unit of one library, where that came from): Space Ranger's
+    ``microns_per_pixel`` where it is given, a Visium HD bin's size, else on Visium the 100 um
+    between spot centres (``spot_diameter_fullres`` is no ruler: 96.4 pixels on DLPFC 151673
+    and 89.5 on the lymph node, with the same 137 pixels between centres)."""
     per_px = _scale_factor(entry, "microns_per_pixel")
     if per_px:
-        return per_px
+        return per_px, "Space Ranger's pixel size"
     diameter = _scale_factor(entry, "spot_diameter_fullres")
     bin_um = _scale_factor(entry, "bin_size_um")
     if diameter and bin_um:
-        return bin_um / diameter
-    if diameter and tech == "visium":
-        return VISIUM_SPOT_UM / diameter
-    return None
+        return bin_um / diameter, "the bin size"
+    if tech == "visium":
+        spacing = _grid_spacing(coords)
+        if spacing:
+            return VISIUM_SPOT_SPACING_UM / spacing, f"the {VISIUM_SPOT_SPACING_UM:g} um between spot centres"
+    return None, ""
 
 
-def distance_units(adata) -> tuple[str, float | None, dict[str, float] | None]:
+def distance_units(adata) -> tuple[str, float | None, dict[str, float] | None, str]:
     """(what the distance axis says, microns per position unit, each section's factor to the
-    first section's scale when their pixel sizes differ by over 1%). "um" when it is known,
-    else the positions' own "position units"."""
+    first section's scale when their pixel sizes differ by over 1%, where the size came from).
+    "um" when it is known, else the positions' own "position units"."""
     tech = spatial.technology(adata)["technology"]
     if tech == "xenium":
-        return "um", 1.0, None
+        return "um", 1.0, None, "the positions, which are in microns"
     uns = adata.uns.get(spatial.KEY)
     libs = [str(x) for x in uns] if isinstance(uns, Mapping) else []
-    per = {lib: _um_per_unit(uns[lib], tech) for lib in libs}
-    known = [v for v in per.values() if v]
-    if not known or len(known) < len(per):
-        return "position units", None, None
-    first = known[0]
-    scales = {lib: v / first for lib, v in per.items()} if any(abs(v / first - 1) > 0.01 for v in known) else None
-    return "um", first, scales
+    if not libs:
+        return "position units", None, None, ""
+    rows = sd._libraries(adata)
+    coords = np.asarray(adata.obsm[spatial.KEY])[:, :2]
+    found = {lib: _um_per_unit(uns[lib], tech, coords[rows == lib]) for lib in libs}
+    per = {lib: v for lib, (v, _) in found.items() if v}
+    if len(per) < len(found):
+        return "position units", None, None, ""
+    first = next(iter(per.values()))
+    scales = {lib: v / first for lib, v in per.items()} if any(abs(v / first - 1) > 0.01 for v in per.values()) else None
+    return "um", first, scales, next(iter(found.values()))[1]
 
 
 def _float_positions(adata, keep: np.ndarray, scales: dict[str, float] | None, sections: np.ndarray) -> np.ndarray:
@@ -233,7 +253,7 @@ def plan_cooccurrence(adata, cluster_key: str, *, interval: int = DEFAULT_INTERV
     if combine == SQUIDPY_SPLITS and len(libs) > 1:
         raise sd.SpatialDomainsError(f"squidpy's split mean is defined for one section and this dataset has {len(libs)}: "
                                      f"use '{SUM}', which counts each section's pairs and sums them.")
-    distance_unit, um_per_unit, scales = distance_units(adata)
+    distance_unit, um_per_unit, scales, distance_source = distance_units(adata)
     points = _float_positions(adata, keep, scales, sections)
     if asked is None and max(np.unique(sections, return_counts=True)[1]) < 3:
         raise sd.SpatialDomainsError("No section has 3 labelled observations: pick another label column.")
@@ -259,7 +279,8 @@ def plan_cooccurrence(adata, cluster_key: str, *, interval: int = DEFAULT_INTERV
         n_obs=int(adata.n_obs), n_labelled=n_labelled, n_used=n_used, unit=unit, column=cluster_key, labels=labels,
         interval=None if asked is not None else int(interval), thresholds=[float(t) for t in thresholds],
         combine=combine, n_splits=n_splits, seed=int(seed), max_obs=int(max_obs), libraries=libs,
-        distance_unit=distance_unit, um_per_unit=um_per_unit, scales=scales, threads=n_threads, visited_pairs=visited,
+        distance_unit=distance_unit, um_per_unit=um_per_unit, distance_source=distance_source, scales=scales,
+        threads=n_threads, visited_pairs=visited,
         notes=notes, estimate_seconds=estimate_seconds(visited, n_threads, n_splits),
         estimate_bytes=estimate_bytes(n_used, len(labels), thresholds.size - 1, n_threads))
 
@@ -382,7 +403,8 @@ def save_cooccurrence(adata, inp: CoOccurrenceInputs, res: CoOccurrenceResult, *
             "labels": p.labels, "sizes": np.bincount(inp.codes, minlength=len(p.labels)).astype(int).tolist(),
             "n_obs": p.n_obs, "n_labelled": p.n_labelled, "n_used": p.n_used, "unit": p.unit, "interval": p.interval,
             "combine": p.combine, "n_splits": p.n_splits, "seed": p.seed, "max_obs": p.max_obs, "libraries": p.libraries,
-            "distance_unit": p.distance_unit, "um_per_unit": p.um_per_unit, "notes": p.notes,
+            "distance_unit": p.distance_unit, "um_per_unit": p.um_per_unit, "distance_source": p.distance_source,
+            "notes": p.notes,
             "visited_pairs": p.visited_pairs, "threads": p.threads, "seconds": round(res.seconds, 1),
             "peak_rss_gb": round(res.peak_rss_bytes / 1024**3, 2), "cells_fingerprint": cells_fingerprint,
             "labels_fingerprint": inp.fingerprint}

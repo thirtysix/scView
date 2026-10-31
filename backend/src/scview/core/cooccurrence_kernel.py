@@ -275,9 +275,17 @@ REPLAY_CODE = (distance32, find_min_max, default_interval, sample_rows, bin_look
                compiled_kernels, compute)
 
 
-def _child() -> None:
-    import resource
+def _peak_rss_kb() -> int:
+    """This process's own high-water mark: ``VmHWM`` restarts at exec, while ``ru_maxrss``
+    keeps what the server held when it forked this child."""
+    with open("/proc/self/status") as f:
+        for line in f:
+            if line.startswith("VmHWM:"):
+                return int(line.split()[1])
+    return 0  # pragma: no cover - no procfs
 
+
+def _child() -> None:
     out = sys.stdout.buffer
 
     def progress(done: int, total: int) -> None:
@@ -289,7 +297,7 @@ def _child() -> None:
                                         str(d["combine"]), int(d["threads"]), progress)
     payload = io.BytesIO()
     np.savez(payload, score=score.astype(np.float32), count=count.astype(np.int64), visited=visited,
-             peak_rss_kb=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+             peak_rss_kb=_peak_rss_kb())
     out.write(f"result {payload.getbuffer().nbytes}\n".encode())
     out.write(payload.getvalue())
     out.flush()

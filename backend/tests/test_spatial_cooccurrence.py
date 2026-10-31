@@ -168,25 +168,28 @@ def test_several_sections_take_the_widest_thresholds():
 
 def test_distance_units_by_technology():
     x = synthetic.tissue("xenium", n_side=8)
-    assert cc.distance_units(x) == ("um", 1.0, None)
-    v = synthetic.tissue("visium", n_side=8)  # a spot's 55 um is 20 full-resolution pixels here
-    assert cc.distance_units(v) == ("um", pytest.approx(55 / 20), None)
+    assert cc.distance_units(x)[:3] == ("um", 1.0, None)
+    v = synthetic.tissue("visium", n_side=8)  # spot centres 100 pixels apart here: 100 um between them
+    assert cc.distance_units(v) == ("um", pytest.approx(1.0), None, "the 100 um between spot centres")
+    v.obsm["spatial"] = v.obsm["spatial"] * 1.37
+    assert cc.distance_units(v)[1] == pytest.approx(1 / 1.37)
     hd = synthetic.tissue("visium_hd", n_side=8)  # a bin's 8 um is 20 pixels
-    assert cc.distance_units(hd) == ("um", pytest.approx(8 / 20), None)
+    assert cc.distance_units(hd)[:3] == ("um", pytest.approx(8 / 20), None)
     hd.uns["spatial"]["s0"]["scalefactors"]["microns_per_pixel"] = 0.2738
     assert cc.distance_units(hd)[1] == pytest.approx(0.2738)
-    assert cc.distance_units(synthetic.tissue("cells", n_side=8)) == ("position units", None, None)
+    assert cc.distance_units(synthetic.tissue("cells", n_side=8)) == ("position units", None, None, "")
 
 
 def test_sections_with_different_pixel_sizes_are_brought_to_one_scale():
     a = synthetic.tissue("visium", n_side=10, sections=2)
-    a.uns["spatial"]["s1"]["scalefactors"] = {**a.uns["spatial"]["s1"]["scalefactors"], "spot_diameter_fullres": 40.0}
-    unit, per, scales = cc.distance_units(a)
-    assert unit == "um" and per == pytest.approx(55 / 20) and scales["s1"] == pytest.approx(0.5)
+    in_s1 = (a.obs["library_id"] == "s1").to_numpy()
+    a.obsm["spatial"][in_s1] *= 2  # the same grid at twice the pixels
+    unit, per, scales, _ = cc.distance_units(a)
+    assert unit == "um" and per == pytest.approx(1.0) and scales["s1"] == pytest.approx(0.5)
     p = cc.plan_cooccurrence(a, "stripe", interval=5)
     inp = cc.prepare_cooccurrence(a, p)
-    # s1 at half the scale: its positions come out halved.
-    assert inp.spatial[inp.sections == 1].max() == pytest.approx(a.obsm["spatial"][a.obs["library_id"] == "s1"].max() / 2)
+    # Back at one scale, the two sections are the same grid.
+    np.testing.assert_allclose(inp.spatial[inp.sections == 1], inp.spatial[inp.sections == 0])
     assert any("pixel sizes differ" in n for n in p.notes)
 
 
