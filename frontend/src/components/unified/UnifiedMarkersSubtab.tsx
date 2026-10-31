@@ -156,7 +156,7 @@ export function UnifiedMarkersSubtab({
     };
   }, [datasetId, groupByColumn, revision]);
 
-  const { flags: ambientFlags, approximate: ambientApprox } = useAmbientFlags(datasetId, groupByColumn, markersData);
+  const { flags: ambientFlags, approximate: ambientApprox } = useAmbientFlags(datasetId, groupByColumn, markersData, dataset?.large);
 
   // A group clicked in the legend, the cluster map or an Observations row (or
   // highlighted by the co-pilot) opens its markers, switching to its column when

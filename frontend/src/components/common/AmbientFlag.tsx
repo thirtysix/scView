@@ -20,12 +20,19 @@ export function AmbientFlag({ flag, group, approximate }: { flag?: AmbientMarker
 
 /** The column's ambient-looking top markers (backend core/ambient.py), for the marker
  *  tables: group -> gene -> flag. Optional: no flags when they can't be worked out (a
- *  large dataset, no counts). Fetched once markers are there (`ready`). */
-export function useAmbientFlags(datasetId: string | null | undefined, column: string | undefined, ready: unknown) {
+ *  large dataset, no counts). Fetched once markers are there (`ready`); not fetched at all on a
+ *  large dataset (`large` set: the backend refuses with a 422, which was a console error on every
+ *  Unified View open). */
+export function useAmbientFlags(
+  datasetId: string | null | undefined,
+  column: string | undefined,
+  ready: unknown,
+  large?: unknown,
+) {
   const [ambient, setAmbient] = useState<AmbientResponse | null>(null);
   useEffect(() => {
     setAmbient(null);
-    if (!datasetId || !ready) return;
+    if (!datasetId || !ready || large) return;
     let cancelled = false;
     getAmbient(datasetId, column || undefined)
       .then((d) => {
@@ -37,7 +44,7 @@ export function useAmbientFlags(datasetId: string | null | undefined, column: st
     return () => {
       cancelled = true;
     };
-  }, [datasetId, column, ready]);
+  }, [datasetId, column, ready, large]);
   const flags = useMemo(() => flagIndex(ambient), [ambient]);
   return { flags, approximate: ambient?.markers?.approximate ?? false };
 }
