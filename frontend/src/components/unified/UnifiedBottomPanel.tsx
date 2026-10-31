@@ -62,6 +62,8 @@ export function UnifiedBottomPanel({
       ? "Per-donor values are for one gene; a score is per cell. Pick a gene."
       : overlay?.type === "program"
         ? "Per-donor values are for one gene; a program's usage is per cell. Pick a gene."
+        : overlay?.type === "atac_activity"
+          ? "Per-donor values are for a gene's RNA; gene activity is per cell. Pick a gene."
         : overlay?.type === "expression"
           ? "Per-donor values are for genes; proteins are not supported yet."
           : undefined;

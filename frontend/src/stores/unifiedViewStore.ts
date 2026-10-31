@@ -28,6 +28,9 @@ type ScatterOverlay =
     }
   // One gene program's per-cell usage share (Programs subtab; 1-based index, P1..Pk)
   | { type: "program"; index: number; name: string }
+  // One gene's peak-based activity (Accessibility subtab, core/atac.py): its own kind, an
+  // expression overlay's layer means a protein
+  | { type: "atac_activity"; gene: string }
   // Expression-weighted kernel density (lib/density.ts) of one gene, or the joint
   // density of several, on the embedding (and PCA pair) and layer it was computed for
   | { type: "density"; genes: string[]; embedding: string; dims?: [number, number]; layer: string }

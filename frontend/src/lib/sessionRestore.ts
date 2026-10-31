@@ -89,6 +89,8 @@ export function captureSession(now: Date = new Date()): SessionFile {
         : { type: "reliability", embedding: r.embedding };
     } else if (overlay.type === "program") {
       view.overlay = { type: "program", index: overlay.index };
+    } else if (overlay.type === "atac_activity") {
+      view.overlay = { type: "atac_activity", gene: overlay.gene };
     } else if (overlay.type === "score" && overlay.genes?.length) {
       view.overlay = overlay.method && overlay.method !== "score_genes"
         ? { type: "score", name: overlay.name, genes: overlay.genes, method: overlay.method }
@@ -415,6 +417,8 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
       notes.push(`Gene overlay ${o.gene}: the gene is not in this dataset.`);
     } else if (o.type === "reliability" && !d.available_embeddings.includes(o.embedding)) {
       notes.push(`Plot reliability of ${o.embedding}: the embedding is not in this dataset.`);
+    } else if (o.type === "atac_activity" && !d.atac) {
+      notes.push(`Gene activity of ${o.gene}: this dataset has no ATAC peaks.`);
     } else {
       unified.setPendingOverlay({ datasetId: d.id, overlay: o });
     }
