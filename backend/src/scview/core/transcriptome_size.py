@@ -24,15 +24,31 @@ holds log-normalised values in this app.
 from __future__ import annotations
 
 import numpy as np
+import scipy.sparse as sp
 
 CAUTION_RATIO = 1.5
 TOTAL_COUNT_COLUMNS = ("total_counts", "n_counts", "nCount_RNA")
 VIOLIN_MAX = 2000  # cells per side sent for the violin plot
+SUM_ROWS = 4096  # rows of an on-disk matrix summed at a time
 
 
-def per_cell_totals(adata) -> tuple[np.ndarray, str] | None:
-    """Every cell's total raw count and where it came from, or None when the
-    dataset holds no counts. ``adata`` is in memory (the compared cells)."""
+def _row_sums(M, keep: np.ndarray | None = None) -> np.ndarray:
+    """Each row's sum. An on-disk matrix (a backed dataset) is read a block of rows at a
+    time, skipping blocks with no ``keep`` row (their sums stay 0: not asked for)."""
+    if sp.issparse(M) or isinstance(M, np.ndarray):
+        return np.asarray(M.sum(axis=1), dtype=np.float64).ravel()
+    out = np.zeros(M.shape[0], dtype=np.float64)
+    for start in range(0, M.shape[0], SUM_ROWS):
+        stop = min(start + SUM_ROWS, M.shape[0])
+        if keep is None or keep[start:stop].any():
+            out[start:stop] = np.asarray(M[start:stop].sum(axis=1), dtype=np.float64).ravel()
+    return out
+
+
+def per_cell_totals(adata, keep: np.ndarray | None = None) -> tuple[np.ndarray, str] | None:
+    """Every cell's total raw count and where it came from, or None when the dataset
+    holds no counts. ``adata`` is in memory (the compared cells), or backed: then only
+    the ``keep`` cells' totals are filled in, a block of rows of its counts at a time."""
     for col in TOTAL_COUNT_COLUMNS:
         if col in adata.obs.columns:
             try:
@@ -47,7 +63,7 @@ def per_cell_totals(adata) -> tuple[np.ndarray, str] | None:
         M, _, source = counts_all_genes(adata)
     except ValueError:
         return None
-    return np.asarray(M.sum(axis=1), dtype=np.float64).ravel(), source
+    return _row_sums(M, keep), source
 
 
 def _sample(v: np.ndarray, rng: np.random.Generator) -> list[float]:
@@ -80,7 +96,7 @@ def compare(totals: np.ndarray, source: str, mask_a: np.ndarray, mask_b: np.ndar
 def check(adata, mask_a: np.ndarray, mask_b: np.ndarray) -> dict | None:
     """``compare`` for the two sides of a DE comparison (``adata`` in memory,
     before anything normalises its X), or None without counts."""
-    found = per_cell_totals(adata)
+    found = per_cell_totals(adata, mask_a | mask_b)
     if found is None:
         return None
     return compare(found[0], found[1], mask_a, mask_b)

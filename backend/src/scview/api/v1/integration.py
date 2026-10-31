@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from scview.core.sse import keepalive
 from scview.config import Settings
-from scview.core import provenance
+from scview.core import provenance, working_copy
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit
 from scview.core.ingestion.merge import MergeJoin
@@ -32,6 +32,7 @@ from scview.core.integration import (
     IntegrationPlan,
     build_plan,
     load_units,
+    read_need,
     read_batch_mixing,
     record_batch_mixing,
     run_integration_streamed,
@@ -73,7 +74,13 @@ async def _plan(body: IntegratePlanRequest, dm: DatasetManager, settings: Settin
     # A dataset a pipeline run is changing is read once the run has finished.
     for did in body.dataset_ids:
         await dm.wait_until_idle(did)
-    checks, units = await asyncio.to_thread(load_units, dm, body.dataset_ids, body.labels)
+    # Every dataset's counts are read here, for a plan too: room first, and the reservation
+    # holds until they are read (a 507 the Compare panel shows, ``JointEmbedding``).
+    ids = body.dataset_ids
+    need = await asyncio.to_thread(read_need, dm, ids)
+    what = f"A joint embedding of {' + '.join(dm.dataset_name(d) for d in ids)}" if need else ""
+    async with working_copy.reading(dm, ids[0] if ids else "", need, what, also=ids[1:]) as held:
+        checks, units = await held.run(load_units, dm, ids, body.labels)
     plan = build_plan(
         checks, units,
         max_datasets=settings.MAX_INTEGRATE_DATASETS,

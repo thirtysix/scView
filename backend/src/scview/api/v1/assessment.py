@@ -20,7 +20,7 @@ from scview.core.assessor import assess_preprocessing, recorded_normalization_me
 from scview.core import (
     cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
-from scview.core import large_mode, large_run, leiden
+from scview.core import large_mode, large_run, leiden, working_copy
 from scview.core import batch_methods, qc_states, scaling, spatial, targeted_panel
 from scview.core.obs_writes import (
     dataset_edit, edit_room, editable, save_edit, uns_snapshot,
@@ -381,11 +381,13 @@ async def apply_doublet_threshold(
         if adaptor is None:
             raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        # A large dataset is edited where it is (its X stays on disk), written in place.
+        # A large dataset is edited where it is (its X stays on disk), written in place. A
+        # backed one is too: the calls are obs and uns, so its matrices need no reading
+        # (``write_derived``); it reopens from the saved file below.
         backed = getattr(adaptor.adata, "isbacked", False) and not adaptor.is_large
 
         def _run():
-            work = adaptor.adata.to_memory() if backed else adaptor.adata
+            work = adaptor.adata
             before = uns_snapshot(work)
             result = doublets.apply_threshold(work, body.threshold, body.column or None)
             save_edit(adaptor, work, output_path, before)
@@ -911,8 +913,13 @@ async def preview_mito_refilter(
     large_mode.check(adaptor, "Re-filtering from the original upload",
                      "it reads the original upload and re-processes it in memory")
     try:
-        return await asyncio.to_thread(mito_refilter.preview, dm, dataset_id, adaptor, column or None,
-                                       mito_mode, floor)
+        need = await asyncio.to_thread(mito_refilter.read_need, dm, dataset_id)
+        async with working_copy.reading(dm, dataset_id, need,
+                                        _refilter_what(dm, dataset_id, need, "Previewing a re-filter of")) as held:
+            return await held.run(mito_refilter.preview, dm, dataset_id, adaptor, column or None,
+                                  mito_mode, floor)
+    except DatasetMemoryError:  # a 507
+        raise
     except mito_refilter.RefilterError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
     except ValueError as e:
@@ -920,6 +927,10 @@ async def preview_mito_refilter(
     except Exception as e:
         logger.error("Mito re-filter preview failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Re-filter preview failed: {e}")
+
+
+def _refilter_what(dm: DatasetManager, dataset_id: str, need: int, what: str) -> str:
+    return f"{what} {dm.dataset_name(dataset_id)} from its original upload" if need else what
 
 
 @router.post("/datasets/{dataset_id}/qc/mito-refilter-stream")
@@ -954,9 +965,13 @@ async def run_mito_refilter(
 
     async def event_generator():
         try:
-            async with aclosing(iterate_exclusive(dm, dataset_id, _events, control)) as events:
-                async for event_type, event_data in events:
-                    yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+            need = await asyncio.to_thread(mito_refilter.read_need, dm, dataset_id)
+            # The original upload is read whole in the run: room for it, said as the run's error.
+            async with working_copy.reading(dm, dataset_id, need,
+                                            _refilter_what(dm, dataset_id, need, "Re-filtering")):
+                async with aclosing(iterate_exclusive(dm, dataset_id, _events, control)) as events:
+                    async for event_type, event_data in events:
+                        yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
         except Exception as e:
             logger.error("Mito re-filter failed for %s: %s", dataset_id, e, exc_info=True)
             detail = e.detail if isinstance(e, HTTPException) else str(e)

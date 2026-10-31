@@ -33,7 +33,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import large_mode, results_store
+from scview.core import large_mode, results_store, working_copy
 from scview.core import learned_gate as lg
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
@@ -176,14 +176,16 @@ async def train_stream(
     else:
         expression = _expression(dm.h5ad_candidates(dataset_id)[1:])
 
-    def prep(src) -> lg.TrainInput:
-        data = src.to_memory() if getattr(src, "isbacked", False) and not large else src
-        return lg.prepare(data, body.cells, expression=expression, sample_column=body.sample_column,
+    def prep(src) -> lg.TrainInput:  # backed: only its counts are read (``expression_of``)
+        return lg.prepare(src, body.cells, expression=expression, sample_column=body.sample_column,
                           condition_column=body.condition_column, exclude_cc_stress=body.exclude_cc_stress,
                           negatives=body.negatives)
 
+    need = 0 if large else await asyncio.to_thread(working_copy.counts_bytes, adaptor)
+    what = f"{_WHAT} on {dm.dataset_name(dataset_id)}" if need else _WHAT
     try:
-        inp = await asyncio.to_thread(prep, adata)
+        async with working_copy.reading(dm, dataset_id, need, what) as held:
+            inp = await held.run(prep, adata)
     except lg.LearnedGateError as e:
         raise _http(e)
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
