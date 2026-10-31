@@ -24,7 +24,7 @@ from pathlib import Path
 import h5py
 from pydantic import BaseModel, Field
 
-from scview.core import spatial, xenium
+from scview.core import hd_cells, spatial, xenium
 from scview.core.atac_import import looks_like_barcode_metrics
 from scview.core.crispr import looks_like_calls
 from scview.core.ingestion import h5seurat
@@ -45,8 +45,9 @@ _SNIFF_BYTES = 8192
 
 # Ensembl gene ids: human ENSG, mouse ENSMUSG, and other species ENS<species>G.
 _ENSEMBL_RE = re.compile(r"^ENS[A-Z]*G\d{6,}", re.IGNORECASE)
-# A 10x cell barcode: a run of ACGT(N), optionally a "-1" / ".1" lane suffix.
-_BARCODE_RE = re.compile(r"^[ACGTN]{8,}([-.]\d+)?$", re.IGNORECASE)
+# A 10x cell barcode: a run of ACGT(N), or Space Ranger 4's segmented cell id, optionally a
+# "-1" / ".1" lane suffix.
+_BARCODE_RE = re.compile(r"^([ACGTN]{8,}|cellid_\d+)([-.]\d+)?$", re.IGNORECASE)
 # A plausible gene symbol / identifier token.
 _GENEISH_RE = re.compile(r"^[A-Za-z0-9._-]{1,30}$")
 
@@ -73,6 +74,7 @@ class FileKind(str, Enum):
     crispr_calls = "crispr_calls"  # Cell Ranger protospacer_calls_per_cell.csv (core/crispr.py)
     spatial = "spatial"  # a Space Ranger spatial file: a side file of a unit (core/spatial.py)
     xenium = "xenium"  # a file of a Xenium output folder (core/xenium.py)
+    hd_cells = "hd_cells"  # an outline file of a Visium HD segmented_outputs folder (core/hd_cells.py)
     atac_fragments = "atac_fragments"  # an ATAC fragments file or its .tbi: a side file (core/atac_fragments.py)
     h5mu = "h5mu"  # MuData on disk, RNA + ATAC modalities (core/atac_import.py)
     atac_metrics = "atac_metrics"  # Cell Ranger ARC per_barcode_metrics.csv (core/atac_import.py)
@@ -130,6 +132,11 @@ def detect_file(path: Path) -> DetectionResult:
         return DetectionResult(kind=FileKind.unknown if found.get("zip") else FileKind.xenium,
                                confidence=0.95, format_family=xenium.TECHNOLOGY,
                                reason=found["reason"], details=details)
+
+    found = hd_cells.sniff(path, head)  # by name, before tens of MB of GeoJSON is peeked at as text
+    if found is not None:
+        return DetectionResult(kind=FileKind.hd_cells, confidence=0.95, format_family="spaceranger",
+                               reason=found["reason"], details={"part": found["part"]})
 
     # Space Ranger's tissue images, parquet positions and spatial/ archives (before the
     # text peek: a tar.gz decodes as text).

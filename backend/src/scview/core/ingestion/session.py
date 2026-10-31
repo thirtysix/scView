@@ -38,7 +38,17 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from scview.core import atac_import, conversion, crispr, modality_store, protein, provenance, spatial, velocity_input
+from scview.core import (
+    atac_import,
+    cell_outlines,
+    conversion,
+    crispr,
+    modality_store,
+    protein,
+    provenance,
+    spatial,
+    velocity_input,
+)
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion import streamed
 from scview.core.ingestion.bundling import (
@@ -99,7 +109,7 @@ def _seqqc_view(unit: IngestUnit) -> IngestUnit:
     ``_attach_vdj`` / ``_attach_guide_calls`` / ``_attach_spatial`` instead."""
     keep = [f for f in unit.side_files
             if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial, SideKind.xenium, SideKind.atac,
-                                   SideKind.atac_metrics)]
+                                   SideKind.atac_metrics, SideKind.hd_cells)]
     return unit.model_copy(update={"side_files": keep})
 
 
@@ -495,8 +505,9 @@ class IngestSessionManager:
         except IngestLoadError as e:
             part.unlink(missing_ok=True)
             raise IngestCommitError(str(e)) from e
+        outlines_part = self._session_dir(sid) / ".scview-outlines"
         try:
-            spatial_params = self._attach_spatial(adata, loadable, opts)
+            spatial_params = self._attach_spatial(adata, loadable, opts, outlines_part)
         except IngestCommitError:
             part.unlink(missing_ok=True)
             raise
@@ -539,12 +550,17 @@ class IngestSessionManager:
                 dest = modality_store.store_path(self.data_dir, dataset_id, atac_import.STORE)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 atac_part.replace(dest)
+            if outlines_part.is_dir():
+                dest = cell_outlines.store_dir(self.data_dir, dataset_id)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                outlines_part.replace(dest)
         except BaseException:
             shutil.rmtree(modality_store.store_dir(self.data_dir, dataset_id), ignore_errors=True)
             raise
         finally:
             part.unlink(missing_ok=True)
             atac_part.unlink(missing_ok=True)
+            shutil.rmtree(outlines_part, ignore_errors=True)
         logger.info("Committed ingest session %s as dataset %s (%s)%s", sid, dataset_id, name,
                     " in blocks" if matrices is not None else "")
         return dataset_id
@@ -707,12 +723,15 @@ class IngestSessionManager:
                     # A gzip cut off past the part detection read surfaces only here.
                     raise IngestCommitError(f"The contig table {f.name} could not be attached: {e}") from e
 
-    def _attach_spatial(self, adata, loadable, opts: IngestOptions) -> dict | None:
+    def _attach_spatial(self, adata, loadable, opts: IngestOptions, outlines_part: Path) -> dict | None:
         """Space Ranger spatial files uploaded with a unit (``core/spatial.py``): each
         sample's spots placed on its own cells, one library per sample (its label).
-        Returns the summary for the ingest history entry (None without spatial files)."""
+        Returns the summary for the ingest history entry (None without spatial files).
+        A segmented_outputs folder: ``_attach_hd_cells``, its outlines into ``outlines_part``."""
         from scview.core import spatial
 
+        if any(f.side_kind == SideKind.hd_cells for u in loadable for f in u.side_files):
+            return self._attach_hd_cells(adata, loadable, opts, outlines_part)
         with_files = [u for u in loadable
                       if any(f.side_kind == SideKind.spatial for f in u.side_files)]
         if not with_files:
@@ -741,6 +760,38 @@ class IngestSessionManager:
             return spatial.finish(adata)
         except spatial.SpatialError as e:
             raise IngestCommitError(str(e)) from e
+
+    def _attach_hd_cells(self, adata, loadable, opts: IngestOptions, outlines_part: Path) -> dict:
+        """Space Ranger 4's segmented_outputs (``core/hd_cells.py``): each sample's cells placed
+        at their outlines' centroids, one library per sample; the outlines written to a folder
+        that moves beside the dataset once it is saved."""
+        from scview.core import hd_cells, spatial
+
+        without = [u.label for u in loadable if not any(f.side_kind == SideKind.hd_cells for f in u.side_files)]
+        if without:
+            raise IngestCommitError(
+                f"Only some samples came with a Space Ranger cell segmentation ({', '.join(without)} did not). "
+                "Upload the segmented samples together without the others.")
+        merged = len(loadable) > 1
+        pieces, records = [], []
+        try:
+            for u in loadable:
+                outlines = {f.spatial_part: (f.path, f.rel_path or f.name) for f in u.side_files
+                            if f.side_kind == SideKind.hd_cells}
+                parts = [(f.spatial_part or "", f.path, f.rel_path or f.name) for f in u.side_files
+                         if f.side_kind == SideKind.spatial]
+                piece, record = hd_cells.attach(
+                    adata, outlines, spatial.read_spaceranger(parts, positions=False), u.label,
+                    sample_column=opts.sample_label if merged else None, sample=u.label if merged else None,
+                    label=u.label)
+                pieces.append(piece)
+                records.append(record)
+            summary = hd_cells.finish(adata, records)
+            shutil.rmtree(outlines_part, ignore_errors=True)
+            hd_cells.write_store(outlines_part, pieces)
+            return summary
+        except (hd_cells.HdCellsError, spatial.SpatialError, OSError, EOFError, zlib.error) as e:
+            raise IngestCommitError(f"The cell segmentation could not be used: {e}") from e
 
     def _write_atac(self, adata, loadable, opts: IngestOptions, part: Path, workdir: Path) -> dict:
         """10x Multiome peaks into the ATAC store (``core/atac_import.py``), read from the
