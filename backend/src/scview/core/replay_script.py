@@ -2916,7 +2916,9 @@ u, s, vt = block_lanczos_svd(AtacTfIdf(counts, selected), ATAC["n_lsi"], ATAC["l
 adata.obsm["X_lsi"] = scaled_embedding(u).astype(np.float32)
 adata.obsm["atac_rep"] = adata.obsm["X_lsi"][:, [d - 1 for d in ATAC["dims"]]]
 sc.pp.neighbors(adata, n_neighbors=ATAC["k"], use_rep="atac_rep", metric=ATAC["metric"], key_added="atac", random_state=0)
+conn = adata.obsp["atac_connectivities"].copy()  # umap-learn trims the graph it is given
 sc.tl.umap(adata, neighbors_key="atac", key_added="X_umap_atac", min_dist=ATAC["min_dist"], random_state=0)
+adata.obsp["atac_connectivities"] = conn
 del adata.obsm["atac_rep"]
 '''
 
