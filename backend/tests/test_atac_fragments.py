@@ -217,6 +217,14 @@ def test_values_by_group_are_capped_honestly(tmp_path):
         af.values_by_group(_adata(), None)
 
 
+def test_values_by_group_refuses_a_column_of_too_many_groups(tmp_path, monkeypatch):
+    adata = _adata()
+    af.save(adata, _result(tmp_path), genome="GRCh38", source=None, file_name=None)
+    monkeypatch.setattr(af, "MAX_GROUPS", 1)
+    with pytest.raises(af.FragmentsError, match="2 groups"):
+        af.values_by_group(adata, "cell_type")
+
+
 # -- attaching ----------------------------------------------------------------
 
 
@@ -247,6 +255,22 @@ def test_verify_refuses_a_low_share_with_the_numbers_and_removes_the_files(tmp_p
     message = str(e.value)
     assert "1 of the first 601 fragments (0.2%)" in message and "3 cells" in message and "5%" in message
     assert not af.fragments_path(tmp_path, "d").exists() and not af.index_path(tmp_path, "d").exists()
+
+
+def test_verify_keeps_only_the_files_name_and_refuses_a_damaged_file(tmp_path):
+    folder = modality_store.store_dir(tmp_path, "d")
+    folder.mkdir(parents=True)
+    write_fragments(folder / af.FRAGMENTS_FILE, _many())
+    state = af.verify(tmp_path, "d", CELLS, file_name="../../etc/atac.tsv.gz", auto_download=False)
+    assert state["name"] == "atac.tsv.gz"
+    af.detach(tmp_path, "d")
+    write_fragments(folder / af.FRAGMENTS_FILE, _many())
+    raw = bytearray((folder / af.FRAGMENTS_FILE).read_bytes())
+    raw[30:60] = bytes(30)
+    (folder / af.FRAGMENTS_FILE).write_bytes(bytes(raw))
+    with pytest.raises(af.FragmentsError, match="damaged"):
+        af.verify(tmp_path, "d", CELLS, auto_download=False)
+    assert not af.fragments_path(tmp_path, "d").exists()
 
 
 def test_verify_refuses_the_other_species(tmp_path):

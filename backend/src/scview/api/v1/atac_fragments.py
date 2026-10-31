@@ -380,3 +380,5 @@ async def coverage(
         return await asyncio.to_thread(work)
     except af.FragmentsError as e:
         raise _http(e)
+    except ff.FragmentFileError as e:
+        raise HTTPException(status_code=422, detail=str(e))

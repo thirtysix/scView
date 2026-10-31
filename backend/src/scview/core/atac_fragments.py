@@ -228,21 +228,17 @@ def verify(data_dir: str | Path, dataset_id: str, barcodes: Sequence[str], file_
     idx = index_path(data_dir, dataset_id)
     state = _read_state(data_dir, dataset_id)
     if file_name:
-        state["name"] = str(file_name)
+        state["name"] = Path(str(file_name)).name  # never the client's path
     if path.exists():
         with open(path, "rb") as fh:
             head = fh.read(1024)
         try:
             check_head(head, "fragments")
-        except FragmentsError:
-            detach(data_dir, dataset_id)
-            raise
-        if state.get("size") != path.stat().st_size or "share" not in state:
-            try:
+            if state.get("size") != path.stat().st_size or "share" not in state:
                 state.update(_check_share(path, barcodes), size=path.stat().st_size)
-            except FragmentsError:
-                detach(data_dir, dataset_id)
-                raise
+        except (FragmentsError, ff.FragmentFileError) as e:
+            detach(data_dir, dataset_id)
+            raise FragmentsError(str(e)) from e
     if idx.exists():
         try:
             index = ff.load_index(idx)
@@ -692,7 +688,11 @@ def values_by_group(adata, group_by: str | None, max_per_group: int = 2000, seed
     labels = _labels(obs, group_by) if group_by else np.full(adata.n_obs, "All cells", dtype=object)
     rng = np.random.default_rng(seed)
     groups = []
-    for name in _ordered(obs, group_by, labels):
+    names = _ordered(obs, group_by, labels)
+    if len(names) > MAX_GROUPS:
+        raise FragmentsError(f"'{group_by}' has {len(names)} groups, more than the {MAX_GROUPS} these plots can show: "
+                             "pick a column with fewer.")
+    for name in names:
         idx = np.flatnonzero(labels == name)
         n = idx.size
         if n > max_per_group:
@@ -866,7 +866,7 @@ def coverage(reader: ff.FragmentReader, adata, chrom: str, start: int, end: int,
     """Depth per bin per group. Fragments are read once for the window; every base's depth
     is computed and averaged per bin, so a 2 Mb window costs about 16 MB per group."""
     if end - start > MAX_WINDOW:
-        raise FragmentsError(f"That window is {(end - start) / 1e6:.2f} Mb; tracks are drawn for up to "
+        raise FragmentsError(f"That window is {end - start:,} bp; tracks are drawn for up to "
                              f"{MAX_WINDOW / 1e6:.0f} Mb at a time: ask for a narrower region.")
     if not reader.has_chrom(chrom):
         raise FragmentsError(f"The fragments file has no chromosome '{chrom}' (it has "
@@ -905,7 +905,7 @@ def coverage(reader: ff.FragmentReader, adata, chrom: str, start: int, end: int,
         summed = np.add.reduceat(depth, edges[:-1] - start)
         mean_depth = summed / np.diff(edges)
         n_cells = int(members.sum())
-        total = float(totals[members].sum()) if totals is not None else None
+        total = float(np.nansum(totals[members])) if totals is not None else None
         scale = 1e6 / total if total else (1e3 / n_cells if n_cells else 0.0)
         values = mean_depth * scale
         ymax = max(ymax, float(values.max(initial=0.0)))

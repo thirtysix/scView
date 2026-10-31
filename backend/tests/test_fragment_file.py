@@ -158,3 +158,13 @@ def test_barcodes_lookup_is_exact():
     codes = ff.Barcodes(CELLS)
     assert codes.lookup(np.array([codes.hash_of("AAAG-1"), codes.hash_of("ZZZZ-1")], dtype=np.uint64)).tolist() == [1, -1]
     assert ff.Barcodes([]).lookup(np.array([codes.hash_of("A")], dtype=np.uint64)).tolist() == [-1]
+
+
+def test_a_damaged_block_is_a_sentence(pair, tmp_path):
+    _, path, _ = pair
+    raw = bytearray(path.read_bytes())
+    raw[30:60] = bytes(30)  # inside the first block's deflate stream
+    bad = tmp_path / "bad.gz"
+    bad.write_bytes(bytes(raw))
+    with pytest.raises(ff.FragmentFileError, match="damaged"):
+        ff.read_all_bgzf(bad)

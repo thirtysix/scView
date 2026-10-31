@@ -80,7 +80,11 @@ def _block_size(buf, pos: int) -> int:
 
 def _inflate(block) -> bytes:
     xlen = struct.unpack_from("<H", block, 10)[0]
-    return zlib.decompress(bytes(block[12 + xlen:-8]), wbits=-15)
+    try:
+        return zlib.decompress(bytes(block[12 + xlen:-8]), wbits=-15)
+    except zlib.error as e:
+        raise FragmentFileError("A block of the fragments file does not decompress: it is damaged; upload it "
+                                "again.") from e
 
 
 def iter_bgzf(path: str | Path) -> Iterator[tuple[int, bytes]]:
