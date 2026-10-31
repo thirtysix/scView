@@ -77,6 +77,7 @@ HD_RAW = "the raw matrix, every bin of the slide and most of them empty: the fil
 HD_COPY = "the same matrix as filtered_feature_bc_matrix.h5, which is read"
 HD_ANALYSIS = "Space Ranger's own analysis (clustering, PCA, UMAP, DE): scView computes these itself"
 HD_OTHER = "a Space Ranger output scView does not read"
+SEG_RAW = "the raw matrix, with the cells the run filtered out: the filtered one is read"
 
 _JUNK_NAMES = {
     ".ds_store": SYSTEM, "thumbs.db": SYSTEM, "desktop.ini": SYSTEM,
@@ -127,6 +128,33 @@ def _hd_junk(rel: str) -> str | None:
     return HD_OTHER
 
 
+_SEG_FILES = {"filtered_feature_cell_matrix.h5", "cell_segmentations.geojson", "nucleus_segmentations.geojson",
+              "graphclust_annotated_cell_segmentations.geojson"}
+_SEG_SPATIAL = {"scalefactors_json.json", "tissue_hires_image.png", "tissue_lowres_image.png"}
+_SEG_MATRIX_DIR = "filtered_feature_cell_matrix"
+
+
+def _seg_junk(rel: str) -> str | None:
+    """Inside a Space Ranger 4 ``segmented_outputs/`` folder only the filtered matrix, the
+    outlines and three files of ``spatial/`` are read: why any other is skipped, None to keep it
+    or outside such a folder."""
+    parts = [p.lower() for p in PurePosixPath(rel).parts]
+    if "segmented_outputs" not in parts[:-1]:
+        return None
+    dirs, name = parts[parts.index("segmented_outputs") + 1:-1], parts[-1]
+    if not dirs and (name in _SEG_FILES or name.endswith("filtered_feature_cell_matrix.h5")):
+        return None
+    if dirs == ["spatial"] and name in _SEG_SPATIAL:
+        return None
+    if dirs == [_SEG_MATRIX_DIR]:
+        return None  # the same matrix as the .h5 when that came too: the bundler drops the copy
+    if "analysis" in dirs:
+        return HD_ANALYSIS
+    if "raw" in name or any("raw" in d for d in dirs):
+        return SEG_RAW
+    return HD_OTHER
+
+
 def junk_reason(rel: str) -> str | None:
     """Why scView skips this file of a folder (a reason above), or None to keep it.
     The frontend skips the same names before sending (``lib/ingestUpload.ts``), so
@@ -139,7 +167,7 @@ def junk_reason(rel: str) -> str | None:
     for suffix, reason in _JUNK_SUFFIXES:
         if name.endswith(suffix):
             return reason
-    return _hd_junk(rel)
+    return _hd_junk(rel) or _seg_junk(rel)
 
 
 def skipped_sentence(skipped: list[dict]) -> str:

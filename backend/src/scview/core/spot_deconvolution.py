@@ -839,8 +839,8 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
 
 
 NOT_SPOTS = ("Spot composition needs Visium spots or Visium HD bins: this dataset has no capture grid. "
-             "Imaging-based data already resolves single cells: label them from a reference instead "
-             "(Data Assessment > Label from a reference dataset).")
+             "Imaging-based data and segmented Visium HD cells already resolve single cells: label them from a "
+             "reference instead (Data Assessment > Label from a reference dataset).")
 
 
 # ---------------------------------------------------------------------------

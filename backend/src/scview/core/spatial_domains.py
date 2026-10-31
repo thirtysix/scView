@@ -455,8 +455,10 @@ def choose_rep(adata, n_libraries: int) -> str:
 
 
 def grid_neighbours(adata) -> int | None:
-    """6 on Visium's grid, 4 on Visium HD's, None (Delaunay) for cells."""
-    return GRID_NEIGHBOURS.get(spatial.technology(adata)["technology"])
+    """6 on Visium's grid, 4 on Visium HD's, None (Delaunay) for cells, Visium HD's segmented
+    ones too."""
+    tech = spatial.technology(adata)
+    return GRID_NEIGHBOURS.get(tech["technology"]) if tech["unit"] in spatial.SPOT_UNITS else None
 
 
 def _graph_text(grid: int | None) -> str:
@@ -634,7 +636,7 @@ def plan_domains(adata, *, k: int | None = DEFAULT_K, n_hops: int = DEFAULT_HOPS
     if check_column:
         _taken(adata, column, _load(adata, DOMAINS_KEY)["runs"], overwrite, "domain")
     tech = spatial.technology(adata)
-    grid = GRID_NEIGHBOURS.get(tech["technology"])
+    grid = grid_neighbours(adata)
     dims = use * (int(n_hops) + 1)
     notes: list[str] = []
     fitted = min(n, MAX_FIT_OBS)
@@ -1071,12 +1073,12 @@ def enrichment_summary(adata, column: str | None = None, cells_fingerprint: str 
 
 def niches_allowed(adata) -> dict[str, Any]:
     """``{"ok", "reason", "note"}``: refused on spots that mix cells, with a sentence."""
-    tech = spatial.technology(adata)["technology"]
+    tech, unit = spatial.technology(adata)["technology"], spatial.technology(adata)["unit"]
     if tech == "visium":
         return {"ok": False, "note": None, "reason": (
             "Composition niches need one label per cell, and a Visium spot mixes several cells: use neighbourhood "
             "enrichment here, or Spot composition for each spot's cell-type shares.")}
-    if tech == "visium_hd":
+    if tech == "visium_hd" and unit == "bin":
         uns = adata.uns.get(spatial.KEY)
         sizes = {spatial._bin_size(uns.get(lib)) for lib in spatial._libraries(adata)} if uns is not None else set()
         sizes.discard(None)

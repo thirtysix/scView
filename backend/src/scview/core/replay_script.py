@@ -1538,6 +1538,22 @@ _HELPER_ORDER += ("spatial_domains",)
 _HELPER_NEEDS["spatial_domains"] = ("spatial_autocorr",)  # knn_edges
 
 
+def _hd_cells_helper() -> str:
+    """core/hd_cells.py's positions of Visium HD's segmented cells, copied (numpy, pandas, json)."""
+    import inspect
+
+    from scview.core import hd_cells
+
+    lines = ["import json", "import os"]
+    for obj in hd_cells.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines)
+
+
+_HELPERS["hd_cells"] = _hd_cells_helper()
+_HELPER_ORDER += ("hd_cells",)
+
+
 def _atac_fragments_helper() -> str:
     """core/atac_fragments.py's QC, in plain pandas: slower than scView's pass, the same numbers."""
     import inspect
@@ -2393,6 +2409,17 @@ def _uns_mapping(adata, key: str) -> dict[str, str] | None:
 
 def _ingest(p: dict, ctx: _Ctx) -> Snippet:
     lines = ["# The import itself is read_input() at the top of this script."]
+    placed = p.get("spatial") if isinstance(p.get("spatial"), dict) else {}
+    libraries = placed.get("libraries") if isinstance(placed.get("libraries"), dict) else {}
+    if placed.get("technology") == "visium_hd" and placed.get("unit") == "cell" and len(libraries) == 1:
+        _need(ctx, "hd_cells")
+        return Snippet(EXACT, lines + [
+            "# Space Ranger 4's cell segmentation: a matrix from segmented_outputs/ has no positions, so",
+            "# they come from the outlines beside it (the centroid of each; scView's stored .h5ad has them).",
+            "if \"spatial\" not in adata.obsm:",
+            "    replay_positions(adata, os.path.dirname(os.path.abspath(INPUT.rstrip(\"/\"))), "
+            f"{_lit(str(next(iter(libraries))))})",
+        ])
     pub = p.get("public_import")
     if isinstance(pub, dict):  # a CELLxGENE Discover dataset version (core/public_import.py)
         return Snippet(EXACT, lines + [
@@ -3285,7 +3312,7 @@ def _spatial_autocorr(p: dict, ctx: _Ctx) -> Snippet:
                   else ["SPATIAL_GENES = [", *_packed([repr(str(g)) for g in genes]), "]"])
     return Snippet(EXACT, [
         f"# Spatially variable genes: Moran's I per gene ({'capture grid' if kind == 'grid' else 'kNN'} "
-        f"neighbours, {p.get('n_neighs', 6)} per spot, within each section), = squidpy 1.6's",
+        f"neighbours, {p.get('n_neighs', 6)} each, within each section), = squidpy 1.6's",
         "# spatial_neighbors + spatial_autocorr defaults; saved where squidpy saves it.",
         *values,
         *gene_lines,

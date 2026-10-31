@@ -23,8 +23,9 @@ A Visium HD run is read one bin size at a time, each its own dataset: the
 ``filtered_feature_bc_matrix.h5`` and ``spatial/`` of one ``square_NNNum/`` folder
 (``HD_DIR_RE``), the same files as a Visium sample with parquet positions and a
 ``bin_size_um`` scale factor. ``spot_diameter_fullres`` is then the bin's side in full-res
-pixels. Its 2 um bins, ``binned_outputs.tar.gz`` and ``segmented_outputs/`` (Space Ranger
-4) are refused with a sentence. A Xenium output folder is read by ``core/xenium.py``.
+pixels. Its 2 um bins and a ``binned_outputs.tar.gz`` are refused with a sentence. Space Ranger
+4's ``segmented_outputs/`` is read as cells by ``core/hd_cells.py`` (technology visium_hd, unit
+cell: no grid). A Xenium output folder is read by ``core/xenium.py``.
 """
 
 from __future__ import annotations
@@ -70,8 +71,16 @@ HD_TOO_FINE = ("The {um} um bins of a Visium HD run are millions of observations
                "the square_008um or square_016um folder instead.")
 HD_ARCHIVE = ("{name} is a Visium HD binned_outputs archive, which scView does not read: unpack it "
               "and drop the binned_outputs folder (or one square_NNNum folder) instead.")
-HD_SEGMENTED = ("Space Ranger 4's segmented_outputs (cell segmentation) is not read yet: upload the "
-                "run's binned_outputs folder instead, which reads as 8 or 16 um bins.")
+HD_SEG_ARCHIVE = ("{name} is a Visium HD segmented_outputs archive, which scView does not read: unpack it "
+                  "and drop the segmented_outputs folder instead.")
+HD_SEG_INCOMPLETE = ("This Space Ranger segmented_outputs folder lacks its filtered_feature_cell_matrix.h5 (or "
+                     "that folder) or its cell_segmentations.geojson, and a dataset of cells needs both: upload "
+                     "the whole folder.")
+HD_SEG_DIR = "segmented_outputs"
+HD_SEG_MATRIX = "filtered_feature_cell_matrix"
+HD_SEG_CELLS = "cell_segmentations.geojson"
+HD_BINS_NOT_READ = ("the run's bins: a run with a cell segmentation reads as cells; for bins upload binned_outputs "
+                    "or one square_NNNum folder alone")
 HD_MIXED_SIZES = ("These Visium HD samples have different bin sizes ({sizes} um): upload samples of "
                   "one bin size together, or each on its own.")
 # A spatial dataset of cells with no more genes than this is a panel (CosMx, MERSCOPE, an
@@ -90,6 +99,7 @@ _BARCODE_RE = re.compile(r"^[ACGTN]{6,}([-.]\d+)?$", re.IGNORECASE)
 _HD_BARCODE_RE = re.compile(r"^s_(\d{3})um_")
 HD_DIR_RE = re.compile(r"^square_(\d{3})um$", re.IGNORECASE)
 _HD_ARCHIVE_RE = re.compile(r"binned_outputs\.(tar\.gz|tgz|tar)$", re.IGNORECASE)
+_HD_SEG_ARCHIVE_RE = re.compile(r"segmented_outputs\.(tar\.gz|tgz|tar)$", re.IGNORECASE)
 _INT_RE = re.compile(r"^-?\d+$")
 _MAX_MEMBER_BYTES = 512 * 1024**2  # one file of a spatial archive
 
@@ -116,6 +126,8 @@ def sniff_binary(path: Path, head: bytes) -> dict | None:
     name = path.name.lower()
     if _HD_ARCHIVE_RE.search(name):  # gigabytes: never walked through
         return {"part": None, "hd_archive": True, "reason": "a Visium HD binned_outputs archive"}
+    if _HD_SEG_ARCHIVE_RE.search(name):
+        return {"part": None, "hd_seg_archive": True, "reason": "a Visium HD segmented_outputs archive"}
     if head.startswith(_GZIP_MAGIC):
         try:
             with gzip.open(path, "rb") as fh:
@@ -141,6 +153,8 @@ def sniff_binary(path: Path, head: bytes) -> dict | None:
             return None
         if members.get(_HD_MEMBER):
             return {"part": None, "hd_archive": True, "reason": "a Visium HD binned_outputs archive"}
+        if members.get(_HD_SEG_MEMBER):
+            return {"part": None, "hd_seg_archive": True, "reason": "a Visium HD segmented_outputs archive"}
         if POSITIONS not in members:
             return {"part": None, "reason": "an archive without Space Ranger tissue positions"}
         return {"part": ARCHIVE, "members": sorted(members),
@@ -196,18 +210,21 @@ def name_key(name: str) -> str:
 
 def unsupported(rels: list[str]) -> str | None:
     """The sentence for an upload of a spatial format scView does not read (Visium HD's
-    binned_outputs as an archive, its segmented_outputs alone, its 2 um bins), from its file
-    paths; None otherwise."""
+    outputs as an archive, a segmented_outputs folder with no matrix or no cell outlines,
+    its 2 um bins), from its file paths; None otherwise."""
     for r in rels:
         if _HD_ARCHIVE_RE.search(r):
             return HD_ARCHIVE.format(name=PurePosixPath(r).name)
+        if _HD_SEG_ARCHIVE_RE.search(r):
+            return HD_SEG_ARCHIVE.format(name=PurePosixPath(r).name)
+    cells = hd_seg_runs(rels)
     if any(hd_folder(r) for r in rels):
-        for um in hd_chosen_bins(rels).values():
-            if um < HD_MIN_BIN_UM:
+        for run, um in hd_chosen_bins(rels).items():
+            if um < HD_MIN_BIN_UM and run not in cells:
                 return too_fine(um)
         return None
-    if any("segmented_outputs" in (d.lower() for d in PurePosixPath(r).parent.parts) for r in rels):
-        return HD_SEGMENTED
+    if not cells and any(hd_seg_folder(r) is not None for r in rels):
+        return HD_SEG_INCOMPLETE
     return None
 
 
@@ -248,6 +265,32 @@ def hd_chosen_bins(rels) -> dict[str, int]:
     return {run: hd_pick_bin(s) for run, s in sizes.items()}
 
 
+def hd_seg_folder(rel: str) -> str | None:
+    """The run's folder of a file inside a ``segmented_outputs/`` folder: its path above that
+    folder ("" at the top). None for any other file."""
+    parts = PurePosixPath(rel).parent.parts
+    for i, d in enumerate(parts):
+        if d.lower() == HD_SEG_DIR:
+            return "/".join(parts[:i])
+    return None
+
+
+def hd_seg_runs(rels) -> set[str]:
+    """The runs of these paths that read as cells: a ``segmented_outputs/`` folder holding the
+    filtered matrix (.h5 or its folder) and the cell outlines. Such a run's bins are not read."""
+    matrix, outlines = set(), set()
+    for r in rels:
+        run = hd_seg_folder(r)
+        if run is None:
+            continue
+        low = PurePosixPath(r.lower())
+        if low.name == HD_SEG_CELLS:
+            outlines.add(run)
+        elif low.name.endswith(HD_SEG_MATRIX + ".h5") or low.parent.name == HD_SEG_MATRIX:
+            matrix.add(run)
+    return matrix & outlines
+
+
 def _read(path: Path, n: int) -> bytes:
     try:
         with open(path, "rb") as fh:
@@ -270,6 +313,7 @@ def _part_of(name: str) -> str | None:
 
 
 _HD_MEMBER = "hd"  # in ``_archive_parts``: the archive holds a Visium HD run's binned outputs
+_HD_SEG_MEMBER = "hd_seg"  # or its segmented outputs
 
 
 def _archive_parts(path: Path) -> dict[str, str] | None:
@@ -281,6 +325,8 @@ def _archive_parts(path: Path) -> dict[str, str] | None:
             for m in tf:
                 if hd_folder(m.name) or "binned_outputs" in PurePosixPath(m.name).parts:
                     return {_HD_MEMBER: m.name}
+                if HD_SEG_DIR in PurePosixPath(m.name).parts:
+                    return {_HD_SEG_MEMBER: m.name}
                 part = _part_of(m.name) if m.isfile() else None
                 if part and (part not in out or m.name.endswith("tissue_positions.csv")):
                     out[part] = m.name
@@ -332,9 +378,10 @@ class SpaceRanger:
     layout: str = ""  # which positions file layout
 
 
-def read_spaceranger(parts: list[tuple[str, str, str]]) -> SpaceRanger:
+def read_spaceranger(parts: list[tuple[str, str, str]], *, positions: bool = True) -> SpaceRanger:
     """Read a sample's spatial files: ``(part, path, shown name)`` each, loose files or an
-    archive (``part`` "archive") of the folder. Raises SpatialError naming the file."""
+    archive (``part`` "archive") of the folder. Raises SpatialError naming the file.
+    ``positions=False``: there is no positions file to read (a segmented_outputs folder)."""
     data: dict[str, tuple[bytes, str]] = {}
     for part, path, shown in parts:
         if part == ARCHIVE:
@@ -344,12 +391,15 @@ def read_spaceranger(parts: list[tuple[str, str, str]]) -> SpaceRanger:
             if part in data:
                 raise SpatialError(f"Two {part} files ({data[part][1]}, {shown}): keep one.")
             data[part] = (_gunzip(Path(path).read_bytes()), shown)
-    if POSITIONS not in data:
+    if not positions:
+        sr = SpaceRanger(positions=pd.DataFrame())
+    elif POSITIONS not in data:
         raise SpatialError("No tissue positions file (tissue_positions.csv or "
                            "tissue_positions_list.csv) came with the spatial files.")
-    raw, pos_name = data[POSITIONS]
-    positions, layout = _read_positions(raw, pos_name)
-    sr = SpaceRanger(positions=positions, layout=layout, files={POSITIONS: pos_name})
+    else:
+        raw, pos_name = data[POSITIONS]
+        table, layout = _read_positions(raw, pos_name)
+        sr = SpaceRanger(positions=table, layout=layout, files={POSITIONS: pos_name})
     if SCALEFACTORS in data:
         raw, name = data[SCALEFACTORS]
         try:
@@ -508,14 +558,7 @@ def attach(adata, sr: SpaceRanger, library_id: str, *, sample_column: str | None
     be an in-tissue spot of the positions file (SpatialError names the count). Returns
     the number of spots."""
     n = adata.n_obs
-    names = adata.obs_names.astype(str)
-    if sample_column and sample is not None:
-        rows = (adata.obs[sample_column].astype(str) == str(sample)).to_numpy()
-        keys = pd.Index([s.rsplit(":", 1)[0] if s.endswith(f":{sample}") else s
-                         for s in names[rows]])
-    else:
-        rows = np.ones(n, dtype=bool)
-        keys = pd.Index(names)
+    rows, keys = sample_rows(adata, sample_column, sample)
     pos = sr.positions.reindex(keys)
     missing = int(pos["pxl_col_in_fullres"].isna().sum())
     who = label or library_id
@@ -553,6 +596,16 @@ def attach(adata, sr: SpaceRanger, library_id: str, *, sample_column: str | None
     return int(rows.sum())
 
 
+def sample_rows(adata, sample_column: str | None, sample: str | None) -> tuple[np.ndarray, pd.Index]:
+    """The rows of one sample of a merge (all of them otherwise) and their names as its own
+    files give them, without the ":<sample>" a merge adds."""
+    names = adata.obs_names.astype(str)
+    if sample_column and sample is not None:
+        rows = (adata.obs[sample_column].astype(str) == str(sample)).to_numpy()
+        return rows, pd.Index([s.rsplit(":", 1)[0] if s.endswith(f":{sample}") else s for s in names[rows]])
+    return np.ones(adata.n_obs, dtype=bool), pd.Index(names)
+
+
 def _with_bin_side(sf: Mapping) -> dict:
     """Scale factors, with ``spot_diameter_fullres`` = the bin's side in pixels when a
     Visium HD file gives the bin size and the pixel size but no diameter."""
@@ -581,11 +634,14 @@ def finish(adata) -> dict:
 
 
 def technology(adata) -> dict:
-    """``{"technology", "unit"}``: Xenium when an import recorded it; Visium HD bins when
-    the scale factors give a bin size; Visium spots when the grid (array_row, array_col)
-    and every library's spot diameter are known; else cells."""
-    if _recorded(adata).get("technology") == "xenium":
+    """``{"technology", "unit"}``: Xenium, or Visium HD's segmented cells, when an import
+    recorded it; Visium HD bins when the scale factors give a bin size; Visium spots when the
+    grid (array_row, array_col) and every library's spot diameter are known; else cells."""
+    recorded = _recorded(adata)
+    if recorded.get("technology") == "xenium":
         return _tech("xenium")
+    if recorded.get("technology") == "visium_hd" and recorded.get("unit") == "cell":
+        return {"technology": "visium_hd", "unit": "cell"}  # no grid: TECHNOLOGIES has its bins
     obs = adata.obs
     uns = adata.uns.get(KEY)
     libs = _libraries(adata)
@@ -789,9 +845,10 @@ def after_merge(parts: Mapping, merged, sample_label: str) -> None:
     merged.obs[LIBRARY_COLUMN] = pd.Categorical(libs, categories=list(uns))
     merged.uns[KEY] = uns
     # ad.concat dropped uns: a recorded technology survives when every part shares it.
-    recorded = {str(_recorded(a).get("technology")) for a in parts.values()}
+    recorded = {(str(_recorded(a).get("technology")), str(_recorded(a).get("unit"))) for a in parts.values()}
     if len(recorded) == 1:
-        merged.uns[INFO_KEY] = {"technology": recorded.pop()}
+        tech, unit = recorded.pop()
+        merged.uns[INFO_KEY] = {"technology": tech, "unit": unit}
     merged.uns[INFO_KEY] = {**technology(merged), **_bin_record(merged)}
 
 
@@ -935,6 +992,8 @@ def grounding_lines(adata) -> tuple[list[str], str]:
     tech = TECHNOLOGY_NAMES[sp["technology"]]
     if sp.get("bin_size_um"):
         tech += f", {sp['bin_size_um']:g} um bins"
+    elif sp["technology"] == "visium_hd" and unit == "cell":
+        tech += ", Space Ranger cell segmentation"
     sections = f"{len(libs)} section{'s' if len(libs) != 1 else ''}"
     per = ", ".join(f"{lib['id']} {lib['n_obs']:,}" for lib in libs[:8])
     images = sorted({res for lib in libs for res in lib["images"]})
@@ -946,6 +1005,9 @@ def grounding_lines(adata) -> tuple[list[str], str]:
     elif unit == "bin":
         line += (" A bin is a square of the capture grid, not a segmented cell (about one cell at 8 um, "
                  "2 to 4 at 16 um), so values are per bin and doublet detection does not apply.")
+    elif sp["technology"] == "visium_hd":
+        line += (" A cell here is Space Ranger's segmentation: the 2 um bins assigned to a nucleus expanded "
+                 "outward, so counts outside any cell are not in this dataset.")
     panel = ""
     if targeted_panel(adata):
         from scview.core import targeted_panel as tp

@@ -90,6 +90,8 @@ describe("paramText", () => {
       source: "spaceranger", spaceranger_version: null, technology: "visium", unit: "spot",
       libraries: { LN: 4035, brain: 2310 }, images: { LN: ["hires", "lowres"], brain: ["lowres"] },
     })).toBe("Visium: 2 sections (LN 4,035 spots, brain 2,310 spots), images hires, lowres");
+    expect(paramText("spatial", { technology: "visium_hd", unit: "cell", libraries: { run_cells: 40222 }, images: { run_cells: ["hires"] } }))
+      .toContain("Visium HD: 1 section (run_cells 40,222 cells), images hires");
     expect(paramText("spatial", { technology: "cells", unit: "cell", libraries: { s1: 1 }, images: { s1: [] } }))
       .toBe("tissue positions: 1 section (s1 1 cell), no image");
     expect(paramText("converted", [
