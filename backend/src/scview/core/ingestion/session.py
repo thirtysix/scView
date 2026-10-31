@@ -34,6 +34,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal
 
+import numpy as np
+import pandas as pd
 from pydantic import BaseModel
 
 from scview.core import atac_import, conversion, crispr, modality_store, protein, provenance, spatial, velocity_input
@@ -844,6 +846,7 @@ class IngestSessionManager:
         ing.mkdir(parents=True, exist_ok=True)
         h5_path = ing / f"{_safe_name(name)}.h5ad"
         _clear_index_name_clashes(adata)
+        _plain_strings(adata)
         try:
             if matrices is not None:
                 streamed.finish_h5ad(adata, matrices, h5_path)
@@ -981,6 +984,23 @@ def _rel_to(path: Path, root: Path) -> str:
 def _safe_name(name: str) -> str:
     cleaned = _SAFE_NAME_RE.sub("_", name).strip("_")
     return cleaned or "dataset"
+
+
+def _plain_strings(adata) -> None:
+    """Pandas ``string`` columns and indexes (anndata >= 0.11 reads them from a file's
+    nullable-string-array, written by default with pandas 3) as plain text: anndata refuses to
+    write them unless a setting is on, older readers cannot read them, and no code here expects
+    pd.NA. A missing value stays missing."""
+    def plain(values):
+        return values.astype(object).where(values.notna(), np.nan)
+
+    frames = [adata.obs, adata.var] + ([adata.raw.var] if adata.raw is not None else [])
+    for frame in frames:
+        if isinstance(frame.index.dtype, pd.StringDtype):
+            frame.index = pd.Index(plain(frame.index.to_series()).to_numpy(dtype=object), name=frame.index.name, dtype=object)
+        for column in frame.columns:
+            if isinstance(frame[column].dtype, pd.StringDtype):
+                frame[column] = plain(frame[column])
 
 
 def _clear_index_name_clashes(adata) -> None:
