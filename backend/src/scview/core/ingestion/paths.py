@@ -72,7 +72,7 @@ REPORT = "Cell Ranger's HTML report"
 LOUPE = "Loupe Browser files"
 MOLECULES = "per-molecule read information, not a count matrix"
 SPATIAL_EXTRA = "Space Ranger alignment images and tables, not used by scView"
-XENIUM_EXTRA = "Xenium transcripts, boundaries, stains and Explorer files, not used by scView"
+XENIUM_EXTRA = "Xenium transcripts, stains and Explorer files, not read with the folder"
 HD_RAW = "the raw matrix, every bin of the slide and most of them empty: the filtered one is read"
 HD_COPY = "the same matrix as filtered_feature_bc_matrix.h5, which is read"
 HD_ANALYSIS = "Space Ranger's own analysis (clustering, PCA, UMAP, DE): scView computes these itself"
@@ -87,9 +87,7 @@ _JUNK_NAMES = {
     "spatial_enrichment.csv": SPATIAL_EXTRA, "barcode_fluorescence_intensity.csv": SPATIAL_EXTRA,
     "fiducial_positions_list.txt": SPATIAL_EXTRA, "probe_set.csv": "the probe set of the run, not data",
     "transcripts.parquet": XENIUM_EXTRA, "transcripts.csv.gz": XENIUM_EXTRA,
-    "morphology.ome.tif": XENIUM_EXTRA, "cell_boundaries.parquet": XENIUM_EXTRA,
-    "cell_boundaries.csv.gz": XENIUM_EXTRA, "nucleus_boundaries.parquet": XENIUM_EXTRA,
-    "nucleus_boundaries.csv.gz": XENIUM_EXTRA, "analysis_summary.html": XENIUM_EXTRA,
+    "morphology.ome.tif": XENIUM_EXTRA, "analysis_summary.html": XENIUM_EXTRA,
     "gene_panel.json": XENIUM_EXTRA,
     "raw_probe_bc_matrix.h5": "the raw per-probe matrix, not used by scView",
     "feature_slice.h5": "Space Ranger's per-gene slide images, not used by scView",
