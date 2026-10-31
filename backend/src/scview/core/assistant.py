@@ -340,6 +340,22 @@ def _add_spot_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]
                                   evidence="\n".join(sd_lines[1:])))
 
 
+def _add_velocity(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved RNA velocity run (core/velocity.py): model, genes, confidence, per group and
+    its warnings, only once a run has been saved on this dataset."""
+    from scview.core import velocity
+
+    try:
+        vel_lines, vel_detail = velocity.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: velocity failed: %s", exc)
+        return
+    if vel_lines:
+        lines.extend(vel_lines)
+        sources.append(ChatSource(kind="result", ref=velocity.TAG, detail=vel_detail,
+                                  evidence="\n".join(vel_lines[1:])))
+
+
 def _add_programs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved gene programs (core/gene_programs.py): k, the stable ones with their
     top genes and best enriched term, only once a run has been saved."""
@@ -370,6 +386,22 @@ def _add_wnn(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
         lines.extend(w_lines)
         sources.append(ChatSource(kind="result", ref=wnn.TAG, detail=w_detail,
                                   evidence="\n".join(w_lines[1:])))
+
+
+def _add_atac(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """10x Multiome ATAC (core/atac.py): the import, LSI and its depth choice, gene activity, WNN
+    weights; nothing on a dataset without ATAC."""
+    from scview.core import atac
+
+    try:
+        a_lines, a_detail = atac.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: ATAC failed: %s", exc)
+        return
+    if a_lines:
+        lines.extend(a_lines)
+        sources.append(ChatSource(kind="result", ref=atac.TAG, detail=a_detail,
+                                  evidence="\n".join(a_lines[1:])))
 
 
 def _add_cnv(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -612,6 +644,21 @@ def _add_hashing(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
         lines.extend(h_lines)
         sources.append(ChatSource(kind="result", ref=hashing.TAG, detail=h_detail,
                                   evidence="\n".join(h_lines)))
+
+
+def _add_fragment_qc(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The ATAC fragment QC (core/atac_fragments.py): its medians, once it has run."""
+    from scview.core import atac_fragments
+
+    try:
+        f_lines, f_detail = atac_fragments.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: fragment QC failed: %s", exc)
+        return
+    if f_lines:
+        lines.extend(f_lines)
+        sources.append(ChatSource(kind="result", ref=atac_fragments.TAG, detail=f_detail,
+                                  evidence="\n".join(f_lines)))
 
 
 def _add_label_clusters(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -936,6 +983,7 @@ def build_grounding_context(
             logger.debug("assistant: mito-by-type grounding failed: %s", exc)
         _add_qc_states(adaptor, lines, sources)
         _add_hashing(adaptor, lines, sources)
+        _add_fragment_qc(adaptor, lines, sources)
         _qc_removal_fact(adaptor, lines, sources)
         _add_seqqc(adaptor, lines, sources)
         # The stored PCA: variance per component, elbow, PC1's top loadings.
@@ -953,11 +1001,13 @@ def build_grounding_context(
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
         _add_wnn(adaptor, lines, sources)
+        _add_atac(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_spatial_domains(adaptor, lines, sources)
         _add_deconvolution(adaptor, lines, sources)
         _add_learned_gate(adaptor, lines, sources)
         _add_spot_deconvolution(adaptor, lines, sources)
+        _add_velocity(adaptor, lines, sources)
         _add_cnv(adaptor, lines, sources)
         _add_count_split(adaptor, lines, sources)
         _add_marker_panel(adaptor, lines, sources)

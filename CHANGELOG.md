@@ -6,6 +6,65 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-10-31
+
+### Added
+- **RNA velocity** (Unified View > Velocity): steady-state and stochastic models, written natively because
+  scVelo's stochastic mode crashes on this image's numpy. Against scVelo 0.3.3 on scipy 1.12, on pancreas
+  and dentate gyrus in both modes: the same 2,000 variable genes and velocity genes, gamma r = 1.000000,
+  per-cell arrow cosine 1.0000, confidence r = 1.0. scVelo on scipy >= 1.13 gives different arrows (its
+  `T.setdiag(0)` no longer clears self transitions; steady-state median cosine 0.57 against the same
+  model): scView keeps scVelo's documented formula. Dynamical velocity and latent time are not offered.
+- **Spliced and unspliced counts**: layers of an uploaded .h5ad or .loom move to their own store on disk;
+  a velocyto .loom, an .h5ad or a STARsolo Velocyto folder can be attached to an open dataset, matched by
+  barcode with the number matched said. The loom and STARsolo routes were tested on files converted from
+  pancreas to those formats, because no native velocyto file could be downloaded.
+- **Arrows on the plot** with density and scale, a per-group table (coherence, length, unspliced share),
+  phase portraits with the fitted line, and a warning on low confidence or a low unspliced share. The text
+  says what the arrows are: direction on a 2D plot, not a fate claim. Large datasets run from the store and
+  never read X (tested to 29,568 cells). PNG export keeps the arrows; SVG, PDF and split view do not.
+- **10x Multiome ATAC.** Peaks stay on disk in their own store, from a 10x .h5 or folder, an .h5ad with
+  Peaks features or an .h5mu; `per_barcode_metrics.csv` adds FRiP, TSS and mitochondrial fractions. ATAC-only
+  uploads are refused with a sentence, and merging samples with different peak sets leaves ATAC out with a
+  warning. Cells keep their peak counts through filtering. PBMC 10k: import 19 s, store 0.54 GB.
+- **Accessibility tab**, for datasets with peaks: per-cell QC, LSI as Signac runs it (the same 136,705 peaks,
+  components 1-30 |r| = 1.000 against Signac 1.17.1) with the depth check that left out component 1 (r = 0.79),
+  ATAC UMAP and clusters; about 2 min 20 s and 0.9 GB on PBMC 10k.
+- **WNN on RNA + ATAC** (weights r = 0.976 against Seurat 5.6.0), with the RNA weight by group. Protein WNN
+  is unchanged.
+- **Gene activity** from peak counts in the gene body + 2 kb upstream (GENCODE v32 / vM23, fetched on first
+  use), as an overlay and against RNA. Marker r with RNA matches Signac's fragment-based activity within .05
+  (MS4A1 .56 against .57); the caption says it is peak-based.
+- **Differential peaks** per group with nearest gene, distance to TSS and class. This is a Wilcoxon test on
+  TF-IDF, the fast default, with no depth covariate: top-100 enriched overlap with Signac's logistic regression
+  was 78, 72 and 52 on three clusters, and most peaks can pass in a large group, as the caption says. CSV and
+  an .h5ad of the peak matrix for Signac and muon.
+- **ATAC fragments.** Attach `atac_fragments.tsv.gz` + `.tbi` to a dataset or at import, with no new dependency:
+  checked for BGZF, barcode share and genome, streamed and never held in memory (2.4 GB in 5 s through nginx).
+  Per-cell TSS enrichment and nucleosome signal equal Signac 1.17.1 on all 11,898 PBMC cells (r = 1.0000, medians
+  5.79 and 0.668; 236M lines in about 90 s, under 0.5 GB). Nucleosome signal reads the whole file, unlike Signac's
+  default sample. Fragment length ladder and TSS profile.
+- **Coverage tracks** per group for a gene or a region up to 2 Mb, with peak ticks and gene arrows (gene bodies, no
+  exons): MS4A1 peaks in the B-cell cluster.
+- All of it reaches the co-pilot, session files and the replay script. Replaying PBMC 10k from the upload: LSI equal,
+  ATAC clusters ARI 1.0, TSS enrichment equal to 1e-6; 7 min and about 7 GB.
+
+### Changed
+- **Differential expression on a dataset opened backed reads only the compared cells** of the tested matrix (Kang
+  every cell: 210 MiB, was 317), with the same results. The doublet threshold reads no matrix; joint embedding plans,
+  reference mapping and learned gates read only the counts.
+- **These reads say what they need first and hold that room until they end**, so two at once count each other, and are
+  refused with a sentence (507) unless the whole estimate fits. A load keeps the low-end rule. The re-filter and spot
+  composition also estimate and hold, though they still read their data whole. At 6 GB during a PBMC run: DE on another
+  dataset is refused naming the run, then works when the run ends, with no restart.
+- **A run's pre-step check counts what other runs and reads will still grow by.** A step that fits only without them
+  says to run again once they finish. Two runs checking at the same moment can both stop; there is no queue.
+- **Load estimates count `.raw` in files from anndata before 0.7**, so estimates for such files rise (Kang included).
+- Compact co-pilot guide: three hints dropped to make room (Cell Ranger, donor shuffle, power).
+
+### Fixed
+- Test that compared wall-clock seconds (learned gates, large) no longer flakes on a loaded machine.
+
 ## [0.52.0] - 2026-10-31
 
 ### Changed

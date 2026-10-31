@@ -125,11 +125,11 @@ def editable(adaptor):
 
 def save_edit(adaptor, adata, output_path: str, uns_before: dict[str, int] | None = None,
               obsm_keys: tuple[str, ...] | list[str] | None = (),
-              obsp_keys: tuple[str, ...] | list[str] | None = ()) -> None:
+              obsp_keys: tuple[str, ...] | list[str] | None = (), var: bool = False) -> None:
     """Save an obs / uns (/ obsm / obsp) edit of ``editable(adaptor)``: ``write_derived``,
     or for a large dataset its obs, the uns entries the edit replaced or removed,
     ``obsm_keys`` and ``obsp_keys`` written into its derived h5ad in place, X neither
-    read nor copied."""
+    read nor copied. ``var``: the edit changed var too."""
     if getattr(adaptor, "is_large", False):
         from scview.core import large_mode
         from scview.core.dataset_manager import large_derived
@@ -137,9 +137,9 @@ def save_edit(adaptor, adata, output_path: str, uns_before: dict[str, int] | Non
         large_derived(adaptor, output_path)
         changed, removed = large_mode.changed_uns(adata, uns_before)
         adaptor.write_in_place(obs=True, uns_keys=changed, uns_removed=removed,
-                               obsm_keys=list(obsm_keys or ()), obsp_keys=list(obsp_keys or ()))
+                               obsm_keys=list(obsm_keys or ()), obsp_keys=list(obsp_keys or ()), var=var)
         return
-    write_derived(adata, output_path, adaptor.h5ad_path, uns_before, obsm_keys, obsp_keys)
+    write_derived(adata, output_path, adaptor.h5ad_path, uns_before, obsm_keys, obsp_keys, var=var)
 
 
 def uns_snapshot(adata) -> dict[str, int]:
@@ -155,6 +155,7 @@ def write_derived(
     uns_before: dict[str, int] | None = None,
     obsm_keys: tuple[str, ...] | list[str] | None = (),
     obsp_keys: tuple[str, ...] | list[str] | None = (),
+    var: bool = False,
 ) -> None:
     """Write ``adata`` to its derived file: beside it first, then swapped in, so a
     failed write leaves the old file and a backed dataset reading it intact.
@@ -165,7 +166,8 @@ def write_derived(
     a full write re-compresses the whole matrix (8 s on a 14k-cell dense file,
     against 0.1 s). Edits must replace an uns entry, not mutate it in place.
     ``obsm_keys``: obsm entries the edit set or removed, rewritten the same way;
-    ``obsp_keys`` the same for obsp (a graph, core/wnn.py).
+    ``obsp_keys`` the same for obsp (a graph, core/wnn.py); ``var``: var rewritten too. A backed
+    ``adata`` is saved the same way from ``source_path``, wherever that is: its matrices were never read in.
     """
     from scview.core import uns_history
 
@@ -179,17 +181,20 @@ def write_derived(
     if (
         uns_before is not None
         and source_path
-        and os.path.exists(output_path)
-        and os.path.samefile(source_path, output_path)
+        and (getattr(adata, "isbacked", False)
+             or (os.path.exists(output_path) and os.path.samefile(source_path, output_path)))
     ):
         import h5py
         from anndata.io import write_elem
 
-        shutil.copyfile(output_path, partial)
+        shutil.copyfile(source_path, partial)
         try:
             with h5py.File(partial, "a") as f:
                 del f["obs"]
                 write_elem(f, "obs", adata.obs)
+                if var:
+                    del f["var"]
+                    write_elem(f, "var", adata.var)
                 if "uns" not in f:
                     write_elem(f, "uns", {})
                 group = f["uns"]

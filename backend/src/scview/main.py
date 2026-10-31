@@ -34,7 +34,7 @@ if not _app_log.handlers:
 
 # Routes that legitimately accept large bodies (file uploads) — exempt from the
 # JSON body-size cap, which still bounds them via MAX_UPLOAD_SIZE_MB.
-_UPLOAD_PATH_HINTS = ("upload", "ingest", "convert", "seq-metrics")  # seq-metrics: raw matrices
+_UPLOAD_PATH_HINTS = ("upload", "ingest", "convert", "seq-metrics", "velocity/attach", "atac/fragments", "atac/metrics")  # seq-metrics: raw matrices
 
 
 @asynccontextmanager

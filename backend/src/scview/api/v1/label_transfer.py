@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 
 from scview.core import label_transfer as lt
 from scview.core import large_mode, preflight, working_copy
+from scview.core.anndata_adaptor import opens_backed
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, uns_snapshot, write_derived
 from scview.core.run_watchdog import RunWatchdog
@@ -225,8 +226,14 @@ async def run_label_transfer(
     ref_cached = dm.get_dataset(body.reference_id)
     est = await asyncio.to_thread(_estimate, dm, paths[0], ref_cached is not None, adaptor, body.method)
     # Room for the reference's copy and the run's matrices: other datasets closed first
-    # (least recently used), a 507 when it cannot fit even then.
-    await dm.reserve(dataset_id, est["peak_bytes"], what=_WHAT)
+    # (least recently used, never the two read here), a 507 when it cannot fit even then.
+    # Held once the stream starts, until the run ends (``hold_read``).
+    what = f"{_WHAT} on {dm.dataset_name(dataset_id)}"
+    guard = dm.hold_read((dataset_id, body.reference_id), 0)
+    try:
+        await dm.reserve(dataset_id, est["peak_bytes"], what=what)
+    finally:
+        guard()
     info = dm.get_dataset_info(body.reference_id) or {}
     ref_name = str(info.get("name") or body.reference_id)
     prefix = lt.slug(body.name or ref_name)
@@ -236,17 +243,20 @@ async def run_label_transfer(
 
     def prepare(query_adaptor) -> lt.Prepared:
         cached = dm.get_dataset(body.reference_id)
-        if cached is not None and not getattr(cached.adata, "isbacked", False):
-            ref = cached.adata
-        else:
-            ref = ad.read_h5ad(paths[0])  # read directly: opening it in the cache could close this one
-        query = query_adaptor.adata
-        if getattr(query, "isbacked", False):
-            query = query.to_memory()
-        return lt.prepare(ref, query, label_column=body.label_column, ref_info=ref_info,
-                          ref_expression=_expression(paths[1:]),
-                          query_expression=_expression(dm.h5ad_candidates(dataset_id)[1:]),
-                          cluster_column=cluster_column)
+        if cached is not None:
+            ref, opened = cached.adata, None
+        else:  # read directly: opening it in the cache could close this one
+            # A file that opens backed stays on disk but for its counts, as the estimate says.
+            big = opens_backed(os.path.getsize(paths[0]))
+            ref = opened = ad.read_h5ad(paths[0], backed="r" if big else None)
+        try:
+            return lt.prepare(ref, query_adaptor.adata, label_column=body.label_column, ref_info=ref_info,
+                              ref_expression=_expression(paths[1:]),
+                              query_expression=_expression(dm.h5ad_candidates(dataset_id)[1:]),
+                              cluster_column=cluster_column)
+        finally:
+            if opened is not None and opened.isbacked:
+                opened.file.close()
 
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
     del adaptor, ref_cached  # the run needs only its copies
@@ -256,6 +266,7 @@ async def run_label_transfer(
             yield _sse("error", {"error": "A reference mapping is already running on this dataset."})
             return
         _running.add(dataset_id)
+        release = dm.hold_read((dataset_id, body.reference_id), est["peak_bytes"], what)
         stop = threading.Event()
         watchdog = RunWatchdog()
         sent = 0
@@ -267,6 +278,7 @@ async def run_label_transfer(
                 fut.exception()  # retrieved: a stopped run is not an error
             if gen is not None:
                 gen.close()
+            release()
             watchdog.stop()
             _running.discard(dataset_id)
 

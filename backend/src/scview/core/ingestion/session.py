@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
-from scview.core import conversion, crispr, protein, provenance, spatial
+from scview.core import atac_import, conversion, crispr, modality_store, protein, provenance, spatial, velocity_input
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion import streamed
 from scview.core.ingestion.bundling import (
@@ -96,7 +96,8 @@ def _seqqc_view(unit: IngestUnit) -> IngestUnit:
     contig tables, guide calls and spatial files are joined to the cells by
     ``_attach_vdj`` / ``_attach_guide_calls`` / ``_attach_spatial`` instead."""
     keep = [f for f in unit.side_files
-            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial, SideKind.xenium)]
+            if f.side_kind not in (SideKind.vdj, SideKind.crispr, SideKind.spatial, SideKind.xenium, SideKind.atac,
+                                   SideKind.atac_metrics)]
     return unit.model_copy(update={"side_files": keep})
 
 
@@ -497,7 +498,14 @@ class IngestSessionManager:
         except IngestCommitError:
             part.unlink(missing_ok=True)
             raise
-        self._record_ingest_provenance(adata, loadable, opts, spatial_params, converted)
+        atac_part = self._session_dir(sid) / ".scview-atac.part.h5"
+        try:
+            atac_params = self._write_atac(adata, loadable, opts, atac_part, self._session_dir(sid))
+        except Exception:
+            part.unlink(missing_ok=True)
+            atac_part.unlink(missing_ok=True)
+            raise
+        self._record_ingest_provenance(adata, loadable, opts, spatial_params, converted, atac_params)
         # Cell Ranger metrics / raw matrices that came with a sample (never raises).
         from scview.core import seq_metrics
 
@@ -508,6 +516,14 @@ class IngestSessionManager:
 
         dataset_id = uuid.uuid4().hex
         name = opts.name or (loadable[0].label if len(loadable) == 1 else "merged_dataset")
+        try:
+            self._adopt_velocity(adata, loadable, matrices, dataset_id)
+            self._attach_atac_fragments(dataset_id, adata, loadable)  # moved out of the staged files: not kept twice
+        except BaseException:
+            part.unlink(missing_ok=True)
+            atac_part.unlink(missing_ok=True)
+            shutil.rmtree(modality_store.store_dir(self.data_dir, dataset_id), ignore_errors=True)
+            raise
         # The originals, in their folders; not the files the bundle skipped.
         skip = {s.path for s in bundle.skipped}
         root = self.files_dir(sid)
@@ -517,11 +533,35 @@ class IngestSessionManager:
         try:
             self._persist_dataset(dataset_id, name, adata, originals, root, matrices=matrices,
                                   conversion_report=report)
+            if atac_part.exists():
+                dest = modality_store.store_path(self.data_dir, dataset_id, atac_import.STORE)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                atac_part.replace(dest)
+        except BaseException:
+            shutil.rmtree(modality_store.store_dir(self.data_dir, dataset_id), ignore_errors=True)
+            raise
         finally:
             part.unlink(missing_ok=True)
+            atac_part.unlink(missing_ok=True)
         logger.info("Committed ingest session %s as dataset %s (%s)%s", sid, dataset_id, name,
                     " in blocks" if matrices is not None else "")
         return dataset_id
+
+    def _adopt_velocity(self, adata, loadable, matrices: Path | None, dataset_id: str) -> None:
+        """Spliced and unspliced layers go to the dataset's modality store, not its h5ad
+        (``core/velocity_input.py``). In blocks (one .h5ad unit): ``streamed`` left them in the file,
+        which is read here; a merge read into memory has them in ``adata``."""
+        name = loadable[0].label if len(loadable) == 1 else "merged upload"
+        try:
+            if matrices is None:
+                velocity_input.adopt_anndata(adata, dataset_id, self.data_dir, file_name=name)
+            elif len(loadable) == 1 and loadable[0].format == UnitFormat.anndata:
+                path = Path(loadable[0].files[0].path)
+                if velocity_input.file_has_layers(path):
+                    velocity_input.write_source(adata, velocity_input.adopt_file(path, dataset_id, self.data_dir,
+                                                                                 file_name=name))
+        except (velocity_input.VelocityInputError, modality_store.ModalityStoreError, OSError) as e:
+            raise IngestCommitError(f"The spliced and unspliced counts could not be saved: {e}") from e
 
     def _load_or_stream(self, loadable, opts: IngestOptions, workdir: Path, part: Path):
         """(dataset, None) read into memory, or (skeleton, ``part``) with the matrices
@@ -586,7 +626,8 @@ class IngestSessionManager:
 
     def _record_ingest_provenance(self, adata, loadable, opts: IngestOptions,
                                   spatial_params: dict | None = None,
-                                  converted: dict[str, dict] | None = None) -> None:
+                                  converted: dict[str, dict] | None = None,
+                                  atac_params: dict | None = None) -> None:
         """Write the source block + an ingest history entry. Never raises. A converted R
         object is recorded as the file it came from (format "seurat")."""
         converted = converted or {}
@@ -624,13 +665,15 @@ class IngestSessionManager:
                     fmt=fmt_of(u),
                 )
             dropped = adata.uns.pop(spatial.DROPPED_KEY, None)
+            atac_note = adata.uns.pop(atac_import.LEFT_OUT_KEY, None)
+            note = (f"Tissue positions of {', '.join(map(str, dropped))} were left out: the other "
+                    "samples have none, so most merged cells would have no position."
+                    if dropped is not None and len(dropped) else None)
             provenance.record_step(
                 adata,
                 step="ingest",
                 tool="scview.ingestion",
-                note=(f"Tissue positions of {', '.join(map(str, dropped))} were left out: the other "
-                      "samples have none, so most merged cells would have no position."
-                      if dropped is not None and len(dropped) else None),
+                note=" ".join(str(n) for n in (note, atac_note) if n) or None,
                 params={
                     "formats": sorted({fmt_of(u) for u in loadable}),
                     "genes_in_rows": opts.genes_in_rows,
@@ -638,6 +681,7 @@ class IngestSessionManager:
                     **({"converted": [_converted_entry(lab, c) for lab, c in converted.items()]}
                        if converted else {}),
                     **({"spatial": spatial_params} if spatial_params else {}),
+                    **(atac_params or {}),
                 },
             )
         except Exception as e:  # provenance must never block ingest
@@ -696,6 +740,38 @@ class IngestSessionManager:
         except spatial.SpatialError as e:
             raise IngestCommitError(str(e)) from e
 
+    def _write_atac(self, adata, loadable, opts: IngestOptions, part: Path, workdir: Path) -> dict:
+        """10x Multiome peaks into the ATAC store (``core/atac_import.py``), read from the
+        files a block of cells at a time, whichever way the genes were read; per-cell totals
+        into obs and each sample's per_barcode_metrics.csv joined to its cells. Returns the
+        history entry's ATAC part ({} without ATAC). A merge with no one peak set has none
+        (the upload said so); a file that cannot be read stops the commit with its sentence."""
+        merged = len(loadable) > 1
+        plans = []
+        left_out = atac_import.merge_sentence(loadable)
+        try:
+            if not left_out:
+                plans = [p for p in (atac_import.plan_unit(u, workdir) for u in loadable) if p is not None]
+                notes = [p.note for p in plans if p.note]
+                if notes:
+                    left_out, plans = notes[0], []
+            if left_out:
+                adata.uns[atac_import.LEFT_OUT_KEY] = left_out
+            if not plans:
+                return {}
+            info = atac_import.attach_obs(adata, atac_import.write_store(plans, part, merged=merged))
+        except (atac_import.AtacImportError, OSError, KeyError, ValueError) as e:
+            raise IngestCommitError(f"The ATAC peaks could not be read: {e}") from e
+        for u in loadable:
+            for f in [f for f in u.side_files if f.side_kind == SideKind.atac_metrics]:
+                try:
+                    atac_import.attach_metrics(adata, f.path, sample_column=opts.sample_label if merged else None,
+                                               sample=u.label if merged else None,
+                                               suffix=f":{u.label}" if merged else "")
+                except (atac_import.AtacImportError, OSError, EOFError, zlib.error, ValueError) as e:
+                    raise IngestCommitError(f"The metrics {f.name} could not be attached: {e}") from e
+        return atac_import.provenance_params(info)
+
     def _attach_guide_calls(self, adata, loadable, opts: IngestOptions) -> None:
         """Cell Ranger's protospacer calls uploaded with a unit (``core/crispr.py``),
         each matched to its own sample's cells in a merge."""
@@ -708,6 +784,26 @@ class IngestSessionManager:
                                         sample=u.label if merged else None)
                 except (crispr.CrisprError, OSError, EOFError, zlib.error, ValueError) as e:
                     raise IngestCommitError(f"The guide calls {f.name} could not be attached: {e}") from e
+
+    def _attach_atac_fragments(self, dataset_id: str, adata, loadable) -> None:
+        """An ATAC fragments file uploaded with the sample (``core/atac_fragments.py``): checked
+        against the cells, then renamed into the dataset's modality folder."""
+        from scview.core import atac_fragments as af
+        from scview.core import fragment_file
+        from scview.core.species import detect_species
+
+        files = [f for u in loadable for f in u.side_files if f.side_kind == SideKind.atac]
+        frag = next((f for f in files if f.spatial_part == "fragments"), None)
+        if frag is None:
+            return
+        index = next((f for f in files if f.spatial_part == "index"), None)
+        species = detect_species(adata).species
+        try:
+            af.attach_side_files(self.data_dir, dataset_id, frag.path, index.path if index else None,
+                                 list(map(str, adata.obs_names)), species=None if species == "unknown" else species,
+                                 name=frag.name)
+        except (af.FragmentsError, fragment_file.FragmentFileError, OSError, EOFError, zlib.error) as e:
+            raise IngestCommitError(f"The fragments file {frag.name} could not be attached: {e}") from e
 
     def _load_and_merge(self, loadable, opts: IngestOptions):
         load_opts = {"genes_in_rows": opts.genes_in_rows}

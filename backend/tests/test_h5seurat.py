@@ -143,6 +143,16 @@ def test_adt_assay_is_the_protein_modality():
     assert "protein_clr" in loaded.obsm  # core/protein.py takes it from there
 
 
+def test_a_chromatin_assay_is_left_out_with_a_sentence(tmp_path):
+    p = tmp_path / "multiome.h5Seurat"
+    _tiny_h5seurat(p)
+    with h5py.File(p, "a") as f:
+        f["assays"].create_group("peaks")
+    a = h5seurat.read(p)
+    assert "chromatin assay peaks" in a.uns["scview_atac_left_out"] and "not read yet" in a.uns["scview_atac_left_out"]
+    assert a.n_vars == 2  # the RNA's genes
+
+
 def test_counts_missing_falls_back_to_data(tmp_path):
     p = tmp_path / "datas.h5Seurat"
     _tiny_h5seurat(p, counts=False)

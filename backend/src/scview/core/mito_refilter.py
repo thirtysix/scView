@@ -361,6 +361,21 @@ def check_runnable(dm, dataset_id: str, adaptor, column: str | None, mito_mode: 
     return col
 
 
+def read_need(dm, dataset_id: str) -> int:
+    """Peak memory of ``prepare``'s read of the original upload, whole (``working_copy``);
+    0 without one (``check_runnable`` says why) or without an estimate."""
+    from scview.core import working_copy
+
+    src = source_file(dm, dataset_id)
+    if src is None:
+        return 0
+    try:
+        return working_copy.file_bytes(src)
+    except Exception as e:  # noqa: BLE001 - never block the work on the estimate itself
+        logger.warning("No read estimate for %s: %s", src, e)
+        return 0
+
+
 def prepare(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "per_type",
             floor: bool = False) -> Prepared:
     """Read the original upload and type every cell (module docstring). ``floor``:

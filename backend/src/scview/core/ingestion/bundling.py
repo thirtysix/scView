@@ -42,6 +42,7 @@ class UnitFormat(str, Enum):
     seurat = "seurat"  # an R object: converted by the R converter at commit (session.py)
     h5seurat = "h5seurat"  # SeuratDisk .h5Seurat, read natively (h5seurat.py)
     xenium = "xenium"  # a Xenium output folder: its matrix + side files (core/xenium.py)
+    h5mu = "h5mu"  # MuData on disk: mod/rna read, mod/atac to the ATAC store (core/atac_import.py)
     unknown = "unknown"
 
 
@@ -65,6 +66,8 @@ class SideKind(str, Enum):
     crispr = "crispr"  # Cell Ranger's guide calls per cell, joined to the unit's cells (core/crispr.py)
     spatial = "spatial"  # a Space Ranger spatial file (positions, scale factors, images; core/spatial.py)
     xenium = "xenium"  # experiment.xenium, cell table, image, its metrics (core/xenium.py)
+    atac = "atac"  # an ATAC fragments file and its .tbi (core/atac_fragments.py; part in spatial_part)
+    atac_metrics = "atac_metrics"  # Cell Ranger ARC per_barcode_metrics.csv (core/atac_import.py)
 
 
 # A 10x MEX unit needs exactly one of each of these.
@@ -80,6 +83,7 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.dense_table: (UnitFormat.dense_table, FileRole.data),
     FileKind.seurat_rds: (UnitFormat.seurat, FileRole.data),
     FileKind.h5seurat: (UnitFormat.h5seurat, FileRole.data),
+    FileKind.h5mu: (UnitFormat.h5mu, FileRole.data),
     FileKind.mtx_matrix: (None, FileRole.matrix),
     FileKind.tenx_barcodes: (None, FileRole.barcodes),
     FileKind.tenx_features: (None, FileRole.features),
@@ -87,6 +91,8 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.crispr_calls: (None, FileRole.side),
     FileKind.spatial: (None, FileRole.side),
     FileKind.xenium: (None, FileRole.side),
+    FileKind.atac_fragments: (None, FileRole.side),
+    FileKind.atac_metrics: (None, FileRole.side),
     FileKind.unknown: (None, FileRole.unknown),
 }
 
@@ -239,6 +245,8 @@ def bundle_from_detections(
     vdj_files: list[BundleFile] = []
     crispr_files: list[BundleFile] = []
     spatial_files: list[BundleFile] = []
+    atac_files: list[BundleFile] = []
+    atac_metrics_files: list[BundleFile] = []
 
     for path, det in detected:
         refusal = refusal or _hd_refusal(path, det)
@@ -266,6 +274,10 @@ def bundle_from_detections(
         elif det.kind == FileKind.spatial:
             spatial_files.append(bf.model_copy(update={
                 "side_kind": SideKind.spatial, "spatial_part": det.details.get("part")}))
+        elif det.kind == FileKind.atac_fragments:
+            atac_files.append(bf.model_copy(update={"side_kind": SideKind.atac, "spatial_part": det.details.get("part")}))
+        elif det.kind == FileKind.atac_metrics:
+            atac_metrics_files.append(bf.model_copy(update={"side_kind": SideKind.atac_metrics}))
         else:
             unknown_files.append(bf)
 
@@ -294,7 +306,9 @@ def bundle_from_detections(
 
     bundle_issues.extend(_attach_vdj_files(units, vdj_files))
     bundle_issues.extend(_attach_crispr_files(units, crispr_files))
+    bundle_issues.extend(_attach_atac_files(units, atac_files))
     bundle_issues.extend(_attach_spatial_files(units, spatial_files))
+    bundle_issues.extend(_attach_atac_metrics(units, atac_metrics_files))
     _unique_labels(units)
     if skipped:
         bundle_issues.insert(0, skipped_sentence(skipped))
@@ -664,7 +678,7 @@ _SIDE_EXTS = (".gz", ".h5", ".h5ad", ".csv", ".mtx", ".tsv", ".txt")
 _TENX_TOKENS = (
     "sample_filtered_feature_bc_matrix", "sample_raw_feature_bc_matrix",
     "filtered_feature_bc_matrix", "raw_feature_bc_matrix",
-    "filtered_gene_bc_matrices", "raw_gene_bc_matrices", "metrics_summary",
+    "filtered_gene_bc_matrices", "raw_gene_bc_matrices", "metrics_summary", "per_barcode_metrics",
 )
 
 
@@ -887,6 +901,32 @@ def _attach_vdj_files(units: list[IngestUnit], vdj_files: list[BundleFile]) -> l
     return issues
 
 
+def _attach_atac_metrics(units: list[IngestUnit], files: list[BundleFile]) -> list[str]:
+    """Add each per_barcode_metrics.csv to the unit with the same sample prefix, else the
+    only unit of its folder, else the only unit. Returns bundle issues."""
+    if not files:
+        return []
+    loadable = [u for u in units if u.format != UnitFormat.unknown]
+    by_key: dict[str, IngestUnit] = {}
+    for u in loadable:
+        by_key.setdefault(_unit_key(u), u)
+    issues: list[str] = []
+    for bf in files:
+        key = _side_key(bf)
+        unit = (by_key.get(key) or _only_in_root(loadable, key)
+                or (loadable[0] if len(loadable) == 1 else None))
+        if unit is None:
+            issues.append(f"{bf.name} (Cell Ranger ARC per-barcode metrics) could not be matched to a sample: "
+                          "name it after its sample, or attach it after import in Unified View > Accessibility.")
+            continue
+        if any(f.side_kind == SideKind.atac_metrics for f in unit.side_files):
+            issues.append(f"{bf.name}: sample {unit.label} already has per-barcode metrics; this file was "
+                          "not attached.")
+            continue
+        unit.side_files.append(bf)
+    return issues
+
+
 def _attach_crispr_files(units: list[IngestUnit], files: list[BundleFile]) -> list[str]:
     """Add Cell Ranger's guide calls (``crispr_analysis/protospacer_calls_per_cell.csv``)
     to the unit of their sample folder, else the only unit. Returns bundle issues."""
@@ -906,6 +946,30 @@ def _attach_crispr_files(units: list[IngestUnit], files: list[BundleFile]) -> li
             continue
         unit.side_files.append(bf)
     return issues
+
+
+def _attach_atac_files(units: list[IngestUnit], files: list[BundleFile]) -> list[str]:
+    """Add an ATAC fragments file and its .tbi to the only sample. Barcodes of a merge carry no
+    sample here, so with several samples the sentence says to attach them afterwards."""
+    if not files:
+        return []
+    names = ", ".join(f.name for f in files)
+    loadable = [u for u in units if u.format != UnitFormat.unknown]
+    if not loadable:
+        return [f"{names}: ATAC fragments go with the sample's matrix: add it, or attach them to an existing dataset "
+                "in Unified View > Accessibility."]
+    if len(loadable) > 1:
+        return [f"{names}: ATAC fragments can be attached to one sample at a time and were not attached here: import "
+                "each sample alone, or attach them in Unified View > Accessibility."]
+    frags = [f for f in files if f.spatial_part == "fragments"]
+    index = [f for f in files if f.spatial_part == "index"]
+    if len(frags) != 1 or len(index) > 1:
+        return [f"{names}: expected one ATAC fragments file with its .tbi; these were not attached."]
+    loadable[0].side_files.extend([*frags, *index])
+    if not index:
+        return [f"{frags[0].name} came without its tabix index (.tbi), which Cell Ranger ARC writes beside it: "
+                "add the .tbi in Unified View > Accessibility before running the fragment QC."]
+    return []
 
 
 # ---------------------------------------------------------------------------

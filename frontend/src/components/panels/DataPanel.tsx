@@ -64,6 +64,7 @@ const FORMAT_LABELS: Record<UnitFormat, string> = {
   dense_table: "Expression table (CSV/TSV)",
   seurat: "R object (.rds: Seurat, SingleCellExperiment), converted when the dataset is created",
   h5seurat: "Seurat (.h5Seurat)",
+  h5mu: "MuData (.h5mu: RNA + ATAC)",
   xenium: "Xenium output folder",
   unknown: "Unrecognised",
 };
@@ -391,7 +392,7 @@ export function DataPanel() {
         </div>
         <p className="mt-2 text-xs text-slate-400">
           .h5ad · Seurat / SingleCellExperiment .rds · Seurat .h5Seurat · 10x (matrix/barcodes/features or
-          .h5) · Visium and Visium HD (Space Ranger outs/) · Xenium (output folder) · loom · CSV/TSV · multiple samples to merge
+          .h5) · 10x Multiome (.h5 or folder, .h5mu) · Visium and Visium HD (Space Ranger outs/) · Xenium (output folder) · loom · CSV/TSV · multiple samples to merge
         </p>
         <input
           ref={fileInput}

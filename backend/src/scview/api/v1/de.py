@@ -29,10 +29,10 @@ from pydantic import BaseModel, Field
 
 from scview.dependencies import get_dataset_manager
 from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
-from scview.core import large_mode, selection_facts
+from scview.core import large_mode, preflight, selection_facts, working_copy
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
-from scview.core.dataset_manager import DatasetManager
+from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +306,16 @@ class _CellTest:
                 "method": self.method}
 
 
+def _uses_raw(adata) -> bool:
+    """Whether a cell-level test reads .raw. Log-normalised expression, never counts:
+    an unprocessed upload can hold counts in .raw beside a log-normalised X, or counts
+    alone, and the fold change is taken of whatever is tested (Kang: ISG15 log2FC 184
+    on counts)."""
+    from scview.core.pipeline import looks_like_counts
+
+    return adata.raw is not None and not looks_like_counts(adata.raw.X)
+
+
 def _prepare(adata, mask_a, mask_b, min_pct: float = 0.0):
     """The AnnData a cell-level test runs on: the ``mask_a`` cells (group
     "selection") and the ``mask_b`` cells ("rest") of ``adata``, log-normalised,
@@ -313,9 +323,9 @@ def _prepare(adata, mask_a, mask_b, min_pct: float = 0.0):
     gene at 0); and that prefilter.
 
     ``adata`` is read, never changed, and never copied whole: only the tested
-    matrix's rows are taken (and normalised when they are counts). A whole-object
-    copy took +2.4 GB per request on Kang (X, layers, .raw, obsm, obsp), enough to
-    get a backend with a few GB killed."""
+    matrix's rows are taken (and normalised when they are counts), from the file
+    for a backed dataset. A whole-object copy took +2.4 GB per request on Kang (X,
+    layers, .raw, obsm, obsp), enough to get a backend with a few GB killed."""
     import anndata as ad
     import numpy as np
     import pandas as pd
@@ -324,16 +334,16 @@ def _prepare(adata, mask_a, mask_b, min_pct: float = 0.0):
     from scview.core.pipeline import looks_like_counts
 
     keep = mask_a | mask_b
-    # Log-normalised expression, never counts: an unprocessed upload can hold counts
-    # in .raw beside a log-normalised X, or counts alone, and the fold change is
-    # taken of whatever is tested (Kang: ISG15 log2FC 184 on counts).
-    use_raw = adata.raw is not None and not looks_like_counts(adata.raw.X)
+    use_raw = _uses_raw(adata)
     # Every gene of the tested matrix: .raw can hold more genes than X (an HVG
     # subset), and testing only X's width kept the up-regulated genes alone.
     M = adata.raw.X if use_raw else adata.X
     names = adata.raw.var_names if use_raw else adata.var_names
     log1p = adata.uns["log1p"] if "log1p" in adata.uns else None
-    rows = M if keep.all() else M[np.flatnonzero(keep)]
+    if working_copy.on_disk(M):
+        rows = working_copy.read_rows(M, keep)
+    else:
+        rows = M if keep.all() else M[np.flatnonzero(keep)]
     mask_a = mask_a[keep]
     if not use_raw and looks_like_counts(rows):
         tmp = ad.AnnData(X=rows.copy() if rows is M else rows)  # never normalise the dataset's own X
@@ -425,6 +435,76 @@ def _methods(work, mask_a, mask_b, dataset_id: str, min_pct: float, top_n: int) 
     }
 
 
+def _test_bytes(adaptor, keep, logreg: bool = False) -> int:
+    """Memory a cell-level test needs on a backed dataset, from its header: the tested
+    matrix's ``keep`` rows and the test on them (``preflight.de_read_need``); 0 when the
+    dataset is in memory or the file gives no estimate."""
+    if not getattr(adaptor.adata, "isbacked", False):
+        return 0
+    try:
+        adata = adaptor.adata
+        h = preflight.read_header(adaptor.h5ad_path, "h5ad")
+        return preflight.de_read_need(h.matrix("raw/X" if _uses_raw(adata) else "X"), int(keep.sum()), logreg)
+    except Exception as e:  # noqa: BLE001 - never block a test on the estimate itself
+        logger.warning("No DE estimate for %s: %s", adaptor.h5ad_path, e)
+        return 0
+
+
+def _counts_cells(adata, keep):
+    """The ``keep`` cells of backed ``adata`` in memory, with only the matrix pseudobulk
+    and the transcriptome-size check will sum: layers['counts'] are in memory already,
+    .raw and X are read from the file, each only when an earlier place holds no counts
+    for it (``pseudobulk.raw_counts``, ``normalization.counts_all_genes``). The same
+    choice as on all three, and the file stays open for other readers."""
+    import anndata as ad
+    import numpy as np
+
+    from scview.core.pipeline import looks_like_counts
+
+    idx = np.flatnonzero(keep)
+    layers = {"counts": adata.layers["counts"][idx]} if "counts" in adata.layers else {}
+    in_layer = bool(layers) and looks_like_counts(layers["counts"])
+    raw = adata.raw
+    raw_x = None
+    if raw is not None and (not in_layer or (raw.n_vars > adata.n_vars and looks_like_counts(raw.X))):
+        raw_x = working_copy.read_rows(raw.X, keep)
+    covered = (raw_x is not None and looks_like_counts(raw_x)
+               and not len(adata.var_names.difference(raw.var_names)))
+    X = working_copy.read_rows(adata.X, keep) if not (in_layer or covered) else None
+    sub = ad.AnnData(X=X, obs=adata.obs.iloc[idx].copy(), var=adata.var, layers=layers)
+    if raw_x is not None:
+        sub.raw = ad.AnnData(X=raw_x, obs=sub.obs[[]], var=raw.var)
+    return sub
+
+
+def _counts_bytes(adaptor, keep) -> int:
+    """Memory ``_counts_cells`` takes on a backed dataset, from its header (the choice
+    judged on the first rows); 0 when the dataset is in memory or there is no estimate."""
+    if not getattr(adaptor.adata, "isbacked", False):
+        return 0
+    from scview.core.pipeline import looks_like_counts
+
+    try:
+        adata = adaptor.adata
+        raw = adata.raw
+        in_layer = "counts" in adata.layers and looks_like_counts(adata.layers["counts"])
+        raw_counts = raw is not None and looks_like_counts(raw.X)
+        wheres = []
+        if raw is not None and (not in_layer or (raw.n_vars > adata.n_vars and raw_counts)):
+            wheres.append("raw/X")
+        if not in_layer and not (raw_counts and not len(adata.var_names.difference(raw.var_names))):
+            wheres.append("X")
+        return working_copy.rows_bytes(adaptor, wheres, int(keep.sum()))
+    except Exception as e:  # noqa: BLE001 - never block a test on the estimate itself
+        logger.warning("No pseudobulk estimate for %s: %s", adaptor.h5ad_path, e)
+        return 0
+
+
+def _what(dm: DatasetManager, dataset_id: str, need: int, what: str = "Differential expression") -> str:
+    """The refusal's subject, naming the dataset (read only when there is a read to refuse)."""
+    return f"{what} on {dm.dataset_name(dataset_id)}" if need else what
+
+
 def _remember(dataset_id: str, res: _CellTest, comparison: dict, adaptor=None) -> str:
     return de_results.remember(dataset_id, res.genes, method=res.method,
                                min_pct=res.prefilter.min_pct, n_skipped=res.prefilter.n_skipped,
@@ -484,12 +564,13 @@ async def differential_expression(
     n_sel = int(mask.sum())
 
     def _run() -> tuple[_CellTest, dict | None]:
-        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
-        size = transcriptome_size.check(work, mask, ~mask)
-        return _cell_test(work, mask, ~mask, dataset_id, body.min_pct, body.method), size
+        size = transcriptome_size.check(adata, mask, ~mask)
+        return _cell_test(adata, mask, ~mask, dataset_id, body.min_pct, body.method), size
 
     # Seconds on a large dataset: in a worker thread, so the server keeps answering.
-    res, size = await asyncio.to_thread(_run)
+    need = await asyncio.to_thread(_test_bytes, adaptor, mask | ~mask, body.method == "logreg")
+    async with working_copy.reading(dm, dataset_id, need, _what(dm, dataset_id, need)) as held:
+        res, size = await held.run(_run)
     # "cells" names exactly which cells, so the co-pilot can cite this result for
     # the same selection (core/selection_facts.py).
     compared = {"mode": "selection", "label": body.label, "n_a": n_sel,
@@ -517,10 +598,11 @@ async def differential_expression_methods(
     n_sel = int(mask.sum())
 
     def _run() -> dict:
-        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
-        return _methods(work, mask, ~mask, dataset_id, body.min_pct, body.top_n)
+        return _methods(adata, mask, ~mask, dataset_id, body.min_pct, body.top_n)
 
-    out = await asyncio.to_thread(_run)
+    need = await asyncio.to_thread(_test_bytes, adaptor, mask | ~mask, True)
+    async with working_copy.reading(dm, dataset_id, need, _what(dm, dataset_id, need)) as held:
+        out = await held.run(_run)
     return DEMethodsResponse(n_selected=n_sel, n_rest=int(adata.n_obs) - n_sel,
                              label=body.label, **out)
 
@@ -628,18 +710,19 @@ async def differential_expression_compare(
     composition = _composition(adata, body, mask_a, mask_b, body.composition_by)
 
     if body.method == "pseudobulk":
-        resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id, adaptor)
+        resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id, adaptor, dm)
         resp.confounding = confounding
         resp.composition = composition
         return resp
 
     def _run() -> tuple[_CellTest, dict | None]:
-        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
-        size = transcriptome_size.check(work, mask_a, mask_b)
-        res = _cell_test(work, mask_a, mask_b, dataset_id, body.min_pct, body.method)
+        size = transcriptome_size.check(adata, mask_a, mask_b)
+        res = _cell_test(adata, mask_a, mask_b, dataset_id, body.min_pct, body.method)
         return res, size
 
-    res, size = await asyncio.to_thread(_run)
+    need = await asyncio.to_thread(_test_bytes, adaptor, mask_a | mask_b, body.method == "logreg")
+    async with working_copy.reading(dm, dataset_id, need, _what(dm, dataset_id, need)) as held:
+        res, size = await held.run(_run)
     key = body.replicate_key or _detect_replicate_key(
         obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
@@ -666,15 +749,17 @@ async def differential_expression_compare_methods(
     mask_a, mask_b = _compare_masks(adata, body)
 
     def _run() -> dict:
-        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
-        return _methods(work, mask_a, mask_b, dataset_id, body.min_pct, body.top_n)
+        return _methods(adata, mask_a, mask_b, dataset_id, body.min_pct, body.top_n)
 
-    out = await asyncio.to_thread(_run)
+    need = await asyncio.to_thread(_test_bytes, adaptor, mask_a | mask_b, True)
+    async with working_copy.reading(dm, dataset_id, need, _what(dm, dataset_id, need)) as held:
+        out = await held.run(_run)
     return DEMethodsResponse(n_selected=int(mask_a.sum()), n_rest=int(mask_b.sum()),
                              label=_compare_label(body), **out)
 
 
-async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str, adaptor=None):
+async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str, adaptor=None,
+                              dm: DatasetManager | None = None):
     """Donor-aware A vs B: per-donor count sums, DESeq2 Wald test or limma-voom /
     voomByGroup, optionally with RUV factors (off the event loop)."""
     from scview.core import pseudobulk
@@ -696,9 +781,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
     keep = mask_a | mask_b
 
     def _run():
-        sub = adata[keep]
-        if getattr(adata, "isbacked", False):
-            sub = sub.to_memory()
+        sub = _counts_cells(adata, keep) if getattr(adata, "isbacked", False) else adata[keep]
         res = pseudobulk_de(
             sub, mask_a[keep], sub.obs[key],
             label_a=body.group_a, label_b=body.group_b, donor_key=key,
@@ -707,10 +790,17 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         # DESeq2's size factors and voom's TMM factors normalise library size too.
         return res, transcriptome_size.check(sub, mask_a[keep], mask_b[keep])
 
+    need = 0
+    if adaptor is not None and dm is not None:
+        need = await asyncio.to_thread(_counts_bytes, adaptor, keep)
     try:
-        res, size = await asyncio.to_thread(_run)
+        what = _what(dm, dataset_id, need, "Pseudobulk DE")
+        async with working_copy.reading(dm, dataset_id, need, what) as held:
+            res, size = await held.run(_run)
     except PseudobulkError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except DatasetMemoryError:  # a 507
+        raise
     except Exception as exc:
         logger.error("Pseudobulk DE failed for %s: %s", dataset_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Pseudobulk DE failed: {exc!s}")
@@ -1035,26 +1125,34 @@ async def differential_expression_audit(
     in_a = ma[keep]
     donors = donor_col.astype(str).to_numpy()[keep]
 
+    both = mask_a | mask_b
+
     def run_pseudobulk():
-        both = mask_a | mask_b
-        sub = adata[both]
-        if getattr(adata, "isbacked", False):
-            sub = sub.to_memory()
+        sub = _counts_cells(adata, both) if getattr(adata, "isbacked", False) else adata[both]
         return pseudobulk.pseudobulk_de(sub, mask_a[both], sub.obs[key], label_a=scope.group_a,
                                         label_b=scope.group_b, donor_key=key, method=pb_method)
 
     def prepare():
-        work = adata.to_memory() if getattr(adata, "isbacked", False) else adata
-        return _prepare(work, ma, mb, min_pct)[0]
+        return _prepare(adata, ma, mb, min_pct)[0]
 
     def sse(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    # The test's rows and pseudobulk's are held together while the audit runs. Refused here
+    # (a 507 before the stream starts); held once the stream starts, so a client gone
+    # before that leaves nothing reserved.
+    need = (await asyncio.to_thread(_test_bytes, adaptor, keep)
+            + await asyncio.to_thread(_counts_bytes, adaptor, both))
+    what = _what(dm, dataset_id, need, "The DE audit")
+    if need:
+        await dm.reserve(dataset_id, need, what=what)
 
     async def events():
         if dataset_id in _audit_running:
             yield sse("error", {"error": "A DE audit is already running on this dataset."})
             return
         _audit_running.add(dataset_id)
+        release = dm.hold_read(dataset_id, need, what) if need else (lambda: None)
         stop = threading.Event()
         gen = None
         pending: asyncio.Future | None = None
@@ -1064,6 +1162,7 @@ async def differential_expression_audit(
                 fut.exception()  # retrieved: a stopped run is not an error
             if gen is not None:
                 gen.close()
+            release()
             _audit_running.discard(dataset_id)
 
         try:

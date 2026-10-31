@@ -28,6 +28,9 @@ IMPORTING = (
     "a Seurat Visium object keeps its tissue image and spot positions); Seurat .h5Seurat "
     "(SeuratDisk; read directly, no R needed: counts, cell metadata, reductions, an ADT assay, "
     "Visium images); "
+    "10x Multiome: its .h5 or folder, an .h5ad with Peaks features or an .h5mu (RNA in X, peaks in their own "
+    "file on disk; per_barcode_metrics.csv beside it adds FRiP, TSS and mitochondrial fractions; ATAC-only data "
+    "and a chromatin assay inside a Seurat object are not read); "
     "nf-core/scrnaseq mtx_conversions outputs (*.h5ad); and Visium spatial data: Space Ranger's "
     "filtered matrix with its spatial/ folder (or spatial.tar.gz; drop the whole outs/ folder), "
     "Visium HD's binned_outputs folder or one square_NNNum folder (8 or 16 um bins, one dataset per bin "
@@ -66,6 +69,15 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Protein > Joint RNA + protein (WNN)", "",
      "Seurat's weighted nearest neighbours: per-cell RNA / protein weights, a joint graph, WNN and "
      "protein UMAPs (in the embedding menu), WNN clusters"),
+    ("Unified View > Accessibility", "ATAC",
+     "only with 10x Multiome peaks (a 10x .h5 or folder, .h5ad with Peaks features, .h5mu): QC, LSI with its "
+     "depth check, ATAC UMAP and clusters"),
+    ("Unified View > Accessibility > Joint RNA + ATAC (WNN)", "",
+     "Seurat's weighted nearest neighbours on RNA PCs and LSI 2:50: per-cell RNA weight by group, WNN UMAP, clusters"),
+    ("Unified View > Accessibility > Gene activity", "peak-based",
+     "peak counts in gene body + 2 kb upstream as an overlay and against RNA; peak-based, not fragment-based"),
+    ("Unified View > Accessibility > Differential peaks", "Wilcoxon on TF-IDF",
+     "peaks per group vs the rest with nearest gene, distance to TSS, class; CSV"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
@@ -73,7 +85,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "a Reactome row's pathway diagram coloured by a DE result's fold changes (also on the DE tab's "
      "enrichment); KEGG and WikiPathways rows link out"),
     ("Unified View > DE", "", "selection vs rest or between groups; cell-level and pseudobulk tests"),
-    ("Unified View > DE > Audit this result", "donor shuffle", "donor-shuffle check of a DE result"),
+    ("Unified View > DE > Audit this result", "", "donor-shuffle check of a DE result"),
     ("Unified View > Activity > TFs (CollecTRI)", "", "transcription factor activity"),
     ("Unified View > Activity > Pathways (PROGENy)", "", "pathway activity"),
     ("Unified View > Activity > Cytokine response", "CytoSig", "CytoSig cytokine response per group"),
@@ -97,12 +109,21 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "neighbourhood enrichment between labels, composition niches; colours the tissue"),
     ("Unified View > Traits", "GWAS",
      "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
+    ("Unified View > Velocity", "",
+     "RNA velocity from spliced and unspliced counts (upload them or attach a velocyto .loom, an .h5ad or a STARsolo "
+     "folder): steady-state or stochastic model as scVelo; arrows on the plot, per-group coherence, phase portraits; "
+     "not the dynamical model or latent time"),
     ("Unified View > Deconvolution", "bulk RNA-seq",
      "cell-type fractions of uploaded bulk RNA-seq samples, this dataset as the reference; self-check, "
      "reference download for MuSiC / CIBERSORTx"),
     ("Unified View > Spot composition", "Visium, RCTD",
      "each spot's or Visium HD bin's cell-type shares from another library dataset as the reference; tissue overlay "
      "per type, dominant type, self-check"),
+    ("Unified View > Accessibility > Fragment QC", "",
+     "attach atac_fragments.tsv.gz + .tbi: per-cell TSS enrichment and nucleosome signal (Signac's definitions), "
+     "fragment length ladder, TSS profile"),
+    ("Unified View > Accessibility > Coverage tracks", "",
+     "from the fragments file: depth per group for a gene or a region up to 2 Mb, with peaks and gene arrows"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),
@@ -124,7 +145,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Compare > Composition > Neighbourhoods (Milo)", "", "neighbourhood differential abundance"),
     ("Compare > Composition > Neighbourhood DE (miloDE)", "", "DE within neighbourhoods"),
     ("Compare > Composition > Two datasets", "", "two datasets' proportions side by side"),
-    ("Compare > Plan a study", "power", "donors per group needed, from this pilot"),
+    ("Compare > Plan a study", "", "donors per group needed, from this pilot"),
     ("History", "replay script", "what was done, edit and re-run, replay script"),
     ("History > Stored results", "", "every stored result, newest first; download or delete"),
     ("Download", "CELLxGENE, Vitessce, .rds",
@@ -134,6 +155,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
 
 CLOSING = "These are all of scView's tabs and tools; name a feature only by its path here."
 
+# In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
+FULL_ONLY = ("Unified View > Accessibility >",)
+
 
 def compact_guide() -> str:
     """Every feature's path, grouped by tab, with a few words where the label
@@ -141,6 +165,8 @@ def compact_guide() -> str:
     heads: dict[str, str] = {}
     items: dict[str, list[str]] = {}
     for path, hint, _what in FEATURES:
+        if path.startswith(FULL_ONLY):
+            continue
         tab, _, rest = path.partition(" > ")
         heads.setdefault(tab, tab)
         if not rest:

@@ -385,10 +385,13 @@ def _first_neighbours(index, K, k, block):
     return nn, nearest
 
 
-def wnn_steps(rna, prot, k=20, knn_range=200, exact_max=4096, sd_scale=1.0, block=4096):
+def wnn_steps(rna, prot, k=20, knn_range=200, exact_max=4096, sd_scale=1.0, block=4096, second="protein"):
     """Seurat's FindMultiModalNeighbors on two embeddings (cells x PCs, not yet
     L2-normalised), as a generator: yields each stage's name before it runs and
     returns a dict (weights, the joint neighbours idx / dist, sigma, scores).
+    ``second``: the second modality's name in its stage (protein PCs or ATAC LSI,
+    ``core/atac.py``, dims 2:n cosine-normalised as Seurat does for lsi); the result's
+    ``protein_*`` keys hold that modality's values.
 
     Memory stays at a few k-wide arrays per cell: each modality's ``knn_range``
     candidates are queried ``block`` cells at a time, twice (the first ``k`` and the
@@ -403,7 +406,7 @@ def wnn_steps(rna, prot, k=20, knn_range=200, exact_max=4096, sd_scale=1.0, bloc
     yield "knn_rna"
     ix_r = knn_index(Xr, exact_max)
     nn_r, c_r = _first_neighbours(ix_r, K, k, block)
-    yield "knn_protein"
+    yield f"knn_{second}"
     ix_p = knn_index(Xp, exact_max)
     nn_p, c_p = _first_neighbours(ix_p, K, k, block)
     yield "bandwidth"

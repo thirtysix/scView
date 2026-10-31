@@ -5,6 +5,7 @@ import type { ClipSetting } from "@/lib/colorScale";
 import type { Camera, SessionOverlay } from "@/lib/session";
 import type { ReliabilityRef } from "@/lib/embeddingReliability";
 import type { ScoreMethod } from "@/api/genesetScore";
+import { ARROW_DEFAULTS } from "@/lib/velocityArrows";
 
 type ScatterOverlay =
   | { type: "obs"; column: string }
@@ -28,6 +29,9 @@ type ScatterOverlay =
     }
   // One gene program's per-cell usage share (Programs subtab; 1-based index, P1..Pk)
   | { type: "program"; index: number; name: string }
+  // One gene's peak-based activity (Accessibility subtab, core/atac.py): its own kind, an
+  // expression overlay's layer means a protein
+  | { type: "atac_activity"; gene: string }
   // Expression-weighted kernel density (lib/density.ts) of one gene, or the joint
   // density of several, on the embedding (and PCA pair) and layer it was computed for
   | { type: "density"; genes: string[]; embedding: string; dims?: [number, number]; layer: string }
@@ -44,9 +48,24 @@ export interface PlacedCamera {
   camera: Camera;
 }
 
+/** The velocity arrows on the main plot (saved in a session): density and scale of the grid. */
+export interface VelocityArrows {
+  on: boolean;
+  scale: number;
+  density: number;
+}
+
 interface UnifiedViewState {
   activeSubtab: Subtab;
   setActiveSubtab: (tab: Subtab) => void;
+
+  velocityArrows: VelocityArrows;
+  setVelocityArrows: (arrows: Partial<VelocityArrows>) => void;
+  // The saved run the arrows draw (null: no run on this dataset's cells; nothing is fetched)
+  velocityRun: { datasetId: string; id: string } | null;
+  setVelocityRun: (run: { datasetId: string; id: string } | null) => void;
+  velocityGridNote: string | null;
+  setVelocityGridNote: (note: string | null) => void;
 
   scatterOverlay: ScatterOverlay;
   setScatterOverlay: (overlay: ScatterOverlay) => void;
@@ -123,6 +142,13 @@ export const useUnifiedViewStore = create<UnifiedViewState>((set) => ({
 
   activeSubtab: "markers",
   setActiveSubtab: (tab) => set({ activeSubtab: tab }),
+
+  velocityArrows: { ...ARROW_DEFAULTS },
+  setVelocityArrows: (arrows) => set((s) => ({ velocityArrows: { ...s.velocityArrows, ...arrows } })),
+  velocityRun: null,
+  setVelocityRun: (run) => set({ velocityRun: run }),
+  velocityGridNote: null,
+  setVelocityGridNote: (note) => set({ velocityGridNote: note }),
 
   scatterOverlay: null,
   setScatterOverlay: (overlay) => set({ scatterOverlay: overlay }),

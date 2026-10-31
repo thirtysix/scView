@@ -14,6 +14,7 @@ const NAMED: Record<string, string> = {
   learned_gate_apply: "Learned gate applied",
   wnn: "Joint RNA + protein (WNN)",
   spot_deconvolution: "Spot composition (cell types per spot)",
+  velocity: "RNA velocity",
   spatial_domains: "Spatial domains",
   spatial_niches: "Composition niches",
   nhood_enrichment: "Neighbourhood enrichment",

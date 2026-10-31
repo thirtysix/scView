@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 # convert.R's names for a CITE-seq antibody assay, in its order of preference.
 ADT_ASSAYS = ("ADT", "Protein", "protein", "adt", "CITE", "Antibody")
+# Signac's usual names for a chromatin assay: left out with a sentence (core/atac_import.py).
+CHROMATIN_ASSAYS = ("ATAC", "atac", "peaks", "Peaks", "chromatin")
 MAX_PROTEINS = 1000  # convert.R: a larger "panel" is not antibodies
 _R_INT_NA = np.iinfo(np.int32).min
 # Seurat image classes read here: Visium (V1 table, V2 centroids); other FOV-based ones
@@ -95,6 +97,14 @@ def read(path: str | Path) -> ad.AnnData:
         protein = _protein(f, assay, n_cells, adata.obs_names)
         if protein is not None:
             adata.obsm["protein_counts"] = protein
+        chromatin = [a for a in f["assays"].keys() if a in CHROMATIN_ASSAYS and a != assay]
+        if assay in CHROMATIN_ASSAYS:
+            raise H5SeuratError(f"{path.name} holds ATAC peaks ({assay}) and no RNA assay: ATAC-only data is "
+                                "not supported yet. Upload the object with its RNA assay.")
+        if chromatin:
+            adata.uns["scview_atac_left_out"] = (
+                f"The chromatin assay {', '.join(chromatin)} of {path.name} was left out: ATAC inside a Seurat "
+                "object is not read yet. Upload the 10x filtered_feature_bc_matrix.h5 or an .h5mu for its peaks.")
         slices = _images(f)
     if slices:
         result = seurat_spatial.attach(adata, slices)

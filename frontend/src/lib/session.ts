@@ -23,6 +23,7 @@ import type { ClipSetting, SignedColormapMode } from "@/lib/colorScale";
 import { PANEL_IDS, UNIFIED_SUBTABS, type PanelId, type UnifiedSubtab } from "@/lib/constants";
 import { exportFilename } from "@/lib/exportFilename";
 import { parseGateList, type SessionGate } from "@/lib/gates";
+import { ARROW_DENSITY_RANGE, ARROW_SCALE_RANGE } from "@/lib/velocityArrows";
 import type { DEMode, DETest } from "@/stores/deSettingsStore";
 import type { CellMethod } from "@/lib/deMethods";
 
@@ -68,7 +69,9 @@ export type SessionOverlay =
   // dims: the PCA pair plotted, when not the first two.
   | { type: "reliability"; embedding: string; dims?: [number, number] }
   // A gene program's usage share (Programs subtab), read again from the saved run on open.
-  | { type: "program"; index: number };
+  | { type: "program"; index: number }
+  // One gene's peak-based ATAC activity (Accessibility subtab), read again on open.
+  | { type: "atac_activity"; gene: string };
 
 /** A selection: the filter it came from, else its cells (whichever is shorter). */
 export type SessionSelection =
@@ -102,6 +105,8 @@ export interface SessionView {
   overlay?: SessionOverlay | null;
   /** This view's colour-range clipping over the default (lib/colorScale.ts) */
   color_clip?: ClipSetting | null;
+  /** The velocity arrows on the main plot; absent in older sessions */
+  velocity_arrows?: { on: boolean; scale: number; density: number } | null;
 }
 
 export interface SessionDE {
@@ -327,7 +332,10 @@ function parseOverlay(x: unknown, where: string): SessionOverlay {
   if (o.type === "program") {
     return { type: "program", index: number(o.index, `${where}.index`, 1, 1000, true) };
   }
-  fail(`${where}.type`, 'must be "expression", "score", "activity", "reliability" or "program"');
+  if (o.type === "atac_activity") {
+    return { type: "atac_activity", gene: text(o.gene, `${where}.gene`, { empty: false }) };
+  }
+  fail(`${where}.type`, 'must be "expression", "score", "activity", "reliability", "program" or "atac_activity"');
 }
 
 const CLIP_PRESETS = ["none", "p1", "p2", "p5", "manual"] as const;
@@ -435,6 +443,14 @@ export function parseSession(x: unknown): SessionFile {
       }),
       overlay: nullable(parseOverlay),
       color_clip: nullable(parseClip),
+      velocity_arrows: nullable((v, at) => {
+        const o = object(v, at);
+        return {
+          on: bool(o.on, `${at}.on`),
+          scale: number(o.scale, `${at}.scale`, ARROW_SCALE_RANGE[0], ARROW_SCALE_RANGE[1]),
+          density: number(o.density, `${at}.density`, ARROW_DENSITY_RANGE[0], ARROW_DENSITY_RANGE[1]),
+        };
+      }),
     });
   }
 

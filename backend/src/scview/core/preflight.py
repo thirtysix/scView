@@ -167,6 +167,8 @@ class Header:
     estimated: bool = False  # cells / genes estimated from a sample (text tables)
     guess: bool = False  # nothing in the file could be read (RDS): sizes are a guess
     unit: str = "cell"  # what one row is, for the sentence about it: "bin" for Visium HD
+    # 10x Multiome peaks, which stay on disk (core/atac_import.py): n_peaks, nnz, store_bytes.
+    atac: dict | None = None
     note: str = ""  # what the numbers rest on, when not read exactly
     seconds: float = 0.0
 
@@ -267,6 +269,7 @@ def _read_h5ad(path: Path) -> Header:
             x = _h5_matrix(f["X"], "X")
             if x is not None:
                 h.matrices.append(x)
+        _h5ad_peaks(f, h)
         if h.x is not None:
             h.n_cells, h.n_genes = h.x.n_cells, h.x.n_genes
         else:  # no X: the cells from the obs index, the genes from var's
@@ -279,15 +282,17 @@ def _read_h5ad(path: Path) -> Header:
             m = _h5_matrix(f["layers"][name], f"layers/{name}")
             if m is not None:
                 h.matrices.append(m)
-        if "raw" in f and "X" in f["raw"]:
-            m = _h5_matrix(f["raw"]["X"], "raw/X")
+        # anndata < 0.7 keeps it at the top level (Kang's), and reads it as .raw all the same.
+        raw_x = f["raw"].get("X") if "raw" in f else f.get("raw.X")
+        if raw_x is not None:
+            m = _h5_matrix(raw_x, "raw/X")
             if m is not None:
                 h.matrices.append(m)
         if h.matrices and not any(mm.sparse for mm in h.matrices):
             # No sparse matrix to take the share of non-zeros from (``_State``): count it
             # on the first rows of each dense one (paul15: 2 ms).
             for mm in h.matrices:
-                mm.nonzero = _h5_head_nonzero(f[mm.where], mm.n_cells)
+                mm.nonzero = _h5_head_nonzero(raw_x if mm.where == "raw/X" else f[mm.where], mm.n_cells)
         for key in f.get("obsm", {}):
             node = f["obsm"][key]
             if isinstance(node, h5py.Dataset):
@@ -310,6 +315,36 @@ def _read_h5ad(path: Path) -> Header:
     return h
 
 
+def _h5ad_peaks(f, h: Header) -> None:
+    """An .h5ad with Peaks in X: the genes alone stay in it, the peaks go to their store."""
+    import h5py
+
+    var = f.get("var")
+    x = h.x
+    if x is None or not isinstance(var, h5py.Group) or "feature_types" not in var:
+        return
+    try:
+        from anndata.io import read_elem
+
+        is_peak = np.asarray(read_elem(var["feature_types"])).astype(str) == "Peaks"
+    except (KeyError, ValueError, TypeError):
+        return
+    if not is_peak.any():
+        return
+    node = f["X"]
+    if isinstance(node, h5py.Group) and x.sparse and _s(node.attrs.get("encoding-type")) == "csr_matrix":
+        peak_nnz = _peak_values(node["indptr"], node["indices"], is_peak, x.nnz)
+    else:
+        peak_nnz = int(round(x.nnz * is_peak.mean()))
+    h.atac = _atac_header(int(is_peak.sum()), peak_nnz)
+    x.n_genes -= int(is_peak.sum())
+    if x.sparse:
+        x.nnz -= peak_nnz
+        x.nnz_estimated = True
+    else:
+        x.nnz = x.n_cells * x.n_genes
+
+
 def _read_10x_h5(path: Path) -> Header:
     """CellRanger HDF5: genes x cells CSC in /matrix (v3) or /<genome> (v2)."""
     import h5py
@@ -322,11 +357,81 @@ def _read_10x_h5(path: Path) -> Header:
             raise ValueError("no matrix group")
         n_genes, n_cells = (int(x) for x in g["shape"][()][:2])
         nnz = int(g["data"].shape[0])
+        features = g.get("features")
+        if features is not None and "feature_type" in features:
+            is_peak = features["feature_type"][:].astype(str) == "Peaks"
+            if is_peak.any():
+                peak_nnz = _peak_values(g["indptr"], g["indices"], is_peak, nnz)
+                h.atac = _atac_header(int(is_peak.sum()), peak_nnz)
+                n_genes -= int(is_peak.sum())
+                nnz -= peak_nnz
     h.n_cells, h.n_genes = n_cells, n_genes
     # scanpy reads the counts as float32 (cells x genes CSR); scipy's indices are int64
     # once the values outnumber int32 (the 1.3M-cell brain: 2.6e9).
     idx = "int64" if max(nnz, n_genes) > np.iinfo(np.int32).max else "int32"
-    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32", idx))
+    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32", idx, nnz_estimated=h.atac is not None))
+    return h
+
+
+# Cells sampled for the share of a multiome file's values that are peaks. PBMC 10k: header read
+# in 0.09 s, 82.0% against 81.6% counted over its 127.5M values.
+PEAK_SAMPLE_CELLS = 64
+MEX_PEAK_SAMPLE = 200_000  # matrix.mtx lines read for it
+# What the store takes on disk per peak value (lzf; PBMC 10k: 104M values, 0.54 GB).
+ATAC_STORE_BYTES_PER_VALUE = 5.6
+
+
+def _peak_values(indptr, indices, is_peak: np.ndarray, nnz: int) -> int:
+    """Stored values of a by-cell matrix that fall on peaks, from a sample of its cells."""
+    n = indptr.shape[0] - 1
+    cells = np.unique(np.linspace(0, max(0, n - 1), min(n, PEAK_SAMPLE_CELLS)).astype(np.int64))
+    hit = total = 0
+    for c in cells:
+        lo, hi = int(indptr[c]), int(indptr[c + 1])
+        if hi > lo:
+            idx = np.asarray(indices[lo:hi])
+            hit += int(is_peak[idx].sum())
+            total += hi - lo
+    return int(round(nnz * hit / total)) if total else 0
+
+
+def _atac_header(n_peaks: int, peak_nnz: int) -> dict:
+    return {"n_peaks": int(n_peaks), "nnz": int(peak_nnz),
+            "store_bytes": int(peak_nnz * ATAC_STORE_BYTES_PER_VALUE)}
+
+
+def _read_h5mu(path: Path) -> Header:
+    """MuData on disk: the RNA modality as an .h5ad's header, the ATAC one on disk."""
+    import h5py
+
+    h = Header("h5mu")
+    with h5py.File(path, "r") as f:
+        mods = f.get("mod", {})
+        rna = next((m for m in ("rna", "RNA", "gex", "GEX") if m in mods), None)
+        atac = next((m for m in ("atac", "ATAC", "peaks", "Peaks") if m in mods), None)
+        if rna is None:
+            h.note = "This file has no RNA modality."
+            return h
+        g = mods[rna]
+        h.obs_columns = _n_columns(g.get("obs"))
+        h.var_columns = _n_columns(g.get("var"))
+        if "X" in g:
+            x = _h5_matrix(g["X"], "X")
+            if x is not None:
+                h.matrices.append(x)
+                h.n_cells, h.n_genes = x.n_cells, x.n_genes
+        for name in g.get("layers", {}):
+            m = _h5_matrix(g["layers"][name], f"layers/{name}")
+            if m is not None:
+                h.matrices.append(m)
+        for key in g.get("obsm", {}):
+            h.obsm_bytes += _h5_bytes(g["obsm"][key])
+        if "uns" in g:
+            h.uns_bytes = _h5_bytes(g["uns"])
+        if atac is not None and "X" in mods[atac]:
+            m = _h5_matrix(mods[atac]["X"], "X")
+            if m is not None:
+                h.atac = _atac_header(m.n_genes, m.nnz)
     return h
 
 
@@ -581,12 +686,14 @@ def sniff_format(path: Path) -> str:
             head = fh.read(8)
     except OSError:
         return "unknown"
-    if head.startswith(_HDF5_MAGIC):
+    if head.startswith((_HDF5_MAGIC, b"MuData")):  # MuData: a user block before the HDF5 signature
         import h5py
 
         try:
             with h5py.File(path, "r") as f:
                 keys = set(f.keys())
+                if "mod" in keys and isinstance(f["mod"], h5py.Group):
+                    return "h5mu"
                 if "matrix" in keys and isinstance(f["matrix"], h5py.Group):
                     return "10x_h5"
                 if {"row_attrs", "col_attrs"} <= keys:
@@ -613,7 +720,7 @@ def sniff_format(path: Path) -> str:
 
 _READERS = {
     "h5ad": _read_h5ad, "10x_h5": _read_10x_h5, "mex": _read_mex, "loom": _read_loom,
-    "zarr": _read_zarr, "rds": _read_rds, "h5seurat": _read_h5seurat,
+    "zarr": _read_zarr, "rds": _read_rds, "h5seurat": _read_h5seurat, "h5mu": _read_h5mu,
 }
 
 
@@ -747,7 +854,7 @@ LOAD_FIXED = 20 * MiB
 # and the index arrays widened on the way in). Measured on the formats listed.
 READ_BYTES_PER_VALUE = {
     "h5ad": 0.0, "zarr": 0.0, "10x_h5": 8.0, "mex": 46.0, "loom": 8.0, "table": 28.0,
-    "h5seurat": 8.0,
+    "h5seurat": 8.0, "h5mu": 0.0,
 }
 # Saving an ingested dataset (gzip h5ad): transient per byte of its matrices.
 WRITE_FRACTION = 0.1
@@ -756,6 +863,7 @@ WRITE_FRACTION = 0.1
 READ_FILE_BPS = {"10x_h5": 60e6, "mex": 12e6, "loom": 30e6, "table": 5e6, "rds": 20e6}
 READ_MEMORY_BPS = 400e6
 WRITE_BPS = 150e6  # gzip h5ad, bytes of matrices per second
+ATAC_IMPORT_SECONDS_PER_VALUE = 2.5e-7  # the peak store's pass over the file (PBMC 10k measured at import)
 
 
 def _frames_bytes(h: Header) -> int:
@@ -828,7 +936,7 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
     breakdown.append(("Cell and gene tables, embeddings, results", other))
     peak, stage = res + read, "reading the file"
     mats = _matrices_bytes(h)
-    secs = (mats / READ_MEMORY_BPS if h.format in ("h5ad", "zarr")
+    secs = (mats / READ_MEMORY_BPS if h.format in ("h5ad", "zarr", "h5mu")
             else h.file_bytes / READ_FILE_BPS.get(h.format, 30e6))
     if ingest:  # saved as a gzip h5ad, then opened
         write = int(mats * WRITE_FRACTION)
@@ -837,6 +945,11 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
         secs += mats / WRITE_BPS + mats / READ_MEMORY_BPS
     if read:
         breakdown.append(("Reading (converting the values)", read))
+    if h.atac:
+        secs += h.atac["nnz"] * ATAC_IMPORT_SECONDS_PER_VALUE
+        notes.append(f"ATAC: {h.atac['n_peaks']:,} peaks ({h.atac['nnz'] / 1e6:,.0f}M values) stay on disk, "
+                     f"about {h.atac['store_bytes'] / GiB:.2f} GB in their own store, written a block of cells "
+                     "at a time; they add nothing to the memory above.")
     if h.backed:
         from scview.core.anndata_adaptor import BACKED_MIN_BYTES
 
@@ -2183,7 +2296,7 @@ def make_verdict(*, need: int, peak: int, stage: str, seconds: tuple[float, floa
 
 _UNIT_FORMATS = {"tenx_mex": "mex", "tenx_h5": "10x_h5", "anndata": "h5ad", "loom": "loom",
                  "zarr": "zarr", "dense_table": "table", "seurat": "rds",
-                 "h5seurat": "h5seurat", "xenium": "10x_h5"}
+                 "h5seurat": "h5seurat", "xenium": "10x_h5", "h5mu": "h5mu"}
 
 
 def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
@@ -2198,6 +2311,8 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
     if f is None:
         return Header("unknown", note="The matrix file of this 10x sample is missing.")
     h = read_header(f.path, fmt, genes_in_rows)
+    if fmt == "mex" and not xen:
+        _mex_peaks(h, unit)
     spatial_parts = [(x.spatial_part or "", x.path) for x in getattr(unit, "side_files", [])
                      if getattr(x, "spatial_part", None)]
     if spatial_parts:  # Space Ranger's tissue images (uint8 RGB in uns) and the coordinates
@@ -2210,6 +2325,34 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
     if xen:
         _xenium_header(h, unit)
     return h
+
+
+def _mex_peaks(h: Header, unit) -> None:
+    """A multiome MEX folder: the genes stay in X, the peaks go to their store. The share of
+    values on peaks comes from the matrix's first lines (sorted by cell, as Cell Ranger writes it)."""
+    features = next((x.path for x in unit.files if x.role.value == "features"), None)
+    matrix = next((x.path for x in unit.files if x.role.value == "matrix"), None)
+    x = h.x
+    if features is None or matrix is None or x is None:
+        return
+    import pandas as pd
+
+    try:
+        table = pd.read_csv(features, sep="\t", header=None, usecols=[2], dtype=str, keep_default_na=False)
+        is_peak = table[2].to_numpy(dtype=str) == "Peaks"
+        if not is_peak.any():
+            return
+        head = pd.read_csv(matrix, sep=r"\s+", header=None, comment="%", skiprows=1, usecols=[0], nrows=MEX_PEAK_SAMPLE)
+        rows = head[0].to_numpy(dtype=np.int64) - 1
+        share = float(is_peak[rows[(rows >= 0) & (rows < is_peak.size)]].mean()) if rows.size else float(is_peak.mean())
+    except (OSError, ValueError, KeyError, IndexError, pd.errors.ParserError):
+        return  # the estimate then counts the peaks as genes, on the safe side
+    peak_nnz = int(round(x.nnz * share))
+    h.atac = _atac_header(int(is_peak.sum()), peak_nnz)
+    x.n_genes -= int(is_peak.sum())
+    x.nnz -= peak_nnz
+    x.nnz_estimated = True
+    h.n_genes = x.n_genes
 
 
 def _xenium_header(h: Header, unit) -> None:
@@ -2279,13 +2422,16 @@ def session_preflight(mgr, sid: str, dm) -> dict:
         half = estimate_load(_half_cells(h)) if not h.guess else None
         if blocks:
             need = streamed.streamed_need([u], opts.genes_in_rows)
+            # A multiome file is read in blocks to keep its peaks out, whatever its size.
+            for_peaks = choice.reason == streamed.PEAKS_REASON
             v = make_verdict(
                 need=need, peak=need, stage="reading and saving it in blocks", seconds=est.seconds,
                 avail=avail, cached=cached,
-                lead=(_load_lead(h, est).replace("Loading takes", "Read whole, loading would take")
+                lead=(_load_lead(h, est) if for_peaks
+                      else _load_lead(h, est).replace("Loading takes", "Read whole, loading would take")
                       + f"; it is read and saved in blocks instead, {_about(need)} at its peak"),
                 breakdown=[("Cell and gene tables, one block", need)],
-                notes=est.notes + [streamed.BLOCKS_NOTE], alternatives=[])
+                notes=est.notes if for_peaks else est.notes + [streamed.BLOCKS_NOTE], alternatives=[])
         else:
             v = make_verdict(
                 need=est.peak_bytes, peak=est.peak_bytes, stage=est.peak_stage, seconds=est.seconds,
@@ -2631,6 +2777,35 @@ LT_CT_PER_VALUE = 12  # CellTypist: the reference densified (float32) and scaled
 LT_FIXED = 100 * MiB
 
 
+def rows_bytes(mm: Matrix | None, n_rows: int) -> int:
+    """Memory ``n_rows`` of ``mm``'s rows take once read: its share of the stored values."""
+    if mm is None or not mm.n_cells:
+        return 0
+    share = min(1.0, n_rows / mm.n_cells)
+    idx = np.dtype(mm.index_dtype).itemsize if mm.sparse else 0
+    return int((mm.nbytes - (mm.n_cells + 1) * idx) * share + (n_rows + 1) * idx)
+
+
+# Measured on Kang opened backed (X 74 MiB, peak RSS over the open): every cell 210 MiB
+# (estimate 207), 4,225 cells 98 MiB (109), all three tests on every cell 275 MiB (280).
+DE_FIXED = 50 * MiB  # the first test's imports
+DE_LOGREG_PER_VALUE = 8  # logistic regression's copy, per stored value
+
+
+def de_read_need(mm: Matrix | None, n_rows: int, logreg: bool = False) -> int:
+    """Peak memory of a cell-level DE test on a backed dataset: the tested matrix's
+    compared rows read from its file, and the Wilcoxon test on them, costed as the
+    marker step (``_step_markers``, two groups); ``logreg`` when logistic regression runs."""
+    from scview.core import matrix_genes
+
+    if mm is None or not mm.n_cells:
+        return 0
+    nnz = int(mm.nnz * min(1.0, n_rows / mm.n_cells))
+    return int(rows_bytes(mm, n_rows) + matrix_genes.block_entries(nnz) * MARKERS_MEMORY_PER_VALUE
+               + 2 * mm.n_genes * 8 * 12 + n_rows * 16 + DE_FIXED
+               + (nnz * DE_LOGREG_PER_VALUE if logreg else 0))
+
+
 def _lt_counts_bytes(h: Header) -> int:
     """The matrix the run reads counts from (layers['counts'], else .raw, else X) as a
     float32 CSR of its non-zeros."""
@@ -2678,6 +2853,63 @@ def cnv_need(n_cells: int, n_genes: int, n_windows: int) -> int:
     block = min(CHUNK, n_cells) * n_genes * CNV_BLOCK_BYTES
     clustering = n_cells * n_windows * CNV_CLUSTER_BYTES + n_cells * N_PCS * 8 * 3
     return int(result + max(block, clustering) + CNV_FIXED)
+
+
+# RNA velocity (core/velocity.py). Calibrated at 2 CPUs on pancreas and dentate gyrus (scVelo's
+# datasets) and each stacked 8 times over with thinned counts (29,568 and 23,440 cells). Peak growth
+# measured / estimated, GB: pancreas stochastic 0.23 / 0.24, steady 0.21 / 0.21, dentate 0.18 / 0.21,
+# x8 pancreas 1.42 / 1.46, steady 1.15 / 1.19, dentate 1.15 / 1.16. Seconds, first run in a process:
+# 27 / 26, 20 / 26, 17 / 25, 77 / 82, 74 / 82, 75 / 71. Time is the three passes over the store, the
+# moments, fit and graph, and the neighbours when computed (numba compiles their search once per
+# process: about 20 s, left out once this module has done it; a pipeline run may have done it too).
+VELOCITY_FIT_GENES_SHARE = 9800  # fitted genes hold 9,800 / the store's genes of the values at 2,000 genes: 35% of
+# pancreas's 27,998 genes, 70% of dentate gyrus's 13,913 (from their measured peaks)
+VELOCITY_SECOND_SHARE = 0.7  # second moments' stored values over those
+VELOCITY_FIT_COPY_BYTES = 35  # the fit's working arrays, per cell x gene of its block
+VELOCITY_FIXED_BYTES = 70 * 2**20
+VELOCITY_SECONDS_FIXED = 1.0
+VELOCITY_SECONDS_PER_VALUE = 1e-7
+VELOCITY_SECONDS_PER_CELL = 7.5e-4
+VELOCITY_SECONDS_PER_CELL_KNN = 1e-3  # 4,096 cells and more: approximate search; under, exact in about 1 s
+VELOCITY_SECONDS_PER_CELL_PCA = 2.3e-4
+VELOCITY_SECONDS_KNN_COMPILE = 20.0
+
+
+def estimate_velocity(n_dataset: int, n_store: int, nnz_spliced: int, nnz_unspliced: int, *, n_top_genes: int = 2000,
+                      n_neighbors: int = 30, method: str = "stochastic", has_graph: bool = False,
+                      has_pca: bool = False, n_store_genes: int = 28_000) -> dict[str, Any]:
+    """Memory and time of a velocity run, from the store's header. The peak is the fit: S and U on
+    the fitted genes, Ms and Mu dense (each a file past core/velocity.MEMMAP_BYTES, so only pages
+    in use), the weights, one block of genes' working arrays and, stochastic, the second moments."""
+    from scview.core import velocity as vel
+
+    n = min(n_dataset, n_store) if n_store else n_dataset
+    share = n / max(n_store, 1)
+    nnz = (nnz_spliced + nnz_unspliced) * share
+    genes = max(1, n_top_genes)
+
+    def dense(cols: int) -> int:
+        size = n * cols * 4
+        return size if size <= vel.MEMMAP_BYTES else vel.BLOCK_CELLS * cols * 4
+
+    fit_share = min(0.9, VELOCITY_FIT_GENES_SHARE * (genes / 2000) / max(n_store_genes, 1))
+    sparse = int(nnz * fit_share * 12)
+    weights = n * 2 * 2 * n_neighbors * 12
+    block = vel.fit_block_genes(n) * n * VELOCITY_FIT_COPY_BYTES
+    second = int(sparse * VELOCITY_SECOND_SHARE) if method == "stochastic" else 0
+    peak = int(sparse + weights + 2 * dense(genes) + block + second + VELOCITY_FIXED_BYTES)
+    secs = (VELOCITY_SECONDS_FIXED + VELOCITY_SECONDS_PER_VALUE * nnz
+            + VELOCITY_SECONDS_PER_CELL * n * (genes / 2000) ** 0.5 * (n_neighbors / 30) ** 2)
+    compile_secs = 0.0
+    if not has_graph:
+        secs += VELOCITY_SECONDS_PER_CELL_KNN * n if n >= 4096 else 1.0
+        if not vel.knn_compiled():
+            compile_secs = VELOCITY_SECONDS_KNN_COMPILE
+        if not has_pca:
+            secs += VELOCITY_SECONDS_PER_CELL_PCA * n
+    total = secs + compile_secs
+    return {"peak_bytes": peak, "seconds": round(total, 1), "seconds_range": [round(secs * 0.8, 1), round(total * 1.2, 1)],
+            "note": vel.estimate_note(total), "n_cells": int(n), "compile_seconds": compile_secs}
 
 
 def memory_level(need: int, avail: int | None) -> str:

@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from scview.api.v1 import (
     activity,
+    atac_fragments,
     datasets,
     embeddings,
     metadata,
@@ -63,7 +64,9 @@ from scview.api.v1 import (
     gwas,
     deconvolution,
     learned_gates,
+    velocity,
     wnn,
+    atac,
     spot_deconvolution,
 )
 
@@ -130,4 +133,7 @@ api_router.include_router(gwas.router, tags=["gwas"])
 api_router.include_router(deconvolution.router, tags=["deconvolution"])
 api_router.include_router(learned_gates.router, tags=["gates"])
 api_router.include_router(wnn.router, tags=["protein"])
+api_router.include_router(velocity.router, tags=["velocity"])
+api_router.include_router(atac.router, tags=["atac"])
 api_router.include_router(spot_deconvolution.router, tags=["spatial"])
+api_router.include_router(atac_fragments.router, tags=["atac"])

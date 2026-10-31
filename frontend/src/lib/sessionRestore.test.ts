@@ -181,6 +181,25 @@ describe("save then open on the same dataset", () => {
     expect(saveAndReset().view?.overlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15"] });
   });
 
+  it("saves a gene activity colouring (ATAC) and restores it only on a dataset with ATAC", async () => {
+    const atac = { n_peaks: 100, genome: "GRCh38", computed: ["peak counts", "gene activity"] };
+    api.getDataset.mockResolvedValue({ ...kang(), atac });
+    buildWorkspace("lasso");
+    useUnifiedViewStore.getState().setScatterOverlay({ type: "atac_activity", gene: "CD3D" });
+    const session = saveAndReset();
+    expect(session.view?.overlay).toEqual({ type: "atac_activity", gene: "CD3D" });
+    await restoreSession(session);
+    expect(useUnifiedViewStore.getState().pendingOverlay).toEqual({
+      datasetId: "kang",
+      overlay: { type: "atac_activity", gene: "CD3D" },
+    });
+    resetStores();
+    api.getDataset.mockResolvedValue(kang()); // RNA alone
+    const report = await restoreSession(session);
+    expect(report.notes).toContain("Gene activity of CD3D: this dataset has no ATAC peaks.");
+    expect(useUnifiedViewStore.getState().pendingOverlay).toBeNull();
+  });
+
   it("saves a protein colouring (CITE-seq) and restores it only where the protein exists", async () => {
     const protein = { names: ["CD19"], controls: [], layer: "protein", counts_layer: "protein_counts", normalisation: "CLR" };
     api.getDataset.mockResolvedValue({ ...kang(), protein });

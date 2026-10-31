@@ -36,6 +36,7 @@ DSB_KEY = "protein_dsb"  # core/dsb.py, made on request
 UNS_KEY = "scview_protein"
 GENE_TYPE = "Gene Expression"
 ANTIBODY_TYPE = "Antibody Capture"
+PEAKS_TYPE = "Peaks"  # 10x Multiome: core/atac_import.py
 # obsm keys other tools use for the same counts (totalVI's protein_expression).
 FOREIGN_KEYS = ("protein_expression", "protein", "adt", "ADT")
 MAX_PROTEINS = 1000  # more is not a panel: a misread table
@@ -130,7 +131,9 @@ def split_features(adata: ad.AnnData) -> tuple[ad.AnnData, ProteinSplit | None]:
     is_cmo = (types == hashing.CMO_TYPE).to_numpy()
     is_guide = (types == crispr.GUIDE_TYPE).to_numpy()
     take_guide = 0 < is_guide.sum() <= crispr.MAX_GUIDES
-    other = types[(types != GENE_TYPE) & (types != ANTIBODY_TYPE) & ~is_cmo & ~(is_guide & take_guide)]
+    # Peaks go to their own store (core/atac_import.py), written from the file: not counted as dropped.
+    other = types[(types != GENE_TYPE) & (types != ANTIBODY_TYPE) & (types != PEAKS_TYPE) & ~is_cmo
+                  & ~(is_guide & take_guide)]
     split.other_features = {str(k): int(v) for k, v in other.value_counts().items()}
     genes = adata[:, (types == GENE_TYPE).to_numpy()].copy()
     if 0 < is_ab.sum() <= MAX_PROTEINS:

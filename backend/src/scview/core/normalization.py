@@ -56,6 +56,8 @@ def find_counts(adata):
         and not len(adata.var_names.difference(raw.var_names))
         and looks_like_counts(raw.X)
     ):
+        if not sp.issparse(raw.X) and not isinstance(raw.X, np.ndarray) and raw.var_names.equals(adata.var_names):
+            return raw.X, ".raw"  # on disk (a backed dataset): cutting its genes would read it whole
         return raw[:, adata.var_names].X, ".raw"
     if looks_like_counts(adata.X):
         return adata.X, "X"

@@ -682,10 +682,14 @@ _FAMILY_PREFIX = {
     # learned gates (core/learned_gate.py); "learned_gate" splits to "learned"
     "lgate": "result:lgate", "learnedgate": "result:lgate", "learned": "result:lgate",
     "spotdeconv": "result:spotdeconv",  # spot composition (core/spot_deconvolution.py)
+    # ATAC fragment QC (core/atac_fragments.py)
+    "fragqc": "result:fragqc", "fragments": "result:fragqc", "tss": "result:fragqc", "nucleosome": "result:fragqc",
+    "velocity": "result:velocity", "rnavelocity": "result:velocity",  # RNA velocity (core/velocity.py)
     "labels": "result:labels:",
     "tissue": "result:tissue",  # spatial data (core/spatial.py)
     "gwas": "result:gwas", "traits": "result:gwas",  # GWAS trait links (core/gwas_catalog.py)
     "wnn": "result:wnn",  # joint RNA + protein weights (core/wnn.py)
+    "atac": "result:atac",  # 10x Multiome peaks, LSI, gene activity, WNN (core/atac.py)
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -737,8 +741,9 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "tfmotifs", "tfmotif", "motifs", "motif",
                                   "gwas", "traits",
                                   "deconvolution", "deconv",
-                                  "lgate", "learnedgate", "learned", "spotdeconv",
-                                  "domains", "domain", "niches", "niche", "nhood")
+                                  "lgate", "learnedgate", "learned", "spotdeconv", "velocity", "rnavelocity",
+                                  "domains", "domain", "niches", "niche", "nhood",
+                                  "fragqc", "fragments", "tss", "nucleosome")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]

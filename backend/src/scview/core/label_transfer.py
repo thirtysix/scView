@@ -68,7 +68,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from scview.core import provenance
+from scview.core import provenance, working_copy
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +387,8 @@ def _lognorm_like(M) -> bool:
     values have negatives, counts are integers)."""
     if M is None:
         return False
+    if working_copy.on_disk(M):  # a backed dataset's: the first rows judge it, as for counts
+        M = M[: min(M.shape[0], 2000)]
     vals = M.data[:20000] if sp.issparse(M) else np.asarray(M).ravel()[:80000]
     vals = np.asarray(vals, dtype=np.float64)
     vals = vals[vals != 0]
@@ -406,9 +408,10 @@ def expression_of(adata, fallback_paths: list[str]) -> tuple[sp.csr_matrix, pd.D
     except IntegrationError:
         pass
     if adata.raw is not None and _lognorm_like(adata.raw.X):
-        return sp.csr_matrix(adata.raw.X, dtype=np.float32), adata.raw.var.copy(), "log-normalised .raw"
+        return (sp.csr_matrix(working_copy.read_matrix(adata.raw.X), dtype=np.float32), adata.raw.var.copy(),
+                "log-normalised .raw")
     if _lognorm_like(adata.X):
-        return sp.csr_matrix(adata.X, dtype=np.float32), adata.var.copy(), "log-normalised X"
+        return sp.csr_matrix(working_copy.read_matrix(adata.X), dtype=np.float32), adata.var.copy(), "log-normalised X"
     raise LabelTransferError("No raw counts or log-normalised values found (layers['counts'], .raw, X, "
                              "and the dataset's source files): mapping compares log-normalised values.", 422)
 
