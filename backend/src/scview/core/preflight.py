@@ -304,6 +304,9 @@ def _read_h5ad(path: Path) -> Header:
             from scview.core.large_layout import KEY as LARGE_KEY
 
             h.large = LARGE_KEY in f["uns"]
+            unit = f.get("uns/scview_spatial/unit")
+            if unit is not None and _s(unit[()]) in ("spot", "bin"):
+                h.unit = _s(unit[()])
     return h
 
 
@@ -692,7 +695,21 @@ def header_from_adata(adata) -> Header:
     h.has_clusters = any(c in adata.obs.columns for c in CLUSTER_COLUMNS)
     if "highly_variable" in adata.var.columns:
         h.n_hvg = int(np.count_nonzero(adata.var["highly_variable"].to_numpy()))
+    h.unit = _unit_of(adata)
     return h
+
+
+def _unit_of(adata) -> str:
+    """What one row is: "spot" / "bin" on a capture grid (core/spatial.py), else "cell"."""
+    from scview.core import spatial
+
+    try:
+        if spatial.is_spot_data(adata):
+            rec = spatial._recorded(adata).get("unit")
+            return str(rec) if rec in spatial.SPOT_UNITS else spatial.technology(adata)["unit"]
+    except Exception:  # noqa: BLE001 — a header never fails on an odd uns entry
+        pass
+    return "cell"
 
 
 # Rows of a dense matrix whose non-zeros are counted (evenly spaced; a strided view, no copy).
@@ -956,6 +973,7 @@ class _State:
     raw_is_x: bool = False  # .raw set to X by the scaling step: one matrix until saved
     clusters: bool = False  # a clustering the ambient RNA step can estimate rho on
     bbknn_graph: bool = False  # batch correction made the graph (BBKNN): neighbours keep it
+    unit: str = "cell"  # the header's: "bin" slows Leiden (leiden_seconds)
 
     @classmethod
     def from_header(cls, h: Header) -> "_State":
@@ -967,7 +985,7 @@ class _State:
                    h.obsm_bytes + h.obsp_bytes + h.varm_bytes + h.uns_bytes + _frames_bytes(h)
                    + (h.n_cells or 0) * LOAD_PER_CELL + LOAD_FIXED,
                    processed=bool(h.obsm) or h.matrix("raw/X") is not None, n_hvg=h.n_hvg,
-                   clusters=h.has_clusters)
+                   clusters=h.has_clusters, unit=h.unit)
 
     def matrices(self) -> list[Matrix]:
         return [mm for mm in [self.x, self.raw, *self.layers.values()] if mm is not None]
@@ -1319,21 +1337,38 @@ def _step_neighbors(s: _State, params) -> tuple[int, _State, float]:
 #   443,946 cells -> 224 x (n / 88,640)^2.24 (fit within -5..+10 %);
 #   fast Leiden (2 passes): 17 / 44 / 138 / 446 s at 88,640 / 221,828 / 443,946 /
 #   1,214,593 cells -> 16.0 x (n / 88,640)^1.275 (fit within -10..+17 %).
+# Visium HD bins (unit "bin") take longer at the same n: a grid of bins over continuous
+# tissue converges slower than dissociated cells. Measured on the laptop (batch 33,
+# 2026-10-31, the pipeline's own graph of a mouse brain: MAD QC, 2,000 variable genes,
+# 50 PCs, 15 neighbours, resolution 0.5, 2 CPUs, the child on one thread), seconds
+# against the cells' estimate at the same n:
+#   full optimisation: 16 um, 98,896 bins (2.54M edges) 811 s vs 309 (x2.62; the live
+#   run of batch 32 took 811 s too); a central 90,267-bin patch of the 8 um binning
+#   (2.43M edges) 585 s vs 252 (x2.32) -> x2.5 (fit within -5..+8 %);
+#   fast Leiden (2 passes): 16 um 38 s vs 20 (x1.88); 8 um, all 393,491 bins (10.5M
+#   edges) 192 s vs 116 (x1.66) -> x1.75 (fit within -7..+5 %).
+# Standard Visium spots (3,623 DLPFC spots: 2.3 s full, 1.5 s fast) sit on the small-data
+# line as cells do, so spots keep factor 1.
 LEIDEN_SCALE_CELLS = 88_640
 LEIDEN_SECONDS = {-1: (242.0, 2.24), 2: (17.3, 1.275)}  # (seconds at LEIDEN_SCALE_CELLS, power)
 LEIDEN_SMALL = {-1: (0.5, 4e-4), 2: (0.5, 2e-4)}  # (fixed, per cell): child start, the graph
+LEIDEN_BIN_FULL = 2.5
+LEIDEN_BIN_FAST = 1.75
+LEIDEN_UNIT_FACTOR = {"bin": {-1: LEIDEN_BIN_FULL, 2: LEIDEN_BIN_FAST}}  # x the cells' estimate; others 1
 # Clustering estimated over this (the full optimisation) offers fast Leiden before a run;
 # SCVIEW_LEIDEN_OFFER_SECONDS in .env changes it.
 LEIDEN_OFFER_SECONDS = 600.0
 
 
-def leiden_seconds(n_cells: int, n_iterations: int = -1) -> float:
-    """Seconds Leiden takes on ``n_cells`` (2 CPUs or more: it uses one)."""
+def leiden_seconds(n_cells: int, n_iterations: int = -1, unit: str = "cell") -> float:
+    """Seconds Leiden takes on ``n_cells`` (2 CPUs or more: it uses one); ``unit`` "bin"
+    (Visium HD) scales the cells' estimate by ``LEIDEN_UNIT_FACTOR``."""
     key = -1 if n_iterations == -1 else 2
     fixed, per_cell = LEIDEN_SMALL[key]
     s0, power = LEIDEN_SECONDS[key]
     n = max(0, int(n_cells))
-    return float(max(fixed + per_cell * n, s0 * (n / LEIDEN_SCALE_CELLS) ** power))
+    factor = LEIDEN_UNIT_FACTOR.get(unit, {}).get(key, 1.0)
+    return float(factor * max(fixed + per_cell * n, s0 * (n / LEIDEN_SCALE_CELLS) ** power))
 
 
 def leiden_offer_seconds() -> float:
@@ -1350,7 +1385,7 @@ def _step_clustering(s: _State, params) -> tuple[int, _State, float]:
     if _p(params, "clustering_method", "leiden") == "louvain":  # igraph's multilevel, fast
         secs = LEIDEN_SMALL[-1][0] + LEIDEN_SMALL[-1][1] * s.n
     else:
-        secs = leiden_seconds(s.n, leiden_iterations(params))
+        secs = leiden_seconds(s.n, leiden_iterations(params), s.unit)
     return 60 * MiB + s.n * 9000, s, secs
 
 
@@ -1760,6 +1795,7 @@ class ChunkedShape:
     dense: bool = False
     other: int = 0
     n_groups: int | None = None  # the active clustering's groups (markers), when known
+    unit: str = "cell"  # the header's: "bin" slows Leiden (leiden_seconds)
 
     @classmethod
     def from_header(cls, h: Header) -> "ChunkedShape":
@@ -1769,7 +1805,7 @@ class ChunkedShape:
         n = h.n_cells or 0
         other = (h.obsm_bytes + h.obsp_bytes + h.varm_bytes + h.uns_bytes + _frames_bytes(h)
                  + n * LOAD_PER_CELL + LOAD_FIXED)
-        return cls(n, h.n_genes or 0, int(nnz), dense, int(other))
+        return cls(n, h.n_genes or 0, int(nnz), dense, int(other), unit=h.unit)
 
 
 def _chunk_pass(sh: ChunkedShape, params, factor: float = 1.0) -> int:
@@ -1836,7 +1872,7 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
         secs = _STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2]
     elif step == "clustering":  # the in-memory step's own time (leiden_seconds)
         t, held = 60 * MiB + n * CHUNKED_LEIDEN_PER_CELL, n * CHUNKED_LEIDEN_KEPT_PER_CELL
-        secs = _STEP_MODELS[step](_State(n, m, None, {}, None, 0), params)[2]
+        secs = _STEP_MODELS[step](_State(n, m, None, {}, None, 0, unit=sh.unit), params)[2]
     elif step in ("embeddings", "uncorrected_embedding", "batch_correction", "enrichment"):
         s = _State(n, m, None, {}, None, 0)
         before = s.other
@@ -2459,7 +2495,7 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
                      alternatives=alternatives)
     out = {"dataset_id": dataset_id, "in_memory": in_memory, "header": h.to_dict(),
            "steps": [e.to_dict() for e in est.steps], "verdict": v,
-           "leiden": leiden_choice(h.n_cells, steps, params)}
+           "leiden": leiden_choice(h.n_cells, steps, params, h.unit)}
     chunked, reason = _would_chunk(requested, need, avail, cached, large)
     out["mode"] = {"chunked": chunked, "requested": requested, "reason": reason}
     out["umap_3d"] = umap_3d_choice(h.n_cells, steps, params, chunked)
@@ -2471,22 +2507,23 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
     return out
 
 
-def leiden_choice(n_cells: int | None, steps: list[str], params=None) -> dict | None:
+def leiden_choice(n_cells: int | None, steps: list[str], params=None, unit: str = "cell") -> dict | None:
     """For a run that clusters with Leiden: its time with the full optimisation and with
     fast Leiden (point estimates, one CPU's worth; ``*_text`` as ranges), the setting the
     run has, and ``offer_fast`` when the full optimisation's estimate is over
     ``leiden_offer_seconds()`` (10 min): the pre-run note then offers fast Leiden. None
     for a run without Leiden clustering. The cells are the dataset's, less filtering's
-    share when the run filters (``FILTER_CELLS_KEPT``)."""
+    share when the run filters (``FILTER_CELLS_KEPT``); ``unit`` "bin" (Visium HD) takes
+    the bins' slower estimate (``leiden_seconds``)."""
     if "clustering" not in (steps or []) or not n_cells:
         return None
     if _p(params, "clustering_method", "leiden") != "leiden":
         return None
     n = int(n_cells * FILTER_CELLS_KEPT) if "filtering" in steps else int(n_cells)
-    full, fast = leiden_seconds(n, -1), leiden_seconds(n, 2)
+    full, fast = leiden_seconds(n, -1, unit), leiden_seconds(n, 2, unit)
     limit = leiden_offer_seconds()
     return {
-        "n_cells": n,
+        "n_cells": n, "unit": unit,
         "full_seconds": round(full, 1), "fast_seconds": round(fast, 1),
         "full_text": time_text(_range(full, CALIBRATION_CPUS)),
         "fast_text": time_text(_range(fast, CALIBRATION_CPUS)),
