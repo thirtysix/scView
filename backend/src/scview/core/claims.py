@@ -672,6 +672,8 @@ _FAMILY_PREFIX = {
     "screen": "result:screen",
     "spatial_genes": "result:spatial_genes", "spatial": "result:spatial_genes",
     "moran": "result:spatial_genes",
+    # a Xenium dataset's outlines and transcripts (core/transcripts.py)
+    "transcripts": "result:transcripts", "transcript": "result:transcripts", "outlines": "result:transcripts",
     # spatial domains and niches (core/spatial_domains.py); "spatial_domains" is matched
     # whole in resolve_tag, as "spatial" alone means the Moran's I fact
     "domains": "result:spatial_domains", "domain": "result:spatial_domains", "niches": "result:spatial_domains",

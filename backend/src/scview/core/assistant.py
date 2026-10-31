@@ -32,6 +32,7 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -338,6 +339,24 @@ def _add_spot_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]
         lines.extend(sd_lines)
         sources.append(ChatSource(kind="result", ref=spot_deconvolution.TAG, detail=sd_detail,
                                   evidence="\n".join(sd_lines[1:])))
+
+
+def _add_imaging_store(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """A Xenium dataset's outlines and transcripts (core/cell_outlines.py, core/transcripts.py),
+    kept beside its h5ad at DATA_DIR/<layer>/<id>/; nothing on a dataset without them."""
+    from scview.core import cell_outlines, transcripts
+
+    try:
+        path = Path(adaptor.h5ad_path)
+        data_dir, dataset_id = path.parents[2], path.parent.name
+        i_lines, i_detail = transcripts.grounding_lines(data_dir, dataset_id, cell_outlines.kinds_of(data_dir, dataset_id))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: imaging store failed: %s", exc)
+        return
+    if i_lines:
+        lines.extend(i_lines)
+        sources.append(ChatSource(kind="result", ref=transcripts.TAG, detail=i_detail,
+                                  evidence="\n".join(i_lines[1:])))
 
 
 def _add_velocity(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -995,6 +1014,8 @@ def build_grounding_context(
                                           evidence="\n".join(pca_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: PCA grounding failed: %s", exc)
+    if want("qc"):
+        _add_imaging_store(adaptor, lines, sources)
     if want("qc") or want("groups"):
         _add_embedding_reliability(adaptor, lines, sources)
         _add_layout_stability(adaptor, lines, sources)

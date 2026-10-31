@@ -63,6 +63,12 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View", "", "linked scatter (UMAP/tSNE/PCA) with analysis tabs beside it"),
     ("Unified View > Embedding > Tissue", "spatial",
      "spots, bins or cells on the tissue image (Visium, Visium HD); Section, Image on/off; colours, lasso as on UMAP"),
+    ("Unified View > Embedding > Tissue > Draw", "cell outlines, nuclei, segmentation",
+     "points, or the segmented cells or nuclei in view once few enough are in view (outlines come with a Xenium "
+     "folder's boundaries files); colours, opacity, hover and lasso as on the points"),
+    ("Unified View > Transcripts", "Xenium transcripts",
+     "attach a run's transcripts.parquet, then coloured dots per gene over the tissue, up to 8 genes; q >= 20, no "
+     "control features; checked against the count matrix"),
     ("Unified View > Markers", "", "marker table per group"),
     ("Unified View > Expression", "", "gene overlay, several genes, gene vs gene"),
     ("Unified View > Protein", "CITE-seq, CLR or DSB", "CITE-seq proteins; CLR or DSB normalisation"),
@@ -156,7 +162,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
 CLOSING = "These are all of scView's tabs and tools; name a feature only by its path here."
 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
-FULL_ONLY = ("Unified View > Accessibility >",)
+FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts")
 
 
 def compact_guide() -> str:

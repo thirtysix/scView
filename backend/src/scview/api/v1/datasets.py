@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from scview.api.v1.export import file_stem
 from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
-from scview.core import conversion, crispr, provenance, replay_script, run_manifest, spatial
+from scview.core import cell_outlines, conversion, crispr, provenance, replay_script, run_manifest, spatial, transcripts, xenium
 from scview.core.atac_import import dataset_state as atac_state
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import is_locked
@@ -291,6 +291,10 @@ async def get_dataset_info(
         info["perturbation"] = crispr.available(adaptor.adata)  # a CRISPR screen's guides
         # Spatial data: libraries, image sizes, bounds (obsm + uns: small, also when large).
         info["spatial"] = spatial.info(adaptor.adata)
+        if info["spatial"]:  # kept beside the dataset (core/cell_outlines.py, core/transcripts.py)
+            info["spatial"]["outlines"] = cell_outlines.kinds_of(dm.data_dir, dataset_id)
+            info["spatial"]["transcripts"] = transcripts.has_store(dm.data_dir, dataset_id)
+            info["spatial"]["outlines_note"] = xenium.outlines_note(adaptor.adata)
         # A large dataset (matrices on disk): the gene store's state (checked once).
         info["large"] = await asyncio.to_thread(adaptor.large_info)
         # Which cells, in which order: a saved session checks it (hashing a

@@ -68,6 +68,7 @@ from scview.api.v1 import (
     wnn,
     atac,
     spot_deconvolution,
+    transcripts,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -137,3 +138,4 @@ api_router.include_router(velocity.router, tags=["velocity"])
 api_router.include_router(atac.router, tags=["atac"])
 api_router.include_router(spot_deconvolution.router, tags=["spatial"])
 api_router.include_router(atac_fragments.router, tags=["atac"])
+api_router.include_router(transcripts.router, tags=["spatial"])
