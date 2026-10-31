@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from scview.core import large_layout, large_mode, memory_budget, results_store, uns_history
+from scview.core import large_layout, large_mode, memory_budget, modality_store, results_store, uns_history
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from scview.core.obs_writes import is_locked
 
@@ -665,7 +665,7 @@ class DatasetManager:
             if large_mode.file_is_large(h5ad):
                 large_layout.remove_sidecars(h5ad)
         found = False
-        for subdir in ("uploads", "ingested", "converted", "cache", "derived"):
+        for subdir in ("uploads", "ingested", "converted", "cache", "derived", modality_store.SUBDIR):
             d = self.data_dir / subdir / dataset_id
             if d.exists():
                 shutil.rmtree(d)
