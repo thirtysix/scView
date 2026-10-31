@@ -97,7 +97,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "neighbourhood enrichment between labels, composition niches; colours the tissue"),
     ("Unified View > Traits", "GWAS",
      "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
-    ("Unified View > Velocity", "scVelo, spliced",
+    ("Unified View > Velocity", "",
      "RNA velocity from spliced and unspliced counts (upload them or attach a velocyto .loom, an .h5ad or a STARsolo "
      "folder): steady-state or stochastic model as scVelo; arrows on the plot, per-group coherence, phase portraits; "
      "not the dynamical model or latent time"),
