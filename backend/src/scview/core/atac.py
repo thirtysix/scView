@@ -25,6 +25,17 @@ group or the rest, BH FDR within each group. Signac recommends logistic regressi
 cell's total as latent covariate, about 144k fits for each group; this is the fast default.
 Peak context: nearest gene by TSS, distance, class (promoter: within 2 kb of a TSS; gene
 body; distal).
+
+Checked on 10x PBMC 10k multiome (11,898 cells, 143,887 peaks) against Signac 1.17.1 and Seurat
+5.6.0. FindTopFeatures: the same 136,705 peaks. LSI: |r| = 1.000 for components 1-30, >= 0.968 for
+all 50, singular values within 0.1%, depth correlations within 0.006. WNN RNA weights: r = 0.976
+(0.979 from Seurat's own PCA and LSI), the same mean 0.461. Gene activity against Signac's fragment-
+based GeneActivity on 2,001 genes: median gene r between the two 0.79; median r with RNA 0.061 against
+0.063; CD3D, MS4A1, LYZ, NKG7 top the same cell groups. Differential peaks against Signac's logistic
+regression (1,000 cells per group, as it takes about 20 min per group even so): 78, 72 and 52 of the top 100
+enriched peaks shared on three clusters, log2FC Spearman 0.95-0.99. Wilcoxon has no depth
+covariate and calls many peaks at this n (46,005 of 50,000 tested in the largest cluster): read the top
+of the table, not the count.
 """
 
 from __future__ import annotations
