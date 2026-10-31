@@ -5,6 +5,7 @@ import {
   getSpotDeconvolution,
   getSpotShare,
   runSpotDeconvolution,
+  spotsBelow,
   type ShareKind,
   type SpotInfo,
   type SpotMethod,
@@ -52,6 +53,8 @@ export function SpotCompositionSubtab() {
   const [refId, setRefId] = useState("");
   const [column, setColumn] = useState("");
   const [method, setMethod] = useState<SpotMethod>("rctd");
+  // The count floor: spots with fewer counts are not fitted (the unit's default from the info).
+  const [minUmi, setMinUmi] = useState<number | null>(null);
   const [check, setCheck] = useState<SpotReferenceCheck | null>(null);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
@@ -73,6 +76,7 @@ export function SpotCompositionSubtab() {
         if (!live) return;
         setInfo(i);
         setResult(i.saved);
+        setMinUmi(i.saved?.min_umi ?? i.min_umi_default ?? null);
         if (i.saved) {
           setRefId(i.saved.reference.id);
           setColumn(i.saved.celltype_column);
@@ -146,7 +150,7 @@ export function SpotCompositionSubtab() {
     try {
       const r = await runSpotDeconvolution(
         datasetId,
-        { reference_id: refId, celltype_column: column, method },
+        { reference_id: refId, celltype_column: column, method, ...(minUmi != null ? { min_umi: minUmi } : {}) },
         {
           signal: abort.current.signal,
           onProgress: (m, done, total) => setProgress(done != null && total ? `${m} (${done}/${total})` : m),
@@ -169,6 +173,9 @@ export function SpotCompositionSubtab() {
   const unit = unitWord(spatial, false);
   const units = unitWord(spatial);
   const bins = spatial?.unit === "bin";
+  const [floorLo, floorHi] = info.min_umi_range ?? [1, 10000];
+  const floorOk = minUmi != null && Number.isInteger(minUmi) && minUmi >= floorLo && minUmi <= floorHi;
+  const below = floorOk ? spotsBelow(info.counts, minUmi) : null;
 
   return (
     <div className="space-y-3 text-xs" data-testid="spot-composition">
@@ -276,14 +283,46 @@ export function SpotCompositionSubtab() {
                 )}
             </div>
           )}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               className="rounded bg-primary px-3 py-1 text-white disabled:opacity-50"
-              disabled={running || !refId || !column || !check?.ok}
+              disabled={running || !refId || !column || !check?.ok || !floorOk}
               onClick={run}
             >
               {running ? <Loader2 className="inline h-3 w-3 animate-spin" /> : null} Fit {units}
             </button>
+            <label className="flex items-center gap-1">
+              Count floor
+              <input
+                type="number"
+                className="w-20 rounded border px-1 py-0.5"
+                value={minUmi ?? ""}
+                min={floorLo}
+                max={floorHi}
+                step={1}
+                disabled={running}
+                aria-label="Count floor"
+                onChange={(e) => setMinUmi(e.target.value === "" ? null : Number(e.target.value))}
+              />
+              <InfoTip label="About the count floor" width={320}>
+                A {unit} with fewer counts than this is not fitted (&quot;low counts&quot;). RCTD&apos;s default for a spot is{" "}
+                {info.min_spot_umi}; a smaller Visium HD bin holds fewer counts, so its default scales with the bin&apos;s area
+                (25 at 8 um): on a mouse brain, 8 um bins of 20-100 counts agreed with their 16 um parent bin as bins of 100+
+                did.
+              </InfoTip>
+            </label>
+            {below && (
+              <Caption testId="spot-floor-caption">
+                {below.atLeast ? "At least " : ""}
+                {below.below.toLocaleString()} of {info.counts!.n.toLocaleString()} {units} (
+                {((100 * below.below) / Math.max(1, info.counts!.n)).toFixed(1)}%) are below it.
+              </Caption>
+            )}
+            {!floorOk && minUmi != null && (
+              <Caption testId="spot-floor-caption">
+                The count floor is a whole number from {floorLo} to {floorHi.toLocaleString()}.
+              </Caption>
+            )}
             {running && (
               <>
                 <span className="text-slate-600" data-testid="spot-progress">
