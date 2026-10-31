@@ -281,6 +281,25 @@ def test_recommend_ties_go_to_the_faster_and_none_first():
     assert bc.recommend(mixed, "cell_type", "shared")["recommended"] == "none"
 
 
+def test_a_tie_broken_on_speed_says_so_with_the_shown_percentages():
+    # Capture 2026-10-28 (pbmc3k + pbmc10k): "Harmony keeps 'cell_type' together best (84%);
+    # BBKNN came within 2% of that" while the table showed BBKNN at 85%.
+    rows = [_row("none", 0.1, 0.90, 0.1), _row("harmony", 0.7, 0.845, 0.5),
+            _row("bbknn", 0.8, 0.854, 2.0)]
+    r = bc.recommend(rows, "cell_type", "shared")
+    assert r["recommended"] == "harmony"
+    assert "best" not in r["reason"].split("within")[0]  # never called the best
+    assert ("within 2 points of the best (85% against BBKNN's 85%: a tie), and Harmony was the "
+            "fastest of them." in r["reason"])
+    # the percentages are the table's (Math.round): 0.845 reads 85%, not 84%
+    assert bc._pct(0.845) == "85%" and bc._pct(0.125) == "13%"
+    # the best itself: "best", with the runner-up within 2 points
+    r = bc.recommend([_row("none", 0.1, 0.90, 0.1), _row("harmony", 0.7, 0.86, 1.0),
+                      _row("bbknn", 0.8, 0.85, 2.0)], "cell_type", "shared")
+    assert r["recommended"] == "harmony"
+    assert "keeps 'cell_type' together best (neighbours share the label 86% of the time); BBKNN came within 2 points of that, and Harmony was the fastest of them." in r["reason"]
+
+
 def test_recommend_without_labels_or_without_mixing():
     rows = [_row("none", 0.1, None, 0.1), _row("harmony", 0.7, None, 0.5),
             _row("scanorama", 0.8, None, 4)]

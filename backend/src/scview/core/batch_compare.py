@@ -27,6 +27,7 @@ pipeline run with that ``batch_method`` (nothing from the comparison is kept).
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any, Callable, Iterator
 
@@ -231,7 +232,8 @@ def _simplest(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _pct(x: float | None) -> str:
-    return "n/a" if x is None else f"{x:.0%}"
+    """As the table shows it: rounded half up, like the frontend's Math.round(x * 100)."""
+    return "n/a" if x is None else f"{math.floor(x * 100 + 0.5):.0f}%"
 
 
 def recommend(rows: list[dict[str, Any]], label_column: str | None, kind: str) -> dict[str, Any]:
@@ -271,17 +273,25 @@ def recommend(rows: list[dict[str, Any]], label_column: str | None, kind: str) -
         return {"recommended": pick["method"], "reason": reason, "warnings": warnings,
                 "notes": notes}
     scored = [r for r in mixers if r.get("conservation") is not None]
-    top = max(r["conservation"] for r in scored)
-    tied = [r for r in scored if r["conservation"] >= top - TIE]
+    best = max(scored, key=lambda r: r["conservation"])
+    tied = [r for r in scored if r["conservation"] >= best["conservation"] - TIE]
     pick = _simplest(tied)
     others = ", ".join(r["label"] for r in tied if r is not pick)
-    reason = (f"{pick['label']}: among the methods that mix the batches acceptably (at least "
-              f"{MIX_OK:.0%} of perfect mixing), it keeps {what} together best (neighbours share "
-              f"the label {_pct(pick['conservation'])} of the time)")
-    if others:
-        reason += (f"; {others} came within {TIE:.0%} of that, and "
-                   + ("no correction is simplest" if pick["method"] == NONE
-                      else f"{pick['label']} was the fastest of them"))
+    mixes = (f"among the methods that mix the batches acceptably (at least {MIX_OK:.0%} of "
+             "perfect mixing)")
+    points = f"{TIE * 100:.0f} points"
+    why = ("no correction is simplest" if pick["method"] == NONE
+           else f"{pick['label']} was the fastest of them")
+    if pick is best:
+        reason = (f"{pick['label']}: {mixes}, it keeps {what} together best (neighbours share "
+                  f"the label {_pct(pick['conservation'])} of the time)")
+        if others:
+            reason += f"; {others} came within {points} of that, and {why}"
+    else:
+        # The pick is not the best: say so, with the shown percentages, and why it won.
+        reason = (f"{pick['label']}: {mixes}, it keeps {what} together within {points} of the "
+                  f"best ({_pct(pick['conservation'])} against {best['label']}'s "
+                  f"{_pct(best['conservation'])}: a tie), and {why}")
     reason += "."
     if pick["method"] == NONE:
         reason += " The batches already mix without correction."
