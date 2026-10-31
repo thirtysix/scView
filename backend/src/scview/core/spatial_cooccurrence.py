@@ -22,9 +22,13 @@ Where this differs from squidpy, each measured against it (``tests/fixtures/spat
 
 - Above 22,897 observations squidpy cuts them by ROW into splits of at most 2,048
   (``n_splits``), scores each pair of splits apart and takes the plain mean, so the result
-  depends on the order of the rows and a pair of far-apart splits adds zeros. Here all pairs
-  are counted and scored once (``SUM``), which is squidpy's own ``n_splits=1``, and needs no
-  distance matrix. ``SQUIDPY_SPLITS`` is squidpy's mean, for one section, to reproduce it.
+  depends on the order of the rows and a pair of far-apart splits adds zeros. On the Xenium
+  breast section (82 splits) that takes the mean same-label score within 111 um from 3.94 to
+  0.22 and the mean score over all pairs and distances from 1.02 to 0.47, and it correlates
+  at r = -0.15 with counting all pairs (with the rows shuffled, the same mean gives r = 0.999:
+  the file's rows are in spatial order). Here all pairs are counted and scored once (``SUM``),
+  which is squidpy's own ``n_splits=1``, and needs no distance matrix. ``SQUIDPY_SPLITS`` is
+  squidpy's mean, for one section, to reproduce it (max difference 7.6e-05 on that section).
 - squidpy adds up its counts in float32, where 16,777,216 + 1 is 16,777,216: from about 4,097
   observations a large label's count can stop growing at long range. Counts here are int64.
 - Several sections (``obs["library_id"]``): squidpy pools the coordinates, which counts pairs
@@ -86,7 +90,7 @@ MIN_PAIRS = 30  # pairs at a distance for the co-pilot to quote the score
 # Measured on the 0.53.0 image at 2 CPUs (Xenium breast, Visium HD 8 um; see the tests).
 _SECONDS_STARTUP = 4.0  # the child's imports and numba's compile
 _SECONDS_PER_PAIR = 2.6e-9  # at 2 threads, per pair within reach in x
-_SECONDS_PER_SPLIT_PAIR = 2.6e-9
+_SECONDS_PER_SPLIT_PAIR = 1.75e-9
 _CHILD_BYTES = 170 * 1024**2  # python, numpy, numba and LLVM in the child
 _BYTES_PER_OBS = 170  # the arrays passed on and sorted, in both processes
 
