@@ -15,11 +15,33 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from scview.core import spatial
+from scview.core import cell_outlines, spatial
 from scview.core.dataset_manager import DatasetManager
 from scview.dependencies import get_dataset_manager
 
 router = APIRouter()
+
+
+@router.get("/datasets/{dataset_id}/spatial/outlines")
+async def get_outlines(
+    dataset_id: str,
+    kind: Literal["cell", "nucleus"] = Query(default="cell"),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The segmented outlines, one per cell in obs order (wire format: ``core/cell_outlines.py``).
+    404 when this dataset has none of that kind."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    path = cell_outlines.store_path(dm.data_dir, dataset_id, kind)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"This dataset has no {kind} outlines.")
+    obs_names = adaptor.adata.obs_names
+
+    def work() -> bytes:
+        return cell_outlines.encode(*cell_outlines.read_for(path, obs_names))
+
+    return Response(content=await asyncio.to_thread(work), media_type="application/octet-stream")
 
 
 def _etag(dataset_id: str, library_id: str, res: str) -> str:
