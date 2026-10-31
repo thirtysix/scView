@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-10-31
+
 ### Changed
 - **A load during a pipeline run counts the run's remaining estimated peak.** Opening another dataset that
   would not leave the run that room is refused with a sentence naming the run ("A run on X needs about N GB
