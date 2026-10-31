@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
-from scview.core import atac_import, conversion, crispr, modality_store, protein, provenance, spatial
+from scview.core import atac_import, conversion, crispr, modality_store, protein, provenance, spatial, velocity_input
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion import streamed
 from scview.core.ingestion.bundling import (
