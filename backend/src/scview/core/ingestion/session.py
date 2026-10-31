@@ -48,6 +48,7 @@ from scview.core import (
     provenance,
     spatial,
     velocity_input,
+    xenium,
 )
 from scview.core.dataset_manager import is_safe_id
 from scview.core.ingestion import streamed
@@ -532,10 +533,12 @@ class IngestSessionManager:
         try:
             self._adopt_velocity(adata, loadable, matrices, dataset_id)
             self._attach_atac_fragments(dataset_id, adata, loadable)  # moved out of the staged files: not kept twice
+            self._adopt_xenium_outlines(dataset_id, adata, loadable)
         except BaseException:
             part.unlink(missing_ok=True)
             atac_part.unlink(missing_ok=True)
             shutil.rmtree(modality_store.store_dir(self.data_dir, dataset_id), ignore_errors=True)
+            cell_outlines.remove(self.data_dir, dataset_id)
             raise
         # The originals, in their folders; not the files the bundle skipped.
         skip = {s.path for s in bundle.skipped}
@@ -556,6 +559,7 @@ class IngestSessionManager:
                 outlines_part.replace(dest)
         except BaseException:
             shutil.rmtree(modality_store.store_dir(self.data_dir, dataset_id), ignore_errors=True)
+            cell_outlines.remove(self.data_dir, dataset_id)
             raise
         finally:
             part.unlink(missing_ok=True)
@@ -564,6 +568,18 @@ class IngestSessionManager:
         logger.info("Committed ingest session %s as dataset %s (%s)%s", sid, dataset_id, name,
                     " in blocks" if matrices is not None else "")
         return dataset_id
+
+    def _adopt_xenium_outlines(self, dataset_id: str, adata, loadable) -> None:
+        """A Xenium run's boundaries files into the outline store (``core/cell_outlines.py``).
+        One run only: merged samples have no outlines (the wizard says so, ``validation.py``)."""
+        if len(loadable) != 1 or loadable[0].format != UnitFormat.xenium:
+            return
+        unit = loadable[0]
+        files = {f.spatial_part: (f.path, f.rel_path or f.name) for f in unit.side_files if f.spatial_part}
+        notes = xenium.adopt_outlines(files, adata, self.data_dir, dataset_id)
+        library = adata.uns.get(spatial.KEY, {}).get(unit.label)
+        if notes and library is not None:
+            library.setdefault("metadata", {})[xenium.OUTLINES_NOTE] = " ".join(notes)
 
     def _adopt_velocity(self, adata, loadable, matrices: Path | None, dataset_id: str) -> None:
         """Spliced and unspliced layers go to the dataset's modality store, not its h5ad
@@ -736,8 +752,6 @@ class IngestSessionManager:
                       if any(f.side_kind == SideKind.spatial for f in u.side_files)]
         if not with_files:
             if any(u.format == UnitFormat.xenium for u in loadable) and spatial.has_spatial(adata):
-                from scview.core import xenium
-
                 return xenium.summary(adata)
             return None
         if len(with_files) < len(loadable):

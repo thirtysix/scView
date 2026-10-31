@@ -121,8 +121,8 @@ class BundleFile(BaseModel):
     side_kind: SideKind | None = None  # a side file's kind (role == side)
     receptor: str | None = None  # contig tables: "T", "B" or "T+B" (their chains, else the name)
     # Space Ranger spatial files: positions | scalefactors | hires | lowres | archive;
-    # a Xenium bundle's side files: experiment | cells | image | metrics;
-    # a segmented_outputs folder's outlines: hd_cells.PARTS.
+    # a Xenium bundle's side files: experiment | cells | image | metrics | cell_boundaries |
+    # nucleus_boundaries; a segmented_outputs folder's outlines: hd_cells.PARTS.
     spatial_part: str | None = None
     # The path inside the uploaded folder (``outs/raw_feature_bc_matrix/barcodes.tsv.gz``);
     # the name alone for a plain upload.
@@ -432,7 +432,8 @@ def _xenium_unit(g: xenium.Group, by_rel: dict) -> IngestUnit:
                        key=lambda f: f.role.value)
     side = [bf(path, role=FileRole.side, side_kind=SideKind.xenium, spatial_part=part)
             for part, path in ((xenium.PART_EXPERIMENT, g.experiment), (xenium.PART_CELLS, g.cells),
-                               (xenium.PART_IMAGE, g.image), (xenium.PART_METRICS, g.metrics)) if path]
+                               (xenium.PART_IMAGE, g.image), (xenium.PART_METRICS, g.metrics),
+                               *g.outlines.items()) if path]
     label = xenium.region_name(by_rel[g.experiment][0]) if g.experiment else ""
     label = label or _dir_label(f"{g.root}/x" if g.root else "x") or "xenium"
     missing = g.missing()

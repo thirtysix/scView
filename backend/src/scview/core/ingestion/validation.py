@@ -54,6 +54,7 @@ def validate_bundle(bundle: Bundle, converted: Collection[str] = ()) -> Validati
         issues.append(IngestIssue(
             severity=IssueSeverity.error, code="spatial_unsupported", message=bundle.unsupported))
     others = sum(u.format != UnitFormat.unknown for u in bundle.units) > 1
+    issues.extend(_merged_outlines_note(bundle, others))
     for unit in bundle.units:
         issues.extend(_validate_unit(unit))
         if unit.format == UnitFormat.seurat:
@@ -78,6 +79,18 @@ def _validate_unit(unit: IngestUnit) -> list[IngestIssue]:
                                   unit_label=unit.label) for text in unit.issues)
     issues.extend(_validate_spatial(unit))
     return issues
+
+
+def _merged_outlines_note(bundle: Bundle, merged: bool) -> list[IngestIssue]:
+    """Merged samples keep no outlines (each run numbers its own cells): said before the commit."""
+    from scview.core import xenium
+
+    if not merged or not any(f.spatial_part in xenium.OUTLINE_KINDS for u in bundle.units for f in u.side_files):
+        return []
+    return [IngestIssue(
+        severity=IssueSeverity.info, code="xenium_merge_no_outlines",
+        message="A merged dataset has no cell outlines: its tissue plot draws points.",
+        suggestion="Import each Xenium run on its own to draw cell and nucleus outlines.")]
 
 
 def _validate_atac(bundle: Bundle) -> list[IngestIssue]:

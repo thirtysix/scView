@@ -35,6 +35,7 @@ import { UnifiedGeneListsSubtab } from "@/components/unified/UnifiedGeneListsSub
 import { UnifiedCommunicationSubtab } from "@/components/unified/UnifiedCommunicationSubtab";
 import { SpatialDomainsSubtab } from "@/components/unified/SpatialDomainsSubtab";
 import { SpatialGenesSubtab } from "@/components/unified/SpatialGenesSubtab";
+import { TranscriptsSubtab } from "@/components/unified/TranscriptsSubtab";
 import { TraitsSubtab } from "@/components/unified/TraitsSubtab";
 import { DeconvolutionSubtab } from "@/components/unified/DeconvolutionSubtab";
 import { SpotCompositionSubtab } from "@/components/unified/SpotCompositionSubtab";
@@ -89,6 +90,9 @@ import {
   unitTitle,
 } from "@/lib/spatial";
 import { useTissueViewStore } from "@/stores/tissueViewStore";
+import { useCellOutlines, useTranscriptDots } from "@/hooks/useTissueExtras";
+import type { WorldRect } from "@/lib/cellOutlines";
+import { TRANSCRIPT_COLORS, shownText, transcriptColorCss } from "@/lib/transcripts";
 import { SPATIAL_EMBEDDING } from "@/api/spatial";
 import type { TissueMode } from "@/components/plots/EmbeddingScatter";
 
@@ -108,6 +112,7 @@ const SUBTABS = [
   { id: "clonotypes" as const, label: "Clonotypes" },
   { id: "perturbation" as const, label: "Perturbation" },
   { id: "spatial" as const, label: "Spatial genes" },
+  { id: "transcripts" as const, label: "Transcripts" },
   { id: "domains" as const, label: "Domains" },
   { id: "traits" as const, label: "Traits" },
   { id: "deconvolution" as const, label: "Deconvolution" },
@@ -195,6 +200,10 @@ export function UnifiedViewPanel() {
   );
   const showTissueImage = useTissueViewStore((s) => s.showImage);
   const tissueImageOpacity = useTissueViewStore((s) => s.imageOpacity);
+  const tissueDraw = useTissueViewStore((s) => s.draw);
+  // A choice this dataset has (another dataset's stays in the store, not drawn).
+  const outlineKind = tissueDraw !== "points" && tissueInfo?.outlines?.includes(tissueDraw) ? tissueDraw : null;
+  const { outlines: cellOutlines, loading: outlinesLoading, error: outlinesError } = useCellOutlines(datasetId, outlineKind);
   const tissue = useMemo<TissueMode | null>(
     () =>
       tissueInfo && tissueLibrary && datasetId
@@ -204,9 +213,36 @@ export function UnifiedViewPanel() {
             showImage: showTissueImage,
             imageOpacity: tissueImageOpacity,
             unit: tissueInfo.unit,
+            outlines: cellOutlines,
+            outlineKind: outlineKind ?? undefined,
           }
         : null,
-    [tissueInfo, tissueLibrary, datasetId, showTissueImage, tissueImageOpacity],
+    [tissueInfo, tissueLibrary, datasetId, showTissueImage, tissueImageOpacity, cellOutlines, outlineKind],
+  );
+  // Transcripts over the tissue, for the view the camera settled on.
+  const [settledView, setSettledView] = useState<WorldRect | null>(null);
+  const transcriptGenes = useTissueViewStore((s) => s.transcriptGenes);
+  const transcriptShown = useTissueViewStore((s) => s.transcriptShown);
+  const { layers: transcriptLayers, error: transcriptError } = useTranscriptDots(
+    datasetId,
+    !!tissueInfo?.transcripts && tissueCoordsIn,
+    settledView,
+  );
+  const transcriptLegend = useMemo<ScatterLegend | null>(
+    () =>
+      transcriptLayers.length
+        ? {
+            type: "categorical",
+            title: "Transcripts",
+            categories: transcriptGenes,
+            colors: transcriptGenes.map((_, i) => [...TRANSCRIPT_COLORS[i % TRANSCRIPT_COLORS.length]!] as [number, number, number]),
+          }
+        : null,
+    [transcriptLayers.length, transcriptGenes],
+  );
+  const plotOverlayLayers = useMemo(
+    () => [...velocityLayers, ...transcriptLayers],
+    [velocityLayers, transcriptLayers],
   );
 
   // A density overlay is computed again when the plot or layer changes.
@@ -571,6 +607,7 @@ export function UnifiedViewPanel() {
     if (activeSubtab === "protein" && dataset && !dataset.protein) setActiveSubtab("markers");
     if (activeSubtab === "perturbation" && dataset && !dataset.perturbation) setActiveSubtab("markers");
     if ((activeSubtab === "spatial" || activeSubtab === "domains") && dataset && !dataset.spatial) setActiveSubtab("markers");
+    if (activeSubtab === "transcripts" && dataset && dataset.spatial?.technology !== "xenium") setActiveSubtab("markers");
     if (activeSubtab === "accessibility" && dataset && !dataset.atac) setActiveSubtab("markers");
   }, [activeSubtab, dataset, setActiveSubtab]);
 
@@ -1148,9 +1185,36 @@ export function UnifiedViewPanel() {
                 axisLabels={embeddingAxisLabels(embedding, pcaDims, dataset?.embedding_dimensions?.[embedding])}
                 onKeyboardSelect={gridActive ? undefined : handleSelectionComplete}
                 tissue={tissue}
-                overlayLayers={velocityLayers.length ? velocityLayers : null}
-                overlayFigureNote={velocityLayers.length ? "Without the velocity arrows (the PNG has them)." : undefined}
+                overlayLayers={plotOverlayLayers.length ? plotOverlayLayers : null}
+                overlayFigureNote={
+                  transcriptLayers.length
+                    ? "Without the transcript dots (the PNG has them)."
+                    : velocityLayers.length
+                      ? "Without the velocity arrows (the PNG has them)."
+                      : undefined
+                }
+                onSettledView={tissueInfo?.transcripts ? setSettledView : undefined}
+                exportNote={transcriptLayers.length && transcriptShown ? shownText(transcriptShown.shown, transcriptShown.total) : undefined}
+                exportOverlayLegend={transcriptLegend}
               />
+            )}
+            {tissueInfo && (outlinesLoading || outlinesError || transcriptError) && (
+              <p role="status" className="absolute bottom-8 left-3 z-10 max-w-[60%] rounded-md border border-slate-300 bg-white/90 px-2 py-0.5 text-[11px] text-slate-600">
+                {outlinesError ?? transcriptError ?? "Loading the outlines"}
+              </p>
+            )}
+            {tissueInfo && transcriptLayers.length > 0 && (
+              <div data-testid="transcript-legend" className="absolute left-3 top-[4.25rem] z-10 max-w-[60%] rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[10px] text-slate-600">
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+                  {transcriptGenes.map((g, i) => (
+                    <span key={g} className="flex items-center gap-1">
+                      <span className="inline-block h-2 w-2 rounded-full border border-slate-400" style={{ background: transcriptColorCss(i) }} />
+                      {g}
+                    </span>
+                  ))}
+                </div>
+                {transcriptShown && <div className="text-slate-500">{shownText(transcriptShown.shown, transcriptShown.total)}</div>}
+              </div>
             )}
             {gridOffOnTissue && (
               <p role="status" className="absolute left-3 top-3 z-10 max-w-[60%] rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[11px] text-slate-600">
@@ -1456,6 +1520,7 @@ export function UnifiedViewPanel() {
                 (tab.id !== "accessibility" || dataset?.atac) &&
                 (tab.id !== "perturbation" || dataset?.perturbation) &&
                 ((tab.id !== "spatial" && tab.id !== "domains") || dataset?.spatial) &&
+                (tab.id !== "transcripts" || dataset?.spatial?.technology === "xenium") &&
                 (tab.id !== "spotcomp" || isGridUnit(dataset?.spatial)),
             )}
             active={activeSubtab}
@@ -1562,6 +1627,7 @@ export function UnifiedViewPanel() {
                 activeGene={scatterOverlay?.type === "expression" && !scatterOverlay.layer ? overlayLabel : null}
               />
             )}
+            {activeSubtab === "transcripts" && dataset?.spatial?.technology === "xenium" && <TranscriptsSubtab />}
             {activeSubtab === "domains" && dataset?.spatial && (
               <SpatialDomainsSubtab groupByColumn={groupByColumn} setGroupByColumn={setGroupByColumn} />
             )}

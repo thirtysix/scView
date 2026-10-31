@@ -73,6 +73,12 @@ export interface SpatialInfo {
   bin_size_um?: number;
   library_column: string;
   libraries: SpatialLibrary[];
+  /** Segmented outlines kept beside the dataset (GET .../spatial/outlines) */
+  outlines?: ("cell" | "nucleus")[];
+  /** Xenium transcripts indexed (GET .../spatial/transcripts) */
+  transcripts?: boolean;
+  /** Why an import's boundaries files were left out */
+  outlines_note?: string | null;
 }
 
 /** How a large dataset's on-disk files are (backend AnnDataAdaptor.large_info). */

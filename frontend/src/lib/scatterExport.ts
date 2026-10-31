@@ -196,6 +196,9 @@ export function composeScatterPng(
   ctx.textBaseline = "middle";
   if (note) {
     ctx.font = LEGEND_FONT;
+    // On a backing: over a tissue image or dense cells the bare text cannot be read.
+    ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+    ctx.fillRect(PAD - 4, plotH - PAD - 9, ctx.measureText(note).width + 8, 18);
     ctx.fillStyle = "#64748b";
     ctx.fillText(note, PAD, plotH - PAD);
   }
