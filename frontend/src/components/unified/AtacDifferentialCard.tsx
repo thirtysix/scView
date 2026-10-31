@@ -124,7 +124,7 @@ export function AtacDifferentialCard({
                   <th className="font-medium">Peak</th>
                   <th className="font-medium" title="The gene whose TSS is nearest; pseudogenes and small RNAs left out">Nearest gene</th>
                   <th className="text-right font-medium" title="To that gene's TSS: + downstream, - upstream on its strand">To TSS</th>
-                  <th className="font-medium" title="Promoter: within 2 kb of a TSS; gene body; distal">Class</th>
+                  <th className="pl-2 font-medium" title="Promoter: within 2 kb of a TSS; gene body; distal">Class</th>
                   <th className="text-right font-medium" title="log2 fold change of mean TF-IDF (expm1) + 1">log2FC</th>
                   <th className="text-right font-medium" title="Share of the group's cells with the peak">% in</th>
                   <th className="text-right font-medium" title="Share of the other cells with the peak">% rest</th>
@@ -137,7 +137,7 @@ export function AtacDifferentialCard({
                     <td className="whitespace-nowrap font-mono text-[10px]">{r.peak}</td>
                     <td>{r.nearest_gene || "–"}</td>
                     <td className="whitespace-nowrap text-right tabular-nums">{formatDistance(r.distance_to_tss)}</td>
-                    <td className="whitespace-nowrap">{r.peak_class || "–"}</td>
+                    <td className="whitespace-nowrap pl-2">{r.peak_class || "–"}</td>
                     <td className="text-right tabular-nums">{r.log2fc.toFixed(2)}</td>
                     <td className="text-right tabular-nums">{(100 * r.pct_in).toFixed(0)}</td>
                     <td className="text-right tabular-nums">{(100 * r.pct_rest).toFixed(0)}</td>
@@ -154,7 +154,8 @@ export function AtacDifferentialCard({
             </button>
           )}
           <Caption n={{ value: da.n_tested[shownGroup] ?? 0, unit: "peaks tested" }}>
-            {shownGroup} against the rest, by {prettyObsLabel(da.column)}. {da.method}
+            {shownGroup} against the rest, by {prettyObsLabel(da.column)}. {da.method} With no depth covariate, most peaks can pass in a
+            large group: read the top of the table, not the count.
           </Caption>
         </div>
       )}

@@ -110,7 +110,7 @@ describe("AccessibilitySubtab", () => {
   it("draws QC with a violin per group on a category axis", async () => {
     renderTab();
     const card = await screen.findByTestId("atac-qc-atac_total_counts");
-    await waitFor(() => expect(card.textContent).toContain("histogram"));
+    await waitFor(() => expect(card.textContent).toContain("bar"));
     expect(card.textContent).toContain("violin;violin");
     expect(screen.getByRole("button", { name: "Attach per-barcode metrics" })).toBeTruthy();
   });

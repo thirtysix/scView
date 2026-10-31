@@ -14,7 +14,7 @@ import {
   type QcValues,
 } from "@/api/atacFragments";
 import type { WatchdogEvent } from "@/api/pipelineRun";
-import { Caption, capText } from "@/components/common/Caption";
+import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
@@ -347,7 +347,7 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
               </div>
               <Caption n={{ value: shown, unit: "cells", of: total }}>
                 Dotted lines: Signac&rsquo;s PBMC vignette cut-offs (TSS enrichment {TSS_LOW}, nucleosome signal {NUCLEOSOME_HIGH}).
-                {cut && ` ${capText({ shown: values.max_per_group, total, by: "a random sample per group" })}`}
+                {cut && ` A random ${values.max_per_group.toLocaleString()} per group.`}
               </Caption>
             </figure>
           )}
