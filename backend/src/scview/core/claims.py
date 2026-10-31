@@ -131,7 +131,10 @@ _NUM_RX = re.compile(
     r"(?<![\w.\-])(-?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(?:[eE]([-+]?\d+))?"
     r"(?:\s?(%)|([kKM])(?![\w]))?(?![\w])"
 )
-_CLUSTER_IDS_RX = re.compile(r"\b(?:clusters?|groups?)\s+((?:\d+)(?:\s*(?:,|and|or|&)\s*\d+)*)", re.I)
+# "cluster 3", "clusters 3, 5 and 7", "clusters are 1, 2, 6 and 7", "clusters: 1, 2"
+_CLUSTER_IDS_RX = re.compile(
+    r"\b(?:clusters?|groups?)(?:\s+(?:are|is|were|was|includes?))?(?:\s*[:=]\s*|\s+)"
+    r"((?:\d+)(?:\s*(?:,|and|or|&)\s*\d+)*)", re.I)
 _STAT_BEFORE_RX = re.compile(
     r"(?<!\w)(FDR|q|padj|adj(?:usted)?\.? p(?:-value)?|p(?:-value)?|ARI|rho|ρ|logFC|log2FC|LFC|AUC|"
     r"score|df|resolution)\s*(?:=|:|of|<|>|≤|≥|was|is|at)?\s*(?:~|≈)?\s*$", re.I)
@@ -262,8 +265,9 @@ def scan(md: str, vocab: Vocab, *, loose_genes: bool = False) -> Scan:
         hits += [(m.start(), m.end(), m.group(1)) for m in rs.finditer(text)]
     if ri is not None:
         for m in ri.finditer(text):
-            w = m.group(1)
-            name = lower.get(w.lower()) or lower.get(re.sub(r"e?s$", "", w, flags=re.I).lower())
+            wl = m.group(1).lower()
+            # a plural: "monocytes" -> "monocyte" (s first: "es" would leave "monocyt")
+            name = lower.get(wl) or lower.get(wl[:-1]) or lower.get(re.sub(r"es$", "", wl))
             if name:
                 hits.append((m.start(), m.end(), name))
     hits.sort(key=lambda h: (h[0], -(h[1] - h[0])))
@@ -494,6 +498,27 @@ def _check_atoms(sc: Scan, ev: Evidence, *, second: bool = False) -> _Outcome:
             used.append(line)
 
     named = {k for _, g in sc.groups if (k := _known(g, ev.groups))}
+    # Cluster ids listed for a label ("Monocyte clusters are 1, 2, 6 and 7"): each id
+    # is supported by a cited line naming both the id and the label (a labels fact's
+    # "- **Monocyte** (n cells): clusters 1 (..), 2 (..)", a cell-type fact's
+    # "- cluster **1** = Monocyte"). An id on no such line is missing, never refuted:
+    # the fact may name the type another way ("CD14 Mono"), which is the judge's call.
+    labels = {g for g in ev.groups if not g.isdigit()}
+    for gpos, g in sc.groups:
+        if not g.isdigit():
+            continue
+        label = _anchor(gpos, sc.group_ends.get(gpos, gpos + len(g)), sc, labels)
+        if label is None:
+            continue
+        hit = next((ln for ln in ev.lines if {g, label} <= {x for _, x in ln.scan.groups}), None)
+        if hit:
+            out.found.append(f"cluster {g} = {label}")
+            out.found_at.add(gpos)
+            out.hard_found += 1
+            use(hit.raw)
+        else:
+            out.missing.append(f"cluster {g} (for {label})")
+            out.missing_at[gpos] = f"cluster {g} (for {label})"
     # A list of genes ("GNLY, GZMB and PRF1") belongs to one group as a unit.
     runs: list[list[tuple[int, str]]] = []
     for gpos, name in sc.genes:

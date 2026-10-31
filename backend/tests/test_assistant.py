@@ -49,6 +49,38 @@ def _build_h5ad(path: Path, n: int = 120, g: int = 80) -> None:
     a.write_h5ad(path)
 
 
+def test_celltype_fact_cautions_on_a_cluster_that_is_mostly_doublets(tmp_path: Path):
+    """Capture 2026-10-28: a joint cluster of 159 cells, 77% predicted doublets, was labelled
+    Monocyte (the annotators see markers only; the default run keeps flagged doublets).
+    The cell-type fact says so beside such a label, from the ONE doublet source."""
+    p = tmp_path / "d.h5ad"
+    _build_h5ad(p)
+    a = ad.read_h5ad(p)
+    a.obs["cell_type"] = a.obs["cluster"].map({"A": "B cell", "B": "Monocyte"}).astype("category")
+    a.uns["scview_active_clustering"] = "cluster"
+    a.uns["cell_type_llm_mapping"] = {"A": "B cell", "B": "Monocyte"}
+    is_b = (a.obs["cluster"] == "B").to_numpy()
+    calls = np.zeros(a.n_obs, dtype=bool)
+    calls[np.flatnonzero(is_b)[: int(0.75 * is_b.sum())]] = True  # 75% of B, none of A
+    a.obs["predicted_doublet"] = calls
+    a.obs["doublet_score"] = calls.astype("float32")
+    a.write_h5ad(p)
+    context, _ = build_grounding_context(AnnDataAdaptor(str(p)))
+    assert "- cluster **A** = B cell\n" in context
+    assert ("- cluster **B** = Monocyte (caution: 75% of its cells are predicted doublets, so the "
+            "label may describe two cell types captured together)") in context
+    # no doublet calls: the plain line
+    plain = tmp_path / "plain.h5ad"
+    _build_h5ad(plain)
+    a = ad.read_h5ad(plain)
+    a.uns["scview_active_clustering"] = "cluster"
+    a.uns["cell_type_llm_mapping"] = {"A": "B cell", "B": "Monocyte"}
+    a.obs["cell_type"] = a.obs["cluster"].map({"A": "B cell", "B": "Monocyte"}).astype("category")
+    a.write_h5ad(plain)
+    context, _ = build_grounding_context(AnnDataAdaptor(str(plain)))
+    assert "- cluster **B** = Monocyte\n" in context and "caution:" not in context
+
+
 def test_grounding_names_the_protein_panel(tmp_path: Path):
     p = tmp_path / "d.h5ad"
     _build_h5ad(p)

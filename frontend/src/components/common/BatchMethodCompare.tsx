@@ -126,7 +126,12 @@ export function BatchMethodCompare({
           >
             <Scale className="h-3.5 w-3.5" /> Compare
             {info.estimate_seconds != null && (
-              <span className="text-white/80">(~{Math.max(1, Math.round(info.estimate_seconds))} s)</span>
+              <span
+                className="text-white/80"
+                title={info.first_run ? "The first comparison in a session compiles BBKNN's graph code (about 16 s of this)" : undefined}
+              >
+                (~{Math.max(1, Math.round(info.estimate_seconds))} s{info.first_run ? ", first run" : ""})
+              </span>
             )}
           </button>
         )}

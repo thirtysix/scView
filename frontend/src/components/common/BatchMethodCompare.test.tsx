@@ -62,6 +62,18 @@ describe("BatchMethodCompare", () => {
     expect(getCompareInfo).not.toHaveBeenCalled();
   });
 
+  it("says when the estimate counts the first run's compilation", async () => {
+    getCompareInfo.mockResolvedValue({ ...INFO, estimate_seconds: 25.2, first_run: true });
+    const { unmount } = render(<BatchMethodCompare datasetId="d" batchKey="batch" />);
+    await screen.findByText(/Luecken et al. 2022/);
+    expect(screen.getByRole("button", { name: /Compare/ }).textContent).toContain("(~25 s, first run)");
+    unmount();
+    getCompareInfo.mockResolvedValue({ ...INFO, first_run: false });
+    render(<BatchMethodCompare datasetId="d" batchKey="batch" />);
+    await screen.findByText(/Luecken et al. 2022/);
+    expect(screen.getByRole("button", { name: /Compare/ }).textContent).toContain("(~12 s)");
+  });
+
   it("shows the background, runs, and applies the recommendation", async () => {
     const onApply = vi.fn();
     render(<BatchMethodCompare datasetId="d" batchKey="batch" onApply={onApply} applyLabel="Set the step to" />);
