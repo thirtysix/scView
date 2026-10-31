@@ -5,6 +5,7 @@ import {
   deleteDataset,
   getDataset,
   listDatasets,
+  openFailureMessage,
   pruneDatasets,
   renameDataset,
 } from "@/api/datasets";
@@ -247,9 +248,15 @@ export function DatasetLibrary() {
                 <div className="group flex min-w-0 items-start gap-1.5">
                   <button
                     onClick={async () => {
-                      const dataset = await getDataset(ds.id);
-                      setCurrentDataset(dataset);
-                      if (dataset.status === "ready") setPanel("unified");
+                      setError(null);
+                      try {
+                        const dataset = await getDataset(ds.id);
+                        setCurrentDataset(dataset);
+                        if (dataset.status === "ready") setPanel("unified");
+                      } catch (e) {
+                        // A 507's detail names the run that holds the memory (or the limit).
+                        setError(openFailureMessage(e));
+                      }
                     }}
                     className="min-w-0 text-left"
                   >

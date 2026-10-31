@@ -10,7 +10,10 @@ const api = vi.hoisted(() => ({
   deleteDataset: vi.fn(),
   pruneDatasets: vi.fn(),
 }));
-vi.mock("@/api/datasets", () => api);
+vi.mock("@/api/datasets", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/datasets")>()),
+  ...api,
+}));
 
 import { DatasetLibrary } from "./DatasetLibrary";
 
@@ -59,5 +62,21 @@ describe("DatasetLibrary", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(await screen.findByText(/control or invisible/)).toBeInTheDocument();
     expect(useDatasetStore.getState().availableDatasets[1]!.name).toBe("kang");
+  });
+
+  it("an open the server refuses shows its sentence, not a generic line", async () => {
+    const detail =
+      "A run on HD 8 um needs about 3.2 GB more at its peak and scView has 1.1 GB free of its 8.0 GB limit: " +
+      "wait for it to finish, or cancel it, before opening kang.";
+    api.getDataset.mockRejectedValue(new Error(`API error 507: ${JSON.stringify({ detail })}`));
+    render(<DatasetLibrary />);
+    fireEvent.click(screen.getByText("kang"));
+    expect(await screen.findByText(detail)).toBeInTheDocument();
+    expect(useDatasetStore.getState().currentDataset?.id).toBe("a");
+    // A later open that works clears it.
+    api.getDataset.mockResolvedValue(ds("b", "kang"));
+    fireEvent.click(screen.getByText("kang"));
+    await waitFor(() => expect(useDatasetStore.getState().currentDataset?.id).toBe("b"));
+    expect(screen.queryByText(detail)).not.toBeInTheDocument();
   });
 });
