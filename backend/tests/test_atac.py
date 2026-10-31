@@ -508,6 +508,7 @@ def test_copilot_grounds_on_the_run_with_its_tag_and_the_router_finds_it(world):
     info["activity"] = {"available": True, "n_genes": 4, "n_genes_with_peaks": 4}
     atac_import.write_info(a, info)
     a.obs[atac.OBS_CLUSTERS] = pd.Categorical(["0"] * a.n_obs)
+    a.obsm[atac.OBSM_LSI] = np.zeros((a.n_obs, 3), dtype=np.float32)
     lines, _detail = atac.grounding_lines(a)
     text = " ".join(lines)
     assert "r = -0.80" in text and "left out" in text and "peak-based" in text and "[result:atac]" in text

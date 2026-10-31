@@ -153,7 +153,9 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str, atac_store: Path
         if is_ab.sum() > protein.MAX_PROTEINS:
             summary["note"] = f"{int(is_ab.sum())} antibody features: more than a panel, dropped from X"
         provenance.init_source(holder, origin="uploaded", original_filename=original_filename, fmt="h5ad")
-        provenance.record_step(holder, step="ingest", tool="scview.ingestion", params={
+        from scview.core.atac_import import LEFT_OUT_KEY
+
+        provenance.record_step(holder, step="ingest", tool="scview.ingestion", note=holder.uns.pop(LEFT_OUT_KEY, None), params={
             "formats": ["h5ad"], "feature_split": summary,
             **({"protein": {"n_proteins": split.n_proteins, "controls": split.controls,
                             "normalisation": "CLR per cell (Seurat margin = 2)"}}

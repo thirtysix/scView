@@ -127,6 +127,20 @@ def test_plain_h5ad_upload_split_writes_the_store(tmp_path, layout):
         _check(out, s)
 
 
+def test_plain_h5ad_upload_of_values_that_are_not_counts_says_so(tmp_path):
+    from scview.core import provenance
+
+    a = mf.as_anndata()
+    a.X = a.X.multiply(0.37).tocsr()
+    src, dst, store = tmp_path / "m.h5ad", tmp_path / "out.h5ad", tmp_path / "atac.h5"
+    a.write_h5ad(src)
+    summary = split_h5ad(src, dst, original_filename="m.h5ad", atac_store=store)
+    assert "n_peaks" not in summary and not store.exists()
+    out = ad.read_h5ad(dst)
+    assert atac_import.LEFT_OUT_KEY not in out.uns and atac_import.UNS_KEY not in out.uns
+    assert "are not counts" in provenance.read_provenance(out)["history"][-1]["note"]
+
+
 def test_plain_h5ad_upload_without_a_store_path_only_leaves_peaks_out(tmp_path):
     src, dst = tmp_path / "m.h5ad", tmp_path / "out.h5ad"
     mf.as_anndata().write_h5ad(src)

@@ -154,8 +154,12 @@ def has_peaks(unit: IngestUnit) -> bool:
     """A unit with ATAC peaks a store can be written from."""
     from scview.core.ingestion.bundling import UnitFormat
 
-    if unit.format == UnitFormat.h5mu:
-        return True
+    if unit.format == UnitFormat.h5mu and unit.files:
+        try:
+            with h5py.File(unit.files[0].path, "r") as f:
+                return _mod(f, ATAC_MODS) is not None
+        except OSError:
+            return False
     types = unit_feature_types(unit)
     return types is not None and bool((types == PEAKS_TYPE).any())
 
