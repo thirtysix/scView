@@ -88,7 +88,7 @@ export function AtacLsiCard({ datasetId, state }: { datasetId: string; state: At
         </div>
       )}
       <a href={atacExportUrl(datasetId)} className="inline-block text-[11px] text-primary hover:underline" download>
-        Download the peak matrix (.h5ad, for Signac and muon)
+        Download the peak matrix (.h5ad, for Signac and muon; takes about a minute the first time)
       </a>
     </section>
   );

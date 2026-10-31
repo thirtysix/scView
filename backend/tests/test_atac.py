@@ -122,6 +122,45 @@ def test_first_component_is_dropped_only_past_the_limit(world):
     assert atac.run_lsi(store, rows, p, stats).dims_used[0] == 2
 
 
+def test_a_stopped_run_keeps_nothing_and_leaves_no_files(world):
+    store, rows = world["store"], world["rows"]
+    p = atac.plan(world["adata"], world["dir"], "d1", n_lsi=8, dims_to=6)
+    genes = atac.choose_genes(world["adata"], "GRCh38", world["dir"])
+    asked = {"n": 0}
+
+    def stop_after_a_while() -> bool:
+        asked["n"] += 1
+        return asked["n"] > 12
+
+    with pytest.raises(atac.AtacCancelled):
+        for _item in atac.iter_run(store, rows, p, data_dir=world["dir"], dataset_id="d1", genes=genes,
+                                   stop=stop_after_a_while):
+            pass
+    left = sorted(f.name for f in store.path.parent.iterdir())
+    assert left == [f"{atac.STORE}.h5"]
+
+
+def test_the_spool_gives_the_same_blocks_and_is_skipped_without_disk(world, monkeypatch, tmp_path):
+    import shutil
+
+    store, rows = world["store"], world["rows"]
+    stats = atac.peak_stats(store, rows)
+    selected = atac.top_peaks(stats.total)
+    direct = atac.TfIdf(store, rows, stats, selected, blocks=100)
+    spooled = atac.TfIdf(store, rows, stats, selected, blocks=100)
+    assert spooled.spool(tmp_path, int(stats.n_cells[selected].sum()))
+    rng = np.random.default_rng(0)
+    right = rng.normal(size=(selected.size, 3))
+    assert np.allclose(spooled.dot(right), direct.dot(right))
+    no_disk = atac.TfIdf(store, rows, stats, selected)
+
+    class Usage:
+        free = 0
+
+    monkeypatch.setattr(shutil, "disk_usage", lambda _p: Usage)
+    assert no_disk.spool(tmp_path, 10) is False and no_disk._spooled is None
+
+
 def test_gene_regions_are_strand_aware():
     table = pd.DataFrame({"start": [10_000, 50_000, 500], "end": [20_000, 60_000, 900], "strand": ["+", "-", "+"]})
     start, end = atac.gene_regions(table)

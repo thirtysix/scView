@@ -4,6 +4,7 @@ import { CapNote, Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { formatDistance, formatP } from "@/lib/atac";
+import { formatDuration } from "@/lib/hvgSensitivity";
 import { errorMessage } from "@/lib/errorMessage";
 import { prettyObsLabel } from "@/lib/formatting";
 import { useAtacRunStore } from "@/stores/atacRunStore";
@@ -94,6 +95,11 @@ export function AtacDifferentialCard({
           </button>
         )}
       </div>
+      {!live && state.plan && (
+        <p className="text-[11px] leading-snug text-slate-500">
+          About {formatDuration(30 + state.plan.nnz * 4e-7)} and 1 to 2 GB beyond the open dataset for all groups of a column.
+        </p>
+      )}
       <AtacRunStatus datasetId={datasetId} kind="differential" />
       <RequestError message={error} />
       {da && (

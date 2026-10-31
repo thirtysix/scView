@@ -683,7 +683,7 @@ def sniff_format(path: Path) -> str:
             head = fh.read(8)
     except OSError:
         return "unknown"
-    if head.startswith(_HDF5_MAGIC):
+    if head.startswith((_HDF5_MAGIC, b"MuData")):  # MuData: a user block before the HDF5 signature
         import h5py
 
         try:
@@ -2389,13 +2389,16 @@ def session_preflight(mgr, sid: str, dm) -> dict:
         half = estimate_load(_half_cells(h)) if not h.guess else None
         if blocks:
             need = streamed.streamed_need([u], opts.genes_in_rows)
+            # A multiome file is read in blocks to keep its peaks out, whatever its size.
+            for_peaks = choice.reason == streamed.PEAKS_REASON
             v = make_verdict(
                 need=need, peak=need, stage="reading and saving it in blocks", seconds=est.seconds,
                 avail=avail, cached=cached,
-                lead=(_load_lead(h, est).replace("Loading takes", "Read whole, loading would take")
+                lead=(_load_lead(h, est) if for_peaks
+                      else _load_lead(h, est).replace("Loading takes", "Read whole, loading would take")
                       + f"; it is read and saved in blocks instead, {_about(need)} at its peak"),
                 breakdown=[("Cell and gene tables, one block", need)],
-                notes=est.notes + [streamed.BLOCKS_NOTE], alternatives=[])
+                notes=est.notes if for_peaks else est.notes + [streamed.BLOCKS_NOTE], alternatives=[])
         else:
             v = make_verdict(
                 need=est.peak_bytes, peak=est.peak_bytes, stage=est.peak_stage, seconds=est.seconds,

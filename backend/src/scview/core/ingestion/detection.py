@@ -132,8 +132,9 @@ def detect_file(path: Path) -> DetectionResult:
     if part is not None:
         return _spatial_result(part)
 
-    # HDF5 family: h5ad / 10x .h5 / loom all share this magic.
-    if head.startswith(_HDF5_MAGIC):
+    # HDF5 family: h5ad / 10x .h5 / loom all share this magic. A MuData file carries its
+    # version in a 512-byte user block before it, where a plain signature check misses it.
+    if head.startswith(_HDF5_MAGIC) or _hdf5_after_user_block(path, head):
         return _classify_hdf5(path)
 
     gzipped = head.startswith(_GZIP_MAGIC)
@@ -196,6 +197,18 @@ def _detect_dir(path: Path) -> DetectionResult:
         confidence=0.0,
         reason="Directory is not a recognised store (expected a .zarr store)",
     )
+
+
+def _hdf5_after_user_block(path: Path, head: bytes) -> bool:
+    """An HDF5 signature at offset 512 under mudata's own header (``MuData (format-version=``)."""
+    if not head.startswith(b"MuData"):
+        return False
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(512)
+            return fh.read(8) == _HDF5_MAGIC
+    except OSError:
+        return False
 
 
 def _read_head(path: Path, n: int) -> bytes:

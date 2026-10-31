@@ -260,6 +260,67 @@ async def test_export_endpoint(client, dataset_manager):
     assert np.array_equal(ad.read_h5ad(path).X.toarray(), p.toarray())
 
 
+async def test_a_run_reserves_what_it_said_and_lets_go(client, dataset_manager, annotated, monkeypatch):
+    did, *_ = _register_multiome(dataset_manager)
+    asked: list[tuple[int, str]] = []
+    reserved: list[int] = []
+    released: list[str] = []
+    real_reserve, real_run, real_release = dataset_manager.reserve, dataset_manager.reserve_run, dataset_manager.release_run
+
+    async def reserve(dataset_id, need, extra=0, what="x"):
+        asked.append((need, what))
+        return await real_reserve(dataset_id, need, extra, what)
+
+    def reserve_run(dataset_id, need, remaining=None):
+        reserved.append(need)
+        return real_run(dataset_id, need, remaining) or object()
+
+    def release_run(dataset_id):
+        released.append(dataset_id)
+        real_release(dataset_id)
+
+    monkeypatch.setattr(dataset_manager, "reserve", reserve)
+    monkeypatch.setattr(dataset_manager, "reserve_run", reserve_run)
+    monkeypatch.setattr(dataset_manager, "release_run", release_run)
+    r = await client.post(f"{API}/datasets/{did}/atac/run-stream", json={"n_lsi": 6, "dims_to": 5})
+    events = _events(r.text)
+    start = next(d for e, d in events if e == "start")
+    assert asked[-1][0] == start["estimate_bytes"] and "ATAC analysis" in asked[-1][1]  # after the dataset's own open
+    assert reserved == [start["estimate_bytes"]] and released == [did]
+    assert did not in atac_api._running and dataset_manager.run_reservations() == {}
+
+
+async def test_a_run_that_cannot_fit_is_refused_before_it_starts(client, dataset_manager, monkeypatch):
+    from scview.core.dataset_manager import DatasetMemoryError
+
+    did, *_ = _register_multiome(dataset_manager)
+
+    await dataset_manager.get_or_load_dataset(did)
+
+    async def reserve(dataset_id, need, extra=0, what="x"):
+        raise DatasetMemoryError(dataset_id, need, 1, 2, what)
+
+    monkeypatch.setattr(dataset_manager, "reserve", reserve)
+    r = await client.post(f"{API}/datasets/{did}/atac/run-stream", json={})
+    assert r.status_code == 507 and did not in atac_api._running
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert atac.OBSM_LSI not in adaptor.adata.obsm
+
+
+async def test_a_differential_result_comes_back_from_the_results_store(client, dataset_manager):
+    from scview.core import results_store
+
+    did, *_ = _register_multiome(dataset_manager)
+    r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group"})
+    result = next(d for e, d in _events(r.text) if e == "result")
+    results_store.flush()
+    atac._DA_LAST.clear()
+    latest = (await client.get(f"{API}/datasets/{did}/atac/differential")).json()
+    assert latest["id"] == result["id"] and latest["n_tested"] == result["n_tested"]
+    page = await client.get(f"{API}/datasets/{did}/atac/differential/{result['id']}", params={"group": "A", "limit": 2})
+    assert page.status_code == 200 and page.json()["rows"]["A"][0]["peak"] == result["rows"]["A"][0]["peak"]
+
+
 async def test_one_run_at_a_time(client, dataset_manager):
     did, *_ = _register_multiome(dataset_manager)
     atac_api._running[did] = "wnn"
@@ -300,6 +361,12 @@ async def test_a_large_dataset_runs_from_the_store_without_reading_x(client, dat
     adaptor = await dataset_manager.get_or_load_dataset(did)
     assert adaptor.is_large and adaptor.adata.obsm[atac.OBSM_LSI].shape == (120, 8)
     assert atac.OBS_CLUSTERS in adaptor.adata.obs.columns and atac.CONN_KEY in adaptor.adata.obsp
+    pca, nb = adaptor.adata.obsm["X_pca"], adaptor.adata.uns["neighbors"]
+    dataset_manager.evict(did)  # written into its h5ad in place
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.adata.obsm[atac.OBSM_LSI].shape == (120, 8) and atac.CONN_KEY in adaptor.adata.obsp
+    assert atac_import.read_info(adaptor.adata)["lsi"]["n_clusters"] >= 1
+    adaptor.adata.obsm["X_pca"], adaptor.adata.uns["neighbors"] = pca, nb
     r = await client.post(f"{API}/datasets/{did}/atac/wnn/run-stream", json={})
     assert [e for e, _ in _events(r.text)][-1] == "complete"
     r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group"})

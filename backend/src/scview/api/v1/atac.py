@@ -522,7 +522,7 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
         return {**atac.da_payload(out["kept"], limit=100), "note": out["note"], "resources": res}
 
     start = {"column": body.column, "groups": chosen, "n_cells": int(rows.size), "min_pct": body.min_pct,
-             "estimate_seconds": atac.estimate_da_seconds(store.nnz(atac.MATRIX)), "estimate_bytes": need}
+             "estimate_seconds": atac.estimate_da_seconds(store.nnz(atac.MATRIX), len(chosen)), "estimate_bytes": need}
     return _stream(_events(
         dm, dataset_id, "differential", start, need,
         lambda stop: atac.iter_differential(store, rows, codes, every, chosen, min_pct=body.min_pct,

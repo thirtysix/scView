@@ -283,6 +283,20 @@ def test_preflight_counts_genes_in_memory_and_adds_a_store_line(tmp_path):
     assert plain.atac is None and not preflight.estimate_load(plain).notes
 
 
+def test_the_ingest_preflight_does_not_call_a_multiome_file_too_large(tmp_path):
+    from scview.core.dataset_manager import DatasetManager
+
+    h5 = mf.write_tenx_h5(tmp_path / "pbmc_filtered_feature_bc_matrix.h5")
+    m, sid = _session(tmp_path, h5)
+    out = preflight.session_preflight(m, sid, DatasetManager(data_dir=str(m.data_dir)))
+    unit = out["units"][0]
+    assert unit["streamed"] is True
+    notes = " ".join(unit["verdict"]["notes"])
+    assert "stay on disk" in notes and "Too large" not in notes
+    assert "Read whole" not in unit["verdict"]["sentence"]
+    assert unit["header"]["atac"]["n_peaks"] == 72
+
+
 def _rna_h5(tmp_path: Path) -> Path:
     a = mf.as_anndata()
     genes = a[:, a.var["feature_types"] == "Gene Expression"].copy()

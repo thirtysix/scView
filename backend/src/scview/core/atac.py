@@ -101,7 +101,7 @@ KEEP_PER_GROUP = 5_000
 MAX_GROUPS = 100
 MIN_GROUP_CELLS = 3
 BLOCK_VALUES = 4_000_000  # stored values per block: about 48 MB of data + indices
-DA_BATCH_VALUES = 30_000_000  # stored values per batch of peaks being ranked: about 360 MB
+DA_BATCH_VALUES = 20_000_000  # stored values per batch of peaks being ranked: about 0.9 GB at its peak
 BUCKET_VALUES = 20_000_000  # per on-disk bucket when turning activity by gene: about 240 MB
 RESULT_KIND = "atac_differential"
 KEEP_RESULTS = 8
@@ -350,7 +350,8 @@ _READ_SECONDS_PER_VALUE = 3.3e-8
 _SPOOL_SECONDS_PER_VALUE = 1.0e-7
 _PRODUCT_SECONDS_PER_VALUE_DIM = 0.9e-9
 _ACTIVITY_SECONDS_PER_VALUE = 3.0e-7
-_DA_SECONDS_PER_VALUE = 3.9e-7
+_DA_SECONDS_PER_VALUE = 3.5e-7
+_DA_SECONDS_PER_VALUE_GROUP = 1.4e-8
 _RUN_FIRST_SECONDS = 20.0
 _BASE_BYTES = 600 * 1024**2  # scanpy, numba, umap-learn and pynndescent loaded
 _BLOCK_BYTES = BLOCK_VALUES * 40  # one block read, its TF-IDF copies and transposed product
@@ -387,16 +388,18 @@ def estimate_bytes(n_cells: int, n_peaks: int, *, n_lsi: int = N_LSI) -> int:
     return int(_BASE_BYTES + n * _KEPT_BYTES_PER_CELL + max(svd, umap, leiden, BUCKET_VALUES * 12))
 
 
-def estimate_da_seconds(nnz: int) -> float:
-    """Differential accessibility at 2 CPUs: detection, then the batches of peaks."""
-    return round(5.0 + nnz * _DA_SECONDS_PER_VALUE, 0)
+def estimate_da_seconds(nnz: int, n_groups: int = 1) -> float:
+    """Differential accessibility at 2 CPUs: detection, then the batches of peaks; each group's
+    bookkeeping per value. PBMC 10k, 104M values: 40 s with 3 groups tested, 76 s with 24."""
+    return round(5.0 + nnz * (_DA_SECONDS_PER_VALUE + n_groups * _DA_SECONDS_PER_VALUE_GROUP), 0)
 
 
 def estimate_da_bytes(n_peaks: int, n_groups: int) -> int:
     """Per-group detection (groups x peaks of integers, twice for its shares), z, p and fold
     change, and one batch of peaks being ranked."""
-    # A batch: three columns of 4 B, its sort order (8 B), the sorted copies while they replace them.
-    return int(_BASE_BYTES / 2 + n_peaks * n_groups * (8 + 8 + 8 + 4 + 8 + 4 + 1) + DA_BATCH_VALUES * 32)
+    # A batch at its peak: three columns of 4 B concatenated from their parts, a sort order (8 B),
+    # the sorted copies beside the columns they replace.
+    return int(_BASE_BYTES + n_peaks * n_groups * (8 + 8 + 8 + 8 + 4 + 8 + 4 + 1) + DA_BATCH_VALUES * 44)
 
 
 def estimate_disk_bytes(nnz: int, activity: bool = True) -> int:
@@ -1209,7 +1212,8 @@ def estimate_wnn_seconds(n_cells: int, n_iterations: int = -1) -> float:
     from scview.core import preflight
 
     n = max(0, int(n_cells))
-    return round(wnn.FIRST_RUN_SECONDS + wnn._SECONDS_PER_CELL * n + preflight.umap_seconds(n, three_d=False)
+    # PBMC 10k, 11k cells: 28 s with numba already compiled, 52 s right after a start.
+    return round(10.0 + 1.6e-3 * n + preflight.umap_seconds(n, three_d=False)
                  + preflight.leiden_seconds(n, n_iterations), 0)
 
 

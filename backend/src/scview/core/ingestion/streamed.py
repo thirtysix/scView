@@ -74,6 +74,7 @@ MEX_BUCKET_ENTRIES = 16_000_000  # entries per on-disk bucket of an unsorted mat
 STREAM_WORKING_BYTES = 384 * 2**20
 _I32 = np.iinfo(np.int32).max
 _COUNTS_HEAD = 1000  # stored values ``merge._counts_like`` judges
+PEAKS_REASON = "ATAC peaks stay out of memory: the genes are read in blocks, without them"
 BLOCKS_NOTE = ("Too large to read into memory whole: the matrix is read and saved a block of cells "
                "at a time, giving the same dataset. Saving it writes about as much to disk as the "
                "files uploaded.")
@@ -804,7 +805,7 @@ def choose(units: list[IngestUnit], mode: str = "auto", genes_in_rows: bool = Tr
     if not streamable:
         return Choice(False, "not a format read in blocks")
     if _peaks_force_blocks(units):
-        return Choice(True, "ATAC peaks stay out of memory: the genes are read in blocks, without them")
+        return Choice(True, PEAKS_REASON)
     try:
         need = in_memory_need(units, genes_in_rows)
     except Exception as e:  # noqa: BLE001 - never block an ingest on the estimate

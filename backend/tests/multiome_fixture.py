@@ -154,7 +154,8 @@ def write_h5mu(path: str | Path, n_per: int = 40, seed: int = 0, *, atac_x: str 
         if atac_x == "tfidf":
             atac.layers["counts"] = p.copy()
         atac.X = p.multiply(0.37).tocsr()
-    with h5py.File(path, "w") as f:
+    # As mudata writes it: the version in a 512-byte user block before the HDF5 signature.
+    with h5py.File(path, "w", userblock_size=512) as f:
         f.attrs["encoding-type"] = "MuData"
         f.attrs["encoding-version"] = "0.1.0"
         write_elem(f, "obs", obs)
@@ -162,4 +163,6 @@ def write_h5mu(path: str | Path, n_per: int = 40, seed: int = 0, *, atac_x: str 
         mods = f.create_group("mod")
         write_elem(mods, "rna", rna)
         write_elem(mods, "atac", atac)
+    with open(path, "r+b") as fh:
+        fh.write(b"MuData (format-version=0.1.0;creator=muon;creator-version=0.1.7)")
     return Path(path)
