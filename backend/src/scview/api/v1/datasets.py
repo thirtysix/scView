@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,6 +92,8 @@ async def upload_dataset(
     feature_split = await _split_feature_types(dm, dataset_id, dest_path, file.filename) \
         if ext == ".h5ad" else None
 
+    velocity = await _move_velocity_layers(dm, dataset_id, dest_path, file.filename) if ext == ".h5ad" else None
+
     needs_conversion = ext in (".rds", ".rdata")
     status = DatasetStatus.converting if needs_conversion else DatasetStatus.ready
 
@@ -109,6 +112,8 @@ async def upload_dataset(
     }
     if feature_split:
         meta["feature_split"] = feature_split
+    if velocity:
+        meta["velocity"] = velocity
     meta_path = upload_dir / "metadata.json"
     with open(meta_path, "w") as fh:
         json.dump(meta, fh, indent=2)
@@ -162,6 +167,34 @@ async def _split_feature_types(dm: DatasetManager, dataset_id: str, src: Path,
     _make_readonly(out)
     logger.info("Split feature types of %s: %s", filename, summary)
     return summary
+
+
+async def _move_velocity_layers(dm: DatasetManager, dataset_id: str, src: Path, filename: str) -> dict | None:
+    """An .h5ad with layers spliced and unspliced: they go to the modality store, and the
+    dataset's working source in ``ingested/{id}/`` is written without them
+    (``core/velocity_input.py``). From the feature split's file when that ran. The upload itself
+    stays as sent. A failure leaves the layers where they are and says so in the result."""
+    from scview.core import modality_store, velocity_input
+
+    out_dir = dm.data_dir / "ingested" / dataset_id
+    out = out_dir / src.name
+    source = out if out.exists() else src
+    if not await asyncio.to_thread(velocity_input.file_has_layers, source):
+        return None
+    made_dir = not out_dir.exists()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        record = await asyncio.to_thread(velocity_input.adopt_upload, source, out, dataset_id, dm.data_dir,
+                                         file_name=Path(filename).name)
+    except Exception as e:  # never lose the upload over this
+        logger.warning("Velocity layers of %s not moved: %s", filename, e)
+        shutil.rmtree(modality_store.store_dir(dm.data_dir, dataset_id), ignore_errors=True)
+        if made_dir:
+            shutil.rmtree(out_dir, ignore_errors=True)
+        return {"error": f"The spliced and unspliced layers could not be moved to their store ({e}); they stay in the "
+                         "file, and attaching them in Unified View > Velocity is the way to use them."}
+    _make_readonly(out)
+    return record
 
 
 @router.get("/datasets")

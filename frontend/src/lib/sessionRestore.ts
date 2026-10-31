@@ -26,6 +26,7 @@ import { listedEmbeddings } from "@/lib/spatial";
 import { resetViewForDataset, useDatasetStore } from "@/stores/datasetStore";
 import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
+import { getVelocity } from "@/api/velocity";
 import { useGeneListsStore } from "@/stores/geneListsStore";
 import { staleReason, useGatesStore } from "@/stores/gatesStore";
 import {
@@ -69,6 +70,8 @@ export function captureSession(now: Date = new Date()): SessionFile {
     overlay: null,
     color_clip: unified.colorClip,
   };
+  // Only for a dataset with a velocity run: any other session stays as it was, and opens with no request.
+  if (dataset && unified.velocityRun?.datasetId === dataset.id) view.velocity_arrows = unified.velocityArrows;
   const cam = unified.camera;
   if (dataset && cam && cam.datasetId === dataset.id && cam.embedding === settings.embedding) {
     view.camera = cam.camera;
@@ -393,6 +396,17 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
   if (v.labels !== undefined) unified.setCentroidLabels(v.labels);
   if (v.subtab) unified.setActiveSubtab(v.subtab);
   if (v.color_clip !== undefined) unified.setColorClip(v.color_clip);
+  if (v.velocity_arrows) {
+    unified.setVelocityArrows(v.velocity_arrows);
+    // Drawn without opening the tab, when the run is still there for these cells.
+    if (v.velocity_arrows.on) {
+      void getVelocity(d.id)
+        .then((s) => {
+          if (s.run && !s.stale) unified.setVelocityRun({ datasetId: d.id, id: s.run.result_id });
+        })
+        .catch(() => undefined);
+    }
+  }
 
   if (v.highlight) {
     const col = columns.get(v.highlight.column);

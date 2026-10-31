@@ -114,6 +114,8 @@ interface EmbeddingScatterProps {
   /** Extra layers drawn over the points and labels, in data coordinates (the
    *  Trajectory panel's PAGA graph); the PNG download includes them */
   overlayLayers?: readonly Layer[] | null;
+  /** What the SVG / PDF note says of them (default: the PAGA graph's wording) */
+  overlayFigureNote?: string;
   /** The embedding's obsm key: a UMAP or t-SNE gets a note that its cluster
    *  gaps aren't distances, linking to the cluster-distance view */
   embedding?: string | null;
@@ -202,6 +204,7 @@ export function EmbeddingScatter({
   highlightCategory = null,
   overlayElement = null,
   overlayLayers = null,
+  overlayFigureNote,
   embedding = null,
   axisLabels = null,
   exportTitle,
@@ -835,7 +838,7 @@ export function EmbeddingScatter({
           onFigure={downloadFigure}
           figureNote={
             overlayLayers?.length
-              ? "Without the graph drawn over the points (the PNG has it)."
+              ? (overlayFigureNote ?? "Without the graph drawn over the points (the PNG has it).")
               : imageLayers.length
                 ? "Without the tissue image (the PNG has it)."
                 : undefined

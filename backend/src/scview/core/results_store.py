@@ -119,6 +119,7 @@ ADDITIVE_STEPS = frozenset({
     "learned_gate_train", "learned_gate_apply",
     "wnn",
     "spot_deconvolution",
+    "velocity",
     "spatial_domains", "spatial_niches", "nhood_enrichment",
     "atac_fragment_qc",
 })

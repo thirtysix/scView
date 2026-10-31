@@ -139,6 +139,7 @@ _RESULT_FACET_HINTS = {
         "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
         "spatial domain", "domains", "niche", "nhood", "stability scan", "neighbourhood enrichment",
         "neighborhood enrichment", "next to each other", "side by side", "adjacent", "colocal", "co-local",
+        "velocity", "scvelo", "spliced", "unspliced", "phase portrait", "arrows", "gamma", "latent time",
     ),
     "markers": ("gene program", "programs", "nmf"),
     "qc": ("targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts",

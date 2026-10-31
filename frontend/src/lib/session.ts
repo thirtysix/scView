@@ -23,6 +23,7 @@ import type { ClipSetting, SignedColormapMode } from "@/lib/colorScale";
 import { PANEL_IDS, UNIFIED_SUBTABS, type PanelId, type UnifiedSubtab } from "@/lib/constants";
 import { exportFilename } from "@/lib/exportFilename";
 import { parseGateList, type SessionGate } from "@/lib/gates";
+import { ARROW_DENSITY_RANGE, ARROW_SCALE_RANGE } from "@/lib/velocityArrows";
 import type { DEMode, DETest } from "@/stores/deSettingsStore";
 import type { CellMethod } from "@/lib/deMethods";
 
@@ -102,6 +103,8 @@ export interface SessionView {
   overlay?: SessionOverlay | null;
   /** This view's colour-range clipping over the default (lib/colorScale.ts) */
   color_clip?: ClipSetting | null;
+  /** The velocity arrows on the main plot; absent in older sessions */
+  velocity_arrows?: { on: boolean; scale: number; density: number } | null;
 }
 
 export interface SessionDE {
@@ -435,6 +438,14 @@ export function parseSession(x: unknown): SessionFile {
       }),
       overlay: nullable(parseOverlay),
       color_clip: nullable(parseClip),
+      velocity_arrows: nullable((v, at) => {
+        const o = object(v, at);
+        return {
+          on: bool(o.on, `${at}.on`),
+          scale: number(o.scale, `${at}.scale`, ARROW_SCALE_RANGE[0], ARROW_SCALE_RANGE[1]),
+          density: number(o.density, `${at}.density`, ARROW_DENSITY_RANGE[0], ARROW_DENSITY_RANGE[1]),
+        };
+      }),
     });
   }
 

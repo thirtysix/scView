@@ -412,8 +412,8 @@ def _replace(group: h5py.Group, key: str, value: Any) -> None:
 
 def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool = True,
                    uns_keys: Iterable[str] = (), uns_removed: Iterable[str] = (),
-                   obsm_keys: Iterable[str] = (), obsp_keys: Iterable[str] = ()) -> None:
-    """Write a backed large dataset's edited obs, ``uns_keys`` (``uns_removed`` deleted),
+                   obsm_keys: Iterable[str] = (), obsp_keys: Iterable[str] = (), var: bool = False) -> None:
+    """Write a backed large dataset's edited obs (``var``: var too), ``uns_keys`` (``uns_removed`` deleted),
     ``obsm_keys`` and ``obsp_keys`` (a graph) into its h5ad, leaving X alone. Holds ``lock`` throughout: the
     backing file is closed (HDF5 opens a file for writing only once nothing in the
     process reads it), written, and opened again; reads of X wait meanwhile.
@@ -430,6 +430,8 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
                     if frame.index.name is not None and frame.index.name in frame.columns:
                         frame.index.name = None
                     _replace(f, "obs", frame)
+                if var:
+                    _replace(f, "var", adata.var)
                 if "uns" not in f:
                     from anndata.io import write_elem
 

@@ -49,7 +49,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from scview.core import crispr, hashing, protein, spatial
+from scview.core import crispr, hashing, protein, spatial, velocity_input
 from scview.core.ingestion import feature_split as fs
 from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 from scview.core.ingestion.detection import legacy_tenx_genomes
@@ -656,8 +656,11 @@ def _copy_h5ad(su: StreamedUnit, fo: h5py.File) -> tuple:
             tables = [t if m.any() else None for t, m in zip(got, masks)]
         if "layers" in fi:
             g = fs._group_like(fi["layers"], fo, "layers")
+            # Spliced + unspliced go to the velocity store instead (session._adopt_velocity).
+            skip = velocity_input.LAYERS if all(k in fi["layers"] for k in velocity_input.REQUIRED) else ()
             for name in fi["layers"].keys():
-                fs._subset_matrix(fi["layers"][name], g, name, keep, [])
+                if name not in skip:
+                    fs._subset_matrix(fi["layers"][name], g, name, keep, [])
         for key in ("raw", "obsp"):
             if key in fi:
                 fi.copy(fi[key], fo, name=key)

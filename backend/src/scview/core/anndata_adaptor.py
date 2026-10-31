@@ -1108,14 +1108,14 @@ class AnnDataAdaptor:
         return self.is_large and self._large.start_rebuild(self.adata)
 
     def write_in_place(self, *, obs: bool = True, uns_keys=(), uns_removed=(), obsm_keys=(),
-                       obsp_keys=()) -> None:
+                       obsp_keys=(), var: bool = False) -> None:
         """Save an obs / uns / obsm / obsp edit of a large dataset into its h5ad, X untouched
         (``large_mode.write_in_place``). Call with the dataset's edit lock held, in a
         worker thread."""
         uns_history.before_save(self, self.adata)
         large_mode.write_in_place(self.adata, self.h5ad_path, self._large.lock, obs=obs,
                                   uns_keys=uns_keys, uns_removed=uns_removed, obsm_keys=obsm_keys,
-                                  obsp_keys=obsp_keys)
+                                  obsp_keys=obsp_keys, var=var)
 
 
 def _qc_missing(obs: pd.DataFrame) -> bool:

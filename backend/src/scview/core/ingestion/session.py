@@ -48,6 +48,7 @@ from scview.core.ingestion.bundling import (
     build_bundle,
 )
 from scview.core.ingestion.detection import FileKind, is_store_dir
+from scview.core import modality_store, velocity_input
 from scview.core.ingestion.loading import IngestLoadError, load_unit
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.validation import IssueSeverity, validate_bundle
@@ -508,10 +509,12 @@ class IngestSessionManager:
 
         dataset_id = uuid.uuid4().hex
         name = opts.name or (loadable[0].label if len(loadable) == 1 else "merged_dataset")
+        self._adopt_velocity(adata, loadable, matrices, dataset_id)
         try:
             self._attach_atac_fragments(dataset_id, adata, loadable)  # moved out of the staged files: not kept twice
         except IngestCommitError:
             part.unlink(missing_ok=True)
+            shutil.rmtree(modality_store.store_dir(self.data_dir, dataset_id), ignore_errors=True)
             raise
         # The originals, in their folders; not the files the bundle skipped.
         skip = {s.path for s in bundle.skipped}
@@ -522,11 +525,30 @@ class IngestSessionManager:
         try:
             self._persist_dataset(dataset_id, name, adata, originals, root, matrices=matrices,
                                   conversion_report=report)
+        except BaseException:
+            shutil.rmtree(modality_store.store_dir(self.data_dir, dataset_id), ignore_errors=True)
+            raise
         finally:
             part.unlink(missing_ok=True)
         logger.info("Committed ingest session %s as dataset %s (%s)%s", sid, dataset_id, name,
                     " in blocks" if matrices is not None else "")
         return dataset_id
+
+    def _adopt_velocity(self, adata, loadable, matrices: Path | None, dataset_id: str) -> None:
+        """Spliced and unspliced layers go to the dataset's modality store, not its h5ad
+        (``core/velocity_input.py``). In blocks (one .h5ad unit): ``streamed`` left them in the file,
+        which is read here; a merge read into memory has them in ``adata``."""
+        name = loadable[0].label if len(loadable) == 1 else "merged upload"
+        try:
+            if matrices is None:
+                velocity_input.adopt_anndata(adata, dataset_id, self.data_dir, file_name=name)
+            elif len(loadable) == 1 and loadable[0].format == UnitFormat.anndata:
+                path = Path(loadable[0].files[0].path)
+                if velocity_input.file_has_layers(path):
+                    velocity_input.write_source(adata, velocity_input.adopt_file(path, dataset_id, self.data_dir,
+                                                                                 file_name=name))
+        except (velocity_input.VelocityInputError, modality_store.ModalityStoreError, OSError) as e:
+            raise IngestCommitError(f"The spliced and unspliced counts could not be saved: {e}") from e
 
     def _load_or_stream(self, loadable, opts: IngestOptions, workdir: Path, part: Path):
         """(dataset, None) read into memory, or (skeleton, ``part``) with the matrices
