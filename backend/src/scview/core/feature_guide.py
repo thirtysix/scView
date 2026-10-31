@@ -73,7 +73,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "a Reactome row's pathway diagram coloured by a DE result's fold changes (also on the DE tab's "
      "enrichment); KEGG and WikiPathways rows link out"),
     ("Unified View > DE", "", "selection vs rest or between groups; cell-level and pseudobulk tests"),
-    ("Unified View > DE > Audit this result", "donor shuffle", "donor-shuffle check of a DE result"),
+    ("Unified View > DE > Audit this result", "", "donor-shuffle check of a DE result"),
     ("Unified View > Activity > TFs (CollecTRI)", "", "transcription factor activity"),
     ("Unified View > Activity > Pathways (PROGENy)", "", "pathway activity"),
     ("Unified View > Activity > Cytokine response", "CytoSig", "CytoSig cytokine response per group"),
@@ -131,7 +131,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Compare > Composition > Neighbourhoods (Milo)", "", "neighbourhood differential abundance"),
     ("Compare > Composition > Neighbourhood DE (miloDE)", "", "DE within neighbourhoods"),
     ("Compare > Composition > Two datasets", "", "two datasets' proportions side by side"),
-    ("Compare > Plan a study", "power", "donors per group needed, from this pilot"),
+    ("Compare > Plan a study", "", "donors per group needed, from this pilot"),
     ("History", "replay script", "what was done, edit and re-run, replay script"),
     ("History > Stored results", "", "every stored result, newest first; download or delete"),
     ("Download", "CELLxGENE, Vitessce, .rds",
