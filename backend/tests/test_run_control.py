@@ -437,12 +437,125 @@ async def test_a_run_with_a_plan_makes_room_first(tmp_path, monkeypatch):
         async def free_memory_for(self, need, keep):
             asked.append((need, keep))
 
+        def reserve_run(self, dataset_id, need, remaining=None):
+            asked.append(("reserve", dataset_id, need, remaining))
+
     monkeypatch.setattr(preflight, "run_need", lambda adata, steps, params: 12345)
     a = _counts()
     await processing._make_run_room(FakeDM(), "d1", type("A", (), {"adata": a})(),
                                     RunControl(_quiet(), plan=(STEPS, pipeline.PipelineParams())))
     await processing._make_run_room(FakeDM(), "d1", type("A", (), {"adata": a})(), RunControl(_quiet()))
-    assert asked == [(12345, "d1")]  # the run without a plan asked nothing
+    assert asked[0] == (12345, "d1")
+    # The run's growth is reserved until it ends (in memory, not backed: the run itself).
+    assert asked[1][:3] == ("reserve", "d1", 12345) and callable(asked[1][3])
+    assert len(asked) == 2  # the run without a plan asked nothing
+
+
+async def test_the_reservation_shrinks_to_the_steps_still_to_run(monkeypatch):
+    from scview.core import preflight, processing
+
+    asked = []
+
+    class FakeDM:
+        async def free_memory_for(self, need, keep):
+            pass
+
+        async def reserve(self, dataset_id, need, extra=0, what=""):
+            pass
+
+        def reserve_run(self, dataset_id, need, remaining=None):
+            asked.append((need, remaining))
+
+    by_step = {"qc_metrics": 10, "normalization": 70, "log_transform": 30, "pca": 20, "save": 5}
+    monkeypatch.setattr(preflight, "run_need", lambda adata, steps, params: 70)
+    monkeypatch.setattr(preflight, "run_step_needs", lambda adata, steps, params: dict(by_step))
+    control = RunControl(_quiet(), plan=(STEPS, pipeline.PipelineParams()))
+    await processing._make_run_room(FakeDM(), "d1", type("A", (), {"adata": _counts()})(), control)
+    [(need, remaining)] = asked
+    assert need == 70 and remaining() == 70
+    control.watchdog.steps["qc_metrics"] = {}  # what the watchdog records as each step finishes
+    control.watchdog.steps["normalization"] = {}
+    assert remaining() == 30
+    for s in ("log_transform", "pca"):
+        control.watchdog.steps[s] = {}
+    assert remaining() == 5  # the save is still to come
+    # A backed dataset: the copy read in counts in every step's need.
+    asked.clear()
+    monkeypatch.setattr(processing.working_copy, "copy_bytes", lambda adaptor: 1000)
+    await processing._make_run_room(FakeDM(), "d1", type("A", (), {"adata": _counts()})(), control)
+    [(need, remaining)] = asked
+    assert need == 1070 and remaining() == 1005
+    # No per-step estimate: the whole need, for the whole run.
+    asked.clear()
+    monkeypatch.setattr(preflight, "run_step_needs", lambda adata, steps, params: 1 / 0)
+    await processing._make_run_room(FakeDM(), "d1", type("A", (), {"adata": _counts()})(), control)
+    assert asked == [(1070, None)]
+
+
+async def test_a_run_reserves_its_growth_until_it_ends_however_it_ends(tmp_path, monkeypatch):
+    from scview.core import memory_budget
+
+    did = _register(tmp_path)
+    dm = DatasetManager(str(tmp_path))
+    monkeypatch.setattr(memory_budget, "read_budget",
+                        lambda *a, **k: memory_budget.MemoryBudget(8 << 30, 1 << 30, True, "container limit"))
+    monkeypatch.setattr(memory_budget, "release_memory", lambda: None)
+    seen = []
+
+    def work(adaptor):
+        seen.append(dict(dm.run_reservations()))
+        out = str(dm.derived_h5ad_path(did, adaptor.h5ad_path))
+        return pipeline.run_pipeline(adaptor.adata, STEPS, output_path=out, control=control)[1]
+
+    control = RunControl(_quiet(), plan=(STEPS, pipeline.PipelineParams()))
+    result = await run_exclusive(dm, did, work, control)
+    assert result.status == "complete" and dm.run_reservations() == {}
+    [during] = seen
+    assert list(during) == [did] and during[did].need == control.mode.need_bytes > 0
+    assert during[did].base_used == 1 << 30
+
+    def failing(adaptor):
+        raise RuntimeError("boom")
+
+    control = RunControl(_quiet(), plan=(STEPS, pipeline.PipelineParams()))
+    with pytest.raises(RuntimeError):
+        await run_exclusive(dm, did, failing, control)
+    assert dm.run_reservations() == {}
+
+
+async def test_a_load_during_a_run_is_refused_with_507_naming_the_run(client, dataset_manager, monkeypatch):
+    from scview.core import dataset_manager as dmod, memory_budget, preflight
+
+    did = _register(Path(dataset_manager.data_dir))
+    other = _register(Path(dataset_manager.data_dir), "other")
+    for d, name in ((did, "HD 8 um"), (other, "HD 16 um")):
+        (Path(dataset_manager.data_dir) / "uploads" / d / "metadata.json").write_text(
+            json.dumps({"id": d, "name": name, "status": "ready"}))
+    dataset_manager.evict(other)
+    # 8 GB, 1 GB used: the run (in memory by choice) is estimated to grow by 6 GB; opening
+    # the other dataset needs 2 GB (x 1.1 + 2 GB reserve, or 2 x 0.8 backed) and would
+    # fit without the run.
+    monkeypatch.setattr(memory_budget, "read_budget",
+                        lambda *a, **k: memory_budget.MemoryBudget(8 << 30, 1 << 30, True, "container limit"))
+    monkeypatch.setattr(memory_budget, "release_memory", lambda: None)
+    monkeypatch.setattr(preflight, "run_need", lambda adata, steps, params: 6 << 30)
+    monkeypatch.setattr(preflight, "run_step_needs", lambda adata, steps, params: dict.fromkeys(steps, 6 << 30))
+    monkeypatch.setattr(dmod, "load_plan", lambda path: dmod.LoadPlan(2 << 30, 2 << 30))
+    monkeypatch.setattr(run_watchdog, "read_memory", lambda: Memory(1 << 30, 8 << 30, True))
+    started, go = threading.Event(), threading.Event()
+    _held(monkeypatch, "normalization", started, go)
+    task = asyncio.ensure_future(client.post(f"{API}/datasets/{did}/assessment/run",
+                                             json={"steps": STEPS, "params": {"chunked": "off"}}))
+    await _wait_for(started.is_set)
+    r = await client.get(f"{API}/datasets/{other}")
+    assert r.status_code == 507, r.text
+    assert r.json()["detail"] == (
+        "A run on HD 8 um needs about 6.0 GB more at its peak and scView has 7.0 GB free of its "
+        "8.0 GB limit: wait for it to finish, or cancel it, before opening HD 16 um.")
+    go.set()
+    assert (await task).status_code == 200
+    r = await client.get(f"{API}/datasets/{other}")  # the run ended: it opens
+    assert r.status_code == 200, r.text
 
 
 @pytest.mark.parametrize("path, body", [

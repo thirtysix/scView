@@ -2308,15 +2308,27 @@ def in_memory_header(adata) -> Header:
     return header_from_adata(adata)
 
 
-def run_need(adata, steps: list[str], params=None) -> int:
-    """Memory a run of ``steps`` needs beyond what the dataset holds in memory (a backed
-    one: once read in, which the run makes room for separately)."""
+def _run_estimate(adata, steps: list[str], params=None) -> RunEstimate:
     if _skips_doublets(adata):
         steps = [s for s in steps if s != "doublet_detection"]
     plan = doublet_plan(adata, params) if "doublet_detection" in steps else None
-    est = estimate_run(in_memory_header(adata), steps=steps, params=params, warm=process_warm(),
-                       doublets=plan)
+    return estimate_run(in_memory_header(adata), steps=steps, params=params, warm=process_warm(),
+                        doublets=plan)
+
+
+def run_need(adata, steps: list[str], params=None) -> int:
+    """Memory a run of ``steps`` needs beyond what the dataset holds in memory (a backed
+    one: once read in, which the run makes room for separately)."""
+    est = _run_estimate(adata, steps, params)
     return max(0, int(est.peak_bytes - est.start_bytes))
+
+
+def run_step_needs(adata, steps: list[str], params=None) -> dict[str, int]:
+    """Per step of the run (and its save), the memory it needs beyond what the dataset
+    holds in memory at that step's peak; ``run_need`` is the largest of them. What a
+    run has still to grow by, once some steps are done, is the largest over the rest."""
+    est = _run_estimate(adata, steps, params)
+    return {e.step: max(0, int(e.peak_bytes - est.start_bytes)) for e in est.steps}
 
 
 def _file_doublet_plan(path, params=None) -> DoubletPlan | None:

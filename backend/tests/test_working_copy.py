@@ -222,3 +222,27 @@ async def test_markers_on_a_backed_dataset_are_computed_in_memory_and_kept(clien
     adaptor = await dataset_manager.get_or_load_dataset(did)
     assert not adaptor.adata.isbacked  # read in for the markers, and served from memory since
     assert adaptor.has_markers(column="grp")
+
+
+async def test_reading_a_backed_dataset_in_during_a_run_on_another_gets_the_run_sentence(
+        client, dataset_manager, backed, monkeypatch):
+    # Light work on a second dataset (markers, scoring, a PAGA) reads it in through the
+    # same path as a load: a run's expected growth is counted, and the refusal names the run.
+    from scview.core.dataset_manager import RunMemoryError
+
+    did = _register(Path(dataset_manager.data_dir))
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.adata.isbacked
+    monkeypatch.setattr(memory_budget, "read_budget",
+                        lambda *a, **k: memory_budget.MemoryBudget(8 * GB, 1 * GB, True, "container limit"))
+    monkeypatch.setattr(memory_budget, "release_memory", lambda: None)
+    monkeypatch.setattr(preflight, "backed_bytes", lambda h: 2 * GB)  # 2.2 + 2 reserve: fits in 7
+    assert await working_copy.make_room(dataset_manager, did, adaptor) is True
+    dataset_manager.mark_busy("run")
+    dataset_manager.reserve_run("run", 6 * GB)  # 1 used + 6 to come: 1 GB left
+    with pytest.raises(RunMemoryError, match="A run on run needs about 6.0 GB more .* before reading big into memory"):
+        await working_copy.make_room(dataset_manager, did, adaptor)
+    r = await client.get(f"{API}/datasets/{did}/markers", params={"groupby_column": "grp", "format": "json"})
+    assert r.status_code == 507 and "A run on run needs about 6.0 GB" in r.json()["detail"]
+    dataset_manager.release_run("run")
+    assert await working_copy.make_room(dataset_manager, did, adaptor) is True
