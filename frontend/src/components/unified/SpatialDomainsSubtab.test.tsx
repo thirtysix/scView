@@ -125,7 +125,9 @@ describe("SpatialDomainsSubtab", () => {
     render(<SpatialDomainsSubtab {...groupProps} />);
     await screen.findByTestId("domains-plan");
     fireEvent.click(screen.getByRole("button", { name: "Suggest k" }));
-    await waitFor(() => expect(api.runDomains.mock.calls[0]![1].k).toBeNull());
+    // The click runs the preflight before the call: a slow CI runner took over the 1 s default.
+    await waitFor(() => expect(api.runDomains).toHaveBeenCalled(), { timeout: 5000 });
+    expect(api.runDomains.mock.calls[0]![1].k).toBeNull();
     expect(api.runDomains.mock.calls[0]![1].column).toBe("spatial_domain_suggested");
     const figure = await screen.findByTestId("stability-curve");
     expect(figure).toHaveTextContent("Suggested k = 3, the highest local peak");
@@ -144,7 +146,8 @@ describe("SpatialDomainsSubtab", () => {
     expect(screen.getByRole("button", { name: "Find domains" })).toBeEnabled();
     api.runDomains.mockResolvedValue(DONE);
     fireEvent.click(screen.getByRole("button", { name: "Find domains" }));
-    await waitFor(() => expect(api.runDomains.mock.calls[0]![1]).toMatchObject({ column: "spatial_domain", overwrite: true }));
+    await waitFor(() => expect(api.runDomains).toHaveBeenCalled(), { timeout: 5000 });
+    expect(api.runDomains.mock.calls[0]![1]).toMatchObject({ column: "spatial_domain", overwrite: true });
   });
 
   it("shows sizes with n, the coherence, a stale reason, and Find markers opens Markers on the column", async () => {
