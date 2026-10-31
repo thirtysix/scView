@@ -300,6 +300,22 @@ def test_a_tie_broken_on_speed_says_so_with_the_shown_percentages():
     assert "keeps 'cell_type' together best (neighbours share the label 86% of the time); BBKNN came within 2 points of that, and Harmony was the fastest of them." in r["reason"]
 
 
+def test_estimate_follows_the_kang_timings_and_counts_compilation_once(monkeypatch):
+    # 2 CPUs, numba warm (2026-10-31): Kang 13,836 cells 9.5 s; a 2,700-cell subsample 0.9 s;
+    # BBKNN's first run in the process compiled for 16 s more (16.3 s against 0.5 s warm).
+    assert abs(bc.estimate_seconds(13_836, warm=True) - 9.5) <= 0.2 * 9.5
+    assert abs(bc.estimate_seconds(2_700, warm=True) - 0.9) <= 0.2 * 0.9
+    assert bc.estimate_seconds(2_700, warm=False) == pytest.approx(
+        bc.estimate_seconds(2_700, warm=True) + bc.COMPILE_SECONDS)
+    assert bc.estimate_seconds(2_700, ["harmony"], warm=False) == pytest.approx(
+        bc.estimate_seconds(2_700, ["harmony"], warm=True))
+    # a comparison that ran BBKNN marks the process warm; the default reads that state
+    monkeypatch.setattr(bc, "_bbknn_warm", False)
+    cold = bc.estimate_seconds(2_700)
+    list(bc.iter_compare(_adata(), "batch", methods=["bbknn"]))
+    assert bc.bbknn_warm() and bc.estimate_seconds(2_700) == pytest.approx(cold - bc.COMPILE_SECONDS)
+
+
 def test_recommend_without_labels_or_without_mixing():
     rows = [_row("none", 0.1, None, 0.1), _row("harmony", 0.7, None, 0.5),
             _row("scanorama", 0.8, None, 4)]
