@@ -1056,12 +1056,12 @@ def _step_reset(s: _State, params) -> tuple[int, _State, float]:
     if counts is not None:
         x = _like(counts, "X", s.n, s.m)
         return counts.nbytes, _State(s.n, s.m, x, layers, None, s.other // 2, s.held,
-                                     s.processed, clusters=s.clusters), 0.05 + counts.nbytes * 1.5e-9
+                                     s.processed, clusters=s.clusters, unit=s.unit), 0.05 + counts.nbytes * 1.5e-9
     if s.raw is not None:  # a new object: the adaptor keeps the old one
         x = _like(s.raw, "X", s.n, s.raw.n_genes)
         return s.raw.nbytes, _State(s.n, s.raw.n_genes, x, {}, None, s.other // 2,
                                     s.held + s.resident(), s.processed,
-                                    clusters=s.clusters), 0.05 + s.raw.nbytes * 1.5e-9
+                                    clusters=s.clusters, unit=s.unit), 0.05 + s.raw.nbytes * 1.5e-9
     return 0, s, 0.1
 
 
@@ -1193,7 +1193,7 @@ def _step_filter(s: _State, params) -> tuple[int, _State, float]:
     mask = 0 if x1 is None else (x1.nnz if x1.sparse else n2 * s.m)
     transient = max(cells_peak, max(genes_peak, mask) - cells_freed)
     new = _State(n2, m2, x2, layers2, raw1, s.other, s.held, s.processed, n_hvg=s.n_hvg,
-                 clusters=s.clusters)
+                 clusters=s.clusters, unit=s.unit)
     return max(0, transient), new, 0.2 + FILTER_SECONDS_PER_BYTE * sum(mm.nbytes for mm in old)
 
 

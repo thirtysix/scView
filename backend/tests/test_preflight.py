@@ -768,3 +768,21 @@ def test_the_headers_say_bin_for_visium_hd(tmp_path):
     assert pf._State.from_header(pf.read_header(tmp_path / "bins.h5ad", "h5ad")).unit == "bin"
     a.uns["scview_spatial"]["unit"] = "spot"
     assert pf.header_from_adata(a).unit == "spot"
+
+
+def test_the_bin_factor_survives_the_steps_before_clustering():
+    # Live on the 16 um section the preflight's `leiden` summary said 611 s and the step list
+    # 122-489 s: the filtering step (and reset to counts) built a fresh state without the unit.
+    n, m = HD16_BINS, 18_825
+    full = pf.LEIDEN_UNIT_FACTOR["bin"][-1]
+    mats = [pf.Matrix("X", n, m, True, 68_000_000, "float32"), pf.Matrix("layers/counts", n, m, True, 68_000_000, "float32")]
+    cells = pf.Header("h5ad", n, m, mats)
+    bins = pf.Header("h5ad", n, m, mats, unit="bin")
+    steps = ["reset_to_counts", "qc_metrics", "filtering", "normalization", "log_transform",
+             "highly_variable_genes", "scaling", "pca", "neighbors", "clustering"]
+
+    def clustering(h):
+        est = pf.estimate_run(h, steps=steps, params=PipelineParams(), cpus=2.0)
+        return next(e for e in est.steps if e.step == "clustering").seconds[0]
+
+    assert clustering(bins) == pytest.approx(full * clustering(cells), rel=0.01)
