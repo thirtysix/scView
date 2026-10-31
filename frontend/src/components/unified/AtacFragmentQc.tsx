@@ -33,9 +33,6 @@ import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
-/** The tab these cards belong in, named in the sentence on where attached files live. */
-const ACCESSIBILITY_TAB = "Accessibility";
-
 // Common cut-offs, from Signac's PBMC vignette (https://stuartlab.org/signac/articles/pbmc_vignette).
 const TSS_LOW = 3;
 const NUCLEOSOME_HIGH = 4;
@@ -204,7 +201,7 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
       {!status?.attached && (
         <p className="text-[11px] leading-snug text-slate-500">
           Attach <code>atac_fragments.tsv.gz</code> and <code>atac_fragments.tsv.gz.tbi</code>, which Cell Ranger ARC writes
-          side by side in <code>outs/</code>. They stay with this dataset; their tools are under <span>{ACCESSIBILITY_TAB}</span>.
+          side by side in <code>outs/</code>. They stay with this dataset.
         </p>
       )}
       {status?.missing && <p className="text-[11px] leading-snug text-amber-700" data-testid="atac-missing">{status.missing}</p>}

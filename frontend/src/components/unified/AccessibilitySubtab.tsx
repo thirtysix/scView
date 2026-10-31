@@ -10,7 +10,9 @@ import { prettyObsLabel } from "@/lib/formatting";
 import { useAtacRunStore } from "@/stores/atacRunStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { AtacActivityCard } from "./AtacActivityCard";
+import { AtacCoverage } from "./AtacCoverage";
 import { AtacDifferentialCard } from "./AtacDifferentialCard";
+import { AtacFragmentQc } from "./AtacFragmentQc";
 import { AtacLsiCard } from "./AtacLsiCard";
 import { AtacQcCard } from "./AtacQcCard";
 import { AtacWnnCard } from "./AtacWnnCard";
@@ -113,11 +115,12 @@ export function AccessibilitySubtab({
 
       <AtacQcCard datasetId={datasetId} groupby={groupby} qcColumns={state.qc_columns ?? []} metricsFiles={info.metrics_files ?? []}
                   onAttached={() => void reload().then(() => refreshDataset(datasetId).catch(() => undefined))} />
-      {/* FRAGMENTS SLOT: the fragments agent's AtacFragmentQc and AtacCoverage cards are mounted here by the lead. */}
+      <AtacFragmentQc datasetId={datasetId} />
       <AtacLsiCard datasetId={datasetId} state={state} />
       <AtacWnnCard datasetId={datasetId} state={state} groupby={groupby} />
       <AtacActivityCard datasetId={datasetId} state={state} groupby={groupby} activeGene={activeGene} onActivity={onActivity} />
       <AtacDifferentialCard datasetId={datasetId} state={state} columns={groupColumns.map((c) => c.name)} defaultColumn={groupby} />
+      <AtacCoverage datasetId={datasetId} />
     </div>
   );
 }

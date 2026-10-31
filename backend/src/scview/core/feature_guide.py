@@ -69,7 +69,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Protein > Joint RNA + protein (WNN)", "",
      "Seurat's weighted nearest neighbours: per-cell RNA / protein weights, a joint graph, WNN and "
      "protein UMAPs (in the embedding menu), WNN clusters"),
-    ("Unified View > Accessibility", "ATAC, multiome, 10x Multiome peaks",
+    ("Unified View > Accessibility", "ATAC",
      "only with 10x Multiome peaks (a 10x .h5 or folder, .h5ad with Peaks features, .h5mu): QC, LSI with its "
      "depth check, ATAC UMAP and clusters"),
     ("Unified View > Accessibility > Joint RNA + ATAC (WNN)", "",
@@ -119,9 +119,11 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Spot composition", "Visium, RCTD",
      "each spot's or Visium HD bin's cell-type shares from another library dataset as the reference; tissue overlay "
      "per type, dominant type, self-check"),
-    ("Unified View > Accessibility", "",
+    ("Unified View > Accessibility > Fragment QC", "",
      "attach atac_fragments.tsv.gz + .tbi: per-cell TSS enrichment and nucleosome signal (Signac's definitions), "
-     "fragment length ladder, TSS profile; coverage tracks per group for a gene or region"),
+     "fragment length ladder, TSS profile"),
+    ("Unified View > Accessibility > Coverage tracks", "",
+     "from the fragments file: depth per group for a gene or a region up to 2 Mb, with peaks and gene arrows"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),
@@ -153,8 +155,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
 
 CLOSING = "These are all of scView's tabs and tools; name a feature only by its path here."
 
-# In the full guide only, for now: the compact block is at its cap (tests/test_feature_guide.py).
-FULL_ONLY = ("Unified View > Accessibility",)
+# In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
+FULL_ONLY = ("Unified View > Accessibility >",)
 
 
 def compact_guide() -> str:
