@@ -81,6 +81,10 @@ reviewer can audit. scView closes both gaps:
 - **Forgiving multi-format ingestion.** h5ad, 10x MEX/HDF5, loom, zarr, dense CSV, Seurat `.rds`,
   and nf-core/scrnaseq outputs, via a guided "Add Data" flow. Human or mouse is detected from the
   gene names, and cell-cycle scoring works on both.
+- **RNA velocity and 10x Multiome ATAC.** Velocity (steady-state and stochastic, matching scVelo 0.3.3 arrow for
+  arrow) from spliced and unspliced counts, drawn on the plot with phase portraits. Multiome peaks stay on disk:
+  LSI as Signac runs it, ATAC UMAP and clusters, WNN on RNA + ATAC, gene activity, differential peaks, and from the
+  fragments file TSS enrichment, nucleosome signal and coverage tracks.
 - **Spatial data on its own terms.** Visium (Space Ranger `outs/`), Visium HD (`binned_outputs/`, 16 or
   8 um bins) and Xenium output folders open on the tissue image. Find spatially variable genes (Moran's I),
   spatial domains (CellCharter's method), neighbourhood enrichment and composition niches, with the QC
