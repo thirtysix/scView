@@ -116,6 +116,16 @@ describe("thumbnails", () => {
     ]);
   });
 
+  it("fills the canvas with the scatter background (white by default, dark when given)", () => {
+    // Capture 2026-10-26: thumbnails stayed white in the dark theme.
+    const light = fakeCtx();
+    drawThumbnail(light.ctx, { thumb, codes, colorOf, width: 50, height: 50 });
+    expect(light.rects[0]).toEqual({ style: "#ffffff", x: 0, y: 0, w: 50 });
+    const dark = fakeCtx();
+    drawThumbnail(dark.ctx, { thumb, codes, colorOf, width: 50, height: 50, background: "#1e293b" });
+    expect(dark.rects[0]).toEqual({ style: "#1e293b", x: 0, y: 0, w: 50 });
+  });
+
   it("outlines the hovered groups on top of muted others", () => {
     const { ctx, rects } = fakeCtx();
     const out = drawThumbnail(ctx, { thumb, codes, colorOf, width: 50, height: 50, outline: new Set([1]) });
