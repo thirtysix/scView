@@ -16,10 +16,17 @@ const XENIUM_PART: Record<string, string> = {
   metrics: "Xenium's run metrics, kept with the dataset's details",
 };
 
+const HD_CELLS_PART: Record<string, string> = {
+  cell_segmentations: "cell outlines, which place each cell",
+  nucleus_segmentations: "nucleus outlines",
+  graphclust_annotated_cell_segmentations: "Space Ranger's own clusters",
+};
+
 /** What a side file is, from its detected kind. */
 export function sideFileRole(f: Pick<BundleFile, "kind" | "side_kind" | "spatial_part">): string {
   if (f.side_kind === "spatial") return SPATIAL_PART[f.spatial_part ?? ""] ?? "Space Ranger spatial file";
   if (f.side_kind === "xenium") return XENIUM_PART[f.spatial_part ?? ""] ?? "Xenium file";
+  if (f.side_kind === "hd_cells") return HD_CELLS_PART[f.spatial_part ?? ""] ?? "Space Ranger segmentation file";
   if (f.side_kind === "atac") return f.spatial_part === "index" ? "index of the ATAC fragments file" : "ATAC fragments file";
   if (f.side_kind === "atac_metrics") return "ATAC metrics per cell: fractions in peaks, at TSS, mitochondrial";
   if (f.kind === "tenx_metrics") return "Cell Ranger metrics";
@@ -42,7 +49,7 @@ export function SequencingQcSideFiles({ files }: { files?: BundleFile[] }) {
           title={
             f.side_kind === "atac_metrics"
               ? "Read for the ATAC quality card on the Accessibility tab; not loaded as cells."
-              : f.side_kind === "spatial" || f.side_kind === "xenium"
+              : f.side_kind === "spatial" || f.side_kind === "xenium" || f.side_kind === "hd_cells"
               ? "Places the spots or cells on the tissue image (Unified View tissue plot); not loaded as cells."
               : "Read for the Sequencing QC card on Data Assessment (metrics, flags and the barcode-rank plot); not loaded as cells."
           }

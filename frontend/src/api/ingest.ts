@@ -8,9 +8,12 @@ import { apiFetch, readError } from "./client";
 export type FileRole = "matrix" | "barcodes" | "features" | "data" | "side" | "unknown";
 /** What a side file is: Cell Ranger metrics, the raw matrix (sequencing QC), a TCR/BCR contig
  *  table, Cell Ranger's CRISPR guide calls, a Space Ranger spatial file, or a file of a Xenium folder. */
-export type SideKind = "metrics" | "raw" | "vdj" | "crispr" | "spatial" | "xenium" | "atac" | "atac_metrics";
-/** Which Space Ranger spatial file (core/spatial.py PARTS) or Xenium file (core/xenium.py). */
+export type SideKind = "metrics" | "raw" | "vdj" | "crispr" | "spatial" | "xenium" | "atac" | "atac_metrics" | "hd_cells";
+/** Which Space Ranger spatial file (core/spatial.py PARTS), Xenium file (core/xenium.py) or outline file (core/hd_cells.py). */
 export type SpatialPart =
+  | "cell_segmentations"
+  | "nucleus_segmentations"
+  | "graphclust_annotated_cell_segmentations"
   | "positions"
   | "scalefactors"
   | "hires"
