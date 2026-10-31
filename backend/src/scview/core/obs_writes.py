@@ -165,7 +165,8 @@ def write_derived(
     a full write re-compresses the whole matrix (8 s on a 14k-cell dense file,
     against 0.1 s). Edits must replace an uns entry, not mutate it in place.
     ``obsm_keys``: obsm entries the edit set or removed, rewritten the same way;
-    ``obsp_keys`` the same for obsp (a graph, core/wnn.py).
+    ``obsp_keys`` the same for obsp (a graph, core/wnn.py). A backed ``adata`` is saved
+    the same way from ``source_path``, wherever that is: its matrices were never read in.
     """
     from scview.core import uns_history
 
@@ -179,13 +180,13 @@ def write_derived(
     if (
         uns_before is not None
         and source_path
-        and os.path.exists(output_path)
-        and os.path.samefile(source_path, output_path)
+        and (getattr(adata, "isbacked", False)
+             or (os.path.exists(output_path) and os.path.samefile(source_path, output_path)))
     ):
         import h5py
         from anndata.io import write_elem
 
-        shutil.copyfile(output_path, partial)
+        shutil.copyfile(source_path, partial)
         try:
             with h5py.File(partial, "a") as f:
                 del f["obs"]

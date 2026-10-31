@@ -30,7 +30,7 @@ import pandas as pd
 import scipy.sparse as sp
 from pydantic import BaseModel, Field
 
-from scview.core import protein, provenance, spatial
+from scview.core import preflight, protein, provenance, spatial, working_copy
 from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_merge
 from scview.core.ingestion.session import _make_readonly, _safe_name
 from scview.core.pipeline import PipelineParams, looks_like_counts, run_pipeline_streamed
@@ -96,9 +96,18 @@ def _find_counts(adata: ad.AnnData) -> tuple[str, Any, pd.DataFrame] | None:
 
 
 def _to_csr(M) -> sp.csr_matrix:
+    if working_copy.on_disk(M):  # a backed dataset's: read once, no copy of the copy
+        M = working_copy.read_matrix(M)
+        return sp.csr_matrix(M, dtype=np.float32) if sp.issparse(M) else sp.csr_matrix(M.astype(np.float32, copy=False))
     if sp.issparse(M):
         return sp.csr_matrix(M, dtype=np.float32, copy=True)
     return sp.csr_matrix(np.asarray(M, dtype=np.float32))
+
+
+def _open_lazily(path: str) -> ad.AnnData:
+    """``path`` with X and .raw's X left on disk: reading counts for a joint embedding or
+    a mapping needs one matrix, not all of them. ``.file.close()`` it when done."""
+    return ad.read_h5ad(path, backed="r")
 
 
 @dataclass
@@ -124,21 +133,24 @@ def recover_counts(adata: ad.AnnData, fallback_paths: list[str]) -> RecoveredCou
     want = adata.obs_names
     for path in fallback_paths:
         try:
-            src = ad.read_h5ad(path)
+            src = _open_lazily(path)
         except Exception as e:  # unreadable source: try the next one
             logger.warning("Could not read %s for counts: %s", path, e)
             continue
-        hit = _find_counts(src)
-        if hit is None or not src.obs_names.is_unique:
-            continue
-        pos = src.obs_names.get_indexer(want)
-        if (pos < 0).any():
-            logger.info("%s lacks %d of the dataset's cells; not using it for counts",
-                        path, int((pos < 0).sum()))
-            continue
-        where, M, var = hit
-        layer = _SOURCE_LAYER_LABEL.get(Path(path).parent.parent.name, "source file")
-        return RecoveredCounts(_to_csr(M)[pos], var.copy(), f"{where} of the {layer}")
+        try:
+            hit = _find_counts(src)
+            if hit is None or not src.obs_names.is_unique:
+                continue
+            pos = src.obs_names.get_indexer(want)
+            if (pos < 0).any():
+                logger.info("%s lacks %d of the dataset's cells; not using it for counts",
+                            path, int((pos < 0).sum()))
+                continue
+            where, M, var = hit
+            layer = _SOURCE_LAYER_LABEL.get(Path(path).parent.parent.name, "source file")
+            return RecoveredCounts(_to_csr(M)[pos], var.copy(), f"{where} of the {layer}")
+        finally:
+            src.file.close()
 
     raise IntegrationError(
         "no raw counts found (checked layers['counts'], raw.X and X, and the dataset's "
@@ -207,8 +219,6 @@ class Unit:
 def build_unit(
     adata: ad.AnnData, *, dataset_id: str, name: str, label: str, fallback_paths: list[str]
 ) -> Unit:
-    if getattr(adata, "isbacked", False):
-        adata = adata.to_memory()
     counts = recover_counts(adata, fallback_paths)
     var = counts.var
     var.index = var.index.astype(str)
@@ -299,9 +309,10 @@ def load_units(
             check.error = str(large_mode.LargeDatasetError(
                 "A joint embedding", "it reads each dataset's counts into memory"))
             continue
+        opened = None
         try:
             cached = dm.get_dataset(did)
-            adata = cached.adata if cached is not None else ad.read_h5ad(paths[0])
+            adata = cached.adata if cached is not None else (opened := _open_lazily(paths[0]))
             unit = build_unit(adata, dataset_id=did, name=name, label=label,
                               fallback_paths=paths[1:])
         except IntegrationError as e:
@@ -311,11 +322,39 @@ def load_units(
             logger.warning("Could not prepare %s for integration: %s", did, e, exc_info=True)
             check.error = f"could not read dataset: {e}"
             continue
+        finally:
+            if opened is not None:
+                opened.file.close()
         check.n_cells, check.n_genes = int(unit.adata.n_obs), int(unit.adata.n_vars)
         check.counts_source = unit.counts_source
         check.columns = [str(c) for c in unit.adata.obs.columns]
         units[label] = unit
     return checks, units
+
+
+def read_need(dm: "DatasetManager", dataset_ids: list[str]) -> int:
+    """Peak memory of ``load_units``, from the file headers: each dataset's counts as the
+    float32 CSR its unit keeps, and the largest closed dataset's open (its tables, layers
+    and embeddings, one dataset at a time) with its counts as read, before they are cut to
+    the unit's copy. Datasets it cannot read count nothing: the plan reports those. Two
+    Kang copies: 279 MiB over what was open, estimated 251."""
+    from scview.core import large_mode
+
+    counts, opening = 0, 0
+    for did in dataset_ids:
+        paths = dm.h5ad_candidates(did)
+        if not paths or large_mode.file_is_large(paths[0]):
+            continue
+        try:
+            h = preflight.read_header(paths[0], "h5ad")
+            one = preflight._lt_counts_bytes(h)
+            counts += one
+            if dm.get_dataset(did) is None:
+                h.backed = True  # ``_open_lazily``
+                opening = max(opening, preflight.estimate_load(h, ingest=False).peak_bytes + one)
+        except Exception as e:  # noqa: BLE001 - never block a plan on the estimate itself
+            logger.warning("No read estimate for %s: %s", did, e)
+    return int(counts + opening)
 
 
 def build_plan(

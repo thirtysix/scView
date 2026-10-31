@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from scview.core import large_mode, preflight
+from scview.core import large_mode, preflight, working_copy
 from scview.core import spot_deconvolution as sd
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
@@ -124,14 +124,17 @@ def _is_bins(adata) -> bool:
 def _estimate(ref_path: str, ref_open: bool, spot_adaptor, n_types: int, method: str,
               check: bool = False) -> dict[str, Any]:
     ref_h = preflight.read_header(ref_path, "h5ad")
+    ref_h.backed = False  # read whole unless open, whatever its size (or large: its own estimate)
     # A large dataset's header comes from its file: its X is on disk, never in the adaptor.
     spot_h = (preflight.read_header(spot_adaptor.h5ad_path, "h5ad") if spot_adaptor.is_large
               else preflight.header_from_adata(spot_adaptor.adata))
+    # Spots opened backed are read in whole for the run (``_preparer``).
+    spots_read = 0 if spot_adaptor.is_large else working_copy.copy_bytes(spot_adaptor)
     secs = sd.estimate_seconds(ref_h.n_cells or 0, spot_adaptor.adata.n_obs, n_types, method,
                                ref_values=sd.stored_values(ref_h) if ref_h.large else 0,
                                spot_values=sd.stored_values(spot_h) if spot_h.large else 0, check=check,
                                bins=_is_bins(spot_adaptor.adata))
-    return {"peak_bytes": sd.need_bytes(ref_h, spot_h, ref_open, check=check), "seconds": secs,
+    return {"peak_bytes": sd.need_bytes(ref_h, spot_h, ref_open, check=check) + spots_read, "seconds": secs,
             "seconds_range": [round(secs * 0.5, 1), round(secs * 2, 1)], "note": sd.estimate_note(secs),
             "large_reference": bool(ref_h.large)}
 
@@ -231,11 +234,17 @@ async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method:
     reason = _reason(adaptor.adata)
     if reason:
         raise HTTPException(status_code=422, detail=reason)
-    est = await asyncio.to_thread(_estimate, paths[0], dm.get_dataset(reference_id) is not None, adaptor,
-                                  20, method, check)
+    cached = dm.get_dataset(reference_id)
+    open_in_memory = cached is not None and not getattr(cached.adata, "isbacked", False)  # else read: _preparer
+    est = await asyncio.to_thread(_estimate, paths[0], open_in_memory, adaptor, 20, method, check)
     # Room for the reference's copy (a large one's block pass): other datasets closed
-    # first (least recently used), a 507 when it cannot fit even then.
-    await dm.reserve(dataset_id, est["peak_bytes"], what=_WHAT)
+    # first (least recently used, never the two read here), a 507 when it cannot fit even
+    # then. Held once the stream starts, until the run ends (``hold_read``).
+    guard = dm.hold_read((dataset_id, reference_id), 0)
+    try:
+        await dm.reserve(dataset_id, est["peak_bytes"], what=f"{_WHAT} on {dm.dataset_name(dataset_id)}")
+    finally:
+        guard()
     info = dm.get_dataset_info(reference_id) or {}
     ref_info = {"id": reference_id, "name": str(info.get("name") or reference_id), "path": paths[0],
                 "mtime": round(os.path.getmtime(paths[0]), 3)}
@@ -302,15 +311,18 @@ def _stream(dataset_id: str, events_of) -> StreamingResponse:
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def _events(dm: DatasetManager, dataset_id: str, start: dict, prepare, iterate, finish_item, label: str):
+def _events(dm: DatasetManager, dataset_id: str, start: dict, prepare, iterate, finish_item, label: str,
+            need: int = 0, reference_id: str = ""):
     """The stream both endpoints share: prepare in a worker thread, then each item of
-    ``iterate(prepared, stop)`` in a worker thread, ``finish_item`` on the last one."""
+    ``iterate(prepared, stop)`` in a worker thread, ``finish_item`` on the last one.
+    ``need`` bytes are held for the two datasets until the run ends."""
 
     async def events():
         if dataset_id in _running:  # another request started between the check and here
             yield _sse("error", {"error": "A spot composition run is already working on this dataset."})
             return
         _running.add(dataset_id)
+        release = dm.hold_read((dataset_id, reference_id), need, f"{label} on {dm.dataset_name(dataset_id)}")
         stop = threading.Event()
         watchdog = RunWatchdog()
         sent = 0
@@ -322,6 +334,7 @@ def _events(dm: DatasetManager, dataset_id: str, start: dict, prepare, iterate, 
                 fut.exception()  # retrieved: a stopped run is not an error
             if gen is not None:
                 gen.close()
+            release()
             watchdog.stop()
             _running.discard(dataset_id)
 
@@ -403,7 +416,7 @@ async def run_spot_deconvolution(dataset_id: str, body: RunRequest,
              "min_umi": body.min_umi}
     return _stream(dataset_id, _events(dm, dataset_id, start, prepare,
                                        lambda p, stop: sd.iter_fit(p, method=body.method, stop=stop),
-                                       finish_item, "Spot composition"))
+                                       finish_item, "Spot composition", est["peak_bytes"], body.reference_id))
 
 
 @router.post("/datasets/{dataset_id}/spot-deconvolution/check-stream")
@@ -425,7 +438,8 @@ async def run_check(dataset_id: str, body: CheckRequest, dm: DatasetManager = De
              "celltype_column": body.celltype_column, "n_spots": sd.CHECK_SPOTS}
     return _stream(dataset_id, _events(dm, dataset_id, start, prepare,
                                        lambda p, stop: sd.iter_check(p, stop=stop),
-                                       finish_item, "The spot composition self-check"))
+                                       finish_item, "The spot composition self-check", est["peak_bytes"],
+                                       body.reference_id))
 
 
 @router.get("/datasets/{dataset_id}/spot-deconvolution/check")

@@ -10,6 +10,7 @@ import re
 import shutil
 import dataclasses
 import unicodedata
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,15 +87,18 @@ class RunMemoryError(DatasetMemoryError):
     raise the limit."""
 
     def __init__(self, dataset_id: str, name: str, run_name: str, run_need: int,
-                 available: int, limit: int, what: str = "Opening this dataset") -> None:
+                 available: int, limit: int, what: str = "Opening this dataset",
+                 holder: str = "") -> None:
         gb = 1024**3
         doing = what.replace("this dataset", name)
         doing = doing[:1].lower() + doing[1:]
+        # ``holder``: a request reading a dataset (``DatasetManager.hold_read``), which ends
+        # by itself and has no Cancel; otherwise a pipeline run.
         Exception.__init__(
             self,
-            f"A run on {run_name} needs about {run_need / gb:.1f} GB more at its peak and scView "
-            f"has {available / gb:.1f} GB free of its {limit / gb:.1f} GB limit: wait for it to "
-            f"finish, or cancel it, before {doing}.")
+            f"{holder or f'A run on {run_name}'} needs about {run_need / gb:.1f} GB more at its "
+            f"peak and scView has {available / gb:.1f} GB free of its {limit / gb:.1f} GB limit: "
+            f"wait for it to finish, {'' if holder else 'or cancel it, '}before {doing}.")
         self.dataset_id = dataset_id
         self.run_name = run_name
 
@@ -112,6 +116,7 @@ class RunReservation:
     base_used: int
     need: int
     remaining: Callable[[], int] | None = None
+    label: str = ""  # a request's read (``DatasetManager.hold_read``): what it is doing
 
     def outstanding(self, used_now: int) -> int:
         """Bytes the run is still expected to grow by from ``used_now``."""
@@ -232,6 +237,10 @@ class DatasetManager:
         # backend killed when the run reached its peak (HD 8 um clustering + opening HD
         # 16 um on 8 GB: exit 137; the run alone fits).
         self._runs: dict[str, RunReservation] = {}
+        # Requests reading a backed dataset or a file into memory (``hold_read``): counted
+        # like a run's growth, and the datasets they read are not dropped under them.
+        self._reads: dict[object, RunReservation] = {}
+        self._reading: Counter[str] = Counter()
 
     # ------------------------------------------------------------------
     # Loading
@@ -308,7 +317,8 @@ class DatasetManager:
         ``keep`` or one a request is working on (its adaptor would re-read the file
         and lose what the request computed: markers, a pipeline run)."""
         return [d for d in self._load_order
-                if d != keep and d not in self._busy and not is_locked(d)]
+                if d != keep and d not in self._busy and d not in self._reading
+                and not is_locked(d)]
 
     def _drop(self, dataset_id: str) -> None:
         self._load_order.remove(dataset_id)
@@ -335,12 +345,14 @@ class DatasetManager:
                     remaining: Callable[[], int] | None = None) -> RunReservation | None:
         """Record that the run starting on ``dataset_id`` is expected to grow by ``need``
         bytes from what is used now (``RunReservation``); ``release_run`` when it ends.
-        None (nothing recorded) for no need or no reading of what is used."""
+        None (nothing recorded) for no need or no reading of what is used. It starts above
+        what the others are still expected to grow by, so their growth is not taken for
+        its own."""
         budget = memory_budget.read_budget()
         if need <= 0 or budget.used_bytes is None:
             return None
-        self._runs[dataset_id] = r = RunReservation(dataset_id, budget.used_bytes, int(need),
-                                                     remaining)
+        base = budget.used_bytes + self.outstanding(budget.used_bytes, dataset_id)
+        self._runs[dataset_id] = r = RunReservation(dataset_id, base, int(need), remaining)
         logger.info("Run on %s reserves %.1f GB over the %.1f GB used", dataset_id,
                     need / 1024**3, budget.used_bytes / 1024**3)
         return r
@@ -352,15 +364,45 @@ class DatasetManager:
     def run_reservations(self) -> dict[str, RunReservation]:
         return dict(self._runs)
 
-    def outstanding(self, used_now: int, keep: str | None = None) -> int:
-        """Bytes the running runs (other than the one on ``keep``) are still expected to
-        grow by from ``used_now``: counted as used by ``free_memory_for``."""
-        return sum(r.outstanding(used_now) for d, r in self._runs.items() if d != keep)
+    def hold_read(self, dataset_ids: str | tuple[str, ...] | list[str], need: int,
+                  label: str = "") -> Callable[[], None]:
+        """Record that a request is reading ``need`` bytes into memory for ``dataset_ids``
+        (``working_copy.reading``, or a stream once it starts, after ``reserve``): counted
+        by ``outstanding`` for every other request, these datasets not dropped meanwhile.
+        Returns the release (safe to call twice); call it when the work has ended, errors
+        included."""
+        ids = (dataset_ids,) if isinstance(dataset_ids, str) else tuple(dataset_ids)
+        token = object()
+        used = memory_budget.read_budget().used_bytes
+        self._reading.update(ids)
+        if need > 0 and used is not None:
+            self._reads[token] = RunReservation(ids[0], used + self.outstanding(used), int(need),
+                                                label=label)
+        released = False
 
-    def _run_holding(self, keep: str, need: int, free: int | None) -> tuple[str, int, int] | None:
-        """When ``need`` bytes are refused only because of the running runs' outstanding
-        growth: (the dataset of the run growing most, its outstanding bytes, bytes free
-        now); None when the need would not fit even without them."""
+        def release() -> None:
+            nonlocal released
+            if released:
+                return
+            released = True
+            self._reads.pop(token, None)
+            self._reading.subtract(ids)
+            self._reading += Counter()  # drops the ones at zero
+
+        return release
+
+    def outstanding(self, used_now: int, keep: str | None = None) -> int:
+        """Bytes the running runs (other than the one on ``keep``) and the requests reading
+        a dataset (``hold_read``, on any dataset: each reads its own copy) are still
+        expected to grow by from ``used_now``: counted as used by ``free_memory_for`` and
+        by a run's pre-step check, which calls this from the run's thread."""
+        return (sum(r.outstanding(used_now) for d, r in list(self._runs.items()) if d != keep)
+                + sum(r.outstanding(used_now) for r in list(self._reads.values())))
+
+    def _run_holding(self, keep: str, need: int, free: int | None) -> tuple[RunReservation, int, int] | None:
+        """When ``need`` bytes are refused only because of the running runs' and reads'
+        outstanding growth: (the reservation growing most, its outstanding bytes, bytes
+        free now); None when the need would not fit even without them."""
         from scview.core import preflight
 
         budget = memory_budget.read_budget()
@@ -370,10 +412,11 @@ class DatasetManager:
         held = self.outstanding(used, keep)
         if held <= 0 or need * (1 - preflight.ERROR_BAND) > free + held:
             return None
-        run_id = max((d for d in self._runs if d != keep), key=lambda d: self._runs[d].outstanding(used))
-        return run_id, self._runs[run_id].outstanding(used), max(0, budget.limit_bytes - used)
+        others = [r for d, r in self._runs.items() if d != keep] + list(self._reads.values())
+        r = max(others, key=lambda x: x.outstanding(used))
+        return r, r.outstanding(used), max(0, budget.limit_bytes - used)
 
-    def _name(self, dataset_id: str) -> str:
+    def dataset_name(self, dataset_id: str) -> str:
         info = self.get_dataset_info(dataset_id)
         return str((info or {}).get("name") or dataset_id)
 
@@ -448,15 +491,16 @@ class DatasetManager:
         def refused(free: int | None) -> bool:
             return free is not None and need * (1 - preflight.ERROR_BAND) > free
 
-        def run_refusal(free: int | None) -> RunMemoryError | None:
+        def run_refusal(free: int | None, last: bool = False) -> RunMemoryError | None:
             # A run on another dataset holds the room until it ends: said at once,
-            # naming the run, when the need would fit without it.
+            # naming the run, when the need would fit without it. A read ends soon by
+            # itself, so it is said only once the wait below is over.
             held = self._run_holding(dataset_id, need, free) if refused(free) else None
-            if held is None:
+            if held is None or (held[0].label and not last):
                 return None
-            run_id, run_need, available = held
-            return RunMemoryError(dataset_id, self._name(dataset_id), self._name(run_id), run_need,
-                                  available, memory_budget.read_budget().limit_bytes, what)
+            r, run_need, available = held
+            return RunMemoryError(dataset_id, self.dataset_name(dataset_id), self.dataset_name(r.dataset_id),
+                                  run_need, available, memory_budget.read_budget().limit_bytes, what, r.label)
 
         free = await self.free_memory_for(need + extra, keep=dataset_id)
         # A run that just ended may still hold its copy for a moment (the request that
@@ -473,7 +517,7 @@ class DatasetManager:
             await asyncio.sleep(1)
             free = await self.free_memory_for(need + extra, keep=dataset_id)
         if refused(free):
-            if (err := run_refusal(free)) is not None:
+            if (err := run_refusal(free, last=True)) is not None:
                 raise err
             raise DatasetMemoryError(dataset_id, need, max(0, free),
                                      memory_budget.read_budget().limit_bytes, what)

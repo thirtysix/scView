@@ -279,15 +279,17 @@ def _read_h5ad(path: Path) -> Header:
             m = _h5_matrix(f["layers"][name], f"layers/{name}")
             if m is not None:
                 h.matrices.append(m)
-        if "raw" in f and "X" in f["raw"]:
-            m = _h5_matrix(f["raw"]["X"], "raw/X")
+        # anndata < 0.7 keeps it at the top level (Kang's), and reads it as .raw all the same.
+        raw_x = f["raw"].get("X") if "raw" in f else f.get("raw.X")
+        if raw_x is not None:
+            m = _h5_matrix(raw_x, "raw/X")
             if m is not None:
                 h.matrices.append(m)
         if h.matrices and not any(mm.sparse for mm in h.matrices):
             # No sparse matrix to take the share of non-zeros from (``_State``): count it
             # on the first rows of each dense one (paul15: 2 ms).
             for mm in h.matrices:
-                mm.nonzero = _h5_head_nonzero(f[mm.where], mm.n_cells)
+                mm.nonzero = _h5_head_nonzero(raw_x if mm.where == "raw/X" else f[mm.where], mm.n_cells)
         for key in f.get("obsm", {}):
             node = f["obsm"][key]
             if isinstance(node, h5py.Dataset):
@@ -2629,6 +2631,35 @@ LT_NOVELTY_GENES = 1.5  # genes variable in either dataset, per variable gene of
 LT_DENSE_COPIES = 3.0  # per cell x gene of the joint matrix: scaled values, PCA's centred copy, its output
 LT_CT_PER_VALUE = 12  # CellTypist: the reference densified (float32) and scaled (float64)
 LT_FIXED = 100 * MiB
+
+
+def rows_bytes(mm: Matrix | None, n_rows: int) -> int:
+    """Memory ``n_rows`` of ``mm``'s rows take once read: its share of the stored values."""
+    if mm is None or not mm.n_cells:
+        return 0
+    share = min(1.0, n_rows / mm.n_cells)
+    idx = np.dtype(mm.index_dtype).itemsize if mm.sparse else 0
+    return int((mm.nbytes - (mm.n_cells + 1) * idx) * share + (n_rows + 1) * idx)
+
+
+# Measured on Kang opened backed (X 74 MiB, peak RSS over the open): every cell 210 MiB
+# (estimate 207), 4,225 cells 98 MiB (109), all three tests on every cell 275 MiB (280).
+DE_FIXED = 50 * MiB  # the first test's imports
+DE_LOGREG_PER_VALUE = 8  # logistic regression's copy, per stored value
+
+
+def de_read_need(mm: Matrix | None, n_rows: int, logreg: bool = False) -> int:
+    """Peak memory of a cell-level DE test on a backed dataset: the tested matrix's
+    compared rows read from its file, and the Wilcoxon test on them, costed as the
+    marker step (``_step_markers``, two groups); ``logreg`` when logistic regression runs."""
+    from scview.core import matrix_genes
+
+    if mm is None or not mm.n_cells:
+        return 0
+    nnz = int(mm.nnz * min(1.0, n_rows / mm.n_cells))
+    return int(rows_bytes(mm, n_rows) + matrix_genes.block_entries(nnz) * MARKERS_MEMORY_PER_VALUE
+               + 2 * mm.n_genes * 8 * 12 + n_rows * 16 + DE_FIXED
+               + (nnz * DE_LOGREG_PER_VALUE if logreg else 0))
 
 
 def _lt_counts_bytes(h: Header) -> int:
