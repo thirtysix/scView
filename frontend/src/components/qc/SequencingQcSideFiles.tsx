@@ -14,6 +14,8 @@ const XENIUM_PART: Record<string, string> = {
   cells: "cell table: positions and per-cell counts",
   image: "morphology image",
   metrics: "Xenium's run metrics, kept with the dataset's details",
+  cell_boundaries: "cell outlines",
+  nucleus_boundaries: "nucleus outlines",
 };
 
 const HD_CELLS_PART: Record<string, string> = {

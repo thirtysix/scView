@@ -2328,7 +2328,7 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
         h.obsm_bytes += 16 * int(h.n_cells or 0)
         hd = any(part == spatial.POSITIONS and spatial.is_hd_positions(path) for part, path in spatial_parts)
         outlines = [x.path for x in unit.side_files if getattr(x, "side_kind", None) == "hd_cells"]
-        h.unit = "cell" if outlines else "bin" if hd else "spot"
+        h.unit = "cell" if outlines or xen else "bin" if hd else "spot"
         if outlines:
             h.side_seconds = (sum(os.path.getsize(p) for p in outlines) / HD_OUTLINE_BPS
                               + spatial.side_bytes(spatial_parts) / HD_IMAGE_BPS)

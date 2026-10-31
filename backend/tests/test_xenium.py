@@ -333,6 +333,7 @@ def test_newer_cell_table_columns_are_kept(tmp_path):
 def test_the_header_counts_genes_not_controls(tmp_path):
     _bundle(tmp_path / "outs")
     h = preflight.read_unit_header(build_bundle(_files(tmp_path), root=tmp_path).units[0])
+    assert h.unit == "cell"  # never "spots": "167,780 spots" in the import wizard
     assert (h.n_cells, h.n_genes) == (N_CELLS, N_GENES) and h.x.n_genes == N_GENES
     _bundle(tmp_path / "mex" / "outs", matrix="mex")
     h = preflight.read_unit_header(build_bundle(_files(tmp_path / "mex"), root=tmp_path / "mex").units[0])
