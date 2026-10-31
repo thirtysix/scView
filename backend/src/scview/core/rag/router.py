@@ -141,6 +141,8 @@ _RESULT_FACET_HINTS = {
         "frip", "depth correlation",
         "spatial domain", "domains", "niche", "nhood", "stability scan", "neighbourhood enrichment",
         "neighborhood enrichment", "next to each other", "side by side", "adjacent", "colocal", "co-local",
+        "co-occur", "cooccur", "co occur", "near each other", "close to each other", "close together",
+        "found together", "occur together", "spatial proximity", "how close", "nearby cell types",
         "velocity", "scvelo", "spliced", "unspliced", "phase portrait", "arrows", "gamma", "latent time",
     ),
     "markers": ("gene program", "programs", "nmf"),

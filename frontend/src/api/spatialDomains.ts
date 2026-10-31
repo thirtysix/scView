@@ -1,6 +1,7 @@
 import { apiFetch } from "./client";
 import { streamEvents } from "./clustering";
 import type { WatchdogEvent } from "./pipelineRun";
+import type { PreflightVerdict } from "./preflight";
 
 // --- Spatial domains and niches (backend core/spatial_domains.py, api/v1/spatial_domains.py) ---
 
@@ -212,6 +213,90 @@ export function runEnrichment(
   handlers: RunHandlers = {},
 ): Promise<EnrichmentResult> {
   return run(`/datasets/${datasetId}/spatial/nhood-enrichment/run-stream`, body, "Neighbourhood enrichment", handlers);
+}
+
+/** What a co-occurrence run would use and need (backend CoOccurrencePlan). */
+export interface CoOccurrencePlan {
+  n_obs: number;
+  n_labelled: number;
+  n_used: number;
+  unit: string;
+  column: string;
+  labels: string[];
+  interval: number | null;
+  /** In the positions' units; the first is never a bound (as squidpy) */
+  thresholds: number[];
+  combine: string;
+  n_splits: number;
+  libraries: string[];
+  /** "um" or "position units" */
+  distance_unit: string;
+  um_per_unit: number | null;
+  /** Where the pixel size came from */
+  distance_source: string;
+  threads: number;
+  visited_pairs: number;
+  notes: string[];
+  estimate_seconds: number;
+  estimate_bytes: number;
+}
+
+export interface CoOccurrenceResult {
+  available: boolean;
+  columns: string[];
+  column?: string;
+  labels?: string[];
+  sizes?: number[];
+  /** labels x labels x distances */
+  occ?: number[][][];
+  /** The ordered pairs of observations behind each score */
+  count?: number[][][];
+  /** Each score's distance on the axis, in `distance_unit` */
+  distances?: number[];
+  distance_unit?: string;
+  um_per_unit?: number | null;
+  distance_source?: string;
+  n_obs?: number;
+  n_labelled?: number;
+  n_used?: number;
+  unit?: string;
+  combine?: string;
+  n_splits?: number;
+  libraries?: string[];
+  notes?: string[];
+  seconds?: number;
+  stale?: boolean;
+  stale_reason?: string | null;
+}
+
+export interface CoOccurrenceInfo {
+  result: CoOccurrenceResult;
+  plan: CoOccurrencePlan | null;
+  verdict: PreflightVerdict | null;
+  /** Why a run with these settings cannot start */
+  reason: string | null;
+  defaults: { interval: number; max_obs: number; split_above: number };
+  running: boolean;
+}
+
+export function getCoOccurrence(
+  datasetId: string,
+  params: { column?: string; interval?: number; combine?: string; max_distance?: number } = {},
+): Promise<CoOccurrenceInfo> {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") q.set(key, String(value));
+  }
+  const text = q.toString();
+  return apiFetch(`/datasets/${datasetId}/spatial/cooccurrence${text ? `?${text}` : ""}`);
+}
+
+export function runCoOccurrence(
+  datasetId: string,
+  body: { cluster_key: string; interval?: number; combine?: string; max_distance?: number },
+  handlers: RunHandlers = {},
+): Promise<CoOccurrenceResult> {
+  return run(`/datasets/${datasetId}/spatial/cooccurrence/run-stream`, body, "Co-occurrence", handlers);
 }
 
 export function runNiches(

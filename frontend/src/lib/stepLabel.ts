@@ -18,6 +18,7 @@ const NAMED: Record<string, string> = {
   spatial_domains: "Spatial domains",
   spatial_niches: "Composition niches",
   nhood_enrichment: "Neighbourhood enrichment",
+  co_occurrence: "Co-occurrence",
 };
 
 /** A pipeline step id as a label: words spaced, first letter capital, abbreviations in capitals. */

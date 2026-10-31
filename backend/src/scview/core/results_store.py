@@ -121,7 +121,7 @@ ADDITIVE_STEPS = frozenset({
     "atac_lsi", "atac_wnn",
     "spot_deconvolution",
     "velocity",
-    "spatial_domains", "spatial_niches", "nhood_enrichment",
+    "spatial_domains", "spatial_niches", "nhood_enrichment", "co_occurrence",
     "atac_fragment_qc",
 })
 

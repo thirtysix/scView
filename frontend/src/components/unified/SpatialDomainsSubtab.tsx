@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
 import {
   getSpatialDomains,
   runDomains,
@@ -22,7 +21,9 @@ import { formatDuration } from "@/lib/hvgSensitivity";
 import { prettyObsLabel } from "@/lib/formatting";
 import { plotConfig } from "@/lib/plotConfig";
 import { unitWord } from "@/lib/spatial";
-import { labelColumns, planText, repName, runShare, runText, scanText, strongestPairs, zRange } from "@/lib/spatialDomains";
+import { labelColumns, planText, repName, scanText, strongestPairs, zRange } from "@/lib/spatialDomains";
+import { CoOccurrenceCard } from "@/components/unified/CoOccurrenceCard";
+import { SpatialRunStatus as RunStatus } from "@/components/unified/SpatialRunStatus";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSpatialDomainsRunStore } from "@/stores/spatialDomainsRunStore";
@@ -321,6 +322,8 @@ export function SpatialDomainsSubtab({
         {info?.enrichment.available && <EnrichmentHeatmap result={info.enrichment} />}
       </section>
 
+      <CoOccurrenceCard columns={columns} labelDefault={labelDefault} />
+
       {/* Composition niches */}
       <section className="space-y-2 border-t border-slate-200 pt-3" aria-label="Composition niches">
         <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
@@ -380,36 +383,6 @@ export function SpatialDomainsSubtab({
         )}
       </section>
     </div>
-  );
-}
-
-function RunStatus({ kind }: { kind: "domains" | "enrichment" | "niches" }) {
-  const datasetId = useDatasetStore((s) => s.currentDatasetId);
-  const run = useSpatialDomainsRunStore();
-  if (run.datasetId !== datasetId || run.kind !== kind) return null;
-  return (
-    <>
-      {run.running && (
-        <div className="space-y-1" data-testid={`${kind}-progress`}>
-          <p className="flex items-center gap-1.5 text-[11px] text-slate-600">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            {runText(run.stage, run.progress)}
-          </p>
-          <div className="h-1 w-full rounded bg-slate-100">
-            <div className="h-1 rounded bg-primary" style={{ width: `${Math.round(runShare(run.stage, run.progress) * 100)}%` }} />
-          </div>
-          <button type="button" onClick={() => run.cancel()} className={OUTLINE}>
-            Cancel
-          </button>
-        </div>
-      )}
-      <RequestError message={run.error} />
-      {run.warnings.map((w) => (
-        <p key={w} className="text-[11px] text-amber-700">
-          {w}
-        </p>
-      ))}
-    </>
   );
 }
 

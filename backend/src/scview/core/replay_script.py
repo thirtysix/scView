@@ -1554,6 +1554,50 @@ _HELPERS["hd_cells"] = _hd_cells_helper()
 _HELPER_ORDER += ("hd_cells",)
 
 
+def _cooccurrence_helper() -> str:
+    """core/cooccurrence_kernel.py's thresholds, pair counting and score (numpy, plus numba,
+    which scanpy brings), copied so the script counts as scView did."""
+    import inspect
+
+    from scview.core import cooccurrence_kernel as kernel
+
+    lines = ["import queue", "from concurrent.futures import ThreadPoolExecutor", "",
+             f"SUM = {kernel.SUM!r}", f"SQUIDPY_SPLITS = {kernel.SQUIDPY_SPLITS!r}",
+             f"SPLIT_ABOVE_MB = {kernel.SPLIT_ABOVE_MB}", f"SPLIT_SIZE = {kernel.SPLIT_SIZE}",
+             f"BLOCK_PAIRS = {kernel.BLOCK_PAIRS}"]
+    for obj in kernel.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", '''
+def co_occurrence_of(adata, column, labels, interval, combine, max_obs, seed, scales=None):
+    """(score, thresholds, ordered pairs), as scView's run: squidpy's score, each section's
+    pairs counted in that section. ``interval``: a number of default thresholds, or a list."""
+    codes = pd.Categorical(adata.obs[column].astype(str), categories=[str(x) for x in labels]).codes
+    keep = codes >= 0
+    if "library_id" in adata.obs.columns:
+        names = adata.obs["library_id"].astype(str).to_numpy()[keep]
+    else:
+        names = np.full(int(keep.sum()), "", dtype=object)
+    coords = np.asarray(adata.obsm["spatial"])[:, :2].astype(np.float64)[keep]
+    for name, factor in (scales or {}).items():
+        coords[names == name] *= factor
+    points = coords.astype(np.float32)
+    sections = np.unique(names, return_inverse=True)[1].astype(np.int32)
+    if isinstance(interval, int):
+        thresholds = default_interval(points, sections, interval)
+    else:
+        thresholds = np.asarray(sorted(interval), dtype=np.float32)
+    kept = codes[keep].astype(np.int32)
+    rows = sample_rows(kept, sections, max_obs, seed)
+    score, count, _ = compute(points[rows], kept[rows], len(labels), sections[rows], thresholds, combine)
+    return score.astype(np.float32), thresholds, count
+'''.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["cooccurrence"] = _cooccurrence_helper()
+_HELPER_ORDER += ("cooccurrence",)
+
+
 def _atac_fragments_helper() -> str:
     """core/atac_fragments.py's QC, in plain pandas: slower than scView's pass, the same numbers."""
     import inspect
@@ -3364,6 +3408,29 @@ def _nhood_enrichment(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+def _co_occurrence(p: dict, ctx: _Ctx) -> Snippet:
+    """Co-occurrence (core/spatial_cooccurrence.py, = squidpy's), saved where squidpy saves it."""
+    from scview.core.spatial_cooccurrence import squidpy_key
+
+    column, labels, interval, distances = (p.get(x) for x in ("column", "labels", "interval", "distances"))
+    combine, max_obs, seed = (p.get(x) for x in ("combine", "max_obs", "seed"))
+    asked = interval if isinstance(interval, int) else distances
+    if (not isinstance(column, str) or not isinstance(labels, list) or len(labels) < 2 or not isinstance(combine, str)
+            or not isinstance(max_obs, int) or not isinstance(seed, int)
+            or not (isinstance(asked, int) or isinstance(asked, list))):
+        return Snippet(NOT_REPLAYABLE, ["# Co-occurrence: settings not recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items() if x != "labels"})],
+                       "settings not recorded")
+    _need(ctx, "cooccurrence")
+    return Snippet(EXACT, [
+        f"# Co-occurrence of {comment_text(column, 60)} (= squidpy's co_occurrence; each section's pairs counted in that "
+        "section).",
+        f"occ, interval, pairs = co_occurrence_of(adata, {_lit(column)}, {_lit([str(x) for x in labels])}, {_lit(asked)}, "
+        f"{_lit(combine)}, {max_obs}, {seed}, {_lit(p.get('scales'))})",
+        f"adata.uns[{_lit(squidpy_key(column))}] = {{\"occ\": occ, \"interval\": interval, \"count\": pairs}}",
+    ])
+
+
 def _spatial_niches(p: dict, ctx: _Ctx) -> Snippet:
     """Composition niches (core/spatial_domains.py; Schurch et al. 2020)."""
     column, label, labels, window, n, seed = (p.get(x) for x in ("column", "label_column", "labels", "k_window",
@@ -3447,6 +3514,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "velocity": _velocity,
     "spatial_domains": _spatial_domains,
     "nhood_enrichment": _nhood_enrichment,
+    "co_occurrence": _co_occurrence,
     "spatial_niches": _spatial_niches,
     "atac_fragment_qc": _atac_fragment_qc,
     "run_errors": _run_errors,
