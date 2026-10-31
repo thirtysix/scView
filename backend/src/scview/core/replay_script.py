@@ -1272,23 +1272,42 @@ def atac_peaks(path):
 
 
 class AtacTfIdf:
-    """Signac's RunTFIDF method 1 on the selected peaks, with the products the SVD asks for."""
+    """Signac's RunTFIDF method 1 on the selected peaks, with the products the SVD asks for:
+    float32 values and scView's blocks of cells, so its sums run in the same order."""
 
-    def __init__(self, counts, selected):
+    def __init__(self, counts, selected, block_values=4_000_000):
         total = np.asarray(counts.sum(axis=0), dtype=np.float64).ravel()
         cell = np.asarray(counts.sum(axis=1), dtype=np.float64).ravel()
         idf = np.where(total > 0, counts.shape[0] / np.where(total > 0, total, 1), 0.0)
-        m = counts.tocsr(copy=True).astype(np.float64)
-        per_cell = np.repeat(np.arange(m.shape[0]), np.diff(m.indptr))
-        m.data = np.log1p(m.data / cell[per_cell] * SCALE_FACTOR * idf[m.indices])
+        lengths = np.diff(counts.indptr)
+        self.blocks = []
+        start = 0
+        while start < lengths.size:
+            size, stop = 0, start
+            while stop < lengths.size and (stop == start or size + lengths[stop] <= block_values):
+                size += int(lengths[stop])
+                stop += 1
+            self.blocks.append((start, stop))
+            start = stop
+        m = counts.tocsr(copy=True)
+        per_cell = np.repeat(np.arange(m.shape[0]), lengths)
+        tf = m.data / cell[per_cell]
+        m.data = np.log1p(tf * SCALE_FACTOR * idf[m.indices]).astype(np.float32)
         self.X = m[:, selected].tocsr()
+        self.X.sort_indices()
         self.shape = self.X.shape
 
     def dot(self, right):
-        return self.X @ right
+        out = np.zeros((self.shape[0], right.shape[1]), dtype=np.float64)
+        for a, b in self.blocks:
+            out[a:b] = self.X[a:b] @ right
+        return out
 
     def tdot(self, left):
-        return self.X.T @ left
+        out = np.zeros((self.shape[1], left.shape[1]), dtype=np.float64)
+        for a, b in self.blocks:
+            out += self.X[a:b].T @ left[a:b]
+        return out
 
 
 def atac_gene_table(url):
@@ -2736,8 +2755,6 @@ def _atac_lsi(p: dict, ctx: _Ctx) -> Snippet:
     lines = [
         "# ATAC LSI (Signac's FindTopFeatures q5, RunTFIDF method 1, RunSVD; core/atac.py), read again from the",
         "# input's Peaks features. The neighbour graph has its own key ('atac'); the RNA graph is not touched.",
-        "# The SVD's sums run in another block order than scView's, so components agree to about 1e-6 and the",
-        "# seeded UMAP shows the same picture, not the same digits.",
         f"ATAC = {_lit(settings)}",
         *_block(_ATAC_CODE),
         'sc.tl.leiden(adata, resolution=ATAC["resolution"], key_added="atac_leiden", neighbors_key="atac", '

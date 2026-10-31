@@ -468,15 +468,9 @@ def test_the_replay_script_repeats_the_run_from_the_original_upload(tmp_path):
     b = ad.read_h5ad(dst)
     assert list(b.var_names) == [x[0] for x in mf.GENES]  # no peak among the genes
     assert list(b.obs_names) == list(a.obs_names)
-    for i in range(8):
-        assert abs(np.corrcoef(b.obsm[atac.OBSM_LSI][:, i], a.obsm[atac.OBSM_LSI][:, i])[0, 1]) > 0.999
+    np.testing.assert_allclose(b.obsm[atac.OBSM_LSI], a.obsm[atac.OBSM_LSI], atol=1e-5)
     assert b.obs[atac.OBS_CLUSTERS].astype(str).tolist() == a.obs[atac.OBS_CLUSTERS].astype(str).tolist()
-    # The SVD's sums run in another block order here, so the seeded layout is not the same to
-    # the digit: the same picture, the two groups as far apart.
-    labels = a.obs["group"].to_numpy()
-    for u in (a.obsm[atac.OBSM_UMAP], b.obsm[atac.OBSM_UMAP]):
-        apart = np.linalg.norm(u[labels == "A"].mean(axis=0) - u[labels == "B"].mean(axis=0))
-        assert apart > 2 * max(u[labels == "A"].std(axis=0).max(), u[labels == "B"].std(axis=0).max())
+    np.testing.assert_allclose(b.obsm[atac.OBSM_UMAP], a.obsm[atac.OBSM_UMAP], atol=1e-3)
     g = b.uns["atac_gene_activity_genes"].tolist()
     assert g == [x[0] for x in mf.GENES]
     assert np.allclose(b.obs[atac.OBS_ACTIVITY_TOTAL], a.obs[atac.OBS_ACTIVITY_TOTAL])
