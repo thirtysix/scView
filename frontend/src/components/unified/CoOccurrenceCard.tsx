@@ -251,7 +251,7 @@ function CoOccurrenceResults({ result }: { result: CoOccurrenceResult }) {
         >
           Co-occurrence of {prettyObsLabel(result.column ?? "")} near {own}, within each distance from {first?.toLocaleString()} to{" "}
           {last?.toLocaleString()} {unit} (each includes the shorter ones). A score above 1: that label is found within the distance
-          of {own} more often than among all pairs at that range; below 1, less often; the dashed line is 1. Nearby{" "}
+          of label {own} more often than among all pairs at that range; below 1, less often; the dashed line is 1. Nearby{" "}
           {units} are not necessarily interacting. {distanceSource(result)}
         </Caption>
       </figure>
