@@ -4,6 +4,7 @@ import { Caption } from "@/components/common/Caption";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
 import { QC_MAX_CELLS, sampled, splitByGroup } from "@/lib/atac";
+import { histogramFigure } from "@/lib/atacPlots";
 import { errorMessage } from "@/lib/errorMessage";
 import { prettyObsLabel } from "@/lib/formatting";
 import { plotConfig } from "@/lib/plotConfig";
@@ -60,14 +61,7 @@ export function AtacQcCard({
       {qc?.columns.map((col) => (
         <div key={col.key} data-testid={`atac-qc-${col.key}`}>
           <Plot
-            data={[{ type: "histogram" as const, x: sampled(col.values.filter((v): v is number => v !== null), QC_MAX_CELLS),
-                     marker: { color: "#2563eb" } }]}
-            layout={{
-              height: 130, margin: { t: 20, r: 8, b: 26, l: 40 },
-              title: { text: col.label, font: { size: 11, color: "#475569" }, x: 0.02 },
-              xaxis: AXIS, yaxis: AXIS, showlegend: false, paper_bgcolor: "white", plot_bgcolor: "white",
-              font: { family: "Inter, system-ui, sans-serif" },
-            }}
+            {...figureOf(col.label, col.values)}
             config={plotConfig(`atac_${col.key}`)}
             useResizeHandler
             style={{ width: "100%" }}
@@ -80,7 +74,7 @@ export function AtacQcCard({
       ))}
       {qc && (
         <Caption n={{ value: cells, unit: "cells", of: qc.n_cells }}>
-          Per-cell ATAC quality{groupby ? `, by ${prettyObsLabel(groupby)}` : ""}.
+          Per-cell ATAC quality{groupby ? `, by ${prettyObsLabel(groupby)}` : ""}. Axes end at the 99.5th percentile.
         </Caption>
       )}
       <div className="flex flex-wrap items-center gap-1.5">
@@ -104,8 +98,16 @@ export function AtacQcCard({
   );
 }
 
+function figureOf(label: string, values: (number | null)[]) {
+  const { data, layout } = histogramFigure(label, sampled(values.filter((v): v is number => v !== null), QC_MAX_CELLS));
+  return { data, layout };
+}
+
 function GroupViolin({ label, name, column, byGroup }: { label: string; name: string; column: string; byGroup: Record<string, number[]> }) {
   const groups = Object.keys(byGroup);
+  // One odd cell (668k peak counts on 10x PBMC, median near 20k) would squash every violin.
+  const values = Object.values(byGroup).flat().sort((x, y) => x - y);
+  const top = values[Math.min(values.length - 1, Math.floor(values.length * 0.995))] ?? 1;
   return (
     <Plot
       data={groups.map((g) => ({
@@ -117,7 +119,7 @@ function GroupViolin({ label, name, column, byGroup }: { label: string; name: st
         // Category: cluster numbers would make it a numeric axis labelling every other group.
         xaxis: { type: "category" as const, tickmode: "array" as const, tickvals: groups, ticktext: groups,
                  tickfont: { size: 9, color: "#64748b" } },
-        yaxis: { ...AXIS, title: { text: label, font: { size: 9, color: "#94a3b8" } } },
+        yaxis: { ...AXIS, range: [0, top * 1.05], title: { text: label, font: { size: 9, color: "#94a3b8" } } },
         showlegend: false, paper_bgcolor: "white", plot_bgcolor: "white", font: { family: "Inter, system-ui, sans-serif" },
       }}
       config={plotConfig(`atac_${name}_by_${column}`)}
