@@ -142,7 +142,8 @@ _RESULT_FACET_HINTS = {
     ),
     "markers": ("gene program", "programs", "nmf"),
     "qc": ("targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts",
-           "control probe"),
+           "control probe", "tss enrichment", "nucleosome", "fragment qc", "fragment length", "atac qc",
+           "fragments per cell"),
 }
 
 

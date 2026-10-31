@@ -433,3 +433,91 @@ def test_peaks_in_prefers_an_interval_column(tmp_path):
                          {"counts": sp.csr_matrix(np.ones((3, 1), dtype=np.float32))}, CELLS, ["peak1"],
                          feature_attrs={"interval": ["chr3-10-20"]})
     assert af.peaks_in(tmp_path, "e", "chr3", 0, 100) == [{"start": 10, "end": 20}]
+
+
+# -- replay and co-pilot -----------------------------------------------------
+
+
+def _gtf_text() -> str:
+    return (f'chr1\tX\tgene\t{TSS + 1}\t{TSS + 900}\t.\t+\t.\tgene_id "E1.1"; gene_type "protein_coding"; gene_name "A";\n'
+            f'chr1\tX\tgene\t{TSS + 2000}\t{TSS + 2600}\t.\t-\t.\tgene_id "E2.1"; gene_type "protein_coding"; gene_name "B";\n'
+            'chr1\tX\tgene\t100\t200\t.\t+\t.\tgene_id "E3.1"; gene_type "lncRNA"; gene_name "C";\n'
+            'chrY\tX\tgene\t100\t200\t.\t+\t.\tgene_id "E4.1_PAR_Y"; gene_type "protein_coding"; gene_name "D";\n'
+            'chrM\tX\tgene\t1\t50\t.\t+\t.\tgene_id "E5.1"; gene_type "protein_coding"; gene_name "E";\n')
+
+
+def _random_lines(n: int = 4000, seed: int = 3) -> list[tuple[str, int, int, str, int]]:
+    rng = np.random.default_rng(seed)
+    starts = TSS + rng.integers(-1800, 3200, n)
+    lengths = rng.integers(20, 400, n)
+    names = rng.choice([*CELLS, "OTHER-1"], n)
+    return sorted((("chr1", int(s), int(s + w), str(b), 1) for s, w, b in zip(starts, lengths, names)), key=lambda x: x[1])
+
+
+def test_replay_code_gives_the_passes_numbers(tmp_path):
+    gtf = tmp_path / "g.gtf"
+    gtf.write_text(_gtf_text())
+    tss_dict = af.gencode_tss(gtf)
+    assert list(tss_dict) == ["chr1"] and tss_dict["chr1"].tolist() == [TSS, TSS + 2599]
+    frame = pd.DataFrame({"chrom": "chr1", "tss": tss_dict["chr1"], "strand": ["+", "-"]})
+    res = _qc(_random_lines(), tmp_path, tss=frame)
+    path = tmp_path / "f.tsv.gz"
+    out = af.fragment_qc(path, CELLS, tss_dict, chunk_lines=700)
+    assert np.allclose(out["tss_enrichment"], res.tss_enrichment, atol=1e-6)
+    assert np.allclose(out["nucleosome_signal"], res.nucleosome_signal, atol=1e-6, equal_nan=True)
+    assert out["n_fragments"].tolist() == res.n_fragments.tolist() and res.tss_enrichment.max() > 0
+
+
+def test_replay_script_runs_the_step_on_a_copy_of_its_helper(tmp_path):
+    from scview.core import replay_script as rs
+
+    ctx = rs._Ctx(adata=_adata())
+    snip = rs._STEP_CODE[af.STEP]({"file": "atac_fragments.tsv.gz", "genome": "GRCh38"}, ctx)
+    assert snip.status == rs.EXACT and "atac_fragments" in ctx.helpers
+    assert "gencode_tss" in rs._HELPERS["atac_fragments"] and "def fragment_qc" in rs._HELPERS["atac_fragments"]
+    missing = rs._STEP_CODE[af.STEP]({"genome": "GRCh38"}, rs._Ctx(adata=_adata()))
+    assert missing.status == rs.NOT_REPLAYABLE
+
+    gtf = tmp_path / "g.gtf"
+    gtf.write_text(_gtf_text())
+    res = _qc(_random_lines(), tmp_path, tss=pd.DataFrame({"chrom": "chr1", "tss": [TSS, TSS + 2599], "strand": ["+", "-"]}))
+    scope = {"np": np, "pd": pd, "INPUT": str(tmp_path / "input.h5ad"), "sys": __import__("sys")}
+    exec(rs._HELPERS["atac_fragments"], scope)  # noqa: S102 - our own generated code
+    adata = _adata()
+    (tmp_path / "f.tsv.gz").rename(tmp_path / "atac_fragments.tsv.gz")  # found beside the input file
+    code = "\n".join(snip.code).replace(rs._lit(gene_annotation.RELEASES["GRCh38"].url), repr(str(gtf)))
+    exec(code, {**scope, "adata": adata})  # noqa: S102
+    assert np.allclose(adata.obs[af.OBS_TSS].to_numpy(), res.tss_enrichment, atol=1e-6)
+    assert adata.obs[af.OBS_N_FRAGMENTS].tolist() == res.n_fragments.tolist()
+
+
+def test_copilot_finds_the_fact_by_its_words_and_tag():
+    from scview.core.claims import resolve_tag
+    from scview.core.rag.router import named_result_facets
+
+    for q in ("what is the median TSS enrichment?", "is the nucleosome signal ok", "fragment QC of this run"):
+        assert "qc" in named_result_facets(q), q
+    refs = [af.TAG, "result:qc:summary"]
+    assert resolve_tag("result:fragqc", refs) == [af.TAG]
+    assert resolve_tag("fragments", refs) == [af.TAG] and resolve_tag("tss:median", refs) == [af.TAG]
+
+
+def test_grounding_reaches_the_context(tmp_path):
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+    from scview.core.assistant import build_grounding_context
+
+    adata = _adata()
+    af.save(adata, _result(tmp_path), genome="GRCh38", source=None, file_name=None)
+    path = tmp_path / "d.h5ad"
+    adata.write_h5ad(path)
+    context, sources = build_grounding_context(AnnDataAdaptor(str(path)), facets={"qc"})
+    assert af.TAG in context and "Median TSS enrichment" in context
+    assert any(s.ref == af.TAG and "Median TSS" in s.evidence for s in sources)
+    context, _ = build_grounding_context(AnnDataAdaptor(str(path)), facets={"markers"})
+    assert af.TAG not in context
+
+
+def test_feature_guide_lists_it():
+    from scview.core import feature_guide
+
+    assert any(row[0] == "Unified View > Accessibility" for row in feature_guide.FEATURES)

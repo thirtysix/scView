@@ -73,7 +73,7 @@ CHECK_LINES = 1_000_000
 # Signac TSSFast: region start relative to the 0-based TSS (1-based rs = tss + 1 + this), width.
 CENTER = (-500, 1001)
 FLANK_UP = (-1000, 100)
-FLANK_DOWN = (900 + 1, 100)
+FLANK_DOWN = (901, 100)
 PROFILE_FLANK = 1000
 PROFILE_BIN = 5
 NUCLEOSOME_FREE_MAX = 147  # length < this
@@ -207,6 +207,18 @@ def _names_in_table(names: Sequence[str], genome: str, data_dir: str | Path, aut
     return len(set(map(str, names)) & set(table["chrom"].astype(str)))
 
 
+def _check_share(path: str | Path, barcodes: Sequence[str]) -> dict[str, Any]:
+    """The barcode check; raises under 5%, with the numbers."""
+    found = ff.share_of_cells(path, ff.Barcodes(barcodes), CHECK_LINES)
+    share = found["matching"] / found["lines"] if found["lines"] else 0.0
+    if share < MIN_BARCODE_SHARE:
+        raise FragmentsError(
+            f"Only {found['matching']:,} of the first {found['lines']:,} fragments ({share:.1%}) belong to "
+            f"this dataset's {len(barcodes):,} cells, under the {MIN_BARCODE_SHARE:.0%} needed: "
+            "attach the fragments file of this sample.")
+    return {"share": round(share, 4), "lines_checked": found["lines"], "cells_seen": found["cells_seen"]}
+
+
 def verify(data_dir: str | Path, dataset_id: str, barcodes: Sequence[str], file_name: str | None = None,
            species: str | None = None, auto_download: bool = True) -> dict[str, Any]:
     """Check the attached pair and record what was found: barcode share on the first 1M lines
@@ -226,16 +238,11 @@ def verify(data_dir: str | Path, dataset_id: str, barcodes: Sequence[str], file_
             detach(data_dir, dataset_id)
             raise
         if state.get("size") != path.stat().st_size or "share" not in state:
-            found = ff.share_of_cells(path, ff.Barcodes(barcodes), CHECK_LINES)
-            share = found["matching"] / found["lines"] if found["lines"] else 0.0
-            if share < MIN_BARCODE_SHARE:
+            try:
+                state.update(_check_share(path, barcodes), size=path.stat().st_size)
+            except FragmentsError:
                 detach(data_dir, dataset_id)
-                raise FragmentsError(
-                    f"Only {found['matching']:,} of the first {found['lines']:,} fragments ({share:.1%}) belong to "
-                    f"this dataset's {len(barcodes):,} cells, under the {MIN_BARCODE_SHARE:.0%} needed: "
-                    "attach the fragments file of this sample.")
-            state.update(size=path.stat().st_size, share=round(share, 4), lines_checked=found["lines"],
-                         cells_seen=found["cells_seen"])
+                raise
     if idx.exists():
         try:
             index = ff.load_index(idx)
@@ -297,12 +304,14 @@ def require_files(data_dir: str | Path, dataset_id: str) -> tuple[Path, Path]:
 
 def attach_side_files(data_dir: str | Path, dataset_id: str, fragments: str | Path, index: str | Path | None,
                       barcodes: Sequence[str], species: str | None = None, name: str | None = None) -> dict[str, Any]:
-    """Files staged with an ingest: moved in (a rename on one filesystem, so 2.4 GB is not
-    copied), then checked."""
-    folder = modality_store.store_dir(data_dir, dataset_id)
-    folder.mkdir(parents=True, exist_ok=True)
+    """Files staged with an ingest: checked where they are, then moved in (a rename on one
+    filesystem, so 2.4 GB is not copied). A refusal leaves them where they were."""
     with open(fragments, "rb") as fh:
         check_head(fh.read(1024), "fragments")
+    found = _check_share(fragments, barcodes)
+    folder = modality_store.store_dir(data_dir, dataset_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    _write_state(data_dir, dataset_id, {**found, "size": os.path.getsize(fragments)})
     _move(fragments, fragments_path(data_dir, dataset_id))
     if index is not None:
         _move(index, index_path(data_dir, dataset_id))
@@ -514,6 +523,71 @@ def iter_qc(path: str | Path, cells: Sequence[str], tss: pd.DataFrame, stop: Cal
         [str(c) for c in cells], score(center, flank).astype(np.float32), signal.astype(np.float32),
         n_fragments, per_cell.reshape(n, GROUP_LENGTH_BINS), lengths, profile, n_tss, n_lines,
         time.monotonic() - t0, seen_tss)}
+
+
+# The same numbers in plain pandas, for the replay script (REPLAY_CODE: copied into it).
+
+
+def gencode_tss(gtf):
+    """Chromosome -> 0-based TSS of each protein-coding gene (GENCODE GTF, path or URL), without
+    chrM and the PAR_Y copies: start on +, end - 1 on -."""
+    rows = pd.read_csv(gtf, sep="\t", comment="#", header=None, usecols=[0, 2, 3, 4, 6, 8],
+                       names=["chrom", "feature", "start", "end", "strand", "attributes"],
+                       dtype={"chrom": str, "feature": str, "strand": str, "attributes": str})
+    rows = rows[rows["feature"] == "gene"]
+    rows = rows[rows["attributes"].str.contains('gene_type "protein_coding"', regex=False)
+                & ~rows["attributes"].str.contains('_PAR_Y"', regex=False)
+                & ~rows["chrom"].isin(["chrM", "MT", "Mt"])]
+    tss = np.where(rows["strand"] == "-", rows["end"].to_numpy() - 1, rows["start"].to_numpy() - 1)
+    return {str(c): tss[rows["chrom"].to_numpy() == c] for c in rows["chrom"].unique()}
+
+
+def windows_holding(pos, tss, at, width, past):
+    """How many of Signac's regions (1-based start = tss + 1 + at, ``width`` bases) count each raw
+    start or end value: [rs + 2, rs + width + past]. See the module docstring."""
+    first = np.sort(tss + 1 + at + 2)
+    last = np.sort(tss + 1 + at + width + past)
+    return np.searchsorted(first, pos, side="right") - np.searchsorted(last, pos, side="left")
+
+
+def fragment_qc(path, cells, tss, chunk_lines=2_000_000):
+    """Signac's TSS enrichment (fast) and nucleosome signal per cell, one pass over a fragments
+    file; returns arrays in the order of ``cells``."""
+    index = pd.Index(cells)
+    n = len(cells)
+    center, flank = np.zeros(n), np.zeros(n)
+    free, mono, total = np.zeros(n), np.zeros(n), np.zeros(n, dtype=np.int64)
+    reader = pd.read_csv(path, sep="\t", comment="#", header=None, usecols=[0, 1, 2, 3],
+                         names=["chrom", "start", "end", "barcode"], chunksize=chunk_lines,
+                         dtype={"chrom": str, "start": np.int64, "end": np.int64, "barcode": str})
+    for chunk in reader:
+        who = index.get_indexer(chunk["barcode"].to_numpy())
+        keep = who >= 0
+        who, chunk = who[keep], chunk[keep]
+        length = (chunk["end"] - chunk["start"]).to_numpy()
+        total += np.bincount(who, minlength=n)
+        free += np.bincount(who[length < NUCLEOSOME_FREE_MAX], minlength=n)
+        mono += np.bincount(who[(length > MONO_LOW) & (length < MONO_HIGH)], minlength=n)
+        for chrom, rows in chunk.groupby("chrom", sort=False).indices.items():
+            sites = tss.get(chrom)
+            if sites is None:
+                continue
+            cell = who[rows]
+            for col, past in (("start", -2), ("end", 1)):
+                pos = chunk[col].to_numpy()[rows]
+                center += np.bincount(cell, weights=windows_holding(pos, sites, CENTER[0], CENTER[1], past), minlength=n)
+                for at, width in (FLANK_UP, FLANK_DOWN):
+                    flank += np.bincount(cell, weights=windows_holding(pos, sites, at, width, past), minlength=n)
+    flank_mean = flank / (FLANK_UP[1] + FLANK_DOWN[1])
+    flank_mean = np.where(flank == 0, flank_mean.mean(), flank_mean)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        score = np.nan_to_num(center / flank_mean, nan=0.0, posinf=0.0, neginf=0.0) / CENTER[1]
+        signal = np.where(free > 0, mono / free, np.nan)
+    return {"tss_enrichment": score, "nucleosome_signal": signal, "n_fragments": total}
+
+
+REPLAY_CONSTANTS = ("CENTER", "FLANK_UP", "FLANK_DOWN", "NUCLEOSOME_FREE_MAX", "MONO_LOW", "MONO_HIGH")
+REPLAY_CODE = (gencode_tss, windows_holding, fragment_qc)
 
 
 def _fold_profile(profile: np.ndarray) -> list[float]:

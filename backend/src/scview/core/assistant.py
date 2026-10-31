@@ -614,6 +614,21 @@ def _add_hashing(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(h_lines)))
 
 
+def _add_fragment_qc(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The ATAC fragment QC (core/atac_fragments.py): its medians, once it has run."""
+    from scview.core import atac_fragments
+
+    try:
+        f_lines, f_detail = atac_fragments.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: fragment QC failed: %s", exc)
+        return
+    if f_lines:
+        lines.extend(f_lines)
+        sources.append(ChatSource(kind="result", ref=atac_fragments.TAG, detail=f_detail,
+                                  evidence="\n".join(f_lines)))
+
+
 def _add_label_clusters(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Every cluster each cell-type label spans (core/label_clusters.py)."""
     from scview.core import label_clusters
@@ -936,6 +951,7 @@ def build_grounding_context(
             logger.debug("assistant: mito-by-type grounding failed: %s", exc)
         _add_qc_states(adaptor, lines, sources)
         _add_hashing(adaptor, lines, sources)
+        _add_fragment_qc(adaptor, lines, sources)
         _qc_removal_fact(adaptor, lines, sources)
         _add_seqqc(adaptor, lines, sources)
         # The stored PCA: variance per component, elbow, PC1's top loadings.

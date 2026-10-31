@@ -103,6 +103,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Spot composition", "Visium, RCTD",
      "each spot's or Visium HD bin's cell-type shares from another library dataset as the reference; tissue overlay "
      "per type, dominant type, self-check"),
+    ("Unified View > Accessibility", "",
+     "attach atac_fragments.tsv.gz + .tbi: per-cell TSS enrichment and nucleosome signal (Signac's definitions), "
+     "fragment length ladder, TSS profile; coverage tracks per group for a gene or region"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),
