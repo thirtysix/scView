@@ -16,6 +16,7 @@ from scview.api.v1.export import file_stem
 from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
 from scview.core import conversion, crispr, provenance, replay_script, run_manifest, spatial
+from scview.core.atac_import import dataset_state as atac_state
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import is_locked
 from scview.models.enums import DatasetStatus
@@ -254,6 +255,7 @@ async def get_dataset_info(
         info["expression_layers"] = adaptor.available_expression_layers()
         info["default_expression_layer"] = adaptor.default_expression_layer()
         info["protein"] = adaptor.protein_info()
+        info["atac"] = atac_state(adaptor.adata, dm.data_dir, dataset_id)  # 10x Multiome peaks
         info["perturbation"] = crispr.available(adaptor.adata)  # a CRISPR screen's guides
         # Spatial data: libraries, image sizes, bounds (obsm + uns: small, also when large).
         info["spatial"] = spatial.info(adaptor.adata)

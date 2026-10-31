@@ -566,6 +566,15 @@ def write_info(adata, info: dict[str, Any]) -> None:
     adata.uns[UNS_KEY] = json.dumps(info)
 
 
+def dataset_state(adata, data_dir: str | Path, dataset_id: str) -> dict[str, Any] | None:
+    """What the dataset description says of ATAC (None without): the Accessibility tab shows
+    only when its store is there."""
+    if UNS_KEY not in adata.uns or not modality_store.store_path(data_dir, dataset_id, STORE).exists():
+        return None
+    info = read_info(adata) or {}
+    return {"n_peaks": info.get("n_peaks"), "genome": info.get("genome"), "computed": info.get("computed") or []}
+
+
 def provenance_params(info: dict[str, Any]) -> dict[str, Any]:
     keys = ("n_peaks", "nnz", "genome", "genome_assumed", "source", "format", "n_cells")
     return {"atac": {**{k: info.get(k) for k in keys}, "location": f"{modality_store.SUBDIR}/<id>/{STORE}.h5"}}

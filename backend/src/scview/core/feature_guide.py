@@ -66,6 +66,15 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Protein > Joint RNA + protein (WNN)", "",
      "Seurat's weighted nearest neighbours: per-cell RNA / protein weights, a joint graph, WNN and "
      "protein UMAPs (in the embedding menu), WNN clusters"),
+    ("Unified View > Accessibility", "ATAC, multiome, 10x Multiome peaks",
+     "only with 10x Multiome peaks (a 10x .h5 or folder, .h5ad with Peaks features, .h5mu): QC, LSI with its "
+     "depth check, ATAC UMAP and clusters"),
+    ("Unified View > Accessibility > Joint RNA + ATAC (WNN)", "",
+     "Seurat's weighted nearest neighbours on RNA PCs and LSI 2:50: per-cell RNA weight by group, WNN UMAP, clusters"),
+    ("Unified View > Accessibility > Gene activity", "peak-based",
+     "peak counts in gene body + 2 kb upstream as an overlay and against RNA; peak-based, not fragment-based"),
+    ("Unified View > Accessibility > Differential peaks", "Wilcoxon on TF-IDF",
+     "peaks per group vs the rest with nearest gene, distance to TSS, class; CSV"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
