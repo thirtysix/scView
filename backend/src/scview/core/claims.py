@@ -676,6 +676,9 @@ _FAMILY_PREFIX = {
     # whole in resolve_tag, as "spatial" alone means the Moran's I fact
     "domains": "result:spatial_domains", "domain": "result:spatial_domains", "niches": "result:spatial_domains",
     "niche": "result:spatial_domains", "nhood": "result:spatial_domains",
+    # co-occurrence (core/spatial_cooccurrence.py); "co_occurrence" and the like are matched
+    # whole in resolve_tag
+    "cooccurrence": "result:cooccurrence",
     "tfmotifs": "result:tfmotifs", "tfmotif": "result:tfmotifs", "motifs": "result:tfmotifs",
     "motif": "result:tfmotifs",
     "deconvolution": "result:deconvolution", "deconv": "result:deconvolution",
@@ -712,6 +715,8 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
     fam = re.split(r"[\s_]", parts[0].lower())[0]
     if parts[0].lower().startswith(("spatial_domain", "spatial_niche", "spatial domain", "spatial niche")):
         fam = "domains"
+    if parts[0].lower().startswith(("co_occur", "co-occur", "co occur", "cooccur")):
+        fam = "cooccurrence"
     prefix = _FAMILY_PREFIX.get(fam)
     if fam in ("lit", "doc"):
         # PMIDs and URLs are exact or nothing.
@@ -743,6 +748,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "deconvolution", "deconv",
                                   "lgate", "learnedgate", "learned", "spotdeconv", "velocity", "rnavelocity",
                                   "domains", "domain", "niches", "niche", "nhood",
+                                  "cooccurrence",
                                   "fragqc", "fragments", "tss", "nucleosome")
                          or not last):
             if fam == "dataset":

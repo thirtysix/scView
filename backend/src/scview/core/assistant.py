@@ -292,6 +292,24 @@ def _add_spatial_domains(adaptor, lines: list[str], sources: list[ChatSource]) -
                                   evidence="\n".join(sd_lines[1:])))
 
 
+def _add_cooccurrence(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved co-occurrence (core/spatial_cooccurrence.py): the pairs most together at the
+    shortest distance with enough pairs, with their scores; only when it fits."""
+    from scview.core import spatial_cooccurrence, spatial_domains
+
+    try:
+        adata = adaptor.adata
+        cc_lines, cc_detail = (spatial_cooccurrence.grounding_lines(adata) if spatial_domains.has_spatial(adata)
+                               else ([], ""))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: co-occurrence failed: %s", exc)
+        return
+    if cc_lines:
+        lines.extend(cc_lines)
+        sources.append(ChatSource(kind="result", ref=spatial_cooccurrence.TAG, detail=cc_detail,
+                                  evidence="\n".join(cc_lines[1:])))
+
+
 def _add_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last bulk deconvolution (core/deconvolution.py): the largest cell fraction per
     bulk sample, only once one has run on this dataset."""
@@ -1004,6 +1022,7 @@ def build_grounding_context(
         _add_atac(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_spatial_domains(adaptor, lines, sources)
+        _add_cooccurrence(adaptor, lines, sources)
         _add_deconvolution(adaptor, lines, sources)
         _add_learned_gate(adaptor, lines, sources)
         _add_spot_deconvolution(adaptor, lines, sources)

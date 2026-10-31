@@ -25,6 +25,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from scview.core import preflight
+from scview.core import spatial_cooccurrence as cc
 from scview.core import spatial_domains as sd
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
@@ -65,6 +67,16 @@ class NichesRequest(BaseModel):
     seed: int = Field(default=sd.SEED, ge=0, le=2**31 - 1)
     column: str = Field(default=sd.NICHE_COLUMN, max_length=64)
     overwrite: bool = False
+
+
+class CoOccurrenceRequest(BaseModel):
+    cluster_key: str = Field(max_length=256)
+    interval: int = Field(default=cc.DEFAULT_INTERVAL, ge=cc.MIN_INTERVAL, le=cc.MAX_INTERVAL)
+    distances: list[float] | None = Field(default=None, max_length=cc.MAX_INTERVAL + 1)  # squidpy's array interval
+    max_distance: float | None = Field(default=None, gt=0)  # or evenly from 0 to this, ``interval`` scores
+    combine: str = Field(default=cc.SUM, max_length=32)
+    seed: int = Field(default=cc.SEED, ge=0, le=2**31 - 1)
+    max_obs: int = Field(default=cc.MAX_FULL_OBS, ge=cc.MIN_FULL_OBS)
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -165,9 +177,10 @@ async def _save(dm: DatasetManager, dataset_id: str, fingerprint: str, what: str
 
 def _stream(dataset_id: str, dm: DatasetManager, what: str, start: dict[str, Any], fingerprint: str,
             make: Callable[[Callable[[], bool]], Iterator[dict[str, Any]]],
-            write: Callable[[Any, Any, dict[str, Any]], dict[str, Any]]) -> StreamingResponse:
+            write: Callable[[Any, Any, dict[str, Any]], dict[str, Any]], reserve: int = 0) -> StreamingResponse:
     """The run as SSE: ``start``, ``stage`` / ``scan`` / ``progress`` / ``curve`` as they come,
-    ``watchdog`` memory warnings, ``result`` (the saved summary), ``complete``, or ``error``."""
+    ``watchdog`` memory warnings, ``result`` (the saved summary), ``complete``, or ``error``.
+    ``reserve``: bytes the run grows by, counted as used by other requests until it ends."""
 
     async def events():
         if dataset_id in _running:  # another request started between the check and here
@@ -190,9 +203,13 @@ def _stream(dataset_id: str, dm: DatasetManager, what: str, start: dict[str, Any
                 fut.exception()  # retrieved: a stopped run is not an error
             gen.close()
             watchdog.stop()
+            if reserve:
+                dm.release_run(dataset_id)
             _running.discard(dataset_id)
 
         try:
+            if reserve:
+                dm.reserve_run(dataset_id, reserve)
             watchdog.start()
             yield _sse("start", start)
             while True:
@@ -308,3 +325,79 @@ async def run_niches(dataset_id: str, body: NichesRequest, dm: DatasetManager = 
                    lambda stop: sd.iter_niches(inp, stop),
                    lambda data, res, resources: sd.save_niches(data, inp, res, resources=resources,
                                                                cells_fingerprint=fingerprint))
+
+
+def _cooccurrence_verdict(dm: DatasetManager, dataset_id: str, plan: cc.CoOccurrencePlan) -> dict[str, Any]:
+    """What a run needs against the memory free, in the app's one preflight sentence."""
+    need = plan.estimate_bytes
+    secs = plan.estimate_seconds
+    avail = preflight.available_memory()
+    used = avail.used_bytes or 0
+    return preflight.make_verdict(
+        need=need, peak=used + need, stage="counting pairs", seconds=(round(secs * 0.8, 1), round(secs * 1.2, 1)),
+        avail=avail, cached=preflight.cached_others(dm, dataset_id),
+        lead=f"Co-occurrence: about {need / 1024**3:.1f} GB more at its peak",
+        breakdown=[("The counting process", need)],
+        notes=[f"{plan.visited_pairs:,} pairs of {plan.unit}s within reach, {plan.threads} thread(s)."], alternatives=[])
+
+
+@router.get("/datasets/{dataset_id}/spatial/cooccurrence")
+async def get_cooccurrence(
+    dataset_id: str,
+    column: str = Query(default="", max_length=256),
+    interval: int = Query(default=cc.DEFAULT_INTERVAL, ge=cc.MIN_INTERVAL, le=cc.MAX_INTERVAL),
+    combine: str = Query(default=cc.SUM, max_length=32),
+    max_distance: float | None = Query(default=None, gt=0),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The saved run of ``column`` (else the latest): ``result`` with ``occ`` (labels x labels x
+    distances), ``count``, ``distances``. With ``column``, what a run would need: ``plan`` and
+    its preflight ``verdict``, or ``reason`` when it cannot run. ``max_distance`` in the
+    positions' units: the thresholds a run with that reach would use."""
+    adaptor = await _adaptor(dm, dataset_id)
+    adata = adaptor.adata
+
+    def work() -> dict[str, Any]:
+        fp = adaptor.cells_fingerprint()
+        out: dict[str, Any] = {"plan": None, "verdict": None, "reason": None,
+                               "result": cc.cooccurrence_summary(adata, column or None, fp)}
+        if column:
+            try:
+                distances = cc.even_distances(max_distance, interval) if max_distance is not None else None
+                plan = cc.plan_cooccurrence(adata, column, interval=interval, distances=distances, combine=combine)
+                out["plan"] = plan.to_dict()
+                out["verdict"] = _cooccurrence_verdict(dm, dataset_id, plan)
+            except sd.SpatialDomainsError as exc:
+                out["reason"] = str(exc)
+        return out
+
+    out = await asyncio.to_thread(work)
+    out["defaults"] = {"interval": cc.DEFAULT_INTERVAL, "max_obs": cc.MAX_FULL_OBS, "split_above": cc.SPLITS_ABOVE_OBS}
+    out["running"] = dataset_id in _running
+    return out
+
+
+@router.post("/datasets/{dataset_id}/spatial/cooccurrence/run-stream")
+async def run_cooccurrence(dataset_id: str, body: CoOccurrenceRequest, dm: DatasetManager = Depends(get_dataset_manager)):
+    """Co-occurrence of a label column (= squidpy's ``co_occurrence``): which labels turn up
+    within each distance of which, against all pairs at that range."""
+    adaptor = await _adaptor(dm, dataset_id)
+    _busy(dataset_id)
+    adata = adaptor.adata
+    distances = cc.even_distances(body.max_distance, body.interval) if body.max_distance is not None else body.distances
+    try:
+        plan = await asyncio.to_thread(cc.plan_cooccurrence, adata, body.cluster_key, interval=body.interval,
+                                       distances=distances, combine=body.combine, seed=body.seed,
+                                       max_obs=body.max_obs)
+        inp = await asyncio.to_thread(cc.prepare_cooccurrence, adata, plan)
+    except sd.SpatialDomainsError as exc:
+        raise _http(exc)
+    fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
+    await dm.reserve(dataset_id, plan.estimate_bytes, what="Co-occurrence")
+    del adata, adaptor
+    start = {**plan.to_dict(), "stages": [{"stage": s, "label": x} for s, x in cc.STAGES]}
+    return _stream(dataset_id, dm, "Co-occurrence", start, fingerprint,
+                   lambda stop: cc.iter_cooccurrence(inp, stop),
+                   lambda data, res, resources: cc.save_cooccurrence(data, inp, res, resources=resources,
+                                                                     cells_fingerprint=fingerprint),
+                   reserve=plan.estimate_bytes)

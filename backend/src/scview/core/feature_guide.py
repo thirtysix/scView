@@ -107,6 +107,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Domains", "niches",
      "spatial domains (clustering that sees each spot's, bin's or cell's neighbours; k chosen or suggested by stability), "
      "neighbourhood enrichment between labels, composition niches; colours the tissue"),
+    ("Unified View > Domains > Co-occurrence", "squidpy",
+     "how much more often one label is found within each distance of another than among all pairs at that range (score "
+     "above 1), with a score-by-distance plot per label and a labels-by-labels heatmap; nearby is not interacting"),
     ("Unified View > Traits", "GWAS",
      "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
     ("Unified View > Velocity", "",
@@ -156,7 +159,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
 CLOSING = "These are all of scView's tabs and tools; name a feature only by its path here."
 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
-FULL_ONLY = ("Unified View > Accessibility >",)
+FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Domains > Co-occurrence")
 
 
 def compact_guide() -> str:
