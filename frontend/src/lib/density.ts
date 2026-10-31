@@ -123,6 +123,7 @@ export function overlayWord(o: Overlay): string {
   if (!o) return "";
   if (o.type === "program") return "program";
   if (o.type === "density") return "(Nebulosa-style)";
+  if (o.type === "atac_activity") return "(peak-based)";
   if (o.type !== "expression") return "score";
   return o.layer ? "protein" : "expression";
 }

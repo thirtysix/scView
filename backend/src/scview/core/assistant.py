@@ -388,6 +388,22 @@ def _add_wnn(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(w_lines[1:])))
 
 
+def _add_atac(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """10x Multiome ATAC (core/atac.py): the import, LSI and its depth choice, gene activity, WNN
+    weights; nothing on a dataset without ATAC."""
+    from scview.core import atac
+
+    try:
+        a_lines, a_detail = atac.grounding_lines(adaptor.adata)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: ATAC failed: %s", exc)
+        return
+    if a_lines:
+        lines.extend(a_lines)
+        sources.append(ChatSource(kind="result", ref=atac.TAG, detail=a_detail,
+                                  evidence="\n".join(a_lines[1:])))
+
+
 def _add_cnv(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved copy-number inference (core/cnv.py): reference, high-score groups,
     high CNV clusters with their gained / lost chromosomes, once run."""
@@ -985,6 +1001,7 @@ def build_grounding_context(
     if want("markers") or want("groups"):
         _add_programs(adaptor, lines, sources)
         _add_wnn(adaptor, lines, sources)
+        _add_atac(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_spatial_domains(adaptor, lines, sources)
         _add_deconvolution(adaptor, lines, sources)

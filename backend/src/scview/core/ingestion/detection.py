@@ -25,6 +25,7 @@ import h5py
 from pydantic import BaseModel, Field
 
 from scview.core import spatial, xenium
+from scview.core.atac_import import looks_like_barcode_metrics
 from scview.core.crispr import looks_like_calls
 from scview.core.ingestion import h5seurat
 from scview.core.vdj import sniff_contigs
@@ -73,6 +74,8 @@ class FileKind(str, Enum):
     spatial = "spatial"  # a Space Ranger spatial file: a side file of a unit (core/spatial.py)
     xenium = "xenium"  # a file of a Xenium output folder (core/xenium.py)
     atac_fragments = "atac_fragments"  # an ATAC fragments file or its .tbi: a side file (core/atac_fragments.py)
+    h5mu = "h5mu"  # MuData on disk, RNA + ATAC modalities (core/atac_import.py)
+    atac_metrics = "atac_metrics"  # Cell Ranger ARC per_barcode_metrics.csv (core/atac_import.py)
     unknown = "unknown"
 
 
@@ -134,8 +137,9 @@ def detect_file(path: Path) -> DetectionResult:
     if part is not None:
         return _spatial_result(part)
 
-    # HDF5 family: h5ad / 10x .h5 / loom all share this magic.
-    if head.startswith(_HDF5_MAGIC):
+    # HDF5 family: h5ad / 10x .h5 / loom all share this magic. A MuData file carries its
+    # version in a 512-byte user block before it, where a plain signature check misses it.
+    if head.startswith(_HDF5_MAGIC) or _hdf5_after_user_block(path, head):
         return _classify_hdf5(path)
 
     gzipped = head.startswith(_GZIP_MAGIC)
@@ -212,6 +216,18 @@ def _detect_dir(path: Path) -> DetectionResult:
     )
 
 
+def _hdf5_after_user_block(path: Path, head: bytes) -> bool:
+    """An HDF5 signature at offset 512 under mudata's own header (``MuData (format-version=``)."""
+    if not head.startswith(b"MuData"):
+        return False
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(512)
+            return fh.read(8) == _HDF5_MAGIC
+    except OSError:
+        return False
+
+
 def _read_head(path: Path, n: int) -> bytes:
     try:
         with open(path, "rb") as fh:
@@ -250,6 +266,17 @@ def _classify_hdf5(path: Path) -> DetectionResult:
         with h5py.File(path, "r") as f:
             keys = set(f.keys())
             details = {"hdf5_keys": sorted(keys)}
+
+            # MuData: one AnnData per modality under /mod (and obs, var of its own).
+            if "mod" in keys and isinstance(f["mod"], h5py.Group):
+                details["modalities"] = sorted(f["mod"].keys())
+                return DetectionResult(
+                    kind=FileKind.h5mu,
+                    confidence=0.95,
+                    format_family="mudata",
+                    reason="MuData .h5mu (modalities: " + ", ".join(details["modalities"]) + ")",
+                    details=details,
+                )
 
             # 10x CellRanger .h5: a /matrix *group* with CSC arrays + features.
             if "matrix" in keys and isinstance(f["matrix"], h5py.Group):
@@ -373,6 +400,14 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
             reason="Cell Ranger metrics summary (metrics_summary.csv)",
             details=details,
         )
+    if looks_like_barcode_metrics(lines[0]):
+        return DetectionResult(
+            kind=FileKind.atac_metrics,
+            confidence=0.95,
+            format_family="10x",
+            reason="Cell Ranger ARC per-barcode metrics (per_barcode_metrics.csv)",
+            details=details,
+        )
     if looks_like_calls(lines[0]):
         return DetectionResult(
             kind=FileKind.crispr_calls,
@@ -440,6 +475,17 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
                 details=details,
             )
 
+    # Cell Ranger ARC's features.tsv: id, name, feature type, chrom, start, end.
+    if delim == "\t" and ncols > 3 and rows and all(
+            len(r) >= 3 and r[2].strip() in _FEATURE_TYPES for r in rows):
+        return DetectionResult(
+            kind=FileKind.tenx_features,
+            confidence=0.9,
+            format_family="10x",
+            reason=f"{ncols}-column features table (id, name, feature type, position)",
+            details=details,
+        )
+
     # Wide delimited grid → dense expression table.
     if ncols > 3:
         return DetectionResult(
@@ -456,6 +502,10 @@ def _classify_text(text: str, gzipped: bool) -> DetectionResult:
         reason="Delimited text that did not match a known layout",
         details=details,
     )
+
+
+_FEATURE_TYPES = {"Gene Expression", "Peaks", "Antibody Capture", "CRISPR Guide Capture",
+                  "Multiplexing Capture", "Custom"}
 
 
 def contig_receptor(lines: list[str]) -> str | None:

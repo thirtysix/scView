@@ -21,6 +21,7 @@ export const UNIFIED_SUBTABS = [
   "markers", "expression", "protein", "genesets", "enrichment", "de", "activity", "genelists", "communication",
   "report", "programs", "cnv", "clonotypes", "perturbation", "spatial", "domains", "traits", "deconvolution", "spotcomp",
   "velocity",
+  "accessibility",
 ] as const;
 
 export type UnifiedSubtab = (typeof UNIFIED_SUBTABS)[number];

@@ -27,6 +27,8 @@ export interface DatasetInfo {
   protein?: ProteinInfo | null;
   /** A CRISPR screen's guides (backend core/crispr.available), or null/absent without them */
   perturbation?: { n_guides: number; cellranger: boolean; assigned: boolean; columns: string[] } | null;
+  /** 10x Multiome peaks (core/atac_import.py), or null/absent without them */
+  atac?: { n_peaks: number | null; genome: string | null; computed: string[] } | null;
   /** Hash of the cell barcodes in order: equal for the same cells (saved sessions) */
   cells_fingerprint?: string;
   created_at: string;

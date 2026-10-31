@@ -1374,6 +1374,139 @@ _HELPER_ORDER += ("velocity",)
 _HELPERS["wnn"] = _wnn_helper()
 _HELPER_ORDER += ("wnn",)
 _HELPER_NEEDS["wnn"] = ("dsb",)  # protein_counts_for
+def _atac_helper() -> str:
+    """core/atac.py's LSI and gene activity code (numpy, scipy, pandas), copied so the script
+    computes them as scView did; the peaks are read again from the input."""
+    import inspect
+
+    from scview.core import atac
+
+    lines = ["import gzip", "import os", "import re", ""]
+    lines += [f"{name} = {_lit(getattr(atac, name))}" for name in atac.REPLAY_CONSTANTS]
+    for obj in atac.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", _ATAC_READERS.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_ATAC_READERS = '''
+def atac_peaks(path):
+    """The input's peak counts as a cells x peaks CSR, with peak and cell names: a 10x file's or
+    an .h5ad's Peaks features, or an .h5mu's atac modality (its counts layer when it has one)."""
+    p = str(path)
+    if p.endswith(".h5mu"):
+        import h5py
+        from anndata.io import read_elem
+
+        with h5py.File(p, "r") as f:
+            mod = next(m for m in ("atac", "ATAC", "peaks", "Peaks") if m in f["mod"])
+            full = read_elem(f["mod"][mod])
+        X = full.layers["counts"] if "counts" in full.layers else full.X
+        return sp.csr_matrix(X, dtype=np.float32), full.var_names.astype(str), full.obs_names.astype(str)
+    if p.endswith(".h5ad"):
+        full = sc.read_h5ad(p)
+    elif p.endswith(".h5"):
+        full = sc.read_10x_h5(p, gex_only=False)
+    else:
+        full = sc.read_10x_mtx(p, var_names="gene_symbols", gex_only=False)
+    keep = full.var["feature_types"].astype(str).eq("Peaks").to_numpy()
+    return (sp.csr_matrix(full.X[:, keep], dtype=np.float32), full.var_names[keep].astype(str),
+            full.obs_names.astype(str))
+
+
+class AtacTfIdf:
+    """Signac's RunTFIDF method 1 on the selected peaks, with the products the SVD asks for:
+    float32 values and scView's blocks of cells, so its sums run in the same order."""
+
+    def __init__(self, counts, selected, block_values=4_000_000):
+        total = np.asarray(counts.sum(axis=0), dtype=np.float64).ravel()
+        cell = np.asarray(counts.sum(axis=1), dtype=np.float64).ravel()
+        idf = np.where(total > 0, counts.shape[0] / np.where(total > 0, total, 1), 0.0)
+        lengths = np.diff(counts.indptr)
+        self.blocks = []
+        start = 0
+        while start < lengths.size:
+            size, stop = 0, start
+            while stop < lengths.size and (stop == start or size + lengths[stop] <= block_values):
+                size += int(lengths[stop])
+                stop += 1
+            self.blocks.append((start, stop))
+            start = stop
+        m = counts.tocsr(copy=True)
+        per_cell = np.repeat(np.arange(m.shape[0]), lengths)
+        tf = m.data / cell[per_cell]
+        m.data = np.log1p(tf * SCALE_FACTOR * idf[m.indices]).astype(np.float32)
+        self.X = m[:, selected].tocsr()
+        self.X.sort_indices()
+        self.shape = self.X.shape
+
+    def dot(self, right):
+        out = np.zeros((self.shape[0], right.shape[1]), dtype=np.float64)
+        for a, b in self.blocks:
+            out[a:b] = self.X[a:b] @ right
+        return out
+
+    def tdot(self, left):
+        out = np.zeros((self.shape[1], left.shape[1]), dtype=np.float64)
+        for a, b in self.blocks:
+            out += self.X[a:b].T @ left[a:b]
+        return out
+
+
+def atac_gene_table(url):
+    """The gene records of the GENCODE GTF (0-based half open): beside the input or here when
+    it is there, else fetched here once."""
+    name = os.path.basename(url)
+    path = next((p for p in (name, os.path.join(os.path.dirname(os.path.abspath(INPUT)), name)) if os.path.exists(p)), None)
+    if path is None:
+        import urllib.request
+
+        path = name
+        urllib.request.urlretrieve(url, path)
+    rows = []
+    with gzip.open(path, "rt") as fh:
+        for line in fh:
+            parts = line.rstrip("\\n").split("\\t")
+            if line.startswith("#") or len(parts) < 9 or parts[2] != "gene":
+                continue
+            attr = lambda key: (re.search(rf'{key} "([^"]+)"', parts[8]) or [None, ""])[1]  # noqa: E731
+            if attr("gene_id").endswith("_PAR_Y"):
+                continue
+            rows.append((attr("gene_id").split(".")[0], attr("gene_name"), parts[0], int(parts[3]) - 1, int(parts[4]), parts[6]))
+    return pd.DataFrame(rows, columns=["gene_id", "gene_name", "chrom", "start", "end", "strand"])
+
+
+def atac_gene_activity(adata, counts, peak_names, table, upstream):
+    """Peak counts in each dataset gene's body + ``upstream`` (matched by gene id, else name):
+    a cells x genes CSR and its gene names."""
+    from types import SimpleNamespace
+
+    genes = adata.raw.var if adata.raw is not None and adata.raw.n_vars > adata.n_vars else adata.var
+    ids = genes["gene_ids"].astype(str).str.replace(r"\\.\\d+$", "", regex=True) if "gene_ids" in genes.columns else None
+    by_id = table.drop_duplicates("gene_id").set_index("gene_id")
+    by_name = table.drop_duplicates("gene_name").set_index("gene_name")
+    names, picked = [], []
+    for i, name in enumerate(genes.index.astype(str)):
+        if ids is not None and ids.iloc[i] in by_id.index:
+            picked.append(by_id.loc[ids.iloc[i]])
+        elif name in by_name.index:
+            picked.append(by_name.loc[name])
+        else:
+            continue
+        names.append(name)
+    frame = pd.DataFrame(picked)
+    start, end = gene_regions(frame, upstream)
+    parts = [re.split(r"[:_-]", n[::-1], maxsplit=2) for n in peak_names]
+    chrom = np.asarray([p[2][::-1] for p in parts], dtype=object)
+    p_end = np.asarray([int(p[0][::-1]) for p in parts], dtype=np.int64)
+    p_start = np.asarray([int(p[1][::-1]) for p in parts], dtype=np.int64)
+    m = overlap_matrix(chrom, p_start, p_end, SimpleNamespace(chrom=frame["chrom"].to_numpy(dtype=object), start=start,
+                                                              end=end, names=names))
+    return (counts @ m).tocsr(), names
+'''
+_HELPERS["atac"] = _atac_helper()
+_HELPER_ORDER += ("atac",)
+_HELPER_NEEDS["atac"] = ()
 _HELPERS["spot_deconvolution"] = _spot_deconvolution_helper()
 _HELPER_ORDER += ("spot_deconvolution",)
 _HELPER_NEEDS["spot_deconvolution"] = ("looks_like_counts",)
@@ -2774,6 +2907,90 @@ def _wnn(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+_ATAC_CODE = '''
+peaks, peak_names, peak_cells = atac_peaks(INPUT)
+counts = peaks[pd.Index(peak_cells).get_indexer(adata.obs_names)].tocsr()
+selected = top_peaks(np.asarray(counts.sum(axis=0), dtype=np.float64).ravel(), ATAC["percentile"])
+u, s, vt = block_lanczos_svd(AtacTfIdf(counts, selected), ATAC["n_lsi"], ATAC["lanczos_block"], ATAC["lanczos_steps"],
+                             ATAC["seed"])
+adata.obsm["X_lsi"] = scaled_embedding(u).astype(np.float32)
+adata.obsm["atac_rep"] = adata.obsm["X_lsi"][:, [d - 1 for d in ATAC["dims"]]]
+sc.pp.neighbors(adata, n_neighbors=ATAC["k"], use_rep="atac_rep", metric=ATAC["metric"], key_added="atac", random_state=0)
+sc.tl.umap(adata, neighbors_key="atac", key_added="X_umap_atac", min_dist=ATAC["min_dist"], random_state=0)
+del adata.obsm["atac_rep"]
+'''
+
+_ATAC_ACTIVITY_CODE = '''
+gene_table = atac_gene_table(ATAC["gene_positions_url"])
+activity, activity_genes = atac_gene_activity(adata, counts, peak_names, gene_table, ATAC["upstream"])
+adata.obsm["atac_gene_activity"] = activity
+adata.uns["atac_gene_activity_genes"] = list(activity_genes)
+adata.obs["atac_activity_total"] = np.asarray(activity.sum(axis=1), dtype=np.float32).ravel()
+'''
+
+
+def _atac_lsi(p: dict, ctx: _Ctx) -> Snippet:
+    """ATAC LSI (core/atac.py, Signac's recipe) from the input's peaks, its graph under its own
+    key, the UMAP, Leiden, and the peak-based gene activity."""
+    need = ("n_lsi", "dims", "lanczos_block", "lanczos_steps")
+    if any(not p.get(x) for x in need):
+        return Snippet(NOT_REPLAYABLE, ["# ATAC LSI: its settings are not recorded. Recorded:", *_param_comment(p)],
+                       "settings not recorded")
+    _need(ctx, "atac")
+    keys = ("percentile", "n_lsi", "lanczos_block", "lanczos_steps", "seed", "dims", "k", "metric", "min_dist",
+            "resolution", "upstream", "gene_positions_url")
+    settings = {x: p.get(x) for x in keys}
+    n_iter = p.get("n_iterations")
+    passes = f", n_iterations={_lit(n_iter)}" if n_iter not in (None, -1) else ""
+    lines = [
+        "# ATAC LSI (Signac's FindTopFeatures q5, RunTFIDF method 1, RunSVD; core/atac.py), read again from the",
+        "# input's Peaks features. The neighbour graph has its own key ('atac'); the RNA graph is not touched.",
+        f"ATAC = {_lit(settings)}",
+        *_block(_ATAC_CODE),
+        'sc.tl.leiden(adata, resolution=ATAC["resolution"], key_added="atac_leiden", neighbors_key="atac", '
+        f'flavor="leidenalg"{passes})',
+    ]
+    if p.get("gene_activity") and p.get("gene_positions_url"):
+        lines += ["# Peak-based gene activity: peak counts in gene body + 2 kb upstream, not fragments.",
+                  *_block(_ATAC_ACTIVITY_CODE)]
+    return Snippet(EXACT, lines)
+
+
+_ATAC_WNN_CODE = '''
+rna = np.asarray(adata.obsm[WNN_ATAC["rep"]])[:, :WNN_ATAC["n_pcs_rna"]].astype(np.float32)
+lsi = np.asarray(adata.obsm["X_lsi"])[:, [d - 1 for d in WNN_ATAC["lsi_dims"]]].astype(np.float32)
+out = wnn_neighbors(rna, lsi, WNN_ATAC["k"], WNN_ATAC["knn_range"], WNN_ATAC["exact_max_cells"])
+conn, dists = wnn_graphs(out["idx"], out["dist"])
+adata.obs["wnn_atac_rna_weight"] = out["rna_weight"].astype(np.float32)
+adata.obsp["wnn_atac_connectivities"] = conn.copy()  # umap-learn trims the graph it is given
+adata.obsp["wnn_atac_distances"] = dists
+adata.uns["wnn_atac"] = {"connectivities_key": "wnn_atac_connectivities", "distances_key": "wnn_atac_distances",
+                         "params": {"method": "umap", "n_neighbors": WNN_ATAC["k"] + 1, "use_rep": WNN_ATAC["rep"],
+                                    "n_pcs": WNN_ATAC["n_pcs_rna"], "metric": "euclidean", "random_state": 0}}
+sc.tl.umap(adata, neighbors_key="wnn_atac", key_added="X_umap_wnn_atac", min_dist=WNN_ATAC["min_dist"], random_state=0)
+adata.obsp["wnn_atac_connectivities"] = conn
+'''
+
+
+def _atac_wnn(p: dict, ctx: _Ctx) -> Snippet:
+    """WNN RNA + ATAC (core/atac.py with core/wnn.py's FindMultiModalNeighbors)."""
+    if any(not p.get(x) for x in ("rep", "n_pcs_rna", "lsi_dims")):
+        return Snippet(NOT_REPLAYABLE, ["# WNN RNA + ATAC: its inputs are not recorded. Recorded:", *_param_comment(p)],
+                       "inputs not recorded")
+    _need(ctx, "wnn")
+    keys = ("rep", "n_pcs_rna", "lsi_dims", "k", "knn_range", "min_dist", "resolution", "exact_max_cells")
+    settings = {x: p.get(x) for x in keys}
+    n_iter = p.get("n_iterations")
+    passes = f", n_iterations={_lit(n_iter)}" if n_iter not in (None, -1) else ""
+    return Snippet(EXACT, [
+        "# WNN RNA + ATAC (Seurat's FindMultiModalNeighbors with LSI as the second modality), under its own key.",
+        f"WNN_ATAC = {_lit(settings)}",
+        *_block(_ATAC_WNN_CODE),
+        'sc.tl.leiden(adata, resolution=WNN_ATAC["resolution"], key_added="wnn_atac_leiden", neighbors_key="wnn_atac", '
+        f'flavor="leidenalg"{passes})',
+    ])
+
+
 def _label_transfer(p: dict, ctx: _Ctx) -> Snippet:
     from scview.core import label_transfer as lt
 
@@ -3195,6 +3412,8 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "learned_gate_train": _learned_gate_train,
     "learned_gate_apply": _learned_gate_apply,
     "wnn": _wnn,
+    "atac_lsi": _atac_lsi,
+    "atac_wnn": _atac_wnn,
     "spot_deconvolution": _spot_deconvolution,
     "velocity": _velocity,
     "spatial_domains": _spatial_domains,
@@ -3232,7 +3451,13 @@ def read_input(path):
     """The dataset as scView imported it: .h5ad as is; 10x .h5 / matrix folders and
     .loom read as scView reads them (gene features only)."""
     p = str(path)
-    if p.endswith(".h5ad"):
+    if p.endswith(".h5mu"):  # MuData: its RNA modality
+        import h5py
+        from anndata.io import read_elem
+
+        with h5py.File(p, "r") as f:
+            adata = read_elem(f["mod"][next(m for m in ("rna", "RNA", "gex", "GEX") if m in f["mod"])])
+    elif p.endswith(".h5ad"):
         adata = sc.read_h5ad(p)
     elif p.endswith(".h5"):
         adata = sc.read_10x_h5(p, gex_only=True)
@@ -3240,6 +3465,8 @@ def read_input(path):
         adata = sc.read_loom(p)
     else:
         adata = sc.read_10x_mtx(p, var_names="gene_symbols", gex_only=True)
+    if "feature_types" in adata.var.columns and adata.var["feature_types"].astype(str).eq("Peaks").any():
+        adata = adata[:, ~adata.var["feature_types"].astype(str).eq("Peaks").to_numpy()].copy()  # peaks: atac_peaks
     adata.var_names_make_unique()
     adata.obs_names_make_unique()
     return adata

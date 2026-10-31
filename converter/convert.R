@@ -286,6 +286,17 @@ manual_convert <- function(obj, output_path, version_info) {
   # ---- expression matrix ---------------------------------------------------
   cat("[convert] Extracting expression matrix ...\n")
 
+  # A chromatin assay is not read: said in the report, and never taken for the genes.
+  chromatin <- seurat_chromatin_assays(obj)
+  if (seurat_main_assay(obj) %in% chromatin) {
+    stop("This Seurat object holds ATAC peaks (", seurat_main_assay(obj), ") and no RNA assay: ATAC-only data ",
+         "is not supported yet. Upload the object with its RNA assay.")
+  }
+  chromatin_note <- if (length(chromatin) > 0) {
+    sprintf(paste0("the chromatin assay %s: ATAC inside a Seurat object is not read yet; upload the 10x ",
+                   "filtered_feature_bc_matrix.h5 or an .h5mu for its peaks"), paste(chromatin, collapse = ", "))
+  } else character(0)
+
   # RNA as before; a Visium object's genes are in its Spatial assay.
   main_assay <- seurat_main_assay(obj)
 
@@ -420,7 +431,7 @@ manual_convert <- function(obj, output_path, version_info) {
     return(list(
       success = TRUE,
       message = paste0("Converted via manual extraction (", version_info, ")"),
-      kept = tissue$kept, skipped = tissue$skipped
+      kept = tissue$kept, skipped = c(tissue$skipped, chromatin_note)
     ))
   } else {
     return(list(success = FALSE, error = "h5ad file was not created"))
@@ -433,6 +444,17 @@ manual_convert <- function(obj, output_path, version_info) {
 
 # A CITE-seq antibody assay's names, in order of preference.
 ADT_ASSAYS <- c("ADT", "Protein", "protein", "adt", "CITE", "Antibody")
+
+# Signac's usual names for a chromatin assay; any assay of its class counts too.
+CHROMATIN_ASSAYS <- c("ATAC", "atac", "peaks", "Peaks", "chromatin")
+
+#' The chromatin assays of a Seurat object (none on a plain RNA object).
+seurat_chromatin_assays <- function(obj) {
+  assays <- tryCatch(SeuratObject::Assays(obj), error = function(e) character(0))
+  Filter(function(a) {
+    a %in% CHROMATIN_ASSAYS || inherits(tryCatch(obj[[a]], error = function(e) NULL), "ChromatinAssay")
+  }, assays)
+}
 
 #' The assay whose genes go in X: RNA (as before), else Spatial (a Visium object),
 #' else the default assay, else the first that is not antibodies.

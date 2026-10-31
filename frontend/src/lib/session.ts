@@ -69,7 +69,9 @@ export type SessionOverlay =
   // dims: the PCA pair plotted, when not the first two.
   | { type: "reliability"; embedding: string; dims?: [number, number] }
   // A gene program's usage share (Programs subtab), read again from the saved run on open.
-  | { type: "program"; index: number };
+  | { type: "program"; index: number }
+  // One gene's peak-based ATAC activity (Accessibility subtab), read again on open.
+  | { type: "atac_activity"; gene: string };
 
 /** A selection: the filter it came from, else its cells (whichever is shorter). */
 export type SessionSelection =
@@ -330,7 +332,10 @@ function parseOverlay(x: unknown, where: string): SessionOverlay {
   if (o.type === "program") {
     return { type: "program", index: number(o.index, `${where}.index`, 1, 1000, true) };
   }
-  fail(`${where}.type`, 'must be "expression", "score", "activity", "reliability" or "program"');
+  if (o.type === "atac_activity") {
+    return { type: "atac_activity", gene: text(o.gene, `${where}.gene`, { empty: false }) };
+  }
+  fail(`${where}.type`, 'must be "expression", "score", "activity", "reliability", "program" or "atac_activity"');
 }
 
 const CLIP_PRESETS = ["none", "p1", "p2", "p5", "manual"] as const;

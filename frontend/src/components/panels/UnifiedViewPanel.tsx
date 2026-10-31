@@ -48,6 +48,9 @@ import { ClonotypeSubtab } from "@/components/unified/ClonotypeSubtab";
 import { PerturbationSubtab } from "@/components/unified/PerturbationSubtab";
 import { CellOntologyCard } from "@/components/unified/CellOntologyCard";
 import { getProgramUsage, type ProgramUsage } from "@/api/programs";
+import { getAtacActivity, type AtacActivity } from "@/api/atac";
+import { activityLabel as atacActivityLabel } from "@/lib/atac";
+import { AccessibilitySubtab } from "@/components/unified/AccessibilitySubtab";
 import { usageLabel } from "@/lib/programs";
 import { ClusterReference } from "@/components/unified/ClusterReference";
 import { SplitScatterGrid } from "@/components/unified/SplitScatterGrid";
@@ -110,6 +113,7 @@ const SUBTABS = [
   { id: "deconvolution" as const, label: "Deconvolution" },
   { id: "spotcomp" as const, label: "Spot composition" },
   { id: "velocity" as const, label: "Velocity" },
+  { id: "accessibility" as const, label: "Accessibility" },
 ] as const;
 
 interface ViolinResponse {
@@ -387,7 +391,7 @@ export function UnifiedViewPanel() {
   // --- Color type from obs column ---
   const colorType = useMemo<"categorical" | "continuous">(() => {
     if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program" ||
-      scatterOverlay?.type === "density")
+      scatterOverlay?.type === "atac_activity" || scatterOverlay?.type === "density")
       return "continuous";
     if (!colorBy || !dataset) return "categorical";
     const col = dataset.obs_columns.find((c) => c.name === colorBy);
@@ -405,7 +409,7 @@ export function UnifiedViewPanel() {
 
   const categories = useMemo(() => {
     if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program" ||
-      scatterOverlay?.type === "density")
+      scatterOverlay?.type === "atac_activity" || scatterOverlay?.type === "density")
       return undefined;
     if (colorType !== "categorical" || !obsColumn?.values) return undefined;
     return obsColumn.values;
@@ -429,7 +433,7 @@ export function UnifiedViewPanel() {
     // A program's usage share is never negative: the sequential map, as for a score.
     scatterOverlay?.type === "score" || scatterOverlay?.type === "program"
       ? "score"
-      : scatterOverlay?.type === "expression" || scatterOverlay?.type === "density"
+      : scatterOverlay?.type === "expression" || scatterOverlay?.type === "density" || scatterOverlay?.type === "atac_activity"
         ? scatterOverlay.type === "expression" && scatterOverlay.layer
           ? "protein"
           : "expression"
@@ -567,6 +571,7 @@ export function UnifiedViewPanel() {
     if (activeSubtab === "protein" && dataset && !dataset.protein) setActiveSubtab("markers");
     if (activeSubtab === "perturbation" && dataset && !dataset.perturbation) setActiveSubtab("markers");
     if ((activeSubtab === "spatial" || activeSubtab === "domains") && dataset && !dataset.spatial) setActiveSubtab("markers");
+    if (activeSubtab === "accessibility" && dataset && !dataset.atac) setActiveSubtab("markers");
   }, [activeSubtab, dataset, setActiveSubtab]);
 
   // Default the expression layer to the dataset's default; re-default when the
@@ -646,6 +651,24 @@ export function UnifiedViewPanel() {
      setViolinData, setViolinTitle, openBottomPanel],
   );
 
+  // --- One gene's peak-based activity (Accessibility subtab), with its violin by group ---
+  const handleAtacActivity = useCallback(
+    (a: AtacActivity) => {
+      const label = atacActivityLabel(a.gene);
+      setOverlayValues(new Float32Array(a.values));
+      setOverlayLabel(label);
+      setScatterOverlay({ type: "atac_activity", gene: a.gene });
+      if (datasetId) setOverlayDatasetId(datasetId);
+      if (a.violin) {
+        setViolinData(a.violin);
+        setViolinTitle(label);
+        openBottomPanel();
+      }
+    },
+    [datasetId, setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId,
+     setViolinData, setViolinTitle, openBottomPanel],
+  );
+
   // --- An overlay from "Open session", drawn once this dataset is on screen ---
   const pendingOverlay = useUnifiedViewStore((s) => s.pendingOverlay);
   const setPendingOverlay = useUnifiedViewStore((s) => s.setPendingOverlay);
@@ -669,6 +692,12 @@ export function UnifiedViewPanel() {
         .catch((err) => console.error("Failed to restore the gene program overlay:", err));
       return;
     }
+    if (o.type === "atac_activity") {
+      getAtacActivity(datasetId, o.gene, groupByColumn || undefined)
+        .then(handleAtacActivity)
+        .catch((err) => console.error("Failed to restore the gene activity overlay:", err));
+      return;
+    }
     if (o.type === "activity") {
       const ref = { network: o.network, source: o.source };
       getActivityCells(datasetId, o.network, o.source)
@@ -682,7 +711,7 @@ export function UnifiedViewPanel() {
       .then((res) => handleScoreComplete(new Float32Array(res.scores), o.name, o.genes, undefined, method))
       .catch((err) => console.error("Failed to restore the gene-set overlay:", err));
   }, [pendingOverlay, datasetId, handleGeneClick, handleProteinClick, handleScoreComplete, setPendingOverlay,
-      handleProgramUsage, groupByColumn]);
+      handleProgramUsage, handleAtacActivity, groupByColumn]);
 
   // --- Clear overlay (revert to obs coloring) ---
   const handleClearOverlay = useCallback(() => {
@@ -1410,7 +1439,7 @@ export function UnifiedViewPanel() {
                   label="Overlay"
                   value={
                     scatterOverlay
-                      ? `${overlayLabel} (${scatterOverlay.type === "expression" && scatterOverlay.layer ? "protein" : scatterOverlay.type === "density" ? "Nebulosa-style" : scatterOverlay.type})`
+                      ? `${overlayLabel} (${scatterOverlay.type === "expression" && scatterOverlay.layer ? "protein" : scatterOverlay.type === "density" ? "Nebulosa-style" : scatterOverlay.type === "atac_activity" ? "peak-based" : scatterOverlay.type})`
                       : "—"
                   }
                 />
@@ -1422,6 +1451,9 @@ export function UnifiedViewPanel() {
             tabs={SUBTABS.filter(
               (tab) =>
                 (tab.id !== "protein" || dataset?.protein) &&
+                // Accessibility: only a dataset with 10x Multiome peaks has it. Peaks arrive with the
+                // upload (the feature guide says which files), so RNA-only datasets never list it.
+                (tab.id !== "accessibility" || dataset?.atac) &&
                 (tab.id !== "perturbation" || dataset?.perturbation) &&
                 ((tab.id !== "spatial" && tab.id !== "domains") || dataset?.spatial) &&
                 (tab.id !== "spotcomp" || isGridUnit(dataset?.spatial)),
@@ -1467,6 +1499,15 @@ export function UnifiedViewPanel() {
                 proteinScale={activeProtein ? colorScale : null}
                 proteinNorm={proteinNorm}
                 onProteinNormChange={setProteinNorm}
+              />
+            )}
+            {activeSubtab === "accessibility" && dataset?.atac && datasetId && (
+              <AccessibilitySubtab
+                datasetId={datasetId}
+                groupByColumn={groupByColumn}
+                setGroupByColumn={setGroupByColumn}
+                activeGene={scatterOverlay?.type === "atac_activity" ? scatterOverlay.gene : null}
+                onActivity={handleAtacActivity}
               />
             )}
             {activeSubtab === "genesets" && (

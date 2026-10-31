@@ -137,6 +137,8 @@ _RESULT_FACET_HINTS = {
         "de audit", "donor shuffle", "deconvol", "bulk", "spot composition", "spots", "spot deconv",
         "visium hd", " bins", "bin composition", "um bin", "µm bin",
         "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
+        "atac", "chromatin", "accessib", "peaks", "lsi", "tf-idf", "tfidf", "multiome", "gene activity",
+        "frip", "depth correlation",
         "spatial domain", "domains", "niche", "nhood", "stability scan", "neighbourhood enrichment",
         "neighborhood enrichment", "next to each other", "side by side", "adjacent", "colocal", "co-local",
         "velocity", "scvelo", "spliced", "unspliced", "phase portrait", "arrows", "gamma", "latent time",

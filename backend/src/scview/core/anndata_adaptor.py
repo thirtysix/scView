@@ -88,7 +88,7 @@ def _counts_matrix(adata):
 # one column per genomic window.
 # obsm keys with an X_ prefix that are not plots of the cells' expression (X_spatial: tissue
 # coordinates, served as obsm "spatial" by name, never in the embedding list).
-NOT_EMBEDDINGS = ("X_nmf_usage", "X_nmf_usage_raw", "X_cnv", "X_spatial")
+NOT_EMBEDDINGS = ("X_nmf_usage", "X_nmf_usage_raw", "X_cnv", "X_spatial", "X_lsi")
 
 
 def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
