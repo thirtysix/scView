@@ -33,10 +33,11 @@ all 50, singular values within 0.1%, depth correlations within 0.006. WNN RNA we
 (0.979 from Seurat's own PCA and LSI), the same mean 0.461. Gene activity against Signac's fragment-
 based GeneActivity on 2,001 genes: median gene r between the two 0.79; median r with RNA 0.061 against
 0.063; CD3D, MS4A1, LYZ, NKG7 top the same cell groups. Differential peaks against Signac's logistic
-regression (1,000 cells per group, as it takes about 20 min per group even so): 78, 72 and 52 of the top 100
-enriched peaks shared on three clusters, log2FC Spearman 0.95-0.99. The count is weak under either test:
-most peaks pass at this n (46,005 of 50,000 tested in the largest cluster), and a depth covariate does
-not change that: read the top of the table, not the count.
+regression, p-values to 1e-5 of a log10 unit (``core/atac_lr.py``), against which Wilcoxon's top 100 enriched
+peaks share a median of 75 across 21 clusters, and none in the two low-depth clusters, where its calls follow
+depth (37,183 of 37,367 pass, 18,223 with the covariate). In the others the count is weak under either
+test: most peaks pass at this n (44,190 and 44,972 of 50,000 in the largest cluster): read the top of the
+table, not the count.
 """
 
 from __future__ import annotations
@@ -386,8 +387,8 @@ _ACTIVITY_SECONDS_PER_VALUE = 3.0e-7
 _DA_SECONDS_PER_VALUE = 3.5e-7
 _DA_SECONDS_PER_VALUE_GROUP = 1.4e-8
 _DA_LR_SECONDS_PER_VALUE = 1.5e-7
-_DA_LR_SECONDS_PER_VALUE_GROUP = 2.0e-8
-_DA_LR_SECONDS_PER_CELL_FIT = 1.5e-7
+_DA_LR_SECONDS_PER_VALUE_GROUP = 1.0e-8
+_DA_LR_SECONDS_PER_CELL_FIT = 1.1e-7
 _RUN_FIRST_SECONDS = 20.0
 _BASE_BYTES = 600 * 1024**2  # scanpy, numba, umap-learn and pynndescent loaded
 _BLOCK_BYTES = BLOCK_VALUES * 40  # one block read, its TF-IDF copies and transposed product
@@ -427,7 +428,8 @@ def estimate_bytes(n_cells: int, n_peaks: int, *, n_lsi: int = N_LSI) -> int:
 def estimate_da_seconds(nnz: int, n_groups: int = 1, test: str = "wilcoxon", *, n_cells: int = 0, n_fits: int | None = None) -> float:
     """Differential accessibility at 2 CPUs: detection, then the batches of peaks; each group's
     bookkeeping per value. PBMC 10k, 104M values: 40 s with 3 groups tested, 76 s with 24.
-    ``lr``: detection, the score pass (per value x group), and the fits, each costing per cell."""
+    ``lr``: detection, the score pass (per value x group), and the fits, each costing per cell.
+    PBMC 10k, 21 groups, 210,000 fits: 311 s (estimate 318), 602 s at 1 CPU."""
     if test == "lr":
         fits = LRT_PER_GROUP * n_groups if n_fits is None else n_fits
         return round(5.0 + nnz * (_DA_LR_SECONDS_PER_VALUE + n_groups * _DA_LR_SECONDS_PER_VALUE_GROUP)

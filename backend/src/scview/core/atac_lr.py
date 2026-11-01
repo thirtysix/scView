@@ -10,6 +10,17 @@ likelihoods, the same p.
 Every peak of a group shares one null fit and x is sparse, so the score test of all of them is one
 pass of sparse products against fixed vectors (``score_products``). The true likelihood ratio is then
 a vectorised IRLS (``lrt_fit``) in blocks.
+
+Checked on 10x PBMC 10k multiome (11,898 cells) against Seurat 5.6.0 + Signac 1.17.1 FindMarkers: all
+cells on 50,000 peaks for two clusters and every 8th tested peak for two low-depth ones with a cell at
+44 sd of depth; 1,000 vs 1,000 cells on every peak at >= 5% (42,248-52,493) for three. r on -log10 p
+1.000000, largest difference in log10 p 5e-6 (on separated peaks; median 1e-10), the same FDR counts, top
+100 all shared. R 1,230-1,380 s per cluster on all cells; here about 100 s on the same peaks at 1 CPU.
+
+Score test against the true likelihood ratio on every peak (three clusters, all cells): r on -log10 p
+0.88-0.93, FDR 5% sets within 0.2%; the true top 1,000 all among the 10,000 highest scores, 922-1,000 among
+the 5,000 highest. Low-depth clusters: FDR 5% 18,223 and 13,300 with the mix, 18,542 and 14,976 with every
+peak fitted (``lrt_peaks`` on the request).
 """
 
 from __future__ import annotations
