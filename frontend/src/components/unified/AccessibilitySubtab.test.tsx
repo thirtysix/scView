@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { AtacDa, AtacState } from "@/api/atac";
+import type { AtacDa, AtacDaRow, AtacState } from "@/api/atac";
 import type { DatasetInfo } from "@/api/types";
 
 const api = vi.hoisted(() => ({
@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   getAtacQc: vi.fn(),
   getAtacActivity: vi.fn(),
   getLatestDa: vi.fn(),
+  getDaEstimate: vi.fn(),
   getDaPage: vi.fn(),
   attachAtacMetrics: vi.fn(),
   runAtac: vi.fn(),
@@ -87,6 +88,7 @@ beforeEach(() => {
   api.getAtacQc.mockResolvedValue({ columns: [{ key: "atac_total_counts", label: "Peak counts per cell", values: [1, 2, 3] }],
                                     n_cells: 3, groups: ["a", "b", "a"], group_order: ["a", "b"], column: "cell_type" });
   api.getLatestDa.mockResolvedValue(null);
+  api.getDaEstimate.mockResolvedValue(null);
 });
 
 describe("AccessibilitySubtab", () => {
@@ -170,7 +172,7 @@ describe("AccessibilitySubtab", () => {
     renderTab();
     await screen.findByTestId("atac-plan");
     fireEvent.click(screen.getByRole("button", { name: "Find differential peaks" }));
-    await waitFor(() => expect(api.runAtacDa).toHaveBeenCalledWith("d1", { column: "cell_type" }, expect.anything()));
+    await waitFor(() => expect(api.runAtacDa).toHaveBeenCalledWith("d1", { column: "cell_type", test: "wilcoxon" }, expect.anything()));
     const table = await screen.findByTestId("atac-da");
     expect(table.textContent).toContain("chr1:10-20");
     expect(table.textContent).toContain("CD3D");
@@ -178,6 +180,40 @@ describe("AccessibilitySubtab", () => {
     expect(table.textContent).toContain("promoter");
     expect(table.textContent).toContain("T (20 at FDR 5%)");
     expect(screen.getByRole("link", { name: "CSV" }).getAttribute("href")).toContain("/atac/differential/abc/csv");
+  });
+
+  it("runs the chosen test, shows its estimate, and names it with the fit counts", async () => {
+    api.getDaEstimate.mockImplementation((_d: string, _c: string, test: string) => Promise.resolve({
+      column: "cell_type", test, n_groups: 3, n_cells: 100, estimate_seconds: test === "lr" ? 300 : 40, estimate_bytes: 2 * 1024 ** 3,
+    }));
+    api.runAtacDa.mockResolvedValue({
+      ...DA, test: "lr", n_tested: { T: 500, B: 400 }, n_significant: { T: 400, B: 2 }, method: "Logistic regression.",
+      n_fit: { T: { score: 400, lrt: 95, lrt_separated: 5, score_no_fit: 0, untestable: 0 }, B: { score: 390, lrt: 10, lrt_separated: 0, score_no_fit: 0, untestable: 0 } },
+      rows: { T: [{ ...(DA.rows.T?.[0] as AtacDaRow), fit: "lrt_separated" }], B: [] },
+    });
+    renderTab();
+    await screen.findByTestId("atac-plan");
+    expect((await screen.findByTestId("atac-da-estimate")).textContent).toContain("Wilcoxon");
+    fireEvent.change(screen.getByLabelText("Test"), { target: { value: "lr" } });
+    await waitFor(() => expect(screen.getByTestId("atac-da-estimate").textContent).toContain("Logistic regression: about 5 min"));
+    fireEvent.click(screen.getByRole("button", { name: "Find differential peaks" }));
+    await waitFor(() => expect(api.runAtacDa).toHaveBeenCalledWith("d1", { column: "cell_type", test: "lr" }, expect.anything()));
+    const table = await screen.findByTestId("atac-da");
+    expect(table.textContent).toContain("LRT, separated");
+    expect(table.textContent).toContain("covariate");
+    expect(table.textContent).toContain("5 peaks separate");
+    expect(table.textContent).toContain("read the top of the table");
+    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "B" } });
+    expect(screen.getByTestId("atac-da").textContent).not.toContain("read the top of the table");
+  });
+
+  it("reads a result saved before the choice as a Wilcoxon, without the fit column", async () => {
+    api.getLatestDa.mockResolvedValue(DA);
+    renderTab();
+    const table = await screen.findByTestId("atac-da");
+    expect(table.textContent).toContain("Wilcoxon on TF-IDF, no covariate");
+    expect(table.textContent).not.toContain("p from");
+    expect(table.textContent).not.toContain("read the top of the table");
   });
 
   it("cancels a running stream: nothing saved is said", async () => {

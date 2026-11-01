@@ -427,11 +427,13 @@ def _add_wnn(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
 
 def _add_atac(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """10x Multiome ATAC (core/atac.py): the import, LSI and its depth choice, gene activity, WNN
-    weights; nothing on a dataset without ATAC."""
+    weights, the last differential peaks and their test; nothing on a dataset without ATAC."""
     from scview.core import atac
 
     try:
         a_lines, a_detail = atac.grounding_lines(adaptor.adata)
+        if a_lines:
+            a_lines += atac.da_grounding_lines(adaptor)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("assistant: ATAC failed: %s", exc)
         return

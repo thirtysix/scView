@@ -13,7 +13,7 @@ import pytest
 import scipy.sparse as sp
 
 from scview.api.v1 import atac as atac_api
-from scview.core import atac, atac_import, gene_annotation, large_layout, modality_store, provenance
+from scview.core import atac, atac_import, gene_annotation, large_layout, modality_store, provenance, results_store
 from tests import multiome_fixture as mf
 from tests.test_hvg_sensitivity import _register
 
@@ -308,8 +308,6 @@ async def test_a_run_that_cannot_fit_is_refused_before_it_starts(client, dataset
 
 
 async def test_a_differential_result_comes_back_from_the_results_store(client, dataset_manager):
-    from scview.core import results_store
-
     did, *_ = _register_multiome(dataset_manager)
     r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group"})
     result = next(d for e, d in _events(r.text) if e == "result")
@@ -371,5 +369,78 @@ async def test_a_large_dataset_runs_from_the_store_without_reading_x(client, dat
     assert [e for e, _ in _events(r.text)][-1] == "complete"
     r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group"})
     assert [e for e, _ in _events(r.text)][-1] == "complete"
+    r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group", "test": "lr"})
+    assert [e for e, _ in _events(r.text)][-1] == "complete"
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.is_large and provenance.read_provenance(adaptor.adata)["history"][-1]["step"] == "atac_differential"
     r = await client.get(f"{API}/datasets/{did}/atac/activity", params={"gene": "GENEA"})
     assert r.status_code == 200 and len(r.json()["values"]) == 120
+
+
+async def test_differential_lr_says_its_test_keeps_fit_counts_and_a_replay_step(client, dataset_manager, annotated):
+    did, *_ = _register_multiome(dataset_manager)
+    bad = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group", "test": "t"})
+    assert bad.status_code == 422
+    r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group", "test": "lr"})
+    assert r.status_code == 200, r.text
+    events = _events(r.text)
+    start = next(d for e, d in events if e == "start")
+    assert start["test"] == "lr" and start["estimate_seconds"] > 0 and start["estimate_bytes"] > 0
+    steps = {d["step"] for e, d in events if e == "progress"}
+    assert {"detection", "score", "fit"} <= steps
+    result = next(d for e, d in events if e == "result")
+    assert result["test"] == "lr" and result["params"]["test"] == "lr" and result["params"]["latent"]
+    assert "Logistic regression" in result["method"] and "covariate" in result["method"]
+    assert sum(result["n_fit"]["A"].values()) >= result["n_tested"]["A"] > 0
+    assert result["rows"]["A"][0]["fit"] in ("lrt", "lrt_separated")
+    assert did not in atac_api._running
+    csv = pd.read_csv(io.StringIO((await client.get(f"{API}/datasets/{did}/atac/differential/{result['id']}/csv")).text))
+    assert "fit" in csv.columns
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    last = provenance.read_provenance(adaptor.adata)["history"][-1]
+    assert last["step"] == "atac_differential" and last["params"]["test"] == "lr" and last["params"]["column"] == "group"
+    results_store.flush()
+    atac._DA_LAST.clear()  # from the results store: the fit column and its counts come back
+    latest = (await client.get(f"{API}/datasets/{did}/atac/differential")).json()
+    assert latest["id"] == result["id"] and latest["test"] == "lr" and latest["n_fit"] == result["n_fit"]
+    assert latest["rows"]["A"][0]["fit"] == result["rows"]["A"][0]["fit"]
+
+
+async def test_differential_wilcoxon_says_so_and_records_its_step_too(client, dataset_manager, annotated):
+    did, *_ = _register_multiome(dataset_manager)
+    r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group"})
+    result = next(d for e, d in _events(r.text) if e == "result")
+    assert result["test"] == "wilcoxon" and result["n_fit"] is None and "fit" not in result["rows"]["A"][0]
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert provenance.read_provenance(adaptor.adata)["history"][-1]["params"]["test"] == "wilcoxon"
+
+
+async def test_differential_estimate_names_each_test(client, dataset_manager):
+    did, *_ = _register_multiome(dataset_manager)
+    url = f"{API}/datasets/{did}/atac/differential-estimate"
+    w = (await client.get(url, params={"column": "group"})).json()
+    lr = (await client.get(url, params={"column": "group", "test": "lr"})).json()
+    assert w["test"] == "wilcoxon" and lr["test"] == "lr" and lr["n_groups"] == 2 and lr["n_cells"] == 80
+    assert lr["estimate_seconds"] >= w["estimate_seconds"] and lr["estimate_bytes"] > 0
+    assert (await client.get(url, params={"column": "nope"})).status_code == 404
+    assert (await client.get(url, params={"column": "group", "test": "t"})).status_code == 422
+
+
+async def test_differential_cells_changed_mid_run_saves_nothing(client, dataset_manager, annotated, monkeypatch):
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+
+    did, *_ = _register_multiome(dataset_manager)
+    real = atac.iter_differential
+
+    def changed(*a, **kw):
+        for item in real(*a, **kw):
+            if item["type"] == "result":
+                monkeypatch.setattr(AnnDataAdaptor, "cells_fingerprint", lambda _self: "other")
+            yield item
+
+    monkeypatch.setattr(atac, "iter_differential", changed)
+    r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group", "test": "lr"})
+    last = _events(r.text)[-1]
+    assert last[0] == "error" and "cells changed" in last[1]["error"]
+    assert did not in atac_api._running
+    assert (await client.get(f"{API}/datasets/{did}/atac/differential")).json() is None
