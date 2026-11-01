@@ -1285,7 +1285,7 @@ def doublet_plan(adata, params=None) -> DoubletPlan | None:
     from scview.core import doublets, scrublet_lean, spatial
     from scview.core.pipeline import StepSkipped, _doublet_matrix
 
-    if spatial.is_spot_data(adata):  # spots and bins: the step is skipped, so it costs nothing
+    if _skips_doublets(adata):  # spots, bins, panels, Visium HD cells: no step, so no cost
         return DoubletPlan([])
     try:
         ch = doublets.channels(adata, _p(params, "doublet_channel_key", "") or None)

@@ -329,7 +329,7 @@ export function SpotCompositionSubtab() {
                 {check.shared_genes_via ? `(matching ${check.shared_genes_via})` : "by name"}; reference {check.species}, this
                 dataset {check.dataset_species}.
                 {shown?.estimate &&
-                  ` Needs ${aboutGb(shown.estimate.peak_bytes)}, ${shown.estimate.note} (${shown.estimate.seconds_range[0]}-${shown.estimate.seconds_range[1]} s).`}
+                  ` Needs ${aboutGb(shown.estimate.peak_bytes)}, ${shown.estimate.note} (${Math.round(shown.estimate.seconds_range[0])}-${Math.round(shown.estimate.seconds_range[1])} s).`}
               </p>
               {check.estimate?.large_reference && (
                 <p data-testid="spot-large-reference">

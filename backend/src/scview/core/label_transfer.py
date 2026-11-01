@@ -545,7 +545,8 @@ def match_genes(ref_var: pd.DataFrame, query_var: pd.DataFrame) -> GeneMatch:
                 qmap = new
             renamed = f"{'the reference' if reset.sample == 'reference' else 'this dataset'} " \
                       f"by its var '{reset.via_column}'"
-    common = [g for g in qmap.index if g in set(rmap.index)]
+    in_ref = set(rmap.index)
+    common = [g for g in qmap.index if g in in_ref]
     return GeneMatch(shared=[str(qmap[g]) for g in common], ref_names=[str(rmap[g]) for g in common],
                      n_ref=len(ref_names), n_query=len(query_names), renamed=renamed,
                      message=recon.message if recon is not None else "")
