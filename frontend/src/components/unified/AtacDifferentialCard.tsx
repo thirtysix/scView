@@ -29,7 +29,7 @@ export function AtacDifferentialCard({
   const live = run.datasetId === datasetId && run.running;
   const elsewhere = !live && !!state.running;
   const [column, setColumn] = useState(defaultColumn);
-  const [test, setTest] = useState<AtacDaTest>("wilcoxon");
+  const [test, setTest] = useState<AtacDaTest>("lr");
   const [estimate, setEstimate] = useState<AtacDaEstimate | null>(null);
   const [group, setGroup] = useState("");
   const [rows, setRows] = useState<AtacDaRow[] | null>(null);
@@ -96,10 +96,11 @@ export function AtacDifferentialCard({
       <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
         <span>Differential peaks</span>
         <InfoTip label="About differential peaks" width={320}>
-          Each group against the rest, for peaks open in at least 5% of either; FDR within each group. Wilcoxon: rank-sum on TF-IDF, no
-          covariate, the fast default. Logistic regression: what Signac recommends (Seurat&rsquo;s LR test, group ~ peak + the
-          cell&rsquo;s total counts against group ~ total counts). Every peak gets a score test against one fit per group, and the
-          10,000 highest of each group a true likelihood ratio; it costs minutes per column, and the line below says how many.
+          Each group against the rest, for peaks open in at least 5% of either; FDR within each group. Logistic regression, the default:
+          what Signac recommends (Seurat&rsquo;s LR test, group ~ peak + the cell&rsquo;s total counts against group ~ total counts).
+          Every peak gets a score test against one fit per group, and the 10,000 highest of each group a true likelihood ratio; it costs
+          minutes per column, and the line below says how many. Wilcoxon: rank-sum on TF-IDF, no covariate, faster, but in a low-depth
+          group its calls follow depth.
         </InfoTip>
       </h4>
       <div className="flex flex-wrap items-center gap-1.5">
@@ -115,8 +116,8 @@ export function AtacDifferentialCard({
           Test
           <select value={test} onChange={(e) => setTest(e.target.value as AtacDaTest)}
                   className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700">
-            <option value="wilcoxon">Wilcoxon (fast)</option>
             <option value="lr">Logistic regression (depth covariate)</option>
+            <option value="wilcoxon">Wilcoxon (fast, no covariate)</option>
           </select>
         </label>
         {!live && (

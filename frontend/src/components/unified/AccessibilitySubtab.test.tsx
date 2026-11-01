@@ -172,7 +172,7 @@ describe("AccessibilitySubtab", () => {
     renderTab();
     await screen.findByTestId("atac-plan");
     fireEvent.click(screen.getByRole("button", { name: "Find differential peaks" }));
-    await waitFor(() => expect(api.runAtacDa).toHaveBeenCalledWith("d1", { column: "cell_type", test: "wilcoxon" }, expect.anything()));
+    await waitFor(() => expect(api.runAtacDa).toHaveBeenCalledWith("d1", { column: "cell_type", test: "lr" }, expect.anything()));
     const table = await screen.findByTestId("atac-da");
     expect(table.textContent).toContain("chr1:10-20");
     expect(table.textContent).toContain("CD3D");
@@ -193,7 +193,9 @@ describe("AccessibilitySubtab", () => {
     });
     renderTab();
     await screen.findByTestId("atac-plan");
-    expect((await screen.findByTestId("atac-da-estimate")).textContent).toContain("Wilcoxon");
+    expect((await screen.findByTestId("atac-da-estimate")).textContent).toContain("Logistic regression: about 5 min");
+    fireEvent.change(screen.getByLabelText("Test"), { target: { value: "wilcoxon" } });
+    await waitFor(() => expect(screen.getByTestId("atac-da-estimate").textContent).toContain("Wilcoxon"));
     fireEvent.change(screen.getByLabelText("Test"), { target: { value: "lr" } });
     await waitFor(() => expect(screen.getByTestId("atac-da-estimate").textContent).toContain("Logistic regression: about 5 min"));
     fireEvent.click(screen.getByRole("button", { name: "Find differential peaks" }));
