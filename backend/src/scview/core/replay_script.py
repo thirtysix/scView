@@ -1379,17 +1379,62 @@ def _atac_helper() -> str:
     computes them as scView did; the peaks are read again from the input."""
     import inspect
 
-    from scview.core import atac
+    from scview.core import atac, atac_lr
 
-    lines = ["import gzip", "import os", "import re", ""]
+    lines = ["import gzip", "import os", "import re", "from concurrent.futures import ThreadPoolExecutor",
+             "from scipy.special import expit, ndtr", ""]
+    lines += [f"{name} = {_lit(getattr(atac_lr, name))}" for name in atac_lr.REPLAY_CONSTANTS]
     lines += [f"{name} = {_lit(getattr(atac, name))}" for name in atac.REPLAY_CONSTANTS]
-    for obj in atac.REPLAY_CODE:
+    for obj in (*atac_lr.REPLAY_CODE, *atac.REPLAY_CODE):
         lines += ["", "", inspect.getsource(obj).rstrip("\n")]
     lines += ["", "", _ATAC_READERS.strip("\n")]
     return "\n".join(lines) + "\n"
 
 
 _ATAC_READERS = '''
+class AtacError(ValueError):
+    pass
+
+
+class AtacCancelled(Exception):
+    pass
+
+
+class AtacCounts:
+    """The counts in memory, read as iter_differential reads the store: blocks of cells."""
+
+    def __init__(self, counts):
+        self.counts = counts
+        self.n_vars = counts.shape[1]
+
+    def iter_blocks(self, _matrix, rows, values):
+        ptr = self.counts.indptr
+        lo = 0
+        while lo < len(rows):
+            hi = lo + 1
+            while hi < len(rows) and ptr[rows[hi] + 1] - ptr[rows[lo]] <= values:
+                hi += 1
+            yield np.arange(lo, hi), self.counts[rows[lo:hi]]
+            lo = hi
+
+
+def atac_differential(counts, peak_names, labels, settings):
+    """iter_differential on the counts in memory: a table of each chosen group vs the rest."""
+    missing = pd.isna(labels)
+    every = sorted({str(x) for x in labels[~missing]})
+    code = {g: i for i, g in enumerate(every)}
+    codes = np.array([-1 if m else code[str(x)] for x, m in zip(labels, missing)], dtype=np.int32)
+    chosen = settings.get("groups") or every
+    for item in iter_differential(AtacCounts(counts), np.arange(counts.shape[0]), codes, every, chosen,
+                                  test=settings["test"], min_pct=settings["min_pct"], max_peaks=settings["max_peaks"],
+                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP)):
+        if item["type"] == "result":
+            frame = item["frame"]
+            frame.insert(1, "peak", np.asarray(peak_names, dtype=object)[frame["peak_index"].to_numpy()])
+            return frame.drop(columns="peak_index")
+    raise AtacError("no result")
+
+
 def atac_peaks(path):
     """The input's peak counts as a cells x peaks CSR, with peak and cell names: a 10x file's or
     an .h5ad's Peaks features, or an .h5mu's atac modality (its counts layer when it has one)."""
@@ -3045,6 +3090,31 @@ adata.obsp["wnn_atac_connectivities"] = conn
 '''
 
 
+_ATAC_DIFFERENTIAL_CODE = '''
+peaks, peak_names, peak_cells = atac_peaks(INPUT)
+counts = peaks[pd.Index(peak_cells).get_indexer(adata.obs_names)].tocsr()
+da_table = atac_differential(counts, peak_names, adata.obs[ATAC_DA["column"]].astype(object).to_numpy(), ATAC_DA)
+adata.uns["atac_differential_" + ATAC_DA["test"]] = da_table
+'''
+
+
+def _atac_differential(p: dict, ctx: _Ctx) -> Snippet:
+    """Differential peaks (core/atac.py, iter_differential; a result, in ``uns``): the same code
+    on the input's peaks read again."""
+    if not p.get("column") or p.get("test") not in ("wilcoxon", "lr"):
+        return Snippet(NOT_REPLAYABLE, ["# Differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
+                       "settings not recorded")
+    _need(ctx, "atac")
+    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks")
+    settings = {x: p.get(x) for x in keys if p.get(x) is not None}
+    return Snippet(EXACT, [
+        f"# Differential peaks by {comment_text(p.get('column'), 80)}, {comment_text(p.get('test'), 12)}: each group vs "
+        "the rest, a table in uns.",
+        f"ATAC_DA = {_lit(settings)}",
+        *_block(_ATAC_DIFFERENTIAL_CODE),
+    ])
+
+
 def _atac_wnn(p: dict, ctx: _Ctx) -> Snippet:
     """WNN RNA + ATAC (core/atac.py with core/wnn.py's FindMultiModalNeighbors)."""
     if any(not p.get(x) for x in ("rep", "n_pcs_rna", "lsi_dims")):
@@ -3510,6 +3580,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "wnn": _wnn,
     "atac_lsi": _atac_lsi,
     "atac_wnn": _atac_wnn,
+    "atac_differential": _atac_differential,
     "spot_deconvolution": _spot_deconvolution,
     "velocity": _velocity,
     "spatial_domains": _spatial_domains,

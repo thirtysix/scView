@@ -20,9 +20,10 @@ GeneActivity: reads in a gene but outside every called peak are not counted. Sto
 barcode in the store ``atac_gene_activity`` (cells x genes, matrix ``gene_activity``) and by
 gene in ``atac_gene_activity_by_gene``, whose rows are genes, so one gene's overlay reads one row.
 
-Differential accessibility: Wilcoxon rank-sum on TF-IDF for peaks detected in >= 5% of the
-group or the rest, BH FDR within each group. Signac recommends logistic regression with the
-cell's total as latent covariate, about 144k fits for each group; this is the fast default.
+Differential accessibility, each group vs the rest, peaks detected in >= 5% of the group or the rest,
+BH FDR within each group. Wilcoxon rank-sum on TF-IDF, the fast default, or logistic regression with
+the cell's total as covariate, what Signac recommends (``core/atac_lr.py``, Seurat's LR test: a score
+test of every peak in one pass, a true likelihood ratio for the 10,000 highest of each group).
 Peak context: nearest gene by TSS, distance, class (promoter: within 2 kb of a TSS; gene
 body; distal).
 
@@ -33,9 +34,9 @@ all 50, singular values within 0.1%, depth correlations within 0.006. WNN RNA we
 based GeneActivity on 2,001 genes: median gene r between the two 0.79; median r with RNA 0.061 against
 0.063; CD3D, MS4A1, LYZ, NKG7 top the same cell groups. Differential peaks against Signac's logistic
 regression (1,000 cells per group, as it takes about 20 min per group even so): 78, 72 and 52 of the top 100
-enriched peaks shared on three clusters, log2FC Spearman 0.95-0.99. Wilcoxon has no depth
-covariate and calls many peaks at this n (46,005 of 50,000 tested in the largest cluster): read the top
-of the table, not the count.
+enriched peaks shared on three clusters, log2FC Spearman 0.95-0.99. The count is weak under either test:
+most peaks pass at this n (46,005 of 50,000 tested in the largest cluster), and a depth covariate does
+not change that: read the top of the table, not the count.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +60,17 @@ import scipy.sparse as sp
 from scipy.special import ndtr
 
 from scview.core import atac_import, modality_store, wnn
+from scview.core.atac_lr import (
+    FIT_NOT_CONVERGED,
+    FIT_OK,
+    FIT_SEPARATED,
+    logistic_null,
+    lrt_fit,
+    null_vectors,
+    score_products,
+    score_statistic,
+    signed_root_p,
+)
 from scview.core.modality_store import ModalityStore
 
 logger = logging.getLogger(__name__)
@@ -109,6 +122,15 @@ PROMOTER = 2_000
 MIN_PCT = 0.05
 MAX_PEAKS_PER_GROUP = 50_000
 KEEP_PER_GROUP = 5_000
+# Peaks per group that get the true likelihood ratio; the others keep their score test. PBMC 10k, every one of
+# 50,000 peaks fitted on three clusters: at 10,000 the true top 1,000 all get it, at 5,000 only 922 in one.
+LRT_PER_GROUP = 2 * KEEP_PER_GROUP
+LR_BLOCK_VALUES = 400_000  # cells x peaks in one IRLS block: stays in cache, a third faster than 3M, about 20 MB
+LR_THREADS = 2
+LR_MIN_BLOCK, LR_MAX_BLOCK = 8, 256
+# What each tested peak's p came from, per group (``fit`` in the result table).
+FIT_SCORE, FIT_LRT, FIT_LRT_SEPARATED, FIT_SCORE_NO_FIT, FIT_UNTESTABLE = 0, 1, 2, 3, 4
+FIT_NAMES = ("score", "lrt", "lrt_separated", "score_no_fit", "untestable")
 MAX_GROUPS = 100
 MIN_GROUP_CELLS = 3
 BLOCK_VALUES = 4_000_000  # stored values per block: about 48 MB of data + indices
@@ -363,6 +385,9 @@ _PRODUCT_SECONDS_PER_VALUE_DIM = 0.9e-9
 _ACTIVITY_SECONDS_PER_VALUE = 3.0e-7
 _DA_SECONDS_PER_VALUE = 3.5e-7
 _DA_SECONDS_PER_VALUE_GROUP = 1.4e-8
+_DA_LR_SECONDS_PER_VALUE = 1.5e-7
+_DA_LR_SECONDS_PER_VALUE_GROUP = 2.0e-8
+_DA_LR_SECONDS_PER_CELL_FIT = 1.5e-7
 _RUN_FIRST_SECONDS = 20.0
 _BASE_BYTES = 600 * 1024**2  # scanpy, numba, umap-learn and pynndescent loaded
 _BLOCK_BYTES = BLOCK_VALUES * 40  # one block read, its TF-IDF copies and transposed product
@@ -399,15 +424,29 @@ def estimate_bytes(n_cells: int, n_peaks: int, *, n_lsi: int = N_LSI) -> int:
     return int(_BASE_BYTES + n * _KEPT_BYTES_PER_CELL + max(svd, umap, leiden, BUCKET_VALUES * 12))
 
 
-def estimate_da_seconds(nnz: int, n_groups: int = 1) -> float:
+def estimate_da_seconds(nnz: int, n_groups: int = 1, test: str = "wilcoxon", *, n_cells: int = 0, n_fits: int | None = None) -> float:
     """Differential accessibility at 2 CPUs: detection, then the batches of peaks; each group's
-    bookkeeping per value. PBMC 10k, 104M values: 40 s with 3 groups tested, 76 s with 24."""
+    bookkeeping per value. PBMC 10k, 104M values: 40 s with 3 groups tested, 76 s with 24.
+    ``lr``: detection, the score pass (per value x group), and the fits, each costing per cell."""
+    if test == "lr":
+        fits = LRT_PER_GROUP * n_groups if n_fits is None else n_fits
+        return round(5.0 + nnz * (_DA_LR_SECONDS_PER_VALUE + n_groups * _DA_LR_SECONDS_PER_VALUE_GROUP)
+                     + fits * max(n_cells, 1) * _DA_LR_SECONDS_PER_CELL_FIT, 0)
     return round(5.0 + nnz * (_DA_SECONDS_PER_VALUE + n_groups * _DA_SECONDS_PER_VALUE_GROUP), 0)
 
 
-def estimate_da_bytes(n_peaks: int, n_groups: int) -> int:
+def estimate_da_bytes(n_peaks: int, n_groups: int, test: str = "wilcoxon", *, n_cells: int = 0) -> int:
     """Per-group detection (groups x peaks of integers, twice for its shares), z, p and fold
-    change, and one batch of peaks being ranked."""
+    change, and one batch of peaks being ranked. ``lr``: then the larger of the score pass (five
+    arrays of peaks x groups, a block's products as large beside them) and a batch of peaks read
+    with the blocks of cells being fitted in each thread."""
+    if test == "lr":
+        n = max(n_cells, 1)
+        width = max(LR_MIN_BLOCK, min(LR_MAX_BLOCK, LR_BLOCK_VALUES // n))
+        vectors = n * n_groups * 8
+        score = n_peaks * n_groups * (5 + 5) * 8 + vectors * 4
+        batch = DA_BATCH_VALUES * 44 + vectors + n * width * 6 * 8 * LR_THREADS
+        return int(_BASE_BYTES + n_peaks * n_groups * (8 + 8 + 8 + 8 + 4 + 8 + 4 + 1 + 1) + max(score, batch))
     # A batch at its peak: three columns of 4 B concatenated from their parts, a sort order (8 B),
     # the sorted copies beside the columns they replace.
     return int(_BASE_BYTES + n_peaks * n_groups * (8 + 8 + 8 + 8 + 4 + 8 + 4 + 1) + DA_BATCH_VALUES * 44)
@@ -879,8 +918,6 @@ def activity_gene(adata, data_dir: str | Path, dataset_id: str, gene: str) -> di
     return {"gene": gene, "counts": counts, "values": values.astype(np.float32), "caption": ACTIVITY_CAPTION}
 
 
-REPLAY_CONSTANTS = ("LANCZOS_BLOCK", "LANCZOS_STEPS", "SEED", "SCALE_FACTOR")
-REPLAY_CODE = (top_peaks, block_lanczos_svd, scaled_embedding, depth_correlation, gene_regions, overlap_matrix)
 
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1035,7 @@ class DaResult:
     method: str
     cells: str
     created_at: str
+    n_fit: dict[str, dict[str, int]] | None = None  # lr: per group, how many peaks got each kind of p
 
 
 def group_codes(adata, column: str, groups: list[str] | None = None) -> tuple[np.ndarray, list[str], list[str]]:
@@ -1022,13 +1060,112 @@ def group_codes(adata, column: str, groups: list[str] | None = None) -> tuple[np
     return codes, every, chosen
 
 
-def iter_differential(store: ModalityStore, rows: np.ndarray, codes: np.ndarray, every: list[str], chosen: list[str],
-                      *, min_pct: float = MIN_PCT, max_peaks: int = MAX_PEAKS_PER_GROUP,
-                      stop: Callable[[], bool] = lambda: False, batch_values: int = DA_BATCH_VALUES
-                      ) -> Iterator[dict[str, Any]]:
-    """Wilcoxon on TF-IDF, each chosen group vs every other labelled cell, as a generator
-    (``progress`` events, then ``{"type": "result", "frame": ..., "n_tested": ...}``): one pass
-    for detection, then one per batch of peaks (``batch_values`` stored values)."""
+def _iter_lr(store, rows, codes, tested_codes, tested, detect, idf, cell_total, z, p, fc, fit, *, stop, batch_values,
+             lrt_per_group):
+    """Seurat's LR test with the cell's total as the latent (``core/atac_lr.py``): one pass of
+    sparse products gives every tested peak's score test against its group's one null fit, then
+    the true likelihood ratio replaces it for the ``lrt_per_group`` highest of each group,
+    ``batch_values`` stored values of peaks at a time. Fills ``z``, ``p``, ``fc`` and ``fit``."""
+    labelled = codes >= 0
+    n_labelled = int(labelled.sum())
+    latent = cell_total[labelled]
+    if latent.std() == 0:
+        raise AtacError("Every cell has the same total peak count, so it cannot be a covariate. Use Wilcoxon.")
+    zs = (latent - latent.mean()) / latent.std()
+    n_vars, k = store.n_vars, len(tested_codes)
+    y = np.column_stack([codes[labelled] == c for c in tested_codes]).astype(np.float64)
+    nulls = [logistic_null(y[:, i], zs) if y[:, i].sum() >= MIN_GROUP_CELLS else None for i in range(k)]
+    usable = [i for i in range(k) if nulls[i] is not None and nulls[i][2]]
+    residual, w, wz = np.zeros((rows.size, k)), np.zeros((rows.size, k)), np.zeros((rows.size, k))
+    inverse = {}
+    for i in usable:
+        residual[labelled, i], w[labelled, i], wz[labelled, i], inverse[i] = null_vectors(y[:, i], zs, nulls[i][0])
+    in_group = np.zeros((rows.size, k + 1))  # the last column: every labelled cell
+    in_group[labelled, :k] = y
+    in_group[labelled, k] = 1.0
+    u, a, b, c, sums = (np.zeros((n_vars, n)) for n in (k, k, k, k, k + 1))
+    yield {"type": "progress", "step": "score", "message": f"Score test of every peak in {k} group{'s' if k != 1 else ''}"}
+    for pos, block in store.iter_blocks(MATRIX, rows, BLOCK_VALUES):
+        if stop():
+            raise AtacCancelled()
+        scaled = block.data / cell_total[np.repeat(pos, np.diff(block.indptr))] * SCALE_FACTOR * idf[block.indices]
+        values = sp.csr_matrix((np.log1p(scaled), block.indices, block.indptr), shape=block.shape)
+        parts = score_products(values, residual[pos], w[pos], wz[pos])
+        for total, part in zip((u, a, b, c), parts):
+            total += part
+        # Seurat's FoldChange on the data slot: means of expm1(TF-IDF).
+        sums += np.asarray(sp.csr_matrix((scaled, block.indices, block.indptr), shape=block.shape).T @ in_group[pos])
+    del residual, w, wz, in_group
+    picks = {}
+    for i, code in enumerate(tested_codes):
+        ok = np.flatnonzero(tested[code])
+        n_in = y[:, i].sum()
+        fc[code, ok] = np.log2((sums[ok, i] / max(n_in, 1) + 1) / ((sums[ok, k] - sums[ok, i]) / max(n_labelled - n_in, 1) + 1))
+        if i not in inverse:
+            fit[code, ok] = FIT_UNTESTABLE
+            p[code, ok] = np.nan
+            continue
+        stat, _v = score_statistic(u[ok, i], a[ok, i], b[ok, i], c[ok, i], inverse[i])
+        z[code, ok], p[code, ok] = signed_root_p(stat, u[ok, i])
+        fit[code, ok[np.isnan(stat)]] = FIT_UNTESTABLE
+        top = ok[np.argsort(-np.nan_to_num(stat), kind="stable")[:lrt_per_group]]
+        picks[i] = top[fit[code, top] != FIT_UNTESTABLE]
+    del u, a, b, c, sums
+    union = np.unique(np.concatenate(list(picks.values()))) if picks else np.zeros(0, dtype=np.int64)
+    sizes = detect.sum(axis=0)[union]
+    batches = np.split(union, np.flatnonzero(np.diff((np.cumsum(sizes) // max(1, batch_values)))) + 1) if union.size else []
+    labelled_at = np.cumsum(labelled) - 1
+    width = int(max(LR_MIN_BLOCK, min(LR_MAX_BLOCK, LR_BLOCK_VALUES // max(1, n_labelled))))
+    n_fits = sum(x.size for x in picks.values())
+    done = 0
+    with ThreadPoolExecutor(LR_THREADS) as pool:  # numpy leaves the GIL for each array operation
+        for bn, peaks in enumerate(batches):
+            where = np.full(n_vars, -1, dtype=np.int32)
+            where[peaks] = np.arange(peaks.size, dtype=np.int32)
+            cols, cells, vals = [], [], []
+            for pos, block in store.iter_blocks(MATRIX, rows, BLOCK_VALUES):
+                if stop():
+                    raise AtacCancelled()
+                mapped = where[block.indices]
+                per_cell = np.repeat(pos, np.diff(block.indptr))
+                keep = (mapped >= 0) & labelled[per_cell]
+                per_cell = per_cell[keep]
+                cols.append(mapped[keep])
+                cells.append(labelled_at[per_cell].astype(np.int32))
+                vals.append(np.log1p(block.data[keep] / cell_total[per_cell] * SCALE_FACTOR * idf[peaks[mapped[keep]]]))
+            x = sp.csc_matrix((np.concatenate(vals) if vals else np.zeros(0), (np.concatenate(cells) if cells else np.zeros(0, np.int32),
+                               np.concatenate(cols) if cols else np.zeros(0, np.int32))), shape=(n_labelled, peaks.size))
+            del cols, cells, vals
+            for i, code in enumerate(tested_codes):
+                mine = picks.get(i)
+                if mine is None:
+                    continue
+                at = where[mine]
+                at = at[at >= 0]
+                parts = [at[lo:lo + width] for lo in range(0, at.size, width)]
+
+                def fit_part(part, i=i):
+                    return lrt_fit(x[:, part].toarray(), y[:, i], zs, nulls[i][0], nulls[i][1])
+
+                for start in range(0, len(parts), LR_THREADS):
+                    if stop():
+                        raise AtacCancelled()
+                    chunk = parts[start:start + LR_THREADS]
+                    for part, (lr, gamma, status) in zip(chunk, pool.map(fit_part, chunk)):
+                        here = peaks[part]
+                        settled = status != FIT_NOT_CONVERGED  # a fit that did not settle keeps its score test
+                        z[code, here[settled]], p[code, here[settled]] = signed_root_p(lr[settled], gamma[settled])
+                        fit[code, here] = np.where(status == FIT_OK, FIT_LRT, np.where(status == FIT_SEPARATED, FIT_LRT_SEPARATED, FIT_SCORE_NO_FIT))
+                        done += part.size
+                yield {"type": "progress", "step": "fit", "batch": bn + 1, "batches": len(batches), "done": done, "total": n_fits,
+                       "message": f"Likelihood ratio, {done:,} of {n_fits:,} fits"}
+
+
+def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min_pct=MIN_PCT, max_peaks=MAX_PEAKS_PER_GROUP,
+                      stop=lambda: False, batch_values=DA_BATCH_VALUES, lrt_per_group=LRT_PER_GROUP):
+    """Each chosen group vs every other labelled cell, as a generator (``progress`` events, then
+    ``{"type": "result", "frame": ..., "n_tested": ...}``): one pass for detection, then, for
+    ``wilcoxon``, one per batch of peaks (``batch_values`` stored values); for ``lr``, ``_iter_lr``."""
     n_vars = store.n_vars
     k = len(every)
     labelled = codes >= 0
@@ -1058,64 +1195,86 @@ def iter_differential(store: ModalityStore, rows: np.ndarray, codes: np.ndarray,
         if ok.size > max_peaks:
             ok = ok[np.argsort(-np.maximum(pct_in[i][ok], pct_out[i][ok]), kind="stable")[:max_peaks]]
         tested[i, ok] = True
-    union = np.flatnonzero(tested.any(axis=0))
-    sizes = detect.sum(axis=0)[union]
-    batches = np.split(union, np.flatnonzero(np.diff((np.cumsum(sizes) // max(1, batch_values)))) + 1) if union.size else []
     idf = np.where(total > 0, rows.size / np.where(total > 0, total, 1), 0.0)
     z = np.zeros((k, n_vars), dtype=np.float32)
     p = np.ones((k, n_vars), dtype=np.float64)
     fc = np.zeros((k, n_vars), dtype=np.float32)
     n_groups = n_per_group.astype(np.float64)
-    for b, peaks in enumerate(batches):
-        yield {"type": "progress", "step": "test", "message": f"Testing peaks, batch {b + 1} of {len(batches)}",
-               "batch": b + 1, "batches": len(batches)}
-        where = np.full(n_vars, -1, dtype=np.int32)
-        where[peaks] = np.arange(peaks.size, dtype=np.int32)
-        cols, cells, vals = [], [], []
-        for pos, block in store.iter_blocks(MATRIX, rows, BLOCK_VALUES):
-            if stop():
-                raise AtacCancelled()
-            mapped = where[block.indices]
-            keep = mapped >= 0
-            per_cell = np.repeat(pos, np.diff(block.indptr))[keep]
-            tf = block.data[keep] / cell_total[per_cell]
-            cols.append(mapped[keep])
-            cells.append(per_cell.astype(np.int32))
-            vals.append((tf * SCALE_FACTOR * idf[peaks[mapped[keep]]]).astype(np.float32))
-        col = np.concatenate(cols) if cols else np.zeros(0, np.int32)
-        cel = np.concatenate(cells) if cells else np.zeros(0, np.int32)
-        val = np.concatenate(vals) if vals else np.zeros(0, np.float32)
-        del cols, cells, vals
-        order = np.argsort(col, kind="stable")
-        col, cel, val = col[order], cel[order], val[order]
-        ptr = np.searchsorted(col, np.arange(peaks.size + 1))
-        for j, peak in enumerate(peaks):
-            lo, hi = ptr[j], ptr[j + 1]
-            v, c = val[lo:hi], cel[lo:hi]
-            z_j, p_j = wilcoxon_sparse(v, c, codes, n_per_group, n_labelled)
-            z[:, peak], p[:, peak] = z_j, p_j
-            # Seurat's FoldChange on the data slot: means of expm1(TF-IDF), which is what val holds.
-            ok = codes[c] >= 0
-            sums = np.bincount(codes[c[ok]], weights=v[ok], minlength=k)
-            mean_in = sums / n_groups.clip(min=1)
-            mean_out = (sums.sum() - sums) / (n_labelled - n_per_group).clip(min=1)
-            fc[:, peak] = np.log2((mean_in + 1) / (mean_out + 1))
+    fit = None
+    if test == "lr":
+        fit = np.zeros((k, n_vars), dtype=np.int8)
+        yield from _iter_lr(store, rows, codes, [code_of[g] for g in chosen], tested, detect, idf, cell_total, z, p, fc, fit,
+                            stop=stop, batch_values=batch_values, lrt_per_group=lrt_per_group)
+    else:
+        union = np.flatnonzero(tested.any(axis=0))
+        sizes = detect.sum(axis=0)[union]
+        batches = np.split(union, np.flatnonzero(np.diff((np.cumsum(sizes) // max(1, batch_values)))) + 1) if union.size else []
+        for b, peaks in enumerate(batches):
+            yield {"type": "progress", "step": "test", "message": f"Testing peaks, batch {b + 1} of {len(batches)}",
+                   "batch": b + 1, "batches": len(batches)}
+            where = np.full(n_vars, -1, dtype=np.int32)
+            where[peaks] = np.arange(peaks.size, dtype=np.int32)
+            cols, cells, vals = [], [], []
+            for pos, block in store.iter_blocks(MATRIX, rows, BLOCK_VALUES):
+                if stop():
+                    raise AtacCancelled()
+                mapped = where[block.indices]
+                keep = mapped >= 0
+                per_cell = np.repeat(pos, np.diff(block.indptr))[keep]
+                tf = block.data[keep] / cell_total[per_cell]
+                cols.append(mapped[keep])
+                cells.append(per_cell.astype(np.int32))
+                vals.append((tf * SCALE_FACTOR * idf[peaks[mapped[keep]]]).astype(np.float32))
+            col = np.concatenate(cols) if cols else np.zeros(0, np.int32)
+            cel = np.concatenate(cells) if cells else np.zeros(0, np.int32)
+            val = np.concatenate(vals) if vals else np.zeros(0, np.float32)
+            del cols, cells, vals
+            order = np.argsort(col, kind="stable")
+            col, cel, val = col[order], cel[order], val[order]
+            ptr = np.searchsorted(col, np.arange(peaks.size + 1))
+            for j, peak in enumerate(peaks):
+                lo, hi = ptr[j], ptr[j + 1]
+                v, c = val[lo:hi], cel[lo:hi]
+                z_j, p_j = wilcoxon_sparse(v, c, codes, n_per_group, n_labelled)
+                z[:, peak], p[:, peak] = z_j, p_j
+                # Seurat's FoldChange on the data slot: means of expm1(TF-IDF), which is what val holds.
+                ok = codes[c] >= 0
+                sums = np.bincount(codes[c[ok]], weights=v[ok], minlength=k)
+                mean_in = sums / n_groups.clip(min=1)
+                mean_out = (sums.sum() - sums) / (n_labelled - n_per_group).clip(min=1)
+                fc[:, peak] = np.log2((mean_in + 1) / (mean_out + 1))
     frames = []
     n_tested: dict[str, int] = {}
     n_significant: dict[str, int] = {}
+    n_fit: dict[str, dict[str, int]] = {}
     for g in chosen:
         i = code_of[g]
         ok = np.flatnonzero(tested[i])
+        if fit is not None:
+            counts = np.bincount(fit[i, ok], minlength=len(FIT_NAMES))
+            n_fit[g] = {name: int(counts[c]) for c, name in enumerate(FIT_NAMES)}
+            ok = ok[fit[i, ok] != FIT_UNTESTABLE]
         padj = _bh(p[i, ok])
         n_tested[g] = int(ok.size)
         n_significant[g] = int((padj < 0.05).sum())
         o = np.lexsort((-np.abs(z[i, ok]), p[i, ok]))[:KEEP_PER_GROUP]
-        frames.append(pd.DataFrame({
-            "group": g, "peak_index": ok[o].astype(np.int32), "z": z[i, ok][o], "log2fc": fc[i, ok][o],
-            "pct_in": pct_in[i, ok][o].astype(np.float32), "pct_rest": pct_out[i, ok][o].astype(np.float32),
-            "pval": p[i, ok][o], "pval_adj": padj[o]}))
+        columns = {"group": g, "peak_index": ok[o].astype(np.int32), "z": z[i, ok][o], "log2fc": fc[i, ok][o],
+                   "pct_in": pct_in[i, ok][o].astype(np.float32), "pct_rest": pct_out[i, ok][o].astype(np.float32),
+                   "pval": p[i, ok][o], "pval_adj": padj[o]}
+        if fit is not None:
+            columns["fit"] = np.asarray(FIT_NAMES, dtype=object)[fit[i, ok][o]]
+        frames.append(pd.DataFrame(columns))
     frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    yield {"type": "result", "frame": frame, "n_tested": n_tested, "n_significant": n_significant}
+    yield {"type": "result", "frame": frame, "n_tested": n_tested, "n_significant": n_significant,
+           **({"n_fit": n_fit} if fit is not None else {})}
+
+
+REPLAY_CONSTANTS = ("LANCZOS_BLOCK", "LANCZOS_STEPS", "SEED", "SCALE_FACTOR", "MATRIX", "BLOCK_VALUES", "DA_BATCH_VALUES",
+                    "KEEP_PER_GROUP", "MIN_GROUP_CELLS", "MIN_PCT", "MAX_PEAKS_PER_GROUP", "LRT_PER_GROUP", "LR_BLOCK_VALUES",
+                    "LR_MIN_BLOCK", "LR_MAX_BLOCK", "LR_THREADS", "FIT_SCORE", "FIT_LRT", "FIT_LRT_SEPARATED", "FIT_SCORE_NO_FIT",
+                    "FIT_UNTESTABLE", "FIT_NAMES")
+REPLAY_CODE = (top_peaks, block_lanczos_svd, scaled_embedding, depth_correlation, gene_regions, overlap_matrix, _bh,
+               wilcoxon_sparse, _iter_lr, iter_differential)
 
 
 def attach_context(frame: pd.DataFrame, store: ModalityStore, genome: str | None, data_dir: str | Path,
@@ -1144,7 +1303,17 @@ def attach_context(frame: pd.DataFrame, store: ModalityStore, genome: str | None
 DA_METHOD = ("Wilcoxon rank-sum on TF-IDF, each group vs the rest (no latent covariate), for peaks detected in >= "
              "{min_pct:.0%} of the group or the rest, the {max_peaks:,} most detected at most; BH FDR within each "
              "group; log2 fold change of mean expm1(TF-IDF) + 1.")
+DA_METHOD_LR = ("Logistic regression with the cell's total peak counts as covariate (Seurat's LR test: group ~ peak + "
+                "total vs group ~ total, on log1p(TF-IDF)), each group vs the rest, for peaks detected in >= {min_pct:.0%} "
+                "of the group or the rest, the {max_peaks:,} most detected at most: a true likelihood ratio for the "
+                "{lrt_peaks:,} peaks with the highest score test of each group, the score test for the others; BH FDR "
+                "within each group across both; log2 fold change of mean expm1(TF-IDF) + 1.")
 _DA_LAST: dict[str, DaResult] = {}
+
+
+def da_test(res: DaResult) -> str:
+    """The test of a kept result; one saved before the choice existed was a Wilcoxon."""
+    return str((res.params or {}).get("test") or "wilcoxon")
 
 
 def da_payload(res: DaResult, group: str | None = None, offset: int = 0, limit: int = 100) -> dict[str, Any]:
@@ -1159,7 +1328,15 @@ def da_payload(res: DaResult, group: str | None = None, offset: int = 0, limit: 
         pages = {g: json.loads(t[t["group"] == g].iloc[:limit][columns].to_json(orient="records")) for g in res.groups}
     return {"id": res.result_id, "column": res.column, "groups": list(res.groups), "n_tested": dict(res.n_tested),
             "n_significant": dict(res.n_significant), "rows": pages, "params": dict(res.params), "method": res.method,
-            "kept_per_group": KEEP_PER_GROUP, "created_at": res.created_at}
+            "test": da_test(res), "n_fit": res.n_fit, "kept_per_group": KEEP_PER_GROUP, "created_at": res.created_at}
+
+
+def record_differential(adata, params: dict[str, Any], resources: dict | None = None) -> None:
+    """A provenance step (a result only; the replay script computes it again)."""
+    from scview.core import provenance
+
+    provenance.record_step(adata, step="atac_differential", tool="scview.atac (Seurat LR test)" if params.get("test") == "lr"
+                           else "scview.atac (Wilcoxon on TF-IDF)", params=params, resources=resources)
 
 
 def remember_da(adaptor, dataset_id: str, res: DaResult) -> None:
@@ -1582,6 +1759,23 @@ def grounding_lines(adata, data_dir: str | Path | None = None) -> tuple[list[str
                      + f". A cell's weights are relative: high RNA weight means RNA predicted its neighbours better than "
                        f"ATAC, not that its ATAC is poor [{TAG}]")
     return lines, detail
+
+
+def da_grounding_lines(adaptor) -> list[str]:
+    """The last differential accessibility result on these cells as facts for the co-pilot."""
+    res = latest_da(adaptor)
+    if res is None:
+        return []
+    lr = da_test(res) == "lr"
+    name = ("logistic regression with the cell's total peak counts as covariate (Seurat's LR)" if lr
+            else "Wilcoxon rank-sum on TF-IDF, no depth covariate")
+    parts = [f"{g} {res.n_significant.get(g, 0):,} of {res.n_tested.get(g, 0):,}" for g in res.groups[:12]]
+    line = f"- Differential peaks by {res.column}, test: {name}; peaks at FDR 5% per group: {'; '.join(parts)}"
+    if lr and res.n_fit:
+        separated = sum(v.get("lrt_separated", 0) for v in res.n_fit.values())
+        no_fit = sum(v.get("score_no_fit", 0) + v.get("untestable", 0) for v in res.n_fit.values())
+        line += f"; {separated:,} fits separated (p from the deviance's limit), {no_fit:,} did not converge"
+    return [line + f" [{TAG}]"]
 
 
 def drop_saved(adata) -> None:

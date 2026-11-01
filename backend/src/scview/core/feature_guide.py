@@ -83,8 +83,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "Seurat's weighted nearest neighbours on RNA PCs and LSI 2:50: per-cell RNA weight by group, WNN UMAP, clusters"),
     ("Unified View > Accessibility > Gene activity", "peak-based",
      "peak counts in gene body + 2 kb upstream as an overlay and against RNA; peak-based, not fragment-based"),
-    ("Unified View > Accessibility > Differential peaks", "Wilcoxon on TF-IDF",
-     "peaks per group vs the rest with nearest gene, distance to TSS, class; CSV"),
+    ("Unified View > Accessibility > Differential peaks", "Wilcoxon or logistic regression",
+     "peaks per group vs the rest, Wilcoxon on TF-IDF or logistic regression with a depth covariate (Seurat's LR), with "
+     "nearest gene, distance to TSS, class; CSV"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
