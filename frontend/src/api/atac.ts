@@ -143,6 +143,20 @@ export interface AtacDaRow {
   nearest_gene: string;
   distance_to_tss: number | null;
   peak_class: string;
+  /** Logistic regression only: what this row's p came from. */
+  fit?: AtacDaFit;
+}
+
+export type AtacDaTest = "wilcoxon" | "lr";
+export type AtacDaFit = "score" | "lrt" | "lrt_separated" | "score_no_fit" | "untestable";
+
+export interface AtacDaEstimate {
+  column: string;
+  test: AtacDaTest;
+  n_groups: number;
+  n_cells: number;
+  estimate_seconds: number;
+  estimate_bytes: number;
 }
 
 export interface AtacDa {
@@ -153,6 +167,9 @@ export interface AtacDa {
   n_significant: Record<string, number>;
   rows: Record<string, AtacDaRow[]>;
   method: string;
+  /** Absent on a result saved before the choice existed: a Wilcoxon. */
+  test?: AtacDaTest;
+  n_fit?: Record<string, Record<AtacDaFit, number>> | null;
   kept_per_group: number;
   created_at: string;
   note?: string | null;
@@ -160,7 +177,7 @@ export interface AtacDa {
 
 export type AtacRunBody = { n_lsi?: number; dims_to?: number; drop_first?: "auto" | "yes" | "no"; resolution?: number; activity?: boolean };
 export type AtacWnnBody = { lsi_first?: number; lsi_last?: number; resolution?: number };
-export type AtacDaBody = { column: string; groups?: string[]; min_pct?: number };
+export type AtacDaBody = { column: string; groups?: string[]; min_pct?: number; test?: AtacDaTest };
 
 export function getAtac(datasetId: string, groupby?: string): Promise<AtacState> {
   const q = new URLSearchParams({ allow_empty: "true" });
@@ -177,6 +194,11 @@ export function getAtacActivity(datasetId: string, gene: string, groupby?: strin
   const q = new URLSearchParams({ gene });
   if (groupby) q.set("groupby", groupby);
   return apiFetch(`/datasets/${datasetId}/atac/activity?${q.toString()}`);
+}
+
+export function getDaEstimate(datasetId: string, column: string, test: AtacDaTest): Promise<AtacDaEstimate> {
+  const q = new URLSearchParams({ column, test });
+  return apiFetch(`/datasets/${datasetId}/atac/differential-estimate?${q.toString()}`);
 }
 
 export function getLatestDa(datasetId: string): Promise<AtacDa | null> {

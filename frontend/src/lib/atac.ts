@@ -2,7 +2,7 @@
  * 10x Multiome ATAC (backend core/atac.py): the Accessibility tab's text and the small
  * calculations behind its plots.
  */
-import type { AtacLsi, AtacPlan, AtacStage, AtacWnnPlan } from "@/api/atac";
+import type { AtacDaFit, AtacDaTest, AtacLsi, AtacPlan, AtacStage, AtacWnnPlan } from "@/api/atac";
 import { formatDuration } from "@/lib/hvgSensitivity";
 
 export const ATAC_CLUSTERS = "atac_leiden";
@@ -87,6 +87,41 @@ export function formatP(p: number | null | undefined): string {
   if (p === null || p === undefined || !isFinite(p)) return "–";
   if (p === 0 || p < 1e-300) return "< 1e-300";
   return p < 0.001 ? p.toExponential(0) : p.toPrecision(2);
+}
+
+/** The test a result names; one saved before the choice existed was a Wilcoxon. */
+export function daTestName(test: AtacDaTest | undefined): string {
+  return test === "lr" ? "Logistic regression with the cell's total counts as covariate" : "Wilcoxon on TF-IDF, no covariate";
+}
+
+const FIT_LABELS: Record<AtacDaFit, string> = {
+  score: "score",
+  lrt: "LRT",
+  lrt_separated: "LRT, separated",
+  score_no_fit: "score, no fit",
+  untestable: "none",
+};
+
+/** What one row's p came from. */
+export function daFitLabel(fit: AtacDaFit | undefined): string {
+  return fit ? FIT_LABELS[fit] : "–";
+}
+
+/** One group's kinds of p in a sentence, with the fits that did not end well counted; "" for a Wilcoxon. */
+export function daFitText(n: Record<AtacDaFit, number> | undefined): string {
+  if (!n) return "";
+  const parts = [`${(n.lrt + n.lrt_separated).toLocaleString()} true likelihood ratios, ${n.score.toLocaleString()} score tests.`];
+  if (n.lrt_separated) {
+    parts.push(`${n.lrt_separated.toLocaleString()} peaks separate the group (the coefficient runs to infinity): p comes from the deviance's limit, as glm's does.`);
+  }
+  if (n.score_no_fit) parts.push(`${n.score_no_fit.toLocaleString()} fits did not converge and keep their score test.`);
+  if (n.untestable) parts.push(`${n.untestable.toLocaleString()} peaks could not be tested and have no p.`);
+  return parts.join(" ");
+}
+
+/** True where a table's count says little: more than half of the tested peaks pass. */
+export function daMostPass(significant: number, tested: number): boolean {
+  return tested > 0 && significant / tested > 0.5;
 }
 
 /** Distance to the nearest TSS: "at TSS", "+1.2 kb" (downstream), "-340 b" (upstream). */
