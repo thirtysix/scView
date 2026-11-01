@@ -109,6 +109,7 @@ describe("SpatialDomainsSubtab", () => {
     api.runDomains.mockResolvedValue(DONE);
     render(<SpatialDomainsSubtab {...groupProps} />);
     await screen.findByTestId("domains-plan");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Find domains" })).toBeEnabled());
     fireEvent.change(screen.getByLabelText("Domains (k)"), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("button", { name: "Find domains" }));
     await waitFor(() => expect(api.runDomains).toHaveBeenCalled());
@@ -124,9 +125,10 @@ describe("SpatialDomainsSubtab", () => {
     api.getSpatialDomains.mockResolvedValueOnce(INFO).mockResolvedValue({ ...INFO, domains: { ...DONE, suggested: true, scan: curve } });
     render(<SpatialDomainsSubtab {...groupProps} />);
     await screen.findByTestId("domains-plan");
+    // The plan renders one commit before the offered name: until then the button is disabled and a click does nothing.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Suggest k" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Suggest k" }));
-    // The click runs the preflight before the call: a slow CI runner took over the 1 s default.
-    await waitFor(() => expect(api.runDomains).toHaveBeenCalled(), { timeout: 5000 });
+    expect(api.runDomains).toHaveBeenCalled();
     expect(api.runDomains.mock.calls[0]![1].k).toBeNull();
     expect(api.runDomains.mock.calls[0]![1].column).toBe("spatial_domain_suggested");
     const figure = await screen.findByTestId("stability-curve");
