@@ -538,6 +538,8 @@ export interface RemovalAuditColumns {
 export interface FilterPreview {
   /** Visium HD bins, when the % mito rule is off for them: why */
   grid_note?: string;
+  /** Visium HD segmented cells under one % mito rule: why to look at per-type bounds */
+  tissue_cells_note?: string;
   n_cells: number;
   n_removed: number;
   n_kept: number;

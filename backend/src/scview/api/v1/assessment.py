@@ -319,6 +319,9 @@ async def get_filter_preview(
                                 label_column or None, condition_column or None)
         if t.max_pct_mt is None and thresholds.max_pct_mt is not None:
             out["grid_note"] = qc_filter.grid_note(spatial.technology(adaptor.adata)["unit"])
+        note = qc_filter.tissue_cells_note(adaptor.adata, t, cells)
+        if note:
+            out["tissue_cells_note"] = note
         return out
 
     try:

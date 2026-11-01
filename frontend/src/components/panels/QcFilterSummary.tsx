@@ -302,6 +302,11 @@ export function QcFilterSummary({
             {preview.grid_note}
           </p>
         )}
+        {preview.tissue_cells_note && (
+          <p className="text-[11px] leading-relaxed text-slate-600" data-testid="qc-tissue-cells-note">
+            {preview.tissue_cells_note}
+          </p>
+        )}
         {/* grid_note: the rule is off on spots and bins (has_mt false), the % mito itself is measured. */}
         {!preview.grid_note && (
           <MitoModeControl

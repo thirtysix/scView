@@ -237,6 +237,21 @@ def grid_note(unit: str) -> str:
             "Tick \"Apply % mito to spots and bins\" to use it anyway.")
 
 
+def tissue_cells_note(adata, t: Thresholds, cells: dict) -> str | None:
+    """Why to look at per-type % mito on Visium HD's segmented cells, when one rule judges them
+    (measured on a mouse brain: 11.5% of cells removed, very unevenly). None otherwise; imaging
+    panels are left out, they rarely measure MT- genes and their % mito is not comparable."""
+    from scview.core import spatial
+
+    if not spatial.has_spatial(adata) or spatial.technology(adata) != {"technology": "visium_hd", "unit": "cell"}:
+        return None
+    if t.max_pct_mt is None or t.mito_mode != "global" or not cells.get("has_mt"):
+        return None
+    return ("Cell types in tissue differ widely in % mito, so one rule removes them unevenly: on a mouse brain, "
+            "0-3% of neurons but 18-35% of glia and vessel cells. Try Per cell type below once cells have labels, "
+            "and check the removal table before filtering.")
+
+
 def grid_rules(adata, t: Thresholds, cells: dict, params=None) -> tuple[Thresholds, dict]:
     """The thresholds and QC table to judge ``adata`` by: as given, unless it is spots or bins
     (comment above). There the % mito rule is off (as when a dataset has no MT- genes) unless

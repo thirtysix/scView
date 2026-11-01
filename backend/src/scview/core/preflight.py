@@ -1013,10 +1013,17 @@ FILTER_SECONDS_PER_BYTE = 3e-9
 # dataset in memory the step's own selection is run on up to DBL_HVG_SAMPLE cells of the
 # largest channel (``doublet_plan``); from a header alone they are taken as 10% of the
 # genes, 12.8 bytes per cell x gene (Kang 11%, ovary 9.5%; the brain's 4.7% is over 2x).
+# A sample keeps more genes than the whole channel does, so a channel over DBL_HVG_SAMPLE
+# follows the power law through it and DBL_HVG_SMALL cells (exponent clipped to
+# DBL_HVG_SLOPES). Against the whole channel, 5,000 alone vs this: Visium HD cells 40k +22 /
+# -7.5%, lymphoid 73k +30 / -11.5%, snRNA brain 41k +10 / +2%, PBMC 12k +3 / +3%, Kang 14k
+# -2.5 / -3%, Xenium 168k +9 / +9%. The HD step measured 9.0 GiB: 13.2 estimated before.
 DBL_SPARSE_COPIES = 6.0
 DBL_PER_CELL_HVG = 144
 DBL_DENSE_PER_VALUE = 12.8  # per cell x gene, when the variable genes are not counted
 DBL_HVG_SAMPLE = 5000
+DBL_HVG_SMALL = 2000
+DBL_HVG_SLOPES = (-0.2, 0.0)
 # Per cell, beside the largest channel: the scores, calls, channel codes and their sort,
 # and the obs columns written (core/doublets.py run_scrublet).
 DBL_OUT_PER_CELL = 48
@@ -1251,10 +1258,30 @@ def _doublet_method(params) -> str:
         return "scrublet"
 
 
+def _channel_hvg(counts, idx: np.ndarray) -> int:
+    """Scrublet's variable genes in a channel of cells ``idx`` (ascending), from evenly spaced
+    samples of it: its own count at ``DBL_HVG_SAMPLE`` cells or fewer, else extrapolated."""
+    from scview.core import scrublet_lean
+
+    def count(k: int) -> int:
+        some = np.unique(idx[np.linspace(0, idx.size - 1, min(idx.size, k)).astype(np.int64)])
+        return scrublet_lean.n_variable_genes(scrublet_lean.channel_rows(counts, some))
+
+    at_sample = count(DBL_HVG_SAMPLE)
+    if idx.size <= DBL_HVG_SAMPLE or at_sample <= 0:
+        return at_sample
+    at_small = count(DBL_HVG_SMALL)
+    if at_small <= 0:
+        return at_sample
+    slope = np.log(at_sample / at_small) / np.log(DBL_HVG_SAMPLE / DBL_HVG_SMALL)
+    slope = float(np.clip(slope, *DBL_HVG_SLOPES))
+    return int(round(at_sample * (idx.size / DBL_HVG_SAMPLE) ** slope))
+
+
 def doublet_plan(adata, params=None) -> DoubletPlan | None:
     """The doublet step's channels on a live AnnData (in memory), and Scrublet's variable
-    genes counted on up to ``DBL_HVG_SAMPLE`` evenly spaced cells of the largest channel
-    (its own selection, ``scrublet_lean.n_variable_genes``). None when they can't be read."""
+    genes in the largest channel (``_channel_hvg``: its own selection on samples,
+    ``scrublet_lean.n_variable_genes``). None when they can't be read."""
     from scview.core import doublets, scrublet_lean, spatial
     from scview.core.pipeline import StepSkipped, _doublet_matrix
 
@@ -1270,9 +1297,7 @@ def doublet_plan(adata, params=None) -> DoubletPlan | None:
         return plan
     try:
         counts, _ = _doublet_matrix(adata)
-        idx = np.flatnonzero(ch.codes == int(np.argmax(sizes)))
-        idx = idx[np.linspace(0, idx.size - 1, min(idx.size, DBL_HVG_SAMPLE)).astype(np.int64)]
-        plan.hvg = scrublet_lean.n_variable_genes(scrublet_lean.channel_rows(counts, np.unique(idx)))
+        plan.hvg = _channel_hvg(counts, np.flatnonzero(ch.codes == int(np.argmax(sizes))))
     except (StepSkipped, ValueError, TypeError, IndexError):
         pass
     return plan
