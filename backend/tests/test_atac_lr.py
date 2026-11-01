@@ -51,6 +51,32 @@ def test_separation_is_named_and_reports_the_deviances_limit_as_glm_does():
     assert atac_lr.signed_root_p(stat, gamma)[1][0] == pytest.approx(R_SEP_P, rel=1e-3)
 
 
+def test_a_cell_far_out_on_depth_is_not_separation():
+    # PBMC 10k: one cell at 44 sd of depth and a low-depth cluster: a large fitted |eta|, finite estimates.
+    rng = np.random.default_rng(1)
+    n = 800
+    latent = rng.lognormal(9.5, 0.6, n)
+    y = (rng.random(n) < 0.3 * (latent < np.median(latent))).astype(float)
+    latent[0] = latent.max() * 40
+    y[0] = 0.0
+    z = _z(latent)
+    assert z.max() > 20
+    b, dev, ok = atac_lr.logistic_null(y, z)
+    assert ok and abs(b[0] + b[1] * z.max()) > 25
+    x = np.where(rng.random((n, 3)) < 0.3, rng.exponential(1.0, (n, 3)) + 1.0, 0.0)
+    stat, _g, status = atac_lr.lrt_fit(x, y, z, b, dev)
+    assert (status == atac_lr.FIT_OK).all() and np.isfinite(stat).all()
+
+
+def test_a_covariate_that_alone_separates_the_group_leaves_no_null():
+    z = np.arange(40, dtype=float)
+    y = (z < 10).astype(float)
+    assert atac_lr.logistic_null(y, z)[2] is False
+    assert atac_lr.logistic_null(1.0 - y, z)[2] is False
+    y[3], y[20] = 0.0, 1.0
+    assert atac_lr.logistic_null(y, (z - z.mean()) / z.std())[2] is True
+
+
 def test_a_block_of_fits_equals_each_fit_alone_and_a_direct_optimiser():
     rng = np.random.default_rng(3)
     n = 400

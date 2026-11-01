@@ -20,7 +20,7 @@ from scipy.special import expit, ndtr
 
 LR_MAX_ITER = 25  # glm.control(maxit)
 LR_TOL = 1e-8  # glm.control(epsilon): |dev - dev_old| / (|dev| + 0.1)
-LR_SEPARATED_ETA = 25.0  # a fitted probability within 1e-11 of 0 or 1: the estimate is on its way to infinity
+LR_SEPARATED_ETA = 25.0  # the peak's own term alone puts a cell within 1e-11 of 0 or 1: gamma is on its way to infinity
 
 FIT_OK = "ok"
 FIT_SEPARATED = "separated"
@@ -30,36 +30,51 @@ FIT_NOT_CONVERGED = "not_converged"
 def deviance_and_mu(eta, y0):
     """The Bernoulli deviance per column and the fitted probabilities: with e = exp(-eta), each
     cell adds 2 log(1 + e), and 2 eta more when y = 0 (``y0``). One exp and one log per cell, as
-    SIMD ufuncs; a term below 1e-16 is lost from a sum of thousands, which glm's test never sees."""
+    SIMD ufuncs; a term below 1e-16 is lost from a sum of thousands, which glm's test never sees. A
+    column whose exp overflows (a step far out on a depth outlier) is summed the slow way."""
     with np.errstate(over="ignore", invalid="ignore"):
         e = np.exp(-eta)
         dev = 2.0 * (np.log(1.0 + e).sum(axis=0) + y0 @ eta)
-        return dev, 1.0 / (1.0 + e)
+    bad = ~np.isfinite(dev)
+    if np.any(bad):
+        sign = 1.0 - 2.0 * y0
+        if eta.ndim == 1:
+            dev = 2.0 * np.logaddexp(0.0, -sign * eta).sum()
+        else:
+            dev[bad] = 2.0 * np.logaddexp(0.0, -sign[:, None] * eta[:, bad]).sum(axis=0)
+    return dev, 1.0 / (1.0 + e)
 
 
 def logistic_null(y, z, max_iter=LR_MAX_ITER, tol=LR_TOL):
     """IRLS for ``y ~ 1 + z``, the null model of every peak in a group: (b0, b1), the deviance,
-    and whether it converged to finite estimates (a covariate that alone separates the group
-    leaves nothing for a peak to add)."""
+    and whether it has finite estimates. With one covariate, separation is exact to see: the
+    group's range of z does not overlap the rest's. A large fitted |eta| says nothing here: one
+    cell at 44 sd of depth has one in any low-depth group (PBMC 10k)."""
     b = np.array([np.log((y.sum() + 0.5) / (y.size - y.sum() + 0.5)), 0.0])
     design = np.column_stack([np.ones_like(z), z])
     y0 = 1.0 - y
     dev, mu = deviance_and_mu(design @ b, y0)
+    inside, outside = z[y > 0], z[y == 0]
+    if inside.max() <= outside.min() or outside.max() <= inside.min():
+        return b, float(dev), False
     for _ in range(max_iter):
         w = mu * (1.0 - mu)
         try:
             step = np.linalg.solve((design * w[:, None]).T @ design, design.T @ (y - mu))
         except np.linalg.LinAlgError:
             return b, float(dev), False
-        b = b + step
-        new, mu = deviance_and_mu(design @ b, y0)
+        new, new_mu = deviance_and_mu(design @ (b + step), y0)
+        for _halve in range(8):
+            if new <= dev + 1e-9 * (abs(dev) + 0.1):
+                break
+            step = step / 2.0
+            new, new_mu = deviance_and_mu(design @ (b + step), y0)
+        b, mu = b + step, new_mu
         done = abs(new - dev) / (abs(new) + 0.1) < tol
         dev = new
         if done:
-            break
-    else:
-        return b, float(dev), False
-    return b, float(dev), bool(np.abs(design @ b).max() < LR_SEPARATED_ETA)
+            return b, float(dev), True
+    return b, float(dev), False
 
 
 def null_vectors(y, z, b):
@@ -99,14 +114,16 @@ def lrt_fit(x, y, z, null_b, null_dev, max_iter=LR_MAX_ITER, tol=LR_TOL):
     """IRLS for ``y ~ 1 + z + x`` on each column of ``x`` (cells x peaks, dense), started from
     the null fit. Returns (LR statistic, gamma, status) per peak. A peak leaves the block when it
     has converged, as glm's test decides. Deviance that rises halves the step (glm does so only when
-    it goes infinite). Status ``separated``: the fitted probabilities reached 0 or 1, so gamma is on
-    its way to infinity and the statistic is the deviance's limit, the number glm stops near."""
+    it goes infinite). Status ``separated``: |gamma| x its largest x reached ``LR_SEPARATED_ETA``, so
+    gamma is on its way to infinity and the statistic is the deviance's limit, the number glm stops
+    near. The peak's own term, not eta: a cell far out on depth has a large |eta| in any fit."""
     n_peaks = x.shape[1]
     stat = np.full(n_peaks, np.nan)
     gamma = np.zeros(n_peaks)
     status = np.full(n_peaks, FIT_NOT_CONVERGED, dtype=object)
     active = np.arange(n_peaks)
     cur = x
+    largest = x.max(axis=0)
     b = np.tile(np.array([null_b[0], null_b[1], 0.0]), (n_peaks, 1))  # rows: intercept, z, x
     y0 = 1.0 - y
     z2 = z * z
@@ -152,14 +169,15 @@ def lrt_fit(x, y, z, null_b, null_dev, max_iter=LR_MAX_ITER, tol=LR_TOL):
         leaving = done | ~good
         if leaving.any():
             ids = active[leaving]
-            extreme = np.abs(eta[:, leaving]).max(axis=0) >= LR_SEPARATED_ETA
+            extreme = np.abs(b[leaving, 2]) * largest[leaving] >= LR_SEPARATED_ETA
             stat[ids] = null_dev - dev[leaving]
             gamma[ids] = b[leaving, 2]
             status[ids] = np.where(~good[leaving], FIT_NOT_CONVERGED, np.where(extreme, FIT_SEPARATED, FIT_OK))
             keep = ~leaving
             active, cur, b, dev, eta, mu = active[keep], cur[:, keep], b[keep], dev[keep], eta[:, keep], mu[:, keep]
+            largest = largest[keep]
     if active.size:  # the iterations ran out
-        extreme = np.abs(eta).max(axis=0) >= LR_SEPARATED_ETA
+        extreme = np.abs(b[:, 2]) * largest >= LR_SEPARATED_ETA
         stat[active] = null_dev - dev
         gamma[active] = b[:, 2]
         status[active] = np.where(extreme, FIT_SEPARATED, FIT_NOT_CONVERGED)
