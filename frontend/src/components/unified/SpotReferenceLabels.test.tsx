@@ -160,6 +160,8 @@ describe("SpotReferenceLabels", () => {
     expect(screen.getByTestId("spot-labels-count")).toHaveTextContent("58 types, at most 50");
     expect(screen.getByTestId("spot-labels-table").className).toMatch(/max-h-56 overflow-y-auto/);
     expect(screen.getAllByTestId("spot-label-suggested")).toHaveLength(7);
+    const firstRows = within(screen.getByTestId("spot-labels-table")).getAllByRole("row").slice(1, 8);
+    expect(firstRows.every((r) => within(r).queryByTestId("spot-label-suggested"))).toBe(true);
     expect(screen.getByLabelText("Leave out Unk_1")).not.toBeChecked();
     expect(editsNow()).toEqual(NO_EDITS);
     fireEvent.click(screen.getByLabelText("Leave out Unk_1"));

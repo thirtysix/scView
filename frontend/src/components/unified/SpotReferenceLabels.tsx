@@ -49,6 +49,11 @@ export function SpotReferenceLabels({
   const [unticked, setUnticked] = useState<string[]>([]);
   const separator = sep ?? likelySeparator(labels);
   const suggestedSet = useMemo(() => new Set(suggested), [suggested]);
+  // The marked ones first: among 59 labels they would otherwise sit below the fold.
+  const rows = useMemo(
+    () => [...labels.filter((l) => suggestedSet.has(l.type)), ...labels.filter((l) => !suggestedSet.has(l.type))],
+    [labels, suggestedSet],
+  );
   const groups = useMemo(() => prefixGroups(labels, edits.exclude, separator, cut), [labels, edits.exclude, separator, cut]);
   const ticked = groups.filter((g) => !unticked.includes(g.name));
   const afterPreview = planLabels(labels, { exclude: edits.exclude, merge: withGroups(edits.merge, ticked) }, minCells);
@@ -127,7 +132,7 @@ export function SpotReferenceLabels({
                 </tr>
               </thead>
               <tbody>
-                {labels.map((l) => {
+                {rows.map((l) => {
                   const out = edits.exclude.includes(l.type);
                   return (
                     <tr key={l.type} className={out ? "text-slate-400" : "text-slate-700"}>
