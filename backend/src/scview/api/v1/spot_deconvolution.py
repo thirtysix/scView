@@ -214,6 +214,12 @@ async def _reference_report(dm: DatasetManager, dataset_id: str, reference_id: s
         spot_species = detect_species(spots).species
         spot_genes = _spot_genes(spots)
         shared = sum(1 for g in var.index.astype(str) if g in spot_genes)
+        matched, matched_via = shared, None  # few by name: the fit's own match, through a var column of ids
+        if shared < sd.MIN_SHARED_GENES:
+            spot_var = spots.raw.var if spots.raw is not None and spots.raw.n_vars > spots.n_vars else spots.var
+            rkey, skey = sd._strip_versions(var), sd._strip_versions(spot_var)
+            match = lt.match_genes(rkey[~rkey.index.duplicated()], skey[~skey.index.duplicated()])
+            matched, matched_via = len(match.shared), match.renamed
         refusal = lt.check_species(ref_species, spot_species)
         if refusal is None and col is not None and len(types) < 2:
             refusal = f"'{col}' has fewer than 2 types with {sd.MIN_TYPE_CELLS}+ cells."
@@ -227,7 +233,8 @@ async def _reference_report(dm: DatasetManager, dataset_id: str, reference_id: s
             "n_small": len(small), "species": ref_species, "dataset_species": spot_species,
             "suggested_exclude": suggested, "excluded_labels": excluded, "merged_labels": merged,
             "n_excluded_cells": n_out,
-            "shared_genes_by_name": shared, "min_shared_genes": sd.MIN_SHARED_GENES,
+            "shared_genes_by_name": shared, "shared_genes": matched, "shared_genes_via": matched_via,
+            "min_shared_genes": sd.MIN_SHARED_GENES,
             "estimate": _estimate(paths[0], cached is not None, spot_adaptor, len(types), method),
         }
 

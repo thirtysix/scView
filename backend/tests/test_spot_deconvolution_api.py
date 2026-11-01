@@ -29,6 +29,20 @@ async def _post(client, did, path, **body):
     return _events(r.text)
 
 
+async def test_reference_check_counts_genes_the_fit_matches_through_ids(client, dataset_manager):
+    """A reference indexed by Ensembl ids with a dataset of symbols: none by name, all by the fit's own match."""
+    prof = _profiles()
+    spots, _ = _spots(prof, n=100)
+    ref = _reference(prof, names=list(spots.var_names))
+    spots.var["gene_ids"] = [f"ENSG{i:011d}" for i in range(spots.n_vars)]
+    ref.var_names = spots.var["gene_ids"].to_numpy()
+    ref.obs["n_counts"] = np.asarray(ref.X.sum(axis=1)).ravel()
+    rid, did = _register(dataset_manager, ref, "sref_ids"), _register(dataset_manager, spots, "spots_ids")
+    chk = (await client.get(f"{API}/datasets/{did}/spot-deconvolution/reference/{rid}")).json()
+    assert chk["shared_genes_by_name"] == 0
+    assert chk["shared_genes"] == spots.n_vars and chk["shared_genes_via"] == "this dataset by its var 'gene_ids'"
+
+
 async def test_reference_check_then_run_saves_and_serves_the_shares(client, dataset_manager):
     ref, did = _pair(dataset_manager)
     info = (await client.get(f"{API}/datasets/{did}/spot-deconvolution")).json()
@@ -39,6 +53,7 @@ async def test_reference_check_then_run_saves_and_serves_the_shares(client, data
     assert chk["ok"] is True and chk["n_cells"] == 240 and chk["celltype_column"] == "cell_type"
     assert {t["type"] for t in chk["types"]} == set(TYPES) and chk["n_small"] == 0
     assert chk["shared_genes_by_name"] == 400 and chk["estimate"]["peak_bytes"] > 0
+    assert chk["shared_genes"] == 400 and chk["shared_genes_via"] is None
     assert chk["estimate"]["seconds"] > 0 and chk["estimate"]["note"].startswith("about")
 
     events = await _post(client, did, "run-stream", reference_id=ref, celltype_column="cell_type")

@@ -325,7 +325,8 @@ export function SpotCompositionSubtab() {
             <div className="space-y-0.5 text-slate-500" data-testid="spot-reference-check">
               <p>
                 {check.n_cells?.toLocaleString()} reference cells, {nTypes} types with {info.min_type_cells}+ cells;{" "}
-                {check.shared_genes_by_name?.toLocaleString()} genes shared by name; reference {check.species}, this
+                {(check.shared_genes_via ? check.shared_genes : check.shared_genes_by_name)?.toLocaleString()} genes shared{" "}
+                {check.shared_genes_via ? `(matching ${check.shared_genes_via})` : "by name"}; reference {check.species}, this
                 dataset {check.dataset_species}.
                 {shown?.estimate &&
                   ` Needs ${aboutGb(shown.estimate.peak_bytes)}, ${shown.estimate.note} (${shown.estimate.seconds_range[0]}-${shown.estimate.seconds_range[1]} s).`}
@@ -341,9 +342,8 @@ export function SpotCompositionSubtab() {
                   Left out (fewer than {info.min_type_cells} cells): {small.map((t) => `${t.type} (${t.n_cells})`).join(", ")}.
                 </p>
               )}
-              {check.shared_genes_by_name != null &&
-                check.min_shared_genes != null &&
-                check.shared_genes_by_name < check.min_shared_genes && (
+              {check.min_shared_genes != null &&
+                (check.shared_genes ?? check.shared_genes_by_name ?? check.min_shared_genes) < check.min_shared_genes && (
                   <p className="text-amber-700">
                     Few genes match by name; Ensembl ids are matched to symbols when a gene-id column exists.
                   </p>

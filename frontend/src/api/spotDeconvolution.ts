@@ -120,6 +120,9 @@ export interface SpotReferenceCheck {
   species?: string;
   dataset_species?: string;
   shared_genes_by_name?: number;
+  /** The fit's own match: through a var column of ids when few match by name. */
+  shared_genes?: number;
+  shared_genes_via?: string | null;
   min_shared_genes?: number;
   estimate?: {
     peak_bytes: number;
