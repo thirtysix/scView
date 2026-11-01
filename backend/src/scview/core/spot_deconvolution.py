@@ -48,6 +48,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 import uuid
@@ -81,6 +82,13 @@ LOW_COUNTS = "low counts"
 # of a mouse brain from 2% of a snRNA reference, and the other shares only made sense without it.
 OVER_SHARE_MIN = 0.20
 OVER_SHARE_FOLD = 5.0
+# Names of labels that hold "whatever did not fit". Words count anywhere in the name (Ext_Unk_3: unknown excitatory
+# neurons, one of the three that blurred that brain); words that also qualify a real class only as the whole name
+# (Other, NA: "Other_Neuron" names neurons, so it is not suggested). Suggested in the panel, never applied.
+CATCH_ALL_WORDS = frozenset({"unk", "unknown", "unassigned", "unclassified", "undefined", "ambiguous", "doublet",
+                             "doublets", "debris", "lowq", "lowquality"})
+CATCH_ALL_WHOLE = frozenset({"na", "n a", "nan", "none", "other", "others"})
+CATCH_ALL_GENERIC = frozenset({"cell", "cells", "type", "types", "cluster"})  # "Other cells", "Unknown type"
 METHODS = ("rctd", "nnls")
 METHOD_NAMES = {"rctd": "RCTD-style Poisson-lognormal fit", "nnls": "NNLS on the fit genes"}
 
@@ -512,7 +520,18 @@ def sd_iter_deconvolve(mu_all, S, Y, N, libs, method, keep, genes=None, s_e=None
                      "converged": conv, "n_clipped": n_clipped, "notes": notes}
 
 
-REPLAY_CODE = (sd_profiles, sd_select_genes, sd_platform_effect, sd_gh, sd_t_grid, sd_table, sd_loglik_direct,
+def sd_edit_labels(labels, exclude, merge):
+    """Reference labels (a Series, None for no label) as a run's choices leave them: each merged into its broader
+    name (``merge``: label -> name), and None for a label in ``exclude`` or merged into a name in it."""
+    gone = set(exclude)
+    new = {}
+    for v in pd.unique(labels.dropna()):
+        name = merge.get(str(v), str(v))
+        new[v] = None if str(v) in gone or name in gone else name
+    return pd.Series([new.get(v) for v in labels], index=labels.index, dtype=object)
+
+
+REPLAY_CODE = (sd_edit_labels, sd_profiles, sd_select_genes, sd_platform_effect, sd_gh, sd_t_grid, sd_table, sd_loglik_direct,
                sd_lookup, sd_fit_nnls, sd_spot_loglik, sd_fit_spots, sd_rows_for, sd_choose_sigma,
                sd_iter_deconvolve)
 
@@ -574,6 +593,53 @@ def type_counts(labels: pd.Series) -> tuple[list[str], list[str], pd.Series]:
     return kept, small, vc
 
 
+def is_catch_all(label: str) -> bool:
+    """Whether a label's NAME says it holds what did not fit (the lists above; case and separators ignored, a
+    trailing number too: Unk_1, LowQ2, "Low quality", "Other cells" but not Other_Neuron or Junk)."""
+    words = [w for w in (re.sub(r"\d+$", "", t) for t in re.findall(r"[a-z0-9]+", str(label).lower())) if w]
+    text = f" {' '.join(words)} "
+    if CATCH_ALL_WORDS.intersection(words) or " low quality " in text or " low q " in text:
+        return True
+    while words and words[-1] in CATCH_ALL_GENERIC:
+        words.pop()
+    return " ".join(words) in CATCH_ALL_WHOLE
+
+
+def suggested_exclude(labels) -> list[str]:
+    """The labels whose name looks like a catch-all, natural order: for the panel to mark, never applied."""
+    from scview.core.deconvolution import _natural
+
+    return sorted((str(t) for t in labels if is_catch_all(t)), key=_natural)
+
+
+def label_edits(labels: pd.Series, exclude: Sequence[str] | None, merge: dict[str, str] | None,
+                column: str) -> tuple[list[str], dict[str, str]]:
+    """A run's left-out and merged labels checked against the reference's own: (left out, merges that apply), both
+    empty when none are asked. A label in both is left out (and a label merged into a left-out name goes with it)."""
+    from scview.core.deconvolution import _natural
+
+    if not exclude and not merge:
+        return [], {}
+    known = set(labels.dropna().astype(str).unique())
+    merge = {str(k): str(v).strip() for k, v in (merge or {}).items()}
+    gone = {str(t) for t in exclude or ()}
+    unknown = sorted((gone - known - set(merge.values())) | (set(merge) - known), key=_natural)
+    if unknown:
+        raise SpotDeconvolutionError(f"'{column}' has no label {', '.join(repr(t) for t in unknown[:5])}"
+                                     f"{' ...' if len(unknown) > 5 else ''}: pick from its labels.")
+    bad = [k for k, v in merge.items() if not v or v == LOW_COUNTS]
+    if bad:
+        raise SpotDeconvolutionError(f"Label '{bad[0]}' cannot merge into '{merge[bad[0]]}': give it a broader name "
+                                     f"(not empty, not \"{LOW_COUNTS}\").")
+    merge = {k: v for k, v in merge.items() if k != v and k not in gone}
+    chain = next((k for k, v in merge.items() if v in merge), None)
+    if chain is not None:
+        to = merge[chain]
+        raise SpotDeconvolutionError(f"Label '{chain}' merges into '{to}', which itself merges into '{merge[to]}': "
+                                     "merge both into the final name.")
+    return sorted(gone, key=_natural), merge
+
+
 @dataclass
 class Prepared:
     """What a run needs, copied out of both datasets (they can close meanwhile)."""
@@ -594,6 +660,11 @@ class Prepared:
     info: dict[str, Any] = field(default_factory=dict)
     check: dict[str, Any] | None = None  # the self-check's synthetic spots (prepare(check=True))
     min_umi: int = MIN_SPOT_UMI  # spots with fewer counts are not fitted
+
+
+def too_many_types(column: str, n: int) -> str:
+    return (f"'{column}' has {n} types with {MIN_TYPE_CELLS}+ cells (at most {MAX_TYPES}): merge or leave out labels "
+            "under Reference labels, or pick a coarser cell-type column.")
 
 
 def default_min_umi(spots) -> int:
@@ -753,11 +824,14 @@ def large_reference(path: str):
 def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_fallback: list[str],
             spot_fallback: list[str], cluster_column: str | None, check: bool = False,
             seed: int = SEED, ref_counts: tuple[Any, pd.DataFrame, str] | None = None,
-            min_umi: int | None = None) -> Prepared:
+            min_umi: int | None = None, exclude_labels: Sequence[str] | None = None,
+            merge_labels: dict[str, str] | None = None) -> Prepared:
     """Check the two datasets and copy out what a run (or, ``check``, the self-check)
     needs: the reference's profiles on the shared genes, the spots' counts.
     ``ref_counts``: the reference's (counts, var, source) when already open
-    (``large_reference``). ``min_umi``: the count floor, the unit's default when None."""
+    (``large_reference``). ``min_umi``: the count floor, the unit's default when None.
+    ``exclude_labels``: those cells are not used at all, as if they had no label;
+    ``merge_labels``: label -> broader name, before the cell and type limits."""
     from scview.core import label_transfer as lt
     from scview.core import spatial
     from scview.core.deconvolution import _excluded
@@ -773,13 +847,16 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
     refusal = lt.check_species(detect_species(ref).species, detect_species(spots).species)
     if refusal:
         raise SpotDeconvolutionError(refusal.replace("Cell types do not map", "Cell-type profiles do not transfer"))
+    excluded, merged = label_edits(labels, exclude_labels, merge_labels, celltype_column)
+    n_labelled = int(labels.notna().sum())
+    if excluded or merged:
+        labels = sd_edit_labels(labels, excluded, merged)
     types, small, _vc = type_counts(labels)
     if len(types) < 2:
         raise SpotDeconvolutionError(f"'{celltype_column}' has fewer than 2 types with {MIN_TYPE_CELLS}+ cells: "
                                      "nothing to split the spots into.")
     if len(types) > MAX_TYPES:
-        raise SpotDeconvolutionError(f"'{celltype_column}' has {len(types)} types with {MIN_TYPE_CELLS}+ cells "
-                                     f"(at most {MAX_TYPES}): pick a coarser cell-type column.")
+        raise SpotDeconvolutionError(too_many_types(celltype_column, len(types)))
     RM, rvar, rsource = (ref_counts if ref_counts is not None
                          else counts_with_var(ref, ref_fallback, "The reference"))
     SM, svar, ssource = counts_with_var(spots, spot_fallback, "This dataset")
@@ -837,7 +914,8 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
         info={**ref_info, "celltype_column": celltype_column, "reference_source": rsource, "spot_source": ssource,
               "renamed": match.renamed, "n_ref_genes": match.n_ref, "n_spot_genes": match.n_query,
               "unit": spatial.technology(spots)["unit"] if spatial.has_spatial(spots) else "spot",
-              "n_reference_cells": int((codes >= 0).sum())},
+              "n_reference_cells": int((codes >= 0).sum()), "excluded_labels": excluded, "merged_labels": merged,
+              "n_excluded_cells": n_labelled - int(labels.notna().sum())},
         check=synth, min_umi=floor,
     )
 
@@ -969,17 +1047,24 @@ def outputs(p: Prepared, out: dict[str, Any]) -> dict[str, Any]:
             "top_share": share.astype(np.float32)}
 
 
-def over_share_notes(types: Sequence[str], n_type_cells: np.ndarray, rna: np.ndarray) -> list[str]:
-    """A sentence for each type with at least ``OVER_SHARE_MIN`` of the fitted RNA and at least
-    ``OVER_SHARE_FOLD`` times its share of the reference's cells. ``rna``: fitted spots x types."""
+def over_share_types(types: Sequence[str], n_type_cells: np.ndarray, rna: np.ndarray) -> dict[str, tuple[float, float]]:
+    """{type: (mean share of the fitted RNA, share of the reference's cells)} for each type with at least
+    ``OVER_SHARE_MIN`` of the RNA and at least ``OVER_SHARE_FOLD`` times its share of the cells. ``rna``: fitted
+    spots x types."""
     if not len(rna):
-        return []
+        return {}
     means, cells = rna.mean(axis=0), np.asarray(n_type_cells, dtype=np.float64)
     of_cells = cells / cells.sum()
-    return [f"{t} holds {means[k]:.0%} of the RNA here but is {of_cells[k]:.0%} of the reference's cells. That can be "
-            "real; if it is a catch-all label (unknown, low quality), it takes signal from the other types: try a "
-            "reference without it."
-            for k, t in enumerate(types) if means[k] >= OVER_SHARE_MIN and means[k] >= OVER_SHARE_FOLD * of_cells[k]]
+    return {t: (float(means[k]), float(of_cells[k])) for k, t in enumerate(types)
+            if means[k] >= OVER_SHARE_MIN and means[k] >= OVER_SHARE_FOLD * of_cells[k]}
+
+
+def over_share_notes(types: Sequence[str], n_type_cells: np.ndarray, rna: np.ndarray) -> list[str]:
+    """A sentence for each of ``over_share_types``."""
+    return [f"{t} holds {rna_share:.0%} of the RNA here but is {cell_share:.0%} of the reference's cells. That can be "
+            "real; if it is a catch-all label (unknown, low quality), it takes signal from the other types: leave it "
+            "out and run again."
+            for t, (rna_share, cell_share) in over_share_types(types, n_type_cells, rna).items()]
 
 
 def summarize(p: Prepared, out: dict[str, Any], *, method: str) -> dict[str, Any]:
@@ -1010,6 +1095,10 @@ def summarize(p: Prepared, out: dict[str, Any], *, method: str) -> dict[str, Any
                         "cell_mean": stats_cells[k]["mean"], "cell_max": stats_cells[k]["max"],
                         "n_top": int(top_counts.get(t, 0))} for k, t in enumerate(p.types)],
         "small_types": list(p.small_types),
+        "excluded_labels": list(p.info.get("excluded_labels") or []),
+        "merged_labels": dict(p.info.get("merged_labels") or {}),
+        "n_excluded_cells": int(p.info.get("n_excluded_cells") or 0),
+        "over_share": list(over_share_types(p.types, p.n_type_cells, rna[fitted])),
         "reference": {key: p.info.get(key) for key in ("id", "name", "path", "mtime", "celltype_column",
                                                        "n_reference_cells")},
         "celltype_column": p.info.get("celltype_column"),
@@ -1061,6 +1150,8 @@ def save(adata, p: Prepared, out: dict[str, Any], summary: dict[str, Any], resou
                 "reference_source": p.info.get("reference_source"), "spot_source": p.info.get("spot_source"),
                 "outputs": list(summary["columns"].values()), "n_skipped": summary["n_skipped"],
                 "min_umi": int(p.min_umi),
+                **({"excluded_labels": summary["excluded_labels"]} if summary.get("excluded_labels") else {}),
+                **({"merged_labels": summary["merged_labels"]} if summary.get("merged_labels") else {}),
             },
             resources=resources,
         )
@@ -1226,6 +1317,8 @@ def iter_check(p: Prepared, *, methods: tuple[str, ...] = METHODS,
         "id": uuid.uuid4().hex[:12], "types": list(p.types), "runs": runs, "n_spots": CHECK_SPOTS,
         "cells_per_spot": list(CHECK_CELLS), "depths": list(CHECK_DEPTHS), "seed": c["seed"],
         "reference": {key: p.info.get(key) for key in ("id", "name", "celltype_column")},
+        "excluded_labels": list(p.info.get("excluded_labels") or []),
+        "merged_labels": dict(p.info.get("merged_labels") or {}),
         "seconds": round(time.monotonic() - t0, 1), "created_at": time.time(),
         "note": ("Synthetic spots from held-out reference cells: no platform effect and no type missing from "
                  "the reference, so real sections fit worse than this.")}}
@@ -1296,6 +1389,9 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
     detail = (f"Spot composition from {ref.get('name')} ({s.get('celltype_column')}, {len(s['types'])} types), "
               f"{s['method_name']}, {s['n_fitted']:,} of {s['n_spots']:,} spots fitted on {s['n_genes']:,} genes")
     lines = [f"\n## Spot composition (saved run) [{TAG}]", f"- {detail} [{TAG}]."]
+    edits = labels_used_line(s)
+    if edits:
+        lines.append(f"- {edits}")
     stats = sorted(s["type_stats"], key=lambda r: -(r["n_top"] or 0))
     tops = [f"{r['type']} {r['n_top']:,}" for r in stats if r["n_top"]][:8]
     if tops:
@@ -1311,6 +1407,23 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
     lines.append("- Shares are estimates of each spot's RNA from the reference's profiles, not counts of cells; a "
                  "type missing from the reference is given to its nearest type.")
     return lines, detail
+
+
+def labels_used_line(s: dict[str, Any]) -> str:
+    """The run's left-out and merged reference labels in a sentence; "" when it used them as they are (or an older
+    result, which records none)."""
+    out, merged = s.get("excluded_labels") or [], s.get("merged_labels") or {}
+    parts = []
+    if out:
+        parts.append(f"Left out of the reference before the fit (their cells not used): {', '.join(out)} "
+                     f"({int(s.get('n_excluded_cells') or 0):,} cells), so no spot can be called one of them.")
+    if merged:
+        groups: dict[str, list[str]] = {}
+        for label, name in merged.items():
+            groups.setdefault(name, []).append(label)
+        parts.append("Merged reference labels: " + "; ".join(f"{name} = {' + '.join(ls)}" for name, ls in groups.items())
+                     + ".")
+    return " ".join(parts)
 
 
 def estimate_note(seconds: float) -> str:

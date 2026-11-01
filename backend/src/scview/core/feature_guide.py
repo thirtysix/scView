@@ -129,6 +129,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Spot composition", "Visium, RCTD",
      "each spot's or Visium HD bin's cell-type shares from another library dataset as the reference; tissue overlay "
      "per type, dominant type, self-check"),
+    ("Unified View > Spot composition > Reference labels", "catch-all label, too many types",
+     "leave reference labels out of the fit (catch-alls such as Unknown are marked, never applied) or merge them under "
+     "a broader name to get under 50 types"),
     ("Unified View > Accessibility > Fragment QC", "",
      "attach atac_fragments.tsv.gz + .tbi: per-cell TSS enrichment and nucleosome signal (Signac's definitions), "
      "fragment length ladder, TSS profile"),
@@ -167,7 +170,7 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
-             "Unified View > Domains > Co-occurrence")
+             "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels")
 
 
 def compact_guide() -> str:
