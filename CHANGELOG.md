@@ -6,6 +6,38 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Differential peaks with a depth covariate** (Unified View > Accessibility): logistic regression as in Seurat's
+  LR test, group ~ peak + total counts against group ~ total counts, now the card's default. P-values match Signac
+  1.17.1 + Seurat 5.6.0 on PBMC 10k to 5e-6 of a log10 unit (all 11,898 cells, 50,000 peaks, 2 clusters). A score
+  test covers every peak and a true likelihood ratio the top 10,000 per group; about 5 minutes for 21 groups at
+  2 CPUs against about 40 s for Wilcoxon, with progress, Cancel and an estimate before the run. Against a true
+  likelihood ratio on every peak, FDR sets agree within 0.4% in three RNA clusters and under-count by up to 11% in
+  low-depth clusters. Why it matters: in a low-depth cluster Wilcoxon passed 37,183 of 37,367 peaks, the covariate
+  18,223; in normal-depth clusters the two are within a few percent. Separated and non-converged fits are named and
+  counted per row and per group. Differential results now reach the replay script; older results read as Wilcoxon.
+  The API's default stays Wilcoxon.
+- **Spot composition: leave reference labels out or merge them** (Reference labels). Labels whose names look like
+  catch-alls are marked and never applied; a column over 50 types can run after merging, with a preview by shared
+  name (58 types to 39, or 17, on a mouse brain reference). The over-share note gains "Leave out <label> and run
+  again". Left-out and merged labels are recorded and reach the replay script, the self-check and the co-pilot. A
+  run with nothing ticked is bitwise the same as before. On Visium HD 16 um mouse brain against a snRNA reference,
+  clusters following their markers went from 8 of 14 with catch-alls to 12 of 14 with Unk out, though per-bin
+  correlation with marker panels did not move (0.41): this fixes what clusters get called, not per-bin signal.
+
+### Changed
+- % mito on segmented Visium HD cells now says one rule removes cell types unevenly and points to Per cell type.
+
+### Fixed
+- Gene matching across Ensembl ids and symbols rebuilt a set for every gene: 35 s on 31,000 genes, now a fraction of
+  a second, in spot composition and reference mapping.
+- The spot composition reference check said "0 genes shared by name" with a false warning for a reference indexed by
+  Ensembl ids; it now counts the genes the fit matches (18,785 on a mouse brain reference).
+- The memory estimate counted doublet detection on segmented Visium HD cells, where the step is skipped: 9.4 GB and
+  large mode, now 1.9 GB in memory.
+- The doublet memory estimate extrapolates Scrublet's variable genes on channels over 5,000 cells instead of using a
+  5,000-cell sample, which ran up to 30% high (lymphoid atlas, 73,000 cells: within 11.5% now).
+
 ## [0.54.0] - 2026-11-01
 
 ### Added
