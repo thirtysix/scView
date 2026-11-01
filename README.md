@@ -85,10 +85,11 @@ reviewer can audit. scView closes both gaps:
   arrow) from spliced and unspliced counts, drawn on the plot with phase portraits. Multiome peaks stay on disk:
   LSI as Signac runs it, ATAC UMAP and clusters, WNN on RNA + ATAC, gene activity, differential peaks, and from the
   fragments file TSS enrichment, nucleosome signal and coverage tracks.
-- **Spatial data on its own terms.** Visium (Space Ranger `outs/`), Visium HD (`binned_outputs/`, 16 or
-  8 um bins) and Xenium output folders open on the tissue image. Find spatially variable genes (Moran's I),
-  spatial domains (CellCharter's method), neighbourhood enrichment and composition niches, with the QC
-  rules adapted: no % mito cut on spots and bins, panel settings on targeted panels.
+- **Spatial data on its own terms.** Visium (Space Ranger `outs/`), Visium HD (16 or 8 um bins, or Space
+  Ranger 4's segmented cells) and Xenium output folders open on the tissue image, with cell and nucleus outlines
+  once you zoom in and, on Xenium, transcripts as dots. Find spatially variable genes (Moran's I), spatial domains
+  (CellCharter's method), neighbourhood enrichment, co-occurrence and composition niches, with the QC rules
+  adapted: no % mito cut on spots and bins, panel settings on targeted panels.
 - **Unified, linked, server-backed exploration.** A Kana-style single screen: scatter plus tabbed
   Markers/Expression/Gene Sets/Enrichment/DE plus violin, scaling to ~200k cells via a FastAPI
   backend, Apache Arrow, and deck.gl. Lasso (or click) a population for a **volcano of differential

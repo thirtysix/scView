@@ -40,6 +40,24 @@ describe("SequencingQcSideFiles", () => {
     expect(c2.innerHTML).toBe("");
   });
 
+  it("names a segmented_outputs folder's outlines by what they hold", () => {
+    const hd = (name: string, part: BundleFile["spatial_part"]): BundleFile =>
+      ({ ...side(name, "spatial"), side_kind: "hd_cells", spatial_part: part });
+    render(
+      <SequencingQcSideFiles
+        files={[hd("cell_segmentations.geojson", "cell_segmentations"), hd("nucleus_segmentations.geojson", "nucleus_segmentations"),
+          hd("graphclust_annotated_cell_segmentations.geojson", "graphclust_annotated_cell_segmentations")]}
+      />,
+    );
+    const items = Array.from(screen.getByTestId("seqqc-side-files").querySelectorAll("li"));
+    expect(items.map((li) => li.textContent)).toEqual([
+      "cell_segmentations.geojson(cell outlines, which place each cell): will be attached",
+      "nucleus_segmentations.geojson(nucleus outlines): will be attached",
+      "graphclust_annotated_cell_segmentations.geojson(Space Ranger's own clusters): will be attached",
+    ]);
+    expect(items[0]!.getAttribute("title")).toContain("tissue image");
+  });
+
   it("names Space Ranger spatial files by what they hold", () => {
     const sp = (name: string, part: BundleFile["spatial_part"]): BundleFile =>
       ({ ...side(name, "spatial"), side_kind: "spatial", spatial_part: part });

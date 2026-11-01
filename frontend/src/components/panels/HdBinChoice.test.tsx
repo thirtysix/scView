@@ -29,4 +29,15 @@ describe("HdBinChoice", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalled();
   });
+
+  it("offers a run's cells first and uploads them by default, with its bins still a choice", () => {
+    const onChoose = vi.fn();
+    render(<HdBinChoice options={OPTIONS} cells onChoose={onChoose} onCancel={vi.fn()} />);
+    expect(screen.getByText("Visium HD: cells or bins?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Upload cells" }));
+    expect(onChoose).toHaveBeenCalledWith("cells");
+    fireEvent.click(screen.getAllByRole("radio")[3]!); // cells, then 2, 8 and 16 um
+    fireEvent.click(screen.getByRole("button", { name: "Upload 16 µm bins" }));
+    expect(onChoose).toHaveBeenLastCalledWith(16);
+  });
 });

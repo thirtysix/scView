@@ -47,13 +47,15 @@ import {
   hdRefusal,
   itemsFromDrop,
   itemsFromFiles,
+  hdSegRuns,
   keepHdBin,
+  keepHdCells,
   skippedNote,
   splitJunk,
   type HdBinOption,
   type UploadItem,
 } from "@/lib/ingestUpload";
-import { HdBinChoice } from "@/components/panels/HdBinChoice";
+import { HdBinChoice, type HdChoice } from "@/components/panels/HdBinChoice";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
   tenx_mex: "10x MEX (matrix + barcodes + features)",
@@ -113,7 +115,7 @@ export function DataPanel() {
   // Files of a picked/dropped folder that were not sent (BAM, Loupe, report), in one sentence.
   const [notSent, setNotSent] = useState<string | null>(null);
   // A Visium HD folder with several bin sizes, waiting for the user's choice.
-  const [hdPick, setHdPick] = useState<{ items: UploadItem[]; options: HdBinOption[] } | null>(null);
+  const [hdPick, setHdPick] = useState<{ items: UploadItem[]; options: HdBinOption[]; cells: boolean } | null>(null);
 
   // CELLxGENE Discover import: offered when the server allows it (PUBLIC_IMPORT_ENABLED).
   const [publicEnabled, setPublicEnabled] = useState(false);
@@ -181,7 +183,7 @@ export function DataPanel() {
   }, []);
 
   const addFiles = useCallback(
-    async (picked: UploadItem[], hdBin?: number) => {
+    async (picked: UploadItem[], hdBin?: HdChoice) => {
       if (picked.length === 0) return;
       // A single R file → the converter path.
       if (picked.length === 1) {
@@ -198,12 +200,14 @@ export function DataPanel() {
         return;
       }
       const options = hdBinOptions(picked);
-      if (options.length > 1 && hdBin == null) {
-        setHdPick({ items: picked, options });
+      const cells = hdSegRuns(picked).size > 0;
+      if (hdBin == null && (options.length > 1 || (cells && options.length > 0))) {
+        setHdPick({ items: picked, options, cells });
         return;
       }
-      const um = hdBin ?? hdDefaultBin(options);
-      const one = um != null ? keepHdBin(picked, um) : { keep: picked, skipped: [] };
+      const choice = hdBin ?? (cells ? "cells" : hdDefaultBin(options));
+      const one =
+        choice === "cells" ? keepHdCells(picked) : choice != null ? keepHdBin(picked, choice) : { keep: picked, skipped: [] };
       const { keep, skipped } = splitJunk(one.keep);
       setNotSent(skippedNote([...one.skipped, ...skipped]));
       if (keep.length === 0) return;
@@ -436,6 +440,7 @@ export function DataPanel() {
       {hdPick && (
         <HdBinChoice
           options={hdPick.options}
+          cells={hdPick.cells}
           onCancel={() => setHdPick(null)}
           onChoose={(um) => {
             const { items } = hdPick;

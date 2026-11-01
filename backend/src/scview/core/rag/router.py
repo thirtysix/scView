@@ -135,18 +135,21 @@ _RESULT_FACET_HINTS = {
         "pseudo-bulk", "voom", "ruv", "crispr", "guide", "knockout", "knock-out", "knocked out",
         "perturb", "mixscape", "ligand", "receptor", "communicat", "composition", "proportion",
         "de audit", "donor shuffle", "deconvol", "bulk", "spot composition", "spots", "spot deconv",
-        "visium hd", " bins", "bin composition", "um bin", "µm bin",
+        "visium hd", " bins", "bin composition", "um bin", "µm bin", "segmented", "segmentation", "outline",
         "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
         "atac", "chromatin", "accessib", "peaks", "lsi", "tf-idf", "tfidf", "multiome", "gene activity",
         "frip", "depth correlation",
         "spatial domain", "domains", "niche", "nhood", "stability scan", "neighbourhood enrichment",
         "neighborhood enrichment", "next to each other", "side by side", "adjacent", "colocal", "co-local",
+        "co-occur", "cooccur", "co occur", "near each other", "close to each other", "close together",
+        "found together", "occur together", "spatial proximity", "how close", "nearby cell types",
         "velocity", "scvelo", "spliced", "unspliced", "phase portrait", "arrows", "gamma", "latent time",
     ),
     "markers": ("gene program", "programs", "nmf"),
     "qc": ("targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts",
            "control probe", "tss enrichment", "nucleosome", "fragment qc", "fragment length", "atac qc",
-           "fragments per cell"),
+           "fragments per cell", "transcripts", "transcript dots", "outlines", "cell boundaries",
+           "nucleus boundaries", "segmentation"),
 }
 
 

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from scview.core import hd_cells
 from scview.core.ingestion.bundling import Bundle, FileRole, IngestUnit, SideKind, UnitFormat
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ def validate_bundle(bundle: Bundle, converted: Collection[str] = ()) -> Validati
         issues.append(IngestIssue(
             severity=IssueSeverity.error, code="spatial_unsupported", message=bundle.unsupported))
     others = sum(u.format != UnitFormat.unknown for u in bundle.units) > 1
+    issues.extend(_merged_outlines_note(bundle, others))
     for unit in bundle.units:
         issues.extend(_validate_unit(unit))
         if unit.format == UnitFormat.seurat:
@@ -77,6 +79,18 @@ def _validate_unit(unit: IngestUnit) -> list[IngestIssue]:
                                   unit_label=unit.label) for text in unit.issues)
     issues.extend(_validate_spatial(unit))
     return issues
+
+
+def _merged_outlines_note(bundle: Bundle, merged: bool) -> list[IngestIssue]:
+    """Merged samples keep no outlines (each run numbers its own cells): said before the commit."""
+    from scview.core import xenium
+
+    if not merged or not any(f.spatial_part in xenium.OUTLINE_KINDS for u in bundle.units for f in u.side_files):
+        return []
+    return [IngestIssue(
+        severity=IssueSeverity.info, code="xenium_merge_no_outlines",
+        message="A merged dataset has no cell outlines: its tissue plot draws points.",
+        suggestion="Import each Xenium run on its own to draw cell and nucleus outlines.")]
 
 
 def _validate_atac(bundle: Bundle) -> list[IngestIssue]:
@@ -118,10 +132,30 @@ def _r_object_note(unit: IngestUnit, converted: bool, others: bool) -> IngestIss
         unit_label=unit.label)
 
 
+def _validate_hd_cells(unit: IngestUnit, parts: set, outlines: set) -> list[IngestIssue]:
+    if hd_cells.PART_CELLS not in outlines:
+        return [IngestIssue(
+            severity=IssueSeverity.error, code="hd_cells_no_outlines",
+            message=f"The segmentation of {unit.label} has no cell_segmentations.geojson, which holds each "
+                    "cell's position.",
+            suggestion="Upload the run's segmented_outputs folder whole.", unit_label=unit.label)]
+    if "scalefactors" not in parts:
+        return [IngestIssue(
+            severity=IssueSeverity.warn, code="spatial_no_scalefactors",
+            message=f"The segmentation of {unit.label} came without spatial/scalefactors_json.json: the cells "
+                    "are placed, but the tissue images cannot be lined up with them.",
+            suggestion="Add the spatial/ folder of segmented_outputs.", unit_label=unit.label)]
+    return []
+
+
 def _validate_spatial(unit: IngestUnit) -> list[IngestIssue]:
     """A sample's Space Ranger spatial files: the tissue positions are required, the
-    scale factors needed to place the images and the spot size."""
+    scale factors needed to place the images and the spot size. A segmented_outputs folder
+    takes its positions from the cell outlines instead."""
     parts = {f.spatial_part for f in unit.side_files if f.side_kind == SideKind.spatial}
+    outlines = {f.spatial_part for f in unit.side_files if f.side_kind == SideKind.hd_cells}
+    if outlines:
+        return _validate_hd_cells(unit, parts, outlines)
     if not parts:
         return []
     if "archive" in parts:

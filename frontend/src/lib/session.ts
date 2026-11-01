@@ -23,6 +23,7 @@ import type { ClipSetting, SignedColormapMode } from "@/lib/colorScale";
 import { PANEL_IDS, UNIFIED_SUBTABS, type PanelId, type UnifiedSubtab } from "@/lib/constants";
 import { exportFilename } from "@/lib/exportFilename";
 import { parseGateList, type SessionGate } from "@/lib/gates";
+import { DOT_SIZE_RANGE } from "@/lib/transcripts";
 import { ARROW_DENSITY_RANGE, ARROW_SCALE_RANGE } from "@/lib/velocityArrows";
 import type { DEMode, DETest } from "@/stores/deSettingsStore";
 import type { CellMethod } from "@/lib/deMethods";
@@ -107,6 +108,10 @@ export interface SessionView {
   color_clip?: ClipSetting | null;
   /** The velocity arrows on the main plot; absent in older sessions */
   velocity_arrows?: { on: boolean; scale: number; density: number } | null;
+  /** The tissue plot's Draw choice; only saved for a dataset with outlines */
+  tissue_draw?: "points" | "cell" | "nucleus";
+  /** Transcript dots over the tissue; only saved for a dataset with transcripts */
+  transcripts?: { genes: string[]; dot_size: number } | null;
 }
 
 export interface SessionDE {
@@ -449,6 +454,14 @@ export function parseSession(x: unknown): SessionFile {
           on: bool(o.on, `${at}.on`),
           scale: number(o.scale, `${at}.scale`, ARROW_SCALE_RANGE[0], ARROW_SCALE_RANGE[1]),
           density: number(o.density, `${at}.density`, ARROW_DENSITY_RANGE[0], ARROW_DENSITY_RANGE[1]),
+        };
+      }),
+      tissue_draw: (v, at) => oneOf(v, ["points", "cell", "nucleus"] as const, at),
+      transcripts: nullable((v, at) => {
+        const o = object(v, at);
+        return {
+          genes: texts(o.genes, `${at}.genes`, 0, 8),
+          dot_size: number(o.dot_size, `${at}.dot_size`, DOT_SIZE_RANGE[0], DOT_SIZE_RANGE[1]),
         };
       }),
     });

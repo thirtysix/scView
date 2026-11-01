@@ -32,6 +32,7 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -292,6 +293,24 @@ def _add_spatial_domains(adaptor, lines: list[str], sources: list[ChatSource]) -
                                   evidence="\n".join(sd_lines[1:])))
 
 
+def _add_cooccurrence(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The saved co-occurrence (core/spatial_cooccurrence.py): the pairs most together at the
+    shortest distance with enough pairs, with their scores; only when it fits."""
+    from scview.core import spatial_cooccurrence, spatial_domains
+
+    try:
+        adata = adaptor.adata
+        cc_lines, cc_detail = (spatial_cooccurrence.grounding_lines(adata) if spatial_domains.has_spatial(adata)
+                               else ([], ""))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: co-occurrence failed: %s", exc)
+        return
+    if cc_lines:
+        lines.extend(cc_lines)
+        sources.append(ChatSource(kind="result", ref=spatial_cooccurrence.TAG, detail=cc_detail,
+                                  evidence="\n".join(cc_lines[1:])))
+
+
 def _add_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The last bulk deconvolution (core/deconvolution.py): the largest cell fraction per
     bulk sample, only once one has run on this dataset."""
@@ -338,6 +357,24 @@ def _add_spot_deconvolution(adaptor, lines: list[str], sources: list[ChatSource]
         lines.extend(sd_lines)
         sources.append(ChatSource(kind="result", ref=spot_deconvolution.TAG, detail=sd_detail,
                                   evidence="\n".join(sd_lines[1:])))
+
+
+def _add_imaging_store(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """A Xenium dataset's outlines and transcripts (core/cell_outlines.py, core/transcripts.py),
+    kept beside its h5ad at DATA_DIR/<layer>/<id>/; nothing on a dataset without them."""
+    from scview.core import cell_outlines, transcripts
+
+    try:
+        path = Path(adaptor.h5ad_path)
+        data_dir, dataset_id = path.parents[2], path.parent.name
+        i_lines, i_detail = transcripts.grounding_lines(data_dir, dataset_id, cell_outlines.kinds_of(data_dir, dataset_id))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: imaging store failed: %s", exc)
+        return
+    if i_lines:
+        lines.extend(i_lines)
+        sources.append(ChatSource(kind="result", ref=transcripts.TAG, detail=i_detail,
+                                  evidence="\n".join(i_lines[1:])))
 
 
 def _add_velocity(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -995,6 +1032,8 @@ def build_grounding_context(
                                           evidence="\n".join(pca_lines[1:])))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: PCA grounding failed: %s", exc)
+    if want("qc"):
+        _add_imaging_store(adaptor, lines, sources)
     if want("qc") or want("groups"):
         _add_embedding_reliability(adaptor, lines, sources)
         _add_layout_stability(adaptor, lines, sources)
@@ -1004,6 +1043,7 @@ def build_grounding_context(
         _add_atac(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_spatial_domains(adaptor, lines, sources)
+        _add_cooccurrence(adaptor, lines, sources)
         _add_deconvolution(adaptor, lines, sources)
         _add_learned_gate(adaptor, lines, sources)
         _add_spot_deconvolution(adaptor, lines, sources)
@@ -1715,7 +1755,7 @@ _SUBTABS = {
     "genesets": "Gene Sets", "enrichment": "Enrichment", "de": "DE",
     "protein": "Protein", "activity": "Activity", "genelists": "Gene lists",
     "communication": "Communication", "report": "Report",
-    "spatial": "Spatial genes", "traits": "Traits",
+    "spatial": "Spatial genes", "transcripts": "Transcripts", "traits": "Traits",
 }
 # Compare panel tabs (frontend ComparePanel.tsx: joint | composition | planner, with
 # Milo and miloDE as modes of Composition).

@@ -52,7 +52,7 @@ import threading
 import time
 import uuid
 import weakref
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -77,6 +77,10 @@ OBSM_CELLS = "spot_deconv_cells"
 OBS_TOP = "spot_deconv_top"
 OBS_TOP_SHARE = "spot_deconv_top_share"
 LOW_COUNTS = "low counts"
+# A type taking much more of the RNA than of the reference's cells: a catch-all label took 21% (mean per bin)
+# of a mouse brain from 2% of a snRNA reference, and the other shares only made sense without it.
+OVER_SHARE_MIN = 0.20
+OVER_SHARE_FOLD = 5.0
 METHODS = ("rctd", "nnls")
 METHOD_NAMES = {"rctd": "RCTD-style Poisson-lognormal fit", "nnls": "NNLS on the fit genes"}
 
@@ -839,8 +843,8 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
 
 
 NOT_SPOTS = ("Spot composition needs Visium spots or Visium HD bins: this dataset has no capture grid. "
-             "Imaging-based data already resolves single cells: label them from a reference instead "
-             "(Data Assessment > Label from a reference dataset).")
+             "Imaging-based data and segmented Visium HD cells already resolve single cells: label them from a "
+             "reference instead (Data Assessment > Label from a reference dataset).")
 
 
 # ---------------------------------------------------------------------------
@@ -965,6 +969,19 @@ def outputs(p: Prepared, out: dict[str, Any]) -> dict[str, Any]:
             "top_share": share.astype(np.float32)}
 
 
+def over_share_notes(types: Sequence[str], n_type_cells: np.ndarray, rna: np.ndarray) -> list[str]:
+    """A sentence for each type with at least ``OVER_SHARE_MIN`` of the fitted RNA and at least
+    ``OVER_SHARE_FOLD`` times its share of the reference's cells. ``rna``: fitted spots x types."""
+    if not len(rna):
+        return []
+    means, cells = rna.mean(axis=0), np.asarray(n_type_cells, dtype=np.float64)
+    of_cells = cells / cells.sum()
+    return [f"{t} holds {means[k]:.0%} of the RNA here but is {of_cells[k]:.0%} of the reference's cells. That can be "
+            "real; if it is a catch-all label (unknown, low quality), it takes signal from the other types: try a "
+            "reference without it."
+            for k, t in enumerate(types) if means[k] >= OVER_SHARE_MIN and means[k] >= OVER_SHARE_FOLD * of_cells[k]]
+
+
 def summarize(p: Prepared, out: dict[str, Any], *, method: str) -> dict[str, Any]:
     arr = outputs(p, out)
     fitted = out["fitted"]
@@ -984,6 +1001,7 @@ def summarize(p: Prepared, out: dict[str, Any], *, method: str) -> dict[str, Any
         notes.append(f"{n_unconv:,} {unit}s did not settle within {MAX_ITER} rounds; their last estimate is kept.")
     if p.info.get("renamed"):
         notes.append(f"Genes were matched after re-indexing {p.info['renamed']}.")
+    notes.extend(over_share_notes(p.types, p.n_type_cells, rna[fitted]))
     stats_rna, stats_cells = _share_stats(rna, p.types), _share_stats(cells, p.types)
     return {
         "method": method, "method_name": METHOD_NAMES[method], "types": list(p.types),

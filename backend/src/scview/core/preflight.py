@@ -169,6 +169,8 @@ class Header:
     unit: str = "cell"  # what one row is, for the sentence about it: "bin" for Visium HD
     # 10x Multiome peaks, which stay on disk (core/atac_import.py): n_peaks, nnz, store_bytes.
     atac: dict | None = None
+    # A segmented_outputs folder: seconds for its outlines and tissue images, beside the matrix's.
+    side_seconds: float = 0.0
     note: str = ""  # what the numbers rest on, when not read exactly
     seconds: float = 0.0
 
@@ -864,6 +866,9 @@ READ_FILE_BPS = {"10x_h5": 60e6, "mex": 12e6, "loom": 30e6, "table": 5e6, "rds":
 READ_MEMORY_BPS = 400e6
 WRITE_BPS = 150e6  # gzip h5ad, bytes of matrices per second
 ATAC_IMPORT_SECONDS_PER_VALUE = 2.5e-7  # the peak store's pass over the file (PBMC 10k measured at import)
+# Visium HD mouse brain, Space Ranger 4: 64 MB of GeoJSON in 1.0 s; 86 MB of decoded images read and gzip-saved.
+HD_OUTLINE_BPS = 64e6
+HD_IMAGE_BPS = 14e6
 
 
 def _frames_bytes(h: Header) -> int:
@@ -943,6 +948,7 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
         if res + write > peak:
             peak, stage = res + write, "saving the dataset"
         secs += mats / WRITE_BPS + mats / READ_MEMORY_BPS
+    secs += h.side_seconds
     if read:
         breakdown.append(("Reading (converting the values)", read))
     if h.atac:
@@ -1817,10 +1823,10 @@ def estimate_step_peak(step: str, shape: tuple[int, int], nnz: int, dense: bool,
 
 
 def _skips_doublets(adata) -> bool:
-    """A targeted panel's run skips the doublet step (core/targeted_panel.py): it costs nothing."""
+    """A targeted panel's or Visium HD cells' run skips the doublet step: it costs nothing."""
     from scview.core import spatial
 
-    return spatial.targeted_panel(adata)
+    return spatial.targeted_panel(adata) or spatial.doublet_skip(adata) is not None
 
 
 def step_peak_for(adata, step: str, params=None) -> int:
@@ -2321,7 +2327,11 @@ def read_unit_header(unit, genes_in_rows: bool = True) -> Header:
         h.uns_bytes += spatial.side_bytes(spatial_parts)
         h.obsm_bytes += 16 * int(h.n_cells or 0)
         hd = any(part == spatial.POSITIONS and spatial.is_hd_positions(path) for part, path in spatial_parts)
-        h.unit = "bin" if hd else "spot"
+        outlines = [x.path for x in unit.side_files if getattr(x, "side_kind", None) == "hd_cells"]
+        h.unit = "cell" if outlines or xen else "bin" if hd else "spot"
+        if outlines:
+            h.side_seconds = (sum(os.path.getsize(p) for p in outlines) / HD_OUTLINE_BPS
+                              + spatial.side_bytes(spatial_parts) / HD_IMAGE_BPS)
     if xen:
         _xenium_header(h, unit)
     return h
@@ -2525,8 +2535,9 @@ def _file_doublet_plan(path, params=None) -> DoubletPlan | None:
         with h5py.File(path, "r") as f:
             obs = ad.io.read_elem(f["obs"])
             unit = f.get("uns/scview_spatial/unit")
-            if unit is not None and _s(unit[()]) in ("spot", "bin"):  # the step is skipped
-                return DoubletPlan([])
+            tech = f.get("uns/scview_spatial/technology")
+            if unit is not None and (_s(unit[()]) in ("spot", "bin") or (tech is not None and _s(tech[()]) == "visium_hd")):
+                return DoubletPlan([])  # the step is skipped
         ch = doublets.channels(ad.AnnData(obs=obs), _p(params, "doublet_channel_key", "") or None)
         return DoubletPlan([int(k) for k in ch.sizes])
     except Exception:  # noqa: BLE001 — an estimate never fails a request: one channel then

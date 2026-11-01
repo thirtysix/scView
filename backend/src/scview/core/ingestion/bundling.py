@@ -23,7 +23,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field
 
-from scview.core import spatial, xenium
+from scview.core import hd_cells, spatial, xenium
 from scview.core.ingestion.detection import DetectionResult, FileKind, detect_file
 from scview.core.ingestion.paths import junk_reason, skipped_sentence
 
@@ -68,6 +68,7 @@ class SideKind(str, Enum):
     xenium = "xenium"  # experiment.xenium, cell table, image, its metrics (core/xenium.py)
     atac = "atac"  # an ATAC fragments file and its .tbi (core/atac_fragments.py; part in spatial_part)
     atac_metrics = "atac_metrics"  # Cell Ranger ARC per_barcode_metrics.csv (core/atac_import.py)
+    hd_cells = "hd_cells"  # a segmented_outputs outline file (core/hd_cells.py; part in spatial_part)
 
 
 # A 10x MEX unit needs exactly one of each of these.
@@ -91,6 +92,7 @@ _KIND_MAP: dict[FileKind, tuple[UnitFormat | None, FileRole]] = {
     FileKind.crispr_calls: (None, FileRole.side),
     FileKind.spatial: (None, FileRole.side),
     FileKind.xenium: (None, FileRole.side),
+    FileKind.hd_cells: (None, FileRole.side),
     FileKind.atac_fragments: (None, FileRole.side),
     FileKind.atac_metrics: (None, FileRole.side),
     FileKind.unknown: (None, FileRole.unknown),
@@ -104,6 +106,7 @@ _ROLE_TOKENS = ("matrix", "barcodes", "features", "genes")
 # upload-staging dir), so they make poor default labels for a prefix-less MEX.
 _GENERIC_MEX_DIRS = {
     "files", "filtered_feature_bc_matrix", "raw_feature_bc_matrix", "outs", "matrix",
+    "filtered_feature_cell_matrix", "raw_feature_cell_matrix",
 }
 
 
@@ -118,7 +121,8 @@ class BundleFile(BaseModel):
     side_kind: SideKind | None = None  # a side file's kind (role == side)
     receptor: str | None = None  # contig tables: "T", "B" or "T+B" (their chains, else the name)
     # Space Ranger spatial files: positions | scalefactors | hires | lowres | archive;
-    # a Xenium bundle's side files: experiment | cells | image | metrics.
+    # a Xenium bundle's side files: experiment | cells | image | metrics | cell_boundaries |
+    # nucleus_boundaries; a segmented_outputs folder's outlines: hd_cells.PARTS.
     spatial_part: str | None = None
     # The path inside the uploaded folder (``outs/raw_feature_bc_matrix/barcodes.tsv.gz``);
     # the name alone for a plain upload.
@@ -155,8 +159,8 @@ class Bundle(BaseModel):
     complete: bool = False  # every (non-unknown) unit is complete
     issues: list[str] = Field(default_factory=list)
     skipped: list[SkippedFile] = Field(default_factory=list)  # also one sentence in issues
-    # A spatial upload scView does not read (a Xenium .zip, Visium HD's 2 um bins, its archive,
-    # its segmented outputs): an error at validation.
+    # A spatial upload scView does not read (a Xenium .zip, Visium HD's 2 um bins, its archives,
+    # a segmented_outputs folder without its matrix or cell outlines): an error at validation.
     unsupported: str | None = None
 
 
@@ -247,6 +251,7 @@ def bundle_from_detections(
     spatial_files: list[BundleFile] = []
     atac_files: list[BundleFile] = []
     atac_metrics_files: list[BundleFile] = []
+    hd_cells_files: list[BundleFile] = []
 
     for path, det in detected:
         refusal = refusal or _hd_refusal(path, det)
@@ -278,6 +283,9 @@ def bundle_from_detections(
             atac_files.append(bf.model_copy(update={"side_kind": SideKind.atac, "spatial_part": det.details.get("part")}))
         elif det.kind == FileKind.atac_metrics:
             atac_metrics_files.append(bf.model_copy(update={"side_kind": SideKind.atac_metrics}))
+        elif det.kind == FileKind.hd_cells:
+            hd_cells_files.append(bf.model_copy(update={
+                "side_kind": SideKind.hd_cells, "spatial_part": det.details.get("part")}))
         else:
             unknown_files.append(bf)
 
@@ -308,6 +316,7 @@ def bundle_from_detections(
     bundle_issues.extend(_attach_crispr_files(units, crispr_files))
     bundle_issues.extend(_attach_atac_files(units, atac_files))
     bundle_issues.extend(_attach_spatial_files(units, spatial_files))
+    bundle_issues.extend(_attach_hd_cells_files(units, hd_cells_files))
     bundle_issues.extend(_attach_atac_metrics(units, atac_metrics_files))
     _unique_labels(units)
     if skipped:
@@ -326,17 +335,21 @@ def bundle_from_detections(
 
 def _hd_refusal(path: Path, det: DetectionResult) -> str | None:
     """A Visium HD file whose content (not its folder) says it cannot be read: an archive
-    of the binned outputs, or bins finer than ``HD_MIN_BIN_UM``."""
+    of its outputs, or bins finer than ``HD_MIN_BIN_UM``."""
     if det.details.get("hd_archive"):
         return spatial.HD_ARCHIVE.format(name=path.name)
+    if det.details.get("hd_seg_archive"):
+        return spatial.HD_SEG_ARCHIVE.format(name=path.name)
     um = det.details.get("hd_bin_um")
     return spatial.too_fine(um) if um is not None and um < spatial.HD_MIN_BIN_UM else None
 
 
 def _select_hd_bins(detected, rel, skipped: list[dict]):
-    """Visium HD: one bin size of each run is read (``spatial.hd_chosen_bins``; the wizard
-    sends only the one the user chose). The run's other bin sizes and the rest of its output
-    folder (``outs/spatial``, ``segmented_outputs``...) are recorded in ``skipped``."""
+    """Visium HD: a run with a cell segmentation (``spatial.hd_seg_runs``) reads as cells, else
+    one bin size of each run is read (``spatial.hd_chosen_bins``; the wizard sends only the one
+    the user chose). The run's other bin sizes and the rest of its output folder (``outs/spatial``,
+    ``segmented_outputs``...) are recorded in ``skipped``."""
+    detected = _select_hd_cells(detected, rel, skipped)
     chosen = spatial.hd_chosen_bins(rel(p) for p, _ in detected)
     if not chosen:
         return detected
@@ -354,6 +367,29 @@ def _select_hd_bins(detected, rel, skipped: list[dict]):
         elif any(rel(p).startswith(pre) for pre in prefixes):
             skipped.append({"path": rel(p), "reason": "the rest of the Space Ranger output folder, "
                             "not part of the bins read"})
+        else:
+            keep.append((p, det))
+    return keep
+
+
+def _select_hd_cells(detected, rel, skipped: list[dict]):
+    """Of a run with a cell segmentation only ``segmented_outputs/`` is read: its bins and the
+    rest of its output folder are recorded in ``skipped``."""
+    runs = spatial.hd_seg_runs(rel(p) for p, _ in detected)
+    if not runs:
+        return detected
+    prefixes = [run + "/" for run in runs if run]
+    keep = []
+    for p, det in detected:
+        r = rel(p)
+        hit = spatial.hd_folder(r)
+        if spatial.hd_seg_folder(r) in runs:
+            keep.append((p, det))
+        elif hit is not None and hit[0] in runs:
+            skipped.append({"path": r, "reason": spatial.HD_BINS_NOT_READ})
+        elif any(r.startswith(pre) for pre in prefixes):
+            skipped.append({"path": r, "reason": "the rest of the Space Ranger output folder, not part of "
+                            "the cells read"})
         else:
             keep.append((p, det))
     return keep
@@ -396,7 +432,8 @@ def _xenium_unit(g: xenium.Group, by_rel: dict) -> IngestUnit:
                        key=lambda f: f.role.value)
     side = [bf(path, role=FileRole.side, side_kind=SideKind.xenium, spatial_part=part)
             for part, path in ((xenium.PART_EXPERIMENT, g.experiment), (xenium.PART_CELLS, g.cells),
-                               (xenium.PART_IMAGE, g.image), (xenium.PART_METRICS, g.metrics)) if path]
+                               (xenium.PART_IMAGE, g.image), (xenium.PART_METRICS, g.metrics),
+                               *g.outlines.items()) if path]
     label = xenium.region_name(by_rel[g.experiment][0]) if g.experiment else ""
     label = label or _dir_label(f"{g.root}/x" if g.root else "x") or "xenium"
     missing = g.missing()
@@ -420,6 +457,7 @@ _GENERIC_DIRS = {
     "filtered_feature_bc_matrix", "raw_feature_bc_matrix", "sample_filtered_feature_bc_matrix",
     "sample_raw_feature_bc_matrix", "filtered_gene_bc_matrices", "raw_gene_bc_matrices",
     "vdj_t", "vdj_b", "vdj_t_gd", "vdj", "spatial",
+    "segmented_outputs", "filtered_feature_cell_matrix",
 }
 # Folders that hold one sample's matrix / contigs, below that sample's own folder.
 _CONTAINER_DIRS = {
@@ -427,6 +465,7 @@ _CONTAINER_DIRS = {
     "sample_filtered_feature_bc_matrix", "sample_raw_feature_bc_matrix",
     "filtered_gene_bc_matrices", "raw_gene_bc_matrices", "vdj_t", "vdj_b", "vdj_t_gd",
     "spatial",  # Space Ranger's spatial/ folder: positions, scale factors, images
+    "filtered_feature_cell_matrix",  # in Space Ranger 4's segmented_outputs/
 }
 _GENOME_PARENTS = {"filtered_gene_bc_matrices", "raw_gene_bc_matrices"}  # Cell Ranger 2: <dir>/GRCh38/
 _VDJ_DIRS = {"vdj_t": "T", "vdj_t_gd": "T", "vdj_b": "B"}
@@ -679,6 +718,7 @@ _TENX_TOKENS = (
     "sample_filtered_feature_bc_matrix", "sample_raw_feature_bc_matrix",
     "filtered_feature_bc_matrix", "raw_feature_bc_matrix",
     "filtered_gene_bc_matrices", "raw_gene_bc_matrices", "metrics_summary", "per_barcode_metrics",
+    "filtered_feature_cell_matrix",
 )
 
 
@@ -1010,6 +1050,35 @@ def _attach_spatial_files(units: list[IngestUnit], files: list[BundleFile]) -> l
             continue
         unit.side_files.append(bf)
         _spatial_label(unit)
+    return issues
+
+
+def _attach_hd_cells_files(units: list[IngestUnit], files: list[BundleFile]) -> list[str]:
+    """Add each outline file of a segmented_outputs folder to the only unit of its folder, else
+    the only unit, and name that unit after its run. Returns bundle issues."""
+    if not files:
+        return []
+    loadable = [u for u in units if u.format != UnitFormat.unknown]
+    if not loadable:
+        return ["Space Ranger's cell outlines need the matrix they belong to: add filtered_feature_cell_matrix.h5 "
+                "from the same segmented_outputs folder."]
+    issues: list[str] = []
+    for bf in files:
+        root = _sample_root(bf.rel_path or bf.name)
+        unit = _only_in_root(loadable, f"{root}|") or (loadable[0] if len(loadable) == 1 else None)
+        if unit is None:
+            issues.append(f"Could not tell which sample the outlines {bf.rel_path or bf.name} belong to: upload "
+                          "each run's segmented_outputs folder whole.")
+            continue
+        if any(f.spatial_part == bf.spatial_part for f in unit.side_files if f.side_kind == SideKind.hd_cells):
+            issues.append(f"{bf.name}: sample {unit.label} already has this file; this one was not attached.")
+            continue
+        unit.side_files.append(bf)
+    for unit in loadable:
+        if any(f.side_kind == SideKind.hd_cells for f in unit.side_files) and unit.files:
+            name = unit.files[0].name
+            prefix = sample_key(name) if unit.format == UnitFormat.tenx_h5 else _mex_prefix(name)
+            unit.label = hd_cells.run_label(unit.files[0].rel_path, prefix)
     return issues
 
 

@@ -6,6 +6,65 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-11-01
+
+### Added
+- **Cell and nucleus outlines on the tissue plot** (Embedding: Tissue, Draw: Points, Cells or Nuclei). A whole
+  section stays points; the segmented shapes are drawn once under 30,000 cells (or 400,000 vertices) are in view,
+  with the same colours, hover and lasso. Xenium outlines come with the folder upload, or attach later from the
+  Transcripts tab; Visium HD's come with its segmentation. Breast Rep1: 167,780 cells, a centroid inside its own
+  outline for 99.992%, polygon area against the cell table r = 0.9997. Outlines stay beside the dataset, so an
+  h5ad export carries none and a merged dataset has none.
+- **Xenium transcripts** (Unified View > Transcripts): attach `transcripts.parquet` and draw up to 8 genes as
+  coloured dots, thinned evenly per gene with "Showing N of M" when a view holds over 300,000. Indexing keeps
+  q >= 20 and leaves out control features. Breast Rep1: 42.6M rows to 34.4M in about 11 s, 297 MB on disk. Checked
+  against the count matrix when it runs: all 313 genes equal, 32,102,954 on both sides. A view on 3 genes
+  answers in about 100 ms for the whole section. Dots show every molecule of the run, whichever cells are filtered.
+- **Space Ranger 4 cell segmentation**: a `segmented_outputs` folder reads as cells, with outlines and Space
+  Ranger's clusters as `spaceranger_graphclust`. A folder holding both cells and bins asks which, cells first;
+  Space Ranger 3 folders are unaffected. Mouse brain: 40,222 cells, 160 MB sent, 12 s to import, default run 144 s
+  and a 2.5 GB peak under an 8 GB limit. The cells hold 69% of the same section's bin counts, so counts run about
+  31% lower than in bins (per gene r = 0.99). Against Space Ranger's clusters ARI 0.55 (14 clusters against 26);
+  top 100 Moran's I genes 78 shared with 16 um bins. Moran's I uses each cell's 6 nearest and domains a Delaunay
+  graph, not the bin grid. % mito stays on: the default removes 11.5% of these cells, unevenly (neurons 0-3%,
+  glia and vessels 18-35%). Doublet detection does not run on them: a tissue section has no droplets, and
+  Scrublet's random pairs do not model the signal cells share with neighbours. Spot composition stays
+  for spots and bins.
+- **Co-occurrence** (Unified View > Domains): score against distance per label, a labels x labels heatmap and
+  CSV, in microns where the pixel size is known, with a replay step. Equal to squidpy 1.6.5 up to its size limit
+  (largest difference 1.9e-6 on DLPFC, 3.8e-6 on a lymph node, 7.5e-5 on 20,000 Xenium cells). Each section's pairs
+  are counted apart. Xenium 160,675 cells 17 s at 4 CPUs; 393,543 Visium HD bins 164 s at 2 CPUs.
+- **Spot composition warns about a label that takes far more RNA than it has cells**: at least 20% of the RNA and
+  at least 5 times its share of the reference. On mouse brain against a snRNA reference, a catch-all "Unk" (2% of
+  the cells) held 21%; without the catch-all labels the clusters follow their markers (Oligo 0.61 in the Mbp
+  cluster, CA1, DG and CA3 in the Hpca cluster, thalamic neurons in the Tcf7l2 cluster). The run has no option to leave
+  a label out: use a reference without it.
+
+### Changed
+- **Above 22,897 observations co-occurrence counts all pairs, which differs from squidpy's default.** Squidpy
+  cuts such data by row into splits and averages the split pairs' scores, and far-apart splits add zeros. Xenium
+  rows are in spatial order: r = -0.15 against all pairs, same-label short-range scores 0.22 against 3.94; with the
+  rows shuffled the same mean gives r = 0.999. A checkbox reproduces squidpy's result (largest difference 7.6e-5).
+- Xenium folder uploads send about 17 MB more, for the boundary files. Without them nothing changes.
+
+### Fixed
+- **A file with pandas `string` columns could not be saved at import**: a current muon `.h5mu` or an `.h5ad` with
+  nullable strings passed detection, then failed at Create dataset with an anndata error. Pandas 3 writes such
+  columns by default. They now save as plain text, for every format.
+- The import wizard called Xenium cells "spots".
+
+### Checked
+- The gaps listed for v0.53.0: real mouse multiome (E18 brain, mm10) through ATAC, WNN, fragment QC and coverage (Gad2
+  coverage peaks in the clusters with its RNA); an `.h5mu` written by muon, through the wizard, with the same peaks as the
+  .h5; a native velocyto .loom attached in the UI, all 812 cells matched (its barcodes also built the test dataset,
+  so a separately made dataset is still untested); coverage as SVG and PDF.
+
+### Known limits
+- Doublet detection's memory estimate runs high (13.2 GiB against 9.0 measured on 40,222 cells).
+- The first zoom or pan at Xenium scale was once seen to stall for up to 1 s on a loaded machine; not reproduced
+  in the live check (longest task 133 ms).
+- Outlines are not in SVG or PDF export.
+
 ## [0.53.0] - 2026-10-31
 
 ### Added

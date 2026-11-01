@@ -549,3 +549,28 @@ def test_sweep_expired(mgr):
     assert removed == 1
     assert not mgr.exists(sid)
     assert mgr.exists(fresh)
+
+
+def test_plain_strings_makes_a_nullable_string_dataset_writable(tmp_path):
+    """A file written with pandas ``string`` columns (nullable-string-array) saves as plain text."""
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+    import scipy.sparse as sp
+
+    from scview.core.ingestion.session import _plain_strings
+
+    adata = ad.AnnData(X=sp.csr_matrix(np.ones((3, 2), dtype=np.float32)))
+    adata.obs_names = pd.Index(["a", "b", "c"], dtype="string")
+    adata.var_names = pd.Index(["g1", "g2"], dtype="string")
+    adata.obs["label"] = pd.array(["x", pd.NA, "y"], dtype="string")
+    adata.var["gene_ids"] = pd.array(["e1", "e2"], dtype="string")
+    adata.raw = adata.copy()
+    adata.raw.var["gene_ids"] = pd.array(["e1", "e2"], dtype="string")
+    _plain_strings(adata)
+    path = tmp_path / "plain.h5ad"
+    adata.write_h5ad(path)
+    back = ad.read_h5ad(path)
+    assert back.obs_names.tolist() == ["a", "b", "c"]
+    assert back.var["gene_ids"].astype(str).tolist() == ["e1", "e2"]
+    assert back.obs["label"].isna().tolist() == [False, True, False]

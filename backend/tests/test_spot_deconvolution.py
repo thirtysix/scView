@@ -456,3 +456,13 @@ def test_counts_below_for_the_floors_caption():
     assert c["below"][11] == 7 and c["below"][100] == 7 and c["below"][501] == 40 and c["median"] == 500.0
     # Past the table's limit the last entry stands for "fewer than limit".
     assert c["below"][1000] == 40
+
+
+def test_a_type_far_above_its_share_of_the_reference_is_flagged():
+    rna = np.tile([0.3, 0.5, 0.2], (10, 1))
+    notes = sd.over_share_notes(["Unk", "Oligo", "Astro"], np.array([20, 500, 480]), rna)
+    assert len(notes) == 1 and notes[0].startswith("Unk holds 30% of the RNA here but is 2% of the reference's cells")
+    # Common in the spots and in the reference, or rare in both: nothing to say.
+    assert sd.over_share_notes(["A", "B"], np.array([50, 50]), np.tile([0.6, 0.4], (5, 1))) == []
+    assert sd.over_share_notes(["A", "B"], np.array([2, 98]), np.tile([0.1, 0.9], (5, 1))) == []
+    assert sd.over_share_notes(["A"], np.array([5]), np.empty((0, 1))) == []

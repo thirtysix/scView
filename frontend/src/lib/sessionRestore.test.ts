@@ -16,6 +16,7 @@ import { useGeneListsStore } from "@/stores/geneListsStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
+import { useTissueViewStore } from "@/stores/tissueViewStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useViewStore } from "@/stores/viewStore";
 
@@ -511,6 +512,57 @@ describe("communication settings", () => {
     delete older.communication;
     await restoreSession(older);
     expect(useCommunicationStore.getState().groupby).toBe("cell_type");
+  });
+});
+
+describe("the tissue plot's outlines and transcripts", () => {
+  const library = { id: "r1", n_obs: 100, images: {}, spot_diameter_fullres: null, bounds: [0, 0, 1, 1] as [number, number, number, number] };
+  const xenium = (over: object = {}) =>
+    kang({ spatial: { technology: "xenium", unit: "cell", library_column: "library_id", libraries: [library], outlines: ["cell", "nucleus"], transcripts: true, ...over } });
+  const reset = () => useTissueViewStore.setState({ draw: "points", transcriptGenes: [], transcriptDotSize: 1 });
+  const roundTrip = (s: SessionFile) => parseSession(JSON.parse(sessionJson(s)));
+
+  beforeEach(reset);
+
+  it("round-trips the Draw choice, the genes and the dot size", async () => {
+    const d = xenium();
+    useDatasetStore.setState({ currentDataset: d, currentDatasetId: d.id });
+    useTissueViewStore.setState({ draw: "nucleus", transcriptGenes: ["ERBB2", "KRT7"], transcriptDotSize: 3 });
+    const session = roundTrip(captureSession());
+    expect(session.view?.tissue_draw).toBe("nucleus");
+    expect(session.view?.transcripts).toEqual({ genes: ["ERBB2", "KRT7"], dot_size: 3 });
+    reset();
+    api.getDataset.mockResolvedValue(d);
+    await restoreSession(session);
+    const t = useTissueViewStore.getState();
+    expect([t.draw, t.transcriptGenes, t.transcriptDotSize]).toEqual(["nucleus", ["ERBB2", "KRT7"], 3]);
+  });
+
+  it("leaves a session of any other dataset as it was", () => {
+    const d = kang();
+    useDatasetStore.setState({ currentDataset: d, currentDatasetId: d.id });
+    const view = captureSession().view!;
+    expect("tissue_draw" in view).toBe(false);
+    expect("transcripts" in view).toBe(false);
+  });
+
+  it("opened on a dataset without them, says so and stays on points", async () => {
+    const d = xenium();
+    useDatasetStore.setState({ currentDataset: d, currentDatasetId: d.id });
+    useTissueViewStore.setState({ draw: "cell", transcriptGenes: ["ERBB2"] });
+    const session = roundTrip(captureSession());
+    reset();
+    api.getDataset.mockResolvedValue(xenium({ outlines: [], transcripts: false }));
+    const report = await restoreSession(session);
+    expect(useTissueViewStore.getState().draw).toBe("points");
+    expect(useTissueViewStore.getState().transcriptGenes).toEqual([]);
+    expect(report.notes.join(" ")).toContain("Draw cells: this dataset has no such outlines.");
+    expect(report.notes.join(" ")).toContain("Transcript dots: this dataset has no transcripts attached.");
+  });
+
+  it("refuses a file with more genes than can be drawn", () => {
+    const bad = { format: "scview-session", version: 1, view: { transcripts: { genes: Array(9).fill("A"), dot_size: 2 } } };
+    expect(() => parseSession(bad)).toThrow();
   });
 });
 

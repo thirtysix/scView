@@ -296,17 +296,19 @@ def has_spatial(adata) -> bool:
 
 
 def is_grid(adata) -> bool:
-    """Visium's or Visium HD's grid (squidpy coord_type "grid"), else generic kNN."""
+    """Visium's or Visium HD's grid (squidpy coord_type "grid"), else generic kNN. Visium HD's
+    segmented cells (unit "cell") are on no grid."""
     info = adata.uns.get("scview_spatial")
     if isinstance(info, dict) and info.get("technology"):
-        return str(info["technology"]) in ("visium", "visium_hd")
+        return str(info["technology"]) in ("visium", "visium_hd") and info.get("unit") != "cell"
     return "spatial" in adata.uns
 
 
 def neighbours_of(adata) -> int:
     """Each point's neighbours: 4 on Visium HD's square grid, else 6."""
     info = adata.uns.get("scview_spatial")
-    return HD_NEIGHS if isinstance(info, dict) and info.get("technology") == "visium_hd" else N_NEIGHS
+    bins = isinstance(info, dict) and info.get("technology") == "visium_hd" and info.get("unit") != "cell"
+    return HD_NEIGHS if bins else N_NEIGHS
 
 
 def unit_of(adata) -> str:

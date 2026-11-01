@@ -3,9 +3,12 @@
 A bundle is ``experiment.xenium`` + ``cell_feature_matrix.h5`` (or the folder
 ``cell_feature_matrix/``, MEX) + ``cells.parquet`` (or ``cells.csv.gz``), with an optional
 image: ``morphology_focus.ome.tif``, ``morphology_focus/morphology_focus_0000.ome.tif``
-(XOA 2+, channel 0 = DAPI), else ``morphology_mip.ome.tif``. The transcripts, boundaries,
-Explorer stores and XOA's own analysis are never read: the 10 GB folder sends about 30 MB
-plus the image (``paths.py`` and ``lib/ingestUpload.ts`` leave them out).
+(XOA 2+, channel 0 = DAPI), else ``morphology_mip.ome.tif``, and the optional
+``cell_boundaries.parquet`` + ``nucleus_boundaries.parquet`` (``.csv.gz`` only without a parquet),
+which go to ``cell_outlines``' store at commit. The transcripts, Explorer stores and XOA's own
+analysis are not read at upload: the 10 GB folder sends about 50 MB plus the image (``paths.py``
+and ``lib/ingestUpload.ts`` leave them out; ``core/transcripts.py`` indexes a transcripts.parquet
+attached later).
 
 The dataset (the format history follows spatialdata-io's Xenium reader, BSD-3-Clause,
 Copyright (c) 2022, scverse; nothing is copied from it):
@@ -38,14 +41,14 @@ import json
 import logging
 import zipfile
 import zlib
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import numpy as np
 import pandas as pd
 
-from scview.core import spatial
+from scview.core import cell_outlines, spatial
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,12 @@ GENE_TYPE = "Gene Expression"
 
 # The parts of a bundle (``BundleFile.spatial_part``).
 PART_EXPERIMENT, PART_CELLS, PART_IMAGE, PART_METRICS = "experiment", "cells", "image", "metrics"
+PART_CELL_OUTLINES, PART_NUCLEUS_OUTLINES = "cell_boundaries", "nucleus_boundaries"
+# Outline kind (``cell_outlines``) of each boundaries part; its file names by preference.
+OUTLINE_KINDS = {PART_CELL_OUTLINES: "cell", PART_NUCLEUS_OUTLINES: "nucleus"}
+OUTLINE_NAMES = {part: (f"{part}.parquet", f"{part}.csv.gz") for part in OUTLINE_KINDS}
+MIN_OUTLINE_MATCH = 0.5  # the share of a dataset's cells a boundaries file must match, by id and place
+OUTLINES_NOTE = "outlines_note"  # uns spatial[library].metadata: why a bundle's outlines were left out
 
 H5_NAME = "cell_feature_matrix.h5"
 MEX_DIR = "cell_feature_matrix"
@@ -81,6 +90,7 @@ _ORGANISMS = {"human": "human", "homo sapiens": "human", "mouse": "mouse", "mus 
 _PARQUET_MAGIC = b"PAR1"
 _ZIP_MAGIC = b"PK\x03\x04"
 _MAX_METRICS = 200
+_OUTLINE_CSV_CHUNK = 1_000_000  # rows of a boundaries .csv.gz read at once
 # TIFF compression tags of the JPEG 2000 and JPEG codecs (Pillow decodes a tile's bytes).
 _PILLOW_CODECS = {7, 33003, 33004, 33005, 34712, 34713}
 
@@ -108,7 +118,26 @@ def sniff(path: Path, head: bytes) -> dict | None:
         return {"part": PART_CELLS, "reason": "Xenium cell table (cells.csv.gz)"}
     if any(name == PurePosixPath(p).name for p in IMAGE_PATHS):
         return {"part": PART_IMAGE, "reason": "Xenium morphology image (OME-TIFF)"}
+    part = outline_part(name)
+    if part and ((name.endswith(".parquet") and head.startswith(_PARQUET_MAGIC))
+                 or (name.endswith(".gz") and _boundaries_csv_header(path))):
+        return {"part": part, "reason": f"Xenium {OUTLINE_KINDS[part]} outlines ({name})"}
     return None
+
+
+def outline_part(name: str) -> str | None:
+    """The boundaries part a file name is, or None."""
+    low = PurePosixPath(name).name.lower()
+    return next((part for part, names in OUTLINE_NAMES.items() if low in names), None)
+
+
+def _boundaries_csv_header(path: Path) -> bool:
+    try:
+        with gzip.open(path, "rt", encoding="utf-8", errors="replace") as fh:
+            header = fh.readline().lower()
+    except (OSError, EOFError, zlib.error):
+        return False
+    return _CELL_ID in header and "vertex_x" in header
 
 
 def _cells_csv_header(path: Path) -> bool:
@@ -141,6 +170,7 @@ class Group:
     cells: str | None = None
     image: str | None = None
     metrics: str | None = None
+    outlines: dict[str, str] = field(default_factory=dict)  # boundaries part -> path
     skipped: list[tuple[str, str]] = field(default_factory=list)
 
     def missing(self) -> list[str]:
@@ -155,7 +185,8 @@ class Group:
         return out
 
     def taken(self) -> set[str]:
-        files = [self.experiment, self.h5, self.cells, self.image, self.metrics, *self.mex.values()]
+        files = [self.experiment, self.h5, self.cells, self.image, self.metrics, *self.mex.values(),
+                 *self.outlines.values()]
         return {f for f in files if f} | {p for p, _ in self.skipped}
 
 
@@ -203,6 +234,14 @@ def _place(group: Group, inner: str, rel: str) -> bool:
             group.skipped.append((dropped, f"the same cell table as {PurePosixPath(kept).name}, which is read"))
     elif low == METRICS_NAME:
         group.metrics = rel
+    elif "/" not in low and outline_part(low):
+        part = outline_part(low)
+        other = group.outlines.get(part)
+        if other is None or low.endswith(".parquet"):
+            group.outlines[part] = rel
+        if other is not None:
+            kept, dropped = (rel, other) if low.endswith(".parquet") else (other, rel)
+            group.skipped.append((dropped, f"the same outlines as {PurePosixPath(kept).name}, which is read"))
     elif low in IMAGE_PATHS:
         if group.image is None or IMAGE_PATHS.index(low) < _image_rank(group):
             if group.image is not None:
@@ -374,6 +413,178 @@ def read_metrics(path: str | Path) -> dict:
         except ValueError:
             out[key.strip()] = value
     return out
+
+
+# ---------------------------------------------------------------------------
+# Cell and nucleus outlines (cell_boundaries, nucleus_boundaries)
+# ---------------------------------------------------------------------------
+
+
+def _boundary_blocks(path: Path, shown: str) -> Iterator[tuple]:
+    """(cell id per vertex as a pyarrow array, x, y), one parquet row group or csv chunk at a
+    time, so what is read at once is bound by the row group."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    columns = [_CELL_ID, "vertex_x", "vertex_y"]
+    with open(path, "rb") as fh:
+        is_parquet = fh.read(4) == _PARQUET_MAGIC
+    if is_parquet:
+        pf = pq.ParquetFile(path)
+        missing = [c for c in columns if c not in pf.schema_arrow.names]
+        if missing:
+            raise XeniumError(f"{shown} lacks the column(s) {', '.join(missing)} of a Xenium boundaries file: "
+                              "upload the file Xenium wrote.")
+        for i in range(pf.num_row_groups):
+            t = pf.read_row_group(i, columns=columns, use_threads=False)
+            yield (t[_CELL_ID].combine_chunks(), t["vertex_x"].to_numpy(), t["vertex_y"].to_numpy())
+    else:
+        for chunk in pd.read_csv(path, dtype={_CELL_ID: str}, usecols=columns, chunksize=_OUTLINE_CSV_CHUNK):
+            yield (pa.array(chunk[_CELL_ID].to_numpy(dtype=object), type=pa.string()),
+                   chunk["vertex_x"].to_numpy(), chunk["vertex_y"].to_numpy())
+
+
+def _runs_of(ids) -> tuple[np.ndarray, np.ndarray]:
+    """(the id of each run of equal ids, as text; the row each run starts at) of a pyarrow
+    array: an id is converted once per run, as a cell's vertices follow each other."""
+    import pyarrow as pa
+
+    if pa.types.is_integer(ids.type):
+        codes = ids.to_numpy(zero_copy_only=False)
+        names = None
+    else:
+        encoded = ids if pa.types.is_dictionary(ids.type) else ids.dictionary_encode()
+        codes = encoded.indices.to_numpy(zero_copy_only=False)
+        names = _cell_ids(encoded.dictionary.to_pylist())
+    if not len(codes):
+        return np.array([], dtype=object), np.array([], dtype=np.int64)
+    starts = np.concatenate(([0], np.flatnonzero(codes[1:] != codes[:-1]) + 1))
+    at = codes[starts]
+    return (names[at] if names is not None else at.astype(str).astype(object)), starts
+
+
+def read_boundaries(path: str | Path, shown: str | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(ids as text, offsets, xy) of a boundaries file, one open ring per id, read by row group:
+    an id is an int up to XOA 1.2, then a string (bytes in some parquet files), as in
+    ``cells.parquet``. A repeated closing vertex is dropped (XOA 1.0.1: every ring has one).
+    XeniumError names the file."""
+    path = Path(path)
+    shown = shown or path.name
+    ids, lengths, xs, ys = [], [], [], []
+    try:
+        for block_ids, x, y in _boundary_blocks(path, shown):
+            run_ids, starts = _runs_of(block_ids)
+            ids.append(run_ids)
+            lengths.append(np.diff(np.concatenate((starts, [len(x)]))))
+            xs.append(np.asarray(x, dtype=np.float32))
+            ys.append(np.asarray(y, dtype=np.float32))
+    except XeniumError:
+        raise
+    except Exception as e:  # noqa: BLE001 - pyarrow's and pandas' own errors
+        raise XeniumError(f"{shown} could not be read as a boundaries file ({e}): upload the file Xenium wrote.") from e
+    all_ids = np.concatenate(ids) if ids else np.array([], dtype=object)
+    if not all_ids.size:
+        raise XeniumError(f"{shown} holds no outlines: upload the file Xenium wrote.")
+    xy = np.column_stack((np.concatenate(xs), np.concatenate(ys)))
+    return _as_rings(all_ids, np.concatenate(lengths), xy)
+
+
+def _as_rings(run_ids: np.ndarray, run_lengths: np.ndarray, xy: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One open ring per id from runs of vertices. Runs of one id are joined (a cell split over
+    two row groups, or a file not in cell order), its vertices staying in file order."""
+    codes, uniques = pd.factorize(run_ids)
+    if len(uniques) < len(run_ids):
+        run_starts = np.concatenate(([0], np.cumsum(run_lengths)[:-1]))
+        order = np.argsort(codes, kind="stable")
+        lengths = run_lengths[order]
+        ends = np.cumsum(lengths)
+        rows = (np.arange(ends[-1], dtype=np.int64) - np.repeat(ends - lengths, lengths)
+                + np.repeat(run_starts[order], lengths))
+        xy = xy[rows]
+        run_lengths = np.bincount(codes, weights=run_lengths, minlength=len(uniques)).astype(np.int64)
+    offsets = np.concatenate(([0], np.cumsum(run_lengths)))
+    last = offsets[1:] - 1
+    closed = (run_lengths > 1) & (xy[offsets[:-1]] == xy[last]).all(axis=1)
+    if closed.any():
+        keep = np.ones(len(xy), dtype=bool)
+        keep[last[closed]] = False
+        xy = xy[keep]
+        offsets = np.concatenate(([0], np.cumsum(run_lengths - closed)))
+    return np.asarray(uniques, dtype=object), offsets, xy
+
+
+def outline_fit(ids: np.ndarray, offsets: np.ndarray, xy: np.ndarray, obs_names, positions: np.ndarray) -> dict:
+    """How a boundaries file fits a dataset: ``n_cells``, ``n_file``, ``n_matched`` (cells whose id
+    the file holds) and ``n_placed`` (of those, with their position inside the outline's bounding
+    box). Ids alone prove little: XOA 1.0's are 1, 2, 3... in every run."""
+    rows = pd.Index(ids).get_indexer(pd.Index([str(o) for o in obs_names]))
+    matched = rows >= 0
+    out = {"n_cells": len(rows), "n_file": len(ids), "n_matched": int(matched.sum()), "n_placed": 0}
+    if not out["n_matched"]:
+        return out
+    starts = offsets[:-1]
+    low = np.column_stack((np.minimum.reduceat(xy[:, 0], starts), np.minimum.reduceat(xy[:, 1], starts)))
+    high = np.column_stack((np.maximum.reduceat(xy[:, 0], starts), np.maximum.reduceat(xy[:, 1], starts)))
+    at = np.asarray(positions, dtype=np.float64)[matched, :2]
+    inside = (at >= low[rows[matched]]) & (at <= high[rows[matched]])
+    out["n_placed"] = int(inside.all(axis=1).sum())
+    return out
+
+
+def refusal_of(fit: Mapping, shown: str) -> str | None:
+    """The sentence when a boundaries file does not fit its dataset; None when it does."""
+    need = MIN_OUTLINE_MATCH * fit["n_cells"]
+    if fit["n_matched"] < need:
+        return (f"{shown} matches {fit['n_matched']:,} of this dataset's {fit['n_cells']:,} cells by id "
+                f"({fit['n_file']:,} outlines in the file): upload the boundaries of this run.")
+    if fit["n_placed"] < need:
+        return (f"{shown} matches this dataset's cells by id, but only {fit['n_placed']:,} of the "
+                f"{fit['n_cells']:,} cells sit inside their outline: upload the boundaries of this run.")
+    return None
+
+
+def write_outlines(path: str | Path, part: str, adata, data_dir: str | Path, dataset_id: str,
+                   shown: str | None = None) -> dict:
+    """Read one boundaries file, check it fits the dataset and write it to the outline store.
+    The fit, with ``kind`` and ``n_vertices``. XeniumError names the file and what to do."""
+    shown = shown or Path(path).name
+    ids, offsets, xy = read_boundaries(path, shown)
+    fit = outline_fit(ids, offsets, xy, adata.obs_names, adata.obsm[spatial.KEY])
+    refusal = refusal_of(fit, shown)
+    if refusal:
+        raise XeniumError(refusal)
+    kind = OUTLINE_KINDS[part]
+    cell_outlines.write(cell_outlines.store_path(data_dir, dataset_id, kind), ids, offsets, xy, source=shown)
+    return {**fit, "kind": kind, "n_vertices": int(len(xy))}
+
+
+def outlines_note(adata) -> str | None:
+    """Why a bundle's boundaries files were left out at import, or None."""
+    libraries = adata.uns.get(spatial.KEY)
+    if not isinstance(libraries, Mapping):
+        return None
+    for entry in libraries.values():
+        meta = entry.get("metadata") if isinstance(entry, Mapping) else None
+        note = meta.get(OUTLINES_NOTE) if isinstance(meta, Mapping) else None
+        if note:
+            return str(note)
+    return None
+
+
+def adopt_outlines(files: Mapping[str, tuple[str, str]], adata, data_dir: str | Path, dataset_id: str) -> list[str]:
+    """A bundle's boundaries files into the store at commit. They only draw, so one that cannot be
+    used leaves a sentence, not a refused dataset; the sentences are returned."""
+    notes = []
+    for part in OUTLINE_KINDS:
+        if part not in files:
+            continue
+        path, shown = files[part]
+        try:
+            write_outlines(path, part, adata, data_dir, dataset_id, shown)
+        except (XeniumError, cell_outlines.OutlineError, OSError) as e:
+            logger.warning("Xenium outlines left out: %s", e)
+            notes.append(str(e))
+    return notes
 
 
 # ---------------------------------------------------------------------------

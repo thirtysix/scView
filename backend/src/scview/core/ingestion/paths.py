@@ -72,11 +72,12 @@ REPORT = "Cell Ranger's HTML report"
 LOUPE = "Loupe Browser files"
 MOLECULES = "per-molecule read information, not a count matrix"
 SPATIAL_EXTRA = "Space Ranger alignment images and tables, not used by scView"
-XENIUM_EXTRA = "Xenium transcripts, boundaries, stains and Explorer files, not used by scView"
+XENIUM_EXTRA = "Xenium transcripts, stains and Explorer files, not read with the folder"
 HD_RAW = "the raw matrix, every bin of the slide and most of them empty: the filtered one is read"
 HD_COPY = "the same matrix as filtered_feature_bc_matrix.h5, which is read"
 HD_ANALYSIS = "Space Ranger's own analysis (clustering, PCA, UMAP, DE): scView computes these itself"
 HD_OTHER = "a Space Ranger output scView does not read"
+SEG_RAW = "the raw matrix, with the cells the run filtered out: the filtered one is read"
 
 _JUNK_NAMES = {
     ".ds_store": SYSTEM, "thumbs.db": SYSTEM, "desktop.ini": SYSTEM,
@@ -87,9 +88,7 @@ _JUNK_NAMES = {
     "spatial_enrichment.csv": SPATIAL_EXTRA, "barcode_fluorescence_intensity.csv": SPATIAL_EXTRA,
     "fiducial_positions_list.txt": SPATIAL_EXTRA, "probe_set.csv": "the probe set of the run, not data",
     "transcripts.parquet": XENIUM_EXTRA, "transcripts.csv.gz": XENIUM_EXTRA,
-    "morphology.ome.tif": XENIUM_EXTRA, "cell_boundaries.parquet": XENIUM_EXTRA,
-    "cell_boundaries.csv.gz": XENIUM_EXTRA, "nucleus_boundaries.parquet": XENIUM_EXTRA,
-    "nucleus_boundaries.csv.gz": XENIUM_EXTRA, "analysis_summary.html": XENIUM_EXTRA,
+    "morphology.ome.tif": XENIUM_EXTRA, "analysis_summary.html": XENIUM_EXTRA,
     "gene_panel.json": XENIUM_EXTRA,
     "raw_probe_bc_matrix.h5": "the raw per-probe matrix, not used by scView",
     "feature_slice.h5": "Space Ranger's per-gene slide images, not used by scView",
@@ -127,6 +126,33 @@ def _hd_junk(rel: str) -> str | None:
     return HD_OTHER
 
 
+_SEG_FILES = {"filtered_feature_cell_matrix.h5", "cell_segmentations.geojson", "nucleus_segmentations.geojson",
+              "graphclust_annotated_cell_segmentations.geojson"}
+_SEG_SPATIAL = {"scalefactors_json.json", "tissue_hires_image.png", "tissue_lowres_image.png"}
+_SEG_MATRIX_DIR = "filtered_feature_cell_matrix"
+
+
+def _seg_junk(rel: str) -> str | None:
+    """Inside a Space Ranger 4 ``segmented_outputs/`` folder only the filtered matrix, the
+    outlines and three files of ``spatial/`` are read: why any other is skipped, None to keep it
+    or outside such a folder."""
+    parts = [p.lower() for p in PurePosixPath(rel).parts]
+    if "segmented_outputs" not in parts[:-1]:
+        return None
+    dirs, name = parts[parts.index("segmented_outputs") + 1:-1], parts[-1]
+    if not dirs and (name in _SEG_FILES or name.endswith("filtered_feature_cell_matrix.h5")):
+        return None
+    if dirs == ["spatial"] and name in _SEG_SPATIAL:
+        return None
+    if dirs == [_SEG_MATRIX_DIR]:
+        return None  # the same matrix as the .h5 when that came too: the bundler drops the copy
+    if "analysis" in dirs:
+        return HD_ANALYSIS
+    if "raw" in name or any("raw" in d for d in dirs):
+        return SEG_RAW
+    return HD_OTHER
+
+
 def junk_reason(rel: str) -> str | None:
     """Why scView skips this file of a folder (a reason above), or None to keep it.
     The frontend skips the same names before sending (``lib/ingestUpload.ts``), so
@@ -139,7 +165,7 @@ def junk_reason(rel: str) -> str | None:
     for suffix, reason in _JUNK_SUFFIXES:
         if name.endswith(suffix):
             return reason
-    return _hd_junk(rel)
+    return _hd_junk(rel) or _seg_junk(rel)
 
 
 def skipped_sentence(skipped: list[dict]) -> str:
