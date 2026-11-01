@@ -473,8 +473,15 @@ def grounding_lines(adata, cells_fingerprint: str | None = None) -> tuple[list[s
     at = f"{s['distances'][t]:g} {s['distance_unit']}"
     detail = f"Co-occurrence of '{s['column']}' on {s['n_used']:,} {s['unit']}s, within {at}"
     sampled = f" (a sample of {s['n_used']:,} of {s['n_labelled']:,})" if s["n_used"] < s["n_labelled"] else ""
-    parts = ([f"most together: {', '.join(high)}"] if high else []) + ([f"most apart: {', '.join(low)}"] if low else [])
-    return ["\n## Spatial co-occurrence (last run)",
-            f"- {detail}{sampled}: {'; '.join(parts) if parts else 'no pair with enough observations'} [{TAG}].",
-            "- The score is P(b | a) / P(b) among pairs within that distance (squidpy's): above 1, b is near a more often "
-            "than among all pairs at that range. Nearby does not mean interacting."], detail
+    splits = s.get("combine") == SQUIDPY_SPLITS  # low scores there come from far-apart splits, not from the tissue
+    parts = ([f"most together: {', '.join(high)}"] if high else []) + (
+        [f"most apart: {', '.join(low)}"] if low and not splits else [])
+    lines = ["\n## Spatial co-occurrence (last run)",
+             f"- {detail}{sampled}: {'; '.join(parts) if parts else 'no pair with enough observations'} [{TAG}].",
+             "- The score is P(b | a) / P(b) among pairs within that distance (squidpy's): above 1, b is near a more often "
+             "than among all pairs at that range. It is symmetric: a near b equals b near a. Nearby does not mean "
+             "interacting."]
+    if splits:
+        lines.append("- This run reproduces squidpy's mean over row-order splits: it depends on the row order and scores run "
+                     "low, so a score below 1 does not mean apart. Counting all pairs is the default.")
+    return lines, detail

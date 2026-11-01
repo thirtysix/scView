@@ -462,6 +462,18 @@ def test_the_fact_names_the_pairs_with_scores_and_resolves_its_family():
     assert cc.grounding_lines(a) == ([], "")
 
 
+def test_the_fact_of_a_split_run_does_not_call_low_scores_apart(monkeypatch):
+    s = {"available": True, "stale": False, "labels": ["a", "b"], "distances": [10.0], "distance_unit": "µm", "column": "c",
+         "n_used": 100, "n_labelled": 100, "unit": "cell", "occ": [[[2.0], [0.1]], [[0.1], [2.0]]],
+         "count": [[[100], [100]], [[100], [100]]]}
+    monkeypatch.setattr(cc, "cooccurrence_summary", lambda *a, **k: s)
+    text = "\n".join(cc.grounding_lines(None)[0])
+    assert "most apart" in text and "row-order" not in text and "symmetric" in text
+    s["combine"] = cc.SQUIDPY_SPLITS
+    text = "\n".join(cc.grounding_lines(None)[0])
+    assert "most apart" not in text and "does not mean apart" in text
+
+
 def test_the_fact_skips_distances_with_too_few_pairs():
     s = {"labels": ["a", "b", "c"], "occ": np.ones((3, 3, 2)).tolist(), "count": np.zeros((3, 3, 2), dtype=int).tolist()}
     s["occ"][0][1] = [9.0, 1.5]
