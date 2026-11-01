@@ -388,7 +388,7 @@ _DA_SECONDS_PER_VALUE = 3.5e-7
 _DA_SECONDS_PER_VALUE_GROUP = 1.4e-8
 _DA_LR_SECONDS_PER_VALUE = 1.5e-7
 _DA_LR_SECONDS_PER_VALUE_GROUP = 1.0e-8
-_DA_LR_SECONDS_PER_CELL_FIT = 1.1e-7
+_DA_LR_SECONDS_PER_CELL_FIT = 9e-8
 _RUN_FIRST_SECONDS = 20.0
 _BASE_BYTES = 600 * 1024**2  # scanpy, numba, umap-learn and pynndescent loaded
 _BLOCK_BYTES = BLOCK_VALUES * 40  # one block read, its TF-IDF copies and transposed product
@@ -429,7 +429,7 @@ def estimate_da_seconds(nnz: int, n_groups: int = 1, test: str = "wilcoxon", *, 
     """Differential accessibility at 2 CPUs: detection, then the batches of peaks; each group's
     bookkeeping per value. PBMC 10k, 104M values: 40 s with 3 groups tested, 76 s with 24.
     ``lr``: detection, the score pass (per value x group), and the fits, each costing per cell.
-    PBMC 10k, 21 groups, 210,000 fits: 311 s (estimate 318), 602 s at 1 CPU."""
+    PBMC 10k, 21 groups, 210,000 fits: 311 s (estimate 268), 602 s at 1 CPU; mouse E18, 4,878 cells: 80 s (112)."""
     if test == "lr":
         fits = LRT_PER_GROUP * n_groups if n_fits is None else n_fits
         return round(5.0 + nnz * (_DA_LR_SECONDS_PER_VALUE + n_groups * _DA_LR_SECONDS_PER_VALUE_GROUP)
