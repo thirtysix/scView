@@ -5,11 +5,12 @@ the cell types of a reference dataset.
 fitted (``reason`` when not: no spots), the saved run and whether one is
 working; ``GET .../reference/{ref}`` reads a candidate reference's label columns, cells
 per type (fewer than 25 flagged), species and shared genes from its file (obs and var
-only) with a memory and time estimate; ``POST .../run-stream`` fits the spots and saves
-obsm ``spot_deconv`` / ``spot_deconv_cells`` and obs ``spot_deconv_top(_share)``
-(SSE); ``GET .../share?type=`` one type's share per spot (the tissue overlay); ``POST
-.../check-stream`` scores both methods on synthetic spots from held-out reference
-cells (SSE, saves nothing); ``GET .../check`` the last check.
+only) with a memory and time estimate; ``POST .../reference/{ref}/labels`` the same after
+left-out and merged labels (a POST: a column's choices can outgrow a URL); ``POST
+.../run-stream`` fits the spots and saves obsm ``spot_deconv`` / ``spot_deconv_cells`` and
+obs ``spot_deconv_top(_share)`` (SSE); ``GET .../share?type=`` one type's share per spot
+(the tissue overlay); ``POST .../check-stream`` scores both methods on synthetic spots from
+held-out reference cells (SSE, saves nothing); ``GET .../check`` the last check.
 
 Both streamed runs copy what they need out of the two datasets first (in a worker
 thread), then fit in blocks of spots, each in a worker thread; only the final save
@@ -26,7 +27,7 @@ import json
 import logging
 import os
 import threading
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import anndata as ad
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -51,7 +52,18 @@ _running: set[str] = set()  # spot datasets with a run or check streaming: one a
 _WHAT = "Spot composition"
 
 
-class RunRequest(BaseModel):
+_Label = Annotated[str, Field(max_length=512)]
+_MAX_EDITS = 500  # a label column has at most 200 labels (label_transfer.MAX_LABELS)
+
+
+class LabelEdits(BaseModel):
+    """A reference's labels as a run takes them; none by default (the run as before)."""
+
+    exclude_labels: list[_Label] = Field(default_factory=list, max_length=_MAX_EDITS)
+    merge_labels: dict[_Label, _Label] = Field(default_factory=dict, max_length=_MAX_EDITS)
+
+
+class RunRequest(LabelEdits):
     reference_id: str = Field(max_length=128)
     celltype_column: str = Field(max_length=256)
     method: Literal["rctd", "nnls"] = "rctd"
@@ -59,10 +71,15 @@ class RunRequest(BaseModel):
     min_umi: int | None = Field(default=None, ge=sd.MIN_UMI_RANGE[0], le=sd.MIN_UMI_RANGE[1])
 
 
-class CheckRequest(BaseModel):
+class CheckRequest(LabelEdits):
     reference_id: str = Field(max_length=128)
     celltype_column: str = Field(max_length=256)
     seed: int = Field(default=sd.SEED, ge=0, le=2**31 - 1)
+
+
+class LabelsRequest(LabelEdits):
+    celltype_column: str = Field(max_length=256)
+    method: Literal["rctd", "nnls"] = "rctd"
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -161,17 +178,8 @@ def _guess_column(obs, columns: list[dict[str, Any]]) -> str | None:
     return columns[0]["column"] if columns else None
 
 
-@router.get("/datasets/{dataset_id}/spot-deconvolution/reference/{reference_id}")
-async def reference_info(
-    dataset_id: str,
-    reference_id: str,
-    celltype_column: str | None = Query(default=None, max_length=256),
-    method: Literal["rctd", "nnls"] = "rctd",
-    dm: DatasetManager = Depends(get_dataset_manager),
-):
-    """A candidate reference: its cells, label columns, the chosen (or guessed) column's
-    cells per type with those under 25 flagged, species against this dataset's, genes
-    shared by name, and the run's memory and time estimate. Reads obs and var only."""
+async def _reference_report(dm: DatasetManager, dataset_id: str, reference_id: str, celltype_column: str | None,
+                            method: str, edits: LabelEdits | None = None) -> dict[str, Any]:
     from scview.core import label_transfer as lt
     from scview.core.species import detect_species
 
@@ -190,10 +198,18 @@ async def reference_info(
         columns = lt.label_columns(skel)
         col = celltype_column or _guess_column(obs, columns)
         types, small, vc = ([], [], None)
+        suggested, excluded, merged, n_out = [], [], {}, 0
         if col is not None:
             if col not in obs.columns:
                 return {"ok": False, "reason": f"The reference has no column '{col}'.", "label_columns": columns}
-            types, small, vc = sd.type_counts(obs[col].astype(object).where(obs[col].notna(), None))
+            labels = obs[col].astype(object).where(obs[col].notna(), None)
+            suggested = sd.suggested_exclude(labels.dropna().astype(str).unique())
+            if edits is not None:
+                excluded, merged = sd.label_edits(labels, edits.exclude_labels, edits.merge_labels, col)
+                edited = sd.sd_edit_labels(labels, excluded, merged)
+                n_out = int(labels.notna().sum() - edited.notna().sum())
+                labels = edited
+            types, small, vc = sd.type_counts(labels)
         ref_species = detect_species(skel).species
         spot_species = detect_species(spots).species
         spot_genes = _spot_genes(spots)
@@ -202,25 +218,64 @@ async def reference_info(
         if refusal is None and col is not None and len(types) < 2:
             refusal = f"'{col}' has fewer than 2 types with {sd.MIN_TYPE_CELLS}+ cells."
         if refusal is None and len(types) > sd.MAX_TYPES:
-            refusal = f"'{col}' has {len(types)} types with {sd.MIN_TYPE_CELLS}+ cells (at most {sd.MAX_TYPES})."
+            refusal = sd.too_many_types(col, len(types))
         return {
             "ok": refusal is None, "reason": refusal, "n_cells": int(len(obs)), "n_genes": int(len(var)),
             "label_columns": columns, "celltype_column": col,
             "types": [{"type": t, "n_cells": int(vc[t]), "small": t in small}
                       for t in [*types, *small]] if vc is not None else [],
             "n_small": len(small), "species": ref_species, "dataset_species": spot_species,
+            "suggested_exclude": suggested, "excluded_labels": excluded, "merged_labels": merged,
+            "n_excluded_cells": n_out,
             "shared_genes_by_name": shared, "min_shared_genes": sd.MIN_SHARED_GENES,
             "estimate": _estimate(paths[0], cached is not None, spot_adaptor, len(types), method),
         }
 
     try:
         return await asyncio.to_thread(work)
+    except sd.SpotDeconvolutionError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
     except Exception as e:  # noqa: BLE001 - an unreadable file is reported, not a 500
         logger.warning("Could not read reference %s: %s", reference_id, e, exc_info=True)
         raise HTTPException(status_code=422, detail=f"Could not read the reference: {e}")
 
 
-async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method: str, check: bool = False):
+@router.get("/datasets/{dataset_id}/spot-deconvolution/reference/{reference_id}")
+async def reference_info(
+    dataset_id: str,
+    reference_id: str,
+    celltype_column: str | None = Query(default=None, max_length=256),
+    method: Literal["rctd", "nnls"] = "rctd",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """A candidate reference: its cells, label columns, the chosen (or guessed) column's
+    cells per type with those under 25 flagged and the labels whose names look like
+    catch-alls (``suggested_exclude``, never applied), species against this dataset's,
+    genes shared by name, and the run's memory and time estimate. Reads obs and var only."""
+    return await _reference_report(dm, dataset_id, reference_id, celltype_column, method)
+
+
+@router.post("/datasets/{dataset_id}/spot-deconvolution/reference/{reference_id}/labels")
+async def reference_labels(dataset_id: str, reference_id: str, body: LabelsRequest,
+                           dm: DatasetManager = Depends(get_dataset_manager)):
+    """``reference_info`` after left-out and merged labels: ``types``, whether a run can start and its estimate as
+    the run will take them; a 422 for a label the column does not have."""
+    return await _reference_report(dm, dataset_id, reference_id, body.celltype_column, body.method, body)
+
+
+def _types_after(path: str, column: str, edits: LabelEdits) -> int | None:
+    """The number of types a run's left-out and merged labels leave (None: the column cannot say; ``prepare`` will).
+    Refuses a label the column does not have before anything streams."""
+    obs, _var, _umap = _read_frames(path)
+    if column not in obs.columns:
+        return None
+    labels = obs[column].astype(object).where(obs[column].notna(), None)
+    excluded, merged = sd.label_edits(labels, edits.exclude_labels, edits.merge_labels, column)
+    return len(sd.type_counts(sd.sd_edit_labels(labels, excluded, merged))[0])
+
+
+async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method: str, check: bool = False,
+                 column: str = "", edits: LabelEdits | None = None):
     """Shared refusals of both streams; the estimate, the reference's info and paths."""
     if reference_id == dataset_id:
         raise HTTPException(status_code=400, detail="Pick another dataset as the reference.")
@@ -236,7 +291,13 @@ async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method:
         raise HTTPException(status_code=422, detail=reason)
     cached = dm.get_dataset(reference_id)
     open_in_memory = cached is not None and not getattr(cached.adata, "isbacked", False)  # else read: _preparer
-    est = await asyncio.to_thread(_estimate, paths[0], open_in_memory, adaptor, 20, method, check)
+    n_types = 20  # untouched labels: the reference check gave the real estimate, this is the room to reserve
+    if edits is not None and (edits.exclude_labels or edits.merge_labels):
+        try:
+            n_types = await asyncio.to_thread(_types_after, paths[0], column, edits) or n_types
+        except sd.SpotDeconvolutionError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
+    est = await asyncio.to_thread(_estimate, paths[0], open_in_memory, adaptor, n_types, method, check)
     # Room for the reference's copy (a large one's block pass): other datasets closed
     # first (least recently used, never the two read here), a 507 when it cannot fit even
     # then. Held once the stream starts, until the run ends (``hold_read``).
@@ -253,14 +314,16 @@ async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method:
 
 def _preparer(dm: DatasetManager, dataset_id: str, reference_id: str, paths: list[str], column: str,
               ref_info: dict, cluster_column: str | None, check: bool, seed: int = sd.SEED,
-              min_umi: int | None = None):
+              min_umi: int | None = None, edits: LabelEdits | None = None):
     def prepare(spot_adaptor) -> sd.Prepared:
         spots = spot_adaptor.adata
         if getattr(spots, "isbacked", False) and not spot_adaptor.is_large:
             spots = spots.to_memory()  # a large one's counts are read by row blocks
         kw = {"celltype_column": column, "ref_info": ref_info, "ref_fallback": paths[1:],
               "spot_fallback": dm.h5ad_candidates(dataset_id)[1:], "cluster_column": cluster_column,
-              "check": check, "seed": seed, "min_umi": min_umi}
+              "check": check, "seed": seed, "min_umi": min_umi,
+              "exclude_labels": edits.exclude_labels if edits else None,
+              "merge_labels": edits.merge_labels if edits else None}
         if large_mode.file_is_large(paths[0]):  # its obs, var and counts sidecar, never read whole
             with sd.large_reference(paths[0]) as (ref, counts):
                 return sd.prepare(ref, spots, ref_counts=counts, **kw)
@@ -398,11 +461,12 @@ async def run_spot_deconvolution(dataset_id: str, body: RunRequest,
     ``complete``, or ``error``. Saved only when the fit reaches its end."""
     import uuid
 
-    adaptor, paths, est, ref_info = await _setup(dm, dataset_id, body.reference_id, body.method)
+    adaptor, paths, est, ref_info = await _setup(dm, dataset_id, body.reference_id, body.method,
+                                                 column=body.celltype_column, edits=body)
     cluster_column = adaptor.active_clustering_column()
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
     prepare = _preparer(dm, dataset_id, body.reference_id, paths, body.celltype_column, ref_info, cluster_column,
-                        check=False, min_umi=body.min_umi)
+                        check=False, min_umi=body.min_umi, edits=body)
     del adaptor
 
     async def finish_item(prepared, out, res):
@@ -424,9 +488,10 @@ async def run_check(dataset_id: str, body: CheckRequest, dm: DatasetManager = De
     """Score both methods on synthetic spots drawn from held-out reference cells (SSE:
     ``progress`` per method and depth, ``result``, ``complete``). Saves nothing in the
     dataset; the check is kept in the results store."""
-    adaptor, paths, est, ref_info = await _setup(dm, dataset_id, body.reference_id, "rctd", check=True)
+    adaptor, paths, est, ref_info = await _setup(dm, dataset_id, body.reference_id, "rctd", check=True,
+                                                 column=body.celltype_column, edits=body)
     prepare = _preparer(dm, dataset_id, body.reference_id, paths, body.celltype_column, ref_info, None,
-                        check=True, seed=body.seed)
+                        check=True, seed=body.seed, edits=body)
     del adaptor
 
     async def finish_item(prepared, out, res):

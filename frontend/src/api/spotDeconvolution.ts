@@ -35,6 +35,12 @@ export interface SpotSummary {
   types: string[];
   type_stats: SpotTypeStats[];
   small_types: string[];
+  /** Reference labels left out and merged for this run; absent on an older result */
+  excluded_labels?: string[];
+  merged_labels?: Record<string, string>;
+  n_excluded_cells?: number;
+  /** Types with far more of the RNA than of the reference's cells (their note is in `notes`) */
+  over_share?: string[];
   reference: { id: string; name: string; celltype_column: string; n_reference_cells: number };
   celltype_column: string;
   sources: { reference: string; spots: string; renamed: string | null };
@@ -106,6 +112,11 @@ export interface SpotReferenceCheck {
   celltype_column?: string | null;
   types?: { type: string; n_cells: number; small: boolean }[];
   n_small?: number;
+  /** Labels whose name looks like a catch-all: marked in the panel, never applied */
+  suggested_exclude?: string[];
+  excluded_labels?: string[];
+  merged_labels?: Record<string, string>;
+  n_excluded_cells?: number;
   species?: string;
   dataset_species?: string;
   shared_genes_by_name?: number;
@@ -142,8 +153,15 @@ export interface SpotCheck {
   cells_per_spot: [number, number];
   depths: number[];
   reference: { id: string; name: string; celltype_column: string };
+  excluded_labels?: string[];
+  merged_labels?: Record<string, string>;
   seconds: number;
   note: string;
+}
+
+export interface SpotLabelEditsBody {
+  exclude_labels?: string[];
+  merge_labels?: Record<string, string>;
 }
 
 const base = (datasetId: string) => `/datasets/${datasetId}/spot-deconvolution`;
@@ -161,6 +179,20 @@ export function checkSpotReference(
   const q = new URLSearchParams({ method });
   if (celltypeColumn) q.set("celltype_column", celltypeColumn);
   return apiFetch(`${base(datasetId)}/reference/${encodeURIComponent(referenceId)}?${q}`);
+}
+
+/** The reference check after left-out and merged labels (a POST: a column's choices can outgrow a URL). */
+export function checkSpotLabels(
+  datasetId: string,
+  referenceId: string,
+  celltypeColumn: string,
+  method: SpotMethod,
+  edits: SpotLabelEditsBody,
+): Promise<SpotReferenceCheck> {
+  return apiFetch(`${base(datasetId)}/reference/${encodeURIComponent(referenceId)}/labels`, {
+    method: "POST",
+    body: JSON.stringify({ celltype_column: celltypeColumn, method, ...edits }),
+  });
 }
 
 export function getSpotShare(datasetId: string, type: string, kind: ShareKind): Promise<{ values: (number | null)[] }> {
@@ -198,7 +230,7 @@ async function stream<T>(path: string, body: unknown, what: string, handlers: St
 /** Fit the spots (SSE); resolves with the saved summary. */
 export function runSpotDeconvolution(
   datasetId: string,
-  body: { reference_id: string; celltype_column: string; method: SpotMethod; min_umi?: number },
+  body: { reference_id: string; celltype_column: string; method: SpotMethod; min_umi?: number } & SpotLabelEditsBody,
   handlers: StreamHandlers = {},
 ): Promise<SpotSummary> {
   return stream(`${base(datasetId)}/run-stream`, body, "The spot composition run", handlers);
@@ -207,7 +239,7 @@ export function runSpotDeconvolution(
 /** The self-check on synthetic spots from held-out reference cells (SSE). */
 export function runSpotCheck(
   datasetId: string,
-  body: { reference_id: string; celltype_column: string },
+  body: { reference_id: string; celltype_column: string } & SpotLabelEditsBody,
   handlers: StreamHandlers = {},
 ): Promise<SpotCheck> {
   return stream(`${base(datasetId)}/check-stream`, body, "The spot composition self-check", handlers);

@@ -135,6 +135,7 @@ _RESULT_FACET_HINTS = {
         "pseudo-bulk", "voom", "ruv", "crispr", "guide", "knockout", "knock-out", "knocked out",
         "perturb", "mixscape", "ligand", "receptor", "communicat", "composition", "proportion",
         "de audit", "donor shuffle", "deconvol", "bulk", "spot composition", "spots", "spot deconv",
+        "reference label", "left out of the reference", "catch-all",
         "visium hd", " bins", "bin composition", "um bin", "µm bin", "segmented", "segmentation", "outline",
         "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
         "atac", "chromatin", "accessib", "peaks", "lsi", "tf-idf", "tfidf", "multiome", "gene activity",

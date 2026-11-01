@@ -1187,15 +1187,19 @@ def first_positions(names, wanted):
     return np.asarray([first[g] for g in wanted], dtype=np.int64)
 
 
-def spot_composition(adata, ref, label, types, genes, ref_genes, fit_genes, s_e, method, min_umi=MIN_SPOT_UMI):
+def spot_composition(adata, ref, label, types, genes, ref_genes, fit_genes, s_e, method, min_umi=MIN_SPOT_UMI,
+                     exclude=(), merge=None):
     """Each spot's shares of the reference's types on the recorded genes, written where
     scView writes them (obsm spot_deconv / spot_deconv_cells, obs spot_deconv_top(_share));
-    spots with fewer than min_umi counts are not fitted."""
+    spots with fewer than min_umi counts are not fitted. exclude: reference labels whose
+    cells are not used; merge: label -> broader name, as the run chose them."""
     RM, rnames = spot_counts(ref)
     SM, snames = spot_counts(adata)
     labels = ref.obs[label]
-    codes = np.asarray(pd.Categorical(labels.astype(str).where(labels.notna(), None).to_numpy(),
-                                      categories=types).codes, dtype=np.int64)
+    labels = labels.astype(str).where(labels.notna(), None)
+    if exclude or merge:
+        labels = sd_edit_labels(labels, exclude, merge or {})
+    codes = np.asarray(pd.Categorical(labels.to_numpy(), categories=types).codes, dtype=np.int64)
     totals = np.asarray(RM.sum(axis=1), dtype=np.float64).ravel()
     codes = np.where(totals > 0, codes, -1)
     mu, S, _ = sd_profiles(RM, totals, codes, len(types))
@@ -2696,7 +2700,9 @@ def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
     genes, ref_genes, fit, types = p.get("genes"), p.get("ref_genes"), p.get("fit_genes"), p.get("types")
     label, ref_file, method, s_e = p.get("celltype_column"), p.get("reference_file"), p.get("method"), p.get("s_e")
     min_umi = p.get("min_umi", sd.MIN_SPOT_UMI)  # older records: the one floor every run had
-    ok = (isinstance(genes, list) and genes and isinstance(ref_genes, list) and len(ref_genes) == len(genes)
+    exclude, merge = p.get("excluded_labels", []), p.get("merged_labels", {})  # only recorded when used
+    ok = (isinstance(exclude, list) and isinstance(merge, dict)
+          and isinstance(genes, list) and genes and isinstance(ref_genes, list) and len(ref_genes) == len(genes)
           and isinstance(fit, list) and fit and all(isinstance(i, int) and 0 <= i < len(genes) for i in fit)
           and isinstance(types, list) and len(types) >= 2 and isinstance(label, str) and label
           and isinstance(ref_file, str) and ref_file and method in sd.METHODS
@@ -2726,9 +2732,12 @@ def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
         "]",
         f"SPOT_FIT = {_lit([int(i) for i in fit])}",
         f"SPOT_TYPES = {_lit([str(t) for t in types])}",
+        *([f"SPOT_EXCLUDE = {_lit([str(t) for t in exclude])}"] if exclude else []),
+        *([f"SPOT_MERGE = {_lit({str(k): str(v) for k, v in merge.items()})}"] if merge else []),
         f"ref = read_input(spot_reference_file({_lit(ref_file)}))",
         f"spot_composition(adata, ref, {_lit(label)}, SPOT_TYPES, SPOT_GENES, SPOT_REF_GENES, SPOT_FIT, "
-        f"{_lit(s_e)}, {_lit(method)}, min_umi={_lit(int(min_umi))})",
+        f"{_lit(s_e)}, {_lit(method)}, min_umi={_lit(int(min_umi))}"
+        f"{', exclude=SPOT_EXCLUDE' if exclude else ''}{', merge=SPOT_MERGE' if merge else ''})",
         "del ref",
     ], "; ".join(notes)[:200] if notes else "")
 

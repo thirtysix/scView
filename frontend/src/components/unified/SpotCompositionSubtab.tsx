@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
+  checkSpotLabels,
   checkSpotReference,
   getSpotDeconvolution,
   getSpotShare,
@@ -16,6 +17,7 @@ import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
 import { unitWord } from "@/lib/spatial";
 import { SpotCompositionCheck } from "@/components/unified/SpotCompositionCheck";
+import { SpotReferenceLabels } from "@/components/unified/SpotReferenceLabels";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { errorMessage } from "@/lib/errorMessage";
 import { aboutGb, referenceChoices } from "@/lib/labelTransfer";
@@ -30,12 +32,25 @@ import {
   toOverlayValues,
   typeRows,
 } from "@/lib/spotComposition";
+import {
+  type LabelEdits,
+  NO_EDITS,
+  editsBody,
+  hasEdits,
+  labelsUsed,
+  planLabels,
+  planProblem,
+  pruneEdits,
+  withTypeOut,
+} from "@/lib/spotLabels";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 
 /** The types listed before "show all". */
 const TYPE_LIMIT = 15;
+/** Quiet time after a change to the labels before the server is asked what they leave. */
+const LABELS_DEBOUNCE_MS = 300;
 
 /**
  * Spot composition (C047): each Visium spot split into the cell types of another
@@ -56,6 +71,9 @@ export function SpotCompositionSubtab() {
   // The count floor: spots with fewer counts are not fitted (the unit's default from the info).
   const [minUmi, setMinUmi] = useState<number | null>(null);
   const [check, setCheck] = useState<SpotReferenceCheck | null>(null);
+  // Labels left out and merged; the server's check under them, with the choices it answered.
+  const [edits, setEdits] = useState<LabelEdits>(NO_EDITS);
+  const [labelCheck, setLabelCheck] = useState<{ key: string; body: SpotReferenceCheck } | null>(null);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +88,7 @@ export function SpotCompositionSubtab() {
     setResult(null);
     setLoadError(null);
     setRefId("");
+    setEdits(NO_EDITS);
     let live = true;
     getSpotDeconvolution(datasetId)
       .then((i) => {
@@ -81,6 +100,7 @@ export function SpotCompositionSubtab() {
           setRefId(i.saved.reference.id);
           setColumn(i.saved.celltype_column);
           setMethod(i.saved.method);
+          setEdits({ exclude: i.saved.excluded_labels ?? [], merge: i.saved.merged_labels ?? {} });
         }
       })
       .catch((e) => live && setLoadError(errorMessage(e)));
@@ -99,6 +119,7 @@ export function SpotCompositionSubtab() {
       .then((c) => {
         if (!live) return;
         setCheck(c);
+        if (c.types) setEdits((e) => pruneEdits(e, c.types ?? []));
         if (!column && c.celltype_column) setColumn(c.celltype_column);
       })
       .catch((e) => live && setCheck({ ok: false, reason: errorMessage(e) }));
@@ -106,6 +127,26 @@ export function SpotCompositionSubtab() {
       live = false;
     };
   }, [datasetId, refId, column, method]);
+
+  const edited = hasEdits(edits);
+  const editsKey = useMemo(() => JSON.stringify(editsBody(edits)), [edits]);
+  // What the chosen labels leave, from the server (types, refusal, estimate); a moment after the last change.
+  useEffect(() => {
+    if (!datasetId || !refId || !column || !edited) {
+      setLabelCheck(null);
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      checkSpotLabels(datasetId, refId, column, method, JSON.parse(editsKey))
+        .then((body) => live && setLabelCheck({ key: editsKey, body }))
+        .catch((e) => live && setLabelCheck({ key: editsKey, body: { ok: false, reason: errorMessage(e) } }));
+    }, LABELS_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [datasetId, refId, column, method, editsKey, edited]);
 
   const rows = useMemo(() => (result ? typeRows(result, kind) : []), [result, kind]);
   const heat = useMemo(() => (result ? heatmapLayout(result, kind) : null), [result, kind]);
@@ -142,7 +183,7 @@ export function SpotCompositionSubtab() {
     useSettingsStore.getState().setColorBy(result.columns.top);
   };
 
-  const run = async () => {
+  const run = async (chosen: LabelEdits = edits) => {
     setRunning(true);
     setError(null);
     setProgress("Starting");
@@ -150,7 +191,13 @@ export function SpotCompositionSubtab() {
     try {
       const r = await runSpotDeconvolution(
         datasetId,
-        { reference_id: refId, celltype_column: column, method, ...(minUmi != null ? { min_umi: minUmi } : {}) },
+        {
+          reference_id: refId,
+          celltype_column: column,
+          method,
+          ...(minUmi != null ? { min_umi: minUmi } : {}),
+          ...(hasEdits(chosen) ? editsBody(chosen) : {}),
+        },
         {
           signal: abort.current.signal,
           onProgress: (m, done, total) => setProgress(done != null && total ? `${m} (${done}/${total})` : m),
@@ -166,8 +213,24 @@ export function SpotCompositionSubtab() {
     }
   };
 
-  const small = check?.types?.filter((t) => t.small) ?? [];
-  const nTypes = (check?.types?.length ?? 0) - small.length;
+  const labels = check?.types ?? [];
+  const plan = planLabels(labels, edits, info.min_type_cells);
+  const small = plan.small;
+  const nTypes = plan.types.length;
+  const labelProblem = labels.length ? planProblem(plan, edits, info.max_types, info.min_type_cells) : null;
+  const labelsFresh = !edited || labelCheck?.key === editsKey;
+  // The server's word under the current labels; its last one is shown while a change is on its way.
+  const shown = edited ? (labelCheck?.body ?? check) : check;
+  const canRunLabels = !!shown?.ok && labelsFresh && !labelProblem;
+  const tooMany = plan.types.length > info.max_types;
+  const used = result ? labelsUsed(result) : null;
+  const sameReference = !!check && !!result && refId === result.reference.id && column === result.celltype_column;
+  const leaveOut = (type: string) => {
+    if (!result) return;
+    const next = withTypeOut(result, type, labels);
+    setEdits(next);
+    void run(next);
+  };
   const shownRows = showAll ? rows : rows.slice(0, TYPE_LIMIT);
   const spatial = dataset?.spatial;
   const unit = unitWord(spatial, false);
@@ -201,6 +264,7 @@ export function SpotCompositionSubtab() {
                 onChange={(e) => {
                   setRefId(e.target.value);
                   setColumn("");
+                  setEdits(NO_EDITS);
                 }}
                 aria-label="Reference dataset"
               >
@@ -219,7 +283,10 @@ export function SpotCompositionSubtab() {
                   className="rounded border px-1 py-0.5"
                   value={column}
                   disabled={running}
-                  onChange={(e) => setColumn(e.target.value)}
+                  onChange={(e) => {
+                    setColumn(e.target.value);
+                    setEdits(NO_EDITS);
+                  }}
                   aria-label="Reference cell-type column"
                 >
                   {check.label_columns.map((c) => (
@@ -253,15 +320,15 @@ export function SpotCompositionSubtab() {
               </InfoTip>
             </label>
           </div>
-          {check && !check.ok && <p className="text-amber-700">{check.reason}</p>}
-          {check?.ok && (
+          {shown && !shown.ok && !labelProblem && <p className="text-amber-700">{shown.reason}</p>}
+          {check && (shown?.ok || tooMany) && (
             <div className="space-y-0.5 text-slate-500" data-testid="spot-reference-check">
               <p>
                 {check.n_cells?.toLocaleString()} reference cells, {nTypes} types with {info.min_type_cells}+ cells;{" "}
                 {check.shared_genes_by_name?.toLocaleString()} genes shared by name; reference {check.species}, this
                 dataset {check.dataset_species}.
-                {check.estimate &&
-                  ` Needs ${aboutGb(check.estimate.peak_bytes)}, ${check.estimate.note} (${check.estimate.seconds_range[0]}-${check.estimate.seconds_range[1]} s).`}
+                {shown?.estimate &&
+                  ` Needs ${aboutGb(shown.estimate.peak_bytes)}, ${shown.estimate.note} (${shown.estimate.seconds_range[0]}-${shown.estimate.seconds_range[1]} s).`}
               </p>
               {check.estimate?.large_reference && (
                 <p data-testid="spot-large-reference">
@@ -283,11 +350,28 @@ export function SpotCompositionSubtab() {
                 )}
             </div>
           )}
+          {labels.length > 0 && (
+            <SpotReferenceLabels
+              labels={labels}
+              suggested={check?.suggested_exclude ?? []}
+              edits={edits}
+              onChange={setEdits}
+              maxTypes={info.max_types}
+              minCells={info.min_type_cells}
+              disabled={running}
+            />
+          )}
+          {labelProblem && (
+            <p className="text-amber-700" data-testid="spot-run-blocked">
+              {labelProblem}
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <button
               className="rounded bg-primary px-3 py-1 text-white disabled:opacity-50"
-              disabled={running || !refId || !column || !check?.ok || !floorOk}
-              onClick={run}
+              disabled={running || !refId || !column || !canRunLabels || !floorOk}
+              title={labelProblem ?? undefined}
+              onClick={() => void run()}
             >
               {running ? <Loader2 className="inline h-3 w-3 animate-spin" /> : null} Fit {units}
             </button>
@@ -350,7 +434,13 @@ export function SpotCompositionSubtab() {
                 .filter((l) => l.s_g != null)
                 .map((l) => (result.libraries.length > 1 ? `${l.id} ${l.s_g!.toFixed(2)}` : l.s_g!.toFixed(2)))
                 .join(", ")}`}
+            {used && <span data-testid="spot-labels-used">; {used.text}</span>}
             .
+            {used && used.detail.length > 0 && (
+              <InfoTip label="The merged labels" width={320}>
+                {used.detail.join("; ")}.
+              </InfoTip>
+            )}
             <InfoTip label="About the numbers" width={320}>
               Spot noise: the spread (log scale) of a gene&apos;s count around the mix in one spot. Platform effect: the
               spread of the genes&apos; differences between the reference and the spots, corrected for before the fit
@@ -461,6 +551,21 @@ export function SpotCompositionSubtab() {
               ))}
             </ul>
           )}
+          {(result.over_share ?? []).length > 0 && result.types.length > 2 && (
+            <div className="flex flex-wrap items-center gap-2" data-testid="spot-over-share">
+              {(result.over_share ?? []).map((t) => (
+                <button
+                  key={t}
+                  className="rounded border px-2 py-0.5 hover:bg-slate-50 disabled:opacity-50"
+                  disabled={!sameReference}
+                  title={sameReference ? undefined : "Pick this run's reference and column again first."}
+                  onClick={() => leaveOut(t)}
+                >
+                  Leave out {t} and run again
+                </button>
+              ))}
+            </div>
+          )}
           <div className="rounded bg-amber-50 p-2 text-amber-800" data-testid="spot-caveats">
             <p>
               Shares are estimates of each {unit}&apos;s RNA (or cells), not counts. A cell type missing from the
@@ -474,8 +579,14 @@ export function SpotCompositionSubtab() {
         </div>
       )}
 
-      {info.available && refId && column && check?.ok && (
-        <SpotCompositionCheck datasetId={datasetId} referenceId={refId} celltypeColumn={column} disabled={running} />
+      {info.available && refId && column && shown?.ok && (
+        <SpotCompositionCheck
+          datasetId={datasetId}
+          referenceId={refId}
+          celltypeColumn={column}
+          edits={edits}
+          disabled={running || !canRunLabels}
+        />
       )}
 
       <p className="text-[11px] text-slate-400">
