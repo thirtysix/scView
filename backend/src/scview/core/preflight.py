@@ -1282,7 +1282,7 @@ def doublet_plan(adata, params=None) -> DoubletPlan | None:
     """The doublet step's channels on a live AnnData (in memory), and Scrublet's variable
     genes in the largest channel (``_channel_hvg``: its own selection on samples,
     ``scrublet_lean.n_variable_genes``). None when they can't be read."""
-    from scview.core import doublets, scrublet_lean, spatial
+    from scview.core import doublets, scrublet_lean
     from scview.core.pipeline import StepSkipped, _doublet_matrix
 
     if _skips_doublets(adata):  # spots, bins, panels, Visium HD cells: no step, so no cost
