@@ -41,7 +41,8 @@ def _genome_auto() -> bool:
 def _estimate(adaptor, p: atac_links.LinkPlan, store, data_dir) -> dict[str, Any]:
     nnz = int(store.nnz(atac.MATRIX) * (p.n_cells / max(1, store.n_obs)))
     status = genome_seq.status(data_dir, p.genome)
-    seconds = atac_links.estimate_seconds(nnz, store.n_vars, len(p.genes), mode=p.mode)
+    seconds = atac_links.estimate_seconds(nnz, store.n_vars, len(p.genes), mode=p.mode,
+                                           cell_share=p.n_cells / max(1, p.n_dataset_cells))
     if not status["downloaded"]:
         seconds += atac_links.DOWNLOAD_SECONDS
     return {"genes": p.mode, "n_genes": len(p.genes), "n_asked": p.n_asked, "missing": p.missing[:20], "n_cells": p.n_cells,

@@ -386,6 +386,10 @@ async def test_run_kept_paged_by_gene_csv_locus_and_a_replay_step(client, seeded
     page = (await client.get(f"{API}/datasets/{did}/atac/links/{rid}", params={"gene": "genea"})).json()
     assert page["total"] >= 1 and {r["gene"] for r in page["rows"]} == {"GENEA"}
     assert set(page["rows"][0]) == {"gene", "peak", "distance_to_tss", "score", "z", "p", "padj"}
+    # A p between 1e-15 and 1e-10 survives the JSON (pandas' default 10 decimals made it 0).
+    res = atac_links.recall(did, rid)
+    tiny = atac_links.LinksResult("t", res.table.assign(p=3.2e-12), res.counts, res.params, "m", "c", "h", "t", 1.0)
+    assert atac_links.payload(tiny)["rows"][0]["p"] == pytest.approx(3.2e-12)
     ranked = (await client.get(f"{API}/datasets/{did}/atac/links/{rid}", params={"sort": "abs_score", "descending": "true", "limit": 3})).json()
     assert abs(ranked["rows"][0]["score"]) >= abs(ranked["rows"][-1]["score"]) and ranked["total"] == result["counts"]["n_links"]
     bad = await client.get(f"{API}/datasets/{did}/atac/links/{rid}", params={"sort": "nope"})
@@ -693,8 +697,9 @@ def test_the_replay_script_reproduces_scores_and_z_from_the_input(tmp_path, sequ
     script.write_text(replay_script.build_script(a, dataset_id="t", dataset_name="test"))
     proc = subprocess.run([sys.executable, str(script), str(src), str(dst)], capture_output=True, text=True, timeout=600, cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr[-3000:]
+    assert "not the ones the run used" not in proc.stdout
     b = ad.read_h5ad(dst)
-    got = b.uns["atac_links"]
+    got = b.uns[f"atac_links_{res.result_id}"]
     assert got["gene"].astype(str).tolist() == mine["gene"].tolist() and got["peak"].astype(str).tolist() == mine["peak"].tolist()
     np.testing.assert_array_equal(got["score"].to_numpy(dtype=np.float64), mine["score"].to_numpy())
     np.testing.assert_array_equal(got["z"].to_numpy(dtype=np.float64), mine["z"].to_numpy())

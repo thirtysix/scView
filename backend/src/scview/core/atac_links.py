@@ -27,8 +27,13 @@ Two things make this hours faster than R, neither changing what a pair's z is dr
 A link is a correlation across the cells used. Across all cells it mostly reflects which cell types
 open the peak and express the gene; it is a candidate for regulation, never proof.
 
-Checked on 10x PBMC 10k multiome against Signac 1.17.1: see ``research/batch37/`` numbers in the module
-test notes and the release's CHANGELOG.
+Checked against Signac 1.17.1 LinkPeaks on the same matrices. 10x PBMC 10k multiome, 617 genes, 2 Signac seeds: GC percent
+of all 143,836 peaks within 5e-11, width equal; MatchRegionStats' weights within 3e-10 (relative) on 12 query peaks; the same
+5,306 tested pairs, score within 9e-15. z here vs Signac r = 0.991, median |difference| 0.072; Signac's seeds against each other
+0.992, 0.070. Kept links overlap (Jaccard) 0.943 and 0.947; Signac's seeds 0.943. Mouse E18, 180 genes: the same 1,479 pairs, score
+within 2e-15, z r = 0.984-0.986 (seeds 0.987), kept 0.939-0.944 (seeds 0.942). Signac took 573 s on the 617 genes at 1 CPU, here 39 s at 2;
+variable genes 52 s, all 26,200 genes 171 s, peak cgroup anon 0.77 GiB (under a 2 GB limit: 68 s, no OOM). The replay script
+from the original upload reproduces score, z and p bitwise on all 31,951 links.
 """
 
 from __future__ import annotations
@@ -284,6 +289,14 @@ def peak_gc(two_bit, chrom, start, end, stop=lambda: False):
     return gc
 
 
+def _selection_hash(adata, mask: np.ndarray | None) -> str:
+    names = adata.obs_names if mask is None else adata.obs_names[mask]
+    h = hashlib.sha256(f"{len(names)}\n".encode())
+    for at in range(0, len(names), 100_000):
+        h.update("\n".join(map(str, names[at:at + 100_000])).encode())
+    return h.hexdigest()[:16]
+
+
 def place_genes(names, ids, table):
     """Each named gene's chrom, TSS and strand: by gene id (``ids``, name -> id), else by name, as
     ``atac.choose_genes``; a gene with no position is left out."""
@@ -436,7 +449,7 @@ def iter_links(store, rows, cell_mask, read_genes, genes, peak_names, chrom, sta
 
 REPLAY_CONSTANTS = ("DISTANCE", "MIN_CELLS", "SCORE_CUTOFF", "N_SAMPLE", "P_CUTOFF", "SEED", "OUTSIDE", "DENSITY_N",
                     "LINK_BLOCK_VALUES", "PRODUCT_VALUES", "RNA_BATCH_BYTES", "MAX_RNA_BATCH", "GC_BATCH")
-REPLAY_CODE = (r_density, BackgroundSampler, ByPeak, signac_bases, peak_widths, peak_gc, place_genes, order_genes, signed_distance,
+REPLAY_CODE = (_selection_hash, r_density, BackgroundSampler, ByPeak, signac_bases, peak_widths, peak_gc, place_genes, order_genes, signed_distance,
                iter_links)
 
 
@@ -507,14 +520,6 @@ def cell_selection(adata, column: str | None, values: list[str] | None) -> np.nd
     return mask
 
 
-def _selection_hash(adata, mask: np.ndarray | None) -> str:
-    names = adata.obs_names if mask is None else adata.obs_names[mask]
-    h = hashlib.sha256(f"{len(names)}\n".encode())
-    for at in range(0, len(names), 100_000):
-        h.update("\n".join(map(str, names[at:at + 100_000])).encode())
-    return h.hexdigest()[:16]
-
-
 def plan_links(adaptor, data_dir: str | Path, *, genome: str | None, mode: str = "variable", gene_list: list[str] | None = None,
                cells_column: str | None = None, cells_value: list[str] | None = None, auto_download: bool = True) -> LinkPlan:
     adata = adaptor.adata
@@ -563,8 +568,11 @@ DOWNLOAD_SECONDS = 120.0  # about 800 MB
 _BASE_BYTES = 600 * 1024**2  # scanpy and friends loaded
 
 
-def estimate_seconds(nnz: int, n_peaks: int, n_genes: int, *, mode: str = "variable") -> float:
-    pairs = n_genes * _PAIRS_PER_GENE.get(mode, 8.0)
+def estimate_seconds(nnz: int, n_peaks: int, n_genes: int, *, mode: str = "variable", cell_share: float = 1.0) -> float:
+    """``cell_share``: the share of the dataset's cells used. Fewer cells: fewer genes pass and fewer peaks, more of a
+    gene's pairs reach |r| > 0.05 by chance; the sum, measured (PBMC 10k, variable genes, 2,717 cells 36 s, estimate 33;
+    259 cells 19 s, 19), goes as the 0.35 power."""
+    pairs = n_genes * _PAIRS_PER_GENE.get(mode, 8.0) * min(1.0, cell_share) ** 0.35
     return round(_FIRST_SECONDS + nnz * _BY_PEAK_SECONDS_PER_VALUE + n_peaks * _PER_PEAK_SECONDS + pairs * _PAIR_SECONDS, 0)
 
 
@@ -688,7 +696,7 @@ def payload(res: LinksResult, *, gene: str = "", search: str = "", sort: str = "
     page = t.iloc[np.asarray(order)[offset:offset + limit]]
     columns = ["gene", "peak", "distance_to_tss", "score", "z", "p", "padj"]
     return {"id": res.result_id, "total": int(len(t)), "offset": offset, "limit": limit, "sort": sort, "descending": descending,
-            "rows": json.loads(page[columns].to_json(orient="records")), "counts": dict(res.counts), "params": dict(res.params),
+            "rows": json.loads(page[columns].to_json(orient="records", double_precision=15)), "counts": dict(res.counts), "params": dict(res.params),
             "method": res.method, "caption": res.caption, "seconds": res.seconds, "created_at": res.created_at,
             "missing": list(res.missing), "stale": stale}
 
@@ -802,7 +810,7 @@ def iter_run(adaptor, store, p: LinkPlan, *, data_dir: str | Path, auto_download
 def run_params(p: LinkPlan, gene_list: list[str] | None) -> dict[str, Any]:
     params: dict[str, Any] = {"genes": p.mode, "cells_column": p.cells_column, "cells_value": p.cells_value, "distance": DISTANCE,
                               "min_cells": MIN_CELLS, "score_cutoff": SCORE_CUTOFF, "n_sample": N_SAMPLE, "p_cutoff": P_CUTOFF,
-                              "seed": SEED, "genome": p.genome,
+                              "seed": SEED, "genome": p.genome, "selection": p.selection,
                               "genome_url": genome_seq.RELEASES[gene_annotation.canonical_genome(p.genome)].url,
                               "gene_positions_url": gene_annotation.RELEASES[gene_annotation.canonical_genome(p.genome)].url}
     if p.mode == "list":

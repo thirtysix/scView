@@ -1565,7 +1565,7 @@ def _atac_links_helper() -> str:
 
     from scview.core import atac_links, genome_seq
 
-    lines = ["import mmap", "import shutil", "import struct", "import tempfile", "import threading", "from pathlib import Path",
+    lines = ["import hashlib", "import mmap", "import shutil", "import struct", "import tempfile", "import threading", "from pathlib import Path",
              "from types import SimpleNamespace", "from typing import Iterable", ""]
     lines += [f"{name} = {_lit(getattr(atac_links, name))}" for name in atac_links.REPLAY_CONSTANTS]
     lines += [f"{name} = {_lit(getattr(genome_seq, name))}" for name in ("UNKNOWN", "_SIGNATURE")]
@@ -1615,6 +1615,9 @@ def atac_links_table(adata, counts, peak_names, settings):
         s = adata.obs[settings["cells_column"]]
         mask = s.astype(str).isin([str(v) for v in settings["cells_value"]]).to_numpy() & s.notna().to_numpy()
     rows = np.arange(counts.shape[0]) if mask is None else np.flatnonzero(mask)
+    if settings.get("selection") and _selection_hash(adata, mask) != settings["selection"]:
+        print("Peak-gene links: these cells are not the ones the run used (labels or filtering came out differently here), "
+              "so the numbers will differ.")
 
     def read_genes(wanted):
         block = rna[:, rna_index.get_indexer(wanted)]
@@ -3205,7 +3208,7 @@ def _atac_differential(p: dict, ctx: _Ctx) -> Snippet:
 _ATAC_LINKS_CODE = '''
 peaks, peak_names, peak_cells = atac_peaks(INPUT)
 counts = peaks[pd.Index(peak_cells).get_indexer(adata.obs_names)].tocsr()
-adata.uns["atac_links"] = atac_links_table(adata, counts, peak_names, ATAC_LINKS)
+adata.uns["atac_links_" + ATAC_LINKS["key"]] = atac_links_table(adata, counts, peak_names, ATAC_LINKS)
 '''
 
 
@@ -3216,8 +3219,9 @@ def _atac_links(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Peak-gene links: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac_links")
-    keys = ("genes", "gene_list", "cells_column", "cells_value", "seed", "genome_url", "gene_positions_url")
+    keys = ("genes", "gene_list", "cells_column", "cells_value", "seed", "genome_url", "gene_positions_url", "selection")
     settings = {x: p.get(x) for x in keys if p.get(x) is not None}
+    settings["key"] = str(p.get("result_id") or p.get("genes"))  # a run of its own: several can be recorded
     return Snippet(EXACT, [
         "# Peak-gene links (Signac's LinkPeaks defaults; core/atac_links.py): a table in uns. A correlation, a candidate",
         "# and never proof of regulation. GC percent needs the genome's .2bit: beside the input or here, else fetched once.",
