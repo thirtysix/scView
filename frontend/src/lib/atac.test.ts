@@ -109,6 +109,10 @@ describe("differential test wording", () => {
     expect(clean).toContain("10,000 true likelihood ratios, 40,000 score tests.");
     expect(clean).toContain("35 peaks separate");
     expect(clean).not.toContain("did not converge");
+    const one = daFitText({ score: 1, lrt: 1, lrt_separated: 1, score_no_fit: 1, untestable: 1 });
+    expect(one).toContain("1 peak separates the group");
+    expect(one).toContain("1 fit did not converge and keeps its score test.");
+    expect(one).toContain("1 peak could not be tested and has no p.");
     const bad = daFitText({ score: 1, lrt: 1, lrt_separated: 0, score_no_fit: 2, untestable: 3 });
     expect(bad).toContain("2 fits did not converge");
     expect(bad).toContain("3 peaks could not be tested");

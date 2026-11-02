@@ -112,10 +112,10 @@ export function daFitText(n: Record<AtacDaFit, number> | undefined): string {
   if (!n) return "";
   const parts = [`${(n.lrt + n.lrt_separated).toLocaleString()} true likelihood ratios, ${n.score.toLocaleString()} score tests.`];
   if (n.lrt_separated) {
-    parts.push(`${n.lrt_separated.toLocaleString()} peaks separate the group (the coefficient runs to infinity): p comes from the deviance's limit, as glm's does.`);
+    parts.push(`${n.lrt_separated.toLocaleString()} ${n.lrt_separated === 1 ? "peak separates" : "peaks separate"} the group (the coefficient runs to infinity): p comes from the deviance's limit, as glm's does.`);
   }
-  if (n.score_no_fit) parts.push(`${n.score_no_fit.toLocaleString()} fits did not converge and keep their score test.`);
-  if (n.untestable) parts.push(`${n.untestable.toLocaleString()} peaks could not be tested and have no p.`);
+  if (n.score_no_fit) parts.push(`${n.score_no_fit.toLocaleString()} ${n.score_no_fit === 1 ? "fit did not converge and keeps its" : "fits did not converge and keep their"} score test.`);
+  if (n.untestable) parts.push(`${n.untestable.toLocaleString()} ${n.untestable === 1 ? "peak could not be tested and has" : "peaks could not be tested and have"} no p.`);
   return parts.join(" ");
 }
 

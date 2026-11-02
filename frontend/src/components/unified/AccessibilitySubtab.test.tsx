@@ -218,6 +218,17 @@ describe("AccessibilitySubtab", () => {
     expect(table.textContent).not.toContain("read the top of the table");
   });
 
+  it("sets Groups from and Test to the result it reloads, and the estimate with them", async () => {
+    api.getLatestDa.mockResolvedValue({ ...DA, column: "atac_leiden", test: "wilcoxon" });
+    render(<AccessibilitySubtab datasetId="d1" groupByColumn="cell_type" setGroupByColumn={vi.fn()} activeGene={null} onActivity={vi.fn()} />);
+    await screen.findByTestId("atac-da");
+    await waitFor(() => expect((screen.getByLabelText("Groups from") as HTMLSelectElement).value).toBe("atac_leiden"));
+    expect((screen.getByLabelText("Test") as HTMLSelectElement).value).toBe("wilcoxon");
+    await waitFor(() => expect(api.getDaEstimate).toHaveBeenLastCalledWith("d1", "atac_leiden", "wilcoxon"));
+    fireEvent.change(screen.getByLabelText("Test"), { target: { value: "lr" } });
+    expect((screen.getByLabelText("Test") as HTMLSelectElement).value).toBe("lr");
+  });
+
   it("cancels a running stream: nothing saved is said", async () => {
     api.runAtac.mockImplementation((_d: string, _b: unknown, h: { signal: AbortSignal }) => new Promise((_res, rej) => {
       h.signal.addEventListener("abort", () => rej(new Error("aborted")));

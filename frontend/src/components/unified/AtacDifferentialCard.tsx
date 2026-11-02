@@ -36,9 +36,18 @@ export function AtacDifferentialCard({
   const [error, setError] = useState<string | null>(null);
   const da = run.da;
 
+  // The selects describe the result in view, so a reloaded table never sits under another column or test.
+  const daId = da?.id;
+  const daColumn = da?.column;
+  const daTest = da?.test;
+  const daColumnListed = daColumn != null && columns.includes(daColumn);
   useEffect(() => {
-    if (defaultColumn) setColumn(defaultColumn);
-  }, [defaultColumn]);
+    if (daColumnListed) setColumn(daColumn);
+    else if (!daId && defaultColumn) setColumn(defaultColumn);
+  }, [daId, daColumn, daColumnListed, defaultColumn]);
+  useEffect(() => {
+    setTest(daId ? daTest ?? "wilcoxon" : "lr");
+  }, [daId, daTest]);
 
   // The last result on these cells, when this tab opens with none in hand.
   useEffect(() => {
