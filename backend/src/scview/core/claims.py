@@ -695,6 +695,8 @@ _FAMILY_PREFIX = {
     "gwas": "result:gwas", "traits": "result:gwas",  # GWAS trait links (core/gwas_catalog.py)
     "wnn": "result:wnn",  # joint RNA + protein weights (core/wnn.py)
     "atac": "result:atac",  # 10x Multiome peaks, LSI, gene activity, WNN (core/atac.py)
+    "atacmotifs": "result:atacmotifs", "atacmotif": "result:atacmotifs",  # motifs in peaks (core/atac_motifs.py)
+    "chromvar": "result:chromvar",  # per-cell motif activity (core/atac_chromvar.py)
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -745,7 +747,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "activity", "deaudit", "audit",
                                   "clonotypes", "clonotype", "ppi", "cnv", "ontology",
                                   "selection", "sel", "screen", "labels", "tissue", "spatial", "moran",
-                                  "tfmotifs", "tfmotif", "motifs", "motif",
+                                  "tfmotifs", "tfmotif", "motifs", "motif", "atacmotifs", "atacmotif", "chromvar",
                                   "gwas", "traits",
                                   "deconvolution", "deconv",
                                   "lgate", "learnedgate", "learned", "spotdeconv", "velocity", "rnavelocity",

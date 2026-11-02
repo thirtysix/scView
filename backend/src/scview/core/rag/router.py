@@ -140,6 +140,7 @@ _RESULT_FACET_HINTS = {
         "wnn", "modality", "modalities", "rna weight", "protein weight", "learned gate", "gate",
         "atac", "chromatin", "accessib", "peaks", "lsi", "tf-idf", "tfidf", "multiome", "gene activity",
         "frip", "depth correlation", "differential peak", "differential access", "depth covariate", "latent covariate",
+        "motif", "chromvar", "jaspar", "findmotifs", "enriched in peaks", "motif activity",
         "spatial domain", "domains", "niche", "nhood", "stability scan", "neighbourhood enrichment",
         "neighborhood enrichment", "next to each other", "side by side", "adjacent", "colocal", "co-local",
         "co-occur", "cooccur", "co occur", "near each other", "close to each other", "close together",

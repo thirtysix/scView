@@ -133,6 +133,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Spot composition > Reference labels", "catch-all label, too many types",
      "leave reference labels out of the fit (catch-alls such as Unknown are marked, never applied) or merge them under "
      "a broader name to get under 50 types"),
+    ("Unified View > Accessibility > Motifs in peaks", "JASPAR, FindMotifs, chromVAR",
+     "scan every peak for the 879 JASPAR 2024 motifs (same hits as Signac's AddMotifs); motifs enriched in a group's "
+     "differential peaks against GC-matched peaks, with each TF's own RNA in the group and its logo; chromVAR activity "
+     "per cell: motifs by variability, groups x motifs, group against the rest, a motif on the plot"),
     ("Unified View > Accessibility > Fragment QC", "",
      "attach atac_fragments.tsv.gz + .tbi: per-cell TSS enrichment and nucleosome signal (Signac's definitions), "
      "fragment length ladder, TSS profile"),
