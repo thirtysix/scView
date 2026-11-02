@@ -28,8 +28,9 @@ export function estimateText(e: LinksEstimate): string {
   const download = e.genome.downloaded
     ? ""
     : ` The first use of ${e.genome.genome} downloads the ${e.genome.source} sequence (${(e.genome.size / 1e6).toFixed(0)} MB, once; included in the time).`;
+  const rough = e.n_cells < e.n_dataset_cells ? " The time is rough for chosen groups: it depends on how many pairs reach the test." : "";
   return `${e.n_genes.toLocaleString()} genes, ${e.n_cells.toLocaleString()} cells: about ${formatDuration(e.estimate_seconds)}, ` +
-    `${gb(e.estimate_bytes)} beyond the open dataset and ${gb(e.estimate_disk_bytes)} of disk while it runs.${download}`;
+    `${gb(e.estimate_bytes)} beyond the open dataset and ${gb(e.estimate_disk_bytes)} of disk while it runs.${rough}${download}`;
 }
 
 /** What a result counted, in one sentence for its caption. */

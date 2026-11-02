@@ -38,6 +38,8 @@ describe("peak-gene links text", () => {
     expect(estimateText(e)).toContain("downloads the UCSC hg38 sequence (835 MB");
     expect(estimateText({ ...e, genome: { ...e.genome, downloaded: true } })).not.toContain("downloads");
     expect(estimateText(e)).toContain("2,000 genes, 11,208 cells");
+    expect(estimateText(e)).not.toContain("rough");
+    expect(estimateText({ ...e, n_cells: 300 })).toContain("rough for chosen groups");
   });
 
   it("counts what was left out", () => {

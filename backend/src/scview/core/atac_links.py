@@ -569,10 +569,11 @@ _BASE_BYTES = 600 * 1024**2  # scanpy and friends loaded
 
 
 def estimate_seconds(nnz: int, n_peaks: int, n_genes: int, *, mode: str = "variable", cell_share: float = 1.0) -> float:
-    """``cell_share``: the share of the dataset's cells used. Fewer cells: fewer genes pass and fewer peaks, more of a
-    gene's pairs reach |r| > 0.05 by chance; the sum, measured (PBMC 10k, variable genes, 2,717 cells 36 s, estimate 33;
-    259 cells 19 s, 19), goes as the 0.35 power."""
-    pairs = n_genes * _PAIRS_PER_GENE.get(mode, 8.0) * min(1.0, cell_share) ** 0.35
+    """``cell_share``: the share of the dataset's cells used. Fewer cells: fewer genes pass and fewer peaks, but more of a
+    gene's pairs reach |r| > 0.05 by chance, so this is only rough for chosen groups (the card says so). Measured: PBMC 10k,
+    variable genes, 2,717 cells 36 s, estimate 42; 259 cells 19 s, 33; all genes, 4,506 cells 190 s, 140; mouse E18, variable
+    genes, 580 cells 39 s, 38."""
+    pairs = n_genes * _PAIRS_PER_GENE.get(mode, 8.0) * min(1.0, cell_share) ** 0.1
     return round(_FIRST_SECONDS + nnz * _BY_PEAK_SECONDS_PER_VALUE + n_peaks * _PER_PEAK_SECONDS + pairs * _PAIR_SECONDS, 0)
 
 
