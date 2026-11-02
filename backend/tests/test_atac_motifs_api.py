@@ -147,6 +147,30 @@ def test_a_second_build_joins_the_running_one_and_cancel_stops_it(tmp_path, monk
     assert len(calls) == 1
 
 
+async def test_cancel_route_ends_the_stream_with_cancelled_and_complete(client, dataset_manager, annotated, monkeypatch):
+    import asyncio
+
+    did, *_ = _register_multiome(dataset_manager)
+    slow = ["python", "-c", "import time; print('{\"type\": \"progress\", \"stage\": \"scan\"}', flush=True); time.sleep(60)"]
+    monkeypatch.setattr(am, "scan_cmd", lambda *a, **k: slow)
+    monkeypatch.setattr(am, "ensure_jaspar", lambda *a, **k: Path("j"))
+    monkeypatch.setattr(am.genome_seq, "ensure", lambda *a, **k: None)
+
+    async def cancel_when_running():
+        for _ in range(100):
+            await asyncio.sleep(0.1)
+            r = await client.post(f"{API}/datasets/{did}/atac/motifs/scan/cancel")
+            if r.json()["cancelled"]:
+                return True
+        return False
+
+    scan_task = asyncio.create_task(client.post(f"{API}/datasets/{did}/atac/motifs/scan"))
+    assert await cancel_when_running()
+    r = await scan_task
+    assert [e for e, _ in _events(r.text)][-2:] == ["cancelled", "complete"]
+    assert not dataset_manager.run_reservations()
+
+
 async def test_cancel_route_with_nothing_running(client, dataset_manager, annotated):
     did, *_ = _register_multiome(dataset_manager)
     r = await client.post(f"{API}/datasets/{did}/atac/motifs/scan/cancel")

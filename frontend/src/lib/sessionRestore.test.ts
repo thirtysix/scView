@@ -182,6 +182,22 @@ describe("save then open on the same dataset", () => {
     expect(saveAndReset().view?.overlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15"] });
   });
 
+  it("saves a chromVAR colouring and restores it only on a dataset with ATAC", async () => {
+    const atac = { n_peaks: 100, genome: "GRCh38", computed: ["peak counts"] };
+    api.getDataset.mockResolvedValue({ ...kang(), atac });
+    buildWorkspace("lasso");
+    const overlay = { type: "atac_motif", motif_id: "MA0080.7", motif: "SPI1" } as const;
+    useUnifiedViewStore.getState().setScatterOverlay(overlay);
+    const session = saveAndReset();
+    expect(session.view?.overlay).toEqual(overlay);
+    await restoreSession(session);
+    expect(useUnifiedViewStore.getState().pendingOverlay).toEqual({ datasetId: "kang", overlay });
+    resetStores();
+    api.getDataset.mockResolvedValue(kang()); // RNA alone
+    const report = await restoreSession(session);
+    expect(report.notes).toContain("chromVAR score of SPI1: this dataset has no ATAC peaks.");
+  });
+
   it("saves a gene activity colouring (ATAC) and restores it only on a dataset with ATAC", async () => {
     const atac = { n_peaks: 100, genome: "GRCh38", computed: ["peak counts", "gene activity"] };
     api.getDataset.mockResolvedValue({ ...kang(), atac });

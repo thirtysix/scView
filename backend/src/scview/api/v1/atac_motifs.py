@@ -241,6 +241,7 @@ async def scan(
                 await asyncio.sleep(POLL_SECONDS)
             if build.cancelled:
                 yield _sse("cancelled", {"message": "The motif scan was stopped; nothing was kept."})
+                yield _sse("complete", {})
                 return
             if build.error:
                 yield _sse("error", {"error": build.error})

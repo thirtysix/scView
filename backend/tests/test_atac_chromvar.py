@@ -247,8 +247,12 @@ def test_matrix_name_is_the_stores():
 
 
 def test_estimates_are_within_20_percent_of_what_was_measured():
-    # Through a child at 2 cores: mouse E18 240 s (41.7M values, 117.7 hits per peak), see the module.
-    assert abs(cv.estimate_seconds(41_686_530, 50, 117.7) / 240 - 1) < 0.2
+    # Through the server at 2 cores, 118 hits per peak: PBMC 10k 591 s (98.9M values, 143,887 peaks, 11,208 cells,
+    # 0.64 GB of cgroup anon over what the server held), mouse E18 234 s (38.4M, 172,193, 4,494, 0.72 GB).
+    assert abs(cv.estimate_seconds(98_917_327, 50, 118.6) / 591 - 1) < 0.2
+    assert abs(cv.estimate_seconds(38_400_000, 50, 117.7) / 234 - 1) < 0.2
+    assert abs(cv.estimate_bytes(11_208, 143_887, 879, 50, 118.6) / 0.64e9 - 1) < 0.2
+    assert abs(cv.estimate_bytes(4_494, 172_193, 879, 50, 117.7) / 0.72e9 - 1) < 0.2
 
 
 def test_child_process_writes_its_result(tmp_path):

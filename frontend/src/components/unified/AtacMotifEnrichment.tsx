@@ -131,7 +131,7 @@ export function AtacMotifEnrichment({ datasetId }: { datasetId: string }) {
         {busy && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </div>
       {da ? (
-        <Caption>Uses the differential peaks by {prettyObsLabel(da.column)} ({daTestName(da.test)}). A few seconds per group.</Caption>
+        <Caption>Uses the differential peaks by {prettyObsLabel(da.column)} ({daTestName(da.test)}). Takes seconds and about 0.3 GB.</Caption>
       ) : (
         <Caption>Find differential peaks first (the card above).</Caption>
       )}
@@ -185,7 +185,7 @@ export function AtacMotifEnrichment({ datasetId }: { datasetId: string }) {
                         <tr>
                           <td colSpan={7} className="pb-1" data-testid="atac-motif-logo">
                             {logo?.motif_id === r.motif_id ? (
-                              <div className="space-y-0.5">
+                              <div className="w-0 min-w-full space-y-0.5">
                                 <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(logo.svg)}`} alt={`Sequence logo of ${logo.motif}, consensus ${logo.consensus}`} className="max-w-full" />
                                 <Caption>
                                   {r.motif}, {logo.length} bases, consensus <span className="font-mono">{logo.consensus}</span>; letter height in bits.

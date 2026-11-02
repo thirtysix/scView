@@ -111,7 +111,7 @@ export function AtacChromvar({
               <Plot
                 data={[{
                   type: "heatmap" as const, x: groups.groups, y: heat.motifs, z: heat.mean_z as number[][],
-                  colorscale: "RdBu", zmin: -zLimit, zmax: zLimit, xgap: 1, ygap: 1,
+                  colorscale: [[0, "#2166ac"], [0.5, "#f7f7f7"], [1, "#b2182b"]], zmin: -zLimit, zmax: zLimit, xgap: 1, ygap: 1,
                   colorbar: { title: { text: "mean z", font: { size: 10 } }, thickness: 10 },
                   hovertemplate: "%{y}<br>%{x}: mean z %{z:.2f}<extra></extra>",
                 }]}

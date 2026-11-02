@@ -311,7 +311,7 @@ REPLAY_CODE = (background_peaks, deviation_kernel, Model, make_model, deviations
 # Time and memory
 # ---------------------------------------------------------------------------
 
-_OPS_SECONDS = 0.86e-9  # per addition at 2 threads
+_OPS_SECONDS = 0.92e-9  # per addition at 2 threads: PBMC 10k 591 s (98.9M values), mouse E18 240 s (41.7M)
 _PREP_SECONDS = 30.0
 _BASE_BYTES = 300 * 1024**2  # the child: numpy, scipy, h5py, numba and its compiled kernel
 _PER_DRAW_BYTES = 4 + 8 + 4 + 4  # the draws and their sort, then who drew each peak
