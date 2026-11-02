@@ -107,7 +107,7 @@ describe("AtacCoverage", () => {
     render(<AtacCoverage datasetId="d" locus={LOCUS} selectedPeak="chr11:1200-1400" />);
     const fig = await screen.findByTestId("atac-coverage");
     expect(api.getCoverage.mock.calls[0]?.[1]).toMatchObject({ region: "chr11:1000-3000" });
-    expect((screen.getByLabelText("Gene or region") as HTMLInputElement).value).toBe("chr11:1000-3000");
+    await waitFor(() => expect((screen.getByLabelText("Gene or region") as HTMLInputElement).value).toBe("chr11:1000-3000"));
     expect(fig.textContent).toContain("never proof of regulation");
   });
 
