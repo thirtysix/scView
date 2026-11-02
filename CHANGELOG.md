@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-11-02
+
 ### Added
 - **Differential peaks with a depth covariate** (Unified View > Accessibility): logistic regression as in Seurat's
   LR test, group ~ peak + total counts against group ~ total counts, now the card's default. P-values match Signac
