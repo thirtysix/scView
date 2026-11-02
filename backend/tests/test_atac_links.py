@@ -583,6 +583,11 @@ async def test_copilot_grounds_on_links_with_its_tag_and_the_router_finds_it(cli
     assert resolve_tag("links", [atac_links.TAG]) == [atac_links.TAG]
     assert any(w == "peak-gene" for w in router._RESULT_FACET_HINTS["groups"])
     assert atac_links.grounding_lines(type("T", (), {"h5ad_path": None})()) == []
+    gene = str(atac_links.latest(adaptor).table["gene"].iloc[0])
+    named = atac_links.named_gene_lines(adaptor, f"which peaks link to {gene.lower()}?")
+    assert named and named[0][0] == gene and "candidates" in named[0][1]
+    assert atac_links.named_gene_lines(adaptor, "which peaks link?") == []
+    assert atac_links.named_gene_lines(adaptor, "") == []
 
 
 def test_the_full_guide_has_the_card_and_the_compact_one_does_not():

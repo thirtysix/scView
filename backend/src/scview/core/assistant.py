@@ -479,6 +479,22 @@ def _add_atac_motifs(adaptor, lines: list[str], sources: list[ChatSource]) -> No
         sources.append(ChatSource(kind="result", ref=atac_chromvar.TAG, detail=c_detail, evidence="\n".join(c_lines[1:])))
 
 
+def _add_named_atac(adaptor, query: str, blocks: list[str], sources: list[ChatSource]) -> None:
+    """Links of a gene and enrichment of a TF the question names: the summaries list only the top ones."""
+    from scview.core import atac_links, atac_motifs
+
+    try:
+        named = [(atac_links.TAG, *x) for x in atac_links.named_gene_lines(adaptor, query)]
+        named += [(atac_motifs.TAG, *x) for x in atac_motifs.named_motif_lines(adaptor, query)]
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: named ATAC facts failed: %s", exc)
+        return
+    for tag, name, fact in named:
+        ref = f"{tag}:{name}"
+        blocks.append(f"{fact} [{ref}]")
+        sources.append(ChatSource(kind="result", ref=ref, detail=fact.split(":")[0].lstrip("- "), evidence=fact))
+
+
 def _add_cnv(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved copy-number inference (core/cnv.py): reference, high-score groups,
     high CNV clusters with their gained / lost chromosomes, once run."""
@@ -1735,6 +1751,7 @@ def _assemble(
     view_context: dict | None,
     include_data_grounding: bool,
     data_facets: list[str] | None = None,
+    query: str = "",
 ) -> tuple[str, list[ChatSource]]:
     """Build the grounded context string + ordered source list from the chosen
     sources (shared by streaming and non-streaming paths). ``data_facets`` narrows
@@ -1746,6 +1763,7 @@ def _assemble(
         data_context, data_sources = build_grounding_context(adaptor, facets)
         blocks.append(data_context)
         sources.extend(data_sources)
+        _add_named_atac(adaptor, query, blocks, sources)
         _add_label_term(adaptor, view_context, blocks, sources)
         _add_tf_motifs(adaptor, view_context, blocks, sources)
         _add_gwas_traits(adaptor, view_context, blocks, sources)
@@ -2297,7 +2315,7 @@ async def answer_query(
     context, sources = _assemble(
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
-        include_data_grounding=include_data_grounding, data_facets=data_facets,
+        include_data_grounding=include_data_grounding, data_facets=data_facets, query=query,
     )
 
     route = route or []
@@ -2399,7 +2417,7 @@ async def stream_answer(
     context, sources = _assemble(
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
-        include_data_grounding=include_data_grounding, data_facets=data_facets,
+        include_data_grounding=include_data_grounding, data_facets=data_facets, query=query,
     )
     route = route or []
     yield {

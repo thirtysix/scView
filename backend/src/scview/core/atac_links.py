@@ -42,6 +42,7 @@ import hashlib
 import json
 import logging
 import queue
+import re
 import shutil
 import tempfile
 import threading
@@ -856,3 +857,27 @@ def grounding_lines(adaptor) -> list[str]:
     if named:
         line += f"; strongest by |z|: {named}"
     return [line + f" [{TAG}]"]
+
+
+def named_gene_lines(adaptor, query: str, max_genes: int = 3, max_links: int = 8) -> list[tuple[str, str]]:
+    """(gene, fact) for each gene the question names, as the top links alone leave out most genes."""
+    res = latest(adaptor)
+    if res is None or not query:
+        return []
+    t = res.table
+    linked = {str(g).upper(): str(g) for g in t["gene"].unique()} if len(t) else {}
+    known = {str(g).upper() for g in adaptor.adata.var_names}
+    out: list[tuple[str, str]] = []
+    for word in dict.fromkeys(re.findall(r"[A-Za-z][A-Za-z0-9.-]+", query)):
+        key = word.rstrip(".-").upper()
+        if len(out) >= max_genes:
+            break
+        if key in linked:
+            rows = t[t["gene"] == linked[key]]
+            top = rows.reindex(rows["score"].abs().sort_values(ascending=False).index).head(max_links)
+            named = "; ".join(f"{r.peak} ({int(r.distance_to_tss):+,d} bp from the TSS, r = {r.score:.3f}, z = {r.z:.1f}, p = {r.p:.2g})" for r in top.itertuples())
+            out.append((linked[key], f"- Peak-gene links of {linked[key]}, {len(rows)} kept at p < {P_CUTOFF} (candidates), the {len(top)} largest |r|: {named}"))
+        elif key in known and word[0].isupper() and len(key) >= 3 and re.search(r"link|peak|enhancer|regulat", query, re.I):
+            what = {"variable": "variable genes only", "all": "all genes", "list": "a chosen list of genes"}.get(res.params.get("genes"), "its genes")
+            out.append((key, f"- Peak-gene links of {key}: none kept in this run, which tested {what}; a gene outside that was not tested."))
+    return out

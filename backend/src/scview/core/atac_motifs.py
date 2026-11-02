@@ -34,6 +34,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -1061,6 +1062,25 @@ def grounding_lines(adaptor) -> tuple[list[str], str]:
     lines.append("- Caveat: a motif hit is not binding; paralogues share motifs, so check the TF's own RNA; GC-rich motifs enrich easily "
                  "even after matching. Say 'candidate'.")
     return lines, detail
+
+
+def named_motif_lines(adaptor, query: str, max_motifs: int = 2, max_groups: int = 4) -> list[tuple[str, str]]:
+    """(TF, fact) for each TF the question names: the groups where its motif enriches most."""
+    res = latest(adaptor)
+    if res is None or res.table is None or not len(res.table) or not query:
+        return []
+    t = res.table
+    parts = {part.upper() for name in t["motif"].astype(str).unique() for part in name.split("::")}
+    out: list[tuple[str, str]] = []
+    for word in dict.fromkeys(re.findall(r"[A-Za-z][A-Za-z0-9-]+", query)):
+        key = word.upper()
+        if key not in parts or len(out) >= max_motifs:
+            continue
+        names = t["motif"].astype(str).map(lambda n: key in [x.upper() for x in n.split("::")])
+        rows = t[names].sort_values("pval").drop_duplicates("group").head(max_groups)
+        out.append((key, f"- Motif of {key} in differential peaks, its {len(rows)} best groups of {len(res.groups)}: "
+                         + "; ".join(f"{r['group']}: {_row_text(r)}" for r in rows.to_dict("records"))))
+    return out
 
 
 if __name__ == "__main__":
