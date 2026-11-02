@@ -1,5 +1,7 @@
 import type { Data, Layout } from "plotly.js";
 import type { Coverage, FragmentLengths, FragmentQc, QcValuesGroup } from "@/api/atacFragments";
+import type { LinkArc } from "@/api/atacLinks";
+import { arcShapes } from "@/lib/atacLinks";
 
 // Figures of the ATAC fragment cards (components/unified/AtacFragmentQc.tsx, AtacCoverage.tsx).
 
@@ -156,6 +158,7 @@ export function tssProfileFigure(profile: FragmentQc["tss_profile"]): { data: Da
 
 const TRACK_HEIGHT = 56;
 const ANNOTATION_HEIGHT = 56;
+const ARC_HEIGHT = 130;
 
 /** The y axis key of row ``i`` (0-based): "yaxis", "yaxis2", ... */
 function yKey(i: number): string {
@@ -167,13 +170,24 @@ function yRef(i: number): string {
   return i === 0 ? "y" : `y${i + 1}`;
 }
 
-/** One filled track per group sharing x and y, peaks and genes in a row beneath. */
-export function coverageFigure(cov: Coverage, colorOf: ColorOf): { data: Data[]; layout: Partial<Layout> } {
+export interface ArcsInView {
+  gene: string;
+  arcs: LinkArc[];
+  selectedPeak?: string | null;
+}
+
+/** One filled track per group sharing x and y, peaks and genes in a row beneath; with ``links``, that gene's arcs
+ *  (peak middle to TSS) in a row under those. No tracks at all draws the peaks, genes and arcs alone. */
+export function coverageFigure(cov: Coverage, colorOf: ColorOf, links?: ArcsInView | null): { data: Data[]; layout: Partial<Layout> } {
   const n = cov.tracks.length;
-  const height = n * TRACK_HEIGHT + ANNOTATION_HEIGHT + 44;
+  const arcs = links?.arcs.filter((a) => a.middle >= cov.region.start && a.middle <= cov.region.end
+    && a.tss >= cov.region.start && a.tss <= cov.region.end) ?? [];
+  const arcRow = arcs.length > 0 ? ARC_HEIGHT : 0;
+  const height = n * TRACK_HEIGHT + ANNOTATION_HEIGHT + arcRow + 44;
   const plotHeight = height - 44;
   const annotationShare = ANNOTATION_HEIGHT / plotHeight;
-  const rowShare = (1 - annotationShare) / Math.max(n, 1);
+  const arcShare = arcRow / plotHeight;
+  const rowShare = (1 - annotationShare - arcShare) / Math.max(n, 1);
   const data: Data[] = cov.tracks.map((t, i) => ({
     type: "scatter" as const,
     mode: "lines" as const,
@@ -196,7 +210,7 @@ export function coverageFigure(cov: Coverage, colorOf: ColorOf): { data: Data[];
     xaxis: {
       ...AXIS,
       range: [cov.region.start, cov.region.end],
-      anchor: yRef(n),
+      anchor: yRef(arcs.length > 0 ? n + 1 : n),
       title: TITLE(`${cov.region.chrom} position (bp)`),
       tickformat: ",d",
     },
@@ -220,7 +234,7 @@ export function coverageFigure(cov: Coverage, colorOf: ColorOf): { data: Data[];
   });
   // The row beneath: peaks along its top, genes under them, with an arrow for the strand.
   layout[yKey(n)] = {
-    domain: [0, annotationShare - 0.004],
+    domain: [arcShare, arcShare + annotationShare - 0.004],
     range: [0, 1],
     visible: false,
     fixedrange: true,
@@ -232,6 +246,7 @@ export function coverageFigure(cov: Coverage, colorOf: ColorOf): { data: Data[];
     fillcolor: "#475569", line: { width: 0 },
   }));
   const genes = laneGenes(cov);
+  const labelled: number[] = [];
   genes.forEach(({ gene, lane }) => {
     const y = 0.62 - lane * 0.3;
     shapes.push({
@@ -247,11 +262,42 @@ export function coverageFigure(cov: Coverage, colorOf: ColorOf): { data: Data[];
       ax: forward ? left : right, ay: y,
       showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1, arrowcolor: "#334155", text: "",
     });
+    // With arcs the window is wide and names run together: the linked gene always, another when its lane has room.
+    const middle = (left + right) / 2;
+    const half = (cov.region.end - cov.region.start) * 0.0075 * gene.name.length;
+    if (arcs.length > 0 && gene.name !== links?.gene && middle - half < (labelled[lane] ?? -Infinity)) return;
+    labelled[lane] = middle + half;
     annotations.push({
-      xref: "x", yref: row as "y", x: (left + right) / 2, y: y - 0.02, yanchor: "top", showarrow: false,
+      xref: "x", yref: row as "y", x: middle, y: y - 0.02, yanchor: "top", showarrow: false,
       text: gene.name, font: { size: 10, color: "#334155" },
     });
   });
+  if (arcs.length > 0) {
+    const arcAxis = yRef(n + 1);
+    layout[yKey(n + 1)] = { domain: [0, arcShare - 0.004], range: [0, 1], visible: false, fixedrange: true, anchor: "x" };
+    const drawn = arcShapes(arcs, links?.selectedPeak);
+    const byStrength = [...arcs].sort((a, b) => Math.abs(a.score) - Math.abs(b.score));
+    for (const a of drawn) {
+      shapes.push({ type: "path", xref: "x", yref: arcAxis as "y", path: a.path, line: { color: a.color, width: a.width, dash: a.dash } });
+    }
+    // Shapes do not hover: a clear marker at each arc's lowest point carries its numbers.
+    data.push({
+      type: "scatter",
+      mode: "markers",
+      xaxis: "x",
+      yaxis: arcAxis,
+      x: drawn.map((a) => a.apexX),
+      y: drawn.map((a) => a.apexY),
+      marker: { size: 9, color: "rgba(0,0,0,0)" },
+      text: byStrength.map((a) => `${links?.gene} ~ ${a.peak}<br>r = ${a.score.toFixed(3)}, z = ${a.z.toFixed(1)}, p = ${a.p.toExponential(1)}`),
+      hovertemplate: "%{text}<extra></extra>",
+    } as Data);
+    annotations.push({
+      xref: "paper", yref: "paper", x: 0, y: 0, xanchor: "left", yanchor: "bottom", showarrow: false,
+      text: `${links?.gene} links: deeper and darker = larger |r|; blue solid r > 0, red dashed r < 0`,
+      font: { size: 10, color: "#475569" },
+    });
+  }
   layout.shapes = shapes;
   layout.annotations = annotations;
   return { data, layout: layout as Partial<Layout> };

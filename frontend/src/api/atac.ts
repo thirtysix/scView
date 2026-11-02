@@ -97,7 +97,7 @@ export interface AtacState {
   wnn_plan?: AtacWnnPlan | null;
   wnn_reason?: string | null;
   qc_columns?: string[];
-  running?: "run" | "wnn" | "differential" | null;
+  running?: "run" | "wnn" | "differential" | "links" | null;
 }
 
 export interface AtacStage {
@@ -231,7 +231,7 @@ export interface AtacStreamHandlers {
   signal?: AbortSignal;
 }
 
-async function runStream<T>(path: string, body: unknown, what: string, h: AtacStreamHandlers): Promise<T> {
+export async function runStream<T>(path: string, body: unknown, what: string, h: AtacStreamHandlers): Promise<T> {
   let result: T | null = null;
   await streamEvents(
     path,
