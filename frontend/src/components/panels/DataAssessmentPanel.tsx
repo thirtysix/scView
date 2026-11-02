@@ -197,7 +197,7 @@ const STEP_ORDER: {
   },
   { key: "neighbors", label: "Neighbor Graph", description: "Compute nearest neighbor graph" },
   { key: "clustering", label: "Clustering", description: "Cluster cells into groups" },
-  { key: "embeddings", label: "UMAP/tSNE", description: "Compute embedding for visualization" },
+  { key: "embeddings", label: "UMAP", description: "Compute the UMAP for visualization (a t-SNE already in the file is shown, not computed)" },
   { key: "marker_genes", label: "Marker Genes", description: "Find differentially expressed genes per obs column" },
   { key: "enrichment", label: "Pathway Enrichment", description: "Run pathway enrichment on marker genes" },
   { key: "cell_cycle", label: "Cell Cycle", description: "Score cell cycle phases" },

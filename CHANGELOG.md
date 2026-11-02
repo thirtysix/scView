@@ -6,6 +6,12 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- The TF and pathway activity help no longer says "Human networks only": mouse datasets have used them
+  through orthologs since 0.43.0.
+- The pipeline step "UMAP/tSNE" is now "UMAP": the step never computed a t-SNE. A t-SNE already in the file is
+  still shown.
+
 ## [0.55.0] - 2026-11-02
 
 ### Added

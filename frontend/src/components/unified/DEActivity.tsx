@@ -101,7 +101,7 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
           decoupler&apos;s univariate linear model on this comparison&apos;s test statistic for all{" "}
           {profile.genes.length.toLocaleString()} tested genes: a positive score means the
           source&apos;s activated targets are higher in {labelA} and its repressed targets lower.
-          Benjamini-Hochberg adjusted across sources. Human networks only.
+          Benjamini-Hochberg adjusted across sources. Human networks; on a mouse dataset, mapped through orthologs.
         </InfoTip>
         <span className="flex-1" />
         <button
