@@ -1556,6 +1556,87 @@ def atac_gene_activity(adata, counts, peak_names, table, upstream):
 _HELPERS["atac"] = _atac_helper()
 _HELPER_ORDER += ("atac",)
 _HELPER_NEEDS["atac"] = ()
+
+
+def _atac_links_helper() -> str:
+    """core/atac_links.py's run and core/genome_seq.py's reader (numpy, scipy, pandas), copied so the
+    script computes the links as scView did."""
+    import inspect
+
+    from scview.core import atac_links, genome_seq
+
+    lines = ["import hashlib", "import mmap", "import shutil", "import struct", "import tempfile", "import threading", "from pathlib import Path",
+             "from types import SimpleNamespace", "from typing import Iterable", ""]
+    lines += [f"{name} = {_lit(getattr(atac_links, name))}" for name in atac_links.REPLAY_CONSTANTS]
+    lines += [f"{name} = {_lit(getattr(genome_seq, name))}" for name in ("UNKNOWN", "_SIGNATURE")]
+    lines += ["_FROM_2BIT = np.array([3, 1, 0, 2], dtype=np.uint8)",
+              "_BYTE_TO_CODES = np.array([[_FROM_2BIT[(b >> s) & 3] for s in (6, 4, 2, 0)] for b in range(256)], dtype=np.uint8)"]
+    for obj in (genome_seq.TwoBit, genome_seq.sequences, genome_seq.base_counts, genome_seq.gc_percent):
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", "genome_seq = SimpleNamespace(sequences=sequences, base_counts=base_counts, gc_percent=gc_percent)"]
+    for obj in atac_links.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    lines += ["", "", _ATAC_LINKS_DRIVER.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_ATAC_LINKS_DRIVER = '''
+def atac_links_table(adata, counts, peak_names, settings):
+    """iter_links on the counts in memory and the script's log-normalised RNA: the kept links as a table."""
+    import urllib.request
+
+    use_raw = adata.raw is not None
+    rna_var = adata.raw.var if use_raw else adata.var
+    rna = adata.raw.X if use_raw else adata.X
+    rna_index = pd.Index(rna_var.index.astype(str))
+    if settings["genes"] == "variable":
+        names = adata.var.index[adata.var["highly_variable"].astype(bool).to_numpy()].astype(str).tolist()
+    elif settings["genes"] == "all":
+        names = rna_index.tolist()
+    else:
+        names = [g for g in settings["gene_list"] if g in rna_index]
+    table = atac_gene_table(settings["gene_positions_url"])
+    table["tss"] = np.where(table["strand"].to_numpy() == "-", table["end"].to_numpy() - 1, table["start"].to_numpy())
+    ids = rna_var["gene_ids"].astype(str).str.replace(r"\\.\\d+$", "", regex=True) if "gene_ids" in rna_var.columns else None
+    known = dict(zip(rna_index, ids)) if ids is not None else {}
+    genes = order_genes(place_genes(names, known, table))
+    parts = [re.split(r"[:_-]", n[::-1], maxsplit=2) for n in peak_names]
+    chrom = np.asarray([p[2][::-1] for p in parts], dtype=object)
+    end = np.asarray([int(p[0][::-1]) for p in parts], dtype=np.int64)
+    start = np.asarray([int(p[1][::-1]) for p in parts], dtype=np.int64)
+    name = os.path.basename(settings["genome_url"])
+    path = next((p for p in (name, os.path.join(os.path.dirname(os.path.abspath(INPUT)), name)) if os.path.exists(p)), None)
+    if path is None:  # about 800 MB, once
+        path = name
+        urllib.request.urlretrieve(settings["genome_url"], path)
+    gc = peak_gc(TwoBit(path), chrom, start, end)
+    mask = None
+    if settings.get("cells_column"):
+        s = adata.obs[settings["cells_column"]]
+        mask = s.astype(str).isin([str(v) for v in settings["cells_value"]]).to_numpy() & s.notna().to_numpy()
+    rows = np.arange(counts.shape[0]) if mask is None else np.flatnonzero(mask)
+    if settings.get("selection") and _selection_hash(adata, mask) != settings["selection"]:
+        print("Peak-gene links: these cells are not the ones the run used (labels or filtering came out differently here), "
+              "so the numbers will differ.")
+
+    def read_genes(wanted):
+        block = rna[:, rna_index.get_indexer(wanted)]
+        return np.asarray(block.toarray() if sp.issparse(block) else block, dtype=np.float32)
+
+    folder = tempfile.mkdtemp(prefix="links-")
+    try:
+        for item in iter_links(AtacCounts(counts), rows, mask, read_genes, genes, peak_names, chrom, start, end, gc, folder,
+                               seed=settings.get("seed", SEED)):
+            if item["type"] == "result":
+                print("Peak-gene links:", item["counts"])
+                return item["frame"].drop(columns="peak_index")
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+    raise AtacError("no result")
+'''
+_HELPERS["atac_links"] = _atac_links_helper()
+_HELPER_ORDER += ("atac_links",)
+_HELPER_NEEDS["atac_links"] = ("atac",)
 _HELPERS["spot_deconvolution"] = _spot_deconvolution_helper()
 _HELPER_ORDER += ("spot_deconvolution",)
 _HELPER_NEEDS["spot_deconvolution"] = ("looks_like_counts",)
@@ -3124,6 +3205,31 @@ def _atac_differential(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+_ATAC_LINKS_CODE = '''
+peaks, peak_names, peak_cells = atac_peaks(INPUT)
+counts = peaks[pd.Index(peak_cells).get_indexer(adata.obs_names)].tocsr()
+adata.uns["atac_links_" + ATAC_LINKS["key"]] = atac_links_table(adata, counts, peak_names, ATAC_LINKS)
+'''
+
+
+def _atac_links(p: dict, ctx: _Ctx) -> Snippet:
+    """Peak-gene links (core/atac_links.py; a result, in ``uns``): the same code and seed on the input's
+    peaks read again, on the log-normalised RNA of the script's own run."""
+    if p.get("genes") not in ("variable", "all", "list") or not p.get("genome_url") or not p.get("gene_positions_url"):
+        return Snippet(NOT_REPLAYABLE, ["# Peak-gene links: the settings are not recorded. Recorded:", *_param_comment(p)],
+                       "settings not recorded")
+    _need(ctx, "atac_links")
+    keys = ("genes", "gene_list", "cells_column", "cells_value", "seed", "genome_url", "gene_positions_url", "selection")
+    settings = {x: p.get(x) for x in keys if p.get(x) is not None}
+    settings["key"] = str(p.get("result_id") or p.get("genes"))  # a run of its own: several can be recorded
+    return Snippet(EXACT, [
+        "# Peak-gene links (Signac's LinkPeaks defaults; core/atac_links.py): a table in uns. A correlation, a candidate",
+        "# and never proof of regulation. GC percent needs the genome's .2bit: beside the input or here, else fetched once.",
+        f"ATAC_LINKS = {_lit(settings)}",
+        *_block(_ATAC_LINKS_CODE),
+    ])
+
+
 def _atac_wnn(p: dict, ctx: _Ctx) -> Snippet:
     """WNN RNA + ATAC (core/atac.py with core/wnn.py's FindMultiModalNeighbors)."""
     if any(not p.get(x) for x in ("rep", "n_pcs_rna", "lsi_dims")):
@@ -3590,6 +3696,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "atac_lsi": _atac_lsi,
     "atac_wnn": _atac_wnn,
     "atac_differential": _atac_differential,
+    "atac_links": _atac_links,
     "spot_deconvolution": _spot_deconvolution,
     "velocity": _velocity,
     "spatial_domains": _spatial_domains,

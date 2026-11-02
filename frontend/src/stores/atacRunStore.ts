@@ -9,11 +9,12 @@ import {
   type AtacStage,
   type AtacWnnBody,
 } from "@/api/atac";
+import { runAtacLinks, type LinksBody, type LinksPage } from "@/api/atacLinks";
 import { watchdogMessage, type WatchdogEvent } from "@/api/pipelineRun";
 
-export type AtacRunKind = "run" | "wnn" | "differential";
+export type AtacRunKind = "run" | "wnn" | "differential" | "links";
 
-const WHAT: Record<AtacRunKind, string> = { run: "ATAC analysis", wnn: "WNN", differential: "Differential accessibility" };
+const WHAT: Record<AtacRunKind, string> = { run: "ATAC analysis", wnn: "WNN", differential: "Differential accessibility", links: "Peak-gene links" };
 
 /**
  * An ATAC run in flight (Accessibility subtab). Kept here, not in a card, so switching
@@ -32,9 +33,12 @@ interface AtacRunState {
   version: number;
   /** The last differential result, for the table. */
   da: AtacDa | null;
+  /** The peak-gene links result in view. */
+  links: LinksPage | null;
   run: (datasetId: string, body: AtacRunBody) => Promise<void>;
   runWnn: (datasetId: string, body: AtacWnnBody) => Promise<void>;
   runDa: (datasetId: string, body: AtacDaBody) => Promise<void>;
+  runLinks: (datasetId: string, body: LinksBody) => Promise<void>;
   cancel: () => void;
 }
 
@@ -74,12 +78,18 @@ export const useAtacRunStore = create<AtacRunState>((set, get) => {
     ...idle,
     version: 0,
     da: null,
+    links: null,
     run: (datasetId, body) => start(datasetId, "run", async (h) => void (await runAtac(datasetId, body, h))),
     runWnn: (datasetId, body) => start(datasetId, "wnn", async (h) => void (await runAtacWnn(datasetId, body, h))),
     runDa: (datasetId, body) =>
       start(datasetId, "differential", async (h) => {
         const da = await runAtacDa(datasetId, body, h);
         set({ da });
+      }),
+    runLinks: (datasetId, body) =>
+      start(datasetId, "links", async (h) => {
+        const links = await runAtacLinks(datasetId, body, h);
+        set({ links });
       }),
     cancel: () => controller?.abort(),
   };
