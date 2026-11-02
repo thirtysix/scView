@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     # into DATA_DIR/marker_db on first use (core/marker_db.py).
     MARKER_DB_AUTO_DOWNLOAD: bool = True
     ANNOTATION_AUTO_DOWNLOAD: bool = True
+    GENOME_AUTO_DOWNLOAD: bool = True
     # Fetch the Human Protein Atlas tissue / cell-type RNA tables into DATA_DIR/hpa
     # on first use (core/offtarget.py).
     HPA_AUTO_DOWNLOAD: bool = True
