@@ -443,6 +443,58 @@ def _add_atac(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(a_lines[1:])))
 
 
+def _add_atac_links(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last peak-gene links on these cells (core/atac_links.py)."""
+    from scview.core import atac_links
+
+    try:
+        l_lines = atac_links.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: peak-gene links failed: %s", exc)
+        return
+    if l_lines:
+        lines.extend(l_lines)
+        sources.append(ChatSource(kind="result", ref=atac_links.TAG, detail="Peak-gene links", evidence="\n".join(l_lines)))
+
+
+def _add_atac_motifs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Motifs in ATAC peaks: the last enrichment (core/atac_motifs.py) and chromVAR run
+    (core/atac_chromvar.py) on these cells; nothing before they have run."""
+    from scview.config import get_settings
+    from scview.core import atac_chromvar, atac_motifs, results_store
+
+    try:
+        m_lines, m_detail = atac_motifs.grounding_lines(adaptor)
+        dataset_id = results_store.dataset_id_of(adaptor)
+        c_lines, c_detail = (atac_chromvar.grounding_lines(get_settings().DATA_DIR, dataset_id, adaptor.cells_fingerprint())
+                             if dataset_id else ([], ""))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: ATAC motifs failed: %s", exc)
+        return
+    if m_lines:
+        lines.extend(m_lines)
+        sources.append(ChatSource(kind="result", ref=atac_motifs.TAG, detail=m_detail, evidence="\n".join(m_lines[1:])))
+    if c_lines:
+        lines.extend(c_lines)
+        sources.append(ChatSource(kind="result", ref=atac_chromvar.TAG, detail=c_detail, evidence="\n".join(c_lines[1:])))
+
+
+def _add_named_atac(adaptor, query: str, blocks: list[str], sources: list[ChatSource]) -> None:
+    """Links of a gene and enrichment of a TF the question names: the summaries list only the top ones."""
+    from scview.core import atac_links, atac_motifs
+
+    try:
+        named = [(atac_links.TAG, *x) for x in atac_links.named_gene_lines(adaptor, query)]
+        named += [(atac_motifs.TAG, *x) for x in atac_motifs.named_motif_lines(adaptor, query)]
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: named ATAC facts failed: %s", exc)
+        return
+    for tag, name, fact in named:
+        ref = f"{tag}:{name}"
+        blocks.append(f"{fact} [{ref}]")
+        sources.append(ChatSource(kind="result", ref=ref, detail=fact.split(":")[0].lstrip("- "), evidence=fact))
+
+
 def _add_cnv(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved copy-number inference (core/cnv.py): reference, high-score groups,
     high CNV clusters with their gained / lost chromosomes, once run."""
@@ -1043,6 +1095,8 @@ def build_grounding_context(
         _add_programs(adaptor, lines, sources)
         _add_wnn(adaptor, lines, sources)
         _add_atac(adaptor, lines, sources)
+        _add_atac_links(adaptor, lines, sources)
+        _add_atac_motifs(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_spatial_domains(adaptor, lines, sources)
         _add_cooccurrence(adaptor, lines, sources)
@@ -1697,6 +1751,7 @@ def _assemble(
     view_context: dict | None,
     include_data_grounding: bool,
     data_facets: list[str] | None = None,
+    query: str = "",
 ) -> tuple[str, list[ChatSource]]:
     """Build the grounded context string + ordered source list from the chosen
     sources (shared by streaming and non-streaming paths). ``data_facets`` narrows
@@ -1708,6 +1763,7 @@ def _assemble(
         data_context, data_sources = build_grounding_context(adaptor, facets)
         blocks.append(data_context)
         sources.extend(data_sources)
+        _add_named_atac(adaptor, query, blocks, sources)
         _add_label_term(adaptor, view_context, blocks, sources)
         _add_tf_motifs(adaptor, view_context, blocks, sources)
         _add_gwas_traits(adaptor, view_context, blocks, sources)
@@ -2259,7 +2315,7 @@ async def answer_query(
     context, sources = _assemble(
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
-        include_data_grounding=include_data_grounding, data_facets=data_facets,
+        include_data_grounding=include_data_grounding, data_facets=data_facets, query=query,
     )
 
     route = route or []
@@ -2361,7 +2417,7 @@ async def stream_answer(
     context, sources = _assemble(
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
-        include_data_grounding=include_data_grounding, data_facets=data_facets,
+        include_data_grounding=include_data_grounding, data_facets=data_facets, query=query,
     )
     route = route or []
     yield {

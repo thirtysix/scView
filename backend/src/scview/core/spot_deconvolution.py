@@ -128,7 +128,7 @@ PLATFORM_MIN_LFC = 0.5
 FIT_MIN_MU = 1e-4
 FIT_MIN_LFC = 0.75
 MIN_FIT_GENES = 200  # fewer: the platform set is fitted
-MIN_GENES = 50  # fewer: refused
+SPOT_MIN_GENES = 50  # fewer: refused
 GN_ROUNDS = 20
 SG2_FLOOR = 1e-4
 GH_NODES = 80
@@ -178,7 +178,7 @@ NOTE = ("Shares are fractions of each spot's or bin's RNA (or, estimated, of its
         "probe-based (FFPE) sections differ most.")
 
 REPLAY_CONSTANTS = ("MIN_SPOT_UMI", "PLATFORM_MIN_MU", "PLATFORM_MIN_LFC", "FIT_MIN_MU", "FIT_MIN_LFC",
-                    "MIN_FIT_GENES", "MIN_GENES", "GN_ROUNDS", "SG2_FLOOR", "GH_NODES", "T_MIN", "T_MAX",
+                    "MIN_FIT_GENES", "SPOT_MIN_GENES", "GN_ROUNDS", "SG2_FLOOR", "GH_NODES", "T_MIN", "T_MAX",
                     "T_STEP", "Y_MAX", "SE_GRID", "SE_START", "SE_SPOTS", "SE_ROUNDS", "MAX_ITER", "TOL",
                     "BLOCK", "HESS_BLOCK", "EIG_FLOOR", "TABLE_ROWS", "SEARCH_T_STEP")
 
@@ -451,8 +451,8 @@ def sd_iter_deconvolve(mu_all, S, Y, N, libs, method, keep, genes=None, s_e=None
         if fit.size < MIN_FIT_GENES:
             notes.append(f"Only {fit.size} genes passed the fit-set cut; the {plat.size} platform-set genes were fitted.")
             fit = plat
-        if fit.size < MIN_GENES:
-            raise ValueError(f"Only {fit.size} informative shared genes (at least {MIN_GENES} are needed): the "
+        if fit.size < SPOT_MIN_GENES:
+            raise ValueError(f"Only {fit.size} informative shared genes (at least {SPOT_MIN_GENES} are needed): the "
                              "reference and the spots share too few genes that tell the types apart.")
     else:
         plat, fit = (np.asarray(g, dtype=np.int64) for g in genes)
@@ -871,7 +871,7 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
         seen_r.add(r_name)
         shared.append(s_name)
         ref_names.append(r_name)
-    if len(shared) < MIN_GENES:
+    if len(shared) < SPOT_MIN_GENES:
         raise SpotDeconvolutionError(
             f"The reference and this dataset share {len(shared):,} genes (reference {match.n_ref:,}, this dataset "
             f"{match.n_query:,}): check that both name genes the same way (symbols or Ensembl ids) and are the "

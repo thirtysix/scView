@@ -83,7 +83,7 @@ reviewer can audit. scView closes both gaps:
   gene names, and cell-cycle scoring works on both.
 - **RNA velocity and 10x Multiome ATAC.** Velocity (steady-state and stochastic, matching scVelo 0.3.3 arrow for
   arrow) from spliced and unspliced counts, drawn on the plot with phase portraits. Multiome peaks stay on disk:
-  LSI as Signac runs it, ATAC UMAP and clusters, WNN on RNA + ATAC, gene activity, differential peaks with a depth covariate, and from the
+  LSI as Signac runs it, ATAC UMAP and clusters, WNN on RNA + ATAC, gene activity, differential peaks with a depth covariate, peak-gene links as Signac runs them, JASPAR motifs in peaks with enrichment and chromVAR, and from the
   fragments file TSS enrichment, nucleosome signal and coverage tracks.
 - **Spatial data on its own terms.** Visium (Space Ranger `outs/`), Visium HD (16 or 8 um bins, or Space
   Ranger 4's segmented cells) and Xenium output folders open on the tissue image, with cell and nucleus outlines

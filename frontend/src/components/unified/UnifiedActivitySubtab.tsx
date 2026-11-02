@@ -167,7 +167,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
         Each cell gets one score per transcription factor (CollecTRI) or pathway (PROGENy): the
         t-value of a linear fit of its log-normalised expression on the source&apos;s signed
         target weights (decoupler&apos;s ULM). Positive: the targets it activates are high and the
-        ones it represses low. Human networks only.
+        ones it represses low. Human networks; on a mouse dataset, mapped through orthologs.
       </InfoTip>
     </div>
   );

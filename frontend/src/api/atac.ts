@@ -97,7 +97,7 @@ export interface AtacState {
   wnn_plan?: AtacWnnPlan | null;
   wnn_reason?: string | null;
   qc_columns?: string[];
-  running?: "run" | "wnn" | "differential" | null;
+  running?: "run" | "wnn" | "differential" | "links" | null;
 }
 
 export interface AtacStage {
@@ -231,7 +231,7 @@ export interface AtacStreamHandlers {
   signal?: AbortSignal;
 }
 
-async function runStream<T>(path: string, body: unknown, what: string, h: AtacStreamHandlers): Promise<T> {
+export async function runStream<T>(path: string, body: unknown, what: string, h: AtacStreamHandlers): Promise<T> {
   let result: T | null = null;
   await streamEvents(
     path,
@@ -260,4 +260,9 @@ export function runAtacWnn(datasetId: string, body: AtacWnnBody, h: AtacStreamHa
 
 export function runAtacDa(datasetId: string, body: AtacDaBody, h: AtacStreamHandlers = {}): Promise<AtacDa> {
   return runStream(`/datasets/${datasetId}/atac/differential`, body, "Differential accessibility", h);
+}
+
+/** chromVAR deviations per cell (core/atac_chromvar.py); aborting `signal` ends the child, nothing kept. */
+export function runAtacChromvar(datasetId: string, body: { seed?: number }, h: AtacStreamHandlers = {}): Promise<unknown> {
+  return runStream(`/datasets/${datasetId}/atac/motifs/chromvar`, body, "chromVAR", h);
 }

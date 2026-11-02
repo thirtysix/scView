@@ -93,6 +93,33 @@ describe("AtacCoverage", () => {
     expect(api.getCoverage).not.toHaveBeenCalled();
   });
 
+  const LOCUS = {
+    gene: "MS4A1", chrom: "chr11", tss: 1100, start: 1000, end: 3000,
+    arcs: [{ peak: "chr11:1200-1400", start: 1200, end: 1400, middle: 1300, tss: 1100, score: 0.4, z: 6, p: 1e-9, padj: 1e-7, distance_to_tss: 100 }],
+    peaks: [{ start: 1200, end: 1400 }],
+    genes: [{ name: "MS4A1", start: 1100, end: 2900, strand: "+" }],
+    note: null,
+  };
+
+  it("a locus from the links draws its window with arcs under the tracks", async () => {
+    api.getFragments.mockResolvedValue({ attached: true, max_window: 2000000, gene_pad: 5000 });
+    api.getCoverage.mockResolvedValue(COV);
+    render(<AtacCoverage datasetId="d" locus={LOCUS} selectedPeak="chr11:1200-1400" />);
+    const fig = await screen.findByTestId("atac-coverage");
+    expect(api.getCoverage.mock.calls[0]?.[1]).toMatchObject({ region: "chr11:1000-3000" });
+    expect((screen.getByLabelText("Gene or region") as HTMLInputElement).value).toBe("chr11:1000-3000");
+    expect(fig.textContent).toContain("never proof of regulation");
+  });
+
+  it("without a fragments file a locus still draws, on a peak track alone", async () => {
+    api.getFragments.mockResolvedValue({ attached: false });
+    render(<AtacCoverage datasetId="d" locus={LOCUS} selectedPeak={null} />);
+    const fig = await screen.findByTestId("atac-links-locus");
+    expect(fig.textContent).toContain("chr11:1,000-3,000");
+    expect(fig.textContent).toContain("never proof of regulation");
+    expect(api.getCoverage).not.toHaveBeenCalled();
+  });
+
   it("tells a region from a gene", () => {
     expect(asRequest(" chr1:1,000-5,000 ")).toEqual({ region: "chr1:1,000-5,000" });
     expect(asRequest("CD3D")).toEqual({ gene: "CD3D" });

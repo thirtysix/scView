@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { getCoverage, getFragments, type Coverage } from "@/api/atacFragments";
+import type { LinksLocus } from "@/api/atacLinks";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
@@ -18,6 +19,28 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** A locus of the peak-gene links in the shape the coverage figure draws: no tracks. */
+function locusAsCoverage(locus: LinksLocus): Coverage {
+  return {
+    region: { chrom: locus.chrom, start: locus.start, end: locus.end },
+    bins: 0,
+    bin_size: 0,
+    x: [],
+    group_by: null,
+    tracks: [],
+    ymax: 0,
+    normalisation: "",
+    notes: [],
+    n_fragments: 0,
+    max_window: 0,
+    peaks: locus.peaks,
+    genes: locus.genes.map((g) => ({ ...g, id: g.name, type: "protein_coding" })),
+    gene: null,
+    genes_note: null,
+    seconds: 0,
+  };
+}
+
 /** A region typed as chr1:1000-5000 (commas fine), else a gene. */
 export function asRequest(text: string): { gene?: string; region?: string } {
   const t = text.trim();
@@ -27,9 +50,19 @@ export function asRequest(text: string): { gene?: string; region?: string } {
 /**
  * Coverage tracks from the ATAC fragments file (backend core/atac_fragments.py): one filled
  * track per group for a gene (its body +- 5 kb) or a region of up to 2 Mb, peak ticks and gene
- * arrows beneath. Renders nothing until a fragments file and its index are attached.
+ * arrows beneath. Renders nothing until a fragments file and its index are attached, or until a
+ * row of the peak-gene links opens a ``locus``: its arcs go under the tracks, or on a peak track
+ * alone without a fragments file.
  */
-export function AtacCoverage({ datasetId }: { datasetId: string }) {
+export function AtacCoverage({
+  datasetId,
+  locus = null,
+  selectedPeak = null,
+}: {
+  datasetId: string;
+  locus?: LinksLocus | null;
+  selectedPeak?: string | null;
+}) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const colorBy = useSettingsStore((s) => s.colorBy);
   const [attached, setAttached] = useState(false);
@@ -73,13 +106,22 @@ export function AtacCoverage({ datasetId }: { datasetId: string }) {
   }, [datasetId]);
 
   const colors = useCategoryColors(groupBy || null);
+  const arcs = useMemo(() => {
+    if (!locus || !cov || cov.region.chrom !== locus.chrom) return null;
+    return { gene: locus.gene, arcs: locus.arcs, selectedPeak };
+  }, [locus, cov, selectedPeak]);
   const figure = useMemo(() => {
     if (!cov) return null;
-    return coverageFigure(cov, (g) => (cov.group_by ? rgbCss(colors(g)) : "#2563eb"));
-  }, [cov, colors]);
+    return coverageFigure(cov, (g) => (cov.group_by ? rgbCss(colors(g)) : "#2563eb"), arcs);
+  }, [cov, colors, arcs]);
+  // Without a fragments file: the same figure with no tracks, peaks and genes from the links' own locus.
+  const peakFigure = useMemo(() => {
+    if (attached || !locus) return null;
+    return coverageFigure(locusAsCoverage(locus), () => "#2563eb", { gene: locus.gene, arcs: locus.arcs, selectedPeak });
+  }, [attached, locus, selectedPeak]);
 
-  const draw = async () => {
-    if (!text.trim()) {
+  const draw = async (asked: string = text, column: string = groupBy) => {
+    if (!asked.trim()) {
       setError("Type a gene or a region like chr1:1000-5000.");
       return;
     }
@@ -89,7 +131,7 @@ export function AtacCoverage({ datasetId }: { datasetId: string }) {
     setBusy(true);
     setError(null);
     try {
-      setCov(await getCoverage(datasetId, { ...asRequest(text), groupBy: groupBy || null }, ctl.signal));
+      setCov(await getCoverage(datasetId, { ...asRequest(asked), groupBy: column || null }, ctl.signal));
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         setCov(null);
@@ -100,7 +142,39 @@ export function AtacCoverage({ datasetId }: { datasetId: string }) {
     }
   };
 
-  if (!attached) return null;
+  // A link's row was clicked: draw its window with the tracks, once per locus opened.
+  const drawRef = useRef(draw);
+  drawRef.current = draw;
+  useEffect(() => {
+    if (!locus || !attached) return;
+    const region = `${locus.chrom}:${locus.start}-${locus.end}`;
+    setText(region);
+    void drawRef.current(region);
+  }, [locus, attached]);
+
+  if (!attached) {
+    if (!locus || !peakFigure) return null;
+    return (
+      <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Links at this locus">
+        <h4 className="text-xs font-semibold text-slate-600">{locus.gene}: links at this locus</h4>
+        <figure className="space-y-1" data-testid="atac-links-locus">
+          <Plot
+            data={peakFigure.data}
+            layout={peakFigure.layout}
+            config={plotConfig(`links_${locus.gene}`)}
+            useResizeHandler
+            style={{ width: "100%" }}
+          />
+          <Caption n={{ value: locus.arcs.length, unit: "links" }}>
+            {locus.chrom}:{locus.start.toLocaleString()}-{locus.end.toLocaleString()}. Each arc joins a peak&rsquo;s middle to the
+            gene&rsquo;s TSS: a correlation, a candidate and never proof of regulation. Attach a fragments file under Fragment QC to
+            draw coverage tracks above these.
+          </Caption>
+          {locus.note && <p className="text-[11px] leading-snug text-amber-700">{locus.note}</p>}
+        </figure>
+      </section>
+    );
+  }
   const nGroups = columns.find((c) => c.name === groupBy)?.n_unique ?? 1;
 
   return (
@@ -168,6 +242,7 @@ export function AtacCoverage({ datasetId }: { datasetId: string }) {
             {Math.round(cov.bin_size).toLocaleString()} bp per bin. {cov.normalisation}{" "}
             {cov.peaks.length > 0 ? `${cov.peaks.length} peaks marked. ` : "No peak table on this dataset. "}
             {cov.genes_note}
+            {arcs && " Arcs: a peak's correlation with the gene, a candidate and never proof of regulation."}
           </Caption>
           {cov.notes.map((n) => (
             <p key={n} className="text-[11px] leading-snug text-amber-700">{n}</p>

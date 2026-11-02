@@ -431,3 +431,27 @@ def test_umap_3d_setting_reaches_the_step_and_the_replay():
     script = replay_script.build_script(off, dataset_id="t", dataset_name="t")
     assert script.count("n_components=3") == 1  # the first run's step only
     compile(script, "replay.py", "exec")
+
+
+def test_no_two_helpers_give_one_name_different_code():
+    """Helpers land in one namespace: the later definition would silently replace the earlier."""
+    import ast
+
+    from scview.core import replay_script as rs
+
+    seen: dict[str, tuple[str, str]] = {}
+    clashes = []
+    for key, code in rs._HELPERS.items():
+        for node in ast.parse(code).body:
+            if isinstance(node, ast.FunctionDef | ast.ClassDef):
+                names = [node.name]
+            elif isinstance(node, ast.Assign):
+                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            else:
+                continue
+            source = ast.get_source_segment(code, node)
+            for name in names:
+                first = seen.setdefault(name, (key, source))
+                if first[1] != source:
+                    clashes.append((name, first[0], key))
+    assert not clashes

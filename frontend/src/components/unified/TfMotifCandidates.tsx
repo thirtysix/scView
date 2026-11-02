@@ -46,6 +46,7 @@ const SORTS: { key: TfSortKey; label: string; title: string }[] = [
 export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, onGeneClick }: Props) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
+  const hasPeaks = !!dataset?.atac;
   const [status, setStatus] = useState<TfMotifStatus | null>(null);
   const [result, setResult] = useState<TfMotifResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -172,6 +173,8 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
           on either strand. Each row is a candidate to check, not a proven regulator.
         </InfoTip>
       </div>
+
+      {hasPeaks && <p className="text-[11px] leading-snug text-slate-500">This dataset has ATAC peaks: Accessibility &gt; Motifs in peaks scans every peak, distal sites included.</p>}
 
       {status && !asm && (
         <p className="text-[11px] text-amber-700">

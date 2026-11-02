@@ -6,6 +6,44 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-11-02
+
+### Added
+- **Peak-gene links** (Unified View > Accessibility): Signac's LinkPeaks defaults, in about a minute for the variable
+  genes and about 3 minutes for all genes on PBMC 10k at 2 CPUs, under 1 GiB of memory (R took 573 s for 617 genes at
+  1 CPU). Against Signac 1.17.1 on the same matrices, the tested pairs are the same and scores agree within 9e-15 on
+  PBMC 10k and 2e-15 on mouse E18; z agrees at r 0.991 and 0.984 to 0.986, as close as two Signac seeds are to each
+  other (0.992, 0.987), as do the kept links. BH is added and raw p kept. Clicking a row draws arcs under the coverage
+  tracks, or on a peak track without a fragments file, with sign and strength visible, and in the SVG/PDF export. A
+  link is labelled as a correlation and a candidate, never proof. Results go stale when the cells or RNA change. The
+  time estimate is rough when you choose groups of cells (19 s against 33, 190 s against 140); whole-dataset estimates
+  were within 11%.
+- **Motifs in peaks** (Accessibility): the 879 JASPAR 2024 motifs in every peak, about 2 minutes and kept per peak set.
+  Every hit is the same as motifmatchr 1.34.0 on PBMC 10k (143,836 peaks x 879 motifs, 0 differ).
+- **Motif enrichment in a group's differential peaks** (Signac's FindMotifs: GC-matched background, FDR, fold), with
+  the TF's own RNA in the group, sequence logos and a zip export. Ours against Signac: r 0.9986 on -log10 p and 19 of
+  the top 20; two Signac seeds: 0.9981 and 19. The query defaults to the vignette's raw p < 0.005, open in over 20% of
+  the group; FDR is one select away. A differential result keeps each group's 5,000 lowest p, so a query can stop
+  there, and the caption says when it does.
+- **chromVAR per-cell motif activity** (about 10 minutes on PBMC 10k): motifs by variability, a groups x motifs
+  heatmap, group against the rest, and a motif on the plot. The same z as `computeDeviations` given the same background
+  draws (within 9.5e-7, 147 motifs); with R's own draws r 0.975, as for two R seeds.
+- The co-pilot can use all three. Ask about a gene's links or a TF's motif by name and it gets that gene's or TF's
+  numbers, not only the top results.
+- The replay script reproduces links, motif hits, enrichment and chromVAR z from the original upload. Peak-gene links
+  and motifs need the genome sequence: the first run downloads the UCSC file once (hg38 835 MB, mm10 715 MB, checked
+  against a pinned sha256) and says so first. `GENOME_AUTO_DOWNLOAD=false` turns that off.
+
+### Fixed
+- Differential peaks: a p or FDR between about 1e-15 and 5e-11 reached the table as 0, while smaller ones were right.
+- Replay scripts: helpers that shared a name replaced each other when one script needed both (`barcode_core` in DSB
+  and V(D)J, `MIN_GENES` in the doublet classifier and spot composition, `BLOCK_VALUES` in DSB and ATAC), so such a
+  script could stop or use the wrong setting. A test now refuses any such clash.
+- The TF and pathway activity help no longer says "Human networks only": mouse datasets have used them
+  through orthologs since 0.43.0.
+- The pipeline step "UMAP/tSNE" is now "UMAP": the step never computed a t-SNE. A t-SNE already in the file is
+  still shown.
+
 ## [0.55.0] - 2026-11-02
 
 ### Added

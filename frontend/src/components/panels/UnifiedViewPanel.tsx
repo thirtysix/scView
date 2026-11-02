@@ -51,6 +51,8 @@ import { CellOntologyCard } from "@/components/unified/CellOntologyCard";
 import { getProgramUsage, type ProgramUsage } from "@/api/programs";
 import { getAtacActivity, type AtacActivity } from "@/api/atac";
 import { activityLabel as atacActivityLabel } from "@/lib/atac";
+import { motifLabel } from "@/lib/atacMotifs";
+import { getChromVarMotif, type ChromVarMotif } from "@/api/atacMotifs";
 import { AccessibilitySubtab } from "@/components/unified/AccessibilitySubtab";
 import { usageLabel } from "@/lib/programs";
 import { ClusterReference } from "@/components/unified/ClusterReference";
@@ -427,7 +429,7 @@ export function UnifiedViewPanel() {
   // --- Color type from obs column ---
   const colorType = useMemo<"categorical" | "continuous">(() => {
     if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program" ||
-      scatterOverlay?.type === "atac_activity" || scatterOverlay?.type === "density")
+      scatterOverlay?.type === "atac_activity" || scatterOverlay?.type === "atac_motif" || scatterOverlay?.type === "density")
       return "continuous";
     if (!colorBy || !dataset) return "categorical";
     const col = dataset.obs_columns.find((c) => c.name === colorBy);
@@ -445,7 +447,7 @@ export function UnifiedViewPanel() {
 
   const categories = useMemo(() => {
     if (scatterOverlay?.type === "expression" || scatterOverlay?.type === "score" || scatterOverlay?.type === "program" ||
-      scatterOverlay?.type === "atac_activity" || scatterOverlay?.type === "density")
+      scatterOverlay?.type === "atac_activity" || scatterOverlay?.type === "atac_motif" || scatterOverlay?.type === "density")
       return undefined;
     if (colorType !== "categorical" || !obsColumn?.values) return undefined;
     return obsColumn.values;
@@ -467,7 +469,7 @@ export function UnifiedViewPanel() {
   // centre; the scatter, split grid, legend and PNG export all draw from it ---
   const overlayKind: OverlayKind =
     // A program's usage share is never negative: the sequential map, as for a score.
-    scatterOverlay?.type === "score" || scatterOverlay?.type === "program"
+    scatterOverlay?.type === "score" || scatterOverlay?.type === "program" || scatterOverlay?.type === "atac_motif"
       ? "score"
       : scatterOverlay?.type === "expression" || scatterOverlay?.type === "density" || scatterOverlay?.type === "atac_activity"
         ? scatterOverlay.type === "expression" && scatterOverlay.layer
@@ -706,6 +708,24 @@ export function UnifiedViewPanel() {
      setViolinData, setViolinTitle, openBottomPanel],
   );
 
+  // --- One motif's chromVAR z (Accessibility subtab), signed; a cell with no score draws at 0 ---
+  const handleAtacMotif = useCallback(
+    (m: ChromVarMotif) => {
+      const label = motifLabel(m.motif);
+      setOverlayValues(new Float32Array(m.values.map((v) => v ?? 0)));
+      setOverlayLabel(label);
+      setScatterOverlay({ type: "atac_motif", motif_id: m.motif_id, motif: m.motif });
+      if (datasetId) setOverlayDatasetId(datasetId);
+      if (m.violin) {
+        setViolinData(m.violin);
+        setViolinTitle(label);
+        openBottomPanel();
+      }
+    },
+    [datasetId, setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId,
+     setViolinData, setViolinTitle, openBottomPanel],
+  );
+
   // --- An overlay from "Open session", drawn once this dataset is on screen ---
   const pendingOverlay = useUnifiedViewStore((s) => s.pendingOverlay);
   const setPendingOverlay = useUnifiedViewStore((s) => s.setPendingOverlay);
@@ -735,6 +755,12 @@ export function UnifiedViewPanel() {
         .catch((err) => console.error("Failed to restore the gene activity overlay:", err));
       return;
     }
+    if (o.type === "atac_motif") {
+      getChromVarMotif(datasetId, o.motif_id, groupByColumn || undefined)
+        .then(handleAtacMotif)
+        .catch((err) => console.error("Failed to restore the chromVAR overlay:", err));
+      return;
+    }
     if (o.type === "activity") {
       const ref = { network: o.network, source: o.source };
       getActivityCells(datasetId, o.network, o.source)
@@ -748,7 +774,7 @@ export function UnifiedViewPanel() {
       .then((res) => handleScoreComplete(new Float32Array(res.scores), o.name, o.genes, undefined, method))
       .catch((err) => console.error("Failed to restore the gene-set overlay:", err));
   }, [pendingOverlay, datasetId, handleGeneClick, handleProteinClick, handleScoreComplete, setPendingOverlay,
-      handleProgramUsage, handleAtacActivity, groupByColumn]);
+      handleProgramUsage, handleAtacActivity, handleAtacMotif, groupByColumn]);
 
   // --- Clear overlay (revert to obs coloring) ---
   const handleClearOverlay = useCallback(() => {
@@ -1573,6 +1599,8 @@ export function UnifiedViewPanel() {
                 setGroupByColumn={setGroupByColumn}
                 activeGene={scatterOverlay?.type === "atac_activity" ? scatterOverlay.gene : null}
                 onActivity={handleAtacActivity}
+                activeMotif={scatterOverlay?.type === "atac_motif" ? scatterOverlay.motif_id : null}
+                onMotif={handleAtacMotif}
               />
             )}
             {activeSubtab === "genesets" && (

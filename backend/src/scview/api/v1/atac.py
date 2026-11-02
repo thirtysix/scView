@@ -50,7 +50,7 @@ router = APIRouter()
 _DONE = object()
 _running: dict[str, str] = {}  # dataset -> what is streaming on it: one at a time each
 _WHAT = {"run": "ATAC analysis (LSI, UMAP, clusters, gene activity)", "wnn": "WNN (joint RNA + ATAC neighbours)",
-         "differential": "Differential accessibility"}
+         "differential": "Differential accessibility", "links": "Peak-gene links"}
 _PEAK_COLUMNS = ("peak", "chrom", "start", "end", "total", "n_cells", "pct_cells", "selected", "nearest_gene",
                  "distance_to_tss", "peak_class")
 MAX_PAGE = 1000
@@ -360,7 +360,7 @@ async def get_peaks(
         table = table.sort_values(sort, ascending=not descending, kind="stable")
         page = table.iloc[offset:offset + limit]
         return {"total": int(len(table)), "offset": offset, "limit": limit, "note": note,
-                "rows": json.loads(page.to_json(orient="records"))}
+                "rows": json.loads(page.to_json(orient="records", double_precision=15))}
 
     try:
         return await asyncio.to_thread(work)

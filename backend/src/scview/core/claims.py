@@ -695,6 +695,9 @@ _FAMILY_PREFIX = {
     "gwas": "result:gwas", "traits": "result:gwas",  # GWAS trait links (core/gwas_catalog.py)
     "wnn": "result:wnn",  # joint RNA + protein weights (core/wnn.py)
     "atac": "result:atac",  # 10x Multiome peaks, LSI, gene activity, WNN (core/atac.py)
+    "links": "result:atac_links", "linkpeaks": "result:atac_links",  # peak-gene links (core/atac_links.py)
+    "atacmotifs": "result:atacmotifs", "atacmotif": "result:atacmotifs",  # motifs in peaks (core/atac_motifs.py)
+    "chromvar": "result:chromvar",  # per-cell motif activity (core/atac_chromvar.py)
     "lit": "lit:", "doc": "doc:", "app": "app:",
 }
 
@@ -719,6 +722,8 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
         fam = "domains"
     if parts[0].lower().startswith(("co_occur", "co-occur", "co occur", "cooccur")):
         fam = "cooccurrence"
+    if parts[0].lower().startswith(("atac_link", "peak_gene", "peak-gene", "peak gene")):
+        fam = "links"
     prefix = _FAMILY_PREFIX.get(fam)
     if fam in ("lit", "doc"):
         # PMIDs and URLs are exact or nothing.
@@ -745,13 +750,14 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                                   "activity", "deaudit", "audit",
                                   "clonotypes", "clonotype", "ppi", "cnv", "ontology",
                                   "selection", "sel", "screen", "labels", "tissue", "spatial", "moran",
-                                  "tfmotifs", "tfmotif", "motifs", "motif",
+                                  "tfmotifs", "tfmotif", "motifs", "motif", "atacmotifs", "atacmotif", "chromvar",
                                   "gwas", "traits",
                                   "deconvolution", "deconv",
                                   "lgate", "learnedgate", "learned", "spotdeconv", "velocity", "rnavelocity",
                                   "domains", "domain", "niches", "niche", "nhood",
                                   "cooccurrence",
-                                  "fragqc", "fragments", "tss", "nucleosome")
+                                  "fragqc", "fragments", "tss", "nucleosome",
+                                  "links", "linkpeaks")
                          or not last):
             if fam == "dataset":
                 return fam_refs[:1]

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { getAtac, type AtacActivity, type AtacState } from "@/api/atac";
+import type { LinksLocus } from "@/api/atacLinks";
+import type { ChromVarMotif } from "@/api/atacMotifs";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
@@ -13,7 +15,9 @@ import { AtacActivityCard } from "./AtacActivityCard";
 import { AtacCoverage } from "./AtacCoverage";
 import { AtacDifferentialCard } from "./AtacDifferentialCard";
 import { AtacFragmentQc } from "./AtacFragmentQc";
+import { AtacLinksCard } from "./AtacLinksCard";
 import { AtacLsiCard } from "./AtacLsiCard";
+import { AtacMotifsCard } from "./AtacMotifsCard";
 import { AtacQcCard } from "./AtacQcCard";
 import { AtacWnnCard } from "./AtacWnnCard";
 
@@ -28,18 +32,23 @@ export function AccessibilitySubtab({
   setGroupByColumn,
   activeGene,
   onActivity,
+  activeMotif = null,
+  onMotif = () => undefined,
 }: {
   datasetId: string;
   groupByColumn: string;
   setGroupByColumn: (column: string) => void;
   activeGene: string | null;
   onActivity: (a: AtacActivity) => void;
+  activeMotif?: string | null;
+  onMotif?: (m: ChromVarMotif) => void;
 }) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const version = useAtacRunStore((s) => s.version);
   const refreshDataset = useDatasetRefresh();
   const [state, setState] = useState<AtacState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [locus, setLocus] = useState<{ locus: LinksLocus; peak: string } | null>(null);
 
   const groupColumns = useMemo(() => {
     if (!dataset) return [];
@@ -120,7 +129,10 @@ export function AccessibilitySubtab({
       <AtacWnnCard datasetId={datasetId} state={state} groupby={groupby} />
       <AtacActivityCard datasetId={datasetId} state={state} groupby={groupby} activeGene={activeGene} onActivity={onActivity} />
       <AtacDifferentialCard datasetId={datasetId} state={state} columns={groupColumns.map((c) => c.name)} defaultColumn={groupby} />
-      <AtacCoverage datasetId={datasetId} />
+      <AtacLinksCard datasetId={datasetId} state={state} columns={groupColumns.map((c) => c.name)}
+                     onLocus={(l, peak) => setLocus({ locus: l, peak })} />
+      <AtacMotifsCard datasetId={datasetId} groupby={groupby} activeMotif={activeMotif} onMotif={onMotif} />
+      <AtacCoverage datasetId={datasetId} locus={locus?.locus ?? null} selectedPeak={locus?.peak ?? null} />
     </div>
   );
 }

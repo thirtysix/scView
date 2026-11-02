@@ -13,7 +13,7 @@ export function AtacRunStatus({ datasetId, kind }: { datasetId: string; kind: At
         <div className="space-y-1" data-testid={`atac-progress-${kind}`}>
           <p className="flex items-center gap-1.5 text-[11px] text-slate-600">
             <Loader2 className="h-3 w-3 animate-spin" />
-            {kind === "differential" ? run.progress ?? "Starting…" : stageText(run.stage)}
+            {kind === "differential" || kind === "links" ? run.progress ?? "Starting…" : stageText(run.stage)}
           </p>
           {run.stage && (
             <div className="h-1 w-full rounded bg-slate-100">

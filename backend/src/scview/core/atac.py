@@ -1325,9 +1325,9 @@ def da_payload(res: DaResult, group: str | None = None, offset: int = 0, limit: 
     columns = [c for c in t.columns if c != "peak_index"]
     if group:
         rows = t[t["group"] == group].iloc[offset:offset + limit]
-        pages = {group: json.loads(rows[columns].to_json(orient="records"))}
+        pages = {group: json.loads(rows[columns].to_json(orient="records", double_precision=15))}
     else:
-        pages = {g: json.loads(t[t["group"] == g].iloc[:limit][columns].to_json(orient="records")) for g in res.groups}
+        pages = {g: json.loads(t[t["group"] == g].iloc[:limit][columns].to_json(orient="records", double_precision=15)) for g in res.groups}
     return {"id": res.result_id, "column": res.column, "groups": list(res.groups), "n_tested": dict(res.n_tested),
             "n_significant": dict(res.n_significant), "rows": pages, "params": dict(res.params), "method": res.method,
             "test": da_test(res), "n_fit": res.n_fit, "kept_per_group": KEEP_PER_GROUP, "created_at": res.created_at}

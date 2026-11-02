@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   runAtac,
+  runAtacChromvar,
   runAtacDa,
   runAtacWnn,
   type AtacDa,
@@ -9,11 +10,12 @@ import {
   type AtacStage,
   type AtacWnnBody,
 } from "@/api/atac";
+import { runAtacLinks, type LinksBody, type LinksPage } from "@/api/atacLinks";
 import { watchdogMessage, type WatchdogEvent } from "@/api/pipelineRun";
 
-export type AtacRunKind = "run" | "wnn" | "differential";
+export type AtacRunKind = "run" | "wnn" | "differential" | "links" | "chromvar";
 
-const WHAT: Record<AtacRunKind, string> = { run: "ATAC analysis", wnn: "WNN", differential: "Differential accessibility" };
+const WHAT: Record<AtacRunKind, string> = { run: "ATAC analysis", wnn: "WNN", differential: "Differential accessibility", links: "Peak-gene links", chromvar: "chromVAR" };
 
 /**
  * An ATAC run in flight (Accessibility subtab). Kept here, not in a card, so switching
@@ -32,9 +34,13 @@ interface AtacRunState {
   version: number;
   /** The last differential result, for the table. */
   da: AtacDa | null;
+  /** The peak-gene links result in view. */
+  links: LinksPage | null;
   run: (datasetId: string, body: AtacRunBody) => Promise<void>;
   runWnn: (datasetId: string, body: AtacWnnBody) => Promise<void>;
   runDa: (datasetId: string, body: AtacDaBody) => Promise<void>;
+  runLinks: (datasetId: string, body: LinksBody) => Promise<void>;
+  runChromvar: (datasetId: string, body: { seed?: number }) => Promise<void>;
   cancel: () => void;
 }
 
@@ -74,6 +80,7 @@ export const useAtacRunStore = create<AtacRunState>((set, get) => {
     ...idle,
     version: 0,
     da: null,
+    links: null,
     run: (datasetId, body) => start(datasetId, "run", async (h) => void (await runAtac(datasetId, body, h))),
     runWnn: (datasetId, body) => start(datasetId, "wnn", async (h) => void (await runAtacWnn(datasetId, body, h))),
     runDa: (datasetId, body) =>
@@ -81,6 +88,12 @@ export const useAtacRunStore = create<AtacRunState>((set, get) => {
         const da = await runAtacDa(datasetId, body, h);
         set({ da });
       }),
+    runLinks: (datasetId, body) =>
+      start(datasetId, "links", async (h) => {
+        const links = await runAtacLinks(datasetId, body, h);
+        set({ links });
+      }),
+    runChromvar: (datasetId, body) => start(datasetId, "chromvar", async (h) => void (await runAtacChromvar(datasetId, body, h))),
     cancel: () => controller?.abort(),
   };
 });
