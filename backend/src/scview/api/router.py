@@ -6,6 +6,7 @@ from scview.api.v1 import (
     activity,
     atac_fragments,
     atac_links,
+    atac_motifs,
     datasets,
     embeddings,
     metadata,
@@ -140,4 +141,5 @@ api_router.include_router(atac.router, tags=["atac"])
 api_router.include_router(spot_deconvolution.router, tags=["spatial"])
 api_router.include_router(atac_fragments.router, tags=["atac"])
 api_router.include_router(atac_links.router, tags=["atac"])
+api_router.include_router(atac_motifs.router, tags=["atac"])
 api_router.include_router(transcripts.router, tags=["spatial"])

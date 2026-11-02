@@ -88,7 +88,7 @@ MEX_ROWS = 1_000_000
 EM_TOL = 1e-5  # mclust emControl()$tol[1]
 EM_MAX_ITER = 5000
 EM_EPS = 2.220446049250313e-16  # .Machine$double.eps: smaller variance is a failed fit
-BLOCK_VALUES = 2_000_000  # values per block in the mixture fits
+DSB_BLOCK_VALUES = 2_000_000  # values per block in the mixture fits
 
 MODES = ("auto", "empty_droplets", "model_negative")
 
@@ -139,7 +139,7 @@ def size_bin(total, width=0.1, n_bins=40):
     return out
 
 
-def barcode_core(names):
+def dsb_barcode_core(names):
     """The bare barcode sequence ("AAAC...-1" and "s1:AAAC..." give "AAAC...")."""
     s = pd.Series(np.asarray(names, dtype=str), dtype=object)
     return s.str.extract(r"([ACGTN]{8,})", expand=False).fillna("").to_numpy(dtype=str)
@@ -149,14 +149,14 @@ def cell_matcher(cells):
     """``is_cell(barcodes)``: full barcode or bare sequence among the dataset's cells."""
     cells = np.asarray(list(cells), dtype=str)
     full = set(cells.tolist())
-    core = set(c for c in barcode_core(cells).tolist() if c)
+    core = set(c for c in dsb_barcode_core(cells).tolist() if c)
 
     def is_cell(barcodes):
         bcs = np.asarray(barcodes, dtype=str)
         if bcs.size == 0:
             return np.zeros(0, dtype=bool)
         in_full = np.fromiter((b in full for b in bcs.tolist()), dtype=bool, count=bcs.size)
-        in_core = np.fromiter((c in core for c in barcode_core(bcs).tolist()), dtype=bool,
+        in_core = np.fromiter((c in core for c in dsb_barcode_core(bcs).tolist()), dtype=bool,
                               count=bcs.size)
         return in_full | in_core
 
@@ -459,7 +459,7 @@ def lower_means(X):
     fitted = np.zeros(m, dtype=bool)
     if m == 0:
         return out, fitted
-    step = max(1, BLOCK_VALUES // max(n, 1))
+    step = max(1, DSB_BLOCK_VALUES // max(n, 1))
     for r0 in range(0, m, step):
         B = X[r0:r0 + step]
         med = np.median(B, axis=1)
@@ -549,9 +549,9 @@ PSEUDO = PSEUDOCOUNT
 NEG_PSEUDO = NEG_PSEUDOCOUNT
 
 # Copied into replay scripts (core/replay_script.py): numpy, pandas and h5py only.
-REPLAY_CONSTANTS = ("EM_TOL", "EM_MAX_ITER", "EM_EPS", "BLOCK_VALUES", "BIN_WIDTH", "RNA_GRID",
+REPLAY_CONSTANTS = ("EM_TOL", "EM_MAX_ITER", "EM_EPS", "DSB_BLOCK_VALUES", "BIN_WIDTH", "RNA_GRID",
                     "PROT_GRID", "PSEUDO", "NEG_PSEUDO")
-REPLAY_CODE = (size_bin, barcode_core, cell_matcher, _accumulate, _new_grid, _grid_record,
+REPLAY_CODE = (size_bin, dsb_barcode_core, cell_matcher, _accumulate, _new_grid, _grid_record,
                background_from_h5, background_from_mex, window_stats, qclass2, _em2, lower_means,
                step1_empty, step1_model_negative, technical_component, regress_out, step2)
 

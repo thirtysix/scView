@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   runAtac,
+  runAtacChromvar,
   runAtacDa,
   runAtacWnn,
   type AtacDa,
@@ -12,9 +13,9 @@ import {
 import { runAtacLinks, type LinksBody, type LinksPage } from "@/api/atacLinks";
 import { watchdogMessage, type WatchdogEvent } from "@/api/pipelineRun";
 
-export type AtacRunKind = "run" | "wnn" | "differential" | "links";
+export type AtacRunKind = "run" | "wnn" | "differential" | "links" | "chromvar";
 
-const WHAT: Record<AtacRunKind, string> = { run: "ATAC analysis", wnn: "WNN", differential: "Differential accessibility", links: "Peak-gene links" };
+const WHAT: Record<AtacRunKind, string> = { run: "ATAC analysis", wnn: "WNN", differential: "Differential accessibility", links: "Peak-gene links", chromvar: "chromVAR" };
 
 /**
  * An ATAC run in flight (Accessibility subtab). Kept here, not in a card, so switching
@@ -39,6 +40,7 @@ interface AtacRunState {
   runWnn: (datasetId: string, body: AtacWnnBody) => Promise<void>;
   runDa: (datasetId: string, body: AtacDaBody) => Promise<void>;
   runLinks: (datasetId: string, body: LinksBody) => Promise<void>;
+  runChromvar: (datasetId: string, body: { seed?: number }) => Promise<void>;
   cancel: () => void;
 }
 
@@ -91,6 +93,7 @@ export const useAtacRunStore = create<AtacRunState>((set, get) => {
         const links = await runAtacLinks(datasetId, body, h);
         set({ links });
       }),
+    runChromvar: (datasetId, body) => start(datasetId, "chromvar", async (h) => void (await runAtacChromvar(datasetId, body, h))),
     cancel: () => controller?.abort(),
   };
 });

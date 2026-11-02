@@ -142,6 +142,7 @@ _RESULT_FACET_HINTS = {
         "frip", "depth correlation", "differential peak", "differential access", "depth covariate", "latent covariate",
         "peak-gene", "peak gene", "peak-to-gene", "peak to gene", "linkpeaks", "linked peak", "peak link", "enhancer",
         "cis-regulatory", "regulatory element",
+        "motif", "chromvar", "jaspar", "findmotifs", "enriched in peaks", "motif activity",
         "spatial domain", "domains", "niche", "nhood", "stability scan", "neighbourhood enrichment",
         "neighborhood enrichment", "next to each other", "side by side", "adjacent", "colocal", "co-local",
         "co-occur", "cooccur", "co occur", "near each other", "close to each other", "close together",

@@ -457,6 +457,28 @@ def _add_atac_links(adaptor, lines: list[str], sources: list[ChatSource]) -> Non
         sources.append(ChatSource(kind="result", ref=atac_links.TAG, detail="Peak-gene links", evidence="\n".join(l_lines)))
 
 
+def _add_atac_motifs(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Motifs in ATAC peaks: the last enrichment (core/atac_motifs.py) and chromVAR run
+    (core/atac_chromvar.py) on these cells; nothing before they have run."""
+    from scview.config import get_settings
+    from scview.core import atac_chromvar, atac_motifs, results_store
+
+    try:
+        m_lines, m_detail = atac_motifs.grounding_lines(adaptor)
+        dataset_id = results_store.dataset_id_of(adaptor)
+        c_lines, c_detail = (atac_chromvar.grounding_lines(get_settings().DATA_DIR, dataset_id, adaptor.cells_fingerprint())
+                             if dataset_id else ([], ""))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: ATAC motifs failed: %s", exc)
+        return
+    if m_lines:
+        lines.extend(m_lines)
+        sources.append(ChatSource(kind="result", ref=atac_motifs.TAG, detail=m_detail, evidence="\n".join(m_lines[1:])))
+    if c_lines:
+        lines.extend(c_lines)
+        sources.append(ChatSource(kind="result", ref=atac_chromvar.TAG, detail=c_detail, evidence="\n".join(c_lines[1:])))
+
+
 def _add_cnv(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved copy-number inference (core/cnv.py): reference, high-score groups,
     high CNV clusters with their gained / lost chromosomes, once run."""
@@ -1058,6 +1080,7 @@ def build_grounding_context(
         _add_wnn(adaptor, lines, sources)
         _add_atac(adaptor, lines, sources)
         _add_atac_links(adaptor, lines, sources)
+        _add_atac_motifs(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_spatial_domains(adaptor, lines, sources)
         _add_cooccurrence(adaptor, lines, sources)

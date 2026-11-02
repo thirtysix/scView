@@ -1637,6 +1637,142 @@ def atac_links_table(adata, counts, peak_names, settings):
 _HELPERS["atac_links"] = _atac_links_helper()
 _HELPER_ORDER += ("atac_links",)
 _HELPER_NEEDS["atac_links"] = ("atac",)
+
+
+def _atac_motifs_helper() -> str:
+    """Motifs in peaks: the scan, FindMotifs and chromVAR code of core/atac_motifs.py and
+    core/atac_chromvar.py, with core/genome_seq.py's 2bit reader, copied so the script gets the
+    same hits from the same two files. Plain numpy and scipy, and numba for chromVAR's kernel
+    (scanpy needs it anyway)."""
+    import inspect
+
+    from scview.core import atac_chromvar, atac_motifs, genome_seq, tf_motifs
+
+    lines = ["import hashlib", "import mmap", "import os", "import re", "import struct", "import threading",
+             "from collections.abc import Iterable", "from concurrent.futures import ThreadPoolExecutor",
+             "from dataclasses import dataclass", "from pathlib import Path", "", "import numba", ""]
+    lines += [f"{name} = {_lit(getattr(atac_motifs, name))}" for name in atac_motifs.REPLAY_CONSTANTS]
+    lines += [f"{name} = {_lit(getattr(atac_chromvar, name))}" for name in atac_chromvar.REPLAY_CONSTANTS]
+    lines += [f"{name} = {_lit(getattr(genome_seq, name))}" for name in genome_seq_constants()]
+    lines += ["_FROM_2BIT = np.array([3, 1, 0, 2], dtype=np.uint8)",
+              "_BYTE_TO_CODES = np.array([[_FROM_2BIT[(b >> s) & 3] for s in (6, 4, 2, 0)] for b in range(256)], dtype=np.uint8)",
+              'MOTIF_ROW = re.compile(r"^([ACGT])\\s*\\[([^\\]]*)\\]$")', "_ROW = MOTIF_ROW"]
+    for obj in (genome_seq.TwoBit, genome_seq.sequences, genome_seq.base_counts, genome_seq.gc_percent, tf_motifs.Motif,
+                tf_motifs.parse_jaspar, *atac_motifs.REPLAY_CODE, *atac_chromvar.REPLAY_CODE):
+        lines += ["", "", inspect.getsource(getattr(obj, "py_func", obj)).rstrip("\n")]
+    lines += ["", "", _ATAC_MOTIF_READERS.strip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+def genome_seq_constants() -> tuple[str, ...]:
+    return ("UNKNOWN", "_SIGNATURE")
+
+
+_ATAC_MOTIF_READERS = '''
+class ScanCancelled(Exception):
+    pass
+
+
+def atac_motif_input(url, sha256):
+    """A pinned input: beside the input data or here when it is there, else fetched here once."""
+    name = os.path.basename(url)
+    path = next((p for p in (name, os.path.join(os.path.dirname(os.path.abspath(INPUT)), name)) if os.path.exists(p)), None)
+    if path is None:
+        import urllib.request
+
+        path = name
+        urllib.request.urlretrieve(url, path)
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 22), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != sha256:
+        raise ValueError(f"{path} is not the pinned file; delete it to fetch it again.")
+    return path
+
+
+_motif_tables = {}
+
+
+def atac_motif_table(peak_names, inputs):
+    """Every peak x every JASPAR motif, as motifmatchr gives them (scanned once per script)."""
+    key = inputs["two_bit_sha256"]
+    if key in _motif_tables:
+        return _motif_tables[key]
+    with open(atac_motif_input(inputs["jaspar_url"], inputs["jaspar_sha256"])) as fh:
+        motifs = parse_jaspar(fh.read())
+    genome = TwoBit(atac_motif_input(inputs["two_bit_url"], inputs["two_bit_sha256"]))
+    parts = [re.split(r"[:_-]", n[::-1], maxsplit=2) for n in peak_names]
+    chrom = np.asarray([p[2][::-1] for p in parts], dtype=object)
+    end = np.asarray([int(p[0][::-1]) for p in parts], dtype=np.int64)
+    start = np.asarray([int(p[1][::-1]) for p in parts], dtype=np.int64)
+    n = chrom.size
+    in_genome = np.fromiter((genome.has(str(c)) for c in chrom), dtype=bool, count=n) & (end > start)
+    blocks = _blocks(np.where(end > start, end - start, 0), BLOCK_BASES)
+    gc = np.full(n, np.nan, dtype=np.float64)
+    totals = np.zeros(4, dtype=np.float64)
+    for i, j in blocks:
+        idx = i + np.flatnonzero(in_genome[i:j])
+        codes, offsets = sequences(genome, chrom[idx], start[idx], end[idx])
+        counts = base_counts(codes, offsets)
+        gc[idx] = gc_percent(counts)
+        totals += counts[:, :4].sum(axis=0)
+    strands, _thresholds = prepare_all([m.counts for m in motifs], totals / totals.sum())
+    hits = np.zeros((n, len(motifs)), dtype=bool)
+    for i, j in blocks:
+        idx = i + np.flatnonzero(in_genome[i:j])
+        if idx.size:
+            codes, offsets = sequences(genome, chrom[idx], start[idx], end[idx])
+            joined, starts = join_regions(codes, offsets)
+            hits[idx] = scan_block(joined, starts, strands, len(motifs), threads=BUILD_THREADS)
+    out = {"hits": hits, "gc": gc, "ids": [m.id for m in motifs], "names": [m.name for m in motifs]}
+    _motif_tables[key] = out
+    return out
+
+
+def atac_motif_enrichment(table, peak_names, da_table, settings):
+    """FindMotifs on each group's peaks of a differential table: one long table, lowest p first."""
+    hits, gc = table["hits"], table["gc"]
+    index = pd.Index(peak_names)
+    frames = []
+    for g in settings.get("groups") or list(dict.fromkeys(da_table["group"].astype(str))):
+        rows = da_table[da_table["group"].astype(str) == g]
+        keep = (rows[settings["p_column"]] < settings["p_max"]) & (rows["pct_in"] > settings["min_pct"]) & (rows["log2fc"] > settings["min_log2fc"])
+        peaks = index.get_indexer(rows.loc[keep, "peak"].astype(str))
+        query = peaks[np.isfinite(gc[peaks])]
+        if query.size == 0:
+            continue
+        background = match_background(gc, query, settings["background"], np.random.default_rng(group_seed(settings["seed"], g)))
+        numbers = motif_numbers(hits[query].sum(axis=0), hits[background].sum(axis=0), query.size, background.size)
+        order = np.lexsort((-np.nan_to_num(numbers["fold_enrichment"], nan=-np.inf, posinf=np.inf), numbers["pval"]))
+        frames.append(pd.DataFrame({"group": g, "motif_id": np.asarray(table["ids"])[order], "motif": np.asarray(table["names"])[order],
+                                    "observed": numbers["observed"][order], "n_query": query.size, "background": numbers["background"][order],
+                                    "n_background": background.size, "fold_enrichment": numbers["fold_enrichment"][order],
+                                    "pval": numbers["pval"][order], "pval_adj": numbers["pval_adj"][order]}))
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def atac_chromvar_run(counts, table, settings):
+    """chromVAR z and deviations, cells x motifs, a block of cells at a time."""
+    total = np.asarray(counts.sum(axis=0), dtype=np.float64).ravel()
+    kept = np.flatnonzero((total > 0) & np.isfinite(table["gc"]))
+    bg = background_peaks(total[kept], table["gc"][kept] / 100.0, iterations=settings["iterations"], w=settings["w"], bs=settings["bs"],
+                          seed=settings["seed"])
+    rows, cols = np.nonzero(table["hits"][kept])
+    ptr = np.zeros(kept.size + 1, dtype=np.int64)
+    ptr[1:] = np.cumsum(np.bincount(rows, minlength=kept.size))
+    n_motifs = table["hits"].shape[1]
+    model = make_model(ptr, cols.astype(np.int32), n_motifs, total[kept], bg)
+    sub = counts[:, kept].tocsr()
+    z = np.empty((sub.shape[0], n_motifs), dtype=np.float32)
+    dev = np.empty_like(z)
+    for i in range(0, sub.shape[0], 512):
+        dev[i:i + 512], z[i:i + 512] = deviations(model, sub[i:i + 512])
+    return z, dev
+'''
+_HELPERS["atac_motifs"] = _atac_motifs_helper()
+_HELPER_ORDER += ("atac_motifs",)
+_HELPER_NEEDS["atac_motifs"] = ("atac",)  # atac_peaks
 _HELPERS["spot_deconvolution"] = _spot_deconvolution_helper()
 _HELPER_ORDER += ("spot_deconvolution",)
 _HELPER_NEEDS["spot_deconvolution"] = ("looks_like_counts",)
@@ -3230,6 +3366,69 @@ def _atac_links(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+_ATAC_MOTIF_TABLE_CODE = '''
+peaks, peak_names, peak_cells = atac_peaks(INPUT)
+motif_table = atac_motif_table(peak_names, ATAC_MOTIF_INPUTS)
+'''
+_ATAC_MOTIF_ENRICH_CODE = '''
+adata.uns["atac_motif_enrichment"] = atac_motif_enrichment(motif_table, peak_names, adata.uns["atac_differential_" + ATAC_MOTIFS["da_test"]], ATAC_MOTIFS)
+'''
+_ATAC_CHROMVAR_CODE = '''
+counts = peaks[pd.Index(peak_cells).get_indexer(adata.obs_names)].tocsr()
+chromvar_z, chromvar_dev = atac_chromvar_run(counts, motif_table, CHROMVAR)
+adata.obsm["atac_chromvar_z"] = chromvar_z
+adata.obsm["atac_chromvar_deviations"] = chromvar_dev
+adata.uns["atac_chromvar_motifs"] = list(motif_table["ids"])
+'''
+
+
+def _motif_inputs(genome: str) -> dict[str, str]:
+    from scview.core import genome_seq, tf_motifs
+
+    r = genome_seq.RELEASES[genome]
+    return {"jaspar_url": tf_motifs.JASPAR.url, "jaspar_sha256": tf_motifs.JASPAR.sha256, "two_bit_url": r.url, "two_bit_sha256": r.sha256}
+
+
+def _atac_motif_enrichment(p: dict, ctx: _Ctx) -> Snippet:
+    """Motifs in differential peaks (core/atac_motifs.py; a result, in ``uns``): the 2bit and
+    JASPAR files fetched again, the same hits, the same seeded background. Needs the differential
+    step before it in the script. The TF's own RNA per group is not computed again."""
+    from scview.core import genome_seq
+
+    keys = ("da_test", "p_column", "p_max", "min_pct", "min_log2fc", "background", "seed")
+    if any(p.get(k) is None for k in keys) or p.get("genome") not in genome_seq.RELEASES:
+        return Snippet(NOT_REPLAYABLE, ["# Motifs in differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
+                       "settings not recorded")
+    _need(ctx, "atac_motifs")
+    settings = {k: p[k] for k in keys} | {"groups": p.get("groups")}
+    return Snippet(EXACT, [
+        f"# Motifs in differential peaks by {comment_text(p.get('column'), 80)} ({comment_text(p.get('genome'), 12)}): "
+        "the hits as motifmatchr gives them, FindMotifs per group, a table in uns.",
+        f"ATAC_MOTIF_INPUTS = {_lit(_motif_inputs(p['genome']))}",
+        f"ATAC_MOTIFS = {_lit(settings)}",
+        *_block(_ATAC_MOTIF_TABLE_CODE),
+        *_block(_ATAC_MOTIF_ENRICH_CODE),
+    ])
+
+
+def _atac_chromvar(p: dict, ctx: _Ctx) -> Snippet:
+    """chromVAR per cell (core/atac_chromvar.py; in ``obsm``): the same hits, the same seeded
+    background peaks, the same kernel."""
+    from scview.core import genome_seq
+
+    keys = ("seed", "iterations", "w", "bs")
+    if any(p.get(k) is None for k in keys) or p.get("genome") not in genome_seq.RELEASES:
+        return Snippet(NOT_REPLAYABLE, ["# chromVAR: the settings are not recorded. Recorded:", *_param_comment(p)], "settings not recorded")
+    _need(ctx, "atac_motifs")
+    return Snippet(EXACT, [
+        f"# chromVAR per-cell motif activity ({comment_text(p.get('genome'), 12)}): z and deviations, cells x motifs, in obsm.",
+        f"ATAC_MOTIF_INPUTS = {_lit(_motif_inputs(p['genome']))}",
+        f"CHROMVAR = {_lit({k: p[k] for k in keys})}",
+        *_block(_ATAC_MOTIF_TABLE_CODE),
+        *_block(_ATAC_CHROMVAR_CODE),
+    ])
+
+
 def _atac_wnn(p: dict, ctx: _Ctx) -> Snippet:
     """WNN RNA + ATAC (core/atac.py with core/wnn.py's FindMultiModalNeighbors)."""
     if any(not p.get(x) for x in ("rep", "n_pcs_rna", "lsi_dims")):
@@ -3697,6 +3896,8 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "atac_wnn": _atac_wnn,
     "atac_differential": _atac_differential,
     "atac_links": _atac_links,
+    "atac_motif_enrichment": _atac_motif_enrichment,
+    "atac_chromvar": _atac_chromvar,
     "spot_deconvolution": _spot_deconvolution,
     "velocity": _velocity,
     "spatial_domains": _spatial_domains,

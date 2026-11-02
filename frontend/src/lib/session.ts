@@ -72,7 +72,9 @@ export type SessionOverlay =
   // A gene program's usage share (Programs subtab), read again from the saved run on open.
   | { type: "program"; index: number }
   // One gene's peak-based ATAC activity (Accessibility subtab), read again on open.
-  | { type: "atac_activity"; gene: string };
+  | { type: "atac_activity"; gene: string }
+  // One motif's chromVAR z per cell (Accessibility subtab), read again on open.
+  | { type: "atac_motif"; motif_id: string; motif: string };
 
 /** A selection: the filter it came from, else its cells (whichever is shorter). */
 export type SessionSelection =
@@ -340,7 +342,10 @@ function parseOverlay(x: unknown, where: string): SessionOverlay {
   if (o.type === "atac_activity") {
     return { type: "atac_activity", gene: text(o.gene, `${where}.gene`, { empty: false }) };
   }
-  fail(`${where}.type`, 'must be "expression", "score", "activity", "reliability", "program" or "atac_activity"');
+  if (o.type === "atac_motif") {
+    return { type: "atac_motif", motif_id: text(o.motif_id, `${where}.motif_id`, { empty: false }), motif: text(o.motif, `${where}.motif`, { empty: false }) };
+  }
+  fail(`${where}.type`, 'must be "expression", "score", "activity", "reliability", "program", "atac_activity" or "atac_motif"');
 }
 
 const CLIP_PRESETS = ["none", "p1", "p2", "p5", "manual"] as const;
