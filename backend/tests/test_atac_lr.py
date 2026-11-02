@@ -372,3 +372,10 @@ def test_a_differential_step_leaves_earlier_results_current():
 def test_module_file_has_no_scview_imports_in_the_replayed_code():
     src = Path(atac_lr.__file__).read_text()
     assert "scview" not in src.split('"""', 2)[2].split("REPLAY_CONSTANTS")[0]
+
+
+def test_a_small_p_stays_in_the_payload():
+    table = pd.DataFrame({"group": ["A", "A"], "peak_index": [0, 1], "peak": ["chr1:1-2", "chr1:3-4"], "pval": [3e-12, 1e-16]})
+    res = atac.DaResult("rid", "c", ["A"], table, {"A": 2}, {"A": 2}, {"test": "lr"}, "m", "", "", {"A": {"lrt": 2}})
+    assert [r["pval"] for r in atac.da_payload(res)["rows"]["A"]] == [3e-12, 1e-16]
+    assert atac.da_payload(res, "A")["rows"]["A"][0]["pval"] == 3e-12

@@ -360,7 +360,7 @@ async def get_peaks(
         table = table.sort_values(sort, ascending=not descending, kind="stable")
         page = table.iloc[offset:offset + limit]
         return {"total": int(len(table)), "offset": offset, "limit": limit, "note": note,
-                "rows": json.loads(page.to_json(orient="records"))}
+                "rows": json.loads(page.to_json(orient="records", double_precision=15))}
 
     try:
         return await asyncio.to_thread(work)
