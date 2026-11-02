@@ -32,6 +32,8 @@ type ScatterOverlay =
   // One gene's peak-based activity (Accessibility subtab, core/atac.py): its own kind, an
   // expression overlay's layer means a protein
   | { type: "atac_activity"; gene: string }
+  // One motif's chromVAR z per cell (Accessibility subtab, core/atac_chromvar.py), signed: the diverging map
+  | { type: "atac_motif"; motif_id: string; motif: string }
   // Expression-weighted kernel density (lib/density.ts) of one gene, or the joint
   // density of several, on the embedding (and PCA pair) and layer it was computed for
   | { type: "density"; genes: string[]; embedding: string; dims?: [number, number]; layer: string }

@@ -261,3 +261,8 @@ export function runAtacWnn(datasetId: string, body: AtacWnnBody, h: AtacStreamHa
 export function runAtacDa(datasetId: string, body: AtacDaBody, h: AtacStreamHandlers = {}): Promise<AtacDa> {
   return runStream(`/datasets/${datasetId}/atac/differential`, body, "Differential accessibility", h);
 }
+
+/** chromVAR deviations per cell (core/atac_chromvar.py); aborting `signal` ends the child, nothing kept. */
+export function runAtacChromvar(datasetId: string, body: { seed?: number }, h: AtacStreamHandlers = {}): Promise<unknown> {
+  return runStream(`/datasets/${datasetId}/atac/motifs/chromvar`, body, "chromVAR", h);
+}
