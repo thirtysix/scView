@@ -138,6 +138,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "fragment length ladder, TSS profile"),
     ("Unified View > Accessibility > Coverage tracks", "",
      "from the fragments file: depth per group for a gene or a region up to 2 Mb, with peaks and gene arrows"),
+    ("Unified View > Accessibility > Peak-gene links", "",
+     "Signac's LinkPeaks: which peaks within 500 kb of a gene's TSS correlate with its expression, tested against 200 matched "
+     "peaks from other chromosomes; variable genes, all genes or a list, all cells or chosen groups; arcs at the locus. A "
+     "candidate regulatory element, a correlation and never proof of regulation"),
     ("Unified View > Resolutions", "cluster tree, merge check",
      "clustering resolution sweep, cluster tree, merge check"),
     ("Unified View > Variable genes", "", "re-cluster under other HVG / neighbour settings"),

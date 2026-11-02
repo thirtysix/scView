@@ -443,6 +443,20 @@ def _add_atac(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
                                   evidence="\n".join(a_lines[1:])))
 
 
+def _add_atac_links(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """The last peak-gene links on these cells (core/atac_links.py)."""
+    from scview.core import atac_links
+
+    try:
+        l_lines = atac_links.grounding_lines(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: peak-gene links failed: %s", exc)
+        return
+    if l_lines:
+        lines.extend(l_lines)
+        sources.append(ChatSource(kind="result", ref=atac_links.TAG, detail="Peak-gene links", evidence="\n".join(l_lines)))
+
+
 def _add_cnv(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The saved copy-number inference (core/cnv.py): reference, high-score groups,
     high CNV clusters with their gained / lost chromosomes, once run."""
@@ -1043,6 +1057,7 @@ def build_grounding_context(
         _add_programs(adaptor, lines, sources)
         _add_wnn(adaptor, lines, sources)
         _add_atac(adaptor, lines, sources)
+        _add_atac_links(adaptor, lines, sources)
         _add_spatial_genes(adaptor, lines, sources)
         _add_spatial_domains(adaptor, lines, sources)
         _add_cooccurrence(adaptor, lines, sources)

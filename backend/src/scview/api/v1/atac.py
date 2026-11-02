@@ -50,7 +50,7 @@ router = APIRouter()
 _DONE = object()
 _running: dict[str, str] = {}  # dataset -> what is streaming on it: one at a time each
 _WHAT = {"run": "ATAC analysis (LSI, UMAP, clusters, gene activity)", "wnn": "WNN (joint RNA + ATAC neighbours)",
-         "differential": "Differential accessibility"}
+         "differential": "Differential accessibility", "links": "Peak-gene links"}
 _PEAK_COLUMNS = ("peak", "chrom", "start", "end", "total", "n_cells", "pct_cells", "selected", "nearest_gene",
                  "distance_to_tss", "peak_class")
 MAX_PAGE = 1000
