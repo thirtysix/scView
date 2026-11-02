@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   activityLabel,
+  daFitLabel,
+  daFitText,
+  daMostPass,
+  daTestName,
   depthChoiceText,
   formatDistance,
   formatP,
@@ -89,5 +93,37 @@ describe("session round trip of the gene activity overlay", () => {
     const o: SessionOverlay = { type: "atac_activity", gene: "CD3D" };
     expect(parseSession(session(o)).view?.overlay).toEqual(o);
     expect(() => parseSession(session({ type: "atac_activity" }))).toThrow();
+  });
+});
+
+describe("differential test wording", () => {
+  it("names the test; a result without one is a Wilcoxon", () => {
+    expect(daTestName("lr")).toContain("covariate");
+    expect(daTestName("wilcoxon")).toContain("Wilcoxon");
+    expect(daTestName(undefined)).toContain("Wilcoxon");
+  });
+
+  it("counts the kinds of p, and says only what happened", () => {
+    expect(daFitText(undefined)).toBe("");
+    const clean = daFitText({ score: 40000, lrt: 9965, lrt_separated: 35, score_no_fit: 0, untestable: 0 });
+    expect(clean).toContain("10,000 true likelihood ratios, 40,000 score tests.");
+    expect(clean).toContain("35 peaks separate");
+    expect(clean).not.toContain("did not converge");
+    const one = daFitText({ score: 1, lrt: 1, lrt_separated: 1, score_no_fit: 1, untestable: 1 });
+    expect(one).toContain("1 peak separates the group");
+    expect(one).toContain("1 fit did not converge and keeps its score test.");
+    expect(one).toContain("1 peak could not be tested and has no p.");
+    const bad = daFitText({ score: 1, lrt: 1, lrt_separated: 0, score_no_fit: 2, untestable: 3 });
+    expect(bad).toContain("2 fits did not converge");
+    expect(bad).toContain("3 peaks could not be tested");
+    expect(bad).not.toContain("separate");
+    expect(daFitLabel("lrt_separated")).toBe("LRT, separated");
+    expect(daFitLabel(undefined)).toBe("–");
+  });
+
+  it("calls the count weak only when most peaks pass", () => {
+    expect(daMostPass(46005, 50000)).toBe(true);
+    expect(daMostPass(100, 50000)).toBe(false);
+    expect(daMostPass(0, 0)).toBe(false);
   });
 });

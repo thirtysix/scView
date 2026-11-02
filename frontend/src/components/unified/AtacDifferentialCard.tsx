@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { daCsvUrl, getDaPage, getLatestDa, type AtacDaRow, type AtacState } from "@/api/atac";
+import { daCsvUrl, getDaEstimate, getDaPage, getLatestDa, type AtacDaEstimate, type AtacDaRow, type AtacDaTest, type AtacState } from "@/api/atac";
 import { CapNote, Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
-import { formatDistance, formatP } from "@/lib/atac";
+import { daFitLabel, daFitText, daMostPass, daTestName, formatDistance, formatP } from "@/lib/atac";
 import { formatDuration } from "@/lib/hvgSensitivity";
 import { errorMessage } from "@/lib/errorMessage";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -12,7 +12,7 @@ import { AtacRunStatus } from "./AtacRunStatus";
 
 const PAGE = 100;
 
-/** Differential peaks per group (Wilcoxon on TF-IDF), with the nearest gene of each. */
+/** Differential peaks per group (Wilcoxon on TF-IDF, or logistic regression with a depth covariate), with the nearest gene of each. */
 export function AtacDifferentialCard({
   datasetId,
   state,
@@ -29,14 +29,25 @@ export function AtacDifferentialCard({
   const live = run.datasetId === datasetId && run.running;
   const elsewhere = !live && !!state.running;
   const [column, setColumn] = useState(defaultColumn);
+  const [test, setTest] = useState<AtacDaTest>("lr");
+  const [estimate, setEstimate] = useState<AtacDaEstimate | null>(null);
   const [group, setGroup] = useState("");
   const [rows, setRows] = useState<AtacDaRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const da = run.da;
 
+  // The selects describe the result in view, so a reloaded table never sits under another column or test.
+  const daId = da?.id;
+  const daColumn = da?.column;
+  const daTest = da?.test;
+  const daColumnListed = daColumn != null && columns.includes(daColumn);
   useEffect(() => {
-    if (defaultColumn) setColumn(defaultColumn);
-  }, [defaultColumn]);
+    if (daColumnListed) setColumn(daColumn);
+    else if (!daId && defaultColumn) setColumn(defaultColumn);
+  }, [daId, daColumn, daColumnListed, defaultColumn]);
+  useEffect(() => {
+    setTest(daId ? daTest ?? "wilcoxon" : "lr");
+  }, [daId, daTest]);
 
   // The last result on these cells, when this tab opens with none in hand.
   useEffect(() => {
@@ -53,11 +64,31 @@ export function AtacDifferentialCard({
     };
   }, [datasetId, setDa]);
 
+  // What the chosen test would need on this column, before it runs.
+  useEffect(() => {
+    let cancelled = false;
+    setEstimate(null);
+    if (!column) return;
+    getDaEstimate(datasetId, column, test)
+      .then((e) => {
+        if (!cancelled) setEstimate(e);
+      })
+      .catch(() => {
+        if (!cancelled) setEstimate(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId, column, test]);
+
   const shownGroup = da && da.groups.includes(group) ? group : da?.groups[0] ?? "";
   const first = useMemo(() => da?.rows[shownGroup] ?? [], [da, shownGroup]);
   useEffect(() => setRows(null), [da?.id, shownGroup]);
   const table = rows ?? first;
   const kept = da ? Math.min(da.kept_per_group, da.n_tested[shownGroup] ?? 0) : 0;
+  const isLr = da?.test === "lr";
+  const fitText = daFitText(da?.n_fit?.[shownGroup]);
+  const mostPass = da ? daMostPass(da.n_significant[shownGroup] ?? 0, da.n_tested[shownGroup] ?? 0) : false;
 
   const more = async () => {
     if (!da) return;
@@ -73,10 +104,12 @@ export function AtacDifferentialCard({
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Differential peaks">
       <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
         <span>Differential peaks</span>
-        <InfoTip label="About differential peaks" width={300}>
-          Wilcoxon rank-sum on TF-IDF, each group against the rest, for peaks open in at least 5% of either; FDR within each
-          group. Signac recommends logistic regression with the cell&rsquo;s total as a covariate, about 144k fits per group; this is
-          the fast default.
+        <InfoTip label="About differential peaks" width={320}>
+          Each group against the rest, for peaks open in at least 5% of either; FDR within each group. Logistic regression, the default:
+          what Signac recommends (Seurat&rsquo;s LR test, group ~ peak + the cell&rsquo;s total counts against group ~ total counts).
+          Every peak gets a score test against one fit per group, and the 10,000 highest of each group a true likelihood ratio; it costs
+          minutes per column, and the line below says how many. Wilcoxon: rank-sum on TF-IDF, no covariate, faster, but in a low-depth
+          group its calls follow depth.
         </InfoTip>
       </h4>
       <div className="flex flex-wrap items-center gap-1.5">
@@ -88,16 +121,25 @@ export function AtacDifferentialCard({
             {columns.map((c) => <option key={c} value={c}>{prettyObsLabel(c)}</option>)}
           </select>
         </label>
+        <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
+          Test
+          <select value={test} onChange={(e) => setTest(e.target.value as AtacDaTest)}
+                  className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700">
+            <option value="lr">Logistic regression (depth covariate)</option>
+            <option value="wilcoxon">Wilcoxon (fast, no covariate)</option>
+          </select>
+        </label>
         {!live && (
-          <button type="button" disabled={!column || run.running || elsewhere} onClick={() => void run.runDa(datasetId, { column })}
+          <button type="button" disabled={!column || run.running || elsewhere} onClick={() => void run.runDa(datasetId, { column, test })}
                   className="rounded bg-primary px-2.5 py-1 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50">
             Find differential peaks
           </button>
         )}
       </div>
-      {!live && state.plan && (
-        <p className="text-[11px] leading-snug text-slate-500">
-          About {formatDuration(30 + state.plan.nnz * 4e-7)} and 1 to 2 GB beyond the open dataset for all groups of a column.
+      {!live && estimate && (
+        <p className="text-[11px] leading-snug text-slate-500" data-testid="atac-da-estimate">
+          {estimate.test === "lr" ? "Logistic regression" : "Wilcoxon"}: about {formatDuration(estimate.estimate_seconds)} and{" "}
+          {(estimate.estimate_bytes / 1024 ** 3).toFixed(1)} GB beyond the open dataset for the {estimate.n_groups} groups of this column.
         </p>
       )}
       <AtacRunStatus datasetId={datasetId} kind="differential" />
@@ -115,10 +157,11 @@ export function AtacDifferentialCard({
               </select>
             </label>
             <a href={daCsvUrl(datasetId, da.id)} download className="text-[11px] text-primary hover:underline">CSV</a>
+            <span className="text-[11px] text-slate-500">{daTestName(da.test)}</span>
           </div>
           {da.note && <p className="text-[11px] leading-snug text-amber-700">{da.note}</p>}
           <div className="max-h-80 overflow-auto">
-            <table className="w-full text-[11px] text-slate-600">
+            <table className="w-full min-w-max border-separate border-spacing-x-1 text-[11px] text-slate-600">
               <thead className="sticky top-0 bg-white text-left text-slate-500">
                 <tr>
                   <th className="font-medium">Peak</th>
@@ -129,6 +172,7 @@ export function AtacDifferentialCard({
                   <th className="text-right font-medium" title="Share of the group's cells with the peak">% in</th>
                   <th className="text-right font-medium" title="Share of the other cells with the peak">% rest</th>
                   <th className="text-right font-medium" title="Benjamini-Hochberg within this group">FDR</th>
+                  {isLr && <th className="pl-2 font-medium" title="LRT: a true likelihood ratio. score: the score test, for peaks below the fitted ones. Separated: the peak splits the group, p from the deviance's limit. No fit: the fit did not converge, so the score test.">p from</th>}
                 </tr>
               </thead>
               <tbody>
@@ -141,7 +185,8 @@ export function AtacDifferentialCard({
                     <td className="text-right tabular-nums">{r.log2fc.toFixed(2)}</td>
                     <td className="text-right tabular-nums">{(100 * r.pct_in).toFixed(0)}</td>
                     <td className="text-right tabular-nums">{(100 * r.pct_rest).toFixed(0)}</td>
-                    <td className="text-right tabular-nums">{formatP(r.pval_adj)}</td>
+                    <td className="whitespace-nowrap pl-1 text-right tabular-nums">{formatP(r.pval_adj)}</td>
+                    {isLr && <td className="whitespace-nowrap pl-2">{daFitLabel(r.fit)}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -154,8 +199,9 @@ export function AtacDifferentialCard({
             </button>
           )}
           <Caption n={{ value: da.n_tested[shownGroup] ?? 0, unit: "peaks tested" }}>
-            {shownGroup} against the rest, by {prettyObsLabel(da.column)}. {da.method} With no depth covariate, most peaks can pass in a
-            large group: read the top of the table, not the count.
+            {shownGroup} against the rest, by {prettyObsLabel(da.column)}. {da.method}
+            {fitText && ` ${fitText}`}
+            {mostPass && " Most tested peaks pass here: with this many cells small differences reach significance, so read the top of the table, not the count."}
           </Caption>
         </div>
       )}

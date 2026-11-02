@@ -525,6 +525,7 @@ def test_segmented_cells_skip_the_doublet_step_with_their_own_reason(cells):
 
     assert spatial.doublet_skip(cells) == spatial.CELLS_DOUBLET_SKIP
     assert preflight._skips_doublets(cells) is True
+    assert preflight.doublet_plan(cells).channels == []  # the run's estimate counts no step that will not run
     with pytest.raises(pipeline.StepNotApplicable, match="not droplets"):
         pipeline._run_doublet_detection(cells, pipeline.PipelineParams())
 

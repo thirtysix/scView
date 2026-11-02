@@ -547,6 +547,26 @@ async def test_filter_preview_says_why_mito_is_off_on_bins(client, dataset_manag
     assert body["n_removed"] >= layer.sum() * 0.9 and "grid_note" not in body
 
 
+def test_tissue_cells_note_only_on_segmented_hd_cells_under_one_mito_rule(monkeypatch):
+    from dataclasses import replace
+
+    from scview.core import qc_filter
+    from scview.core.pipeline import PipelineParams
+
+    t = qc_filter.Thresholds.from_params(PipelineParams(qc_threshold_mode="fixed"))
+    cells = {"has_mt": True}
+    monkeypatch.setattr(spatial, "has_spatial", lambda a: True)
+    monkeypatch.setattr(spatial, "technology", lambda a: {"technology": "visium_hd", "unit": "cell"})
+    assert "Per cell type" in qc_filter.tissue_cells_note(object(), t, cells)
+    assert qc_filter.tissue_cells_note(object(), t, {"has_mt": False}) is None
+    assert qc_filter.tissue_cells_note(object(), replace(t, max_pct_mt=None), cells) is None
+    assert qc_filter.tissue_cells_note(object(), replace(t, mito_mode="per_type"), cells) is None
+    monkeypatch.setattr(spatial, "technology", lambda a: {"technology": "xenium", "unit": "cell"})
+    assert qc_filter.tissue_cells_note(object(), t, cells) is None
+    monkeypatch.setattr(spatial, "has_spatial", lambda a: False)
+    assert qc_filter.tissue_cells_note(object(), t, cells) is None
+
+
 def test_assessor_wording_for_bins():
     from scview.core.assessor import _check_filtering
     from scview.core.pipeline import per_cell_qc

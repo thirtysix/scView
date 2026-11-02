@@ -5,6 +5,7 @@ import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
 import { errorMessage } from "@/lib/errorMessage";
 import { SPOT_METHOD_LABELS } from "@/lib/spotComposition";
+import { type LabelEdits, editsBody, hasEdits, labelsUsed } from "@/lib/spotLabels";
 
 const num = (v: number | null | undefined, d = 3) => (v == null ? "-" : v.toFixed(d));
 
@@ -16,11 +17,14 @@ export function SpotCompositionCheck({
   datasetId,
   referenceId,
   celltypeColumn,
+  edits,
   disabled,
 }: {
   datasetId: string;
   referenceId: string;
   celltypeColumn: string;
+  /** The same left-out and merged labels as the run */
+  edits?: LabelEdits;
   disabled?: boolean;
 }) {
   const [check, setCheck] = useState<SpotCheck | null>(null);
@@ -49,7 +53,7 @@ export function SpotCompositionCheck({
       setCheck(
         await runSpotCheck(
           datasetId,
-          { reference_id: referenceId, celltype_column: celltypeColumn },
+          { reference_id: referenceId, celltype_column: celltypeColumn, ...(edits && hasEdits(edits) ? editsBody(edits) : {}) },
           { signal: abort.current.signal, onProgress: (m) => setProgress(m) },
         ),
       );
@@ -62,6 +66,7 @@ export function SpotCompositionCheck({
   };
 
   const best = check?.runs.find((r) => r.method === "rctd" && r.depth === check.depths[0]) ?? check?.runs[0];
+  const used = check ? labelsUsed(check) : null;
 
   return (
     <div className="space-y-2 rounded border border-slate-200 p-2" data-testid="spot-check">
@@ -120,7 +125,7 @@ export function SpotCompositionCheck({
             </p>
           )}
           <Caption n={{ value: check.n_spots, unit: "synthetic spots per run" }}>
-            From {check.reference.name} ({check.reference.celltype_column}). {check.note}
+            From {check.reference.name} ({check.reference.celltype_column}){used ? `; ${used.text}` : ""}. {check.note}
           </Caption>
         </>
       )}

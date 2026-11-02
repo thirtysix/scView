@@ -1187,15 +1187,19 @@ def first_positions(names, wanted):
     return np.asarray([first[g] for g in wanted], dtype=np.int64)
 
 
-def spot_composition(adata, ref, label, types, genes, ref_genes, fit_genes, s_e, method, min_umi=MIN_SPOT_UMI):
+def spot_composition(adata, ref, label, types, genes, ref_genes, fit_genes, s_e, method, min_umi=MIN_SPOT_UMI,
+                     exclude=(), merge=None):
     """Each spot's shares of the reference's types on the recorded genes, written where
     scView writes them (obsm spot_deconv / spot_deconv_cells, obs spot_deconv_top(_share));
-    spots with fewer than min_umi counts are not fitted."""
+    spots with fewer than min_umi counts are not fitted. exclude: reference labels whose
+    cells are not used; merge: label -> broader name, as the run chose them."""
     RM, rnames = spot_counts(ref)
     SM, snames = spot_counts(adata)
     labels = ref.obs[label]
-    codes = np.asarray(pd.Categorical(labels.astype(str).where(labels.notna(), None).to_numpy(),
-                                      categories=types).codes, dtype=np.int64)
+    labels = labels.astype(str).where(labels.notna(), None)
+    if exclude or merge:
+        labels = sd_edit_labels(labels, exclude, merge or {})
+    codes = np.asarray(pd.Categorical(labels.to_numpy(), categories=types).codes, dtype=np.int64)
     totals = np.asarray(RM.sum(axis=1), dtype=np.float64).ravel()
     codes = np.where(totals > 0, codes, -1)
     mu, S, _ = sd_profiles(RM, totals, codes, len(types))
@@ -1379,17 +1383,62 @@ def _atac_helper() -> str:
     computes them as scView did; the peaks are read again from the input."""
     import inspect
 
-    from scview.core import atac
+    from scview.core import atac, atac_lr
 
-    lines = ["import gzip", "import os", "import re", ""]
+    lines = ["import gzip", "import os", "import re", "from concurrent.futures import ThreadPoolExecutor",
+             "from scipy.special import expit, ndtr", ""]
+    lines += [f"{name} = {_lit(getattr(atac_lr, name))}" for name in atac_lr.REPLAY_CONSTANTS]
     lines += [f"{name} = {_lit(getattr(atac, name))}" for name in atac.REPLAY_CONSTANTS]
-    for obj in atac.REPLAY_CODE:
+    for obj in (*atac_lr.REPLAY_CODE, *atac.REPLAY_CODE):
         lines += ["", "", inspect.getsource(obj).rstrip("\n")]
     lines += ["", "", _ATAC_READERS.strip("\n")]
     return "\n".join(lines) + "\n"
 
 
 _ATAC_READERS = '''
+class AtacError(ValueError):
+    pass
+
+
+class AtacCancelled(Exception):
+    pass
+
+
+class AtacCounts:
+    """The counts in memory, read as iter_differential reads the store: blocks of cells."""
+
+    def __init__(self, counts):
+        self.counts = counts
+        self.n_vars = counts.shape[1]
+
+    def iter_blocks(self, _matrix, rows, values):
+        ptr = self.counts.indptr
+        lo = 0
+        while lo < len(rows):
+            hi = lo + 1
+            while hi < len(rows) and ptr[rows[hi] + 1] - ptr[rows[lo]] <= values:
+                hi += 1
+            yield np.arange(lo, hi), self.counts[rows[lo:hi]]
+            lo = hi
+
+
+def atac_differential(counts, peak_names, labels, settings):
+    """iter_differential on the counts in memory: a table of each chosen group vs the rest."""
+    missing = pd.isna(labels)
+    every = sorted({str(x) for x in labels[~missing]})
+    code = {g: i for i, g in enumerate(every)}
+    codes = np.array([-1 if m else code[str(x)] for x, m in zip(labels, missing)], dtype=np.int32)
+    chosen = settings.get("groups") or every
+    for item in iter_differential(AtacCounts(counts), np.arange(counts.shape[0]), codes, every, chosen,
+                                  test=settings["test"], min_pct=settings["min_pct"], max_peaks=settings["max_peaks"],
+                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP)):
+        if item["type"] == "result":
+            frame = item["frame"]
+            frame.insert(1, "peak", np.asarray(peak_names, dtype=object)[frame["peak_index"].to_numpy()])
+            return frame.drop(columns="peak_index")
+    raise AtacError("no result")
+
+
 def atac_peaks(path):
     """The input's peak counts as a cells x peaks CSR, with peak and cell names: a 10x file's or
     an .h5ad's Peaks features, or an .h5mu's atac modality (its counts layer when it has one)."""
@@ -2651,7 +2700,9 @@ def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
     genes, ref_genes, fit, types = p.get("genes"), p.get("ref_genes"), p.get("fit_genes"), p.get("types")
     label, ref_file, method, s_e = p.get("celltype_column"), p.get("reference_file"), p.get("method"), p.get("s_e")
     min_umi = p.get("min_umi", sd.MIN_SPOT_UMI)  # older records: the one floor every run had
-    ok = (isinstance(genes, list) and genes and isinstance(ref_genes, list) and len(ref_genes) == len(genes)
+    exclude, merge = p.get("excluded_labels", []), p.get("merged_labels", {})  # only recorded when used
+    ok = (isinstance(exclude, list) and isinstance(merge, dict)
+          and isinstance(genes, list) and genes and isinstance(ref_genes, list) and len(ref_genes) == len(genes)
           and isinstance(fit, list) and fit and all(isinstance(i, int) and 0 <= i < len(genes) for i in fit)
           and isinstance(types, list) and len(types) >= 2 and isinstance(label, str) and label
           and isinstance(ref_file, str) and ref_file and method in sd.METHODS
@@ -2681,9 +2732,12 @@ def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
         "]",
         f"SPOT_FIT = {_lit([int(i) for i in fit])}",
         f"SPOT_TYPES = {_lit([str(t) for t in types])}",
+        *([f"SPOT_EXCLUDE = {_lit([str(t) for t in exclude])}"] if exclude else []),
+        *([f"SPOT_MERGE = {_lit({str(k): str(v) for k, v in merge.items()})}"] if merge else []),
         f"ref = read_input(spot_reference_file({_lit(ref_file)}))",
         f"spot_composition(adata, ref, {_lit(label)}, SPOT_TYPES, SPOT_GENES, SPOT_REF_GENES, SPOT_FIT, "
-        f"{_lit(s_e)}, {_lit(method)}, min_umi={_lit(int(min_umi))})",
+        f"{_lit(s_e)}, {_lit(method)}, min_umi={_lit(int(min_umi))}"
+        f"{', exclude=SPOT_EXCLUDE' if exclude else ''}{', merge=SPOT_MERGE' if merge else ''})",
         "del ref",
     ], "; ".join(notes)[:200] if notes else "")
 
@@ -3043,6 +3097,31 @@ adata.uns["wnn_atac"] = {"connectivities_key": "wnn_atac_connectivities", "dista
 sc.tl.umap(adata, neighbors_key="wnn_atac", key_added="X_umap_wnn_atac", min_dist=WNN_ATAC["min_dist"], random_state=0)
 adata.obsp["wnn_atac_connectivities"] = conn
 '''
+
+
+_ATAC_DIFFERENTIAL_CODE = '''
+peaks, peak_names, peak_cells = atac_peaks(INPUT)
+counts = peaks[pd.Index(peak_cells).get_indexer(adata.obs_names)].tocsr()
+da_table = atac_differential(counts, peak_names, adata.obs[ATAC_DA["column"]].astype(object).to_numpy(), ATAC_DA)
+adata.uns["atac_differential_" + ATAC_DA["test"]] = da_table
+'''
+
+
+def _atac_differential(p: dict, ctx: _Ctx) -> Snippet:
+    """Differential peaks (core/atac.py, iter_differential; a result, in ``uns``): the same code
+    on the input's peaks read again."""
+    if not p.get("column") or p.get("test") not in ("wilcoxon", "lr"):
+        return Snippet(NOT_REPLAYABLE, ["# Differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
+                       "settings not recorded")
+    _need(ctx, "atac")
+    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks")
+    settings = {x: p.get(x) for x in keys if p.get(x) is not None}
+    return Snippet(EXACT, [
+        f"# Differential peaks by {comment_text(p.get('column'), 80)}, {comment_text(p.get('test'), 12)}: each group vs "
+        "the rest, a table in uns.",
+        f"ATAC_DA = {_lit(settings)}",
+        *_block(_ATAC_DIFFERENTIAL_CODE),
+    ])
 
 
 def _atac_wnn(p: dict, ctx: _Ctx) -> Snippet:
@@ -3510,6 +3589,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "wnn": _wnn,
     "atac_lsi": _atac_lsi,
     "atac_wnn": _atac_wnn,
+    "atac_differential": _atac_differential,
     "spot_deconvolution": _spot_deconvolution,
     "velocity": _velocity,
     "spatial_domains": _spatial_domains,

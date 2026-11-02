@@ -6,8 +6,9 @@ need. ``POST .../atac/run-stream``: LSI, graph, UMAP, Leiden, gene activity (SSE
 ``POST .../atac/wnn/run-stream``: WNN RNA + ATAC (SSE). ``GET .../atac/peaks``: every peak's
 totals and context, paged. ``GET .../atac/activity?gene=``: one gene's activity per cell, by
 group, beside its RNA. ``GET .../atac/qc``: the QC columns per cell. ``POST .../atac/metrics``:
-attach a per_barcode_metrics.csv. ``POST .../atac/differential``: Wilcoxon per group (SSE),
-kept by result id; ``GET .../atac/differential/{id}``, ``.../csv``. ``GET .../atac/export``: an
+attach a per_barcode_metrics.csv. ``POST .../atac/differential``: Wilcoxon or logistic regression
+with a depth covariate per group (SSE), kept by result id; ``GET .../atac/differential-estimate``
+says what each costs; ``GET .../atac/differential/{id}``, ``.../csv``. ``GET .../atac/export``: an
 h5ad of the peak matrix.
 
 Each run works on the store and its own copies, in worker threads, block by block; only the
@@ -75,6 +76,8 @@ class DifferentialRequest(BaseModel):
     groups: list[str] | None = Field(default=None, max_length=atac.MAX_GROUPS)
     min_pct: float = Field(default=atac.MIN_PCT, ge=0, le=1)
     max_peaks: int = Field(default=atac.MAX_PEAKS_PER_GROUP, ge=10, le=500_000)
+    test: Literal["wilcoxon", "lr"] = "wilcoxon"
+    lrt_peaks: int = Field(default=atac.LRT_PER_GROUP, ge=1, le=500_000)  # lr: true likelihood ratios per group
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -487,10 +490,39 @@ async def get_activity(
         raise _http(e)
 
 
+def _da_fits(body_groups: int, lrt_peaks: int, max_peaks: int, n_peaks: int) -> int:
+    return body_groups * min(lrt_peaks, max_peaks, n_peaks)
+
+
+@router.get("/datasets/{dataset_id}/atac/differential-estimate")
+async def differential_estimate(
+    dataset_id: str, column: str = Query(max_length=256), test: Literal["wilcoxon", "lr"] = "wilcoxon",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """What a differential run of every group of this column would need."""
+    adaptor = await _adaptor(dm, dataset_id)
+    adata = adaptor.adata
+
+    def work() -> dict[str, Any]:
+        _codes, every, chosen = atac.group_codes(adata, column, None)
+        with atac.open_store(adata, dm.data_dir, dataset_id) as store:
+            return {"column": column, "test": test, "n_groups": len(chosen), "n_cells": int(adata.n_obs),
+                    "estimate_seconds": atac.estimate_da_seconds(
+                        store.nnz(atac.MATRIX), len(chosen), test, n_cells=int(adata.n_obs),
+                        n_fits=_da_fits(len(chosen), atac.LRT_PER_GROUP, atac.MAX_PEAKS_PER_GROUP, store.n_vars)),
+                    "estimate_bytes": atac.estimate_da_bytes(store.n_vars, len(every), test, n_cells=int(adata.n_obs))}
+
+    try:
+        return await asyncio.to_thread(work)
+    except atac.AtacError as e:
+        raise _http(e)
+
+
 @router.post("/datasets/{dataset_id}/atac/differential")
 async def run_differential(dataset_id: str, body: DifferentialRequest, dm: DatasetManager = Depends(get_dataset_manager)):
-    """Wilcoxon on TF-IDF per group vs the rest, streamed: ``start``, ``progress``, ``result``
-    (the id, each group's counts and its first rows), ``complete``, or ``error``. Kept by id."""
+    """Each group vs the rest, Wilcoxon on TF-IDF or logistic regression with a depth covariate,
+    streamed: ``start``, ``progress``, ``result`` (the id, each group's counts and its first rows),
+    ``complete``, or ``error``. Kept by id; a provenance step for the replay script."""
     adaptor = await _adaptor(dm, dataset_id)
     _refuse_running(dataset_id)
     adata = adaptor.adata
@@ -501,32 +533,44 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
     except atac.AtacError as e:
         raise _http(e)
     cells = await asyncio.to_thread(results_store.cells_hash, adata)
-    need = atac.estimate_da_bytes(store.n_vars, len(every))
+    fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
+    need = atac.estimate_da_bytes(store.n_vars, len(every), body.test, n_cells=int(rows.size))
     await dm.reserve(dataset_id, need, what=_WHAT["differential"])
     genome = store.meta.get("genome")
+    lrt_peaks = min(body.lrt_peaks, body.max_peaks)
 
     async def on_result(item, res):
+        params: dict[str, Any] = {"column": body.column, "groups": body.groups, "min_pct": body.min_pct,
+                                  "max_peaks": body.max_peaks, "test": body.test,
+                                  "on": "log1p(TF-IDF)" if body.test == "lr" else "TF-IDF"}
+        if body.test == "lr":
+            params |= {"latent": "total peak counts per cell", "lrt_peaks": lrt_peaks}
+
         def finish() -> dict[str, Any]:
             table, note = atac.attach_context(item["frame"], store, genome, dm.data_dir, _auto_download())
-            params = {"min_pct": body.min_pct, "max_peaks": body.max_peaks, "test": "wilcoxon", "on": "TF-IDF"}
-            result_id = uuid.uuid4().hex[:12]
-            kept = atac.DaResult(result_id=result_id, column=body.column, groups=chosen, table=table,
+            method = (atac.DA_METHOD_LR.format(min_pct=body.min_pct, max_peaks=body.max_peaks, lrt_peaks=lrt_peaks)
+                      if body.test == "lr" else atac.DA_METHOD.format(min_pct=body.min_pct, max_peaks=body.max_peaks))
+            kept = atac.DaResult(result_id=uuid.uuid4().hex[:12], column=body.column, groups=chosen, table=table,
                                  n_tested=item["n_tested"], n_significant=item["n_significant"], params=params,
-                                 method=atac.DA_METHOD.format(min_pct=body.min_pct, max_peaks=body.max_peaks), cells=cells,
-                                 created_at=datetime.now(timezone.utc).isoformat())
+                                 method=method, cells=cells, created_at=datetime.now(timezone.utc).isoformat(),
+                                 n_fit=item.get("n_fit"))
             return {"kept": kept, "note": note}
 
         out = await asyncio.to_thread(finish)
+        await _save(dm, dataset_id, fingerprint, (), (), "differential accessibility",
+                    lambda data: atac.record_differential(data, params, res))
         a = await _adaptor(dm, dataset_id)
         atac.remember_da(a, dataset_id, out["kept"])
         return {**atac.da_payload(out["kept"], limit=100), "note": out["note"], "resources": res}
 
-    start = {"column": body.column, "groups": chosen, "n_cells": int(rows.size), "min_pct": body.min_pct,
-             "estimate_seconds": atac.estimate_da_seconds(store.nnz(atac.MATRIX), len(chosen)), "estimate_bytes": need}
+    start = {"column": body.column, "groups": chosen, "n_cells": int(rows.size), "min_pct": body.min_pct, "test": body.test,
+             "estimate_seconds": atac.estimate_da_seconds(store.nnz(atac.MATRIX), len(chosen), body.test, n_cells=int(rows.size),
+                                                          n_fits=_da_fits(len(chosen), lrt_peaks, body.max_peaks, store.n_vars)),
+             "estimate_bytes": need}
     return _stream(_events(
         dm, dataset_id, "differential", start, need,
-        lambda stop: atac.iter_differential(store, rows, codes, every, chosen, min_pct=body.min_pct,
-                                            max_peaks=body.max_peaks, stop=stop),
+        lambda stop: atac.iter_differential(store, rows, codes, every, chosen, test=body.test, min_pct=body.min_pct,
+                                            max_peaks=body.max_peaks, stop=stop, lrt_per_group=lrt_peaks),
         on_result, "Differential accessibility", closers=[store.close]))
 
 

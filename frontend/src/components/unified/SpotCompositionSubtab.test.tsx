@@ -209,6 +209,17 @@ describe("SpotCompositionSubtab", () => {
     expect(screen.getByRole("button", { name: /Fit spots/ })).toBeDisabled();
   });
 
+  it("counts genes the fit matches through ids, with no false warning", async () => {
+    api.checkSpotReference.mockResolvedValue({
+      ...CHECK, shared_genes_by_name: 0, shared_genes: 18785, shared_genes_via: "this dataset by its var 'gene_ids'",
+    });
+    render(<SpotCompositionSubtab />);
+    await pickReference();
+    const text = screen.getByTestId("spot-reference-check").textContent;
+    expect(text).toContain("18,785 genes shared (matching this dataset by its var 'gene_ids')");
+    expect(text).not.toContain("Few genes match");
+  });
+
   it("says when a large reference is read from disk, and only then", async () => {
     const { unmount } = render(<SpotCompositionSubtab />);
     await pickReference();

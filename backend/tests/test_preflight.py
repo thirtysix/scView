@@ -304,6 +304,29 @@ def test_doublet_plan_counts_scrublets_own_variable_genes_in_the_largest_channel
     assert whole > per
 
 
+def test_channel_hvg_extrapolates_a_large_channel_from_two_samples(monkeypatch):
+    from scview.core import scrublet_lean
+
+    sizes = []
+
+    def falling(rows):  # more genes in a smaller sample, as on real channels
+        sizes.append(rows.shape[0])
+        return {pf.DBL_HVG_SAMPLE: 2343, pf.DBL_HVG_SMALL: 2647}[rows.shape[0]]
+
+    monkeypatch.setattr(scrublet_lean, "n_variable_genes", falling)
+    M = np.zeros((40_222, 2))
+    assert pf._channel_hvg(M, np.arange(40_222)) == pytest.approx(1775, abs=5)  # whole channel: 1,919
+    assert sizes == [pf.DBL_HVG_SAMPLE, pf.DBL_HVG_SMALL]
+    # A small channel is counted, and never asked twice.
+    sizes.clear()
+    monkeypatch.setattr(scrublet_lean, "n_variable_genes", lambda rows: sizes.append(rows.shape[0]) or 1500)
+    assert pf._channel_hvg(M, np.arange(3000)) == 1500
+    assert sizes == [3000]
+    # A sample with fewer genes than the smaller one is noise: no extrapolation upward.
+    monkeypatch.setattr(scrublet_lean, "n_variable_genes", lambda rows: {pf.DBL_HVG_SAMPLE: 900, pf.DBL_HVG_SMALL: 800}[rows.shape[0]])
+    assert pf._channel_hvg(M, np.arange(40_222)) == 900
+
+
 def test_doublet_plan_of_a_file_reads_its_obs_alone(tmp_path):
     from tests.test_doublet_channels import _dataset
 

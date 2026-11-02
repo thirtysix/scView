@@ -83,8 +83,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "Seurat's weighted nearest neighbours on RNA PCs and LSI 2:50: per-cell RNA weight by group, WNN UMAP, clusters"),
     ("Unified View > Accessibility > Gene activity", "peak-based",
      "peak counts in gene body + 2 kb upstream as an overlay and against RNA; peak-based, not fragment-based"),
-    ("Unified View > Accessibility > Differential peaks", "Wilcoxon on TF-IDF",
-     "peaks per group vs the rest with nearest gene, distance to TSS, class; CSV"),
+    ("Unified View > Accessibility > Differential peaks", "LR with depth, or Wilcoxon",
+     "peaks per group vs the rest, logistic regression with a depth covariate (Seurat's LR, the default) or Wilcoxon on TF-IDF, with "
+     "nearest gene, distance to TSS, class; CSV"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
@@ -129,6 +130,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Spot composition", "Visium, RCTD",
      "each spot's or Visium HD bin's cell-type shares from another library dataset as the reference; tissue overlay "
      "per type, dominant type, self-check"),
+    ("Unified View > Spot composition > Reference labels", "catch-all label, too many types",
+     "leave reference labels out of the fit (catch-alls such as Unknown are marked, never applied) or merge them under "
+     "a broader name to get under 50 types"),
     ("Unified View > Accessibility > Fragment QC", "",
      "attach atac_fragments.tsv.gz + .tbi: per-cell TSS enrichment and nucleosome signal (Signac's definitions), "
      "fragment length ladder, TSS profile"),
@@ -167,7 +171,7 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
-             "Unified View > Domains > Co-occurrence")
+             "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels")
 
 
 def compact_guide() -> str:
