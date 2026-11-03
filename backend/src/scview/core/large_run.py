@@ -1262,12 +1262,13 @@ class _Backend:
     def __init__(self, run: LargeRun) -> None:
         self.run = run
 
-    def rank_genes_groups(self, adata, groupby: str, key_added: str | None = None) -> None:
+    def rank_genes_groups(self, adata, groupby: str, key_added: str | None = None,
+                          groups: Any = "all") -> None:
         run = self.run
         store = run.store()
         run._label = f"Marker genes for {groupby}"
         sparse_markers.rank_genes_groups(
-            adata, groupby, store, method="wilcoxon", pts=True, use_raw=False,
+            adata, groupby, store, method="wilcoxon", pts=True, use_raw=False, groups=groups,
             key_added=key_added, specificity=True, check_store=False,
             progress=run._store_tick)
 

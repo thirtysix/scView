@@ -51,8 +51,7 @@ async def get_result(dataset_id: str, result_id: str,
                      dm: DatasetManager = Depends(get_dataset_manager)) -> dict:
     """One stored result's entry with its parameters and fingerprint."""
     _known(dm, dataset_id)
-    rows = await asyncio.to_thread(results_store.entries, dataset_id, None, dm.get_dataset(dataset_id))
-    e = next((e for e in rows if e["id"] == result_id), None)
+    e, _ = await _find(dm, dataset_id, result_id, value=False)
     if e is None:
         raise HTTPException(status_code=404, detail="No such stored result.")
     return {**_summary(e), "params": e.get("params") or {}, "fingerprint": e.get("fingerprint")}
@@ -122,12 +121,28 @@ async def pin_result(dataset_id: str, result_id: str, body: PinBody,
     return {"id": result_id, "pinned": body.pinned}
 
 
+async def _find(dm: DatasetManager, dataset_id: str, result_id: str, value: bool = True):
+    """(entry, (entry, value)) of a stored result, or (None, None). A result is written in
+    the background (``results_store.keep``): an agent asking for it in the next call (the
+    pilot: enrichment of a pseudobulk DE just returned) waits for the queued writes once
+    before it is taken as gone."""
+    for attempt in (0, 1):
+        if attempt:
+            await asyncio.to_thread(results_store.flush)
+        rows = await asyncio.to_thread(results_store.entries, dataset_id, None, dm.get_dataset(dataset_id))
+        e = next((e for e in rows if e["id"] == result_id), None)
+        if e is not None and not value:
+            return e, None
+        got = await asyncio.to_thread(results_store.load, dataset_id, result_id) if e else None
+        if e is not None and got is not None:
+            return e, got
+    return None, None
+
+
 async def _entry_value(dm: DatasetManager, dataset_id: str, result_id: str):
     _known(dm, dataset_id)
-    rows = await asyncio.to_thread(results_store.entries, dataset_id, None, dm.get_dataset(dataset_id))
-    e = next((e for e in rows if e["id"] == result_id), None)
-    got = await asyncio.to_thread(results_store.load, dataset_id, result_id) if e else None
-    if e is None or got is None:
+    e, got = await _find(dm, dataset_id, result_id)
+    if e is None:
         raise HTTPException(status_code=404, detail="No such stored result.")
     return e, got[1]
 

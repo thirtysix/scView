@@ -70,6 +70,7 @@ describe("prettyEmbeddingLabel", () => {
     expect(prettyEmbeddingLabel("X_umap")).toBe("UMAP");
     expect(prettyEmbeddingLabel("X_umap_3d")).toBe("UMAP");
     expect(prettyEmbeddingLabel("X_umap_uncorrected")).toBe("UMAP (uncorrected)");
+    expect(prettyEmbeddingLabel("X_umap_original")).toBe("UMAP (original)");
     expect(prettyEmbeddingLabel("X_pca_harmony")).toBe("PCA (HARMONY)");
   });
 });

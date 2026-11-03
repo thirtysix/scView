@@ -1022,6 +1022,7 @@ DBL_SPARSE_COPIES = 6.0
 DBL_PER_CELL_HVG = 144
 DBL_DENSE_PER_VALUE = 12.8  # per cell x gene, when the variable genes are not counted
 DBL_HVG_SAMPLE = 5000
+DBL_COSTED = 3  # channels whose variable genes are counted, largest first
 DBL_HVG_SMALL = 2000
 DBL_HVG_SLOPES = (-0.2, 0.0)
 # Per cell, beside the largest channel: the scores, calls, channel codes and their sort,
@@ -1206,6 +1207,10 @@ class DoubletPlan:
 
     channels: list[int]
     hvg: int | None = None
+    # (cells, variable genes) of the DBL_COSTED largest channels: the peak is the worst of
+    # them, not always the largest's (pilot 38b64997: 9,400 cells with 4,219 variable genes
+    # peaked 8% over 10,858 with 3,418; measured 5.44 vs 5.03 GB, model 5.71 vs 5.34).
+    costed: list[tuple[int, int]] | None = None
 
 
 def _step_doublet(s: _State, params, plan: DoubletPlan | None = None) -> tuple[int, _State, float]:
@@ -1226,7 +1231,9 @@ def _step_doublet(s: _State, params, plan: DoubletPlan | None = None) -> tuple[i
     # Only the channel's counts, as CSR (a dense matrix made so by blocks): the layers,
     # .raw and a dense X are not copied.
     copies = int(DBL_SPARSE_COPIES * _csr_bytes(counts) * largest / max(1, counts.n_cells))
-    if plan is not None and plan.hvg:
+    if plan is not None and plan.costed:
+        dense = max(int(DBL_PER_CELL_HVG * c * h) for c, h in plan.costed)
+    elif plan is not None and plan.hvg:
         dense = int(DBL_PER_CELL_HVG * largest * plan.hvg)
     else:
         dense = int(DBL_DENSE_PER_VALUE * largest * counts.n_genes)
@@ -1297,7 +1304,10 @@ def doublet_plan(adata, params=None) -> DoubletPlan | None:
         return plan
     try:
         counts, _ = _doublet_matrix(adata)
-        plan.hvg = _channel_hvg(counts, np.flatnonzero(ch.codes == int(np.argmax(sizes))))
+        order = [int(j) for j in np.argsort(sizes, kind="stable")[::-1][:DBL_COSTED]
+                 if sizes[int(j)] >= scrublet_lean.MIN_CHANNEL_CELLS]
+        plan.costed = [(sizes[j], _channel_hvg(counts, np.flatnonzero(ch.codes == j))) for j in order]
+        plan.hvg = plan.costed[0][1]
     except (StepSkipped, ValueError, TypeError, IndexError):
         pass
     return plan
@@ -2658,7 +2668,9 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
                            doublets=plan)
         alternatives.append((f"Use 1,000 variable genes instead of {params.n_top_genes:,}",
                              alt.peak_bytes - held))
-    half = None if plan is None else DoubletPlan([c // 2 for c in plan.channels], plan.hvg)
+    half = None if plan is None else DoubletPlan(
+        [c // 2 for c in plan.channels], plan.hvg,
+        None if plan.costed is None else [(c // 2, h) for c, h in plan.costed])
     alt = estimate_run(_half_cells(h), steps=steps, params=params, warm=warm, doublets=half)
     alternatives.append(("Subsample the cells: half of them", alt.peak_bytes - held))
 

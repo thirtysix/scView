@@ -61,6 +61,8 @@ class _Ctx:
     # The matrix the last scaling step planned for PCA (core/scaling.py), or None: an
     # older scView's scaling wrote it into X, so PCA reads X as it is.
     scaling: dict[str, Any] | None = None
+    # True once a step has kept the file's own UMAP as X_umap_original
+    kept_umap: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1907,8 +1909,25 @@ def _block(text: str) -> list[str]:
     return text.strip("\n").splitlines()
 
 
+_KEEP_UMAP = '''
+_umap = "X_umap" if "X_umap" in adata.obsm else next((k for k in adata.obsm if k.lower() == "x_umap"), None)
+if _umap is not None and "X_umap_original" not in adata.obsm:  # the file's own UMAP (any case)
+    adata.obsm["X_umap_original"] = np.asarray(adata.obsm[_umap])[:, :2].astype(np.float32)
+'''
+
+
+def _keep_umap(ctx: _Ctx) -> str:
+    """The line keeping the file's own UMAP (as pipeline.keep_original_umap), only in
+    the first step that would clear or overwrite it: later, X_umap is scView's."""
+    if ctx.kept_umap:
+        return ""
+    ctx.kept_umap = True
+    return _KEEP_UMAP.strip("\n") + "\n"
+
+
 def _reset_to_counts(p: dict, ctx: _Ctx) -> Snippet:
-    return Snippet(EXACT, _block('''
+    keep = _keep_umap(ctx)
+    return Snippet(EXACT, _block(keep + '''
 if "counts_uncorrected" in adata.layers:  # the counts before an ambient RNA correction
     adata.layers["counts"] = adata.layers["counts_uncorrected"]
     del adata.layers["counts_uncorrected"]
@@ -1922,7 +1941,7 @@ if "counts" in adata.layers or adata.raw is not None:
         "highly_variable", "means", "dispersions", "dispersions_norm", "variances",
         "residual_variances", "highly_variable_rank", "highly_variable_nbatches",
         "highly_variable_intersection") if c in adata.var.columns], inplace=True)
-    for k in [k for k in list(adata.obsm.keys()) if k.startswith("X_")]:
+    for k in [k for k in list(adata.obsm.keys()) if k.startswith("X_") and k != "X_umap_original"]:
         del adata.obsm[k]
     for k in list(adata.obsp.keys()):
         del adata.obsp[k]
@@ -2502,7 +2521,8 @@ def _embeddings(p: dict, ctx: _Ctx) -> Snippet:
     three_d = "" if p.get("umap_3d") == "off" else (
         f'sc.tl.umap(adata, min_dist={_lit(md)}, n_components=3)\n'
         'adata.obsm["X_umap_3d"] = adata.obsm["X_umap"].copy()\n')
-    return Snippet(EXACT, _block(f'''
+    keep = _keep_umap(ctx)
+    return Snippet(EXACT, _block(keep + f'''
 # umap-learn trims the graph it is given in place: keep the one clustering used.
 key = (adata.uns.get("neighbors") or {{}}).get("connectivities_key", "connectivities")
 graph = adata.obsp[key].copy() if key in adata.obsp else None

@@ -145,14 +145,35 @@ LOAD_MARGIN = 1.1
 # Memory kept free beyond a load or run's own need, for the requests that follow it:
 # opening Kang beside a cached ovary (3.2 GB) left 0.4 GB of a 6 GB limit, and the
 # page's first requests (QC, cluster QC, the co-pilot insight) got the backend killed.
+# ``SCVIEW_MEMORY_RESERVE`` (a share of the limit, 0.05-0.5) sets it for a server with one
+# client and no browser, a batch job: the 1,000-dataset pilot's two largest datasets were
+# refused in memory by this reserve on 66/69 GB jobs.
 RESERVE_SHARE = 0.25
+RESERVE_RANGE = (0.05, 0.5)
 RESERVE_MIN = 1024**3
 # How long a load that does not fit waits for memory a finished run is still freeing.
 REFUSAL_WAIT_SECONDS = 10
 
 
+def reserve_share() -> float:
+    """The working reserve's share of the limit: ``SCVIEW_MEMORY_RESERVE``, else 0.25."""
+    raw = os.environ.get("SCVIEW_MEMORY_RESERVE", "").strip()
+    if not raw:
+        return RESERVE_SHARE
+    try:
+        share = float(raw)
+    except ValueError:
+        share = float("nan")
+    lo, hi = RESERVE_RANGE
+    if not lo <= share <= hi:
+        logger.warning("SCVIEW_MEMORY_RESERVE=%r is not a share from %s to %s; using %s",
+                       raw, lo, hi, RESERVE_SHARE)
+        return RESERVE_SHARE
+    return share
+
+
 def working_reserve(limit_bytes: int) -> int:
-    return max(RESERVE_MIN, int(RESERVE_SHARE * limit_bytes))
+    return max(RESERVE_MIN, int(reserve_share() * limit_bytes))
 
 
 # Memory a gene-store rebuild of a large dataset takes while it runs: one staged row chunk

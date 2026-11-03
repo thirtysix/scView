@@ -503,3 +503,63 @@ async def test_api_is_off_in_public_mode_unless_enabled(client, fake, test_setti
     assert r.status_code == 200
     assert Settings(PUBLIC_IMPORT_ENABLED=False).public_import_enabled is False
     assert Settings().public_import_enabled is True
+
+
+def _local_dir(monkeypatch, folder) -> None:
+    from scview import config
+
+    monkeypatch.setattr(config, "get_settings", lambda: Settings(PUBLIC_IMPORT_LOCAL_DIR=str(folder)))
+
+
+@pytest.mark.asyncio
+async def test_api_import_from_the_local_dir_makes_no_request(client, dataset_manager, monkeypatch, tmp_path):
+    """PUBLIC_IMPORT_LOCAL_DIR: a version fetched beforehand (h5ad + its listing record) is
+    imported with Discover unreachable, as on a batch node without internet."""
+    from scview.api.v1 import public_import as api
+
+    local = tmp_path / "fetched"
+    local.mkdir()
+    discover_h5ad(local / f"{LIVER_B}.h5ad")
+    rec = json.loads(json.dumps(LISTING_REC()))
+    rec["assets"][0]["filesize"] = (local / f"{LIVER_B}.h5ad").stat().st_size
+    (local / f"{LIVER_B}.json").write_text(json.dumps(rec))
+    offline = FakeDiscover()
+
+    def unreachable(request):
+        import httpx
+
+        offline.urls.append(str(request.url))
+        raise httpx.ConnectError("offline")
+
+    offline.handler = unreachable
+    monkeypatch.setattr(pi, "new_client", offline.client)
+    monkeypatch.setattr(pi, "memory_verdict", lambda p: {"verdict": "fits", "message": "ok"})
+    monkeypatch.setattr(pi, "_HEADERS", {})
+    _local_dir(monkeypatch, local)
+    api._catalogs.clear()
+
+    r = await client.get(f"{API}/public-import/discover/datasets/{LIVER_B}")
+    assert r.status_code == 200, r.text
+    assert r.json()["memory"]["source"] == "the file's header, read from the local copy"
+    assert r.json()["memory"]["n_cells"] == 40
+    r = await client.post(f"{API}/public-import/discover/import-stream", json={"dataset_version_id": LIVER_B})
+    events = _events(r.text)
+    assert events[-1][0] == "complete", events
+    assert offline.urls == []
+    did = events[-1][1]["dataset_id"]
+    adaptor = dataset_manager.get_dataset(did)
+    assert "MT-ND1" in list(adaptor.adata.var_names)
+    assert _sha(Path(dataset_manager.data_dir) / "uploads" / did / f"{LIVER_B}.h5ad") == _sha(local / f"{LIVER_B}.h5ad")
+    api._catalogs.clear()
+
+
+def test_local_copy_of_the_wrong_size_is_refused(tmp_path, monkeypatch):
+    (tmp_path / f"{LIVER_B}.h5ad").write_bytes(b"abc")
+    _local_dir(monkeypatch, tmp_path)
+    dest = tmp_path / "out" / "x.h5ad"
+    dest.parent.mkdir()
+    with pytest.raises(pi.PublicImportError, match="local copy"):
+        list(pi.download(LIVER_B, dest, 999, threading.Event(), client=FakeDiscover(status=500).client()))
+    assert list(dest.parent.iterdir()) == []
+    _local_dir(monkeypatch, "")
+    assert pi.local_copy(LIVER_B) is None

@@ -11,13 +11,13 @@ from fastapi.responses import Response
 
 from scview.dependencies import get_dataset_manager
 from scview.core.dataset_manager import DatasetManager
-from scview.core import marker_specificity
+from scview.core import marker_specificity, sparse_markers
 from scview.core.arrow_serializer import dataframe_to_arrow_ipc
 from scview.core.obs_writes import dataset_edit
 from scview.core import working_copy
 from scview.core.large_mode import LargeDatasetError
 from scview.core.ora_background import resolve_markers_key
-from scview.core.pipeline import drop_enrichment_cache
+from scview.core.pipeline import drop_enrichment_cache, note_skipped
 from scview.core.uns_keys import markers_column, markers_key
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,22 @@ MAX_MARKER_GROUPS = 100
 NO_MARKERS = "No marker genes yet: run the pipeline or pick a column."
 # The base columns of a marker table (``AnnDataAdaptor.get_markers``), for an empty one.
 MARKER_COLUMNS = ("group", "gene", "logfoldchange", "pval", "pval_adj")
+
+
+SKIPPED_REASON = "fewer than 2 cells: no test (their cells stay in every other group's rest)"
+
+
+def _skipped_groups(adata, column: str) -> list[str]:
+    """The groups the stored markers of ``column`` left out (``pipeline.note_skipped``)."""
+    key = resolve_markers_key(adata.uns, column or "")
+    rgg = adata.uns.get(key) if key else None
+    params = rgg.get("params", {}) if isinstance(rgg, dict) else {}
+    raw = params.get("skipped_groups") if isinstance(params, dict) else None
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    return [str(g) for g in list(raw)]
 
 
 def _no_markers(format: str, reason: str):
@@ -75,10 +91,12 @@ def _compute_markers(adata: ad.AnnData, column: str) -> dict:
     )
     if "log1p" in adata.uns:  # the base the fold changes undo, as for the pipeline's
         work.uns["log1p"] = adata.uns["log1p"]
+    groups, skipped = sparse_markers.testable_groups(labels)
     rank_genes.rank_genes_groups(work, column, method="wilcoxon", pts=True, use_raw=False,
-                                 specificity=True)
+                                 specificity=True, groups=groups)
     rgg = work.uns["rank_genes_groups"]
     rgg["params"]["use_raw"] = use_raw  # what the ranking actually read
+    note_skipped(rgg, skipped)
     return rgg
 
 
@@ -86,7 +104,7 @@ def _compute_markers_large(adaptor, column: str) -> dict:
     """``_compute_markers`` for a large dataset: the same Wilcoxon test from the gene
     store (``core/sparse_markers.py``, equal to scanpy's), its specificity columns from
     the group means computed on the way; the matrix stays on disk."""
-    from scview.core import large_mode, sparse_markers
+    from scview.core import large_mode
 
     store = adaptor.gene_store()
     if store is None:
@@ -101,10 +119,12 @@ def _compute_markers_large(adaptor, column: str) -> dict:
                       var=pd.DataFrame(index=adata.var_names))
     if "log1p" in adata.uns:
         work.uns["log1p"] = adata.uns["log1p"]
-    sparse_markers.rank_genes_groups(work, column, store, method="wilcoxon", pts=True,
+    groups, skipped = sparse_markers.testable_groups(labels)
+    sparse_markers.rank_genes_groups(work, column, store, method="wilcoxon", pts=True, groups=groups,
                                      use_raw=False, specificity=True, check_store=False)
     rgg = work.uns["rank_genes_groups"]
     rgg["params"]["use_raw"] = False
+    note_skipped(rgg, skipped)
     return rgg
 
 
@@ -257,7 +277,14 @@ async def get_markers(
         # Group by cluster/group to match frontend MarkersResponse shape
         groups = list(dict.fromkeys(r["group"] for r in records))
         markers_by_group = {g: [r for r in records if r["group"] == g] for g in groups}
-        return {"groups": groups, "markers": markers_by_group}
+        out = {"groups": groups, "markers": markers_by_group}
+        skipped = _skipped_groups(adaptor.adata, groupby_column)
+        if skipped:
+            out["skipped_groups"] = skipped
+            out["skipped_reason"] = SKIPPED_REASON
+        return out
 
     ipc_bytes = dataframe_to_arrow_ipc(df)
-    return Response(content=ipc_bytes, media_type=ARROW_CONTENT_TYPE)
+    skipped = _skipped_groups(adaptor.adata, groupby_column)
+    headers = {"X-Scview-Skipped-Groups": str(len(skipped))} if skipped else None
+    return Response(content=ipc_bytes, media_type=ARROW_CONTENT_TYPE, headers=headers)

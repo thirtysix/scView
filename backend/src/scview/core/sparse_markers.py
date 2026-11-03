@@ -231,6 +231,27 @@ def compute(store: GeneStore, labels: Any, **kwargs: Any) -> dict[str, Any]:
     return _compute(store, labels, **kwargs)[0]
 
 
+MIN_GROUP_CELLS = 2  # scanpy refuses a group of one cell (no variance)
+
+
+def testable_groups(labels: Any) -> tuple[Any, list[str]]:
+    """(the ``groups`` argument, the groups left out) for markers of every group of a
+    column vs the rest. scanpy refuses the whole column when one group has fewer than
+    2 cells; those groups are left out instead (their cells stay in every other
+    group's rest) and named. ``"all"`` when none is, so the call is scanpy's own."""
+    s = labels if isinstance(labels, pd.Series) else pd.Series(labels)
+    if not isinstance(s.dtype, pd.CategoricalDtype):
+        s = s.astype(str).astype("category")
+    sizes = s.value_counts(sort=False).reindex(s.cat.categories, fill_value=0)
+    small = [str(g) for g, n in sizes.items() if n < MIN_GROUP_CELLS]
+    if not small:
+        return "all", []
+    keep = [g for g, n in sizes.items() if n >= MIN_GROUP_CELLS]
+    if not keep:
+        raise ValueError("No group has at least 2 cells: no markers to compute.")
+    return keep, small
+
+
 def _select_groups(categories: pd.Index, groups: Any, reference: str) -> list[int]:
     """Positions in ``categories`` of the groups scanpy compares, in its order: every
     category, or ``groups`` as given with the reference appended when not among them."""

@@ -136,6 +136,34 @@ def _totals(M) -> np.ndarray:
     return np.asarray(M.sum(axis=1), dtype=np.float64).ravel()
 
 
+# A table, not violins side by side (qc_groups.MAX_GROUPS = 50): pilot sample columns
+# held 51 batches and 66 libraries.
+MAX_GROUPS = 1000
+
+ROW_BLOCK = 20_000  # cells per read of a matrix on disk
+
+
+def _in_memory(M) -> bool:
+    return sp.issparse(M) or isinstance(M, np.ndarray)
+
+
+def _scan(M, f_idx: list[int], m_idx: list[int], totals: bool, by_rows: bool):
+    """(F, Y, totals or None): the female and male genes' columns and the cells' totals.
+    ``by_rows``: ``M`` is on disk (a backed dataset's ``_CSRDataset``, h5py), read in
+    blocks of cells, as it is stored, instead of whole (it has no ``sum``)."""
+    if not by_rows:
+        return _columns(M, f_idx), _columns(M, m_idx), (_totals(M) if totals else None)
+    F, Y, T = [], [], []
+    for i0 in range(0, M.shape[0], ROW_BLOCK):
+        block = M[i0:min(i0 + ROW_BLOCK, M.shape[0])]
+        block = sp.csr_matrix(block) if sp.issparse(block) else np.asarray(block)
+        F.append(_columns(block, f_idx))
+        Y.append(_columns(block, m_idx))
+        if totals:
+            T.append(_totals(block))
+    return (np.vstack(F), np.vstack(Y), np.concatenate(T) if totals else None)
+
+
 def _share(x: float) -> str:
     return f"{x:.0%}" if x >= 0.1 or x == 0 else f"{x:.1%}"
 
@@ -410,7 +438,7 @@ def sex_check(adata, column: str | None = None) -> dict:
             raise KeyError(f"Column '{column}' not found in obs.")
         reason = "requested"
     else:
-        column, reason = qc_groups.sample_grouping(adata)
+        column, reason = qc_groups.sample_grouping(adata, max_groups=MAX_GROUPS)
     species = detect_species(adata)
     M, names, source, is_counts = _matrix(adata)
     f_list, m_list = _genes_for(species.species)
@@ -418,35 +446,50 @@ def sex_check(adata, column: str | None = None) -> dict:
 
     if column:
         group_names, codes = qc_groups.group_codes(obs[column])
-        if len(group_names) > qc_groups.MAX_GROUPS:
+        if len(group_names) > MAX_GROUPS:
             raise ValueError(f"'{column}' has {len(group_names)} groups; the sex check takes at "
-                             f"most {qc_groups.MAX_GROUPS}.")
+                             f"most {MAX_GROUPS}.")
     else:
         group_names, codes = ["All cells"], np.zeros(adata.n_obs, dtype=int)
     k = len(group_names)
 
-    F = _columns(M, [names.get_loc(g) for g in f_genes])
-    Y = _columns(M, [names.get_loc(g) for g in m_genes])
+    from scview.core import large_layout
+
+    # a large dataset's X reads genes from its gene-major copy; anything else on disk
+    # is stored by cell
+    by_rows = not _in_memory(M) and not large_layout.is_large(adata)
+    F, Y, totals = _scan(M, [names.get_loc(g) for g in f_genes],
+                         [names.get_loc(g) for g in m_genes], is_counts, by_rows)
     f_any = (F > 0).any(axis=1) if f_genes else np.zeros(adata.n_obs, bool)
     m_any = (Y > 0).any(axis=1) if m_genes else np.zeros(adata.n_obs, bool)
     f_sum, m_sum = F.sum(axis=1), Y.sum(axis=1)
-    totals = _totals(M) if is_counts else None
 
     meta_col = sex_metadata_column(obs)
     meta = _metadata_per_group(obs, meta_col, codes, k) if meta_col else None
 
+    # per group sums in one pass each (a loop of masks is k x n_cells)
+    ok = codes >= 0
+    c = codes[ok]
+
+    def per_group(values) -> np.ndarray:
+        return np.bincount(c, weights=np.asarray(values, dtype=np.float64)[ok], minlength=k)
+
+    sizes = np.bincount(c, minlength=k)
+    n_f, n_m, n_both = per_group(f_any), per_group(m_any), per_group(f_any & m_any)
+    tot_g = per_group(totals) if totals is not None else np.zeros(k)
+    f_g, m_g = per_group(f_sum), per_group(m_sum)
+
     rows: list[dict] = []
     for i, name in enumerate(group_names):
-        m = codes == i
-        n = int(m.sum())
+        n = int(sizes[i])
         row: dict = {"name": name, "n_cells": n}
-        row["frac_female"] = round(float(f_any[m].mean()), 4) if n and f_genes else None
-        row["frac_male"] = round(float(m_any[m].mean()), 4) if n and m_genes else None
-        row["frac_both"] = round(float((f_any & m_any)[m].mean()), 4) if n else 0.0
-        tot = float(totals[m].sum()) if totals is not None else 0.0
-        row["cpm_female"] = (round(float(f_sum[m].sum()) / tot * 1e6, 1)
+        row["frac_female"] = round(float(n_f[i] / n), 4) if n and f_genes else None
+        row["frac_male"] = round(float(n_m[i] / n), 4) if n and m_genes else None
+        row["frac_both"] = round(float(n_both[i] / n), 4) if n else 0.0
+        tot = float(tot_g[i])
+        row["cpm_female"] = (round(float(f_g[i]) / tot * 1e6, 1)
                              if tot > 0 and f_genes else None)
-        row["cpm_male"] = (round(float(m_sum[m].sum()) / tot * 1e6, 1)
+        row["cpm_male"] = (round(float(m_g[i]) / tot * 1e6, 1)
                            if tot > 0 and m_genes else None)
         row["call"], row["confidence"] = call_sex(n, row["frac_female"], row["frac_male"])
         row["evidence"] = (f"Only {n} cells: too few to call." if n < MIN_CELLS
