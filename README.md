@@ -62,6 +62,9 @@ reviewer can audit. scView closes both gaps:
   dataset is loaded. The co-pilot also **drives the UI** ("color by cell type", "run clustering at
   resolution 1.0") via confirm-gated, allow-listed actions, **answers "what is this?"** from a ✦ on any
   cluster, gene, marker, or pathway, and can **write a methods paragraph** from the provenance recipe.
+- **Drive it from your own AI agent (MCP).** Claude Code or any MCP client connects to `/mcp` and gets
+  31 tools over the same code the UI runs: import, processing, donor-aware statistics, enrichment and
+  plots ([how](#use-scview-from-your-ai-agent-mcp)).
 - **AI-assisted assessment.** A deterministic assessor reports the state of ~15 preprocessing
   steps; an LLM advisor recommends the next steps with reasons and sized parameters; *you* always
   approve before anything runs. A one-line "I notice…" insight on open points you at the right next step.
@@ -106,7 +109,8 @@ reviewer can audit. scView closes both gaps:
 - **Donor-aware statistics.** Between-groups DE can run as **pseudobulk** (each donor's counts
   summed and tested with DESeq2, paired when every donor is in both groups), and the cell-level
   test reports how many donors stand behind each side, so a condition effect isn't confused with
-  one donor.
+  one donor. Per-donor plots test patients against controls on donor values, and DE warns when the
+  two sides differ in sex.
 - **Figures and data out.** Every chart downloads as a high-resolution PNG or an SVG, the embedding
   as a PNG with its legend, and the dataset as its processed `.h5ad`, cell metadata or marker tables.
 - **Joint embedding across datasets.** Pick two or more datasets and scView merges their raw counts
