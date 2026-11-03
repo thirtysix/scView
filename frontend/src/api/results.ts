@@ -100,6 +100,7 @@ const KIND_LABELS: Record<string, string> = {
   de: "DE",
   markers: "Markers",
   enrichment: "Enrichment",
+  gsea: "GSEA",
   ccc: "Ligand-receptor",
   ccc_compare: "L-R change",
   composition: "Composition",

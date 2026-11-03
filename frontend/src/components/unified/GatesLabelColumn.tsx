@@ -8,7 +8,8 @@ import { columnNameError, UNASSIGNED } from "@/lib/labels";
 import { useLabelUndoStore } from "@/stores/labelUndoStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
-/** The backend's cap on labels in one column (core/user_labels.py MAX_LABELS), Unassigned included. */
+/** Labels in one column the UI keeps to, Unassigned included: its pickers hide columns with more
+ * than 100 values (the backend, core/user_labels.py MAX_LABELS, allows 2,000). */
 const MAX_LABELS = 100;
 
 /** Previous values of several labellings of disjoint cells, one group per value. */
