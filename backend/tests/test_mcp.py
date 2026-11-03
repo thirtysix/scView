@@ -279,6 +279,9 @@ async def test_compare_de_results(client, dataset_manager):
              "within_column": "cluster", "within_value": "A", "replicate_key": "donor_id"}
     cell = await _call("differential_expression", scope)
     pb = await _call("differential_expression", {**scope, "method": "pseudobulk"})
+    # A cell-level test across donors says its p values are optimistic; pseudobulk does not.
+    assert any(w.startswith("cell-level test across donors") for w in cell["warnings"])
+    assert not any(w.startswith("cell-level test") for w in pb["warnings"])
     r = await _call("compare_de_results", {"dataset_id": did, "result_a": cell["result_id"],
                                            "result_b": pb["result_id"], "limit": 5})
     assert r["a"]["method"] == "wilcoxon" and r["b"]["method"] == "pseudobulk"

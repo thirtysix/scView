@@ -694,6 +694,13 @@ async def differential_expression(
         "down": [[num(g.get(c)) for c in cols] for g in down[:n]],
         "warnings": _de_warnings(r),
     }
+    if (out["method"] != "pseudobulk" and not r.get("underreplicated")
+            and (r.get("n_donors_a") or 0) >= 2 and (r.get("n_donors_b") or 0) >= 2):
+        # The UI's caption says the same: a cell-level test treats cells as independent.
+        out["warnings"].append(
+            f"cell-level test across donors ({r.get('n_donors_a')} vs {r.get('n_donors_b')}): cells are "
+            "treated as independent, so p values are optimistic when the sides also differ by donor; "
+            "confirm with method='pseudobulk' or per_donor_expression")
     if any(g.get("pval") == 0 for g in up[:n] + down[:n]):
         out["note"] = P0_NOTE
     comp = r.get("composition") or {}

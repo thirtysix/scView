@@ -242,7 +242,7 @@ export function DonorBoxPlot({
                 n ({conditions[0]} vs {conditions[1]})
               </th>
               <th className="pr-3 text-right font-medium" title={unitHelp ? `${TEST_HELP.diff} ${unitHelp}` : TEST_HELP.diff}>
-                Difference
+                Difference ({conditions[1]} − {conditions[0]})
               </th>
               <th className="pr-3 text-right font-medium">
                 <span className="inline-flex items-center gap-1">

@@ -122,6 +122,7 @@ describe("DonorBoxPlot", () => {
     );
     const table = screen.getByTestId("unpaired-tests").textContent!;
     expect(table).toContain("n (normal vs COVID-19)");
+    expect(table).toContain("Difference (COVID-19 − normal)");
     expect(table).toContain("3 vs 4");
     expect(table).toContain("+5.50 log2 CPM");
     expect(table).toContain("0.0571*");
