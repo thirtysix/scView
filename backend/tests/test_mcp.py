@@ -159,9 +159,10 @@ async def test_data_tools(client, dataset_manager):
     assert [d["id"] for d in r["datasets"]] == [did]
     r = await _call("get_dataset", {"dataset_id": did})
     assert r["n_cells"] == 480 and r["n_genes"] == 40 and "X_umap" in r["available_embeddings"]
-    cols = {c["name"]: c for c in r["obs_columns"]}
-    assert cols["stim"]["values"] == ["CTRL", "STIM"] and r["large_mode"] is False
-    assert cols["is_primary_data"]["values"] == ["True"]  # only the value present
+    assert r["obs_columns"]["columns"] == ["name", "dtype", "n_unique"]
+    assert ["stim", "category", 2] in r["obs_columns"]["rows"] and r["obs_columns"]["n_total"] == 6
+    assert r["column_values"]["stim"] == ["CTRL", "STIM"] and r["large_mode"] is False
+    assert r["column_values"]["is_primary_data"] == ["True"]  # only the value present
     r = await _call("describe_column", {"dataset_id": did, "column": "donor_id"})
     assert r["kind"] == "categories" and r["counts"][0][1] == 120
     r = await _call("describe_column", {"dataset_id": did, "column": "day"})
@@ -190,6 +191,33 @@ async def test_data_tools(client, dataset_manager):
     assert "Closest: cluster" in text
     text = await _call("get_dataset", {"dataset_id": "missing"}, error=True)
     assert "not found" in text.lower()
+
+
+async def test_get_dataset_names_every_column(client, dataset_manager):
+    """Yang 2021: 45 obs columns, 22 shown and no paging (the author labels were hidden).
+    Every name and type comes back; the small columns' values while they fit."""
+    did = _register(dataset_manager, "manycols")
+    a = _adata().copy()
+    rng = np.random.default_rng(1)
+    for i in range(60):
+        words = [f"{'ontology_term_' * 3}{i}_{k}" for k in range(25)]
+        a.obs[f"meta_{i:02d}"] = pd.Categorical(rng.choice(words, a.n_obs))
+    a.obs["cellID2"] = pd.Categorical(np.where(a.obs["cluster"] == "A", "Microglia", "Astro"))
+    a.write_h5ad(Path(dataset_manager.data_dir) / "uploads" / did / "data.h5ad")
+    async with Client(SERVER) as c:
+        r = await c.call_tool("get_dataset", {"dataset_id": did})
+    text = r.content[0].text
+    d = json.loads(text)
+    names = [row[0] for row in d["obs_columns"]["rows"]]
+    assert len(names) == d["obs_columns"]["n_total"] == 67 and "cellID2" in names and "meta_59" in names
+    assert "truncated" not in d and len(text) < 2 * compact.MAX_CHARS
+    assert d["column_values"]["cellID2"] == ["Astro", "Microglia"]  # small ones first
+    assert "describe_column" in d["column_values_left_out"]
+
+
+def test_steps_done_writes_repeats_once():
+    assert tools._runs(["qc_metrics", "label_cells", "label_cells", "label_cells", "pca", "label_cells"]) == [
+        "qc_metrics", "label_cells x3", "pca", "label_cells"]
 
 
 async def test_describe_column_per_group(client, dataset_manager):

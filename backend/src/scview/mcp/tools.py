@@ -119,20 +119,20 @@ async def list_datasets() -> str:
 
 @tool(READ)
 async def get_dataset(dataset_id: DatasetId) -> str:
-    """One dataset: cells, genes, processing steps done, embeddings, obs columns (type and
-    number of values; the values when 30 or fewer), expression layers, active clustering,
-    large-dataset mode, and other modalities present."""
+    """One dataset: cells, genes, processing steps done, embeddings, every obs column (name,
+    type and number of values, always all of them), the values of the small categorical
+    columns (30 or fewer values, as many as fit; describe_column gives the rest), expression
+    layers, active clustering, large-dataset mode, and other modalities present."""
     d = await _get(_ds(dataset_id))
-    cols = []
+    cols, values = [], {}
     for c in d.get("obs_columns") or []:
-        entry = {"name": c["name"], "dtype": c.get("dtype"), "n_unique": c.get("n_unique")}
+        cols.append([c["name"], c.get("dtype"), c.get("n_unique")])
         if c.get("values") is not None and (c.get("n_unique") or 99) <= 30:
-            entry["values"] = c["values"]
+            values[c["name"]] = c["values"]
         if c.get("dtype") == "bool" and (c.get("n_unique") or 0) < 2:
             # The route lists both for a bool column (its colour slots): name the one present.
             vals = (await _get(f"{_ds(dataset_id)}/metadata/{c['name']}", format="json"))["values"]
-            entry["values"] = sorted({str(v) for v in vals if v is not None})
-        cols.append(entry)
+            values[c["name"]] = sorted({str(v) for v in vals if v is not None})
     out = pick(d, "id", "name", "status", "n_cells", "n_genes", "error_message", "active_clustering",
                "user_annotation_columns", "app_annotation_columns", "available_embeddings",
                "default_expression_layer")
@@ -145,11 +145,39 @@ async def get_dataset(dataset_id: DatasetId) -> str:
     if d.get("status") == "ready":
         try:
             recipe = await api.get(f"{_ds(dataset_id)}/recipe")
-            out["steps_done"] = [s.get("step") for s in recipe.get("recipe") or []]
+            out["steps_done"] = _runs([s.get("step") for s in recipe.get("recipe") or []])
         except api.RouteError:
             pass
-    out["obs_columns"] = cols
-    return dumps(out)
+    # Every column's name and type, never cut (Yang 2021: 22 of 45 shown, the author labels
+    # among the hidden); the small columns' values while they fit, fewest values first.
+    out["obs_columns"] = {"columns": ["name", "dtype", "n_unique"], "rows": cols, "n_total": len(cols)}
+    budget = compact.MAX_CHARS - len(dumps(out, 10**9))
+    kept, left = {}, []
+    for name, vals in sorted(values.items(), key=lambda kv: len(json.dumps(kv[1], default=str))):
+        size = len(json.dumps({name: vals}, default=str))
+        if size <= budget:
+            kept[name] = vals
+            budget -= size
+        else:
+            left.append(name)
+    out["column_values"] = {name: kept[name] for name in values if name in kept}
+    if left:
+        out["column_values_left_out"] = f"{', '.join(left)}: describe_column lists them"
+    return dumps(out, 10**9)
+
+
+def _runs(steps: list[Any]) -> list[str]:
+    """Steps in order, a step repeated back to back written once with its count
+    ('label_cells x13')."""
+    out: list[str] = []
+    for s in steps:
+        name = str(s)
+        if out and out[-1].split(" x")[0] == name:
+            n = out[-1].partition(" x")[2]
+            out[-1] = f"{name} x{int(n or 1) + 1}"
+        else:
+            out.append(name)
+    return out
 
 
 async def _column_error(dataset_id: str, name: str) -> ToolError:
