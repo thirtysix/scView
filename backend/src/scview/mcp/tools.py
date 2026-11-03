@@ -379,6 +379,27 @@ def _check_steps(steps: list[str]) -> None:
 
 
 @tool(READ)
+async def sex_check(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(description="The samples / donors (default: detected).")] = "",
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """Each sample's sex from its expression (XIST vs Y-chromosome genes): female / male /
+    mixed / ambiguous / undetermined with the evidence, against any sex metadata column, and the
+    warnings: mismatches (possible swaps), mixed samples, and sex confounded with a condition
+    (then XIST and Y genes top any comparison between them)."""
+    d = await _get(f"{_ds(dataset_id)}/qc/sex", column=column)
+    out = {"dataset_id": dataset_id,
+           **pick(d, "column", "reason", "species", "metadata_column", "female_genes", "male_genes",
+                  "source", "summary", "warnings", "notes"),
+           "samples": table(d.get("groups") or [], ["name", "n_cells", "call", "confidence", "metadata",
+                                                    "mismatch", "frac_female", "frac_male", "evidence"],
+                            clamp(limit)),
+           "confounding": [pick(c, "condition", "kind", "levels") for c in d.get("confounding") or []]}
+    return dumps(out, _max_chars(limit))
+
+
+@tool(READ)
 async def preflight(dataset_id: DatasetId, steps: Steps, params: Annotated[dict[str, Any] | None, Field(
         description="The run's parameters, as run_pipeline takes them (its schema lists them).")] = None) -> str:
     """Before a run: its peak memory and rough time per step and in all, against the memory

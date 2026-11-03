@@ -74,7 +74,8 @@ def _adata() -> ad.AnnData:
                         rate[10:20] = 12
                     rows.append(rng.poisson(rate))
                     obs.append({"donor_id": f"D{d}", "stim": cond, "cluster": typ,
-                                "day": 9 if cond == "CTRL" else 11, "is_primary_data": True})
+                                "day": 9 if cond == "CTRL" else 11, "is_primary_data": True,
+                                "sex": "female" if d < 2 else "male"})
     counts = np.asarray(rows, dtype=np.float32)
     obs = pd.DataFrame(obs, index=[f"c{i}" for i in range(len(rows))])
     for c in ("donor_id", "stim", "cluster"):
@@ -169,6 +170,10 @@ async def test_data_tools(client, dataset_manager):
     assert r["dataset_id"] == did and "D0" in json.dumps(r)
     r = await _call("memory_status", {})
     assert "limit_gb" in r and "available_bytes" in r
+    r = await _call("sex_check", {"dataset_id": did, "column": "donor_id"})
+    assert r["column"] == "donor_id" and r["metadata_column"] == "sex"
+    assert r["samples"]["rows"][0][0] == "D0" and "metadata" in r["samples"]["columns"]
+    assert any("sex marker genes" in n for n in r["notes"])  # no XIST / Y genes in this data
     r = await _call("assess_dataset", {"dataset_id": did})
     assert "pca" in r["done"] and "species" in r
     r = await _call("qc_filter_preview", {"dataset_id": did, "mode": "fixed", "min_genes": 30})

@@ -494,7 +494,7 @@ bridge (needs Node.js). In `claude_desktop_config.json` (not tested by us; add
 ```
 The tools: `list_datasets`, `get_dataset`, `describe_column`, `crosstab`, `memory_status`,
 `search_public_datasets` and `import_public_dataset` (CELLxGENE Discover), `assess_dataset`,
-`qc_filter_preview`, `preflight`, `run_pipeline`, `get_recipe`, `get_replay_script`, `get_markers`,
+`qc_filter_preview`, `sex_check`, `preflight`, `run_pipeline`, `get_recipe`, `get_replay_script`, `get_markers`,
 `annotate_celltypist`, `set_labels` (label the cells a filter selects), `subcluster`,
 `differential_expression` (cell-level or donor-aware pseudobulk), `compare_de_results`,
 `per_donor_expression`,
