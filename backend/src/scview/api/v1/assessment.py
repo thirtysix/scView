@@ -189,7 +189,9 @@ async def get_sex_check(
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
     try:
         # Reads a few gene columns and every cell's total counts: off the loop.
-        return await asyncio.to_thread(sex_check.sex_check, adaptor.adata, column or None)
+        result = await asyncio.to_thread(sex_check.sex_check, adaptor.adata, column or None)
+        sex_check.remember(dataset_id, result)  # for a later DE between groups' sex warning
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

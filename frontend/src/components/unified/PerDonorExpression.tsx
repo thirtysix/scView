@@ -178,6 +178,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
           height={height}
           design={result.design}
           pairedTests={result.paired_tests}
+          unpairedTests={result.unpaired_tests}
           unit={method === "mean" ? "log-norm units" : "log2 CPM"}
           unitHelp={`Value: ${result.value_label}.`}
           note={

@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     # Import public datasets from CELLxGENE Discover (core/public_import.py). Unset:
     # on in private mode, off in public mode (the server would download for anyone).
     PUBLIC_IMPORT_ENABLED: bool | None = None
+    # The MCP server at /mcp (scview/mcp/): an AI agent's tools over these routes. Unset:
+    # on in private mode, off in public mode (an agent can run anything the UI can).
+    MCP_ENABLED: bool | None = None
+    # Browser origins allowed to call /mcp besides localhost / 127.0.0.1 / [::1] on any
+    # port (comma-separated, e.g. "http://192.168.1.5:8080"); their hosts are allowed too.
+    MCP_ALLOWED_ORIGINS: str = ""
 
     # --- Deployment posture --------------------------------------------------
     # "private" (default): assume a single trusted user on localhost — the only
@@ -95,6 +101,16 @@ class Settings(BaseSettings):
         if self.PUBLIC_IMPORT_ENABLED is not None:
             return self.PUBLIC_IMPORT_ENABLED
         return not self.is_public
+
+    @property
+    def mcp_enabled(self) -> bool:
+        if self.MCP_ENABLED is not None:
+            return self.MCP_ENABLED
+        return not self.is_public
+
+    @property
+    def mcp_allowed_origins(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.MCP_ALLOWED_ORIGINS.split(",") if o.strip()]
 
     @property
     def is_public(self) -> bool:

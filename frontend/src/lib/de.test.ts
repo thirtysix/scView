@@ -96,6 +96,17 @@ describe("DE co-pilot questions", () => {
     );
   });
 
+  it("passes a sex difference between the sides on to the co-pilot", () => {
+    const r: DEResponse = {
+      n_selected: 40, n_rest: 60, label: "A", genes,
+      sex: { kind: "imbalanced", message: "Sex differs between the sides (A: 0 female, 4 male; B: 2 female, 2 male).",
+             sample_key: "donor", source: "metadata column 'sex'", a: { female: 0, male: 4 }, b: { female: 2, male: 2 } },
+    };
+    expect(describeComparison({ a: "A", b: "B", betweenGroups: true }, r)).toContain(
+      ". Caution: Sex differs between the sides (A: 0 female, 4 male; B: 2 female, 2 male)",
+    );
+  });
+
   it("says which genes a prefiltered result tested", () => {
     const r: DEResponse = { n_selected: 40, n_rest: 60, label: "A", genes, min_pct: 0.1, n_genes_tested: 8123 };
     expect(describeComparison({ a: "B cells", b: "rest", betweenGroups: false }, r)).toBe(

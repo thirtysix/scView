@@ -183,6 +183,7 @@ def per_donor_expression(
         "min_cells": MIN_CELLS, "groups": [], "conditions": [], "points": [],
         "n_donors": {}, "n_dropped": 0, "warnings": [], "message": None,
         "design": {"paired": False, "n_pairs": 0, "conditions": []}, "paired_tests": {},
+        "unpaired_tests": {},
     }
     if sample_key is None:
         out["message"] = (
@@ -245,6 +246,8 @@ def per_donor_expression(
         out["design"] = paired_design.detect_design(set(zip(d, c)), conditions)
         if out["design"]["paired"] and len(conditions) == 2:
             out["paired_tests"] = paired_design.group_paired_tests(points, conditions, groups)
+        elif len(conditions) == 2:  # different donors in each: rank-sum + Welch on donor values
+            out["unpaired_tests"] = paired_design.group_unpaired_tests(points, conditions, groups)
     few = {k: n for k, n in out["n_donors"].items() if n < FEW_DONORS}
     if few:
         where = ", ".join(f"{k or 'all cells'}: {n}" for k, n in few.items())

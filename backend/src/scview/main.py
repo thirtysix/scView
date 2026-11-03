@@ -19,6 +19,7 @@ from scview.core.dataset_manager import DatasetBusyError, DatasetMemoryError
 from scview.core.large_mode import LargeDatasetError
 from scview.core.guards import require_access
 from scview.api.router import api_router
+from scview.mcp import server as mcp_server
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,9 @@ async def lifespan(app: FastAPI):
 
     if mark_running():
         logger.warning("The previous backend stopped without shutting down (killed, most often for memory).")
-    yield
+    # The MCP server's session manager (/mcp, scview/mcp/server.py) lives as long as the app.
+    async with mcp_server.lifespan():
+        yield
     mark_stopped()
 
 
@@ -114,6 +117,8 @@ app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.MAX_JSON_BODY_KB 
 # Routers — every /api route passes the (optional) shared-secret access gate.
 # ---------------------------------------------------------------------------
 app.include_router(api_router, dependencies=[Depends(require_access)])
+# The MCP server for AI agents: guarded in its endpoint (MCP_ENABLED, ACCESS_TOKEN, Origin).
+app.router.routes.extend(mcp_server.routes())
 
 
 @app.exception_handler(DatasetBusyError)

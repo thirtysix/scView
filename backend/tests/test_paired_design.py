@@ -68,3 +68,29 @@ def test_group_tests_use_only_the_donors_in_both_conditions():
     assert tests["A"]["n_pairs"] == 8
     assert tests["A"]["wilcoxon_p"] == pytest.approx(10 / 256)
     assert tests["B"]["n_pairs"] == 0 and tests["B"]["wilcoxon_p"] is None
+
+
+def test_unpaired_test_matches_scipy_and_names_the_exact_floor():
+    patients = [0.05, 0.08, 0.10, 0.11, 0.13, 0.15, 0.24]
+    controls = [0.20, 0.30, 0.35, 0.40, 0.45, 0.50]
+    r = pdn.unpaired_test(controls, patients)
+    assert r["n_a"] == 6 and r["n_b"] == 7 and r["method"] == "exact"
+    assert r["mannwhitney_p"] == pytest.approx(stats.mannwhitneyu(patients, controls, method="exact").pvalue)
+    assert r["welch_p"] == pytest.approx(stats.ttest_ind(patients, controls, equal_var=False).pvalue)
+    assert r["mean_diff"] == pytest.approx(np.mean(patients) - np.mean(controls))
+    assert r["min_p"] == pytest.approx(2 / 1716) and r["caution"] is None  # 0.24 sits among controls
+    apart = pdn.unpaired_test(controls, [v - 0.2 for v in patients])
+    assert apart["mannwhitney_p"] == pytest.approx(2 / 1716)
+    assert "smallest two-sided p" in apart["caution"] and "C(13, 6)" in apart["caution"]
+    tied = pdn.unpaired_test([1.0, 1.0, 2.0], [3.0, 3.0, 4.0])
+    assert tied["method"].startswith("normal approximation") and tied["mannwhitney_p"] is not None
+    few = pdn.unpaired_test([1.0, 2.0], [3.0, 4.0, 5.0])
+    assert few["mannwhitney_p"] is None and "at least 3" in few["caution"]
+
+
+def test_group_unpaired_tests_per_group():
+    pts = [{"group": g, "condition": c, "sample": f"{c}{i}", "value": float(i + (5 if c == "B" else 0))}
+           for g in ("x", "y") for c in ("A", "B") for i in range(4)]
+    out = pdn.group_unpaired_tests(pts, ["A", "B"], ["x", "y"])
+    assert set(out) == {"x", "y"} and out["x"]["n_a"] == out["x"]["n_b"] == 4
+    assert out["x"]["mean_diff"] == pytest.approx(5.0) and out["x"]["mannwhitney_p"] == pytest.approx(2 / 70)

@@ -106,4 +106,27 @@ describe("DonorBoxPlot", () => {
     expect(caption).toContain("there is no test");
     expect(screen.queryByTestId("paired-tests")).toBeNull();
   });
+
+  it("lists the unpaired donor-level tests under the boxes when the donors differ", () => {
+    const pts = [
+      ...["c1", "c2", "c3"].map((d, i) => pt("B", "normal", d, i)),
+      ...["p1", "p2", "p3", "p4"].map((d, i) => pt("B", "COVID-19", d, i + 5)),
+    ];
+    const unpaired = {
+      B: { n_a: 3, n_b: 4, mean_diff: 5.5, mannwhitney_p: 2 / 35, welch_p: 0.0002, method: "exact",
+           min_p: 2 / 35, caution: "3 vs 4 donors: p = 0.057 is the smallest two-sided p" },
+    };
+    render(
+      <DonorBoxPlot {...base} groups={["B"]} conditions={["normal", "COVID-19"]} points={pts}
+        design={{ paired: false, n_pairs: 0, conditions: ["normal", "COVID-19"] }} unpairedTests={unpaired} />,
+    );
+    const table = screen.getByTestId("unpaired-tests").textContent!;
+    expect(table).toContain("n (normal vs COVID-19)");
+    expect(table).toContain("Difference (COVID-19 − normal)");
+    expect(table).toContain("3 vs 4");
+    expect(table).toContain("+5.50 log2 CPM");
+    expect(table).toContain("0.0571*");
+    expect(screen.getByTestId("unpaired-caption").textContent).toContain("COVID-19 minus normal");
+    expect(screen.queryByTestId("paired-tests")).toBeNull();
+  });
 });

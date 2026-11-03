@@ -6,6 +6,34 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-11-03
+
+### Added
+- **MCP server for AI agents** at `/mcp` on the backend: `claude mcp add --transport http scview
+  http://127.0.0.1:8080/mcp` (also `http://127.0.0.1:3000/mcp` through the frontend). 31 tools call the same routes
+  as the UI, so validation, edit locks, memory checks and provenance are the UI's: find and import a CELLxGENE
+  dataset, assess, preflight and run the pipeline, markers, CellTypist, labels from a cell filter (an agent cannot
+  lasso), DE cell-level or pseudobulk, compare two DE results, per-donor expression, composition, Milo, enrichment,
+  gene-set scores, a sex check, stored results, and PNG plots (embedding, violin, dot plot, optionally within one
+  cell type). Long runs are jobs (`job_status`, `cancel_job`). Results are compact (top rows plus totals; each was
+  under 8,000 characters on Kang), unknown arguments and pipeline parameters are refused with a hint, and nothing
+  deletes. On by default, off in public mode (`MCP_ENABLED`); `ACCESS_TOKEN` applies; requests from other web
+  origins or host names are refused (`MCP_ALLOWED_ORIGINS` to allow one). Tested end to end with the MCP SDK client
+  and with a headless Claude Code run answering a question about the Wilk et al. 2020 COVID-19 PBMC data in 9 tool
+  turns. Claude Desktop reaches it through `mcp-remote` (in the README, not tested by us).
+- **Patients against controls, per donor:** per-donor expression now tests two unpaired conditions on the donor
+  values (exact rank-sum and Welch t, at least 3 donors a side), shown in a table under the boxes with the
+  difference's direction. With 7 against 6 donors the smallest possible rank-sum p is 0.0012 (2 / C(13, 7)); the
+  result says so when a p sits at that floor.
+- **Sex warning in DE between groups** (cell-level and pseudobulk): when the two sides' samples differ in sex make-up
+  (from the metadata sex column, or a sex check already run), a red note says XIST, TSIX and Y genes will show up for
+  that reason. On Wilk 2020 (every patient male, 2 of 6 controls female) cell-level DE put XIST at padj 4e-20 in
+  CD14 monocytes with no warning before.
+
+### Changed
+- The composition warning for groups found almost only in one condition is worded for cell-type labels when the
+  column is not a clustering: a real expansion or loss is possible, or a label called differently per condition.
+
 ## [0.56.0] - 2026-11-02
 
 ### Added

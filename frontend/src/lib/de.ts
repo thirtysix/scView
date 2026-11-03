@@ -105,6 +105,8 @@ export function describeComparison(c: DEComparison, r: DEResponse): string {
   let text = describeTest(c, r);
   // The co-pilot must not read a batch difference as biology...
   if (r.confounding) text += `. Caution: ${r.confounding.message}`;
+  // ... nor sex-linked genes as the condition's.
+  if (r.sex) text += `. Caution: ${r.sex.message.replace(/\.$/, "")}`;
   // ... nor a shift in which cells each side holds as a change within cells.
   const mix = compositionCautionForCopilot(r.composition);
   if (mix) text += `. Caution (composition by ${r.composition!.column}): ${mix.replace(/\.$/, "")}`;

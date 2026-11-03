@@ -140,6 +140,16 @@ class CompositionResult:
 # ---------------------------------------------------------------------------
 
 
+_CLUSTERING_RE = re.compile(r"leiden|louvain|seurat_clusters", re.I)
+
+
+def is_clustering_column(adata, column: str) -> bool:
+    """A clustering (leiden / louvain / seurat_clusters, a sub-clustering ``*_sub``, or the
+    clustering a scView run made active) rather than cell-type labels."""
+    return bool(_CLUSTERING_RE.search(column) or column.endswith("_sub")
+                or adata.uns.get("scview_active_clustering") == column)
+
+
 def transform_props(counts: np.ndarray, kind: Transform = "logit") -> np.ndarray:
     """Per-sample shares (rows = samples, columns = groups) on the test's scale,
     as propeller's getTransformedProps computes them."""
@@ -422,6 +432,7 @@ def composition_test(
     paired: bool | None = None,
     batch_key: str | None = None,
     robust: bool = True,
+    group_is_clustering: bool = True,
 ) -> CompositionResult:
     """Test each group of ``group_key`` for a different share of the cells
     between the conditions of ``condition_key``, with the samples of
@@ -530,11 +541,14 @@ def composition_test(
     only = _one_condition_groups(cell_counts, groups)
     if only:
         shown = ", ".join(only[:5]) + (f" and {len(only) - 5} more" if len(only) > 5 else "")
-        result.warnings.append(
-            f"{len(only)} of {len(groups)} groups are almost only in one condition (95%+ of their "
-            f"cells, adjusted for condition size): {shown}. Clusters built where the conditions "
-            "separate (a stimulation response, an uncorrected batch) mark a change of state, not "
-            "of abundance; compare cell types, or clusters from a batch-corrected embedding.")
+        lead = (f"{len(only)} of {len(groups)} groups are almost only in one condition (95%+ of "
+                f"their cells, adjusted for condition size): {shown}.")
+        result.warnings.append(lead + (
+            " Clusters built where the conditions separate (a stimulation response, an uncorrected "
+            "batch) mark a change of state, not of abundance; compare cell types, or clusters from a "
+            "batch-corrected embedding." if group_is_clustering else
+            " A real expansion or loss is possible, but so is a label that was called differently in "
+            "each condition; check their markers per condition."))
 
     if sample is None:
         result.warnings.append(

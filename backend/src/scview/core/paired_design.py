@@ -15,6 +15,13 @@ leans entirely on their normality.
 Used by core/donor_expression.py (a gene per donor) and core/composition.py
 (a group's share per donor). With more than two conditions the design is still
 paired (longitudinal: the lines are drawn) but no test is made here.
+
+Different donors in the two conditions (unpaired: patients vs controls) are
+compared by ``unpaired_test``: a Wilcoxon rank-sum (Mann-Whitney U, exact when
+no two values tie) and a Welch t on the per-donor values, the test Wilk et al.
+(2020) used on donor means. With so few donors the exact rank-sum has a floor:
+7 vs 6 donors cannot go below p = 2 / C(13, 6) = 0.0012 two-sided, whatever
+the separation; the result says so when the p is that floor.
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ from scipy import stats
 
 MIN_PAIRS = 5  # fewer: the p-values are descriptive
 MIN_PAIRS_TEST = 2  # fewer: no test at all
+MIN_DONORS_UNPAIRED = 3  # per condition, for the rank-sum and Welch tests
 
 
 def detect_design(samples: Iterable[tuple[str, str]], conditions: Sequence[str]) -> dict:
@@ -91,6 +99,60 @@ def group_paired_tests(points: Iterable[dict], conditions: Sequence[str],
         out[g] = paired_test([by_group[g][d][first] for d in donors],
                              [by_group[g][d][second] for d in donors])
     return out
+
+
+def unpaired_test(first: Sequence[float], second: Sequence[float]) -> dict:
+    """Second against first, each donor once: ``n_a``, ``n_b``, ``mean_diff`` (second's
+    mean minus first's), ``mannwhitney_p`` (two-sided rank-sum, exact without ties, else
+    the normal approximation: ``method`` says which), ``welch_p``, ``min_p`` (the
+    smallest p the exact rank-sum can give at these sizes) and a ``caution`` when a side
+    has under MIN_DONORS_UNPAIRED donors (no test) or the p is at that floor."""
+    a = np.asarray(first, dtype=np.float64)
+    b = np.asarray(second, dtype=np.float64)
+    na, nb = int(a.size), int(b.size)
+    out: dict = {"n_a": na, "n_b": nb,
+                 "mean_diff": _finite(b.mean() - a.mean()) if na and nb else None,
+                 "mannwhitney_p": None, "welch_p": None, "method": None,
+                 "min_p": _min_ranksum_p(na, nb) if na and nb else None, "caution": None}
+    if min(na, nb) < MIN_DONORS_UNPAIRED:
+        out["caution"] = (f"{na} vs {nb} donors: a donor-level test needs at least "
+                          f"{MIN_DONORS_UNPAIRED} in each condition.")
+        return out
+    both = np.concatenate([a, b])
+    if np.ptp(both) == 0:
+        out["caution"] = "Every donor has the same value: no test."
+        return out
+    exact = np.unique(both).size == both.size
+    out["method"] = "exact" if exact else "normal approximation (tied values)"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out["mannwhitney_p"] = _finite(stats.mannwhitneyu(
+            b, a, alternative="two-sided", method="exact" if exact else "asymptotic").pvalue)
+        out["welch_p"] = _finite(stats.ttest_ind(b, a, equal_var=False).pvalue)
+    p = out["mannwhitney_p"]
+    if exact and p is not None and p <= out["min_p"] * (1 + 1e-9):
+        out["caution"] = (
+            f"{na} vs {nb} donors: p = {p:.2g} is the smallest two-sided p an exact rank-sum test "
+            f"can give at these sizes (2 / C({na + nb}, {na})): every donor of one condition is "
+            "beyond every donor of the other, and more donors would be needed for a smaller p.")
+    return out
+
+
+def group_unpaired_tests(points: Iterable[dict], conditions: Sequence[str],
+                         groups: Sequence[str]) -> dict[str, dict]:
+    """``unpaired_test`` per group over its donors' values in the two ``conditions``
+    (points: dicts with group, condition, sample, value)."""
+    first, second = conditions[0], conditions[1]
+    vals: dict[str, dict[str, list[float]]] = {g: {first: [], second: []} for g in groups}
+    for p in points:
+        if p["condition"] in (first, second) and p["group"] in vals:
+            vals[p["group"]][p["condition"]].append(float(p["value"]))
+    return {g: unpaired_test(vals[g][first], vals[g][second]) for g in groups}
+
+
+def _min_ranksum_p(na: int, nb: int) -> float:
+    """The smallest two-sided p an exact rank-sum test can give with na and nb values."""
+    return min(1.0, 2.0 / math.comb(na + nb, na))
 
 
 def _min_wilcoxon_p(n: int) -> float:
