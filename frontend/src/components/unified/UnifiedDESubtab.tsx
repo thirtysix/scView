@@ -160,7 +160,12 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const covariateCols = useMemo(
     () =>
       (dataset?.obs_columns ?? []).filter(
-        (c) => c.values && c.n_unique >= 2 && c.n_unique <= 20 && ![splitBy, withinCol, replicateKey].includes(c.name),
+        (c) =>
+          c.values &&
+          c.n_unique >= 2 &&
+          c.n_unique <= 20 &&
+          !c.name.endsWith("_ontology_term_id") && // CELLxGENE's ids repeat the named column
+          ![splitBy, withinCol, replicateKey].includes(c.name),
       ),
     [dataset, splitBy, withinCol, replicateKey],
   );
