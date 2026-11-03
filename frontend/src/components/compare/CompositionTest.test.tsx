@@ -126,6 +126,34 @@ describe("CompositionTest", () => {
     );
   });
 
+  it("tests within a subset and leaves samples out", async () => {
+    const info = {
+      ...KANG_INFO,
+      obs_columns: [
+        ...KANG_INFO.obs_columns.filter((c) => c.name !== "Donor"),
+        { name: "Donor", dtype: "category", n_unique: 3, values: ["SNG-101", "SNG-107", "SNG-1015"] },
+        { name: "lineage", dtype: "category", n_unique: 2, values: ["Lymphoid", "Myeloid"] },
+      ],
+    };
+    render(<CompositionTest datasetId="kang" info={info} />);
+    await screen.findByText("1 of 3 groups shift (FDR < 0.05)");
+    fireEvent.change(screen.getByLabelText("Subset column"), { target: { value: "lineage" } });
+    fireEvent.change(screen.getByLabelText("Subset value"), { target: { value: "Myeloid" } });
+    await waitFor(() =>
+      expect(testComposition).toHaveBeenLastCalledWith(
+        "kang", expect.objectContaining({ within_column: "lineage", within_value: "Myeloid" })),
+    );
+    fireEvent.change(screen.getByLabelText("Leave out a sample"), { target: { value: "SNG-107" } });
+    await waitFor(() =>
+      expect(testComposition).toHaveBeenLastCalledWith(
+        "kang", expect.objectContaining({ exclude_samples: ["SNG-107"] })),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "SNG-107 ×" }));
+    await waitFor(() =>
+      expect(testComposition).toHaveBeenLastCalledWith("kang", expect.not.objectContaining({ exclude_samples: expect.anything() })),
+    );
+  });
+
   it("shows proportions only, with the warning, when a condition has one sample", async () => {
     testComposition.mockResolvedValue({
       ...RESULT,

@@ -15,6 +15,13 @@ export interface CompositionRequest {
   paired?: boolean;
   /** limma's robust empirical Bayes (propeller's default); false: the plain fit. */
   robust?: boolean;
+  /** Values of the sample column to leave out. */
+  exclude_samples?: string[];
+  /** Shares among these cells only: the column and its value(s). */
+  within_column?: string;
+  within_value?: string | string[];
+  /** Person column the samples nest in, for the repeated-donor warning (default: detected). */
+  donor_key?: string;
 }
 
 export interface CompositionGroup {
@@ -73,6 +80,15 @@ export interface CompositionResult {
   dropped_samples: string[];
   /** Whether any donor occurs in more than one condition, and how many are in all. */
   pairing: PairedDesign;
+  /** The rest are absent from older servers. */
+  within?: { column: string; values: string[]; n_cells: number } | null;
+  excluded_samples?: string[] | null;
+  /** Samples nested in people with several per person (the warning names them). */
+  repeated_donors?: { donor_key: string; n_samples: number; n_donors: number; donors: Record<string, number> } | null;
+  /** e.g. "'cell_type' by 'disease' (MS vs normal); within class = OL". */
+  comparison?: string;
+  /** The stored result's id (Results). */
+  result_id?: string | null;
 }
 
 /**

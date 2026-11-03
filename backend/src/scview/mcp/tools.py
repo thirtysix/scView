@@ -804,12 +804,23 @@ async def composition_test(
     transform: Annotated[Literal["logit", "asin"], Field(description=(
         "Scale the per-sample shares are tested on: logit (propeller's default) or arcsine square root."))] = "logit",
     paired: Annotated[bool | None, Field(description="Default: paired when every donor is in every condition.")] = None,
+    exclude_samples: Annotated[list[str] | None, Field(description=(
+        "Values of the sample column to leave out (e.g. one donor's samples, for a leave-one-out)."))] = None,
+    within_column: Annotated[str | None, Field(description=(
+        "Test shares among a subset only: its column (e.g. a broad cell class)."))] = None,
+    within_value: Annotated[list[str] | None, Field(description=(
+        "The subset's value(s) of within_column (e.g. ['Immune']: T cells among immune cells)."))] = None,
+    donor_key: Annotated[str | None, Field(description=(
+        "Person column the samples nest in, for the repeated-donor warning (default: detected)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Do cell types make up different shares of the cells between conditions, with donors as
-    replicates (propeller-style: per-sample proportions, limma moderated t/F, BH FDR)."""
+    replicates (propeller-style: per-sample proportions, limma moderated t/F, BH FDR). Returns
+    the stored result_id; `comparison` names the conditions, subset and samples left out."""
     body = {"condition_key": condition_key, "group_key": group_key, "sample_key": sample_key,
-            "conditions": conditions, "reference": reference, "transform": transform, "paired": paired}
+            "conditions": conditions, "reference": reference, "transform": transform, "paired": paired,
+            "exclude_samples": exclude_samples, "within_column": within_column,
+            "within_value": within_value, "donor_key": donor_key}
     d = await _post(f"{_ds(dataset_id)}/composition/test", body)
     groups = [_flat(g) for g in d.pop("groups", []) or []]
     d.pop("samples", None)  # per-sample shares: in get_result's table
