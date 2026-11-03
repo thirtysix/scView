@@ -14,6 +14,7 @@ import {
   type DonorPoint,
   type PairedDesign,
   type PairedTest,
+  type UnpairedTest,
 } from "@/lib/donorPlot";
 import { formatPValue } from "@/lib/formatting";
 import { plotConfig } from "@/lib/plotConfig";
@@ -42,6 +43,8 @@ interface Props {
   design?: PairedDesign | null;
   /** Group -> paired test (two conditions); printed under the slope chart. */
   pairedTests?: Readonly<Record<string, PairedTest | null | undefined>>;
+  /** Group -> unpaired donor-level test (different donors in the two conditions); under the boxes. */
+  unpairedTests?: Readonly<Record<string, UnpairedTest | null | undefined>>;
   /** Unit of a change between conditions, e.g. "log2 CPM" or "percentage points". */
   unit?: string;
   /** Formats a change (default: `format`; a per-cent formatter would double the unit). */
@@ -62,6 +65,14 @@ const TEST_HELP = {
     "with an outlying donor.",
   change: "Mean over the paired donors of (second condition minus first), in the plotted units.",
   pairs: "Donors with a value in both conditions in this group (a donor with too few cells in one is left out).",
+  ranksum:
+    "Wilcoxon rank-sum (Mann-Whitney U) test, two-sided, on one value per donor: do the donors of one " +
+    "condition rank above the other's? Exact for small n without ties (scipy). With n and m donors it " +
+    "cannot go below p = 2 / C(n + m, n): 7 vs 6 donors give 0.0012 at best, however far apart.",
+  welch:
+    "Welch t-test, two-sided, on one value per donor: compares the two conditions' means without " +
+    "assuming equal variances. Rests on roughly normal donor values; one outlying donor moves it.",
+  diff: "Second condition's mean over its donors minus the first's, in the plotted units.",
 };
 
 /**
@@ -74,7 +85,7 @@ const TEST_HELP = {
  */
 export function DonorBoxPlot({
   points, groups, conditions, sampleKey, colorOf, valueLabel, format, title, plotName,
-  datasetName, height = 380, defaultFacet = false, note, design, pairedTests, unit = "", unitHelp,
+  datasetName, height = 380, defaultFacet = false, note, design, pairedTests, unpairedTests, unit = "", unitHelp,
   changeFormat = format,
 }: Props) {
   const [facet, setFacet] = useState(defaultFacet);
@@ -96,6 +107,10 @@ export function DonorBoxPlot({
     [slope, two, groups, pairedTests, points],
   );
   const faceted = slope || facet;
+  const unpairedTested = useMemo(
+    () => (!paired && two ? groups.filter((g) => unpairedTests?.[g] && points.some((p) => p.group === g)) : []),
+    [paired, two, groups, unpairedTests, points],
+  );
 
   return (
     <div>
@@ -216,6 +231,58 @@ export function DonorBoxPlot({
           * Under 5 pairs: read as descriptive. An exact signed-rank test on n pairs cannot go below
           p = 2 / 2^n two-sided, and a paired t on so few differences rests on their normality. A dash
           is a group with under 2 pairs or no change.
+        </p>
+      )}
+      {unpairedTested.length > 0 && (
+        <table className="mt-1.5 text-[11px] text-slate-600" data-testid="unpaired-tests">
+          <thead>
+            <tr className="text-left text-slate-500">
+              <th className="pr-3 font-medium">Group</th>
+              <th className="pr-3 text-right font-medium" title="Donors with a value in each condition here">
+                n ({conditions[0]} vs {conditions[1]})
+              </th>
+              <th className="pr-3 text-right font-medium" title={unitHelp ? `${TEST_HELP.diff} ${unitHelp}` : TEST_HELP.diff}>
+                Difference
+              </th>
+              <th className="pr-3 text-right font-medium">
+                <span className="inline-flex items-center gap-1">
+                  Rank-sum p <InfoTip label="About the Wilcoxon rank-sum test">{TEST_HELP.ranksum}</InfoTip>
+                </span>
+              </th>
+              <th className="text-right font-medium">
+                <span className="inline-flex items-center gap-1">
+                  Welch t p <InfoTip label="About the Welch t-test">{TEST_HELP.welch}</InfoTip>
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {unpairedTested.map((g) => {
+              const t = unpairedTests![g]!;
+              return (
+                <tr key={g} className="border-t border-slate-100">
+                  <td className="pr-3 py-0.5 text-slate-800">{g}</td>
+                  <td className="pr-3 text-right tabular-nums">{t.n_a} vs {t.n_b}</td>
+                  <td className="pr-3 text-right tabular-nums">{formatChange(t.mean_diff, changeFormat, unit)}</td>
+                  <td className="pr-3 text-right tabular-nums" title={t.caution ?? t.method ?? undefined}>
+                    {t.mannwhitney_p == null ? "–" : formatPValue(t.mannwhitney_p)}
+                    {t.caution && t.mannwhitney_p != null ? "*" : ""}
+                  </td>
+                  <td className="text-right tabular-nums" title={t.caution ?? undefined}>
+                    {t.welch_p == null ? "–" : formatPValue(t.welch_p)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {unpairedTested.length > 0 && (
+        <p className="mt-1 text-xs text-slate-500" data-testid="unpaired-caption">
+          Different {sampleKey} values in {conditions[0]} and {conditions[1]}: each group compares one value per{" "}
+          {sampleKey} ({conditions[1]} minus {conditions[0]}). A dash is a group with under 3 a side.
+          {unpairedTested.some((g) => unpairedTests![g]!.caution && unpairedTests![g]!.mannwhitney_p != null) &&
+            " * At the floor of the exact rank-sum test for these numbers of donors: a smaller p needs more donors."}
         </p>
       )}
       {caution && (

@@ -149,6 +149,20 @@ def test_paired_design_tests_each_group_pair_by_pair():
     assert r["paired_tests"]["B"]["caution"] is None
 
 
+def test_disjoint_donors_get_the_unpaired_donor_level_test():
+    a = _adata(n_donors=3, disjoint=True)
+    r = dx.per_donor_expression(a, "G0", "cell_type", sample_key="donor_id", condition_key="stim")
+    assert r["design"]["paired"] is False and r["paired_tests"] == {}
+    t = r["unpaired_tests"]["A"]
+    # Donor i has G0 = i + 1 (+2 in STIM): CTRL 1, 2, 3 vs STIM 3, 4, 5, one tie.
+    assert r["conditions"] == ["STIM", "CTRL"]  # the stored order: CTRL minus STIM below
+    assert t["n_a"] == 3 and t["n_b"] == 3 and t["mean_diff"] < 0
+    assert t["method"].startswith("normal approximation") and 0 < t["mannwhitney_p"] < 0.2
+    assert t["min_p"] == pytest.approx(0.1)  # 2 / C(6, 3)
+    paired = dx.per_donor_expression(_adata(), "G0", "cell_type", sample_key="donor_id", condition_key="stim")
+    assert paired["unpaired_tests"] == {} and paired["paired_tests"]
+
+
 def test_disjoint_donors_are_unpaired_and_unchanged():
     r = dx.per_donor_expression(_adata(disjoint=True), "G0", "cell_type", condition_key="stim")
     assert r["design"] == {"paired": False, "n_pairs": 0, "conditions": ["STIM", "CTRL"]}

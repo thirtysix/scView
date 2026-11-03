@@ -165,6 +165,23 @@ export interface PairedTest {
   caution: string | null;
 }
 
+/** Second condition against the first with different donors in each (core/paired_design.py). */
+export interface UnpairedTest {
+  n_a: number;
+  n_b: number;
+  /** Second condition's mean over its donors minus the first's. */
+  mean_diff: number | null;
+  /** Wilcoxon rank-sum (Mann-Whitney U), two-sided; null under 3 donors a side. */
+  mannwhitney_p: number | null;
+  /** Welch t-test, two-sided. */
+  welch_p: number | null;
+  /** "exact", or "normal approximation (tied values)". */
+  method: string | null;
+  /** The smallest p the exact rank-sum can give with these numbers of donors. */
+  min_p: number | null;
+  caution: string | null;
+}
+
 export const SLOPE_LINE = "#94a3b8";
 export const SLOPE_MEAN_LINE = "#334155";
 
