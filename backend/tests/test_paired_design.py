@@ -23,6 +23,9 @@ def test_detects_paired_disjoint_and_longitudinal_designs():
     times = ["T0", "T1", "T2"]
     longitudinal = pdn.detect_design([(d, t) for d in ("D0", "D1") for t in times] + [("D2", "T0")], times)
     assert longitudinal == {"paired": True, "n_pairs": 2, "conditions": times}
+    # Donors in two of three levels but none in all: never "paired with 0 pairs".
+    partial = pdn.detect_design([("D0", "T1"), ("D0", "T2"), ("C0", "T0")], times)
+    assert partial == {"paired": False, "n_pairs": 0, "conditions": times}
     # Unsplit ("" condition) or one condition: nothing to pair.
     assert pdn.detect_design([("D0", ""), ("D1", "")], [""])["paired"] is False
     assert pdn.detect_design([("D0", "CTRL"), ("D0", "STIM")], ["CTRL"])["paired"] is False

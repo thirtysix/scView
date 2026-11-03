@@ -764,24 +764,23 @@ async def per_donor_expression(
     method: Annotated[Literal["mean", "cpm"], Field(description=(
         "mean of the log-normalised values per donor, or cpm: log2 CPM of the donor's summed counts."))] = "mean",
     groups: Annotated[list[str] | None, Field(description="Only these groups (default: all).")] = None,
+    conditions: Annotated[list[str] | None, Field(description=(
+        "The two condition values to test (default: the column's two, or its two besides "
+        "'Unassigned'); other values are still listed, not tested."))] = None,
+    reference: Annotated[str | None, Field(description=(
+        "Baseline of the two: mean_diff is the other minus this (default: the first in the column's order)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """One gene's pseudobulk value per donor in each group (and condition), with the design
-    (paired when every donor is in every condition) and the per-group donor-level test
-    (paired Wilcoxon signed-rank + paired t, or unpaired): the donor-aware check of a DE gene."""
+    (paired when donors are in both tested conditions) and the per-group donor-level test
+    (paired Wilcoxon signed-rank + paired t, or unpaired) of two conditions; `difference`
+    names the sign of mean_diff: the donor-aware check of a DE gene."""
     d = await _get(f"{_ds(dataset_id)}/expression/per-donor", gene=gene, groupby=groupby,
-                   sample=sample, condition=condition, method=method)
+                   sample=sample, condition=condition, method=method, groups=groups or None,
+                   conditions=conditions or None, reference=reference or None)
     points = d.pop("points", None) or []
-    if groups:
-        wanted = {str(g) for g in groups}
-        points = [p for p in points if str(p.get("group")) in wanted]
-        missing = sorted(wanted - {str(g) for g in d.get("groups") or []})
-        d["groups"] = [g for g in d.get("groups") or [] if str(g) in wanted]
-        if missing:
-            d["groups_not_found"] = missing
-        for k in ("paired_tests", "unpaired_tests"):
-            if isinstance(d.get(k), dict):
-                d[k] = {g: v for g, v in d[k].items() if str(g) in wanted}
+    if not d.get("groups_not_found"):
+        d.pop("groups_not_found", None)
     # Per group x condition: the donors' values (compact: donor -> value).
     table: dict[str, dict[str, dict[str, Any]]] = {}
     for p in points:

@@ -40,16 +40,16 @@ MIN_DONORS_UNPAIRED = 3  # per condition, for the rank-sum and Welch tests
 
 def detect_design(samples: Iterable[tuple[str, str]], conditions: Sequence[str]) -> dict:
     """``{"paired", "n_pairs", "conditions"}`` from the (donor, condition)
-    samples: paired when some donor occurs in more than one condition;
-    ``n_pairs`` is the donors present in every condition."""
+    samples: ``n_pairs`` is the donors present in every condition, and the
+    design is paired when there is at least one (never paired with 0 pairs:
+    with three levels and no donor in all of them, compare two)."""
     conds = [c for c in conditions if c != ""]
     by_donor: dict[str, set[str]] = {}
     for donor, cond in samples:
         if cond in conds:
             by_donor.setdefault(donor, set()).add(cond)
-    paired = len(conds) > 1 and any(len(s) > 1 for s in by_donor.values())
-    n_pairs = sum(1 for s in by_donor.values() if s == set(conds)) if paired else 0
-    return {"paired": paired, "n_pairs": n_pairs, "conditions": conds}
+    n_pairs = sum(1 for s in by_donor.values() if s == set(conds)) if len(conds) > 1 else 0
+    return {"paired": n_pairs > 0, "n_pairs": n_pairs, "conditions": conds}
 
 
 def paired_test(first: Sequence[float], second: Sequence[float]) -> dict:

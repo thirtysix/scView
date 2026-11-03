@@ -23,6 +23,13 @@ When a donor occurs in more than one condition (Kang: every donor in CTRL and
 STIM) the design is paired, and ``design`` says so: the plot joins each donor's
 values with a line, and with exactly two conditions each group gets a Wilcoxon
 signed-rank and a paired t-test on the plotted values (core/paired_design.py).
+
+The tests compare two levels of the condition: ``conditions`` picks them (and
+``reference`` the baseline, else the first in the column's order), so a third
+level (a second control group, the "Unassigned" cells of a labelled column)
+does not stop the test. Without ``conditions``, a column with two levels besides
+"Unassigned" tests those two. The other levels stay in ``points``; ``difference``
+names the direction of every ``mean_diff`` ("tested - reference").
 """
 
 from __future__ import annotations
@@ -42,6 +49,8 @@ MIN_CELLS = 10  # per donor x condition x group sample
 FEW_DONORS = 3  # fewer in a condition: a box says little, read the points
 MAX_SAMPLES = 300  # as pseudobulk DE: more and the column is per-cell
 MAX_GROUPS = 60
+MAX_DROPPED_LISTED = 100  # dropped donor-group samples named in ``dropped``
+UNASSIGNED = "Unassigned"  # user_labels.UNASSIGNED: cells a labelling did not reach
 
 VALUE_LABELS = {
     "mean": "mean log-normalised expression per donor",
@@ -147,6 +156,44 @@ def detect_sample_key(obs: pd.DataFrame, group_key: str, condition_key: str | No
     return pick_donor(obs, candidates, masks)
 
 
+def _tested_levels(levels: list[str], condition_key: str, conditions: list[str] | None,
+                   reference: str | None) -> tuple[list[str] | None, str | None]:
+    """(the two levels the tests compare, reference first, or None; a note on the choice)."""
+    if conditions:
+        chosen = list(dict.fromkeys(str(c) for c in conditions))
+        unknown = [c for c in chosen if c not in levels]
+        if unknown:
+            raise DonorExpressionError(
+                f"'{unknown[0]}' is not a value of '{condition_key}' in these cells "
+                f"(values: {', '.join(levels[:12])}).")
+        if len(chosen) != 2:
+            raise DonorExpressionError(
+                f"Pick exactly two values of '{condition_key}' to compare (got {len(chosen)}).")
+        note = None
+    elif len(levels) == 2:
+        chosen, note = list(levels), None
+    else:
+        named = [c for c in levels if c != UNASSIGNED]
+        if len(named) == 2 and len(levels) == 3:
+            chosen = named
+            note = (f"'{UNASSIGNED}' cells are shown but left out of the tests, which compare "
+                    f"{named[0]} and {named[1]}.")
+        elif reference is not None:
+            raise DonorExpressionError(
+                f"'{condition_key}' has {len(levels)} values: name the two to compare in "
+                "conditions, with the reference among them.")
+        else:
+            return None, (f"'{condition_key}' has {len(levels)} values and a test compares two: "
+                          "pick them (conditions) for a donor-level test.") if len(levels) > 2 else None
+    if reference is not None:
+        if str(reference) not in chosen:
+            raise DonorExpressionError(
+                f"The reference '{reference}' is not one of the compared values "
+                f"({' and '.join(chosen)}).")
+        chosen = [str(reference), *(c for c in chosen if c != str(reference))]
+    return chosen, note
+
+
 def per_donor_expression(
     adata,
     gene: str,
@@ -155,12 +202,17 @@ def per_donor_expression(
     sample_key: str | None = None,
     condition_key: str | None = None,
     method: Method = "mean",
+    conditions: list[str] | None = None,
+    reference: str | None = None,
+    groups: list[str] | None = None,
 ) -> dict:
     """One point per (donor, condition) sample in each group of ``group_key``.
 
     ``sample_key`` None detects the donor column; when there is none the result
     has ``sample_key`` None, no points and a message (a dataset without donors is
-    not an error, it just cannot be shown this way)."""
+    not an error, it just cannot be shown this way). ``conditions`` (two values)
+    and ``reference`` choose the tested levels; ``groups`` keeps only those groups,
+    so donors and dropped samples are counted over them alone."""
     obs = adata.obs
     for col in (group_key, sample_key, condition_key):
         if col and col not in obs.columns:
@@ -169,6 +221,8 @@ def per_donor_expression(
         raise DonorExpressionError(f"Unknown method '{method}' (mean or cpm).")
     if condition_key and condition_key in (group_key, sample_key):
         condition_key = None
+    if (conditions or reference) and not condition_key:
+        raise DonorExpressionError("Choosing conditions or a reference needs a condition column.")
     detected = False
     if not sample_key:
         sample_key = detect_sample_key(obs, group_key, condition_key)
@@ -181,7 +235,8 @@ def per_donor_expression(
         "sample_key_detected": detected, "condition_key": condition_key,
         "method": method, "value_label": VALUE_LABELS[method], "source": None,
         "min_cells": MIN_CELLS, "groups": [], "conditions": [], "points": [],
-        "n_donors": {}, "n_dropped": 0, "warnings": [], "message": None,
+        "n_donors": {}, "n_dropped": 0, "dropped": [], "warnings": [], "notes": [],
+        "message": None, "tested_conditions": None, "reference": None, "difference": None,
         "design": {"paired": False, "n_pairs": 0, "conditions": []}, "paired_tests": {},
         "unpaired_tests": {},
     }
@@ -201,30 +256,43 @@ def per_donor_expression(
     donor = _labels(obs[sample_key])
     cond = _labels(obs[condition_key]) if condition_key else pd.Series("", index=obs.index)
     keep = (group.notna() & donor.notna() & cond.notna()).to_numpy()
+    if groups:
+        wanted = {str(x) for x in groups}
+        present = set(group.dropna().unique())
+        if not wanted & present:
+            raise DonorExpressionError(
+                f"None of the groups ({', '.join(sorted(wanted)[:5])}) is in '{group_key}'.")
+        out["groups_not_found"] = sorted(wanted - present)
+        keep &= group.isin(wanted).to_numpy()
     if not keep.any():
         raise DonorExpressionError("No cells have all of the chosen columns set.")
     g, d, c = group.to_numpy()[keep], donor.to_numpy()[keep], cond.to_numpy()[keep]
     v = values[keep]
     w = weights[keep] if weights is not None else None
 
-    groups = _order(obs[group_key], set(g))
-    conditions = _order(obs[condition_key], set(c)) if condition_key else [""]
-    if len(groups) > MAX_GROUPS:
+    group_order = _order(obs[group_key], set(g))
+    levels = _order(obs[condition_key], set(c)) if condition_key else [""]
+    if len(group_order) > MAX_GROUPS:
         raise DonorExpressionError(
-            f"'{group_key}' has {len(groups)} groups; per-donor plots take at most {MAX_GROUPS}.")
+            f"'{group_key}' has {len(group_order)} groups; per-donor plots take at most {MAX_GROUPS}.")
     n_samples = len(set(zip(d, c)))
     if n_samples > MAX_SAMPLES:
         raise DonorExpressionError(
             f"{n_samples} samples is too many (at most {MAX_SAMPLES}); '{sample_key}' looks "
             "like a per-cell column rather than a donor or sample.")
+    tested: list[str] | None = None
+    if condition_key:
+        tested, note = _tested_levels(levels, condition_key, conditions, reference)
+        if note:
+            out["notes"].append(note)
 
     frame = pd.DataFrame({"g": g, "d": d, "c": c, "v": v, "w": w if w is not None else 0.0})
     agg = frame.groupby(["g", "c", "d"], sort=False, observed=True).agg(
         n=("v", "size"), v=("v", "sum"), w=("w", "sum"))
-    points = []
+    points, dropped = [], []
     for (gi, ci, di), row in agg.iterrows():
         if row["n"] < MIN_CELLS:
-            out["n_dropped"] += 1
+            dropped.append({"group": gi, "condition": ci, "sample": di, "n_cells": int(row["n"])})
             continue
         if method == "mean":
             value = row["v"] / row["n"]
@@ -232,22 +300,27 @@ def per_donor_expression(
             value = np.log2(row["v"] / row["w"] * 1e6 + 1) if row["w"] > 0 else 0.0
         points.append({"group": gi, "condition": ci, "sample": di,
                        "n_cells": int(row["n"]), "value": round(float(value), 5)})
-    gpos = {x: i for i, x in enumerate(groups)}
-    cpos = {x: i for i, x in enumerate(conditions)}
+    gpos = {x: i for i, x in enumerate(group_order)}
+    cpos = {x: i for i, x in enumerate(levels)}
     points.sort(key=lambda p: (gpos[p["group"]], cpos[p["condition"]], p["sample"]))
+    dropped.sort(key=lambda p: (gpos[p["group"]], cpos[p["condition"]], p["sample"]))
 
-    out["groups"], out["conditions"], out["points"] = groups, conditions, points
+    out["groups"], out["conditions"], out["points"] = group_order, levels, points
+    out["n_dropped"], out["dropped"] = len(dropped), dropped[:MAX_DROPPED_LISTED]
     out["n_donors"] = {k: len({p["sample"] for p in points if p["condition"] == k})
-                       for k in conditions}
-    # Pairing is the dataset's design (which donors were sampled in which
-    # conditions), so it is read off the cells, not the samples kept; the tests
-    # use the pairs with a value in both conditions in each group.
+                       for k in levels}
+    # Pairing is the dataset's design (which donors were sampled in which of the
+    # tested conditions), so it is read off the cells, not the samples kept; the
+    # tests use the pairs with a value in both conditions in each group.
     if condition_key:
-        out["design"] = paired_design.detect_design(set(zip(d, c)), conditions)
-        if out["design"]["paired"] and len(conditions) == 2:
-            out["paired_tests"] = paired_design.group_paired_tests(points, conditions, groups)
-        elif len(conditions) == 2:  # different donors in each: rank-sum + Welch on donor values
-            out["unpaired_tests"] = paired_design.group_unpaired_tests(points, conditions, groups)
+        out["design"] = paired_design.detect_design(set(zip(d, c)), tested or levels)
+    if tested:
+        out["tested_conditions"], out["reference"] = tested, tested[0]
+        out["difference"] = f"{tested[1]} - {tested[0]}"
+        if out["design"]["paired"]:
+            out["paired_tests"] = paired_design.group_paired_tests(points, tested, group_order)
+        else:  # different donors in each: rank-sum + Welch on donor values
+            out["unpaired_tests"] = paired_design.group_unpaired_tests(points, tested, group_order)
     few = {k: n for k, n in out["n_donors"].items() if n < FEW_DONORS}
     if few:
         where = ", ".join(f"{k or 'all cells'}: {n}" for k, n in few.items())
