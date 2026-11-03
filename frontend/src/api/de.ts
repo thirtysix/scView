@@ -43,6 +43,11 @@ export interface DEResponse {
   ruv_k?: number | null;
   heteroscedasticity?: PseudobulkHetero | null;
   ruv?: PseudobulkRuv | null;
+  /** Pseudobulk: the covariates in the design, those left out (and why), and design
+   *  cautions: replicates nested in donors, a side with under 3 donors. Absent from older servers. */
+  covariates?: string[];
+  covariate_notes?: string[];
+  replicate_warnings?: string[];
   /** /de/compare: the two sides are also different batches (datasets, runs). */
   confounding?: DEConfounding | null;
   /** /de/compare: the sides' samples differ in sex (absent from older servers). */
@@ -217,6 +222,8 @@ export interface DECompareRequest {
   /** Pseudobulk only: the model (DESeq2 when absent) and RUV factors (0-3). */
   pb_method?: PseudobulkMethod;
   ruv_k?: number;
+  /** Pseudobulk only: per-sample obs columns in the design (sex, batch, age; up to 4). */
+  covariates?: string[];
   /** Cell-level: test only genes detected in this fraction of either group's cells. */
   min_pct?: number;
   /** The label column the composition check uses (the active clustering when absent). */

@@ -69,3 +69,41 @@ async def test_composition_subset_leave_out_and_stored_ids(client, dataset_manag
     assert r2["comparison"].endswith("within klass = all; without D0_CTRL_0, D0_CTRL_1")
     text = await _call("composition_test", {**base, "exclude_samples": ["nobody"]}, error=True)
     assert "not a value of 'sample'" in text
+
+
+async def test_pseudobulk_covariates_and_repeated_samples(client, dataset_manager):
+    def edit(a):
+        _with_samples(a)
+        a.obs["batch"] = pd.Categorical(a.obs["donor_id"].astype(str).map(
+            {"D0": "b1", "D1": "b2", "D2": "b1", "D3": "b2"}))
+
+    did = _register(dataset_manager, "pbc", edit)
+    base = {"dataset_id": did, "column": "stim", "group_a": "STIM", "group_b": "CTRL",
+            "within_column": "cluster", "within_value": "A", "method": "pseudobulk"}
+    # Before: no covariates argument; the design was always ~condition (or ~donor + condition).
+    r = await _call("differential_expression", {**base, "replicate_key": "donor_id", "covariates": ["sex"]})
+    assert r["design"] == "~donor_id + condition" and "covariates" not in r
+    assert any(w.startswith("covariate: 'sex' is constant within each donor") for w in r["warnings"])
+    r = await _call("differential_expression", {**base, "replicate_key": "sample", "covariates": ["batch"],
+                                                "pb_method": "voom"})
+    assert r["design"] == "~batch + condition" and r["covariates"] == ["batch"]
+    assert r["n_samples_a"] == 8 and r["n_donors_a"] == 4
+    assert any(w.startswith("replicates: Samples are not independent: 4 of 4 'donor_id'") for w in r["warnings"])
+    text = await _call("differential_expression", {**base, "replicate_key": "sample", "covariates": ["stim"]},
+                       error=True)
+    assert "cannot also be a covariate" in text
+    text = await _call("differential_expression", {"dataset_id": did, "column": "stim", "group_a": "STIM",
+                                                   "group_b": "CTRL", "covariates": ["sex"]}, error=True)
+    assert "method='pseudobulk'" in text
+
+
+async def test_cell_level_de_warns_on_cell_sex_shares(client, dataset_manager):
+    def edit(a):  # female D0, D1 keep 1 in 4 STIM cells: 2 F + 2 M donors a side, 20% vs 50% of cells
+        keep = ~(a.obs["donor_id"].isin(["D0", "D1"]) & (a.obs["stim"] == "STIM")).to_numpy()
+        keep |= (pd.Series(range(a.n_obs), index=a.obs.index) % 4 == 0).to_numpy()
+        a._inplace_subset_obs(keep)
+
+    did = _register(dataset_manager, "sexc", edit)
+    r = await _call("differential_expression", {"dataset_id": did, "column": "stim", "group_a": "STIM",
+                                                "group_b": "CTRL", "replicate_key": "donor_id"})
+    assert any(w.startswith("sex: Cells differ in sex between the sides") for w in r["warnings"])

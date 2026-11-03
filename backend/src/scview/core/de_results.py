@@ -100,6 +100,8 @@ def describe(comparison: dict[str, Any]) -> str:
     pb = PB_METHOD_NAMES.get(comparison.get("pb_method") or "")
     if comparison.get("method") == "pseudobulk" and pb:  # core/pseudobulk.py options
         method = f"pseudobulk {pb}" + (f" + RUV k={comparison['ruv_k']}" if comparison.get("ruv_k") else "")
+        if comparison.get("covariates"):
+            method += " + " + ", ".join(comparison["covariates"])
     if comparison.get("mode") == "selection":
         n = comparison.get("n_a")
         size = f" ({n:,} cells)" if isinstance(n, int) else ""

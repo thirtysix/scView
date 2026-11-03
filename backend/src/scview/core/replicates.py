@@ -78,7 +78,7 @@ def repeated_donors(obs, sample_key: str, sides: Sequence, donor_key: str | None
         per = reps.groupby("d", observed=True).size()
         many = per[per > 1].sort_values(ascending=False)
         if many.empty:
-            return None
+            continue  # one sample per person here (a copy of the sample column, or truly one each)
         donors = {str(k): int(v) for k, v in many.items()}
         shown = ", ".join(f"{k}: {v}" for k, v in list(donors.items())[:MAX_NAMED])
         more = f" and {len(donors) - MAX_NAMED} more" if len(donors) > MAX_NAMED else ""

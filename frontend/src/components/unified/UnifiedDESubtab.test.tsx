@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import type { DEResponse } from "@/api/de";
 import type { DatasetInfo } from "@/api/types";
 import { DE_DEFAULTS, useDESettingsStore } from "@/stores/deSettingsStore";
@@ -347,6 +347,28 @@ describe("UnifiedDESubtab cell-level method", () => {
     fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
     await waitFor(() => expect(computeDECompare).toHaveBeenCalledTimes(2));
     expect(computeDECompare.mock.calls[1]![1]).toMatchObject({ method: "pseudobulk", pb_method: "voom", ruv_k: 1 });
+  });
+
+  it("adjusts pseudobulk for chosen covariates and shows the replicate cautions", async () => {
+    computeDECompare.mockResolvedValue({
+      n_selected: 100, n_rest: 100, label: "STIM", genes: [], method: "pseudobulk", replicate_key: "ind",
+      n_samples_a: 3, n_samples_b: 3, design: "~cell_type + condition", counts_source: "X",
+      covariates: ["cell_type"], covariate_notes: [],
+      replicate_warnings: ["Fewer than 3 donors on a side (STIM: 2): the variance between them rests on one or two people."],
+    });
+    useDESettingsStore.getState().update({ mode: "groups", test: "pseudobulk", replicateKey: "ind", splitBy: "stim",
+      groupA: "STIM", groupB: "CTRL" });
+    renderDE();
+    const chips = within(screen.getByTestId("pb-covariates")).getAllByRole("button");
+    expect(chips.map((b) => b.getAttribute("aria-pressed"))).not.toContain("true");
+    const chip = chips.find((b) => /cell/i.test(b.textContent ?? ""))!;
+    fireEvent.click(chip);
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await waitFor(() => expect(computeDECompare).toHaveBeenCalledTimes(1));
+    expect(computeDECompare.mock.calls[0]![1]).toMatchObject({ method: "pseudobulk", covariates: ["cell_type"] });
+    expect((await screen.findByTestId("de-replicate-caution")).textContent).toContain("Fewer than 3 donors");
+    expect(screen.getByText(/design ~cell_type \+ condition/)).toBeTruthy();
   });
 
   it("shows a logistic regression by coefficient, without p-values", async () => {

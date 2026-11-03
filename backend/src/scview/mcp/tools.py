@@ -611,6 +611,8 @@ def _de_warnings(r: dict[str, Any]) -> list[str]:
                  f"(median counts {num(ts.get('median_a'))} vs {num(ts.get('median_b'))})")
     if r.get("dropped_samples"):
         w.append(f"samples left out: {', '.join(map(str, r['dropped_samples'][:10]))}")
+    w += [f"replicates: {x}" for x in r.get("replicate_warnings") or []]
+    w += [f"covariate: {x}" for x in r.get("covariate_notes") or []]
     return w
 
 
@@ -632,6 +634,12 @@ async def differential_expression(
     replicate_key: Annotated[str | None, Field(description="Donor/sample column (default: detected).")] = None,
     pb_method: Annotated[Literal["deseq2", "voom", "voombygroup"], Field(
         description="Pseudobulk model: DESeq2 (default), limma-voom, or voomByGroup (a variance per group).")] = "deseq2",
+    covariates: Annotated[list[str] | None, Field(max_length=4, description=(
+        "Pseudobulk: per-sample obs columns in the design before the condition (sex, batch, age); "
+        "refused when one varies within a sample or is confounded with the condition."))] = None,
+    donor_key: Annotated[str | None, Field(description=(
+        "Pseudobulk: the person column the replicate column's samples nest in, for the "
+        "repeated-donor warning (default: detected)."))] = None,
     min_pct: Annotated[float | None, Field(ge=0, le=1, description="Cell-level: test genes detected in at least this share of either side (default 0.01).")] = None,
     padj_max: Annotated[float, Field(gt=0, le=1, description="Count and list genes at adjusted p at most this.")] = 0.05,
     lfc_min: Annotated[float, Field(ge=0, description="And |log2 fold change| at least this.")] = 0.25,
@@ -650,6 +658,10 @@ async def differential_expression(
                                 "replicate_key": replicate_key, "method": method, "pb_method": pb_method}
         if min_pct is not None:
             body["min_pct"] = min_pct
+        if covariates or donor_key:
+            if method != "pseudobulk":
+                raise ToolError("covariates and donor_key are for method='pseudobulk'.")
+            body.update({"covariates": covariates, "donor_key": donor_key})
         r = await _post(f"{_ds(dataset_id)}/de/compare", body)
     else:
         if method == "pseudobulk":
@@ -686,7 +698,7 @@ async def differential_expression(
         "dataset_id": dataset_id, "result_id": r.get("result_id"), "label": r.get("label"),
         "method": r.get("method"), "n_a": r.get("n_selected"), "n_b": r.get("n_rest"),
         **pick(r, "replicate_key", "n_donors_a", "n_donors_b", "n_samples_a", "n_samples_b",
-               "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped"),
+               "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped", "covariates"),
         "n_genes_tested": r.get("n_genes_tested") or len(genes),
         "rule": f"padj <= {padj_max} and |log2FC| >= {lfc_min}" if has_p else f"|coef| ranked, |log2FC| >= {lfc_min}",
         "n_up": len(up), "n_down": len(down), "columns": cols,
@@ -694,6 +706,8 @@ async def differential_expression(
         "down": [[num(g.get(c)) for c in cols] for g in down[:n]],
         "warnings": _de_warnings(r),
     }
+    if not out.get("covariates"):
+        out.pop("covariates", None)
     if (out["method"] != "pseudobulk" and not r.get("underreplicated")
             and (r.get("n_donors_a") or 0) >= 2 and (r.get("n_donors_b") or 0) >= 2):
         # The UI's caption says the same: a cell-level test treats cells as independent.
