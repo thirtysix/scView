@@ -6,6 +6,30 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-11-03
+
+Batch 40: fixes from the 20-dataset pilot of the 1,000-dataset run (CSC Roihu, 1.1M cells).
+
+### Added
+- **Your file's own UMAP is kept** as `X_umap_original` ("UMAP (original)") before scView's replaces it, at reset to
+  counts and before the UMAP step, whatever the case of its key (`X_UMAP` on Jäkel 2019).
+- `PUBLIC_IMPORT_LOCAL_DIR`: a public import copies `<version>.h5ad` (and its listing record) from a folder instead of
+  downloading, for batch nodes without internet.
+- `SCVIEW_MEMORY_RESERVE` (0.05-0.5, default 0.25): the share of the memory limit kept free beside a load or run. A
+  batch job with one client can use about 0.10; at 0.25 the pilot's two largest datasets (159k and 185k cells on 66
+  and 69 GB jobs) were sent to large-dataset mode.
+
+### Fixed
+- **Marker genes no longer fail a whole column when a group has one cell** (author columns on two pilot datasets).
+  Those groups are left out, named in the answer (`skipped_groups`), and their cells stay in every other group's rest.
+- The sex check works on datasets opened from disk (it failed with "'_CSRDataset' object has no attribute 'sum'"),
+  and takes sample columns of up to 1,000 groups (it refused 51 batches and 66 libraries at the violin cap of 50).
+- A stored result asked for right after it was computed is found: enrichment of a DE result in the next MCP call
+  answered "No such stored result" on 3 of 20 pilot datasets, because the result was still being written.
+- The memory estimate for doublet detection costs the three largest capture channels, not only the one with the most
+  cells: a smaller channel with more variable genes peaks higher (pilot: 9,400 cells with 4,219 variable genes against
+  10,858 with 3,418; Scrublet measured 5.44 vs 5.03 GB, estimated 5.71 vs 5.34).
+
 ## [0.58.0] - 2026-11-03
 
 Batch 39: fixes found by re-analysing five published datasets through the MCP server (Wilk 2020, Jäkel 2019,
