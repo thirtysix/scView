@@ -144,6 +144,14 @@ async def test_samples_nested_in_donors_and_few_donors_are_warned():
     # Summed by donor: no warning, and the paired design (when donors recur) is kept.
     res = await differential_expression_compare("x", _req(replicate_key="donor_id"), _DM(a))
     assert res.replicate_warnings == [] and res.n_samples_a == 3
+    # Jäkel CI vs NAWM: two of three donors on both sides, so ~condition cannot block on them.
+    part = _counts(["m1", "m2", "m3"], ["m1", "m2", "m4"], seed=10)
+    res = await differential_expression_compare("x", _req(pb_method="voom"), _DM(part))
+    assert res.design == "~condition"
+    assert any("2 'donor' values are on both sides (m1, m2) but not every one" in x for x in res.replicate_warnings)
+    full = _counts(["m1", "m2", "m3"], ["m1", "m2", "m3"], seed=10)
+    res = await differential_expression_compare("x", _req(pb_method="voom"), _DM(full))
+    assert res.design == "~donor + condition" and not any("both sides" in x for x in res.replicate_warnings)
     two = _counts(["a0", "a1"], ["b0", "b1", "b2"], seed=9)
     res = await differential_expression_compare("x", _req(pb_method="voom"), _DM(two))
     assert any("Fewer than 3 donors on a side (A: 2)" in x for x in res.replicate_warnings)

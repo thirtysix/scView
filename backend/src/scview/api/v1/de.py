@@ -31,7 +31,9 @@ from scview.dependencies import get_dataset_manager
 from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
 from scview.core import large_mode, preflight, selection_facts, working_copy
 from scview.core.confounding import for_comparison, recorded_batch_key
-from scview.core.replicates import donor_candidates, few_donors, pick_donor, repeated_donors
+from scview.core.replicates import (
+    donor_candidates, few_donors, on_both_sides, partly_paired, pick_donor, repeated_donors,
+)
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 
 logger = logging.getLogger(__name__)
@@ -866,6 +868,10 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
     if rep:
         person = obs[rep["donor_key"]]
         people = {body.group_a: int(person[mask_a].nunique()), body.group_b: int(person[mask_b].nunique())}
+    if not res.paired:  # some donors on both sides, not all: ~condition cannot block on them
+        shared = on_both_sides(obs, key, mask_a, mask_b, pseudobulk.MIN_CELLS_PER_SAMPLE)
+        if shared:
+            rep_warnings.append(partly_paired(shared, key, res.design))
     few = few_donors(people, f"'{rep['donor_key']}' values" if rep else "donors")
     if few:
         rep_warnings.append(few)

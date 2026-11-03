@@ -94,6 +94,23 @@ def repeated_donors(obs, sample_key: str, sides: Sequence, donor_key: str | None
     return None
 
 
+def on_both_sides(obs, key: str, mask_a, mask_b, min_cells: int) -> list[str]:
+    """The ``key`` values with at least ``min_cells`` cells on each side."""
+    col = obs[key].astype(str).where(obs[key].notna())
+    a = col[np.asarray(mask_a, bool)].value_counts()
+    b = col[np.asarray(mask_b, bool)].value_counts()
+    return sorted(set(a[a >= min_cells].index) & set(b[b >= min_cells].index))
+
+
+def partly_paired(shared: Sequence[str], key: str, design: str) -> str:
+    """The warning for donors on both sides of an unpaired design (not every donor is)."""
+    shown = ", ".join(list(shared)[:MAX_NAMED]) + (" ..." if len(shared) > MAX_NAMED else "")
+    return (f"{len(shared)} '{key}' value{'s are' if len(shared) != 1 else ' is'} on both sides "
+            f"({shown}) but not every one, so the design cannot block on them ({design}): each "
+            "one's two samples count as independent and p values are optimistic. Compare only the "
+            "donors on both sides (paired), or keep one sample per donor.")
+
+
 def few_donors(counts: dict[str, int], unit: str) -> str | None:
     """A warning when a side has fewer than FEW_DONORS (``counts``: side -> people)."""
     few = {k: n for k, n in counts.items() if n < FEW_DONORS}
