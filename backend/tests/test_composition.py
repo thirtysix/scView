@@ -326,6 +326,25 @@ def test_clusters_made_of_one_condition_are_flagged():
     assert r.warnings[0].startswith("2 of 5 groups are almost only in one condition")
     assert "g3, g4" in r.warnings[0]
     assert composition_test(_obs(T2_SAMPLES, T2), "cond", "donor", "group").warnings == []
+    assert "change of state" in r.warnings[0]
+    # Cell-type labels (not a clustering): a label called differently is the other reading.
+    r = composition_test(_obs(T2_SAMPLES, counts), "cond", "donor", "group", group_is_clustering=False)
+    assert r.warnings[0].startswith("2 of 5 groups are almost only in one condition")
+    assert "change of state" not in r.warnings[0]
+    assert "called differently in each condition; check their markers per condition" in r.warnings[0]
+
+
+def test_which_columns_are_clusterings():
+    import anndata as ad
+
+    from scview.core.composition import is_clustering_column
+
+    a = ad.AnnData(np.zeros((2, 1)))
+    a.uns["scview_active_clustering"] = "my_groups"
+    for col in ("leiden", "scview_leiden_r0.5", "louvain", "seurat_clusters", "cell_type_sub", "my_groups"):
+        assert is_clustering_column(a, col), col
+    for col in ("cell_type", "cell.type.fine", "cluster", "predicted_labels"):
+        assert not is_clustering_column(a, col), col
 
 
 def test_bad_requests():

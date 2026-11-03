@@ -65,6 +65,7 @@ async def composition_test(
             conditions=body.conditions, reference=body.reference,
             transform=body.transform, paired=body.paired, robust=body.robust,
             batch_key=recorded_batch_key(adata),
+            group_is_clustering=comp.is_clustering_column(adata, body.group_key),
         )
         return result, not body.sample_key and key is not None
 
