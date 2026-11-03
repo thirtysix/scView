@@ -242,7 +242,7 @@ def _line(event: str, data: Any) -> str | None:
     if event == "substep":
         return f"{data.get('step')}: {data.get('message') or data.get('label') or data.get('name') or ''}"[:200]
     if event in ("complete", "result"):
-        return "finishing"
+        return "finished; reading the result back"
     msg = data.get("message") or data.get("stage") or data.get("step") or data.get("error")
     if event == "progress" and data.get("fraction") is not None:
         msg = f"{msg or ''} {round(100 * float(data['fraction']))}%".strip()
