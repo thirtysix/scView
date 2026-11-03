@@ -640,8 +640,8 @@ async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind:
 async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = None,
                        allow_large_mode: Annotated[bool, Field(description=(
                            "Let a run that does not fit in memory convert the dataset to "
-                           "large-dataset layout for good (DE and other whole-matrix tools are "
-                           "then refused on it, .raw leaves its layers). Default false: such a "
+                           "large-dataset layout for good (cell-level DE and other whole-matrix tools "
+                           "are then refused on it; pseudobulk DE stays; .raw leaves its layers). Default false: such a "
                            "run is refused, naming what it would turn off."))] = False) -> str:
     """Run pipeline steps on a dataset and save the result (a job: returns job_id at once;
     follow it with job_status, stop it with cancel_job). Check preflight first on a big dataset.
@@ -656,7 +656,7 @@ async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = Non
             raise ToolError(
                 f"Not run: {mode.get('reason')} That converts the dataset for good: "
                 f"{mode.get('layout_after')}; no longer available on it: "
-                f"{'; '.join(mode.get('turns_off') or [])}. Run DE and the other tools first, free "
+                f"{'; '.join(mode.get('turns_off') or [])}. Run cell-level DE and the other tools first, free "
                 "memory, or pass allow_large_mode=true to convert it.")
     job = await _start_run(dataset_id, steps, p, "pipeline", allow_large_mode=allow_large_mode)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id, "steps": steps,

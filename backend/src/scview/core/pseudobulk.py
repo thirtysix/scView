@@ -210,6 +210,46 @@ def _sum_by_sample(M, codes: np.ndarray, n_samples: int) -> sp.csr_matrix:
     return sp.csr_matrix(S @ M)
 
 
+# Cells per read of a counts matrix on disk (a large dataset's counts file: at most
+# large_mode.MAX_READ_BYTES per read; 5,000 cells of 4,500 genes each are 180 MB).
+SUM_ROW_BLOCK = 5_000
+
+
+def _in_memory(M) -> bool:
+    return sp.issparse(M) or isinstance(M, np.ndarray)
+
+
+def sum_rows(M, rows: np.ndarray, codes: np.ndarray, n_samples: int) -> sp.csr_matrix:
+    """``_sum_by_sample(M[rows], codes, n_samples)``. On disk (a large dataset's counts
+    file, a backed matrix) the cells are read in spans of ``SUM_ROW_BLOCK`` rows, as they
+    are stored, so only one span and the sums are ever held; the sums are the same
+    (float64, added span by span in row order). ``rows`` ascending."""
+    rows = np.asarray(rows, dtype=np.int64)
+    if _in_memory(M):
+        return _sum_by_sample(M if rows.size == M.shape[0] else M[rows], codes, n_samples)
+    from scview.core.large_mode import LargeDatasetError
+
+    total = sp.csr_matrix((n_samples, M.shape[1]), dtype=np.float64)
+    step = SUM_ROW_BLOCK
+    i = 0
+    while i < rows.size:
+        lo = int(rows[i])
+        hi = min(lo + step, M.shape[0])
+        j = int(np.searchsorted(rows, hi))
+        try:
+            block = M[lo:hi]
+        except LargeDatasetError:
+            if step == 1:
+                raise
+            step = max(1, step // 2)  # very deep cells: smaller spans
+            continue
+        block = sp.csr_matrix(block) if sp.issparse(block) else np.asarray(block)
+        part = block[rows[i:j] - lo]
+        total = total + _sum_by_sample(part, codes[i:j], n_samples)
+        i = j
+    return sp.csr_matrix(total)
+
+
 def _filter_genes(P: sp.csr_matrix, min_samples: int) -> np.ndarray:
     """Column indices of the genes worth testing, capped at ``MAX_GENES`` by total count."""
     expressed = np.asarray((P >= MIN_GENE_COUNT).sum(axis=0)).ravel() >= min_samples
@@ -237,7 +277,9 @@ def pseudobulk_de(
     factors in the design.
 
     ``adata`` holds only the compared cells; ``in_a`` marks the A cells (the
-    rest are B) and ``donors`` gives each cell's donor (missing = left out).
+    rest are B) and ``donors`` gives each cell's donor (missing = left out: a large
+    dataset is passed whole, its other cells without a donor, and its counts file is
+    read in blocks of cells).
     ``covariates``: per-sample obs columns of those cells (one column each) to
     put in the design before the condition.
     """
@@ -260,7 +302,7 @@ def pseudobulk_de(
     sample_donor = np.array([s.split("\x1f", 1)[1] for s in samples])
 
     rows = np.flatnonzero(has_donor)
-    P = _sum_by_sample(M[rows] if not has_donor.all() else M, codes, len(samples))
+    P = sum_rows(M, rows, codes, len(samples))
 
     ok = n_cells >= MIN_CELLS_PER_SAMPLE
     names = {"a": label_a, "b": label_b}
