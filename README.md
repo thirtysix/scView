@@ -39,6 +39,7 @@ https://github.com/user-attachments/assets/486aaf9d-bf77-4a20-9f1f-28bc3bf81e8c
   - [Once it's running](#once-its-running)
   - [First steps](#first-steps)
   - [Optional: enable the AI features](#optional-enable-the-ai-features)
+  - [Use scView from your AI agent (MCP)](#use-scview-from-your-ai-agent-mcp)
   - [Updating](#updating)
 - [Architecture](#architecture)
 - [Development](#development)
@@ -465,6 +466,45 @@ DEEPINFRA_API_KEY=your-key-here
 Without a key the assistant degrades gracefully to deterministic, rule-based guidance. The RAG
 co-pilot's literature/tutorial corpora additionally require a Postgres/pgvector connection string
 (`RAG_DATABASE_URL`); see [`docs/AI_ASSISTANT.md`](docs/AI_ASSISTANT.md).
+
+### Use scView from your AI agent (MCP)
+scView's backend serves an [MCP](https://modelcontextprotocol.io) server at `/mcp`, so an agent
+such as Claude Code can open datasets, run the processing and do the statistics with the same
+code the browser uses (its results also show in the open UI). With scView running, in Claude Code:
+```bash
+claude mcp add --transport http scview http://127.0.0.1:8080/mcp
+```
+If you set `ACCESS_TOKEN` in `.env`, pass it as a header:
+```bash
+claude mcp add --transport http scview http://127.0.0.1:8080/mcp --header "Authorization: Bearer <your-token>"
+```
+**Claude Desktop** starts MCP servers from its config file as local programs rather than calling
+an HTTP address, so it reaches scView through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)
+bridge (needs Node.js). In `claude_desktop_config.json` (not tested by us; add
+`"--header", "Authorization: Bearer <your-token>"` to `args` when a token is set):
+```json
+{
+  "mcpServers": {
+    "scview": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:8080/mcp", "--transport", "http-only"]
+    }
+  }
+}
+```
+The tools: `list_datasets`, `get_dataset`, `describe_column`, `crosstab`, `memory_status`,
+`search_public_datasets` and `import_public_dataset` (CELLxGENE Discover), `assess_dataset`,
+`qc_filter_preview`, `preflight`, `run_pipeline`, `get_recipe`, `get_replay_script`, `get_markers`,
+`annotate_celltypist`, `set_labels` (label the cells a filter selects), `subcluster`,
+`differential_expression` (cell-level or donor-aware pseudobulk), `per_donor_expression`,
+`composition_test`, `milo`, `expression_by_group`, `enrichment` (ORA or GSEA), `score_gene_set`,
+`list_results`, `get_result`, `plot` (a PNG), and `job_status` / `cancel_job` for the long runs.
+No tool deletes anything. The server runs in a container and cannot read files on your computer:
+upload a file in the UI, or with
+`curl -F "file=@/path/to/data.h5ad" http://127.0.0.1:8080/api/v1/datasets/upload`.
+The MCP server is on by default and off in public mode (`MCP_ENABLED` in `.env`). It answers
+requests addressed to `localhost` / `127.0.0.1` and refuses web pages from other sites, unless
+`MCP_ALLOWED_ORIGINS` names another address (e.g. `http://192.168.1.5:8080`).
 
 ### Updating
 - **Downloaded ZIP:** download and extract the new ZIP, copy your `.env` file across from the old
