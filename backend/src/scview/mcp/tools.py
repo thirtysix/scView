@@ -596,6 +596,8 @@ def _de_warnings(r: dict[str, Any]) -> list[str]:
     conf = r.get("confounding")
     if conf:
         w.append("confounding: " + str(conf.get("message") or conf))
+    if (r.get("sex") or {}).get("message"):
+        w.append("sex: " + r["sex"]["message"])
     comp = r.get("composition") or {}
     if comp.get("warn"):
         w.append("composition: " + str(comp.get("message")))

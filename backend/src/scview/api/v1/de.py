@@ -194,6 +194,8 @@ class DEResponse(BaseModel):
     ruv: dict | None = None
     # /de/compare: the two sides are also different batches (core/confounding.py).
     confounding: dict | None = None
+    # /de/compare: the two sides' samples differ in sex (core/sex_check.py compare_sides).
+    sex: dict | None = None
     # /de/compare: the two sides' cluster/state composition (core/de_composition.py).
     composition: DEComposition | None = None
     # Names this result for a follow-up such as GSEA (core/de_results.py), which
@@ -273,6 +275,26 @@ def _donor_stats(donors) -> tuple[int, float]:
     if total == 0:
         return 0, 0.0
     return int((counts > 0).sum()), float(counts.max()) / total
+
+
+def _sex_difference(obs, body: _CompareScope, mask_a, mask_b, dataset_id: str) -> dict | None:
+    """The sides' samples differ in sex (core/sex_check.py), judged on the replicate
+    column: sex from the metadata column, else a sex check already run; no check
+    otherwise (the expression call is never run here). Never fails the DE."""
+    from scview.core import sex_check
+
+    try:
+        key = body.replicate_key or _detect_replicate_key(
+            obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b)
+        if not key or key not in obs.columns:
+            return None
+        known = sex_check.sample_sexes(obs, key, dataset_id)
+        if known is None:
+            return None
+        return sex_check.compare_sides(obs, key, mask_a, mask_b, str(body.group_a), str(body.group_b), *known)
+    except Exception as e:  # noqa: BLE001 — a caution, never a reason for the DE to fail
+        logger.warning("Sex check of a DE comparison failed: %s", e)
+        return None
 
 
 def _replicate_guard(obs, mask_a, mask_b, key: str | None) -> dict:
@@ -708,11 +730,13 @@ async def differential_expression_compare(
     confounding = hit.to_dict() if hit else None
     # The two sides' cluster mix: a shift makes the DE partly a composition test.
     composition = _composition(adata, body, mask_a, mask_b, body.composition_by)
+    sex = _sex_difference(obs, body, mask_a, mask_b, dataset_id)
 
     if body.method == "pseudobulk":
         resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id, adaptor, dm)
         resp.confounding = confounding
         resp.composition = composition
+        resp.sex = sex
         return resp
 
     def _run() -> tuple[_CellTest, dict | None]:
@@ -729,8 +753,8 @@ async def differential_expression_compare(
     guard = _replicate_guard(obs, mask_a, mask_b, key)
     result_id = _remember(dataset_id, res, _compared(body, n_a, n_b, key), adaptor)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=_compare_label(body), genes=res.genes,
-                      result_id=result_id, transcriptome_size=size,
-                      confounding=confounding, composition=composition, **guard, **res.fields())
+                      result_id=result_id, transcriptome_size=size, confounding=confounding,
+                      composition=composition, sex=sex, **guard, **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/compare/methods", response_model=DEMethodsResponse)

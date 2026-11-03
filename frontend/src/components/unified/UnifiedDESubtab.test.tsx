@@ -238,6 +238,30 @@ describe("UnifiedDESubtab transcriptome-size caution", () => {
   });
 });
 
+describe("UnifiedDESubtab sex caution", () => {
+  beforeEach(() => {
+    plots.props = [];
+    computeDECompare.mockReset();
+    useDESettingsStore.getState().update({ mode: "groups", splitBy: "cell_type", groupA: "NK", groupB: "T" });
+  });
+
+  it("shows the sides' sex make-up when they differ", async () => {
+    const message =
+      "Sex differs between the sides (COVID-19: 0 female, 7 male; normal: 2 female, 4 male) " +
+      "(samples by 'donor_id', sex from metadata column 'sex'): XIST, TSIX and Y-chromosome genes " +
+      "will show up in this comparison for that reason, not the condition's; read sex-linked genes as sex.";
+    computeDECompare.mockResolvedValue({
+      ...RESULT, label: "NK",
+      sex: { kind: "imbalanced", message, sample_key: "donor_id", source: "metadata column 'sex'",
+             a: { female: 0, male: 7 }, b: { female: 2, male: 4 } },
+    });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    const alert = await screen.findByTestId("de-sex-caution");
+    expect(alert.textContent).toBe(message);
+  });
+});
+
 const LOGREG: DEResponse = {
   n_selected: 40,
   n_rest: 60,

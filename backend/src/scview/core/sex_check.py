@@ -258,6 +258,74 @@ def sex_confounding(obs: pd.DataFrame, column: str, codes: np.ndarray, names: li
     return out
 
 
+# The last expression-based calls per (dataset, sample column): sample -> female / male.
+# Process memory: a DE between groups reads them when there is no sex metadata column,
+# and never runs the expression check itself.
+_calls: dict[tuple[str, str], dict[str, str]] = {}
+
+
+def remember(dataset_id: str, result: dict) -> None:
+    """Keep a sex check's per-sample calls for later comparisons (``sample_sexes``)."""
+    if result.get("column"):
+        _calls[(dataset_id, str(result["column"]))] = _sex_of_rows(result.get("groups") or [])
+
+
+def sample_sexes(obs: pd.DataFrame, sample_key: str,
+                 dataset_id: str | None = None) -> tuple[dict[str, str], str] | None:
+    """Each sample's sex (female / male) and where it came from: the sex metadata column
+    (a sample's value when 90%+ of its cells agree), else the last sex check of this
+    dataset by ``sample_key``; None when neither exists."""
+    meta = sex_metadata_column(obs)
+    if meta is not None:
+        names, codes = qc_groups.group_codes(obs[sample_key])
+        per = _metadata_per_group(obs, meta, codes, len(names))
+        sexes = {n: p["value"] for n, p in zip(names, per) if p["value"] in ("female", "male")}
+        return sexes, f"metadata column '{meta}'"
+    stored = _calls.get((dataset_id or "", sample_key))
+    if stored:
+        return dict(stored), "the sex check (from expression)"
+    return None
+
+
+def compare_sides(obs: pd.DataFrame, sample_key: str, mask_a: np.ndarray, mask_b: np.ndarray,
+                  label_a: str, label_b: str, sexes: dict[str, str], source: str) -> dict | None:
+    """Whether the two sides of a comparison differ in their samples' sexes (a sample
+    counts on a side with at least MIN_CELLS of its cells there), as ``sex_confounding``
+    judges the levels of a condition: ``confounded`` (each side one sex, not the same)
+    or ``imbalanced`` (a side of 2+ samples all one sex, the other side both). None
+    when they do not, or when a side has no sample of known sex."""
+    samples = obs[sample_key].astype(str).where(obs[sample_key].notna()).to_numpy()
+    tallies = []
+    for mask in (mask_a, mask_b):
+        names, counts = np.unique(samples[mask & pd.notna(samples)], return_counts=True)
+        t = {"female": 0, "male": 0}
+        for name, n in zip(names, counts):
+            if n >= MIN_CELLS and str(name) in sexes:
+                t[sexes[str(name)]] += 1
+        tallies.append(t)
+    if not all(t["female"] + t["male"] for t in tallies):
+        return None
+    single = [("female" if t["male"] == 0 else "male") if (t["female"] == 0) != (t["male"] == 0) else None
+              for t in tallies]
+    desc = "; ".join(f"{lab}: {t['female']} female, {t['male']} male"
+                     for lab, t in zip((label_a, label_b), tallies))
+    tail = f" (samples by '{sample_key}', sex from {source})"
+    if single[0] and single[1] and single[0] != single[1]:
+        kind = "confounded"
+        msg = (f"Sex differs completely between the sides ({desc}){tail}: every difference here is "
+               "also a sex difference, so XIST, TSIX and Y-chromosome genes will top the list and no "
+               "test can separate sex from the comparison.")
+    elif any(s and (t["female"] + t["male"]) >= 2 for s, t in zip(single, tallies)) and None in single:
+        kind = "imbalanced"
+        msg = (f"Sex differs between the sides ({desc}){tail}: XIST, TSIX and Y-chromosome genes "
+               "will show up in this comparison for that reason, not the condition's; read sex-linked "
+               "genes as sex.")
+    else:
+        return None
+    return {"kind": kind, "message": msg, "sample_key": sample_key, "source": source,
+            "a": tallies[0], "b": tallies[1]}
+
+
 def sex_check(adata, column: str | None = None) -> dict:
     """Per-sample sex calls from expression, compared with any sex metadata, and
     warnings for mixed samples, mismatches and sex x condition confounding.

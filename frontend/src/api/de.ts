@@ -45,6 +45,8 @@ export interface DEResponse {
   ruv?: PseudobulkRuv | null;
   /** /de/compare: the two sides are also different batches (datasets, runs). */
   confounding?: DEConfounding | null;
+  /** /de/compare: the sides' samples differ in sex (absent from older servers). */
+  sex?: DESexDifference | null;
   /** /de/compare: each side's share of every cluster/state (absent from older servers). */
   composition?: DEComposition | null;
   /** Names this result for GSEA, which could not send every gene back. */
@@ -158,6 +160,17 @@ export interface DEComposition {
   n_missing?: number;
   /** The sides are different groups of `column`: composition is the comparison. */
   nested?: boolean;
+}
+
+/** /de/compare: the two sides' samples differ in sex (core/sex_check.py compare_sides). */
+export interface DESexDifference {
+  kind: "confounded" | "imbalanced";
+  message: string;
+  sample_key: string;
+  /** Where each sample's sex came from: the metadata column, or a sex check already run. */
+  source: string;
+  a: { female: number; male: number };
+  b: { female: number; male: number };
 }
 
 export interface DEConfounding {

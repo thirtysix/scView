@@ -756,6 +756,15 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                   ? "biological" : `'${result.confounding.condition}'`} effect.
               </span>
             )}
+            {result.sex && (
+              <span
+                role="alert"
+                data-testid="de-sex-caution"
+                className="mt-1 block rounded border border-red-200 bg-red-50 px-1.5 py-1 text-red-800"
+              >
+                {result.sex.message}
+              </span>
+            )}
             {result.composition?.warn && (
               <span
                 role="alert"
