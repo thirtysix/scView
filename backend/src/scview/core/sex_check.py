@@ -52,6 +52,15 @@ OFF_SHARE = 0.02  # and "off" at or below this share (ambient RNA stays under it
 MIN_CELLS = 10  # as pseudobulk and the per-donor plots
 # A per-sample marker share this spread-out across samples (max/min) is not "one level".
 UNIFORM_RATIO = 1.5
+# Cell-level DE: the share of each side's cells from female samples differing by this
+# much (absolute, 15 percentage points) is warned about even when the donors balance
+# (Yang 2021: 1 female donor a side, 31% vs 7% of the L2/3 nuclei, XIST padj 6e-34).
+CELL_SHARE_DIFF = 0.15
+
+# A sample with Y genes in this share of its cells sets the dataset's male Y-gene level.
+MALE_LIKE_SHARE = 0.5
+# A marker set's CPM under this share of the other sex's samples' level is ambient RNA.
+AMBIENT_SHARE = 0.1
 
 CALLS = ("female", "male", "mixed", "ambiguous", "undetermined")
 
@@ -154,6 +163,40 @@ def call_sex(n_cells: int, female: float | None, male: float | None) -> tuple[st
     if m_off and female is None:
         return "female", "low"  # Y genes absent, XIST not measured
     return "ambiguous", "low"
+
+
+def ambient_recall(rows: list[dict]) -> None:
+    """Re-call a mixed or ambiguous sample whose second marker set is at an ambient level.
+
+    In pooled lanes (Liu 2021: 5' v1, donors pooled and demultiplexed) a female sample's
+    cells pick up Y-gene reads from the male donors' ambient RNA: Y genes in 5-14% of its
+    cells, so a cell-share rule calls it mixed or ambiguous, though at 12-36 CPM against the
+    male samples' 676-863. Measured against the dataset's own samples (those with Y genes in
+    half their cells or more for the male level; the others with XIST on for the female
+    level), a level under ``AMBIENT_SHARE`` of it is ambient: the call is the other sex.
+    Needs counts (CPM) and samples of the other sex to compare with; changes ``rows``."""
+    def level(values: list[float]) -> float | None:
+        return float(np.median(values)) if values else None
+
+    sized = [r for r in rows if r["n_cells"] >= MIN_CELLS]
+    ref_m = level([r["cpm_male"] for r in sized if r["cpm_male"] is not None
+                   and (r["frac_male"] or 0) >= MALE_LIKE_SHARE])
+    ref_f = level([r["cpm_female"] for r in sized if r["cpm_female"] is not None
+                   and (r["frac_male"] or 0) < MALE_LIKE_SHARE and (r["frac_female"] or 0) >= ON_SHARE])
+    for r in sized:
+        if r["call"] not in ("mixed", "ambiguous"):
+            continue
+        f, m = r["frac_female"] or 0, r["frac_male"] or 0
+        if ref_m and r["cpm_male"] is not None and f >= ON_SHARE and r["cpm_male"] < AMBIENT_SHARE * ref_m:
+            r["call"], r["confidence"] = "female", "high" if f >= 2 * ON_SHARE else "low"
+            r["evidence"] = r["evidence"][:-1] + (
+                f". The Y genes' {r['cpm_male']:,.0f} CPM is {r['cpm_male'] / ref_m:.0%} of the male "
+                f"samples' {ref_m:,.0f}: ambient RNA from male donors in the same run, not a male donor.")
+        elif ref_f and r["cpm_female"] is not None and m >= ON_SHARE and r["cpm_female"] < AMBIENT_SHARE * ref_f:
+            r["call"], r["confidence"] = "male", "high" if m >= 2 * ON_SHARE else "low"
+            r["evidence"] = r["evidence"][:-1] + (
+                f". XIST's {r['cpm_female']:,.0f} CPM is {r['cpm_female'] / ref_f:.0%} of the female "
+                f"samples' {ref_f:,.0f}: ambient RNA from female donors in the same run, not a female donor.")
 
 
 def _evidence(row: dict, f_genes: list[str], m_genes: list[str]) -> str:
@@ -326,6 +369,34 @@ def compare_sides(obs: pd.DataFrame, sample_key: str, mask_a: np.ndarray, mask_b
             "a": tallies[0], "b": tallies[1]}
 
 
+def compare_cell_shares(obs: pd.DataFrame, sample_key: str, mask_a: np.ndarray, mask_b: np.ndarray,
+                        label_a: str, label_b: str, sexes: dict[str, str], source: str) -> dict | None:
+    """For a cell-level test, which weighs each donor by its cells: the share of each side's
+    cells (in samples of known sex) that come from female samples. ``kind`` "cells" when the
+    shares differ by CELL_SHARE_DIFF or more, else None (also when a side has no cell of a
+    sample of known sex)."""
+    samples = obs[sample_key].astype(str).where(obs[sample_key].notna()).to_numpy()
+    sex = pd.Series(samples).map(sexes).to_numpy()
+    shares, tallies = [], []
+    for mask in (mask_a, mask_b):
+        s = sex[np.asarray(mask, bool)]
+        f, m = int((s == "female").sum()), int((s == "male").sum())
+        if f + m == 0:
+            return None
+        shares.append(f / (f + m))
+        tallies.append({"female_cells": f, "male_cells": m, "share_female": round(f / (f + m), 4)})
+    if abs(shares[0] - shares[1]) < CELL_SHARE_DIFF:
+        return None
+    msg = (f"Cells differ in sex between the sides: {_share(shares[0])} of {label_a}'s cells and "
+           f"{_share(shares[1])} of {label_b}'s come from female samples (samples by "
+           f"'{sample_key}', sex from {source}; warned at a difference of "
+           f"{CELL_SHARE_DIFF * 100:.0f} points or more). A cell-level test weighs each donor by "
+           "its cells, so XIST, TSIX and Y-chromosome genes can top the list even when the donors "
+           "balance; read sex-linked genes as sex, or use pseudobulk.")
+    return {"kind": "cells", "message": msg, "sample_key": sample_key, "source": source,
+            "a": tallies[0], "b": tallies[1], "threshold": CELL_SHARE_DIFF}
+
+
 def sex_check(adata, column: str | None = None) -> dict:
     """Per-sample sex calls from expression, compared with any sex metadata, and
     warnings for mixed samples, mismatches and sex x condition confounding.
@@ -381,10 +452,11 @@ def sex_check(adata, column: str | None = None) -> dict:
         row["evidence"] = (f"Only {n} cells: too few to call." if n < MIN_CELLS
                            else _evidence(row, f_genes, m_genes))
         row["metadata"] = meta[i]["value"] if meta else None
-        row["mismatch"] = bool(meta and row["call"] in ("female", "male")
-                               and meta[i]["value"] in ("female", "male")
-                               and meta[i]["value"] != row["call"])
         rows.append(row)
+    ambient_recall(rows)
+    for r in rows:
+        r["mismatch"] = bool(r["call"] in ("female", "male") and r["metadata"] in ("female", "male")
+                             and r["metadata"] != r["call"])
 
     warnings: list[str] = []
     for r in rows:
@@ -396,8 +468,10 @@ def sex_check(adata, column: str | None = None) -> dict:
         if r["call"] == "mixed":
             warnings.append(
                 f"'{r['name']}' has both female and male markers in many cells "
-                f"({r['evidence'][:-1]}): it pools donors of both sexes (demultiplex them "
-                "before per-donor analysis) or holds doublets across donors.")
+                f"({r['evidence'][:-1]}): it may pool donors of both sexes (demultiplex them "
+                "before per-donor analysis), hold doublets across donors, or carry ambient RNA "
+                "from other donors in a pooled run (then its CPM of the second set is far below "
+                "the other samples').")
     confounding = sex_confounding(obs, column, codes, group_names, _sex_of_rows(rows)) if column else []
     warnings += [c["message"] for c in confounding]
 
@@ -413,7 +487,15 @@ def sex_check(adata, column: str | None = None) -> dict:
         notes.append("No Y-chromosome genes are in the data (filtered out?), so calls rest on "
                      f"{'/'.join(f_genes)} alone: a male call means only that it is absent.")
     elif not f_genes:
-        notes.append("XIST is not in the data, so calls rest on the Y genes alone.")
+        notes.append("XIST and TSIX are not in the data, so calls rest on the Y genes alone.")
+    elif not any(g.upper() == "XIST" for g in f_genes):
+        # Jäkel 2019's CELLxGENE version: no XIST, so both metadata females came out
+        # ambiguous with nothing saying why.
+        top = max((r["frac_female"] or 0 for r in rows), default=0.0)
+        notes.append(f"XIST is not in the data, only {'/'.join(f_genes)}, which is much sparser (in at "
+                     f"most {_share(top)} of a sample's cells here): a sample without Y genes is left "
+                     "ambiguous rather than called female, as it could also be a male sample too "
+                     "shallow for its Y genes to show.")
     if not is_counts:
         notes.append(f"No raw counts, so detection is read from {source} and no CPM is given.")
     called = [r for r in rows if r["n_cells"] >= MIN_CELLS and r["frac_female"] is not None]

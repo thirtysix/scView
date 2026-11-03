@@ -144,6 +144,10 @@ class PipelineParams:
 
     # Neighbors
     n_neighbors: int = 15
+    # The obsm representation the neighbour graph is built on: "" picks the batch-corrected
+    # PCs when there are some (X_pca_harmony, X_scanorama; a BBKNN graph is kept), else
+    # X_pca; "X_pca" builds on the uncorrected PCs even after a correction.
+    neighbors_use_rep: str = ""
 
     # Clustering
     clustering_resolution: float = 0.5
@@ -979,12 +983,17 @@ def _run_batch_correction(adata: ad.AnnData, params: PipelineParams) -> dict[str
 def _run_neighbors(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]:
     """Compute the nearest-neighbour graph on the corrected PCs when there are some
     (Harmony, Scanorama), else on X_pca. A BBKNN graph made by batch correction (since
-    the last PCA) is the graph: kept, and recorded as kept."""
-    if batch_methods.is_bbknn_graph(adata):
+    the last PCA) is the graph: kept, and recorded as kept. ``neighbors_use_rep`` names
+    the representation instead (then a BBKNN graph is replaced)."""
+    chosen = (params.neighbors_use_rep or "").strip()
+    if chosen and chosen not in adata.obsm:
+        have = ", ".join(k for k in adata.obsm if k.startswith(("X_pca", "X_scanorama"))) or "none"
+        raise ValueError(f"neighbors_use_rep '{chosen}' is not in this dataset; its PCs: {have}.")
+    if not chosen and batch_methods.is_bbknn_graph(adata):
         p = adata.uns["neighbors"]["params"]
         logger.info("Neighbor graph: BBKNN graph from batch correction kept")
         return {"graph": "bbknn", "kept": True, "n_neighbors_total": int(p.get("n_neighbors", 0))}
-    use_rep = batch_methods.neighbour_rep(adata)
+    use_rep = chosen or batch_methods.neighbour_rep(adata)
     sc.pp.neighbors(adata, n_neighbors=params.n_neighbors, use_rep=use_rep)
     logger.info("Neighbor graph: k=%d, use_rep=%s", params.n_neighbors, use_rep)
     return {"use_rep": use_rep}
@@ -1952,7 +1961,7 @@ _STEP_PROVENANCE: dict[str, tuple[str, tuple[str, ...]]] = {
     "pca": ("scanpy.pp.pca", ("n_comps",)),
     "uncorrected_embedding": ("scanpy.tl.umap (uncorrected PCA)", ("n_neighbors", "umap_min_dist")),
     "batch_correction": ("scview.batch_correction", ("batch_key", "batch_method")),
-    "neighbors": ("scanpy.pp.neighbors", ("n_neighbors", "n_comps")),
+    "neighbors": ("scanpy.pp.neighbors", ("n_neighbors", "n_comps", "neighbors_use_rep")),
     "clustering": ("scanpy.tl.leiden/louvain", ("clustering_method", "clustering_resolution")),
     "embeddings": ("scanpy.tl.umap", ("umap_min_dist", "umap_3d")),
     "marker_genes": ("scanpy.tl.rank_genes_groups", ("marker_columns",)),
@@ -2160,6 +2169,7 @@ def _finish_run(
     output_path: str | None,
     control: RunControl | None,
     outcome: step_failures.Outcome | None = None,
+    write: Callable[[ad.AnnData, str], None] | None = None,
 ) -> None:
     """Finalise and save a run that reached its end, also one that finished with
     errors (what ran is saved; ``run_errors`` in provenance lists what did not). A
@@ -2169,7 +2179,9 @@ def _finish_run(
     it was before the run.
 
     The file is written beside the derived file and then swapped in, so a backend
-    killed mid-write (out of memory) leaves the previous file whole."""
+    killed mid-write (out of memory) leaves the previous file whole. ``write(adata,
+    path)`` writes it (default: ``adata.write_h5ad``, gzip); a run on the dataset without
+    its matrices (``large_run.run_light``) copies them from its file instead."""
     if outcome is not None:
         step_failures.settle_unrun(adata, outcome)  # markers of a column clustered again
         _end_status(result, outcome)
@@ -2188,7 +2200,10 @@ def _finish_run(
         partial = output_path + ".partial"
         uns_history.before_save(output_path, adata)  # markers / enrichment this run replaced
         try:
-            adata.write_h5ad(partial, compression="gzip")
+            if write is None:
+                adata.write_h5ad(partial, compression="gzip")
+            else:
+                write(adata, partial)
             os.replace(partial, output_path)
         except BaseException:
             Path(partial).unlink(missing_ok=True)
@@ -2228,6 +2243,7 @@ def run_pipeline(
     params: PipelineParams | None = None,
     output_path: str | None = None,
     control: RunControl | None = None,
+    write: Callable[[ad.AnnData, str], None] | None = None,
 ) -> tuple[ad.AnnData, PipelineResult]:
     """Run a subset of preprocessing steps on the AnnData object.
 
@@ -2244,6 +2260,8 @@ def run_pipeline(
     control
         Checked before each step (cancel, the pre-step hook) and times and
         watches each step (``core/run_watchdog.py``). None: neither.
+    write
+        Writes the saved file (``_finish_run``); None: ``write_h5ad``.
 
     A step that fails skips the steps that need it (``core/step_failures.py``); the
     others run, and the run is saved with status "finished_with_errors".
@@ -2309,7 +2327,7 @@ def run_pipeline(
                 break
             _step_failed(adata, result, outcome, step_name, str(e))
 
-    _finish_run(adata, params, result, t0, output_path, control, outcome)
+    _finish_run(adata, params, result, t0, output_path, control, outcome, write)
     return adata, result
 
 
@@ -2319,6 +2337,7 @@ def run_pipeline_streamed(
     params: PipelineParams | None = None,
     output_path: str | None = None,
     control: RunControl | None = None,
+    write: Callable[[ad.AnnData, str], None] | None = None,
 ) -> Generator[tuple[str, dict[str, Any]], None, tuple[ad.AnnData, PipelineResult]]:
     """Run preprocessing steps, yielding progress events after each step.
 
@@ -2431,7 +2450,7 @@ def run_pipeline_streamed(
             _step_failed(adata, result, outcome, step_name, str(e))
             yield ("step_error", {"step": step_name, "index": idx, "error": str(e)})
 
-    _finish_run(adata, params, result, t0, output_path, control, outcome)
+    _finish_run(adata, params, result, t0, output_path, control, outcome, write)
     yield ("complete", result.to_dict())
 
     return adata, result

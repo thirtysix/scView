@@ -159,9 +159,10 @@ async def test_data_tools(client, dataset_manager):
     assert [d["id"] for d in r["datasets"]] == [did]
     r = await _call("get_dataset", {"dataset_id": did})
     assert r["n_cells"] == 480 and r["n_genes"] == 40 and "X_umap" in r["available_embeddings"]
-    cols = {c["name"]: c for c in r["obs_columns"]}
-    assert cols["stim"]["values"] == ["CTRL", "STIM"] and r["large_mode"] is False
-    assert cols["is_primary_data"]["values"] == ["True"]  # only the value present
+    assert r["obs_columns"]["columns"] == ["name", "dtype", "n_unique"]
+    assert ["stim", "category", 2] in r["obs_columns"]["rows"] and r["obs_columns"]["n_total"] == 6
+    assert r["column_values"]["stim"] == ["CTRL", "STIM"] and r["large_mode"] is False
+    assert r["column_values"]["is_primary_data"] == ["True"]  # only the value present
     r = await _call("describe_column", {"dataset_id": did, "column": "donor_id"})
     assert r["kind"] == "categories" and r["counts"][0][1] == 120
     r = await _call("describe_column", {"dataset_id": did, "column": "day"})
@@ -181,9 +182,73 @@ async def test_data_tools(client, dataset_manager):
     r = await _call("preflight", {"dataset_id": did, "steps": ["pca", "neighbors"]})
     assert r["verdict"]["level"] in ("fits", "tight", "wont_fit") and r["steps"]["rows"][0][0] == "pca"
     text = await _call("describe_column", {"dataset_id": did, "column": "nope"}, error=True)
-    assert "Column 'nope' not found." in text
+    assert "Column 'nope' not found." in text and "donor_id" in text  # names the columns
+    text = await _call("describe_column", {"dataset_id": did, "column": "donor"}, error=True)
+    assert "Closest: donor_id" in text
+    text = await _call("crosstab", {"dataset_id": did, "row": "donor_id", "col": "condition"}, error=True)
+    assert "Column 'condition' not found." in text and "stim" in text
+    text = await _call("plot", {"dataset_id": did, "color_by": "clusters"}, error=True)
+    assert "Closest: cluster" in text
     text = await _call("get_dataset", {"dataset_id": "missing"}, error=True)
     assert "not found" in text.lower()
+
+
+async def test_get_dataset_names_every_column(client, dataset_manager):
+    """Yang 2021: 45 obs columns, 22 shown and no paging (the author labels were hidden).
+    Every name and type comes back; the small columns' values while they fit."""
+    did = _register(dataset_manager, "manycols")
+    a = _adata().copy()
+    rng = np.random.default_rng(1)
+    for i in range(60):
+        words = [f"{'ontology_term_' * 3}{i}_{k}" for k in range(25)]
+        a.obs[f"meta_{i:02d}"] = pd.Categorical(rng.choice(words, a.n_obs))
+    a.obs["cellID2"] = pd.Categorical(np.where(a.obs["cluster"] == "A", "Microglia", "Astro"))
+    a.write_h5ad(Path(dataset_manager.data_dir) / "uploads" / did / "data.h5ad")
+    async with Client(SERVER) as c:
+        r = await c.call_tool("get_dataset", {"dataset_id": did})
+    text = r.content[0].text
+    d = json.loads(text)
+    names = [row[0] for row in d["obs_columns"]["rows"]]
+    assert len(names) == d["obs_columns"]["n_total"] == 67 and "cellID2" in names and "meta_59" in names
+    assert "truncated" not in d and len(text) < 2 * compact.MAX_CHARS
+    assert d["column_values"]["cellID2"] == ["Astro", "Microglia"]  # small ones first
+    assert "describe_column" in d["column_values_left_out"]
+
+
+def test_steps_done_writes_repeats_once():
+    assert tools._runs(["qc_metrics", "label_cells", "label_cells", "label_cells", "pca", "label_cells"]) == [
+        "qc_metrics", "label_cells x3", "pca", "label_cells"]
+
+
+async def test_describe_column_per_group(client, dataset_manager):
+    """A numeric column per donor x condition (Jäkel, Yang, Otero-Garcia, Liu: depth or %
+    mito per sample needed set_labels or crosstab proxies)."""
+    did = _register(dataset_manager)
+    r = await _call("describe_column", {"dataset_id": did, "column": "day", "groupby": ["donor_id", "stim"]})
+    assert r["groupby"] == ["donor_id", "stim"] and r["n_total"] == 8
+    cols = r["columns"]
+    first = dict(zip(cols, r["rows"][0]))
+    assert first["donor_id"] == "D0" and first["stim"] == "CTRL" and first["n"] == 60
+    assert first["median"] == 9 and first["iqr"] == 0 and first["mean"] == 9
+    r = await _call("describe_column", {"dataset_id": did, "column": "day", "groupby": ["donor_id"],
+                                        "limit": 2, "offset": 2})
+    assert [row[0] for row in r["rows"]] == ["D2", "D3"] and r["n_total"] == 4 and "next_offset" not in r
+    assert dict(zip(r["columns"], r["rows"][0]))["median"] == 10  # half day 9, half day 11
+    text = await _call("describe_column", {"dataset_id": did, "column": "stim", "groupby": ["donor_id"]},
+                       error=True)
+    assert "not numeric" in text and "crosstab" in text
+    text = await _call("describe_column", {"dataset_id": did, "column": "day", "groupby": ["donr"]},
+                       error=True)
+    assert "Closest: donor_id" in text
+
+
+def test_by_group_leaves_out_missing_values_and_groups():
+    v = pd.Series([1.0, 2.0, None, 4.0, 10.0], dtype=object)
+    g = pd.Series(["a", "a", "a", None, "b"], dtype=object)
+    recs = tools._by_group(v, [g], ["s"])
+    assert recs[0] == {"s": "a", "n": 3, "n_missing": 1, "mean": 1.5, "median": 1.5, "q25": 1.25,
+                       "q75": 1.75, "iqr": 0.5, "min": 1.0, "max": 2.0}
+    assert recs[1]["s"] == "b" and recs[1]["n"] == 1 and len(recs) == 2
 
 
 async def test_markers_labels_by_filter_and_subcluster(client, dataset_manager):
@@ -202,6 +267,14 @@ async def test_markers_labels_by_filter_and_subcluster(client, dataset_manager):
     text = await _call("set_labels", {"dataset_id": did, "column": "sample", "label": "x", "filter": {
         "op": "and", "items": [{"kind": "category", "column": "donor_id", "values": ["nobody"]}]}}, error=True)
     assert "No cell matches" in text
+    # An unknown filter key is refused (Otero-Garcia: "negate" was ignored and relabelled
+    # the cells it meant to leave out); nothing is written.
+    text = await _call("set_labels", {"dataset_id": did, "column": "sample", "label": "x", "filter": {
+        "op": "and", "items": [{"kind": "category", "column": "donor_id", "values": ["D0"],
+                                "negate": True}]}}, error=True)
+    assert "negate" in text
+    r = await _call("describe_column", {"dataset_id": did, "column": "sample"})
+    assert dict(r["counts"]) == {"Unassigned": 420, "D0_d11": 60}
     r = await _call("subcluster", {"dataset_id": did, "column": "cluster", "group": "A", "resolution": 0.3})
     assert r["column"] == "cluster_sub"
     r = await _call("get_recipe", {"dataset_id": did})
@@ -212,6 +285,71 @@ async def test_markers_labels_by_filter_and_subcluster(client, dataset_manager):
 
 
 # --- statistics --------------------------------------------------------------------------------
+
+async def test_expression_by_group_pages_through_the_groups(client, dataset_manager):
+    """Liu 2021: 197 genes x 100 groups came back as 25 groups, no offset. Every group
+    once, each whole, a page at a time."""
+    did = _register(dataset_manager)
+    seen, offset = [], 0
+    while True:
+        r = await _call("expression_by_group", {"dataset_id": did, "genes": GENES, "groupby": "donor_id",
+                                                "limit": 3, "offset": offset})
+        assert "truncated" not in r and r["n_groups"] == 4
+        assert len(r["mean"]) == len(r["fraction"]) == len(r["groups"]) and len(r["mean"][0]) == 40
+        seen += r["groups"]
+        if "next_offset" not in r:
+            break
+        offset = r["next_offset"]
+    assert seen == ["D0", "D1", "D2", "D3"]
+
+
+async def test_expression_by_group_page_holds_fewer_groups_when_genes_are_many(client, dataset_manager,
+                                                                                monkeypatch):
+    did = _register(dataset_manager)
+    monkeypatch.setattr(compact, "MAX_CHARS", 1500)  # a page of about two groups of 40 genes
+    r = await _call("expression_by_group", {"dataset_id": did, "genes": GENES, "groupby": "donor_id"})
+    assert 1 <= len(r["groups"]) < 4 and r["next_offset"] == len(r["groups"]) and "truncated" not in r
+
+
+async def test_score_gene_set_per_sample_with_the_donor_level_test(client, dataset_manager):
+    """Liu 2021: a hallmark score per sample within each cell type took ~200 calls. One
+    call: each sample's mean score per group, and per group the donor-level test."""
+    did = _register(dataset_manager)
+    r = await _call("score_gene_set", {"dataset_id": did, "genes": S_SET, "groupby": "cluster",
+                                       "sample": "donor_id", "condition": "stim"})
+    assert r["conditions"] == ["CTRL", "STIM"] and r["direction"] == "mean_diff = STIM minus CTRL"
+    assert r["design"]["paired"] is True and r["design"]["n_pairs"] == 4
+    assert r["values"]["n_total"] == 16 and r["values"]["columns"] == [
+        "group", "condition", "sample", "n_cells", "mean_score"]
+    tests = {row[0]: dict(zip(r["tests"]["columns"], row)) for row in r["tests"]["rows"]}
+    assert set(tests) == {"A", "B"} and all(t["n_pairs"] == 4 and t["mean_diff"] > 0 for t in tests.values())
+    assert tests["A"]["ttest_p"] < 0.05 and "descriptive" in tests["A"]["caution"]  # 4 pairs
+    # The per-sample means are the cells' scores averaged (the route's own scores).
+    d = await tools._post(f"/datasets/{did}/genesets/score", {"gene_set": S_SET, "method": "score_genes"})
+    a = _adata()
+    m = (a.obs["cluster"] == "A") & (a.obs["stim"] == "STIM") & (a.obs["donor_id"] == "D1")
+    row = next(x for x in r["values"]["rows"] if x[:3] == ["A", "STIM", "D1"])
+    assert row[3] == 30 and abs(row[4] - float(np.mean(np.asarray(d["scores"])[m.to_numpy()]))) < 1e-3
+    # The order is the caller's: [reference, tested]; a page of rows with next_offset.
+    r = await _call("score_gene_set", {"dataset_id": did, "genes": S_SET, "groupby": "cluster",
+                                       "sample": "donor_id", "condition": "stim",
+                                       "conditions": ["STIM", "CTRL"], "limit": 5})
+    assert r["direction"] == "mean_diff = CTRL minus STIM" and r["next_offset"] == 5
+    assert all(row[r["tests"]["columns"].index("mean_diff")] < 0 for row in r["tests"]["rows"])
+    # Per sample with no condition: values only.
+    r = await _call("score_gene_set", {"dataset_id": did, "genes": T_SET, "groupby": "cluster",
+                                       "sample": "donor_id"})
+    assert r["values"]["n_total"] == 8 and "tests" not in r
+    text = await _call("score_gene_set", {"dataset_id": did, "genes": T_SET, "condition": "stim"}, error=True)
+    assert "give sample" in text
+    text = await _call("score_gene_set", {"dataset_id": did, "genes": T_SET, "groupby": "cluster",
+                                          "sample": "donor_id", "condition": "donor_id"}, error=True)
+    assert "4 values" in text and "conditions=[reference, tested]" in text
+    text = await _call("score_gene_set", {"dataset_id": did, "genes": T_SET, "groupby": "cluster",
+                                          "sample": "donor_id", "condition": "stim",
+                                          "conditions": ["CTRL", "nope"]}, error=True)
+    assert "'nope'" in text
+
 
 async def test_de_per_donor_composition_and_enrichment(client, dataset_manager):
     did = _register(dataset_manager)
@@ -373,6 +511,37 @@ def test_labels_skip_tiny_groups_and_move_off_each_other():
     assert "pDC" not in names and {"IgA PB", "IgG PB", "T"} == set(names)
     (_, _, ya), (_, _, yb) = [s for s in spots if s[0] in ("IgA PB", "IgG PB")]
     assert abs(ya - yb) > 0.2  # the two labels on one spot were moved apart
+
+
+async def test_plot_draws_only_the_cells_an_embedding_places(client, dataset_manager):
+    """A CELLxGENE embedding can leave cells out (NaN rows; Jäkel 2019: 4,903 of 17,799):
+    colouring by a column with small groups failed in the label placement."""
+    did = _register(dataset_manager, "nanumap")
+    path = Path(dataset_manager.data_dir) / "uploads" / did / "data.h5ad"
+    a = _adata().copy()
+    a.obs["typ"] = pd.Categorical(np.where(np.arange(a.n_obs) < 4, "rare", a.obs["cluster"].astype(str)))
+    a.obsm["X_umap"] = a.obsm["X_umap"].copy()
+    a.obsm["X_umap"][100:200] = np.nan
+    a.write_h5ad(path)
+    content = await _call("plot", {"dataset_id": did, "color_by": "typ"})
+    text = next(b.text for b in content if b.type == "text")
+    assert "380 of 480 cells placed on X_umap (100 have no coordinates" in text
+    assert base64.b64decode(next(b for b in content if b.type == "image").data).startswith(PNG)
+    content = await _call("plot", {"dataset_id": did, "color_by": "donor_id",
+                                   "within_column": "cluster", "within_value": "A"})
+    assert "with cluster = A placed" in next(b.text for b in content if b.type == "text")
+
+
+def test_label_spots_ignore_cells_without_coordinates():
+    from scview.mcp import plots
+
+    rng = np.random.default_rng(0)
+    xy = np.vstack([rng.normal(0, 1, (1000, 2)), rng.normal(5, 0.1, (8, 2))])
+    xy[::7] = np.nan  # in both groups: the small one (under 1%) failed on its empty core
+    codes = np.repeat([0, 1], [1000, 8])
+    names = [n for n, _, _ in plots._label_spots(xy, codes, ["big", "small"])]
+    assert names == ["big", "small"]
+    assert plots._label_spots(np.full((5, 2), np.nan), np.zeros(5, int), ["x"]) == []
 
 
 async def test_plot_samples_a_big_dataset_and_says_so(client, dataset_manager, monkeypatch):
@@ -573,3 +742,10 @@ async def test_hostile_origin_and_host_are_refused(tmp_data_dir):
     lan = Settings(DATA_DIR=str(tmp_data_dir), MCP_ALLOWED_ORIGINS="http://192.168.1.5:8080")
     assert (await _post_init(lan, {"origin": "http://192.168.1.5:8080"}, host="192.168.1.5:8080")).status_code == 200
     assert (await _post_init(lan, {"origin": "http://192.168.1.6:8080"}, host="192.168.1.5:8080")).status_code == 403
+
+
+async def test_any_route_missing_column_names_the_closest(client, dataset_manager):
+    did = _register(dataset_manager)
+    text = await _call("per_donor_expression", {"dataset_id": did, "gene": "G1", "groupby": "clustr"},
+                       error=True)
+    assert "Column 'clustr' not found." in text and "Closest: cluster" in text

@@ -77,6 +77,9 @@ MIXED = "Mixed"
 CELLS_PER_SAMPLE = 5  # Milo's rule of thumb for the mean neighbourhood size
 ONE_CONDITION_SHARE = 0.95
 ONE_CONDITION_WARN = 0.5  # share of neighbourhoods that are one condition before warning
+ONE_SAMPLE_SHARE = 0.5  # a neighbourhood with this share of its cells from one sample
+ONE_SAMPLE_WARN = 0.5  # share of the significant neighbourhoods that are, before warning
+OUTSIDE_WARN = 0.1  # share of the cells in neither condition before saying so
 # DESeq2 fits one model per neighbourhood: one process keeps it in this worker
 # thread, as pseudobulk does.
 N_CPUS = 1
@@ -120,6 +123,31 @@ def representation(adata) -> tuple[str, np.ndarray]:
     if rep is None:
         raise MiloError("No PCA (or Harmony) representation found for the neighbour graph.")
     return rep, X
+
+
+def graph_k(adata) -> int | None:
+    """The neighbour graph's k (``n_neighbors``): it sets the neighbourhoods' size."""
+    params = (adata.uns.get("neighbors") or {}).get("params") or {}
+    try:
+        return int(np.ravel(params.get("n_neighbors"))[0])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def graph_batch_key(adata, recorded: str | None) -> str | None:
+    """``recorded`` (the last batch correction's key) when the graph held now was built on
+    corrected PCs or is BBKNN's, else None: a graph rebuilt on X_pca after a correction is
+    not corrected, and the warning about it was stale. A graph that does not say what it
+    was built on keeps the recorded key."""
+    from scview.core import batch_methods
+
+    if not recorded:
+        return None
+    params = (adata.uns.get("neighbors") or {}).get("params") or {}
+    rep = params.get("use_rep") if isinstance(params, dict) else None
+    if batch_methods.is_bbknn_graph(adata) or not rep or rep in batch_methods.CORRECTED_KEYS:
+        return recorded
+    return None
 
 
 def default_prop(n_cells: int) -> float:
@@ -228,6 +256,25 @@ class MiloResult:
     notes: list[str] = field(default_factory=list)
     dropped_samples: list[str] = field(default_factory=list)
     timings: dict[str, float] = field(default_factory=dict)
+    # The graph's k, and per neighbourhood the sample with most of its counted cells and
+    # that share (None in results stored before they were kept).
+    n_neighbors: int | None = None
+    top_sample: list[str] | None = None
+    top_sample_share: np.ndarray | None = None
+
+    def sample_summary(self) -> dict[str, Any] | None:
+        """Which samples fill the significant neighbourhoods: how many of them have half or
+        more of their cells from one sample, and the samples that do so most often."""
+        if self.top_sample is None or self.top_sample_share is None:
+            return None
+        sig = np.flatnonzero(self.significant)
+        share = np.asarray(self.top_sample_share, dtype=float)
+        one = [i for i in sig if np.isfinite(share[i]) and share[i] >= ONE_SAMPLE_SHARE]
+        counts = pd.Series([self.top_sample[i] for i in one], dtype=object).value_counts()
+        return {"n_significant": int(len(sig)), "n_mostly_one_sample": int(len(one)),
+                "share_threshold": ONE_SAMPLE_SHARE,
+                "by_sample": [{"sample": str(k), "n_nhoods": int(v)} for k, v in counts.head(5).items()],
+                "median_top_share": float(np.median(share[sig])) if len(sig) else None}
 
     @property
     def significant(self) -> np.ndarray:
@@ -258,7 +305,8 @@ class MiloResult:
             "label_key": self.label_key, "conditions": self.conditions,
             "reference": self.conditions[0], "design": self.design,
             "covariates": self.covariates, "formula": self.formula,
-            "representation": self.representation, "prop": self.prop, "seed": SEED,
+            "representation": self.representation, "n_neighbors": self.n_neighbors,
+            "prop": self.prop, "seed": SEED,
             "n_cells": self.n_cells, "n_samples": self.n_samples,
             "n_nhoods": int(len(self.index)),
             "n_tested": int(np.isfinite(self.pval).sum()),
@@ -277,8 +325,11 @@ class MiloResult:
                 "pval": _floats(self.pval),
                 "spatial_fdr": _floats(self.spatial_fdr),
                 "counts": {k: v.astype(int).tolist() for k, v in self.counts.items()},
+                "top_sample": self.top_sample,
+                "top_sample_share": _floats(self.top_sample_share, 4),
             },
             "labels": self.label_summary(),
+            "samples_in_significant": self.sample_summary(),
             "edges": [] if self.edges is None else self.edges.astype(int).tolist(),
             "n_edges_total": self.n_edges_total,
             "layouts": {k: _floats(v, 4) for k, v in (layouts or {}).items()},
@@ -321,6 +372,7 @@ class Plan:
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     dropped_samples: list[str] = field(default_factory=list)
+    n_neighbors: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -330,7 +382,7 @@ class Plan:
             "n_cells": self.n_cells, "n_samples": self.n_samples, "prop": self.prop,
             "n_nhoods_estimate": self.n_nhoods_estimate,
             "estimate_seconds": round(self.estimate_seconds, 1),
-            "representation": self.representation,
+            "representation": self.representation, "n_neighbors": self.n_neighbors,
             "warnings": self.warnings, "notes": self.notes,
             "dropped_samples": self.dropped_samples,
         }
@@ -456,6 +508,9 @@ def plan(adata, condition_key: str, sample_key: str | None, *,
         raise MiloError("Too few samples for the design: no residual degrees of freedom.")
 
     warnings = design_warnings(adata, condition_key, keep, batch_key)
+    outside = outside_note(cond, chosen, condition_key)
+    if outside:
+        warnings.append(outside)
     n_s = int(len(s_cond))
     if min(n_samples.values()) < 3:
         notes.append("With two samples in a condition the replicate variance is barely "
@@ -467,8 +522,24 @@ def plan(adata, condition_key: str, sample_key: str | None, *,
         prop=float(prop), n_nhoods_estimate=n_nh,
         estimate_seconds=estimate_seconds(n_nh, n_s), representation=rep, keep=keep,
         sample_codes=codes, sample_cond=s_cond, sample_donor=s_donor, sample_cov=sample_cov,
-        warnings=warnings, notes=notes, dropped_samples=dropped,
+        warnings=warnings, notes=notes, dropped_samples=dropped, n_neighbors=graph_k(adata),
     )
+
+
+def outside_note(cond: pd.Series, chosen: list[str], condition_key: str) -> str | None:
+    """Say so when many cells are in neither chosen condition (Jäkel 2019: a condition column
+    set only on oligodendrocytes, every other cell 'Unassigned'): the neighbourhoods are
+    still sampled from, and span, the whole graph, so the run is not a test within a subset."""
+    out = cond.notna() & ~cond.isin(chosen)
+    n = int(out.sum())
+    if not n or (n < OUTSIDE_WARN * len(cond) and "Unassigned" not in set(cond[out])):
+        return None
+    top = cond[out].value_counts().head(3)
+    which = ", ".join(f"'{k}' {v:,}" for k, v in top.items())
+    return (f"{n:,} cells ({n / len(cond):.0%}) have a '{condition_key}' value other than "
+            f"{' or '.join(map(repr, chosen))} ({which}). They are not counted, but the neighbourhoods "
+            "are still sampled from and built on the whole graph, so this does not test within a "
+            "subset of cells: for that, run Milo on a dataset (and graph) of those cells only.")
 
 
 def design_matrix(s_cond: np.ndarray, chosen: list[str], donors: np.ndarray | None,
@@ -638,6 +709,25 @@ def iter_milo(adata, p: Plan, *, label_key: str | None = None,
     if labels is not None:
         notes.append(f"Neighbourhoods whose commonest '{label_key}' label holds under "
                      f"{MIXED_FRACTION:.0%} of their cells are labelled {MIXED}.")
+    # Which sample fills each neighbourhood (Yang 2021: the significant ones were one patient's
+    # cells, found only by re-running without that patient).
+    totals = counts.sum(axis=1)
+    top = np.argmax(counts, axis=1) if counts.shape[1] else np.zeros(len(nh.index), dtype=int)
+    top_share = np.divide(counts[np.arange(len(top)), top], totals, out=np.full(len(top), np.nan),
+                          where=totals > 0)
+    paired_names = p.design == "paired" or len(set(p.sample_donor)) < len(p.sample_donor)
+    sample_names = [f"{d} ({c})" if paired_names else str(d)
+                    for d, c in zip(p.sample_donor, p.sample_cond)]
+    top_sample = [sample_names[i] if totals[j] > 0 else None for j, i in enumerate(top)]
+    sig = np.nan_to_num(fdr, nan=1.0) < ALPHA
+    one = sig & (np.nan_to_num(top_share) >= ONE_SAMPLE_SHARE)
+    if sig.sum() and one.sum() >= ONE_SAMPLE_WARN * sig.sum():
+        most = pd.Series([top_sample[i] for i in np.flatnonzero(one)]).value_counts()
+        warnings.append(
+            f"{int(one.sum())} of the {int(sig.sum())} significant neighbourhoods have half or more of "
+            f"their counted cells from one sample (most often {most.index[0]}: {int(most.iloc[0])}): "
+            "the shift may be those samples' own make-up rather than the condition's. Check by "
+            "leaving the sample out.")
     untested = int(tested.sum() - np.isfinite(pval).sum())
     if untested:
         notes.append(f"{untested} neighbourhoods were not tested (DESeq2 flagged an outlying "
@@ -651,7 +741,8 @@ def iter_milo(adata, p: Plan, *, label_key: str | None = None,
         kth_distance=nh.kth_distance, counts=by_cond, log_fc=log_fc, pval=pval,
         spatial_fdr=fdr, labels=labels, label_fraction=frac, edges=edges,
         n_edges_total=n_edges, membership=nh.membership, warnings=warnings, notes=notes,
-        dropped_samples=p.dropped_samples, timings=timings,
+        dropped_samples=p.dropped_samples, timings=timings, n_neighbors=graph_k(adata),
+        top_sample=top_sample, top_sample_share=top_share,
     )}
 
 

@@ -156,6 +156,14 @@ def test_filters_this_dataset_cannot_answer_raise_with_a_status(spec, status, wo
             {"kind": "category", "column": "stim", "values": ["A"]}]}]}]},
     {"op": "and", "items": [{"kind": "group", "op": "and", "conditions": [
         {"kind": "category", "column": "stim", "values": ["A"]}] * 20}] * 3},
+    # An unknown key is refused, not ignored (an agent's "negate" selected the cells it
+    # meant to leave out), at every level.
+    {"op": "and", "items": [{"kind": "category", "column": "stim", "values": ["A"], "negate": True}]},
+    {"op": "and", "not": True, "items": [{"kind": "category", "column": "stim", "values": ["A"]}]},
+    {"op": "and", "items": [{"kind": "group", "op": "or", "invert": True, "conditions": [
+        {"kind": "category", "column": "stim", "values": ["A"]}]}]},
+    {"op": "and", "items": [{"kind": "range", "column": "n_counts", "min": 1, "exclusive": True}]},
+    {"op": "and", "items": [{"kind": "gene", "gene": "G0", "op": ">", "value": 1, "layer": "raw"}]},
 ])
 def test_malformed_filters_are_rejected(spec):
     with pytest.raises(ValidationError):

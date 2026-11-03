@@ -140,6 +140,58 @@ def test_search_filters_sorts_and_counts():
     assert len(page["results"]) == 2 and page["total"] == 4
 
 
+def test_search_reads_collection_descriptions_and_words_not_phrases():
+    """Otero-Garcia 2022: "neurofibrillary tangle" found nothing, though the collection's
+    description says "neurofibrillary tangles (NFTs)" (the title: "tangle-bearing")."""
+    ds = [pi.slim(r) for r in LISTING]
+    ds[0]["collection_description"] = "Tau aggregation in neurofibrillary tangles (NFTs) is ..."
+    for d in ds[1:]:
+        d["collection_description"] = ""
+    r = pi.search(ds, q="neurofibrillary tangle")
+    assert r["total"] == 1 and r["results"][0]["dataset_version_id"] == ds[0]["dataset_version_id"]
+    assert "collection_description" not in r["results"][0] and "partial" not in r
+    assert pi.search(ds, q="Tangle, neurofibrillary")["total"] == 1  # order and punctuation
+    assert pi.search(ds, q="NFTs")["total"] == 1 and pi.search(ds, q="aggregations")["total"] == 1
+    # No dataset with every word: the ones with the most, and which were not found.
+    r = pi.search(ds, q="neurofibrillary zebrafish")
+    assert r["total"] == 1 and r["partial"] == {"words_matched": 1, "of": 2,
+                                                "not_found_together": ["zebrafish"]}
+    assert pi.search(ds, q="zebrafish")["total"] == 0  # one word: no partial match
+    assert pi.search([pi.slim(r) for r in LISTING], q="liver")["total"] == 1  # a listing without them
+
+
+def test_listing_keeps_each_collections_description(tmp_path):
+    import httpx
+
+    fake = FakeDiscover()
+    orig = fake.handler
+    coll = LISTING_REC()["collection_id"]
+
+    def handler(request):
+        if str(request.url) == f"{pi.API_BASE}/collections":
+            return httpx.Response(200, json=[{"collection_id": coll, "description": "Hepatic B cells " * 400}])
+        return orig(request)
+
+    fake.handler = handler
+    got = pi.DiscoverCatalog(tmp_path, client_factory=fake.client).listing().datasets
+    rec = next(d for d in got if d["dataset_version_id"] == LIVER_B)
+    assert rec["collection_description"].startswith("Hepatic B cells")
+    assert len(rec["collection_description"]) == pi.DESCRIPTION_MAX
+    assert all("collection_description" in d for d in got)
+    # Collections unreachable: titles alone, still a listing.
+    fake.handler = orig
+    again = pi.DiscoverCatalog(tmp_path / "b", client_factory=fake.client).listing().datasets
+    assert {d["collection_description"] for d in again} == {""}
+    # A listing cached before descriptions were kept is fetched again.
+    path = tmp_path / "c" / "public_import" / "discover_datasets.json"
+    path.parent.mkdir(parents=True)
+    old = [{k: v for k, v in d.items() if k != "collection_description"} for d in got]
+    path.write_text(json.dumps({"fetched_at": pi._now(), "datasets": old}))
+    n = fake.listing_calls
+    pi.DiscoverCatalog(tmp_path / "c", client_factory=fake.client).listing()
+    assert fake.listing_calls == n + 1
+
+
 def test_listing_is_cached_with_a_ttl(tmp_path):
     fake = FakeDiscover()
     cat = pi.DiscoverCatalog(tmp_path, client_factory=fake.client)

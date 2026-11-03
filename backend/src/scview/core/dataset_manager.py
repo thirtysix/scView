@@ -179,7 +179,15 @@ def load_plan(path: str) -> LoadPlan:
 
     h = preflight.read_header(path)
     h5ad = getattr(h, "format", None) == "h5ad"
-    large = h5ad and large_mode.file_is_large(path)
+    return plan_of_header(h, h5ad and large_mode.file_is_large(path))
+
+
+def plan_of_header(h, large: bool = False) -> LoadPlan:
+    """``load_plan`` from a header already read (a remote file's, before it is downloaded:
+    ``public_import.remote_header``); ``large``: the file is a large dataset."""
+    from scview.core import preflight
+
+    h5ad = getattr(h, "format", None) == "h5ad"
     in_memory = None
     if not (large or getattr(h, "backed", False)):
         in_memory = int(preflight.estimate_load(h, ingest=False).peak_bytes)

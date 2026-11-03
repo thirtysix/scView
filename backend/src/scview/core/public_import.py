@@ -32,6 +32,7 @@ see the batch 18 report.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import re
@@ -57,6 +58,7 @@ LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/"
 LISTING_TTL_SECONDS = 24 * 3600
 CACHE_DIR = "public_import"
 LISTING_FILE = "discover_datasets.json"
+DESCRIPTION_MAX = 4000  # characters of a collection's description kept for the search
 CHUNK = 1024 * 1024
 # Disk kept free beyond the two copies (the download and the working copy).
 DISK_MARGIN = 1024**3
@@ -192,7 +194,9 @@ class DiscoverCatalog:
                     cached = Listing(list(data["datasets"]), str(data["fetched_at"]), True)
                 except (OSError, ValueError, KeyError, TypeError):
                     cached = None
-            if cached is not None and not refresh and self._fresh(cached.fetched_at):
+            # A listing cached before descriptions were kept is fetched again once.
+            described = not cached or not cached.datasets or "collection_description" in cached.datasets[0]
+            if cached is not None and not refresh and self._fresh(cached.fetched_at) and described:
                 self._mem = cached
                 return Listing(cached.datasets, cached.fetched_at, True)
             try:
@@ -206,6 +210,9 @@ class DiscoverCatalog:
             if not isinstance(raw, list):
                 raise PublicImportError("CELLxGENE Discover's listing has an unexpected shape.", 502)
             datasets = [s for s in (slim(r) for r in raw if isinstance(r, dict)) if s]
+            described = self._descriptions()
+            for s in datasets:
+                s["collection_description"] = described.get(str(s.get("collection_id")), "")
             fresh = Listing(datasets, _now(), False)
             self.dir.mkdir(parents=True, exist_ok=True)
             part = path.with_suffix(".part")
@@ -213,6 +220,20 @@ class DiscoverCatalog:
             part.replace(path)
             self._mem = fresh
             return fresh
+
+    def _descriptions(self) -> dict[str, str]:
+        """collection id -> its description (the abstract), for the search: a study's
+        words are often only there (Otero-Garcia 2022: "neurofibrillary" in no title).
+        Empty when Discover will not give them: the search then reads titles alone."""
+        try:
+            raw = self._get_json("/collections")
+        except PublicImportError as e:
+            logger.warning("Discover collections not fetched (%s): searching titles only", e)
+            return {}
+        if not isinstance(raw, list):
+            return {}
+        return {str(c["collection_id"]): str(c.get("description") or "")[:DESCRIPTION_MAX]
+                for c in raw if isinstance(c, dict) and c.get("collection_id")}
 
     def _fresh(self, fetched_at: str) -> bool:
         try:
@@ -250,17 +271,32 @@ def search(datasets: list[dict], q: str | None = None, organism: str | None = No
            tissue: str | None = None, disease: str | None = None, assay: str | None = None,
            max_bytes: int | None = None, sort: str = "cells", limit: int = 50,
            offset: int = 0) -> dict:
-    """Datasets matching every given filter (``q``: all words, in the title, collection,
-    tissues, diseases, assays or DOI label), with counts per organism and tissue over
-    the text-matched set so the filters show what is there."""
-    words = [w for w in (q or "").lower().split() if w]
+    """Datasets matching every given filter (``q``: its words, each anywhere in the title,
+    collection name or description, tissues, diseases, assays or DOI label; a word ending
+    in "s" also matches without it), with counts per organism and tissue over the
+    text-matched set so the filters show what is there. When no dataset has every word,
+    the ones with the most of them, and ``partial`` saying which words were not found."""
+    words = [w for w in re.findall(r"[\w'’-]+", (q or "").lower()) if w]
 
     def text(d: dict) -> str:
         return " ".join([d.get("title") or "", d.get("collection_name") or "",
+                         d.get("collection_description") or "",
                          d.get("collection_doi_label") or "", *d["tissue"], *d["disease"],
                          *d["assay"], *d["organism"]]).lower()
 
-    hits = [d for d in datasets if all(w in text(d) for w in words)]
+    def has(word: str, t: str) -> bool:
+        return word in t or (len(word) > 3 and word.endswith("s") and word[:-1] in t)
+
+    found = [(d, [w for w in words if has(w, text(d))]) for d in datasets]
+    best = max((len(m) for _, m in found), default=0)
+    partial = None
+    if words and best < len(words) and best > 0 and len(words) > 1:
+        hits = [d for d, m in found if len(m) == best]
+        seen = {w for _, m in found if len(m) == best for w in m}
+        partial = {"words_matched": best, "of": len(words),
+                   "not_found_together": [w for w in words if w not in seen] or words}
+    else:
+        hits = [d for d, m in found if len(m) == len(words)]
     organisms = Counter(o for d in hits for o in d["organism"])
     tissues = Counter(t for d in hits if _matches(d["organism"], organism) for t in d["tissue"])
     hits = [d for d in hits
@@ -271,11 +307,16 @@ def search(datasets: list[dict], q: str | None = None, organism: str | None = No
            "title": lambda d: d["title"].lower(),
            "newest": lambda d: "".join(chr(0x10FFFF - ord(c)) for c in (d.get("published_at") or ""))}
     hits.sort(key=key.get(sort, key["cells"]))
-    return {
+    out = {
         "total": len(hits),
-        "results": hits[offset:offset + limit],
+        # The description is searched, not sent: hundreds of words per dataset.
+        "results": [{k: v for k, v in d.items() if k != "collection_description"}
+                    for d in hits[offset:offset + limit]],
         "facets": {"organism": organisms.most_common(), "tissue": tissues.most_common(60)},
     }
+    if partial:
+        out["partial"] = partial
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -486,10 +527,16 @@ def memory_verdict(path: Path) -> dict:
     """How the downloaded file would open (``dataset_manager.load_plan``, from its
     header): ``fits`` in memory, ``backed`` (matrices stay on disk: large-dataset
     handling), or ``wont_fit`` even backed with every other dataset closed."""
-    from scview.core import memory_budget
-    from scview.core.dataset_manager import LOAD_MARGIN, load_plan, working_reserve
+    from scview.core.dataset_manager import load_plan
 
-    plan = load_plan(str(path))
+    return plan_verdict(load_plan(str(path)))
+
+
+def plan_verdict(plan) -> dict:
+    """``memory_verdict`` of a ``dataset_manager.LoadPlan``."""
+    from scview.core import memory_budget
+    from scview.core.dataset_manager import LOAD_MARGIN, working_reserve
+
     budget = memory_budget.read_budget()
     gb = 1024**3
     out: dict[str, Any] = {"in_memory_bytes": plan.in_memory, "backed_bytes": plan.backed,
@@ -504,12 +551,138 @@ def memory_verdict(path: Path) -> dict:
     elif plan.backed * LOAD_MARGIN <= room:
         out.update(verdict="backed", message=(
             "Too big to read into memory: it opens from disk (the expression matrix stays in the "
-            f"file), about {plan.backed / gb:.1f} GB at its peak; processing runs in "
-            "large-dataset mode."))
+            f"file), about {plan.backed / gb:.1f} GB at its peak; pipeline steps that read the "
+            "expression matrix run in large-dataset mode, which converts it (neighbours, "
+            "clustering and UMAP on its stored PCA do not)."))
     else:
         out.update(verdict="wont_fit", message=(
             f"Needs about {plan.backed / gb:.1f} GB even with its matrices on disk; scView has "
             f"{budget.limit_bytes / gb:.1f} GB. Raise SCVIEW_MEMORY_GB in .env (then restart scView)."))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Memory before the download: the file's header read over HTTP ranges
+# ---------------------------------------------------------------------------
+
+HEADER_BLOCK = 1 << 20  # bytes per ranged request (h5py reads the header in small pieces)
+HEADER_MAX_REQUESTS = 48  # a header spread wider than this is not read (no estimate)
+_HEADERS: dict[str, Any] = {}  # version id -> header (a version never changes)
+_HEADERS_MAX = 32
+
+
+class RangeFile(io.RawIOBase):
+    """A remote file read with HTTP range requests, a block at a time, each block kept:
+    h5py opens it to read an h5ad's header (shapes, encodings, column lists) without its
+    matrices. Raises ``PublicImportError`` when the host does not serve ranges or the
+    header needs more than ``max_requests`` blocks."""
+
+    def __init__(self, url: str, size: int, client: httpx.Client, block: int = HEADER_BLOCK,
+                 max_requests: int | None = None) -> None:
+        super().__init__()
+        self.url, self.size, self.client = url, int(size), client
+        self.block = block
+        self.max_requests = HEADER_MAX_REQUESTS if max_requests is None else max_requests
+        self.pos = 0
+        self.requests = 0
+        self._blocks: dict[int, bytes] = {}
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self.pos
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        base = {0: 0, 1: self.pos, 2: self.size}[whence]
+        self.pos = max(0, base + int(offset))
+        return self.pos
+
+    def _get(self, i: int) -> bytes:
+        if i not in self._blocks:
+            if self.requests >= self.max_requests:
+                raise PublicImportError("The file's header is spread too widely to read before "
+                                        "downloading it.", 502)
+            start = i * self.block
+            end = min(self.size, start + self.block) - 1
+            self.requests += 1
+            r = self.client.get(self.url, headers={"Range": f"bytes={start}-{end}"})
+            if r.status_code != 206 or len(r.content) != end - start + 1:
+                raise PublicImportError(f"CELLxGENE Discover did not serve a part of the file "
+                                        f"(HTTP {r.status_code}).", 502)
+            self._blocks[i] = r.content
+        return self._blocks[i]
+
+    def readinto(self, b) -> int:
+        n = min(len(b), max(0, self.size - self.pos))
+        done = 0
+        while done < n:
+            i, off = divmod(self.pos + done, self.block)
+            chunk = self._get(i)[off:off + n - done]
+            b[done:done + len(chunk)] = chunk
+            done += len(chunk)
+        self.pos += done
+        return done
+
+
+def remote_header(rec: dict, client: httpx.Client | None = None):
+    """The header of a dataset version's h5ad (``preflight``: shapes, stored values, what
+    it holds) read from Discover's file host by ranges, before any download; kept per
+    version. Raises ``PublicImportError`` when it cannot be read."""
+    from scview.core import preflight
+    from scview.core.anndata_adaptor import opens_backed
+
+    vid = check_uuid(rec["dataset_version_id"])
+    if vid in _HEADERS:
+        return _HEADERS[vid]
+    size = int(rec.get("size_bytes") or 0)
+    if size <= 0:
+        raise PublicImportError("Discover gives no size for this file.", 502)
+    own = client is None
+    client = client or new_client()
+    t0 = time.monotonic()
+    try:
+        with RangeFile(file_url(vid), size, client) as fh:
+            h = preflight._read_h5ad(fh)
+            n = fh.requests
+    except PublicImportError:
+        raise
+    except httpx.HTTPError as e:
+        raise PublicImportError(f"Could not reach CELLxGENE Discover ({e}).", 502)
+    except Exception as e:  # noqa: BLE001 - not an h5ad header h5py can read
+        raise PublicImportError(f"Could not read the file's header ({type(e).__name__}: {e}).", 502)
+    finally:
+        if own:
+            client.close()
+    h.file_bytes = size
+    h.backed = opens_backed(size) or h.large
+    logger.info("Header of %s read remotely: %d requests, %.1f s", vid, n, time.monotonic() - t0)
+    if len(_HEADERS) >= _HEADERS_MAX:
+        _HEADERS.pop(next(iter(_HEADERS)))
+    _HEADERS[vid] = h
+    return h
+
+
+def memory_before_download(rec: dict, client: httpx.Client | None = None) -> dict:
+    """``memory_verdict`` of a dataset version before it is downloaded, from its header read
+    remotely (``remote_header``): the memory opening it needs (in memory, and with its
+    matrices on disk) against what scView has. ``verdict`` "unknown" (with the reason) when
+    the header cannot be read: the import then checks the file once it is downloaded."""
+    from scview.core.dataset_manager import plan_of_header
+
+    try:
+        h = remote_header(rec, client)
+    except PublicImportError as e:
+        return {"verdict": "unknown", "message": f"{e} The memory is checked once it is downloaded.",
+                "source": "none"}
+    out = plan_verdict(plan_of_header(h, bool(h.large)))
+    out.update(source="the file's header, read from Discover before downloading",
+               n_cells=h.n_cells, n_genes=h.n_genes,
+               matrices=[{"where": m.where, "sparse": m.sparse, "nnz": m.nnz, "bytes": m.nbytes}
+                         for m in h.matrices])
     return out
 
 

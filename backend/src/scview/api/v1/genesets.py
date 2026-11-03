@@ -220,47 +220,35 @@ def _none_found(gene_set: list[str]) -> HTTPException:
 
 
 def _score_genes(adata, genes_found: list[str], gene_set: list[str], score_key: str):
-    """``sc.tl.score_genes`` on .raw when it has the genes, else X: (scores, genes
-    used, genes missing, where from). Call in a worker thread."""
+    """``sc.tl.score_genes`` on log-normalised values: (scores, genes used, genes missing,
+    where from). Call in a worker thread.
+
+    ``.raw`` when it holds log values, else X when it does, else the shifted log of the
+    counts (``activity.lognorm_matrix``). ``.raw`` was taken whenever present: a published
+    file's ``.raw`` often holds the raw COUNTS (CELLxGENE), and scores of counts follow
+    depth (Liu 2021: a maximum of 31 on data whose log values top out at 8.5)."""
+    import anndata as ad
     import scanpy as sc
 
-    # A light AnnData sharing the arrays, so the score column is not written into the
+    from scview.core.activity import lognorm_matrix
+
+    # A light AnnData on the chosen matrix, so the score column is not written into the
     # dataset (a backed one is read in first by the endpoint, core/working_copy.py).
-    work_adata = adata.to_memory() if hasattr(adata, "to_memory") else adata.copy()
-
-    # Filter genes_found to those actually present in the expression matrix
-    # that score_genes will use (raw if use_raw, else X).
-    has_raw = work_adata.raw is not None
-    if has_raw:
-        raw_var = set(work_adata.raw.var_names.tolist())
-        genes_in_raw = [g for g in genes_found if g in raw_var]
-    else:
-        genes_in_raw = []
-    main_var = set(work_adata.var_names.tolist())
-    genes_in_main = [g for g in genes_found if g in main_var]
-
-    # Try with raw first (log-normalised), fall back to main X
-    for use_raw, gene_list in [(True, genes_in_raw), (False, genes_in_main)]:
-        if not gene_list or (use_raw and not has_raw):
-            continue
+    M, names, source = lognorm_matrix(adata)
+    work = ad.AnnData(X=M, obs=pd.DataFrame(index=adata.obs_names.copy()),
+                      var=pd.DataFrame(index=pd.Index(names).astype(str)))
+    present = set(work.var_names)
+    gene_list = [g for g in genes_found if g in present]
+    if gene_list:
         try:
-            sc.tl.score_genes(
-                work_adata,
-                gene_list=gene_list,
-                score_name=score_key,
-                use_raw=use_raw,
-            )
-        except Exception as inner_err:
-            logger.warning(
-                "score_genes failed with use_raw=%s: %s — trying fallback",
-                use_raw, inner_err,
-            )
-            continue
-        # What was actually used
-        used = {g.upper() for g in gene_list}
-        missing = [g for g in gene_set if g.upper() not in used]
-        scores = np.nan_to_num(work_adata.obs[score_key].values.astype(float), nan=0.0)
-        return scores, gene_list, missing, ".raw" if use_raw else "X"
+            sc.tl.score_genes(work, gene_list=gene_list, score_name=score_key, use_raw=False)
+        except Exception as inner_err:  # noqa: BLE001 - too few genes to bin: said below
+            logger.warning("score_genes failed on the %s: %s", source, inner_err)
+        else:
+            used = {g.upper() for g in gene_list}
+            missing = [g for g in gene_set if g.upper() not in used]
+            scores = np.nan_to_num(work.obs[score_key].values.astype(float), nan=0.0)
+            return scores, gene_list, missing, source
 
     raise HTTPException(
         status_code=400,

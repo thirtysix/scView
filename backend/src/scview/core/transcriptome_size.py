@@ -60,7 +60,7 @@ def per_cell_totals(adata, keep: np.ndarray | None = None) -> tuple[np.ndarray, 
     from scview.core.normalization import counts_all_genes
 
     try:
-        M, _, source = counts_all_genes(adata)
+        M, _, source = counts_all_genes(adata, read_only=True)  # summed only
     except ValueError:
         return None
     return _row_sums(M, keep), source

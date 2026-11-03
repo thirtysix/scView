@@ -24,7 +24,11 @@ Steps need the dataset in memory: one the adaptor opened backed (a file over
 mode (``core/large_run.py``): with a plan, the mode is chosen first (``choose_mode``, on
 ``PipelineParams.chunked``), and a run in that mode reads the file in blocks itself, so
 the cached copy is dropped instead and the work gets a fresh adaptor that has read
-nothing (``control.mode`` tells the run endpoints which way to run). Work that needs only
+nothing (``control.mode`` tells the run endpoints which way to run). A run whose steps
+need no matrix (neighbours, clustering, UMAP on the stored PCA: ``large_run.run_light``)
+gets the same and reads the file without its matrices, so it never converts the dataset;
+a run that would convert it is refused (409) when ``control.allow_large`` is False (the
+MCP's ``run_pipeline`` without ``allow_large_mode``). Work that needs only
 obs, obsm, obsp and uns (PAGA, pseudotime: ``run_exclusive(light=True)``) gets the same
 on a large dataset and reads it without its matrices (``large_run.read_light``). Any
 other work on a large dataset is refused (422): it would read the matrices into memory.
@@ -130,6 +134,25 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
                 preflight.step_times, dm, dataset_id, steps, params, control.mode.chunked)
         except Exception as e:  # never block a run on the estimate itself
             logger.warning("No step times for %s: %s", dataset_id, e)
+        if control.mode.chunked and not control.allow_large and large_run.large_info(
+                adaptor.h5ad_path) is None:
+            from scview.core import large_mode
+
+            raise HTTPException(status_code=409, detail=(
+                f"{control.mode.reason} {large_mode.conversion_note()} Nothing was run: run it "
+                "again allowing large-dataset mode to convert it, or free memory first."))
+        if control.mode.light:  # reads no matrix: the cached copy goes, the run reads the rest
+            path = adaptor.h5ad_path
+            dm.evict(dataset_id)
+            try:
+                peak = await asyncio.to_thread(large_run.light_need, path, steps, params)
+            except Exception as e:  # never block a run on the estimate itself
+                logger.warning("No estimate for the run on %s: %s", dataset_id, e)
+                peak = 0
+            await dm.free_memory_for(peak, keep=dataset_id)
+            await _reserve_run(dm, dataset_id, control, peak,
+                               lambda: large_run.light_step_needs(path, steps, params))
+            return AnnDataAdaptor(path)
         if control.mode.chunked:
             why = large_run.refused(steps, params)  # a step this mode does not run: before anything
             if why is not None:
@@ -201,7 +224,10 @@ async def _reserve_run(dm: DatasetManager, dataset_id: str, control: RunControl,
 
 
 def _chunked(control: RunControl | None) -> bool:
-    return bool(getattr(getattr(control, "mode", None), "chunked", False))
+    """Whether the run reads the dataset itself (large-dataset mode, or a run without the
+    matrices): its cached copy was dropped, and it is never read into memory."""
+    mode = getattr(control, "mode", None)
+    return bool(getattr(mode, "chunked", False) or getattr(mode, "light", False))
 
 
 async def _for_light_work(dm: DatasetManager, dataset_id: str,

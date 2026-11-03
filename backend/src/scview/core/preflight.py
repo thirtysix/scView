@@ -2691,14 +2691,98 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
            "steps": [e.to_dict() for e in est.steps], "verdict": v,
            "leiden": leiden_choice(h.n_cells, steps, params, h.unit)}
     chunked, reason = _would_chunk(requested, need, avail, cached, large)
-    out["mode"] = {"chunked": chunked, "requested": requested, "reason": reason}
     out["umap_3d"] = umap_3d_choice(h.n_cells, steps, params, chunked)
+    if not large and requested != "on" and files and _light_ok(files[0], steps):
+        from scview.core.large_run import LIGHT_REASON
+
+        out["mode"] = {"chunked": False, "light": True, "requested": requested, "reason": LIGHT_REASON}
+        out["umap_3d"] = umap_3d_choice(h.n_cells, steps, params, False)
+        out["in_memory_estimate"] = {"steps": out["steps"], "verdict": v}
+        out.update(_light_preflight(h, steps, params, held, avail, cached))
+        return out
+    out["mode"] = {"chunked": chunked, "requested": requested, "reason": reason, "light": False}
     if chunked:
         out["in_memory_estimate"] = {"steps": out["steps"], "verdict": v}
         out.update(_chunked_preflight(h, steps, _large_params(params), held, avail, cached, plan,
                                       large=large,
                                       disk_folder=Path(dm.data_dir)))
+        if not large:  # the run converts the dataset: say what that turns off
+            from scview.core import large_mode
+
+            out["mode"].update(converts=True, turns_off=list(large_mode.OFF_IN_LARGE_MODE),
+                               layout_after=large_mode.LAYOUT_AFTER)
+            out["verdict"]["sentence"] += CONVERTS_SENTENCE
+            out["verdict"]["notes"].append(large_mode.conversion_note())
     return out
+
+
+# Said in the verdict of a run that would put the dataset in large-dataset layout.
+CONVERTS_SENTENCE = (" It converts the dataset for good: differential expression and other "
+                     "whole-matrix tools are then refused on it, and .raw leaves its expression "
+                     "layers (see the notes).")
+
+
+def _light_ok(path, steps: list[str]) -> bool:
+    from scview.core.large_run import light_run_ok
+
+    return light_run_ok(path, steps)
+
+
+# Memory the first neighbour graph or UMAP in a fresh process keeps (numba's compiled
+# pynndescent and umap): Otero-Garcia 2022's 96k neurons, the graph without the matrices,
+# +0.73 GiB peak RSS cold against +0.25 warm (the steps' model says 0.38).
+LIGHT_WARMUP = 480 * MiB
+_LIGHT_WARMUP_STEPS = ("uncorrected_embedding", "batch_correction", "neighbors", "embeddings")
+
+
+def estimate_light_run(h: Header, steps: list[str], params=None, warm: bool | None = None) -> RunEstimate:
+    """Memory per step and at the peak of a run whose steps need no matrix
+    (``large_run.run_light``): the dataset without its matrices, the steps as large-dataset
+    mode runs them on that copy, and the save, which copies the matrices from the file as
+    they are stored (``estimate_chunked_run`` of a dataset in that layout already); in a
+    fresh process, from the first step that loads them, the libraries it keeps
+    (``LIGHT_WARMUP``)."""
+    est = estimate_chunked_run(h, steps, params, large=True)
+    warm = process_warm() if warm is None else warm
+    if warm:
+        return est
+    out, held = [], 0
+    for e in est.steps:
+        if e.step in _LIGHT_WARMUP_STEPS and not held:
+            out.append(StepEstimate(e.step, e.resident_bytes, e.transient_bytes + LIGHT_WARMUP,
+                                    e.seconds, e.measured))
+            held = LIGHT_WARMUP
+        else:
+            out.append(StepEstimate(e.step, e.resident_bytes + held, e.transient_bytes, e.seconds,
+                                    e.measured))
+    peak = max(out, key=lambda e: e.peak_bytes)
+    return RunEstimate(out, est.start_bytes, peak.peak_bytes, peak.step, est.end_bytes + held,
+                       est.seconds)
+
+
+def _light_preflight(h: Header, steps: list[str], params, held: int, avail: Available,
+                     cached: Cached) -> dict:
+    """The estimate of a run whose steps need no matrix (``estimate_light_run``)."""
+    est = estimate_light_run(h, steps, params)
+    need = est.peak_bytes - held
+    stage = STEP_LABELS.get(est.peak_step, est.peak_step)
+    lead = (f"Without its matrices (these steps need none): {_about(max(0, need))} more than now "
+            f"at its peak ({stage})" if need > 0 else
+            f"Without its matrices (these steps need none): no more memory than this dataset "
+            f"holds now at its peak ({stage})")
+    disk = int((h.file_bytes or 0) + ChunkedShape.from_header(h).other)
+    v = make_verdict(need=need, peak=est.peak_bytes, stage=stage, seconds=est.seconds,
+                     avail=avail, cached=cached, lead=lead,
+                     breakdown=[("This dataset without its matrices", est.start_bytes),
+                                (f"At the peak ({stage})", est.peak_bytes)],
+                     notes=["X and .raw are not read: the saved file copies them from the "
+                            "current one as they are stored, so the dataset keeps its layout "
+                            "and its expression layers."]
+                     + ([] if process_warm() else ["Includes about 0.5 GB the first run in a fresh "
+                                                   "scView keeps for the libraries it loads."]),
+                     alternatives=[])
+    return {"steps": [e.to_dict() for e in est.steps], "verdict": v,
+            "disk": {"need_bytes": disk, "free_bytes": None}}
 
 
 def leiden_choice(n_cells: int | None, steps: list[str], params=None, unit: str = "cell") -> dict | None:
@@ -2840,6 +2924,53 @@ def de_read_need(mm: Matrix | None, n_rows: int, logreg: bool = False) -> int:
     return int(rows_bytes(mm, n_rows) + matrix_genes.block_entries(nnz) * MARKERS_MEMORY_PER_VALUE
                + 2 * mm.n_genes * 8 * 12 + n_rows * 16 + DE_FIXED
                + (nnz * DE_LOGREG_PER_VALUE if logreg else 0))
+
+
+def _kept_rows(M, keep: np.ndarray) -> Matrix:
+    """The ``keep`` rows of in-memory ``M`` as a Matrix (a CSR's stored values counted
+    exactly from its row pointers), in ``M``'s index type: slicing builds the rows in it
+    before scipy narrows them."""
+    import scipy.sparse as sp
+
+    n = int(np.count_nonzero(keep))
+    rows, cols = (int(s) for s in M.shape)
+    if sp.issparse(M):
+        if M.format == "csr":
+            nnz = int(np.diff(M.indptr)[np.asarray(keep, dtype=bool)].sum())
+        else:
+            nnz = int(M.nnz * n / max(rows, 1))
+        return Matrix("X", n, cols, True, nnz, M.dtype.name, M.indices.dtype.name)
+    return Matrix("X", n, cols, False, n * cols, np.dtype(M.dtype).name)
+
+
+def de_memory_need(M, keep: np.ndarray, logreg: bool = False, counts: bool = False) -> int:
+    """``de_read_need`` for a dataset in memory: the compared rows copied out of the tested
+    matrix ``M`` (no copy when every row is compared: the test reads ``M`` itself; a second
+    one when they are ``counts``, log-normalised for the test), and the test on them.
+    Liu 2021's 125k PBMCs, classical monocytes T0 vs HC (38,334 cells x 30,000 genes,
+    62M values): 1.07 GB estimated, 0.92 GB measured over the loaded data."""
+    mm = _kept_rows(M, keep)
+    if not mm.n_cells:
+        return 0
+    need = de_read_need(mm, mm.n_cells, logreg)
+    if bool(np.all(keep)):
+        need -= rows_bytes(mm, mm.n_cells)
+    if counts:
+        need += rows_bytes(mm, mm.n_cells)
+    return int(need)
+
+
+# Pseudobulk in memory: the compared cells' counts copied out (anndata's view of them) and
+# summed by donor. Liu 2021's classical monocytes (38,334 cells, 62M values, int64
+# indices): 0.74 GB of rows, 0.92 GB measured over the loaded data.
+PB_ROWS_FACTOR = 1.25
+
+
+def pseudobulk_memory_need(M, keep: np.ndarray) -> int:
+    """Peak memory of pseudobulk DE on the ``keep`` cells of a dataset in memory, whose
+    counts are ``M`` (``pseudobulk.raw_counts``)."""
+    mm = _kept_rows(M, keep)
+    return int(rows_bytes(mm, mm.n_cells) * PB_ROWS_FACTOR + DE_FIXED)
 
 
 def _lt_counts_bytes(h: Header) -> int:

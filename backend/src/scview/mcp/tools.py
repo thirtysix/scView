@@ -14,6 +14,7 @@ import base64
 import gzip
 import io
 import json
+import re
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
@@ -53,7 +54,8 @@ Filter = Annotated[CellFilter, Field(description=(
     '{"op":"and","items":[{"kind":"category","column":"donor_id","values":["C1"]},'
     '{"kind":"range","column":"DPS","min":11,"max":11}]}. Items: category (column, values), '
     "range (column, min and/or max), gene (gene, op >,>=,<,<=, value) or a group "
-    '{"kind":"group","op":"or","conditions":[...]}.'))]
+    '{"kind":"group","op":"or","conditions":[...]}. No other keys (an unknown one is refused) and '
+    "no negation: list the values to keep instead."))]
 
 
 P0_NOTE = ("A p value of 0 is what the test returned: below double precision (under about 1e-300), "
@@ -70,18 +72,33 @@ def _fail(e: api.RouteError) -> ToolError:
     return ToolError(e.detail)
 
 
+_MISSING_COLUMN = re.compile(r"^Column '([^']+)' not found")
+_DATASET_PATH = re.compile(r"^/datasets/([^/]+)/")
+
+
+async def _route_error(e: api.RouteError, path: str) -> ToolError:
+    """The route's error; a missing obs column also names the closest columns (any route)."""
+    col, ds = _MISSING_COLUMN.match(e.detail or ""), _DATASET_PATH.match(path)
+    if col and ds and "Closest:" not in e.detail:
+        try:
+            return await _column_error(ds.group(1), col.group(1))
+        except Exception:  # noqa: BLE001 — the hint is extra; the route's own error stands
+            pass
+    return _fail(e)
+
+
 async def _get(path: str, **query: Any) -> Any:
     try:
         return await api.get(path, **query)
     except api.RouteError as e:
-        raise _fail(e) from None
+        raise await _route_error(e, path) from None
 
 
 async def _post(path: str, body: Any = None, **query: Any) -> Any:
     try:
         return await api.post(path, body, **query)
     except api.RouteError as e:
-        raise _fail(e) from None
+        raise await _route_error(e, path) from None
 
 
 async def _raw(path: str, **query: Any) -> tuple[dict[str, str], bytes]:
@@ -118,20 +135,20 @@ async def list_datasets() -> str:
 
 @tool(READ)
 async def get_dataset(dataset_id: DatasetId) -> str:
-    """One dataset: cells, genes, processing steps done, embeddings, obs columns (type and
-    number of values; the values when 30 or fewer), expression layers, active clustering,
-    large-dataset mode, and other modalities present."""
+    """One dataset: cells, genes, processing steps done, embeddings, every obs column (name,
+    type and number of values, always all of them), the values of the small categorical
+    columns (30 or fewer values, as many as fit; describe_column gives the rest), expression
+    layers, active clustering, large-dataset mode, and other modalities present."""
     d = await _get(_ds(dataset_id))
-    cols = []
+    cols, values = [], {}
     for c in d.get("obs_columns") or []:
-        entry = {"name": c["name"], "dtype": c.get("dtype"), "n_unique": c.get("n_unique")}
+        cols.append([c["name"], c.get("dtype"), c.get("n_unique")])
         if c.get("values") is not None and (c.get("n_unique") or 99) <= 30:
-            entry["values"] = c["values"]
+            values[c["name"]] = c["values"]
         if c.get("dtype") == "bool" and (c.get("n_unique") or 0) < 2:
             # The route lists both for a bool column (its colour slots): name the one present.
             vals = (await _get(f"{_ds(dataset_id)}/metadata/{c['name']}", format="json"))["values"]
-            entry["values"] = sorted({str(v) for v in vals if v is not None})
-        cols.append(entry)
+            values[c["name"]] = sorted({str(v) for v in vals if v is not None})
     out = pick(d, "id", "name", "status", "n_cells", "n_genes", "error_message", "active_clustering",
                "user_annotation_columns", "app_annotation_columns", "available_embeddings",
                "default_expression_layer")
@@ -144,21 +161,138 @@ async def get_dataset(dataset_id: DatasetId) -> str:
     if d.get("status") == "ready":
         try:
             recipe = await api.get(f"{_ds(dataset_id)}/recipe")
-            out["steps_done"] = [s.get("step") for s in recipe.get("recipe") or []]
+            out["steps_done"] = _runs([s.get("step") for s in recipe.get("recipe") or []])
         except api.RouteError:
             pass
-    out["obs_columns"] = cols
-    return dumps(out)
+    # Every column's name and type, never cut (Yang 2021: 22 of 45 shown, the author labels
+    # among the hidden); the small columns' values while they fit, fewest values first.
+    out["obs_columns"] = {"columns": ["name", "dtype", "n_unique"], "rows": cols, "n_total": len(cols)}
+    budget = compact.MAX_CHARS - len(dumps(out, 10**9))
+    kept, left = {}, []
+    for name, vals in sorted(values.items(), key=lambda kv: len(json.dumps(kv[1], default=str))):
+        size = len(json.dumps({name: vals}, default=str))
+        if size <= budget:
+            kept[name] = vals
+            budget -= size
+        else:
+            left.append(name)
+    out["column_values"] = {name: kept[name] for name in values if name in kept}
+    if left:
+        out["column_values_left_out"] = f"{', '.join(left)}: describe_column lists them"
+    return dumps(out, 10**9)
+
+
+def _runs(steps: list[Any]) -> list[str]:
+    """Steps in order, a step repeated back to back written once with its count
+    ('label_cells x13')."""
+    out: list[str] = []
+    for s in steps:
+        name = str(s)
+        if out and out[-1].split(" x")[0] == name:
+            n = out[-1].partition(" x")[2]
+            out[-1] = f"{name} x{int(n or 1) + 1}"
+        else:
+            out.append(name)
+    return out
+
+
+async def _column_error(dataset_id: str, name: str) -> ToolError:
+    """A column that is not there: the closest names, and every column when there are few."""
+    names = [c["name"] for c in (await _get(_ds(dataset_id))).get("obs_columns") or []]
+    return ToolError(column_message(name, names))
+
+
+def column_message(name: str, names: list[str]) -> str:
+    """'Column ... not found.' with the closest of ``names`` (spelling, or containing it),
+    and all of them when there are at most 60."""
+    import difflib
+
+    names = [str(n) for n in names]
+    lower = {n.lower(): n for n in names}
+    close = difflib.get_close_matches(name.lower(), list(lower), n=5, cutoff=0.5)
+    close += [lower[n] for n in lower if name.lower() in n and lower[n] not in close][: 5 - len(close)]
+    close = [lower.get(c, c) for c in close]
+    msg = f"Column '{name}' not found."
+    if close:
+        msg += f" Closest: {', '.join(close)}."
+    if len(names) <= 60:
+        msg += f" The {len(names)} obs columns: {', '.join(names)}."
+    else:
+        msg += f" The dataset has {len(names)} obs columns: get_dataset lists them all."
+    return msg
+
+
+async def _obs_values(dataset_id: str, column: str) -> pd.Series:
+    """One obs column's values (missing as None), or the closest names when it is not there."""
+    try:
+        d = await api.get(f"{_ds(dataset_id)}/metadata/{column}", format="json")
+    except api.RouteError as e:
+        if e.status == 404 and e.detail.startswith("Column"):
+            raise await _column_error(dataset_id, column) from None
+        raise _fail(e) from None
+    return pd.Series(d["values"], dtype=object)
+
+
+def _is_numeric(s: pd.Series) -> bool:
+    present = s.dropna()
+    if present.empty or present.map(type).eq(bool).any():
+        return False
+    return bool(pd.to_numeric(present, errors="coerce").notna().all())
+
+
+def _by_group(values: pd.Series, groups: list[pd.Series], names: list[str]) -> list[dict[str, Any]]:
+    """n, missing, mean, median and quartiles of a numeric column per group (cells whose
+    group is missing are left out)."""
+    frame = pd.DataFrame({f"g{i}": g.astype(str).where(g.notna()) for i, g in enumerate(groups)})
+    frame["v"] = pd.to_numeric(values, errors="coerce")
+    keys = [f"g{i}" for i in range(len(groups))]
+    out = []
+    for key, sub in frame.dropna(subset=keys).groupby(keys, sort=True, observed=True):
+        key = key if isinstance(key, tuple) else (key,)
+        v = sub["v"].dropna()
+        rec: dict[str, Any] = dict(zip(names, key))
+        rec.update(n=int(len(sub)), n_missing=int(len(sub) - len(v)))
+        if len(v):
+            q = v.quantile([0.25, 0.5, 0.75]).tolist()
+            rec.update(mean=float(v.mean()), median=q[1], q25=q[0], q75=q[2], iqr=q[2] - q[0],
+                       min=float(v.min()), max=float(v.max()))
+        out.append(rec)
+    return out
 
 
 @tool(READ)
-async def describe_column(dataset_id: DatasetId,
-                          column: Annotated[str, Field(description="An obs (cell metadata) column.")],
-                          limit: Limit = DEFAULT_LIMIT) -> str:
+async def describe_column(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(description="An obs (cell metadata) column.")],
+    groupby: Annotated[list[str] | None, Field(max_length=2, description=(
+        "One or two obs columns (e.g. ['sample'] or ['donor_id', 'condition']): summarise a numeric "
+        "column per group (n, mean, median, quartiles, IQR) instead of over every cell."))] = None,
+    limit: Limit = DEFAULT_LIMIT,
+    offset: Annotated[int, Field(ge=0, description="With groupby: the group row to start from.")] = 0,
+) -> str:
     """One obs column: each value's cell count (largest first) for a category, or a
-    numeric summary (min, quartiles, max, mean, missing)."""
-    d = await _get(f"{_ds(dataset_id)}/metadata/{column}", format="json")
-    s = pd.Series(d["values"])
+    numeric summary (min, quartiles, max, mean, missing). With groupby, a numeric column
+    (depth, genes per cell, % mito, doublet score) per group: per sample, or per donor x
+    condition. A missing column's error names the closest columns."""
+    s = await _obs_values(dataset_id, column)
+    if groupby:
+        if column in groupby:
+            raise ToolError("groupby must name other columns than the one described.")
+        if not _is_numeric(s):
+            raise ToolError(f"'{column}' is not numeric: count its values per group with crosstab "
+                            f"(row '{column}', col '{groupby[0]}').")
+        groups = [await _obs_values(dataset_id, g) for g in groupby]
+        recs = _by_group(s, groups, list(groupby))
+        n = clamp(limit)
+        cols = [*groupby, "n", "n_missing", "mean", "median", "q25", "q75", "iqr", "min", "max"]
+        out = {"dataset_id": dataset_id, "column": column, "groupby": list(groupby),
+               "n_cells": int(len(s)), "n_missing": int(s.isna().sum()),
+               "n_without_group": int(sum(pd.concat(groups, axis=1).isna().any(axis=1))),
+               "offset": offset, **table(recs[offset:], cols, n)}
+        out["n_total"] = len(recs)
+        if offset + n < len(recs):
+            out["next_offset"] = offset + n
+        return dumps(out, _max_chars(limit))
     out: dict[str, Any] = {"dataset_id": dataset_id, "column": column, "n_cells": int(len(s)),
                            "n_missing": int(s.isna().sum())}
     numeric = pd.to_numeric(s, errors="coerce")
@@ -183,7 +317,15 @@ async def crosstab(dataset_id: DatasetId,
                    limit: Limit = DEFAULT_LIMIT) -> str:
     """Cell counts for every pair of values of two obs columns (e.g. donor x condition,
     cell type x condition): which donors are in which condition, and how many cells."""
-    d = await _get(f"{_ds(dataset_id)}/metadata/crosstab", row=row, col=col)
+    try:
+        d = await api.get(f"{_ds(dataset_id)}/metadata/crosstab", row=row, col=col)
+    except api.RouteError as e:
+        if e.status == 404 and "not found" in e.detail.lower() and "dataset" not in e.detail.lower():
+            names = [c["name"] for c in (await _get(_ds(dataset_id))).get("obs_columns") or []]
+            missing = next((c for c in (row, col) if c not in names), None)
+            if missing is not None:
+                raise ToolError(column_message(missing, names)) from None
+        raise _fail(e) from None
     return dumps({"dataset_id": dataset_id, **d}, _max_chars(limit))
 
 
@@ -203,7 +345,9 @@ async def memory_status() -> str:
 
 @tool(WEB_READ)
 async def search_public_datasets(
-    query: Annotated[str | None, Field(description="Words in the title or collection.")] = None,
+    query: Annotated[str | None, Field(description=(
+        "Words (not a phrase), each anywhere in the title, collection name or the collection's "
+        "description (its abstract). With no dataset holding them all, those with the most."))] = None,
     organism: Annotated[str | None, Field(description="e.g. Homo sapiens")] = None,
     tissue: Annotated[str | None, Field(description="e.g. blood")] = None,
     disease: Annotated[str | None, Field(description="e.g. COVID-19")] = None,
@@ -213,8 +357,9 @@ async def search_public_datasets(
         description="Order: most cells first (default), largest download, title, or newest.")] = "cells",
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
-    """Search CELLxGENE Discover's public datasets (listing cached a day). Import one with
-    import_public_dataset and its dataset_version_id."""
+    """Search CELLxGENE Discover's public datasets (listing cached a day). Check one's memory
+    need with check_public_dataset; import it with import_public_dataset and its
+    dataset_version_id."""
     d = await _get("/public-import/discover/datasets", q=query, organism=organism, tissue=tissue,
                    disease=disease, assay=assay, max_mb=max_mb, sort=sort, limit=clamp(limit))
     found = d.get("datasets") or d.get("results") or []
@@ -229,8 +374,36 @@ async def search_public_datasets(
             if isinstance(e.get(k), list):
                 e[k] = e[k][:5]
         out.append(e)
-    return dumps({"datasets": out, "n_total": d.get("total", d.get("n_total", len(out))),
-                  "fetched_at": d.get("fetched_at")}, _max_chars(limit))
+    res = {"datasets": out, "n_total": d.get("total", d.get("n_total", len(out))),
+           "fetched_at": d.get("fetched_at")}
+    if d.get("partial"):
+        res["partial"] = {**d["partial"], "note": "No dataset has every word: these have the most."}
+    return dumps(res, _max_chars(limit))
+
+
+def _memory(m: dict[str, Any] | None) -> dict[str, Any]:
+    gb = 2**30
+    out = pick(m or {}, "verdict", "message", "source", "n_cells", "n_genes")
+    for k in ("in_memory_bytes", "backed_bytes", "limit_bytes"):
+        if isinstance((m or {}).get(k), (int, float)):
+            out[k.replace("_bytes", "_gb")] = round(m[k] / gb, 2)
+    return out
+
+
+@tool(WEB_READ)
+async def check_public_dataset(
+    dataset_version_id: Annotated[str, Field(description="From search_public_datasets.")],
+    dataset_id: Annotated[str | None, Field(
+        description="Its dataset_id: needed only for a version no longer current.")] = None,
+) -> str:
+    """Before an import: one Discover dataset version's size, the disk the import needs, and
+    the memory opening it needs (verdict fits in memory / backed: its matrices stay on disk /
+    wont_fit; read from the file's header on Discover, nothing is downloaded)."""
+    d = await _get(f"/public-import/discover/datasets/{dataset_version_id}", dataset_id=dataset_id)
+    out = pick(d, "dataset_version_id", "dataset_id", "title", "cell_count", "disk")
+    out["size_mb"] = round((d.get("size_bytes") or 0) / 2**20, 1)
+    out["memory"] = _memory(d.get("memory"))
+    return dumps(out)
 
 
 def _line(event: str, data: Any) -> str | None:
@@ -262,8 +435,13 @@ async def import_public_dataset(
     name: Annotated[str | None, Field(description="Name in the library (default: the title).")] = None,
 ) -> str:
     """Download a CELLxGENE Discover dataset into the library (a job: returns job_id at once;
-    follow it with job_status; the new dataset's id is in the result)."""
+    follow it with job_status; the new dataset's id is in the result). Refused before any
+    download when the file could not open even with its matrices on disk."""
     body = {"dataset_version_id": dataset_version_id, "dataset_id": dataset_id, "name": name}
+    detail = await _get(f"/public-import/discover/datasets/{dataset_version_id}", dataset_id=dataset_id)
+    memory = _memory(detail.get("memory"))
+    if memory.get("verdict") == "wont_fit":
+        raise ToolError(f"Not downloaded: {memory.get('message')}")
 
     async def cancel(job: jobs.Job) -> None:
         jid = (job.events.get("job") or {}).get("job_id")
@@ -276,7 +454,7 @@ async def import_public_dataset(
 
     job = jobs.new("import", None, "/public-import/discover/import-stream", body,
                    progress_line=_line, finish=finish, cancel_route=cancel)
-    return dumps({"job_id": job.id, "status": job.status,
+    return dumps({"job_id": job.id, "status": job.status, "memory": memory,
                   "next": "job_status(job_id, wait_seconds=50) until complete"})
 
 
@@ -391,6 +569,7 @@ async def sex_check(
     d = await _get(f"{_ds(dataset_id)}/qc/sex", column=column)
     out = {"dataset_id": dataset_id,
            **pick(d, "column", "reason", "species", "metadata_column", "female_genes", "male_genes",
+                  "female_genes_missing", "male_genes_missing",
                   "source", "summary", "warnings", "notes"),
            "samples": table(d.get("groups") or [], ["name", "n_cells", "call", "confidence", "metadata",
                                                     "mismatch", "frac_female", "frac_male", "evidence"],
@@ -404,18 +583,12 @@ async def preflight(dataset_id: DatasetId, steps: Steps, params: Annotated[dict[
         description="The run's parameters, as run_pipeline takes them (its schema lists them).")] = None) -> str:
     """Before a run: its peak memory and rough time per step and in all, against the memory
     scView has free (verdict fits / tight / wont_fit, with suggestions), and whether it would
-    run in large-dataset mode. Nothing is run."""
+    run in large-dataset mode (mode.converts: the dataset would be converted for good, with
+    what that turns off) or without the matrices (mode.light: steps that need none). Nothing
+    is run."""
     _check_steps(steps)
     p = _check_params(params)
-    query: dict[str, Any] = {"steps": ",".join(steps)}
-    for k in ("n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
-              "doublet_channel_key", "doublet_method", "chunked", "clustering_method",
-              "leiden_iterations", "umap_3d", "ambient_rho"):
-        if p.get(k) is not None:
-            query[k] = p[k]
-    if p.get("regress_out"):
-        query["regress_out"] = ",".join(p["regress_out"])
-    d = await _get(f"{_ds(dataset_id)}/preflight", **query)
+    d = await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))
     gb = 2**30
     steps_ = [{"step": s.get("step"), "peak_gb": round((s.get("peak_bytes") or 0) / gb, 2),
                "seconds": s.get("seconds")} for s in d.get("steps") or []]
@@ -425,6 +598,18 @@ async def preflight(dataset_id: DatasetId, steps: Steps, params: Annotated[dict[
            "data": pick(head, "n_cells", "n_genes", "format", "backed", "large", "unit"),
            "steps": table(steps_, ["step", "peak_gb", "seconds"], 40)}
     return dumps(out)
+
+
+def _preflight_query(steps: list[str], p: dict[str, Any]) -> dict[str, Any]:
+    query: dict[str, Any] = {"steps": ",".join(steps)}
+    for k in ("n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
+              "doublet_channel_key", "doublet_method", "chunked", "clustering_method",
+              "leiden_iterations", "umap_3d", "ambient_rho"):
+        if p.get(k) is not None:
+            query[k] = p[k]
+    if p.get("regress_out"):
+        query["regress_out"] = ",".join(p["regress_out"])
+    return query
 
 
 def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
@@ -437,7 +622,7 @@ def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
 
 
 async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind: str,
-                     finish: Callable = _pipeline_result) -> jobs.Job:
+                     finish: Callable = _pipeline_result, allow_large_mode: bool = True) -> jobs.Job:
     if any(j.dataset_id == dataset_id for j in jobs.running()):
         busy = next(j for j in jobs.running() if j.dataset_id == dataset_id)
         raise ToolError(f"Job {busy.id} ({busy.kind}) is still running on this dataset; "
@@ -447,18 +632,33 @@ async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind:
         await api.post(f"{_ds(dataset_id)}/assessment/cancel")
 
     return jobs.new(kind, dataset_id, f"{_ds(dataset_id)}/assessment/run-stream",
-                    {"steps": steps, "params": p}, progress_line=_line, finish=finish,
-                    cancel_route=cancel)
+                    {"steps": steps, "params": p, "allow_large_mode": allow_large_mode},
+                    progress_line=_line, finish=finish, cancel_route=cancel)
 
 
 @tool(WRITE)
-async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = None) -> str:
+async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = None,
+                       allow_large_mode: Annotated[bool, Field(description=(
+                           "Let a run that does not fit in memory convert the dataset to "
+                           "large-dataset layout for good (DE and other whole-matrix tools are "
+                           "then refused on it, .raw leaves its layers). Default false: such a "
+                           "run is refused, naming what it would turn off."))] = False) -> str:
     """Run pipeline steps on a dataset and save the result (a job: returns job_id at once;
     follow it with job_status, stop it with cancel_job). Check preflight first on a big dataset.
-    The original upload is never changed. Unknown step or parameter names are refused."""
+    Steps that need no expression matrix (neighbors, clustering, embeddings on the stored PCA)
+    never convert it. The original upload is never changed. Unknown step or parameter names are
+    refused."""
     _check_steps(steps)
     p = _check_params(params)
-    job = await _start_run(dataset_id, steps, p, "pipeline")
+    if not allow_large_mode:
+        mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
+        if mode.get("converts"):
+            raise ToolError(
+                f"Not run: {mode.get('reason')} That converts the dataset for good: "
+                f"{mode.get('layout_after')}; no longer available on it: "
+                f"{'; '.join(mode.get('turns_off') or [])}. Run DE and the other tools first, free "
+                "memory, or pass allow_large_mode=true to convert it.")
+    job = await _start_run(dataset_id, steps, p, "pipeline", allow_large_mode=allow_large_mode)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id, "steps": steps,
                   "params": p, "next": "job_status(job_id, wait_seconds=50) until complete"})
 
@@ -562,16 +762,18 @@ async def set_labels(
         "Create the column (every other cell 'Unassigned'). False: write into an existing user column."))] = False,
 ) -> str:
     """Give every cell matching a filter one label in a user annotation column (as a lasso and
-    "Label" in the UI): name a cluster ({"kind":"category","column":"leiden","values":["3"]}),
-    or build a column such as a sample id from donor AND day. Saved with the dataset."""
+    "Label" in the UI): name a cluster (filter {"op":"and","items":[{"kind":"category",
+    "column":"leiden","values":["3"]}]}), or build a column such as a sample id from donor AND
+    day. An unknown key in the filter is refused. Saved with the dataset."""
     idx = await _indices(dataset_id, filter)
     if len(idx) == 0:
         raise ToolError("No cell matches the filter; nothing was labelled.")
     r = await _post(f"{_ds(dataset_id)}/labels", {"column": column, "label": label,
                                                     "indices": idx.tolist(), "new_column": new_column})
-    out = pick(r, "column", "label", "created")
+    out = pick(r, "column", "label", "created", "n_labels", "note")
     out.update(dataset_id=dataset_id, n_labelled=int(len(idx)),
-               n_changed=sum(len(g.get("indices") or []) for g in r.get("previous") or []))
+               n_changed=sum(len(g.get("indices") or []) for g in r.get("previous") or []
+                             if g.get("value") != r.get("label")))
     return dumps(out)
 
 
@@ -611,6 +813,8 @@ def _de_warnings(r: dict[str, Any]) -> list[str]:
                  f"(median counts {num(ts.get('median_a'))} vs {num(ts.get('median_b'))})")
     if r.get("dropped_samples"):
         w.append(f"samples left out: {', '.join(map(str, r['dropped_samples'][:10]))}")
+    w += [f"replicates: {x}" for x in r.get("replicate_warnings") or []]
+    w += [f"covariate: {x}" for x in r.get("covariate_notes") or []]
     return w
 
 
@@ -632,6 +836,12 @@ async def differential_expression(
     replicate_key: Annotated[str | None, Field(description="Donor/sample column (default: detected).")] = None,
     pb_method: Annotated[Literal["deseq2", "voom", "voombygroup"], Field(
         description="Pseudobulk model: DESeq2 (default), limma-voom, or voomByGroup (a variance per group).")] = "deseq2",
+    covariates: Annotated[list[str] | None, Field(max_length=4, description=(
+        "Pseudobulk: per-sample obs columns in the design before the condition (sex, batch, age); "
+        "refused when one varies within a sample or is confounded with the condition."))] = None,
+    donor_key: Annotated[str | None, Field(description=(
+        "Pseudobulk: the person column the replicate column's samples nest in, for the "
+        "repeated-donor warning (default: detected)."))] = None,
     min_pct: Annotated[float | None, Field(ge=0, le=1, description="Cell-level: test genes detected in at least this share of either side (default 0.01).")] = None,
     padj_max: Annotated[float, Field(gt=0, le=1, description="Count and list genes at adjusted p at most this.")] = 0.05,
     lfc_min: Annotated[float, Field(ge=0, description="And |log2 fold change| at least this.")] = 0.25,
@@ -650,6 +860,10 @@ async def differential_expression(
                                 "replicate_key": replicate_key, "method": method, "pb_method": pb_method}
         if min_pct is not None:
             body["min_pct"] = min_pct
+        if covariates or donor_key:
+            if method != "pseudobulk":
+                raise ToolError("covariates and donor_key are for method='pseudobulk'.")
+            body.update({"covariates": covariates, "donor_key": donor_key})
         r = await _post(f"{_ds(dataset_id)}/de/compare", body)
     else:
         if method == "pseudobulk":
@@ -686,7 +900,7 @@ async def differential_expression(
         "dataset_id": dataset_id, "result_id": r.get("result_id"), "label": r.get("label"),
         "method": r.get("method"), "n_a": r.get("n_selected"), "n_b": r.get("n_rest"),
         **pick(r, "replicate_key", "n_donors_a", "n_donors_b", "n_samples_a", "n_samples_b",
-               "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped"),
+               "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped", "covariates"),
         "n_genes_tested": r.get("n_genes_tested") or len(genes),
         "rule": f"padj <= {padj_max} and |log2FC| >= {lfc_min}" if has_p else f"|coef| ranked, |log2FC| >= {lfc_min}",
         "n_up": len(up), "n_down": len(down), "columns": cols,
@@ -694,6 +908,8 @@ async def differential_expression(
         "down": [[num(g.get(c)) for c in cols] for g in down[:n]],
         "warnings": _de_warnings(r),
     }
+    if not out.get("covariates"):
+        out.pop("covariates", None)
     if (out["method"] != "pseudobulk" and not r.get("underreplicated")
             and (r.get("n_donors_a") or 0) >= 2 and (r.get("n_donors_b") or 0) >= 2):
         # The UI's caption says the same: a cell-level test treats cells as independent.
@@ -764,24 +980,23 @@ async def per_donor_expression(
     method: Annotated[Literal["mean", "cpm"], Field(description=(
         "mean of the log-normalised values per donor, or cpm: log2 CPM of the donor's summed counts."))] = "mean",
     groups: Annotated[list[str] | None, Field(description="Only these groups (default: all).")] = None,
+    conditions: Annotated[list[str] | None, Field(description=(
+        "The two condition values to test (default: the column's two, or its two besides "
+        "'Unassigned'); other values are still listed, not tested."))] = None,
+    reference: Annotated[str | None, Field(description=(
+        "Baseline of the two: mean_diff is the other minus this (default: the first in the column's order)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """One gene's pseudobulk value per donor in each group (and condition), with the design
-    (paired when every donor is in every condition) and the per-group donor-level test
-    (paired Wilcoxon signed-rank + paired t, or unpaired): the donor-aware check of a DE gene."""
+    (paired when donors are in both tested conditions) and the per-group donor-level test
+    (paired Wilcoxon signed-rank + paired t, or unpaired) of two conditions; `difference`
+    names the sign of mean_diff: the donor-aware check of a DE gene."""
     d = await _get(f"{_ds(dataset_id)}/expression/per-donor", gene=gene, groupby=groupby,
-                   sample=sample, condition=condition, method=method)
+                   sample=sample, condition=condition, method=method, groups=groups or None,
+                   conditions=conditions or None, reference=reference or None)
     points = d.pop("points", None) or []
-    if groups:
-        wanted = {str(g) for g in groups}
-        points = [p for p in points if str(p.get("group")) in wanted]
-        missing = sorted(wanted - {str(g) for g in d.get("groups") or []})
-        d["groups"] = [g for g in d.get("groups") or [] if str(g) in wanted]
-        if missing:
-            d["groups_not_found"] = missing
-        for k in ("paired_tests", "unpaired_tests"):
-            if isinstance(d.get(k), dict):
-                d[k] = {g: v for g, v in d[k].items() if str(g) in wanted}
+    if not d.get("groups_not_found"):
+        d.pop("groups_not_found", None)
     # Per group x condition: the donors' values (compact: donor -> value).
     table: dict[str, dict[str, dict[str, Any]]] = {}
     for p in points:
@@ -805,12 +1020,23 @@ async def composition_test(
     transform: Annotated[Literal["logit", "asin"], Field(description=(
         "Scale the per-sample shares are tested on: logit (propeller's default) or arcsine square root."))] = "logit",
     paired: Annotated[bool | None, Field(description="Default: paired when every donor is in every condition.")] = None,
+    exclude_samples: Annotated[list[str] | None, Field(description=(
+        "Values of the sample column to leave out (e.g. one donor's samples, for a leave-one-out)."))] = None,
+    within_column: Annotated[str | None, Field(description=(
+        "Test shares among a subset only: its column (e.g. a broad cell class)."))] = None,
+    within_value: Annotated[list[str] | None, Field(description=(
+        "The subset's value(s) of within_column (e.g. ['Immune']: T cells among immune cells)."))] = None,
+    donor_key: Annotated[str | None, Field(description=(
+        "Person column the samples nest in, for the repeated-donor warning (default: detected)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Do cell types make up different shares of the cells between conditions, with donors as
-    replicates (propeller-style: per-sample proportions, limma moderated t/F, BH FDR)."""
+    replicates (propeller-style: per-sample proportions, limma moderated t/F, BH FDR). Returns
+    the stored result_id; `comparison` names the conditions, subset and samples left out."""
     body = {"condition_key": condition_key, "group_key": group_key, "sample_key": sample_key,
-            "conditions": conditions, "reference": reference, "transform": transform, "paired": paired}
+            "conditions": conditions, "reference": reference, "transform": transform, "paired": paired,
+            "exclude_samples": exclude_samples, "within_column": within_column,
+            "within_value": within_value, "donor_key": donor_key}
     d = await _post(f"{_ds(dataset_id)}/composition/test", body)
     groups = [_flat(g) for g in d.pop("groups", []) or []]
     d.pop("samples", None)  # per-sample shares: in get_result's table
@@ -837,7 +1063,11 @@ def _milo_result(job: jobs.Job) -> dict[str, Any]:
         r.pop(k, None)
     out = {"dataset_id": job.dataset_id, **r}
     if isinstance(nh, dict) and nh.get("spatial_fdr"):
-        cols = ["label", "label_fraction", "size", "log_fc", "pval", "spatial_fdr"]
+        cols = ["label", "label_fraction", "size", "n_counted", "log_fc", "pval", "spatial_fdr", "top_sample",
+                "top_sample_share"]
+        by_cond = list((nh.get("counts") or {}).values())
+        nh["n_counted"] = [int(sum(c[i] for c in by_cond)) for i in range(len(nh["spatial_fdr"]))] \
+            if by_cond else None
         recs = [{c: (nh.get(c) or [None] * (i + 1))[i] for c in cols} for i in range(len(nh["spatial_fdr"]))]
         recs.sort(key=lambda x: 1.0 if x["spatial_fdr"] is None else x["spatial_fdr"])
         out["top_neighbourhoods"] = table(recs, cols, 15)
@@ -858,7 +1088,11 @@ async def milo(
 ) -> str:
     """Milo neighbourhood differential abundance between two conditions, donors as replicates,
     no clusters needed (a job: returns job_id; job_status gives the result: neighbourhoods
-    significant at spatial FDR and the labels they fall in). The dataset is not changed."""
+    significant at spatial FDR, the labels they fall in, the graph's k and representation,
+    and which sample fills each one: samples_in_significant). Cells in neither condition are
+    not counted but the neighbourhoods span the whole graph (the plan warns). Rebuild the graph
+    on another representation with run_pipeline(["neighbors"], {"neighbors_use_rep": "X_pca"}).
+    The dataset is not changed."""
     body = {"condition_key": condition_key, "sample_key": sample_key, "conditions": conditions,
             "covariates": covariates, "paired": paired, "label_key": label_key, "prop": prop}
     plan = await _post(f"{_ds(dataset_id)}/milo/plan", body)
@@ -877,21 +1111,35 @@ async def expression_by_group(
         "Expression layer (default: the dataset's own default, which can be raw COUNTS, e.g. 'raw'; "
         "the result names the layer used); get_dataset lists the layers."))] = "",
     limit: Limit = DEFAULT_LIMIT,
+    offset: Annotated[int, Field(ge=0, description=(
+        "The group to start from: page through many groups with the result's next_offset."))] = 0,
 ) -> str:
     """Each gene's mean expression and share of expressing cells in each group (the dot plot's
     numbers). mean is over all of a group's cells; fraction is the share with a value above 0.
-    The default layer may be raw counts (then mean is mean counts): the result names it."""
+    The default layer may be raw counts (then mean is mean counts): the result names it.
+    Groups come a page at a time (at most limit, fewer when many genes): next_offset gives the
+    next page."""
     d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
-    g = d["groups"][: clamp(limit)]
     out = {"dataset_id": dataset_id, "groupby": d["groupby"], "layer": d["layer"], "genes": d["genes"],
-           "groups": g, "mean": d["mean"][: len(g)], "fraction": d["fraction"][: len(g)],
+           "n_groups": len(d["groups"]), "offset": offset,
            "note": "mean[i][j] and fraction[i][j] are group i, gene j"}
-    if len(d["groups"]) > len(g):
-        out["n_groups"] = len(d["groups"])
     missing = [x for x in genes if x not in d["genes"]]
     if missing:
         out["genes_missing"] = missing
-    return dumps(out, _max_chars(limit))
+    # As many groups as fit the page (Liu 2021: 197 genes x 100 groups came back as 25 groups
+    # with no way to the rest), each whole.
+    budget = _max_chars(limit) - len(dumps(out, 10**9)) - 200
+    end = offset
+    while end < min(len(d["groups"]), offset + clamp(limit)):
+        size = len(dumps([d["groups"][end], d["mean"][end], d["fraction"][end]], 10**9))
+        if end > offset and size > budget:
+            break
+        budget -= size
+        end += 1
+    out.update(groups=d["groups"][offset:end], mean=d["mean"][offset:end], fraction=d["fraction"][offset:end])
+    if end < len(d["groups"]):
+        out["next_offset"] = end
+    return dumps(out, 10**9)
 
 
 async def _de_table(dataset_id: str, result_id: str) -> pd.DataFrame:
@@ -954,7 +1202,7 @@ async def enrichment(
         d = await _post(f"{_ds(dataset_id)}/enrichment/gsea", body)
         out = {"dataset_id": dataset_id, "method": "gsea",
                **pick(d, "rank_metric_label", "n_genes_ranked", "n_excluded_ribo_mito", "n_sets_tested",
-                      "permutations", "collections", "warning", "panel_caution", "de_method"),
+                      "permutations", "collections", "warning", "panel_caution", "de_method", "result_id"),
                "note": "leading_edge: first 10 genes; a pvalue of 0 is below 1/permutations"}
         for side in ("up", "down"):
             s = d.get(side) or {}
@@ -1017,18 +1265,47 @@ async def score_gene_set(
     method: Annotated[Literal["score_genes", "aucell", "ssgsea", "gsva"], Field(description=(
         "score_genes: scanpy's mean minus a matched control set (default); aucell: the set's share of "
         "each cell's top-ranked genes; ssgsea / gsva: rank walks (refused on very large data)."))] = "score_genes",
+    sample: Annotated[str, Field(description=(
+        "Donor / sample column: the mean score per sample within each group (samples with at "
+        "least 10 cells there), the donor-level view of a signature."))] = "",
+    condition: Annotated[str, Field(description=(
+        "With sample: the condition column; each group's donor-level test between two of its "
+        "values (paired signed-rank + paired t when donors are in both, else rank-sum + Welch t), "
+        "as per_donor_expression tests a gene."))] = "",
+    conditions: Annotated[list[str] | None, Field(min_length=2, max_length=2, description=(
+        "With condition: [reference, tested], the two values to compare (needed when the column "
+        "has more than two; cells with any other value are left out). mean_diff = tested minus "
+        "reference."))] = None,
     limit: Limit = DEFAULT_LIMIT,
+    offset: Annotated[int, Field(ge=0, description="With sample: the per-sample row to start from.")] = 0,
 ) -> str:
     """Score every cell for a gene set (scanpy score_genes by default, or AUCell / ssGSEA /
-    GSVA) and summarise the scores per group (mean, median, share above 0)."""
+    GSVA, on log-normalised values) and summarise the scores per group (mean, median, share
+    above 0). With sample (and condition): each sample's mean score within each group, and
+    per group the donor-level test between two conditions, in one call."""
+    if (condition or conditions) and not sample:
+        raise ToolError("A donor-level test needs the sample (donor) column: give sample.")
+    if conditions and not condition:
+        raise ToolError("conditions needs the condition column it is values of.")
     d = await _post(f"{_ds(dataset_id)}/genesets/score", {"gene_set": genes, "method": method})
     scores = np.asarray(d.pop("scores"), dtype=np.float64)
     if not groupby:
         groupby = (await _get(_ds(dataset_id))).get("active_clustering") or ""
     out: dict[str, Any] = {"dataset_id": dataset_id, **{k: v for k, v in d.items() if k != "score_name"}}
     out["genes_found"] = out.get("genes_found", [])[:50]
+    if sample:
+        if not groupby:
+            raise ToolError("No grouping column: give groupby (e.g. the cell types).")
+        cols = {"group": await _obs_values(dataset_id, groupby), "sample": await _obs_values(dataset_id, sample)}
+        if condition:
+            cols["condition"] = await _obs_values(dataset_id, condition)
+        out.update(groupby=groupby, sample=sample,
+                   **_per_sample_scores(scores, cols, conditions, clamp(limit), offset))
+        if condition:
+            out["condition"] = condition
+        return dumps(out, 10**9)  # a page of limit rows: its size is bounded already
     if groupby:
-        labels = pd.Series((await _get(f"{_ds(dataset_id)}/metadata/{groupby}", format="json"))["values"])
+        labels = await _obs_values(dataset_id, groupby)
         frame = pd.DataFrame({"g": labels.astype(str).where(labels.notna()), "s": scores})
         agg = frame.groupby("g", observed=True)["s"].agg(
             n="size", mean="mean", median="median", share_above_0=lambda s: float((s > 0).mean()))
@@ -1040,12 +1317,85 @@ async def score_gene_set(
     return dumps(out, _max_chars(limit))
 
 
+SAMPLE_MIN_CELLS = 10  # per sample x group, as per_donor_expression (core/donor_expression.py)
+
+
+def _per_sample_scores(scores: np.ndarray, cols: dict[str, pd.Series], conditions: list[str] | None,
+                       limit: int, offset: int) -> dict[str, Any]:
+    """Each (group, condition, sample)'s mean score over its cells (at least
+    SAMPLE_MIN_CELLS of them), and with a condition, per group the donor-level test of
+    core/paired_design.py between the two conditions (Liu 2021 built 67 label columns and
+    ~200 calls for this)."""
+    from scview.core import paired_design
+
+    def text(s: pd.Series) -> pd.Series:
+        return s.astype(str).where(s.notna())
+
+    frame = pd.DataFrame({k: text(v) for k, v in cols.items()})
+    frame["s"] = scores
+    has_cond = "condition" in frame
+    out: dict[str, Any] = {"min_cells": SAMPLE_MIN_CELLS}
+    if has_cond:
+        present = list(dict.fromkeys(frame["condition"].dropna()))
+        order = [str(c) for c in cols["condition"].dtype.categories] if isinstance(
+            cols["condition"].dtype, pd.CategoricalDtype) else sorted(present)
+        levels = [c for c in order if c in present]
+        if conditions:
+            missing = [c for c in conditions if c not in present]
+            if missing:
+                raise ToolError(f"No cell has condition {', '.join(map(repr, missing))}; its values are: "
+                                f"{', '.join(levels[:30])}.")
+            pair = [str(c) for c in conditions]
+        elif len(levels) == 2:
+            pair = levels
+        else:
+            raise ToolError(f"The condition column has {len(levels)} values ({', '.join(levels[:30])}): "
+                            "pick two with conditions=[reference, tested].")
+        n_left = int(frame["condition"].notna().sum() - frame["condition"].isin(pair).sum())
+        frame = frame[frame["condition"].isin(pair)]
+        out.update(conditions=pair, direction=f"mean_diff = {pair[1]} minus {pair[0]}")
+        if n_left:
+            out["cells_left_out"] = f"{n_left:,} cells with another condition value"
+    keys = ["group", "condition", "sample"] if has_cond else ["group", "sample"]
+    agg = frame.dropna(subset=keys).groupby(keys, observed=True, sort=True)["s"].agg(
+        n_cells="size", mean_score="mean").reset_index()
+    small = agg[agg["n_cells"] < SAMPLE_MIN_CELLS]
+    agg = agg[agg["n_cells"] >= SAMPLE_MIN_CELLS]
+    if len(small):
+        out["n_dropped"] = int(len(small))
+        out["dropped"] = [" / ".join(str(r[k]) for k in keys) + f" ({int(r['n_cells'])} cells)"
+                          for _, r in small.head(20).iterrows()]
+    recs = agg.to_dict("records")
+    out["values"] = table(recs[offset:], [*keys, "n_cells", "mean_score"], limit)
+    out["values"]["n_total"] = len(recs)
+    out["offset"] = offset
+    if offset + limit < len(recs):
+        out["next_offset"] = offset + limit
+    if has_cond:
+        groups = list(dict.fromkeys(agg["group"]))
+        points = [{"group": r["group"], "condition": r["condition"], "sample": r["sample"],
+                   "value": r["mean_score"]} for r in recs]
+        both = frame.dropna(subset=["sample", "condition"])
+        design = paired_design.detect_design(set(zip(both["sample"], both["condition"])), out["conditions"])
+        out["design"] = design
+        if design["paired"]:
+            tests = paired_design.group_paired_tests(points, out["conditions"], groups)
+            tcols = ["group", "n_pairs", "mean_diff", "wilcoxon_p", "ttest_p", "caution"]
+        else:
+            tests = paired_design.group_unpaired_tests(points, out["conditions"], groups)
+            tcols = ["group", "n_a", "n_b", "mean_diff", "mannwhitney_p", "welch_p", "caution"]
+        out["test"] = ("paired: Wilcoxon signed-rank + paired t over the donors in both" if design["paired"]
+                       else "unpaired: Wilcoxon rank-sum + Welch t on the donors' mean scores")
+        out["tests"] = table([{"group": g, **t} for g, t in tests.items()], tcols, 200)
+    return out
+
+
 # --- results, figures, jobs --------------------------------------------------------------------------
 
 @tool(READ)
 async def list_results(
     dataset_id: DatasetId,
-    kind: Annotated[str | None, Field(description="Only this kind (e.g. de, markers, enrichment, composition).")] = None,
+    kind: Annotated[str | None, Field(description="Only this kind (e.g. de, markers, enrichment, gsea, composition, milo).")] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The dataset's stored results (DE, markers, enrichment, composition, ...), newest first:
@@ -1137,7 +1487,7 @@ async def plot(
         try:
             col = adaptor.get_obs_column(within_column)
         except KeyError:
-            raise ToolError(f"Column '{within_column}' not found.")
+            raise ToolError(column_message(within_column, list(adaptor.adata.obs.columns)))
         mask = (col.astype(str).where(col.notna()) == str(within_value)).to_numpy()
         if not mask.any():
             raise ToolError(f"No cell has {within_column} = '{within_value}'.")
@@ -1169,10 +1519,28 @@ async def plot(
                 try:
                     values = adaptor.get_obs_column(color_by)
                 except KeyError:
-                    raise ToolError(f"Column '{color_by}' not found.")
+                    raise ToolError(column_message(color_by, list(adaptor.adata.obs.columns)))
                 label = color_by
             elif gene:
                 values, label = _values_of_gene(gene), gene
+            # A published embedding can leave cells out (NaN coordinates: CELLxGENE sets often
+            # do): draw the placed cells only, sampled among themselves, and say how many.
+            placed = np.flatnonzero(np.isfinite(np.asarray(xy, dtype=float)).all(axis=1))
+            if len(placed) == 0:
+                raise ToolError(f"No cell has a position on '{embedding}' (every coordinate is missing).")
+            if len(placed) < n:
+                pick_ = plots.sample(len(placed))
+                rows_ = placed if pick_ is None else placed[pick_]
+                note = (f"{len(placed):,} of {n:,} cells placed on {embedding} ({n - len(placed):,} have "
+                        "no coordinates, not drawn)" if pick_ is None else
+                        f"random {len(rows_):,} of the {len(placed):,} cells placed on {embedding} "
+                        f"({n - len(placed):,} of {n:,} have no coordinates)")
+                if focus is not None:
+                    note += (f"; {int(focus[placed].sum()):,} of {int(focus.sum()):,} with "
+                             f"{within_column} = {within_value} placed")
+                    if not focus[placed].any():
+                        raise ToolError(f"No cell with {within_column} = '{within_value}' has a "
+                                        f"position on '{embedding}'.")
             if rows_ is not None:
                 xy = xy[rows_]
                 focus = focus[rows_] if focus is not None else None
@@ -1188,7 +1556,7 @@ async def plot(
         try:
             groups = adaptor.get_obs_column(by)
         except KeyError:
-            raise ToolError(f"Column '{by}' not found.")
+            raise ToolError(column_message(by, list(adaptor.adata.obs.columns)))
         values = _values_of_gene(gene)
         if focus is not None:  # the subgroup's cells only, sampled among themselves
             values, groups = values[focus], groups[focus]
