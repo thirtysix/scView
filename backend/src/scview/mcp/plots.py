@@ -20,6 +20,7 @@ MAX_POINTS = 50_000
 MAX_LEGEND = 40
 LABEL_MIN_SHARE = 0.002  # groups under 0.2% of the cells get a legend entry, no label
 LABEL_HEIGHT = 0.035  # of the axis: a label's line height, for moving labels apart
+SMALL_GROUP = 0.01  # groups under 1% of the cells: drawn last, with larger points
 SEED = 0
 
 
@@ -70,7 +71,8 @@ def _label_spots(xy: np.ndarray, codes: np.ndarray, names: list[str]) -> list[tu
     """Where to write each group's name: on the group's cell nearest its median (so a
     scattered group's label is never in empty space), skipped for a group under
     LABEL_MIN_SHARE of the cells, and moved up or down off a label already placed
-    (largest group first); a label with no free spot near its group is left out
+    (largest group first); a small group's label sits just above it, so its few cells
+    stay visible; a label with no free spot near its group is left out
     (its legend entry stays)."""
     lo, hi = xy.min(axis=0), xy.max(axis=0)
     span = np.where(hi > lo, hi - lo, 1.0)
@@ -83,7 +85,11 @@ def _label_spots(xy: np.ndarray, codes: np.ndarray, names: list[str]) -> list[tu
             continue
         pts = xy[hit]
         med = np.median(pts, axis=0)
-        x, y = (pts[np.argmin(((pts - med) ** 2).sum(axis=1))] - lo) / span
+        dist = ((pts - med) ** 2).sum(axis=1)
+        x, y = (pts[np.argmin(dist)] - lo) / span
+        if sizes[i] < SMALL_GROUP * len(codes):  # just above a small group's core, not over it
+            core = pts[dist <= np.median(dist)]
+            y = (core[:, 1].max() - lo[1]) / span[1] + 0.6 * LABEL_HEIGHT
         half = 0.0075 * len(names[i]) + 0.01
         for dy in (0, 1, -1, 2, -2, 3, -3):
             yy = y + dy * LABEL_HEIGHT
@@ -116,10 +122,16 @@ def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
         names = [str(c) for c in cats.cat.categories]
         codes = cats.cat.codes.to_numpy()
         colours = _palette(len(names))
-        order = np.random.default_rng(SEED).permutation(len(xy))  # no group drawn on top of all
+        # Random order, so no large group is drawn over all others; a small group (under
+        # SMALL_GROUP of the cells) last and with larger points, or a tight one is not seen.
+        sizes = np.bincount(codes[codes >= 0], minlength=len(names))
+        small = (codes >= 0) & (sizes[np.maximum(codes, 0)] < SMALL_GROUP * len(codes))
+        order = np.random.default_rng(SEED).permutation(len(xy))
+        order = np.concatenate([order[~small[order]], order[small[order]]])
         rgba = np.array([colours[c] if c >= 0 else (0.8, 0.8, 0.8) for c in codes[order]],
                         dtype=float).reshape(-1, 3)
-        ax.scatter(xy[order, 0], xy[order, 1], s=size, c=rgba, linewidths=0, rasterized=True)
+        dot = np.where(small[order], max(3.0, 4 * size), size)
+        ax.scatter(xy[order, 0], xy[order, 1], s=dot, c=rgba, linewidths=0, rasterized=True)
         if len(names) <= MAX_LEGEND:
             from matplotlib.lines import Line2D
 
