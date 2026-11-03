@@ -91,6 +91,8 @@ async def _drive(job: Job) -> None:
         else:
             out = job.finish(job)
             job.result = await out if asyncio.iscoroutine(out) else out
+            if job.dataset_id is None and (job.result or {}).get("dataset_id"):
+                job.dataset_id = job.result["dataset_id"]  # an import: the dataset it made
             status = (job.result or {}).get("status")
             # A pipeline run that stopped itself (nothing saved) is not "complete".
             job.status = status if status in ("cancelled", "stopped") else "complete"

@@ -479,6 +479,7 @@ async def test_public_search_and_import_job(client, dataset_manager, fake):  # n
     done = await _finish(r["job_id"])
     assert done["status"] == "complete", done
     new = done["result"]["dataset_id"]
+    assert done["dataset_id"] == new
     r = await _call("list_datasets", {})
     assert new in {d["id"] for d in r["datasets"]}
 
