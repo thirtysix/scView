@@ -318,6 +318,51 @@ async def test_plot_is_a_png_within_the_caps(client, dataset_manager, args):
     assert len(data) < 300_000 and max(_png_size(data)) <= 1600
 
 
+@pytest.mark.parametrize("args", [
+    {"color_by": "donor_id"}, {"kind": "violin", "gene": "G12", "groupby": "donor_id"},
+    {"kind": "dotplot", "genes": ["G0", "G12"], "groupby": "donor_id"},
+])
+async def test_plot_within_one_subgroup(client, dataset_manager, args):
+    did = _register(dataset_manager)
+    content = await _call("plot", {"dataset_id": did, "within_column": "cluster", "within_value": "A", **args})
+    text = next(b.text for b in content if b.type == "text")
+    assert "cluster = A" in text
+    if args.get("kind") != "dotplot":
+        assert "240" in text  # type A's cells
+    data = base64.b64decode(next(b for b in content if b.type == "image").data)
+    assert data.startswith(PNG)
+    text = await _call("plot", {"dataset_id": did, "within_column": "cluster", "within_value": "Z",
+                                "color_by": "stim"}, error=True)
+    assert "No cell has cluster = 'Z'" in text
+    text = await _call("plot", {"dataset_id": did, "within_column": "cluster"}, error=True)
+    assert "both" in text
+
+
+async def test_dotplot_within_is_the_subgroups_cells(client, dataset_manager):
+    did = _register(dataset_manager)
+    d = await tools._dotplot_within(did, ["G0", "G12"], "stim", "", "cluster", "B")
+    assert d["groups"] == ["CTRL", "STIM"] and d["genes"] == ["G0", "G12"]
+    a = _adata()
+    b_ctrl = ((a.obs["cluster"] == "B") & (a.obs["stim"] == "CTRL")).to_numpy()
+    x = a[b_ctrl, ["G0", "G12"]].X.toarray()
+    assert np.allclose(d["fraction"][0], (x > 0).mean(axis=0), atol=1e-3)
+    assert d["mean"][1][1] > d["mean"][0][1]  # G12 up in STIM
+
+
+def test_labels_skip_tiny_groups_and_move_off_each_other():
+    from scview.mcp import plots
+
+    rng = np.random.default_rng(0)
+    xy = np.vstack([rng.normal(0, 0.01, (500, 2)), rng.normal(0, 0.01, (500, 2)),
+                    rng.normal(5, 0.01, (1, 2)), rng.normal(10, 1, (500, 2))])
+    codes = np.repeat([0, 1, 2, 3], [500, 500, 1, 500])
+    spots = plots._label_spots(xy, codes, ["IgA PB", "IgG PB", "pDC", "T"])
+    names = [n for n, _, _ in spots]
+    assert "pDC" not in names and {"IgA PB", "IgG PB", "T"} == set(names)
+    (_, _, ya), (_, _, yb) = [s for s in spots if s[0] in ("IgA PB", "IgG PB")]
+    assert abs(ya - yb) > 0.2  # the two labels on one spot were moved apart
+
+
 async def test_plot_samples_a_big_dataset_and_says_so(client, dataset_manager, monkeypatch):
     from scview.mcp import plots
 

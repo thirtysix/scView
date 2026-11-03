@@ -1056,19 +1056,41 @@ async def plot(
     groupby: Annotated[str, Field(description="Groups (violin, dotplot; default: the active clustering).")] = "",
     genes: Annotated[list[str] | None, Field(max_length=60, description="Genes (dotplot).")] = None,
     layer: Annotated[str, Field(description="Expression layer (default: the dataset's).")] = "",
+    within_column: Annotated[str | None, Field(description=(
+        "Only one subgroup: its obs column (e.g. cell_type). Violin and dotplot use only its cells; "
+        "an embedding colours them and draws the other cells grey."))] = None,
+    within_value: Annotated[str | None, Field(description="Only one subgroup: its value (e.g. CD14 Monocyte).")] = None,
 ) -> list:
     """A PNG figure of the dataset (at most 1600 px, under 300 KB). A dataset over 50,000 cells
     is drawn from a random 50,000 (said in the caption). The same views are in the browser UI."""
+    if (within_column is None) != (within_value is None):
+        raise ToolError("Give both within_column and within_value, or neither.")
+    scope = f" in {within_column} = {within_value}" if within_column else ""
     if kind == "dotplot":
         if not genes:
             raise ToolError("A dot plot needs genes.")
-        d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
-        caption = f"{len(d['groups'])} groups of {d['groupby']}, layer {d['layer']}"
-        png = await asyncio.to_thread(plots.dotplot, d, f"Dot plot by {d['groupby']}", caption)
+        if within_column:
+            d = await _dotplot_within(dataset_id, genes, groupby, layer, within_column, within_value or "")
+        else:
+            d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
+        caption = f"{len(d['groups'])} groups of {d['groupby']}{scope}, layer {d['layer']}"
+        png = await asyncio.to_thread(plots.dotplot, d, f"Dot plot by {d['groupby']}{scope}", caption)
         return [Image(data=png, format="png"), TextContent(type="text", text=caption)]
 
     adaptor = await _adaptor(dataset_id)
     lay = layer or None
+
+    def _within() -> np.ndarray | None:
+        if not within_column:
+            return None
+        try:
+            col = adaptor.get_obs_column(within_column)
+        except KeyError:
+            raise ToolError(f"Column '{within_column}' not found.")
+        mask = (col.astype(str).where(col.notna()) == str(within_value)).to_numpy()
+        if not mask.any():
+            raise ToolError(f"No cell has {within_column} = '{within_value}'.")
+        return mask
 
     def _values_of_gene(g: str) -> np.ndarray:
         if g not in set(adaptor._var_names_for_layer(lay or adaptor.default_expression_layer())):
@@ -1079,6 +1101,9 @@ async def plot(
         n = adaptor.n_cells()
         rows_ = plots.sample(n)
         note = f"{n:,} cells" if rows_ is None else f"random {len(rows_):,} of {n:,} cells"
+        focus = _within()
+        if focus is not None:
+            note += f"; {int(focus.sum()):,} with {within_column} = {within_value}"
         if kind == "embedding":
             try:
                 xy = adaptor.get_embedding(embedding)[:, :2]
@@ -1099,10 +1124,11 @@ async def plot(
                 values, label = _values_of_gene(gene), gene
             if rows_ is not None:
                 xy = xy[rows_]
+                focus = focus[rows_] if focus is not None else None
                 if values is not None:
                     values = values.iloc[rows_] if isinstance(values, pd.Series) else values[rows_]
-            title = f"{embedding} coloured by {label}" if label else embedding
-            return plots.embedding(np.asarray(xy, dtype=float), values, title, label, note), note
+            title = (f"{embedding} coloured by {label}" if label else embedding) + scope
+            return plots.embedding(np.asarray(xy, dtype=float), values, title, label, note, focus), note
         if not gene:
             raise ToolError("A violin plot needs a gene.")
         by = groupby or adaptor.active_clustering_column() or ""
@@ -1113,10 +1139,15 @@ async def plot(
         except KeyError:
             raise ToolError(f"Column '{by}' not found.")
         values = _values_of_gene(gene)
+        if focus is not None:  # the subgroup's cells only, sampled among themselves
+            values, groups = values[focus], groups[focus]
+            rows_ = plots.sample(len(values))
+            note = f"{len(values):,} cells with {within_column} = {within_value}" + (
+                f" (random {len(rows_):,} drawn)" if rows_ is not None else "")
         if rows_ is not None:
             values, groups = values[rows_], groups.iloc[rows_]
-        return plots.violin(values, groups, f"{gene} by {by}", f"{gene} ({lay or adaptor.default_expression_layer()})",
-                            note), note
+        return plots.violin(values, groups, f"{gene} by {by}{scope}",
+                            f"{gene} ({lay or adaptor.default_expression_layer()})", note), note
 
     try:
         png, note = await asyncio.to_thread(_draw)
@@ -1125,6 +1156,36 @@ async def plot(
     except Exception as e:  # a refusal on a large dataset, a bad column type
         raise ToolError(f"Could not draw the plot: {e}") from None
     return [Image(data=png, format="png"), TextContent(type="text", text=f"{kind}: {note}, {len(png):,} bytes")]
+
+
+async def _dotplot_within(dataset_id: str, genes: list[str], groupby: str, layer: str,
+                          column: str, value: str) -> dict[str, Any]:
+    """The dot plot's numbers over one subgroup's cells: the by-group route's selection row,
+    once per group of ``groupby`` among those cells (in the column's order)."""
+    flt = CellFilter(op="and", items=[{"kind": "category", "column": column, "values": [value]}])
+    within = await _indices(dataset_id, flt)
+    if len(within) == 0:
+        raise ToolError(f"No cell has {column} = '{value}'.")
+    if not groupby:
+        groupby = (await _get(_ds(dataset_id))).get("active_clustering") or ""
+    values = (await _get(f"{_ds(dataset_id)}/metadata/{groupby}", format="json"))["values"]
+    labels = pd.Series(values, dtype="object").astype(str).where(pd.Series(values).notna())
+    order = list(dict.fromkeys(v for v in labels if isinstance(v, str)))
+    sub = labels.iloc[within]
+    present = set(sub.dropna())
+    out: dict[str, Any] = {"groupby": groupby, "groups": [], "mean": [], "fraction": [],
+                           "genes": [], "layer": layer}
+    for g in sorted(present, key=lambda x: (order.index(x), x)):
+        cells = within[(sub == g).to_numpy()]
+        r = await _post(f"{_ds(dataset_id)}/expression/by-group",
+                        {"genes": genes, "groupby": groupby, "layer": layer, "cells": cells.tolist(),
+                         "include_groups": False})
+        sel = r["selection"]
+        out.update(genes=r["genes"], layer=r["layer"])
+        out["groups"].append(g)
+        out["mean"].append(sel["mean"])
+        out["fraction"].append(sel["fraction"])
+    return out
 
 
 @tool(READ)

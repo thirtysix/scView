@@ -18,6 +18,8 @@ MAX_PX = 1600
 MAX_BYTES = 300_000
 MAX_POINTS = 50_000
 MAX_LEGEND = 40
+LABEL_MIN_SHARE = 0.002  # groups under 0.2% of the cells get a legend entry, no label
+LABEL_HEIGHT = 0.035  # of the axis: a label's line height, for moving labels apart
 SEED = 0
 
 
@@ -64,22 +66,59 @@ def is_categorical(values: Any) -> bool:
             or not pd.api.types.is_numeric_dtype(values))
 
 
+def _label_spots(xy: np.ndarray, codes: np.ndarray, names: list[str]) -> list[tuple[str, float, float]]:
+    """Where to write each group's name: on the group's cell nearest its median (so a
+    scattered group's label is never in empty space), skipped for a group under
+    LABEL_MIN_SHARE of the cells, and moved up or down off a label already placed
+    (largest group first); a label with no free spot near its group is left out
+    (its legend entry stays)."""
+    lo, hi = xy.min(axis=0), xy.max(axis=0)
+    span = np.where(hi > lo, hi - lo, 1.0)
+    placed: list[tuple[float, float, float]] = []  # x, y (0-1), half width
+    out = []
+    sizes = np.bincount(codes[codes >= 0], minlength=len(names))
+    for i in np.argsort(-sizes):
+        hit = codes == i
+        if sizes[i] < max(5, LABEL_MIN_SHARE * len(codes)):
+            continue
+        pts = xy[hit]
+        med = np.median(pts, axis=0)
+        x, y = (pts[np.argmin(((pts - med) ** 2).sum(axis=1))] - lo) / span
+        half = 0.0075 * len(names[i]) + 0.01
+        for dy in (0, 1, -1, 2, -2, 3, -3):
+            yy = y + dy * LABEL_HEIGHT
+            if all(abs(x - px) > half + ph or abs(yy - py) > LABEL_HEIGHT for px, py, ph in placed):
+                placed.append((x, yy, half))
+                out.append((names[i], lo[0] + x * span[0], lo[1] + yy * span[1]))
+                break
+    return out
+
+
 def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
-              color_label: str, caption: str) -> bytes:
-    """Cells on two embedding dimensions, coloured by a category (legend and labels
-    at the groups' medians) or a number (colour bar)."""
+              color_label: str, caption: str, focus: np.ndarray | None = None) -> bytes:
+    """Cells on two embedding dimensions, coloured by a category (legend, and labels on
+    the groups) or a number (colour bar). ``focus`` (a mask): only those cells are
+    coloured, the others drawn grey beneath them."""
     fig = _figure(8.5, 7)
     ax = fig.add_subplot(1, 1, 1)
     size = max(0.5, min(12.0, 30000.0 / max(len(xy), 1)))
+    if focus is not None:
+        ax.scatter(xy[~focus, 0], xy[~focus, 1], s=size, c="#d9d9d9", linewidths=0, rasterized=True)
+        xy = xy[focus]
+        if values is not None:
+            values = values[focus]
     if values is None:
         ax.scatter(xy[:, 0], xy[:, 1], s=size, c="#4a6fa5", linewidths=0, rasterized=True)
     elif is_categorical(values):
         cats = values.astype("category")
+        if focus is not None:
+            cats = cats.cat.remove_unused_categories()
         names = [str(c) for c in cats.cat.categories]
         codes = cats.cat.codes.to_numpy()
         colours = _palette(len(names))
         order = np.random.default_rng(SEED).permutation(len(xy))  # no group drawn on top of all
-        rgba = np.array([colours[c] if c >= 0 else (0.8, 0.8, 0.8) for c in codes[order]])
+        rgba = np.array([colours[c] if c >= 0 else (0.8, 0.8, 0.8) for c in codes[order]],
+                        dtype=float).reshape(-1, 3)
         ax.scatter(xy[order, 0], xy[order, 1], s=size, c=rgba, linewidths=0, rasterized=True)
         if len(names) <= MAX_LEGEND:
             from matplotlib.lines import Line2D
@@ -88,12 +127,9 @@ def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
                        for i, n in enumerate(names)]
             ax.legend(handles=handles, title=color_label, loc="center left", bbox_to_anchor=(1.0, 0.5),
                       fontsize=8, title_fontsize=9, frameon=False, markerscale=1.2)
-            for i, n in enumerate(names):
-                hit = codes == i
-                if hit.sum() >= 5:
-                    mx, my = np.median(xy[hit], axis=0)
-                    ax.text(mx, my, n, fontsize=8, ha="center", va="center", weight="bold",
-                            bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.6})
+            for n, x, y in _label_spots(xy, codes, names):
+                ax.text(x, y, n, fontsize=8, ha="center", va="center", weight="bold",
+                        bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.6})
         else:
             caption += f" {len(names)} groups: no legend."
     else:
