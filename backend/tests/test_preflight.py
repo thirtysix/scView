@@ -300,8 +300,23 @@ def test_doublet_plan_counts_scrublets_own_variable_genes_in_the_largest_channel
     assert plan.hvg == seen[0]  # the genes Scrublet scored in that channel
     per = pf.step_peak_for(a, "doublet_detection", PipelineParams())
     whole = pf.step_peak_for(a, "doublet_detection", PipelineParams(doublet_channel_key="__all__"))
-    assert per == pf.DBL_PER_CELL_HVG * 260 * plan.hvg + pf.DBL_OUT_PER_CELL * a.n_obs
+    assert plan.costed[0] == (260, plan.hvg) and [c for c, _ in plan.costed] == [260, 200, 150]
+    worst = max(c * h for c, h in plan.costed)
+    assert per == pf.DBL_PER_CELL_HVG * worst + pf.DBL_OUT_PER_CELL * a.n_obs
     assert whole > per
+
+
+def test_a_smaller_channel_with_more_variable_genes_sets_the_peak():
+    """Pilot 38b64997: the second channel by cells (9,400) kept 4,219 variable genes against
+    the largest's 3,418 (10,858 cells) and peaked higher (measured 5.44 vs 5.03 GB)."""
+    plan = pf.DoubletPlan([10858, 9400, 8866, 500], 3418, [(10858, 3418), (9400, 4219), (8866, 4326)])
+    from scview.core.pipeline import PipelineParams as P
+
+    st = pf._State(29_617, 35_469, pf.Matrix("X", 29_617, 35_469, True, 100_000_000), {}, None, 0)
+    peak, _, _ = pf._step_doublet(st, P(), plan)
+    assert peak == pf.DBL_PER_CELL_HVG * 9400 * 4219 + pf.DBL_OUT_PER_CELL * 29_617
+    old = pf.DoubletPlan(plan.channels, 3418)  # largest channel only: what 0.58.0 costed
+    assert pf._step_doublet(st, P(), old)[0] < peak
 
 
 def test_channel_hvg_extrapolates_a_large_channel_from_two_samples(monkeypatch):
