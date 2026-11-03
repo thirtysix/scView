@@ -375,6 +375,37 @@ def test_labels_skip_tiny_groups_and_move_off_each_other():
     assert abs(ya - yb) > 0.2  # the two labels on one spot were moved apart
 
 
+async def test_plot_draws_only_the_cells_an_embedding_places(client, dataset_manager):
+    """A CELLxGENE embedding can leave cells out (NaN rows; Jäkel 2019: 4,903 of 17,799):
+    colouring by a column with small groups failed in the label placement."""
+    did = _register(dataset_manager, "nanumap")
+    path = Path(dataset_manager.data_dir) / "uploads" / did / "data.h5ad"
+    a = _adata().copy()
+    a.obs["typ"] = pd.Categorical(np.where(np.arange(a.n_obs) < 4, "rare", a.obs["cluster"].astype(str)))
+    a.obsm["X_umap"] = a.obsm["X_umap"].copy()
+    a.obsm["X_umap"][100:200] = np.nan
+    a.write_h5ad(path)
+    content = await _call("plot", {"dataset_id": did, "color_by": "typ"})
+    text = next(b.text for b in content if b.type == "text")
+    assert "380 of 480 cells placed on X_umap (100 have no coordinates" in text
+    assert base64.b64decode(next(b for b in content if b.type == "image").data).startswith(PNG)
+    content = await _call("plot", {"dataset_id": did, "color_by": "donor_id",
+                                   "within_column": "cluster", "within_value": "A"})
+    assert "with cluster = A placed" in next(b.text for b in content if b.type == "text")
+
+
+def test_label_spots_ignore_cells_without_coordinates():
+    from scview.mcp import plots
+
+    rng = np.random.default_rng(0)
+    xy = np.vstack([rng.normal(0, 1, (1000, 2)), rng.normal(5, 0.1, (8, 2))])
+    xy[::7] = np.nan  # in both groups: the small one (under 1%) failed on its empty core
+    codes = np.repeat([0, 1], [1000, 8])
+    names = [n for n, _, _ in plots._label_spots(xy, codes, ["big", "small"])]
+    assert names == ["big", "small"]
+    assert plots._label_spots(np.full((5, 2), np.nan), np.zeros(5, int), ["x"]) == []
+
+
 async def test_plot_samples_a_big_dataset_and_says_so(client, dataset_manager, monkeypatch):
     from scview.mcp import plots
 

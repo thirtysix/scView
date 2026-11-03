@@ -1173,6 +1173,24 @@ async def plot(
                 label = color_by
             elif gene:
                 values, label = _values_of_gene(gene), gene
+            # A published embedding can leave cells out (NaN coordinates: CELLxGENE sets often
+            # do): draw the placed cells only, sampled among themselves, and say how many.
+            placed = np.flatnonzero(np.isfinite(np.asarray(xy, dtype=float)).all(axis=1))
+            if len(placed) == 0:
+                raise ToolError(f"No cell has a position on '{embedding}' (every coordinate is missing).")
+            if len(placed) < n:
+                pick_ = plots.sample(len(placed))
+                rows_ = placed if pick_ is None else placed[pick_]
+                note = (f"{len(placed):,} of {n:,} cells placed on {embedding} ({n - len(placed):,} have "
+                        "no coordinates, not drawn)" if pick_ is None else
+                        f"random {len(rows_):,} of the {len(placed):,} cells placed on {embedding} "
+                        f"({n - len(placed):,} of {n:,} have no coordinates)")
+                if focus is not None:
+                    note += (f"; {int(focus[placed].sum()):,} of {int(focus.sum()):,} with "
+                             f"{within_column} = {within_value} placed")
+                    if not focus[placed].any():
+                        raise ToolError(f"No cell with {within_column} = '{within_value}' has a "
+                                        f"position on '{embedding}'.")
             if rows_ is not None:
                 xy = xy[rows_]
                 focus = focus[rows_] if focus is not None else None
