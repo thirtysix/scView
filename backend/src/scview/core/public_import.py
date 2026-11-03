@@ -27,6 +27,11 @@ methods / report.
 
 Census slices (``cellxgene_census`` / tiledbsoma) were evaluated and not built:
 see the batch 18 report.
+
+Offline: with ``PUBLIC_IMPORT_LOCAL_DIR`` set, a version whose h5ad is already there
+(``{version_id}.h5ad``, fetched beforehand) is copied from it instead of downloaded,
+its header is read from it, and its listing record (``{version_id}.json``, one
+record of ``GET /curation/v1/datasets``) stands in for the listing when present.
 """
 
 from __future__ import annotations
@@ -94,6 +99,17 @@ def check_uuid(value: str, what: str = "dataset version id") -> str:
 def file_url(version_id: str) -> str:
     """The h5ad of one dataset version, on Discover's fixed file host."""
     return f"{FILES_BASE}/{check_uuid(version_id)}.h5ad"
+
+
+def local_copy(version_id: str, suffix: str = ".h5ad") -> Path | None:
+    """The version's file in ``PUBLIC_IMPORT_LOCAL_DIR`` (fetched beforehand), if there."""
+    from scview.config import get_settings
+
+    folder = get_settings().PUBLIC_IMPORT_LOCAL_DIR
+    if not folder:
+        return None
+    path = Path(folder) / f"{check_uuid(version_id)}{suffix}"
+    return path if path.is_file() else None
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +262,14 @@ class DiscoverCatalog:
         """One dataset version: from the listing (current versions), else, given its
         dataset id, from that dataset's version history (an older, pinned version)."""
         vid = check_uuid(version_id)
+        record = local_copy(vid, ".json")
+        if record is not None:
+            try:
+                s = slim({"visibility": "PUBLIC", **json.loads(record.read_text())})
+            except (OSError, ValueError, TypeError) as e:
+                raise PublicImportError(f"The local record {record.name} cannot be read ({e}).", 500)
+            if s and s["dataset_version_id"] == vid:
+                return s
         for d in self.listing().datasets:
             if d["dataset_version_id"] == vid:
                 return d
@@ -344,6 +368,10 @@ def download(version_id: str, dest: Path, expected_size: int, cancel: threading.
     removed either way."""
     url = file_url(version_id)
     part = dest.with_name(f".{dest.name}.part")
+    local = local_copy(version_id)
+    if local is not None:
+        yield from _copy_local(local, part, dest, expected_size, cancel)
+        return
     own = client is None
     client = client or new_client()
     try:
@@ -373,6 +401,28 @@ def download(version_id: str, dest: Path, expected_size: int, cancel: threading.
     finally:
         if own:
             client.close()
+
+
+def _copy_local(src: Path, part: Path, dest: Path, expected_size: int,
+                cancel: threading.Event) -> Iterator[tuple[int, int]]:
+    """``download`` from a file fetched beforehand: the same progress, checks and cleanup."""
+    total = src.stat().st_size
+    if expected_size and total != expected_size:
+        raise PublicImportError(f"The local copy {src} has {total:,} bytes, Discover lists "
+                                f"{expected_size:,}.", 502)
+    done = 0
+    try:
+        with open(src, "rb") as fin, open(part, "wb") as fout:
+            while chunk := fin.read(CHUNK):
+                if cancel.is_set():
+                    raise ImportCancelled()
+                fout.write(chunk)
+                done += len(chunk)
+                yield done, total
+        part.replace(dest)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
 
 
 def file_sha256(path: Path) -> str:
@@ -638,6 +688,12 @@ def remote_header(rec: dict, client: httpx.Client | None = None):
     vid = check_uuid(rec["dataset_version_id"])
     if vid in _HEADERS:
         return _HEADERS[vid]
+    local = local_copy(vid)
+    if local is not None:  # fetched beforehand: read here, no request
+        h = preflight.read_header(local, "h5ad")
+        if h.format != "h5ad":
+            raise PublicImportError(f"Could not read the local copy's header ({h.note}).", 502)
+        return h
     size = int(rec.get("size_bytes") or 0)
     if size <= 0:
         raise PublicImportError("Discover gives no size for this file.", 502)
@@ -679,7 +735,8 @@ def memory_before_download(rec: dict, client: httpx.Client | None = None) -> dic
         return {"verdict": "unknown", "message": f"{e} The memory is checked once it is downloaded.",
                 "source": "none"}
     out = plan_verdict(plan_of_header(h, bool(h.large)))
-    out.update(source="the file's header, read from Discover before downloading",
+    out.update(source="the file's header, read from the local copy" if local_copy(rec["dataset_version_id"])
+               else "the file's header, read from Discover before downloading",
                n_cells=h.n_cells, n_genes=h.n_genes,
                matrices=[{"where": m.where, "sparse": m.sparse, "nnz": m.nnz, "bytes": m.nbytes}
                          for m in h.matrices])

@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # Import public datasets from CELLxGENE Discover (core/public_import.py). Unset:
     # on in private mode, off in public mode (the server would download for anyone).
     PUBLIC_IMPORT_ENABLED: bool | None = None
+    # A folder of Discover files fetched beforehand ({version_id}.h5ad, and optionally its
+    # listing record {version_id}.json): an import of such a version copies it from there
+    # instead of downloading (batch runs on nodes without internet). Empty: always download.
+    PUBLIC_IMPORT_LOCAL_DIR: str = ""
     # The MCP server at /mcp (scview/mcp/): an AI agent's tools over these routes. Unset:
     # on in private mode, off in public mode (an agent can run anything the UI can).
     MCP_ENABLED: bool | None = None
