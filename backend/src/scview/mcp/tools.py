@@ -745,7 +745,11 @@ async def per_donor_expression(
     if groups:
         wanted = {str(g) for g in groups}
         points = [p for p in points if str(p.get("group")) in wanted]
-        for k in ("paired_tests", "tests"):
+        missing = sorted(wanted - {str(g) for g in d.get("groups") or []})
+        d["groups"] = [g for g in d.get("groups") or [] if str(g) in wanted]
+        if missing:
+            d["groups_not_found"] = missing
+        for k in ("paired_tests", "unpaired_tests"):
             if isinstance(d.get(k), dict):
                 d[k] = {g: v for g, v in d[k].items() if str(g) in wanted}
     # Per group x condition: the donors' values (compact: donor -> value).

@@ -230,6 +230,7 @@ async def test_de_per_donor_composition_and_enrichment(client, dataset_manager):
     r = await _call("per_donor_expression", {"dataset_id": did, "gene": "G12", "groupby": "cluster",
                                              "condition": "stim", "sample": "donor_id", "groups": ["A"]})
     assert r["design"]["paired"] is True and set(r["paired_tests"]) == {"A"}
+    assert r["groups"] == ["A"]
     assert len(r["values_by_group"]["A"]["STIM"]) == 4
     r = await _call("composition_test", {"dataset_id": did, "condition_key": "stim", "group_key": "cluster",
                                          "sample_key": "donor_id"})
