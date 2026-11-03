@@ -671,6 +671,50 @@ async def differential_expression(
 
 
 @tool(READ)
+async def compare_de_results(
+    dataset_id: DatasetId,
+    result_a: Annotated[str, Field(description="A differential_expression result_id (e.g. the cell-level one).")],
+    result_b: Annotated[str, Field(description="Another result_id (e.g. pseudobulk on the same comparison).")],
+    padj_max: Annotated[float, Field(gt=0, le=1, description="Significant at adjusted p at most this.")] = 0.05,
+    lfc_min: Annotated[float, Field(ge=0, le=20, description="And |log2FC| at least this.")] = 0.25,
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """Compare two DE results' significant genes (the DE overlap the UI draws): how many each
+    calls, how many both call, their sign agreement, and the top genes only one of them calls
+    (largest |log2FC| first). Use case: cell-level Wilcoxon vs donor-level pseudobulk."""
+    d = await _post(f"{_ds(dataset_id)}/de/overlap", {
+        "result_ids": [result_a, result_b], "direction": "both", "padj_max": padj_max, "lfc_min": lfc_min})
+    n = clamp(limit)
+    sets = d.get("sets") or []
+    pair = (d.get("pairs") or [{}])[0]
+    by_sets = {tuple(i["sets"]): i for i in d.get("intersections") or []}
+
+    def genes(key: tuple[int, ...]) -> dict[str, Any]:
+        i = by_sets.get(key) or {"n": 0, "n_up": 0, "n_down": 0, "genes": []}
+        recs = [{"gene": g["gene"], "lfc_a": (g.get("lfc") or [None, None])[0],
+                 "lfc_b": (g.get("lfc") or [None, None])[1]} for g in i.get("genes") or []]
+        return {**pick(i, "n", "n_up", "n_down"), **table(recs, ["gene", "lfc_a", "lfc_b"], n)}
+
+    shared, disc = pair.get("shared", 0), pair.get("discordant", 0)
+    out = {
+        "dataset_id": dataset_id, "rule": f"padj <= {padj_max} and |log2FC| >= {lfc_min}",
+        "a": pick(sets[0], "name", "method", "n", "n_up", "n_down", "n_tested") if sets else None,
+        "b": pick(sets[1], "name", "method", "n", "n_up", "n_down", "n_tested") if len(sets) > 1 else None,
+        "n_common_tested": d.get("n_common_tested"),
+        "both": shared, "discordant_sign": disc,
+        "sign_agreement": round(shared / (shared + disc), 4) if shared + disc else None,
+        "jaccard": pair.get("jaccard"),
+        "only_a": genes((0,)), "only_b": genes((1,)),
+        "note": "lfc_* is null where that result did not test the gene (under its detection "
+                "cut-off or the pseudobulk count filter).",
+        "notes": d.get("notes") or [],
+    }
+    if disc:
+        out["discordant_genes"] = [g["gene"] for g in (d.get("discordant") or {}).get("genes", [])[:n]]
+    return dumps(out, _max_chars(limit))
+
+
+@tool(READ)
 async def per_donor_expression(
     dataset_id: DatasetId,
     gene: Annotated[str, Field(description="One gene.")],

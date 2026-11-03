@@ -264,6 +264,24 @@ async def test_de_per_donor_composition_and_enrichment(client, dataset_manager):
     assert r["kind"] == "de" and len(r["rows"]) == 3 and r["n_rows"] == de["n_genes_tested"]
 
 
+async def test_compare_de_results(client, dataset_manager):
+    did = _register(dataset_manager)
+    scope = {"dataset_id": did, "column": "stim", "group_a": "STIM", "group_b": "CTRL",
+             "within_column": "cluster", "within_value": "A", "replicate_key": "donor_id"}
+    cell = await _call("differential_expression", scope)
+    pb = await _call("differential_expression", {**scope, "method": "pseudobulk"})
+    r = await _call("compare_de_results", {"dataset_id": did, "result_a": cell["result_id"],
+                                           "result_b": pb["result_id"], "limit": 5})
+    assert r["a"]["method"] == "wilcoxon" and r["b"]["method"] == "pseudobulk"
+    assert r["a"]["n"] == cell["n_up"] + cell["n_down"] and r["b"]["n"] == pb["n_up"] + pb["n_down"]
+    assert r["both"] + r["only_a"]["n"] == r["a"]["n"] and r["both"] + r["only_b"]["n"] == r["b"]["n"]
+    assert r["both"] >= 8 and r["sign_agreement"] == 1.0
+    assert r["only_a"]["columns"] == ["gene", "lfc_a", "lfc_b"] and len(r["only_a"]["rows"]) <= 5
+    text = await _call("compare_de_results", {"dataset_id": did, "result_a": cell["result_id"],
+                                              "result_b": "gone"}, error=True)
+    assert "DE" in text or "result" in text
+
+
 async def test_large_dataset_refusal_is_a_tool_error(client, dataset_manager, monkeypatch):
     from scview.core import large_mode
 

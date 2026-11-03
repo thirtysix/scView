@@ -496,7 +496,8 @@ The tools: `list_datasets`, `get_dataset`, `describe_column`, `crosstab`, `memor
 `search_public_datasets` and `import_public_dataset` (CELLxGENE Discover), `assess_dataset`,
 `qc_filter_preview`, `preflight`, `run_pipeline`, `get_recipe`, `get_replay_script`, `get_markers`,
 `annotate_celltypist`, `set_labels` (label the cells a filter selects), `subcluster`,
-`differential_expression` (cell-level or donor-aware pseudobulk), `per_donor_expression`,
+`differential_expression` (cell-level or donor-aware pseudobulk), `compare_de_results`,
+`per_donor_expression`,
 `composition_test`, `milo`, `expression_by_group`, `enrichment` (ORA or GSEA), `score_gene_set`,
 `list_results`, `get_result`, `plot` (a PNG), and `job_status` / `cancel_job` for the long runs.
 No tool deletes anything. The server runs in a container and cannot read files on your computer:
