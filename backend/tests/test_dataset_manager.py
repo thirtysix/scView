@@ -136,6 +136,32 @@ async def test_a_load_keeps_a_working_reserve_free(dm, monkeypatch):
     assert dm.cached_ids() == ["b", "c"]
 
 
+@pytest.mark.parametrize("share,kept", [("", ["b", "c"]), ("0.1", ["a", "b", "c"])])
+async def test_a_smaller_reserve_keeps_both(dm, monkeypatch, share, kept):
+    # Two datasets of 1.5 GB on 6 GB leave 2 GB; a 0.5 GB load (0.55 with its margin)
+    # plus the default reserve (1.5 GB) does not fit, plus a batch job's
+    # SCVIEW_MEMORY_RESERVE=0.1 (0.6 GB, so the 1 GB floor) does.
+    monkeypatch.setenv("SCVIEW_MEMORY_RESERVE", share)
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=0.1, limited=False, per_dataset_gb=1.5)
+    await dm.load_dataset("a")
+    await dm.load_dataset("b")
+    _fake_memory(monkeypatch, dm, need_gb=0.5, per_dataset_gb=1.5)
+    await dm.load_dataset("c")
+    assert dm.cached_ids() == kept
+
+
+@pytest.mark.parametrize("raw,share", [("", 0.25), ("0.1", 0.1), ("0.5", 0.5),
+                                       ("0.01", 0.25), ("0.9", 0.25), ("ten", 0.25)])
+def test_reserve_share_from_the_environment(monkeypatch, raw, share):
+    from scview.core.dataset_manager import RESERVE_MIN, reserve_share, working_reserve
+
+    monkeypatch.setenv("SCVIEW_MEMORY_RESERVE", raw)
+    assert reserve_share() == share
+    assert working_reserve(64 * GB) == int(share * 64 * GB)
+    assert working_reserve(2 * GB) == max(RESERVE_MIN, int(share * 2 * GB))
+
+
 async def test_a_load_waits_for_memory_a_finished_run_is_still_freeing(dm, monkeypatch):
     from scview.core import memory_budget
 
