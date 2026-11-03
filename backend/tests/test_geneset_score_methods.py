@@ -65,6 +65,39 @@ async def test_default_method_is_score_genes_unchanged(client, dataset_manager):
     np.testing.assert_allclose(body["scores"], ref.obs["s"].to_numpy(), rtol=1e-6, atol=1e-7)
 
 
+async def test_score_genes_skips_a_raw_that_holds_counts(client, dataset_manager):
+    """CELLxGENE layout: X log-normalised, .raw the raw COUNTS. Scoring took .raw whenever
+    present (Liu 2021: max score 31 where log values top out at 8.5); it now scores X."""
+    a = _adata()
+    cx = ad.AnnData(X=a.raw.X.copy(), obs=a.obs.copy(), var=pd.DataFrame(index=a.raw.var_names))
+    counts = ad.AnnData(X=a.layers["counts"].copy(), obs=a.obs.copy(), var=cx.var.copy())
+    cx.raw = counts
+    did = _register(dataset_manager, cx, "cxg")
+    r = await client.post(f"{API}/datasets/{did}/genesets/score", json={"gene_set": SET, "score_name": "s"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source"] == "log-normalised X"
+    ref = cx.copy()
+    sc.tl.score_genes(ref, ["G0", "G1", "G2", "G3", "G4", "G5"], score_name="s", use_raw=False)
+    np.testing.assert_allclose(body["scores"], ref.obs["s"].to_numpy(), rtol=1e-6, atol=1e-7)
+    on_counts = cx.copy()
+    sc.tl.score_genes(on_counts, ["G0", "G1", "G2", "G3", "G4", "G5"], score_name="s", use_raw=True)
+    assert body["max_score"] < on_counts.obs["s"].max()
+
+
+async def test_score_genes_on_counts_only_scores_their_shifted_log(client, dataset_manager):
+    a = _adata()
+    raw_counts = ad.AnnData(X=a.layers["counts"].copy(), obs=a.obs.copy(),
+                            var=pd.DataFrame(index=a.raw.var_names))
+    did = _register(dataset_manager, raw_counts, "countsonly")
+    r = await client.post(f"{API}/datasets/{did}/genesets/score", json={"gene_set": SET, "score_name": "s"})
+    assert r.status_code == 200, r.text
+    assert r.json()["source"].startswith("shifted log of the counts")
+    ref = a.raw.to_adata()
+    sc.tl.score_genes(ref, ["G0", "G1", "G2", "G3", "G4", "G5"], score_name="s", use_raw=False)
+    np.testing.assert_allclose(r.json()["scores"], ref.obs["s"].to_numpy(), rtol=1e-4, atol=1e-5)
+
+
 async def test_aucell_method(client, dataset_manager):
     a = _adata()
     did = _register(dataset_manager, a)

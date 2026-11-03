@@ -1159,18 +1159,47 @@ async def score_gene_set(
     method: Annotated[Literal["score_genes", "aucell", "ssgsea", "gsva"], Field(description=(
         "score_genes: scanpy's mean minus a matched control set (default); aucell: the set's share of "
         "each cell's top-ranked genes; ssgsea / gsva: rank walks (refused on very large data)."))] = "score_genes",
+    sample: Annotated[str, Field(description=(
+        "Donor / sample column: the mean score per sample within each group (samples with at "
+        "least 10 cells there), the donor-level view of a signature."))] = "",
+    condition: Annotated[str, Field(description=(
+        "With sample: the condition column; each group's donor-level test between two of its "
+        "values (paired signed-rank + paired t when donors are in both, else rank-sum + Welch t), "
+        "as per_donor_expression tests a gene."))] = "",
+    conditions: Annotated[list[str] | None, Field(min_length=2, max_length=2, description=(
+        "With condition: [reference, tested], the two values to compare (needed when the column "
+        "has more than two; cells with any other value are left out). mean_diff = tested minus "
+        "reference."))] = None,
     limit: Limit = DEFAULT_LIMIT,
+    offset: Annotated[int, Field(ge=0, description="With sample: the per-sample row to start from.")] = 0,
 ) -> str:
     """Score every cell for a gene set (scanpy score_genes by default, or AUCell / ssGSEA /
-    GSVA) and summarise the scores per group (mean, median, share above 0)."""
+    GSVA, on log-normalised values) and summarise the scores per group (mean, median, share
+    above 0). With sample (and condition): each sample's mean score within each group, and
+    per group the donor-level test between two conditions, in one call."""
+    if (condition or conditions) and not sample:
+        raise ToolError("A donor-level test needs the sample (donor) column: give sample.")
+    if conditions and not condition:
+        raise ToolError("conditions needs the condition column it is values of.")
     d = await _post(f"{_ds(dataset_id)}/genesets/score", {"gene_set": genes, "method": method})
     scores = np.asarray(d.pop("scores"), dtype=np.float64)
     if not groupby:
         groupby = (await _get(_ds(dataset_id))).get("active_clustering") or ""
     out: dict[str, Any] = {"dataset_id": dataset_id, **{k: v for k, v in d.items() if k != "score_name"}}
     out["genes_found"] = out.get("genes_found", [])[:50]
+    if sample:
+        if not groupby:
+            raise ToolError("No grouping column: give groupby (e.g. the cell types).")
+        cols = {"group": await _obs_values(dataset_id, groupby), "sample": await _obs_values(dataset_id, sample)}
+        if condition:
+            cols["condition"] = await _obs_values(dataset_id, condition)
+        out.update(groupby=groupby, sample=sample,
+                   **_per_sample_scores(scores, cols, conditions, clamp(limit), offset))
+        if condition:
+            out["condition"] = condition
+        return dumps(out, 10**9)  # a page of limit rows: its size is bounded already
     if groupby:
-        labels = pd.Series((await _get(f"{_ds(dataset_id)}/metadata/{groupby}", format="json"))["values"])
+        labels = await _obs_values(dataset_id, groupby)
         frame = pd.DataFrame({"g": labels.astype(str).where(labels.notna()), "s": scores})
         agg = frame.groupby("g", observed=True)["s"].agg(
             n="size", mean="mean", median="median", share_above_0=lambda s: float((s > 0).mean()))
@@ -1180,6 +1209,79 @@ async def score_gene_set(
     else:
         out["summary"] = {"mean": float(scores.mean()), "median": float(np.median(scores))}
     return dumps(out, _max_chars(limit))
+
+
+SAMPLE_MIN_CELLS = 10  # per sample x group, as per_donor_expression (core/donor_expression.py)
+
+
+def _per_sample_scores(scores: np.ndarray, cols: dict[str, pd.Series], conditions: list[str] | None,
+                       limit: int, offset: int) -> dict[str, Any]:
+    """Each (group, condition, sample)'s mean score over its cells (at least
+    SAMPLE_MIN_CELLS of them), and with a condition, per group the donor-level test of
+    core/paired_design.py between the two conditions (Liu 2021 built 67 label columns and
+    ~200 calls for this)."""
+    from scview.core import paired_design
+
+    def text(s: pd.Series) -> pd.Series:
+        return s.astype(str).where(s.notna())
+
+    frame = pd.DataFrame({k: text(v) for k, v in cols.items()})
+    frame["s"] = scores
+    has_cond = "condition" in frame
+    out: dict[str, Any] = {"min_cells": SAMPLE_MIN_CELLS}
+    if has_cond:
+        present = list(dict.fromkeys(frame["condition"].dropna()))
+        order = [str(c) for c in cols["condition"].dtype.categories] if isinstance(
+            cols["condition"].dtype, pd.CategoricalDtype) else sorted(present)
+        levels = [c for c in order if c in present]
+        if conditions:
+            missing = [c for c in conditions if c not in present]
+            if missing:
+                raise ToolError(f"No cell has condition {', '.join(map(repr, missing))}; its values are: "
+                                f"{', '.join(levels[:30])}.")
+            pair = [str(c) for c in conditions]
+        elif len(levels) == 2:
+            pair = levels
+        else:
+            raise ToolError(f"The condition column has {len(levels)} values ({', '.join(levels[:30])}): "
+                            "pick two with conditions=[reference, tested].")
+        n_left = int(frame["condition"].notna().sum() - frame["condition"].isin(pair).sum())
+        frame = frame[frame["condition"].isin(pair)]
+        out.update(conditions=pair, direction=f"mean_diff = {pair[1]} minus {pair[0]}")
+        if n_left:
+            out["cells_left_out"] = f"{n_left:,} cells with another condition value"
+    keys = ["group", "condition", "sample"] if has_cond else ["group", "sample"]
+    agg = frame.dropna(subset=keys).groupby(keys, observed=True, sort=True)["s"].agg(
+        n_cells="size", mean_score="mean").reset_index()
+    small = agg[agg["n_cells"] < SAMPLE_MIN_CELLS]
+    agg = agg[agg["n_cells"] >= SAMPLE_MIN_CELLS]
+    if len(small):
+        out["n_dropped"] = int(len(small))
+        out["dropped"] = [" / ".join(str(r[k]) for k in keys) + f" ({int(r['n_cells'])} cells)"
+                          for _, r in small.head(20).iterrows()]
+    recs = agg.to_dict("records")
+    out["values"] = table(recs[offset:], [*keys, "n_cells", "mean_score"], limit)
+    out["values"]["n_total"] = len(recs)
+    out["offset"] = offset
+    if offset + limit < len(recs):
+        out["next_offset"] = offset + limit
+    if has_cond:
+        groups = list(dict.fromkeys(agg["group"]))
+        points = [{"group": r["group"], "condition": r["condition"], "sample": r["sample"],
+                   "value": r["mean_score"]} for r in recs]
+        both = frame.dropna(subset=["sample", "condition"])
+        design = paired_design.detect_design(set(zip(both["sample"], both["condition"])), out["conditions"])
+        out["design"] = design
+        if design["paired"]:
+            tests = paired_design.group_paired_tests(points, out["conditions"], groups)
+            tcols = ["group", "n_pairs", "mean_diff", "wilcoxon_p", "ttest_p", "caution"]
+        else:
+            tests = paired_design.group_unpaired_tests(points, out["conditions"], groups)
+            tcols = ["group", "n_a", "n_b", "mean_diff", "mannwhitney_p", "welch_p", "caution"]
+        out["test"] = ("paired: Wilcoxon signed-rank + paired t over the donors in both" if design["paired"]
+                       else "unpaired: Wilcoxon rank-sum + Welch t on the donors' mean scores")
+        out["tests"] = table([{"group": g, **t} for g, t in tests.items()], tcols, 200)
+    return out
 
 
 # --- results, figures, jobs --------------------------------------------------------------------------

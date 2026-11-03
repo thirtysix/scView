@@ -311,6 +311,46 @@ async def test_expression_by_group_page_holds_fewer_groups_when_genes_are_many(c
     assert 1 <= len(r["groups"]) < 4 and r["next_offset"] == len(r["groups"]) and "truncated" not in r
 
 
+async def test_score_gene_set_per_sample_with_the_donor_level_test(client, dataset_manager):
+    """Liu 2021: a hallmark score per sample within each cell type took ~200 calls. One
+    call: each sample's mean score per group, and per group the donor-level test."""
+    did = _register(dataset_manager)
+    r = await _call("score_gene_set", {"dataset_id": did, "genes": S_SET, "groupby": "cluster",
+                                       "sample": "donor_id", "condition": "stim"})
+    assert r["conditions"] == ["CTRL", "STIM"] and r["direction"] == "mean_diff = STIM minus CTRL"
+    assert r["design"]["paired"] is True and r["design"]["n_pairs"] == 4
+    assert r["values"]["n_total"] == 16 and r["values"]["columns"] == [
+        "group", "condition", "sample", "n_cells", "mean_score"]
+    tests = {row[0]: dict(zip(r["tests"]["columns"], row)) for row in r["tests"]["rows"]}
+    assert set(tests) == {"A", "B"} and all(t["n_pairs"] == 4 and t["mean_diff"] > 0 for t in tests.values())
+    assert tests["A"]["ttest_p"] < 0.05 and "descriptive" in tests["A"]["caution"]  # 4 pairs
+    # The per-sample means are the cells' scores averaged (the route's own scores).
+    d = await tools._post(f"/datasets/{did}/genesets/score", {"gene_set": S_SET, "method": "score_genes"})
+    a = _adata()
+    m = (a.obs["cluster"] == "A") & (a.obs["stim"] == "STIM") & (a.obs["donor_id"] == "D1")
+    row = next(x for x in r["values"]["rows"] if x[:3] == ["A", "STIM", "D1"])
+    assert row[3] == 30 and abs(row[4] - float(np.mean(np.asarray(d["scores"])[m.to_numpy()]))) < 1e-3
+    # The order is the caller's: [reference, tested]; a page of rows with next_offset.
+    r = await _call("score_gene_set", {"dataset_id": did, "genes": S_SET, "groupby": "cluster",
+                                       "sample": "donor_id", "condition": "stim",
+                                       "conditions": ["STIM", "CTRL"], "limit": 5})
+    assert r["direction"] == "mean_diff = CTRL minus STIM" and r["next_offset"] == 5
+    assert all(row[r["tests"]["columns"].index("mean_diff")] < 0 for row in r["tests"]["rows"])
+    # Per sample with no condition: values only.
+    r = await _call("score_gene_set", {"dataset_id": did, "genes": T_SET, "groupby": "cluster",
+                                       "sample": "donor_id"})
+    assert r["values"]["n_total"] == 8 and "tests" not in r
+    text = await _call("score_gene_set", {"dataset_id": did, "genes": T_SET, "condition": "stim"}, error=True)
+    assert "give sample" in text
+    text = await _call("score_gene_set", {"dataset_id": did, "genes": T_SET, "groupby": "cluster",
+                                          "sample": "donor_id", "condition": "donor_id"}, error=True)
+    assert "4 values" in text and "conditions=[reference, tested]" in text
+    text = await _call("score_gene_set", {"dataset_id": did, "genes": T_SET, "groupby": "cluster",
+                                          "sample": "donor_id", "condition": "stim",
+                                          "conditions": ["CTRL", "nope"]}, error=True)
+    assert "'nope'" in text
+
+
 async def test_de_per_donor_composition_and_enrichment(client, dataset_manager):
     did = _register(dataset_manager)
     de = await _call("differential_expression", {
