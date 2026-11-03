@@ -234,3 +234,41 @@ async def test_endpoint(client, dataset_manager):
     assert r.status_code == 200 and r.json()["reason"] == "requested"
     assert {g["call"] for g in r.json()["groups"]} == {"mixed"}
     assert (await client.get(url, params={"column": "nope"})).status_code == 404
+
+
+def test_a_backed_dataset_gives_the_in_memory_answer(tmp_path: Path, monkeypatch):
+    """Pilot issue 10: a backed dataset's counts are a ``_CSRDataset`` (no ``sum``);
+    they are now read in blocks of cells, with the same result."""
+    a = _adata({"D1": "F", "D2": "M", "D3": "F", "D4": "M"})
+    want = sc.sex_check(a)
+    path = tmp_path / "d.h5ad"
+    a.write_h5ad(path)
+    monkeypatch.setattr(sc, "ROW_BLOCK", 70)  # several blocks, one cut mid-donor
+    backed = ad.read_h5ad(path, backed="r")
+    try:
+        got = sc.sex_check(backed)
+    finally:
+        backed.file.close()
+    assert got["groups"] == want["groups"]
+    assert got["summary"] == want["summary"]
+
+
+def test_more_than_fifty_samples_are_checked():
+    """Pilot issue 11: sample columns with 51 batches / 66 libraries were refused at
+    the violin cap of 50; the sex check is a table."""
+    donors = {f"D{i}": ("F" if i % 2 else "M") for i in range(66)}
+    a = _adata(donors, cells=12, conditions=("CTRL",))
+    r = sc.sex_check(a, "donor")
+    assert len(r["groups"]) == 66
+    called = {g["name"]: g["call"] for g in r["groups"]}
+    assert called["D1"] == "female" and called["D2"] == "male"
+    assert sc.sex_check(a)["column"] == "donor"  # detected too, not only when named
+    a.obs["cell"] = a.obs_names  # 792 groups: under the cap; one more cut it
+    assert len(sc.sex_check(a, "cell")["groups"]) == a.n_obs
+
+
+def test_the_group_cap_still_refuses(monkeypatch):
+    monkeypatch.setattr(sc, "MAX_GROUPS", 3)
+    a = _adata({"D1": "F", "D2": "M", "D3": "F", "D4": "M"})
+    with pytest.raises(ValueError, match="at most 3"):
+        sc.sex_check(a, "donor")
