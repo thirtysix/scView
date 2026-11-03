@@ -357,6 +357,41 @@ async def test_gsea_of_a_prefiltered_de_result_ranks_its_tested_genes(client, da
     assert other["de_min_pct"] is None and other["de_n_genes_skipped"] is None
 
 
+async def test_a_gsea_run_is_stored_with_the_datasets_results(client, dataset_manager):
+    """Liu 2021: GSEA had no result_id, so one set's row meant running it again. Stored as
+    DE results are: every tested set, both signs, once per run."""
+    from scview.core import results_store
+
+    did = _register_transcriptome(dataset_manager, n_genes=400)
+    de = (await client.post(f"{API}/datasets/{did}/de", json={"indices": list(range(30))})).json()
+    body = (await _gsea(client, did, de_result_id=de["result_id"], max_terms=1)).json()
+    rid = body["result_id"]
+    assert rid
+    results_store.flush()
+    listed = (await client.get(f"{API}/datasets/{did}/results", params={"kind": "gsea"})).json()["results"]
+    assert [e["id"] for e in listed] == [rid] and listed[0]["label"].startswith("GSEA of DE ")
+    assert listed[0]["stale"] is False
+    r = await client.get(f"{API}/datasets/{did}/results/{rid}/table.tsv.gz")
+    assert r.status_code == 200
+    import gzip
+    import io
+
+    data = r.content
+    try:
+        data = gzip.decompress(data)
+    except OSError:
+        pass
+    table = pd.read_csv(io.BytesIO(data), sep="\t")
+    n_terms = body["up"]["n_terms"] + body["down"]["n_terms"]
+    assert len(table) == n_terms > 1  # every set, not the max_terms shown
+    assert {"side", "term", "nes", "pvalue", "fdr", "leading_edge"} <= set(table.columns)
+    # The same run again (served from the cache) is the same result, stored once.
+    again = (await _gsea(client, did, de_result_id=de["result_id"])).json()
+    results_store.flush()
+    assert again["result_id"] == rid and again["cached"] is True
+    assert len(results_store.entries(did, "gsea")) == 1
+
+
 async def test_an_unknown_or_foreign_result_id_is_404(client, dataset_manager):
     did = _register(dataset_manager)
     other = _register_transcriptome(dataset_manager, "other", n_genes=400)

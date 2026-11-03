@@ -1110,7 +1110,7 @@ async def enrichment(
         d = await _post(f"{_ds(dataset_id)}/enrichment/gsea", body)
         out = {"dataset_id": dataset_id, "method": "gsea",
                **pick(d, "rank_metric_label", "n_genes_ranked", "n_excluded_ribo_mito", "n_sets_tested",
-                      "permutations", "collections", "warning", "panel_caution", "de_method"),
+                      "permutations", "collections", "warning", "panel_caution", "de_method", "result_id"),
                "note": "leading_edge: first 10 genes; a pvalue of 0 is below 1/permutations"}
         for side in ("up", "down"):
             s = d.get(side) or {}
@@ -1303,7 +1303,7 @@ def _per_sample_scores(scores: np.ndarray, cols: dict[str, pd.Series], condition
 @tool(READ)
 async def list_results(
     dataset_id: DatasetId,
-    kind: Annotated[str | None, Field(description="Only this kind (e.g. de, markers, enrichment, composition).")] = None,
+    kind: Annotated[str | None, Field(description="Only this kind (e.g. de, markers, enrichment, gsea, composition, milo).")] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The dataset's stored results (DE, markers, enrichment, composition, ...), newest first:

@@ -165,6 +165,7 @@ READERS = {
     "mixscape": lambda e, r: _mixscape(r),
     "de_audit": lambda e, r: _records(r.cell_only),
     "dsb": lambda e, v: _records(v["proteins"]),
+    "gsea": lambda e, v: _records(v["terms"]),
 }
 
 
