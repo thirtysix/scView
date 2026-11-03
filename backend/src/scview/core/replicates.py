@@ -87,7 +87,7 @@ def repeated_donors(obs, sample_key: str, sides: Sequence, donor_key: str | None
             "donors": donors,
             "message": (
                 f"Samples are not independent: {len(donors)} of {per.size} '{cand}' values give "
-                f"more than one '{sample_key}' sample here ({shown}{more}). Each sample is counted "
+                f"more than one '{sample_key}' value here ({shown}{more}). Each sample is counted "
                 f"as an independent replicate, so p values are optimistic; use '{cand}' as the "
                 "replicate column to count each person once."),
         }

@@ -315,6 +315,23 @@ def _sex_difference(obs, body: _CompareScope, mask_a, mask_b, dataset_id: str,
         return None
 
 
+def _sex_adjusted(sex: dict, obs, body: _CompareScope) -> dict:
+    """A pseudobulk design with the sex column as a covariate estimates sex apart from the
+    condition: say so instead of warning that sex-linked genes will top the list."""
+    from scview.core import sex_check
+
+    meta = sex_check.sex_metadata_column(obs)
+    if not meta or meta not in (getattr(body, "covariates", None) or []):
+        return sex
+    msg = str(sex.get("message", ""))
+    cut = msg.find("): ")  # the sides' make-up and its source end at the first "): "
+    head = msg[:cut + 1] if cut >= 0 else msg.rstrip(".")
+    return {**sex, "adjusted": True, "message": (
+        f"{head}; '{meta}' is a covariate in this design, so sex-linked genes are adjusted for. "
+        "Where one side holds a single sex, the sex effect is estimated from the other side "
+        "only: read XIST and Y-chromosome genes with care.")}
+
+
 def _replicate_guard(obs, mask_a, mask_b, key: str | None) -> dict:
     if not key:
         return {"replicate_key": None, "underreplicated": False}
@@ -766,6 +783,8 @@ async def differential_expression_compare(
     # The two sides' cluster mix: a shift makes the DE partly a composition test.
     composition = _composition(adata, body, mask_a, mask_b, body.composition_by)
     sex = _sex_difference(obs, body, mask_a, mask_b, dataset_id, cell_level=body.method != "pseudobulk")
+    if sex and body.method == "pseudobulk":
+        sex = _sex_adjusted(sex, obs, body)
 
     if body.method == "pseudobulk":
         resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id, adaptor, dm)

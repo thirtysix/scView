@@ -742,3 +742,10 @@ async def test_hostile_origin_and_host_are_refused(tmp_data_dir):
     lan = Settings(DATA_DIR=str(tmp_data_dir), MCP_ALLOWED_ORIGINS="http://192.168.1.5:8080")
     assert (await _post_init(lan, {"origin": "http://192.168.1.5:8080"}, host="192.168.1.5:8080")).status_code == 200
     assert (await _post_init(lan, {"origin": "http://192.168.1.6:8080"}, host="192.168.1.5:8080")).status_code == 403
+
+
+async def test_any_route_missing_column_names_the_closest(client, dataset_manager):
+    did = _register(dataset_manager)
+    text = await _call("per_donor_expression", {"dataset_id": did, "gene": "G1", "groupby": "clustr"},
+                       error=True)
+    assert "Column 'clustr' not found." in text and "Closest: cluster" in text

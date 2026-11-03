@@ -145,3 +145,16 @@ def test_cell_shares_under_the_threshold_are_quiet():
     assert sex_check.compare_cell_shares(obs, "donor_id", covid, ~covid, "C", "N", ONE_F_A_SIDE, "x") is None
     # No cell of a known-sex sample on side A: no judgement.
     assert sex_check.compare_cell_shares(obs, "donor_id", covid, ~covid, "C", "N", {"H0": "female"}, "x") is None
+
+
+async def test_sex_as_a_pseudobulk_covariate_says_it_is_adjusted(client, dataset_manager):
+    did = _register(dataset_manager, _adata(WILK_LIKE), "adj")
+    body = {**BODY, "method": "pseudobulk", "within_column": "cell_type", "within_value": "A"}
+    plain = (await client.post(f"{API}/datasets/{did}/de/compare", json=body)).json()["sex"]
+    assert "adjusted" not in plain and "will show up" in plain["message"]
+    r = await client.post(f"{API}/datasets/{did}/de/compare", json={**body, "covariates": ["sex"]})
+    assert r.status_code == 200, r.text
+    sex = r.json()["sex"]
+    assert sex["adjusted"] is True and sex["kind"] == "imbalanced"
+    assert sex["message"].startswith("Sex differs between the sides (COVID-19: 0 female, 4 male; normal: 2 female, 2 male)")
+    assert "'sex' is a covariate in this design" in sex["message"] and "will show up" not in sex["message"]

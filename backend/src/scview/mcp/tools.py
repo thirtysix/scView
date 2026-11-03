@@ -14,6 +14,7 @@ import base64
 import gzip
 import io
 import json
+import re
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
@@ -71,18 +72,33 @@ def _fail(e: api.RouteError) -> ToolError:
     return ToolError(e.detail)
 
 
+_MISSING_COLUMN = re.compile(r"^Column '([^']+)' not found")
+_DATASET_PATH = re.compile(r"^/datasets/([^/]+)/")
+
+
+async def _route_error(e: api.RouteError, path: str) -> ToolError:
+    """The route's error; a missing obs column also names the closest columns (any route)."""
+    col, ds = _MISSING_COLUMN.match(e.detail or ""), _DATASET_PATH.match(path)
+    if col and ds and "Closest:" not in e.detail:
+        try:
+            return await _column_error(ds.group(1), col.group(1))
+        except Exception:  # noqa: BLE001 — the hint is extra; the route's own error stands
+            pass
+    return _fail(e)
+
+
 async def _get(path: str, **query: Any) -> Any:
     try:
         return await api.get(path, **query)
     except api.RouteError as e:
-        raise _fail(e) from None
+        raise await _route_error(e, path) from None
 
 
 async def _post(path: str, body: Any = None, **query: Any) -> Any:
     try:
         return await api.post(path, body, **query)
     except api.RouteError as e:
-        raise _fail(e) from None
+        raise await _route_error(e, path) from None
 
 
 async def _raw(path: str, **query: Any) -> tuple[dict[str, str], bytes]:
