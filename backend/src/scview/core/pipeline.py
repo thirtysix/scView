@@ -409,8 +409,9 @@ def clear_processing(adata: ad.AnnData) -> None:
         if col in adata.var.columns:
             del adata.var[col]
 
-    # Clear embeddings
-    keys_to_clear = [k for k in adata.obsm_keys() if k.startswith("X_")]
+    # Clear embeddings, keeping the file's own UMAP (kept first if this is the first run)
+    keep_original_umap(adata)
+    keys_to_clear = [k for k in list(adata.obsm) if k.startswith("X_") and k != ORIGINAL_UMAP_KEY]
     for k in keys_to_clear:
         del adata.obsm[k]
 
@@ -1061,9 +1062,32 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]
     return found
 
 
+ORIGINAL_UMAP_KEY = "X_umap_original"
+
+
+def keep_original_umap(adata: ad.AnnData) -> bool:
+    """Copy the file's own ``X_umap`` to ``X_umap_original`` before scView's UMAP
+    overwrites it, so the author's layout stays beside the new one. Only when no
+    earlier scView run made that ``X_umap`` (no ``embeddings`` step in provenance)
+    and nothing is kept yet. Returns True when it copied."""
+    if "X_umap" not in adata.obsm or ORIGINAL_UMAP_KEY in adata.obsm:
+        return False
+    history = provenance.read_provenance(adata).get("history") or []
+    if any(h.get("step") == "embeddings" for h in history):
+        return False
+    xy = np.asarray(adata.obsm["X_umap"])
+    if xy.ndim != 2 or xy.shape[1] < 2:
+        return False
+    adata.obsm[ORIGINAL_UMAP_KEY] = np.array(xy[:, :2], dtype=np.float32)
+    logger.info("Kept the file's own UMAP as %s", ORIGINAL_UMAP_KEY)
+    return True
+
+
 def _run_embeddings(adata: ad.AnnData, params: PipelineParams) -> dict:
     """Compute the 2D UMAP and, unless ``umap_3d`` leaves it out, the 3D one. Returns
-    the 3D setting the step used (on / off), for the History and the replay."""
+    the 3D setting the step used (on / off), for the History and the replay. The
+    file's own 2D UMAP, if any, is kept first (``keep_original_umap``)."""
+    keep_original_umap(adata)
     # sc.tl.umap hands umap-learn the neighbour graph without copying it, and
     # umap-learn zeroes the graph's weakest edges in place. The saved graph was
     # then not the one the clustering ran on: re-clustering it (the resolution
