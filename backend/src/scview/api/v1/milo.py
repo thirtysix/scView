@@ -76,7 +76,7 @@ def _plan(adata, body: MiloRequest) -> tuple[milo.Plan, bool]:
         key = pick_donor(obs, donor_candidates(obs, exclude), masks)
     p = milo.plan(adata, body.condition_key, key, conditions=body.conditions,
                   covariates=body.covariates, paired=body.paired, prop=body.prop,
-                  batch_key=recorded_batch_key(adata))
+                  batch_key=milo.graph_batch_key(adata, recorded_batch_key(adata)))
     return p, not body.sample_key
 
 

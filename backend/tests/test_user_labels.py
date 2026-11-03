@@ -142,6 +142,23 @@ def test_relabelling_every_cell_drops_the_unused_category():
     assert list(a.obs["mine"].cat.categories) == ["A"]
 
 
+def test_a_column_takes_more_labels_than_the_pickers_list(monkeypatch):
+    """Liu 2021: a sample x cell-type column hit the old 100-label cap mid-loop. Past
+    UI_MAX_GROUPS the answer says the UI's pickers leave the column out; MAX_LABELS holds."""
+    from scview.core import user_labels
+
+    a = ad.AnnData(np.zeros((300, 2), dtype=np.float32))
+    out = label_cells(a, "sxt", "L0", [0], new_column=True)
+    assert out["n_labels"] == 2 and "note" not in out
+    for i in range(1, 120):
+        out = label_cells(a, "sxt", f"L{i}", [i], new_column=False)
+    assert out["n_labels"] == 121 and "leave it out" in out["note"]
+    monkeypatch.setattr(user_labels, "MAX_LABELS", 121)
+    with pytest.raises(LabelError, match="already has 121 labels"):
+        label_cells(a, "sxt", "one more", [200], new_column=False)
+    label_cells(a, "sxt", "L3", [200], new_column=False)  # an existing label still goes in
+
+
 def test_labelling_drops_the_columns_markers_and_enrichment():
     a = _adata()
     label_cells(a, "mine", "A", range(20), new_column=True)

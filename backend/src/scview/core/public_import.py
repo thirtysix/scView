@@ -58,6 +58,7 @@ LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/"
 LISTING_TTL_SECONDS = 24 * 3600
 CACHE_DIR = "public_import"
 LISTING_FILE = "discover_datasets.json"
+DESCRIPTION_MAX = 4000  # characters of a collection's description kept for the search
 CHUNK = 1024 * 1024
 # Disk kept free beyond the two copies (the download and the working copy).
 DISK_MARGIN = 1024**3
@@ -193,7 +194,9 @@ class DiscoverCatalog:
                     cached = Listing(list(data["datasets"]), str(data["fetched_at"]), True)
                 except (OSError, ValueError, KeyError, TypeError):
                     cached = None
-            if cached is not None and not refresh and self._fresh(cached.fetched_at):
+            # A listing cached before descriptions were kept is fetched again once.
+            described = not cached or not cached.datasets or "collection_description" in cached.datasets[0]
+            if cached is not None and not refresh and self._fresh(cached.fetched_at) and described:
                 self._mem = cached
                 return Listing(cached.datasets, cached.fetched_at, True)
             try:
@@ -207,6 +210,9 @@ class DiscoverCatalog:
             if not isinstance(raw, list):
                 raise PublicImportError("CELLxGENE Discover's listing has an unexpected shape.", 502)
             datasets = [s for s in (slim(r) for r in raw if isinstance(r, dict)) if s]
+            described = self._descriptions()
+            for s in datasets:
+                s["collection_description"] = described.get(str(s.get("collection_id")), "")
             fresh = Listing(datasets, _now(), False)
             self.dir.mkdir(parents=True, exist_ok=True)
             part = path.with_suffix(".part")
@@ -214,6 +220,20 @@ class DiscoverCatalog:
             part.replace(path)
             self._mem = fresh
             return fresh
+
+    def _descriptions(self) -> dict[str, str]:
+        """collection id -> its description (the abstract), for the search: a study's
+        words are often only there (Otero-Garcia 2022: "neurofibrillary" in no title).
+        Empty when Discover will not give them: the search then reads titles alone."""
+        try:
+            raw = self._get_json("/collections")
+        except PublicImportError as e:
+            logger.warning("Discover collections not fetched (%s): searching titles only", e)
+            return {}
+        if not isinstance(raw, list):
+            return {}
+        return {str(c["collection_id"]): str(c.get("description") or "")[:DESCRIPTION_MAX]
+                for c in raw if isinstance(c, dict) and c.get("collection_id")}
 
     def _fresh(self, fetched_at: str) -> bool:
         try:
@@ -251,17 +271,32 @@ def search(datasets: list[dict], q: str | None = None, organism: str | None = No
            tissue: str | None = None, disease: str | None = None, assay: str | None = None,
            max_bytes: int | None = None, sort: str = "cells", limit: int = 50,
            offset: int = 0) -> dict:
-    """Datasets matching every given filter (``q``: all words, in the title, collection,
-    tissues, diseases, assays or DOI label), with counts per organism and tissue over
-    the text-matched set so the filters show what is there."""
-    words = [w for w in (q or "").lower().split() if w]
+    """Datasets matching every given filter (``q``: its words, each anywhere in the title,
+    collection name or description, tissues, diseases, assays or DOI label; a word ending
+    in "s" also matches without it), with counts per organism and tissue over the
+    text-matched set so the filters show what is there. When no dataset has every word,
+    the ones with the most of them, and ``partial`` saying which words were not found."""
+    words = [w for w in re.findall(r"[\w'’-]+", (q or "").lower()) if w]
 
     def text(d: dict) -> str:
         return " ".join([d.get("title") or "", d.get("collection_name") or "",
+                         d.get("collection_description") or "",
                          d.get("collection_doi_label") or "", *d["tissue"], *d["disease"],
                          *d["assay"], *d["organism"]]).lower()
 
-    hits = [d for d in datasets if all(w in text(d) for w in words)]
+    def has(word: str, t: str) -> bool:
+        return word in t or (len(word) > 3 and word.endswith("s") and word[:-1] in t)
+
+    found = [(d, [w for w in words if has(w, text(d))]) for d in datasets]
+    best = max((len(m) for _, m in found), default=0)
+    partial = None
+    if words and best < len(words) and best > 0 and len(words) > 1:
+        hits = [d for d, m in found if len(m) == best]
+        seen = {w for _, m in found if len(m) == best for w in m}
+        partial = {"words_matched": best, "of": len(words),
+                   "not_found_together": [w for w in words if w not in seen] or words}
+    else:
+        hits = [d for d, m in found if len(m) == len(words)]
     organisms = Counter(o for d in hits for o in d["organism"])
     tissues = Counter(t for d in hits if _matches(d["organism"], organism) for t in d["tissue"])
     hits = [d for d in hits
@@ -272,11 +307,16 @@ def search(datasets: list[dict], q: str | None = None, organism: str | None = No
            "title": lambda d: d["title"].lower(),
            "newest": lambda d: "".join(chr(0x10FFFF - ord(c)) for c in (d.get("published_at") or ""))}
     hits.sort(key=key.get(sort, key["cells"]))
-    return {
+    out = {
         "total": len(hits),
-        "results": hits[offset:offset + limit],
+        # The description is searched, not sent: hundreds of words per dataset.
+        "results": [{k: v for k, v in d.items() if k != "collection_description"}
+                    for d in hits[offset:offset + limit]],
         "facets": {"organism": organisms.most_common(), "tissue": tissues.most_common(60)},
     }
+    if partial:
+        out["partial"] = partial
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -126,24 +126,78 @@ ADDITIVE_STEPS = frozenset({
 })
 
 
+# Hand labels (core/user_labels.py) change one user annotation column and nothing else:
+# a result is stale after one only when it named that column (its labels' hash is in the
+# fingerprint's ``columns``), so naming cells no longer marks every DE, Milo and
+# composition result stale.
+LABEL_STEPS = frozenset({"label_cells", "undo_label_cells"})
+
+
 def fingerprint(adaptor: Any) -> dict[str, Any] | None:
     """The cells (in order) and the recipe's step count the adaptor holds now:
-    ``n_steps`` every step, ``n_data_steps`` without ``ADDITIVE_STEPS``."""
+    ``n_steps`` every step, ``n_data_steps`` without ``ADDITIVE_STEPS``, ``n_core_steps``
+    without those and ``LABEL_STEPS`` either."""
     try:
         from scview.core import provenance
         adata = adaptor.adata
         history = provenance.read_provenance(adata).get("history") or []
+        steps = [h.get("step") for h in history]
         return {"n_cells": int(adata.n_obs), "cells": adaptor.cells_fingerprint(), "n_steps": len(history),
-                "n_data_steps": sum(1 for h in history if h.get("step") not in ADDITIVE_STEPS)}
+                "n_data_steps": sum(1 for s in steps if s not in ADDITIVE_STEPS),
+                "n_core_steps": sum(1 for s in steps if s not in ADDITIVE_STEPS and s not in LABEL_STEPS)}
     except Exception:  # a test double, or no data
         return None
 
 
-def _is_stale(stored: dict[str, Any], now: dict[str, Any]) -> bool:
+def _strings(obj: Any) -> list[str]:
+    """The text values at the top of a result or its parameters (a dataclass's fields, a
+    dict's values, and lists of text in them): where a result names its obs columns."""
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        values = [getattr(obj, f.name, None) for f in dataclasses.fields(obj)]
+    elif isinstance(obj, dict):
+        values = list(obj.values())
+    else:
+        return []
+    out = []
+    for v in values:
+        if isinstance(v, str):
+            out.append(v)
+        elif isinstance(v, (list, tuple)) and len(v) <= 50:
+            out.extend(x for x in v if isinstance(x, str))
+        elif isinstance(v, dict) and len(v) <= 50:  # a DE's comparison
+            out.extend(x for x in v.values() if isinstance(x, str))
+    return out
+
+
+def used_user_columns(adaptor: Any, *objs: Any) -> dict[str, str | None]:
+    """The user annotation columns ``objs`` (a result, its parameters) name, each with
+    its labels' hash now."""
+    try:
+        from scview.core.user_labels import user_columns
+
+        adata = adaptor.adata
+        mine = set(user_columns(adata))
+        names = sorted({s for o in objs for s in _strings(o) if s in mine})
+        return {c: (column_fingerprint(adata, c, cells="-") or {}).get("labels") for c in names}
+    except Exception:  # a test double, or no data
+        return {}
+
+
+def _is_stale(stored: dict[str, Any], now: dict[str, Any], columns_now: Any = None) -> bool:
     """A stored fingerprint against the current one. Entries written before
-    ``n_data_steps`` existed still compare every step."""
-    keys = set(stored) - {"n_steps"} if "n_data_steps" in stored else set(stored)
-    return any(stored.get(k) != now.get(k) for k in keys)
+    ``n_data_steps`` existed still compare every step; before ``n_core_steps``, every
+    step but the additive ones (labels included). ``columns_now(names)``: the labels'
+    hashes of the user columns the result named, now."""
+    if "n_core_steps" in stored:
+        keys = set(stored) - {"n_steps", "n_data_steps", "columns"}
+    elif "n_data_steps" in stored:
+        keys = set(stored) - {"n_steps"}
+    else:
+        keys = set(stored)
+    if any(stored.get(k) != now.get(k) for k in keys):
+        return True
+    cols = stored.get("columns") or {}
+    return bool(cols) and columns_now is not None and columns_now(list(cols)) != cols
 
 
 def safe_id(value: str | None) -> bool:
@@ -512,12 +566,16 @@ def keep(
         dataset_id = dataset_id_of(target)
     if not _safe(dataset_id) or (result_id is not None and not _safe(result_id)):
         return None
+    fp = computed_on if computed_on is not None else (fingerprint(adaptor) if adaptor is not None else None)
+    if computed_on is None and fp is not None:
+        used = used_user_columns(adaptor, params, value)
+        if used:
+            fp = {**fp, "columns": used}
     entry = {
         "id": result_id or uuid.uuid4().hex, "kind": kind, "key": str(key), "label": label,
         "params": params or {}, "created_at": time.time(), "version": _version(),
         "status": "superseded" if archived else "primary",
-        "fingerprint": computed_on if computed_on is not None else (
-            fingerprint(adaptor) if adaptor is not None else None),
+        "fingerprint": fp,
     }
     if archived:
         entry["archived"] = True
@@ -537,10 +595,18 @@ def entries(dataset_id: str, kind: str | None = None, adaptor: Any = None) -> li
     with _lock:
         out = [dict(e) for e in _read_index(dataset_id) if kind is None or e["kind"] == kind]
     cache: dict = {}
+    hashes: dict[str, str | None] = {}
+
+    def columns_now(names: list[str]) -> dict[str, str | None]:
+        for c in names:
+            if c not in hashes:
+                hashes[c] = (column_fingerprint(adaptor, c, cells="-") or {}).get("labels")
+        return {c: hashes[c] for c in names}
+
     for e in out:
         fp = e.get("fingerprint")
         now = _current_fingerprint(adaptor, fp, cache) if adaptor is not None and fp else None
-        e["stale"] = None if now is None else _is_stale(fp, now)
+        e["stale"] = None if now is None else _is_stale(fp, now, columns_now)
     return sorted(out, key=lambda e: e["created_at"], reverse=True)
 
 

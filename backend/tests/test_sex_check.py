@@ -34,9 +34,12 @@ def _adata(donors: dict[str, str], cells: int = 40, conditions=("CTRL", "STIM"),
         for cond in conditions:
             for j in range(cells):
                 base = rng.poisson(3.0, len(filler)).astype(float)
-                fem = sex == "F" or (sex == "FM" and j % 2 == 0)
-                f = (rng.random(len(f_names)) < (0.7 if fem else 0.0)) * 2.0
-                m = (rng.random(len(m_names)) < (0.0 if fem else 0.6)) * 3.0
+                fem = sex in ("F", "FA") or (sex == "FM" and j % 2 == 0)
+                f = (rng.random(len(f_names)) < (0.35 if sex == "FA" else 0.7 if fem else 0.0)) * 2.0
+                # "FA": a female in a pooled lane (5' data): sparser XIST, and single ambient
+                # Y-gene reads from the male donors in ~12% of her cells.
+                m = (rng.random(len(m_names)) < (0.07 if sex == "FA" else 0.0 if fem else 0.6)) * (
+                    1.0 if sex == "FA" else 3.0)
                 rows.append(np.concatenate([base, f if xist else [], m if y_genes else []]))
                 obs.append({"donor": d, "stim": cond})
     a = ad.AnnData(sp.csr_matrix(np.array(rows, dtype=np.float32)), obs=pd.DataFrame(obs))
@@ -66,6 +69,36 @@ def test_a_pooled_sample_is_mixed_and_warned():
     d2 = next(g for g in r["groups"] if g["name"] == "D2")
     assert d2["call"] == "mixed"
     assert any("'D2' has both female and male markers" in w for w in r["warnings"])
+
+
+def test_ambient_y_reads_in_a_pooled_lane_do_not_make_a_female_mixed():
+    """Liu 2021 (5' v1, pooled lanes): females with Y genes in 5-14% of cells at 12-36 CPM
+    against the males' 676-863 were called "mixed ... pools donors" or ambiguous."""
+    a = _adata({"D1": "FA", "D2": "M", "D3": "FA", "D4": "M", "D5": "FM"}, cells=60)
+    r = sc.sex_check(a)
+    rows = {g["name"]: g for g in r["groups"]}
+    assert rows["D1"]["frac_male"] > sc.OFF_SHARE  # not "off" by the cell-share rule alone
+    assert sc.call_sex(rows["D1"]["n_cells"], rows["D1"]["frac_female"], rows["D1"]["frac_male"])[0] in (
+        "mixed", "ambiguous")
+    assert rows["D1"]["call"] == rows["D3"]["call"] == "female"
+    assert "ambient RNA from male donors" in rows["D1"]["evidence"]
+    assert rows["D5"]["call"] == "mixed"  # a real pool: Y genes at half the male level
+    assert not any("'D1'" in w or "'D3'" in w for w in r["warnings"])
+    assert any("'D5' has both" in w for w in r["warnings"])
+    # Without male samples to compare with, the cell-share call stands.
+    alone = sc.sex_check(_adata({"D1": "FA", "D3": "FA"}, cells=60))
+    assert {g["call"] for g in alone["groups"]} <= {"mixed", "ambiguous"}
+
+
+def test_xist_missing_but_tsix_present_is_said():
+    """Jäkel 2019's CELLxGENE version has TSIX but no XIST: both females came out ambiguous
+    with nothing saying why."""
+    a = _adata({"D1": "F", "D2": "M", "D3": "F"})
+    a.var_names = [("TSIX" if v == "XIST" else v) for v in a.var_names]
+    r = sc.sex_check(a)
+    assert r["female_genes"] == ["TSIX"] and "XIST" in r["female_genes_missing"]
+    assert any(n.startswith("XIST is not in the data, only TSIX") for n in r["notes"])
+    assert not any("XIST is not in the data" in n for n in sc.sex_check(_adata({"D1": "F", "D2": "M"}))["notes"])
 
 
 def test_metadata_disagreement_flags_a_possible_swap():
@@ -165,7 +198,7 @@ def test_report_lines_carry_the_calls_and_warnings():
     a = _adata({"D1": "F", "D2": "FM", "D3": "M"})
     line, concerns = sc.report_lines(sc.sex_check(a))
     assert "1 female, 1 male, 1 mixed" in line and "'donor'" in line
-    assert concerns and "pools donors" in concerns[0]
+    assert concerns and "pool donors of both sexes" in concerns[0]
 
 
 def test_qc_report_states_the_calls_and_the_confounding(tmp_path: Path):

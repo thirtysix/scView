@@ -271,6 +271,8 @@ class GseaResponse(BaseModel):
     de_n_genes_skipped: int | None = None
     # A stored DE result's test: wilcoxon | t-test | logreg | pseudobulk.
     de_method: str | None = None
+    # The run in the dataset's results store (GET /results/{id}); None when not stored.
+    result_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1025,6 +1027,8 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
             len(ranking.genes), run.n_sets, run.permutations, run.seconds,
         )
 
+    result_id = _keep_gsea(dataset_id, adaptor, body, ranking, collections, run, key, params)
+
     def side(records: list[dict]) -> GseaSide:
         top = records[: body.max_terms]
         return GseaSide(
@@ -1053,8 +1057,41 @@ def _compute_gsea(dataset_id: str, adaptor, body: GseaRequest, settings: Setting
         group=body.group,
         warning=ms.warning(species, collections),
         species=species,
+        result_id=result_id,
         **prefilter,
     )
+
+
+def _keep_gsea(dataset_id: str, adaptor, body: GseaRequest, ranking, collections: list[str],
+               run, key: str, params: dict) -> str | None:
+    """Store the run with the dataset's results (every tested set, both signs), as DE and
+    composition results are, so list_results / get_result find it (Liu 2021: a GSEA's other
+    rows meant running it again). The id comes from the run's cache key: the same run
+    again is the same result, stored once."""
+    from scview.core import results_store
+
+    result_id = key[:32]
+    if any(e["id"] == result_id for e in results_store.entries(dataset_id, "gsea")):
+        return result_id
+    if body.de_result_id:
+        stored = de_results.recall(dataset_id, body.de_result_id)
+        what = f"DE '{stored.label}'" if stored is not None else f"DE {body.de_result_id}"
+        source = body.de_result_id
+    elif body.group:
+        what, source = f"'{body.column}' = {body.group}", f"{body.column}|{body.group}"
+    else:
+        what, source = "a gene ranking", "genes"
+    terms = [{"side": "up", **r} for r in run.up] + [{"side": "down", **r} for r in run.down]
+    value = {"terms": terms, "rank_metric": ranking.metric, "n_genes_ranked": len(ranking.genes),
+             "n_sets_tested": run.n_sets, "permutations": run.permutations}
+    fut = results_store.keep(
+        dataset_id, "gsea", value, key=f"{source}|{','.join(collections)}", result_id=result_id,
+        label=f"GSEA of {what} ({', '.join(collections)})", adaptor=adaptor,
+        params={**params, "permutations": run.permutations, "collections": collections,
+                "rank_metric": ranking.metric,
+                "de_result_id": body.de_result_id or None, "column": body.column or None,
+                "group": body.group or None, "exclude_ribo_mito": body.exclude_ribo_mito})
+    return result_id if fut is not None else None
 
 
 # ---------------------------------------------------------------------------

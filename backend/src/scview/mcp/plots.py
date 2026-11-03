@@ -73,7 +73,11 @@ def _label_spots(xy: np.ndarray, codes: np.ndarray, names: list[str]) -> list[tu
     LABEL_MIN_SHARE of the cells, and moved up or down off a label already placed
     (largest group first); a small group's label sits just above it, so its few cells
     stay visible; a label with no free spot near its group is left out
-    (its legend entry stays)."""
+    (its legend entry stays). Cells with no coordinates (NaN) are left out."""
+    ok = np.isfinite(xy).all(axis=1)
+    xy, codes = xy[ok], codes[ok]
+    if len(xy) == 0:
+        return []
     lo, hi = xy.min(axis=0), xy.max(axis=0)
     span = np.where(hi > lo, hi - lo, 1.0)
     placed: list[tuple[float, float, float]] = []  # x, y (0-1), half width
