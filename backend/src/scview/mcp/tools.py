@@ -573,7 +573,8 @@ async def set_labels(
                                                     "indices": idx.tolist(), "new_column": new_column})
     out = pick(r, "column", "label", "created", "n_labels", "note")
     out.update(dataset_id=dataset_id, n_labelled=int(len(idx)),
-               n_changed=sum(len(g.get("indices") or []) for g in r.get("previous") or []))
+               n_changed=sum(len(g.get("indices") or []) for g in r.get("previous") or []
+                             if g.get("value") != r.get("label")))
     return dumps(out)
 
 

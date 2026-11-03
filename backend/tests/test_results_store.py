@@ -165,11 +165,52 @@ def test_a_step_that_only_adds_a_result_leaves_others_current(tmp_path):
 def test_an_entry_from_before_data_steps_still_counts_every_step(tmp_path):
     a = FakeAdaptor(tmp_path, "ds2c", _adata())
     fp = results_store.fingerprint(a)
-    old = {k: v for k, v in fp.items() if k != "n_data_steps"}
+    old = {k: v for k, v in fp.items() if k not in ("n_data_steps", "n_core_steps")}
     assert results_store._is_stale(old, fp) is False
     provenance.record_step(a.adata, step="spatial_autocorr", tool="scview.spatial_autocorr")
     now = results_store.fingerprint(a)
     assert results_store._is_stale(old, now) is True  # written by an older version: every step counts
+    assert results_store._is_stale(fp, now) is False
+
+
+def test_a_label_marks_stale_only_the_results_that_named_its_column(tmp_path):
+    """Otero-Garcia 2022: adding a label column marked every DE and Milo result stale.
+    Labels change one user column: a result is stale only when it named that column."""
+    from scview.core.user_labels import label_cells
+
+    a = FakeAdaptor(tmp_path, "ds2d", _adata())
+    a.adata.obs["stim"] = pd.Categorical(["A", "B"] * 10)
+    label_cells(a.adata, "nft", "pos", range(5), new_column=True)
+    label_cells(a.adata, "other", "x", range(3), new_column=True)
+
+    @dataclass
+    class _Comp:  # as composition / Milo results name their columns
+        condition_key: str
+        group_key: str
+        covariates: list
+
+    results_store.keep(a, "de", {"v": 1}, params={"split_by": "stim", "group_a": "A"}).result()
+    results_store.keep(a, "composition", _Comp("nft", "stim", [])).result()
+    results_store.keep(a, "milo", _Comp("stim", "", ["other"])).result()
+    stale = lambda: {e["kind"]: e["stale"] for e in results_store.entries("ds2d", adaptor=a)}  # noqa: E731
+    assert stale() == {"de": False, "composition": False, "milo": False}
+
+    label_cells(a.adata, "new_col", "y", range(4), new_column=True)  # a column nothing used
+    label_cells(a.adata, "nft", "pos", range(5, 8), new_column=False)  # the composition's column
+    assert stale() == {"de": False, "composition": True, "milo": False}
+    label_cells(a.adata, "other", "x", range(3, 6), new_column=False)  # a Milo covariate
+    assert stale()["milo"] is True
+    provenance.record_step(a.adata, step="clustering", tool="scanpy")  # data steps still count
+    assert stale()["de"] is True
+
+
+def test_an_entry_from_before_core_steps_still_counts_label_steps(tmp_path):
+    a = FakeAdaptor(tmp_path, "ds2e", _adata())
+    fp = results_store.fingerprint(a)
+    old = {k: v for k, v in fp.items() if k != "n_core_steps"}
+    provenance.record_step(a.adata, step="label_cells", tool="scview.label_selection")
+    now = results_store.fingerprint(a)
+    assert results_store._is_stale(old, now) is True  # as it was when it was written
     assert results_store._is_stale(fp, now) is False
 
 
