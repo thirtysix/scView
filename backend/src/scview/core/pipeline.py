@@ -1065,21 +1065,31 @@ def _run_clustering(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any]
 ORIGINAL_UMAP_KEY = "X_umap_original"
 
 
+def file_umap_key(keys) -> str | None:
+    """The file's own 2D UMAP key: ``X_umap``, else one spelled in other case
+    (Jäkel 2019 on CELLxGENE has ``X_UMAP``); None when there is none."""
+    keys = list(keys)
+    if "X_umap" in keys:
+        return "X_umap"
+    return next((k for k in keys if k.lower() == "x_umap"), None)
+
+
 def keep_original_umap(adata: ad.AnnData) -> bool:
-    """Copy the file's own ``X_umap`` to ``X_umap_original`` before scView's UMAP
+    """Copy the file's own ``X_umap`` (any case) to ``X_umap_original`` before scView's UMAP
     overwrites it, so the author's layout stays beside the new one. Only when no
     earlier scView run made that ``X_umap`` (no ``embeddings`` step in provenance)
     and nothing is kept yet. Returns True when it copied."""
-    if "X_umap" not in adata.obsm or ORIGINAL_UMAP_KEY in adata.obsm:
+    key = file_umap_key(adata.obsm.keys())
+    if key is None or ORIGINAL_UMAP_KEY in adata.obsm:
         return False
     history = provenance.read_provenance(adata).get("history") or []
     if any(h.get("step") == "embeddings" for h in history):
         return False
-    xy = np.asarray(adata.obsm["X_umap"])
+    xy = np.asarray(adata.obsm[key])
     if xy.ndim != 2 or xy.shape[1] < 2:
         return False
     adata.obsm[ORIGINAL_UMAP_KEY] = np.array(xy[:, :2], dtype=np.float32)
-    logger.info("Kept the file's own UMAP as %s", ORIGINAL_UMAP_KEY)
+    logger.info("Kept the file's own UMAP (%s) as %s", key, ORIGINAL_UMAP_KEY)
     return True
 
 

@@ -101,3 +101,24 @@ def test_replay_keeps_it_once(tmp_path):
     rep = ad.read_h5ad(dst)
     np.testing.assert_array_equal(rep.obsm[ORIGINAL_UMAP_KEY], xy)
     np.testing.assert_allclose(rep.obsm["X_umap"], out.obsm["X_umap"], atol=1e-4)
+
+
+def test_capitalised_key_is_kept_through_reset_and_replay(tmp_path):
+    """Jäkel 2019 on CELLxGENE stores X_UMAP: reset_to_counts would delete it."""
+    inp = _counts()
+    xy = _author_umap(inp)
+    inp.obsm["X_UMAP"] = inp.obsm.pop("X_umap")
+    inp.raw = inp.copy()
+    inp.X = np.log1p(inp.X)
+    out, res = run_pipeline(inp.copy(), ["reset_to_counts", *STEPS], PARAMS)
+    assert res.errors == {}
+    np.testing.assert_array_equal(out.obsm[ORIGINAL_UMAP_KEY], xy)
+    assert "X_UMAP" not in out.obsm
+    text = replay_script.build_script(out, dataset_id="t", dataset_name="test")
+    src, script, dst = tmp_path / "in.h5ad", tmp_path / "replay.py", tmp_path / "out.h5ad"
+    inp.write_h5ad(src)
+    script.write_text(text)
+    proc = subprocess.run([sys.executable, str(script), str(src), str(dst)],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    np.testing.assert_array_equal(ad.read_h5ad(dst).obsm[ORIGINAL_UMAP_KEY], xy)

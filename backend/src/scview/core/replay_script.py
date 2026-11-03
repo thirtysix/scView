@@ -1910,8 +1910,9 @@ def _block(text: str) -> list[str]:
 
 
 _KEEP_UMAP = '''
-if "X_umap" in adata.obsm and "X_umap_original" not in adata.obsm:  # the file's own UMAP
-    adata.obsm["X_umap_original"] = np.asarray(adata.obsm["X_umap"])[:, :2].astype(np.float32)
+_umap = "X_umap" if "X_umap" in adata.obsm else next((k for k in adata.obsm if k.lower() == "x_umap"), None)
+if _umap is not None and "X_umap_original" not in adata.obsm:  # the file's own UMAP (any case)
+    adata.obsm["X_umap_original"] = np.asarray(adata.obsm[_umap])[:, :2].astype(np.float32)
 '''
 
 
