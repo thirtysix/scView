@@ -720,6 +720,9 @@ async def get_markers(
     out = {g: [[num(r.get(c)) for c in cols] for r in recs[:n_genes]] for g, recs in d["markers"].items()}
     extra = {"note": P0_NOTE} if "pval_adj" in cols and any(
         r[cols.index("pval_adj")] == 0 for rs in out.values() for r in rs) else {}
+    if d.get("skipped_groups"):
+        extra["skipped_groups"] = d["skipped_groups"]
+        extra["skipped_reason"] = d.get("skipped_reason")
     return dumps({"dataset_id": dataset_id, "column": column, "columns": cols, "markers": out, **extra},
                  _max_chars(DEFAULT_LIMIT * max(1, n_genes // 10)))
 

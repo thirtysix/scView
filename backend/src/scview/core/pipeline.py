@@ -321,14 +321,24 @@ def _wilcoxon(adata: ad.AnnData, groupby: str, key_added: str | None = None) -> 
     ``uns[key_added or "rank_genes_groups"]``), by blocks of genes (``core/rank_genes.py``,
     bit for bit scanpy's); in a large-dataset run from its gene store. Either way with the
     specificity frame already in (``sparse_markers``) unless scanpy ran."""
+    from scview.core.sparse_markers import testable_groups
+
+    groups, skipped = testable_groups(adata.obs[groupby])
     backend = _LARGE.get()
     if backend is not None:
-        backend.rank_genes_groups(adata, groupby, key_added=key_added)
+        backend.rank_genes_groups(adata, groupby, key_added=key_added, groups=groups)
     else:
         from scview.core import rank_genes
 
-        rank_genes.rank_genes_groups(adata, groupby, method="wilcoxon", pts=True,
+        rank_genes.rank_genes_groups(adata, groupby, method="wilcoxon", pts=True, groups=groups,
                                      key_added=key_added, specificity=True)
+    note_skipped(adata.uns[key_added or "rank_genes_groups"], skipped)
+
+
+def note_skipped(rgg: Any, skipped: list[str]) -> None:
+    """Name the groups a marker test left out (fewer than 2 cells) in its params."""
+    if skipped:
+        rgg.setdefault("params", {})["skipped_groups"] = [str(g) for g in skipped]
 
 
 def _attach_specificity(adata: ad.AnnData, rgg: Any, col: str) -> None:
