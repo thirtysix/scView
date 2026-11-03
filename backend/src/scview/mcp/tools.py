@@ -517,6 +517,7 @@ async def sex_check(
     d = await _get(f"{_ds(dataset_id)}/qc/sex", column=column)
     out = {"dataset_id": dataset_id,
            **pick(d, "column", "reason", "species", "metadata_column", "female_genes", "male_genes",
+                  "female_genes_missing", "male_genes_missing",
                   "source", "summary", "warnings", "notes"),
            "samples": table(d.get("groups") or [], ["name", "n_cells", "call", "confidence", "metadata",
                                                     "mismatch", "frac_female", "frac_male", "evidence"],
