@@ -213,8 +213,9 @@ async def search_public_datasets(
         description="Order: most cells first (default), largest download, title, or newest.")] = "cells",
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
-    """Search CELLxGENE Discover's public datasets (listing cached a day). Import one with
-    import_public_dataset and its dataset_version_id."""
+    """Search CELLxGENE Discover's public datasets (listing cached a day). Check one's memory
+    need with check_public_dataset; import it with import_public_dataset and its
+    dataset_version_id."""
     d = await _get("/public-import/discover/datasets", q=query, organism=organism, tissue=tissue,
                    disease=disease, assay=assay, max_mb=max_mb, sort=sort, limit=clamp(limit))
     found = d.get("datasets") or d.get("results") or []
@@ -231,6 +232,31 @@ async def search_public_datasets(
         out.append(e)
     return dumps({"datasets": out, "n_total": d.get("total", d.get("n_total", len(out))),
                   "fetched_at": d.get("fetched_at")}, _max_chars(limit))
+
+
+def _memory(m: dict[str, Any] | None) -> dict[str, Any]:
+    gb = 2**30
+    out = pick(m or {}, "verdict", "message", "source", "n_cells", "n_genes")
+    for k in ("in_memory_bytes", "backed_bytes", "limit_bytes"):
+        if isinstance((m or {}).get(k), (int, float)):
+            out[k.replace("_bytes", "_gb")] = round(m[k] / gb, 2)
+    return out
+
+
+@tool(WEB_READ)
+async def check_public_dataset(
+    dataset_version_id: Annotated[str, Field(description="From search_public_datasets.")],
+    dataset_id: Annotated[str | None, Field(
+        description="Its dataset_id: needed only for a version no longer current.")] = None,
+) -> str:
+    """Before an import: one Discover dataset version's size, the disk the import needs, and
+    the memory opening it needs (verdict fits in memory / backed: its matrices stay on disk /
+    wont_fit; read from the file's header on Discover, nothing is downloaded)."""
+    d = await _get(f"/public-import/discover/datasets/{dataset_version_id}", dataset_id=dataset_id)
+    out = pick(d, "dataset_version_id", "dataset_id", "title", "cell_count", "disk")
+    out["size_mb"] = round((d.get("size_bytes") or 0) / 2**20, 1)
+    out["memory"] = _memory(d.get("memory"))
+    return dumps(out)
 
 
 def _line(event: str, data: Any) -> str | None:
@@ -262,8 +288,13 @@ async def import_public_dataset(
     name: Annotated[str | None, Field(description="Name in the library (default: the title).")] = None,
 ) -> str:
     """Download a CELLxGENE Discover dataset into the library (a job: returns job_id at once;
-    follow it with job_status; the new dataset's id is in the result)."""
+    follow it with job_status; the new dataset's id is in the result). Refused before any
+    download when the file could not open even with its matrices on disk."""
     body = {"dataset_version_id": dataset_version_id, "dataset_id": dataset_id, "name": name}
+    detail = await _get(f"/public-import/discover/datasets/{dataset_version_id}", dataset_id=dataset_id)
+    memory = _memory(detail.get("memory"))
+    if memory.get("verdict") == "wont_fit":
+        raise ToolError(f"Not downloaded: {memory.get('message')}")
 
     async def cancel(job: jobs.Job) -> None:
         jid = (job.events.get("job") or {}).get("job_id")
@@ -276,7 +307,7 @@ async def import_public_dataset(
 
     job = jobs.new("import", None, "/public-import/discover/import-stream", body,
                    progress_line=_line, finish=finish, cancel_route=cancel)
-    return dumps({"job_id": job.id, "status": job.status,
+    return dumps({"job_id": job.id, "status": job.status, "memory": memory,
                   "next": "job_status(job_id, wait_seconds=50) until complete"})
 
 

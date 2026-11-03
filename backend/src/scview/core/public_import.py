@@ -32,6 +32,7 @@ see the batch 18 report.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import re
@@ -486,10 +487,16 @@ def memory_verdict(path: Path) -> dict:
     """How the downloaded file would open (``dataset_manager.load_plan``, from its
     header): ``fits`` in memory, ``backed`` (matrices stay on disk: large-dataset
     handling), or ``wont_fit`` even backed with every other dataset closed."""
-    from scview.core import memory_budget
-    from scview.core.dataset_manager import LOAD_MARGIN, load_plan, working_reserve
+    from scview.core.dataset_manager import load_plan
 
-    plan = load_plan(str(path))
+    return plan_verdict(load_plan(str(path)))
+
+
+def plan_verdict(plan) -> dict:
+    """``memory_verdict`` of a ``dataset_manager.LoadPlan``."""
+    from scview.core import memory_budget
+    from scview.core.dataset_manager import LOAD_MARGIN, working_reserve
+
     budget = memory_budget.read_budget()
     gb = 1024**3
     out: dict[str, Any] = {"in_memory_bytes": plan.in_memory, "backed_bytes": plan.backed,
@@ -504,12 +511,138 @@ def memory_verdict(path: Path) -> dict:
     elif plan.backed * LOAD_MARGIN <= room:
         out.update(verdict="backed", message=(
             "Too big to read into memory: it opens from disk (the expression matrix stays in the "
-            f"file), about {plan.backed / gb:.1f} GB at its peak; processing runs in "
-            "large-dataset mode."))
+            f"file), about {plan.backed / gb:.1f} GB at its peak; pipeline steps that read the "
+            "expression matrix run in large-dataset mode, which converts it (neighbours, "
+            "clustering and UMAP on its stored PCA do not)."))
     else:
         out.update(verdict="wont_fit", message=(
             f"Needs about {plan.backed / gb:.1f} GB even with its matrices on disk; scView has "
             f"{budget.limit_bytes / gb:.1f} GB. Raise SCVIEW_MEMORY_GB in .env (then restart scView)."))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Memory before the download: the file's header read over HTTP ranges
+# ---------------------------------------------------------------------------
+
+HEADER_BLOCK = 1 << 20  # bytes per ranged request (h5py reads the header in small pieces)
+HEADER_MAX_REQUESTS = 48  # a header spread wider than this is not read (no estimate)
+_HEADERS: dict[str, Any] = {}  # version id -> header (a version never changes)
+_HEADERS_MAX = 32
+
+
+class RangeFile(io.RawIOBase):
+    """A remote file read with HTTP range requests, a block at a time, each block kept:
+    h5py opens it to read an h5ad's header (shapes, encodings, column lists) without its
+    matrices. Raises ``PublicImportError`` when the host does not serve ranges or the
+    header needs more than ``max_requests`` blocks."""
+
+    def __init__(self, url: str, size: int, client: httpx.Client, block: int = HEADER_BLOCK,
+                 max_requests: int | None = None) -> None:
+        super().__init__()
+        self.url, self.size, self.client = url, int(size), client
+        self.block = block
+        self.max_requests = HEADER_MAX_REQUESTS if max_requests is None else max_requests
+        self.pos = 0
+        self.requests = 0
+        self._blocks: dict[int, bytes] = {}
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self.pos
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        base = {0: 0, 1: self.pos, 2: self.size}[whence]
+        self.pos = max(0, base + int(offset))
+        return self.pos
+
+    def _get(self, i: int) -> bytes:
+        if i not in self._blocks:
+            if self.requests >= self.max_requests:
+                raise PublicImportError("The file's header is spread too widely to read before "
+                                        "downloading it.", 502)
+            start = i * self.block
+            end = min(self.size, start + self.block) - 1
+            self.requests += 1
+            r = self.client.get(self.url, headers={"Range": f"bytes={start}-{end}"})
+            if r.status_code != 206 or len(r.content) != end - start + 1:
+                raise PublicImportError(f"CELLxGENE Discover did not serve a part of the file "
+                                        f"(HTTP {r.status_code}).", 502)
+            self._blocks[i] = r.content
+        return self._blocks[i]
+
+    def readinto(self, b) -> int:
+        n = min(len(b), max(0, self.size - self.pos))
+        done = 0
+        while done < n:
+            i, off = divmod(self.pos + done, self.block)
+            chunk = self._get(i)[off:off + n - done]
+            b[done:done + len(chunk)] = chunk
+            done += len(chunk)
+        self.pos += done
+        return done
+
+
+def remote_header(rec: dict, client: httpx.Client | None = None):
+    """The header of a dataset version's h5ad (``preflight``: shapes, stored values, what
+    it holds) read from Discover's file host by ranges, before any download; kept per
+    version. Raises ``PublicImportError`` when it cannot be read."""
+    from scview.core import preflight
+    from scview.core.anndata_adaptor import opens_backed
+
+    vid = check_uuid(rec["dataset_version_id"])
+    if vid in _HEADERS:
+        return _HEADERS[vid]
+    size = int(rec.get("size_bytes") or 0)
+    if size <= 0:
+        raise PublicImportError("Discover gives no size for this file.", 502)
+    own = client is None
+    client = client or new_client()
+    t0 = time.monotonic()
+    try:
+        with RangeFile(file_url(vid), size, client) as fh:
+            h = preflight._read_h5ad(fh)
+            n = fh.requests
+    except PublicImportError:
+        raise
+    except httpx.HTTPError as e:
+        raise PublicImportError(f"Could not reach CELLxGENE Discover ({e}).", 502)
+    except Exception as e:  # noqa: BLE001 - not an h5ad header h5py can read
+        raise PublicImportError(f"Could not read the file's header ({type(e).__name__}: {e}).", 502)
+    finally:
+        if own:
+            client.close()
+    h.file_bytes = size
+    h.backed = opens_backed(size) or h.large
+    logger.info("Header of %s read remotely: %d requests, %.1f s", vid, n, time.monotonic() - t0)
+    if len(_HEADERS) >= _HEADERS_MAX:
+        _HEADERS.pop(next(iter(_HEADERS)))
+    _HEADERS[vid] = h
+    return h
+
+
+def memory_before_download(rec: dict, client: httpx.Client | None = None) -> dict:
+    """``memory_verdict`` of a dataset version before it is downloaded, from its header read
+    remotely (``remote_header``): the memory opening it needs (in memory, and with its
+    matrices on disk) against what scView has. ``verdict`` "unknown" (with the reason) when
+    the header cannot be read: the import then checks the file once it is downloaded."""
+    from scview.core.dataset_manager import plan_of_header
+
+    try:
+        h = remote_header(rec, client)
+    except PublicImportError as e:
+        return {"verdict": "unknown", "message": f"{e} The memory is checked once it is downloaded.",
+                "source": "none"}
+    out = plan_verdict(plan_of_header(h, bool(h.large)))
+    out.update(source="the file's header, read from Discover before downloading",
+               n_cells=h.n_cells, n_genes=h.n_genes,
+               matrices=[{"where": m.where, "sparse": m.sparse, "nnz": m.nnz, "bytes": m.nbytes}
+                         for m in h.matrices])
     return out
 
 

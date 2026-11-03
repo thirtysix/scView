@@ -101,14 +101,17 @@ async def dataset_detail(
     dataset_id: str | None = None,
     settings: Settings = Depends(get_settings_dep),
 ):
-    """One dataset version, with the URL it downloads from and the disk it needs."""
+    """One dataset version, with the URL it downloads from, the disk it needs and the memory
+    opening it needs (``memory``: from its header, read remotely before any download)."""
     _enabled(settings)
     try:
         rec = await asyncio.to_thread(catalog(settings).find, version_id, dataset_id)
     except pi.PublicImportError as e:
         raise _http(e)
+    memory = await asyncio.to_thread(pi.memory_before_download, rec)
     return {**rec, "download_url": pi.file_url(rec["dataset_version_id"]),
-            "disk": _disk(settings, rec["size_bytes"]), "license_url": pi.LICENSE_URL}
+            "disk": _disk(settings, rec["size_bytes"]), "memory": memory,
+            "license_url": pi.LICENSE_URL}
 
 
 class ImportBody(BaseModel):
@@ -129,15 +132,20 @@ async def import_stream(
 ):
     """Download one dataset version into the library, streaming progress (SSE).
 
-    Events: ``job`` (its id, for cancel), ``stage``, ``progress``, ``memory``, then
+    Events: ``job`` (its id, for cancel), ``memory`` (before the download, from the file's
+    header read remotely), ``stage``, ``progress``, ``memory`` (of the file downloaded), then
     ``complete`` (the dataset id) once it is registered and opened, or ``error`` /
-    ``cancelled``. Leaving the stream cancels the import; nothing is kept then."""
+    ``cancelled``. Leaving the stream cancels the import; nothing is kept then. A file that
+    could not open even with its matrices on disk is refused (507) before downloading."""
     _enabled(settings)
     try:
         rec = await asyncio.to_thread(catalog(settings).find, body.dataset_version_id, body.dataset_id)
         await asyncio.to_thread(pi.check_disk, Path(settings.DATA_DIR), rec["size_bytes"])
     except pi.PublicImportError as e:
         raise _http(e)
+    before = await asyncio.to_thread(pi.memory_before_download, rec)
+    if before.get("verdict") == "wont_fit":
+        raise HTTPException(status_code=507, detail=f"{before['message']} Nothing was downloaded.")
     job_id = uuid.uuid4().hex
     dataset_id = str(uuid.uuid4())
     cancel = threading.Event()
@@ -150,6 +158,7 @@ async def import_stream(
             yield _sse("job", {"job_id": job_id, "dataset_version_id": rec["dataset_version_id"],
                                "url": pi.file_url(rec["dataset_version_id"]),
                                "size_bytes": rec["size_bytes"]})
+            yield _sse("memory", {**before, "stage": "before download"})
             while True:
                 item = await asyncio.to_thread(next, gen, _DONE)
                 if item is _DONE:
