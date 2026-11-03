@@ -101,10 +101,14 @@ async def get_expression_per_donor(
     sample: str = Query(default="", description="Donor / sample column (default: detected)"),
     condition: str = Query(default="", description="Condition column to split each group by"),
     method: str = Query(default="mean", description="mean (log-normalised) or cpm (log2 CPM of summed counts)"),
+    conditions: list[str] = Query(default=[], description="The two condition values to test (repeat)"),
+    reference: str = Query(default="", description="The baseline of the two (default: the first)"),
+    groups: list[str] = Query(default=[], description="Only these groups (repeat; default: all)"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """One pseudobulk value per donor (x condition) in each group, for a box +
-    strip plot (core/donor_expression.py). No donor column: 200 with a message."""
+    strip plot (core/donor_expression.py). No donor column: 200 with a message.
+    ``conditions`` + ``reference`` pick the two levels the donor-level tests compare."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
@@ -117,6 +121,7 @@ async def get_expression_per_donor(
         return donor_expression.per_donor_expression(
             adaptor.adata, gene, groupby, sample_key=sample or None,
             condition_key=condition or None, method=method,  # type: ignore[arg-type]
+            conditions=conditions or None, reference=reference or None, groups=groups or None,
         )
 
     try:

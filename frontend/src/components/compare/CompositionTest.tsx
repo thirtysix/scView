@@ -60,6 +60,10 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
   const [transform, setTransform] = useState<"logit" | "asin">("logit");
   const [pairing, setPairing] = useState<"auto" | "paired" | "unpaired">("auto");
   const [robust, setRobust] = useState(true);
+  // Shares among a subset of the cells (T cells among immune cells), and samples left out.
+  const [withinCol, setWithinCol] = useState("");
+  const [withinVal, setWithinVal] = useState("");
+  const [leftOut, setLeftOut] = useState<string[]>([]);
   const [result, setResult] = useState<CompositionResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +123,16 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
 
   // Whether the samples pair up depends on the columns: back to auto.
   useEffect(() => setPairing("auto"), [conditionKey, sampleKey]);
+  // Left-out samples are values of the sample column: a new column starts with none.
+  useEffect(() => setLeftOut((s) => (s.length ? [] : s)), [conditionKey, sampleKey]);
+
+  const withinOptions = useMemo(
+    () => cols.filter((c) => c.values?.length && c.name !== groupKey && c.name !== conditionKey),
+    [cols, groupKey, conditionKey],
+  );
+  const withinValues = useMemo(() => cols.find((c) => c.name === withinCol)?.values ?? [], [cols, withinCol]);
+  const sampleCol = sampleKey || result?.sample_key || "";
+  const sampleValues = useMemo(() => cols.find((c) => c.name === sampleCol)?.values ?? [], [cols, sampleCol]);
 
   const included = useMemo(
     () => conditionValues.filter((v) => !excluded.includes(v)),
@@ -147,6 +161,8 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
       transform,
       ...(pairing !== "auto" ? { paired: pairing === "paired" } : {}),
       ...(robust ? {} : { robust: false }),
+      ...(withinCol && withinVal ? { within_column: withinCol, within_value: withinVal } : {}),
+      ...(leftOut.length ? { exclude_samples: leftOut } : {}),
     })
       .then((r) => !cancelled && setResult(r))
       .catch((e) => {
@@ -160,7 +176,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
     };
   }, [
     datasetId, conditionKey, groupKey, sampleKey, excluded, included, reference, transform, pairing,
-    robust, conditionValues,
+    robust, conditionValues, withinCol, withinVal, leftOut,
   ]);
 
   const rows = useMemo(() => (result ? sortedGroups(result) : []), [result]);
@@ -370,6 +386,75 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
             )}
           </div>
         )}
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <label
+            className="flex items-center gap-1.5"
+            title="Test each group's share among these cells only, e.g. T-cell types among immune cells"
+          >
+            Within
+            <select
+              aria-label="Subset column"
+              value={withinCol}
+              onChange={(e) => {
+                setWithinCol(e.target.value);
+                setWithinVal("");
+              }}
+              className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-700"
+            >
+              <option value="">All cells</option>
+              {withinOptions.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {prettyObsLabel(c.name)}
+                </option>
+              ))}
+            </select>
+            {withinCol && (
+              <select
+                aria-label="Subset value"
+                value={withinVal}
+                onChange={(e) => setWithinVal(e.target.value)}
+                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-700"
+              >
+                <option value="">Pick a value…</option>
+                {withinValues.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+          {sampleValues.length > 0 && (
+            <label className="ml-2 flex items-center gap-1.5" title="Leave these samples out, e.g. one donor's, to see whether a shift rests on them">
+              Leave out
+              <select
+                aria-label="Leave out a sample"
+                value=""
+                onChange={(e) => e.target.value && setLeftOut((s) => [...s, e.target.value])}
+                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-700"
+              >
+                <option value="">{prettyObsLabel(sampleCol)}…</option>
+                {sampleValues
+                  .filter((v) => !leftOut.includes(v))
+                  .map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
+          {leftOut.map((v) => (
+            <button
+              key={v}
+              onClick={() => setLeftOut((s) => s.filter((x) => x !== v))}
+              title="Put this sample back"
+              className="rounded-full border border-slate-300 px-2 py-0.5 text-slate-600 line-through hover:bg-slate-50"
+            >
+              {v} ×
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && (

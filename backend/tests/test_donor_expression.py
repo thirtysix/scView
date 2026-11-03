@@ -178,8 +178,65 @@ def test_three_timepoints_are_paired_without_a_test():
     r = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim")
     assert r["conditions"] == ["T2", "T1", "T0"]
     assert r["design"] == {"paired": True, "n_pairs": 3, "conditions": ["T2", "T1", "T0"]}
-    assert r["paired_tests"] == {}
+    assert r["paired_tests"] == {} and r["tested_conditions"] is None
+    assert "pick them (conditions)" in r["notes"][0]
     assert len(r["points"]) == 2 * 3 * 3
+
+
+def _otero_like():
+    """Subjects D0-D2 in NFTpos and NFTneg (paired), controls C0-C2 in 'Unassigned'
+    (a set_labels column): no donor is in all three levels."""
+    a = _adata(conditions=("NFTpos", "NFTneg"))
+    ctrl = _adata(conditions=("Unassigned",))
+    ctrl.obs["donor_id"] = "C" + ctrl.obs["donor_id"].astype(str).str[1:]
+    both = ad.concat([a, ctrl], index_unique="-")
+    both.obs["stim"] = pd.Categorical(both.obs["stim"].astype(str),
+                                      categories=["Unassigned", "NFTpos", "NFTneg"])
+    return both
+
+
+def test_two_chosen_levels_of_three_are_tested_and_named():
+    a = _otero_like()
+    # Before: a third level gave paired with 0 pairs and no test at all.
+    r = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim")
+    assert r["design"] == {"paired": True, "n_pairs": 3, "conditions": ["NFTpos", "NFTneg"]}
+    assert r["tested_conditions"] == ["NFTpos", "NFTneg"] and "'Unassigned' cells" in r["notes"][0]
+    assert r["difference"] == "NFTneg - NFTpos" and r["reference"] == "NFTpos"
+    assert set(r["paired_tests"]) == {"A", "B"}
+    assert {p["condition"] for p in r["points"]} == {"Unassigned", "NFTpos", "NFTneg"}  # still listed
+    # reference flips the sign; two chosen levels name the comparison.
+    flip = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim",
+                                   conditions=["NFTpos", "NFTneg"], reference="NFTneg")
+    assert flip["difference"] == "NFTpos - NFTneg"
+    assert flip["paired_tests"]["A"]["mean_diff"] == pytest.approx(-r["paired_tests"]["A"]["mean_diff"])
+    # Subjects vs controls: different donors, the unpaired test.
+    un = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim",
+                                 conditions=["Unassigned", "NFTpos"], reference="Unassigned")
+    assert un["design"]["paired"] is False and un["paired_tests"] == {}
+    assert un["unpaired_tests"]["A"]["n_a"] == 3 and un["difference"] == "NFTpos - Unassigned"
+    with pytest.raises(dx.DonorExpressionError, match="not a value of 'stim'"):
+        dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim", conditions=["NFTpos", "x"])
+    with pytest.raises(dx.DonorExpressionError, match="exactly two"):
+        dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim", conditions=["NFTpos"])
+    with pytest.raises(dx.DonorExpressionError, match="reference 'Unassigned' is not one"):
+        dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim", reference="Unassigned")
+
+
+def test_groups_restrict_the_counts_and_dropped_samples_are_named():
+    a = _adata(n_donors=3)
+    small = ((a.obs["donor_id"] == "D2") & (a.obs["stim"] == "STIM")
+             & (a.obs["cell_type"] == "B")).to_numpy()
+    a = a[~small | (np.cumsum(small) <= 4)].copy()  # D2 STIM B keeps 4 cells
+    r = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim")
+    assert r["n_dropped"] == 1
+    assert r["dropped"] == [{"group": "B", "condition": "STIM", "sample": "D2", "n_cells": 4}]
+    only_a = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim", groups=["A", "Z"])
+    assert only_a["groups"] == ["A"] and only_a["n_dropped"] == 0 and only_a["dropped"] == []
+    assert only_a["groups_not_found"] == ["Z"] and set(only_a["paired_tests"]) == {"A"}
+    only_b = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim", groups=["B"])
+    assert only_b["n_donors"] == {"STIM": 2, "CTRL": 3}
+    with pytest.raises(dx.DonorExpressionError, match="None of the groups"):
+        dx.per_donor_expression(a, "G0", "cell_type", groups=["Z"])
 
 
 def _register(dm, adata, did: str = "ds") -> str:
@@ -205,3 +262,11 @@ async def test_endpoint(client, dataset_manager):
     assert r.status_code == 404
     r = await client.get(url, params={"gene": "G0", "groupby": "cell_type", "method": "x"})
     assert r.status_code == 400
+    r = await client.get(url, params=[("gene", "G0"), ("groupby", "cell_type"), ("condition", "stim"),
+                                      ("conditions", "STIM"), ("conditions", "CTRL"),
+                                      ("reference", "CTRL"), ("groups", "A")])
+    assert r.status_code == 200, r.text
+    assert r.json()["difference"] == "STIM - CTRL" and r.json()["groups"] == ["A"]
+    r = await client.get(url, params=[("gene", "G0"), ("groupby", "cell_type"), ("condition", "stim"),
+                                      ("conditions", "nope"), ("conditions", "CTRL")])
+    assert r.status_code == 400 and "not a value" in r.json()["detail"]

@@ -30,13 +30,27 @@ class CompositionRequest(BaseModel):
     transform: Literal["logit", "asin"] = "logit"
     paired: bool | None = None  # None: paired when every donor is in every condition
     robust: bool = True  # limma's robust empirical Bayes, propeller's default
+    # Leave these values of the sample column out (a donor's samples, a failed library).
+    exclude_samples: list[str] | None = None
+    # Shares among these cells only (T cells among immune cells): one value or several.
+    within_column: str | None = None
+    within_value: str | list[str] | None = None
+    # The person column the samples nest in, for the repeated-donor warning (default: detected).
+    donor_key: str | None = None
+
+    def within_values(self) -> list[str] | None:
+        v = self.within_value
+        return None if v is None else [v] if isinstance(v, str) else list(v)
 
 
 def _detect_sample_key(obs, body: CompositionRequest) -> str | None:
     cond = obs[body.condition_key]
     values = body.conditions or [str(v) for v in cond.dropna().astype(str).unique()]
     labels = cond.astype(str).where(cond.notna())
-    masks = [(labels == v).to_numpy() for v in values]
+    scope = True
+    if body.within_column and body.within_column in obs.columns:
+        scope = obs[body.within_column].astype(str).isin(body.within_values() or []).to_numpy()
+    masks = [(labels == v).to_numpy() & scope for v in values]
     candidates = donor_candidates(obs, {body.condition_key, body.group_key})
     return pick_donor(obs, candidates, masks)
 
@@ -54,7 +68,7 @@ async def composition_test(
         raise HTTPException(status_code=404, detail="Dataset not found.")
     adata = adaptor.adata
     obs = adata.obs
-    for col in (body.condition_key, body.group_key, body.sample_key):
+    for col in (body.condition_key, body.group_key, body.sample_key, body.within_column, body.donor_key):
         if col and col not in obs.columns:
             raise HTTPException(status_code=404, detail=f"Column '{col}' not found.")
 
@@ -66,6 +80,8 @@ async def composition_test(
             transform=body.transform, paired=body.paired, robust=body.robust,
             batch_key=recorded_batch_key(adata),
             group_is_clustering=comp.is_clustering_column(adata, body.group_key),
+            exclude_samples=body.exclude_samples, within_column=body.within_column,
+            within_values=body.within_values(), donor_key=body.donor_key,
         )
         return result, not body.sample_key and key is not None
 
@@ -74,5 +90,5 @@ async def composition_test(
         result, detected = await asyncio.to_thread(_run)
     except comp.CompositionError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    comp.remember(adaptor, result)
-    return {**result.to_dict(), "sample_key_detected": detected}
+    result_id = comp.remember(adaptor, result)
+    return {**result.to_dict(), "sample_key_detected": detected, "result_id": result_id}

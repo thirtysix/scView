@@ -31,7 +31,9 @@ from scview.dependencies import get_dataset_manager
 from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
 from scview.core import large_mode, memory_budget, preflight, selection_facts, working_copy
 from scview.core.confounding import for_comparison, recorded_batch_key
-from scview.core.replicates import donor_candidates, pick_donor
+from scview.core.replicates import (
+    donor_candidates, few_donors, on_both_sides, partly_paired, pick_donor, repeated_donors,
+)
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,10 @@ class DECompareRequest(_CompareScope):
     # in the design (0 = none). The defaults are DESeq2 without RUV.
     pb_method: Literal["deseq2", "voom", "voombygroup"] = "deseq2"
     ruv_k: int = Field(default=0, ge=0, le=3)
+    # Pseudobulk only: per-sample obs columns in the design (sex, batch, age), and the
+    # person column the replicates nest in, for the repeated-donor warning (None: detected).
+    covariates: list[str] | None = Field(default=None, max_length=4)
+    donor_key: str | None = None
     # The cell-level test only: pseudobulk filters genes on their summed counts.
     min_pct: float = _MinPct
     # The label column the composition check uses (core/de_composition.py);
@@ -192,6 +198,11 @@ class DEResponse(BaseModel):
     ruv_k: int | None = None
     heteroscedasticity: dict | None = None
     ruv: dict | None = None
+    # Pseudobulk: the covariates in the design, those left out (and why), and design
+    # cautions: replicates nested in donors, a side with under 3 donors (core/replicates.py).
+    covariates: list[str] = []
+    covariate_notes: list[str] = []
+    replicate_warnings: list[str] = []
     # /de/compare: the two sides are also different batches (core/confounding.py).
     confounding: dict | None = None
     # /de/compare: the two sides' samples differ in sex (core/sex_check.py compare_sides).
@@ -277,10 +288,13 @@ def _donor_stats(donors) -> tuple[int, float]:
     return int((counts > 0).sum()), float(counts.max()) / total
 
 
-def _sex_difference(obs, body: _CompareScope, mask_a, mask_b, dataset_id: str) -> dict | None:
+def _sex_difference(obs, body: _CompareScope, mask_a, mask_b, dataset_id: str,
+                    cell_level: bool = False) -> dict | None:
     """The sides' samples differ in sex (core/sex_check.py), judged on the replicate
     column: sex from the metadata column, else a sex check already run; no check
-    otherwise (the expression call is never run here). Never fails the DE."""
+    otherwise (the expression call is never run here). ``cell_level``: when the
+    samples balance, also the share of each side's CELLS from female samples (a
+    cell-level test weighs donors by their cells). Never fails the DE."""
     from scview.core import sex_check
 
     try:
@@ -291,7 +305,11 @@ def _sex_difference(obs, body: _CompareScope, mask_a, mask_b, dataset_id: str) -
         known = sex_check.sample_sexes(obs, key, dataset_id)
         if known is None:
             return None
-        return sex_check.compare_sides(obs, key, mask_a, mask_b, str(body.group_a), str(body.group_b), *known)
+        sides = (key, mask_a, mask_b, str(body.group_a), str(body.group_b), *known)
+        found = sex_check.compare_sides(obs, *sides)
+        if found is None and cell_level:
+            found = sex_check.compare_cell_shares(obs, *sides)
+        return found
     except Exception as e:  # noqa: BLE001 — a caution, never a reason for the DE to fail
         logger.warning("Sex check of a DE comparison failed: %s", e)
         return None
@@ -747,7 +765,7 @@ async def differential_expression_compare(
     confounding = hit.to_dict() if hit else None
     # The two sides' cluster mix: a shift makes the DE partly a composition test.
     composition = _composition(adata, body, mask_a, mask_b, body.composition_by)
-    sex = _sex_difference(obs, body, mask_a, mask_b, dataset_id)
+    sex = _sex_difference(obs, body, mask_a, mask_b, dataset_id, cell_level=body.method != "pseudobulk")
 
     if body.method == "pseudobulk":
         resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id, adaptor, dm)
@@ -818,6 +836,14 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         raise HTTPException(
             status_code=400, detail="The donor column must differ from the column being compared."
         )
+    covs = list(dict.fromkeys(body.covariates or []))
+    for col in [*covs, body.donor_key]:
+        if col and col not in adata.obs.columns:
+            raise HTTPException(status_code=400, detail=f"Column '{col}' not found.")
+    clash = [c for c in covs if c in (body.split_by, key, body.within_column)]
+    if clash:
+        raise HTTPException(status_code=400, detail=(
+            f"'{clash[0]}' is the compared, donor or subset column, so it cannot also be a covariate."))
 
     keep = mask_a | mask_b
 
@@ -827,6 +853,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
             sub, mask_a[keep], sub.obs[key],
             label_a=body.group_a, label_b=body.group_b, donor_key=key,
             method=body.pb_method, ruv_k=body.ruv_k,
+            covariates=sub.obs[covs] if covs else None,
         )
         # DESeq2's size factors and voom's TMM factors normalise library size too.
         return res, transcriptome_size.check(sub, mask_a[keep], mask_b[keep])
@@ -849,10 +876,29 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
     label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
     genes = [DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa, stat=res.stats.get(g))
              for g, lf, p, pa in res.genes]
+    # Replicates nested in people (a sample column, several samples per donor), and few people.
+    obs = adata.obs
+    rep = repeated_donors(obs, key, [mask_a, mask_b], body.donor_key,
+                          exclude={c for c in (body.split_by, body.within_column) if c})
+    rep_warnings = [rep["message"]] if rep else []
+    people = {body.group_a: res.n_samples_a, body.group_b: res.n_samples_b}
+    if rep:
+        person = obs[rep["donor_key"]]
+        people = {body.group_a: int(person[mask_a].nunique()), body.group_b: int(person[mask_b].nunique())}
+    if not res.paired:  # some donors on both sides, not all: ~condition cannot block on them
+        shared = on_both_sides(obs, key, mask_a, mask_b, pseudobulk.MIN_CELLS_PER_SAMPLE)
+        if shared:
+            rep_warnings.append(partly_paired(shared, key, res.design))
+    few = few_donors(people, f"'{rep['donor_key']}' values" if rep else "donors")
+    if few:
+        rep_warnings.append(few)
     comparison = _compared(body, res.n_cells_a, res.n_cells_b, key)
+    if res.covariates:
+        comparison["covariates"] = res.covariates
     comparison = {**comparison, **pseudobulk.summary_params(
         res, de_results.describe({**comparison, "method": "pseudobulk",
                                   "pb_method": res.method, "ruv_k": res.ruv_k}))}
+    comparison["design"] = res.design
     pseudobulk.remember(adaptor, {**comparison, "method": "pseudobulk"})
     return DEResponse(
         n_selected=res.n_cells_a,
@@ -863,8 +909,8 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
             dataset_id, genes, method="pseudobulk", comparison=comparison, adaptor=adaptor,
         ),
         replicate_key=key,
-        n_donors_a=res.n_samples_a,
-        n_donors_b=res.n_samples_b,
+        n_donors_a=people[body.group_a],
+        n_donors_b=people[body.group_b],
         method="pseudobulk",
         n_samples_a=res.n_samples_a,
         n_samples_b=res.n_samples_b,
@@ -877,6 +923,9 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         ruv_k=res.ruv_k,
         heteroscedasticity=res.heteroscedasticity,
         ruv=res.ruv,
+        covariates=res.covariates,
+        covariate_notes=res.covariate_notes,
+        replicate_warnings=rep_warnings,
     )
 
 

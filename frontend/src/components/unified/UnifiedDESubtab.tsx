@@ -155,6 +155,25 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     }
   }, [donorCols, replicateKey, setReplicateKey]);
 
+  // Pseudobulk covariates: per-sample columns (sex, batch) put in the design before the condition.
+  const [covariates, setCovariates] = useState<string[]>([]);
+  const covariateCols = useMemo(
+    () =>
+      (dataset?.obs_columns ?? []).filter(
+        (c) =>
+          c.values &&
+          c.n_unique >= 2 &&
+          c.n_unique <= 20 &&
+          !c.name.endsWith("_ontology_term_id") && // CELLxGENE's ids repeat the named column
+          ![splitBy, withinCol, replicateKey].includes(c.name),
+      ),
+    [dataset, splitBy, withinCol, replicateKey],
+  );
+  const usedCovariates = useMemo(
+    () => covariates.filter((c) => covariateCols.some((x) => x.name === c)),
+    [covariates, covariateCols],
+  );
+
   const splitValues = splitCols.find((c) => c.name === splitBy)?.values ?? [];
   const withinValues = withinCols.find((c) => c.name === withinCol)?.values ?? [];
 
@@ -229,6 +248,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
               replicate_key: replicateKey,
               ...(pbMethod !== "deseq2" ? { pb_method: pbMethod } : {}),
               ...(ruvK ? { ruv_k: ruvK } : {}),
+              ...(usedCovariates.length ? { covariates: usedCovariates } : {}),
             }
           : { min_pct: minPct, ...(cellMethod !== "wilcoxon" ? { method: cellMethod } : {}) }),
         ...(compositionBy ? { composition_by: compositionBy } : {}),
@@ -248,7 +268,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
       setLoading(false);
     }
   }, [datasetId, splitBy, groupA, groupB, withinCol, withinVal, test, replicateKey, pbMethod, ruvK, minPct,
-      cellMethod, compositionBy]);
+      cellMethod, compositionBy, usedCovariates]);
 
   // The current comparison under every cell-level test, and their agreement.
   const runMethods = useCallback(async () => {
@@ -532,6 +552,37 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                     onChange={update}
                     selectCls={selectCls}
                   />
+                  {covariateCols.length > 0 && (
+                    <div className="flex items-start gap-1.5" data-testid="pb-covariates">
+                      <span
+                        className="w-12 flex-shrink-0 pt-0.5 font-medium text-slate-500"
+                        title="Per-sample columns in the design before the condition (~sex + batch + condition). One value per donor sample; a column confounded with the comparison is refused."
+                      >
+                        Adjust
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {covariateCols.map((c) => {
+                          const on = usedCovariates.includes(c.name);
+                          return (
+                            <button
+                              key={c.name}
+                              type="button"
+                              aria-pressed={on}
+                              disabled={!on && usedCovariates.length >= 4}
+                              onClick={() =>
+                                setCovariates((s) => (on ? s.filter((x) => x !== c.name) : [...s, c.name]))
+                              }
+                              className={`rounded-full border px-2 py-0.5 text-[10px] disabled:opacity-40 ${
+                                on ? "border-primary/40 bg-primary/10 text-primary" : "border-slate-200 text-slate-500"
+                              }`}
+                            >
+                              {prettyObsLabel(c.name)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <p className="text-[10px] leading-snug text-slate-500">
                     Sums each donor&apos;s raw counts per group and tests donors, not cells, with{" "}
                     {pbMethodLabel(pbMethod)}, so p-values allow for donor-to-donor variation. Needs raw
@@ -715,6 +766,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 tested.
                 {(result.dropped_samples?.length ?? 0) > 0 &&
                   ` Left out (under 10 cells): ${result.dropped_samples!.join(", ")}.`}
+                {(result.covariate_notes ?? []).map((n) => ` ${n}`).join("")}
               </span>
             ) : refLabel !== "rest" && (
               <span
@@ -756,6 +808,16 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                   ? "biological" : `'${result.confounding.condition}'`} effect.
               </span>
             )}
+            {(result.replicate_warnings ?? []).map((w) => (
+              <span
+                key={w}
+                role="alert"
+                data-testid="de-replicate-caution"
+                className="mt-1 block rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-amber-800"
+              >
+                {w}
+              </span>
+            ))}
             {result.sex && (
               <span
                 role="alert"

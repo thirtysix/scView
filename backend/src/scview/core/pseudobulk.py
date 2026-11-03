@@ -16,6 +16,14 @@ t) or ``voombygroup`` (a trend per condition, for when one condition's donors va
 more). Whatever the method, each condition's own trend and residual variance are
 compared (``heteroscedasticity``). ``ruv_k`` > 0 adds that many RUVg factors from
 empirical control genes (core/ruv.py) to the design.
+
+``covariates`` adds per-sample obs columns (sex, batch, age, chemistry) to the
+design, ``~sex + batch + condition`` (as Milo takes them): a column must hold one
+value per pseudobulk sample, and one that cannot be separated from the condition
+(every level on one side) is refused. Text, boolean and categorical columns, and
+numbers with at most ``MAX_NUMERIC_LEVELS`` distinct values, are factors; other
+numbers enter as one centred and scaled slope. A covariate the paired design
+already holds (constant within each donor, as sex is) is left out with a note.
 """
 
 from __future__ import annotations
@@ -55,6 +63,10 @@ TREND_POINTS = 60
 # A RUV factor correlated with the condition at least this much may take signal.
 RUV_CONDITION_R = 0.5
 TAG = "result:pseudobulk"  # the co-pilot's tag for the last run
+MAX_COVARIATES = 4
+# A numeric covariate with at most this many distinct sample values is a factor
+# (batch 1/2/3 is not a slope); more, and it is one slope (age).
+MAX_NUMERIC_LEVELS = 5
 
 
 class PseudobulkError(ValueError):
@@ -79,6 +91,89 @@ class PseudobulkResult:
     ruv_k: int = 0
     heteroscedasticity: dict | None = None
     ruv: dict | None = None
+    covariates: list[str] = field(default_factory=list)  # in the design, as asked
+    covariate_notes: list[str] = field(default_factory=list)  # left out, and why
+    warnings: list[str] = field(default_factory=list)  # design cautions (repeated donors)
+
+
+def _sample_values(values: pd.Series, codes: np.ndarray, n: int, name: str,
+                   names: list[str]) -> np.ndarray:
+    """One value per pseudobulk sample from the cells' values; refuses a column that is
+    missing for some cells or varies within a sample."""
+    v = values.to_numpy()
+    missing = pd.isna(v)
+    if missing.any():
+        raise PseudobulkError(
+            f"Covariate '{name}' is missing for {int(missing.sum()):,} of the compared cells: "
+            "a covariate needs a value for every sample.")
+    frame = pd.DataFrame({"s": codes, "v": v})
+    k = frame.groupby("s")["v"].nunique()
+    if (k > 1).any():
+        bad = names[int(k.index[np.argmax(k.to_numpy() > 1)])]
+        raise PseudobulkError(
+            f"Covariate '{name}' varies within a sample ({bad} has {int(k.max())} values): a "
+            "covariate must be one value per pseudobulk sample (sex, batch, age), not per cell.")
+    first = frame.drop_duplicates("s").set_index("s")["v"]
+    return first.reindex(range(n)).to_numpy()
+
+
+def _rank(M: np.ndarray) -> int:
+    return int(np.linalg.matrix_rank(M)) if M.size else 0
+
+
+def _covariate_design(cov: dict[str, np.ndarray], nuisance: np.ndarray, is_a: np.ndarray,
+                      sample_cond: np.ndarray, names: dict[str, str]
+                      ) -> tuple[np.ndarray, dict[str, pd.Series], list[str], list[str]]:
+    """(the covariates' design columns, each used covariate's per-sample values for
+    DESeq2's formula, the covariates used, notes on those left out). Refuses one that
+    is confounded with the condition or only partly separable from the rest."""
+    cols: list[np.ndarray] = []
+    meta: dict[str, pd.Series] = {}
+    used: list[str] = []
+    notes: list[str] = []
+    base = nuisance
+    for j, (name, raw) in enumerate(cov.items()):
+        s = pd.Series(raw)
+        numeric = (pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
+                   and s.nunique() > MAX_NUMERIC_LEVELS)
+        if s.nunique() < 2:
+            notes.append(f"'{name}' has one value in these samples: left out.")
+            continue
+        if numeric:
+            x = s.to_numpy(dtype=np.float64)
+            z = (x - x.mean()) / x.std()
+            block = z[:, None]
+            meta[f"c{j}"] = pd.Series(z)
+        else:
+            levels = sorted(s.astype(str).unique())
+            codes = pd.Categorical(s.astype(str), categories=levels).codes
+            block = (codes[:, None] == np.arange(1, len(levels))[None, :]).astype(np.float64)
+            meta[f"c{j}"] = pd.Series([f"v{c}" for c in codes])
+        r0 = _rank(base)
+        gain = _rank(np.column_stack([base, block])) - r0
+        if gain == 0:
+            notes.append(f"'{name}' is constant within each donor, which the paired design already "
+                         "holds: left out." if nuisance.shape[1] > 1 else
+                         f"'{name}' adds nothing the design does not hold: left out.")
+            meta.pop(f"c{j}")
+            continue
+        if gain < block.shape[1]:
+            raise PseudobulkError(
+                f"Covariate '{name}' is partly collinear with the donors or the other covariates "
+                "(some of its values occur with one donor or one level only): leave it out or "
+                "merge its rare values.")
+        with_cond = np.column_stack([base, block, is_a])
+        if _rank(with_cond) < _rank(np.column_stack([base, block])) + 1:
+            side = {names[k]: sorted(set(s.astype(str)[sample_cond == k]))[:4] for k in ("a", "b")}
+            shown = "; ".join(f"{k}: {', '.join(v)}" for k, v in side.items())
+            raise PseudobulkError(
+                f"Covariate '{name}' is confounded with the condition ({shown}): the two cannot "
+                "be separated, so it cannot be in the design.")
+        base = np.column_stack([base, block])
+        cols.append(block)
+        used.append(name)
+    C = np.column_stack(cols) if cols else np.zeros((len(is_a), 0))
+    return C, meta, used, notes
 
 
 def raw_counts(adata):
@@ -135,6 +230,7 @@ def pseudobulk_de(
     donor_key: str = "donor",
     method: str = "deseq2",
     ruv_k: int = 0,
+    covariates: pd.DataFrame | None = None,
 ) -> PseudobulkResult:
     """Condition A vs B on per-donor pseudobulk sums: DESeq2's Wald test, or
     limma-voom / voomByGroup's moderated t (``method``), with ``ruv_k`` RUVg
@@ -142,11 +238,15 @@ def pseudobulk_de(
 
     ``adata`` holds only the compared cells; ``in_a`` marks the A cells (the
     rest are B) and ``donors`` gives each cell's donor (missing = left out).
+    ``covariates``: per-sample obs columns of those cells (one column each) to
+    put in the design before the condition.
     """
     if method not in METHODS:
         raise PseudobulkError(f"Unknown pseudobulk method '{method}' ({', '.join(METHODS)}).")
     if not 0 <= ruv_k <= MAX_RUV_K:
         raise PseudobulkError(f"RUV k must be 0 to {MAX_RUV_K}.")
+    if covariates is not None and covariates.shape[1] > MAX_COVARIATES:
+        raise PseudobulkError(f"At most {MAX_COVARIATES} covariates.")
     M, gene_names, source = raw_counts(adata)
     donor = donors.astype(str).where(donors.notna()).to_numpy()
     has_donor = pd.notna(donor)
@@ -164,6 +264,11 @@ def pseudobulk_de(
 
     ok = n_cells >= MIN_CELLS_PER_SAMPLE
     names = {"a": label_a, "b": label_b}
+    sample_names = [f"{sample_donor[i]} ({names[sample_cond[i]]})" for i in range(len(samples))]
+    cov_values = {}
+    for name in (covariates.columns if covariates is not None else []):
+        col = covariates[name].iloc[rows].reset_index(drop=True)
+        cov_values[str(name)] = _sample_values(col, codes, len(samples), str(name), sample_names)
     dropped = [f"{sample_donor[i]} ({names[sample_cond[i]]}, {n_cells[i]} cells)"
                for i in np.flatnonzero(~ok)]
     n_a = int((ok & (sample_cond == "a")).sum())
@@ -183,6 +288,7 @@ def pseudobulk_de(
 
     P, sample_cond, sample_donor = P[ok], sample_cond[ok], sample_donor[ok]
     n_cells_kept = n_cells[ok]
+    cov_values = {k: v[ok] for k, v in cov_values.items()}
     genes_idx = _filter_genes(P, min(n_a, n_b))
     if len(genes_idx) == 0:
         raise PseudobulkError(
@@ -215,6 +321,11 @@ def pseudobulk_de(
     if paired:
         dummies = donor_codes[:, None] == np.arange(1, donor_codes.max() + 1)[None, :]
         nuisance = np.column_stack([nuisance, dummies.astype(np.float64)])
+    cov_cols, cov_meta, cov_used, cov_notes = _covariate_design(
+        cov_values, nuisance, is_a, sample_cond, names)
+    nuisance = np.column_stack([nuisance, cov_cols])
+    for k, v in cov_meta.items():
+        meta[k] = v.to_numpy()
     lib = C.sum(axis=1)
     try:
         eff_lib = lib * vm.norm_factors(C, "TMM", lib)
@@ -242,7 +353,10 @@ def pseudobulk_de(
             + (f" with {n_w} RUV factor{'s' if n_w != 1 else ''}; use a smaller k." if n_w else ".")
         )
     w_names = [f"W{j + 1}" for j in range(W.shape[1])]
-    design = "~" + " + ".join(w_names + (["donor"] if paired else []) + ["condition"])
+    # Neutral names in the formula (c0, c1 ...); the reported design uses the columns'.
+    terms = w_names + (["donor"] if paired else []) + list(cov_meta) + ["condition"]
+    design = "~" + " + ".join(terms)
+    shown = dict(zip(cov_meta, cov_used))
 
     if method == "deseq2":
         for j, wn in enumerate(w_names):
@@ -258,7 +372,7 @@ def pseudobulk_de(
         n_cells_a=int(n_cells_kept[sample_cond == "a"].sum()),
         n_cells_b=int(n_cells_kept[sample_cond == "b"].sum()),
         n_genes_tested=len(genes_idx),
-        design=design.replace("donor", donor_key),
+        design="~" + " + ".join(donor_key if t == "donor" else shown.get(t, t) for t in terms),
         paired=paired,
         counts_source=source,
         dropped_samples=dropped,
@@ -267,6 +381,8 @@ def pseudobulk_de(
         ruv_k=int(W.shape[1]),
         heteroscedasticity=hetero,
         ruv=ruv,
+        covariates=cov_used,
+        covariate_notes=cov_notes,
     )
 
 
@@ -457,6 +573,7 @@ def summary_params(res: PseudobulkResult, label: str) -> dict:
         "hetero_ratio": h.get("ratio"), "hetero_higher": h.get("higher"),
         "hetero_flag": bool(h.get("flag")),
         "ruv_warning": (res.ruv or {}).get("warning"),
+        "covariates": list(getattr(res, "covariates", None) or []),
     }
 
 
@@ -496,6 +613,7 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
         return [], None
     name = METHOD_NAMES.get(p.get("pb_method") or "deseq2", "DESeq2")
     ruv = f" + RUV k={p['ruv_k']}" if p.get("ruv_k") else ""
+    ruv += "".join(f" + {c}" for c in p.get("covariates") or [])
     detail = (f"{p['pb_label']} ({name}{ruv}; {p.get('n_samples_a')} vs {p.get('n_samples_b')} "
               f"donor samples): {p.get('n_sig')} of {p.get('n_tested')} genes at adj. p < 0.05")
     lines = ["\n## Pseudobulk DE (last run; donors as replicates)", f"- {detail} [{TAG}]."]

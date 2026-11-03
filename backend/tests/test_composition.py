@@ -415,6 +415,95 @@ async def test_endpoint_detects_the_donor_column_and_runs_off_the_loop(
     assert resp.json()["sample_key_detected"] is False and not resp.json()["tested"]
 
 
+def _nested_obs() -> pd.DataFrame:
+    """Jäkel-like: samples nested in people. Controls C1-C4 one sample each; patients P1, P2
+    give two lesion samples each and P3 one. Groups g0/g1 are 'T', g2/g3 'M'."""
+    samples = ["Ctrl__C1_s", "Ctrl__C2_s", "Ctrl__C3_s", "Ctrl__C4_s",
+               "MS__P1_a", "MS__P1_b", "MS__P2_a", "MS__P2_b", "MS__P3_a"]
+    counts = [[40, 60, 100, 50], [50, 50, 90, 60], [45, 55, 110, 40], [55, 45, 95, 55],
+              [80, 20, 100, 50], [85, 15, 90, 60], [75, 25, 110, 40], [90, 10, 95, 55],
+              [70, 30, 100, 50]]
+    obs = _obs(samples, counts, cond_col="cond", donor_col="Sample").astype(str)
+    obs["donor_id"] = obs["Sample"].str.split("_").str[0]
+    obs["klass"] = obs["group"].map({"g0": "T", "g1": "T", "g2": "M", "g3": "M"})
+    return obs.astype("category")
+
+
+def test_shares_within_a_subset_and_samples_left_out():
+    obs = _nested_obs()
+    r = composition_test(obs, "cond", "Sample", "group", reference="Ctrl",
+                         within_column="klass", within_values=["T"])
+    assert [g.group for g in r.groups] == ["g0", "g1"] and r.tested
+    assert r.within == {"column": "klass", "values": ["T"], "n_cells": 900}
+    assert all(abs(sum(s.props) - 1) < 1e-6 for s in r.samples)  # shares of T cells
+    g0 = r.groups[0]
+    assert g0.props["Ctrl"] == pytest.approx(np.mean([0.4, 0.5, 0.45, 0.55]))
+    assert g0.fdr < comp.FDR  # 48% -> 80% of T cells; among all cells it is diluted
+    assert "within klass = T" in r.comparison()
+    out = composition_test(obs, "cond", "Sample", "group", reference="Ctrl",
+                           exclude_samples=["P1_a", "P1_b"])
+    assert out.n_samples == {"Ctrl": 4, "MS": 3} and out.excluded_samples == ["P1_a", "P1_b"]
+    assert "without P1_a, P1_b" in out.to_dict()["comparison"]
+    with pytest.raises(CompositionError, match="'nope' is not a value of 'Sample'"):
+        composition_test(obs, "cond", "Sample", "group", exclude_samples=["nope"])
+    with pytest.raises(CompositionError, match="'X' is not a value of 'klass'"):
+        composition_test(obs, "cond", "Sample", "group", within_column="klass", within_values=["X"])
+    with pytest.raises(CompositionError, match="must differ"):
+        composition_test(obs, "cond", "Sample", "group", within_column="group", within_values=["g0"])
+
+
+def test_samples_nested_in_donors_are_named_and_few_donors_warned():
+    obs = _nested_obs()
+    r = composition_test(obs, "cond", "Sample", "group", reference="Ctrl")
+    rep = r.repeated_donors
+    assert rep["donor_key"] == "donor_id" and rep["donors"] == {"P1": 2, "P2": 2}
+    assert rep["n_samples"] == 9 and rep["n_donors"] == 7
+    assert any("Samples are not independent: 2 of 7 'donor_id' values" in w and "P1: 2, P2: 2" in w
+               for w in r.warnings)
+    # MS has 5 samples but 3 people: no few-donor warning; drop P3 and it has 2.
+    assert not any("Fewer than 3" in w for w in r.warnings)
+    two = composition_test(obs, "cond", "Sample", "group", reference="Ctrl", exclude_samples=["P3_a"])
+    assert any("Fewer than 3 'donor_id' values on a side (MS: 2)" in w for w in two.warnings)
+    # By donor: each person once, nothing to warn about.
+    by_donor = composition_test(obs, "cond", "donor_id", "group", reference="Ctrl")
+    assert by_donor.repeated_donors is None and not any("not independent" in w for w in by_donor.warnings)
+    # Kang-like (the donor is the sample column, in both conditions): no warning.
+    kang = composition_test(_obs(T2_SAMPLES, T2), "cond", "donor", "group")
+    assert kang.repeated_donors is None
+
+
+async def test_each_comparison_is_stored_with_its_own_id_and_label(client, dataset_manager):
+    from scview.core import results_store
+
+    obs = _nested_obs()
+    obs["lesion"] = obs["cond"].astype(str).where(~obs["Sample"].astype(str).str.endswith("_b"), "Active")
+    obs["lesion"] = obs["lesion"].astype("category")
+    _dataset(Path(dataset_manager.data_dir), obs, "jk")
+    url = "/api/v1/datasets/jk/composition/test"
+    base = {"condition_key": "lesion", "group_key": "group", "sample_key": "Sample", "reference": "Ctrl"}
+    one = (await client.post(url, json={**base, "conditions": ["Ctrl", "MS"]})).json()
+    two = (await client.post(url, json={**base, "conditions": ["Ctrl", "Active"]})).json()
+    sub = (await client.post(url, json={**base, "conditions": ["Ctrl", "MS"], "within_column": "klass",
+                                        "within_value": "T", "exclude_samples": ["P3_a"]})).json()
+    assert one["result_id"] and two["result_id"] and one["result_id"] != two["result_id"]
+    assert one["comparison"] == "'group' by 'lesion' (MS vs Ctrl)"
+    assert sub["comparison"] == "'group' by 'lesion' (MS vs Ctrl); within klass = T; without P3_a"
+    results_store.flush()
+    entries = {e["id"]: e for e in results_store.entries("jk", "composition")}
+    assert {e["status"] for e in entries.values()} == {"primary"}  # none supersedes another
+    assert entries[two["result_id"]]["label"] == "Composition of 'group' by 'lesion' (Active vs Ctrl)"
+    got = results_store.load("jk", sub["result_id"])
+    assert got is not None and got[1].within["values"] == ["T"]
+
+
+def test_a_result_stored_before_the_subset_fields_still_opens():
+    r = composition_test(_obs(T2_SAMPLES, T2), "cond", "donor", "group")
+    for name in ("within", "excluded_samples", "repeated_donors"):
+        del r.__dict__[name]  # as decoded from an older store: no such attribute set
+    d = r.to_dict()
+    assert d["within"] is None and d["excluded_samples"] is None and d["comparison"]
+
+
 async def test_endpoint_errors(client, dataset_manager):
     _dataset(Path(dataset_manager.data_dir), _obs(T2_SAMPLES, T2))
     url = "/api/v1/datasets/ds/composition/test"

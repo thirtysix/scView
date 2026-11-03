@@ -663,6 +663,8 @@ def _de_warnings(r: dict[str, Any]) -> list[str]:
                  f"(median counts {num(ts.get('median_a'))} vs {num(ts.get('median_b'))})")
     if r.get("dropped_samples"):
         w.append(f"samples left out: {', '.join(map(str, r['dropped_samples'][:10]))}")
+    w += [f"replicates: {x}" for x in r.get("replicate_warnings") or []]
+    w += [f"covariate: {x}" for x in r.get("covariate_notes") or []]
     return w
 
 
@@ -684,6 +686,12 @@ async def differential_expression(
     replicate_key: Annotated[str | None, Field(description="Donor/sample column (default: detected).")] = None,
     pb_method: Annotated[Literal["deseq2", "voom", "voombygroup"], Field(
         description="Pseudobulk model: DESeq2 (default), limma-voom, or voomByGroup (a variance per group).")] = "deseq2",
+    covariates: Annotated[list[str] | None, Field(max_length=4, description=(
+        "Pseudobulk: per-sample obs columns in the design before the condition (sex, batch, age); "
+        "refused when one varies within a sample or is confounded with the condition."))] = None,
+    donor_key: Annotated[str | None, Field(description=(
+        "Pseudobulk: the person column the replicate column's samples nest in, for the "
+        "repeated-donor warning (default: detected)."))] = None,
     min_pct: Annotated[float | None, Field(ge=0, le=1, description="Cell-level: test genes detected in at least this share of either side (default 0.01).")] = None,
     padj_max: Annotated[float, Field(gt=0, le=1, description="Count and list genes at adjusted p at most this.")] = 0.05,
     lfc_min: Annotated[float, Field(ge=0, description="And |log2 fold change| at least this.")] = 0.25,
@@ -702,6 +710,10 @@ async def differential_expression(
                                 "replicate_key": replicate_key, "method": method, "pb_method": pb_method}
         if min_pct is not None:
             body["min_pct"] = min_pct
+        if covariates or donor_key:
+            if method != "pseudobulk":
+                raise ToolError("covariates and donor_key are for method='pseudobulk'.")
+            body.update({"covariates": covariates, "donor_key": donor_key})
         r = await _post(f"{_ds(dataset_id)}/de/compare", body)
     else:
         if method == "pseudobulk":
@@ -738,7 +750,7 @@ async def differential_expression(
         "dataset_id": dataset_id, "result_id": r.get("result_id"), "label": r.get("label"),
         "method": r.get("method"), "n_a": r.get("n_selected"), "n_b": r.get("n_rest"),
         **pick(r, "replicate_key", "n_donors_a", "n_donors_b", "n_samples_a", "n_samples_b",
-               "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped"),
+               "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped", "covariates"),
         "n_genes_tested": r.get("n_genes_tested") or len(genes),
         "rule": f"padj <= {padj_max} and |log2FC| >= {lfc_min}" if has_p else f"|coef| ranked, |log2FC| >= {lfc_min}",
         "n_up": len(up), "n_down": len(down), "columns": cols,
@@ -746,6 +758,8 @@ async def differential_expression(
         "down": [[num(g.get(c)) for c in cols] for g in down[:n]],
         "warnings": _de_warnings(r),
     }
+    if not out.get("covariates"):
+        out.pop("covariates", None)
     if (out["method"] != "pseudobulk" and not r.get("underreplicated")
             and (r.get("n_donors_a") or 0) >= 2 and (r.get("n_donors_b") or 0) >= 2):
         # The UI's caption says the same: a cell-level test treats cells as independent.
@@ -816,24 +830,23 @@ async def per_donor_expression(
     method: Annotated[Literal["mean", "cpm"], Field(description=(
         "mean of the log-normalised values per donor, or cpm: log2 CPM of the donor's summed counts."))] = "mean",
     groups: Annotated[list[str] | None, Field(description="Only these groups (default: all).")] = None,
+    conditions: Annotated[list[str] | None, Field(description=(
+        "The two condition values to test (default: the column's two, or its two besides "
+        "'Unassigned'); other values are still listed, not tested."))] = None,
+    reference: Annotated[str | None, Field(description=(
+        "Baseline of the two: mean_diff is the other minus this (default: the first in the column's order)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """One gene's pseudobulk value per donor in each group (and condition), with the design
-    (paired when every donor is in every condition) and the per-group donor-level test
-    (paired Wilcoxon signed-rank + paired t, or unpaired): the donor-aware check of a DE gene."""
+    (paired when donors are in both tested conditions) and the per-group donor-level test
+    (paired Wilcoxon signed-rank + paired t, or unpaired) of two conditions; `difference`
+    names the sign of mean_diff: the donor-aware check of a DE gene."""
     d = await _get(f"{_ds(dataset_id)}/expression/per-donor", gene=gene, groupby=groupby,
-                   sample=sample, condition=condition, method=method)
+                   sample=sample, condition=condition, method=method, groups=groups or None,
+                   conditions=conditions or None, reference=reference or None)
     points = d.pop("points", None) or []
-    if groups:
-        wanted = {str(g) for g in groups}
-        points = [p for p in points if str(p.get("group")) in wanted]
-        missing = sorted(wanted - {str(g) for g in d.get("groups") or []})
-        d["groups"] = [g for g in d.get("groups") or [] if str(g) in wanted]
-        if missing:
-            d["groups_not_found"] = missing
-        for k in ("paired_tests", "unpaired_tests"):
-            if isinstance(d.get(k), dict):
-                d[k] = {g: v for g, v in d[k].items() if str(g) in wanted}
+    if not d.get("groups_not_found"):
+        d.pop("groups_not_found", None)
     # Per group x condition: the donors' values (compact: donor -> value).
     table: dict[str, dict[str, dict[str, Any]]] = {}
     for p in points:
@@ -857,12 +870,23 @@ async def composition_test(
     transform: Annotated[Literal["logit", "asin"], Field(description=(
         "Scale the per-sample shares are tested on: logit (propeller's default) or arcsine square root."))] = "logit",
     paired: Annotated[bool | None, Field(description="Default: paired when every donor is in every condition.")] = None,
+    exclude_samples: Annotated[list[str] | None, Field(description=(
+        "Values of the sample column to leave out (e.g. one donor's samples, for a leave-one-out)."))] = None,
+    within_column: Annotated[str | None, Field(description=(
+        "Test shares among a subset only: its column (e.g. a broad cell class)."))] = None,
+    within_value: Annotated[list[str] | None, Field(description=(
+        "The subset's value(s) of within_column (e.g. ['Immune']: T cells among immune cells)."))] = None,
+    donor_key: Annotated[str | None, Field(description=(
+        "Person column the samples nest in, for the repeated-donor warning (default: detected)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Do cell types make up different shares of the cells between conditions, with donors as
-    replicates (propeller-style: per-sample proportions, limma moderated t/F, BH FDR)."""
+    replicates (propeller-style: per-sample proportions, limma moderated t/F, BH FDR). Returns
+    the stored result_id; `comparison` names the conditions, subset and samples left out."""
     body = {"condition_key": condition_key, "group_key": group_key, "sample_key": sample_key,
-            "conditions": conditions, "reference": reference, "transform": transform, "paired": paired}
+            "conditions": conditions, "reference": reference, "transform": transform, "paired": paired,
+            "exclude_samples": exclude_samples, "within_column": within_column,
+            "within_value": within_value, "donor_key": donor_key}
     d = await _post(f"{_ds(dataset_id)}/composition/test", body)
     groups = [_flat(g) for g in d.pop("groups", []) or []]
     d.pop("samples", None)  # per-sample shares: in get_result's table

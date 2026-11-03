@@ -43,6 +43,9 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
   const [condition, setCondition] = useState<string | null>(null); // null: suggested
   const [sample, setSample] = useState(""); // "": detected by the backend
   const [method, setMethod] = useState<DonorMethod>("mean");
+  // The two levels to test when the condition has more than two; "all": every level, no test;
+  // null: the backend's default (its two levels besides "Unassigned", if that leaves two).
+  const [pick, setPick] = useState<{ a: string; ref: string } | "all" | null>(null);
   const [result, setResult] = useState<Result | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +69,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
       groupby: groupColumn,
       ...(sample ? { sample } : {}),
       ...(conditionKey ? { condition: conditionKey } : {}),
+      ...(conditionKey && pick && pick !== "all" ? { conditions: [pick.a, pick.ref], reference: pick.ref } : {}),
       method,
     })
       .then((r) => !cancelled && setResult(r))
@@ -78,7 +82,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
     return () => {
       cancelled = true;
     };
-  }, [datasetId, gene, groupColumn, conditionKey, sample, method]);
+  }, [datasetId, gene, groupColumn, conditionKey, sample, method, pick]);
 
   const conditionColor = useCategoryColors(result?.condition_key ?? conditionKey);
   const groupColor = useCategoryColors(groupColumn);
@@ -86,6 +90,20 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
     (k: string, kind: "condition" | "group") => rgbCss(kind === "condition" ? conditionColor(k) : groupColor(k)),
     [conditionColor, groupColor],
   );
+
+  // More than two levels: the plot shows the two tested ones (with their test), or every level.
+  const levels = useMemo(() => (result?.conditions ?? []).filter((c) => c !== ""), [result]);
+  const tested = pick === "all" ? null : (result?.tested_conditions ?? null);
+  const shown = useMemo(() => {
+    if (!result || levels.length <= 2 || !tested) return { conditions: result?.conditions ?? [], points: result?.points ?? [] };
+    return { conditions: tested, points: result.points.filter((p) => tested.includes(p.condition)) };
+  }, [result, levels, tested]);
+  const pickA = pick === "all" ? "" : pick ? pick.a : (tested?.[1] ?? "");
+  const pickRef = pick && pick !== "all" ? pick.ref : (tested?.[0] ?? "");
+  const choosePair = (a: string, ref: string) => {
+    if (!a) return setPick("all");
+    setPick({ a, ref: ref && ref !== a ? ref : (levels.find((l) => l !== a) ?? "") });
+  };
 
   if (!gene) {
     return (
@@ -104,7 +122,10 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
           <select
             aria-label="Condition column"
             value={conditionKey}
-            onChange={(e) => setCondition(e.target.value)}
+            onChange={(e) => {
+              setCondition(e.target.value);
+              setPick(null);
+            }}
             className={selCls}
           >
             <option value="">None</option>
@@ -142,6 +163,33 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
             <option value="cpm">log2 CPM of summed counts</option>
           </select>
         </label>
+        {levels.length > 2 && (
+          <span className="flex items-center gap-1" title="A donor-level test compares two values of the condition; the others are left out of it.">
+            Compare
+            <select aria-label="Tested condition" value={pickA} onChange={(e) => choosePair(e.target.value, pickRef)} className={selCls}>
+              <option value="">All values (no test)</option>
+              {levels.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+            {pickA && (
+              <>
+                vs
+                <select aria-label="Reference condition" value={pickRef} onChange={(e) => choosePair(pickA, e.target.value)} className={selCls}>
+                  {levels
+                    .filter((l) => l !== pickA)
+                    .map((l) => (
+                      <option key={l} value={l}>
+                        {l}
+                      </option>
+                    ))}
+                </select>
+              </>
+            )}
+          </span>
+        )}
         {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </div>
 
@@ -166,9 +214,9 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
       )}
       {result?.sample_key && result.points.length > 0 && (
         <DonorBoxPlot
-          points={result.points}
+          points={shown.points}
           groups={result.groups}
-          conditions={result.conditions}
+          conditions={shown.conditions}
           sampleKey={prettyObsLabel(result.sample_key)}
           colorOf={colorOf}
           valueLabel={`${result.gene} ${label}`}
@@ -185,6 +233,9 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
             `Value: ${result.value_label} (${result.source}).` +
             (result.n_dropped > 0
               ? ` ${result.n_dropped} donor-group sample${result.n_dropped === 1 ? "" : "s"} under ${result.min_cells} cells left out.`
+              : "") +
+            (shown.conditions.length < levels.length
+              ? ` Showing ${shown.conditions.join(" and ")} of ${levels.length} values (${shown.conditions[1]} minus ${shown.conditions[0]}); pick All values under Compare for the rest.`
               : "")
           }
         />

@@ -149,6 +149,33 @@ describe("PerDonorExpression", () => {
     expect(screen.queryByTestId("paired-tests")).toBeNull();
   });
 
+  it("with a third level, tests the two chosen ones and draws only them", async () => {
+    const three = ["Unassigned", "NFTpos", "NFTneg"];
+    getPerDonorExpression.mockResolvedValue({
+      ...PAIRED, conditions: three, n_donors: { Unassigned: 4, NFTpos: 4, NFTneg: 4 },
+      points: three.flatMap((t, i) => pts(t, 4, i)),
+      design: { paired: true, n_pairs: 4, conditions: ["NFTpos", "NFTneg"] },
+      tested_conditions: ["NFTpos", "NFTneg"], reference: "NFTpos", difference: "NFTneg - NFTpos",
+      paired_tests: { B: { n_pairs: 4, mean_diff: 1, wilcoxon_p: 0.125, ttest_p: 0.01, caution: null } },
+    });
+    render(<PerDonorExpression datasetId="kang" gene="ISG15" groupColumn="cluster" />);
+    const caption = await screen.findByTestId("donor-caption");
+    expect(caption.textContent).toContain("each in NFTpos and NFTneg");
+    expect(caption.textContent).toContain("Showing NFTpos and NFTneg of 3 values (NFTneg minus NFTpos)");
+    expect(screen.getByTestId("paired-tests")).toBeInTheDocument();
+    expect((screen.getByLabelText("Tested condition") as HTMLSelectElement).value).toBe("NFTneg");
+    expect((screen.getByLabelText("Reference condition") as HTMLSelectElement).value).toBe("NFTpos");
+    fireEvent.change(screen.getByLabelText("Reference condition"), { target: { value: "Unassigned" } });
+    await waitFor(() =>
+      expect(getPerDonorExpression).toHaveBeenLastCalledWith("kang", expect.objectContaining({
+        conditions: ["NFTneg", "Unassigned"], reference: "Unassigned",
+      })),
+    );
+    fireEvent.change(screen.getByLabelText("Tested condition"), { target: { value: "" } });
+    await waitFor(() => expect(screen.getByTestId("donor-caption").textContent).not.toContain("Showing"));
+    expect(screen.queryByTestId("paired-tests")).toBeNull();
+  });
+
   it("explains why there is nothing to show without a gene", () => {
     render(<PerDonorExpression datasetId="kang" gene={null} noGeneReason="Pick a gene." groupColumn="cluster" />);
     expect(screen.getByText("Pick a gene.")).toBeInTheDocument();

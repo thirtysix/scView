@@ -52,6 +52,10 @@ OFF_SHARE = 0.02  # and "off" at or below this share (ambient RNA stays under it
 MIN_CELLS = 10  # as pseudobulk and the per-donor plots
 # A per-sample marker share this spread-out across samples (max/min) is not "one level".
 UNIFORM_RATIO = 1.5
+# Cell-level DE: the share of each side's cells from female samples differing by this
+# much (absolute, 15 percentage points) is warned about even when the donors balance
+# (Yang 2021: 1 female donor a side, 31% vs 7% of the L2/3 nuclei, XIST padj 6e-34).
+CELL_SHARE_DIFF = 0.15
 
 CALLS = ("female", "male", "mixed", "ambiguous", "undetermined")
 
@@ -324,6 +328,34 @@ def compare_sides(obs: pd.DataFrame, sample_key: str, mask_a: np.ndarray, mask_b
         return None
     return {"kind": kind, "message": msg, "sample_key": sample_key, "source": source,
             "a": tallies[0], "b": tallies[1]}
+
+
+def compare_cell_shares(obs: pd.DataFrame, sample_key: str, mask_a: np.ndarray, mask_b: np.ndarray,
+                        label_a: str, label_b: str, sexes: dict[str, str], source: str) -> dict | None:
+    """For a cell-level test, which weighs each donor by its cells: the share of each side's
+    cells (in samples of known sex) that come from female samples. ``kind`` "cells" when the
+    shares differ by CELL_SHARE_DIFF or more, else None (also when a side has no cell of a
+    sample of known sex)."""
+    samples = obs[sample_key].astype(str).where(obs[sample_key].notna()).to_numpy()
+    sex = pd.Series(samples).map(sexes).to_numpy()
+    shares, tallies = [], []
+    for mask in (mask_a, mask_b):
+        s = sex[np.asarray(mask, bool)]
+        f, m = int((s == "female").sum()), int((s == "male").sum())
+        if f + m == 0:
+            return None
+        shares.append(f / (f + m))
+        tallies.append({"female_cells": f, "male_cells": m, "share_female": round(f / (f + m), 4)})
+    if abs(shares[0] - shares[1]) < CELL_SHARE_DIFF:
+        return None
+    msg = (f"Cells differ in sex between the sides: {_share(shares[0])} of {label_a}'s cells and "
+           f"{_share(shares[1])} of {label_b}'s come from female samples (samples by "
+           f"'{sample_key}', sex from {source}; warned at a difference of "
+           f"{CELL_SHARE_DIFF * 100:.0f} points or more). A cell-level test weighs each donor by "
+           "its cells, so XIST, TSIX and Y-chromosome genes can top the list even when the donors "
+           "balance; read sex-linked genes as sex, or use pseudobulk.")
+    return {"kind": "cells", "message": msg, "sample_key": sample_key, "source": source,
+            "a": tallies[0], "b": tallies[1], "threshold": CELL_SHARE_DIFF}
 
 
 def sex_check(adata, column: str | None = None) -> dict:

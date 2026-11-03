@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import re
 import threading
+import uuid
 import weakref
 from dataclasses import dataclass, field
 from typing import Literal
@@ -51,6 +52,7 @@ from scipy import optimize, special, stats
 
 from scview.core import paired_design, results_store
 from scview.core.confounding import check, condition_columns, for_comparison
+from scview.core.replicates import few_donors, repeated_donors
 
 Transform = Literal["logit", "asin"]
 
@@ -116,6 +118,25 @@ class CompositionResult:
     dropped_samples: list[str] = field(default_factory=list)
     # {"paired", "n_pairs", "conditions"}: whether the donors recur across conditions.
     pairing: dict = field(default_factory=lambda: {"paired": False, "n_pairs": 0, "conditions": []})
+    # Shares within one compartment: {"column", "values", "n_cells"} (None: all cells).
+    # Plain defaults: a result stored before these existed still loads.
+    within: dict | None = None
+    excluded_samples: list | None = None  # sample values left out on request
+    # Samples nested in donors with several per donor (core/replicates.py repeated_donors).
+    repeated_donors: dict | None = None
+
+    def comparison(self) -> str:
+        """What was compared, for the stored result's label and key."""
+        conds = (f"{self.conditions[1]} vs {self.conditions[0]}" if len(self.conditions) == 2
+                 else ", ".join(self.conditions))
+        parts = [f"'{self.group_key}' by '{self.condition_key}' ({conds})"]
+        w = getattr(self, "within", None)
+        if w:
+            parts.append(f"within {w['column']} = {', '.join(w['values'])}")
+        ex = getattr(self, "excluded_samples", None)
+        if ex:
+            parts.append(f"without {', '.join(ex[:4])}{' ...' if len(ex) > 4 else ''}")
+        return "; ".join(parts)
 
     def to_dict(self) -> dict:
         return {
@@ -132,6 +153,10 @@ class CompositionResult:
             "samples": [s.__dict__ for s in self.samples],
             "warnings": self.warnings, "notes": self.notes,
             "dropped_samples": self.dropped_samples, "pairing": self.pairing,
+            "within": getattr(self, "within", None),
+            "excluded_samples": getattr(self, "excluded_samples", None),
+            "repeated_donors": getattr(self, "repeated_donors", None),
+            "comparison": self.comparison(),
         }
 
 
@@ -433,22 +458,52 @@ def composition_test(
     batch_key: str | None = None,
     robust: bool = True,
     group_is_clustering: bool = True,
+    exclude_samples: list[str] | None = None,
+    within_column: str | None = None,
+    within_values: list[str] | None = None,
+    donor_key: str | None = None,
 ) -> CompositionResult:
     """Test each group of ``group_key`` for a different share of the cells
     between the conditions of ``condition_key``, with the samples of
     ``sample_key`` (one per value per condition) as replicates. ``paired`` None
     pairs by sample when every sample value occurs in every condition.
     ``batch_key`` is the dataset's batch-correction key, if any. ``robust``
-    (propeller's default) squeezes the variances robustly."""
-    for col in (condition_key, group_key, sample_key):
+    (propeller's default) squeezes the variances robustly.
+
+    ``exclude_samples`` leaves those ``sample_key`` values out; ``within_column`` /
+    ``within_values`` test the shares among those cells only (T cells among immune
+    cells). ``donor_key`` names the person column the samples nest in, for the
+    repeated-donor warning (None: detected)."""
+    for col in (condition_key, group_key, sample_key, within_column, donor_key):
         if col and col not in obs.columns:
             raise CompositionError(f"Column '{col}' not found.")
     if len({condition_key, group_key, sample_key} - {None}) < (3 if sample_key else 2):
         raise CompositionError("The condition, sample and group columns must be different.")
     if transform not in ("logit", "asin"):
         raise CompositionError(f"Unknown transform '{transform}' (logit or asin).")
+    scope = pd.Series(True, index=obs.index)
+    if within_column:
+        if within_column == group_key:
+            raise CompositionError(
+                "The subset column must differ from the tested groups' column (shares of a "
+                "group among its own cells are all 100%).")
+        if not within_values:
+            raise CompositionError(f"Name the value(s) of '{within_column}' to test within.")
+        wl = _labels(obs, within_column)
+        missing = [v for v in within_values if not (wl == v).any()]
+        if missing:
+            raise CompositionError(f"'{missing[0]}' is not a value of '{within_column}'.")
+        scope &= wl.isin(within_values)
+    if exclude_samples:
+        if not sample_key:
+            raise CompositionError("Leaving samples out needs a sample column.")
+        sl = _labels(obs, sample_key)
+        missing = [v for v in exclude_samples if not (sl == v).any()]
+        if missing:
+            raise CompositionError(f"'{missing[0]}' is not a value of '{sample_key}'.")
+        scope &= ~sl.isin(exclude_samples)
 
-    cond = _labels(obs, condition_key)
+    cond = _labels(obs, condition_key).where(scope)
     available = _order(obs[condition_key].where(cond.notna()))
     chosen = list(dict.fromkeys(conditions)) if conditions else available
     unknown = [c for c in chosen if c not in available]
@@ -502,6 +557,9 @@ def composition_test(
         condition_key=condition_key, sample_key=sample_key, group_key=group_key,
         conditions=chosen, groups=[], samples=[], n_samples={}, n_cells={},
         transform=transform, robust=robust,
+        within=({"column": within_column, "values": [str(v) for v in within_values or []],
+                 "n_cells": int(keep.sum())} if within_column else None),
+        excluded_samples=[str(v) for v in exclude_samples] if exclude_samples else None,
     )
     ok = n_per >= MIN_CELLS_PER_SAMPLE if sample is not None else np.ones(len(n_per), bool)
     result.dropped_samples = [f"{s_donor[i]} ({s_cond[i]}, {n_per[i]} cells)"
@@ -555,7 +613,20 @@ def composition_test(
             "No sample or donor column: the cells cannot be grouped into replicates, so "
             "only the proportions are shown. Pick the column that names each donor or sample.")
         return result
+    sides = [((cond == k) & keep).to_numpy() for k in chosen]
+    rep = repeated_donors(obs, sample_key, sides, donor_key, exclude={condition_key, group_key})
+    if rep:
+        result.repeated_donors = rep
+        result.warnings.append(rep["message"])
+        person = _labels(obs, rep["donor_key"])
+        people = {k: int(person[side].nunique()) for k, side in zip(chosen, sides)}
+    else:
+        people = dict(result.n_samples)
     few = [k for k in chosen if result.n_samples[k] < MIN_SAMPLES]
+    if not few:
+        caution = few_donors(people, f"'{rep['donor_key']}' values" if rep else "samples")
+        if caution:
+            result.warnings.append(caution)
     if few:
         result.warnings.append(
             f"{', '.join(f'{k}: {result.n_samples[k]}' for k in few)} sample(s) of "
@@ -667,17 +738,21 @@ _last: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _last_lock = threading.Lock()
 
 
-def remember(adaptor, result: CompositionResult) -> None:
-    """Keep the last result for the co-pilot. Held as long as the loaded dataset
-    is: a re-processed (reloaded) dataset starts without one."""
+def remember(adaptor, result: CompositionResult) -> str | None:
+    """Keep the last result for the co-pilot (held as long as the loaded dataset is: a
+    re-processed, reloaded dataset starts without one) and store it; returns the stored
+    result's id. The key and label name the whole comparison (conditions, subset, samples
+    left out), so a run of another comparison does not supersede this one."""
     try:
         with _last_lock:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
-        return
-    results_store.keep(adaptor, "composition", result,
-                       key=f"{result.condition_key}|{result.group_key}",
-                       label=f"Composition of '{result.group_key}' by '{result.condition_key}'")
+        return None
+    result_id = uuid.uuid4().hex
+    what = result.comparison()
+    future = results_store.keep(adaptor, "composition", result, result_id=result_id,
+                                key=f"{what}|{result.sample_key}", label=f"Composition of {what}")
+    return result_id if future is not None else None
 
 
 _CAUTION = (
@@ -716,7 +791,13 @@ def _fits(r: CompositionResult, obs: pd.DataFrame) -> bool:
     """Whether a run's columns and groups are still the dataset's."""
     if any(k and k not in obs.columns for k in (r.condition_key, r.sample_key, r.group_key)):
         return False
-    return set(_order(obs[r.group_key])) == {g.group for g in r.groups}  # not renamed / re-clustered
+    groups = obs[r.group_key]
+    w = getattr(r, "within", None)
+    if w:  # a subset run: the groups among its cells
+        if w["column"] not in obs.columns:
+            return False
+        groups = groups.where(_labels(obs, w["column"]).isin(w["values"]))
+    return set(_order(groups)) == {g.group for g in r.groups}  # not renamed / re-clustered
 
 
 def _pick(adaptor, obs: pd.DataFrame, group_key: str | None = None
