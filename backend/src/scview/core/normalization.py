@@ -37,11 +37,14 @@ def check_method(method: str) -> str:
     return method
 
 
-def find_counts(adata):
+def find_counts(adata, read_only: bool = False):
     """Raw counts for X's genes, without changing ``adata``: (matrix, where from).
 
     ``layers['counts']``, then ``.raw`` (when it holds counts for every gene in X),
-    then X. Raises ``ValueError`` when none of them holds counts."""
+    then X. Raises ``ValueError`` when none of them holds counts. ``read_only``: the
+    caller only reads the matrix, so a ``.raw`` with X's genes in X's order is handed
+    over as it is, not cut to them (a copy of all of it: +4.5 GB at its peak on 125k
+    PBMCs, which got the backend killed during a DE's transcriptome-size check)."""
     from scview.core.large_mode import counts_of
     from scview.core.pipeline import looks_like_counts  # pipeline imports this module
 
@@ -56,7 +59,8 @@ def find_counts(adata):
         and not len(adata.var_names.difference(raw.var_names))
         and looks_like_counts(raw.X)
     ):
-        if not sp.issparse(raw.X) and not isinstance(raw.X, np.ndarray) and raw.var_names.equals(adata.var_names):
+        on_disk = not sp.issparse(raw.X) and not isinstance(raw.X, np.ndarray)
+        if (on_disk or read_only) and raw.var_names.equals(adata.var_names):
             return raw.X, ".raw"  # on disk (a backed dataset): cutting its genes would read it whole
         return raw[:, adata.var_names].X, ".raw"
     if looks_like_counts(adata.X):
@@ -67,15 +71,16 @@ def find_counts(adata):
     )
 
 
-def counts_all_genes(adata):
+def counts_all_genes(adata, read_only: bool = False):
     """Raw counts for as many genes as the dataset has: (matrix, gene names, where
-    from). ``.raw`` can hold more genes than X (an HVG subset upload)."""
+    from). ``.raw`` can hold more genes than X (an HVG subset upload). ``read_only``:
+    as ``find_counts``'s."""
     from scview.core.pipeline import looks_like_counts
 
     raw = adata.raw
     if raw is not None and raw.n_vars > adata.n_vars and looks_like_counts(raw.X):
         return raw.X, raw.var_names, ".raw"
-    M, source = find_counts(adata)
+    M, source = find_counts(adata, read_only)
     return M, adata.var_names, source
 
 

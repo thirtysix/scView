@@ -2842,6 +2842,53 @@ def de_read_need(mm: Matrix | None, n_rows: int, logreg: bool = False) -> int:
                + (nnz * DE_LOGREG_PER_VALUE if logreg else 0))
 
 
+def _kept_rows(M, keep: np.ndarray) -> Matrix:
+    """The ``keep`` rows of in-memory ``M`` as a Matrix (a CSR's stored values counted
+    exactly from its row pointers), in ``M``'s index type: slicing builds the rows in it
+    before scipy narrows them."""
+    import scipy.sparse as sp
+
+    n = int(np.count_nonzero(keep))
+    rows, cols = (int(s) for s in M.shape)
+    if sp.issparse(M):
+        if M.format == "csr":
+            nnz = int(np.diff(M.indptr)[np.asarray(keep, dtype=bool)].sum())
+        else:
+            nnz = int(M.nnz * n / max(rows, 1))
+        return Matrix("X", n, cols, True, nnz, M.dtype.name, M.indices.dtype.name)
+    return Matrix("X", n, cols, False, n * cols, np.dtype(M.dtype).name)
+
+
+def de_memory_need(M, keep: np.ndarray, logreg: bool = False, counts: bool = False) -> int:
+    """``de_read_need`` for a dataset in memory: the compared rows copied out of the tested
+    matrix ``M`` (no copy when every row is compared: the test reads ``M`` itself; a second
+    one when they are ``counts``, log-normalised for the test), and the test on them.
+    Liu 2021's 125k PBMCs, classical monocytes T0 vs HC (38,334 cells x 30,000 genes,
+    62M values): 1.07 GB estimated, 0.92 GB measured over the loaded data."""
+    mm = _kept_rows(M, keep)
+    if not mm.n_cells:
+        return 0
+    need = de_read_need(mm, mm.n_cells, logreg)
+    if bool(np.all(keep)):
+        need -= rows_bytes(mm, mm.n_cells)
+    if counts:
+        need += rows_bytes(mm, mm.n_cells)
+    return int(need)
+
+
+# Pseudobulk in memory: the compared cells' counts copied out (anndata's view of them) and
+# summed by donor. Liu 2021's classical monocytes (38,334 cells, 62M values, int64
+# indices): 0.74 GB of rows, 0.92 GB measured over the loaded data.
+PB_ROWS_FACTOR = 1.25
+
+
+def pseudobulk_memory_need(M, keep: np.ndarray) -> int:
+    """Peak memory of pseudobulk DE on the ``keep`` cells of a dataset in memory, whose
+    counts are ``M`` (``pseudobulk.raw_counts``)."""
+    mm = _kept_rows(M, keep)
+    return int(rows_bytes(mm, mm.n_cells) * PB_ROWS_FACTOR + DE_FIXED)
+
+
 def _lt_counts_bytes(h: Header) -> int:
     """The matrix the run reads counts from (layers['counts'], else .raw, else X) as a
     float32 CSR of its non-zeros."""

@@ -211,15 +211,19 @@ def test_the_test_estimate_scales_with_the_cells_read_and_the_header_sees_legacy
     assert h.matrix("raw/X") is not None and h.matrix("raw/X").nnz == raw.nnz
 
 
-async def test_an_in_memory_dataset_is_not_checked(client, dataset_manager, tmp_data_dir, monkeypatch):
+@pytest.mark.parametrize("where", list(BODIES))
+async def test_an_in_memory_dataset_is_checked_too(client, dataset_manager, tmp_data_dir, monkeypatch, where):
+    """A test on a dataset in memory copies the compared rows out and ranks them: unguarded,
+    38k of Liu 2021's 125k PBMCs got the backend killed. Refused when nothing is free."""
     _register(Path(tmp_data_dir), "x", _dataset())
     await dataset_manager.get_or_load_dataset("x")
+    assert not dataset_manager.get_dataset("x").adata.isbacked
     _budget(monkeypatch, limit=1.0, used=1.0)  # nothing free at all
-    calls = []
-    monkeypatch.setattr(dataset_manager, "hold_read", lambda *a, **k: calls.append(a) or (lambda: None))
-    r = await client.post(f"{API}/datasets/x/de/compare", json=COMPARE)
-    assert r.status_code == 200, r.text
-    assert calls == []
+    monkeypatch.setattr("scview.core.dataset_manager.REFUSAL_WAIT_SECONDS", 1)
+    r = await _post(client, "x", where)
+    assert r.status_code == 507, r.text
+    assert "x name" in r.json()["detail"]
+    assert dataset_manager._reads == {} and not dataset_manager._reading
 
 
 # -- refused, runs, released -----------------------------------------------------------

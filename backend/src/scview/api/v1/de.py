@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from scview.dependencies import get_dataset_manager
 from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
-from scview.core import large_mode, preflight, selection_facts, working_copy
+from scview.core import large_mode, memory_budget, preflight, selection_facts, working_copy
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import donor_candidates, pick_donor
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
@@ -458,13 +458,21 @@ def _methods(work, mask_a, mask_b, dataset_id: str, min_pct: float, top_n: int) 
 
 
 def _test_bytes(adaptor, keep, logreg: bool = False) -> int:
-    """Memory a cell-level test needs on a backed dataset, from its header: the tested
-    matrix's ``keep`` rows and the test on them (``preflight.de_read_need``); 0 when the
-    dataset is in memory or the file gives no estimate."""
-    if not getattr(adaptor.adata, "isbacked", False):
-        return 0
+    """Memory a cell-level test needs: the tested matrix's ``keep`` rows and the test on
+    them, from the file header of a backed dataset (``preflight.de_read_need``), from the
+    matrix itself in memory (``preflight.de_memory_need``: an unguarded test on 38k of
+    125k PBMCs got the backend killed); 0 when there is no estimate."""
     try:
         adata = adaptor.adata
+        if not getattr(adata, "isbacked", False):
+            if not memory_budget.read_budget().limited:
+                return 0  # no container limit: nothing is checked (DatasetManager.reserve)
+            from scview.core.pipeline import looks_like_counts
+
+            use_raw = _uses_raw(adata)
+            M = adata.raw.X if use_raw else adata.X
+            return preflight.de_memory_need(M, keep, logreg,
+                                            counts=not use_raw and looks_like_counts(M))
         h = preflight.read_header(adaptor.h5ad_path, "h5ad")
         return preflight.de_read_need(h.matrix("raw/X" if _uses_raw(adata) else "X"), int(keep.sum()), logreg)
     except Exception as e:  # noqa: BLE001 - never block a test on the estimate itself
@@ -501,13 +509,22 @@ def _counts_cells(adata, keep):
 
 def _counts_bytes(adaptor, keep) -> int:
     """Memory ``_counts_cells`` takes on a backed dataset, from its header (the choice
-    judged on the first rows); 0 when the dataset is in memory or there is no estimate."""
-    if not getattr(adaptor.adata, "isbacked", False):
-        return 0
+    judged on the first rows); in memory, pseudobulk's copy of the ``keep`` cells' counts
+    and their sums (``preflight.pseudobulk_memory_need``); 0 when there is no estimate."""
     from scview.core.pipeline import looks_like_counts
 
     try:
         adata = adaptor.adata
+        if not getattr(adata, "isbacked", False):
+            if not memory_budget.read_budget().limited:
+                return 0  # no container limit: nothing is checked (DatasetManager.reserve)
+            from scview.core.pseudobulk import PseudobulkError, raw_counts
+
+            try:
+                M = raw_counts(adata)[0]
+            except PseudobulkError:  # said by the test itself
+                return 0
+            return preflight.pseudobulk_memory_need(M, keep)
         raw = adata.raw
         in_layer = "counts" in adata.layers and looks_like_counts(adata.layers["counts"])
         raw_counts = raw is not None and looks_like_counts(raw.X)
