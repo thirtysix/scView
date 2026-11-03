@@ -205,7 +205,8 @@ async def search_public_datasets(
     disease: Annotated[str | None, Field(description="e.g. COVID-19")] = None,
     assay: Annotated[str | None, Field(description="e.g. 10x 3' v3")] = None,
     max_mb: Annotated[float | None, Field(gt=0, description="Largest download, MB.")] = None,
-    sort: Literal["cells", "size", "title", "newest"] = "cells",
+    sort: Annotated[Literal["cells", "size", "title", "newest"], Field(
+        description="Order: most cells first (default), largest download, title, or newest.")] = "cells",
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Search CELLxGENE Discover's public datasets (listing cached a day). Import one with
@@ -297,10 +298,14 @@ async def qc_filter_preview(
     dataset_id: DatasetId,
     mode: Annotated[Literal["mad", "fixed"] | None, Field(
         description="mad (default): each sample's outliers; fixed: the cut-offs below.")] = None,
-    min_genes: float | None = None, max_genes: float | None = None, min_counts: float | None = None,
+    min_genes: Annotated[float | None, Field(description="Fixed mode: fewest genes per cell (default 200).")] = None,
+    max_genes: Annotated[float | None, Field(description="Fixed mode: most genes per cell (0 = no cap).")] = None,
+    min_counts: Annotated[float | None, Field(description="Fixed mode: fewest counts per cell (0 = none).")] = None,
     max_pct_mt: Annotated[float | None, Field(description="% mito ceiling (default 20).")] = None,
-    mad_k: float | None = None, mad_k_mt: float | None = None,
-    drop_doublets: bool | None = None,
+    mad_k: Annotated[float | None, Field(description=(
+        "MAD mode: cut counts and genes per cell below each sample's median minus k MADs (log1p; default 5)."))] = None,
+    mad_k_mt: Annotated[float | None, Field(description="MAD mode: % mito above median + k MADs (default 3).")] = None,
+    drop_doublets: Annotated[bool | None, Field(description="Also drop the cells called doublets (default no).")] = None,
     sample_column: Annotated[str, Field(description="The samples (default: detected).")] = "",
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
@@ -455,7 +460,7 @@ async def get_recipe(dataset_id: DatasetId) -> str:
 async def get_replay_script(
     dataset_id: DatasetId,
     offset: Annotated[int, Field(ge=0, description="Character to start from (page through a long script).")] = 0,
-    max_chars: Annotated[int, Field(ge=500, le=60000)] = 7000,
+    max_chars: Annotated[int, Field(ge=500, le=60000, description="Page length in characters.")] = 7000,
 ) -> str:
     """The standalone Python (scanpy) script that replays the recorded steps from the input
     file, one page at a time (it is often longer than one page)."""
@@ -598,10 +603,11 @@ async def differential_expression(
         "wilcoxon / t-test (Welch) / logreg are cell-level. pseudobulk sums each donor's counts "
         "and tests with DESeq2 (or voom), the donor-aware test for conditions; between groups only."))] = "wilcoxon",
     replicate_key: Annotated[str | None, Field(description="Donor/sample column (default: detected).")] = None,
-    pb_method: Literal["deseq2", "voom", "voombygroup"] = "deseq2",
+    pb_method: Annotated[Literal["deseq2", "voom", "voombygroup"], Field(
+        description="Pseudobulk model: DESeq2 (default), limma-voom, or voomByGroup (a variance per group).")] = "deseq2",
     min_pct: Annotated[float | None, Field(ge=0, le=1, description="Cell-level: test genes detected in at least this share of either side (default 0.01).")] = None,
-    padj_max: Annotated[float, Field(gt=0, le=1)] = 0.05,
-    lfc_min: Annotated[float, Field(ge=0)] = 0.25,
+    padj_max: Annotated[float, Field(gt=0, le=1, description="Count and list genes at adjusted p at most this.")] = 0.05,
+    lfc_min: Annotated[float, Field(ge=0, description="And |log2 fold change| at least this.")] = 0.25,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Differential expression: A vs B of one column (optionally within one cell type), one
@@ -758,7 +764,8 @@ async def composition_test(
     sample_key: Annotated[str | None, Field(description="Donor / sample column (default: detected).")] = None,
     conditions: Annotated[list[str] | None, Field(description="Values to compare (default: all).")] = None,
     reference: Annotated[str | None, Field(description="Baseline condition (default: the first).")] = None,
-    transform: Literal["logit", "asin"] = "logit",
+    transform: Annotated[Literal["logit", "asin"], Field(description=(
+        "Scale the per-sample shares are tested on: logit (propeller's default) or arcsine square root."))] = "logit",
     paired: Annotated[bool | None, Field(description="Default: paired when every donor is in every condition.")] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
@@ -806,7 +813,8 @@ async def milo(
     sample_key: Annotated[str | None, Field(description="Donor / sample column (default: detected).")] = None,
     conditions: Annotated[list[str] | None, Field(description="[reference, tested] (default: the first two).")] = None,
     covariates: Annotated[list[str] | None, Field(description="Per-sample columns in the design (batch, sex).")] = None,
-    paired: bool | None = None,
+    paired: Annotated[bool | None, Field(description=(
+        "Donors in both conditions as pairs (default: paired when every donor is in both)."))] = None,
     label_key: Annotated[str | None, Field(description="Cell types to label neighbourhoods by.")] = None,
     prop: Annotated[float | None, Field(gt=0, le=1, description="Share of cells sampled as index cells.")] = None,
 ) -> str:
@@ -825,13 +833,16 @@ async def milo(
 @tool(READ)
 async def expression_by_group(
     dataset_id: DatasetId,
-    genes: Annotated[list[str], Field(min_length=1, max_length=300)],
+    genes: Annotated[list[str], Field(min_length=1, max_length=300, description="Gene symbols, up to 300.")],
     groupby: Annotated[str, Field(description="Obs column (default: the active clustering).")] = "",
-    layer: Annotated[str, Field(description="Expression layer (default: the dataset's).")] = "",
+    layer: Annotated[str, Field(description=(
+        "Expression layer (default: the dataset's own default, which can be raw COUNTS, e.g. 'raw'; "
+        "the result names the layer used); get_dataset lists the layers."))] = "",
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Each gene's mean expression and share of expressing cells in each group (the dot plot's
-    numbers). mean is over all of a group's cells; fraction is the share with a value above 0."""
+    numbers). mean is over all of a group's cells; fraction is the share with a value above 0.
+    The default layer may be raw counts (then mean is mean counts): the result names it."""
     d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
     g = d["groups"][: clamp(limit)]
     out = {"dataset_id": dataset_id, "groupby": d["groupby"], "layer": d["layer"], "genes": d["genes"],
@@ -962,10 +973,12 @@ async def enrichment(
 @tool(READ)
 async def score_gene_set(
     dataset_id: DatasetId,
-    genes: Annotated[list[str], Field(min_length=1, max_length=2000)],
+    genes: Annotated[list[str], Field(min_length=1, max_length=2000, description="The set's gene symbols.")],
     groupby: Annotated[str, Field(description="Summarise the per-cell scores by this obs column "
                                               "(default: the active clustering).")] = "",
-    method: Literal["score_genes", "aucell", "ssgsea", "gsva"] = "score_genes",
+    method: Annotated[Literal["score_genes", "aucell", "ssgsea", "gsva"], Field(description=(
+        "score_genes: scanpy's mean minus a matched control set (default); aucell: the set's share of "
+        "each cell's top-ranked genes; ssgsea / gsva: rank walks (refused on very large data)."))] = "score_genes",
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Score every cell for a gene set (scanpy score_genes by default, or AUCell / ssGSEA /
@@ -1010,7 +1023,7 @@ async def get_result(
     dataset_id: DatasetId,
     result_id: Annotated[str, Field(description="From list_results or a tool's result_id.")],
     limit: Limit = DEFAULT_LIMIT,
-    offset: Annotated[int, Field(ge=0)] = 0,
+    offset: Annotated[int, Field(ge=0, description="Row to start from (page through a long table).")] = 0,
     sort_by: Annotated[str | None, Field(description="Column to sort by (ascending; prefix '-' for descending).")] = None,
 ) -> str:
     """A stored result's parameters and its table's rows (from offset, limit of them)."""

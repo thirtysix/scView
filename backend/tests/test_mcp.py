@@ -120,6 +120,8 @@ async def test_tools_listed_with_descriptions_strict_schemas_and_hints():
             "composition_test", "enrichment", "plot", "job_status", "cancel_job", "set_labels"} <= names
     for t in listed:
         assert t.description and len(t.description) > 30, t.name
+        for arg, prop in t.input_schema.get("properties", {}).items():
+            assert prop.get("description"), f"{t.name}.{arg} has no description"
         assert t.input_schema["type"] == "object" and t.input_schema["additionalProperties"] is False, t.name
         assert t.annotations is not None and t.annotations.destructive_hint is False, t.name
     by = {t.name: t for t in listed}
