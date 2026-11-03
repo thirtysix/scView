@@ -127,6 +127,10 @@ async def get_dataset(dataset_id: DatasetId) -> str:
         entry = {"name": c["name"], "dtype": c.get("dtype"), "n_unique": c.get("n_unique")}
         if c.get("values") is not None and (c.get("n_unique") or 99) <= 30:
             entry["values"] = c["values"]
+        if c.get("dtype") == "bool" and (c.get("n_unique") or 0) < 2:
+            # The route lists both for a bool column (its colour slots): name the one present.
+            vals = (await _get(f"{_ds(dataset_id)}/metadata/{c['name']}", format="json"))["values"]
+            entry["values"] = sorted({str(v) for v in vals if v is not None})
         cols.append(entry)
     out = pick(d, "id", "name", "status", "n_cells", "n_genes", "error_message", "active_clustering",
                "user_annotation_columns", "app_annotation_columns", "available_embeddings",

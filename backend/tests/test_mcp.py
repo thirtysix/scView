@@ -74,7 +74,7 @@ def _adata() -> ad.AnnData:
                         rate[10:20] = 12
                     rows.append(rng.poisson(rate))
                     obs.append({"donor_id": f"D{d}", "stim": cond, "cluster": typ,
-                                "day": 9 if cond == "CTRL" else 11})
+                                "day": 9 if cond == "CTRL" else 11, "is_primary_data": True})
     counts = np.asarray(rows, dtype=np.float32)
     obs = pd.DataFrame(obs, index=[f"c{i}" for i in range(len(rows))])
     for c in ("donor_id", "stim", "cluster"):
@@ -160,6 +160,7 @@ async def test_data_tools(client, dataset_manager):
     assert r["n_cells"] == 480 and r["n_genes"] == 40 and "X_umap" in r["available_embeddings"]
     cols = {c["name"]: c for c in r["obs_columns"]}
     assert cols["stim"]["values"] == ["CTRL", "STIM"] and r["large_mode"] is False
+    assert cols["is_primary_data"]["values"] == ["True"]  # only the value present
     r = await _call("describe_column", {"dataset_id": did, "column": "donor_id"})
     assert r["kind"] == "categories" and r["counts"][0][1] == 120
     r = await _call("describe_column", {"dataset_id": did, "column": "day"})
