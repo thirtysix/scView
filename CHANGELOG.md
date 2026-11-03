@@ -6,6 +6,51 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-11-03
+
+Batch 39: fixes found by re-analysing five published datasets through the MCP server (Wilk 2020, Jäkel 2019,
+Yang 2021, Otero-Garcia 2022, Liu 2021).
+
+### Fixed
+- **DE no longer copies `.raw`** for its transcriptome-size check. On Liu 2021 (125k PBMCs) that copy added 4.5 GB at
+  the peak and the backend was killed; the same classical-monocyte Wilcoxon (38,334 cells) now takes +0.8 GB. In-memory
+  DE (cell-level, pseudobulk, method comparison, audit) reserves its estimate and answers with a one-sentence 507 when
+  it cannot fit, before allocating.
+- **Neighbours, clustering and UMAP on a stored PCA read no expression matrix** and never convert a dataset to the
+  large-dataset layout. On Otero-Garcia's 96k neurons the run took 48 s instead of 196 s plus a conversion, and DE
+  stayed available.
+- **Gene-set scores use log-normalised values**, never raw counts held in `.raw` (every CELLxGENE import and Kang).
+  Scores on those datasets change: the old ones were wrong (Kang maximum 58.6, now 3.3).
+- Embedding plots draw when some cells have no coordinates (Jäkel: 4,903 of 17,799), and say how many were left out.
+- The first hand label on a dataset is saved in a fraction of a second (it rewrote the whole file: 11 s on 23k cells).
+- Adding a label column no longer marks DE, Milo or composition results stale unless they used that column.
+- The sex check no longer calls pooled-lane females "mixed" from ambient Y reads, and says when XIST is not in the
+  matrix.
+
+### Added
+- **Pseudobulk covariates** (sex, batch, age, chemistry): up to 4 per-sample columns in the DESeq2 and voom designs,
+  in the UI as "Adjust" chips. Voom matches limma 3.68.5 within 3e-11. A covariate that varies within a sample, or is
+  confounded or collinear with the condition, is refused in one sentence.
+- **Per-donor expression compares two chosen conditions** of a column with three or more values (a "Compare ... vs"
+  choice in the UI), names the difference's direction and lists the donor-groups left out.
+- **Warnings about replicates**: pseudobulk and composition warn when samples repeat a person (several samples per
+  donor), when donors sit on both sides of an unpaired design, and when a side has fewer than 3 donors; pseudobulk then
+  counts people, not samples.
+- Cell-level DE warns when the two sides' cells differ in sex share by 15 points or more, even when the donors balance
+  (Yang 2021: 7% vs 31%); with sex as a pseudobulk covariate the sex warning says it is adjusted for.
+- **Composition**: shares within one compartment (e.g. T cells among immune cells), samples left out, and one stored
+  result per comparison.
+- Preflight says what converting to the large-dataset layout turns off; MCP `run_pipeline` needs
+  `allow_large_mode=true` to convert.
+- CELLxGENE imports check memory before downloading, from the file header read by HTTP ranges, and refuse a file that
+  cannot open (MCP `check_public_dataset`).
+- Milo reports k, the representation, and which samples fill each neighbourhood; the neighbours step takes a
+  representation (`neighbors_use_rep`).
+- GSEA runs are stored as results. Discover search matches words across collection descriptions.
+- MCP: `describe_column` summarises a numeric column per group, `get_dataset` lists every column, `expression_by_group`
+  pages, `score_gene_set` gives per-sample scores within groups with the donor-level test, cell filters refuse unknown
+  keys, a user column takes up to 2,000 labels, and a missing column's error names the closest ones.
+
 ## [0.57.0] - 2026-11-03
 
 ### Added

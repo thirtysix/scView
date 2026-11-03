@@ -63,7 +63,7 @@ reviewer can audit. scView closes both gaps:
   resolution 1.0") via confirm-gated, allow-listed actions, **answers "what is this?"** from a ✦ on any
   cluster, gene, marker, or pathway, and can **write a methods paragraph** from the provenance recipe.
 - **Drive it from your own AI agent (MCP).** Claude Code or any MCP client connects to `/mcp` and gets
-  31 tools over the same code the UI runs: import, processing, donor-aware statistics, enrichment and
+  32 tools over the same code the UI runs: import, processing, donor-aware statistics, enrichment and
   plots ([how](#use-scview-from-your-ai-agent-mcp)).
 - **AI-assisted assessment.** A deterministic assessor reports the state of ~15 preprocessing
   steps; an LLM advisor recommends the next steps with reasons and sized parameters; *you* always
@@ -497,7 +497,7 @@ bridge (needs Node.js). In `claude_desktop_config.json` (not tested by us; add
 }
 ```
 The tools: `list_datasets`, `get_dataset`, `describe_column`, `crosstab`, `memory_status`,
-`search_public_datasets` and `import_public_dataset` (CELLxGENE Discover), `assess_dataset`,
+`search_public_datasets`, `check_public_dataset` (memory before download) and `import_public_dataset` (CELLxGENE Discover), `assess_dataset`,
 `qc_filter_preview`, `sex_check`, `preflight`, `run_pipeline`, `get_recipe`, `get_replay_script`, `get_markers`,
 `annotate_celltypist`, `set_labels` (label the cells a filter selects), `subcluster`,
 `differential_expression` (cell-level or donor-aware pseudobulk), `compare_de_results`,
