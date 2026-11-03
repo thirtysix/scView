@@ -93,3 +93,52 @@ def test_an_added_obsm_entry_is_written_with_the_partial_write(tmp_path, monkeyp
     a.obsm["X_umap_s1_k10"] = a.obsm["X_umap_s1_k10"] * 2
     write_derived(a, path, path, uns_snapshot(a), obsm_keys=["X_umap_s1_k10"])
     np.testing.assert_array_equal(ad.read_h5ad(path).obsm["X_umap_s1_k10"][3], [12, 14])
+
+
+def test_first_label_save_copies_an_unchanged_source(tmp_path, monkeypatch):
+    """source_unchanged (a hand label, obs + uns only): the first save beside another file
+    copies it rather than re-compressing every matrix (81 s on Otero-Garcia's 96k cells)."""
+    src = _saved(tmp_path)
+    a = ad.read_h5ad(src)
+    a.uns["in_memory_only"] = "kept"  # gained since the read: a full write would have saved it
+    a.obsm["X_extra"] = np.ones((4, 2), dtype=np.float32)
+    before = uns_snapshot(a)
+    a.obs["label"] = pd.Categorical(["T", "T", "Unassigned", "Unassigned"])
+    a.uns["prov"] = "new"
+
+    def _no_full_write(*_a, **_k):
+        raise AssertionError("full write used")
+
+    monkeypatch.setattr(ad.AnnData, "write_h5ad", _no_full_write)
+    out = str(tmp_path / "out.h5ad")
+    write_derived(a, out, src, before, source_unchanged=True)
+    b = ad.read_h5ad(out)
+    assert list(b.obs["label"]) == ["T", "T", "Unassigned", "Unassigned"]
+    assert b.uns["prov"] == "new" and b.uns["in_memory_only"] == "kept"
+    np.testing.assert_array_equal(b.X, a.X)
+    np.testing.assert_array_equal(b.obsm["X_extra"], 1)
+    assert ad.read_h5ad(src).uns["prov"] == "old"  # the source is untouched
+
+
+def test_source_unchanged_writes_whole_when_the_source_is_an_old_format(tmp_path, monkeypatch):
+    import h5py
+
+    from scview.core import obs_writes
+
+    src = _saved(tmp_path)
+    assert obs_writes._current_h5ad(src)
+    old = str(tmp_path / "old.h5")
+    with h5py.File(old, "w") as f:  # no root encoding: as anndata before 0.8 wrote it
+        f.create_dataset("X", data=np.zeros((2, 2)))
+    assert not obs_writes._current_h5ad(old) and not obs_writes._current_h5ad(str(tmp_path / "none"))
+    monkeypatch.setattr(obs_writes, "_current_h5ad", lambda _p: False)
+    a = ad.read_h5ad(src)
+    before = uns_snapshot(a)
+    a.obs["label"] = "x"
+    calls = []
+    real = ad.AnnData.write_h5ad
+    monkeypatch.setattr(ad.AnnData, "write_h5ad",
+                        lambda self, *x, **k: (calls.append(1), real(self, *x, **k)))
+    out = str(tmp_path / "out.h5ad")
+    write_derived(a, out, src, before, source_unchanged=True)
+    assert calls and "label" in ad.read_h5ad(out).obs

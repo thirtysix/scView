@@ -21,12 +21,18 @@ from typing import Annotated, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_ITEMS = 20
 MAX_CONDITIONS = 40  # in the whole filter, groups included
 MAX_VALUES = 200
 MAX_NAME = 256
+
+
+class _Strict(BaseModel):
+    # An unknown key is refused, never ignored: a misspelt or invented one (an agent's
+    # ``"negate": true``) would otherwise select the very cells it meant to leave out.
+    model_config = ConfigDict(extra="forbid")
 
 
 class FilterError(ValueError):
@@ -38,20 +44,20 @@ class FilterError(ValueError):
         self.status = status
 
 
-class GeneCondition(BaseModel):
+class GeneCondition(_Strict):
     kind: Literal["gene"]
     gene: str = Field(min_length=1, max_length=MAX_NAME)
     op: Literal[">", ">=", "<", "<="]
     value: float = Field(allow_inf_nan=False)
 
 
-class CategoryCondition(BaseModel):
+class CategoryCondition(_Strict):
     kind: Literal["category"]
     column: str = Field(min_length=1, max_length=MAX_NAME)
     values: list[Annotated[str, Field(max_length=MAX_NAME)]] = Field(min_length=1, max_length=MAX_VALUES)
 
 
-class RangeCondition(BaseModel):
+class RangeCondition(_Strict):
     kind: Literal["range"]
     column: str = Field(min_length=1, max_length=MAX_NAME)
     min: float | None = Field(default=None, allow_inf_nan=False)
@@ -69,7 +75,7 @@ class RangeCondition(BaseModel):
 Condition = Annotated[GeneCondition | CategoryCondition | RangeCondition, Field(discriminator="kind")]
 
 
-class ConditionGroup(BaseModel):
+class ConditionGroup(_Strict):
     kind: Literal["group"]
     op: Literal["and", "or"]
     conditions: list[Condition] = Field(min_length=1, max_length=MAX_ITEMS)
@@ -78,7 +84,7 @@ class ConditionGroup(BaseModel):
 Item = Annotated[GeneCondition | CategoryCondition | RangeCondition | ConditionGroup, Field(discriminator="kind")]
 
 
-class CellFilter(BaseModel):
+class CellFilter(_Strict):
     op: Literal["and", "or"]
     items: list[Item] = Field(min_length=1, max_length=MAX_ITEMS)
     # Expression layer the gene conditions read ("" = the dataset's default).

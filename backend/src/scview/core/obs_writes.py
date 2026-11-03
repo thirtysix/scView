@@ -125,11 +125,13 @@ def editable(adaptor):
 
 def save_edit(adaptor, adata, output_path: str, uns_before: dict[str, int] | None = None,
               obsm_keys: tuple[str, ...] | list[str] | None = (),
-              obsp_keys: tuple[str, ...] | list[str] | None = (), var: bool = False) -> None:
+              obsp_keys: tuple[str, ...] | list[str] | None = (), var: bool = False,
+              source_unchanged: bool = False) -> None:
     """Save an obs / uns (/ obsm / obsp) edit of ``editable(adaptor)``: ``write_derived``,
     or for a large dataset its obs, the uns entries the edit replaced or removed,
     ``obsm_keys`` and ``obsp_keys`` written into its derived h5ad in place, X neither
-    read nor copied. ``var``: the edit changed var too."""
+    read nor copied. ``var``: the edit changed var too. ``source_unchanged``: see
+    ``write_derived``."""
     if getattr(adaptor, "is_large", False):
         from scview.core import large_mode
         from scview.core.dataset_manager import large_derived
@@ -139,7 +141,8 @@ def save_edit(adaptor, adata, output_path: str, uns_before: dict[str, int] | Non
         adaptor.write_in_place(obs=True, uns_keys=changed, uns_removed=removed,
                                obsm_keys=list(obsm_keys or ()), obsp_keys=list(obsp_keys or ()), var=var)
         return
-    write_derived(adata, output_path, adaptor.h5ad_path, uns_before, obsm_keys, obsp_keys, var=var)
+    write_derived(adata, output_path, adaptor.h5ad_path, uns_before, obsm_keys, obsp_keys, var=var,
+                  source_unchanged=source_unchanged)
 
 
 def uns_snapshot(adata) -> dict[str, int]:
@@ -156,6 +159,7 @@ def write_derived(
     obsm_keys: tuple[str, ...] | list[str] | None = (),
     obsp_keys: tuple[str, ...] | list[str] | None = (),
     var: bool = False,
+    source_unchanged: bool = False,
 ) -> None:
     """Write ``adata`` to its derived file: beside it first, then swapped in, so a
     failed write leaves the old file and a backed dataset reading it intact.
@@ -168,6 +172,10 @@ def write_derived(
     ``obsm_keys``: obsm entries the edit set or removed, rewritten the same way;
     ``obsp_keys`` the same for obsp (a graph, core/wnn.py); ``var``: var rewritten too. A backed
     ``adata`` is saved the same way from ``source_path``, wherever that is: its matrices were never read in.
+    ``source_unchanged``: the caller's edit touched only obs, uns and the keys named, so the
+    in-memory matrices are still ``source_path``'s (the first hand label on a dataset with
+    no derived file yet): copied too, when that file is a current-format h5ad, rather than
+    re-compressed (81 s on a 96k-cell, 1.2 GB file).
     """
     from scview.core import uns_history
 
@@ -182,7 +190,8 @@ def write_derived(
         uns_before is not None
         and source_path
         and (getattr(adata, "isbacked", False)
-             or (os.path.exists(output_path) and os.path.samefile(source_path, output_path)))
+             or (os.path.exists(output_path) and os.path.samefile(source_path, output_path))
+             or (source_unchanged and _current_h5ad(source_path)))
     ):
         import h5py
         from anndata.io import write_elem
@@ -202,10 +211,15 @@ def write_derived(
                     if key in group:
                         del group[key]
                 for key, value in adata.uns.items():
-                    if uns_before.get(key) != id(value):
+                    # From another file (source_unchanged), also what the dataset gained in
+                    # memory since it was read (as a full write would save it).
+                    if uns_before.get(key) != id(value) or (source_unchanged and key not in group):
                         if key in group:
                             del group[key]
                         write_elem(group, key, value)
+                if source_unchanged:
+                    obsm_keys = [*(obsm_keys or ()),
+                                 *(k for k in adata.obsm if "obsm" not in f or k not in f["obsm"])]
                 if obsm_keys and "obsm" not in f:
                     write_elem(f, "obsm", {})
                 for key in obsm_keys or ():
@@ -226,3 +240,16 @@ def write_derived(
     else:
         adata.write_h5ad(partial, compression="gzip")
     os.replace(partial, output_path)
+
+
+def _current_h5ad(path: str) -> bool:
+    """An h5ad written by anndata 0.8 or later (each element names its encoding), so obs
+    and uns written into a copy of it read back with the rest."""
+    import h5py
+
+    try:
+        with h5py.File(path, "r") as f:
+            enc = f.attrs.get("encoding-type")
+            return (enc.decode() if isinstance(enc, bytes) else enc) == "anndata"
+    except (OSError, ValueError):
+        return False

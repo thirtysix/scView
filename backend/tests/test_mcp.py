@@ -202,6 +202,14 @@ async def test_markers_labels_by_filter_and_subcluster(client, dataset_manager):
     text = await _call("set_labels", {"dataset_id": did, "column": "sample", "label": "x", "filter": {
         "op": "and", "items": [{"kind": "category", "column": "donor_id", "values": ["nobody"]}]}}, error=True)
     assert "No cell matches" in text
+    # An unknown filter key is refused (Otero-Garcia: "negate" was ignored and relabelled
+    # the cells it meant to leave out); nothing is written.
+    text = await _call("set_labels", {"dataset_id": did, "column": "sample", "label": "x", "filter": {
+        "op": "and", "items": [{"kind": "category", "column": "donor_id", "values": ["D0"],
+                                "negate": True}]}}, error=True)
+    assert "negate" in text
+    r = await _call("describe_column", {"dataset_id": did, "column": "sample"})
+    assert dict(r["counts"]) == {"Unassigned": 420, "D0_d11": 60}
     r = await _call("subcluster", {"dataset_id": did, "column": "cluster", "group": "A", "resolution": 0.3})
     assert r["column"] == "cluster_sub"
     r = await _call("get_recipe", {"dataset_id": did})

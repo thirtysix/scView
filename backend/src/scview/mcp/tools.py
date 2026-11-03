@@ -53,7 +53,8 @@ Filter = Annotated[CellFilter, Field(description=(
     '{"op":"and","items":[{"kind":"category","column":"donor_id","values":["C1"]},'
     '{"kind":"range","column":"DPS","min":11,"max":11}]}. Items: category (column, values), '
     "range (column, min and/or max), gene (gene, op >,>=,<,<=, value) or a group "
-    '{"kind":"group","op":"or","conditions":[...]}.'))]
+    '{"kind":"group","op":"or","conditions":[...]}. No other keys (an unknown one is refused) and '
+    "no negation: list the values to keep instead."))]
 
 
 P0_NOTE = ("A p value of 0 is what the test returned: below double precision (under about 1e-300), "
@@ -562,14 +563,15 @@ async def set_labels(
         "Create the column (every other cell 'Unassigned'). False: write into an existing user column."))] = False,
 ) -> str:
     """Give every cell matching a filter one label in a user annotation column (as a lasso and
-    "Label" in the UI): name a cluster ({"kind":"category","column":"leiden","values":["3"]}),
-    or build a column such as a sample id from donor AND day. Saved with the dataset."""
+    "Label" in the UI): name a cluster (filter {"op":"and","items":[{"kind":"category",
+    "column":"leiden","values":["3"]}]}), or build a column such as a sample id from donor AND
+    day. An unknown key in the filter is refused. Saved with the dataset."""
     idx = await _indices(dataset_id, filter)
     if len(idx) == 0:
         raise ToolError("No cell matches the filter; nothing was labelled.")
     r = await _post(f"{_ds(dataset_id)}/labels", {"column": column, "label": label,
                                                     "indices": idx.tolist(), "new_column": new_column})
-    out = pick(r, "column", "label", "created")
+    out = pick(r, "column", "label", "created", "n_labels", "note")
     out.update(dataset_id=dataset_id, n_labelled=int(len(idx)),
                n_changed=sum(len(g.get("indices") or []) for g in r.get("previous") or []))
     return dumps(out)

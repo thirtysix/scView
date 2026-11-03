@@ -32,8 +32,12 @@ UNASSIGNED = "Unassigned"
 
 LABEL_MAX = 80
 COLUMN_MAX = 64
-# Pickers and markers handle at most 100 groups per column.
-MAX_LABELS = 100
+# The UI's group pickers (colour by, markers, ...) list columns of at most 100 values;
+# a bigger hand-label column (a sample x cell-type id an agent builds: 670 labels for
+# Liu 2021) still works in filters, per-donor tests and crosstabs, and the answer says
+# the pickers leave it out. The cap keeps a column a grouping, not one label per cell.
+UI_MAX_GROUPS = 100
+MAX_LABELS = 2000
 # A letter first, then letters, digits, space, "_", "-" or ".". No "/": h5py
 # would read it as a path separator when the file is written.
 _COLUMN_RE = re.compile(r"[A-Za-z][A-Za-z0-9 _.\-]*")
@@ -181,13 +185,19 @@ def label_cells(
     _record(adata, "label_cells", {
         "column": column, "label": clean, "n_cells": int(idx.size), "new_column": new_column,
     })
-    return {
+    n_labels = len(adata.obs[column].cat.categories)
+    out = {
         "column": column,
         "label": clean,
         "n_cells": int(idx.size),
         "created": new_column,
         "previous": previous,
+        "n_labels": n_labels,
     }
+    if n_labels > UI_MAX_GROUPS:
+        out["note"] = (f"'{column}' has {n_labels} labels: the UI's group pickers list columns of at "
+                       f"most {UI_MAX_GROUPS}, so they leave it out; filters and tests still take it.")
+    return out
 
 
 def restore(

@@ -64,7 +64,8 @@ async def _edit_and_save(
             work = editable(adaptor)
             before = uns_snapshot(work)
             result = edit(work)
-            save_edit(adaptor, work, output_path, before)
+            # Labels change obs and uns only: the matrices are copied, not rewritten.
+            save_edit(adaptor, work, output_path, before, source_unchanged=True)
             return result
 
         try:
