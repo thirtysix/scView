@@ -152,14 +152,103 @@ async def get_dataset(dataset_id: DatasetId) -> str:
     return dumps(out)
 
 
+async def _column_error(dataset_id: str, name: str) -> ToolError:
+    """A column that is not there: the closest names, and every column when there are few."""
+    names = [c["name"] for c in (await _get(_ds(dataset_id))).get("obs_columns") or []]
+    return ToolError(column_message(name, names))
+
+
+def column_message(name: str, names: list[str]) -> str:
+    """'Column ... not found.' with the closest of ``names`` (spelling, or containing it),
+    and all of them when there are at most 60."""
+    import difflib
+
+    names = [str(n) for n in names]
+    lower = {n.lower(): n for n in names}
+    close = difflib.get_close_matches(name.lower(), list(lower), n=5, cutoff=0.5)
+    close += [lower[n] for n in lower if name.lower() in n and lower[n] not in close][: 5 - len(close)]
+    close = [lower.get(c, c) for c in close]
+    msg = f"Column '{name}' not found."
+    if close:
+        msg += f" Closest: {', '.join(close)}."
+    if len(names) <= 60:
+        msg += f" The {len(names)} obs columns: {', '.join(names)}."
+    else:
+        msg += f" The dataset has {len(names)} obs columns: get_dataset lists them all."
+    return msg
+
+
+async def _obs_values(dataset_id: str, column: str) -> pd.Series:
+    """One obs column's values (missing as None), or the closest names when it is not there."""
+    try:
+        d = await api.get(f"{_ds(dataset_id)}/metadata/{column}", format="json")
+    except api.RouteError as e:
+        if e.status == 404 and e.detail.startswith("Column"):
+            raise await _column_error(dataset_id, column) from None
+        raise _fail(e) from None
+    return pd.Series(d["values"], dtype=object)
+
+
+def _is_numeric(s: pd.Series) -> bool:
+    present = s.dropna()
+    if present.empty or present.map(type).eq(bool).any():
+        return False
+    return bool(pd.to_numeric(present, errors="coerce").notna().all())
+
+
+def _by_group(values: pd.Series, groups: list[pd.Series], names: list[str]) -> list[dict[str, Any]]:
+    """n, missing, mean, median and quartiles of a numeric column per group (cells whose
+    group is missing are left out)."""
+    frame = pd.DataFrame({f"g{i}": g.astype(str).where(g.notna()) for i, g in enumerate(groups)})
+    frame["v"] = pd.to_numeric(values, errors="coerce")
+    keys = [f"g{i}" for i in range(len(groups))]
+    out = []
+    for key, sub in frame.dropna(subset=keys).groupby(keys, sort=True, observed=True):
+        key = key if isinstance(key, tuple) else (key,)
+        v = sub["v"].dropna()
+        rec: dict[str, Any] = dict(zip(names, key))
+        rec.update(n=int(len(sub)), n_missing=int(len(sub) - len(v)))
+        if len(v):
+            q = v.quantile([0.25, 0.5, 0.75]).tolist()
+            rec.update(mean=float(v.mean()), median=q[1], q25=q[0], q75=q[2], iqr=q[2] - q[0],
+                       min=float(v.min()), max=float(v.max()))
+        out.append(rec)
+    return out
+
+
 @tool(READ)
-async def describe_column(dataset_id: DatasetId,
-                          column: Annotated[str, Field(description="An obs (cell metadata) column.")],
-                          limit: Limit = DEFAULT_LIMIT) -> str:
+async def describe_column(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(description="An obs (cell metadata) column.")],
+    groupby: Annotated[list[str] | None, Field(max_length=2, description=(
+        "One or two obs columns (e.g. ['sample'] or ['donor_id', 'condition']): summarise a numeric "
+        "column per group (n, mean, median, quartiles, IQR) instead of over every cell."))] = None,
+    limit: Limit = DEFAULT_LIMIT,
+    offset: Annotated[int, Field(ge=0, description="With groupby: the group row to start from.")] = 0,
+) -> str:
     """One obs column: each value's cell count (largest first) for a category, or a
-    numeric summary (min, quartiles, max, mean, missing)."""
-    d = await _get(f"{_ds(dataset_id)}/metadata/{column}", format="json")
-    s = pd.Series(d["values"])
+    numeric summary (min, quartiles, max, mean, missing). With groupby, a numeric column
+    (depth, genes per cell, % mito, doublet score) per group: per sample, or per donor x
+    condition. A missing column's error names the closest columns."""
+    s = await _obs_values(dataset_id, column)
+    if groupby:
+        if column in groupby:
+            raise ToolError("groupby must name other columns than the one described.")
+        if not _is_numeric(s):
+            raise ToolError(f"'{column}' is not numeric: count its values per group with crosstab "
+                            f"(row '{column}', col '{groupby[0]}').")
+        groups = [await _obs_values(dataset_id, g) for g in groupby]
+        recs = _by_group(s, groups, list(groupby))
+        n = clamp(limit)
+        cols = [*groupby, "n", "n_missing", "mean", "median", "q25", "q75", "iqr", "min", "max"]
+        out = {"dataset_id": dataset_id, "column": column, "groupby": list(groupby),
+               "n_cells": int(len(s)), "n_missing": int(s.isna().sum()),
+               "n_without_group": int(sum(pd.concat(groups, axis=1).isna().any(axis=1))),
+               "offset": offset, **table(recs[offset:], cols, n)}
+        out["n_total"] = len(recs)
+        if offset + n < len(recs):
+            out["next_offset"] = offset + n
+        return dumps(out, _max_chars(limit))
     out: dict[str, Any] = {"dataset_id": dataset_id, "column": column, "n_cells": int(len(s)),
                            "n_missing": int(s.isna().sum())}
     numeric = pd.to_numeric(s, errors="coerce")
@@ -184,7 +273,15 @@ async def crosstab(dataset_id: DatasetId,
                    limit: Limit = DEFAULT_LIMIT) -> str:
     """Cell counts for every pair of values of two obs columns (e.g. donor x condition,
     cell type x condition): which donors are in which condition, and how many cells."""
-    d = await _get(f"{_ds(dataset_id)}/metadata/crosstab", row=row, col=col)
+    try:
+        d = await api.get(f"{_ds(dataset_id)}/metadata/crosstab", row=row, col=col)
+    except api.RouteError as e:
+        if e.status == 404 and "not found" in e.detail.lower() and "dataset" not in e.detail.lower():
+            names = [c["name"] for c in (await _get(_ds(dataset_id))).get("obs_columns") or []]
+            missing = next((c for c in (row, col) if c not in names), None)
+            if missing is not None:
+                raise ToolError(column_message(missing, names)) from None
+        raise _fail(e) from None
     return dumps({"dataset_id": dataset_id, **d}, _max_chars(limit))
 
 
@@ -1140,7 +1237,7 @@ async def plot(
         try:
             col = adaptor.get_obs_column(within_column)
         except KeyError:
-            raise ToolError(f"Column '{within_column}' not found.")
+            raise ToolError(column_message(within_column, list(adaptor.adata.obs.columns)))
         mask = (col.astype(str).where(col.notna()) == str(within_value)).to_numpy()
         if not mask.any():
             raise ToolError(f"No cell has {within_column} = '{within_value}'.")
@@ -1172,7 +1269,7 @@ async def plot(
                 try:
                     values = adaptor.get_obs_column(color_by)
                 except KeyError:
-                    raise ToolError(f"Column '{color_by}' not found.")
+                    raise ToolError(column_message(color_by, list(adaptor.adata.obs.columns)))
                 label = color_by
             elif gene:
                 values, label = _values_of_gene(gene), gene
@@ -1209,7 +1306,7 @@ async def plot(
         try:
             groups = adaptor.get_obs_column(by)
         except KeyError:
-            raise ToolError(f"Column '{by}' not found.")
+            raise ToolError(column_message(by, list(adaptor.adata.obs.columns)))
         values = _values_of_gene(gene)
         if focus is not None:  # the subgroup's cells only, sampled among themselves
             values, groups = values[focus], groups[focus]

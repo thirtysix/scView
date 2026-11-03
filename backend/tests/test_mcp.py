@@ -181,9 +181,46 @@ async def test_data_tools(client, dataset_manager):
     r = await _call("preflight", {"dataset_id": did, "steps": ["pca", "neighbors"]})
     assert r["verdict"]["level"] in ("fits", "tight", "wont_fit") and r["steps"]["rows"][0][0] == "pca"
     text = await _call("describe_column", {"dataset_id": did, "column": "nope"}, error=True)
-    assert "Column 'nope' not found." in text
+    assert "Column 'nope' not found." in text and "donor_id" in text  # names the columns
+    text = await _call("describe_column", {"dataset_id": did, "column": "donor"}, error=True)
+    assert "Closest: donor_id" in text
+    text = await _call("crosstab", {"dataset_id": did, "row": "donor_id", "col": "condition"}, error=True)
+    assert "Column 'condition' not found." in text and "stim" in text
+    text = await _call("plot", {"dataset_id": did, "color_by": "clusters"}, error=True)
+    assert "Closest: cluster" in text
     text = await _call("get_dataset", {"dataset_id": "missing"}, error=True)
     assert "not found" in text.lower()
+
+
+async def test_describe_column_per_group(client, dataset_manager):
+    """A numeric column per donor x condition (Jäkel, Yang, Otero-Garcia, Liu: depth or %
+    mito per sample needed set_labels or crosstab proxies)."""
+    did = _register(dataset_manager)
+    r = await _call("describe_column", {"dataset_id": did, "column": "day", "groupby": ["donor_id", "stim"]})
+    assert r["groupby"] == ["donor_id", "stim"] and r["n_total"] == 8
+    cols = r["columns"]
+    first = dict(zip(cols, r["rows"][0]))
+    assert first["donor_id"] == "D0" and first["stim"] == "CTRL" and first["n"] == 60
+    assert first["median"] == 9 and first["iqr"] == 0 and first["mean"] == 9
+    r = await _call("describe_column", {"dataset_id": did, "column": "day", "groupby": ["donor_id"],
+                                        "limit": 2, "offset": 2})
+    assert [row[0] for row in r["rows"]] == ["D2", "D3"] and r["n_total"] == 4 and "next_offset" not in r
+    assert dict(zip(r["columns"], r["rows"][0]))["median"] == 10  # half day 9, half day 11
+    text = await _call("describe_column", {"dataset_id": did, "column": "stim", "groupby": ["donor_id"]},
+                       error=True)
+    assert "not numeric" in text and "crosstab" in text
+    text = await _call("describe_column", {"dataset_id": did, "column": "day", "groupby": ["donr"]},
+                       error=True)
+    assert "Closest: donor_id" in text
+
+
+def test_by_group_leaves_out_missing_values_and_groups():
+    v = pd.Series([1.0, 2.0, None, 4.0, 10.0], dtype=object)
+    g = pd.Series(["a", "a", "a", None, "b"], dtype=object)
+    recs = tools._by_group(v, [g], ["s"])
+    assert recs[0] == {"s": "a", "n": 3, "n_missing": 1, "mean": 1.5, "median": 1.5, "q25": 1.25,
+                       "q75": 1.75, "iqr": 0.5, "min": 1.0, "max": 2.0}
+    assert recs[1]["s"] == "b" and recs[1]["n"] == 1 and len(recs) == 2
 
 
 async def test_markers_labels_by_filter_and_subcluster(client, dataset_manager):
