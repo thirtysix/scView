@@ -1005,21 +1005,35 @@ async def expression_by_group(
         "Expression layer (default: the dataset's own default, which can be raw COUNTS, e.g. 'raw'; "
         "the result names the layer used); get_dataset lists the layers."))] = "",
     limit: Limit = DEFAULT_LIMIT,
+    offset: Annotated[int, Field(ge=0, description=(
+        "The group to start from: page through many groups with the result's next_offset."))] = 0,
 ) -> str:
     """Each gene's mean expression and share of expressing cells in each group (the dot plot's
     numbers). mean is over all of a group's cells; fraction is the share with a value above 0.
-    The default layer may be raw counts (then mean is mean counts): the result names it."""
+    The default layer may be raw counts (then mean is mean counts): the result names it.
+    Groups come a page at a time (at most limit, fewer when many genes): next_offset gives the
+    next page."""
     d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
-    g = d["groups"][: clamp(limit)]
     out = {"dataset_id": dataset_id, "groupby": d["groupby"], "layer": d["layer"], "genes": d["genes"],
-           "groups": g, "mean": d["mean"][: len(g)], "fraction": d["fraction"][: len(g)],
+           "n_groups": len(d["groups"]), "offset": offset,
            "note": "mean[i][j] and fraction[i][j] are group i, gene j"}
-    if len(d["groups"]) > len(g):
-        out["n_groups"] = len(d["groups"])
     missing = [x for x in genes if x not in d["genes"]]
     if missing:
         out["genes_missing"] = missing
-    return dumps(out, _max_chars(limit))
+    # As many groups as fit the page (Liu 2021: 197 genes x 100 groups came back as 25 groups
+    # with no way to the rest), each whole.
+    budget = _max_chars(limit) - len(dumps(out, 10**9)) - 200
+    end = offset
+    while end < min(len(d["groups"]), offset + clamp(limit)):
+        size = len(dumps([d["groups"][end], d["mean"][end], d["fraction"][end]], 10**9))
+        if end > offset and size > budget:
+            break
+        budget -= size
+        end += 1
+    out.update(groups=d["groups"][offset:end], mean=d["mean"][offset:end], fraction=d["fraction"][offset:end])
+    if end < len(d["groups"]):
+        out["next_offset"] = end
+    return dumps(out, 10**9)
 
 
 async def _de_table(dataset_id: str, result_id: str) -> pd.DataFrame:

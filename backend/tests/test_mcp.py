@@ -286,6 +286,31 @@ async def test_markers_labels_by_filter_and_subcluster(client, dataset_manager):
 
 # --- statistics --------------------------------------------------------------------------------
 
+async def test_expression_by_group_pages_through_the_groups(client, dataset_manager):
+    """Liu 2021: 197 genes x 100 groups came back as 25 groups, no offset. Every group
+    once, each whole, a page at a time."""
+    did = _register(dataset_manager)
+    seen, offset = [], 0
+    while True:
+        r = await _call("expression_by_group", {"dataset_id": did, "genes": GENES, "groupby": "donor_id",
+                                                "limit": 3, "offset": offset})
+        assert "truncated" not in r and r["n_groups"] == 4
+        assert len(r["mean"]) == len(r["fraction"]) == len(r["groups"]) and len(r["mean"][0]) == 40
+        seen += r["groups"]
+        if "next_offset" not in r:
+            break
+        offset = r["next_offset"]
+    assert seen == ["D0", "D1", "D2", "D3"]
+
+
+async def test_expression_by_group_page_holds_fewer_groups_when_genes_are_many(client, dataset_manager,
+                                                                                monkeypatch):
+    did = _register(dataset_manager)
+    monkeypatch.setattr(compact, "MAX_CHARS", 1500)  # a page of about two groups of 40 genes
+    r = await _call("expression_by_group", {"dataset_id": did, "genes": GENES, "groupby": "donor_id"})
+    assert 1 <= len(r["groups"]) < 4 and r["next_offset"] == len(r["groups"]) and "truncated" not in r
+
+
 async def test_de_per_donor_composition_and_enrichment(client, dataset_manager):
     did = _register(dataset_manager)
     de = await _call("differential_expression", {
