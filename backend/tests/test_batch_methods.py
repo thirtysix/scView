@@ -168,6 +168,30 @@ def test_bbknn_replaces_the_graph_and_the_neighbour_step_keeps_it():
     assert _run_neighbors(a, p) == {"use_rep": "X_pca"}
 
 
+def test_neighbors_use_rep_builds_on_the_named_representation():
+    """Jäkel 2019: to drop Harmony from the graph the agent re-ran PCA (no other way)."""
+    a = _adata()
+    p = PipelineParams(batch_key="batch", batch_method="harmony", n_neighbors=10)
+    _run_batch_correction(a, p)
+    chosen = PipelineParams(n_neighbors=10, neighbors_use_rep="X_pca")
+    assert _run_neighbors(a, chosen) == {"use_rep": "X_pca"}
+    assert a.uns["neighbors"]["params"]["use_rep"] == "X_pca" and "X_pca_harmony" in a.obsm
+    _record_pipeline_step(a, "neighbors", chosen, {"use_rep": "X_pca"})
+    rec = provenance.read_provenance(a)["history"][-1]["params"]
+    assert rec["neighbors_use_rep"] == "X_pca"
+    snippet = replay_script._neighbors(rec, None)
+    assert snippet.code == ["sc.pp.neighbors(adata, n_neighbors=10, use_rep='X_pca')"]
+    # Left out: the corrected PCs, as before (and the replay picks them the same way).
+    assert _run_neighbors(a, p) == {"use_rep": "X_pca_harmony"}
+    assert "X_pca_harmony" in "\n".join(replay_script._neighbors({"n_neighbors": 10}, None).code)
+    with pytest.raises(ValueError, match="neighbors_use_rep 'X_nope' is not in this dataset"):
+        _run_neighbors(a, PipelineParams(neighbors_use_rep="X_nope"))
+    # Named, a BBKNN graph is replaced rather than kept.
+    b = _adata()
+    _run_batch_correction(b, PipelineParams(batch_key="batch", batch_method="bbknn", n_neighbors=10))
+    assert _run_neighbors(b, chosen) == {"use_rep": "X_pca"}
+
+
 def test_unknown_batch_key_is_a_clear_error():
     with pytest.raises(ValueError, match="not found"):
         _run_batch_correction(_adata(), PipelineParams(batch_key="nope", batch_method="scanorama"))

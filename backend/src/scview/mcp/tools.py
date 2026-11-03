@@ -965,7 +965,11 @@ def _milo_result(job: jobs.Job) -> dict[str, Any]:
         r.pop(k, None)
     out = {"dataset_id": job.dataset_id, **r}
     if isinstance(nh, dict) and nh.get("spatial_fdr"):
-        cols = ["label", "label_fraction", "size", "log_fc", "pval", "spatial_fdr"]
+        cols = ["label", "label_fraction", "size", "n_counted", "log_fc", "pval", "spatial_fdr", "top_sample",
+                "top_sample_share"]
+        by_cond = list((nh.get("counts") or {}).values())
+        nh["n_counted"] = [int(sum(c[i] for c in by_cond)) for i in range(len(nh["spatial_fdr"]))] \
+            if by_cond else None
         recs = [{c: (nh.get(c) or [None] * (i + 1))[i] for c in cols} for i in range(len(nh["spatial_fdr"]))]
         recs.sort(key=lambda x: 1.0 if x["spatial_fdr"] is None else x["spatial_fdr"])
         out["top_neighbourhoods"] = table(recs, cols, 15)
@@ -986,7 +990,11 @@ async def milo(
 ) -> str:
     """Milo neighbourhood differential abundance between two conditions, donors as replicates,
     no clusters needed (a job: returns job_id; job_status gives the result: neighbourhoods
-    significant at spatial FDR and the labels they fall in). The dataset is not changed."""
+    significant at spatial FDR, the labels they fall in, the graph's k and representation,
+    and which sample fills each one: samples_in_significant). Cells in neither condition are
+    not counted but the neighbourhoods span the whole graph (the plan warns). Rebuild the graph
+    on another representation with run_pipeline(["neighbors"], {"neighbors_use_rep": "X_pca"}).
+    The dataset is not changed."""
     body = {"condition_key": condition_key, "sample_key": sample_key, "conditions": conditions,
             "covariates": covariates, "paired": paired, "label_key": label_key, "prop": prop}
     plan = await _post(f"{_ds(dataset_id)}/milo/plan", body)

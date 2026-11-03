@@ -2457,6 +2457,10 @@ def _neighbors(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(EXACT, ["# The BBKNN graph from batch correction is the neighbour graph "
                                "(kept, as scView did)."])
     k = p.get("n_neighbors", 15)
+    if p.get("neighbors_use_rep"):  # the representation was chosen (neighbors_use_rep)
+        return Snippet(EXACT, [
+            f"sc.pp.neighbors(adata, n_neighbors={_lit(k)}, use_rep={_lit(p['neighbors_use_rep'])})",
+        ])
     return Snippet(EXACT, [
         'use_rep = next((r for r in ("X_pca_harmony", "X_scanorama") if r in adata.obsm), "X_pca")',
         f"sc.pp.neighbors(adata, n_neighbors={_lit(k)}, use_rep=use_rep)",

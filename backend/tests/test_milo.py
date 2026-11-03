@@ -337,10 +337,76 @@ async def test_run_warns_when_the_graph_was_corrected_for_the_condition(
     a = synthetic()
     provenance.record_step(a, step="batch_correction", tool="harmony",
                            params={"batch_key": "cond", "batch_method": "harmony"})
+    a.obsm["X_pca_harmony"] = a.obsm["X_pca"].copy()
+    a.uns["neighbors"]["params"]["use_rep"] = "X_pca_harmony"  # the graph is on the corrected PCs
     _dataset(Path(dataset_manager.data_dir), a)
     r = await client.post("/api/v1/datasets/ds/milo/plan", json={"condition_key": "cond"})
     assert r.status_code == 200
     assert any("batch-corrected for 'cond'" in w for w in r.json()["warnings"])
+    assert r.json()["n_neighbors"] == 50 and r.json()["representation"] == "X_pca_harmony"
+
+
+async def test_no_batch_warning_once_the_graph_is_rebuilt_on_uncorrected_pcs(client, dataset_manager):
+    """Jäkel 2019: after the graph was rebuilt on X_pca, Milo still warned it was built on an
+    embedding batch-corrected for 'Sample' (read from the recipe, not the graph)."""
+    a = synthetic()
+    provenance.record_step(a, step="batch_correction", tool="harmony",
+                           params={"batch_key": "cond", "batch_method": "harmony"})
+    a.obsm["X_pca_harmony"] = a.obsm["X_pca"].copy()  # still held, but the graph is on X_pca
+    _dataset(Path(dataset_manager.data_dir), a)
+    r = await client.post("/api/v1/datasets/ds/milo/plan", json={"condition_key": "cond"})
+    assert r.status_code == 200
+    assert not any("batch-corrected" in w for w in r.json()["warnings"])
+
+
+def test_graph_batch_key():
+    a = synthetic()
+    assert milo.graph_batch_key(a, None) is None
+    assert milo.graph_batch_key(a, "Sample") is None  # graph on X_pca
+    a.uns["neighbors"]["params"]["use_rep"] = "X_scanorama"
+    assert milo.graph_batch_key(a, "Sample") == "Sample"
+    del a.uns["neighbors"]["params"]["use_rep"]  # a graph that does not say: as before
+    assert milo.graph_batch_key(a, "Sample") == "Sample"
+    a.uns["neighbors"]["params"].update(use_rep="X_pca", bbknn={"batch_key": "Sample"})
+    assert milo.graph_batch_key(a, "Sample") == "Sample"
+
+
+def test_samples_filling_the_significant_neighbourhoods():
+    """Yang 2021: the significant neighbourhoods were one patient's cells; the result now
+    names each neighbourhood's top sample and warns when most are one sample's."""
+    r = _run(synthetic(shift=3.0))
+    d = r.to_dict()
+    assert d["n_neighbors"] == 50 and d["representation"] == "X_pca"
+    n = d["n_nhoods"]
+    assert len(d["nhoods"]["top_sample"]) == len(d["nhoods"]["top_sample_share"]) == n
+    assert all(s.endswith(("(A)", "(B)")) for s in d["nhoods"]["top_sample"] if s)  # paired: donor (cond)
+    s = d["samples_in_significant"]
+    assert s["n_significant"] == d["n_significant"] and s["n_mostly_one_sample"] == 0  # 8 samples share
+    assert not any("one sample" in w for w in r.warnings)
+    # The share is the top sample's of the neighbourhood's counted cells.
+    i = int(np.argmax(r.sizes))
+    assert 0 < d["nhoods"]["top_sample_share"][i] < 0.5
+    # When one sample fills the significant ones, the summary names it.
+    r.top_sample = ["d1 (B)"] * n
+    r.top_sample_share = np.full(n, 0.9)
+    s = r.sample_summary()
+    assert s["n_mostly_one_sample"] == s["n_significant"] and s["by_sample"][0]["sample"] == "d1 (B)"
+    old = milo.MiloResult(**{**{f: getattr(r, f) for f in r.__dataclass_fields__},
+                             "top_sample": None, "top_sample_share": None, "n_neighbors": None})
+    assert old.sample_summary() is None and json.dumps(old.to_dict())  # a result stored before
+
+
+def test_cells_outside_the_two_conditions_are_named():
+    """Jäkel 2019: a condition column set only on oligodendrocytes ('Unassigned' elsewhere)
+    gave neighbourhoods built on every cell, with no word of it."""
+    a = synthetic()
+    cond = a.obs["cond"].astype(str).to_numpy().copy()
+    cond[(a.obs["type"] != "t0").to_numpy()] = "Unassigned"
+    a.obs["ol_cond"] = pd.Categorical(cond)
+    p = milo.plan(a, "ol_cond", "donor", conditions=["A", "B"])
+    w = [x for x in p.warnings if "other than" in x]
+    assert w and "'Unassigned'" in w[0] and "whole graph" in w[0]
+    assert not any("other than" in x for x in milo.plan(a, "cond", "donor").warnings)
 
 
 def test_grounding_drops_a_result_whose_columns_went():
