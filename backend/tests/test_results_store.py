@@ -542,3 +542,32 @@ async def test_phase3_api(client, dataset_manager):
     with zipfile.ZipFile(__import__("io").BytesIO(r.content)) as z:
         names = z.namelist()
         assert any(n.endswith(".h5ad") for n in names) and "manifest.json" in names
+
+
+async def test_a_result_still_being_written_is_found(client, dataset_manager, tmp_data_dir, monkeypatch):
+    """Pilot: an agent asked for the enrichment of a pseudobulk DE in the call after it, and
+    the table read ran before the background write had landed: 404 "No such stored result"
+    on 3 of 20 datasets. A miss now waits for the queued writes once."""
+    import threading
+    import uuid
+
+    did = "racing"
+    (tmp_data_dir / "uploads" / did).mkdir(parents=True)
+    (tmp_data_dir / "uploads" / did / "metadata.json").write_text('{"name": "x"}')
+    gate = threading.Event()
+    real_save = results_store._save
+
+    def slow_save(*a, **k):
+        gate.wait(10)
+        real_save(*a, **k)
+
+    monkeypatch.setattr(results_store, "_save", slow_save)
+    rid = uuid.uuid4().hex
+    results_store.keep(did, "ppi", [{"label": "q"}], label="late", result_id=rid)
+    assert results_store.entries(did) == []  # still queued
+    threading.Timer(0.3, gate.set).start()
+    r = await client.get(f"/api/v1/datasets/{did}/results/{rid}")
+    assert r.status_code == 200, r.text
+    assert r.json()["label"] == "late"
+    # a result that never existed is still a 404 (after one wait for the queue)
+    assert (await client.get(f"/api/v1/datasets/{did}/results/{uuid.uuid4().hex}")).status_code == 404
