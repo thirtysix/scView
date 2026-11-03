@@ -329,7 +329,9 @@ async def memory_status() -> str:
 
 @tool(WEB_READ)
 async def search_public_datasets(
-    query: Annotated[str | None, Field(description="Words in the title or collection.")] = None,
+    query: Annotated[str | None, Field(description=(
+        "Words (not a phrase), each anywhere in the title, collection name or the collection's "
+        "description (its abstract). With no dataset holding them all, those with the most."))] = None,
     organism: Annotated[str | None, Field(description="e.g. Homo sapiens")] = None,
     tissue: Annotated[str | None, Field(description="e.g. blood")] = None,
     disease: Annotated[str | None, Field(description="e.g. COVID-19")] = None,
@@ -355,8 +357,11 @@ async def search_public_datasets(
             if isinstance(e.get(k), list):
                 e[k] = e[k][:5]
         out.append(e)
-    return dumps({"datasets": out, "n_total": d.get("total", d.get("n_total", len(out))),
-                  "fetched_at": d.get("fetched_at")}, _max_chars(limit))
+    res = {"datasets": out, "n_total": d.get("total", d.get("n_total", len(out))),
+           "fetched_at": d.get("fetched_at")}
+    if d.get("partial"):
+        res["partial"] = {**d["partial"], "note": "No dataset has every word: these have the most."}
+    return dumps(res, _max_chars(limit))
 
 
 def _line(event: str, data: Any) -> str | None:
