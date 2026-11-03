@@ -2160,6 +2160,7 @@ def _finish_run(
     output_path: str | None,
     control: RunControl | None,
     outcome: step_failures.Outcome | None = None,
+    write: Callable[[ad.AnnData, str], None] | None = None,
 ) -> None:
     """Finalise and save a run that reached its end, also one that finished with
     errors (what ran is saved; ``run_errors`` in provenance lists what did not). A
@@ -2169,7 +2170,9 @@ def _finish_run(
     it was before the run.
 
     The file is written beside the derived file and then swapped in, so a backend
-    killed mid-write (out of memory) leaves the previous file whole."""
+    killed mid-write (out of memory) leaves the previous file whole. ``write(adata,
+    path)`` writes it (default: ``adata.write_h5ad``, gzip); a run on the dataset without
+    its matrices (``large_run.run_light``) copies them from its file instead."""
     if outcome is not None:
         step_failures.settle_unrun(adata, outcome)  # markers of a column clustered again
         _end_status(result, outcome)
@@ -2188,7 +2191,10 @@ def _finish_run(
         partial = output_path + ".partial"
         uns_history.before_save(output_path, adata)  # markers / enrichment this run replaced
         try:
-            adata.write_h5ad(partial, compression="gzip")
+            if write is None:
+                adata.write_h5ad(partial, compression="gzip")
+            else:
+                write(adata, partial)
             os.replace(partial, output_path)
         except BaseException:
             Path(partial).unlink(missing_ok=True)
@@ -2228,6 +2234,7 @@ def run_pipeline(
     params: PipelineParams | None = None,
     output_path: str | None = None,
     control: RunControl | None = None,
+    write: Callable[[ad.AnnData, str], None] | None = None,
 ) -> tuple[ad.AnnData, PipelineResult]:
     """Run a subset of preprocessing steps on the AnnData object.
 
@@ -2244,6 +2251,8 @@ def run_pipeline(
     control
         Checked before each step (cancel, the pre-step hook) and times and
         watches each step (``core/run_watchdog.py``). None: neither.
+    write
+        Writes the saved file (``_finish_run``); None: ``write_h5ad``.
 
     A step that fails skips the steps that need it (``core/step_failures.py``); the
     others run, and the run is saved with status "finished_with_errors".
@@ -2309,7 +2318,7 @@ def run_pipeline(
                 break
             _step_failed(adata, result, outcome, step_name, str(e))
 
-    _finish_run(adata, params, result, t0, output_path, control, outcome)
+    _finish_run(adata, params, result, t0, output_path, control, outcome, write)
     return adata, result
 
 
@@ -2319,6 +2328,7 @@ def run_pipeline_streamed(
     params: PipelineParams | None = None,
     output_path: str | None = None,
     control: RunControl | None = None,
+    write: Callable[[ad.AnnData, str], None] | None = None,
 ) -> Generator[tuple[str, dict[str, Any]], None, tuple[ad.AnnData, PipelineResult]]:
     """Run preprocessing steps, yielding progress events after each step.
 
@@ -2431,7 +2441,7 @@ def run_pipeline_streamed(
             _step_failed(adata, result, outcome, step_name, str(e))
             yield ("step_error", {"step": step_name, "index": idx, "error": str(e)})
 
-    _finish_run(adata, params, result, t0, output_path, control, outcome)
+    _finish_run(adata, params, result, t0, output_path, control, outcome, write)
     yield ("complete", result.to_dict())
 
     return adata, result

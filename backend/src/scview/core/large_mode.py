@@ -59,6 +59,38 @@ MAX_COLUMNS = int(os.environ.get("SCVIEW_LARGE_READ_GENES", "256") or 256)
 HELD_FIXED = 48 * MiB
 HELD_PER_CELL = 8 + 8
 
+# What a dataset can no longer do once a run has put it in large-dataset layout (the
+# refusals of ``check`` across the API; tests/test_light_run.py checks every one is named),
+# said before a run that would convert it (preflight, the MCP ``run_pipeline`` opt-in).
+OFF_IN_LARGE_MODE = (
+    "differential expression (cell-level and pseudobulk) and the DE audit",
+    "AUCell scoring and comparing scoring methods (AUCell)",
+    "TF and pathway activity",
+    "upstream TF candidates",
+    "ligand-receptor communication",
+    "neighbourhood DE (miloDE)",
+    "genes along pseudotime",
+    "sub-clustering",
+    "re-filtering from the original upload",
+    "the ambient RNA estimate and ambient RNA correction",
+    "copy-number inference",
+    "gene programs (consensus NMF)",
+    "reference mapping",
+    "comparing batch-correction methods (Scanorama, BBKNN)",
+)
+# Its matrices afterwards (core/large_layout.py): what "expression layers" lists. Checked on
+# Otero-Garcia 2022 (CELLxGENE: counts in .raw, log-normalised X): X kept as it was, .raw's
+# 269.6M values moved to the counts file, no longer an expression layer.
+LAYOUT_AFTER = ("X stays log-normalised; .raw is moved out of the dataset into a .counts.h5 file "
+                "beside it (its counts are kept, but no longer offered as an expression layer, "
+                "so the layers are [X]; the original upload is untouched)")
+
+
+def conversion_note() -> str:
+    """One sentence on what a run that puts a dataset in large-dataset layout turns off."""
+    return ("Large-dataset mode converts the dataset for good: " + LAYOUT_AFTER + ", and these are "
+            "no longer available on it: " + "; ".join(OFF_IN_LARGE_MODE) + ".")
+
 
 class LargeDatasetError(Exception):
     """Work that is not done on a large dataset (its matrices stay on disk): a 422 with

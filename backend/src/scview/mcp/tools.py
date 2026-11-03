@@ -404,18 +404,12 @@ async def preflight(dataset_id: DatasetId, steps: Steps, params: Annotated[dict[
         description="The run's parameters, as run_pipeline takes them (its schema lists them).")] = None) -> str:
     """Before a run: its peak memory and rough time per step and in all, against the memory
     scView has free (verdict fits / tight / wont_fit, with suggestions), and whether it would
-    run in large-dataset mode. Nothing is run."""
+    run in large-dataset mode (mode.converts: the dataset would be converted for good, with
+    what that turns off) or without the matrices (mode.light: steps that need none). Nothing
+    is run."""
     _check_steps(steps)
     p = _check_params(params)
-    query: dict[str, Any] = {"steps": ",".join(steps)}
-    for k in ("n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
-              "doublet_channel_key", "doublet_method", "chunked", "clustering_method",
-              "leiden_iterations", "umap_3d", "ambient_rho"):
-        if p.get(k) is not None:
-            query[k] = p[k]
-    if p.get("regress_out"):
-        query["regress_out"] = ",".join(p["regress_out"])
-    d = await _get(f"{_ds(dataset_id)}/preflight", **query)
+    d = await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))
     gb = 2**30
     steps_ = [{"step": s.get("step"), "peak_gb": round((s.get("peak_bytes") or 0) / gb, 2),
                "seconds": s.get("seconds")} for s in d.get("steps") or []]
@@ -425,6 +419,18 @@ async def preflight(dataset_id: DatasetId, steps: Steps, params: Annotated[dict[
            "data": pick(head, "n_cells", "n_genes", "format", "backed", "large", "unit"),
            "steps": table(steps_, ["step", "peak_gb", "seconds"], 40)}
     return dumps(out)
+
+
+def _preflight_query(steps: list[str], p: dict[str, Any]) -> dict[str, Any]:
+    query: dict[str, Any] = {"steps": ",".join(steps)}
+    for k in ("n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
+              "doublet_channel_key", "doublet_method", "chunked", "clustering_method",
+              "leiden_iterations", "umap_3d", "ambient_rho"):
+        if p.get(k) is not None:
+            query[k] = p[k]
+    if p.get("regress_out"):
+        query["regress_out"] = ",".join(p["regress_out"])
+    return query
 
 
 def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
@@ -437,7 +443,7 @@ def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
 
 
 async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind: str,
-                     finish: Callable = _pipeline_result) -> jobs.Job:
+                     finish: Callable = _pipeline_result, allow_large_mode: bool = True) -> jobs.Job:
     if any(j.dataset_id == dataset_id for j in jobs.running()):
         busy = next(j for j in jobs.running() if j.dataset_id == dataset_id)
         raise ToolError(f"Job {busy.id} ({busy.kind}) is still running on this dataset; "
@@ -447,18 +453,33 @@ async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind:
         await api.post(f"{_ds(dataset_id)}/assessment/cancel")
 
     return jobs.new(kind, dataset_id, f"{_ds(dataset_id)}/assessment/run-stream",
-                    {"steps": steps, "params": p}, progress_line=_line, finish=finish,
-                    cancel_route=cancel)
+                    {"steps": steps, "params": p, "allow_large_mode": allow_large_mode},
+                    progress_line=_line, finish=finish, cancel_route=cancel)
 
 
 @tool(WRITE)
-async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = None) -> str:
+async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = None,
+                       allow_large_mode: Annotated[bool, Field(description=(
+                           "Let a run that does not fit in memory convert the dataset to "
+                           "large-dataset layout for good (DE and other whole-matrix tools are "
+                           "then refused on it, .raw leaves its layers). Default false: such a "
+                           "run is refused, naming what it would turn off."))] = False) -> str:
     """Run pipeline steps on a dataset and save the result (a job: returns job_id at once;
     follow it with job_status, stop it with cancel_job). Check preflight first on a big dataset.
-    The original upload is never changed. Unknown step or parameter names are refused."""
+    Steps that need no expression matrix (neighbors, clustering, embeddings on the stored PCA)
+    never convert it. The original upload is never changed. Unknown step or parameter names are
+    refused."""
     _check_steps(steps)
     p = _check_params(params)
-    job = await _start_run(dataset_id, steps, p, "pipeline")
+    if not allow_large_mode:
+        mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
+        if mode.get("converts"):
+            raise ToolError(
+                f"Not run: {mode.get('reason')} That converts the dataset for good: "
+                f"{mode.get('layout_after')}; no longer available on it: "
+                f"{'; '.join(mode.get('turns_off') or [])}. Run DE and the other tools first, free "
+                "memory, or pass allow_large_mode=true to convert it.")
+    job = await _start_run(dataset_id, steps, p, "pipeline", allow_large_mode=allow_large_mode)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id, "steps": steps,
                   "params": p, "next": "job_status(job_id, wait_seconds=50) until complete"})
 

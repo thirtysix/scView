@@ -197,11 +197,12 @@ class ModeChoice:
     run_bytes: int | None = None  # of that, the run itself (beyond the dataset in memory)
     free_bytes: int | None = None  # memory free with the other open datasets closed
     limit_bytes: int | None = None
+    light: bool = False  # in memory without the matrices (``run_light``): never converts
 
     def to_dict(self) -> dict[str, Any]:
         return {"chunked": self.chunked, "requested": self.requested, "reason": self.reason,
                 "need_bytes": self.need_bytes, "free_bytes": self.free_bytes,
-                "limit_bytes": self.limit_bytes}
+                "limit_bytes": self.limit_bytes, "light": self.light}
 
 
 def large_info(h5ad_path) -> dict | None:
@@ -253,6 +254,100 @@ def is_chunked(control: RunControl | None) -> bool:
     return bool(getattr(getattr(control, "mode", None), "chunked", False))
 
 
+def is_light(control: RunControl | None) -> bool:
+    """Whether ``core/processing.py`` chose a run without the matrices (``run_light``)."""
+    return bool(getattr(getattr(control, "mode", None), "light", False))
+
+
+# ---------------------------------------------------------------------------
+# Runs that need no matrix: in memory, without them
+# ---------------------------------------------------------------------------
+
+# The steps that work on obs, obsm, obsp and uns alone (the ones large-dataset mode runs
+# on its matrix-free copy): a run of only these reads no matrix and writes none.
+LIGHT_RUN_STEPS = _LIGHT_STEPS
+LIGHT_REASON = ("These steps need no expression matrix: the run reads the dataset without its "
+                "matrices (X and .raw stay in the file as they are) and saves its results beside "
+                "them, so the dataset keeps its layout.")
+# Top-level entries of an h5ad the light copy holds and writes itself; every other entry
+# (X, raw, layers) is copied from the file as it is stored.
+_LIGHT_KEYS = ("obs", "var", "obsm", "obsp", "varm", "varp", "uns")
+
+
+def light_run_ok(path, steps: list[str]) -> bool:
+    """Whether a run of ``steps`` on the h5ad at ``path`` can work without its matrices:
+    every step is one of ``LIGHT_RUN_STEPS``, and the file is an ordinary h5ad (not in
+    large-dataset layout, not anndata < 0.7's, whose .raw sits at the top level).
+
+    Otero-Garcia 2022's 96k neurons: the neighbour graph on the authors' PCA was costed at
+    7.2 GB in memory (reading X and .raw in), so the run went to large-dataset mode and the
+    dataset was converted for good (no more DE, .raw gone from its layers)."""
+    if not path or not steps or any(s not in LIGHT_RUN_STEPS for s in steps):
+        return False
+    try:
+        return large_info(path) is None and not is_legacy_layout(path)
+    except OSError:
+        return False
+
+
+def light_estimate(path, steps: list[str], params=None):
+    """Memory per step and at the peak of a run without the matrices
+    (``preflight.estimate_light_run``, from the file's header)."""
+    from scview.core import preflight
+
+    return preflight.estimate_light_run(preflight.read_header(path, "h5ad"), steps, params)
+
+
+def light_need(path, steps: list[str], params=None) -> int:
+    """The peak of ``light_estimate``: nothing of the dataset is held when it starts."""
+    return int(light_estimate(path, steps, params).peak_bytes)
+
+
+def light_step_needs(path, steps: list[str], params=None) -> dict[str, int]:
+    """Per step of a run without the matrices (and its save), its peak."""
+    return {e.step: int(e.peak_bytes) for e in light_estimate(path, steps, params).steps}
+
+
+def light_writer(source) -> Callable[[ad.AnnData, str], None]:
+    """``pipeline._finish_run``'s ``write`` for a run without the matrices: the light copy
+    written (gzip, as a run saves), then the source file's other entries (X, .raw, layers)
+    copied into it as they are stored, chunk by chunk, never through memory. The source
+    is read before the result replaces it (it may be the same path)."""
+    source = str(source)
+
+    def write(light: ad.AnnData, partial: str) -> None:
+        light.write_h5ad(partial, compression="gzip")
+        with h5py.File(source, "r") as src, h5py.File(partial, "r+") as dst:
+            for key in src:
+                if key in _LIGHT_KEYS:
+                    continue
+                if key in dst:  # the empty layers group written for the copy
+                    del dst[key]
+                src.copy(src[key], dst, key)
+            shape = src["X"].attrs.get("shape") if "X" in src else None
+        if shape is not None and tuple(int(v) for v in shape) != (light.n_obs, light.n_vars):
+            raise LargeRunError(f"The saved matrix ({int(shape[0])} x {int(shape[1])}) does not "
+                                f"match the cells and genes ({light.n_obs} x {light.n_vars}).")
+
+    return write
+
+
+def run_light(path, steps: list[str], params: PipelineParams, output_path: str,
+              control: RunControl | None) -> PipelineResult:
+    """The in-memory pipeline on the dataset without its matrices (``read_light``), saved
+    beside its matrices (``light_writer``): the same steps, results and records as a run
+    on the whole dataset in memory."""
+    return run_pipeline(read_light(path), steps, params, output_path, control,
+                        write=light_writer(path))[1]
+
+
+def run_light_streamed(path, steps: list[str], params: PipelineParams, output_path: str,
+                       control: RunControl | None):
+    """``run_light``, streamed as ``pipeline.run_pipeline_streamed``."""
+    return run_pipeline_streamed(read_light(path), steps, params, output_path, control,
+                                 write=light_writer(path))
+
+
 def in_memory_need(adaptor, steps: list[str], params) -> tuple[int, int]:
     """(memory the in-memory run needs beyond what the dataset holds now, the run's own
     part of it): reading a backed dataset into memory (``working_copy.copy_bytes``), then
@@ -276,18 +371,23 @@ def in_memory_need(adaptor, steps: list[str], params) -> tuple[int, int]:
 
 
 def choose_mode(dm, dataset_id: str, adaptor, steps: list[str], params) -> ModeChoice:
-    """Large-dataset mode or in memory for a run of ``steps`` (see the module docstring).
-    Raises ``ValueError`` for a ``chunked`` value that is not auto / on / off."""
+    """Large-dataset mode or in memory for a run of ``steps`` (see the module docstring);
+    in memory without the matrices (``light``) when every step needs none of them
+    (``light_run_ok``), unless large-dataset mode was chosen. Raises ``ValueError`` for a
+    ``chunked`` value that is not auto / on / off."""
     from scview.core import memory_budget, preflight
     from scview.core.dataset_manager import LOAD_MARGIN, working_reserve
 
     requested = check_chunked(getattr(params, "chunked", "auto"))
-    if large_info(getattr(adaptor, "h5ad_path", None)) is not None:
+    path = getattr(adaptor, "h5ad_path", None)
+    if large_info(path) is not None:
         return ModeChoice(True, requested, "This dataset is in large-dataset layout (its counts "
                           "and gene-major copy are on disk beside it), so it runs in "
                           "large-dataset mode: it is never read into memory.")
     if requested == "on":
         return ModeChoice(True, requested, "Large-dataset mode was chosen for this run.")
+    if light_run_ok(path, steps):
+        return ModeChoice(False, requested, LIGHT_REASON, light=True)
     if requested == "off":
         return ModeChoice(False, requested, "In memory was chosen for this run.")
     budget = memory_budget.read_budget()
@@ -1448,10 +1548,13 @@ def run(path: str | Path, steps: list[str], params: PipelineParams | None = None
 
 def run_for(adaptor, steps: list[str], params: PipelineParams, output_path: str,
             control: RunControl | None) -> PipelineResult:
-    """The run in the mode ``core/processing.py`` chose (``control.mode``)."""
+    """The run in the mode ``core/processing.py`` chose (``control.mode``): large-dataset,
+    without the matrices (``light``) or in memory."""
     mode = getattr(control, "mode", None)
     if is_chunked(control):
         result = run(adaptor.h5ad_path, steps, params, output_path, control)
+    elif is_light(control):
+        result = run_light(adaptor.h5ad_path, steps, params, output_path, control)
     else:
         result = run_pipeline(adaptor.adata, steps, params, output_path, control)[1]
     result.mode = mode.to_dict() if mode is not None else None
@@ -1464,6 +1567,8 @@ def run_streamed_for(adaptor, steps: list[str], params: PipelineParams, output_p
     mode = getattr(control, "mode", None)
     if is_chunked(control):
         gen = run_streamed(adaptor.h5ad_path, steps, params, output_path, control)
+    elif is_light(control):
+        gen = run_light_streamed(adaptor.h5ad_path, steps, params, output_path, control)
     else:
         gen = run_pipeline_streamed(adaptor.adata, steps, params, output_path, control)
     for event, data in gen:

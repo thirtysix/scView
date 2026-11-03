@@ -48,6 +48,9 @@ class RunPipelineRequest(BaseModel):
     """Request body for the pipeline run endpoint."""
     steps: list[str]
     params: dict[str, Any] | None = None
+    # False: refused (409, before anything runs) when the run would put the dataset in
+    # large-dataset layout, with what that turns off (the MCP passes its opt-in here).
+    allow_large_mode: bool = True
 
 
 class SuggestRequest(BaseModel):
@@ -460,7 +463,7 @@ async def run_assessment_pipeline(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-    control = RunControl(plan=(body.steps, params))
+    control = RunControl(plan=(body.steps, params), allow_large=body.allow_large_mode)
     # Drop this request's hold on the cached copy before the run: run_exclusive
     # reloads the dataset from disk afterwards, and a reference kept here would
     # hold the old AnnData through that reload (two copies: ovary at 6 GB was
@@ -505,7 +508,7 @@ async def run_assessment_pipeline_stream(
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     del adaptor  # as /assessment/run: no hold on the copy the run replaces
-    control = RunControl(plan=(body.steps, params))
+    control = RunControl(plan=(body.steps, params), allow_large=body.allow_large_mode)
 
     def _events(adaptor):
         # Write processing output to the derived layer, never the original
