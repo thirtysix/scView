@@ -105,3 +105,43 @@ def test_compare_sides_needs_known_sexes_on_both_sides():
     r = sex_check.compare_sides(obs, "donor_id", covid, ~covid, "COVID-19", "normal",
                                 {d: s for d, s in WILK_LIKE.items()}, "x")
     assert r["kind"] == "imbalanced"
+
+
+ONE_F_A_SIDE = {d: ("female" if d in ("P0", "H0") else "male") for d in WILK_LIKE}
+
+
+def _yang_like() -> ad.AnnData:
+    """One female donor a side, but H0 gives 4x the cells of P0: donors balance, cells do not."""
+    a = _adata(ONE_F_A_SIDE)
+    extra = a[(a.obs["donor_id"] == "H0").to_numpy()].copy()
+    big = ad.concat([a] + [extra] * 3, index_unique="-")
+    big.obs = big.obs.astype("category")
+    return big
+
+
+@pytest.mark.parametrize("method", ["wilcoxon", "t-test"])
+async def test_cell_level_tests_warn_when_cells_differ_in_sex(client, dataset_manager, method):
+    did = _register(dataset_manager, _yang_like(), f"cells{method}")
+    r = await client.post(f"{API}/datasets/{did}/de/compare", json={**BODY, "method": method})
+    assert r.status_code == 200, r.text
+    sex = r.json()["sex"]
+    # 40 of 160 COVID-19 cells (25%) vs 160 of 280 normal cells (57%) from female donors.
+    assert sex["kind"] == "cells" and sex["a"]["share_female"] == 0.25
+    assert sex["b"]["share_female"] == pytest.approx(160 / 280, abs=1e-4)
+    assert "25% of COVID-19's cells and 57% of normal's" in sex["message"]
+    assert "15 points" in sex["message"] and sex["threshold"] == sex_check.CELL_SHARE_DIFF
+
+
+async def test_pseudobulk_keeps_the_donor_rule(client, dataset_manager):
+    did = _register(dataset_manager, _yang_like(), "cellspb")
+    r = await client.post(f"{API}/datasets/{did}/de/compare", json={**BODY, "method": "pseudobulk"})
+    assert r.status_code == 200, r.text
+    assert r.json()["sex"] is None  # 1 female of 4 donors a side: balanced by donor
+
+
+def test_cell_shares_under_the_threshold_are_quiet():
+    obs = _adata(ONE_F_A_SIDE).obs
+    covid = (obs["disease"] == "COVID-19").to_numpy()
+    assert sex_check.compare_cell_shares(obs, "donor_id", covid, ~covid, "C", "N", ONE_F_A_SIDE, "x") is None
+    # No cell of a known-sex sample on side A: no judgement.
+    assert sex_check.compare_cell_shares(obs, "donor_id", covid, ~covid, "C", "N", {"H0": "female"}, "x") is None

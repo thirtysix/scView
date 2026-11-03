@@ -162,15 +162,17 @@ export interface DEComposition {
   nested?: boolean;
 }
 
-/** /de/compare: the two sides' samples differ in sex (core/sex_check.py compare_sides). */
+/** /de/compare: the two sides' samples differ in sex (core/sex_check.py compare_sides), or,
+ *  for a cell-level test, the share of their CELLS from female samples does ("cells"). */
 export interface DESexDifference {
-  kind: "confounded" | "imbalanced";
+  kind: "confounded" | "imbalanced" | "cells";
   message: string;
   sample_key: string;
   /** Where each sample's sex came from: the metadata column, or a sex check already run. */
   source: string;
-  a: { female: number; male: number };
-  b: { female: number; male: number };
+  /** Samples of each sex; "cells": cells of each sex and the female share. */
+  a: { female?: number; male?: number; female_cells?: number; male_cells?: number; share_female?: number };
+  b: { female?: number; male?: number; female_cells?: number; male_cells?: number; share_female?: number };
 }
 
 export interface DEConfounding {

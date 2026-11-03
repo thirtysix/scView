@@ -277,10 +277,13 @@ def _donor_stats(donors) -> tuple[int, float]:
     return int((counts > 0).sum()), float(counts.max()) / total
 
 
-def _sex_difference(obs, body: _CompareScope, mask_a, mask_b, dataset_id: str) -> dict | None:
+def _sex_difference(obs, body: _CompareScope, mask_a, mask_b, dataset_id: str,
+                    cell_level: bool = False) -> dict | None:
     """The sides' samples differ in sex (core/sex_check.py), judged on the replicate
     column: sex from the metadata column, else a sex check already run; no check
-    otherwise (the expression call is never run here). Never fails the DE."""
+    otherwise (the expression call is never run here). ``cell_level``: when the
+    samples balance, also the share of each side's CELLS from female samples (a
+    cell-level test weighs donors by their cells). Never fails the DE."""
     from scview.core import sex_check
 
     try:
@@ -291,7 +294,11 @@ def _sex_difference(obs, body: _CompareScope, mask_a, mask_b, dataset_id: str) -
         known = sex_check.sample_sexes(obs, key, dataset_id)
         if known is None:
             return None
-        return sex_check.compare_sides(obs, key, mask_a, mask_b, str(body.group_a), str(body.group_b), *known)
+        sides = (key, mask_a, mask_b, str(body.group_a), str(body.group_b), *known)
+        found = sex_check.compare_sides(obs, *sides)
+        if found is None and cell_level:
+            found = sex_check.compare_cell_shares(obs, *sides)
+        return found
     except Exception as e:  # noqa: BLE001 — a caution, never a reason for the DE to fail
         logger.warning("Sex check of a DE comparison failed: %s", e)
         return None
@@ -730,7 +737,7 @@ async def differential_expression_compare(
     confounding = hit.to_dict() if hit else None
     # The two sides' cluster mix: a shift makes the DE partly a composition test.
     composition = _composition(adata, body, mask_a, mask_b, body.composition_by)
-    sex = _sex_difference(obs, body, mask_a, mask_b, dataset_id)
+    sex = _sex_difference(obs, body, mask_a, mask_b, dataset_id, cell_level=body.method != "pseudobulk")
 
     if body.method == "pseudobulk":
         resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id, adaptor, dm)
