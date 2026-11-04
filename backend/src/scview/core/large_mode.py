@@ -63,7 +63,7 @@ HELD_PER_CELL = 8 + 8
 # refusals of ``check`` across the API; tests/test_light_run.py checks every one is named),
 # said before a run that would convert it (preflight, the MCP ``run_pipeline`` opt-in).
 OFF_IN_LARGE_MODE = (
-    "differential expression (cell-level and pseudobulk) and the DE audit",
+    "cell-level differential expression and the DE audit (pseudobulk DE stays)",
     "AUCell scoring and comparing scoring methods (AUCell)",
     "TF and pathway activity",
     "upstream TF candidates",

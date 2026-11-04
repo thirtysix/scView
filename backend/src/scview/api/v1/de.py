@@ -542,7 +542,7 @@ def _counts_cells(adata, keep):
     return sub
 
 
-def _counts_bytes(adaptor, keep) -> int:
+def _counts_bytes(adaptor, keep, key: str = "") -> int:
     """Memory ``_counts_cells`` takes on a backed dataset, from its header (the choice
     judged on the first rows); in memory, pseudobulk's copy of the ``keep`` cells' counts
     and their sums (``preflight.pseudobulk_memory_need``); 0 when there is no estimate."""
@@ -550,6 +550,14 @@ def _counts_bytes(adaptor, keep) -> int:
 
     try:
         adata = adaptor.adata
+        if getattr(adaptor, "is_large", False):
+            # One span of the counts file as read and as CSR, and the sums twice while a
+            # span is added (pseudobulk.sum_rows): (donor, side) samples x genes, float64.
+            from scview.core.pseudobulk import MAX_SAMPLES
+
+            donors = adata.obs[key].where(keep).nunique() if key in adata.obs else MAX_SAMPLES
+            n_samples = min(MAX_SAMPLES, 2 * int(donors))
+            return int(2 * large_mode.MAX_READ_BYTES + 2 * n_samples * adata.n_vars * 12)
         if not getattr(adata, "isbacked", False):
             if not memory_budget.read_budget().limited:
                 return 0  # no container limit: nothing is checked (DatasetManager.reserve)
@@ -765,7 +773,8 @@ async def differential_expression_compare(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
-    large_mode.check(adaptor, "Differential expression", _DE_WHY)
+    if body.method != "pseudobulk":  # pseudobulk sums the counts file in blocks of cells
+        large_mode.check(adaptor, "Cell-level differential expression", _DE_WHY)
 
     adata = adaptor.adata
     obs = adata.obs
@@ -866,7 +875,27 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
 
     keep = mask_a | mask_b
 
+    large = bool(getattr(adaptor, "is_large", False))
+
+    def _run_large():
+        # The whole dataset, the other cells without a donor: only the counts file's rows
+        # are read, in blocks (pseudobulk.sum_rows); nothing else touches the matrix.
+        donors = adata.obs[key].where(keep)
+        res = pseudobulk_de(
+            adata, mask_a, donors,
+            label_a=body.group_a, label_b=body.group_b, donor_key=key,
+            method=body.pb_method, ruv_k=body.ruv_k,
+            covariates=adata.obs[covs] if covs else None,
+        )
+        try:  # obs total_counts (the QC step's); never a pass over the matrix here
+            size = transcriptome_size.check(adata, mask_a, mask_b)
+        except large_mode.LargeDatasetError:
+            size = None
+        return res, size
+
     def _run():
+        if large:
+            return _run_large()
         sub = _counts_cells(adata, keep) if getattr(adata, "isbacked", False) else adata[keep]
         res = pseudobulk_de(
             sub, mask_a[keep], sub.obs[key],
@@ -879,7 +908,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
 
     need = 0
     if adaptor is not None and dm is not None:
-        need = await asyncio.to_thread(_counts_bytes, adaptor, keep)
+        need = await asyncio.to_thread(_counts_bytes, adaptor, keep, key)
     try:
         what = _what(dm, dataset_id, need, "Pseudobulk DE")
         async with working_copy.reading(dm, dataset_id, need, what) as held:

@@ -805,3 +805,74 @@ def test_an_old_layout_input_is_rewritten_and_runs(tmp_path):
     assert res.status == "complete", res.stop_reason or res.errors
     assert not large_run.is_legacy_layout(res.output_path)
     assert ad.read_h5ad(res.output_path, backed="r").obs_names[0] == "c0"
+
+
+def _design(obs: pd.DataFrame) -> pd.DataFrame:
+    """Eight donors, four per arm, by cell name (the same on any copy of these cells)."""
+    k = np.array([int(n.split("-")[0][4:]) for n in obs.index]) % 8
+    return pd.DataFrame({"donor": pd.Categorical([f"d{i}" for i in k]),
+                         "cond": pd.Categorical(np.where(k < 4, "ctrl", "stim"))}, index=obs.index)
+
+
+@pytest.mark.parametrize("pb_method", ["deseq2", "voom"])
+async def test_pseudobulk_de_runs_on_a_large_dataset_as_in_memory(
+        client, dataset_manager, processed, monkeypatch, pb_method):
+    """Part A: pseudobulk DE sums the counts file in spans of cells; the answer is the
+    in-memory run's on the same cells (cell-level DE stays refused)."""
+    from scview.core import pseudobulk
+
+    _register_large(processed, Path(dataset_manager.data_dir), did=f"pb{pb_method}")
+    did = f"pb{pb_method}"
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.is_large
+    for c, v in _design(adaptor.adata.obs).items():
+        adaptor.adata.obs[c] = v
+    monkeypatch.setattr(pseudobulk, "SUM_ROW_BLOCK", 300)  # several spans, a ragged last one
+    reads = []
+    monkeypatch.setattr(working_copy, "in_memory", lambda a: reads.append(a) or a.to_memory())
+    spans = []
+    real_sum = pseudobulk._sum_by_sample
+    monkeypatch.setattr(pseudobulk, "_sum_by_sample",
+                        lambda M, c, n: spans.append(M.shape[0]) or real_sum(M, c, n))
+    body = {"split_by": "cond", "group_a": "stim", "group_b": "ctrl", "method": "pseudobulk",
+            "replicate_key": "donor", "pb_method": pb_method}
+    r = await client.post(f"{API}/datasets/{did}/de/compare", json=body)
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert reads == []
+    n = adaptor.adata.n_obs
+    assert len(spans) == -(-n // 300) and sum(spans) == n  # every cell, span by span
+    assert got["n_samples_a"] == 4 and got["n_samples_b"] == 4
+    monkeypatch.setattr(pseudobulk, "_sum_by_sample", real_sum)
+
+    mem = processed[2].copy()
+    for c, v in _design(mem.obs).items():
+        mem.obs[c] = v
+    want = pseudobulk.pseudobulk_de(mem, (mem.obs["cond"] == "stim").to_numpy(), mem.obs["donor"],
+                                    label_a="stim", label_b="ctrl", donor_key="donor",
+                                    method=pb_method)
+    w = {g: (lf, p) for g, lf, p, _ in want.genes}
+    assert {g["gene"] for g in got["genes"]} == set(w)
+    for g in got["genes"]:
+        np.testing.assert_allclose([g["logfoldchange"], g["pval"]], w[g["gene"]], rtol=1e-6, atol=1e-12)
+
+    body["method"] = "wilcoxon"
+    r = await client.post(f"{API}/datasets/{did}/de/compare", json=body)
+    assert r.status_code == 422 and "Cell-level differential expression" in r.text
+
+
+def test_sum_rows_on_disk_equals_in_memory(tmp_path, monkeypatch):
+    from scview.core import pseudobulk
+
+    a = _counts(n=900)
+    path = _write(a, tmp_path / "d.h5ad")
+    rows = np.sort(np.random.default_rng(3).choice(900, 500, replace=False))
+    codes = np.random.default_rng(4).integers(0, 6, rows.size)
+    want = pseudobulk._sum_by_sample(a.X[rows], codes, 6).toarray()
+    monkeypatch.setattr(pseudobulk, "SUM_ROW_BLOCK", 130)
+    b = ad.read_h5ad(path, backed="r")
+    try:
+        got = pseudobulk.sum_rows(b.X, rows, codes, 6).toarray()
+    finally:
+        b.file.close()
+    np.testing.assert_array_equal(got, want)
