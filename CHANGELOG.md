@@ -6,6 +6,13 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **The memory estimate for doublet detection in large-dataset mode counts Scrublet's own variable genes**, as the
+  in-memory estimate does, from sample rows of the counts on disk (about 14 s on 159k cells), and adds the channel's
+  counts read in beside its arrays. It assumed 10% of all genes before: on a 159k-cell CELLxGENE dataset with
+  35,469 genes it said 4.6 GiB for a step that rose 6.0 GiB; now 5.9. The check before each step of a large run uses
+  the same estimate.
+
 ## [0.60.0] - 2026-11-04
 
 Pseudobulk DE on large datasets (part A of the pseudobulk study; checked on CSC Roihu on a 159k-cell placenta atlas:

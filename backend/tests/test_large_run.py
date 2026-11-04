@@ -876,3 +876,91 @@ def test_sum_rows_on_disk_equals_in_memory(tmp_path, monkeypatch):
     finally:
         b.file.close()
     np.testing.assert_array_equal(got, want)
+
+
+# --- the doublet step's plan from a file (preflight before a large run) -------------------
+
+
+def test_doublet_plan_on_disk_counts_the_variable_genes_as_in_memory(tmp_path):
+    """Without the genes the step is costed at 10% of all genes: on CELLxGENE's 35,469 that
+    missed the pilot's large run (38b64997) by about a quarter."""
+    import scanpy as sc
+
+    from tests.test_doublet_channels import _dataset
+
+    large_run._DISK_PLANS.clear()
+    a = _dataset([150, 260, 200])
+    mem = preflight.doublet_plan(a, PipelineParams())
+    assert mem.costed and mem.hvg
+    disk = large_run.doublet_plan_on_disk(_write(a, tmp_path / "a.h5ad"), PipelineParams())
+    assert (disk.channels, disk.costed, disk.hvg) == (mem.channels, mem.costed, mem.hvg)
+    # CELLxGENE's layout: X log-normalised, the counts in .raw (the step scores .raw).
+    b = a.copy()
+    b.raw = a
+    sc.pp.normalize_total(b)
+    sc.pp.log1p(b)
+    assert preflight.doublet_plan(b, PipelineParams()).costed == mem.costed
+    assert large_run.doublet_plan_on_disk(_write(b, tmp_path / "b.h5ad"), PipelineParams()).costed \
+        == mem.costed
+
+
+def test_doublet_plan_on_disk_is_counted_once_per_file(tmp_path, monkeypatch):
+    from tests.test_doublet_channels import _dataset
+
+    large_run._DISK_PLANS.clear()
+    opened = []
+    real = large_run.LargeRun.open
+    monkeypatch.setattr(large_run.LargeRun, "open", lambda self: opened.append(1) or real(self))
+    p = _write(_dataset([150, 260, 200]), tmp_path / "a.h5ad")
+    first = large_run.doublet_plan_on_disk(p, PipelineParams())
+    second = large_run.doublet_plan_on_disk(p, PipelineParams())
+    assert len(opened) == 1 and first == second and first is not second
+    whole = large_run.doublet_plan_on_disk(p, PipelineParams(doublet_channel_key="__all__"))
+    assert len(opened) == 2 and whole.channels == [610]
+    # Neither a missing file nor an old-layout one is opened as a run: obs alone, or nothing.
+    assert large_run.doublet_plan_on_disk(tmp_path / "missing.h5ad", PipelineParams()) is None
+    old = tmp_path / "old.h5ad"
+    _write_legacy_h5ad(old, np.random.default_rng(0).poisson(1.0, size=(120, 60)))
+    old_plan = large_run.doublet_plan_on_disk(old, PipelineParams())
+    assert old_plan is None or old_plan.costed is None  # obs alone (this one has no channels)
+    assert len(opened) == 2
+
+
+def test_doublet_plan_on_disk_reads_a_large_dataset_s_counts_file(processed, tmp_path):
+    big, res, _, _, _ = processed
+    out = _copy_large(res, tmp_path)
+    large_run._DISK_PLANS.clear()
+    plan = large_run.doublet_plan_on_disk(out, PipelineParams(**PARAMS))
+    with h5py.File(large_layout.counts_path(out, big.uns), "r") as f:
+        counts = ad.io.read_elem(f[large_layout.COUNTS_KEY])
+    light = ad.read_h5ad(out, backed="r")
+    mem = preflight.doublet_plan(ad.AnnData(X=counts, obs=light.obs.copy()), PipelineParams(**PARAMS))
+    light.file.close()
+    assert plan.costed and plan.costed == mem.costed  # the counts sidecar, not X (log-normalised)
+    # The large run's own pre-step check costs the same rows.
+    run = large_run.LargeRun(out, None, PipelineParams(**PARAMS))
+    run.open()
+    try:
+        assert run._doublet_plan("doublet_detection").costed == mem.costed
+        assert run._doublet_plan("pca") is None
+    finally:
+        run.cleanup()
+
+
+def test_large_mode_estimate_costs_the_doublet_step_with_the_counted_genes(tmp_path, monkeypatch):
+    from tests.test_doublet_channels import _dataset
+
+    large_run._DISK_PLANS.clear()
+    a = _dataset([150, 260, 200])
+    p = _write(a, tmp_path / "a.h5ad")
+    plan = preflight.doublet_plan(a, PipelineParams())
+    est = large_run._run_estimate(p, ["doublet_detection"], PipelineParams())
+    want = preflight.estimate_chunked_run(preflight.read_header(p, "h5ad"), ["doublet_detection"],
+                                          PipelineParams(), doublets=plan)
+    assert est.steps[0].transient_bytes == want.steps[0].transient_bytes
+    seen = []
+    real = preflight.estimate_chunked_run
+    monkeypatch.setattr(preflight, "estimate_chunked_run",
+                        lambda *a, **k: seen.append(k.get("doublets")) or real(*a, **k))
+    large_run._run_estimate(p, ["doublet_detection"], PipelineParams())
+    assert seen[0].costed == plan.costed  # not the channels alone (_file_doublet_plan)
