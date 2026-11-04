@@ -362,7 +362,7 @@ def in_memory_need(adaptor, steps: list[str], params) -> tuple[int, int]:
         return copy + run, run
     if preflight._skips_doublets(adata):
         steps = [s for s in steps if s != "doublet_detection"]
-    plan = (preflight._file_doublet_plan(adaptor.h5ad_path, params)
+    plan = (doublet_plan_on_disk(adaptor.h5ad_path, params)
             if "doublet_detection" in steps else None)
     est = preflight.estimate_run(preflight.in_memory_header(adata), steps=steps, params=params,
                                  warm=preflight.process_warm(), doublets=plan)
@@ -494,6 +494,52 @@ class _DaskRows:
             return _csr(self.X.compute())
 
 
+# doublet_plan_on_disk: (file, mtime, size, channel key) -> plan; a preflight asks again
+# with each change in the run dialog, and counting reads ~21,000 rows of the counts.
+_DISK_PLANS: dict[tuple, Any] = {}
+_DISK_PLANS_MAX = 16
+
+
+def doublet_plan_on_disk(path: str | Path, params=None):
+    """The doublet step's channels on a dataset file, and Scrublet's variable genes in the
+    largest of them counted on its counts as a large run reads them (``LargeRun.open``: obs
+    and the matrices' layout, then sample rows): what the in-memory ``doublet_plan`` does on
+    an open dataset. The channels from obs alone (``preflight._file_doublet_plan``) when the
+    file can't be opened that way (an anndata < 0.7 file is not rewritten for an estimate).
+
+    Without the genes the step is costed at 10% of all genes, which on CELLxGENE's 35,469
+    missed the pilot's large run by about a quarter (2026-11-04, 38b64997)."""
+    from scview.core import preflight
+
+    params = params if params is not None else PipelineParams()
+    p = Path(path)
+    try:
+        st = p.stat()
+        key = (str(p.resolve()), st.st_mtime_ns, st.st_size, params.doublet_channel_key or "")
+    except OSError:
+        return preflight._file_doublet_plan(path, params)
+    if key in _DISK_PLANS:
+        return replace(_DISK_PLANS[key])
+    plan = None
+    if not is_legacy_layout(p):
+        run = LargeRun(p, None, params)
+        try:
+            run.open()
+            plan = run.costed_doublet_plan()
+        except Exception as e:  # noqa: BLE001 — an estimate never fails a request
+            logger.debug("doublet plan of %s: %s", p.name, e)
+            plan = None
+        finally:
+            run.cleanup()
+    if plan is None or (plan.channels and plan.costed is None):
+        plan = preflight._file_doublet_plan(path, params) if plan is None else plan
+        return plan  # not cached: the genes may be countable next time
+    if len(_DISK_PLANS) >= _DISK_PLANS_MAX:
+        _DISK_PLANS.pop(next(iter(_DISK_PLANS)))
+    _DISK_PLANS[key] = plan
+    return replace(plan)
+
+
 def _remove_stale_stages(folder: Path) -> None:
     """Staging folders a run left behind when its process died (its pid is gone)."""
     if not folder.is_dir():
@@ -547,6 +593,7 @@ class LargeRun:
         self._label = ""
         self._last_post = 0.0
         self.saved = False
+        self._dbl_plan = None  # costed_doublet_plan, once per run
 
     # -- opening ------------------------------------------------------------
 
@@ -914,23 +961,50 @@ class LargeRun:
             raise StepNotApplicable(reason)
         if spatial.targeted_panel(self.light):
             raise StepNotApplicable(targeted_panel.DOUBLET_SKIP)
-        # pipeline._doublet_matrix: X unless it holds processed values, then the counts.
-        where = None
-        m = self.x
-        if not _holds_counts(m):
-            if _holds_counts(self.layer):
-                m, where = self.layer, "layers['counts']"
-            elif _holds_counts(self.raw):
-                m, where = self.raw, ".raw"
-            else:
-                raise StepSkipped("Doublet detection needs raw counts: X holds processed values "
-                                  "and there is no counts layer or counts in .raw.")
+        m, where = self.doublet_counts()
         with self._rows(m) as counts:
             found = doublets.run_doublets(self.light, counts, method, params.expected_doublet_rate,
                                           params.doublet_channel_key or None)
         if where is not None:
             found["input"] = where
         return found
+
+    def doublet_counts(self) -> tuple[_Mat, str | None]:
+        """The matrix the doublet step scores and where it is (pipeline._doublet_matrix): X
+        unless it holds processed values, then the counts layer, then .raw."""
+        if _holds_counts(self.x):
+            return self.x, None
+        if _holds_counts(self.layer):
+            return self.layer, "layers['counts']"
+        if _holds_counts(self.raw):
+            return self.raw, ".raw"
+        raise StepSkipped("Doublet detection needs raw counts: X holds processed values "
+                          "and there is no counts layer or counts in .raw.")
+
+    def costed_doublet_plan(self):
+        """The doublet step's channels and Scrublet's variable genes in the largest of them,
+        counted on the rows the step will read (``preflight.cost_channels``), once per run;
+        the channels alone when the genes can't be counted, None without channels."""
+        from scview.core import preflight
+
+        if self._dbl_plan is not None:
+            return self._dbl_plan
+        if spatial.is_spot_data(self.light):  # the step is skipped, so it costs nothing
+            return preflight.DoubletPlan([])
+        try:
+            ch = doublets.channels(self.light, self.params.doublet_channel_key or None)
+        except Exception:  # noqa: BLE001 — an estimate never fails a step
+            return None
+        plan = preflight.DoubletPlan([int(k) for k in ch.sizes])
+        try:
+            m, _ = self.doublet_counts()
+            with self._rows(m) as counts:
+                preflight.cost_channels(plan, counts, ch.codes)
+        except Exception as e:  # noqa: BLE001 — the channels' cells alone then
+            logger.debug("doublet plan: variable genes not counted: %s", e)
+            plan.costed, plan.hvg = None, None
+        self._dbl_plan = plan
+        return plan
 
     def _filtering(self) -> dict[str, Any]:
         from scview.core.anndata_adaptor import _QC_OBS_NAMES
@@ -1227,17 +1301,7 @@ class LargeRun:
                                       self.dense, int(other), _n_groups(light))
 
     def _doublet_plan(self, step: str):
-        if step != "doublet_detection":
-            return None
-        from scview.core import preflight
-
-        if spatial.is_spot_data(self.light):  # the step is skipped, so it costs nothing
-            return preflight.DoubletPlan([])
-        try:
-            ch = doublets.channels(self.light, self.params.doublet_channel_key or None)
-            return preflight.DoubletPlan([int(k) for k in ch.sizes])
-        except Exception:  # noqa: BLE001 — an estimate never fails a step
-            return None
+        return self.costed_doublet_plan() if step == "doublet_detection" else None
 
 
 def _array_bytes(m) -> int:
@@ -1368,8 +1432,7 @@ def _run_estimate(path: str | Path, steps: list[str], params=None):
     from scview.core import preflight
 
     h = preflight.read_header(path, "h5ad")
-    plan = (preflight._file_doublet_plan(path, params) if "doublet_detection" in steps
-            else None)
+    plan = doublet_plan_on_disk(path, params) if "doublet_detection" in steps else None
     large = large_info(path) is not None
     return preflight.estimate_chunked_run(h, steps, params, large=large, doublets=plan)
 

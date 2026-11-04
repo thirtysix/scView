@@ -824,3 +824,37 @@ def test_the_bin_factor_survives_the_steps_before_clustering():
         return next(e for e in est.steps if e.step == "clustering").seconds[0]
 
     assert clustering(bins) == pytest.approx(full * clustering(cells), rel=0.01)
+
+
+def test_large_mode_doublet_step_holds_the_worst_channel_s_counts_beside_scrublet():
+    """Pilot 38b64997 in large mode (Roihu, 2026-11-04): the step rose 5.99 GiB over its start;
+    the in-memory model with the counted genes gave 5.22, as the channel read in (its counts
+    are part of the dataset held in memory) was not costed."""
+    plan = pf.DoubletPlan([10858, 9400, 8866], 3402, [(10858, 3402), (9400, 4133), (8866, 4356)])
+    n, m, nnz = 158_978, 35_469, 718_700_000
+    sh = pf.ChunkedShape(n, m, nnz)
+    large, _, _ = pf.chunked_step("doublet_detection", sh, PipelineParams(), doublets=plan)
+    x = pf.Matrix("X", n, m, True, nnz, "float32")
+    mem, _, _ = pf._step_doublet(pf._State(n, m, x, {}, None, 0), PipelineParams(), plan)
+    channel = int(pf._csr_bytes(x) * 9400 / n)  # the worst channel (cells x genes): 9,400 x 4,133
+    assert large == mem + channel
+    assert 5.5 < large / 2**30 < 6.3  # measured 5.99 GiB
+
+
+def test_large_mode_keeps_a_share_of_the_doublet_step_and_the_write_grows_with_workers(monkeypatch):
+    """Roihu refit (2026-11-04): after doublet detection the process kept ~a tenth of the step
+    (2.97 GB into filtering after 23 GB on 185k cells, 0.68 modelled); the write rose more at
+    4 workers than at 2 (38b64997 1.83 vs 1.16 GB)."""
+    from scview.core import chunked
+
+    sh = pf.ChunkedShape(158_978, 35_469, 718_700_000)
+    t, held, _ = pf.chunked_step("doublet_detection", sh, PipelineParams(), doublets=pf.DoubletPlan([10858]))
+    assert held == 158_978 * 16 + int(pf.DBL_KEPT_SHARE * t)
+    est = pf.estimate_chunked_run(sh, ["doublet_detection", "filtering"], PipelineParams(),
+                                  doublets=pf.DoubletPlan([10858]))
+    assert est.steps[1].resident_bytes - est.steps[0].resident_bytes == held
+    writes = {}
+    for w in (2, 4):
+        monkeypatch.setattr(chunked, "n_workers", lambda w=w: w)
+        writes[w] = pf.chunked_step("highly_variable_genes", sh, PipelineParams(), write=True)[0]
+    assert writes[4] - writes[2] >= 2 * pf.CHUNKED_WRITE_PER_WORKER

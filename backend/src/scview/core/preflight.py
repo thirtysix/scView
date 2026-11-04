@@ -1213,7 +1213,8 @@ class DoubletPlan:
     costed: list[tuple[int, int]] | None = None
 
 
-def _step_doublet(s: _State, params, plan: DoubletPlan | None = None) -> tuple[int, _State, float]:
+def _step_doublet(s: _State, params, plan: DoubletPlan | None = None, *,
+                  read_in: bool = False) -> tuple[int, _State, float]:
     counts = s.x
     beside = s.layers.get("counts") or s.raw
     if s.processed and s.x is not None and not s.x.sparse and beside is not None:
@@ -1232,11 +1233,17 @@ def _step_doublet(s: _State, params, plan: DoubletPlan | None = None) -> tuple[i
     # .raw and a dense X are not copied.
     copies = int(DBL_SPARSE_COPIES * _csr_bytes(counts) * largest / max(1, counts.n_cells))
     if plan is not None and plan.costed:
-        dense = max(int(DBL_PER_CELL_HVG * c * h) for c, h in plan.costed)
+        worst, h = max(plan.costed, key=lambda ch: ch[0] * ch[1])
+        dense = int(DBL_PER_CELL_HVG * worst * h)
     elif plan is not None and plan.hvg:
-        dense = int(DBL_PER_CELL_HVG * largest * plan.hvg)
+        worst, dense = largest, int(DBL_PER_CELL_HVG * largest * plan.hvg)
     else:
-        dense = int(DBL_DENSE_PER_VALUE * largest * counts.n_genes)
+        worst, dense = largest, int(DBL_DENSE_PER_VALUE * largest * counts.n_genes)
+    if read_in:
+        # Large-dataset mode reads each channel's counts in (scrublet_lean.channel_rows) and
+        # holds them beside the dense arrays; in memory they are part of the dataset held.
+        # Pilot 38b64997 (2026-11-04, Roihu): the step rose 5.99 GiB; 5.22 without this.
+        dense += int(_csr_bytes(counts) * worst / max(1, counts.n_cells))
     method = _doublet_method(params)
     s.other += s.n * 16 * (2 if method == "both" else 1)
     peak, secs = 0, 0.0
@@ -1304,12 +1311,23 @@ def doublet_plan(adata, params=None) -> DoubletPlan | None:
         return plan
     try:
         counts, _ = _doublet_matrix(adata)
-        order = [int(j) for j in np.argsort(sizes, kind="stable")[::-1][:DBL_COSTED]
-                 if sizes[int(j)] >= scrublet_lean.MIN_CHANNEL_CELLS]
-        plan.costed = [(sizes[j], _channel_hvg(counts, np.flatnonzero(ch.codes == j))) for j in order]
-        plan.hvg = plan.costed[0][1]
+        cost_channels(plan, counts, ch.codes)
     except (StepSkipped, ValueError, TypeError, IndexError):
         pass
+    return plan
+
+
+def cost_channels(plan: DoubletPlan, counts, codes: np.ndarray) -> DoubletPlan:
+    """Fill ``plan.costed`` and ``plan.hvg``: Scrublet's variable genes in the DBL_COSTED
+    largest channels (``_channel_hvg``) of ``counts``, in memory or on disk (anndata's
+    backed CSR, an h5py dataset, large_run's lazy rows); ``codes``: each cell's channel."""
+    from scview.core import scrublet_lean
+
+    sizes = plan.channels
+    order = [int(j) for j in np.argsort(sizes, kind="stable")[::-1][:DBL_COSTED]
+             if sizes[int(j)] >= scrublet_lean.MIN_CHANNEL_CELLS]
+    plan.costed = [(sizes[j], _channel_hvg(counts, np.flatnonzero(codes == j))) for j in order]
+    plan.hvg = plan.costed[0][1] if plan.costed else None
     return plan
 
 
@@ -1913,6 +1931,14 @@ CHUNKED_FIXED = 500 * MiB  # kept by the process from its first pass on (see abo
 # a few times over; 0.80 GB peak RSS building 100k cells on its own.
 GENESTORE_BUILD_BYTES = 750 * MiB
 CHUNKED_WRITE_KEPT = 400 * MiB  # kept by the process after the write (measured, as above)
+# Refit on CSC Roihu (2026-11-04): 8 CELLxGENE datasets of 18k-185k cells forced into large
+# mode, 4 CPUs (two also at 2), anon memory every second (research: pilot notes). Two terms
+# the laptop run had no way to show: after doublet detection the process keeps about a tenth
+# of the step's transient (freed arrays glibc keeps: 0.03-0.16, median 0.11; 2.97 GB held
+# into filtering after a 23 GB step on 185k cells, 0.68 modelled), and the write grows with
+# the workers (38b64997 1.83 vs 1.16 GB at 4 vs 2 CPUs, 5015051f 1.23 vs 1.00; 0.98 modelled).
+DBL_KEPT_SHARE = 0.12
+CHUNKED_WRITE_PER_WORKER = 150 * MiB
 MARKERS_STORE_PER_VALUE = 60  # sparse_markers: working set per stored value of a gene block
 CELLTYPIST_LABELS = 100  # probabilities kept per cell (float32)
 CHUNKED_NEIGHBORS_PER_CELL = 2_600  # building the graph; 1,300 of it kept
@@ -1990,8 +2016,8 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
     elif step == "doublet_detection":
         x = Matrix("X", n, m, not sh.dense, sh.nnz if not sh.dense else n * m, "float32",
                    nonzero=sh.nnz if sh.dense else None)
-        t, _, secs = _step_doublet(_State(n, m, x, {}, None, 0), params, doublets)
-        held = n * 16
+        t, _, secs = _step_doublet(_State(n, m, x, {}, None, 0), params, doublets, read_in=True)
+        held = n * 16 + int(DBL_KEPT_SHARE * t)
     elif step == "filtering":
         t, secs = _chunk_pass(sh, params) + sh.other, _pass_secs(sh)
     elif step == "normalization":
@@ -2059,7 +2085,10 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
     else:
         t, secs = 0, 0.1
     if write:
-        t = max(t, _chunk_pass(sh, params) + GENESTORE_BUILD_BYTES)
+        from scview.core import chunked
+
+        t = max(t, _chunk_pass(sh, params) + GENESTORE_BUILD_BYTES
+                + CHUNKED_WRITE_PER_WORKER * chunked.n_workers())
         held += CHUNKED_WRITE_KEPT
         secs += sh.nnz * CHUNKED_WRITE_SECONDS_PER_VALUE
     return int(t), int(held), float(secs)
@@ -2579,6 +2608,14 @@ def _file_doublet_plan(path, params=None) -> DoubletPlan | None:
         return None
 
 
+def _disk_doublet_plan(path, params=None) -> DoubletPlan | None:
+    """The doublet step's channels and Scrublet's variable genes in the largest of them, read
+    from the file (``large_run.doublet_plan_on_disk``); the channels alone when that fails."""
+    from scview.core import large_run
+
+    return large_run.doublet_plan_on_disk(path, params)
+
+
 def _panel_size(adaptor, files: list) -> int | None:
     """The genes of a targeted panel (core/targeted_panel.py), from the open dataset or its
     file's recorded flag; None for any other dataset."""
@@ -2648,7 +2685,7 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         if not files:
             raise FileNotFoundError(dataset_id)
         h = read_header(files[0], "h5ad")
-        plan = _file_doublet_plan(files[0], params) if dbl else None
+        plan = _disk_doublet_plan(files[0], params) if dbl else None
     large = h.large or (in_memory and large_layout.is_large(adaptor.adata))
     warm = process_warm()
     est = estimate_run(h, steps=steps, params=params, warm=warm, doublets=plan)

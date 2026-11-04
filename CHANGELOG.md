@@ -6,6 +6,22 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.60.1] - 2026-11-04
+
+Memory estimates for large-dataset mode, measured on CSC Roihu (the 1,000-dataset run's batch nodes).
+
+### Fixed
+- **The memory estimate for doublet detection in large-dataset mode counts Scrublet's own variable genes**, as the
+  in-memory estimate does, from sample rows of the counts on disk (about 14 s on 159k cells), and adds the channel's
+  counts read in beside its arrays. It assumed 10% of all genes before: on a 159k-cell CELLxGENE dataset with
+  35,469 genes it said 4.6 GiB for a step that rose 6.0 GiB; now 5.9. The check before each step of a large run uses
+  the same estimate.
+- **Large-dataset mode's per-step memory estimates are refitted on CSC Roihu** (8 datasets of 18k-185k cells, 4 and
+  2 CPUs, measured every second). After doublet detection a process keeps about a tenth of that step's memory, and
+  writing the matrices takes more with more CPUs; neither showed in the laptop run the model came from. Steps after
+  doublet detection were up to 2.2x their estimate; now none is above 1.1x. The run's peak estimate is unchanged
+  where doublet detection sets it.
+
 ## [0.60.0] - 2026-11-04
 
 Pseudobulk DE on large datasets (part A of the pseudobulk study; checked on CSC Roihu on a 159k-cell placenta atlas:
