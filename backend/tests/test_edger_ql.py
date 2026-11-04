@@ -145,6 +145,24 @@ def test_lowess_delta_is_the_fixed_point():
     assert eq.lowess_delta(np.repeat(np.arange(50.0), 3), 200) == 0.0
 
 
+def test_kernels_fall_back_when_compiling_fails(monkeypatch):
+    """No writable numba cache: compile without one; numba unusable: the numpy paths ({})."""
+    tried = []
+
+    def fake(cache):
+        tried.append(cache)
+        if cache:
+            raise RuntimeError("no locator available")
+        return {"ok": True}
+
+    monkeypatch.setattr(eq, "_compile", fake)
+    monkeypatch.setattr(eq, "_KERNELS", None)
+    assert eq._kernels() == {"ok": True} and tried == [True, False]
+    monkeypatch.setattr(eq, "_compile", lambda cache: (_ for _ in ()).throw(ImportError("numba")))
+    monkeypatch.setattr(eq, "_KERNELS", None)
+    assert eq._kernels() == {}
+
+
 def test_compiled_kernels_match_numpy_paths(monkeypatch):
     """numba kernels and the numpy fallbacks give the same smoothers, fits and adjusted deviances."""
     rng = np.random.default_rng(2)

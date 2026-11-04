@@ -567,7 +567,12 @@ class UnitMoments:
     """Scaled chi-square approximation of the NB unit deviance at dispersion ``psi``: for mean m,
     df k(m) = 2E^2/V and scale s(m) = V/(2E) from the exact moments (``deviance_moments``) on a
     log-spaced table, read by a cubic spline in log m on log E and log V. The table grows to cover
-    the means asked for; below ``_M_FLOOR`` k is taken proportional to m (its limit) and s fixed."""
+    the means asked for; below ``_M_FLOOR`` k is taken proportional to m (its limit) and s fixed.
+
+    edgeR's own k and s are not exact moments everywhere: within ~1e-4 of them for means up to ~50,
+    then up to 0.1% (psi 0.1) to 0.3% (psi 3) apart, constant above means ~1e4 at large psi
+    (black-box). That approximation is not reproduced; it is most of the remaining difference
+    in s2.prior (~1e-3) and p-values (median |d log10 p| ~2e-5)."""
 
     def __init__(self, psi: float, step: float = _GRID_STEP):
         self.psi = float(psi)
@@ -1128,16 +1133,37 @@ def _apl_oneway_loop(y, off, grp, ngrp, X, phi, gb, tol, maxit, floor):
     return total
 
 
+def _compile(cache: bool) -> dict:
+    """The kernels, compiled now on tiny inputs (so a failing compile or cache shows here)."""
+    import numba
+
+    jit = numba.njit(nogil=True, cache=cache)
+    k = {"wlowess": jit(_wlowess_loop), "one_group": jit(_one_group_loop), "clowess": jit(_clowess_loop),
+         "adjust": jit(_adjust_loop), "apl_oneway": jit(_apl_oneway_loop)}
+    x = np.array([0.0, 1.0, 2.0, 3.0])
+    y = np.array([[1.0, 2.0], [0.0, 3.0], [2.0, 1.0], [4.0, 0.0]])
+    off = np.zeros((4, 2))
+    X = np.column_stack([np.ones(4), [0.0, 0.0, 1.0, 1.0]])
+    c = np.zeros((4, 3))
+    k["wlowess"](x, x, np.ones(4), 2.0, np.array([0, 3], dtype=np.int64))
+    k["one_group"](y, off, np.full(2, 0.1), np.zeros(2), 1e-11, 60)
+    k["clowess"](x, x, 0.5, 3, 0.0)
+    k["adjust"](y, y + 0.5, np.full((4, 2), 0.5), 0.1, 1.0, 0.0, 1.0, c, c, 1e-10)
+    k["apl_oneway"](y, off, np.array([0, 0, 1, 1], dtype=np.int64), 2, X, 0.1, np.full((2, 2), np.nan), 1e-11, 60,
+                    1e-20)
+    return k
+
+
 def _kernels() -> dict:
+    """numba kernels, compiled once per process (cached on disk where it can be); {} when numba is
+    missing or cannot compile, and the numpy paths run instead."""
     global _KERNELS
     if _KERNELS is None:
-        try:
-            import numba
-
-            jit = numba.njit(nogil=True, cache=True)
-            _KERNELS = {"wlowess": jit(_wlowess_loop), "one_group": jit(_one_group_loop),
-                        "clowess": jit(_clowess_loop), "adjust": jit(_adjust_loop),
-                        "apl_oneway": jit(_apl_oneway_loop)}
-        except Exception:  # noqa: BLE001 - numba missing or failing: the numpy paths
-            _KERNELS = {}
+        _KERNELS = {}
+        for cache in (True, False):
+            try:
+                _KERNELS = _compile(cache)
+                break
+            except Exception:  # noqa: BLE001 - no writable cache, no numba: try without, then numpy
+                continue
     return _KERNELS
