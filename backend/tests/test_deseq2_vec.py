@@ -91,7 +91,7 @@ def test_condition_design_agrees_with_pydeseq2():
     lfc = np.where(np.arange(G) < 30, 1.5, 0.0)
     counts, cond = sim(4, G=G, seed=1, lfc=lfc)
     X = np.column_stack([np.ones(len(cond)), cond])
-    res = dv.deseq2_wald(counts, X)
+    res = dv.deseq2_wald(counts, X, pydeseq2_trend=True)
     dds, r = run_pydeseq2(counts, X, [0, 1])
     assert_agrees(res, dds, r)
     # Gene-wise and MAP dispersions and the trend, not only the end result.
@@ -113,7 +113,7 @@ def test_paired_design_agrees_with_pydeseq2():
     donors = np.tile(np.arange(d), 2)
     X = np.column_stack([np.ones(2 * d)] + [(donors == k).astype(float) for k in range(1, d)]
                         + [cond])
-    res = dv.deseq2_wald(counts, X)
+    res = dv.deseq2_wald(counts, X, pydeseq2_trend=True)
     dds, r = run_pydeseq2(counts, X, np.eye(X.shape[1])[-1])
     assert_agrees(res, dds, r)
 
@@ -126,7 +126,7 @@ def test_covariate_design_agrees_with_pydeseq2():
     counts, cond = sim(5, G=220, seed=5, extra=extra,
                        lfc=np.where(np.arange(220) < 20, 1.0, 0.0))
     X = np.column_stack([np.ones(10), age, cond])
-    res = dv.deseq2_wald(counts, X, coef=2)
+    res = dv.deseq2_wald(counts, X, coef=2, pydeseq2_trend=True)
     dds, r = run_pydeseq2(counts, X, [0, 0, 1])
     assert_agrees(res, dds, r)
 
@@ -150,7 +150,7 @@ def test_zero_genes_and_one_sided_zeros_match_pydeseq2():
     counts[cond == 1, 1] = 0  # zero on one side only
     counts[cond == 0, 2] = 0
     X = np.column_stack([np.ones(8), cond])
-    res = dv.deseq2_wald(counts, X)
+    res = dv.deseq2_wald(counts, X, pydeseq2_trend=True)
     dds, r = run_pydeseq2(counts, X, [0, 1])
     assert np.isnan(res.pvalue[0]) and np.isnan(res.log2fc[0]) and res.base_mean[0] == 0
     assert np.isnan(res.dispersions[0])
@@ -165,13 +165,13 @@ def test_cooks_outlier_loses_its_p_value_as_in_pydeseq2():
     counts, cond = sim(3, G=150, seed=8)
     counts[0, 5] = counts[:, 5].max() * 60 + 500
     X = np.column_stack([np.ones(6), cond])
-    res = dv.deseq2_wald(counts, X)
+    res = dv.deseq2_wald(counts, X, pydeseq2_trend=True)
     dds, r = run_pydeseq2(counts, X, [0, 1])
     assert res.cooks_outlier[5] and np.isnan(res.pvalue[5])
     np.testing.assert_array_equal(res.cooks_outlier, dds.var["_pvalue_cooks_outlier"].to_numpy())
     assert not res.replaced.any()
     assert_agrees(res, dds, r)
-    off = dv.deseq2_wald(counts, X, cooks_filter=False)
+    off = dv.deseq2_wald(counts, X, cooks_filter=False, pydeseq2_trend=True)
     assert np.isfinite(off.pvalue[5])
 
 
@@ -180,7 +180,7 @@ def test_outlier_refit_with_seven_replicates_matches_pydeseq2():
     counts[2, 40] = counts[:, 40].max() * 40 + 300
     counts[9, 41] = counts[:, 41].max() * 40 + 300
     X = np.column_stack([np.ones(14), cond])
-    res = dv.deseq2_wald(counts, X)
+    res = dv.deseq2_wald(counts, X, pydeseq2_trend=True)
     dds, r = run_pydeseq2(counts, X, [0, 1])
     np.testing.assert_array_equal(res.replaced, dds.var["replaced"].to_numpy())
     np.testing.assert_array_equal(res.refitted, dds.var["refitted"].to_numpy())
@@ -188,7 +188,7 @@ def test_outlier_refit_with_seven_replicates_matches_pydeseq2():
     np.testing.assert_allclose(res.base_mean, r["baseMean"].to_numpy(), rtol=1e-10)
     assert_agrees(res, dds, r)
     # Without the refit the outlier gene keeps its counts and is filtered instead.
-    plain = dv.deseq2_wald(counts, X, refit_cooks=False)
+    plain = dv.deseq2_wald(counts, X, refit_cooks=False, pydeseq2_trend=True)
     assert not plain.refitted.any()
 
 
@@ -198,7 +198,7 @@ def test_every_gene_with_a_zero_uses_iterative_size_factors():
     for g in range(counts.shape[1]):
         counts[rng.integers(0, 8), g] = 0
     X = np.column_stack([np.ones(8), cond])
-    res = dv.deseq2_wald(counts, X)
+    res = dv.deseq2_wald(counts, X, pydeseq2_trend=True)
     dds, r = run_pydeseq2(counts, X, [0, 1])
     np.testing.assert_allclose(res.size_factors, dds.obs["size_factors"].to_numpy(), rtol=0.02)
     dp = dlog10(res.pvalue, r["pvalue"].to_numpy())
@@ -208,7 +208,7 @@ def test_every_gene_with_a_zero_uses_iterative_size_factors():
 def test_genes_the_newton_search_cannot_handle_fall_back_to_the_grid(monkeypatch):
     counts, cond = sim(4, G=100, seed=11)
     X = np.column_stack([np.ones(8), cond])
-    ref = dv.deseq2_wald(counts, X)
+    ref = dv.deseq2_wald(counts, X, pydeseq2_trend=True)
     real = nb_glm.maximise_1d
 
     def flaky(derivs, x0, lo, hi, **kw):
@@ -218,12 +218,28 @@ def test_genes_the_newton_search_cannot_handle_fall_back_to_the_grid(monkeypatch
         return x, ok
 
     monkeypatch.setattr(nb_glm, "maximise_1d", flaky)
-    res = dv.deseq2_wald(counts, X)
+    res = dv.deseq2_wald(counts, X, pydeseq2_trend=True)
     assert not res.genewise_converged[::7].all()
     # The 100 + 100 point grid lands within one fine step (~0.004 in log alpha).
     moved = ref.genewise_dispersions > 1e-6
     d = np.abs(np.log(res.genewise_dispersions) - np.log(ref.genewise_dispersions))[moved]
     assert d.max() < 0.01
+
+
+def test_default_trend_leaves_out_genes_on_the_dispersion_floor():
+    """The default trend is pydeseq2's gamma GLM on the genes above
+    100 * min_disp only (pydeseq2_trend=True: on every gene)."""
+    counts, cond = sim(2, G=300, seed=15)
+    X = np.column_stack([np.ones(4), cond])
+    res = dv.deseq2_wald(counts, X)
+    py = dv.deseq2_wald(counts, X, pydeseq2_trend=True)
+    floor = res.genewise_dispersions < 100 * dv.MIN_DISP
+    assert floor.sum() > 10  # 2 + 2 samples: many genes look Poisson
+    mean = res.base_mean
+    want = dv._parametric_trend(mean[~floor], res.genewise_dispersions[~floor])
+    np.testing.assert_allclose(res.trend_coeffs, want)
+    np.testing.assert_allclose(py.trend_coeffs,
+                               dv._parametric_trend(mean, py.genewise_dispersions))
 
 
 def test_independent_filtering_matches_plain_bh_when_off():
@@ -319,3 +335,10 @@ def test_nb_deviance_by_hand():
         t1 = y * np.log(y / m) if y > 0 else 0.0
         want += 2 * (t1 - (y + 1 / a) * np.log((1 + a * y) / (1 + a * m)))
     assert nb_glm.nb_deviance(Y, mu, np.array([a]))[0] == pytest.approx(want)
+
+
+def test_trigamma_matches_scipy():
+    from scipy import special
+
+    x = np.concatenate([np.linspace(1e-3, 30, 2000), np.logspace(-4, 9, 500)])
+    np.testing.assert_allclose(nb_glm.trigamma(x), special.polygamma(1, x), rtol=1e-11)

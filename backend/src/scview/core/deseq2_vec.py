@@ -16,7 +16,8 @@ dispersion fit; here every gene moves at once:
    log(alpha) on [1e-8, max(10, n)] from the start (``nb_glm.maximise_1d``,
    analytic derivatives; a 100-point grid only for genes it cannot handle).
 5. Trend a0 + a1 / mean by pydeseq2's gamma GLM (its L-BFGS-B fit, refitted
-   without genes off the curve), else the mean trend.
+   without genes off the curve) on the genes above 100 * min_disp, else the
+   mean trend.
 6. Prior variance: squared MAD of the log residuals (genes with dispersion
    >= 100 * min_disp) minus trigamma(df / 2), at least 0.25.
 7. MAP dispersions (same likelihood plus the log-normal prior around the
@@ -30,10 +31,20 @@ dispersion fit; here every gene moves at once:
    samples), independent filtering on the mean (pydeseq2's lowess rule) for
    the adjusted p.
 
-Deliberate differences: the dispersion maxima are found to 1e-8 in
-log(alpha), where pydeseq2 stops at L-BFGS-B's tolerance, so pydeseq2's
-grid fallback after an L-BFGS-B failure is not reproduced; the grid fallback
-here keeps the prior for MAP dispersions (pydeseq2 drops it).
+Deliberate differences: the parametric trend is fitted on the genes whose
+gene-wise dispersion is >= 100 * min_disp, the genes the prior variance uses
+(pydeseq2 fits it on every gene: its first fit, pulled down by the genes
+stuck on min_disp, decides which genes count as off the curve, and those
+never come back).
+Measured on 144 Kang pseudobulk fits (4 cell types, 2-4 donors a side),
+R DESeq2 1.48.2's trend coefficients match this fit (CD14 Mono, 2 v 2: R 0.0508 + 2.64
+/ mean; here 0.0512 + 2.64; pydeseq2's rule 0.0485 + 2.32), and p values
+come 10x closer to R's (median |dlog10 p| 0.0002 vs 0.0022);
+``pydeseq2_trend=True`` restores pydeseq2's fit. Also: the dispersion maxima
+are found to 1e-8 in log(alpha), where pydeseq2 stops at L-BFGS-B's
+tolerance, so pydeseq2's grid fallback after an L-BFGS-B failure is not
+reproduced; the grid fallback here keeps the prior for MAP dispersions
+(pydeseq2 drops it). As in both, a gene-wise start on min_disp stays there.
 """
 
 from __future__ import annotations
@@ -411,12 +422,15 @@ def deseq2_wald(counts: np.ndarray, X: np.ndarray, coef: int | np.ndarray = -1, 
                 independent_filter: bool = True, alpha: float = 0.05,
                 min_replicates: int = 7, fit_type: str = "parametric",
                 min_mu: float = nb_glm.MIN_MU, min_disp: float = MIN_DISP,
-                max_disp: float = MAX_DISP, beta_tol: float = nb_glm.BETA_TOL) -> DeseqResult:
+                max_disp: float = MAX_DISP, beta_tol: float = nb_glm.BETA_TOL,
+                pydeseq2_trend: bool = False) -> DeseqResult:
     """DESeq2's Wald test of design column ``coef`` (or a contrast vector) on
     ``counts`` (samples x genes, non-negative integers) with design ``X``
     (samples x p, full column rank, intercept first). NaN as pydeseq2 sets
     them: all-zero genes get no test; Cook's outliers lose their p value;
-    genes below the independent-filtering cutoff lose their adjusted p."""
+    genes below the independent-filtering cutoff lose their adjusted p.
+    ``pydeseq2_trend`` fits the trend on every gene as pydeseq2 does, genes
+    stuck on min_disp included (see the module notes)."""
     C = np.asarray(counts)
     if C.ndim != 2 or not np.all(np.isfinite(C)) or (C < 0).any() or np.any(C != np.round(C)):
         raise ValueError("Counts must be a samples x genes matrix of non-negative integers.")
@@ -454,7 +468,10 @@ def deseq2_wald(counts: np.ndarray, X: np.ndarray, coef: int | np.ndarray = -1, 
     # Gene-wise dispersions, trend, prior, MAP, coefficients.
     mom, mu_hat = F.start_and_mu(Y)
     gw, gconv = F.log_disp(Y, mu_hat, mom)
-    coeffs = _parametric_trend(base_mean[nz], gw) if fit_type == "parametric" else None
+    coeffs = None
+    if fit_type == "parametric":
+        use = slice(None) if pydeseq2_trend else gw >= 100 * min_disp
+        coeffs = _parametric_trend(base_mean[nz][use], gw[use])
     if coeffs is not None:
         trend = "parametric"
 
