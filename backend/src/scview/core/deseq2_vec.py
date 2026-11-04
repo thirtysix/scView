@@ -35,16 +35,20 @@ Deliberate differences: the parametric trend is fitted on the genes whose
 gene-wise dispersion is >= 100 * min_disp, the genes the prior variance uses
 (pydeseq2 fits it on every gene: its first fit, pulled down by the genes
 stuck on min_disp, decides which genes count as off the curve, and those
-never come back).
-Measured on 144 Kang pseudobulk fits (4 cell types, 2-4 donors a side),
-R DESeq2 1.48.2's trend coefficients match this fit (CD14 Mono, 2 v 2: R 0.0508 + 2.64
-/ mean; here 0.0512 + 2.64; pydeseq2's rule 0.0485 + 2.32), and p values
-come 10x closer to R's (median |dlog10 p| 0.0002 vs 0.0022);
+never come back). Measured on 144 Kang pseudobulk fits (4 cell types, 2-4
+donors a side), R DESeq2 1.48.2's trend matches this fit (CD14 Mono, 2 v 2:
+R 0.0508 + 2.64 / mean, here 0.0512 + 2.64, pydeseq2's rule 0.0485 + 2.32)
+and p values come 10x closer to R's (median |dlog10 p| 0.0002 vs 0.0022);
 ``pydeseq2_trend=True`` restores pydeseq2's fit. Also: the dispersion maxima
 are found to 1e-8 in log(alpha), where pydeseq2 stops at L-BFGS-B's
 tolerance, so pydeseq2's grid fallback after an L-BFGS-B failure is not
 reproduced; the grid fallback here keeps the prior for MAP dispersions
 (pydeseq2 drops it). As in both, a gene-wise start on min_disp stays there.
+
+Known gap (pydeseq2 shares it): with 3 or fewer residual degrees of freedom R
+DESeq2 sets the prior variance another way (a 4-donor paired Kang fit: R
+0.737, trigamma rule 0.364), so such fits sit further from R (median |dlog10
+p| 0.011 there; 0.0007 with R's prior plugged in).
 """
 
 from __future__ import annotations
@@ -203,7 +207,19 @@ class _Fitter:
         return mom, mu
 
     def log_disp(self, Y, mu, start, prior=None):
-        """Maximise the Cox-Reid adjusted likelihood (+ prior) per gene."""
+        """Maximise the Cox-Reid adjusted likelihood (+ prior) per gene. A
+        gene-wise start on min_disp stays there: the slope in log(alpha)
+        vanishes with alpha, so pydeseq2's L-BFGS-B stops at once (R DESeq2
+        keeps every such start too, measured on Kang)."""
+        disp = np.full(len(Y), self.min_disp)
+        ok = np.ones(len(Y), dtype=bool)
+        free = np.ones(len(Y), dtype=bool) if prior is not None else start > self.min_disp
+        if free.any():
+            pr = None if prior is None else (prior[0][free], prior[1])
+            disp[free], ok[free] = self._log_disp(Y[free], mu[free], start[free], pr)
+        return disp, ok
+
+    def _log_disp(self, Y, mu, start, prior):
         G = len(Y)
         lo = np.full(G, math.log(self.min_disp))
         hi = np.full(G, math.log(self.max_disp))
@@ -225,12 +241,6 @@ class _Fitter:
 
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
                 out[s], ok[s] = nb_glm.maximise_1d(derivs, np.log(start[s]), lo[s], hi[s])
-        if prior is None:
-            # A gene-wise start on min_disp stays there: the slope in log(alpha)
-            # vanishes with alpha, so pydeseq2's L-BFGS-B stops at once (R DESeq2
-            # keeps every such start too, measured on Kang).
-            at_min = start <= self.min_disp
-            out[at_min], ok[at_min] = math.log(self.min_disp), True
         bad = np.flatnonzero(~ok)
         if bad.size:
             out[bad] = self._grid_log_disp(Y[bad], mu[bad], None if prior is None

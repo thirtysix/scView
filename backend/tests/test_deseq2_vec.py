@@ -242,6 +242,16 @@ def test_default_trend_leaves_out_genes_on_the_dispersion_floor():
                                dv._parametric_trend(mean, py.genewise_dispersions))
 
 
+def test_chunked_fit_equals_one_chunk(monkeypatch):
+    counts, cond = sim(4, G=150, seed=17, lfc=np.where(np.arange(150) < 15, 1.0, 0.0))
+    X = np.column_stack([np.ones(8), cond])
+    whole = dv.deseq2_wald(counts, X)
+    monkeypatch.setattr(dv, "_CHUNK_ELEMENTS", 8 * 40)  # 40 genes a chunk
+    parts = dv.deseq2_wald(counts, X)
+    np.testing.assert_allclose(parts.pvalue, whole.pvalue, rtol=1e-12)
+    np.testing.assert_allclose(parts.dispersions, whole.dispersions, rtol=1e-12)
+
+
 def test_independent_filtering_matches_plain_bh_when_off():
     counts, cond = sim(4, G=150, seed=12, lfc=np.where(np.arange(150) < 40, 2.0, 0.0))
     X = np.column_stack([np.ones(8), cond])
