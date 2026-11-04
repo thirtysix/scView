@@ -45,14 +45,22 @@ tolerance, so pydeseq2's grid fallback after an L-BFGS-B failure is not
 reproduced; the grid fallback here keeps the prior for MAP dispersions
 (pydeseq2 drops it). As in both, a gene-wise start on min_disp stays there.
 
-Known gap (pydeseq2 shares it): with 3 or fewer residual degrees of freedom R
-DESeq2 sets the prior variance another way (a 4-donor paired Kang fit: R
-0.737, trigamma rule 0.364), so such fits sit further from R (median |dlog10
-p| 0.011 there; 0.0007 with R's prior plugged in).
+Prior variance at 3 or fewer residual df (n - p): the default subtracts
+trigamma(df / 2), the VARIANCE of log chi-square, from a squared MAD, which
+does not match at low df (log chi-square is skewed). ``prior_var_rule``
+"mad_chisq" subtracts the squared MAD of log chi-square instead (exact, from
+its quantiles); "simulate" measures the sampling term the way the observed
+one is measured (NB counts at the fitted means with the trend dispersions,
+the same gene-wise estimator, seeded from the counts). R DESeq2 uses neither
+(its values sit on a 1/999 grid and imply a data-dependent term); on 432
+Kang null + spiked low-df tasks the rules change nothing in calibration or
+FDR, since the prior mostly sits on its 0.25 floor, and add power only where
+the spread is large (label-swap paired nulls).
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
 from dataclasses import dataclass
 
@@ -87,6 +95,8 @@ class DeseqResult:
     trend_coeffs: np.ndarray | None
     prior_disp_var: float
     squared_logres: float
+    prior_sampling_var: float  # the term subtracted from squared_logres
+    prior_var_rule: str  # the rule used ("trigamma" above prior_var_max_df)
     genewise_converged: np.ndarray
     map_converged: np.ndarray
     lfc_converged: np.ndarray
@@ -309,12 +319,66 @@ def _mean_trend(disp: np.ndarray, min_disp: float) -> float:
     return float(stats.trim_mean(disp[disp > 10 * min_disp], proportiontocut=0.001))
 
 
-def _prior(gw, fitted, n, p, min_disp) -> tuple[float, float]:
-    """(squared log-residual MAD, prior variance of log dispersions)."""
+def _spread(gw, fitted, min_disp) -> float:
+    """Squared MAD of the log residuals of the dispersions >= 100 * min_disp."""
     resid = np.log(gw) - np.log(fitted)
     above = gw >= 100 * min_disp
-    slr = _mad(resid[above]) ** 2 if above.any() else 0.0
+    return _mad(resid[above]) ** 2 if above.any() else 0.0
+
+
+def _prior(gw, fitted, n, p, min_disp) -> tuple[float, float]:
+    """(squared log-residual MAD, prior variance of log dispersions)."""
+    slr = _spread(gw, fitted, min_disp)
     return slr, max(slr - float(special.polygamma(1, (n - p) / 2)), 0.25)
+
+
+PRIOR_VAR_RULES = ("trigamma", "mad_chisq", "simulate")
+PRIOR_SIM_GENES = 2000
+
+
+def mad_chisq_spread(df: float) -> float:
+    """The sampling term measured as the observed spread is: squared MAD of
+    log chi-square on ``df`` degrees of freedom over Phi^-1(0.75)^2, from the
+    chi-square quantiles (trigamma(df / 2) is its variance instead; they meet
+    as df grows: 0.79 vs 0.93 at 3 df, 1.29 vs 1.64 at 2)."""
+    m = math.log(stats.chi2.ppf(0.5, df))
+
+    def half(d):
+        return stats.chi2.cdf(math.exp(m + d), df) - stats.chi2.cdf(math.exp(m - d), df) - 0.5
+
+    d = optimize.brentq(half, 1e-12, 60.0, xtol=1e-14)
+    return (d / stats.norm.ppf(0.75)) ** 2
+
+
+def _data_seed(C: np.ndarray) -> int:
+    """A seed from the counts (shape and per-sample, per-gene sums), so a
+    replay of the same data draws the same simulation."""
+    h = hashlib.sha256(repr(C.shape).encode())
+    h.update(np.ascontiguousarray(C.sum(axis=1), dtype=np.int64).tobytes())
+    h.update(np.ascontiguousarray(C.sum(axis=0), dtype=np.int64).tobytes())
+    return int.from_bytes(h.digest()[:8], "little")
+
+
+def simulated_spread(F: _Fitter, mu: np.ndarray, trend: np.ndarray, seed: int,
+                     n_genes: int = PRIOR_SIM_GENES) -> float:
+    """The sampling term by parametric simulation, measured as the observed
+    spread is: negative binomial counts at the fitted means ``mu`` (genes x
+    samples, size factors in) with the TREND dispersions (no gene spread) for
+    ``n_genes`` random genes, the same gene-wise estimator (start, floor,
+    bounds), then the squared MAD of log(simulated gene-wise / trend) over the
+    genes >= 100 * min_disp."""
+    rng = np.random.default_rng(seed)
+    G = len(mu)
+    idx = np.sort(rng.choice(G, n_genes, replace=False)) if G > n_genes else np.arange(G)
+    m, a = mu[idx], trend[idx][:, None]
+    Ys = rng.poisson(rng.gamma(1 / a, m * a)).astype(np.float64)
+    keep = Ys.any(axis=1)
+    Ys, a = Ys[keep], a[keep, 0]
+    if not len(Ys):
+        return 0.0
+    mom, mus = F.start_and_mu(Ys)
+    gw, _ = F.log_disp(Ys, mus, mom)
+    return _spread(gw, a, F.min_disp)
 
 
 def _map_and_lfc(F: _Fitter, Y, mu, gw, fitted, slr, prior_var):
@@ -433,14 +497,21 @@ def deseq2_wald(counts: np.ndarray, X: np.ndarray, coef: int | np.ndarray = -1, 
                 min_replicates: int = 7, fit_type: str = "parametric",
                 min_mu: float = nb_glm.MIN_MU, min_disp: float = MIN_DISP,
                 max_disp: float = MAX_DISP, beta_tol: float = nb_glm.BETA_TOL,
-                pydeseq2_trend: bool = False) -> DeseqResult:
+                pydeseq2_trend: bool = False, prior_var_rule: str = "trigamma",
+                prior_var_max_df: int = 3, prior_sim_seed: int | None = None,
+                prior_sim_genes: int = PRIOR_SIM_GENES) -> DeseqResult:
     """DESeq2's Wald test of design column ``coef`` (or a contrast vector) on
     ``counts`` (samples x genes, non-negative integers) with design ``X``
     (samples x p, full column rank, intercept first). NaN as pydeseq2 sets
     them: all-zero genes get no test; Cook's outliers lose their p value;
     genes below the independent-filtering cutoff lose their adjusted p.
     ``pydeseq2_trend`` fits the trend on every gene as pydeseq2 does, genes
-    stuck on min_disp included (see the module notes)."""
+    stuck on min_disp included (see the module notes). ``prior_var_rule``
+    sets the sampling term subtracted from the squared log-residual MAD for
+    the prior variance when n - p <= ``prior_var_max_df``: "trigamma"
+    (pydeseq2: trigamma((n - p) / 2)), "mad_chisq" (``mad_chisq_spread``) or
+    "simulate" (``simulated_spread``, seeded from the counts unless
+    ``prior_sim_seed``)."""
     C = np.asarray(counts)
     if C.ndim != 2 or not np.all(np.isfinite(C)) or (C < 0).any() or np.any(C != np.round(C)):
         raise ValueError("Counts must be a samples x genes matrix of non-negative integers.")
@@ -455,6 +526,8 @@ def deseq2_wald(counts: np.ndarray, X: np.ndarray, coef: int | np.ndarray = -1, 
         raise ValueError("No residual degrees of freedom to estimate the dispersions.")
     if fit_type not in ("parametric", "mean"):
         raise ValueError(f"Unknown fit_type {fit_type!r}.")
+    if prior_var_rule not in PRIOR_VAR_RULES:
+        raise ValueError(f"Unknown prior_var_rule {prior_var_rule!r}.")
     c = np.zeros(p)
     if np.ndim(coef) == 0:
         c[int(coef)] = 1.0
@@ -494,6 +567,15 @@ def deseq2_wald(counts: np.ndarray, X: np.ndarray, coef: int | np.ndarray = -1, 
             return np.full(len(m), md)
     fitted = trend_fn(base_mean[nz])
     slr, prior_var = _prior(gw, fitted, n, p, min_disp)
+    sampling, rule = float(special.polygamma(1, (n - p) / 2)), "trigamma"
+    if prior_var_rule != "trigamma" and n - p <= prior_var_max_df:
+        rule = prior_var_rule
+        if rule == "mad_chisq":
+            sampling = mad_chisq_spread(n - p)
+        else:
+            seed = _data_seed(C) if prior_sim_seed is None else prior_sim_seed
+            sampling = simulated_spread(F, mu_hat, fitted, seed, prior_sim_genes)
+        prior_var = max(slr - sampling, 0.25)
     mp, mconv, disp, fit = _map_and_lfc(F, Y, mu_hat, gw, fitted, slr, prior_var)
     beta = fit.beta.copy()
 
@@ -577,5 +659,6 @@ def deseq2_wald(counts: np.ndarray, X: np.ndarray, coef: int | np.ndarray = -1, 
         map_dispersions=full(mp), cooks_outlier=full(outl, False, bool),
         replaced=full(replaced, False, bool), refitted=full(refitted, False, bool),
         trend=trend, trend_coeffs=coeffs, prior_disp_var=float(prior_var),
-        squared_logres=float(slr), genewise_converged=full(gconv, False, bool),
+        squared_logres=float(slr), prior_sampling_var=sampling, prior_var_rule=rule,
+        genewise_converged=full(gconv, False, bool),
         map_converged=full(mconv, False, bool), lfc_converged=full(fit.converged, False, bool))

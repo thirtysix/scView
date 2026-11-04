@@ -352,3 +352,65 @@ def test_trigamma_matches_scipy():
 
     x = np.concatenate([np.linspace(1e-3, 30, 2000), np.logspace(-4, 9, 500)])
     np.testing.assert_allclose(nb_glm.trigamma(x), special.polygamma(1, x), rtol=1e-11)
+
+
+# ---------------------------------------------------------------------------
+# Prior variance rules at low residual df
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("df", [1, 2, 3, 6])
+def test_mad_chisq_spread_matches_a_monte_carlo_mad(df):
+    from scipy import stats
+
+    x = np.log(np.random.default_rng(df).chisquare(df, 400_000))
+    mad = np.median(np.abs(x - np.median(x))) / stats.norm.ppf(0.75)
+    assert dv.mad_chisq_spread(df) == pytest.approx(mad ** 2, rel=0.01)
+
+
+def test_mad_chisq_spread_approaches_trigamma_with_df():
+    from scipy import special
+
+    assert dv.mad_chisq_spread(3) < special.polygamma(1, 1.5)  # 0.79 vs 0.93
+    assert dv.mad_chisq_spread(400) == pytest.approx(special.polygamma(1, 200), rel=0.01)
+
+
+def test_prior_rule_applies_only_at_low_df():
+    counts, cond = sim(2, G=300, seed=20)  # 2 v 2: n - p = 2
+    X = np.column_stack([np.ones(4), cond])
+    base = dv.deseq2_wald(counts, X)
+    mc = dv.deseq2_wald(counts, X, prior_var_rule="mad_chisq")
+    assert base.prior_var_rule == "trigamma" and mc.prior_var_rule == "mad_chisq"
+    assert mc.squared_logres == base.squared_logres
+    assert mc.prior_sampling_var == pytest.approx(dv.mad_chisq_spread(2))
+    assert mc.prior_disp_var == pytest.approx(max(mc.squared_logres - dv.mad_chisq_spread(2), 0.25))
+    counts4, cond4 = sim(4, G=200, seed=21)  # n - p = 6: the rule is not used
+    X4 = np.column_stack([np.ones(8), cond4])
+    a = dv.deseq2_wald(counts4, X4)
+    b = dv.deseq2_wald(counts4, X4, prior_var_rule="simulate")
+    assert b.prior_var_rule == "trigamma"
+    np.testing.assert_array_equal(a.pvalue, b.pvalue)
+    c = dv.deseq2_wald(counts4, X4, prior_var_rule="mad_chisq", prior_var_max_df=10)
+    assert c.prior_var_rule == "mad_chisq"
+    with pytest.raises(ValueError, match="prior_var_rule"):
+        dv.deseq2_wald(counts4, X4, prior_var_rule="nope")
+
+
+def test_simulated_spread_is_seeded_from_the_data_and_matches_no_extra_spread():
+    """Counts drawn on the trend itself (no gene-to-gene spread): the observed
+    spread is all sampling, so the simulated term should come close to it."""
+    rng = np.random.default_rng(22)
+    G = 2000
+    base = np.exp(rng.uniform(np.log(20), np.log(3000), G))
+    alpha = 0.08 + 2.0 / base
+    cond = np.array([0.0, 0, 1, 1])
+    mu = base[None] * np.array([0.8, 1.2, 1.0, 1.1])[:, None]
+    counts = nb_counts(rng, mu, alpha[None])
+    X = np.column_stack([np.ones(4), cond])
+    a = dv.deseq2_wald(counts, X, prior_var_rule="simulate")
+    b = dv.deseq2_wald(counts, X, prior_var_rule="simulate")
+    assert a.prior_sampling_var == b.prior_sampling_var  # same data, same draw
+    c = dv.deseq2_wald(counts, X, prior_var_rule="simulate", prior_sim_seed=1)
+    assert c.prior_sampling_var != a.prior_sampling_var
+    assert a.prior_sampling_var == pytest.approx(a.squared_logres, rel=0.25)
+    assert c.prior_sampling_var == pytest.approx(a.prior_sampling_var, rel=0.25)
