@@ -1931,6 +1931,14 @@ CHUNKED_FIXED = 500 * MiB  # kept by the process from its first pass on (see abo
 # a few times over; 0.80 GB peak RSS building 100k cells on its own.
 GENESTORE_BUILD_BYTES = 750 * MiB
 CHUNKED_WRITE_KEPT = 400 * MiB  # kept by the process after the write (measured, as above)
+# Refit on CSC Roihu (2026-11-04): 8 CELLxGENE datasets of 18k-185k cells forced into large
+# mode, 4 CPUs (two also at 2), anon memory every second (research: pilot notes). Two terms
+# the laptop run had no way to show: after doublet detection the process keeps about a tenth
+# of the step's transient (freed arrays glibc keeps: 0.03-0.16, median 0.11; 2.97 GB held
+# into filtering after a 23 GB step on 185k cells, 0.68 modelled), and the write grows with
+# the workers (38b64997 1.83 vs 1.16 GB at 4 vs 2 CPUs, 5015051f 1.23 vs 1.00; 0.98 modelled).
+DBL_KEPT_SHARE = 0.12
+CHUNKED_WRITE_PER_WORKER = 150 * MiB
 MARKERS_STORE_PER_VALUE = 60  # sparse_markers: working set per stored value of a gene block
 CELLTYPIST_LABELS = 100  # probabilities kept per cell (float32)
 CHUNKED_NEIGHBORS_PER_CELL = 2_600  # building the graph; 1,300 of it kept
@@ -2009,7 +2017,7 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
         x = Matrix("X", n, m, not sh.dense, sh.nnz if not sh.dense else n * m, "float32",
                    nonzero=sh.nnz if sh.dense else None)
         t, _, secs = _step_doublet(_State(n, m, x, {}, None, 0), params, doublets, read_in=True)
-        held = n * 16
+        held = n * 16 + int(DBL_KEPT_SHARE * t)
     elif step == "filtering":
         t, secs = _chunk_pass(sh, params) + sh.other, _pass_secs(sh)
     elif step == "normalization":
@@ -2077,7 +2085,10 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
     else:
         t, secs = 0, 0.1
     if write:
-        t = max(t, _chunk_pass(sh, params) + GENESTORE_BUILD_BYTES)
+        from scview.core import chunked
+
+        t = max(t, _chunk_pass(sh, params) + GENESTORE_BUILD_BYTES
+                + CHUNKED_WRITE_PER_WORKER * chunked.n_workers())
         held += CHUNKED_WRITE_KEPT
         secs += sh.nnz * CHUNKED_WRITE_SECONDS_PER_VALUE
     return int(t), int(held), float(secs)
