@@ -57,6 +57,36 @@ UNIFORM_RATIO = 1.5
 # (Yang 2021: 1 female donor a side, 31% vs 7% of the L2/3 nuclei, XIST padj 6e-34).
 CELL_SHARE_DIFF = 0.15
 
+# A pseudobulk comparison whose sides' shares of female samples differ by this much (absolute)
+# is warned about even when neither side is one sex: random donor splits of one condition put
+# XIST and Y genes among the significant genes (research/pseudobulk/calib, 18 datasets: the most
+# frequent null hits after mitochondrial genes). 2 female + 1 male vs 1 + 2 differ by 33 points.
+SAMPLE_SHARE_DIFF = 0.25
+
+# Genes whose expression follows sex itself: X-inactivation lncRNAs and Y-chromosome genes
+# expressed outside the testis. In a DE result they are flagged (``sex_linked``): a difference
+# in them is a difference in the samples' sexes unless sex is balanced or in the design.
+SEX_LINKED_GENES = {
+    "human": ("XIST", "TSIX", "JPX", "RPS4Y1", "RPS4Y2", "DDX3Y", "KDM5D", "UTY", "EIF1AY", "ZFY",
+              "USP9Y", "NLGN4Y", "TXLNGY", "PRKY", "TBL1Y", "PCDH11Y", "TMSB4Y", "LINC00278",
+              "TTTY14", "TTTY15", "TTTY10"),
+    "mouse": ("Xist", "Tsix", "Jpx", "Ddx3y", "Eif2s3y", "Kdm5d", "Uty", "Zfy1", "Zfy2", "Usp9y"),
+}
+_SEX_LINKED = frozenset(g for genes in SEX_LINKED_GENES.values() for g in genes)
+
+
+def sex_linked(genes) -> list[str]:
+    """The genes of ``genes`` (names, in order, once each) that follow sex itself."""
+    seen: set[str] = set()
+    out = []
+    for g in genes:
+        g = str(g)
+        if g in _SEX_LINKED and g not in seen:
+            seen.add(g)
+            out.append(g)
+    return out
+
+
 # A sample with Y genes in this share of its cells sets the dataset's male Y-gene level.
 MALE_LIKE_SHARE = 0.5
 # A marker set's CPM under this share of the other sex's samples' level is ambient RNA.
@@ -358,13 +388,18 @@ def sample_sexes(obs: pd.DataFrame, sample_key: str,
     return None
 
 
+def _female_share(t: dict) -> float:
+    return t["female"] / (t["female"] + t["male"])
+
+
 def compare_sides(obs: pd.DataFrame, sample_key: str, mask_a: np.ndarray, mask_b: np.ndarray,
                   label_a: str, label_b: str, sexes: dict[str, str], source: str) -> dict | None:
     """Whether the two sides of a comparison differ in their samples' sexes (a sample
     counts on a side with at least MIN_CELLS of its cells there), as ``sex_confounding``
     judges the levels of a condition: ``confounded`` (each side one sex, not the same)
-    or ``imbalanced`` (a side of 2+ samples all one sex, the other side both). None
-    when they do not, or when a side has no sample of known sex."""
+    or ``imbalanced`` (a side of 2+ samples all one sex, the other side both), else
+    ``unequal`` (the sides' shares of female samples differ by SAMPLE_SHARE_DIFF or more).
+    None when they do not, or when a side has no sample of known sex."""
     samples = obs[sample_key].astype(str).where(obs[sample_key].notna()).to_numpy()
     tallies = []
     for mask in (mask_a, mask_b):
@@ -391,6 +426,12 @@ def compare_sides(obs: pd.DataFrame, sample_key: str, mask_a: np.ndarray, mask_b
         msg = (f"Sex differs between the sides ({desc}){tail}: XIST, TSIX and Y-chromosome genes "
                "will show up in this comparison for that reason, not the condition's; read sex-linked "
                "genes as sex.")
+    elif abs(_female_share(tallies[0]) - _female_share(tallies[1])) >= SAMPLE_SHARE_DIFF:
+        kind = "unequal"
+        msg = (f"The sides' samples differ in their mix of sexes ({desc}){tail}: XIST and "
+               "Y-chromosome genes can reach significance for that reason alone (seen in random "
+               "splits of one condition's donors); read sex-linked genes as sex, or (pseudobulk) put "
+               "the sex column in the design.")
     else:
         return None
     return {"kind": kind, "message": msg, "sample_key": sample_key, "source": source,

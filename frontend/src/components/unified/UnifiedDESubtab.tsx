@@ -46,6 +46,7 @@ import {
   deResultQuestion,
   isSignificant,
   replicateColumns,
+  sexLinkedTitle,
   suggestReplicateColumn,
   type DEComparison,
 } from "@/lib/de";
@@ -306,6 +307,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
     [result, pThreshold, fcThreshold],
   );
   const withP = result ? hasPValues(result) : true;
+  const sexLinked = useMemo(() => new Set(result?.sex_linked ?? []), [result]);
 
   const askAboutGene = useCallback(
     (gene: DEResponse["genes"][number]) => {
@@ -932,7 +934,22 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                   >
                     <td className="px-2 py-1.5">
                       <div className="flex items-center justify-between gap-1">
-                        <span className="font-mono font-medium text-slate-800">{g.gene}</span>
+                        <span className="flex items-center gap-1">
+                          <span className="font-mono font-medium text-slate-800">{g.gene}</span>
+                          {sexLinked.has(g.gene) && (
+                            <span
+                              data-testid="de-sex-linked"
+                              title={sexLinkedTitle(result)}
+                              className={`rounded border px-1 text-[9px] font-medium uppercase ${
+                                result.sex && !result.sex.adjusted
+                                  ? "border-red-200 bg-red-50 text-red-700"
+                                  : "border-slate-200 bg-slate-100 text-slate-600"
+                              }`}
+                            >
+                              sex
+                            </span>
+                          )}
+                        </span>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

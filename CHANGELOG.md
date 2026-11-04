@@ -6,6 +6,15 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Sex-linked genes are marked in every DE result.** XIST, TSIX and Y-chromosome genes get a "sex" badge in
+  the DE table (red when the two sides' samples differ in sex, grey otherwise), and the co-pilot is told which
+  significant genes are sex-linked. In random splits of one condition's donors across 18 public datasets, these
+  genes were among the most frequent false hits whenever the split happened to line up with donor sex.
+- **DE between groups warns when the sides' sex mix differs**, not only when a side is all one sex: a gap of
+  25 percentage points or more in the share of female samples (for example 3 female + 1 male against
+  1 female + 3 male) now gives a caution.
+
 ## [0.60.1] - 2026-11-04
 
 Memory estimates for large-dataset mode, measured on CSC Roihu (the 1,000-dataset run's batch nodes).

@@ -8,6 +8,8 @@ import {
   describeComparison,
   isSignificant,
   replicateColumns,
+  sexLinkedTitle,
+  significantSexLinked,
   suggestReplicateColumn,
   type DEComparison,
 } from "./de";
@@ -224,5 +226,32 @@ describe("deEnrichmentQuery", () => {
     const q = deEnrichmentQuery(res, 0.05, 0);
     expect(q.up).not.toContain("ACTB");
     expect(q.down).not.toContain("ACTB");
+  });
+});
+
+describe("sex-linked genes", () => {
+  const g = (gene: string, pval_adj: number): DEGene => ({ gene, logfoldchange: 2, pval: pval_adj / 10, pval_adj });
+  const base: DEResponse = {
+    n_selected: 4, n_rest: 4, label: "COVID-19 vs normal",
+    genes: [g("XIST", 0.001), g("IFI27", 0.01), g("RPS4Y1", 0.2)],
+    sex_linked: ["XIST", "RPS4Y1"],
+  };
+  it("names only the significant ones", () => {
+    expect(significantSexLinked(base)).toEqual(["XIST"]);
+    expect(significantSexLinked({ ...base, sex_linked: undefined })).toEqual([]);
+  });
+  it("tells the co-pilot, saying when the sex balance is unknown", () => {
+    const c: DEComparison = { a: "COVID-19", b: "normal", scope: "all cells", betweenGroups: true };
+    const text = describeComparison(c, base);
+    expect(text).toContain("Sex-linked genes among the significant");
+    expect(text).toContain("not known here");
+    expect(text).toContain("XIST");
+    expect(text).not.toContain("RPS4Y1");
+  });
+  it("words the badge by what is known about sex", () => {
+    const sex = { kind: "unequal" as const, message: "m.", sample_key: "donor", source: "s", a: {}, b: {} };
+    expect(sexLinkedTitle(base)).toContain("only if the sides balance");
+    expect(sexLinkedTitle({ ...base, sex })).toContain("read this difference as sex");
+    expect(sexLinkedTitle({ ...base, sex: { ...sex, adjusted: true } })).toContain("adjusted for");
   });
 });

@@ -52,6 +52,9 @@ export interface DEResponse {
   confounding?: DEConfounding | null;
   /** /de/compare: the sides' samples differ in sex (absent from older servers). */
   sex?: DESexDifference | null;
+  /** Genes of `genes` that follow sex itself: XIST, TSIX, Y-chromosome genes
+   *  (core/sex_check.py SEX_LINKED_GENES). Absent from older servers. */
+  sex_linked?: string[];
   /** /de/compare: each side's share of every cluster/state (absent from older servers). */
   composition?: DEComposition | null;
   /** Names this result for GSEA, which could not send every gene back. */
@@ -170,11 +173,13 @@ export interface DEComposition {
 /** /de/compare: the two sides' samples differ in sex (core/sex_check.py compare_sides), or,
  *  for a cell-level test, the share of their CELLS from female samples does ("cells"). */
 export interface DESexDifference {
-  kind: "confounded" | "imbalanced" | "cells";
+  kind: "confounded" | "imbalanced" | "unequal" | "cells";
   message: string;
   sample_key: string;
   /** Where each sample's sex came from: the metadata column, or a sex check already run. */
   source: string;
+  /** Pseudobulk with the sex column as a covariate: sex is estimated apart from the condition. */
+  adjusted?: boolean;
   /** Samples of each sex; "cells": cells of each sex and the female share. */
   a: { female?: number; male?: number; female_cells?: number; male_cells?: number; share_female?: number };
   b: { female?: number; male?: number; female_cells?: number; male_cells?: number; share_female?: number };
