@@ -6,6 +6,16 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-11-04
+
+Pseudobulk DE on large datasets (part A of the pseudobulk study; checked on CSC Roihu on a 159k-cell placenta atlas:
+all 7 per-cell-type comparisons that 0.59.0 refused now run; the whole analysis took 34 min and peaked at 7.3 GB).
+
+### Added
+- **Pseudobulk DE between groups runs on large datasets.** The counts are summed per donor and group straight from
+  the counts file, a span of 5,000 cells at a time, so the matrix is never loaded; DESeq2 and voom give the same
+  answer as in memory. Cell-level DE (Wilcoxon, t-test, logreg) is still refused in large-dataset mode.
+
 ## [0.59.0] - 2026-11-03
 
 Batch 40: fixes from the 20-dataset pilot of the 1,000-dataset run (CSC Roihu, 1.1M cells).
