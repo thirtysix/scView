@@ -158,3 +158,60 @@ async def test_sex_as_a_pseudobulk_covariate_says_it_is_adjusted(client, dataset
     assert sex["adjusted"] is True and sex["kind"] == "imbalanced"
     assert sex["message"].startswith("Sex differs between the sides (COVID-19: 0 female, 4 male; normal: 2 female, 2 male)")
     assert "'sex' is a covariate in this design" in sex["message"] and "will show up" not in sex["message"]
+
+
+def test_unequal_sex_mix_warns_when_neither_side_is_one_sex():
+    """Random donor splits of one condition put XIST and Y genes among the hits when the
+    sides' sex mix differs (research/pseudobulk/calib); 3 F + 1 M vs 1 F + 3 M says so."""
+    obs = _adata(None, with_column=False).obs
+    covid = (obs["disease"] == "COVID-19").to_numpy()
+    mix = {"P0": "female", "P1": "female", "P2": "female", "P3": "male",
+           "H0": "female", "H1": "male", "H2": "male", "H3": "male"}
+    r = sex_check.compare_sides(obs, "donor_id", covid, ~covid, "COVID-19", "normal", mix, "x")
+    assert r["kind"] == "unequal" and "3 female, 1 male" in r["message"]
+    # 2 + 2 vs 1 + 3 differ by 25 points: at the threshold
+    two = {**mix, "P2": "male"}
+    assert sex_check.compare_sides(obs, "donor_id", covid, ~covid, "C", "N", two, "x")["kind"] == "unequal"
+    same = {**mix, "P1": "male", "P2": "male"}  # 1 + 3 a side: balanced
+    assert sex_check.compare_sides(obs, "donor_id", covid, ~covid, "C", "N", same, "x") is None
+
+
+def test_sex_linked_genes_are_named_on_every_de_response():
+    from scview.api.v1.de import DEGene, DEResponse
+
+    genes = [DEGene(gene=g, logfoldchange=1.0, pval=0.01, pval_adj=0.04)
+             for g in ("IFI27", "XIST", "RPS4Y1", "Xist", "ACTB")]
+    r = DEResponse(n_selected=4, n_rest=4, label="x", genes=genes)
+    assert r.sex_linked == ["XIST", "RPS4Y1", "Xist"]
+    assert DEResponse(n_selected=1, n_rest=1, label="x", genes=genes[:1]).sex_linked == []
+    assert sex_check.sex_linked(["UTY", "UTY", "G1"]) == ["UTY"]
+
+
+@pytest.mark.parametrize("method", ["wilcoxon", "pseudobulk"])
+async def test_sex_linked_genes_are_found_by_symbol_when_names_are_ensembl_ids(
+        client, dataset_manager, method):
+    """A CELLxGENE file uploaded as it is: Ensembl ids as gene names, symbols in
+    var['feature_name']. Seen on Wilk 2020 (2026-11-05): no gene was flagged."""
+    a = _adata(WILK_LIKE)
+    ids = [f"ENSG{i:011d}" for i in range(20)]
+    symbols = ["XIST"] + [f"G{i}" for i in range(1, 19)] + ["RPS4Y1"]
+    a.var = pd.DataFrame({"feature_name": symbols}, index=ids)
+    did = _register(dataset_manager, a, "sexens")
+    r = await client.post(f"{API}/datasets/{did}/de/compare", json={**BODY, "method": method,
+                                                                    "within_column": "cell_type",
+                                                                    "within_value": "A"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    shown = {g["gene"] for g in body["genes"]}
+    assert set(body["sex_linked"]) == {ids[0], ids[19]} & shown and ids[0] in shown
+
+
+def test_sex_linked_ids_reads_symbols_from_var_and_raw():
+    a = ad.AnnData(np.zeros((2, 3), dtype=np.float32))
+    a.var_names = ["ENSG1", "ENSG2", "ENSG3"]
+    a.var["feature_name"] = ["XIST", "CD3E", "UTY"]
+    assert sex_check.sex_linked_ids(a) == {"ENSG1": "XIST", "ENSG3": "UTY"}
+    assert sex_check.sex_linked(["ENSG3", "ENSG2", "XIST"], sex_check.sex_linked_ids(a)) == ["ENSG3", "XIST"]
+    b = ad.AnnData(np.zeros((2, 2), dtype=np.float32))
+    b.var_names = ["XIST", "CD3E"]
+    assert sex_check.sex_linked_ids(b) == {}

@@ -333,20 +333,19 @@ describe("UnifiedDESubtab cell-level method", () => {
     expect(screen.queryByRole("combobox", { name: "Cell-level test" })).toBeNull();
   });
 
-  it("sends the pseudobulk model and RUV k only when changed", async () => {
+  it("always sends the pseudobulk model (voom by default), RUV k only when set", async () => {
     useDESettingsStore.getState().update({ mode: "groups", test: "pseudobulk", replicateKey: "donor" });
     renderDE();
     fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
     await waitFor(() => expect(computeDECompare).toHaveBeenCalledTimes(1));
     const first = computeDECompare.mock.calls[0]![1];
-    expect(first).toMatchObject({ method: "pseudobulk" });
-    expect(first).not.toHaveProperty("pb_method");
+    expect(first).toMatchObject({ method: "pseudobulk", pb_method: "voom" });
     expect(first).not.toHaveProperty("ruv_k");
-    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "voom" } });
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "deseq2" } });
     fireEvent.change(screen.getByLabelText("RUV"), { target: { value: "1" } });
     fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
     await waitFor(() => expect(computeDECompare).toHaveBeenCalledTimes(2));
-    expect(computeDECompare.mock.calls[1]![1]).toMatchObject({ method: "pseudobulk", pb_method: "voom", ruv_k: 1 });
+    expect(computeDECompare.mock.calls[1]![1]).toMatchObject({ method: "pseudobulk", pb_method: "deseq2", ruv_k: 1 });
   });
 
   it("adjusts pseudobulk for chosen covariates and shows the replicate cautions", async () => {

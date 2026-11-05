@@ -13,7 +13,7 @@ Two pseudobulk values are offered:
   file often has none left), and gives every cell one vote, so a few very deep
   cells cannot carry a donor.
 - ``cpm``: log2(CPM + 1) of the sample's summed raw counts, the quantity a
-  pseudobulk DE test (DESeq2 on donor sums, core/pseudobulk.py) works from.
+  pseudobulk DE test (limma-voom or DESeq2 on donor sums, core/pseudobulk.py) works from.
   Deep cells weigh more. Needs raw counts.
 
 A sample with fewer than ``MIN_CELLS`` cells of a group is left out, as in

@@ -101,12 +101,30 @@ export interface DEComparison {
 const num = (n: number | null | undefined) => (n ?? 0).toLocaleString("en-US");
 
 /** One-line description of the comparison and the test behind it. */
+/** The significant genes (adjusted p < 0.05) of a result that follow sex itself. */
+export function significantSexLinked(r: DEResponse): string[] {
+  const flagged = new Set(r.sex_linked ?? []);
+  if (!flagged.size) return [];
+  return r.genes.filter((g) => flagged.has(g.gene) && g.pval_adj != null && g.pval_adj < 0.05).map((g) => g.gene);
+}
+
+/** Tooltip of a sex-linked gene's badge: stronger when the sides' samples differ in sex. */
+export function sexLinkedTitle(r: DEResponse): string {
+  const base = "Sex-linked gene (XIST, TSIX or Y chromosome): its level follows the samples' sex.";
+  if (r.sex?.adjusted) return `${base} Sex is a covariate in this design, so it is adjusted for.`;
+  if (r.sex) return `${base} The sides' samples differ in sex, so read this difference as sex, not the comparison.`;
+  return `${base} Read it as the comparison's only if the sides balance in sex (random splits of one condition's donors put these genes among the hits when they do not).`;
+}
+
 export function describeComparison(c: DEComparison, r: DEResponse): string {
   let text = describeTest(c, r);
   // The co-pilot must not read a batch difference as biology...
   if (r.confounding) text += `. Caution: ${r.confounding.message}`;
   // ... nor sex-linked genes as the condition's.
   if (r.sex) text += `. Caution: ${r.sex.message.replace(/\.$/, "")}`;
+  const sexGenes = significantSexLinked(r);
+  if (sexGenes.length)
+    text += `. Sex-linked genes among the significant (follow the samples' sex${r.sex ? "" : "; sex balance between the sides not known here"}): ${sexGenes.slice(0, 8).join(", ")}`;
   // ... nor a shift in which cells each side holds as a change within cells.
   const mix = compositionCautionForCopilot(r.composition);
   if (mix) text += `. Caution (composition by ${r.composition!.column}): ${mix.replace(/\.$/, "")}`;

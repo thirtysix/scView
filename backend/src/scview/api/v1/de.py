@@ -6,7 +6,7 @@ regression, ``core/de_methods.py``) over the genes detected in enough cells
 (``core/de_prefilter.py``), returning log fold-change and adjusted p-values per
 gene. Unlike the marker endpoint (which groups by an obs column), the
 group here is an ad-hoc list of cell indices. Between-groups comparisons can
-instead run donor-aware pseudobulk DESeq2 (``core/pseudobulk.py``). The
+instead run donor-aware pseudobulk limma-voom or DESeq2 (``core/pseudobulk.py``). The
 ``/methods`` endpoints run one comparison under every cell-level test and say
 how far they agree. A between-groups comparison also reports the two sides'
 composition (``core/de_composition.py``), before (``GET /de/composition``)
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from scview.dependencies import get_dataset_manager
 from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
@@ -81,12 +81,12 @@ class _CompareScope(BaseModel):
 
 
 class DECompareRequest(_CompareScope):
-    # "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key
+    # "pseudobulk": per-donor count sums tested with limma-voom (needs replicate_key
     # or a detectable donor column, and raw counts); the others are cell-level.
     method: Literal["wilcoxon", "t-test", "logreg", "pseudobulk"] = "wilcoxon"
     # Pseudobulk only (core/pseudobulk.py): the model, and RUVg unwanted factors
-    # in the design (0 = none). The defaults are DESeq2 without RUV.
-    pb_method: Literal["deseq2", "voom", "voombygroup"] = "deseq2"
+    # in the design (0 = none). The defaults are limma-voom without RUV.
+    pb_method: Literal["deseq2", "voom", "voombygroup"] = "voom"
     ruv_k: int = Field(default=0, ge=0, le=3)
     # Pseudobulk only: per-sample obs columns in the design (sex, batch, age), and the
     # person column the replicates nest in, for the repeated-donor warning (None: detected).
@@ -221,6 +221,29 @@ class DEResponse(BaseModel):
     detection: list[int] | None = None
     # The two sides' RNA content; None when the dataset holds no raw counts.
     transcriptome_size: TranscriptomeSize | None = None
+    # Genes of ``genes`` that follow sex itself (XIST, Y-chromosome genes;
+    # core/sex_check.py SEX_LINKED_GENES), filled from ``genes`` on every response.
+    sex_linked: list[str] = []
+
+    @model_validator(mode="after")
+    def _flag_sex_linked(self):
+        if not self.sex_linked:
+            from scview.core.sex_check import sex_linked
+
+            self.sex_linked = sex_linked(g.gene for g in self.genes)
+        return self
+
+
+def _sex_linked(adata, genes) -> list[str]:
+    """``DEResponse.sex_linked`` when the gene names may not be symbols (Ensembl ids
+    with symbols in var): the response's own check reads names only."""
+    from scview.core import sex_check
+
+    try:
+        ids = sex_check.sex_linked_ids(adata)
+    except Exception:  # pragma: no cover - a flag, never the reason DE fails
+        return []
+    return sex_check.sex_linked((g.gene for g in genes), ids) if ids else []
 
 
 class DEMethodSummary(BaseModel):
@@ -307,8 +330,9 @@ def _sex_difference(obs, body: _CompareScope, mask_a, mask_b, dataset_id: str,
             return None
         sides = (key, mask_a, mask_b, str(body.group_a), str(body.group_b), *known)
         found = sex_check.compare_sides(obs, *sides)
-        if found is None and cell_level:
-            found = sex_check.compare_cell_shares(obs, *sides)
+        if cell_level and (found is None or found["kind"] == "unequal"):
+            # a cell-level test weighs donors by their cells: the cells' sex mix says more
+            found = sex_check.compare_cell_shares(obs, *sides) or found
         return found
     except Exception as e:  # noqa: BLE001 — a caution, never a reason for the DE to fail
         logger.warning("Sex check of a DE comparison failed: %s", e)
@@ -660,7 +684,8 @@ async def differential_expression(
                 "cells": selection_facts.selection_hash(mask.nonzero()[0], int(adata.n_obs))}
     return DEResponse(n_selected=n_sel, n_rest=int(adata.n_obs) - n_sel, label=body.label,
                       genes=res.genes, result_id=_remember(dataset_id, res, compared, adaptor),
-                      transcriptome_size=size, **res.fields())
+                      transcriptome_size=size, sex_linked=_sex_linked(adata, res.genes),
+                      **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/methods", response_model=DEMethodsResponse)
@@ -817,7 +842,8 @@ async def differential_expression_compare(
     result_id = _remember(dataset_id, res, _compared(body, n_a, n_b, key), adaptor)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=_compare_label(body), genes=res.genes,
                       result_id=result_id, transcriptome_size=size, confounding=confounding,
-                      composition=composition, sex=sex, **guard, **res.fields())
+                      composition=composition, sex=sex, sex_linked=_sex_linked(adata, res.genes),
+                      **guard, **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/compare/methods", response_model=DEMethodsResponse)
@@ -847,8 +873,8 @@ async def differential_expression_compare_methods(
 
 async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str, adaptor=None,
                               dm: DatasetManager | None = None):
-    """Donor-aware A vs B: per-donor count sums, DESeq2 Wald test or limma-voom /
-    voomByGroup, optionally with RUV factors (off the event loop)."""
+    """Donor-aware A vs B: per-donor count sums, limma-voom / voomByGroup or
+    DESeq2, optionally with RUV factors (off the event loop)."""
     from scview.core import pseudobulk
     from scview.core.pseudobulk import PseudobulkError, pseudobulk_de
 
@@ -940,6 +966,9 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
     few = few_donors(people, f"'{rep['donor_key']}' values" if rep else "donors")
     if few:
         rep_warnings.append(few)
+    caution = pseudobulk.method_caution(res.method, res.n_samples_a, res.n_samples_b)
+    if caution:
+        rep_warnings.append(caution)
     comparison = _compared(body, res.n_cells_a, res.n_cells_b, key)
     if res.covariates:
         comparison["covariates"] = res.covariates
@@ -967,6 +996,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         counts_source=res.counts_source,
         dropped_samples=res.dropped_samples,
         transcriptome_size=size,
+        sex_linked=_sex_linked(adata, genes),
         pb_method=res.method,
         ruv_k=res.ruv_k,
         heteroscedasticity=res.heteroscedasticity,
@@ -1174,7 +1204,7 @@ class DEAuditRequest(BaseModel):
     min_pct: float = _MinPct
     n_permutations: int = Field(default=20, ge=1, le=100)
     max_seconds: float = Field(default=300.0, ge=5.0, le=1800.0)
-    pb_method: Literal["deseq2", "voom", "voombygroup"] = "deseq2"
+    pb_method: Literal["deseq2", "voom", "voombygroup"] = "voom"
     seed: int = 0
 
 

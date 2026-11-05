@@ -52,6 +52,9 @@ export interface DEResponse {
   confounding?: DEConfounding | null;
   /** /de/compare: the sides' samples differ in sex (absent from older servers). */
   sex?: DESexDifference | null;
+  /** Genes of `genes` that follow sex itself: XIST, TSIX, Y-chromosome genes
+   *  (core/sex_check.py SEX_LINKED_GENES). Absent from older servers. */
+  sex_linked?: string[];
   /** /de/compare: each side's share of every cluster/state (absent from older servers). */
   composition?: DEComposition | null;
   /** Names this result for GSEA, which could not send every gene back. */
@@ -170,11 +173,13 @@ export interface DEComposition {
 /** /de/compare: the two sides' samples differ in sex (core/sex_check.py compare_sides), or,
  *  for a cell-level test, the share of their CELLS from female samples does ("cells"). */
 export interface DESexDifference {
-  kind: "confounded" | "imbalanced" | "cells";
+  kind: "confounded" | "imbalanced" | "unequal" | "cells";
   message: string;
   sample_key: string;
   /** Where each sample's sex came from: the metadata column, or a sex check already run. */
   source: string;
+  /** Pseudobulk with the sex column as a covariate: sex is estimated apart from the condition. */
+  adjusted?: boolean;
   /** Samples of each sex; "cells": cells of each sex and the female share. */
   a: { female?: number; male?: number; female_cells?: number; male_cells?: number; share_female?: number };
   b: { female?: number; male?: number; female_cells?: number; male_cells?: number; share_female?: number };
@@ -216,10 +221,10 @@ export interface DECompareRequest {
   within_column?: string;
   within_value?: string;
   replicate_key?: string;
-  /** "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key);
+  /** "pseudobulk": per-donor count sums tested with limma-voom (default) or DESeq2 (needs replicate_key);
    *  the others are cell-level tests (Wilcoxon when absent). */
   method?: DEMethod;
-  /** Pseudobulk only: the model (DESeq2 when absent) and RUV factors (0-3). */
+  /** Pseudobulk only: the model (limma-voom when absent; servers before 0.61 used DESeq2) and RUV factors (0-3). */
   pb_method?: PseudobulkMethod;
   ruv_k?: number;
   /** Pseudobulk only: per-sample obs columns in the design (sex, batch, age; up to 4). */
@@ -233,7 +238,7 @@ export interface DECompareRequest {
 /**
  * DE between two groups of one obs column (A vs B), optionally within one
  * subgroup — e.g. dataset STIM vs CTRL within one cell type: cell-level Wilcoxon,
- * or donor-aware pseudobulk DESeq2. In the response, `n_selected` / `n_rest` are
+ * or donor-aware pseudobulk limma-voom or DESeq2. In the response, `n_selected` / `n_rest` are
  * the A / B cell counts.
  */
 export async function computeDECompare(

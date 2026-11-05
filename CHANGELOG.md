@@ -6,6 +6,31 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-11-05
+
+Pseudobulk DE defaults to limma-voom, chosen on 18 public datasets; sex-linked genes are flagged in every DE result.
+
+### Changed
+- **Pseudobulk DE now uses limma-voom by default instead of DESeq2.** On real donor splits of 18 public datasets
+  (82 cell types, 166,000 fits) with known effects added, DESeq2 called about 1 false gene in 3 at a nominal FDR
+  of 5% with 2 donors per side, 1 in 5 at 3 and 1 in 6 at 4; limma-voom called 1 in 7 at 2 donors and stayed near
+  1 in 20 from 3 donors on, while ranking genes as well (AUC 0.89 for both). DESeq2 is still offered, and a DESeq2
+  run with fewer than 6 donors on its smaller side now carries a caution that its adjusted p-values are optimistic.
+  Results stored before this change keep their DESeq2 label. Method and numbers: `docs/validation/pseudobulk-de.md`.
+- **The study planner's DE power now runs limma-voom on each simulated study**, the same code as pseudobulk DE,
+  so a plan matches the test you will actually run. DESeq2 can still be chosen ("Test" in Compare > Plan a
+  study > Pseudobulk DE). voom plans also run about 3x faster.
+
+### Added
+- **Sex-linked genes are marked in every DE result.** XIST, TSIX and Y-chromosome genes get a "sex" badge in
+  the DE table (red when the two sides' samples differ in sex, grey otherwise), and the co-pilot is told which
+  significant genes are sex-linked. Genes named by Ensembl id (a CELLxGENE file uploaded as it is) are matched
+  through the symbols in var['feature_name']. In random splits of one condition's donors across 18 public datasets, these
+  genes were among the most frequent false hits whenever the split happened to line up with donor sex.
+- **DE between groups warns when the sides' sex mix differs**, not only when a side is all one sex: a gap of
+  25 percentage points or more in the share of female samples (for example 3 female + 1 male against
+  1 female + 3 male) now gives a caution.
+
 ## [0.60.1] - 2026-11-04
 
 Memory estimates for large-dataset mode, measured on CSC Roihu (the 1,000-dataset run's batch nodes).

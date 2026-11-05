@@ -66,7 +66,11 @@ export interface DEPlanRequest extends PilotRequest {
   target_power?: number;
   design?: "paired" | "unpaired";
   reps?: number;
+  /** The app's pseudobulk test run on each simulated study (server default voom). */
+  method?: DEPlanMethod;
 }
+
+export type DEPlanMethod = "voom" | "deseq2";
 
 export interface PlanPilotSummary {
   design: PilotInfo["design"];
@@ -184,6 +188,9 @@ export interface DEPlan {
   expression_tertiles: number[];
   design: "paired" | "unpaired";
   can_pair: boolean;
+  /** Absent on plans stored before v0.61.0 (those ran DESeq2). */
+  method?: DEPlanMethod;
+  method_name?: string;
   log2fc: number[];
   donors: number[];
   cells: number[];

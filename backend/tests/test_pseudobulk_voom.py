@@ -83,16 +83,34 @@ async def test_voom_methods_find_the_planted_genes(pb):
 
 
 @pytest.mark.asyncio
-async def test_default_stays_deseq2_and_adds_the_variance_check():
+async def test_default_is_voom_and_adds_the_variance_check():
     a = _counts(DONORS, DONORS)
     res = await differential_expression_compare("x", _req(), _DM(a))
-    assert res.pb_method == "deseq2" and res.ruv_k == 0 and res.ruv is None
+    assert res.pb_method == "voom" and res.ruv_k == 0 and res.ruv is None
     assert res.design == "~donor + condition"
-    assert de_results.recall("x", res.result_id).label == "All cells: A vs B (pseudobulk DESeq2)"
+    assert de_results.recall("x", res.result_id).label == "All cells: A vs B (pseudobulk limma-voom)"
+    assert not any("DESeq2 with" in w for w in res.replicate_warnings)
     h = res.heteroscedasticity
     assert [g["group"] for g in h["groups"]] == ["A", "B"]
     assert all(g["n_samples"] == 5 and len(g["trend"]) >= 2 for g in h["groups"])
     assert h["flag"] is False and h["ratio"] < pseudobulk.HETERO_RATIO
+
+
+@pytest.mark.asyncio
+async def test_deseq2_below_six_donors_a_side_carries_the_fdr_caution():
+    a = _counts(DONORS, DONORS)
+    res = await differential_expression_compare("x", _req(pb_method="deseq2"), _DM(a))
+    assert res.pb_method == "deseq2"
+    caution = [w for w in res.replicate_warnings if w.startswith("DESeq2 with 5 donors")]
+    assert len(caution) == 1 and "limma-voom" in caution[0]
+
+
+def test_method_caution_only_for_deseq2_under_the_threshold():
+    n = pseudobulk.DESEQ2_FDR_DONORS
+    assert pseudobulk.method_caution("deseq2", n - 1, 20) is not None
+    assert pseudobulk.method_caution("deseq2", n, n) is None
+    assert pseudobulk.method_caution("voom", 2, 2) is None
+    assert pseudobulk.method_caution("voombygroup", 2, 2) is None
 
 
 @pytest.mark.asyncio

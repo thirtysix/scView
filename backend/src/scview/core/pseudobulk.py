@@ -1,19 +1,22 @@
-"""Pseudobulk differential expression across donors (DESeq2 via pydeseq2, or
-limma-voom / voomByGroup via core/voom.py), optionally with RUV factors.
+"""Pseudobulk differential expression across donors (limma-voom / voomByGroup via
+core/voom.py, or DESeq2 via pydeseq2), optionally with RUV factors.
 
 A cell-level test treats every cell as an independent replicate, so when two
 conditions also differ by donor its p-values are far too small. Here each
-donor's raw counts are summed per condition into one pseudobulk sample, and
-DESeq2's negative-binomial Wald test compares those samples: the replicate is
-the donor, not the cell.
+donor's raw counts are summed per condition into one pseudobulk sample, and those
+samples are compared (limma-voom's moderated t by default): the replicate is the
+donor, not the cell.
 
 When every donor contributes a sample to both conditions (the usual
 stimulated-vs-control layout), the design is paired, ``~donor + condition``, so
 donor-to-donor baseline differences are absorbed; otherwise it is ``~condition``.
 
-``method``: ``deseq2`` (default), ``voom`` (TMM, one mean-variance trend, moderated
-t) or ``voombygroup`` (a trend per condition, for when one condition's donors vary
-more). Whatever the method, each condition's own trend and residual variance are
+``method``: ``voom`` (default: TMM, one mean-variance trend, moderated t),
+``voombygroup`` (a trend per condition, for when one condition's donors vary more)
+or ``deseq2`` (negative-binomial Wald test). voom is the default because it held
+its false discovery rate on real donor splits where DESeq2 did not: true FDP at a
+nominal 5% was 13% / 7% / 6% at 2 / 3 / 4 donors per side for voom and 34% / 20% /
+15% for DESeq2 (R and pydeseq2 alike), over 18 datasets (docs/validation/pseudobulk-de.md). Whatever the method, each condition's own trend and residual variance are
 compared (``heteroscedasticity``). ``ruv_k`` > 0 adds that many RUVg factors from
 empirical control genes (core/ruv.py) to the design.
 
@@ -55,6 +58,10 @@ N_CPUS = 1
 METHODS = ("deseq2", "voom", "voombygroup")
 METHOD_NAMES = {"deseq2": "DESeq2", "voom": "limma-voom", "voombygroup": "voomByGroup"}
 MAX_RUV_K = 3
+# DESeq2 called more false genes than its FDR on real donor splits below this many
+# donors on the smaller side (true FDP at a nominal 5%: 34% at 2, 20% at 3, 15% at
+# 4, 11% at 6; voom 13%, 7%, 6%, 6%): a chosen DESeq2 run warns under it.
+DESEQ2_FDR_DONORS = 6
 # One condition's median residual variance this many times the other's flags
 # heteroscedastic groups (voomByGroup then fits each its own trend).
 HETERO_RATIO = 2.0
@@ -87,7 +94,7 @@ class PseudobulkResult:
     dropped_samples: list[str] = field(default_factory=list)
     # gene -> Wald statistic (DESeq2) or moderated t (voom)
     stats: dict[str, float] = field(default_factory=dict)
-    method: str = "deseq2"
+    method: str = "voom"
     ruv_k: int = 0
     heteroscedasticity: dict | None = None
     ruv: dict | None = None
@@ -268,12 +275,12 @@ def pseudobulk_de(
     label_a: str = "A",
     label_b: str = "B",
     donor_key: str = "donor",
-    method: str = "deseq2",
+    method: str = "voom",
     ruv_k: int = 0,
     covariates: pd.DataFrame | None = None,
 ) -> PseudobulkResult:
-    """Condition A vs B on per-donor pseudobulk sums: DESeq2's Wald test, or
-    limma-voom / voomByGroup's moderated t (``method``), with ``ruv_k`` RUVg
+    """Condition A vs B on per-donor pseudobulk sums: limma-voom / voomByGroup's
+    moderated t, or DESeq2's Wald test (``method``), with ``ruv_k`` RUVg
     factors in the design.
 
     ``adata`` holds only the compared cells; ``in_a`` marks the A cells (the
@@ -602,6 +609,18 @@ def _ruv(C, nuisance, is_a, lib, cond, donor, n_cells, k, method, names, paired)
 
 _last: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _last_lock = threading.Lock()
+
+
+def method_caution(method: str, n_a: int, n_b: int) -> str | None:
+    """The DESeq2 FDR caution for a run with fewer than DESEQ2_FDR_DONORS donors on
+    its smaller side (None for voom, or for enough donors)."""
+    n = min(n_a, n_b)
+    if method != "deseq2" or n >= DESEQ2_FDR_DONORS:
+        return None
+    return (f"DESeq2 with {n} donors on the smaller side: on real donor splits it called "
+            "more false genes than its FDR says (about 1 in 3 at 2 donors per side, 1 in 6 at 4, "
+            "for a nominal 1 in 20). limma-voom held its FDR much better; prefer it here, or "
+            "read DESeq2's padj as optimistic.")
 
 
 def summary_params(res: PseudobulkResult, label: str) -> dict:

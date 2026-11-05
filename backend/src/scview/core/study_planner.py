@@ -632,15 +632,22 @@ def donors_needed(points: Sequence[PowerPoint], target: float = TARGET_POWER) ->
 # al. 2021, PMID 34785648) model pseudobulk power the same way: the donor is
 # the replicate, the cells only sharpen each donor's mean.
 #
-# The test, on the pilot and on every simulated study: DESeq2's negative
-# binomial Wald test as pydeseq2 runs it for the app's pseudobulk DE (median-
+# The dispersion model above is fitted with DESeq2's estimator. The test on
+# the pilot and on every simulated study is the app's own pseudobulk test,
+# ``method``: limma-voom (the app's default since v0.61.0: TMM, one mean-variance
+# trend, moderated t; core/voom.py, the code pseudobulk DE runs) or DESeq2's
+# negative binomial Wald test as pydeseq2 runs it for the app's pseudobulk DE (median-
 # of-ratios size factors; method-of-moments start; Cox-Reid profile-likelihood
 # gene-wise dispersions; parametric mean-dispersion trend; log-normal prior
 # with MAD variance, floor 0.25; MAP dispersions, gene-wise kept for genes far
 # above the trend; Wald z on the condition coefficient; Benjamini-Hochberg),
 # vectorised over genes for the two designs the app uses (``~condition`` and
 # ``~donor + condition``). Left out: Cook's-distance refits and independent
-# filtering. tests/test_study_planner.py checks it against pydeseq2.
+# filtering. tests/test_study_planner.py checks it against pydeseq2. The two
+# differ most at few donors on real data: DESeq2's false discoveries run well
+# above the nominal rate at 2-4 donors per side (docs/validation/pseudobulk-de.md).
+# The simulated studies here are negative binomial (DESeq2's own model), so they
+# do not reproduce that; on Kang CD14 Mono the two plans' power is close.
 
 DE_DEFAULT_CELLS = (50, 200, 1000)  # cells of the type per sample
 DE_DEFAULT_LOG2FC = (0.5, 1.0)
@@ -648,9 +655,13 @@ DE_SHARE = 0.10  # share of the simulated genes that change
 DE_GENES = 2000  # genes simulated per study (a random draw of the pilot's tested genes)
 DE_MIN_REPS, DE_MAX_REPS = 4, 40
 DE_TIME_BUDGET_S = 45.0
+DE_METHODS = ("voom", "deseq2")
+DE_METHOD_NAMES = {"voom": "limma-voom", "deseq2": "DESeq2"}
 # Seconds per simulated study per (gene x sample), measured 2026-10-22 on 2 cores
-# (Kang CD14 Mono, 2,000 genes): ~3.1e-6 paired, ~1.4e-6 unpaired.
-_DE_COST = {"paired": 3.2e-6, "unpaired": 1.5e-6}
+# (Kang CD14 Mono, 2,000 genes): DESeq2 ~3.1e-6 paired, ~1.4e-6 unpaired; voom's test
+# alone 0.5-1.1e-6 (2,000 genes, 4-16 donors per side, 2026-11-05), plus the simulation.
+_DE_COST = {("deseq2", "paired"): 3.2e-6, ("deseq2", "unpaired"): 1.5e-6,
+            ("voom", "paired"): 1.4e-6, ("voom", "unpaired"): 1.0e-6}
 MIN_DISP = 1e-8
 MIN_MU = 0.5  # pydeseq2's floor on fitted means
 _CHUNK_ELEMENTS = 8_000_000  # dense rows read per chunk: ~64 MB as float64
@@ -932,6 +943,47 @@ def nb_wald_test(counts: np.ndarray, s_cond: np.ndarray, s_donor: np.ndarray,
                     kind_trend)
 
 
+def voom_test(counts: np.ndarray, s_cond: np.ndarray, s_donor: np.ndarray,
+              paired: bool) -> tuple[np.ndarray, np.ndarray]:
+    """limma-voom as the app's pseudobulk DE runs it (TMM, voom weights, moderated
+    t on the condition column of ``~condition`` or ``~donor + condition``) on
+    ``counts`` (samples x genes): (log2 fold change, BH-adjusted p) per gene,
+    NaN where the fit gives none."""
+    from scview.core import pseudobulk
+    from scview.core import voom as vm
+
+    C = np.asarray(counts, dtype=np.float64)
+    cond = np.asarray(s_cond, dtype=np.float64)
+    cols = [np.ones(len(C))]
+    if paired:
+        codes = pd.factorize(np.asarray(s_donor), sort=True)[0]
+        cols += [(codes == k).astype(np.float64) for k in range(1, int(codes.max()) + 1)]
+    X = np.column_stack(cols + [cond])
+    if X.shape[0] - X.shape[1] < 1:
+        raise PlannerError("No residual degrees of freedom for the test.")
+    lib = C.sum(axis=1)
+    try:
+        eb = pseudobulk._voom_test(C, X, None, lib * vm.norm_factors(C, "TMM", lib))
+    except vm.VoomError as exc:
+        raise PlannerError(str(exc)) from exc
+    lfc = np.asarray(eb.logfc, dtype=np.float64)
+    p = np.asarray(eb.p, dtype=np.float64)
+    padj = np.full(len(p), np.nan)
+    ok = np.isfinite(lfc) & np.isfinite(p)
+    if ok.any():
+        padj[ok] = comp._bh(p[ok])
+    return lfc, padj
+
+
+def de_test(counts: np.ndarray, s_cond: np.ndarray, s_donor: np.ndarray, paired: bool,
+            method: str = "voom") -> tuple[np.ndarray, np.ndarray]:
+    """(log2 fold change, adjusted p) of the app's pseudobulk test ``method``."""
+    if method == "voom":
+        return voom_test(counts, s_cond, s_donor, paired)
+    res = nb_wald_test(counts, s_cond, s_donor, "paired" if paired else "unpaired")
+    return res.log2fc, res.padj
+
+
 @dataclass
 class DEPilot:
     group_key: str
@@ -1066,15 +1118,16 @@ class DEModel:
     tau2: np.ndarray  # donor effect variance (log scale; paired pilots)
     alpha_pilot: np.ndarray  # MAP pseudobulk dispersion of the pilot's design
     n_tested: int  # pilot genes passing the app's filter
-    pilot_n_significant: int | None  # the fast test on the pilot itself (FDR < 0.05)
+    pilot_n_significant: int | None  # the planned test on the pilot itself (FDR < 0.05)
     median_cells: float
     trend: str
 
 
-def fit_de(pilot: DEPilot, *, n_genes: int = DE_GENES, seed: int = 0) -> DEModel:
+def fit_de(pilot: DEPilot, *, n_genes: int = DE_GENES, seed: int = 0,
+           method: str = "voom") -> DEModel:
     """Per gene: per-cell mean, pilot dispersion (DESeq2's), donor effect and
     the cells' own overdispersion; ``n_genes`` of the tested genes drawn for
-    the simulation."""
+    the simulation. ``method`` is the test run on the pilot itself."""
     if pilot.design == "none":
         what = ("This dataset has no donor or sample column" if pilot.sample_key is None else
                 f"'{pilot.sample_key}' gives fewer than 2 samples of {pilot.group} per condition "
@@ -1107,7 +1160,11 @@ def fit_de(pilot: DEPilot, *, n_genes: int = DE_GENES, seed: int = 0) -> DEModel
     q = (S1[ref] / sf_per_cell[ref, None]).sum(axis=0) / n[ref, 0].sum()
     rng = np.random.default_rng([seed, 104729])
     pick = np.sort(rng.choice(K.shape[1], size=min(n_genes, K.shape[1]), replace=False))
-    n_sig = int(np.nansum(res.padj < ALPHA)) if pilot.design != "single" else None
+    n_sig = None
+    if pilot.design != "single":
+        padj = res.padj if method == "deseq2" else \
+            voom_test(K, pilot.s_cond, pilot.s_donor, pilot.design == "paired")[1]
+        n_sig = int(np.nansum(padj < ALPHA))
     return DEModel(
         pilot=pilot, genes=pilot.gene_names[pilot.tested][pick], q=q[pick],
         alpha_bio=alpha_bio[pick], alpha_cell=alpha_cell[pick], tau2=tau2[pick],
@@ -1125,11 +1182,12 @@ class DEGrid:
     alpha: float = ALPHA
     reps: int = 10
     seed: int = 0
+    method: str = "voom"  # the app's pseudobulk test run on each simulated study
 
 
 def de_auto_reps(grid: DEGrid, n_genes: int) -> int:
     """Studies per grid point so the grid takes about DE_TIME_BUDGET_S."""
-    per = _DE_COST["paired" if grid.design == "paired" else "unpaired"] * n_genes
+    per = _DE_COST[(grid.method, "paired" if grid.design == "paired" else "unpaired")] * n_genes
     cost = per * sum(2 * n for n in grid.donors) * len(grid.cells) * len(grid.log2fc)
     reps = int(DE_TIME_BUDGET_S / max(cost, 1e-9))
     return int(min(DE_MAX_REPS, max(DE_MIN_REPS, reps)))
@@ -1148,7 +1206,7 @@ class DEPoint:
 
 
 def de_power_point(model: DEModel, grid: DEGrid, L: float, n: int, m: int) -> DEPoint:
-    """Share of the changed genes the fast DESeq2-style test finds (BH < alpha,
+    """Share of the changed genes the app's test (``grid.method``) finds (BH < alpha,
     right sign) in ``grid.reps`` simulated studies of n donors per group with m
     cells of the type per sample."""
     from scview.core import pseudobulk
@@ -1182,9 +1240,9 @@ def de_power_point(model: DEModel, grid: DEGrid, L: float, n: int, m: int) -> DE
         hit = np.zeros(G, dtype=bool)
         if len(ok) >= 10:
             try:
-                res = nb_wald_test(K[:, ok], s_cond, s_donor, "paired" if paired else "unpaired")
-                sig = (res.padj < grid.alpha) & np.isfinite(res.padj)
-                right = np.sign(res.log2fc) == np.sign(lfc[ok])
+                est, padj = de_test(K[:, ok], s_cond, s_donor, paired, grid.method)
+                sig = (padj < grid.alpha) & np.isfinite(padj)
+                right = np.sign(est) == np.sign(lfc[ok])
                 hit[ok[sig & right]] = True
                 called = ok[sig]
                 if called.size:
@@ -1478,6 +1536,7 @@ class DERequestModel:
     reps: int | None = None
     n_genes: int = DE_GENES
     seed: int = 0
+    method: str = "voom"
 
 
 def prepare_de(adata, req: DERequestModel) -> tuple[DEModel, DEGrid]:
@@ -1492,9 +1551,11 @@ def prepare_de(adata, req: DERequestModel) -> tuple[DEModel, DEGrid]:
         raise PlannerError("alpha must be in (0, 0.5) and the target power in (0, 1).")
     if not (200 <= req.n_genes <= 10_000):
         raise PlannerError("n_genes must be from 200 to 10,000.")
+    if req.method not in DE_METHODS:
+        raise PlannerError(f"method must be one of {', '.join(DE_METHODS)}.")
     pilot = de_pilot(adata, req.group_key, req.group, req.condition_key, req.sample_key,
                      reference=req.reference, conditions=req.conditions)
-    model = fit_de(pilot, n_genes=req.n_genes, seed=req.seed)
+    model = fit_de(pilot, n_genes=req.n_genes, seed=req.seed, method=req.method)
     design = req.design or ("paired" if pilot.design == "paired" else "unpaired")
     if design not in ("paired", "unpaired"):
         raise PlannerError("design must be 'paired' or 'unpaired'.")
@@ -1502,7 +1563,7 @@ def prepare_de(adata, req: DERequestModel) -> tuple[DEModel, DEGrid]:
         raise PlannerError("A paired design needs a paired pilot (every donor in both "
                            "conditions); plan an unpaired study.")
     grid = DEGrid(log2fc=lfcs, donors=donors, cells=cells, design=design,
-                  de_share=req.de_share, alpha=req.alpha, seed=req.seed)
+                  de_share=req.de_share, alpha=req.alpha, seed=req.seed, method=req.method)
     grid.reps = int(req.reps) if req.reps else de_auto_reps(grid, len(model.q))
     if not (2 <= grid.reps <= 500):
         raise PlannerError("reps must be from 2 to 500.")
@@ -1540,13 +1601,19 @@ def _de_assumptions(model: DEModel, grid: DEGrid, points: list[DEPoint]) -> list
     fdps = [p.fdp for p in points if p.fdp is not None]
     sig = (f"; on the pilot itself it calls {model.pilot_n_significant:,} genes at FDR < 0.05"
            if model.pilot_n_significant is not None else "")
-    out.append(
-        "Test: DESeq2's negative binomial Wald test as the app's pseudobulk DE runs it "
-        "(pydeseq2), reimplemented vectorised so hundreds of studies run in seconds; Cook's "
-        f"refits and independent filtering are left out{sig}. Across the simulated studies "
-        f"false discoveries were {np.mean(fdps) * 100:.0f}% of the calls (target "
-        f"{grid.alpha:.0%})." if fdps else "Test: DESeq2's negative binomial Wald test, "
-        "reimplemented vectorised (no calls in the simulated studies).")
+    if grid.method == "voom":
+        test = ("Test: limma-voom as the app's pseudobulk DE runs it (TMM, voom weights, "
+                f"moderated t; the same code){sig}.")
+    else:
+        test = ("Test: DESeq2's negative binomial Wald test as the app's pseudobulk DE runs it "
+                "(pydeseq2), reimplemented vectorised so hundreds of studies run in seconds; "
+                f"Cook's refits and independent filtering are left out{sig}. The app's "
+                "pseudobulk default is limma-voom: on real donor splits DESeq2 called more "
+                "false genes than its FDR at few donors, which these simulated (negative "
+                "binomial) studies do not reproduce.")
+    out.append(test + (f" Across the simulated studies false discoveries were "
+                       f"{np.mean(fdps) * 100:.0f}% of the calls (target {grid.alpha:.0%})."
+                       if fdps else " No calls in the simulated studies."))
     out.append(f"The dispersions are estimates from {len(pilot.donors)} donors: another tissue, "
                "protocol or population can vary more, and more variability needs more donors.")
     return out
@@ -1578,6 +1645,7 @@ def de_payload(model: DEModel, grid: DEGrid, points: list[DEPoint], target_power
                        "donor_sd_median": float(math.sqrt(np.median(model.tau2)))},
         "expression_tertiles": [float(t) for t in tert],
         "design": grid.design, "can_pair": pilot.design == "paired",
+        "method": grid.method, "method_name": DE_METHOD_NAMES[grid.method],
         "log2fc": grid.log2fc, "donors": grid.donors, "cells": grid.cells,
         "de_share": grid.de_share, "alpha": grid.alpha, "target_power": target_power,
         "reps": grid.reps, "points": [p.__dict__ for p in points], "needed": needed,
@@ -1593,6 +1661,7 @@ def iter_de_plan(model: DEModel, grid: DEGrid, target_power: float,
     t0 = time.perf_counter() if t0 is None else t0
     total = de_points(grid)
     yield {"start": {"kind": "de", "n_points": total, "reps": grid.reps, "design": grid.design,
+                     "method": grid.method,
                      "group": model.pilot.group, "n_genes": int(len(model.q))}}
     points = []
     for i, p in enumerate(iter_de_power(model, grid, stop)):
@@ -1713,7 +1782,7 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
             rows = [r for r in d["needed"] if r["log2fc"] == L]
             parts.append(f"log2FC {L:g}: " + "/".join(_n_text(r["donors_needed"], top) for r in rows))
         lines.append(
-            f"- Pseudobulk DE in {d['group']} ({d['design']} design, {d['de_share']:.0%} of genes "
+            f"- Pseudobulk DE in {d['group']} ({d['design']} design, {d.get('method_name', 'DESeq2')}, {d['de_share']:.0%} of genes "
             f"changed, power = share found at FDR < {d['alpha']:g}, target {d['target_power']:.0%}): "
             f"donors per group needed at {' / '.join(f'{m:,}' for m in d['cells'])} {d['group']} "
             "cells per donor: " + "; ".join(parts))

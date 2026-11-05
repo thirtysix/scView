@@ -49,7 +49,7 @@ async def test_deseq2_with_sex_matches_pydeseq2_on_the_same_design():
     from pydeseq2.ds import DeseqStats
 
     a = _with_sex(_counts(A, B, seed=3))
-    res = await differential_expression_compare("x", _req(covariates=["sex"]), _DM(a))
+    res = await differential_expression_compare("x", _req(covariates=["sex"], pb_method="deseq2"), _DM(a))
     assert res.design == "~sex + condition" and res.covariates == ["sex"] and res.covariate_notes == []
     counts, meta = _pseudobulk(a)
     inf = DefaultInference(n_cpus=1)
