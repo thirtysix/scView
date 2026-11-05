@@ -3,7 +3,8 @@ import { describePbModel, formatR, pbMethodLabel, PB_METHODS } from "./pseudobul
 
 describe("pseudobulk labels", () => {
   it("names each model, DESeq2 for older servers", () => {
-    expect(PB_METHODS.map((m) => m.value)).toEqual(["voom", "voombygroup", "deseq2"]);
+    expect(PB_METHODS.map((m) => m.value)).toEqual(["voom", "voombygroup", "edger_ql", "deseq2"]);
+    expect(pbMethodLabel("edger_ql")).toBe("edgeR QL");
     expect(pbMethodLabel("voombygroup")).toBe("voomByGroup");
     expect(pbMethodLabel(undefined)).toBe("DESeq2");
   });
@@ -16,6 +17,9 @@ describe("pseudobulk labels", () => {
       "Pseudobulk limma-voom (moderated t on TMM log-CPM, 1 RUV factor, design ~W1 + Donor + condition)",
     );
     expect(describePbModel({ design: "~condition" })).toContain("DESeq2 (Wald test");
+    expect(describePbModel({ pb_method: "edger_ql", design: "~condition", ruv_k: 0 })).toBe(
+      "Pseudobulk edgeR QL (quasi-likelihood F-test, TMM, design ~condition)",
+    );
   });
 
   it("formats correlations, n/a when missing", () => {

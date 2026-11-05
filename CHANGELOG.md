@@ -6,7 +6,21 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **edgeR quasi-likelihood is offered for pseudobulk DE** ("edgeR QL" in the model list, `pb_method: "edger_ql"`
+  in the API and MCP tool): edgeR 4's QL F-test (glmQLFit with legacy=FALSE, then glmQLFTest), written from the
+  papers and checked against R edgeR 4.6.3, whose p values it matches to a median of 3 in 100,000 on the log10
+  scale. On the 18 datasets behind the voom default it held its false discovery rate as limma-voom did (1 in 7
+  false at 2 donors per side, about 1 in 15 at 3 to 4) and ranked genes slightly better (AUC 0.90 vs 0.89).
+  limma-voom stays the default. The first edgeR QL run after a restart compiles its kernels (a few seconds).
+
 ### Changed
+- **Pseudobulk DESeq2 runs on scView's own vectorised DESeq2 instead of pydeseq2**, the same steps fitted for all
+  genes at once: a cell type now takes 0.1-0.3 s instead of 2-6 s (Kang). Its dispersion trend is fitted on the
+  genes above the dispersion floor, which is where R's DESeq2 lands, so p values sit 10x closer to R's (median
+  0.0002 on the log10 scale) and a result can differ slightly from 0.61.0's (on Kang CD14 monocytes 2,199 genes
+  at adjusted p < 0.05 vs 2,265 under pydeseq2). The FDR caution below 6 donors per side still applies. Milo
+  neighbourhood DA keeps pydeseq2, matching pertpy.
 - **A CELLxGENE .h5ad uploaded directly now gets gene symbols as its gene names**, as the Discover import always
   did: the symbols in var['feature_name'] become the gene names in X and .raw, the Ensembl ids are kept in
   var['gene_ids'], a gene with no symbol keeps its id, and a repeated symbol gets "-1". Before, these files kept

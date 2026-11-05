@@ -636,14 +636,14 @@ def donors_needed(points: Sequence[PowerPoint], target: float = TARGET_POWER) ->
 # the pilot and on every simulated study is the app's own pseudobulk test,
 # ``method``: limma-voom (the app's default since v0.61.0: TMM, one mean-variance
 # trend, moderated t; core/voom.py, the code pseudobulk DE runs) or DESeq2's
-# negative binomial Wald test as pydeseq2 runs it for the app's pseudobulk DE (median-
+# negative binomial Wald test as the app's pseudobulk DE runs it (core/deseq2_vec.py; median-
 # of-ratios size factors; method-of-moments start; Cox-Reid profile-likelihood
 # gene-wise dispersions; parametric mean-dispersion trend; log-normal prior
 # with MAD variance, floor 0.25; MAP dispersions, gene-wise kept for genes far
 # above the trend; Wald z on the condition coefficient; Benjamini-Hochberg),
 # vectorised over genes for the two designs the app uses (``~condition`` and
 # ``~donor + condition``). Left out: Cook's-distance refits and independent
-# filtering. tests/test_study_planner.py checks it against pydeseq2. The two
+# filtering. tests/test_study_planner.py checks it against the app's DESeq2. The two
 # differ most at few donors on real data: DESeq2's false discoveries run well
 # above the nominal rate at 2-4 donors per side (docs/validation/pseudobulk-de.md).
 # The simulated studies here are negative binomial (DESeq2's own model), so they
@@ -1606,7 +1606,7 @@ def _de_assumptions(model: DEModel, grid: DEGrid, points: list[DEPoint]) -> list
                 f"moderated t; the same code){sig}.")
     else:
         test = ("Test: DESeq2's negative binomial Wald test as the app's pseudobulk DE runs it "
-                "(pydeseq2), reimplemented vectorised so hundreds of studies run in seconds; "
+                "in a lighter form so hundreds of studies run in seconds; "
                 f"Cook's refits and independent filtering are left out{sig}. The app's "
                 "pseudobulk default is limma-voom: on real donor splits DESeq2 called more "
                 "false genes than its FDR at few donors, which these simulated (negative "

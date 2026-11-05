@@ -1,5 +1,6 @@
 """Pseudobulk differential expression across donors (limma-voom / voomByGroup via
-core/voom.py, or DESeq2 via pydeseq2), optionally with RUV factors.
+core/voom.py, edgeR v4 quasi-likelihood via core/edger_ql.py, or DESeq2 via
+core/deseq2_vec.py), optionally with RUV factors.
 
 A cell-level test treats every cell as an independent replicate, so when two
 conditions also differ by donor its p-values are far too small. Here each
@@ -13,10 +14,14 @@ donor-to-donor baseline differences are absorbed; otherwise it is ``~condition``
 
 ``method``: ``voom`` (default: TMM, one mean-variance trend, moderated t),
 ``voombygroup`` (a trend per condition, for when one condition's donors vary more)
-or ``deseq2`` (negative-binomial Wald test). voom is the default because it held
+``edger_ql`` (edgeR v4's quasi-likelihood F-test, glmQLFit legacy=FALSE: matched
+R edgeR 4.6 to 3 decimals in p) or ``deseq2`` (negative-binomial Wald test,
+vectorised over genes: within 0.01 of R DESeq2's p, and its dispersion trend is
+fitted as R fits it, where pydeseq2's departs). voom is the default because it held
 its false discovery rate on real donor splits where DESeq2 did not: true FDP at a
 nominal 5% was 13% / 7% / 6% at 2 / 3 / 4 donors per side for voom and 34% / 20% /
-15% for DESeq2 (R and pydeseq2 alike), over 18 datasets (docs/validation/pseudobulk-de.md). Whatever the method, each condition's own trend and residual variance are
+15% for DESeq2 (R and pydeseq2 alike), over 18 datasets; edgeR QL held it as voom did
+(docs/validation/pseudobulk-de.md). Whatever the method, each condition's own trend and residual variance are
 compared (``heteroscedasticity``). ``ruv_k`` > 0 adds that many RUVg factors from
 empirical control genes (core/ruv.py) to the design.
 
@@ -49,14 +54,12 @@ MIN_REPLICATES = 2
 # A gene is tested when it has at least this many counts in as many samples as
 # the smaller condition has (the edgeR filterByExpr idea, simplified).
 MIN_GENE_COUNT = 10
-# Compute bounds: DESeq2 fits one model per gene, so cost is samples x genes.
+# Compute bounds: the count models fit every gene, so cost is samples x genes.
 MAX_SAMPLES = 300
 MAX_GENES = 20_000
-# Worker processes for pydeseq2's per-gene fits. One keeps it in-process, which
-# also keeps a shared laptop or a one-worker server from being saturated.
-N_CPUS = 1
-METHODS = ("deseq2", "voom", "voombygroup")
-METHOD_NAMES = {"deseq2": "DESeq2", "voom": "limma-voom", "voombygroup": "voomByGroup"}
+METHODS = ("deseq2", "voom", "voombygroup", "edger_ql")
+METHOD_NAMES = {"deseq2": "DESeq2", "voom": "limma-voom", "voombygroup": "voomByGroup",
+                "edger_ql": "edgeR QL"}
 MAX_RUV_K = 3
 # DESeq2 called more false genes than its FDR on real donor splits below this many
 # donors on the smaller side (true FDP at a nominal 5%: 34% at 2, 20% at 3, 15% at
@@ -92,7 +95,7 @@ class PseudobulkResult:
     paired: bool
     counts_source: str
     dropped_samples: list[str] = field(default_factory=list)
-    # gene -> Wald statistic (DESeq2) or moderated t (voom)
+    # gene -> Wald statistic (DESeq2), moderated t (voom) or signed sqrt(F) (edgeR QL)
     stats: dict[str, float] = field(default_factory=dict)
     method: str = "voom"
     ruv_k: int = 0
@@ -280,7 +283,7 @@ def pseudobulk_de(
     covariates: pd.DataFrame | None = None,
 ) -> PseudobulkResult:
     """Condition A vs B on per-donor pseudobulk sums: limma-voom / voomByGroup's
-    moderated t, or DESeq2's Wald test (``method``), with ``ruv_k`` RUVg
+    moderated t, edgeR QL's F-test, or DESeq2's Wald test (``method``), with ``ruv_k`` RUVg
     factors in the design.
 
     ``adata`` holds only the compared cells; ``in_a`` marks the A cells (the
@@ -345,8 +348,7 @@ def pseudobulk_de(
             "pseudobulk samples; there is too little signal to test."
         )
 
-    # Neutral labels for the model: formulaic and the contrast never see the
-    # user's group or donor names (which may hold spaces or symbols).
+    # Neutral labels: the model never sees the user's group or donor names.
     donor_codes = pd.factorize(sample_donor, sort=True)[0]
     index = [f"s{i}" for i in range(len(sample_cond))]
     counts_df = pd.DataFrame(
@@ -373,8 +375,6 @@ def pseudobulk_de(
     cov_cols, cov_meta, cov_used, cov_notes = _covariate_design(
         cov_values, nuisance, is_a, sample_cond, names)
     nuisance = np.column_stack([nuisance, cov_cols])
-    for k, v in cov_meta.items():
-        meta[k] = v.to_numpy()
     lib = C.sum(axis=1)
     try:
         eff_lib = lib * vm.norm_factors(C, "TMM", lib)
@@ -404,13 +404,12 @@ def pseudobulk_de(
     w_names = [f"W{j + 1}" for j in range(W.shape[1])]
     # Neutral names in the formula (c0, c1 ...); the reported design uses the columns'.
     terms = w_names + (["donor"] if paired else []) + list(cov_meta) + ["condition"]
-    design = "~" + " + ".join(terms)
     shown = dict(zip(cov_meta, cov_used))
 
     if method == "deseq2":
-        for j, wn in enumerate(w_names):
-            meta[wn] = W[:, j]
-        genes, stat = _run_deseq2(counts_df, meta, design)
+        genes, stat = _run_deseq2(C, X, list(counts_df.columns))
+    elif method == "edger_ql":
+        genes, stat = _run_edger_ql(C, X, list(counts_df.columns))
     else:
         genes, stat = _run_voom(C, X, sample_cond if method == "voombygroup" else None,
                                 eff_lib, list(counts_df.columns))
@@ -449,38 +448,51 @@ def _ranked(rows: list[tuple[str, float, float, float]], stat: dict
     return sorted(rows, key=_rank, reverse=True)
 
 
-def _run_deseq2(
-    counts_df: pd.DataFrame, meta: pd.DataFrame, design: str
-) -> tuple[list[tuple[str, float, float, float]], dict[str, float]]:
+def _run_deseq2(C: np.ndarray, X: np.ndarray, gene_names: list[str]
+                ) -> tuple[list[tuple[str, float, float, float]], dict[str, float]]:
     """(gene, log2FC, p, adjusted p) per tested gene, strongest up first, and each
-    gene's Wald statistic."""
-    from pydeseq2.dds import DeseqDataSet
-    from pydeseq2.default_inference import DefaultInference
-    from pydeseq2.ds import DeseqStats
+    gene's Wald statistic: DESeq2's Wald test of the design's last column
+    (core/deseq2_vec.py, pydeseq2's steps vectorised over genes)."""
+    from scview.core import deseq2_vec
 
-    inference = DefaultInference(n_cpus=N_CPUS)
-    dds = DeseqDataSet(
-        counts=counts_df, metadata=meta, design=design, inference=inference, quiet=True
-    )
-    dds.deseq2()
-    stats = DeseqStats(dds, contrast=["condition", "a", "b"], inference=inference, quiet=True)
-    stats.summary()
-    res = stats.results_df
-
+    try:
+        res = deseq2_vec.deseq2_wald(np.rint(C).astype(np.int64), X, coef=-1)
+    except ValueError as exc:
+        raise PseudobulkError(str(exc)) from exc
     out: list[tuple[str, float, float, float]] = []
-    for gene, lfc, p, padj in zip(
-        res.index, res["log2FoldChange"], res["pvalue"], res["padj"]
-    ):
+    wald: dict[str, float] = {}
+    for i, gene in enumerate(gene_names):
+        lfc, p, padj, st = res.log2fc[i], res.pvalue[i], res.padj[i], res.stat[i]
         # NaN LFC/p: an all-zero or Cook's-outlier gene, not tested. NaN padj
         # alone: DESeq2's independent filtering left a low-mean gene out of the
         # FDR correction, which reads as "not significant".
         if not (np.isfinite(lfc) and np.isfinite(p)):
             continue
-        out.append((str(gene), float(lfc), float(p), float(padj) if np.isfinite(padj) else 1.0))
-    # DESeq2 returns genes in input (genome) order.
-    stat = res["stat"].to_dict() if "stat" in res else {}
-    wald = {str(g): float(s) for g, s in stat.items() if s is not None and np.isfinite(s)}
-    return _ranked(out, stat), wald
+        out.append((gene, float(lfc), float(p), float(padj) if np.isfinite(padj) else 1.0))
+        if np.isfinite(st):
+            wald[gene] = float(st)
+    return _ranked(out, wald), wald
+
+
+def _run_edger_ql(C: np.ndarray, X: np.ndarray, gene_names: list[str]
+                  ) -> tuple[list[tuple[str, float, float, float]], dict[str, float]]:
+    """(gene, log2FC, p, adjusted p) per gene, strongest up first, and each gene's
+    statistic as sign(log2FC) * sqrt(F) (F has one numerator df, so this is the
+    t-like signed form the tables and GSEA rank by): edgeR v4's QL F-test of the
+    design's last column (core/edger_ql.py)."""
+    from scview.core import edger_ql
+
+    try:
+        res = edger_ql.glm_ql(C, X, coef=-1)
+    except ValueError as exc:
+        raise PseudobulkError(str(exc)) from exc
+    ok = np.isfinite(res.logFC) & np.isfinite(res.pvalue)
+    padj = np.where(np.isfinite(res.padj), res.padj, 1.0)
+    rows = [(gene_names[i], float(res.logFC[i]), float(res.pvalue[i]), float(padj[i]))
+            for i in np.flatnonzero(ok)]
+    signed = np.sign(res.logFC) * np.sqrt(np.maximum(res.F, 0.0))
+    stat = {gene_names[i]: float(signed[i]) for i in np.flatnonzero(ok & np.isfinite(signed))}
+    return _ranked(rows, stat), stat
 
 
 def _voom_test(C: np.ndarray, X: np.ndarray, group: np.ndarray | None, lib: np.ndarray):

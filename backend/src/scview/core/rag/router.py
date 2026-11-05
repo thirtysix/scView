@@ -224,7 +224,7 @@ other tissues (Human Protein Atlas lookup), cytokine response (CytoSig), protein
 interaction networks (STRING), copy number / malignant cells (inferCNV-style), e.g. \
 "are the B cell markers specific outside blood?" → data with ["markers"]. \
 Results of comparisons and screens run in scView need ["groups"]: DE between \
-conditions (pseudobulk DESeq2 / limma-voom / RUV, neighbourhood DE (miloDE)), \
+conditions (pseudobulk DESeq2 / limma-voom / edgeR QL / RUV, neighbourhood DE (miloDE)), \
 composition and Milo, and CRISPR screens (guide assignment, Mixscape knockouts), \
 e.g. "which knockouts worked?" or "which pseudobulk method did I use?" → data with ["groups"].
 - "tutorials": single-cell METHODS / how-to / parameter / interpretation questions \

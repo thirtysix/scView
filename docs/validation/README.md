@@ -7,7 +7,7 @@ one method or one family of methods, so the pages can later be combined into a s
 
 | Page | Question | Decision it supports |
 |---|---|---|
-| [Pseudobulk DE](pseudobulk-de.md) | Which pseudobulk model holds its false discovery rate on real donor data, and how to build the replicates | limma-voom is the default (v0.61.0); DESeq2 carries an FDR caution below 6 donors per side |
+| [Pseudobulk DE](pseudobulk-de.md) | Which pseudobulk model holds its false discovery rate on real donor data, and how to build the replicates | limma-voom is the default (v0.61.0); edgeR QL offered and DESeq2 vectorised (v0.62.0); DESeq2 carries an FDR caution below 6 donors per side |
 
 ## Template for a page
 

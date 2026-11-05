@@ -63,7 +63,7 @@ DONORS = [f"d{i}" for i in range(5)]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("pb", ["voom", "voombygroup"])
+@pytest.mark.parametrize("pb", ["voom", "voombygroup", "edger_ql"])
 async def test_voom_methods_find_the_planted_genes(pb):
     a = _counts(DONORS, DONORS)
     res = await differential_expression_compare("x", _req(pb_method=pb), _DM(a))
@@ -78,7 +78,7 @@ async def test_voom_methods_find_the_planted_genes(pb):
     assert by["G0"].stat > 0 > by["G1"].stat
     stored = de_results.recall("x", res.result_id)
     assert stored.comparison["pb_method"] == pb and stored.comparison["ruv_k"] == 0
-    name = "limma-voom" if pb == "voom" else "voomByGroup"
+    name = pseudobulk.METHOD_NAMES[pb]
     assert stored.label == f"All cells: A vs B (pseudobulk {name})"
 
 
@@ -125,7 +125,7 @@ async def test_variance_check_flags_a_group_whose_donors_vary_more():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("pb", ["deseq2", "voom"])
+@pytest.mark.parametrize("pb", ["deseq2", "voom", "edger_ql"])
 async def test_ruv_factor_recovers_planted_unwanted_variation(pb):
     tech = np.array([1.0, 2.5, 0.5, 1.8, 0.7, 0.6, 2.2, 1.0, 0.4, 1.5])
     a = _counts(DONORS, DONORS, tech=tech, sd_a=0.1, sd_b=0.1)

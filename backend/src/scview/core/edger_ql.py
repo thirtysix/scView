@@ -1,5 +1,5 @@
 """edgeR v4's quasi-likelihood pipeline (glmQLFit with legacy=FALSE, then glmQLFTest) on
-per-sample counts, vectorised over genes. Research build: not wired into pseudobulk DE yet.
+per-sample counts, vectorised over genes. Pseudobulk DE runs it as ``method="edger_ql"`` (core/pseudobulk.py).
 
     res = glm_ql(counts, design, coef=-1)          # counts: samples x genes
     res.logFC, res.F, res.pvalue, res.padj          # + dispersion, df_prior, s2_prior, s2_post, ...

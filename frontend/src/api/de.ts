@@ -70,9 +70,9 @@ export interface DEResponse {
   transcriptome_size?: TranscriptomeSize | null;
 }
 
-/** The pseudobulk model (backend core/pseudobulk.py): DESeq2, limma-voom, or
- *  voomByGroup (a mean-variance trend per group). */
-export type PseudobulkMethod = "deseq2" | "voom" | "voombygroup";
+/** The pseudobulk model (backend core/pseudobulk.py): DESeq2, limma-voom,
+ *  voomByGroup (a mean-variance trend per group) or edgeR QL (quasi-likelihood F). */
+export type PseudobulkMethod = "deseq2" | "voom" | "voombygroup" | "edger_ql";
 
 /** One group's voom trend (sqrt SD against mean log2 count) and variance. */
 export interface PseudobulkHeteroGroup {
@@ -221,7 +221,7 @@ export interface DECompareRequest {
   within_column?: string;
   within_value?: string;
   replicate_key?: string;
-  /** "pseudobulk": per-donor count sums tested with limma-voom (default) or DESeq2 (needs replicate_key);
+  /** "pseudobulk": per-donor count sums tested with limma-voom (default), edgeR QL or DESeq2 (needs replicate_key);
    *  the others are cell-level tests (Wilcoxon when absent). */
   method?: DEMethod;
   /** Pseudobulk only: the model (limma-voom when absent; servers before 0.61 used DESeq2) and RUV factors (0-3). */
