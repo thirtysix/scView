@@ -6,6 +6,10 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-11-05
+
+edgeR QL joins the pseudobulk models, DESeq2 runs about 20x faster on scView's own engine, and CELLxGENE uploads get gene symbols.
+
 ### Added
 - **edgeR quasi-likelihood is offered for pseudobulk DE** ("edgeR QL" in the model list, `pb_method: "edger_ql"`
   in the API and MCP tool): edgeR 4's QL F-test (glmQLFit with legacy=FALSE, then glmQLFTest), written from the
