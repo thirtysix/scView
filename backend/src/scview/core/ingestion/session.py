@@ -698,6 +698,9 @@ class IngestSessionManager:
                     original_filename=names_of(u),
                     fmt=fmt_of(u),
                 )
+            from scview.core import gene_symbols
+
+            symbols = adata.uns.pop(gene_symbols.PENDING_KEY, None)
             dropped = adata.uns.pop(spatial.DROPPED_KEY, None)
             atac_note = adata.uns.pop(atac_import.LEFT_OUT_KEY, None)
             note = (f"Tissue positions of {', '.join(map(str, dropped))} were left out: the other "
@@ -715,6 +718,7 @@ class IngestSessionManager:
                     **({"converted": [_converted_entry(lab, c) for lab, c in converted.items()]}
                        if converted else {}),
                     **({"spatial": spatial_params} if spatial_params else {}),
+                    **({"gene_symbols": symbols} if symbols else {}),
                     **(atac_params or {}),
                 },
             )

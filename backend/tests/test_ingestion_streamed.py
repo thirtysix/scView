@@ -631,3 +631,29 @@ def test_originals_are_linked_not_copied(tmp_path, data_dir):
     kept = data_dir / "uploads" / did / "f.h5"
     assert kept.read_bytes() == f.read_bytes()
     assert kept.stat().st_nlink == 2  # the staged file (removed with its session) and this
+
+
+def test_h5ad_cellxgene_gene_ids_become_symbols_in_blocks_and_in_memory(tmp_path, data_dir, calls):
+    """A CELLxGENE file (Ensembl ids, symbols in var['feature_name']): both import paths
+    give the symbols as gene names in X and .raw, the ids in var['gene_ids'], and record it."""
+    X = _counts(60, 6, seed=3).astype(np.float32)
+    ids = [f"ENSG{i:011d}" for i in range(6)]
+    f = _h5ad(tmp_path / "cxg.h5ad", X, var_names=ids)
+    a = ad.read_h5ad(f)
+    symbols = ["XIST", "CD3E", "", "MT-CO1", "CD3E", "RPS4Y1"]
+    a.var["feature_name"] = symbols
+    a.raw = a
+    a.write_h5ad(f)
+    today, new = _both(data_dir, [f], calls)
+    assert_same_h5ad(today, new)
+    want = ["XIST", "CD3E", ids[2], "MT-CO1", "CD3E-1", "RPS4Y1"]
+    for path in (today, new):
+        b = ad.read_h5ad(path)
+        assert list(b.var_names) == want and list(b.var["gene_ids"]) == ids
+        assert list(b.raw.var_names) == want
+        from scview.core import provenance
+
+        hist = provenance.read_provenance(b)["history"]
+        step = next(s for s in hist if s["step"] == "ingest")
+        assert step["params"]["gene_symbols"]["var"]["made_unique"] == 1
+        assert "scview_gene_symbols_pending" not in b.uns

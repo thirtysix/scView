@@ -75,6 +75,12 @@ def load_unit(unit: IngestUnit, options: dict | None = None) -> ad.AnnData:
         logger.exception("Failed to load unit '%s' (%s)", unit.label, unit.format)
         raise IngestLoadError(f"Could not read this {unit.format.value} dataset: {e}") from e
 
+    # A CELLxGENE file: gene symbols from var['feature_name'] as gene names (core/gene_symbols.py).
+    if unit.format in (UnitFormat.anndata, UnitFormat.h5mu, UnitFormat.zarr, UnitFormat.loom):
+        from scview.core import gene_symbols
+
+        gene_symbols.apply_in_memory(adata)
+
     # A corrupt binary file can still parse as a text table with no usable data.
     if adata.n_obs == 0 or adata.n_vars == 0:
         raise IngestLoadError(

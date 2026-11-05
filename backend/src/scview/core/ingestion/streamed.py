@@ -470,6 +470,11 @@ def _open_h5ad(unit: IngestUnit, workdir: Path):
         extra = [k for k in ("layers", "raw", "obsp") if k in f and len(f[k])]
         has_x = x is not None
     meta = ad.AnnData(**parts)
+    # A CELLxGENE file: symbols as gene names in var here; .raw is copied as stored and
+    # renamed in the output (``_copy_h5ad``), core/gene_symbols.py.
+    from scview.core import gene_symbols
+
+    gene_symbols.apply_in_memory(meta)
     if not has_x:
         extra.append("no X")
     return meta, rows, path, extra
@@ -673,6 +678,14 @@ def _copy_h5ad(su: StreamedUnit, fo: h5py.File) -> tuple:
         for key in ("raw", "obsp"):
             if key in fi:
                 fi.copy(fi[key], fo, name=key)
+        if isinstance(fo.get("raw"), h5py.Group) and isinstance(fo["raw"].get("var"), h5py.Group):
+            from scview.core import gene_symbols
+
+            got = gene_symbols.rewrite_group(fo["raw"]["var"])
+            if got:  # recorded with the var rename, as the in-memory path records both
+                pending = dict(su.meta.uns.get(gene_symbols.PENDING_KEY) or {})
+                pending["raw_var"] = got
+                su.meta.uns[gene_symbols.PENDING_KEY] = pending
     return tuple(tables)
 
 

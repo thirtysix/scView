@@ -6,6 +6,14 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- **A CELLxGENE .h5ad uploaded directly now gets gene symbols as its gene names**, as the Discover import always
+  did: the symbols in var['feature_name'] become the gene names in X and .raw, the Ensembl ids are kept in
+  var['gene_ids'], a gene with no symbol keeps its id, and a repeated symbol gets "-1". Before, these files kept
+  Ensembl ids, so gene search ("XIST"), marker databases, gene sets and the sex and % mito checks found nothing.
+  Applies to the quick upload and the import wizard; the uploaded file stays as sent, and the replay script
+  repeats the rename. Datasets uploaded before keep their names.
+
 ## [0.61.0] - 2026-11-05
 
 Pseudobulk DE defaults to limma-voom, chosen on 18 public datasets; sex-linked genes are flagged in every DE result.

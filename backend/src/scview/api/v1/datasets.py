@@ -97,6 +97,8 @@ async def upload_dataset(
         if ext == ".h5ad" else None
 
     velocity = await _move_velocity_layers(dm, dataset_id, dest_path, file.filename) if ext == ".h5ad" else None
+    # A CELLxGENE file (Ensembl ids, symbols in var['feature_name']): symbols as gene names.
+    gene_names = await _gene_symbols(dm, dataset_id, dest_path, file.filename) if ext == ".h5ad" else None
 
     needs_conversion = ext in (".rds", ".rdata")
     status = DatasetStatus.converting if needs_conversion else DatasetStatus.ready
@@ -118,6 +120,8 @@ async def upload_dataset(
         meta["feature_split"] = feature_split
     if velocity:
         meta["velocity"] = velocity
+    if gene_names:
+        meta["gene_names"] = gene_names
     meta_path = upload_dir / "metadata.json"
     with open(meta_path, "w") as fh:
         json.dump(meta, fh, indent=2)
@@ -187,6 +191,49 @@ async def _split_feature_types(dm: DatasetManager, dataset_id: str, src: Path,
                          "in the expression matrix."}
     _make_readonly(out)
     logger.info("Split feature types of %s: %s", filename, summary)
+    return summary
+
+
+async def _gene_symbols(dm: DatasetManager, dataset_id: str, src: Path, filename: str) -> dict | None:
+    """A CELLxGENE .h5ad (Ensembl ids, symbols in var['feature_name']): the dataset's
+    working source in ``ingested/{id}/`` gets the symbols as gene names, ids kept in
+    var['gene_ids'] (``core/gene_symbols.py``), from the feature split's or velocity
+    move's file when one ran. The upload itself stays as sent. var and raw/var only are
+    rewritten (the matrices are copied as they are). A failure leaves the names as they
+    are and says so in the result."""
+    from scview.core import gene_symbols
+
+    out_dir = dm.data_dir / "ingested" / dataset_id
+    out = out_dir / src.name
+    current = out if out.exists() else src
+    try:
+        if not await asyncio.to_thread(gene_symbols.file_applies, current):
+            return None
+    except Exception as e:  # an unreadable file is the loader's to report
+        logger.warning("Gene names of %s not checked: %s", filename, e)
+        return None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    partial = out_dir / f".{src.name}.symbols.partial"
+
+    def work() -> dict | None:
+        shutil.copyfile(current, partial)
+        partial.chmod(0o644)
+        summary = gene_symbols.rewrite_file(partial)
+        if summary:
+            gene_symbols.record_in_file(partial, summary, Path(filename).name)
+        return summary
+
+    try:
+        summary = await asyncio.to_thread(work)
+        if out.exists():
+            out.chmod(0o644)
+        partial.replace(out)
+    except Exception as e:  # never lose the upload over the gene names
+        partial.unlink(missing_ok=True)
+        logger.warning("Gene names of %s not changed to symbols: %s", filename, e)
+        return {"error": f"Gene symbols could not be made the gene names ({e}); the Ensembl ids stay."}
+    _make_readonly(out)
+    logger.info("Gene symbols for %s: %s", filename, summary)
     return summary
 
 
