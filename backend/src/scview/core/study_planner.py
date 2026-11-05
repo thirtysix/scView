@@ -644,9 +644,10 @@ def donors_needed(points: Sequence[PowerPoint], target: float = TARGET_POWER) ->
 # vectorised over genes for the two designs the app uses (``~condition`` and
 # ``~donor + condition``). Left out: Cook's-distance refits and independent
 # filtering. tests/test_study_planner.py checks it against pydeseq2. The two
-# differ most at few donors: DESeq2's false discoveries run well above the
-# nominal rate at 2-4 donors per side (docs/validation/pseudobulk-de.md), so a
-# DESeq2 plan counts some of those as power.
+# differ most at few donors on real data: DESeq2's false discoveries run well
+# above the nominal rate at 2-4 donors per side (docs/validation/pseudobulk-de.md).
+# The simulated studies here are negative binomial (DESeq2's own model), so they
+# do not reproduce that; on Kang CD14 Mono the two plans' power is close.
 
 DE_DEFAULT_CELLS = (50, 200, 1000)  # cells of the type per sample
 DE_DEFAULT_LOG2FC = (0.5, 1.0)
@@ -1606,9 +1607,10 @@ def _de_assumptions(model: DEModel, grid: DEGrid, points: list[DEPoint]) -> list
     else:
         test = ("Test: DESeq2's negative binomial Wald test as the app's pseudobulk DE runs it "
                 "(pydeseq2), reimplemented vectorised so hundreds of studies run in seconds; "
-                f"Cook's refits and independent filtering are left out{sig}. At few donors "
-                "DESeq2 calls more false discoveries than its nominal rate, which a plan "
-                "counts as power: limma-voom (the app's default) is the safer basis.")
+                f"Cook's refits and independent filtering are left out{sig}. The app's "
+                "pseudobulk default is limma-voom: on real donor splits DESeq2 called more "
+                "false genes than its FDR at few donors, which these simulated (negative "
+                "binomial) studies do not reproduce.")
     out.append(test + (f" Across the simulated studies false discoveries were "
                        f"{np.mean(fdps) * 100:.0f}% of the calls (target {grid.alpha:.0%})."
                        if fdps else " No calls in the simulated studies."))

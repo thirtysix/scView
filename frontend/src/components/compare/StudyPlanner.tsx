@@ -412,7 +412,7 @@ export function StudyPlanner({ datasetId, info, defaultCondition, defaultGroup, 
             <label className="text-xs font-medium text-slate-500">
               <span className="mb-1 block">Test</span>
               <select aria-label="Planner DE test" value={deMethod}
-                title="The pseudobulk test run on each simulated study. limma-voom is the app's default; DESeq2 calls more false discoveries than its nominal rate at few donors, which the plan would count as power."
+                title="The pseudobulk test run on each simulated study: pick the one you will run. limma-voom is the app's default."
                 onChange={(e) => setDeMethod(e.target.value as DEPlanMethod)} className={selectCls}>
                 <option value="voom">limma-voom</option>
                 <option value="deseq2">DESeq2</option>

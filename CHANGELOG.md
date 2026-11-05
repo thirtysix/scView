@@ -15,8 +15,7 @@ All notable changes to scView are documented here. The format is based on
   Results stored before this change keep their DESeq2 label. Method and numbers: `docs/validation/pseudobulk-de.md`.
 - **The study planner's DE power now runs limma-voom on each simulated study**, the same code as pseudobulk DE,
   so a plan matches the test you will actually run. DESeq2 can still be chosen ("Test" in Compare > Plan a
-  study > Pseudobulk DE); at few donors its excess false discoveries counted as power, so DESeq2 plans read higher. voom
-  plans also run about 3x faster.
+  study > Pseudobulk DE). voom plans also run about 3x faster.
 
 ### Added
 - **Sex-linked genes are marked in every DE result.** XIST, TSIX and Y-chromosome genes get a "sex" badge in
