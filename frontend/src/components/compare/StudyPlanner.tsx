@@ -7,6 +7,7 @@ import {
   runDEPlan,
   type CompositionPlan,
   type DEPlan,
+  type DEPlanMethod,
   type PilotInfo,
   type PilotRequest,
   type PlanProgress,
@@ -92,6 +93,7 @@ export function StudyPlanner({ datasetId, info, defaultCondition, defaultGroup, 
   const [alpha, setAlpha] = useState(0.05);
   const [target, setTarget] = useState(0.8);
   const [design, setDesign] = useState<"auto" | "paired" | "unpaired">("auto");
+  const [deMethod, setDeMethod] = useState<DEPlanMethod>("voom");
   const [assumedSd, setAssumedSd] = useState("");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<PlanProgress | null>(null);
@@ -232,7 +234,8 @@ export function StudyPlanner({ datasetId, info, defaultCondition, defaultGroup, 
           ).then((r) => !ctrl.signal.aborted && setComp(r))
         : runDEPlan(
             datasetId,
-            { ...common, group: deGroup, log2fc: lfcs ?? DE_DEFAULT_LOG2FC, cells: deCells ?? DE_DEFAULT_CELLS },
+            // method always sent: the server default can change under an old client.
+            { ...common, group: deGroup, log2fc: lfcs ?? DE_DEFAULT_LOG2FC, cells: deCells ?? DE_DEFAULT_CELLS, method: deMethod },
             handlers,
           ).then((r) => !ctrl.signal.aborted && setDe(r));
     job
@@ -246,7 +249,7 @@ export function StudyPlanner({ datasetId, info, defaultCondition, defaultGroup, 
           setProgress(null);
         }
       });
-  }, [pilotReq, pilot, donors, alpha, target, design, mode, datasetId, groups, folds, cells, needsSd, sd, deGroup, lfcs, deCells]);
+  }, [pilotReq, pilot, donors, alpha, target, design, mode, datasetId, groups, folds, cells, needsSd, sd, deGroup, lfcs, deCells, deMethod]);
 
   const stop = useCallback(() => {
     abort.current?.abort();
@@ -289,7 +292,8 @@ export function StudyPlanner({ datasetId, info, defaultCondition, defaultGroup, 
           <InfoTip width={320}>
             Each point simulates many studies of that size from this dataset&apos;s own donor-to-donor
             variability and runs on each the test the app itself would run (the composition test, or
-            pseudobulk DESeq2). Power is the share of those studies that find the effect.
+            pseudobulk limma-voom, or DESeq2 if chosen). Power is the share of those studies that find
+            the effect.
           </InfoTip>
         </div>
 
@@ -405,6 +409,15 @@ export function StudyPlanner({ datasetId, info, defaultCondition, defaultGroup, 
               title="Cells of the chosen type in each sample (its pseudobulk); one curve each" />
             <NumbersField label="Donors per group" value={donorsText} onChange={setDonorsText}
               title="The x axis: donors in each group" />
+            <label className="text-xs font-medium text-slate-500">
+              <span className="mb-1 block">Test</span>
+              <select aria-label="Planner DE test" value={deMethod}
+                title="The pseudobulk test run on each simulated study. limma-voom is the app's default; DESeq2 calls more false discoveries than its nominal rate at few donors, which the plan would count as power."
+                onChange={(e) => setDeMethod(e.target.value as DEPlanMethod)} className={selectCls}>
+                <option value="voom">limma-voom</option>
+                <option value="deseq2">DESeq2</option>
+              </select>
+            </label>
             <Controls alpha={alpha} setAlpha={setAlpha} target={target} setTarget={setTarget} />
           </div>
         )}
@@ -616,7 +629,7 @@ function DEResult({ plan, target, onAsk }: { plan: DEPlan; target: number; onAsk
   const maxN = Math.max(...plan.donors);
   return (
     <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <Header onAsk={onAsk} text={`Pseudobulk DE in ${plan.group}: share of changed genes found (${plan.design} design)`} />
+      <Header onAsk={onAsk} text={`Pseudobulk DE in ${plan.group}: share of changed genes found (${plan.design} design, ${plan.method_name ?? "DESeq2"})`} />
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-xs text-slate-500">Effect</span>
         {plan.log2fc.map((x) => (

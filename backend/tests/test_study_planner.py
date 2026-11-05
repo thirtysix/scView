@@ -287,6 +287,49 @@ def test_the_fast_nb_test_agrees_with_pydeseq2(paired):
     assert np.median(np.abs(-mine.log2fc[ok] - ref["lfc"][ok])) < 0.02
 
 
+@pytest.mark.parametrize("paired", [True, False])
+def test_the_planner_voom_test_is_the_apps_voom(paired):
+    """The planner's voom is pseudobulk DE's own: same design built by hand
+    (intercept, donors when paired, the tested condition last), same TMM, same
+    numbers."""
+    from scview.core import voom as vm
+
+    K, s_cond, s_donor = de_counts(paired=paired, n_genes=600, n_de=60)
+    kept = pseudobulk._filter_genes(K, 4)
+    K = K[:, kept]
+    lfc, padj = planner.voom_test(K, s_cond, s_donor, paired)
+    C = K.astype(np.float64)
+    cols = [np.ones(len(C))]
+    if paired:
+        cols += [(s_donor == d).astype(float) for d in sorted(set(s_donor))[1:]]
+    X = np.column_stack(cols + [s_cond.astype(float)])
+    lib = C.sum(axis=1)
+    names = [f"g{j}" for j in range(C.shape[1])]
+    rows, _ = pseudobulk._run_voom(C, X, None, lib * vm.norm_factors(C, "TMM", lib), names)
+    ref = pd.DataFrame(rows, columns=["g", "lfc", "p", "padj"]).set_index("g").reindex(names)
+    assert np.allclose(lfc, ref["lfc"].to_numpy(), atol=1e-10, equal_nan=True)
+    assert np.allclose(padj, ref["padj"].to_numpy(), atol=1e-10, equal_nan=True)
+    # The generating effect (genes 0..59 changed) is found.
+    changed = kept < 60
+    assert np.nanmean(padj[changed] < 0.05) > 0.5 > 0.05 > np.nanmean(padj[~changed] < 0.05)
+
+
+def test_de_power_voom_and_deseq2_both_run_and_voom_holds_the_fdr():
+    model = planner.fit_de(planner.de_pilot(de_adata(), "cell_type", "T", "stim", "Donor"),
+                           n_genes=400)
+    pts = {}
+    for method in planner.DE_METHODS:
+        grid = planner.DEGrid(log2fc=[1.0], donors=[3], cells=[300], design="unpaired",
+                              reps=6, seed=3, method=method)
+        pts[method] = planner.de_power_point(model, grid, 1.0, 3, 300)
+    assert all(0 < p.power <= 1 for p in pts.values())
+    assert pts["voom"].fdp is None or pts["voom"].fdp < 0.15
+    with pytest.raises(planner.PlannerError, match="method"):
+        planner.prepare_de(de_adata(n_donors=3, n_genes=200), planner.DERequestModel(
+            group_key="cell_type", group="T", condition_key="stim", sample_key="Donor",
+            method="edger"))
+
+
 def de_adata(n_donors=8, cells=300, n_genes=400, alpha_bio=0.04, phi_cell=0.6, tau=0.2,
              seed=0) -> ad.AnnData:
     """Cells of type T: sample mean = q * donor effect * Gamma(bio dispersion),
@@ -498,7 +541,18 @@ async def test_de_stream(client, dataset_manager):
     assert result["kind"] == "de" and result["group"] == "T" and result["design"] == "paired"
     assert result["pilot"]["n_simulated"] == 200 and len(result["points"]) == 2
     assert result["pilot"]["counts_source"] == "layers['counts']"
-    assert any("DESeq2" in s for s in result["assumptions"])
+    # voom is the default test (the app's pseudobulk default since v0.61.0).
+    assert result["method"] == "voom" and result["method_name"] == "limma-voom"
+    assert any("limma-voom" in s for s in result["assumptions"])
+    r = await client.post("/api/v1/datasets/ds/planner/de-stream", json={
+        "group_key": "cell_type", "group": "T", "condition_key": "stim", "method": "deseq2",
+        "log2fc": [1.0], "donors": [3], "cells": [100], "reps": 2, "n_genes": 200})
+    assert r.status_code == 200, r.text
+    result = _events(r.text)[-2][1]
+    assert result["method"] == "deseq2" and any("DESeq2" in s for s in result["assumptions"])
+    r = await client.post("/api/v1/datasets/ds/planner/de-stream",
+                          json={"group_key": "cell_type", "group": "T", "method": "edger"})
+    assert r.status_code == 422
     r = await client.post("/api/v1/datasets/ds/planner/de-stream",
                           json={"group_key": "cell_type", "group": "nope"})
     assert r.status_code == 400

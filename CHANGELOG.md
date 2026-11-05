@@ -13,6 +13,10 @@ All notable changes to scView are documented here. The format is based on
   1 in 20 from 3 donors on, while ranking genes as well (AUC 0.89 for both). DESeq2 is still offered, and a DESeq2
   run with fewer than 6 donors on its smaller side now carries a caution that its adjusted p-values are optimistic.
   Results stored before this change keep their DESeq2 label. Method and numbers: `docs/validation/pseudobulk-de.md`.
+- **The study planner's DE power now runs limma-voom on each simulated study**, the same code as pseudobulk DE,
+  so a plan matches the test you will actually run. DESeq2 can still be chosen ("Test" in Compare > Plan a
+  study > Pseudobulk DE); at few donors its excess false discoveries counted as power, so DESeq2 plans read higher. voom
+  plans also run about 3x faster.
 
 ### Added
 - **Sex-linked genes are marked in every DE result.** XIST, TSIX and Y-chromosome genes get a "sex" badge in

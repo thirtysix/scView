@@ -77,6 +77,8 @@ class DEPlanRequest(_Pilot):
     reps: int | None = None
     n_genes: int = planner.DE_GENES
     seed: int = 0
+    # The app's pseudobulk test run on each simulated study (voom = the DE default).
+    method: Literal["voom", "deseq2"] = "voom"
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
