@@ -185,3 +185,33 @@ def test_sex_linked_genes_are_named_on_every_de_response():
     assert r.sex_linked == ["XIST", "RPS4Y1", "Xist"]
     assert DEResponse(n_selected=1, n_rest=1, label="x", genes=genes[:1]).sex_linked == []
     assert sex_check.sex_linked(["UTY", "UTY", "G1"]) == ["UTY"]
+
+
+@pytest.mark.parametrize("method", ["wilcoxon", "pseudobulk"])
+async def test_sex_linked_genes_are_found_by_symbol_when_names_are_ensembl_ids(
+        client, dataset_manager, method):
+    """A CELLxGENE file uploaded as it is: Ensembl ids as gene names, symbols in
+    var['feature_name']. Seen on Wilk 2020 (2026-11-05): no gene was flagged."""
+    a = _adata(WILK_LIKE)
+    ids = [f"ENSG{i:011d}" for i in range(20)]
+    symbols = ["XIST"] + [f"G{i}" for i in range(1, 19)] + ["RPS4Y1"]
+    a.var = pd.DataFrame({"feature_name": symbols}, index=ids)
+    did = _register(dataset_manager, a, "sexens")
+    r = await client.post(f"{API}/datasets/{did}/de/compare", json={**BODY, "method": method,
+                                                                    "within_column": "cell_type",
+                                                                    "within_value": "A"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    shown = {g["gene"] for g in body["genes"]}
+    assert set(body["sex_linked"]) == {ids[0], ids[19]} & shown and ids[0] in shown
+
+
+def test_sex_linked_ids_reads_symbols_from_var_and_raw():
+    a = ad.AnnData(np.zeros((2, 3), dtype=np.float32))
+    a.var_names = ["ENSG1", "ENSG2", "ENSG3"]
+    a.var["feature_name"] = ["XIST", "CD3E", "UTY"]
+    assert sex_check.sex_linked_ids(a) == {"ENSG1": "XIST", "ENSG3": "UTY"}
+    assert sex_check.sex_linked(["ENSG3", "ENSG2", "XIST"], sex_check.sex_linked_ids(a)) == ["ENSG3", "XIST"]
+    b = ad.AnnData(np.zeros((2, 2), dtype=np.float32))
+    b.var_names = ["XIST", "CD3E"]
+    assert sex_check.sex_linked_ids(b) == {}

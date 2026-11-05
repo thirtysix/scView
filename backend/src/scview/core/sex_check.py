@@ -75,15 +75,39 @@ SEX_LINKED_GENES = {
 _SEX_LINKED = frozenset(g for genes in SEX_LINKED_GENES.values() for g in genes)
 
 
-def sex_linked(genes) -> list[str]:
-    """The genes of ``genes`` (names, in order, once each) that follow sex itself."""
+def sex_linked(genes, symbols: dict[str, str] | None = None) -> list[str]:
+    """The genes of ``genes`` (names, in order, once each) that follow sex itself.
+    ``symbols`` maps other gene names (Ensembl ids) to their symbols: see
+    ``sex_linked_ids``."""
     seen: set[str] = set()
     out = []
     for g in genes:
         g = str(g)
-        if g in _SEX_LINKED and g not in seen:
+        if (g in _SEX_LINKED or (symbols and symbols.get(g) in _SEX_LINKED)) and g not in seen:
             seen.add(g)
             out.append(g)
+    return out
+
+
+def sex_linked_ids(adata) -> dict[str, str]:
+    """Gene name -> symbol for the sex-linked genes of a dataset whose gene names are
+    not symbols (a CELLxGENE file uploaded as it is: Ensembl ids, symbols in
+    var['feature_name']), from var and raw.var; empty when the names are symbols."""
+    from scview.core.cellxgene_export import SYMBOL_COLUMNS
+
+    out: dict[str, str] = {}
+    tables = [adata.var]
+    if getattr(adata, "raw", None) is not None:
+        tables.append(adata.raw.var)
+    for var in tables:
+        for col in SYMBOL_COLUMNS:
+            if col not in var.columns:
+                continue
+            vals = var[col].astype(str)
+            hit = vals.isin(_SEX_LINKED).to_numpy()
+            for name, sym in zip(var.index[hit].astype(str), vals[hit]):
+                if name != sym:
+                    out.setdefault(name, sym)
     return out
 
 

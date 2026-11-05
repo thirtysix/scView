@@ -21,7 +21,8 @@ All notable changes to scView are documented here. The format is based on
 ### Added
 - **Sex-linked genes are marked in every DE result.** XIST, TSIX and Y-chromosome genes get a "sex" badge in
   the DE table (red when the two sides' samples differ in sex, grey otherwise), and the co-pilot is told which
-  significant genes are sex-linked. In random splits of one condition's donors across 18 public datasets, these
+  significant genes are sex-linked. Genes named by Ensembl id (a CELLxGENE file uploaded as it is) are matched
+  through the symbols in var['feature_name']. In random splits of one condition's donors across 18 public datasets, these
   genes were among the most frequent false hits whenever the split happened to line up with donor sex.
 - **DE between groups warns when the sides' sex mix differs**, not only when a side is all one sex: a gap of
   25 percentage points or more in the share of female samples (for example 3 female + 1 male against

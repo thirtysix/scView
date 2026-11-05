@@ -234,6 +234,18 @@ class DEResponse(BaseModel):
         return self
 
 
+def _sex_linked(adata, genes) -> list[str]:
+    """``DEResponse.sex_linked`` when the gene names may not be symbols (Ensembl ids
+    with symbols in var): the response's own check reads names only."""
+    from scview.core import sex_check
+
+    try:
+        ids = sex_check.sex_linked_ids(adata)
+    except Exception:  # pragma: no cover - a flag, never the reason DE fails
+        return []
+    return sex_check.sex_linked((g.gene for g in genes), ids) if ids else []
+
+
 class DEMethodSummary(BaseModel):
     method: str
     label: str  # e.g. "Welch t-test"
@@ -672,7 +684,8 @@ async def differential_expression(
                 "cells": selection_facts.selection_hash(mask.nonzero()[0], int(adata.n_obs))}
     return DEResponse(n_selected=n_sel, n_rest=int(adata.n_obs) - n_sel, label=body.label,
                       genes=res.genes, result_id=_remember(dataset_id, res, compared, adaptor),
-                      transcriptome_size=size, **res.fields())
+                      transcriptome_size=size, sex_linked=_sex_linked(adata, res.genes),
+                      **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/methods", response_model=DEMethodsResponse)
@@ -829,7 +842,8 @@ async def differential_expression_compare(
     result_id = _remember(dataset_id, res, _compared(body, n_a, n_b, key), adaptor)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=_compare_label(body), genes=res.genes,
                       result_id=result_id, transcriptome_size=size, confounding=confounding,
-                      composition=composition, sex=sex, **guard, **res.fields())
+                      composition=composition, sex=sex, sex_linked=_sex_linked(adata, res.genes),
+                      **guard, **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/compare/methods", response_model=DEMethodsResponse)
@@ -982,6 +996,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         counts_source=res.counts_source,
         dropped_samples=res.dropped_samples,
         transcriptome_size=size,
+        sex_linked=_sex_linked(adata, genes),
         pb_method=res.method,
         ruv_k=res.ruv_k,
         heteroscedasticity=res.heteroscedasticity,
