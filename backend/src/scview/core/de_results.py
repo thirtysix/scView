@@ -34,7 +34,8 @@ SCORE_METRICS = {"wilcoxon": "wilcoxon_score", "t-test": "t_score", "logreg": "l
 METHOD_NAMES = {"wilcoxon": "Wilcoxon", "t-test": "t-test", "logreg": "logistic regression",
                 "pseudobulk": "pseudobulk DESeq2"}
 # A pseudobulk result's model (comparison["pb_method"]; absent = DESeq2).
-PB_METHOD_NAMES = {"deseq2": "DESeq2", "voom": "limma-voom", "voombygroup": "voomByGroup"}
+PB_METHOD_NAMES = {"deseq2": "DESeq2", "voom": "limma-voom", "voombygroup": "voomByGroup",
+                   "edger_ql": "edgeR QL"}
 
 
 @dataclass(frozen=True)

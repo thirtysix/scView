@@ -814,7 +814,7 @@ def _design(obs: pd.DataFrame) -> pd.DataFrame:
                          "cond": pd.Categorical(np.where(k < 4, "ctrl", "stim"))}, index=obs.index)
 
 
-@pytest.mark.parametrize("pb_method", ["deseq2", "voom"])
+@pytest.mark.parametrize("pb_method", ["deseq2", "voom", "edger_ql"])
 async def test_pseudobulk_de_runs_on_a_large_dataset_as_in_memory(
         client, dataset_manager, processed, monkeypatch, pb_method):
     """Part A: pseudobulk DE sums the counts file in spans of cells; the answer is the

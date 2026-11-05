@@ -589,7 +589,6 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                     Sums each donor&apos;s raw counts per group and tests donors, not cells, with{" "}
                     {pbMethodLabel(pbMethod)}, so p-values allow for donor-to-donor variation. Needs raw
                     counts and at least 2 donors per group with 10+ cells each.
-                    {loading && pbMethod === "deseq2" && " Fitting one model per gene can take up to a minute."}
                   </p>
                   {result?.method === "pseudobulk" && (
                     <PseudobulkDiagnostics hetero={result.heteroscedasticity} ruv={result.ruv} />

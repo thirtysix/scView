@@ -1,7 +1,7 @@
 """Study planner (core/study_planner.py, api/v1/planner.py).
 
 Expected values come from the generating model written out here (known
-spreads, known dispersions), from pydeseq2 (the app's pseudobulk DE), or by
+spreads, known dispersions), from the app's pseudobulk DESeq2, or by
 hand; never from the planner's own output.
 """
 
@@ -263,28 +263,28 @@ def de_counts(n_donors=4, n_genes=300, paired=True, seed=0, n_de=30, lfc=1.5):
 
 
 @pytest.mark.parametrize("paired", [True, False])
-def test_the_fast_nb_test_agrees_with_pydeseq2(paired):
+def test_the_fast_nb_test_agrees_with_the_apps_deseq2(paired):
     """On genes past the app's count filter (as both the app and the planner test
-    them). Below it, a near-empty gene's Cox-Reid optimum can sit at the upper
-    bound while pydeseq2's L-BFGS-B stops at its 1e-8 starting value."""
+    them), against the app's own DESeq2 (core/deseq2_vec.py, the same design built
+    by hand: intercept, donors when paired, the tested condition last)."""
     K, s_cond, s_donor = de_counts(paired=paired, n_genes=600, n_de=60)
     K = K[:, pseudobulk._filter_genes(K, 4)]
     kind = "paired" if paired else "unpaired"
     mine = planner.nb_wald_test(K, s_cond, s_donor, kind)
-    meta = pd.DataFrame({"condition": np.where(s_cond == 1, "b", "a"),
-                         "donor": [f"d{d}" for d in s_donor]},
-                        index=[f"s{i}" for i in range(len(s_cond))])
-    df = pd.DataFrame(K, index=meta.index, columns=[f"g{j}" for j in range(K.shape[1])])
-    genes, wald = pseudobulk._run_deseq2(df, meta, "~donor + condition" if paired else "~condition")
-    ref = pd.DataFrame(genes, columns=["g", "lfc", "p", "padj"]).set_index("g").reindex(df.columns)
-    rstat = pd.Series(wald).reindex(df.columns)
+    cols = [np.ones(len(K))]
+    if paired:
+        cols += [(s_donor == d).astype(float) for d in sorted(set(s_donor))[1:]]
+    X = np.column_stack(cols + [s_cond.astype(float)])
+    names = [f"g{j}" for j in range(K.shape[1])]
+    genes, wald = pseudobulk._run_deseq2(np.asarray(K, dtype=np.float64), X, names)
+    ref = pd.DataFrame(genes, columns=["g", "lfc", "p", "padj"]).set_index("g").reindex(names)
+    rstat = pd.Series(wald).reindex(names)
     ok = rstat.notna().to_numpy()
-    # pydeseq2's contrast is a vs b (reference vs tested): the sign flips.
-    assert stats.spearmanr(-mine.stat[ok], rstat[ok]).statistic > 0.995
-    sig_m = set(df.columns[mine.padj < 0.05])
+    assert stats.spearmanr(mine.stat[ok], rstat[ok]).statistic > 0.995
+    sig_m = {names[j] for j in np.flatnonzero(mine.padj < 0.05)}
     sig_r = set(ref.index[ref["padj"] < 0.05])
     assert len(sig_m & sig_r) / max(len(sig_m | sig_r), 1) > 0.85
-    assert np.median(np.abs(-mine.log2fc[ok] - ref["lfc"][ok])) < 0.02
+    assert np.median(np.abs(mine.log2fc[ok] - ref["lfc"][ok])) < 0.02
 
 
 @pytest.mark.parametrize("paired", [True, False])

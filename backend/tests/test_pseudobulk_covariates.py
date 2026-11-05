@@ -60,9 +60,20 @@ async def test_deseq2_with_sex_matches_pydeseq2_on_the_same_design():
     ref = st.results_df.dropna(subset=["log2FoldChange", "pvalue"])
     got = {g.gene: g for g in res.genes}
     assert set(got) == set(ref.index)
-    for gene, row in ref.iterrows():
-        assert got[gene].logfoldchange == pytest.approx(row["log2FoldChange"], rel=1e-6, abs=1e-9)
-        assert got[gene].pval == pytest.approx(row["pvalue"], rel=1e-6, abs=1e-12)
+    # The app runs core/deseq2_vec.py: exactly that engine on this design ...
+    from scview.core import deseq2_vec
+    X = np.column_stack([np.ones(len(meta)), (meta["sex"] == "M").to_numpy(float),
+                         (meta["cond"] == "A").to_numpy(float)])
+    vec = deseq2_vec.deseq2_wald(counts.to_numpy(np.int64), X)
+    for i, gene in enumerate(counts.columns):
+        if gene in got:
+            assert got[gene].logfoldchange == pytest.approx(vec.log2fc[i], rel=1e-9, abs=1e-12)
+            assert got[gene].pval == pytest.approx(vec.pvalue[i], rel=1e-9, abs=1e-15)
+    # ... and close to pydeseq2, which fits its dispersion trend differently.
+    lfc = np.array([got[g].logfoldchange for g in ref.index])
+    assert np.max(np.abs(lfc - ref["log2FoldChange"].to_numpy())) < 0.02
+    dlp = np.abs(np.log10([got[g].pval for g in ref.index]) - np.log10(ref["pvalue"].to_numpy()))
+    assert np.median(dlp) < 1e-3
     stored = de_results.recall("x", res.result_id)
     assert stored.comparison["covariates"] == ["sex"] and stored.comparison["design"] == "~sex + condition"
     assert stored.label == "All cells: A vs B (pseudobulk DESeq2 + sex)"

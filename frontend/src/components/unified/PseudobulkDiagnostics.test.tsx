@@ -59,11 +59,11 @@ describe("PseudobulkDiagnostics", () => {
 });
 
 describe("PseudobulkModelRows", () => {
-  it("offers the three models and RUV k 0-3 as labelled selects", () => {
+  it("offers the four models and RUV k 0-3 as labelled selects", () => {
     const onChange = vi.fn();
     render(<PseudobulkModelRows pbMethod="voom" ruvK={0} onChange={onChange} selectCls="" />);
     const model = screen.getByLabelText("Model") as HTMLSelectElement;
-    expect(Array.from(model.options).map((o) => o.text)).toEqual(["limma-voom", "voomByGroup", "DESeq2"]);
+    expect(Array.from(model.options).map((o) => o.text)).toEqual(["limma-voom", "voomByGroup", "edgeR QL", "DESeq2"]);
     fireEvent.change(model, { target: { value: "voombygroup" } });
     expect(onChange).toHaveBeenCalledWith({ pbMethod: "voombygroup" });
     const ruv = screen.getByLabelText("RUV") as HTMLSelectElement;

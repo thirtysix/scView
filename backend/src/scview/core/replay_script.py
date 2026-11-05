@@ -2741,7 +2741,36 @@ def _uns_mapping(adata, key: str) -> dict[str, str] | None:
         return None
 
 
+# The rename core/gene_symbols.py makes at import (= the Discover import's block below).
+_SYMBOLS_CODE = [
+    "# scView made the symbols in var['feature_name'] the gene names (Ensembl ids kept in",
+    "# var['gene_ids']), in X and in .raw; scView's stored copy already has them (no-op).",
+    "def _symbols(var):",
+    "    ids = var.index.astype(str)",
+    "    names = var[\"feature_name\"].astype(str).to_numpy()",
+    "    names = [n if n and n.lower() != \"nan\" else i for n, i in zip(names, ids)]",
+    "    var = var.copy()",
+    "    var[\"gene_ids\"] = list(ids)",
+    "    var.index = ad.utils.make_index_unique(pd.Index(names))",
+    "    return var",
+    "if adata.raw is not None and \"feature_name\" in adata.raw.var.columns \\",
+    "        and \"gene_ids\" not in adata.raw.var.columns:",
+    "    raw = adata.raw.to_adata()",
+    "    raw.var = _symbols(raw.var)",
+    "    adata.raw = raw",
+    "if \"feature_name\" in adata.var.columns and \"gene_ids\" not in adata.var.columns:",
+    "    adata.var = _symbols(adata.var)",
+]
+
+
 def _ingest(p: dict, ctx: _Ctx) -> Snippet:
+    snip = _ingest_steps(p, ctx)
+    if isinstance(p.get("gene_symbols"), dict) and not isinstance(p.get("public_import"), dict):
+        return Snippet(snip.status, snip.code + _SYMBOLS_CODE, snip.note)
+    return snip
+
+
+def _ingest_steps(p: dict, ctx: _Ctx) -> Snippet:
     lines = ["# The import itself is read_input() at the top of this script."]
     placed = p.get("spatial") if isinstance(p.get("spatial"), dict) else {}
     libraries = placed.get("libraries") if isinstance(placed.get("libraries"), dict) else {}

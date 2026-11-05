@@ -8,7 +8,9 @@ Pseudobulk DE sums each donor's counts per condition and tests the sums, so the 
 not the cell. Two choices are left: which count model tests the sums, and how the pseudobulk samples are
 built (minimum cells per sample, weights, which unit counts as the replicate).
 
-**Decision.** limma-voom is the default model. DESeq2 and voomByGroup stay available. A DESeq2 run with
+**Decision.** limma-voom is the default model. DESeq2 and voomByGroup stay available, and from 0.62.0
+edgeR v4 QL is offered too (scView's port, below) while DESeq2 runs on scView's vectorised build instead of
+pydeseq2. A DESeq2 run with
 fewer than 6 donors on its smaller side carries a caution that its adjusted p-values are optimistic.
 Replicates are donors, samples with fewer than 10 cells are dropped and listed, samples are never weighted
 by cell count, and a donor's cells are never split into several pseudo-replicates. A side with fewer than
@@ -146,7 +148,9 @@ Null share of genes at p < 0.05 with limma-voom (round 1: 18 datasets, 106 cell 
   3 × 10⁻⁵ (99th percentile 4 × 10⁻⁴); calls at p < 0.05 agree on 99.997% of tests; all summary scores equal
   R to three decimals; 3x faster than R.
 - **Vectorised DESeq2**: median |Δlog10 p| vs R 0.0002 (pydeseq2 0.0028); 14x faster than R and about 80x
-  faster than pydeseq2.
+  faster than pydeseq2 per fit. In the app (0.62.0, Kang, whole comparison including the sums) a cell type
+  takes 0.1-0.3 s against pydeseq2's 2-6 s. The difference from pydeseq2 is the dispersion trend: fitted on
+  the genes above the dispersion floor, as R's fit lands, so its hit lists sit nearer R's than pydeseq2's.
 
 ## Limits
 

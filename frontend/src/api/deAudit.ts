@@ -1,4 +1,5 @@
 import { streamEvents } from "./clustering";
+import type { PseudobulkMethod } from "./de";
 
 /** A between-groups comparison to audit: a kept DE result, or its scope. */
 export interface DEAuditRequest {
@@ -16,7 +17,7 @@ export interface DEAuditRequest {
   n_permutations?: number;
   /** The shuffles stop here with those done (default 300 s). */
   max_seconds?: number;
-  pb_method?: "deseq2" | "voom" | "voombygroup";
+  pb_method?: PseudobulkMethod;
   seed?: number;
 }
 

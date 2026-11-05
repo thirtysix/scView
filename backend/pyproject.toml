@@ -1,6 +1,6 @@
 [project]
 name = "scview"
-version = "0.61.0"
+version = "0.62.0"
 description = "Single-cell RNA-seq browser-based visualization tool"
 requires-python = ">=3.11"
 dependencies = [
@@ -36,7 +36,8 @@ dependencies = [
     "asyncpg>=0.30.0",  # Neon/Postgres + pgvector for the RAG co-pilot corpora
     "beautifulsoup4>=4.12.0",  # tutorial-corpus HTML extraction (RAG ingestion)
     "celltypist>=1.6.0",  # reference-based cell-type annotation (small CPU models)
-    "pydeseq2>=0.5.0",  # pseudobulk DE across donors (DESeq2 in Python; formula designs)
+    "pydeseq2>=0.5.0",  # Milo neighbourhood DA (= pertpy's pydeseq2 solver); pseudobulk DE uses core/deseq2_vec.py
+    "numba>=0.60.0",  # edgeR QL kernels (core/edger_ql.py; also a scanpy dependency)
     # MCP server at /mcp (scview/mcp/): 2.x speaks both the initialize handshake (2024-11-05 ..
     # 2025-11-25) and the 2026-07-28 per-request protocol. Exact: the tools reach into
     # MCPServer's tool manager and low-level server, which a minor release may rename.
