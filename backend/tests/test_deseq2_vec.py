@@ -248,8 +248,9 @@ def test_chunked_fit_equals_one_chunk(monkeypatch):
     whole = dv.deseq2_wald(counts, X)
     monkeypatch.setattr(dv, "_CHUNK_ELEMENTS", 8 * 40)  # 40 genes a chunk
     parts = dv.deseq2_wald(counts, X)
-    np.testing.assert_allclose(parts.pvalue, whole.pvalue, rtol=1e-12)
-    np.testing.assert_allclose(parts.dispersions, whole.dispersions, rtol=1e-12)
+    # Chunks change the matrix shapes, so BLAS rounding (CPU-dependent) differs at ~1e-9.
+    np.testing.assert_allclose(parts.pvalue, whole.pvalue, rtol=1e-7)
+    np.testing.assert_allclose(parts.dispersions, whole.dispersions, rtol=1e-7)
 
 
 def test_independent_filtering_matches_plain_bh_when_off():

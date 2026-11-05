@@ -49,6 +49,11 @@ G <- 400; donor <- factor(rep(1:4, each = 2)); cond <- rep(0:1, 4)
 mu0 <- exp(rnorm(G, 2, 1.8)); deff <- exp(matrix(rnorm(G * 4, 0, 0.5), G))[, as.integer(donor)]
 lfc <- ifelse(runif(G) < 0.1, rnorm(G, 0, 1.2), 0)
 C <- nb(mu0 * deff * exp(outer(lfc, cond)) * rep(exp(rnorm(8, 0, 0.3)), each = G), 0.05)
+# A gene with one nonzero count is fitted exactly: its residual df is round-off (R ~1e-14, the port
+# ~1e-14 to 3e-8), so whether it clears the average-QL trend's df floor depends on the CPU. Left out
+# (pseudobulk DE's count filter never passes such a gene). Regenerated with edgeR 4.10.0 / limma
+# 3.68.1, which reproduce the 4.6.3 numbers of the other cases to ~1e-10.
+C <- C[rowSums(C > 0) >= 2, , drop = FALSE]
 write_case("paired", C, model.matrix(~donor + cond), 5)
 
 # group + continuous covariate, testing the covariate
