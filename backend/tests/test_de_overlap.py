@@ -282,7 +282,7 @@ async def test_endpoint_label_for_pseudobulk():
         "x", DECompareRequest(split_by="cond", group_a="A", group_b="B", method="pseudobulk",
                               replicate_key="donor"), _DM(a))
     r = de_results.recall("x", res.result_id)
-    assert r.label == "All cells: A vs B (pseudobulk DESeq2)"
+    assert r.label == "All cells: A vs B (pseudobulk limma-voom)"
     assert r.comparison["replicate_key"] == "donor" and r.pvals_adj is not None
 
 
