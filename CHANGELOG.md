@@ -6,6 +6,10 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-11-05
+
+Pseudobulk DE defaults to limma-voom, chosen on 18 public datasets; sex-linked genes are flagged in every DE result.
+
 ### Changed
 - **Pseudobulk DE now uses limma-voom by default instead of DESeq2.** On real donor splits of 18 public datasets
   (82 cell types, 166,000 fits) with known effects added, DESeq2 called about 1 false gene in 3 at a nominal FDR
