@@ -247,7 +247,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
           ? {
               method: "pseudobulk",
               replicate_key: replicateKey,
-              ...(pbMethod !== "deseq2" ? { pb_method: pbMethod } : {}),
+              pb_method: pbMethod,
               ...(ruvK ? { ruv_k: ruvK } : {}),
               ...(usedCovariates.length ? { covariates: usedCovariates } : {}),
             }
@@ -907,7 +907,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                     className="px-2 py-1.5 text-right font-medium text-slate-600"
                     title={
                       result.method === "pseudobulk"
-                        ? `DESeq2 log2 fold change of the per-donor summed counts, ${result.label} over ${refLabel}`
+                        ? `${pbMethodLabel(result.pb_method)} log2 fold change of the per-donor summed counts, ${result.label} over ${refLabel}`
                         : `log2 of the mean expression in ${result.label} over ${refLabel} (expm1 of the mean log-normalised values on each side, as scanpy's rank_genes_groups takes it)`
                     }
                   >

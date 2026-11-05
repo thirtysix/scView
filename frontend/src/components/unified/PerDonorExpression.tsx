@@ -28,8 +28,8 @@ const METHOD_HELP: Record<DonorMethod, string> = {
     "Mean of the log-normalised expression over each donor's cells in the group: the violin's own " +
     "scale, every cell one vote, no counts needed.",
   cpm:
-    "log2(CPM + 1) of each donor's summed raw counts in the group: what pseudobulk DE (DESeq2 on donor " +
-    "sums) works from. Deeper cells weigh more.",
+    "log2(CPM + 1) of each donor's summed raw counts in the group: what pseudobulk DE (limma-voom or " +
+    "DESeq2 on donor sums) works from. Deeper cells weigh more.",
 };
 
 /**

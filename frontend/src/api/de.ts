@@ -221,10 +221,10 @@ export interface DECompareRequest {
   within_column?: string;
   within_value?: string;
   replicate_key?: string;
-  /** "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key);
+  /** "pseudobulk": per-donor count sums tested with limma-voom (default) or DESeq2 (needs replicate_key);
    *  the others are cell-level tests (Wilcoxon when absent). */
   method?: DEMethod;
-  /** Pseudobulk only: the model (DESeq2 when absent) and RUV factors (0-3). */
+  /** Pseudobulk only: the model (limma-voom when absent; servers before 0.61 used DESeq2) and RUV factors (0-3). */
   pb_method?: PseudobulkMethod;
   ruv_k?: number;
   /** Pseudobulk only: per-sample obs columns in the design (sex, batch, age; up to 4). */
@@ -238,7 +238,7 @@ export interface DECompareRequest {
 /**
  * DE between two groups of one obs column (A vs B), optionally within one
  * subgroup — e.g. dataset STIM vs CTRL within one cell type: cell-level Wilcoxon,
- * or donor-aware pseudobulk DESeq2. In the response, `n_selected` / `n_rest` are
+ * or donor-aware pseudobulk limma-voom or DESeq2. In the response, `n_selected` / `n_rest` are
  * the A / B cell counts.
  */
 export async function computeDECompare(

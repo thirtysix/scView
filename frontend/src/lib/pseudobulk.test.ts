@@ -3,7 +3,7 @@ import { describePbModel, formatR, pbMethodLabel, PB_METHODS } from "./pseudobul
 
 describe("pseudobulk labels", () => {
   it("names each model, DESeq2 for older servers", () => {
-    expect(PB_METHODS.map((m) => m.value)).toEqual(["deseq2", "voom", "voombygroup"]);
+    expect(PB_METHODS.map((m) => m.value)).toEqual(["voom", "voombygroup", "deseq2"]);
     expect(pbMethodLabel("voombygroup")).toBe("voomByGroup");
     expect(pbMethodLabel(undefined)).toBe("DESeq2");
   });

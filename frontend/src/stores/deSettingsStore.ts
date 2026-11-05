@@ -44,7 +44,7 @@ export const DE_DEFAULTS: DESettings = {
   fcThreshold: 1,
   minPct: DEFAULT_MIN_PCT,
   cellMethod: "wilcoxon",
-  pbMethod: "deseq2",
+  pbMethod: "voom",
   ruvK: 0,
 };
 

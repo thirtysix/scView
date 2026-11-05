@@ -6,7 +6,7 @@ regression, ``core/de_methods.py``) over the genes detected in enough cells
 (``core/de_prefilter.py``), returning log fold-change and adjusted p-values per
 gene. Unlike the marker endpoint (which groups by an obs column), the
 group here is an ad-hoc list of cell indices. Between-groups comparisons can
-instead run donor-aware pseudobulk DESeq2 (``core/pseudobulk.py``). The
+instead run donor-aware pseudobulk limma-voom or DESeq2 (``core/pseudobulk.py``). The
 ``/methods`` endpoints run one comparison under every cell-level test and say
 how far they agree. A between-groups comparison also reports the two sides'
 composition (``core/de_composition.py``), before (``GET /de/composition``)
@@ -81,12 +81,12 @@ class _CompareScope(BaseModel):
 
 
 class DECompareRequest(_CompareScope):
-    # "pseudobulk": per-donor count sums tested with DESeq2 (needs replicate_key
+    # "pseudobulk": per-donor count sums tested with limma-voom (needs replicate_key
     # or a detectable donor column, and raw counts); the others are cell-level.
     method: Literal["wilcoxon", "t-test", "logreg", "pseudobulk"] = "wilcoxon"
     # Pseudobulk only (core/pseudobulk.py): the model, and RUVg unwanted factors
-    # in the design (0 = none). The defaults are DESeq2 without RUV.
-    pb_method: Literal["deseq2", "voom", "voombygroup"] = "deseq2"
+    # in the design (0 = none). The defaults are limma-voom without RUV.
+    pb_method: Literal["deseq2", "voom", "voombygroup"] = "voom"
     ruv_k: int = Field(default=0, ge=0, le=3)
     # Pseudobulk only: per-sample obs columns in the design (sex, batch, age), and the
     # person column the replicates nest in, for the repeated-donor warning (None: detected).
@@ -859,8 +859,8 @@ async def differential_expression_compare_methods(
 
 async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dataset_id: str, adaptor=None,
                               dm: DatasetManager | None = None):
-    """Donor-aware A vs B: per-donor count sums, DESeq2 Wald test or limma-voom /
-    voomByGroup, optionally with RUV factors (off the event loop)."""
+    """Donor-aware A vs B: per-donor count sums, limma-voom / voomByGroup or
+    DESeq2, optionally with RUV factors (off the event loop)."""
     from scview.core import pseudobulk
     from scview.core.pseudobulk import PseudobulkError, pseudobulk_de
 
@@ -952,6 +952,9 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
     few = few_donors(people, f"'{rep['donor_key']}' values" if rep else "donors")
     if few:
         rep_warnings.append(few)
+    caution = pseudobulk.method_caution(res.method, res.n_samples_a, res.n_samples_b)
+    if caution:
+        rep_warnings.append(caution)
     comparison = _compared(body, res.n_cells_a, res.n_cells_b, key)
     if res.covariates:
         comparison["covariates"] = res.covariates
@@ -1186,7 +1189,7 @@ class DEAuditRequest(BaseModel):
     min_pct: float = _MinPct
     n_permutations: int = Field(default=20, ge=1, le=100)
     max_seconds: float = Field(default=300.0, ge=5.0, le=1800.0)
-    pb_method: Literal["deseq2", "voom", "voombygroup"] = "deseq2"
+    pb_method: Literal["deseq2", "voom", "voombygroup"] = "voom"
     seed: int = 0
 
 

@@ -6,6 +6,14 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- **Pseudobulk DE now uses limma-voom by default instead of DESeq2.** On real donor splits of 18 public datasets
+  (82 cell types, 166,000 fits) with known effects added, DESeq2 called about 1 false gene in 3 at a nominal FDR
+  of 5% with 2 donors per side, 1 in 5 at 3 and 1 in 6 at 4; limma-voom called 1 in 7 at 2 donors and stayed near
+  1 in 20 from 3 donors on, while ranking genes as well (AUC 0.89 for both). DESeq2 is still offered, and a DESeq2
+  run with fewer than 6 donors on its smaller side now carries a caution that its adjusted p-values are optimistic.
+  Results stored before this change keep their DESeq2 label. Method and numbers: `docs/validation/pseudobulk-de.md`.
+
 ### Added
 - **Sex-linked genes are marked in every DE result.** XIST, TSIX and Y-chromosome genes get a "sex" badge in
   the DE table (red when the two sides' samples differ in sex, grey otherwise), and the co-pilot is told which

@@ -420,7 +420,7 @@ def iter_audit(
     max_seconds: float = MAX_SECONDS,
     seed: int = 0,
     pseudobulk: Callable[[], Any] | None = None,
-    pb_name: str = "DESeq2",
+    pb_name: str = "limma-voom",
     label: str = "",
     comparison: dict[str, Any] | None = None,
     donor_key: str = "",

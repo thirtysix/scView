@@ -2,16 +2,20 @@ import type { DEResponse, PseudobulkMethod } from "@/api/de";
 
 /** The pseudobulk models offered (backend core/pseudobulk.py), with when to use each. */
 export const PB_METHODS: { value: PseudobulkMethod; label: string; when: string }[] = [
-  { value: "deseq2", label: "DESeq2", when: "the default: negative binomial model, fine for most designs." },
   {
     value: "voom",
     label: "limma-voom",
-    when: "fast, and well calibrated with few donors; one mean-variance trend for all samples.",
+    when: "the default: fast, and held its false discovery rate on real donor splits; one mean-variance trend.",
   },
   {
     value: "voombygroup",
     label: "voomByGroup",
     when: "when one group's donors vary much more than the other's (see the variance check).",
+  },
+  {
+    value: "deseq2",
+    label: "DESeq2",
+    when: "negative binomial model; its FDR ran high (about 1 in 3 false at 2 donors per side) below 6 donors per side.",
   },
 ];
 

@@ -835,10 +835,10 @@ async def differential_expression(
     filter: Annotated[CellFilter | None, Field(description="Selected cells vs every other cell.")] = None,
     method: Annotated[Literal["wilcoxon", "t-test", "logreg", "pseudobulk"], Field(description=(
         "wilcoxon / t-test (Welch) / logreg are cell-level. pseudobulk sums each donor's counts "
-        "and tests with DESeq2 (or voom), the donor-aware test for conditions; between groups only."))] = "wilcoxon",
+        "and tests with limma-voom (or DESeq2), the donor-aware test for conditions; between groups only."))] = "wilcoxon",
     replicate_key: Annotated[str | None, Field(description="Donor/sample column (default: detected).")] = None,
     pb_method: Annotated[Literal["deseq2", "voom", "voombygroup"], Field(
-        description="Pseudobulk model: DESeq2 (default), limma-voom, or voomByGroup (a variance per group).")] = "deseq2",
+        description="Pseudobulk model: limma-voom (default), voomByGroup (a variance per group), or DESeq2 (its FDR runs high below 6 donors per side).")] = "voom",
     covariates: Annotated[list[str] | None, Field(max_length=4, description=(
         "Pseudobulk: per-sample obs columns in the design before the condition (sex, batch, age); "
         "refused when one varies within a sample or is confounded with the condition."))] = None,
