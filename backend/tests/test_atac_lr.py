@@ -254,12 +254,24 @@ def test_wilcoxon_is_what_it_was_when_no_test_is_named(world):
     assert "fit" not in out["frame"].columns and "n_fit" not in out
 
 
+@pytest.mark.parametrize("nnz, groups, cells, measured", [
+    (104_012_773, 21, 11_898, (240.7, 311.0)),  # PBMC 10k: this laptop 2026-11-06, the b36 agent's run
+    (97_980_766, 24, 11_208, (281.0,)),  # PBMC 10k after RNA QC, live through the UI (b36)
+    (41_686_530, 21, 4_878, (62.9, 80.0)),  # E18 mouse brain: this laptop, the b36 agent's run
+])
+def test_the_lr_estimate_is_within_20_percent_of_the_measured_runs(nnz, groups, cells, measured):
+    # All 10,000 likelihood ratios per group; the cost per cell of a fit falls with fewer cells.
+    est = atac.estimate_da_seconds(nnz, groups, "lr", n_cells=cells)
+    for secs in measured:
+        assert abs(est / secs - 1) <= 0.2, (est, secs)
+
+
 def test_estimates_name_the_test_and_leave_wilcoxon_alone():
     assert atac.estimate_da_seconds(104_000_000, 3) == round(5.0 + 104e6 * (3.5e-7 + 3 * 1.4e-8), 0)
     lr = atac.estimate_da_seconds(104_000_000, 24, "lr", n_cells=11_898)
     assert lr > atac.estimate_da_seconds(104_000_000, 24)
     assert atac.estimate_da_seconds(104_000_000, 24, "lr", n_cells=11_898, n_fits=100) < lr
-    base = atac.estimate_da_bytes(143_887, 24)
+    base =atac.estimate_da_bytes(143_887, 24)
     assert base == atac.estimate_da_bytes(143_887, 24, "wilcoxon", n_cells=11_898)
     assert atac.estimate_da_bytes(143_887, 24, "lr", n_cells=11_898) > 0
 
