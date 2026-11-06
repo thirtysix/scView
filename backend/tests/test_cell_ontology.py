@@ -5,6 +5,7 @@ cl-basic.obo 2026-06-08 (tests/fixtures/cell_ontology/cl_pbmc.obo); no network."
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import time
@@ -230,6 +231,7 @@ def test_unlabelled_cells_leave_a_mapping_incomplete():
 
 def test_get_index_fetches_only_the_ontology(tmp_path, monkeypatch):
     monkeypatch.setattr(mdb, "ONTOLOGY_URL", "https://cl.test/cl-basic.obo")
+    monkeypatch.setattr(mdb, "ONTOLOGY_SHA256", hashlib.sha256(FIX.read_bytes()).hexdigest())
     monkeypatch.setattr(mdb, "ONTOLOGY_MIN_TERMS", 5)
     co._cache.clear()
     calls: list[str] = []
@@ -254,6 +256,7 @@ def test_get_index_says_why_when_it_cannot(tmp_path, monkeypatch):
     with pytest.raises(co.OntologyUnavailable, match="MARKER_DB_AUTO_DOWNLOAD is off"):
         co.get_index(tmp_path / "off", auto_download=False)
     monkeypatch.setattr(mdb, "ONTOLOGY_URL", "https://cl.test/cl-basic.obo")
+    monkeypatch.setattr(mdb, "ONTOLOGY_SHA256", hashlib.sha256(FIX.read_bytes()).hexdigest())
     client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(503)))
     with pytest.raises(co.OntologyUnavailable, match="could not be downloaded"):
         co.get_index(tmp_path / "down", auto_download=True, client=client)

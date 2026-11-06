@@ -40,7 +40,8 @@ under ``raw/``, then one normalised table per source (species, cell_type, cl_id,
 gene, weight) and ``manifest.json`` (URL, date, sha256, row counts). The two
 marker files are frozen releases and their sha256 is pinned, so a wrong or
 altered file is refused (CellMarker 2.0's download server is plain HTTP). The
-Cell Ontology (``cl-basic.obo``, for name matching) is fetched the same way and
+Cell Ontology (``cl-basic.obo`` release 2026-06-08, sha256 pinned; for name matching
+and the CL ids of ``core/cell_ontology.py``) is fetched the same way and
 kept as a compact id -> name / synonyms / parents table; without it matching
 falls back to names and abbreviations. A file placed in ``raw/`` by hand is used
 without any download. ``MARKER_DB_AUTO_DOWNLOAD=false`` turns fetching off.
@@ -403,7 +404,14 @@ ACT_SUMS = Path(__file__).with_name("marker_db_act.sha256")
 ACT_WORKERS = 4
 ACT_DELAY = 0.05  # seconds before each request: a small server
 
-ONTOLOGY_URL = "http://purl.obolibrary.org/obo/cl/cl-basic.obo"
+# One pinned Cell Ontology release (the same bytes as the versioned OBO PURL
+# purl.obolibrary.org/obo/cl/releases/2026-06-08/cl-basic.obo), so CL ids and the
+# annotator benchmark's distances do not move under a dataset. A cl-basic.obo put in
+# raw/ by hand (or fetched unpinned before v0.64.0) is used as it is; the manifest
+# says whether it is the pinned release.
+ONTOLOGY_RELEASE = "2026-06-08"
+ONTOLOGY_URL = f"https://github.com/obophenotype/cell-ontology/releases/download/v{ONTOLOGY_RELEASE}/cl-basic.obo"
+ONTOLOGY_SHA256 = "73996c6349283e7a8cbd8183367a1cb810d0077e9c291ae0c72bd31e869f8c1c"
 ONTOLOGY_FILE = "cl-basic.obo"
 ONTOLOGY_MIN_TERMS = 2000
 
@@ -684,7 +692,7 @@ def _install_ontology(dest: Path, client: httpx.Client | None) -> dict:
         else:
             c, own = _client(client)
             try:
-                url, digest, size = _download((ONTOLOGY_URL,), part, None, c)
+                url, digest, size = _download((ONTOLOGY_URL,), part, ONTOLOGY_SHA256, c)
             finally:
                 if own:
                     c.close()
@@ -702,7 +710,8 @@ def _install_ontology(dest: Path, client: httpx.Client | None) -> dict:
         if src == part:
             part.replace(raw)
         entry.update(url=ONTOLOGY_URL, fetched_at=_now(), terms=len(terms),
-                     version=m.group(1).strip() if m else None)
+                     version=m.group(1).strip() if m else None,
+                     pinned=bool(ONTOLOGY_SHA256) and entry["sha256"] == ONTOLOGY_SHA256)
         return entry
     finally:
         part.unlink(missing_ok=True)
@@ -861,6 +870,7 @@ def status(dest: Path, *, auto_download: bool | None = None) -> dict:
         "ontology": {
             "downloaded": _installed(dest, "ontology"), "url": ONTOLOGY_URL,
             "version": onto.get("version"), "fetched_at": onto.get("fetched_at"),
+            "release": ONTOLOGY_RELEASE, "pinned": onto.get("pinned"),
             "error": of.get("error") if of and not _installed(dest, "ontology") else None,
         },
     }

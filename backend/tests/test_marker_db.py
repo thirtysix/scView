@@ -99,6 +99,7 @@ def small_sources(monkeypatch, raw):
     monkeypatch.setattr(mdb, "ACT_SUMS", FIX / "act_sample.sha256")
     monkeypatch.setattr(mdb, "ACT_DELAY", 0.0)
     monkeypatch.setattr(mdb, "ONTOLOGY_URL", "https://cl.test/cl-basic.obo")
+    monkeypatch.setattr(mdb, "ONTOLOGY_SHA256", hashlib.sha256(raw["ontology"]).hexdigest())
     monkeypatch.setattr(mdb, "ONTOLOGY_MIN_TERMS", 5)
 
     def no_network(client):
@@ -206,6 +207,7 @@ def test_download_stores_tables_and_manifest_and_falls_back_to_the_mirror(tmp_pa
     assert set(m["sources"]) == {"panglao", "cellmarker2", "act", "ontology"}
     assert set(m["failures"]) == {"cellmarker3"} and st["cellmarker"] == "CellMarker 2.0"  # 3.0 not served here
     assert st["ontology"]["version"] == "cl/releases/2026-06-08/cl-basic.owl"
+    assert st["ontology"]["pinned"] is True and st["ontology"]["release"] == mdb.ONTOLOGY_RELEASE
     assert (dest / "raw" / mdb.SOURCES["cellmarker2"].filename).is_file()
     assert not list(dest.rglob("*.part*"))
     with gzip.open(dest / "panglao.tsv.gz", "rt") as f:
