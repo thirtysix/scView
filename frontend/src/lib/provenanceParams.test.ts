@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { keptRerunParams, lastRunText, paramText } from "./provenanceParams";
+import { keptRerunParams, lastRunText, paramChips, paramText } from "./provenanceParams";
 
 describe("fast Leiden in the History", () => {
   it("the chip says which Leiden optimisation ran", () => {
@@ -102,5 +102,47 @@ describe("paramText", () => {
 
   it("never shows [object Object] for a list of objects", () => {
     expect(paramText("rows", [{ a: 1 }])).toBe('rows=[{"a":1}]');
+  });
+});
+
+describe("the ingest step's chips", () => {
+  it("words what came in instead of JSON (backend core/ingestion/session.py)", () => {
+    const step = {
+      step: "ingest",
+      params: {
+        formats: ["tenx_mex", "anndata"],
+        genes_in_rows: false,
+        protein: { n_proteins: 17, controls: ["IgG1", "IgG2a"], normalisation: "CLR per cell (Seurat margin = 2)",
+          location: "obsm protein_counts / protein_clr" },
+        atac: { n_peaks: 105421, nnz: 1, genome: "GRCh38", genome_assumed: true, source: "f.h5", format: "10x", n_cells: 9 },
+        gene_symbols: { var: { from: "var['feature_name']", ids_in: "var['gene_ids']", n_genes: 24505, renamed: 21241,
+          kept_id: 3, made_unique: 1 } },
+      },
+    };
+    expect(paramChips(step).map(([, t]) => t)).toEqual([
+      "formats: 10x MEX, AnnData (.h5ad)",
+      "CITE-seq: 17 antibodies (2 isotype controls), CLR per cell (Seurat margin = 2)",
+      "ATAC: 105,421 peaks, GRCh38 (assumed from the peak names)",
+      "gene symbols from var['feature_name']: 21,241 of 24,505 names changed, ids kept in var['gene_ids']",
+    ]);
+    expect(paramChips(step).every(([, t]) => !t.includes("{"))).toBe(true);
+  });
+
+  it("words a split upload, a public import and a table read with genes in rows", () => {
+    const chips = (params: Record<string, unknown>) => paramChips({ step: "ingest", params }).map(([, t]) => t);
+    expect(chips({ formats: ["h5ad"], feature_split: { n_genes: 33538, n_antibodies: 17, n_multiplexing_tags: 0,
+      n_guides: 0, other_features: [], location: "x" } })).toEqual([
+      "format: AnnData (.h5ad)", "features split: 33,538 genes, 17 antibodies",
+    ]);
+    expect(chips({ public_import: { source: "CELLxGENE Discover", dataset_id: "abc", doi: "10.1/x", license: "CC BY 4.0" } }))
+      .toEqual(["CELLxGENE Discover: dataset abc, DOI 10.1/x, CC BY 4.0"]);
+    expect(chips({ formats: ["dense_table"], genes_in_rows: true })).toEqual([
+      "format: expression table (CSV/TSV)", "table read with genes in rows",
+    ]);
+  });
+
+  it("leaves another step's params of the same name to the general rule", () => {
+    expect(paramText("protein", "CD3", "learned_gate_train")).toBe("protein=CD3");
+    expect(paramText("formats", ["tenx_mex"], "something_else")).toBe("formats=tenx_mex");
   });
 });
