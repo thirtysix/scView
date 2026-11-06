@@ -417,3 +417,17 @@ def test_labels_series_helper_keeps_missing_and_non_strings():
     labels = pd.Series(["a", None, "b", "c"], index=list("wxyz"), dtype=object)
     out = sd.sd_edit_labels(labels, ["b"], {"c": "a"})
     assert out.tolist() == ["a", None, None, "a"] and list(out.index) == list("wxyz")
+
+
+async def test_a_run_without_edits_estimates_from_the_columns_own_types(client, dataset_manager):
+    """The stream's start estimate counted 20 types whenever no label was edited: the
+    Lymph Node's 33-type run said 46 s in the stream, 79 s in the reference check."""
+    rid, did, _ = _pair(dataset_manager, "noedit")
+    url = f"{API}/datasets/{did}/spot-deconvolution"
+    chk = (await client.get(f"{url}/reference/{rid}",
+                            params={"celltype_column": "cell_type", "method": "nnls"})).json()
+    r = await client.post(f"{url}/run-stream", json={"reference_id": rid, "celltype_column": "cell_type",
+                                                     "method": "nnls"})
+    events = _events(r.text)
+    assert events[-1][0] == "complete", events[-1]
+    assert events[0][1]["estimate"]["seconds"] == chk["estimate"]["seconds"]

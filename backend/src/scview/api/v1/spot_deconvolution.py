@@ -299,10 +299,12 @@ async def _setup(dm: DatasetManager, dataset_id: str, reference_id: str, method:
         raise HTTPException(status_code=422, detail=reason)
     cached = dm.get_dataset(reference_id)
     open_in_memory = cached is not None and not getattr(cached.adata, "isbacked", False)  # else read: _preparer
-    n_types = 20  # untouched labels: the reference check gave the real estimate, this is the room to reserve
-    if edits is not None and (edits.exclude_labels or edits.merge_labels):
+    # The column's own count (after any left-out and merged labels) for the time and the room
+    # held; 20 only when the column cannot say. A flat 20 said 46 s for a 33-type run of 79 s.
+    n_types = 20
+    if column:
         try:
-            n_types = await asyncio.to_thread(_types_after, paths[0], column, edits) or n_types
+            n_types = await asyncio.to_thread(_types_after, paths[0], column, edits or LabelEdits()) or n_types
         except sd.SpotDeconvolutionError as e:
             raise HTTPException(status_code=e.status, detail=str(e))
     est = await asyncio.to_thread(_estimate, paths[0], open_in_memory, adaptor, n_types, method, check)
