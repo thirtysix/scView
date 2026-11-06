@@ -4,7 +4,9 @@
 the marker databases' ``cl-basic.obo``; 503 when it is not on disk and cannot be fetched).
 ``GET|POST /datasets/{id}/ontology/terms`` reads or sets a label column's label -> term
 mapping (kept in uns, saved like any obs edit); ``POST .../terms/suggest`` proposes terms
-for every label, which are shown and never stored.
+for every label, which are shown and never stored. ``GET /datasets/{id}/annotation/
+ontology?column=`` gives every label its strict match (and the LLM annotator's checked
+id), also never stored.
 """
 
 from __future__ import annotations
@@ -129,6 +131,25 @@ async def set_label_terms(
         elif result["previous"]:
             dm.saved_in_place(dataset_id, adaptor, output_path)
     return {**result["summary"], "previous": result["previous"], "columns": result["columns"]}
+
+
+@router.get("/datasets/{dataset_id}/annotation/ontology")
+async def label_ontology_matches(
+    dataset_id: str,
+    column: str = Query(..., max_length=256),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Each label of ``column`` with its strict Cell Ontology match (``cell_ontology.
+    map_column``: same name, exact synonym or the same once case, plurals, '+' and
+    hyphens are set aside; else none). For a column the LLM annotator wrote, the id the
+    model gave is used when it agrees with the label. Nothing is stored; the terms the
+    user confirms are ``/ontology/terms``."""
+    adaptor = await _adaptor(dm, dataset_id)
+    idx = await _index()
+    try:
+        return await asyncio.to_thread(co.map_column, adaptor.adata, column, idx)
+    except co.TermError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
 
 
 class SuggestBody(BaseModel):
