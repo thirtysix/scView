@@ -325,19 +325,31 @@ def test_a_tie_broken_on_speed_says_so_with_the_shown_percentages():
 
 
 def test_estimate_follows_the_kang_timings_and_counts_compilation_once(monkeypatch):
-    # 2 CPUs, numba warm (2026-10-31): Kang 13,836 cells 9.5 s; a 2,700-cell subsample 0.9 s;
-    # BBKNN's first run in the process compiled for 16 s more (16.3 s against 0.5 s warm).
-    assert abs(bc.estimate_seconds(13_836, warm=True) - 9.5) <= 0.2 * 9.5
-    assert abs(bc.estimate_seconds(2_700, warm=True) - 0.9) <= 0.2 * 0.9
+    # 2 CPUs, numba warm (2026-11-06): Kang 13,836 cells 6.4 s; a 2,700-cell subsample 0.45 s.
+    # BBKNN's first run: 18.3 s in all in a fresh container, 14.7 s after a restart (numba's
+    # cache of pynndescent on disk), 7.1 s in a server that had run its pipeline.
+    assert abs(bc.estimate_seconds(13_836, warm=True) - 6.4) <= 0.2 * 6.4
+    assert abs(bc.estimate_seconds(2_700, warm=True) - 0.45) <= 0.2 * 0.45
+    assert abs(bc.estimate_seconds(13_836, warm=False) - 18.3) <= 0.2 * 18.3
     assert bc.estimate_seconds(2_700, warm=False) == pytest.approx(
         bc.estimate_seconds(2_700, warm=True) + bc.COMPILE_SECONDS)
     assert bc.estimate_seconds(2_700, ["harmony"], warm=False) == pytest.approx(
         bc.estimate_seconds(2_700, ["harmony"], warm=True))
-    # a comparison that ran BBKNN marks the process warm; the default reads that state
+    # the default reads the process: a fresh one with a cache on disk imports faster
     monkeypatch.setattr(bc, "_bbknn_warm", False)
-    cold = bc.estimate_seconds(2_700)
+    monkeypatch.setattr(bc.numba_warm, "graph_compiled", lambda: False)
+    monkeypatch.setattr(bc.numba_warm, "import_seconds", lambda: bc.numba_warm.IMPORT_CACHED_SECONDS)
+    restarted = bc.estimate_seconds(13_836)
+    assert abs(restarted - 14.7) <= 0.2 * 14.7
+    assert bc.compile_seconds() == pytest.approx(restarted - bc.estimate_seconds(13_836, warm=True))
+    # any neighbour graph built in the process compiles BBKNN's code: no compile left
+    monkeypatch.setattr(bc.numba_warm, "graph_compiled", lambda: True)
+    assert bc.bbknn_warm() and bc.compile_seconds() == 0
+    assert abs(bc.estimate_seconds(13_836) - 7.1) <= 0.2 * 7.1
+    # and so does a comparison that ran BBKNN
+    monkeypatch.setattr(bc.numba_warm, "graph_compiled", lambda: False)
     list(bc.iter_compare(_adata(), "batch", methods=["bbknn"]))
-    assert bc.bbknn_warm() and bc.estimate_seconds(2_700) == pytest.approx(cold - bc.COMPILE_SECONDS)
+    assert bc.bbknn_warm() and bc.estimate_seconds(2_700) == pytest.approx(bc.estimate_seconds(2_700, warm=True))
 
 
 def test_recommend_without_labels_or_without_mixing():
@@ -378,6 +390,8 @@ async def test_compare_endpoints(client, dataset_manager):
     info = r.json()
     assert info["available"] and info["label_column"] == "cell_type"
     assert info["estimate_seconds"] > 0 and "Luecken" in info["background"]
+    assert info["first_run"] == (info["compile_seconds"] > 0)
+    assert info["compile_seconds"] <= info["estimate_seconds"]
     r = await client.get(f"{API}/datasets/{did}/batch/compare", params={"batch_key": "nope"})
     assert r.json()["available"] is False and "not found" in r.json()["reason"]
 
