@@ -94,3 +94,53 @@ def test_on_disk_finds_an_index_in_each_place_numba_writes(tmp_path, monkeypatch
     (target / "utils.make_heap-130.py311.nbi").write_bytes(b"")
     assert nw.on_disk("fakepkg")
     assert not nw.on_disk("no_such_package_here")
+
+
+def _state(monkeypatch, compiled: bool, import_seconds: float = nw.IMPORT_CACHED_SECONDS):
+    for fn in ("graph_compiled", "search_compiled", "layout_compiled"):
+        monkeypatch.setattr(nw, fn, lambda: compiled)
+    monkeypatch.setattr(nw, "import_seconds", lambda: 0.0 if compiled else import_seconds)
+
+
+def test_first_run_notes_follow_the_process(monkeypatch):
+    from scview.core import hvg_sensitivity as hs
+    from scview.core import layout_stability as ls
+    from scview.core import merge_check as mc
+    from scview.core import wnn
+
+    # Kang after a server restart (2 CPUs): the variable-gene check took 30 s more than after
+    # the pipeline, the merge check 30 s, layout stability 28 s.
+    _state(monkeypatch, compiled=False)
+    for secs in (hs.first_run_seconds(13_836), mc.first_run_seconds(13_836), ls.first_run_seconds(13_836)):
+        assert abs(secs - 29.4) <= 0.2 * 29.4
+    assert hs.first_run_seconds(3_000) < 10  # exact neighbours: no search to compile
+    assert wnn.first_run_seconds(7_798) == wnn.FIRST_RUN_SECONDS
+    _state(monkeypatch, compiled=True)
+    assert hs.first_run_seconds(13_836) == mc.first_run_seconds(13_836) == ls.first_run_seconds(13_836) == 0
+    assert wnn.first_run_seconds(7_798) == 0
+    assert wnn.estimate_seconds(7_798) == wnn.estimate_seconds(7_798, warm=True)
+
+
+def test_pipeline_neighbours_and_velocity_leave_out_a_done_compile(monkeypatch):
+    from scview.core import preflight as pf
+    from scview.core import velocity as vel
+
+    steps = ["pca", "neighbors"]
+    h = (13_836, 14_053)
+
+    def neighbours(warm):
+        run = pf.estimate_run(h, nnz=13_836 * 1_000, steps=steps, warm=warm, cpus=2.0)
+        return next(e for e in run.steps if e.step == "neighbors").seconds
+
+    _state(monkeypatch, compiled=False, import_seconds=nw.IMPORT_COLD_SECONDS)
+    cold = neighbours(False)
+    assert neighbours(True) == cold  # nothing compiled yet: the whole compile still counts
+    _state(monkeypatch, compiled=True)
+    assert neighbours(False) == cold  # warm False pins the cold estimate
+    warm = neighbours(True)
+    # Kang: 28-31 s first, 1.4 s in a warm server
+    assert warm[0] <= 1.4 <= warm[1] and cold[0] <= 29.6 <= cold[1]
+    monkeypatch.setattr(vel, "knn_compiled", lambda: False)
+    assert pf.estimate_velocity(13_836, 13_836, 10**7, 3 * 10**6)["compile_seconds"] == 0
+    _state(monkeypatch, compiled=False)
+    assert pf.estimate_velocity(13_836, 13_836, 10**7, 3 * 10**6)["compile_seconds"] == pf.VELOCITY_SECONDS_KNN_COMPILE

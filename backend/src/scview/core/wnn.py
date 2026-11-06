@@ -561,16 +561,27 @@ class WnnPlan:
                 "estimate_bytes": estimate_bytes(self.n_cells, self.d_rna, self.d_protein)}
 
 
-def estimate_seconds(n_cells: int, n_iterations: int = -1) -> float:
-    """A run's time at 2 CPUs, plus numba's first compile: the neighbour stages (per
-    cell), the two UMAPs and the protein graph as the pipeline's estimates have them
-    (``core/preflight.py``: 500 epochs up to 10,000 cells, 200 above), and Leiden with
-    the passes the dataset's clustering used."""
+def estimate_seconds(n_cells: int, n_iterations: int = -1, *, warm: bool | None = None) -> float:
+    """A run's time at 2 CPUs, plus numba's first compile (``first_run_seconds``; ``warm``
+    True or False pins it): the neighbour stages (per cell), the two UMAPs and the protein
+    graph as the pipeline's estimates have them (``core/preflight.py``: 500 epochs up to
+    10,000 cells, 200 above), and Leiden with the passes the dataset's clustering used."""
     from scview.core import preflight
 
     n = max(0, int(n_cells))
-    return round(FIRST_RUN_SECONDS + _SECONDS_PER_CELL * n + 2 * preflight.umap_seconds(n, three_d=False)
+    first = first_run_seconds(n) if warm is None else (0.0 if warm else FIRST_RUN_SECONDS)
+    return round(first + _SECONDS_PER_CELL * n + 2 * preflight.umap_seconds(n, three_d=False)
                  + _PROTEIN_GRAPH_SECONDS_PER_CELL * n + preflight.leiden_seconds(n, n_iterations), 0)
+
+
+def first_run_seconds(n_cells: int) -> float:
+    """``FIRST_RUN_SECONDS`` until numba has compiled the neighbour search (pynndescent past
+    ``EXACT_MAX_CELLS``), the graph weights and the UMAP layout in this process, which any
+    neighbour graph and UMAP do (``core/numba_warm.py``); then none."""
+    from scview.core import numba_warm
+
+    left = numba_warm.umap_seconds(numba_warm.SEARCH_MIN_CELLS if n_cells > EXACT_MAX_CELLS else 0)
+    return FIRST_RUN_SECONDS if left > 0 else 0.0
 
 
 def estimate_bytes(n_cells: int, d_rna: int = 50, d_protein: int = MAX_PROTEIN_PCS) -> int:

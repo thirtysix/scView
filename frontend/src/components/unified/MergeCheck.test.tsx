@@ -129,6 +129,16 @@ describe("MergeCheck", () => {
     expect(screen.queryByText(/merge candidate/)).not.toBeInTheDocument(); // the old result is gone
   });
 
+  it("names the first run's compile only while it is still to come", async () => {
+    const { unmount } = render(<MergeCheck datasetId="ds" rows={rows} method="leiden" selected={null} />);
+    expect(await screen.findByText(/first run after the server starts adds ~30 s/)).toBeInTheDocument();
+    unmount();
+    api.getMergeCheckInfo.mockResolvedValue({ ...info, first_run_seconds: 0 });
+    render(<MergeCheck datasetId="ds" rows={rows} method="leiden" selected={null} />);
+    expect(await screen.findByText(/about 1 min 35 s\./)).toBeInTheDocument();
+    expect(screen.queryByText(/first run/)).not.toBeInTheDocument();
+  });
+
   it("explains why it can't run", async () => {
     api.getMergeCheckInfo.mockResolvedValue({ ...info, available: false, reason: "The merge check splits the raw counts" });
     render(<MergeCheck datasetId="ds" rows={[]} method="leiden" selected={null} />);
