@@ -146,9 +146,11 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
       : ctColumns.includes(target.trim())
         ? target.trim()
         : null;
-  // The labels' Cell Ontology ids: the column just written, else the output column if it exists.
+  // The labels' Cell Ontology ids: the column just written, else the output column if it
+  // exists, else `cell_type` (what the pipeline's annotation step writes) if that exists.
+  const hasColumn = (name: string) => !!dataset?.obs_columns?.some((c) => c.name === name);
   const ontologyColumn =
-    lastWritten ?? (dataset?.obs_columns?.some((c) => c.name === target.trim()) ? target.trim() : null);
+    lastWritten ?? (hasColumn(target.trim()) ? target.trim() : hasColumn("cell_type") ? "cell_type" : null);
 
   const handleAnnotate = async () => {
     const tgt = target.trim() || "cell_type";

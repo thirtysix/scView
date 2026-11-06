@@ -79,7 +79,7 @@ export function AnnotationOntologyIds({
         </InfoTip>
       </div>
       <p className="mb-2 text-[11px] text-slate-500">
-        {data.n_matched} of {data.n_labels} labels matched{data.version ? ` · ${data.version.replace(/^cl\/releases\//, "CL ").replace(/\/cl-basic\.owl$/, "")}` : ""}.
+        {data.n_matched} of {data.n_labels} labels in <code className="font-mono">{column}</code> matched{data.version ? ` · ${data.version.replace(/^cl\/releases\//, "CL ").replace(/\/cl-basic\.owl$/, "")}` : ""}.
       </p>
       <table className="w-full text-[11px]">
         <thead>

@@ -76,7 +76,7 @@ describe("AnnotationControl (CellTypist)", () => {
     fireEvent.click(screen.getByText("Annotate cell types"));
     const card = await screen.findByTestId("ontology-ids");
     expect(getLabelMatches).toHaveBeenCalledWith("d1", "paul15_clusters_celltypeAnno");
-    expect(card).toHaveTextContent("1 of 2 labels matched · CL 2026-06-08");
+    expect(card).toHaveTextContent("1 of 2 labels in paul15_clusters_celltypeAnno matched · CL 2026-06-08");
     const link = screen.getByRole("link", { name: /CL:0000623/ });
     expect(link).toHaveAttribute("href", "https://www.ebi.ac.uk/ols4/ontologies/cl/classes?obo_id=CL:0000623");
     expect(screen.getByText("NK cells").closest("tr")).toHaveTextContent("AI · normalised");
@@ -84,6 +84,16 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(mono.querySelector("a")).toBeNull();
     expect(mono).not.toHaveTextContent("none");
     for (const h of ["Label", "CL id", "Match"]) expect(screen.getByText(h)).toHaveAttribute("title");
+  });
+
+  it("shows the pipeline's cell_type column when the output column does not exist yet", async () => {
+    useDatasetStore.setState({
+      currentDataset: { ...DATASET, obs_columns: [...DATASET.obs_columns, { name: "cell_type", dtype: "category", n_unique: 9 }] } as DatasetInfo,
+    });
+    render(<AnnotationControl onAnnotate={vi.fn()} running={false} species="human" />);
+    const card = await screen.findByTestId("ontology-ids");
+    expect(getLabelMatches).toHaveBeenCalledWith("d1", "cell_type");
+    expect(card).toHaveTextContent("labels in cell_type matched");
   });
 
   it("says why when the ontology cannot be had", async () => {
