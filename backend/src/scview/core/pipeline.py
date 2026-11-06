@@ -1615,22 +1615,41 @@ def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 25) -> dict
     return group_markers(adata, groupby, n=n)
 
 
+_LIST_MARK = re.compile(r"^(?:[-*•]+\s*|\d+[.)]\s+)")
+_ID_PREFIX = re.compile(r"^(?:cluster|group)\s*", re.I)
+
+
+def _reply_cluster_id(cid: str, cluster_set: set[str]) -> str | None:
+    """The cluster a reply line's id names: exact, then without "Cluster"/"#"/case, then
+    the LONGEST cluster the id ends with at a word boundary ("Cluster 13" is 13, not 3)."""
+    if cid in cluster_set:
+        return cid
+    bare = _ID_PREFIX.sub("", cid).strip(" #`'\"")
+    if bare in cluster_set:
+        return bare
+    by_lower = {c.lower(): c for c in cluster_set}
+    if bare.lower() in by_lower:
+        return by_lower[bare.lower()]
+    ends = [c for c in cluster_set if cid.endswith(c) and (len(cid) == len(c) or not cid[-len(c) - 1].isalnum())]
+    return max(ends, key=len) if ends else None
+
+
 def _parse_cluster_labels(raw: str, clusters: list[str]) -> dict[str, str]:
-    """Parse an LLM reply ('cluster_id: cell type' per line) into {cluster: label}."""
+    """Parse an LLM reply ('cluster_id: cell type' per line) into {cluster: label}.
+
+    Only a list mark is taken off the front ("- ", "* ", "1. "): numeric cluster ids
+    ("3: B cells") used to be stripped with it, so every numeric clustering fell back
+    to line order, and one extra line in the reply shifted every label."""
     cluster_set = {str(c) for c in clusters}
     out: dict[str, str] = {}
     for line in raw.splitlines():
-        line = line.strip().lstrip("-*0123456789. ").strip()
+        line = _LIST_MARK.sub("", line.strip()).replace("**", "").strip()
         if ":" not in line:
             continue
         cid, label = (p.strip() for p in line.split(":", 1))
-        if cid in cluster_set:
-            out[cid] = label
-        else:
-            for c in cluster_set:
-                if cid.endswith(c):
-                    out[c] = label
-                    break
+        c = _reply_cluster_id(cid, cluster_set)
+        if c is not None and c not in out:
+            out[c] = label
     if not out:  # fall back to positional zip if the model ignored the id format
         labels = []
         for ln in raw.splitlines():
@@ -1676,9 +1695,12 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         **chat_extra(model),
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
-        max_tokens=800,
+        max_tokens=_annotation_max_tokens(len(marker_map)),
     )
     raw = resp.choices[0].message.content or ""
+    if getattr(resp.choices[0], "finish_reason", None) == "length":
+        logger.warning("LLM annotation reply cut at max_tokens (%d clusters): later clusters may be Unknown",
+                       len(marker_map))
     tissue = _parse_tissue_line(raw) or hint
     labels = _parse_cluster_labels(raw, list(marker_map.keys()))
 
@@ -1700,6 +1722,12 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         len(mapping), target, model, groupby, tissue or "?", cl.get("cl_ids", "not checked"),
     )
     return cl
+
+
+def _annotation_max_tokens(n_clusters: int) -> int:
+    """Room for the tissue line plus one 'id: label | CL:0000000' line per cluster (about
+    25 tokens; 40 allowed). A fixed 800 cut the reply at about 30 clusters."""
+    return min(8192, 200 + 40 * max(1, n_clusters))
 
 
 _CL_SUFFIX = re.compile(r"\s*[|(\[,;]?\s*(?:CL[:_ ]?(\d{7})|CL[:_ ]?none)\s*[)\]]?\s*$", re.I)
