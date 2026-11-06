@@ -254,10 +254,57 @@ fi
 
 # ── Memory limit ────────────────────────────────────────────────────────────
 # SCVIEW_MEMORY_GB caps the backend's memory (docker-compose.yml), so a dataset
-# too big for the machine stops scView, not the computer. Suggested once: free
-# memory minus 3 GB to the nearest whole GB, at most what Docker/Podman has
-# (their virtual machine on macOS) minus 1 GB, and not under MIN_MEMORY_GB.
+# too big for the machine stops scView, not the computer. Suggested once:
+# suggest_memory_gb. A limit above what Docker/Podman has (their virtual machine
+# on macOS) means the machine's own OOM killer decides what stops, not the limit.
 MIN_MEMORY_GB=4  # processing a 14,000-cell dataset (Kang) peaks at about 3.5 GB
+
+engine_cap_gb() {  # engine_cap_gb ENGINE_GB: the most to give scView in it, 0.5 GB less
+    # rounded down to a whole GB, at least 1; nothing when ENGINE_GB is empty or 0 (not known)
+    awk -v e="${1:-0}" 'BEGIN {if (e > 0) {c = int(e - 0.5); print (c < 1 ? 1 : c)}}'
+}
+
+# suggest_memory_gb FREE_GB ENGINE_GB MIN_GB: prints "SUGGESTED WANTED". WANTED is
+# free memory minus 3 GB to the nearest whole GB, at least MIN_GB; SUGGESTED is WANTED
+# at most engine_cap_gb. SUGGESTED < WANTED: the engine is the limit (the MIN_GB floor
+# only holds when the engine has room for it).
+suggest_memory_gb() {
+    local cap
+    cap=$(engine_cap_gb "$2")
+    awk -v f="${1:-0}" -v c="${cap:-0}" -v m="$3" 'BEGIN {
+        w = int(f - 3 + 0.5); if (w < m) w = m; s = w; if (c > 0 && s > c) s = c; print s, w}'
+}
+
+engine_in_vm() {  # Docker/Podman runs in a virtual machine whose memory the user sets
+    [ "$(uname -s)" = "Darwin" ] && return 0
+    [ "$ENGINE" = "docker" ] || return 1
+    local os
+    os=$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)
+    [[ "$os" == *"Docker Desktop"* ]]
+}
+
+engine_label() {  # what to call the engine whose memory is short
+    if engine_in_vm; then
+        [ "$ENGINE" = "podman" ] && echo "The Podman machine" || echo "Docker Desktop"
+    else
+        [ "$ENGINE" = "podman" ] && echo "Podman" || echo "Docker"
+    fi
+}
+
+engine_memory_advice() {  # engine_memory_advice WANTED_GB [then]: how to give the machine more
+    local mb=$(( ($1 + 1) * 1024 ))
+    engine_in_vm || return 0
+    if [ "$ENGINE" = "podman" ]; then
+        warn "To give it more (${mb} MB lets scView use $1 GB), run:"
+        warn "  podman machine stop; podman machine set --memory ${mb}; podman machine start"
+    else
+        warn "To give it more, open Docker Desktop, Settings > Resources, set Memory to"
+        warn "$(( $1 + 1 )) GB or more, and click Apply & restart."
+    fi
+    if [ -n "${2:-}" ]; then
+        warn "Then change SCVIEW_MEMORY_GB in .env, or delete that line to be asked again."
+    fi
+}
 
 free_memory_gb() {
     if [ -r /proc/meminfo ]; then
@@ -286,17 +333,20 @@ set_env_value() {  # set_env_value KEY VALUE: replace or append the line in .env
         END {if (!done) print k "=" v}' .env > "$tmp" && mv "$tmp" .env
 }
 
-MEMORY_GB=$(grep -E '^SCVIEW_MEMORY_GB=' .env 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '[:space:]')
+MEMORY_GB=$({ grep -E '^SCVIEW_MEMORY_GB=' .env 2>/dev/null || true; } | tail -1 | cut -d= -f2 | tr -d '[:space:]')
 if [ -z "$MEMORY_GB" ]; then
     FREE_GB=$(free_memory_gb)
-    ENGINE_GB=$(engine_memory_gb)
-    SUGGEST=$(awk -v f="${FREE_GB:-0}" -v e="${ENGINE_GB:-0}" -v m="$MIN_MEMORY_GB" 'BEGIN {
-        s = int(f - 3 + 0.5); if (e > 0 && s > int(e - 1)) s = int(e - 1); if (s < m) s = m; print s}')
+    ENGINE_GB=$(engine_memory_gb || true)
+    read -r SUGGEST WANTED <<< "$(suggest_memory_gb "$FREE_GB" "$ENGINE_GB" "$MIN_MEMORY_GB")"
     echo ""
     info "Free memory now: ${FREE_GB:-?} GB${ENGINE_GB:+ (${ENGINE} has ${ENGINE_GB} GB)}."
     if [ -n "$FREE_GB" ] && awk -v f="$FREE_GB" -v m="$MIN_MEMORY_GB" 'BEGIN {exit !(f - 3 < m)}'; then
         warn "That leaves less than ${MIN_MEMORY_GB} GB for scView after 3 GB for the rest of the computer;"
         warn "close other programs, or expect only small datasets (under ~10,000 cells) to process."
+    fi
+    if [ "$SUGGEST" -lt "$WANTED" ]; then
+        warn "$(engine_label) has only ${ENGINE_GB} GB of memory, so scView can use at most ${SUGGEST} GB."
+        engine_memory_advice "$WANTED" then
     fi
     if [ -t 0 ]; then
         echo -e "  How much memory may scView use? A dataset that needs more stops scView, not the computer."
@@ -313,6 +363,13 @@ if [ -z "$MEMORY_GB" ]; then
     set_env_value SCVIEW_MEMORY_GB "$MEMORY_GB"
 fi
 ok "Memory limit: ${MEMORY_GB} GB (SCVIEW_MEMORY_GB in .env)"
+[ -n "${ENGINE_GB+set}" ] || ENGINE_GB=$(engine_memory_gb || true)
+ENGINE_CAP=$(engine_cap_gb "$ENGINE_GB")
+if [ -n "$ENGINE_CAP" ] && [ "$MEMORY_GB" -gt "$ENGINE_CAP" ] 2>/dev/null; then
+    warn "$(engine_label) has only ${ENGINE_GB} GB of memory: at ${MEMORY_GB} GB a big dataset can run it out of"
+    warn "memory before scView's own limit stops it. Set SCVIEW_MEMORY_GB in .env to ${ENGINE_CAP} or less."
+    engine_memory_advice "$MEMORY_GB"
+fi
 if [ "$MEMORY_GB" -lt "$MIN_MEMORY_GB" ] 2>/dev/null; then
     warn "Under ${MIN_MEMORY_GB} GB: processing a 14,000-cell dataset needs about 3.5 GB."
 fi
