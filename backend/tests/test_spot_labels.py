@@ -297,6 +297,21 @@ def test_the_estimate_follows_the_type_count():
     assert sd.estimate_seconds(1000, 5000, 20) < a < sd.estimate_seconds(1000, 5000, 50)
 
 
+@pytest.mark.parametrize("n_ref, n_spots, n_types, bins, measured", [
+    (40_572, 98_896, 7, True, 84.9),  # HD 16 um x the mouse brain reference, merged to 7 types
+    (40_572, 98_896, 16, True, 88.9),
+    (40_572, 98_896, 26, True, 165.8),
+    (40_572, 98_896, 37, True, 424.2),
+    (40_572, 2_310, 15, False, 8.7),  # CytAssist FFPE mouse brain spots
+    (40_572, 2_310, 37, False, 17.0),
+    (73_260, 4_035, 33, False, 31.4),  # V1_Human_Lymph_Node x the lymphoid atlas (Subset)
+])
+def test_the_estimate_is_within_20_percent_of_the_measured_runs(n_ref, n_spots, n_types, bins, measured):
+    # whole runs through the API, 2 CPUs with 2 BLAS threads, 2026-11-06
+    est = sd.estimate_seconds(n_ref, n_spots, n_types, bins=bins)
+    assert abs(est / measured - 1) <= 0.2
+
+
 # --- Through the API ---
 
 
